@@ -120,134 +120,151 @@ ParseResult<std::vector<double>> parseDoubleList(std::string_view str) {
   return result;
 }
 
+void ParseCalculationMode(components::AnimationInterpolation& options, std::string_view value) {
+  if (value == "linear") {
+    options.calcMode = components::CalcMode::Linear;
+  } else if (value == "discrete") {
+    options.calcMode = components::CalcMode::Discrete;
+  } else if (value == "paced") {
+    options.calcMode = components::CalcMode::Paced;
+  } else if (value == "spline") {
+    options.calcMode = components::CalcMode::Spline;
+  } else {
+    options.valid = false;
+  }
+}
+
+void ParseInterpolationList(AnimationParseContext& context,
+                            components::AnimationInterpolation& options,
+                            const XMLQualifiedNameRef& name, std::string_view value) {
+  auto result = parseDoubleList(value);
+  auto& destination =
+      name == XMLQualifiedNameRef("keyTimes") ? options.keyTimes : options.keySplines;
+  if (result.hasResult() && !result.result().empty()) {
+    destination = std::move(result.result());
+  } else {
+    destination.clear();
+    options.valid = false;
+    if (result.hasError()) {
+      context.diagnostic = std::move(result.error());
+    }
+  }
+}
+
+void ParseAnimationComposition(components::AnimationInterpolation& options,
+                               const XMLQualifiedNameRef& name, std::string_view value) {
+  bool& destination =
+      name == XMLQualifiedNameRef("additive") ? options.additive : options.accumulate;
+  destination = value == "sum";
+  const auto defaultValue = name == XMLQualifiedNameRef("additive") ? "replace" : "none";
+  options.valid &= destination || value == defaultValue;
+}
+
 /// Parse attributes shared by value, transform, and motion interpolation.
 bool ParseAnimationInterpolation(AnimationParseContext& context,
                                  components::AnimationInterpolation& options,
                                  const XMLQualifiedNameRef& name, std::string_view value) {
   if (name == XMLQualifiedNameRef("calcMode")) {
-    if (value == "linear") {
-      options.calcMode = components::CalcMode::Linear;
-    } else if (value == "discrete") {
-      options.calcMode = components::CalcMode::Discrete;
-    } else if (value == "paced") {
-      options.calcMode = components::CalcMode::Paced;
-    } else if (value == "spline") {
-      options.calcMode = components::CalcMode::Spline;
-    } else {
-      options.valid = false;
-    }
+    ParseCalculationMode(options, value);
   } else if (name == XMLQualifiedNameRef("keyTimes") || name == XMLQualifiedNameRef("keySplines")) {
-    auto result = parseDoubleList(value);
-    auto& destination =
-        name == XMLQualifiedNameRef("keyTimes") ? options.keyTimes : options.keySplines;
-    if (result.hasResult() && !result.result().empty()) {
-      destination = std::move(result.result());
-    } else {
-      destination.clear();
-      options.valid = false;
-      if (result.hasError()) {
-        context.diagnostic = std::move(result.error());
-      }
-    }
+    ParseInterpolationList(context, options, name, value);
   } else if (name == XMLQualifiedNameRef("additive") || name == XMLQualifiedNameRef("accumulate")) {
-    bool& destination =
-        name == XMLQualifiedNameRef("additive") ? options.additive : options.accumulate;
-    destination = value == "sum";
-    const auto defaultValue = name == XMLQualifiedNameRef("additive") ? "replace" : "none";
-    options.valid &= destination || value == defaultValue;
+    ParseAnimationComposition(options, name, value);
   } else {
     return false;
   }
   return true;
 }
 
-/// Common animation timing attribute parsing shared by <animate>, <animateTransform>, and <set>.
-///
-/// Retain complete timing lists for interval resolution; earliest offsets support legacy
-/// inspection.
+ParseResult<std::optional<components::ClockValue>> ParseEarliestOffset(std::string_view listValue) {
+  std::optional<components::ClockValue> bestOffset;
+  auto itemResult = parseSemicolonList(listValue);
+  if (itemResult.hasError()) {
+    return std::move(itemResult.error());
+  }
+  for (const std::string& item : itemResult.result()) {
+    if (item == "indefinite") {
+      continue;
+    }
+    auto result = ClockValueParser::Parse(item);
+    if (result.hasResult()) {
+      if (!bestOffset.has_value() || result.result().seconds() < bestOffset->seconds()) {
+        bestOffset = result.result();
+      }
+    }
+  }
+  return bestOffset;
+}
+
+void ParseTimingOffset(AnimationParseContext& context, std::optional<std::string>& rawValue,
+                       std::optional<components::ClockValue>& destination, std::string_view value) {
+  rawValue = std::string(value);
+  auto offset = ParseEarliestOffset(value);
+  destination.reset();
+  if (offset.hasResult()) {
+    destination = std::move(offset.result());
+  } else {
+    context.diagnostic = std::move(offset.error());
+  }
+}
+
+bool ParseTimingDuration(components::AnimationTimingComponent& timing,
+                         const XMLQualifiedNameRef& name, std::string_view value) {
+  std::optional<components::ClockValue>* destination;
+  if (name == XMLQualifiedNameRef("dur")) {
+    destination = &timing.dur;
+  } else if (name == XMLQualifiedNameRef("repeatDur")) {
+    destination = &timing.repeatDur;
+  } else if (name == XMLQualifiedNameRef("min")) {
+    destination = &timing.min;
+  } else if (name == XMLQualifiedNameRef("max")) {
+    destination = &timing.max;
+  } else {
+    return false;
+  }
+  auto result = ClockValueParser::Parse(value);
+  if (result.hasResult() && (name != XMLQualifiedNameRef("max") || result.result().seconds() > 0)) {
+    *destination = result.result();
+  }
+  return true;
+}
+
+void ParseRepeatCount(components::AnimationTimingComponent& timing, std::string_view value) {
+  if (value == "indefinite") {
+    timing.repeatCount = std::numeric_limits<double>::infinity();
+  } else if (auto maybeNumber = ParseNumberNoSuffix(value); maybeNumber && *maybeNumber > 0) {
+    timing.repeatCount = maybeNumber;
+  }
+}
+
+void ParseRestartMode(components::AnimationTimingComponent& timing, std::string_view value) {
+  if (value == "whenNotActive") {
+    timing.restart = components::AnimationRestart::WhenNotActive;
+  } else if (value == "never") {
+    timing.restart = components::AnimationRestart::Never;
+  } else {
+    timing.restart = components::AnimationRestart::Always;
+  }
+}
+
+/// Retain complete timing lists for interval resolution; earliest offsets support inspection.
 void parseAnimationTimingAttribute(AnimationParseContext& context,
                                    components::AnimationTimingComponent& timing,
                                    const XMLQualifiedNameRef& name, std::string_view value) {
-  auto parseEarliestOffset =
-      [](std::string_view listValue) -> ParseResult<std::optional<components::ClockValue>> {
-    std::optional<components::ClockValue> bestOffset;
-    auto itemResult = parseSemicolonList(listValue);
-    if (itemResult.hasError()) {
-      return std::move(itemResult.error());
-    }
-    for (const std::string& item : itemResult.result()) {
-      if (item == "indefinite") {
-        continue;
-      }
-
-      auto result = ClockValueParser::Parse(item);
-      if (result.hasResult()) {
-        if (!bestOffset.has_value() || result.result().seconds() < bestOffset->seconds()) {
-          bestOffset = result.result();
-        }
-      }
-    }
-    return bestOffset;
-  };
-
+  if (ParseTimingDuration(timing, name, value)) {
+    return;
+  }
   if (name == XMLQualifiedNameRef("begin")) {
-    timing.beginValue = std::string(value);
-    auto offset = parseEarliestOffset(value);
-    timing.beginOffset.reset();
-    if (offset.hasResult()) {
-      timing.beginOffset = std::move(offset.result());
-    } else {
-      context.diagnostic = std::move(offset.error());
-    }
-  } else if (name == XMLQualifiedNameRef("dur")) {
-    auto result = ClockValueParser::Parse(value);
-    if (result.hasResult()) {
-      timing.dur = result.result();
-    }
+    ParseTimingOffset(context, timing.beginValue, timing.beginOffset, value);
   } else if (name == XMLQualifiedNameRef("end")) {
-    timing.endValue = std::string(value);
-    auto offset = parseEarliestOffset(value);
-    timing.endOffset.reset();
-    if (offset.hasResult()) {
-      timing.endOffset = std::move(offset.result());
-    } else {
-      context.diagnostic = std::move(offset.error());
-    }
+    ParseTimingOffset(context, timing.endValue, timing.endOffset, value);
   } else if (name == XMLQualifiedNameRef("fill")) {
-    if (value == "freeze") {
-      timing.fill = components::AnimationFill::Freeze;
-    } else {
-      timing.fill = components::AnimationFill::Remove;
-    }
+    timing.fill =
+        value == "freeze" ? components::AnimationFill::Freeze : components::AnimationFill::Remove;
   } else if (name == XMLQualifiedNameRef("repeatCount")) {
-    if (value == "indefinite") {
-      timing.repeatCount = std::numeric_limits<double>::infinity();
-    } else if (auto maybeNumber = ParseNumberNoSuffix(value); maybeNumber && *maybeNumber > 0) {
-      timing.repeatCount = maybeNumber;
-    }
-  } else if (name == XMLQualifiedNameRef("repeatDur")) {
-    auto result = ClockValueParser::Parse(value);
-    if (result.hasResult()) {
-      timing.repeatDur = result.result();
-    }
+    ParseRepeatCount(timing, value);
   } else if (name == XMLQualifiedNameRef("restart")) {
-    if (value == "whenNotActive") {
-      timing.restart = components::AnimationRestart::WhenNotActive;
-    } else if (value == "never") {
-      timing.restart = components::AnimationRestart::Never;
-    } else {
-      timing.restart = components::AnimationRestart::Always;
-    }
-  } else if (name == XMLQualifiedNameRef("min")) {
-    auto result = ClockValueParser::Parse(value);
-    if (result.hasResult()) {
-      timing.min = result.result();
-    }
-  } else if (name == XMLQualifiedNameRef("max")) {
-    auto result = ClockValueParser::Parse(value);
-    if (result.hasResult() && result.result().seconds() > 0) {
-      timing.max = result.result();
-    }
+    ParseRestartMode(timing, value);
   }
 }
 

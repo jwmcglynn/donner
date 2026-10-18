@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <type_traits>
@@ -50,6 +51,46 @@ bool ValidNumericDeclaration(const AnimateValueComponent& value, const std::stri
   return value.by && valid(*value.by) && (!value.from || valid(*value.from));
 }
 
+std::optional<std::vector<std::string>> BuildAnimationValues(const AnimateValueComponent& value,
+                                                             const std::string& underlying,
+                                                             const AnimationValueContext& context) {
+  if (!value.values.empty()) {
+    return value.values;
+  }
+  if (value.to) {
+    return std::vector<std::string>{value.from.value_or(underlying), *value.to};
+  }
+  if (!value.by || context.referenceValue) {
+    return std::vector<std::string>{};
+  }
+  const auto from =
+      value.from ? value.from : CombineAnimationValues(*value.by, *value.by, 0, 0, context);
+  if (!from) {
+    return std::nullopt;
+  }
+  const auto to = CombineAnimationValues(*from, *value.by, 1, 1, context, true);
+  return to ? std::optional(std::vector<std::string>{*from, *to}) : std::nullopt;
+}
+
+std::vector<double> AnimationDistances(std::span<const std::string> values,
+                                       const AnimationValueContext& context,
+                                       AnimationInterpolation& options) {
+  std::vector<double> distances;
+  if (options.calcMode != CalcMode::Paced) {
+    return distances;
+  }
+  for (std::size_t i = 1; i < values.size(); ++i) {
+    const auto distance = AnimationValueDistance(values[i - 1], values[i], context);
+    if (!distance) {
+      options.calcMode = CalcMode::Discrete;
+      options.keyTimes.clear();
+      return {};
+    }
+    distances.push_back(*distance);
+  }
+  return distances;
+}
+
 /// Interpolate a value for `<animate>` at the given progress.
 /// Returns a value (which may be empty), or nullopt if interpolation failed.
 std::optional<std::string> interpolateAnimateValue(double progress,
@@ -59,56 +100,31 @@ std::optional<std::string> interpolateAnimateValue(double progress,
   if (!ValidNumericDeclaration(valueComp, underlying, context)) {
     return std::nullopt;
   }
-  std::vector<std::string> values = valueComp.values;
-  if (values.empty()) {
-    if (valueComp.to) {
-      values = {valueComp.from.value_or(underlying), *valueComp.to};
-    } else if (valueComp.by && !context.referenceValue) {
-      const auto from = valueComp.from
-                            ? valueComp.from
-                            : CombineAnimationValues(*valueComp.by, *valueComp.by, 0, 0, context);
-      if (!from) {
-        return {};
-      }
-      const auto to = CombineAnimationValues(*from, *valueComp.by, 1, 1, context, true);
-      if (!to) {
-        return {};
-      }
-      values = {*from, *to};
-    }
+  const auto values = BuildAnimationValues(valueComp, underlying, context);
+  if (!values) {
+    return {};
   }
-  std::vector<double> distances;
   AnimationInterpolation options = valueComp;
   if (context.referenceValue) {
     options.calcMode = CalcMode::Discrete;
   }
-  if (options.calcMode == CalcMode::Paced) {
-    for (std::size_t i = 1; i < values.size(); ++i) {
-      const auto distance = AnimationValueDistance(values[i - 1], values[i], context);
-      if (!distance) {
-        options.calcMode = CalcMode::Discrete;
-        options.keyTimes.clear();
-        break;
-      }
-      distances.push_back(*distance);
-    }
-  }
-  const auto segment = SelectAnimationSegment(progress, values.size(), options, distances);
+  const std::vector<double> distances = AnimationDistances(*values, context, options);
+  const auto segment = SelectAnimationSegment(progress, values->size(), options, distances);
   if (!segment) {
     return {};
   }
   if (segment->from == segment->to) {
-    return values[segment->from];
+    return (*values)[segment->from];
   }
-  const auto& from = values[segment->from];
-  const auto& to = values[segment->to];
+  const auto& from = (*values)[segment->from];
+  const auto& to = (*values)[segment->to];
   if (auto result =
           CombineAnimationValues(from, to, 1 - segment->progress, segment->progress, context)) {
     return *result;
   }
   options.calcMode = CalcMode::Discrete;
-  const auto discrete = SelectAnimationSegment(progress, values.size(), options);
-  return discrete ? std::optional(values[discrete->from]) : std::nullopt;
+  const auto discrete = SelectAnimationSegment(progress, values->size(), options);
+  return discrete ? std::optional((*values)[discrete->from]) : std::nullopt;
 }
 
 /// Get the expected number of values per entry for a given transform type.
@@ -184,80 +200,98 @@ std::vector<double> zeroTransformValues(TransformAnimationType type) {
   return {0.0};
 }
 
+std::vector<double> ParseTransformTuple(std::string_view value, TransformAnimationType type) {
+  std::vector<double> numbers = parseNumbers(value);
+  if (numbers.empty() || numbers.size() > static_cast<std::size_t>(expectedNumberCount(type)) ||
+      !std::all_of(numbers.begin(), numbers.end(),
+                   [](double number) { return std::isfinite(number); })) {
+    return {};
+  }
+  padToExpected(numbers, type);
+  return numbers;
+}
+
+std::vector<std::vector<double>> BuildByTransformKeyframes(
+    const AnimateTransformComponent& transform) {
+  std::vector<double> from = transform.from ? ParseTransformTuple(*transform.from, transform.type)
+                                            : zeroTransformValues(transform.type);
+  const std::vector<double> by = ParseTransformTuple(*transform.by, transform.type);
+  if (from.empty() || by.empty()) {
+    return {};
+  }
+  std::vector<double> to = from;
+  for (size_t i = 0; i < to.size() && i < by.size(); ++i) {
+    to[i] += by[i];
+  }
+  return {std::move(from), std::move(to)};
+}
+
+std::vector<std::vector<double>> BuildTransformKeyframes(
+    const AnimateTransformComponent& transform) {
+  std::vector<std::vector<double>> keyframes;
+  const auto parse = [&](const std::string& value) {
+    return ParseTransformTuple(value, transform.type);
+  };
+  if (!transform.values.empty()) {
+    keyframes.reserve(transform.values.size());
+    std::transform(transform.values.begin(), transform.values.end(), std::back_inserter(keyframes),
+                   parse);
+  } else if (transform.from && transform.to) {
+    keyframes = {parse(*transform.from), parse(*transform.to)};
+  } else if (transform.by) {
+    keyframes = BuildByTransformKeyframes(transform);
+  } else if (transform.to) {
+    keyframes.push_back(parse(*transform.to));
+  }
+  return keyframes;
+}
+
+std::vector<double> TransformDistances(std::span<const std::vector<double>> keyframes,
+                                       TransformAnimationType type, CalcMode mode) {
+  std::vector<double> distances;
+  if (mode != CalcMode::Paced) {
+    return distances;
+  }
+  for (std::size_t i = 1; i < keyframes.size(); ++i) {
+    double distance = 0;
+    const std::size_t count = type == TransformAnimationType::Rotate ? 1 : keyframes[i].size();
+    for (std::size_t j = 0; j < count; ++j) {
+      distance = std::hypot(distance, keyframes[i][j] - keyframes[i - 1][j]);
+    }
+    distances.push_back(distance);
+  }
+  return distances;
+}
+
+void AccumulateTransform(std::vector<double>& values, std::span<const double> last, bool accumulate,
+                         double iteration) {
+  if (!accumulate) {
+    return;
+  }
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] += iteration * last[i];
+  }
+}
+
 /// Interpolate transform values for <animateTransform>.
 std::string interpolateTransformValue(double progress,
                                       const AnimateTransformComponent& transformComp,
                                       double iteration = 0) {
   const TransformAnimationType type = transformComp.type;
-
-  // Build the effective keyframe list as parsed and padded number tuples. Precedence per SMIL:
-  // values, from/to, from/by, by, then to.
-  std::vector<std::vector<double>> keyframes;
-
-  const auto parsePadded = [type](const std::string& str) {
-    std::vector<double> nums = parseNumbers(str);
-    if (nums.empty() || nums.size() > static_cast<std::size_t>(expectedNumberCount(type)) ||
-        !std::all_of(nums.begin(), nums.end(), [](double value) { return std::isfinite(value); })) {
-      return std::vector<double>{};
-    }
-    padToExpected(nums, type);
-    return nums;
-  };
-
-  if (!transformComp.values.empty()) {
-    keyframes.reserve(transformComp.values.size());
-    for (const auto& v : transformComp.values) {
-      keyframes.push_back(parsePadded(v));
-    }
-  } else if (transformComp.from.has_value() && transformComp.to.has_value()) {
-    keyframes.push_back(parsePadded(*transformComp.from));
-    keyframes.push_back(parsePadded(*transformComp.to));
-  } else if (transformComp.by.has_value()) {
-    // A by-only transform uses additive zero, including scale(0).
-    std::vector<double> fromNums = transformComp.from.has_value() ? parsePadded(*transformComp.from)
-                                                                  : zeroTransformValues(type);
-    const std::vector<double> byNums = parsePadded(*transformComp.by);
-    if (fromNums.empty() || byNums.empty()) {
-      return {};
-    }
-    std::vector<double> toNums = fromNums;
-    for (size_t i = 0; i < toNums.size() && i < byNums.size(); ++i) {
-      toNums[i] += byNums[i];
-    }
-    keyframes.push_back(std::move(fromNums));
-    keyframes.push_back(std::move(toNums));
-  } else if (transformComp.to.has_value()) {
-    keyframes.push_back(parsePadded(*transformComp.to));
-  } else {
-    return {};
-  }
+  std::vector<std::vector<double>> keyframes = BuildTransformKeyframes(transformComp);
 
   if (std::any_of(keyframes.begin(), keyframes.end(),
                   [](const auto& frame) { return frame.empty(); })) {
     return {};
   }
-  std::vector<double> distances;
-  if (transformComp.calcMode == CalcMode::Paced) {
-    for (std::size_t i = 1; i < keyframes.size(); ++i) {
-      double distance = 0;
-      const std::size_t count = type == TransformAnimationType::Rotate ? 1 : keyframes[i].size();
-      for (std::size_t j = 0; j < count; ++j) {
-        distance = std::hypot(distance, keyframes[i][j] - keyframes[i - 1][j]);
-      }
-      distances.push_back(distance);
-    }
-  }
+  const std::vector<double> distances = TransformDistances(keyframes, type, transformComp.calcMode);
   const auto segment = SelectAnimationSegment(progress, keyframes.size(), transformComp, distances);
   if (!segment) {
     return {};
   }
   if (segment->from == segment->to) {
     auto result = keyframes[segment->from];
-    if (transformComp.accumulate) {
-      for (std::size_t i = 0; i < result.size(); ++i) {
-        result[i] += iteration * keyframes.back()[i];
-      }
-    }
+    AccumulateTransform(result, keyframes.back(), transformComp.accumulate, iteration);
     return formatTransform(type, result);
   }
   const std::size_t interval = segment->from;
@@ -271,10 +305,9 @@ std::string interpolateTransformValue(double progress,
   std::vector<double> result(count);
   for (size_t i = 0; i < count; ++i) {
     result[i] = fromNums[i] + (toNums[i] - fromNums[i]) * localT;
-    if (transformComp.accumulate) {
-      result[i] += iteration * keyframes.back()[i];
-    }
   }
+
+  AccumulateTransform(result, keyframes.back(), transformComp.accumulate, iteration);
 
   return formatTransform(type, result);
 }

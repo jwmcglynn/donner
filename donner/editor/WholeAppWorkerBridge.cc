@@ -1445,28 +1445,38 @@ void NotifyFirstFramePresented(int headlessDeviceCreations) {
   // clang-format on
 }
 
+// clang-format off
+EM_JS(void, RecordPresentedDocumentFrameStats,
+      (double documentGeneration, double frameVersion, double presentedAtEpochMs,
+       int surfacePresented), {
+        if (surfacePresented && Number.isSafeInteger(documentGeneration) &&
+            documentGeneration > 0 && Number.isSafeInteger(frameVersion) && frameVersion >= 0 &&
+            Number.isFinite(presentedAtEpochMs) && presentedAtEpochMs >= performance.timeOrigin) {
+          const presented = window['__donnerPresentedDocumentStats'] || ({
+            'count': 0, 'documentGeneration': 0, 'frameVersion': 0, 'samples': [],
+          });
+          if (presented['documentGeneration'] !== documentGeneration ||
+              presented['frameVersion'] !== frameVersion) {
+            const at = presentedAtEpochMs - performance.timeOrigin;
+            presented['count'] += 1;
+            presented['documentGeneration'] = documentGeneration;
+            presented['frameVersion'] = frameVersion;
+            presented['lastPresentedAtMs'] = at;
+            presented['lastPublicationDelayMs'] = Math.max(0, performance.now() - at);
+            presented['samples'][(presented['count'] - 1) % 4096] =
+                ([presented['count'], documentGeneration, frameVersion, at]);
+            window['__donnerPresentedDocumentStats'] = presented;
+          }
+        }
+      });
+// clang-format on
+
 void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
                                    bool surfacePresented) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
-        if ($3 && Number.isSafeInteger($0) && $0 > 0 && Number.isSafeInteger($1) && $1 >= 0 &&
-            Number.isFinite($2) && $2 >= performance.timeOrigin) {
-          const presented = window['__donnerPresentedDocumentStats'] || ({
-            'count': 0, 'documentGeneration': 0, 'frameVersion': 0, 'samples': [],
-          });
-          if (presented['documentGeneration'] !== $0 || presented['frameVersion'] !== $1) {
-            const at = $2 - performance.timeOrigin;
-            presented['count'] += 1;
-            presented['documentGeneration'] = $0;
-            presented['frameVersion'] = $1;
-            presented['lastPresentedAtMs'] = at;
-            presented['lastPublicationDelayMs'] = Math.max(0, performance.now() - at);
-            presented['samples'][(presented['count'] - 1) % 4096] =
-                ([presented['count'], $0, $1, at]);
-            window['__donnerPresentedDocumentStats'] = presented;
-          }
-        }
+        RecordPresentedDocumentFrameStats($0, $1, $2, $3);
         const stats = window['__donnerWorkerStats'];
         if (!stats || stats['publishReason'] !== 'render-result' || stats['resultFramePresented']) {
           return;

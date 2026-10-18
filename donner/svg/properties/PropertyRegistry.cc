@@ -895,57 +895,65 @@ ParseResult<StrokeLinejoin> ParseStrokeLinejoin(std::span<const css::ComponentVa
   return err;
 }
 
+std::optional<ParseDiagnostic> SkipDasharraySeparator(
+    std::span<const css::ComponentValue>& components) {
+  if (TrySkipToken<css::Token::Whitespace>(components) ||
+      TrySkipToken<css::Token::Comma>(components) || components.empty()) {
+    TrySkipToken<css::Token::Whitespace>(components);
+    return std::nullopt;
+  }
+  ParseDiagnostic err;
+  err.reason = "Unexpected tokens after dasharray value";
+  err.range.start =
+      !components.empty() ? components.front().sourceOffset() : FileOffset::EndOfString();
+  return err;
+}
+
+ParseResult<Lengthd> ParseDasharrayValue(const css::ComponentValue& component) {
+  if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
+    if (!dimension->suffixUnit) {
+      ParseDiagnostic err;
+      err.reason = "Invalid unit on length";
+      err.range.start = component.sourceOffset();
+      return err;
+    }
+    return Lengthd(dimension->value, dimension->suffixUnit.value());
+  }
+  if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
+    return Lengthd(percentage->value, Lengthd::Unit::Percent);
+  }
+  if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+    return Lengthd(number->value, Lengthd::Unit::None);
+  }
+  ParseDiagnostic err;
+  err.reason = "Unexpected token in dasharray";
+  err.range.start = component.sourceOffset();
+  return err;
+}
+
 ParseResult<StrokeDasharray> ParseStrokeDasharray(std::span<const css::ComponentValue> components) {
   // https://www.w3.org/TR/css-values-4/#mult-comma
   StrokeDasharray result;
-
   if (const auto ident = parser::TryGetSingleIdent(components);
       ident && ident->equalsLowercase("none")) {
     return result;
   }
-
   while (!components.empty()) {
     if (!result.empty()) {
-      if (TrySkipToken<css::Token::Whitespace>(components) ||
-          TrySkipToken<css::Token::Comma>(components) || components.empty()) {
-        TrySkipToken<css::Token::Whitespace>(components);
-      } else {
-        ParseDiagnostic err;
-        err.reason = "Unexpected tokens after dasharray value";
-        err.range.start =
-            !components.empty() ? components.front().sourceOffset() : FileOffset::EndOfString();
-        return err;
+      if (auto error = SkipDasharraySeparator(components)) {
+        return std::move(*error);
       }
     }
-
     if (components.empty()) {
       break;
     }
-
-    const css::ComponentValue& component = components.front();
-    if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
-      if (!dimension->suffixUnit) {
-        ParseDiagnostic err;
-        err.reason = "Invalid unit on length";
-        err.range.start = component.sourceOffset();
-        return err;
-      } else {
-        result.emplace_back(dimension->value, dimension->suffixUnit.value());
-      }
-    } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
-      result.emplace_back(percentage->value, Lengthd::Unit::Percent);
-    } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
-      result.emplace_back(number->value, Lengthd::Unit::None);
-    } else {
-      ParseDiagnostic err;
-      err.reason = "Unexpected token in dasharray";
-      err.range.start = component.sourceOffset();
-      return err;
+    auto value = ParseDasharrayValue(components.front());
+    if (value.hasError()) {
+      return std::move(value.error());
     }
-
+    result.emplace_back(value.result());
     components = components.subspan(1);
   }
-
   return result;
 }
 

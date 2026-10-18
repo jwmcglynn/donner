@@ -1703,7 +1703,7 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
   scopes[0].position = scopes[0].start;
   struct PathOutputOrigin {
     double output = 0;
-    double local = 0;
+    double localOffset = 0;
   };
   std::vector<std::vector<std::optional<double>>> pathOutputPositions;
   pathOutputPositions.reserve(paths.size());
@@ -1755,7 +1755,7 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
       auto& cluster = paths[item.group].clusters[item.index];
       const auto& origin = *pathOrigins[item.group];
       cluster.pathOffset =
-          origin.local + *pathOutputPositions[item.group][item.index] - origin.output;
+          origin.localOffset + *pathOutputPositions[item.group][item.index] - origin.output;
       cluster.advance *= scope.scale;
       auto& run = runs[cluster.runIndex];
       for (size_t glyphIndex = cluster.glyphStart; glyphIndex < cluster.glyphEnd; ++glyphIndex) {

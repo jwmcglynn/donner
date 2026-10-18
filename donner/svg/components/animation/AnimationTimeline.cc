@@ -24,6 +24,57 @@ constexpr std::size_t kMaximumTimelineIntervals = 16384;
 constexpr std::size_t kMaximumDependencyUpdates = 65536;
 constexpr std::size_t kMaximumDependencySteps = 262144;
 
+std::size_t TimeOffsetSign(std::string_view item) {
+  std::size_t sign = item.find_last_of("+-");
+  while (sign != std::string_view::npos && sign > 1 &&
+         (item[sign - 1] == 'e' || item[sign - 1] == 'E') && item[sign - 2] >= '0' &&
+         item[sign - 2] <= '9') {
+    sign = item.find_last_of("+-", sign - 1);
+  }
+  return sign;
+}
+
+bool ParseRepeatSpecifier(std::string_view item, AnimationTimeSpecifier& result) {
+  if (!item.starts_with("repeat(") || !item.ends_with(')')) {
+    return false;
+  }
+  const auto number = item.substr(7, item.size() - 8);
+  const auto [end, error] =
+      std::from_chars(number.data(), number.data() + number.size(), result.repeat);
+  if (error != std::errc{} || end != number.data() + number.size() || result.repeat == 0) {
+    return false;
+  }
+  result.kind = AnimationTimeSpecifier::Kind::Repeat;
+  return true;
+}
+
+bool ExtractTimeSource(std::string_view& item, AnimationTimeSpecifier& result) {
+  const std::size_t dot = item.rfind('.');
+  if (dot == std::string_view::npos) {
+    return true;
+  }
+  result.sourceId = item.substr(0, dot);
+  item.remove_prefix(dot + 1);
+  return !result.sourceId.empty();
+}
+
+bool AssignTimeSpecifierKind(std::string_view item, AnimationTimeSpecifier& result) {
+  result.kind = AnimationTimeSpecifier::Kind::Event;
+  if (!result.sourceId.empty() && item == "begin") {
+    result.kind = AnimationTimeSpecifier::Kind::Begin;
+  } else if (!result.sourceId.empty() && item == "end") {
+    result.kind = AnimationTimeSpecifier::Kind::End;
+  } else if (!result.sourceId.empty() && item.starts_with("repeat(")) {
+    return ParseRepeatSpecifier(item, result);
+  } else {
+    if (item.empty() || item.find_first_of(" \t\r\n()+") != std::string_view::npos) {
+      return false;
+    }
+    result.event = item;
+  }
+  return true;
+}
+
 std::optional<AnimationTimeSpecifier> ParseTimeSpecifier(std::string_view item) {
   auto clock = parser::ClockValueParser::Parse(item);
   if (clock.hasResult()) {
@@ -34,12 +85,7 @@ std::optional<AnimationTimeSpecifier> ParseTimeSpecifier(std::string_view item) 
   }
   AnimationTimeSpecifier result;
   // Only one clock parse: repeated suffix parsing makes long hostile names quadratic.
-  std::size_t sign = item.find_last_of("+-");
-  while (sign != std::string_view::npos && sign > 1 &&
-         (item[sign - 1] == 'e' || item[sign - 1] == 'E') && item[sign - 2] >= '0' &&
-         item[sign - 2] <= '9') {
-    sign = item.find_last_of("+-", sign - 1);
-  }
+  const std::size_t sign = TimeOffsetSign(item);
   if (sign != std::string_view::npos) {
     auto offset = parser::ClockValueParser::Parse(item.substr(sign));
     if (offset.hasResult() && std::isfinite(offset.result().seconds())) {
@@ -47,32 +93,8 @@ std::optional<AnimationTimeSpecifier> ParseTimeSpecifier(std::string_view item) 
       item = StringUtils::TrimWhitespace(item.substr(0, sign));
     }
   }
-  const std::size_t dot = item.rfind('.');
-  if (dot != std::string_view::npos) {
-    result.sourceId = item.substr(0, dot);
-    item.remove_prefix(dot + 1);
-    if (result.sourceId.empty()) {
-      return std::nullopt;
-    }
-  }
-  result.kind = AnimationTimeSpecifier::Kind::Event;
-  if (!result.sourceId.empty() && item == "begin") {
-    result.kind = AnimationTimeSpecifier::Kind::Begin;
-  } else if (!result.sourceId.empty() && item == "end") {
-    result.kind = AnimationTimeSpecifier::Kind::End;
-  } else if (!result.sourceId.empty() && item.starts_with("repeat(") && item.ends_with(')')) {
-    const auto number = item.substr(7, item.size() - 8);
-    const auto [end, error] =
-        std::from_chars(number.data(), number.data() + number.size(), result.repeat);
-    if (error != std::errc{} || end != number.data() + number.size() || result.repeat == 0) {
-      return std::nullopt;
-    }
-    result.kind = AnimationTimeSpecifier::Kind::Repeat;
-  } else {
-    if (item.empty() || item.find_first_of(" \t\r\n()+") != std::string_view::npos) {
-      return std::nullopt;
-    }
-    result.event = item;
+  if (!ExtractTimeSource(item, result) || !AssignTimeSpecifierKind(item, result)) {
+    return std::nullopt;
   }
   return result;
 }
@@ -298,34 +320,9 @@ bool InsertAnimationInstance(std::vector<double>& times, double time) {
   return true;
 }
 
-bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animations, double time) {
-  AnimationResourceBudget budget;
-  return ResolveAnimationTimeline(registry, animations, time, budget);
-}
-
-bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animations, double time,
-                              AnimationResourceBudget& budget) {
-  if (animations.size() > AnimationResourceBudget::kMaximumAnimations ||
-      !parser::RefreshAnimationAttributes(registry, animations)) {
-    return false;
-  }
-  for (Entity entity : animations) {
-    auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
-    state.phase = AnimationPhase::Before;
-    state.intervals.clear();
-  }
-  if (!std::isfinite(time) || animations.size() > AnimationResourceBudget::kMaximumAnimations) {
-    return false;
-  }
-  std::vector<TimelineNode> nodes;
-  NodeIndices indices;
-  if (!InitializeNodes(registry, animations, nodes, indices, budget)) {
-    return false;
-  }
-  std::deque<std::size_t> queue;
-  for (std::size_t i = 0; i < nodes.size(); ++i) {
-    queue.push_back(i);
-  }
+bool ResolveDependencyQueue(Registry& registry, const NodeIndices& indices,
+                            std::vector<TimelineNode>& nodes, std::deque<std::size_t>& queue,
+                            AnimationResourceBudget& budget) {
   std::size_t updates = 0;
   std::size_t steps = 0;
   std::size_t totalIntervals = 0;
@@ -360,6 +357,40 @@ bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animat
         queue.push_back(dependent);
       }
     }
+  }
+  return true;
+}
+
+bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animations, double time) {
+  AnimationResourceBudget budget;
+  return ResolveAnimationTimeline(registry, animations, time, budget);
+}
+
+bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animations, double time,
+                              AnimationResourceBudget& budget) {
+  if (animations.size() > AnimationResourceBudget::kMaximumAnimations ||
+      !parser::RefreshAnimationAttributes(registry, animations)) {
+    return false;
+  }
+  for (Entity entity : animations) {
+    auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
+    state.phase = AnimationPhase::Before;
+    state.intervals.clear();
+  }
+  if (!std::isfinite(time) || animations.size() > AnimationResourceBudget::kMaximumAnimations) {
+    return false;
+  }
+  std::vector<TimelineNode> nodes;
+  NodeIndices indices;
+  if (!InitializeNodes(registry, animations, nodes, indices, budget)) {
+    return false;
+  }
+  std::deque<std::size_t> queue;
+  for (std::size_t i = 0; i < nodes.size(); ++i) {
+    queue.push_back(i);
+  }
+  if (!ResolveDependencyQueue(registry, indices, nodes, queue, budget)) {
+    return false;
   }
   for (const auto& node : nodes) {
     SelectInterval(registry.get<AnimationStateComponent>(node.entity), node, time);

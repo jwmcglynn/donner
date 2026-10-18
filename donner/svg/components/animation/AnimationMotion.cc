@@ -198,6 +198,54 @@ std::optional<double> MotionAngle(const AnimateMotionComponent& motion, double t
   return number.result().number;
 }
 
+std::optional<Path> ParseMotionPathSource(const std::optional<std::string>& source) {
+  if (!source || source->empty() ||
+      source->size() > AnimationResourceBudget::kMaximumPathValueBytes) {
+    return std::nullopt;
+  }
+  auto parsed = parser::PathParser::Parse(*source);
+  return parsed.hasError() ? std::nullopt : std::optional(std::move(parsed.result()));
+}
+
+std::optional<Path> ResolveMotionPath(Registry& registry, Entity entity,
+                                      const AnimateMotionComponent& motion,
+                                      AnimationResourceBudget& budget, bool& additive) {
+  std::optional<Path> path;
+  const auto source = MotionPathSource(registry, entity, motion, budget, path);
+  if (!path && source) {
+    return ParseMotionPathSource(source);
+  }
+  if (!path) {
+    path = ImplicitMotionPath(motion);
+    additive =
+        additive || (motion.values.empty() && !motion.from && !motion.to && motion.by.has_value());
+  }
+  return path;
+}
+
+bool AccumulateMotion(const AnimateMotionComponent& motion, double iteration,
+                      const Path::MeasuredPath& measured, Path::PointOnPath& sample) {
+  if (!motion.accumulate || !(iteration > 0)) {
+    return true;
+  }
+  const auto last = measured.pointAtArcLength(measured.pathLength());
+  if (!last.valid) {
+    return false;
+  }
+  sample.point += last.point * iteration;
+  return true;
+}
+
+std::string FormatMotionTransform(const Vector2d& point, double angle) {
+  std::ostringstream result;
+  result.precision(std::numeric_limits<double>::max_digits10);
+  result << "translate(" << point.x << ", " << point.y << ")";
+  if (angle != 0) {
+    result << " rotate(" << angle << ")";
+  }
+  return result.str();
+}
+
 }  // namespace
 
 SampledAnimationMotion SampleAnimationMotion(Registry& registry, Entity entity,
@@ -207,22 +255,7 @@ SampledAnimationMotion SampleAnimationMotion(Registry& registry, Entity entity,
     return {};
   }
   bool additive = motion.additive;
-  std::optional<Path> path;
-  const auto source = MotionPathSource(registry, entity, motion, budget, path);
-  if (!path && source) {
-    if (source->empty() || source->size() > AnimationResourceBudget::kMaximumPathValueBytes) {
-      return {};
-    }
-    auto parsed = parser::PathParser::Parse(*source);
-    if (parsed.hasError()) {
-      return {};
-    }
-    path = std::move(parsed.result());
-  } else if (!path) {
-    path = ImplicitMotionPath(motion);
-    additive =
-        additive || (motion.values.empty() && !motion.from && !motion.to && motion.by.has_value());
-  }
+  const auto path = ResolveMotionPath(registry, entity, motion, budget, additive);
   if (!path) {
     return {};
   }
@@ -238,24 +271,14 @@ SampledAnimationMotion SampleAnimationMotion(Registry& registry, Entity entity,
   if (!sample.valid) {
     return {};
   }
-  if (motion.accumulate && iteration > 0) {
-    const auto last = measured.pointAtArcLength(measured.pathLength());
-    if (!last.valid) {
-      return {};
-    }
-    sample.point += last.point * iteration;
+  if (!AccumulateMotion(motion, iteration, measured, sample)) {
+    return {};
   }
   const auto angle = MotionAngle(motion, sample.angle);
   if (!angle || !std::isfinite(sample.point.x) || !std::isfinite(sample.point.y)) {
     return {};
   }
-  std::ostringstream result;
-  result.precision(std::numeric_limits<double>::max_digits10);
-  result << "translate(" << sample.point.x << ", " << sample.point.y << ")";
-  if (*angle != 0) {
-    result << " rotate(" << *angle << ")";
-  }
-  return {result.str(), additive};
+  return {FormatMotionTransform(sample.point, *angle), additive};
 }
 
 }  // namespace donner::svg::components

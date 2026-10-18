@@ -194,6 +194,51 @@ std::optional<double> Number(std::string_view value) {
   return result.result().number;
 }
 
+template <typename Component, typename Field, typename Value, std::size_t N>
+bool ApplyNamedField(Registry& registry, Entity entity, std::string_view name,
+                     Field Component::*field, std::string_view value,
+                     const std::pair<std::string_view, Value> (&values)[N]) {
+  for (const auto& [candidate, parsed] : values) {
+    if (candidate == value) {
+      return SimpleField(registry, entity, name, field, parsed);
+    }
+  }
+  return true;
+}
+
+bool ApplyLinearGradientLength(Registry& registry, Entity entity, std::string_view name,
+                               Lengthd length) {
+  using Field = std::optional<Lengthd> LinearGradientComponent::*;
+  static constexpr std::pair<std::string_view, Field> fields[] = {
+      {"x1", &LinearGradientComponent::x1},
+      {"y1", &LinearGradientComponent::y1},
+      {"x2", &LinearGradientComponent::x2},
+      {"y2", &LinearGradientComponent::y2},
+  };
+  for (const auto& [fieldName, field] : fields) {
+    if (fieldName == name && SimpleField(registry, entity, name, field, length)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ApplyRadialGradientLength(Registry& registry, Entity entity, std::string_view name,
+                               Lengthd length) {
+  using Field = std::optional<Lengthd> RadialGradientComponent::*;
+  static constexpr std::pair<std::string_view, Field> fields[] = {
+      {"cx", &RadialGradientComponent::cx}, {"cy", &RadialGradientComponent::cy},
+      {"r", &RadialGradientComponent::r},   {"fx", &RadialGradientComponent::fx},
+      {"fy", &RadialGradientComponent::fy}, {"fr", &RadialGradientComponent::fr},
+  };
+  for (const auto& [fieldName, field] : fields) {
+    if (fieldName == name && SimpleField(registry, entity, name, field, length)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool ApplyGradientLength(Registry& registry, Entity entity, std::string_view name,
                          std::string_view value) {
   donner::parser::LengthParser::Options options;
@@ -203,37 +248,8 @@ bool ApplyGradientLength(Registry& registry, Entity entity, std::string_view nam
     return false;
   }
   const auto length = parsed.result().length;
-  if (name == "x1" && SimpleField(registry, entity, name, &LinearGradientComponent::x1, length)) {
-    return true;
-  }
-  if (name == "y1" && SimpleField(registry, entity, name, &LinearGradientComponent::y1, length)) {
-    return true;
-  }
-  if (name == "x2" && SimpleField(registry, entity, name, &LinearGradientComponent::x2, length)) {
-    return true;
-  }
-  if (name == "y2" && SimpleField(registry, entity, name, &LinearGradientComponent::y2, length)) {
-    return true;
-  }
-  if (name == "cx" && SimpleField(registry, entity, name, &RadialGradientComponent::cx, length)) {
-    return true;
-  }
-  if (name == "cy" && SimpleField(registry, entity, name, &RadialGradientComponent::cy, length)) {
-    return true;
-  }
-  if (name == "r" && SimpleField(registry, entity, name, &RadialGradientComponent::r, length)) {
-    return true;
-  }
-  if (name == "fx" && SimpleField(registry, entity, name, &RadialGradientComponent::fx, length)) {
-    return true;
-  }
-  if (name == "fy" && SimpleField(registry, entity, name, &RadialGradientComponent::fy, length)) {
-    return true;
-  }
-  if (name == "fr" && SimpleField(registry, entity, name, &RadialGradientComponent::fr, length)) {
-    return true;
-  }
-  return false;
+  return ApplyLinearGradientLength(registry, entity, name, length) ||
+         ApplyRadialGradientLength(registry, entity, name, length);
 }
 
 bool ApplyFilterNumber(Registry& registry, Entity entity, std::string_view name, double value) {
@@ -471,195 +487,165 @@ bool ApplyFilterControl(Registry& registry, Entity entity, std::string_view name
          ApplyFilterReference(registry, entity, name, value);
 }
 
+bool ApplyCompositeOperator(Registry& registry, Entity entity, std::string_view name,
+                            std::string_view value) {
+  if (!registry.all_of<FECompositeComponent>(entity)) {
+    return false;
+  }
+  using Operator = FECompositeComponent::Operator;
+  static constexpr std::pair<std::string_view, Operator> values[] = {
+      {"over", Operator::Over},
+      {"in", Operator::In},
+      {"out", Operator::Out},
+      {"atop", Operator::Atop},
+      {"xor", Operator::Xor},
+      {"lighter", Operator::Lighter},
+      {"arithmetic", Operator::Arithmetic},
+  };
+  return ApplyNamedField(registry, entity, name, &FECompositeComponent::op, value, values);
+}
+
+bool ApplyMorphologyOperator(Registry& registry, Entity entity, std::string_view name,
+                             std::string_view value) {
+  if (!registry.all_of<FEMorphologyComponent>(entity)) {
+    return false;
+  }
+  using Operator = FEMorphologyComponent::Operator;
+  static constexpr std::pair<std::string_view, Operator> values[] = {
+      {"erode", Operator::Erode},
+      {"dilate", Operator::Dilate},
+  };
+  return ApplyNamedField(registry, entity, name, &FEMorphologyComponent::op, value, values);
+}
+
+bool ApplyFilterOperator(Registry& registry, Entity entity, std::string_view name,
+                         std::string_view value) {
+  if (registry.all_of<FECompositeComponent>(entity)) {
+    return ApplyCompositeOperator(registry, entity, name, value);
+  }
+  return ApplyMorphologyOperator(registry, entity, name, value);
+}
+
+bool ApplyColorMatrixType(Registry& registry, Entity entity, std::string_view name,
+                          std::string_view value) {
+  if (!registry.all_of<FEColorMatrixComponent>(entity)) {
+    return false;
+  }
+  using Type = FEColorMatrixComponent::Type;
+  static constexpr std::pair<std::string_view, Type> values[] = {
+      {"matrix", Type::Matrix},
+      {"saturate", Type::Saturate},
+      {"hueRotate", Type::HueRotate},
+      {"luminanceToAlpha", Type::LuminanceToAlpha},
+  };
+  return ApplyNamedField(registry, entity, name, &FEColorMatrixComponent::type, value, values);
+}
+
+bool ApplyFunctionType(Registry& registry, Entity entity, std::string_view name,
+                       std::string_view value) {
+  if (!registry.all_of<FEFuncComponent>(entity)) {
+    return false;
+  }
+  using Type = FEFuncComponent::FuncType;
+  static constexpr std::pair<std::string_view, Type> values[] = {
+      {"identity", Type::Identity}, {"table", Type::Table}, {"discrete", Type::Discrete},
+      {"linear", Type::Linear},     {"gamma", Type::Gamma},
+  };
+  return ApplyNamedField(registry, entity, name, &FEFuncComponent::type, value, values);
+}
+
+bool ApplyTurbulenceType(Registry& registry, Entity entity, std::string_view name,
+                         std::string_view value) {
+  if (!registry.all_of<FETurbulenceComponent>(entity)) {
+    return false;
+  }
+  using Type = FETurbulenceComponent::Type;
+  static constexpr std::pair<std::string_view, Type> values[] = {
+      {"fractalNoise", Type::FractalNoise},
+      {"turbulence", Type::Turbulence},
+  };
+  return ApplyNamedField(registry, entity, name, &FETurbulenceComponent::type, value, values);
+}
+
+bool ApplyFilterType(Registry& registry, Entity entity, std::string_view name,
+                     std::string_view value) {
+  if (registry.all_of<FEColorMatrixComponent>(entity)) {
+    return ApplyColorMatrixType(registry, entity, name, value);
+  }
+  if (registry.all_of<FEFuncComponent>(entity)) {
+    return ApplyFunctionType(registry, entity, name, value);
+  }
+  return ApplyTurbulenceType(registry, entity, name, value);
+}
+
+bool ApplyGradientUnits(Registry& registry, Entity entity, std::string_view name,
+                        std::string_view value) {
+  if (!registry.all_of<GradientComponent>(entity)) {
+    return false;
+  }
+  static constexpr std::pair<std::string_view, GradientUnits> values[] = {
+      {"userSpaceOnUse", GradientUnits::UserSpaceOnUse},
+      {"objectBoundingBox", GradientUnits::ObjectBoundingBox},
+  };
+  return ApplyNamedField(registry, entity, name, &GradientComponent::gradientUnits, value, values);
+}
+
+bool ApplyGradientSpreadMethod(Registry& registry, Entity entity, std::string_view name,
+                               std::string_view value) {
+  if (!registry.all_of<GradientComponent>(entity)) {
+    return false;
+  }
+  static constexpr std::pair<std::string_view, GradientSpreadMethod> values[] = {
+      {"pad", GradientSpreadMethod::Pad},
+      {"reflect", GradientSpreadMethod::Reflect},
+      {"repeat", GradientSpreadMethod::Repeat},
+  };
+  return ApplyNamedField(registry, entity, name, &GradientComponent::spreadMethod, value, values);
+}
+
+bool ApplyBlendMode(Registry& registry, Entity entity, std::string_view name,
+                    std::string_view value) {
+  if (!registry.all_of<FEBlendComponent>(entity)) {
+    return false;
+  }
+  using Mode = FEBlendComponent::Mode;
+  static constexpr std::pair<std::string_view, Mode> values[] = {
+      {"normal", Mode::Normal},
+      {"multiply", Mode::Multiply},
+      {"screen", Mode::Screen},
+      {"darken", Mode::Darken},
+      {"lighten", Mode::Lighten},
+      {"overlay", Mode::Overlay},
+      {"color-dodge", Mode::ColorDodge},
+      {"color-burn", Mode::ColorBurn},
+      {"hard-light", Mode::HardLight},
+      {"soft-light", Mode::SoftLight},
+      {"difference", Mode::Difference},
+      {"exclusion", Mode::Exclusion},
+      {"hue", Mode::Hue},
+      {"saturation", Mode::Saturation},
+      {"color", Mode::Color},
+      {"luminosity", Mode::Luminosity},
+  };
+  return ApplyNamedField(registry, entity, name, &FEBlendComponent::mode, value, values);
+}
+
 bool ApplyDiscreteAttribute(Registry& registry, Entity entity, std::string_view name,
                             std::string_view value) {
-  if (name == "operator" && registry.all_of<FECompositeComponent>(entity)) {
-    if (value == "over") {
-      return SimpleField(registry, entity, name, &FECompositeComponent::op,
-                         FECompositeComponent::Operator::Over);
-    }
-    if (value == "in") {
-      return SimpleField(registry, entity, name, &FECompositeComponent::op,
-                         FECompositeComponent::Operator::In);
-    }
-    if (value == "out") {
-      return SimpleField(registry, entity, name, &FECompositeComponent::op,
-                         FECompositeComponent::Operator::Out);
-    }
-    if (value == "atop") {
-      return SimpleField(registry, entity, name, &FECompositeComponent::op,
-                         FECompositeComponent::Operator::Atop);
-    }
-    if (value == "xor") {
-      return SimpleField(registry, entity, name, &FECompositeComponent::op,
-                         FECompositeComponent::Operator::Xor);
-    }
-    if (value == "lighter") {
-      return SimpleField(registry, entity, name, &FECompositeComponent::op,
-                         FECompositeComponent::Operator::Lighter);
-    }
-    if (value == "arithmetic") {
-      return SimpleField(registry, entity, name, &FECompositeComponent::op,
-                         FECompositeComponent::Operator::Arithmetic);
-    }
-    return true;
+  if (name == "operator") {
+    return ApplyFilterOperator(registry, entity, name, value);
   }
-  if (name == "operator" && registry.all_of<FEMorphologyComponent>(entity)) {
-    if (value == "erode") {
-      return SimpleField(registry, entity, name, &FEMorphologyComponent::op,
-                         FEMorphologyComponent::Operator::Erode);
-    }
-    if (value == "dilate") {
-      return SimpleField(registry, entity, name, &FEMorphologyComponent::op,
-                         FEMorphologyComponent::Operator::Dilate);
-    }
-    return true;
+  if (name == "type") {
+    return ApplyFilterType(registry, entity, name, value);
   }
-  if (name == "type" && registry.all_of<FEColorMatrixComponent>(entity)) {
-    if (value == "matrix") {
-      return SimpleField(registry, entity, name, &FEColorMatrixComponent::type,
-                         FEColorMatrixComponent::Type::Matrix);
-    }
-    if (value == "saturate") {
-      return SimpleField(registry, entity, name, &FEColorMatrixComponent::type,
-                         FEColorMatrixComponent::Type::Saturate);
-    }
-    if (value == "hueRotate") {
-      return SimpleField(registry, entity, name, &FEColorMatrixComponent::type,
-                         FEColorMatrixComponent::Type::HueRotate);
-    }
-    if (value == "luminanceToAlpha") {
-      return SimpleField(registry, entity, name, &FEColorMatrixComponent::type,
-                         FEColorMatrixComponent::Type::LuminanceToAlpha);
-    }
-    return true;
+  if (name == "gradientUnits") {
+    return ApplyGradientUnits(registry, entity, name, value);
   }
-  if (name == "type" && registry.all_of<FEFuncComponent>(entity)) {
-    if (value == "identity") {
-      return SimpleField(registry, entity, name, &FEFuncComponent::type,
-                         FEFuncComponent::FuncType::Identity);
-    }
-    if (value == "table") {
-      return SimpleField(registry, entity, name, &FEFuncComponent::type,
-                         FEFuncComponent::FuncType::Table);
-    }
-    if (value == "discrete") {
-      return SimpleField(registry, entity, name, &FEFuncComponent::type,
-                         FEFuncComponent::FuncType::Discrete);
-    }
-    if (value == "linear") {
-      return SimpleField(registry, entity, name, &FEFuncComponent::type,
-                         FEFuncComponent::FuncType::Linear);
-    }
-    if (value == "gamma") {
-      return SimpleField(registry, entity, name, &FEFuncComponent::type,
-                         FEFuncComponent::FuncType::Gamma);
-    }
-    return true;
+  if (name == "spreadMethod") {
+    return ApplyGradientSpreadMethod(registry, entity, name, value);
   }
-  if (name == "type" && registry.all_of<FETurbulenceComponent>(entity)) {
-    if (value == "fractalNoise") {
-      return SimpleField(registry, entity, name, &FETurbulenceComponent::type,
-                         FETurbulenceComponent::Type::FractalNoise);
-    }
-    if (value == "turbulence") {
-      return SimpleField(registry, entity, name, &FETurbulenceComponent::type,
-                         FETurbulenceComponent::Type::Turbulence);
-    }
-    return true;
-  }
-  if (name == "gradientUnits" && registry.all_of<GradientComponent>(entity)) {
-    if (value == "userSpaceOnUse") {
-      return SimpleField(registry, entity, name, &GradientComponent::gradientUnits,
-                         GradientUnits::UserSpaceOnUse);
-    }
-    if (value == "objectBoundingBox") {
-      return SimpleField(registry, entity, name, &GradientComponent::gradientUnits,
-                         GradientUnits::ObjectBoundingBox);
-    }
-    return true;
-  }
-  if (name == "spreadMethod" && registry.all_of<GradientComponent>(entity)) {
-    if (value == "pad") {
-      return SimpleField(registry, entity, name, &GradientComponent::spreadMethod,
-                         GradientSpreadMethod::Pad);
-    }
-    if (value == "reflect") {
-      return SimpleField(registry, entity, name, &GradientComponent::spreadMethod,
-                         GradientSpreadMethod::Reflect);
-    }
-    if (value == "repeat") {
-      return SimpleField(registry, entity, name, &GradientComponent::spreadMethod,
-                         GradientSpreadMethod::Repeat);
-    }
-    return true;
-  }
-  if (name == "mode" && registry.all_of<FEBlendComponent>(entity)) {
-    if (value == "normal") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Normal);
-    }
-    if (value == "multiply") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Multiply);
-    }
-    if (value == "screen") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Screen);
-    }
-    if (value == "darken") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Darken);
-    }
-    if (value == "lighten") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Lighten);
-    }
-    if (value == "overlay") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Overlay);
-    }
-    if (value == "color-dodge") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::ColorDodge);
-    }
-    if (value == "color-burn") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::ColorBurn);
-    }
-    if (value == "hard-light") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::HardLight);
-    }
-    if (value == "soft-light") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::SoftLight);
-    }
-    if (value == "difference") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Difference);
-    }
-    if (value == "exclusion") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Exclusion);
-    }
-    if (value == "hue") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Hue);
-    }
-    if (value == "saturation") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Saturation);
-    }
-    if (value == "color") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Color);
-    }
-    if (value == "luminosity") {
-      return SimpleField(registry, entity, name, &FEBlendComponent::mode,
-                         FEBlendComponent::Mode::Luminosity);
-    }
-    return true;
+  if (name == "mode") {
+    return ApplyBlendMode(registry, entity, name, value);
   }
   return false;
 }
@@ -892,28 +878,58 @@ bool ApplyMaskOrClipUnits(Registry& registry, Entity entity, std::string_view na
   return false;
 }
 
+bool ApplyTextPathStartOffset(Registry& registry, Entity entity, std::string_view name,
+                              std::string_view value) {
+  const auto lengths = ParseAnimationLengths(value);
+  if (!lengths || lengths->size() != 1) {
+    return false;
+  }
+  return SimpleField(registry, entity, name, &TextPathComponent::startOffset, lengths->front());
+}
+
+bool ApplyTextPathSide(Registry& registry, Entity entity, std::string_view name,
+                       std::string_view value) {
+  if (value != "left" && value != "right") {
+    return false;
+  }
+  return SimpleField(registry, entity, name, &TextPathComponent::side,
+                     value == "left" ? TextPathSide::Left : TextPathSide::Right);
+}
+
+bool ApplyTextPathMethod(Registry& registry, Entity entity, std::string_view name,
+                         std::string_view value) {
+  if (value != "align" && value != "stretch") {
+    return false;
+  }
+  return SimpleField(registry, entity, name, &TextPathComponent::method,
+                     value == "align" ? TextPathMethod::Align : TextPathMethod::Stretch);
+}
+
+bool ApplyTextPathSpacing(Registry& registry, Entity entity, std::string_view name,
+                          std::string_view value) {
+  if (value != "auto" && value != "exact") {
+    return false;
+  }
+  return SimpleField(registry, entity, name, &TextPathComponent::spacing,
+                     value == "auto" ? TextPathSpacing::Auto : TextPathSpacing::Exact);
+}
+
 bool ApplyTextPathAttribute(Registry& registry, Entity entity, std::string_view name,
                             std::string_view value) {
   if (!registry.all_of<TextPathComponent>(entity)) {
     return false;
   }
   if (name == "startOffset") {
-    const auto lengths = ParseAnimationLengths(value);
-    if (lengths && lengths->size() == 1) {
-      return SimpleField(registry, entity, name, &TextPathComponent::startOffset, lengths->front());
-    }
+    return ApplyTextPathStartOffset(registry, entity, name, value);
   }
-  if (name == "side" && (value == "left" || value == "right")) {
-    return SimpleField(registry, entity, name, &TextPathComponent::side,
-                       value == "left" ? TextPathSide::Left : TextPathSide::Right);
+  if (name == "side") {
+    return ApplyTextPathSide(registry, entity, name, value);
   }
-  if (name == "method" && (value == "align" || value == "stretch")) {
-    return SimpleField(registry, entity, name, &TextPathComponent::method,
-                       value == "align" ? TextPathMethod::Align : TextPathMethod::Stretch);
+  if (name == "method") {
+    return ApplyTextPathMethod(registry, entity, name, value);
   }
-  if (name == "spacing" && (value == "auto" || value == "exact")) {
-    return SimpleField(registry, entity, name, &TextPathComponent::spacing,
-                       value == "auto" ? TextPathSpacing::Auto : TextPathSpacing::Exact);
+  if (name == "spacing") {
+    return ApplyTextPathSpacing(registry, entity, name, value);
   }
   return false;
 }

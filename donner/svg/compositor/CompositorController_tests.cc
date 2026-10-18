@@ -108,16 +108,16 @@ class StyleAdmissionResourceLoader : public ResourceLoaderInterface {
 public:
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view url) override {
-    const std::string_view source =
-        url == "external.svg" ? R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
-                <use href="tile.svg#tile" fill="blue"/>
-              </svg>)svg"
-                              : R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
-                <rect id="tile" width="2" height="2"/>
-              </svg>)svg";
     if (url != "external.svg" && url != "tile.svg") {
       return ResourceLoaderError::NotFound;
     }
+    static constexpr std::string_view kExternalDocument =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\">"
+        "<use href=\"tile.svg#tile\" fill=\"blue\"/></svg>";
+    static constexpr std::string_view kTileDocument =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\">"
+        "<rect id=\"tile\" width=\"2\" height=\"2\"/></svg>";
+    const std::string_view source = url == "external.svg" ? kExternalDocument : kTileDocument;
     return std::vector<uint8_t>(source.begin(), source.end());
   }
 };

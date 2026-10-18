@@ -82,6 +82,32 @@ std::optional<AnimationSegment> PacedSegment(double progress, std::size_t count,
   return AnimationSegment{count - 1, count - 1, 0};
 }
 
+struct IntervalProgress {
+  std::size_t interval = 0;
+  double fraction = 0;
+};
+
+IntervalProgress SelectIntervalProgress(double progress, std::size_t count,
+                                        const AnimationInterpolation& options, bool discrete) {
+  if (options.keyTimes.empty()) {
+    const double scaled = progress * static_cast<double>(discrete ? count : count - 1);
+    return {std::min(static_cast<std::size_t>(scaled), count - 1),
+            scaled - std::min(static_cast<std::size_t>(scaled), count - 1)};
+  }
+  const auto next = std::upper_bound(options.keyTimes.begin(), options.keyTimes.end(), progress);
+  const std::size_t interval = static_cast<std::size_t>(next - options.keyTimes.begin() - 1);
+  const double start = options.keyTimes[interval];
+  const double end = interval + 1 < count ? options.keyTimes[interval + 1] : 1;
+  return {interval, end > start ? (progress - start) / (end - start) : 1};
+}
+
+double ApplySplineProgress(double local, std::size_t interval,
+                           const AnimationInterpolation& options) {
+  return options.calcMode == CalcMode::Spline
+             ? SplineProgress(local, std::span(options.keySplines).subspan(interval * 4, 4))
+             : local;
+}
+
 }  // namespace
 
 std::optional<AnimationSegment> SelectAnimationSegment(double progress, std::size_t count,
@@ -99,29 +125,12 @@ std::optional<AnimationSegment> SelectAnimationSegment(double progress, std::siz
     return PacedSegment(progress, count, distances);
   }
   const bool discrete = options.calcMode == CalcMode::Discrete;
-  std::size_t interval;
-  double start;
-  double end;
-  if (options.keyTimes.empty()) {
-    const double scaled = progress * static_cast<double>(discrete ? count : count - 1);
-    interval = std::min(static_cast<std::size_t>(scaled), count - 1);
-    start = 0;
-    end = 1;
-    progress = scaled - interval;
-  } else {
-    const auto next = std::upper_bound(options.keyTimes.begin(), options.keyTimes.end(), progress);
-    interval = static_cast<std::size_t>(next - options.keyTimes.begin() - 1);
-    start = options.keyTimes[interval];
-    end = interval + 1 < count ? options.keyTimes[interval + 1] : 1;
+  const IntervalProgress selected = SelectIntervalProgress(progress, count, options, discrete);
+  if (discrete || selected.interval + 1 == count) {
+    return AnimationSegment{selected.interval, selected.interval, 0};
   }
-  if (discrete || interval + 1 == count) {
-    return AnimationSegment{interval, interval, 0};
-  }
-  double local = end > start ? (progress - start) / (end - start) : 1;
-  if (options.calcMode == CalcMode::Spline) {
-    local = SplineProgress(local, std::span(options.keySplines).subspan(interval * 4, 4));
-  }
-  return AnimationSegment{interval, interval + 1, local};
+  const double local = ApplySplineProgress(selected.fraction, selected.interval, options);
+  return AnimationSegment{selected.interval, selected.interval + 1, local};
 }
 
 }  // namespace donner::svg::components

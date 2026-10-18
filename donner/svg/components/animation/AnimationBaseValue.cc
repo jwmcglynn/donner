@@ -8,6 +8,7 @@
 #include <tuple>
 #include <type_traits>
 #include <unordered_set>
+#include <utility>
 
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -489,6 +490,27 @@ std::string SerializeTextPositionBase(const Values& values, AnimationResourceBud
   return output.str();
 }
 
+template <typename Field>
+auto InheritedTextPositionValues(Registry& registry, Entity target, Field field,
+                                 AnimationResourceBudget& budget) {
+  using Values = std::remove_reference_t<decltype(std::declval<TextPositioningComponent>().*field)>;
+  Entity current = target;
+  while (current != entt::null && registry.valid(current)) {
+    if (!budget.reserveReferenceWork(1)) {
+      break;
+    }
+    if (const auto* component = registry.try_get<TextPositioningComponent>(current);
+        component && !(component->*field).empty()) {
+      const auto& values = component->*field;
+      return current == target || values.size() == 1 ? &values
+                                                     : static_cast<const Values*>(nullptr);
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    current = tree ? tree->parent() : entt::null;
+  }
+  return static_cast<const Values*>(nullptr);
+}
+
 std::optional<std::string> TextPositionBaseValue(Registry& registry, Entity target,
                                                  std::string_view name,
                                                  const AnimationValueContext& context,
@@ -497,26 +519,9 @@ std::optional<std::string> TextPositionBaseValue(Registry& registry, Entity targ
   if (!text) {
     return std::nullopt;
   }
-  const auto inheritedComponent = [&](auto field) {
-    Entity current = target;
-    while (current != entt::null && registry.valid(current)) {
-      if (!budget.reserveReferenceWork(1)) {
-        break;
-      }
-      if (const auto* component = registry.try_get<TextPositioningComponent>(current);
-          component && !(component->*field).empty()) {
-        const auto& values = component->*field;
-        // A multi-value ancestor needs the descendant's addressable-character offset. Until that
-        // instance context is available, fail closed instead of using the wrong list entry.
-        return current == target || values.size() == 1 ? &values : nullptr;
-      }
-      const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-      current = tree ? tree->parent() : entt::null;
-    }
-    return static_cast<const std::remove_reference_t<decltype(text->*field)>*>(nullptr);
-  };
   if (name == "rotate") {
-    const auto* values = inheritedComponent(&TextPositioningComponent::rotateDegrees);
+    const auto* values = InheritedTextPositionValues(
+        registry, target, &TextPositioningComponent::rotateDegrees, budget);
     return values ? SerializeTextPositionBase(*values, budget) : std::string{};
   }
   using Field = SmallVector<Lengthd, 1> TextPositioningComponent::*;
@@ -526,7 +531,7 @@ std::optional<std::string> TextPositionBaseValue(Registry& registry, Entity targ
                                                        {"dy", &TextPositioningComponent::dy}};
   for (const auto& [attribute, field] : fields) {
     if (name == attribute) {
-      const auto* values = inheritedComponent(field);
+      const auto* values = InheritedTextPositionValues(registry, target, field, budget);
       if (!values) {
         return std::string{};
       }
@@ -833,53 +838,70 @@ std::optional<RcString> AnimationReferenceValue(Registry& registry, Entity entit
   }
 }
 
+void ConfigureLengthExtent(std::string_view attribute, AnimationValueContext& context) {
+  static constexpr std::array<std::string_view, 10> xNames = {
+      "x", "dx", "x1", "x2", "cx", "rx", "width", "fx", "refX", "markerWidth"};
+  static constexpr std::array<std::string_view, 10> yNames = {
+      "y", "dy", "y1", "y2", "cy", "ry", "height", "fy", "refY", "markerHeight"};
+  if (std::find(xNames.begin(), xNames.end(), attribute) != xNames.end()) {
+    context.extent = Lengthd::Extent::X;
+  } else if (std::find(yNames.begin(), yNames.end(), attribute) != yNames.end()) {
+    context.extent = Lengthd::Extent::Y;
+  }
+}
+
+void ConfigureAnimationStyleContext(Registry& registry, Entity target, Entity root,
+                                    AnimationValueContext& context) {
+  if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
+      style && style->properties) {
+    context.linearRgb = style->properties->colorInterpolation.getOr(ColorInterpolation::SRGB) ==
+                        ColorInterpolation::LinearRGB;
+    if (const auto color = style->properties->color.get()) {
+      context.currentColor = color->resolve(context.currentColor, 1);
+    }
+    if (const auto font = style->properties->fontSize.get()) {
+      context.fontMetrics.fontSize = font->toPixels(context.viewBox, context.fontMetrics);
+    }
+  }
+  if (const auto* style = registry.try_get<ComputedStyleComponent>(root);
+      style && style->properties) {
+    if (const auto font = style->properties->fontSize.get()) {
+      context.fontMetrics.rootFontSize = font->toPixels(context.viewBox, context.fontMetrics);
+    }
+  }
+}
+
+bool IsReferenceAnimationAttribute(std::string_view attribute) {
+  return attribute == "href" || attribute == "xlink:href" || attribute == "in" ||
+         attribute == "in2" || attribute == "result";
+}
+
+void ConfigureValueKinds(Registry& registry, Entity target, std::string_view attribute,
+                         AnimationValueContext& context) {
+  context.angleValue = attribute == "orient" && registry.all_of<MarkerComponent>(target);
+  context.referenceValue = IsReferenceAnimationAttribute(attribute);
+  context.numberPair = attribute == "stdDeviation" || attribute == "radius" ||
+                       attribute == "baseFrequency" || attribute == "order";
+  context.integerValue = attribute == "numOctaves" || attribute == "targetX" ||
+                         attribute == "targetY" || attribute == "order";
+}
+
 AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
                                           std::string_view attribute,
                                           AnimationResourceBudget& budget) {
   AnimationValueContext result;
-  result.angleValue = attribute == "orient" && registry.all_of<MarkerComponent>(target);
-  result.referenceValue = attribute == "href" || attribute == "xlink:href" || attribute == "in" ||
-                          attribute == "in2" || attribute == "result";
-  result.numberPair = attribute == "stdDeviation" || attribute == "radius" ||
-                      attribute == "baseFrequency" || attribute == "order";
-  result.integerValue = attribute == "numOctaves" || attribute == "targetX" ||
-                        attribute == "targetY" || attribute == "order";
+  ConfigureValueKinds(registry, target, attribute, result);
   ConfigureNumericContext(registry, target, attribute, result);
   result.viewBox = LayoutSystem().getViewBox(EntityHandle(registry, target));
   if (ResourceUsesBoundingBoxUnits(registry, target, budget)) {
     result.viewBox = Box2d{{0, 0}, {1, 1}};
   }
-  if (attribute == "x" || attribute == "dx" || attribute == "x1" || attribute == "x2" ||
-      attribute == "cx" || attribute == "rx" || attribute == "width" || attribute == "fx" ||
-      attribute == "refX" || attribute == "markerWidth") {
-    result.extent = Lengthd::Extent::X;
-  }
-  if (attribute == "y" || attribute == "dy" || attribute == "y1" || attribute == "y2" ||
-      attribute == "cy" || attribute == "ry" || attribute == "height" || attribute == "fy" ||
-      attribute == "refY" || attribute == "markerHeight") {
-    result.extent = Lengthd::Extent::Y;
-  }
+  ConfigureLengthExtent(attribute, result);
   const auto& document = registry.ctx().get<SVGDocumentContext>();
   if (document.canvasSize) {
     result.fontMetrics.viewportSize = Vector2d(*document.canvasSize);
   }
-  if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
-      style && style->properties) {
-    result.linearRgb = style->properties->colorInterpolation.getOr(ColorInterpolation::SRGB) ==
-                       ColorInterpolation::LinearRGB;
-    if (const auto color = style->properties->color.get()) {
-      result.currentColor = color->resolve(result.currentColor, 1);
-    }
-    if (const auto font = style->properties->fontSize.get()) {
-      result.fontMetrics.fontSize = font->toPixels(result.viewBox, result.fontMetrics);
-    }
-  }
-  if (const auto* rootStyle = registry.try_get<ComputedStyleComponent>(document.rootEntity);
-      rootStyle && rootStyle->properties) {
-    if (const auto font = rootStyle->properties->fontSize.get()) {
-      result.fontMetrics.rootFontSize = font->toPixels(result.viewBox, result.fontMetrics);
-    }
-  }
+  ConfigureAnimationStyleContext(registry, target, document.rootEntity, result);
   return result;
 }
 
