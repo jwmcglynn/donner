@@ -47,77 +47,93 @@ std::string repeatedAnimationValues(std::size_t count) {
   return values;
 }
 
-/// Helper to run the animation system and return the override value for a given attribute on an
-/// element.
+std::optional<std::string> getAnimatedFill(SVGDocument& document, SVGElement element, double time) {
+  // Paint stacks are resolved only after the final inheritance and color context is known.
+  document.setTime(time);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  const auto paint = element.getComputedStyle().fill.get();
+  if (!paint || !paint->is<PaintServer::Solid>()) {
+    return std::nullopt;
+  }
+  return paint->get<PaintServer::Solid>().color.resolve(css::RGBA::RGB(0, 0, 0), 1).toHexString();
+}
+
+std::optional<std::string> getAnimatedOpacity(SVGDocument& document, SVGElement element,
+                                              double time) {
+  document.setTime(time);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  const auto opacity = element.getComputedStyle().opacity.get();
+  if (!opacity) {
+    return std::nullopt;
+  }
+  std::ostringstream output;
+  output.precision(12);
+  output << *opacity;
+  return output.str();
+}
+
+bool supportsRectLength(const SVGElement& element, const std::string& attributeName) {
+  return element.type() == ElementType::Rect &&
+         (attributeName == "x" || attributeName == "width" || attributeName == "height");
+}
+
+std::optional<std::string> getAnimatedRectLength(SVGDocument& document, SVGElement element,
+                                                 const std::string& attributeName, double time) {
+  auto& registry = document.registry();
+  const auto recipe =
+      element.entityHandle().get<components::AnimatedValuesComponent>().contextualLengths.at(
+          attributeName);
+  const auto rect = element.cast<SVGRectElement>();
+  auto& budget = registry.ctx().get<components::AnimationResourceBudget>();
+  auto context = components::AnimationContextFor(registry, element.entityHandle().entity(),
+                                                 attributeName, budget);
+  context.extent = attributeName == "height" ? Lengthd::Extent::Y : Lengthd::Extent::X;
+  const Lengthd underlying = attributeName == "x"       ? rect.x()
+                             : attributeName == "width" ? rect.width()
+                                                        : rect.height();
+  if (!components::SampleContextualLengthRecipe(*recipe, underlying, context)) {
+    return std::nullopt;
+  }
+  document.setTime(time);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  std::ostringstream output;
+  output.precision(12);
+  if (attributeName == "x") {
+    output << rect.computedX();
+  } else if (attributeName == "width") {
+    output << rect.computedWidth();
+  } else {
+    output << rect.computedHeight();
+  }
+  return output.str();
+}
+
+/// Run the animation system and read the resolved value of the selected attribute.
 std::optional<std::string> getAnimatedValue(SVGDocument& document, const char* selector,
                                             const std::string& attributeName, double time) {
   auto& registry = document.registry();
   components::AnimationSystem().advance(registry, time, nullptr);
-
   auto element = document.querySelector(selector);
   if (!element.has_value()) {
     return std::nullopt;
   }
-
   auto* animValues =
       registry.try_get<components::AnimatedValuesComponent>(element->entityHandle().entity());
   if (!animValues) {
     return std::nullopt;
   }
-
   if (attributeName == "fill" && animValues->contextualLengths.contains("fill")) {
-    // Paint stacks are resolved only after the final inheritance and color context is known.
-    document.setTime(time);
-    ParseWarningSink warnings = ParseWarningSink::Disabled();
-    RendererUtils::prepareDocumentForRendering(document, false, warnings);
-    const auto paint = element->getComputedStyle().fill.get();
-    if (!paint || !paint->is<PaintServer::Solid>()) {
-      return std::nullopt;
-    }
-    return paint->get<PaintServer::Solid>().color.resolve(css::RGBA::RGB(0, 0, 0), 1).toHexString();
+    return getAnimatedFill(document, *element, time);
   }
   if (attributeName == "opacity" && animValues->contextualLengths.contains("opacity")) {
-    document.setTime(time);
-    ParseWarningSink warnings = ParseWarningSink::Disabled();
-    RendererUtils::prepareDocumentForRendering(document, false, warnings);
-    const auto opacity = element->getComputedStyle().opacity.get();
-    if (!opacity) {
-      return std::nullopt;
-    }
-    std::ostringstream output;
-    output.precision(12);
-    output << *opacity;
-    return output.str();
+    return getAnimatedOpacity(document, *element, time);
   }
-  const bool supportedRectLength =
-      element->type() == ElementType::Rect &&
-      (attributeName == "x" || attributeName == "width" || attributeName == "height");
-  if (supportedRectLength && animValues->contextualLengths.contains(attributeName)) {
-    const auto recipe = animValues->contextualLengths.at(attributeName);
-    const auto rect = element->cast<SVGRectElement>();
-    auto& budget = registry.ctx().get<components::AnimationResourceBudget>();
-    auto context = components::AnimationContextFor(registry, element->entityHandle().entity(),
-                                                   attributeName, budget);
-    context.extent = attributeName == "height" ? Lengthd::Extent::Y : Lengthd::Extent::X;
-    const Lengthd underlying = attributeName == "x"       ? rect.x()
-                               : attributeName == "width" ? rect.width()
-                                                          : rect.height();
-    if (!components::SampleContextualLengthRecipe(*recipe, underlying, context)) {
-      return std::nullopt;
-    }
-    document.setTime(time);
-    ParseWarningSink warnings = ParseWarningSink::Disabled();
-    RendererUtils::prepareDocumentForRendering(document, false, warnings);
-    std::ostringstream output;
-    output.precision(12);
-    if (attributeName == "x") {
-      output << rect.computedX();
-    } else if (attributeName == "width") {
-      output << rect.computedWidth();
-    } else {
-      output << rect.computedHeight();
-    }
-    return output.str();
+  if (supportsRectLength(*element, attributeName) &&
+      animValues->contextualLengths.contains(attributeName)) {
+    return getAnimatedRectLength(document, *element, attributeName, time);
   }
   auto it = animValues->overrides.find(attributeName);
   if (it == animValues->overrides.end()) {
