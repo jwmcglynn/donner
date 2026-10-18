@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <initializer_list>
 #include <limits>
 #include <sstream>
@@ -755,18 +756,100 @@ std::optional<std::string> FilterNumberBaseValue(Registry& registry, Entity targ
   return result;
 }
 
+enum class AttributeTrait : uint16_t {
+  None = 0,
+  Reference = 1 << 0,
+  NumberPair = 1 << 1,
+  Integer = 1 << 2,
+  Scalar = 1 << 3,
+  MarkerAngle = 1 << 4,
+  StopPercentage = 1 << 5,
+  ColorMatrixList = 1 << 6,
+  ConvolveList = 1 << 7,
+  FunctionList = 1 << 8,
+};
+
+constexpr AttributeTrait operator|(AttributeTrait lhs, AttributeTrait rhs) {
+  return static_cast<AttributeTrait>(static_cast<uint16_t>(lhs) | static_cast<uint16_t>(rhs));
+}
+
+struct AnimationAttributeTraits {
+  std::string_view name;
+  Lengthd::Extent extent = Lengthd::Extent::Mixed;
+  AttributeTrait flags = AttributeTrait::None;
+};
+
+constexpr bool HasTrait(const AnimationAttributeTraits& traits, AttributeTrait flag) {
+  return (static_cast<uint16_t>(traits.flags) & static_cast<uint16_t>(flag)) != 0;
+}
+
+const AnimationAttributeTraits& LookupAnimationAttributeTraits(std::string_view name) {
+  static constexpr std::array kTraits = {
+      AnimationAttributeTraits{"x", Lengthd::Extent::X},
+      AnimationAttributeTraits{"dx", Lengthd::Extent::X},
+      AnimationAttributeTraits{"x1", Lengthd::Extent::X},
+      AnimationAttributeTraits{"x2", Lengthd::Extent::X},
+      AnimationAttributeTraits{"cx", Lengthd::Extent::X},
+      AnimationAttributeTraits{"rx", Lengthd::Extent::X},
+      AnimationAttributeTraits{"width", Lengthd::Extent::X},
+      AnimationAttributeTraits{"fx", Lengthd::Extent::X},
+      AnimationAttributeTraits{"refX", Lengthd::Extent::X},
+      AnimationAttributeTraits{"markerWidth", Lengthd::Extent::X},
+      AnimationAttributeTraits{"y", Lengthd::Extent::Y},
+      AnimationAttributeTraits{"dy", Lengthd::Extent::Y},
+      AnimationAttributeTraits{"y1", Lengthd::Extent::Y},
+      AnimationAttributeTraits{"y2", Lengthd::Extent::Y},
+      AnimationAttributeTraits{"cy", Lengthd::Extent::Y},
+      AnimationAttributeTraits{"ry", Lengthd::Extent::Y},
+      AnimationAttributeTraits{"height", Lengthd::Extent::Y},
+      AnimationAttributeTraits{"fy", Lengthd::Extent::Y},
+      AnimationAttributeTraits{"refY", Lengthd::Extent::Y},
+      AnimationAttributeTraits{"markerHeight", Lengthd::Extent::Y},
+      AnimationAttributeTraits{"href", Lengthd::Extent::Mixed, AttributeTrait::Reference},
+      AnimationAttributeTraits{"xlink:href", Lengthd::Extent::Mixed, AttributeTrait::Reference},
+      AnimationAttributeTraits{"in", Lengthd::Extent::Mixed, AttributeTrait::Reference},
+      AnimationAttributeTraits{"in2", Lengthd::Extent::Mixed, AttributeTrait::Reference},
+      AnimationAttributeTraits{"result", Lengthd::Extent::Mixed, AttributeTrait::Reference},
+      AnimationAttributeTraits{"stdDeviation", Lengthd::Extent::Mixed, AttributeTrait::NumberPair},
+      AnimationAttributeTraits{"radius", Lengthd::Extent::Mixed, AttributeTrait::NumberPair},
+      AnimationAttributeTraits{"baseFrequency", Lengthd::Extent::Mixed, AttributeTrait::NumberPair},
+      AnimationAttributeTraits{"order", Lengthd::Extent::Mixed,
+                               AttributeTrait::NumberPair | AttributeTrait::Integer},
+      AnimationAttributeTraits{"numOctaves", Lengthd::Extent::Mixed, AttributeTrait::Integer},
+      AnimationAttributeTraits{"targetX", Lengthd::Extent::Mixed, AttributeTrait::Integer},
+      AnimationAttributeTraits{"targetY", Lengthd::Extent::Mixed, AttributeTrait::Integer},
+      AnimationAttributeTraits{"pathLength", Lengthd::Extent::Mixed, AttributeTrait::Scalar},
+      AnimationAttributeTraits{"orient", Lengthd::Extent::Mixed, AttributeTrait::MarkerAngle},
+      AnimationAttributeTraits{"offset", Lengthd::Extent::Mixed, AttributeTrait::StopPercentage},
+      AnimationAttributeTraits{"values", Lengthd::Extent::Mixed, AttributeTrait::ColorMatrixList},
+      AnimationAttributeTraits{"kernelMatrix", Lengthd::Extent::Mixed,
+                               AttributeTrait::ConvolveList},
+      AnimationAttributeTraits{"tableValues", Lengthd::Extent::Mixed, AttributeTrait::FunctionList},
+  };
+  static constexpr AnimationAttributeTraits kDefault{""};
+  const auto found = std::find_if(kTraits.begin(), kTraits.end(),
+                                  [name](const auto& item) { return item.name == name; });
+  return found == kTraits.end() ? kDefault : *found;
+}
+
 void ConfigureNumericContext(Registry& registry, Entity target, std::string_view name,
+                             const AnimationAttributeTraits& traits,
                              AnimationValueContext& context) {
-  context.percentageNumbers = name == "offset" && registry.all_of<StopComponent>(target);
+  context.percentageNumbers =
+      HasTrait(traits, AttributeTrait::StopPercentage) && registry.all_of<StopComponent>(target);
   const bool scalar =
-      context.percentageNumbers || name == "pathLength" || context.integerValue ||
+      context.percentageNumbers || HasTrait(traits, AttributeTrait::Scalar) ||
+      context.integerValue ||
       VisitAnimationNumberAttribute(registry, target, name, [](const auto&, auto) {});
   if (scalar || context.numberPair) {
     context.maximumNumbers = context.numberPair ? 2 : 1;
   }
-  if ((name == "values" && registry.all_of<FEColorMatrixComponent>(target)) ||
-      (name == "kernelMatrix" && registry.all_of<FEConvolveMatrixComponent>(target)) ||
-      (name == "tableValues" && registry.all_of<FEFuncComponent>(target))) {
+  if ((HasTrait(traits, AttributeTrait::ColorMatrixList) &&
+       registry.all_of<FEColorMatrixComponent>(target)) ||
+      (HasTrait(traits, AttributeTrait::ConvolveList) &&
+       registry.all_of<FEConvolveMatrixComponent>(target)) ||
+      (HasTrait(traits, AttributeTrait::FunctionList) &&
+       registry.all_of<FEFuncComponent>(target))) {
     context.maximumNumbers = AnimationResourceBudget::kMaximumNumbersPerValue;
   }
 }
@@ -838,18 +921,6 @@ std::optional<RcString> AnimationReferenceValue(Registry& registry, Entity entit
   }
 }
 
-void ConfigureLengthExtent(std::string_view attribute, AnimationValueContext& context) {
-  static constexpr std::array<std::string_view, 10> xNames = {
-      "x", "dx", "x1", "x2", "cx", "rx", "width", "fx", "refX", "markerWidth"};
-  static constexpr std::array<std::string_view, 10> yNames = {
-      "y", "dy", "y1", "y2", "cy", "ry", "height", "fy", "refY", "markerHeight"};
-  if (std::find(xNames.begin(), xNames.end(), attribute) != xNames.end()) {
-    context.extent = Lengthd::Extent::X;
-  } else if (std::find(yNames.begin(), yNames.end(), attribute) != yNames.end()) {
-    context.extent = Lengthd::Extent::Y;
-  }
-}
-
 void ConfigureAnimationStyleContext(Registry& registry, Entity target, Entity root,
                                     AnimationValueContext& context) {
   if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
@@ -871,32 +942,27 @@ void ConfigureAnimationStyleContext(Registry& registry, Entity target, Entity ro
   }
 }
 
-bool IsReferenceAnimationAttribute(std::string_view attribute) {
-  return attribute == "href" || attribute == "xlink:href" || attribute == "in" ||
-         attribute == "in2" || attribute == "result";
-}
-
-void ConfigureValueKinds(Registry& registry, Entity target, std::string_view attribute,
+void ConfigureValueKinds(Registry& registry, Entity target, const AnimationAttributeTraits& traits,
                          AnimationValueContext& context) {
-  context.angleValue = attribute == "orient" && registry.all_of<MarkerComponent>(target);
-  context.referenceValue = IsReferenceAnimationAttribute(attribute);
-  context.numberPair = attribute == "stdDeviation" || attribute == "radius" ||
-                       attribute == "baseFrequency" || attribute == "order";
-  context.integerValue = attribute == "numOctaves" || attribute == "targetX" ||
-                         attribute == "targetY" || attribute == "order";
+  context.angleValue =
+      HasTrait(traits, AttributeTrait::MarkerAngle) && registry.all_of<MarkerComponent>(target);
+  context.referenceValue = HasTrait(traits, AttributeTrait::Reference);
+  context.numberPair = HasTrait(traits, AttributeTrait::NumberPair);
+  context.integerValue = HasTrait(traits, AttributeTrait::Integer);
 }
 
 AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
                                           std::string_view attribute,
                                           AnimationResourceBudget& budget) {
   AnimationValueContext result;
-  ConfigureValueKinds(registry, target, attribute, result);
-  ConfigureNumericContext(registry, target, attribute, result);
+  const AnimationAttributeTraits& traits = LookupAnimationAttributeTraits(attribute);
+  ConfigureValueKinds(registry, target, traits, result);
+  ConfigureNumericContext(registry, target, attribute, traits, result);
   result.viewBox = LayoutSystem().getViewBox(EntityHandle(registry, target));
   if (ResourceUsesBoundingBoxUnits(registry, target, budget)) {
     result.viewBox = Box2d{{0, 0}, {1, 1}};
   }
-  ConfigureLengthExtent(attribute, result);
+  result.extent = traits.extent;
   const auto& document = registry.ctx().get<SVGDocumentContext>();
   if (document.canvasSize) {
     result.fontMetrics.viewportSize = Vector2d(*document.canvasSize);

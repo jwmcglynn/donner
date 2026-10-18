@@ -119,18 +119,35 @@ function extractBrowserLibraryFunction(name, nextName, bridge) {
 }
 
 const frameAttemptFixture = {
-  scheduledAttempts: 11, eventAttempts: 12, scheduledIdle: 13, eventIdle: 14,
-  scheduledRendered: 15, eventRendered: 16, blockedByFrame: 17, blockedByGpu: 18,
+  scheduledAttempts: 11,
+  eventAttempts: 12,
+  scheduledIdle: 13,
+  eventIdle: 14,
+  scheduledRendered: 15,
+  eventRendered: 16,
+  blockedByFrame: 17,
+  blockedByGpu: 18,
   eventDeferrals: 19,
 };
 
 function makeFrameSamplePublisher(body) {
   const publish = new Function(
-    "window", "performance", ...Array.from({ length: 14 }, (_, index) => `$${index}`), body,
+    "window",
+    "performance",
+    ...Array.from({ length: 14 }, (_, index) => `$${index}`),
+    body,
   );
   return (window, clock, triggerBits, frameMs, callbacks, heapBytes, completedAtEpochMs) =>
-    publish(window, clock, triggerBits, frameMs, callbacks, heapBytes, completedAtEpochMs,
-      ...Object.values(frameAttemptFixture));
+    publish(
+      window,
+      clock,
+      triggerBits,
+      frameMs,
+      callbacks,
+      heapBytes,
+      completedAtEpochMs,
+      ...Object.values(frameAttemptFixture),
+    );
 }
 
 test("host timing consumes each current-frame draw snapshot once", () => {
@@ -571,10 +588,40 @@ test("the first canvas frame after a polled result must carry that result", () =
   const publisher = workerBridgeSource.match(/void PublishPresentedDocumentFrame\([\s\S]*?\n\}/);
   assert.ok(publisher, "expected the presented-document-frame publisher");
   const body = publisher[0].match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
-  const publish = new Function("window", "performance", "$0", "$1", "$2", "$3", body);
+  const statsHelper = workerBridgeSource.match(
+    /EM_JS\(void, RecordPresentedDocumentFrameStats,[\s\S]*?int surfacePresented\), \{([\s\S]*?)\n {6}\}\);/,
+  );
+  assert.ok(statsHelper, "expected the production presentation stats helper");
+  const recordStats = new Function(
+    "window",
+    "performance",
+    "documentGeneration",
+    "frameVersion",
+    "presentedAtEpochMs",
+    "surfacePresented",
+    statsHelper[1],
+  );
+  const publish = new Function(
+    "window",
+    "performance",
+    "RecordPresentedDocumentFrameStats",
+    "$0",
+    "$1",
+    "$2",
+    "$3",
+    body,
+  );
   const frameClock = { timeOrigin: 1000, now: () => 250 };
   const presentFrame = (window, generation, version, epochMs = 1200, surfacePresented = true) =>
-    publish(window, frameClock, generation, version, epochMs, Number(surfacePresented));
+    publish(
+      window,
+      frameClock,
+      (...values) => recordStats(window, frameClock, ...values),
+      generation,
+      version,
+      epochMs,
+      Number(surfacePresented),
+    );
   const unpresented = {};
   presentFrame(unpresented, 2, 5, 1200, false);
   assert.equal(unpresented.__donnerPresentedDocumentStats, undefined);

@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <limits>
+#include <span>
 #include <sstream>
+#include <utility>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Path.h"
@@ -155,8 +158,32 @@ std::optional<Path> ImplicitMotionPath(const AnimateMotionComponent& motion) {
   return builder.build();
 }
 
-std::optional<double> MotionDistance(const AnimateMotionComponent& motion,
-                                     const Path::MeasuredPath& measured, double progress) {
+std::optional<std::vector<double>> AuthoredMotionTimingPoints(
+    const Path& path, const Path::MeasuredPath& measured,
+    std::span<const double> segmentEndDistances) {
+  std::vector<double> points;
+  points.reserve(segmentEndDistances.size() + 1);
+  points.push_back(0);
+  std::size_t segmentIndex = 0;
+  for (const Path::Command& command : path.commands()) {
+    if (command.verb == Path::Verb::MoveTo) {
+      continue;
+    }
+    if (segmentIndex >= segmentEndDistances.size()) {
+      return std::nullopt;
+    }
+    const double endDistance = segmentEndDistances[segmentIndex++];
+    if (!command.isInternal) {
+      points.push_back(measured.pathLength() > 0 ? endDistance / measured.pathLength() : 0);
+    }
+  }
+  return segmentIndex == segmentEndDistances.size() ? std::optional(std::move(points))
+                                                    : std::nullopt;
+}
+
+std::optional<double> MotionDistance(const AnimateMotionComponent& motion, const Path& path,
+                                     const Path::MeasuredPath& measured,
+                                     std::span<const double> segmentEndDistances, double progress) {
   if (motion.calcMode == CalcMode::Paced) {
     return progress * measured.pathLength();
   }
@@ -168,11 +195,11 @@ std::optional<double> MotionDistance(const AnimateMotionComponent& motion,
       return std::nullopt;
     }
   } else {
-    points = measured.segmentEndDistances();
-    points.insert(points.begin(), 0);
-    for (double& point : points) {
-      point = measured.pathLength() > 0 ? point / measured.pathLength() : 0;
+    auto authoredPoints = AuthoredMotionTimingPoints(path, measured, segmentEndDistances);
+    if (!authoredPoints) {
+      return std::nullopt;
     }
+    points = std::move(*authoredPoints);
   }
   const auto segment = SelectAnimationSegment(progress, points.size(), motion);
   if (!segment) {
@@ -196,6 +223,134 @@ std::optional<double> MotionAngle(const AnimateMotionComponent& motion, double t
     return std::nullopt;
   }
   return number.result().number;
+}
+
+bool IsExactlyZeroVector(Vector2d vector) {
+  return vector.x == 0 && vector.y == 0;
+}
+
+std::optional<Vector2d> FirstNonzeroVector(Vector2d first, Vector2d second, Vector2d third) {
+  for (const Vector2d candidate : {first, second, third}) {
+    if (!IsExactlyZeroVector(candidate)) {
+      return candidate;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<Vector2d> MotionCommandEndpointTangent(const Path& path, std::size_t selectedSegment,
+                                                     bool atEnd) {
+  const auto commands = path.commands();
+  const auto points = path.points();
+  Vector2d current;
+  Vector2d subpathStart;
+  bool hasCurrent = false;
+  std::size_t segmentIndex = 0;
+  for (const Path::Command& command : commands) {
+    if (command.verb == Path::Verb::MoveTo) {
+      current = points[command.pointIndex];
+      subpathStart = current;
+      hasCurrent = true;
+      continue;
+    }
+    if (!hasCurrent) {
+      return std::nullopt;
+    }
+
+    const Vector2d start = current;
+    Vector2d end;
+    std::optional<Vector2d> tangent;
+    switch (command.verb) {
+      case Path::Verb::MoveTo: UTILS_UNREACHABLE();
+      case Path::Verb::LineTo:
+        end = points[command.pointIndex];
+        tangent = end - start;
+        break;
+      case Path::Verb::QuadTo: {
+        const Vector2d control = points[command.pointIndex];
+        end = points[command.pointIndex + 1];
+        tangent = atEnd ? FirstNonzeroVector(end - control, end - start, {})
+                        : FirstNonzeroVector(control - start, end - start, {});
+        break;
+      }
+      case Path::Verb::CurveTo: {
+        const Vector2d firstControl = points[command.pointIndex];
+        const Vector2d secondControl = points[command.pointIndex + 1];
+        end = points[command.pointIndex + 2];
+        tangent =
+            atEnd ? FirstNonzeroVector(end - secondControl, end - firstControl, end - start)
+                  : FirstNonzeroVector(firstControl - start, secondControl - start, end - start);
+        break;
+      }
+      case Path::Verb::ClosePath:
+        end = subpathStart;
+        tangent = end - start;
+        break;
+    }
+    if (segmentIndex++ == selectedSegment) {
+      return tangent;
+    }
+    current = end;
+  }
+  return std::nullopt;
+}
+
+bool SegmentHasPositiveLength(std::span<const double> segmentEndDistances, std::size_t segment) {
+  const double start = segment == 0 ? 0 : segmentEndDistances[segment - 1];
+  return segmentEndDistances[segment] > start;
+}
+
+bool IsSameMotionDistance(double lhs, double rhs) {
+  if (lhs == rhs) {
+    return true;
+  }
+  const double scale = std::max(std::abs(lhs), std::abs(rhs));
+  return std::abs(lhs - rhs) <= scale * std::numeric_limits<double>::epsilon() * 8;
+}
+
+std::optional<std::pair<std::size_t, bool>> MotionBoundarySegment(
+    std::span<const double> segmentEndDistances, double distance) {
+  const auto selected =
+      std::lower_bound(segmentEndDistances.begin(), segmentEndDistances.end(), distance);
+  if (selected == segmentEndDistances.end()) {
+    return std::nullopt;
+  }
+  const std::size_t selectedSegment =
+      static_cast<std::size_t>(selected - segmentEndDistances.begin());
+  const double startDistance = selectedSegment == 0 ? 0 : segmentEndDistances[selectedSegment - 1];
+  if (IsSameMotionDistance(distance, startDistance) && !IsSameMotionDistance(distance, *selected)) {
+    return std::pair(selectedSegment, false);
+  }
+  if (!IsSameMotionDistance(distance, *selected)) {
+    return std::nullopt;
+  }
+
+  for (std::size_t following = selectedSegment + 1; following < segmentEndDistances.size();
+       ++following) {
+    if (SegmentHasPositiveLength(segmentEndDistances, following)) {
+      return std::pair(following, false);
+    }
+  }
+  for (std::size_t incoming = segmentEndDistances.size(); incoming-- > 0;) {
+    if (SegmentHasPositiveLength(segmentEndDistances, incoming)) {
+      return std::pair(incoming, true);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<double> MotionEndpointTangentAngle(const Path& path,
+                                                 std::span<const double> segmentEndDistances,
+                                                 double distance) {
+  const auto selected = MotionBoundarySegment(segmentEndDistances, distance);
+  if (!selected) {
+    return std::nullopt;
+  }
+  const auto tangent = MotionCommandEndpointTangent(path, selected->first, selected->second);
+  if (!tangent || IsExactlyZeroVector(*tangent)) {
+    return std::nullopt;
+  }
+  return std::atan2(tangent->y, tangent->x);
 }
 
 std::optional<Path> ParseMotionPathSource(const std::optional<std::string>& source) {
@@ -223,12 +378,17 @@ std::optional<Path> ResolveMotionPath(Registry& registry, Entity entity,
   return path;
 }
 
-bool AccumulateMotion(const AnimateMotionComponent& motion, double iteration,
-                      const Path::MeasuredPath& measured, Path::PointOnPath& sample) {
+bool AccumulateMotion(const AnimateMotionComponent& motion, const Path& path, double iteration,
+                      const Path::MeasuredPath& measured,
+                      std::span<const double> segmentEndDistances, Path::PointOnPath& sample) {
   if (!motion.accumulate || !(iteration > 0)) {
     return true;
   }
-  const auto last = measured.pointAtArcLength(measured.pathLength());
+  const auto finalDistance = MotionDistance(motion, path, measured, segmentEndDistances, 1);
+  if (!finalDistance) {
+    return false;
+  }
+  const auto last = measured.pointAtArcLength(*finalDistance);
   if (!last.valid) {
     return false;
   }
@@ -263,7 +423,8 @@ SampledAnimationMotion SampleAnimationMotion(Registry& registry, Entity entity,
   if (!budget.reserveGeometryWork(measured.measurementWorkUnits()) || !measured.valid()) {
     return {};
   }
-  const auto distance = MotionDistance(motion, measured, progress);
+  const std::vector<double> segmentEndDistances = measured.segmentEndDistances();
+  const auto distance = MotionDistance(motion, *path, measured, segmentEndDistances, progress);
   if (!distance) {
     return {};
   }
@@ -271,10 +432,16 @@ SampledAnimationMotion SampleAnimationMotion(Registry& registry, Entity entity,
   if (!sample.valid) {
     return {};
   }
-  if (!AccumulateMotion(motion, iteration, measured, sample)) {
+  if (!AccumulateMotion(motion, *path, iteration, measured, segmentEndDistances, sample)) {
     return {};
   }
-  const auto angle = MotionAngle(motion, sample.angle);
+  double tangentAngle = sample.angle;
+  if ((motion.rotate == "auto" || motion.rotate == "auto-reverse") &&
+      IsExactlyZeroVector(sample.tangent)) {
+    tangentAngle =
+        MotionEndpointTangentAngle(*path, segmentEndDistances, *distance).value_or(tangentAngle);
+  }
+  const auto angle = MotionAngle(motion, tangentAngle);
   if (!angle || !std::isfinite(sample.point.x) || !std::isfinite(sample.point.y)) {
     return {};
   }

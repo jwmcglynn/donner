@@ -356,6 +356,19 @@ constexpr bool ForEachShape(const F& f) {
   return ForEachShapeImpl<TypeList>(f, std::make_index_sequence<TypeList::size>{});
 }
 
+bool HasIdenticalPathData(const Path& first, const Path& second) {
+  const auto sameCommand = [](const Path::Command& a, const Path::Command& b) {
+    return a.verb == b.verb && a.pointIndex == b.pointIndex && a.isInternal == b.isInternal;
+  };
+  const auto samePoint = [](const Vector2d& a, const Vector2d& b) {
+    return a.x == b.x && a.y == b.y;
+  };
+  return std::equal(first.commands().begin(), first.commands().end(), second.commands().begin(),
+                    second.commands().end(), sameCommand) &&
+         std::equal(first.points().begin(), first.points().end(), second.points().begin(),
+                    second.points().end(), samePoint);
+}
+
 bool IsDisplayNone(EntityHandle handle, ParseWarningSink& warningSink) {
   const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, warningSink);
   return style.properties && style.properties->display.get().value() == Display::None;
@@ -364,12 +377,20 @@ bool IsDisplayNone(EntityHandle handle, ParseWarningSink& warningSink) {
 }  // namespace
 
 EntityHandle ShapeSystem::geometryHandle(EntityHandle instance) {
-  if (!instance.all_of<ComputedInstanceGeometryComponent>()) {
-    if (const auto* shadow = instance.try_get<ShadowEntityComponent>()) {
-      return EntityHandle(*instance.registry(), shadow->lightEntity);
-    }
+  const auto* shadow = instance.try_get<ShadowEntityComponent>();
+  if (!shadow) {
+    return instance;
   }
-  return instance;
+  const EntityHandle light(*instance.registry(), shadow->lightEntity);
+  if (!instance.all_of<ComputedInstanceGeometryComponent>()) {
+    return light;
+  }
+  const auto* instancePath = instance.try_get<ComputedPathComponent>();
+  const auto* lightPath = light.try_get<ComputedPathComponent>();
+  // Identical instance geometry retains the source's renderer cache and batching identity.
+  return instancePath && lightPath && HasIdenticalPathData(instancePath->spline, lightPath->spline)
+             ? light
+             : instance;
 }
 
 void ShapeSystem::instantiateShadowComputedPath(EntityHandle handle,

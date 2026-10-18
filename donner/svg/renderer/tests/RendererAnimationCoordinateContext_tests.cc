@@ -691,13 +691,13 @@ TEST(RendererAnimationCoordinateContext, ShapeFontUnitsUseEachTransformedInstanc
     document.setTime(time);
     const std::string a = time == 1 ? "3" : "4";
     const std::string b = time == 1 ? "7" : "4";
-    auto expected = instantiateSubtree(paint + "<rect x='1' width='" + a +
-                                           "' height='4' fill='url(#g)'/>"
-                                           "<rect x='8' y='4' width='" +
+    auto expected = instantiateSubtree(paint + "<g transform='translate(1 0)'><rect width='" + a +
+                                           "' height='4' fill='url(#g)'/></g>"
+                                           "<g transform='translate(8 4)'><rect width='" +
                                            b +
-                                           "' height='4' fill='url(#g)'/>"
-                                           "<rect x='3' y='8' width='" +
-                                           a + "' height='4' fill='url(#g)'/>",
+                                           "' height='4' fill='url(#g)'/></g>"
+                                           "<g transform='translate(3 8)'><rect width='" +
+                                           a + "' height='4' fill='url(#g)'/></g>",
                                        parser::SVGParser::Options(), Vector2i(16, 16));
     editor::tests::CompareBitmapToBitmap(
         RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),

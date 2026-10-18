@@ -8,6 +8,7 @@
 
 #include "donner/base/encoding/Base64.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGMarkerElement.h"
@@ -30,6 +31,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
+#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -708,6 +710,55 @@ TEST(RendererAnimationPresentation, FrozenPartialTextPositionKeepsBoundaryLowerL
         RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
         "frozen-partial-text-position-" + std::to_string(item.time),
         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPresentation, RtlTextLengthMatchesEquivalentStaticTarget) {
+  const auto fontFile =
+      donner::tests::ReadRequiredRunfile("third_party/resvg-test-suite/fonts/Amiri-Regular.ttf");
+  ASSERT_THAT(fontFile.error, testing::IsEmpty());
+  css::FontFaceSource fontSource;
+  fontSource.kind = css::FontFaceSource::Kind::Data;
+  const auto fontData = std::make_shared<const std::vector<uint8_t>>(fontFile.contents.begin(),
+                                                                     fontFile.contents.end());
+  fontSource.payload = fontData;
+  fontSource.trusted = true;
+  css::FontFace face;
+  face.familyName = "Amiri";
+  face.sources.push_back(std::move(fontSource));
+  const auto parseArabic = [&](std::string_view source) {
+    auto document = instantiateSubtree(source, parser::SVGParser::Options(), Vector2i(200, 80));
+    auto& fonts = document.registry().ctx().get_or_emplace<FontManager>(document.registry());
+    fonts.addFontFace(face);
+    EXPECT_THAT(fonts.fontData(fonts.findFont("Amiri")), testing::ElementsAreArray(*fontData));
+    return document;
+  };
+  for (const std::string_view adjust : {"spacing", "spacingAndGlyphs"}) {
+    SCOPED_TRACE(adjust);
+    const std::string attributes =
+        " x='20' y='45' font-size='32' font-family='Amiri' lengthAdjust='" + std::string(adjust) +
+        "'";
+    auto document = parseArabic("<text id='owner'" + attributes +
+                                ">&#x627;&#x644;&#x648;&#x64A;&#x628;"
+                                "<animate attributeName='textLength' to='120' dur='2s'/></text>");
+    auto owner = document.querySelector("#owner");
+    ASSERT_THAT(owner, testing::Ne(std::nullopt));
+    document.setTime(3);
+    const double natural = owner->cast<SVGTextElement>().getComputedTextLength();
+    ASSERT_GT(natural, 0);
+    document.setTime(1);
+    std::ostringstream midpoint;
+    midpoint.precision(std::numeric_limits<double>::max_digits10);
+    midpoint << (natural + 120) / 2;
+    auto expected = parseArabic("<text" + attributes + " textLength='" + midpoint.str() +
+                                "'>&#x627;&#x644;&#x648;&#x64A;&#x628;</text>");
+    const auto actualBitmap = RenderDocumentWithActiveBackend(document);
+    const auto expectedBitmap = RenderDocumentWithActiveBackend(expected);
+    ASSERT_GT(test::CountNonTransparentPixels(actualBitmap), 100u);
+    ASSERT_GT(test::CountNonTransparentPixels(expectedBitmap), 100u);
+    editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap,
+                                         "rtl-text-length-" + std::string(adjust),
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 #endif
