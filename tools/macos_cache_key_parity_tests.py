@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -469,7 +470,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                      "BAZEL_MACOS_BUILD_FLAGS": "--config=ci-macos",
                      "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild),
                      "XCODE_LOCATOR": str(locator) if locator_status is not None else "",
-                     "XCRUN": str(xcrun)},
+                     "XCRUN": str(xcrun), "XCODE_PROBE_PYTHON": sys.executable},
                 capture_output=True, text=True, timeout=test_timing.STALL_GUARD_SECONDS,
                 check=False)
             return (result.returncode, env_file.read_text(), output_file.read_text(),
