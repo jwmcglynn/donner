@@ -185,42 +185,56 @@ std::optional<std::string> SamplePaintStack(const ContextualLengthRecipe& recipe
                                             const AnimationValueContext& context,
                                             AnimationResourceBudget& budget, BaseProvider base) {
   PropertyRegistry validator;
-  std::optional<std::string> underlying;
-  bool contributed = false;
+  using PaintState = std::optional<std::string>;
+  std::optional<PaintState> cachedBase;
+  bool refused = false;
   const std::string empty;
-  for (const auto& source : recipe.samples) {
-    if (NeedsUnderlying(source)) {
-      if (!underlying) {
-        underlying = base();
-        if (!underlying) {
+  const auto sampled = SampleContextualAnimationRecipe(
+      recipe, PaintState{},
+      [&](const ContextualLengthSample& source,
+          PaintState underlying) -> std::optional<PaintState> {
+        if (refused) {
           return std::nullopt;
         }
-      }
-      if (underlying->size() > AnimationResourceBudget::kMaximumContextualWork / 16 ||
-          !budget.reserveContextualWork(underlying->size() * 16)) {
+        if (NeedsUnderlying(source)) {
+          if (!underlying) {
+            if (!cachedBase) {
+              cachedBase = base();
+            }
+            underlying = *cachedBase;
+            if (!underlying) {
+              refused = true;
+              return std::nullopt;
+            }
+          }
+          if (underlying->size() > AnimationResourceBudget::kMaximumContextualWork / 16 ||
+              !budget.reserveContextualWork(underlying->size() * 16)) {
+            refused = true;
+            return std::nullopt;
+          }
+        }
+        ContextualLengthSample sample = source;
+        if (!NormalizeDeclaration(sample, keywords, budget)) {
+          refused = true;
+          return std::nullopt;
+        }
+        if (!ValidDeclaration(sample, name, underlying ? *underlying : empty, validator)) {
+          return std::nullopt;
+        }
+        const auto value =
+            SampleAnimationValue(sample.progress, sample.iteration,
+                                 std::get_if<SetAnimationComponent>(&sample.declaration),
+                                 std::get_if<AnimateValueComponent>(&sample.declaration), nullptr,
+                                 underlying ? *underlying : empty, context);
+        if (!value) {
+          return std::nullopt;
+        }
+        if (ValidPaintValue(validator, name, value->second)) {
+          return PaintState(value->second);
+        }
         return std::nullopt;
-      }
-    }
-    ContextualLengthSample sample = source;
-    if (!NormalizeDeclaration(sample, keywords, budget)) {
-      return std::nullopt;
-    }
-    if (!ValidDeclaration(sample, name, underlying ? *underlying : empty, validator)) {
-      continue;
-    }
-    const auto value = SampleAnimationValue(sample.progress, sample.iteration,
-                                            std::get_if<SetAnimationComponent>(&sample.declaration),
-                                            std::get_if<AnimateValueComponent>(&sample.declaration),
-                                            nullptr, underlying ? *underlying : empty, context);
-    if (!value) {
-      continue;
-    }
-    if (ValidPaintValue(validator, name, value->second)) {
-      underlying = value->second;
-      contributed = true;
-    }
-  }
-  return contributed ? underlying : std::nullopt;
+      });
+  return !refused && sampled ? *sampled : std::nullopt;
 }
 
 template <typename P>

@@ -2,7 +2,11 @@
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
+#include "donner/svg/components/text/TextPathComponent.h"
+#include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 
 namespace donner::svg::components {
@@ -32,6 +36,15 @@ Entity InvalidateTextLayout(EntityHandle handle) {
   }
 
   return entt::null;
+}
+
+void InvalidateAnimatedText(Registry& registry, Entity entity) {
+  if (registry.any_of<TextComponent, TextPositioningComponent, TextPathComponent>(entity)) {
+    const Entity root = InvalidateTextLayout(EntityHandle(registry, entity));
+    if (root != entt::null) {
+      registry.remove<ComputedTextComponent>(root);
+    }
+  }
 }
 
 }  // namespace donner::svg::components

@@ -22,4 +22,10 @@ namespace donner::svg::components {
  */
 Entity InvalidateTextLayout(EntityHandle handle);
 
+/** Invalidate animation-derived text caches when an animated text field changes.
+ * @param registry Document storage.
+ * @param entity Entity whose text-related animation inputs changed.
+ */
+void InvalidateAnimatedText(Registry& registry, Entity entity);
+
 }  // namespace donner::svg::components

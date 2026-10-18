@@ -1777,28 +1777,26 @@ bool HasNeutralLeafCompositing(const components::ComputedStyleComponent& style) 
          style.properties->isolation.get().value() != Isolation::Isolate;
 }
 
-/// The paint-order slice from @p maskedEntity through the end of its mask content
-/// [@p maskFirst, @p maskLast], without offscreen feImage shadows. The mask content is traversed
-/// forward from the masked entity, as in a range draw, so the slice is empty when the mask content
-/// does not follow its entity.
+/// Collect a masked host followed by its mask content, including masks shared with an earlier host.
 std::vector<Entity> CollectMaskReplaySlice(Registry& registry, Entity maskedEntity,
                                            Entity maskFirst, Entity maskLast) {
   const std::unordered_set<Entity> feImageShadowEntities =
       collectOffscreenFeImageShadowEntities(registry);
-  std::vector<Entity> sliceEntities;
-  bool reachedMaskFirst = false;
+  std::vector<Entity> sliceEntities{maskedEntity};
   RenderingInstanceView view(registry);
-  while (!view.done() && view.currentEntity() != maskedEntity) {
+  while (!view.done() && view.currentEntity() != maskFirst) {
     view.advance();
   }
   for (; !view.done(); view.advance()) {
     const Entity entity = view.currentEntity();
+    if (entity == maskedEntity) {
+      return {};
+    }
     if (feImageShadowEntities.count(entity) == 0) {
       sliceEntities.push_back(entity);
     }
-    reachedMaskFirst = reachedMaskFirst || entity == maskFirst;
     if (entity == maskLast) {
-      return reachedMaskFirst ? sliceEntities : std::vector<Entity>();
+      return sliceEntities;
     }
   }
   return {};
@@ -3440,6 +3438,56 @@ void RendererDriver::applyDrawTimeContextRemaps(
 
 namespace {
 
+/// Resolve a mask region using the target's bounds and the authored mask units.
+std::optional<Box2d> MaskRegionBounds(EntityHandle target, const components::MaskComponent& mask,
+                                      const Box2d& shapeLocalBounds) {
+  const bool objectBoundingBox = mask.maskUnits == MaskUnits::ObjectBoundingBox;
+  const Box2d maskUnitsBounds =
+      objectBoundingBox ? shapeLocalBounds : components::LayoutSystem().getViewBox(target);
+
+  const Lengthd x = mask.x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+  const Lengthd y = mask.y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+  const Lengthd width = mask.width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+  const Lengthd height = mask.height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+
+  // In an objectBoundingBox coordinate system, unitless values are fractions of the target
+  // bounds and positions are relative to its origin. Percentages use the same origin, while
+  // absolute lengths retain their CSS pixel conversion. The default -10%/-10%/120%/120%
+  // region is real clipping state too, rather than an unbounded auto region.
+  const auto resolveMaskLength = [&](const Lengthd& length, Lengthd::Extent extent,
+                                     bool isPosition) {
+    const double extentPixels =
+        extent == Lengthd::Extent::X ? maskUnitsBounds.width() : maskUnitsBounds.height();
+    double pixels = objectBoundingBox && length.unit == Lengthd::Unit::None
+                        ? length.value * extentPixels
+                        : length.toPixels(maskUnitsBounds, FontMetrics(), extent);
+    if (objectBoundingBox && isPosition) {
+      pixels +=
+          extent == Lengthd::Extent::X ? maskUnitsBounds.topLeft.x : maskUnitsBounds.topLeft.y;
+    }
+    return pixels;
+  };
+
+  const double xPx = resolveMaskLength(x, Lengthd::Extent::X, true);
+  const double yPx = resolveMaskLength(y, Lengthd::Extent::Y, true);
+  const double wPx = resolveMaskLength(width, Lengthd::Extent::X, false);
+  const double hPx = resolveMaskLength(height, Lengthd::Extent::Y, false);
+  return Box2d::FromXYWH(xPx, yPx, wPx, hPx);
+}
+
+/// Read the mask's resolved type and color space without changing cascade behavior.
+std::pair<MaskType, ColorInterpolation> MaskPaintOptions(EntityHandle maskHandle) {
+  MaskType maskType = MaskType::Luminance;
+  ColorInterpolation colorInterpolation = ColorInterpolation::SRGB;
+  if (const auto* maskStyle = maskHandle.try_get<components::ComputedStyleComponent>();
+      maskStyle != nullptr && maskStyle->properties.has_value()) {
+    maskType = maskStyle->properties->maskType.get().value_or(MaskType::Luminance);
+    colorInterpolation =
+        maskStyle->properties->colorInterpolation.get().value_or(ColorInterpolation::SRGB);
+  }
+  return {maskType, colorInterpolation};
+}
+
 void PushMaskWithColorSpace(RendererInterface& renderer, const std::optional<Box2d>& bounds,
                             MaskType maskType, ColorInterpolation colorInterpolation) {
   if (colorInterpolation == ColorInterpolation::LinearRGB) {
@@ -3450,6 +3498,37 @@ void PushMaskWithColorSpace(RendererInterface& renderer, const std::optional<Box
 }
 
 }  // namespace
+
+void RendererDriver::renderMaskContents(RenderingInstanceView& view, Registry& registry,
+                                        const components::RenderingInstanceComponent& instance,
+                                        const components::ResolvedMask& mask,
+                                        const Box2d& shapeLocalBounds) {
+  const bool subtreeAhead =
+      registry.get<components::RenderingInstanceComponent>(mask.subtreeInfo->firstRenderedEntity)
+          .drawOrder > instance.drawOrder;
+  if (!shapeLocalBounds.isEmpty()) {
+    RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
+                                                                          registry);
+    if (subtreeAhead) {
+      traverseRange(view, registry, mask.subtreeInfo->firstRenderedEntity,
+                    mask.subtreeInfo->lastRenderedEntity);
+    } else {
+      // Shared mask content has already passed the caller's forward-only draw cursor.
+      const RenderingInstanceView::SavedState savedPosition = view.save();
+      if (view.isFullSnapshot() && view.seek(mask.subtreeInfo->firstRenderedEntity)) {
+        traverseRange(view, registry, mask.subtreeInfo->firstRenderedEntity,
+                      mask.subtreeInfo->lastRenderedEntity);
+        view.restore(savedPosition);
+      } else {
+        RenderingInstanceView replay(registry);
+        traverseRange(replay, registry, mask.subtreeInfo->firstRenderedEntity,
+                      mask.subtreeInfo->lastRenderedEntity);
+      }
+    }
+  } else if (subtreeAhead) {
+    skipUntil(view, mask.subtreeInfo->lastRenderedEntity);
+  }
+}
 
 int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
                                const components::RenderingInstanceComponent& instance,
@@ -3487,47 +3566,9 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
       continue;
     }
 
-    const bool objectBoundingBox = mc->maskUnits == MaskUnits::ObjectBoundingBox;
-    const Box2d maskUnitsBounds =
-        objectBoundingBox ? shapeLocalBounds
-                          : components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-
-    const Lengthd x = mc->x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-    const Lengthd y = mc->y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-    const Lengthd width = mc->width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
-    const Lengthd height = mc->height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
-
-    // In an objectBoundingBox coordinate system, unitless values are fractions of the target
-    // bounds and positions are relative to its origin. Percentages use the same origin, while
-    // absolute lengths retain their CSS pixel conversion. The default -10%/-10%/120%/120%
-    // region is real clipping state too, rather than an unbounded auto region.
-    const auto resolveMaskLength = [&](const Lengthd& length, Lengthd::Extent extent,
-                                       bool isPosition) {
-      const double extentPixels =
-          extent == Lengthd::Extent::X ? maskUnitsBounds.width() : maskUnitsBounds.height();
-      double pixels = objectBoundingBox && length.unit == Lengthd::Unit::None
-                          ? length.value * extentPixels
-                          : length.toPixels(maskUnitsBounds, FontMetrics(), extent);
-      if (objectBoundingBox && isPosition) {
-        pixels +=
-            extent == Lengthd::Extent::X ? maskUnitsBounds.topLeft.x : maskUnitsBounds.topLeft.y;
-      }
-      return pixels;
-    };
-
-    const double xPx = resolveMaskLength(x, Lengthd::Extent::X, true);
-    const double yPx = resolveMaskLength(y, Lengthd::Extent::Y, true);
-    const double wPx = resolveMaskLength(width, Lengthd::Extent::X, false);
-    const double hPx = resolveMaskLength(height, Lengthd::Extent::Y, false);
-    const std::optional<Box2d> maskBounds = Box2d::FromXYWH(xPx, yPx, wPx, hPx);
-    MaskType maskType = MaskType::Luminance;
-    ColorInterpolation colorInterpolation = ColorInterpolation::SRGB;
-    if (const auto* maskStyle = m->reference.handle.try_get<components::ComputedStyleComponent>();
-        maskStyle != nullptr && maskStyle->properties.has_value()) {
-      maskType = maskStyle->properties->maskType.get().value_or(MaskType::Luminance);
-      colorInterpolation =
-          maskStyle->properties->colorInterpolation.get().value_or(ColorInterpolation::SRGB);
-    }
+    const std::optional<Box2d> maskBounds =
+        MaskRegionBounds(instance.dataHandle(registry), *mc, shapeLocalBounds);
+    const auto [maskType, colorInterpolation] = MaskPaintOptions(m->reference.handle);
 
     if (verbose_) {
       std::cout << "[renderMask] chain depth=" << chain.size()
@@ -3550,12 +3591,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
       surfaceFromCanvasTransform_ = userSpaceFromMaskContent * surfaceFromCanvasTransform_;
     }
 
-    if (!shapeLocalBounds.isEmpty()) {
-      traverseRange(view, registry, m->subtreeInfo->firstRenderedEntity,
-                    m->subtreeInfo->lastRenderedEntity);
-    } else {
-      skipUntil(view, m->subtreeInfo->lastRenderedEntity);
-    }
+    renderMaskContents(view, registry, instance, *m, shapeLocalBounds);
 
     surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
     renderer_.transitionMaskToContent();

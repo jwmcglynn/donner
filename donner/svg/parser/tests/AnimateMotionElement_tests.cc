@@ -141,6 +141,33 @@ TEST(SVGAnimateMotionElement, MotionSupplementsTheUnderlyingTransform) {
               testing::Optional(testing::StrEq("translate(100) translate(25, 0)")));
 }
 
+TEST(SVGAnimateMotionElement, ByOnlyAddsLowerMotionUnlessAnotherPathSourceWins) {
+  struct Case {
+    const char* attributes;
+    const char* children;
+    bool adds;
+  };
+  const Case cases[] = {
+      {"by='0 100'", "", true},
+      {"by='0 100' additive='replace'", "", true},
+      {"by='0 100' values='0 0;0 100'", "", false},
+      {"by='0 100' path='M0 0V100'", "", false},
+      {"by='0 100'", "<mpath href='#route'/>", false},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.attributes);
+    SCOPED_TRACE(item.children);
+    auto document = ParseMotion(
+        "<svg xmlns='http://www.w3.org/2000/svg'><path id='route' d='M0 0V100'/>"
+        "<rect id='r' transform='translate(100)'><animateMotion path='M0 0H100' dur='2s'/>"
+        "<animateMotion dur='2s' " +
+        std::string(item.attributes) + ">" + item.children + "</animateMotion></rect></svg>");
+    const char* expected = item.adds ? "translate(100) translate(50, 0) translate(0, 50)"
+                                     : "translate(100) translate(0, 50)";
+    EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq(expected)));
+  }
+}
+
 TEST(SVGAnimateMotionElement, InvalidMpathDoesNotFallBackToPath) {
   auto document = ParseMotion(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">

@@ -75,16 +75,32 @@ std::optional<std::string> getAnimatedValue(SVGDocument& document, const char* s
     }
     return paint->get<PaintServer::Solid>().color.resolve(css::RGBA::RGB(0, 0, 0), 1).toHexString();
   }
-  const bool supportedRectLength = element->type() == ElementType::Rect &&
-                                   (attributeName == "width" || attributeName == "height");
+  if (attributeName == "opacity" && animValues->contextualLengths.contains("opacity")) {
+    document.setTime(time);
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(document, false, warnings);
+    const auto opacity = element->getComputedStyle().opacity.get();
+    if (!opacity) {
+      return std::nullopt;
+    }
+    std::ostringstream output;
+    output.precision(12);
+    output << *opacity;
+    return output.str();
+  }
+  const bool supportedRectLength =
+      element->type() == ElementType::Rect &&
+      (attributeName == "x" || attributeName == "width" || attributeName == "height");
   if (supportedRectLength && animValues->contextualLengths.contains(attributeName)) {
     const auto recipe = animValues->contextualLengths.at(attributeName);
     const auto rect = element->cast<SVGRectElement>();
     auto& budget = registry.ctx().get<components::AnimationResourceBudget>();
     auto context = components::AnimationContextFor(registry, element->entityHandle().entity(),
                                                    attributeName, budget);
-    context.extent = attributeName == "width" ? Lengthd::Extent::X : Lengthd::Extent::Y;
-    const Lengthd underlying = attributeName == "width" ? rect.width() : rect.height();
+    context.extent = attributeName == "height" ? Lengthd::Extent::Y : Lengthd::Extent::X;
+    const Lengthd underlying = attributeName == "x"       ? rect.x()
+                               : attributeName == "width" ? rect.width()
+                                                          : rect.height();
     if (!components::SampleContextualLengthRecipe(*recipe, underlying, context)) {
       return std::nullopt;
     }
@@ -93,7 +109,9 @@ std::optional<std::string> getAnimatedValue(SVGDocument& document, const char* s
     RendererUtils::prepareDocumentForRendering(document, false, warnings);
     std::ostringstream output;
     output.precision(12);
-    if (attributeName == "width") {
+    if (attributeName == "x") {
+      output << rect.computedX();
+    } else if (attributeName == "width") {
       output << rect.computedWidth();
     } else {
       output << rect.computedHeight();
@@ -1336,6 +1354,31 @@ TEST(SVGAnimateElement, RepeatEventAndOffsetStartDependentAnimation) {
               testing::Optional(testing::StrEq("25")));
 }
 
+TEST(SVGAnimateElement, MinimumExtensionDoesNotCreateRepeatDependencies) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns='http://www.w3.org/2000/svg'>
+      <rect><set id='clock' attributeName='fill' to='red' dur='1s' repeatCount='2' min='10s'/></rect>
+      <rect id='late'><animate attributeName='width' from='0' to='100'
+        begin='clock.repeat(5)' dur='2s'/></rect>
+      <rect id='offset'><animate attributeName='width' from='0' to='100'
+        begin='clock.repeat(5)-5s' dur='2s'/></rect>
+      <rect id='ending'><animate attributeName='width' from='0' to='100'
+        end='clock.repeat(5)' dur='10s'/></rect>
+      <rect id='valid'><animate attributeName='width' from='0' to='100'
+        begin='clock.repeat(1)+0.25s' dur='2s'/></rect>
+      <rect id='after'><animate attributeName='width' from='0' to='100'
+        begin='clock.end' dur='2s'/></rect>
+    </svg>)svg");
+  EXPECT_THAT(getAnimatedValue(document, "#late", "width", 5.5), testing::Eq(std::nullopt));
+  EXPECT_THAT(getAnimatedValue(document, "#offset", "width", 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(getAnimatedValue(document, "#ending", "width", 6),
+              testing::Optional(testing::StrEq("60")));
+  EXPECT_THAT(getAnimatedValue(document, "#valid", "width", 1.75),
+              testing::Optional(testing::StrEq("25")));
+  EXPECT_THAT(getAnimatedValue(document, "#after", "width", 10.5),
+              testing::Optional(testing::StrEq("25")));
+}
+
 TEST(SVGAnimateElement, MouseEventOffsetsRetainIntervalsForSeeking) {
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns='http://www.w3.org/2000/svg'><rect id="r"><animate attributeName="width" from="0" to="100"
@@ -1430,6 +1473,59 @@ TEST(SVGAnimateElement, ToAndByUseUnderlyingValue) {
         "<animate attributeName='width' dur='2s' " + attributes + "/></rect></svg>");
     EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1.0),
                 testing::Optional(testing::StrEq("150")));
+  }
+}
+
+TEST(SVGAnimateElement, FrozenPartialToOnlyValueKeepsLowerLayerAtFreezeBoundary) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" x="0">
+      <animate attributeName="x" from="0" to="100" dur="10s"/>
+      <animate attributeName="x" to="200" dur="2s" repeatCount="0.5" fill="freeze"/>
+    </rect></svg>)svg");
+  for (double time : {5.0, 1.0, 5.0}) {
+    SCOPED_TRACE(time);
+    EXPECT_THAT(getAnimatedValue(document, "#r", "x", time),
+                testing::Optional(testing::StrEq("105")));
+  }
+}
+
+TEST(SVGAnimateElement, FrozenPartialToOnlyValueRebuildsInactiveLowerLayer) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="2s"/>
+      <animate attributeName="opacity" to="1" dur="2s" repeatCount="0.5" fill="freeze"/>
+    </rect></svg>)svg");
+  for (double time : {5.0, 1.0, 5.0}) {
+    SCOPED_TRACE(time);
+    EXPECT_THAT(getAnimatedValue(document, "#r", "opacity", time),
+                testing::Optional(testing::StrEq("0.75")));
+  }
+}
+
+TEST(SVGAnimateElement, MinimumExtensionKeepsPartialToOnlyValueAtRepeatBoundary) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" x="0">
+      <animate attributeName="x" from="0" to="100" dur="10s"/>
+      <animate attributeName="x" to="200" dur="2s" repeatCount="0.5" min="10s" fill="freeze"/>
+    </rect></svg>)svg");
+  for (double time : {5.0, 1.0, 5.0}) {
+    SCOPED_TRACE(time);
+    EXPECT_THAT(getAnimatedValue(document, "#r", "x", time),
+                testing::Optional(testing::StrEq("105")));
+  }
+}
+
+TEST(SVGAnimateElement, InvalidFrozenPartialToOnlyValueKeepsCurrentLowerLayer) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" x="0">
+      <animate attributeName="x" from="0" to="100" dur="10s"/>
+      <animate attributeName="x" to="invalid" dur="2s" repeatCount="0.5" fill="freeze"/>
+    </rect></svg>)svg");
+  for (double time : {5.0, 1.0, 5.0}) {
+    SCOPED_TRACE(time);
+    const char* expected = time == 1.0 ? "10" : "50";
+    EXPECT_THAT(getAnimatedValue(document, "#r", "x", time),
+                testing::Optional(testing::StrEq(expected)));
   }
 }
 

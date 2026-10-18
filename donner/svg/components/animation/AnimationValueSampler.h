@@ -15,6 +15,47 @@ namespace donner::svg::components {
 
 class AnimationResourceBudget;
 
+namespace detail {
+
+template <typename Value, typename Sampler>
+std::optional<Value> SampleContextualAnimationRecipeImpl(const ContextualLengthRecipe& recipe,
+                                                         const Value& base, Value underlying,
+                                                         Sampler& sampler) {
+  std::optional<Value> result;
+  for (const auto& sample : recipe.samples) {
+    Value layerUnderlying = underlying;
+    if (sample.usesFrozenUnderlying) {
+      layerUnderlying = base;
+    }
+    if (sample.frozenUnderlying) {
+      if (auto frozen =
+              SampleContextualAnimationRecipeImpl(*sample.frozenUnderlying, base, base, sampler)) {
+        layerUnderlying = std::move(*frozen);
+      }
+    }
+    if (auto value = sampler(sample, layerUnderlying)) {
+      underlying = *value;
+      result = std::move(*value);
+    }
+  }
+  return result;
+}
+
+}  // namespace detail
+
+/** Fold an admitted contextual animation stack, rebuilding frozen to-only underliers as needed.
+ * @tparam Value Owning consumer value copied at frozen sandwich boundaries.
+ * @param recipe Immutable admitted stack.
+ * @param underlying Authored, styled, or typed base for the referencing instance.
+ * @param sampler Callable(sample, lowerValue) returning a valid contributed value or nullopt.
+ * @return Last valid contribution, or nullopt when no layer contributes.
+ */
+template <typename Value, typename Sampler>
+std::optional<Value> SampleContextualAnimationRecipe(const ContextualLengthRecipe& recipe,
+                                                     Value underlying, Sampler&& sampler) {
+  return detail::SampleContextualAnimationRecipeImpl(recipe, underlying, underlying, sampler);
+}
+
 /** Sample one animation without document or timing side effects.
  * @param progress Progress within the current iteration.
  * @param iteration Number of completed iterations.

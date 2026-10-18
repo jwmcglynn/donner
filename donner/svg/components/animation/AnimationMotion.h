@@ -9,6 +9,12 @@
 
 namespace donner::svg::components {
 
+/// A sampled motion transform with its effective composition mode.
+struct SampledAnimationMotion {
+  std::string transform;  ///< Supplemental translation and rotation, empty for invalid motion.
+  bool additive = false;  ///< Whether to preserve lower motion layers.
+};
+
 /** Sample the supplemental transform for a motion animation.
  * @param registry Document storage.
  * @param entity Motion animation element.
@@ -16,10 +22,10 @@ namespace donner::svg::components {
  * @param progress Normalized simple time.
  * @param iteration Completed repeat count.
  * @param budget Shared per-frame geometry budget.
- * @return Serialized translation/rotation, or empty for unresolved or invalid motion.
+ * @return Sampled transform and composition mode; an empty transform denotes invalid motion.
  */
-std::string SampleAnimationMotion(Registry& registry, Entity entity,
-                                  const AnimateMotionComponent& motion, double progress,
-                                  double iteration, AnimationResourceBudget& budget);
+SampledAnimationMotion SampleAnimationMotion(Registry& registry, Entity entity,
+                                             const AnimateMotionComponent& motion, double progress,
+                                             double iteration, AnimationResourceBudget& budget);
 
 }  // namespace donner::svg::components

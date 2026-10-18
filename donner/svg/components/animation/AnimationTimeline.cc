@@ -146,7 +146,8 @@ bool ResolveInstances(Registry& registry, const NodeIndices& indices,
         value = interval.end;
       } else if (spec.kind == AnimationTimeSpecifier::Kind::Repeat) {
         value += source.simpleDuration * spec.repeat;
-        if (!(value < interval.end) || source.simpleDuration <= 0) {
+        const double repeatEnd = std::min(interval.end, interval.begin + interval.repeatDuration);
+        if (!(value < repeatEnd) || source.simpleDuration <= 0) {
           continue;
         }
       }

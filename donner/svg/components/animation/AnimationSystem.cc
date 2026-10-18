@@ -5,11 +5,13 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 #include "donner/svg/components/ElementTypeComponent.h"
@@ -29,6 +31,7 @@
 #include "donner/svg/components/animation/SetAnimationComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/text/TextInvalidation.h"
 
 namespace donner::svg::components {
 
@@ -123,6 +126,81 @@ double computeProgress(double documentTime, double beginTime, double simpleDurat
   return progress;
 }
 
+struct AnimationSamplePosition {
+  double progress = 0;
+  double iteration = 0;
+  double sampleTime = 0;
+  double beginTime = 0;
+  bool repeatingContentEnded = false;
+  AnimationPhase phase = AnimationPhase::Before;
+};
+
+std::optional<AnimationSamplePosition> SamplePositionAtTime(const AnimationStateComponent& state,
+                                                            const AnimationTimingComponent& timing,
+                                                            double time) {
+  const AnimationInterval* selected = nullptr;
+  for (const auto& interval : state.intervals) {
+    if (interval.begin > time) {
+      break;
+    }
+    selected = &interval;
+  }
+  if (!selected) {
+    return std::nullopt;
+  }
+
+  const AnimationPhase phase =
+      time < selected->end ? AnimationPhase::Active : AnimationPhase::After;
+  if (!shouldApplyValue(phase, timing.fill) ||
+      (timing.fill == AnimationFill::Remove &&
+       time >= selected->begin + selected->repeatDuration)) {
+    return std::nullopt;
+  }
+
+  const double activeDuration = selected->end - selected->begin;
+  const double sampleTime =
+      phase == AnimationPhase::Active || !std::isfinite(activeDuration) ? time : selected->end;
+  const double cappedTime = std::min(sampleTime, selected->begin + selected->repeatDuration);
+  const double progress = computeProgress(
+      cappedTime, selected->begin, state.simpleDuration, activeDuration,
+      phase == AnimationPhase::After || sampleTime >= selected->begin + selected->repeatDuration);
+  double iteration = 0;
+  if (std::isfinite(state.simpleDuration) && state.simpleDuration > 0) {
+    const double elapsed = cappedTime - selected->begin;
+    iteration = std::floor(elapsed / state.simpleDuration);
+    if (progress == 1 && iteration > 0) {
+      if (const auto completed = CompletedIterationCount(elapsed, state.simpleDuration)) {
+        iteration = *completed - 1;
+      } else {
+        --iteration;
+      }
+    }
+  }
+  return AnimationSamplePosition{
+      .progress = progress,
+      .iteration = iteration,
+      .sampleTime = cappedTime,
+      .beginTime = selected->begin,
+      .repeatingContentEnded = sampleTime >= selected->begin + selected->repeatDuration,
+      .phase = phase};
+}
+
+bool IsPartialFrozenToOnly(const AnimationSamplePosition& sample,
+                           const AnimationTimingComponent& timing,
+                           const AnimateValueComponent* value) {
+  return value && value->values.empty() && !value->from && value->to &&
+         (sample.phase == AnimationPhase::After || sample.repeatingContentEnded) &&
+         timing.fill == AnimationFill::Freeze && sample.progress < 1;
+}
+
+std::string_view AnimatedAttribute(const SetAnimationComponent* set,
+                                   const AnimateValueComponent* value,
+                                   const AnimateTransformComponent* transform) {
+  return set ? std::string_view(set->attributeName)
+             : (value ? std::string_view(value->attributeName)
+                      : (transform ? std::string_view(transform->attributeName) : "transform"));
+}
+
 void AddAnimationSourceBytes(std::string_view value, std::size_t& sourceBytes) {
   if (sourceBytes <= AnimationResourceBudget::kMaximumSourceBytes) {
     sourceBytes += std::min(value.size(), AnimationResourceBudget::kMaximumSourceBytes + 1);
@@ -189,6 +267,27 @@ const std::optional<std::string>& AnimationHref(Registry& registry, Entity entit
   return registry.get<AnimateTransformComponent>(entity).href;
 }
 
+/// Resolve live authored targeting without refreshing typed animation state under a read lock.
+Entity ResolveAuthoredAnimationTarget(Registry& registry, Entity entity,
+                                      AnimationResourceBudget& budget) {
+  const auto* attributes = registry.try_get<donner::components::AttributesComponent>(entity);
+  if (!attributes) {
+    return resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity), budget);
+  }
+  auto href = attributes->getAttribute("href");
+  if (!href) {
+    href = attributes->getAttribute(xml::XMLQualifiedNameRef("xlink", "href"));
+  }
+  if (!href) {
+    return resolveTargetByHrefOrParent(registry, entity, std::nullopt, budget);
+  }
+  if (!budget.reserveSourceBytes(href->size())) {
+    return entt::null;
+  }
+  return resolveTargetByHrefOrParent(registry, entity, std::string(std::string_view(*href)),
+                                     budget);
+}
+
 bool ValidTransformAttribute(Registry& registry, Entity target, std::string_view name) {
   const auto* type = registry.try_get<ElementTypeComponent>(target);
   if (!type) {
@@ -207,6 +306,16 @@ bool ValidTransformAttribute(Registry& registry, Entity target, std::string_view
 using ContextualRecipes =
     std::unordered_map<Entity,
                        std::unordered_map<std::string, std::vector<ContextualLengthSample>>>;
+
+constexpr std::size_t kMaximumFrozenSandwichDepth = 256;
+
+struct FrozenLowerLayer {
+  Entity entity = entt::null;
+  AnimationSamplePosition sample;
+  const SetAnimationComponent* set = nullptr;
+  const AnimateValueComponent* value = nullptr;
+  const AnimateTransformComponent* transform = nullptr;
+};
 
 bool NeedsInstanceValueContext(Registry& registry, Entity target, std::string_view attribute) {
   if (attribute == "font-size" || IsContextualScalarAttribute(attribute) ||
@@ -231,15 +340,27 @@ bool NeedsInstanceValueContext(Registry& registry, Entity target, std::string_vi
        (attribute == "cx" || attribute == "cy" || attribute == "rx" || attribute == "ry")) ||
       (type->type() == ElementType::Line &&
        (attribute == "x1" || attribute == "y1" || attribute == "x2" || attribute == "y2"));
-  return shapeLength || (type->type() == ElementType::TextPath && attribute == "startOffset") ||
+  const bool textLength =
+      attribute == "textLength" &&
+      (type->type() == ElementType::Text || type->type() == ElementType::TSpan ||
+       type->type() == ElementType::TextPath || type->type() == ElementType::A);
+  const bool textPosition = (attribute == "x" || attribute == "y" || attribute == "dx" ||
+                             attribute == "dy" || attribute == "rotate") &&
+                            (type->type() == ElementType::Text ||
+                             type->type() == ElementType::TSpan || type->type() == ElementType::A);
+  return shapeLength || textLength || textPosition ||
+         (type->type() == ElementType::TextPath && attribute == "startOffset") ||
          (type->type() == ElementType::Marker &&
           (attribute == "markerWidth" || attribute == "markerHeight" || attribute == "refX" ||
            attribute == "refY"));
 }
 
-bool RetainContextualLength(ContextualRecipes& recipes, Entity target, std::string_view attribute,
-                            const SetAnimationComponent* set, const AnimateValueComponent* value,
-                            double progress, double iteration, AnimationResourceBudget& budget) {
+bool AppendContextualLengthSample(std::vector<ContextualLengthSample>& samples,
+                                  const SetAnimationComponent* set,
+                                  const AnimateValueComponent* value, double progress,
+                                  double iteration, bool usesFrozenUnderlying,
+                                  std::shared_ptr<const ContextualLengthRecipe> frozenUnderlying,
+                                  AnimationResourceBudget& budget) {
   const std::size_t sourceBytes = AnimationSourceBytes(set, value, nullptr, nullptr);
   const std::size_t keyframes = value ? value->values.size() : 0;
   if (keyframes > AnimationResourceBudget::kMaximumOutputBytes / (2 * sizeof(std::string))) {
@@ -250,10 +371,11 @@ bool RetainContextualLength(ContextualRecipes& recipes, Entity target, std::stri
   if (!budget.reserveOutput(retained)) {
     return false;
   }
-  auto& samples = recipes[target][std::string(attribute)];
   ContextualLengthSample sample;
   sample.progress = progress;
   sample.iteration = iteration;
+  sample.usesFrozenUnderlying = usesFrozenUnderlying;
+  sample.frozenUnderlying = std::move(frozenUnderlying);
   if (set) {
     sample.declaration = *set;
   } else {
@@ -263,10 +385,166 @@ bool RetainContextualLength(ContextualRecipes& recipes, Entity target, std::stri
   return true;
 }
 
+bool RetainContextualLength(ContextualRecipes& recipes, Entity target, std::string_view attribute,
+                            const SetAnimationComponent* set, const AnimateValueComponent* value,
+                            double progress, double iteration, bool usesFrozenUnderlying,
+                            std::shared_ptr<const ContextualLengthRecipe> frozenUnderlying,
+                            AnimationResourceBudget& budget) {
+  auto& samples = recipes[target][std::string(attribute)];
+  return AppendContextualLengthSample(samples, set, value, progress, iteration,
+                                      usesFrozenUnderlying, std::move(frozenUnderlying), budget);
+}
+
+std::optional<std::vector<FrozenLowerLayer>> CollectFrozenLowerLayers(
+    Registry& registry, std::span<const Entity> documentAnimations, Entity upperAnimation,
+    const AnimationSamplePosition& upperSample, Entity target, std::string_view attribute,
+    bool contextualOnly, AnimationResourceBudget& budget) {
+  const auto upperOrder =
+      std::find(documentAnimations.begin(), documentAnimations.end(), upperAnimation);
+  if (upperOrder == documentAnimations.end()) {
+    return std::vector<FrozenLowerLayer>{};
+  }
+
+  std::vector<FrozenLowerLayer> result;
+  for (auto it = documentAnimations.begin(); it != documentAnimations.end(); ++it) {
+    const Entity entity = *it;
+    if (entity == upperAnimation || !budget.reserveReferenceWork(attribute.size() + 1)) {
+      if (budget.rejected()) {
+        return std::nullopt;
+      }
+      continue;
+    }
+    const auto* set = registry.try_get<SetAnimationComponent>(entity);
+    const auto* value = registry.try_get<AnimateValueComponent>(entity);
+    const auto* transform = registry.try_get<AnimateTransformComponent>(entity);
+    if ((!set && !value && !transform) || (contextualOnly && !set && !value) ||
+        AnimatedAttribute(set, value, transform) != attribute) {
+      continue;
+    }
+    auto& state = registry.get<AnimationStateComponent>(entity);
+    state.targetEntity = ResolveAuthoredAnimationTarget(registry, entity, budget);
+    if (budget.rejected()) {
+      return std::nullopt;
+    }
+    if (state.targetEntity != target) {
+      continue;
+    }
+    const auto sample = SamplePositionAtTime(state, registry.get<AnimationTimingComponent>(entity),
+                                             upperSample.sampleTime);
+    if (!sample || sample->beginTime > upperSample.beginTime ||
+        (sample->beginTime == upperSample.beginTime && it >= upperOrder)) {
+      continue;
+    }
+    result.push_back(FrozenLowerLayer{
+        .entity = entity, .sample = *sample, .set = set, .value = value, .transform = transform});
+  }
+  std::stable_sort(result.begin(), result.end(), [](const auto& first, const auto& second) {
+    return first.sample.beginTime < second.sample.beginTime;
+  });
+  return result;
+}
+
+std::shared_ptr<const ContextualLengthRecipe> BuildFrozenContextualUnderlying(
+    Registry& registry, std::span<const Entity> documentAnimations, Entity upperAnimation,
+    const AnimationSamplePosition& upperSample, Entity target, std::string_view attribute,
+    AnimationResourceBudget& budget, std::size_t depth) {
+  if (depth >= kMaximumFrozenSandwichDepth) {
+    budget.reserveOutput(AnimationResourceBudget::kMaximumOutputBytes + 1);
+    return nullptr;
+  }
+
+  const auto lowerLayers = CollectFrozenLowerLayers(registry, documentAnimations, upperAnimation,
+                                                    upperSample, target, attribute, true, budget);
+  if (!lowerLayers) {
+    return nullptr;
+  }
+  std::vector<ContextualLengthSample> samples;
+  for (const auto& layer : *lowerLayers) {
+    const auto& timing = registry.get<AnimationTimingComponent>(layer.entity);
+    std::shared_ptr<const ContextualLengthRecipe> frozenUnderlying;
+    const bool usesFrozenUnderlying = IsPartialFrozenToOnly(layer.sample, timing, layer.value);
+    if (usesFrozenUnderlying) {
+      frozenUnderlying =
+          BuildFrozenContextualUnderlying(registry, documentAnimations, layer.entity, layer.sample,
+                                          target, attribute, budget, depth + 1);
+      if (budget.rejected()) {
+        return nullptr;
+      }
+    }
+    if (!AppendContextualLengthSample(samples, layer.set, layer.value, layer.sample.progress,
+                                      layer.sample.iteration, usesFrozenUnderlying,
+                                      std::move(frozenUnderlying), budget)) {
+      return nullptr;
+    }
+  }
+  if (samples.empty()) {
+    return nullptr;
+  }
+  auto result = ContextualLengthRecipe::Create(std::move(samples));
+  if (!result) {
+    budget.reserveOutput(AnimationResourceBudget::kMaximumOutputBytes + 1);
+  }
+  return result;
+}
+
+std::optional<std::string> RebuildFrozenUnderlyingValue(
+    Registry& registry, std::span<const Entity> documentAnimations, Entity upperAnimation,
+    const AnimationSamplePosition& upperSample, Entity target, std::string_view attribute,
+    const std::string& base, const AnimationValueContext& context, AnimationResourceBudget& budget,
+    std::size_t depth) {
+  if (depth >= kMaximumFrozenSandwichDepth) {
+    budget.reserveOutput(AnimationResourceBudget::kMaximumOutputBytes + 1);
+    return std::nullopt;
+  }
+
+  const auto lowerLayers = CollectFrozenLowerLayers(registry, documentAnimations, upperAnimation,
+                                                    upperSample, target, attribute, false, budget);
+  if (!lowerLayers) {
+    return std::nullopt;
+  }
+  std::string underlying = base;
+  for (const auto& layer : *lowerLayers) {
+    const auto& timing = registry.get<AnimationTimingComponent>(layer.entity);
+    std::string layerUnderlying = underlying;
+    if (IsPartialFrozenToOnly(layer.sample, timing, layer.value)) {
+      auto frozen =
+          RebuildFrozenUnderlyingValue(registry, documentAnimations, layer.entity, layer.sample,
+                                       target, attribute, base, context, budget, depth + 1);
+      if (!frozen) {
+        return std::nullopt;
+      }
+      layerUnderlying = std::move(*frozen);
+    }
+    if (!budget.reserveSourceBytes(
+            AnimationSourceBytes(layer.set, layer.value, layer.transform, nullptr))) {
+      return std::nullopt;
+    }
+    const auto sampled =
+        SampleAnimationValue(layer.sample.progress, layer.sample.iteration, layer.set, layer.value,
+                             layer.transform, layerUnderlying, context, &budget);
+    if (budget.rejected()) {
+      return std::nullopt;
+    }
+    if (!sampled) {
+      continue;
+    }
+    const bool acceptsEmpty = sampled->first == "href" || sampled->first == "xlink:href" ||
+                              sampled->first == "result" || sampled->first == "d";
+    if (sampled->second.empty() && !acceptsEmpty) {
+      continue;
+    }
+    if (!budget.reserveOutput(sampled->second.size())) {
+      return std::nullopt;
+    }
+    underlying = sampled->second;
+  }
+  return underlying;
+}
+
 bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
                       AnimationResourceBudget& resourceBudget,
                       std::unordered_map<Entity, std::string>& motionBases,
-                      ContextualRecipes& recipes) {
+                      ContextualRecipes& recipes, std::span<const Entity> documentAnimations) {
   const auto& timing = registry.get<AnimationTimingComponent>(entity);
   auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
   const auto* setComp = registry.try_get<SetAnimationComponent>(entity);
@@ -283,7 +561,7 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
   if (resourceBudget.rejected()) {
     return false;
   }
-  if (!registry.valid(state.targetEntity) || !shouldApplyValue(state.phase, timing.fill)) {
+  if (!registry.valid(state.targetEntity)) {
     return true;
   }
   if (!IsAnimationInSvgNamespace(registry, state.targetEntity)) {
@@ -295,40 +573,26 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
     return true;
   }
 
-  if (timing.fill == AnimationFill::Remove &&
-      documentTime >= state.beginTime + state.repeatDuration) {
+  const auto sample = SamplePositionAtTime(state, timing, documentTime);
+  if (!sample) {
     return true;
   }
-  const double sampleTime =
-      (state.phase == AnimationPhase::Active || !std::isfinite(state.activeDuration))
-          ? documentTime
-          : state.beginTime + state.activeDuration;
-  const double progress = computeProgress(
-      std::min(sampleTime, state.beginTime + state.repeatDuration), state.beginTime,
-      state.simpleDuration, state.activeDuration,
-      state.phase == AnimationPhase::After || sampleTime >= state.beginTime + state.repeatDuration);
-  double iteration = 0;
-  if (std::isfinite(state.simpleDuration) && state.simpleDuration > 0) {
-    const double elapsed = std::min(sampleTime - state.beginTime, state.repeatDuration);
-    iteration = std::floor(elapsed / state.simpleDuration);
-    if (progress == 1 && iteration > 0) {
-      if (const auto completed = CompletedIterationCount(elapsed, state.simpleDuration)) {
-        iteration = *completed - 1;
-      } else {
-        --iteration;
-      }
-    }
-  }
-  const std::string_view attribute =
-      setComp
-          ? setComp->attributeName
-          : (valueComp
-                 ? std::string_view(valueComp->attributeName)
-                 : (transformComp ? std::string_view(transformComp->attributeName) : "transform"));
+  const std::string_view attribute = AnimatedAttribute(setComp, valueComp, transformComp);
   if ((setComp || valueComp) &&
       NeedsInstanceValueContext(registry, state.targetEntity, attribute)) {
+    std::shared_ptr<const ContextualLengthRecipe> frozenUnderlying;
+    if (IsPartialFrozenToOnly(*sample, timing, valueComp)) {
+      frozenUnderlying =
+          BuildFrozenContextualUnderlying(registry, documentAnimations, entity, *sample,
+                                          state.targetEntity, attribute, resourceBudget, 0);
+      if (resourceBudget.rejected()) {
+        return false;
+      }
+    }
     return RetainContextualLength(recipes, state.targetEntity, attribute, setComp, valueComp,
-                                  progress, iteration, resourceBudget);
+                                  sample->progress, sample->iteration,
+                                  IsPartialFrozenToOnly(*sample, timing, valueComp),
+                                  std::move(frozenUnderlying), resourceBudget);
   }
   const auto context =
       setComp ? AnimationValueContext{}
@@ -337,30 +601,50 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
       motionComp ||
       (valueComp && (valueComp->additive || (valueComp->values.empty() && !valueComp->from))) ||
       (transformComp && (transformComp->additive || (!transformComp->from && transformComp->by)));
-  const auto underlyingValue = needsUnderlying
-                                   ? UnderlyingAnimationValue(registry, state.targetEntity,
-                                                              attribute, context, resourceBudget)
-                                   : std::optional(std::string{});
+  auto underlyingValue = needsUnderlying
+                             ? UnderlyingAnimationValue(registry, state.targetEntity, attribute,
+                                                        context, resourceBudget)
+                             : std::optional(std::string{});
   if (resourceBudget.rejected()) {
     return false;
   }
   if (!underlyingValue) {
     return true;
   }
+  if (IsPartialFrozenToOnly(*sample, timing, valueComp)) {
+    const auto base =
+        BaseAnimationValue(registry, state.targetEntity, attribute, context, resourceBudget);
+    if (resourceBudget.rejected()) {
+      return false;
+    }
+    if (!base) {
+      return true;
+    }
+    underlyingValue = RebuildFrozenUnderlyingValue(registry, documentAnimations, entity, *sample,
+                                                   state.targetEntity, attribute, *base, context,
+                                                   resourceBudget, 0);
+    if (resourceBudget.rejected()) {
+      return false;
+    }
+    if (!underlyingValue) {
+      return true;
+    }
+  }
   const std::string& underlying = *underlyingValue;
   std::optional<std::pair<std::string, std::string>> sampled;
   if (motionComp) {
-    std::string motion =
-        SampleAnimationMotion(registry, entity, *motionComp, progress, iteration, resourceBudget);
+    auto motionSample = SampleAnimationMotion(registry, entity, *motionComp, sample->progress,
+                                              sample->iteration, resourceBudget);
+    std::string& motion = motionSample.transform;
     const auto [base, inserted] = motionBases.try_emplace(state.targetEntity, underlying);
-    const std::string& prefix = motionComp->additive ? underlying : base->second;
+    const std::string& prefix = motionSample.additive ? underlying : base->second;
     if (!motion.empty() && !prefix.empty()) {
       motion = prefix + " " + motion;
     }
     sampled = std::pair<std::string, std::string>{"transform", std::move(motion)};
   } else {
-    sampled = SampleAnimationValue(progress, iteration, setComp, valueComp, transformComp,
-                                   underlying, context, &resourceBudget);
+    sampled = SampleAnimationValue(sample->progress, sample->iteration, setComp, valueComp,
+                                   transformComp, underlying, context, &resourceBudget);
   }
   if (resourceBudget.rejected()) {
     return false;
@@ -381,15 +665,21 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
   return true;
 }
 
-void ClearSampledAnimationValues(Registry& registry) {
+void ClearSampledAnimationValues(Registry& registry,
+                                 std::unordered_set<Entity>* invalidatedText = nullptr) {
   for (auto [entity, values] : registry.view<AnimatedValuesComponent>().each()) {
+    const bool hadContextualValues = !values.contextualLengths.empty();
     values.overrides.clear();
     values.contextualLengths.clear();
+    if (hadContextualValues && (!invalidatedText || invalidatedText->insert(entity).second)) {
+      InvalidateAnimatedText(registry, entity);
+    }
   }
 }
 
 void PublishContextualRecipes(Registry& registry, ContextualRecipes& recipes,
-                              const AnimationResourceBudget& budget) {
+                              const AnimationResourceBudget& budget,
+                              std::unordered_set<Entity>& invalidatedText) {
   if (budget.rejected()) {
     return;
   }
@@ -398,10 +688,13 @@ void PublishContextualRecipes(Registry& registry, ContextualRecipes& recipes,
     for (auto& [attribute, samples] : attributes) {
       const auto recipe = ContextualLengthRecipe::Create(std::move(samples));
       if (!recipe) {
-        ClearSampledAnimationValues(registry);
+        ClearSampledAnimationValues(registry, &invalidatedText);
         return;
       }
       values.contextualLengths.emplace(attribute, recipe);
+      if (invalidatedText.insert(target).second) {
+        InvalidateAnimatedText(registry, target);
+      }
     }
   }
 }
@@ -627,8 +920,7 @@ bool AnimationSystem::isAnimationTarget(Registry& registry, Entity targetEntity)
   }
   AnimationResourceBudget budget;
   for (const Entity entity : animations) {
-    const Entity resolved =
-        resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity), budget);
+    const Entity resolved = ResolveAuthoredAnimationTarget(registry, entity, budget);
     if (budget.rejected()) {
       return true;
     }
@@ -683,7 +975,8 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
   if (const auto* context = registry.ctx().find<AnimationContextualWorkContext>()) {
     resourceBudget.setContextualWorkBudget(context->budget);
   }
-  ClearSampledAnimationValues(registry);
+  std::unordered_set<Entity> invalidatedText;
+  ClearSampledAnimationValues(registry, &invalidatedText);
 
   if (registry.ctx().get<ResourceManagerContext>().processingMode() ==
       ProcessingMode::SecureStatic) {
@@ -695,6 +988,7 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
   if (!ResolveAnimationTimeline(registry, animations, documentTime, resourceBudget)) {
     return;
   }
+  const std::vector<Entity> documentAnimations = animations;
   std::stable_sort(animations.begin(), animations.end(), [&](Entity first, Entity second) {
     return registry.get<AnimationStateComponent>(first).beginTime <
            registry.get<AnimationStateComponent>(second).beginTime;
@@ -711,15 +1005,16 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
   });
   std::unordered_map<Entity, std::string> motionBases;
   ContextualRecipes recipes;
-  for (const Entity entity : animations) {
-    if (!ProcessAnimation(registry, entity, documentTime, resourceBudget, motionBases, recipes)) {
-      ClearSampledAnimationValues(registry);
+  for (std::size_t index = 0; index < animations.size(); ++index) {
+    if (!ProcessAnimation(registry, animations[index], documentTime, resourceBudget, motionBases,
+                          recipes, documentAnimations)) {
+      ClearSampledAnimationValues(registry, &invalidatedText);
       recipes.clear();
       break;
     }
   }
 
-  PublishContextualRecipes(registry, recipes, resourceBudget);
+  PublishContextualRecipes(registry, recipes, resourceBudget, invalidatedText);
   RemoveEmptyAnimationValues(registry);
 }
 

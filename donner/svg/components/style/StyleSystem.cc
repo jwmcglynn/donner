@@ -316,13 +316,10 @@ void ApplyContextualFontSize(Registry& registry, Entity dataEntity,
     parentSize = parentStyle->properties->fontSize.get().value().value;
   }
   Lengthd underlying = BaseFontLength(properties, parentSize);
-  std::optional<Lengthd> result;
-  for (const auto& sample : recipe->second->samples) {
-    if (const auto value = SampleFontLength(sample, underlying, parentSize)) {
-      underlying = *value;
-      result = *value;
-    }
-  }
+  const auto result = SampleContextualAnimationRecipe(
+      *recipe->second, underlying, [&](const ContextualLengthSample& sample, Lengthd lower) {
+        return SampleFontLength(sample, lower, parentSize);
+      });
   if (result) {
     std::ignore = properties.parsePresentationAttribute(
         "font-size", result->toRcString().str(), EntityHandle(), css::Specificity::Animation());

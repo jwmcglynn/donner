@@ -2462,6 +2462,44 @@ TEST(SVGDocument, AnimationTargetQueryUsesAttachedIdentityAndNamespace) {
   EXPECT_EQ(IsAnimationTarget(*duplicate), true);
 }
 
+TEST(SVGDocument, AnimationTargetQueryObservesHrefEditsBeforeSampling) {
+  const std::pair<const char*, const char*> declarations[] = {
+      {"set", "attributeName='opacity' to='0.5'"},
+      {"animate", "attributeName='opacity' to='0.5' dur='1s'"},
+      {"animateTransform", "attributeName='transform' type='translate' to='10' dur='1s'"},
+      {"animateMotion", "path='M0 0H10' dur='1s'"},
+  };
+  for (const auto& [tag, attributes] : declarations) {
+    SCOPED_TRACE(tag);
+    auto document = ParseSVG(
+        "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'>"
+        "<rect id='a'/><circle id='b'/><g id='parent'><" +
+        std::string(tag) + " id='animation' href='#a' " + attributes + "/></g></svg>");
+    auto animation = document.querySelector("#animation");
+    const auto first = document.querySelector("#a");
+    const auto second = document.querySelector("#b");
+    const auto parent = document.querySelector("#parent");
+    ASSERT_TRUE(animation && first && second && parent);
+    EXPECT_TRUE(IsAnimationTarget(*first));
+    animation->setAttribute("href", "#b");
+    EXPECT_FALSE(IsAnimationTarget(*first));
+    EXPECT_TRUE(IsAnimationTarget(*second));
+    animation->setAttribute(xml::XMLQualifiedNameRef("xlink", "href"), "#a");
+    animation->setAttribute("href", "");
+    EXPECT_FALSE(IsAnimationTarget(*first));
+    EXPECT_FALSE(IsAnimationTarget(*second));
+    EXPECT_FALSE(IsAnimationTarget(*parent));
+    animation->removeAttribute("href");
+    EXPECT_TRUE(IsAnimationTarget(*first));
+    animation->removeAttribute(xml::XMLQualifiedNameRef("xlink", "href"));
+    const std::string source(document.source());
+    EXPECT_FALSE(IsAnimationTarget(*first));
+    EXPECT_FALSE(IsAnimationTarget(*second));
+    EXPECT_TRUE(IsAnimationTarget(*parent));
+    EXPECT_EQ(document.source(), source);
+  }
+}
+
 TEST(SVGDocument, AnimationTargetQueryConservativelyProtectsOnReferenceExhaustion) {
   std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><rect id='target'/>";
   for (int i = 0; i < 1500; ++i) {

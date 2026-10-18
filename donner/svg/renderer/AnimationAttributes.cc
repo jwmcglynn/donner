@@ -36,7 +36,6 @@
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/paint/StopComponent.h"
-#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/components/text/TextPathComponent.h"
@@ -119,15 +118,6 @@ bool PresentationValueMatches(const Property<Value, Cascade>& current,
                               const Property<Value, Cascade>& applied) {
   return current.state == applied.state && current.specificity == applied.specificity &&
          current.get() == applied.get();
-}
-
-void InvalidateAnimatedText(Registry& registry, Entity entity) {
-  if (registry.any_of<TextComponent, TextPositioningComponent, TextPathComponent>(entity)) {
-    const Entity root = InvalidateTextLayout(EntityHandle(registry, entity));
-    if (root != entt::null) {
-      registry.remove<ComputedTextComponent>(root);
-    }
-  }
 }
 
 template <typename Component, typename Value, typename Read, typename Write>

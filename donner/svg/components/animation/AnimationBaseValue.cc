@@ -883,21 +883,24 @@ AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
   return result;
 }
 
-std::optional<RcString> CascadedAnimationPathData(Registry& registry, Entity target,
-                                                  AnimationResourceBudget& budget) {
+static std::optional<RcString> AnimationPathData(Registry& registry, Entity target,
+                                                 AnimationResourceBudget& budget,
+                                                 bool includeAnimationOverride) {
   Property<RcString> data("d");
   if (const auto* path = registry.try_get<PathComponent>(target)) {
     data = path->d;
   }
-  if (const auto* animated = registry.try_get<AnimatedValuesComponent>(target);
-      animated && animated->overrides.contains("d")) {
-    const auto& value = registry.get<AnimatedValuesComponent>(target).overrides.at("d");
-    if (value.size() > AnimationResourceBudget::kMaximumPathValueBytes ||
-        !budget.reserveSourceBytes(value.size())) {
-      return std::nullopt;
+  if (includeAnimationOverride) {
+    if (const auto* animated = registry.try_get<AnimatedValuesComponent>(target);
+        animated && animated->overrides.contains("d")) {
+      const auto& value = registry.get<AnimatedValuesComponent>(target).overrides.at("d");
+      if (value.size() > AnimationResourceBudget::kMaximumPathValueBytes ||
+          !budget.reserveSourceBytes(value.size())) {
+        return std::nullopt;
+      }
+      data.substitute(RcString(value));
+      data.specificity = css::Specificity::Animation();
     }
-    data.substitute(RcString(value));
-    data.specificity = css::Specificity::Animation();
   }
   if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
       style && style->properties) {
@@ -920,14 +923,22 @@ std::optional<RcString> CascadedAnimationPathData(Registry& registry, Entity tar
   return data.get();
 }
 
-std::optional<std::string> UnderlyingAnimationValue(Registry& registry, Entity target,
-                                                    std::string_view attribute,
-                                                    const AnimationValueContext& context,
-                                                    AnimationResourceBudget& budget) {
-  if (const auto* animated = registry.try_get<AnimatedValuesComponent>(target)) {
-    if (const auto it = animated->overrides.find(std::string(attribute));
-        it != animated->overrides.end()) {
-      return budget.reserveSourceBytes(it->second.size()) ? it->second : std::string{};
+std::optional<RcString> CascadedAnimationPathData(Registry& registry, Entity target,
+                                                  AnimationResourceBudget& budget) {
+  return AnimationPathData(registry, target, budget, true);
+}
+
+static std::optional<std::string> AnimationBaseOrUnderlyingValue(
+    Registry& registry, Entity target, std::string_view attribute,
+    const AnimationValueContext& context, AnimationResourceBudget& budget,
+    bool includeAnimationOverride) {
+  if (includeAnimationOverride) {
+    const auto* animated = registry.try_get<AnimatedValuesComponent>(target);
+    if (animated) {
+      if (const auto it = animated->overrides.find(std::string(attribute));
+          it != animated->overrides.end()) {
+        return budget.reserveSourceBytes(it->second.size()) ? it->second : std::string{};
+      }
     }
   }
 
@@ -935,7 +946,7 @@ std::optional<std::string> UnderlyingAnimationValue(Registry& registry, Entity t
     if (const auto* path = registry.try_get<PathComponent>(target); path && path->splineOverride) {
       return SerializeAnimationPathGeometry(*path->splineOverride, budget);
     }
-    const auto data = CascadedAnimationPathData(registry, target, budget);
+    const auto data = AnimationPathData(registry, target, budget, includeAnimationOverride);
     if (!data || data->size() > AnimationResourceBudget::kMaximumPathValueBytes ||
         !budget.reserveSourceBytes(data->size())) {
       return std::nullopt;
@@ -1035,6 +1046,20 @@ std::optional<std::string> UnderlyingAnimationValue(Registry& registry, Entity t
     return "none";
   }
   return "0";
+}
+
+std::optional<std::string> UnderlyingAnimationValue(Registry& registry, Entity target,
+                                                    std::string_view attribute,
+                                                    const AnimationValueContext& context,
+                                                    AnimationResourceBudget& budget) {
+  return AnimationBaseOrUnderlyingValue(registry, target, attribute, context, budget, true);
+}
+
+std::optional<std::string> BaseAnimationValue(Registry& registry, Entity target,
+                                              std::string_view attribute,
+                                              const AnimationValueContext& context,
+                                              AnimationResourceBudget& budget) {
+  return AnimationBaseOrUnderlyingValue(registry, target, attribute, context, budget, false);
 }
 
 std::shared_ptr<const ContextualLengthRecipe> ContextualLengthFor(Registry& registry, Entity target,

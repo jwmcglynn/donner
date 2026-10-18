@@ -260,6 +260,33 @@ TEST_F(StyleSystemTest, ExhaustedPaintWorkPreservesBaseAndRecoversOnTheNextSampl
   EXPECT_EQ(document.source(), source);
 }
 
+TEST_F(StyleSystemTest, MidStackPaintWorkRefusalDiscardsPartialLowerAnimation) {
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='r' fill='red'>"
+      "<set attributeName='fill' to='#0000ff'/><animate attributeName='fill' to='lime' dur='2s'/>"
+      "</rect></svg>");
+  auto& registry = document.registry();
+  const auto target = document.querySelector("#r")->entityHandle();
+  AnimationSystem().advance(registry, 1);
+  registry.ctx().emplace<AnimationStyleContext>().enabled = true;
+  const auto& recipe =
+      registry.get<AnimatedValuesComponent>(target.entity()).contextualLengths.at("fill");
+  auto& budget = registry.ctx().get<AnimationResourceBudget>();
+  constexpr std::size_t kPaintKeywordWork = 64;
+  constexpr std::size_t kInsufficientBlueUnderlyingWork = 111;
+  const std::size_t retainedWork =
+      recipe->evaluationWork + kPaintKeywordWork + kInsufficientBlueUnderlyingWork;
+  ASSERT_GE(budget.remainingContextualWork(), retainedWork);
+  ASSERT_TRUE(budget.reserveContextualWork(budget.remainingContextualWork() - retainedWork));
+
+  styleSystem.invalidateComputed(target);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const auto& properties = *styleSystem.computeStyle(target, warnings).properties;
+  EXPECT_EQ(properties.fill.get(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)))));
+  EXPECT_FALSE(budget.rejected());
+}
+
 TEST_F(StyleSystemTest, RepeatedAnimatedOpacityReservesWorkBeforeParsing) {
   const std::string value = std::string(65536, '0') + ".5";
   auto document = ParseSVG(

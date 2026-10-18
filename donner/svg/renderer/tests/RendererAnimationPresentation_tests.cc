@@ -2,6 +2,9 @@
 #include <gtest/gtest.h>
 
 #include <functional>
+#include <limits>
+#include <memory>
+#include <sstream>
 
 #include "donner/base/encoding/Base64.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -11,7 +14,9 @@
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGSVGElement.h"
+#include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimateMotionComponent.h"
@@ -21,6 +26,8 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
@@ -185,10 +192,10 @@ TEST(RendererAnimationPresentation, ToOnlyTextPositionUsesTypedBase) {
   }
 }
 
-TEST(RendererAnimationPresentation, ToOnlyTextXUsesFirstTypedCoordinateAsScalarBase) {
+TEST(RendererAnimationPresentation, ToOnlyTextXUsesFullTypedCoordinateList) {
   auto document = ParsePresentation(
-      "<text id='t' x='2 14' y='12' font-size='10'>H"
-      "<animate attributeName='x' to='10' dur='2s'/></text>");
+      "<text id='t' x='2 14' y='12' font-size='10'>HH"
+      "<animate attributeName='x' to='10 18' dur='2s'/></text>");
   auto text = document.querySelector("#t");
   ASSERT_THAT(text, testing::Ne(std::nullopt));
   SmallVector<Lengthd, 1> coordinates;
@@ -197,19 +204,19 @@ TEST(RendererAnimationPresentation, ToOnlyTextXUsesFirstTypedCoordinateAsScalarB
   text->cast<SVGTextElement>().setXList(std::move(coordinates));
 
   document.setTime(1);
-  auto expected = ParsePresentation("<text x='8' y='12' font-size='10'>H</text>");
+  auto expected = ParsePresentation("<text x='8 16' y='12' font-size='10'>HH</text>");
   editor::tests::CompareBitmapToBitmap(
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
-      "typed-text-scalar-x-base", editor::tests::PixelmatchIdentityParams());
+      "typed-text-list-x-base", editor::tests::PixelmatchIdentityParams());
 }
 
-TEST(RendererAnimationPresentation, EmptyChildTextListsUseAncestorBaseAndRestoreAcrossSeeks) {
+TEST(RendererAnimationPresentation, EmptyChildDeltaListsUseNeutralBaseAndRestoreAncestorLayout) {
   struct Case {
     const char* attribute;
     double base;
     double to;
   };
-  for (const Case item : {Case{"dx", 2, 6}, Case{"dy", 1, 5}, Case{"rotate", 10, 30}}) {
+  for (const Case item : {Case{"dx", 2, 6}, Case{"dy", 1, 5}}) {
     SCOPED_TRACE(item.attribute);
     const std::string prefix = "<text x='2' y='12' font-size='10' " + std::string(item.attribute) +
                                "='" + std::to_string(item.base) + "'><tspan";
@@ -220,30 +227,487 @@ TEST(RendererAnimationPresentation, EmptyChildTextListsUseAncestorBaseAndRestore
       SCOPED_TRACE(time);
       document.setTime(time);
       const bool active = time == 2.0;
-      const double value = active ? (item.base + item.to) / 2 : item.base;
+      const double value = active ? item.to / 2 : item.base;
       const std::string child =
           active ? " " + std::string(item.attribute) + "='" + std::to_string(value) + "'" : "";
       auto expected = ParsePresentation(prefix + child + ">H</tspan></text>");
       editor::tests::CompareBitmapToBitmap(
           RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
-          "ancestor-text-position-base", editor::tests::PixelmatchIdentityParams());
+          "neutral-child-delta-base", editor::tests::PixelmatchIdentityParams());
     }
   }
 }
 
-TEST(RendererAnimationPresentation, MultiValueAncestorTextListFailsClosedForChildAnimation) {
+TEST(RendererAnimationPresentation, MultiValueAncestorListDoesNotBecomeChildBase) {
   const std::string source =
       "<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan id='s'>B"
       "<animate attributeName='dx' to='8' begin='1s' dur='2s'/></tspan></text>";
   auto document = ParsePresentation(source);
-  auto expected = ParsePresentation(
-      "<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan>B</tspan></text>");
   for (const double time : {0.0, 2.0, 4.0, 2.0}) {
     SCOPED_TRACE(time);
     document.setTime(time);
+    const std::string child = time == 2.0 ? " dx='4'" : "";
+    auto expected =
+        ParsePresentation("<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan" +
+                          child + ">B</tspan></text>");
     editor::tests::CompareBitmapToBitmap(
         RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
-        "multi-value-ancestor-fails-closed", editor::tests::PixelmatchIdentityParams());
+        "multi-value-ancestor-is-layout-only", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPresentation, RootTextLengthUsesNaturalLengthAcrossNestedContent) {
+  auto document = ParsePresentation(
+      "<text id='t' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>"
+      "<tspan>H</tspan><a><tspan>H</tspan></a>"
+      "<animate attributeName='textLength' to='12' dur='2s'/></text>");
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  const double natural = text->cast<SVGTextElement>().getComputedTextLength();
+  document.setTime(1);
+  std::ostringstream value;
+  value.precision(std::numeric_limits<double>::max_digits10);
+  value << (natural + 12) / 2;
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='" +
+      value.str() + "'><tspan>H</tspan><a><tspan>H</tspan></a></text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "nested-natural-text-length", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, NestedTextLengthUsesOwnerAggregateAndFontMetrics) {
+  auto document = ParsePresentation(
+      "<text x='1' y='12' font-size='10'><tspan id='owner' font-size='20' "
+      "lengthAdjust='spacingAndGlyphs'>H<a><tspan>H</tspan></a>"
+      "<animate attributeName='textLength' to='1em' dur='2s'/></tspan></text>");
+  auto owner = document.querySelector("#owner");
+  ASSERT_TRUE(owner.has_value());
+  const double natural = owner->cast<SVGTSpanElement>().getComputedTextLength();
+  document.setTime(1);
+  std::ostringstream value;
+  value.precision(std::numeric_limits<double>::max_digits10);
+  value << (natural + 20) / 2;
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10'><tspan font-size='20' "
+      "lengthAdjust='spacingAndGlyphs' textLength='" +
+      value.str() + "'>H<a><tspan>H</tspan></a></tspan></text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "nested-owner-text-length", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, SharedTextLengthUsesEachOccurrenceFontMetrics) {
+  auto document = ParsePresentation(
+      "<defs><text id='source' lengthAdjust='spacingAndGlyphs'><tspan><a><tspan>HH</tspan></a>"
+      "</tspan><animate attributeName='textLength' to='1em' dur='2s'/></text></defs>"
+      "<use href='#source' x='1' y='6' font-size='6'/><use href='#source' x='1' y='15' "
+      "font-size='10'/>");
+  auto measure = [](double fontSize) {
+    auto value = ParsePresentation("<text font-size='" + std::to_string(fontSize) + "'>HH</text>");
+    return value.querySelector("text")->cast<SVGTextElement>().getComputedTextLength();
+  };
+  const double first = (measure(6) + 6) / 2;
+  const double second = (measure(10) + 10) / 2;
+  document.setTime(1);
+  std::ostringstream firstValue;
+  std::ostringstream secondValue;
+  firstValue.precision(std::numeric_limits<double>::max_digits10);
+  secondValue.precision(std::numeric_limits<double>::max_digits10);
+  firstValue << first;
+  secondValue << second;
+  auto expected = ParsePresentation(
+      "<text x='1' y='6' font-size='6' lengthAdjust='spacingAndGlyphs' textLength='" +
+      firstValue.str() +
+      "'>HH</text><text x='1' y='15' font-size='10' "
+      "lengthAdjust='spacingAndGlyphs' textLength='" +
+      secondValue.str() + "'>HH</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "shared-text-length-occurrence-fonts", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, TextPathTextLengthUsesNaturalOwnerScope) {
+  const std::string prefix =
+      "<defs><path id='p' d='M0 12H100'/></defs><text font-size='10'><textPath id='owner' "
+      "href='#p' lengthAdjust='spacingAndGlyphs'";
+  auto document = ParsePresentation(
+      prefix + ">HH<animate attributeName='textLength' to='50' dur='2s'/></textPath></text>");
+  auto owner = document.querySelector("#owner");
+  ASSERT_TRUE(owner.has_value());
+  const double natural = owner->cast<SVGTextPathElement>().getComputedTextLength();
+  document.setTime(1);
+  std::ostringstream value;
+  value.precision(std::numeric_limits<double>::max_digits10);
+  value << (natural + 50) / 2;
+  auto expected =
+      ParsePresentation(prefix + " textLength='" + value.str() + "'>HH</textPath></text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-path-natural-text-length", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, TextLengthWorkRefusalKeepsNestedStaticTargetsAtomic) {
+  auto document = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>H"
+      "<tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH</tspan>"
+      "<animate attributeName='textLength' to='30' dur='2s'/></text>");
+  document.setTime(1);
+  auto styleWork = std::make_shared<components::StyleResourceBudget>();
+  auto* initialBudget = document.registry().ctx().find<components::AnimationResourceBudget>();
+  if (!initialBudget) {
+    initialBudget = &document.registry().ctx().emplace<components::AnimationResourceBudget>();
+  }
+  components::StyleResourceBudget::OwnerScope ownerScope(*styleWork);
+  components::StyleResourceBudget::ActiveRegistryScope activeScope(*styleWork, document.registry());
+  auto sharedAllowance = initialBudget->contextualWorkBudget();
+  ASSERT_TRUE(sharedAllowance);
+  ASSERT_TRUE(initialBudget->reserveContextualWork(
+      components::AnimationResourceBudget::kMaximumContextualWork));
+  auto renderer = CreateRendererInstance(ActiveRendererBackend());
+  RendererDriver driver(*renderer, false, nullptr, styleWork);
+  driver.draw(document);
+  const RendererBitmap actual = renderer->takeSnapshot();
+  EXPECT_EQ(sharedAllowance->remaining(), 0u);
+  EXPECT_EQ(document.registry()
+                .ctx()
+                .get<components::AnimationResourceBudget>()
+                .remainingContextualWork(),
+            0u);
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10'>H"
+      "<tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH</tspan></text>");
+  editor::tests::CompareBitmapToBitmap(actual, RenderDocumentWithActiveBackend(expected),
+                                       "text-length-work-refusal",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, NaturalTextLengthSpacingMovesGlyphsWithoutScalingThem) {
+  auto document = ParsePresentation(
+      "<text id='t' x='1' y='12' font-size='10' lengthAdjust='spacing'>HH"
+      "<animate attributeName='textLength' to='14' dur='2s'/></text>");
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  const double natural = text->cast<SVGTextElement>().getComputedTextLength();
+  document.setTime(1);
+  std::ostringstream value;
+  value.precision(std::numeric_limits<double>::max_digits10);
+  value << (natural + 14) / 2;
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacing' "
+      "textLength='" +
+      value.str() + "'>HH</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "natural-text-length-spacing", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, NegativeAnimatedTextLengthPreservesNaturalLayout) {
+  const std::string base = "<text x='1' y='12' font-size='10'>HH</text>";
+  auto document = ParsePresentation(
+      "<text x='1' y='12' font-size='10'>HH"
+      "<animate attributeName='textLength' to='-100' dur='2s'/></text>");
+  document.setTime(1);
+  auto expected = ParsePresentation(base);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "negative-text-length-preserves-natural", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, InvalidAnimatedTextLengthPreservesExplicitBase) {
+  const std::string base =
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' "
+      "textLength='8'>HH</text>";
+  auto document = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
+      "<animate attributeName='textLength' to='-100' dur='2s'/></text>");
+  document.setTime(1);
+  auto expected = ParsePresentation(base);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "invalid-text-length-keeps-explicit-base", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, MixedFlatAndPathTextLengthMatchesStaticTargetAcrossSeeks) {
+  const std::string paths =
+      "<defs><path id='p1' d='M1 12H30'/><path id='p2' d='M32 12H62'/></defs>";
+  const std::string text =
+      "<text id='owner' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>A"
+      "<textPath href='#p1'>B</textPath>C<textPath href='#p2'>D</textPath></text>";
+  auto document = ParsePresentation(paths + text +
+                                    "<animate href='#owner' attributeName='textLength' to='50' "
+                                    "dur='2s'/>");
+  auto owner = document.querySelector("#owner");
+  ASSERT_TRUE(owner.has_value());
+  document.setTime(3);
+  const double natural = owner->cast<SVGTextElement>().getComputedTextLength();
+  std::ostringstream midpoint;
+  midpoint.precision(std::numeric_limits<double>::max_digits10);
+  midpoint << (natural + 50) / 2;
+  for (const double time : {0.0, 1.0, 3.0, 1.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    const std::string target = time == 1 ? " textLength='" + midpoint.str() + "'" : "";
+    auto expected = ParsePresentation(
+        paths + "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'" + target +
+        ">A<textPath href='#p1'>B</textPath>C<textPath href='#p2'>D</textPath></text>");
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         "mixed-flat-path-text-length-" + std::to_string(time),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPresentation, NestedFixedOwnerDoesNotCreateParentScalingGap) {
+  auto document = ParsePresentation(
+      "<text id='owner' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>"
+      "<tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH</tspan>H"
+      "<animate attributeName='textLength' to='30' dur='2s'/></text>");
+  auto owner = document.querySelector("#owner");
+  ASSERT_TRUE(owner.has_value());
+  document.setTime(3);
+  const double natural = owner->cast<SVGTextElement>().getComputedTextLength();
+  document.setTime(1);
+  std::ostringstream midpoint;
+  midpoint.precision(std::numeric_limits<double>::max_digits10);
+  midpoint << (natural + 30) / 2;
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='" +
+      midpoint.str() +
+      "'><tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH</tspan>H</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "nested-fixed-owner-parent-scaling", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, NestedOwnerAbsoluteResetStopsPriorLengthCarry) {
+  auto document = ParsePresentation(
+      "<text y='12' font-size='10'><tspan lengthAdjust='spacingAndGlyphs' "
+      "textLength='40'>AB</tspan><tspan x='100' textLength='20'>C</tspan></text>");
+  auto expected = ParsePresentation(
+      "<text y='12' font-size='10'><tspan lengthAdjust='spacingAndGlyphs' "
+      "textLength='40'>AB</tspan><tspan x='100'>C</tspan></text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "nested-owner-absolute-reset", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, InvalidNestedTextLengthKeepsOwnBaseOnly) {
+  auto document = ParsePresentation(
+      "<text id='owner' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>H"
+      "<tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
+      "<animate attributeName='textLength' to='-1' dur='2s'/></tspan>H"
+      "<animate attributeName='textLength' to='40' dur='2s'/></text>");
+  auto owner = document.querySelector("#owner");
+  ASSERT_TRUE(owner.has_value());
+  document.setTime(3);
+  const double natural = owner->cast<SVGTextElement>().getComputedTextLength();
+  document.setTime(1);
+  std::ostringstream midpoint;
+  midpoint.precision(std::numeric_limits<double>::max_digits10);
+  midpoint << (natural + 40) / 2;
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='" +
+      midpoint.str() +
+      "'>H"
+      "<tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH</tspan>H</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "invalid-nested-text-length-own-base", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, VerticalNaturalTextLengthMatchesStaticTarget) {
+  auto document = ParsePresentation(
+      "<text id='owner' x='12' y='1' font-size='10' writing-mode='vertical-rl' "
+      "lengthAdjust='spacingAndGlyphs'>HH"
+      "<animate attributeName='textLength' to='20' dur='2s'/></text>");
+  auto owner = document.querySelector("#owner");
+  ASSERT_TRUE(owner.has_value());
+  document.setTime(3);
+  const double natural = owner->cast<SVGTextElement>().getComputedTextLength();
+  document.setTime(1);
+  std::ostringstream midpoint;
+  midpoint.precision(std::numeric_limits<double>::max_digits10);
+  midpoint << (natural + 20) / 2;
+  auto expected = ParsePresentation(
+      "<text x='12' y='1' font-size='10' writing-mode='vertical-rl' "
+      "lengthAdjust='spacingAndGlyphs' textLength='" +
+      midpoint.str() + "'>HH</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "vertical-natural-text-length", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, NaturalTextLengthRecomputesAfterSourceMutation) {
+  auto document = ParsePresentation(
+      "<text id='owner' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>HH</text>"
+      "<animate href='#owner' attributeName='textLength' to='30' dur='2s'/>");
+  auto owner = document.querySelector("#owner");
+  ASSERT_TRUE(owner.has_value());
+  owner->cast<SVGTextElement>().setTextContent("HHH");
+  document.setTime(3);
+  const double natural = owner->cast<SVGTextElement>().getComputedTextLength();
+  document.setTime(1);
+  std::ostringstream midpoint;
+  midpoint.precision(std::numeric_limits<double>::max_digits10);
+  midpoint << (natural + 30) / 2;
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='" +
+      midpoint.str() + "'>HHH</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "natural-text-length-source-mutation", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, InvalidUpperTextLengthKeepsValidLowerLayer) {
+  auto document = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
+      "<animate attributeName='textLength' from='10' to='20' dur='2s'/>"
+      "<set attributeName='textLength' to='-1' dur='2s'/></text>");
+  document.setTime(1);
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' "
+      "textLength='15'>HH</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "invalid-upper-text-length-keeps-lower", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, TextLengthValuesIgnoreInvalidFromOperand) {
+  auto document = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
+      "<animate attributeName='textLength' from='-1' values='10;20' dur='2s'/></text>");
+  document.setTime(1);
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' "
+      "textLength='15'>HH</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-length-values-precedence", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, TextPositionBaseUsesAnimatedListArity) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' to='10' dur='2s'/>");
+  document.setTime(0.5);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='4'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-position-list-arity", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, AnimatedTextPositionListReplacesAuthoredTail) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='1 2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' from='10' to='10' dur='2s'/>");
+  document.setTime(1);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='10'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-position-list-replaces-tail", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, NonemptyDeltaListIsNotTruncatedForInterpolation) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='1 2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' to='10' dur='2s'/>");
+  document.setTime(0.5);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='1 2'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "nonempty-delta-list-is-not-truncated", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, InvalidUpperTextPositionKeepsValidLowerLayer) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' from='2' to='6' dur='2s'/>"
+      "<set href='#owner' attributeName='dx' to='invalid' dur='2s'/>");
+  document.setTime(1);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='4'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "invalid-upper-text-position-keeps-lower", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, TextPositionValuesIgnoreInvalidFromOperand) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' from='invalid' values='10;14' dur='2s'/>");
+  document.setTime(1);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='12'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-position-values-precedence", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, TextPositionToIgnoresInactiveInvalidByOperand) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' from='2' to='6' by='invalid' dur='2s'/>");
+  document.setTime(1);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='4'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-position-to-precedence", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, EmptyDeltaBaseIsPaddedPerAnimationLayer) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10'>AB</text>"
+      "<animate href='#owner' attributeName='dx' to='8' dur='2s'/>"
+      "<animate href='#owner' attributeName='dx' to='10 20' dur='4s'/>");
+  document.setTime(0.5);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='2'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "empty-delta-base-layer-padding", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, FrozenPartialTextLengthKeepsBoundaryLowerLayer) {
+  auto document = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
+      "<animate attributeName='textLength' from='10' to='20' dur='10s'/>"
+      "<animate attributeName='textLength' to='30' dur='2s' repeatCount='0.5' "
+      "fill='freeze'/></text>");
+  struct Checkpoint {
+    double time;
+    double target;
+  };
+  for (const Checkpoint item :
+       {Checkpoint{5, 20.5}, Checkpoint{0.5, 15.375}, Checkpoint{5, 20.5}}) {
+    SCOPED_TRACE(item.time);
+    document.setTime(item.time);
+    auto expected = ParsePresentation(
+        "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='" +
+        std::to_string(item.target) + "'>HH</text>");
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         "frozen-partial-text-length-" + std::to_string(item.time),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPresentation, FrozenPartialTextPositionKeepsBoundaryLowerLayer) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='2'>HH</text>"
+      "<animate href='#owner' attributeName='dx' from='2' to='12' dur='10s'/>"
+      "<animate href='#owner' attributeName='dx' to='20' dur='2s' repeatCount='0.5' "
+      "fill='freeze'/>");
+  struct Checkpoint {
+    double time;
+    double target;
+  };
+  for (const Checkpoint item : {Checkpoint{5, 11.5}, Checkpoint{0.5, 6.875}, Checkpoint{5, 11.5}}) {
+    SCOPED_TRACE(item.time);
+    document.setTime(item.time);
+    auto expected = ParsePresentation("<text y='12' font-size='10' dx='" +
+                                      std::to_string(item.target) + "'>HH</text>");
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "frozen-partial-text-position-" + std::to_string(item.time),
+        editor::tests::PixelmatchIdentityParams());
   }
 }
 #endif

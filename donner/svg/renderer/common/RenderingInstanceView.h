@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <span>
 #include <vector>
 
@@ -50,7 +51,8 @@ public:
   RenderingInstanceView(Registry& registry, std::span<const Entity> entities)
       : storage_(registry.storage<components::RenderingInstanceComponent>()),
         entities_(entities.begin(), entities.end()),
-        end_(entities_.size()) {}
+        end_(entities_.size()),
+        fullSnapshot_(false) {}
 
   /// Destructor.
   ~RenderingInstanceView() = default;
@@ -62,6 +64,9 @@ public:
   RenderingInstanceView(RenderingInstanceView&&) = default;
   RenderingInstanceView& operator=(const RenderingInstanceView&) = delete;
   RenderingInstanceView& operator=(RenderingInstanceView&&) = delete;
+
+  /// Returns whether this view captured the complete registry rather than an explicit subset.
+  bool isFullSnapshot() const { return fullSnapshot_; }
 
   /// Returns true if the view has no more elements.
   bool done() const { return current_ == end_; }
@@ -93,6 +98,21 @@ public:
   /// Restores the state.
   void restore(const SavedState& state) { current_ = state.current; }
 
+  /**
+   * Seek to an entity anywhere in this snapshot, preserving the cursor if it is absent.
+   *
+   * @param entity Entity to locate.
+   * @returns True if the entity is present and the cursor was moved to it.
+   */
+  bool seek(Entity entity) {
+    const auto it = std::find(entities_.begin(), entities_.end(), entity);
+    if (it == entities_.end()) {
+      return false;
+    }
+    current_ = static_cast<size_t>(it - entities_.begin());
+    return true;
+  }
+
   /// Returns the current component.
   const components::RenderingInstanceComponent& get() const {
     assert(!done());
@@ -105,6 +125,7 @@ private:
   std::vector<Entity> entities_;  //!< Snapshot of entity IDs in iteration order.
   size_t current_ = 0;            //!< Index into \ref entities_ of the current element.
   size_t end_ = 0;                //!< One past the last valid index.
+  bool fullSnapshot_ = true;  //!< Whether all rendering instances were captured at construction.
 };
 
 }  // namespace donner::svg
