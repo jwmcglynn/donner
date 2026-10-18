@@ -210,6 +210,8 @@ donner_cc_test(
     # a hung process.
     size = "medium",
     srcs = ["EditorShell_tests.cc"],
+    opens_gpu_device = True,
+    renderer_backend = "geode",
     # GPU-backed framebuffer cases need short shards and isolated local device use.
     shard_count = 8,
     tags = ["exclusive-if-local"],
