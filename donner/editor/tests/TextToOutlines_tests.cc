@@ -495,6 +495,28 @@ TEST(TextToOutlines, AppliesThroughAsyncDocumentAndUndoRestoresText) {
   EXPECT_FALSE(async.document().querySelector("#logo_outlines").has_value());
 }
 
+TEST(TextToOutlines, CapacityRefusalMustNotDeleteSourceText) {
+  AsyncSVGDocument async;
+  async.setDocument(Parse(kTextSvg));
+  svg::SVGElement text = TextElement(async.document());
+  ConvertTextToOutlinesResult result = convertTextToOutlines(async.document(), text);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  const std::string sourceBefore(async.document().source());
+  async.document().xmlDocument().setSourceEditTreeLimits(0, 128);
+  const auto parent = text.parentElement();
+  ASSERT_THAT(parent, testing::Ne(std::nullopt));
+  async.queue().push(EditorCommand::InsertElementCommand(*parent, *result.outlineGroup, text));
+  for (svg::SVGElement& path : result.outlinePaths) {
+    async.queue().push(EditorCommand::InsertElementCommand(*result.outlineGroup, path));
+  }
+  async.queue().push(EditorCommand::DeleteElementCommand(text));
+  ASSERT_TRUE(async.flushFrame());
+
+  EXPECT_THAT(async.document().source(), Eq(sourceBefore));
+  EXPECT_THAT(async.document().querySelector("#logo").has_value(), Eq(true));
+}
+
 // Error handling: a `<text>` that produces no glyph outlines (empty content)
 // fails the conversion and leaves the document completely unchanged.
 TEST(TextToOutlines, EmptyOutlineFailureLeavesDocumentUnchanged) {
