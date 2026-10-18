@@ -3975,11 +3975,20 @@ async function finishAnimationPreview({
       timeout: scaledMs(3000),
       message: "Edit action is applied before quitting",
     }).toBeGreaterThan(frames + 1);
-    await page.keyboard.press("Control+q");
-    await expect.poll(() => page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0), {
-      timeout: scaledMs(5000),
-      message: "shutdown begins while the raster yield remains held",
-    }).toBeGreaterThan(shutdowns);
+    await page.keyboard.down("Control");
+    try {
+      try {
+        await page.keyboard.down("q");
+        await expect.poll(() => page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0), {
+          timeout: scaledMs(5000),
+          message: "shutdown begins while the raster yield remains held",
+        }).toBeGreaterThan(shutdowns);
+      } finally {
+        await page.keyboard.up("q");
+      }
+    } finally {
+      await page.keyboard.up("Control");
+    }
     expect(
       await heldForQuit.raster.evaluate(() => {
         const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
