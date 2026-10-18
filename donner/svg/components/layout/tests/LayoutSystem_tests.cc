@@ -898,8 +898,8 @@ TEST_F(LayoutSystemTest, ImageCssWideDimensionKeepsIntrinsicAspectRatio) {
   layoutSystem.instantiateAllComputedComponents(registry, warningSink);
 
   const auto image = document.querySelector("#image")->entityHandle();
-  EXPECT_EQ(image.get<ComputedSizedElementComponent>().bounds,
-            Box2d(Vector2d(5, 6), Vector2d(17, 18)));
+  EXPECT_THAT(image.get<ComputedSizedElementComponent>().bounds,
+              BoxEq(Vector2d(5, 6), Vector2d(17, 18)));
 }
 
 TEST_F(LayoutSystemTest, CreateShadowSizedElementComponent) {
@@ -944,8 +944,8 @@ TEST_F(LayoutSystemTest, ParsedShadowCssWideUseDimensionsKeepTargetSize) {
       registry, shadowEntity, document.querySelector("#u")->entityHandle(),
       document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
       warningSink));
-  EXPECT_EQ(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
-            Box2d(Vector2d(1, 2), Vector2d(41, 22)));
+  EXPECT_THAT(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+              BoxEq(Vector2d(1, 2), Vector2d(41, 22)));
 }
 
 TEST_F(LayoutSystemTest, ParsedShadowCssWideTargetDimensionsUseParentViewport) {
@@ -963,8 +963,8 @@ TEST_F(LayoutSystemTest, ParsedShadowCssWideTargetDimensionsUseParentViewport) {
       registry, shadowEntity, document.querySelector("#u")->entityHandle(),
       document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
       warningSink));
-  EXPECT_EQ(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
-            Box2d(Vector2d(1, 2), Vector2d(201, 102)));
+  EXPECT_THAT(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+              BoxEq(Vector2d(1, 2), Vector2d(201, 102)));
 }
 
 TEST_F(LayoutSystemTest, ShadowSizeExplicitCssWidePropertyStateDoesNotAbort) {
@@ -986,8 +986,8 @@ TEST_F(LayoutSystemTest, ShadowSizeExplicitCssWidePropertyStateDoesNotAbort) {
   EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
       registry, shadowEntity, use, document.querySelector("#sym")->unsafeEntityHandle().entity(),
       ShadowBranchType::Main, warningSink));
-  EXPECT_EQ(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
-            Box2d(Vector2d(1, 2), Vector2d(41, 22)));
+  EXPECT_THAT(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+              BoxEq(Vector2d(1, 2), Vector2d(41, 22)));
 }
 
 TEST_F(LayoutSystemTest, ShadowSizeUseSetterNulloptDoesNotAbort) {
@@ -1009,8 +1009,8 @@ TEST_F(LayoutSystemTest, ShadowSizeUseSetterNulloptDoesNotAbort) {
       registry, shadowEntity, use.entityHandle(),
       document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
       warningSink));
-  EXPECT_EQ(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
-            Box2d(Vector2d(1, 2), Vector2d(41, 22)));
+  EXPECT_THAT(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+              BoxEq(Vector2d(1, 2), Vector2d(41, 22)));
 }
 
 /**
