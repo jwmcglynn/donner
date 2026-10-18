@@ -926,7 +926,10 @@ TEST_F(LayoutSystemTest, CreateShadowSizedElementComponent) {
   EXPECT_EQ(shadowSized.bounds, Box2d(Vector2d(1, 2), Vector2d(51, 27)));
 }
 
-TEST_F(LayoutSystemTest, ShadowSizeCssWideUseDimensionsKeepTargetSize) {
+// The initial XML parser rejects CSS-wide dimensions on <use>/<symbol>. These
+// cover that parser boundary; the mutation tests below exercise resolved-empty
+// properties reaching the shadow-sizing helper.
+TEST_F(LayoutSystemTest, ParsedShadowCssWideUseDimensionsKeepTargetSize) {
   auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs><symbol id="sym" x="1" y="2" width="40" height="20"/></defs>
@@ -945,7 +948,7 @@ TEST_F(LayoutSystemTest, ShadowSizeCssWideUseDimensionsKeepTargetSize) {
             Box2d(Vector2d(1, 2), Vector2d(41, 22)));
 }
 
-TEST_F(LayoutSystemTest, ShadowSizeCssWideTargetDimensionsUseParentViewport) {
+TEST_F(LayoutSystemTest, ParsedShadowCssWideTargetDimensionsUseParentViewport) {
   auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs><symbol id="sym" x="1" y="2" width="initial" height="unset"/></defs>
