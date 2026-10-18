@@ -2969,6 +2969,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         rc = _read(".bazelrc")
         self.assertIn("build:buildbuddy-re --config=latest_llvm", rc.splitlines())
         self.assertIn("build:buildbuddy-re --spawn_strategy=remote", rc.splitlines())
+        self.assertIn('build:buildbuddy-re --strategy_regexp="^Executing genrule '
+                      '//donner/editor:editor_build_info_txt$=local"', rc.splitlines())
+        self.assertNotIn("build:buildbuddy-re --strategy=Genrule=local", rc.splitlines())
         self.assertIn("build:buildbuddy-re --strategy=TestRunner=local", rc.splitlines())
         self.assertIn("build:buildbuddy-re --noremote_local_fallback", rc.splitlines())
         main = self.supply_chain_files[".github/workflows/main.yml"]
