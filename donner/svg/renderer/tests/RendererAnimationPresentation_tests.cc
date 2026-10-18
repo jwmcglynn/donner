@@ -1269,12 +1269,14 @@ public:
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view url) override {
     requests.emplace_back(url);
-    return DecodeBase64Data(url == "b.png"
-                                ? "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNgYP"
-                                  "gPRmAKABf2A/1+6zfzAAAAAElFTkSuQmCC"
-                                : "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8"
-                                  "AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==")
-        .result();
+    const std::string_view encoded =
+        url == "b.png"   ? "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNgYPgP"
+                           "RmAKABf2A/1+6zfzAAAAAElFTkSuQmCC"
+        : url == "c.png" ? "iVBORw0KGgoAAAANSUhEUgAAAAMAAAAECAIAAADETxJQAAAAD0lEQVR4nGNg+M8A"
+                           "RXhZAO84C/UG7FlZAAAAAElFTkSuQmCC"
+                         : "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AA"
+                           "RAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==";
+    return DecodeBase64Data(encoded).result();
   }
 
   std::vector<std::string> requests;
@@ -1282,12 +1284,12 @@ public:
 
 TEST(RendererAnimationPresentation, AnimatedImageCacheEvictsBeforeFamilyBudgetRefusal) {
   auto document = ParsePresentation(R"svg(
-    <image id="i" width="16" height="16"><animate attributeName="href"
+    <image id="i" width="16" height="16" preserveAspectRatio="none"><animate attributeName="href"
       values="a.png;b.png;c.png" calcMode="discrete" dur="3s"
       repeatCount="indefinite"/></image>)svg");
   auto& registry = document.registry();
   components::DocumentResourceFamilyBudget::Limits limits;
-  limits.decodedImageBytes = 32;
+  limits.decodedImageBytes = 64;
   auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
   registry.ctx().get<components::DocumentResourceFamilyContext>().budget = family;
   registry.ctx().erase<components::ResourceManagerContext>();
@@ -1301,18 +1303,20 @@ TEST(RendererAnimationPresentation, AnimatedImageCacheEvictsBeforeFamilyBudgetRe
   for (const double time : {0.25, 1.25, 2.25, 3.25, 4.25, 5.25}) {
     SCOPED_TRACE(time);
     document.setTime(time);
-    const bool blue = static_cast<int>(time) % 3 == 1;
-    auto expected = ParsePresentation(blue ? R"(<rect width="16" height="16" fill="blue"/>)"
-                                           : R"(<rect width="16" height="16" fill="red"/>)");
+    const int phase = static_cast<int>(time) % 3;
+    auto expected =
+        ParsePresentation(phase == 0   ? R"(<rect width="16" height="16" fill="red"/>)"
+                          : phase == 1 ? R"(<rect width="16" height="16" fill="blue"/>)"
+                                       : R"(<rect width="16" height="16" fill="lime"/>)");
     editor::tests::CompareBitmapToBitmap(
         RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
         "animated-image-cache-family-budget", editor::tests::PixelmatchIdentityParams());
     const auto* loaded = registry.try_get<components::LoadedImageComponent>(target);
     ASSERT_THAT(loaded, testing::Ne(nullptr));
     ASSERT_TRUE(loaded->image.has_value());
-    EXPECT_EQ(loaded->image->data.size(), 16u);
+    EXPECT_EQ(loaded->image->data.size(), phase == 2 ? 48u : 16u);
     EXPECT_LE(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::DecodedImage),
-              32u);
+              64u);
   }
   EXPECT_THAT(requests, testing::Contains("c.png"));
 }
