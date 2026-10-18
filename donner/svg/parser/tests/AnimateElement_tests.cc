@@ -10,6 +10,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
@@ -1673,12 +1674,16 @@ TEST(SVGAnimateElement, NamespaceChangesDisableAndRestoreAnimation) {
 
 TEST(SVGAnimateElement, MixedTextPositionUnitsUseTheirOwnViewportAxis) {
   auto document = parseSVGWithExperimental(R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><text id="r">
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><text id="r">H
       <animate attributeName="dx" from="10px" to="50%" dur="2s"/>
       <animate attributeName="dy" from="10px" to="50%" dur="2s"/>
     </text></svg>)svg");
-  EXPECT_THAT(getAnimatedValue(document, "#r", "dx", 1), testing::Optional(testing::StrEq("55")));
-  EXPECT_THAT(getAnimatedValue(document, "#r", "dy", 1), testing::Optional(testing::StrEq("30")));
+  document.setTime(1);
+  components::AnimationSystem().advance(document.registry(), 1, nullptr);
+  auto text = document.querySelector("#r");
+  ASSERT_THAT(text, testing::Ne(std::nullopt));
+  EXPECT_THAT(text->cast<SVGTextElement>().getStartPositionOfChar(0),
+              testing::Eq(Vector2d(55, 30)));
 }
 
 TEST(SVGAnimateElement, ReferenceValuesAreDiscreteAndNonAdditive) {
