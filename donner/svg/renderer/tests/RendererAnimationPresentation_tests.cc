@@ -728,7 +728,11 @@ TEST(RendererAnimationPresentation, RtlTextLengthMatchesEquivalentStaticTarget) 
   face.sources.push_back(std::move(fontSource));
   const auto parseArabic = [&](std::string_view source) {
     auto document = instantiateSubtree(source, parser::SVGParser::Options(), Vector2i(200, 80));
-    auto& fonts = document.registry().ctx().get_or_emplace<FontManager>(document.registry());
+    auto& context = document.registry().ctx();
+    if (!context.contains<FontManager>()) {
+      context.emplace<FontManager>(document.registry());
+    }
+    auto& fonts = context.get<FontManager>();
     fonts.addFontFace(face);
     EXPECT_THAT(fonts.fontData(fonts.findFont("Amiri")), testing::ElementsAreArray(*fontData));
     return document;
