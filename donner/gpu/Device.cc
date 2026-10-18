@@ -669,6 +669,12 @@ void Device::poll() {
   pendingDestroys_.resize(writeIndex);
 }
 
+void Device::pollCompletionOnce() {
+  if (!isLost()) {
+    onPollBackend();
+  }
+}
+
 template <typename Record, typename Tag>
 Status Device::destroyResource(details::SlotTable<Record>& table, Handle<Tag>&& handle,
                                ResourceKind kind) {

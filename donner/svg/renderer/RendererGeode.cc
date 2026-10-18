@@ -2264,6 +2264,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                static_cast<int>(desc.size.height), 1,
                                gpu::TextureFormatBytesPerTexel(desc.format));
     UTILS_RELEASE_ASSERT(releasedSurface);
+    recycleOrDestroyTexture(std::move(texture), desc);
+  }
+
+  void recycleOrDestroyTexture(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
     if (texturePool) {
       texturePool->release(std::move(texture), desc);
     } else {
@@ -2284,12 +2288,37 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::vector<PendingRelease> framePendingReleases;
   std::vector<PendingRelease> failedFilterTextures;
 
+  void drainFencedTextureBackings() {
+    if (device) {
+      device->drainFencedTextureBackings();
+    }
+  }
+
+  void retainRecoverableTexture(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
+    const uint64_t fence = device->runtimeDevice().lastSubmittedSerial();
+    if (!device->deferDestroyTextureBackingAfterSerial(std::move(texture), fence)) {
+      failedFilterTextures.push_back({std::move(texture), desc});
+    }
+  }
+
+  void retainTextureAfterAbandonedFrame(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
+    if (frameArenaWriteFailed && device && !device->isDeviceLost()) {
+      retainRecoverableTexture(std::move(texture), desc);
+    } else {
+      retainTextureWithoutCompletionProof(std::move(texture), desc);
+    }
+  }
+
   void releaseTextureAtFrameEnd(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
     if (!texture.isValid()) {
       return;
     }
     if (frameRecordingAbandoned) {
-      failedFilterTextures.push_back({std::move(texture), desc});
+      if (frameArenaWriteFailed && device && !device->isDeviceLost()) {
+        retainRecoverableTexture(std::move(texture), desc);
+      } else {
+        failedFilterTextures.push_back({std::move(texture), desc});
+      }
       return;
     }
     framePendingReleases.push_back({std::move(texture), desc});
@@ -2310,7 +2339,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   void retainPendingFrameReleasesAfterFailure() {
     for (PendingRelease& pending : framePendingReleases) {
-      failedFilterTextures.push_back(std::move(pending));
+      if (frameArenaWriteFailed && device && !device->isDeviceLost()) {
+        retainRecoverableTexture(std::move(pending.texture), pending.desc);
+      } else {
+        failedFilterTextures.push_back(std::move(pending));
+      }
     }
     framePendingReleases.clear();
   }
@@ -2744,8 +2777,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       if (!frameArenaWriteFailed) {
         device->markDeviceLost("frame commands could not be submitted before filter execution");
       }
-      retainTextureWithoutCompletionProof(std::move(localTexture), localDesc);
-      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureAfterAbandonedFrame(std::move(localTexture), localDesc);
+      retainTextureAfterAbandonedFrame(std::move(frame.layerTexture), frame.layerDesc);
       frame.localRasterRequiredForBudget = true;
       if (frameGpuEncoder == nullptr && !frameArenaWriteFailed && !restoreFrameAfterFilter()) {
         device->markDeviceLost("frame encoder could not be restored after filter suspension");
@@ -2811,7 +2844,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!suspendFrameForFilter()) {
       if (frameArenaWriteFailed) {
         filterExecutionBudget->release(frame.filterReservation);
-        retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
+        retainTextureAfterAbandonedFrame(std::move(frame.layerTexture), frame.layerDesc);
         abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
         return std::nullopt;
       }
@@ -5807,6 +5840,13 @@ int RendererGeode::height() const {
 
 void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->resetForBeginFrame(viewport);
+  if (impl_->device) {
+    impl_->device->drainFencedTextureBackings();
+    if (impl_->device->pendingFencedTextureBackings() != 0) {
+      impl_->frameRecordingAbandoned = true;
+      return;
+    }
+  }
   if (impl_->prepareFrameTarget()) {
     impl_->createFrameEncoder();
   }
@@ -5886,6 +5926,7 @@ void RendererGeode::endFrame() {
 
   // The documents the frame drew are still held, so give back what it borrowed from them now.
   impl_->releaseFrameLoans();
+  impl_->drainFencedTextureBackings();
 
   impl_->deviceFromLocalTransform = Transform2d();
   impl_->deviceFromLocalTransformStack.clear();
@@ -6105,7 +6146,7 @@ void RendererGeode::popClip() {
     Impl::ClipStackEntry& entry = impl_->clipStack.back();
     for (auto& release : entry.maskLayerTextures) {
       if (impl_->frameRecordingAbandoned) {
-        impl_->retainTextureWithoutCompletionProof(std::move(release.texture), release.desc);
+        impl_->retainTextureAfterAbandonedFrame(std::move(release.texture), release.desc);
       } else {
         impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
       }
@@ -6195,7 +6236,7 @@ void RendererGeode::popIsolatedLayer() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->retainTextureAfterAbandonedFrame(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
 
@@ -6353,7 +6394,7 @@ void RendererGeode::popFilterLayer() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->retainTextureAfterAbandonedFrame(std::move(frame.layerTexture), frame.layerDesc);
     impl_->filterExecutionBudget->release(frame.filterReservation);
     return;
   }
@@ -6585,8 +6626,8 @@ void RendererGeode::popMask() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainTextureWithoutCompletionProof(std::move(frame.maskTexture), frame.maskDesc);
-    impl_->retainTextureWithoutCompletionProof(std::move(frame.contentTexture), frame.contentDesc);
+    impl_->retainTextureAfterAbandonedFrame(std::move(frame.maskTexture), frame.maskDesc);
+    impl_->retainTextureAfterAbandonedFrame(std::move(frame.contentTexture), frame.contentDesc);
     impl_->releaseClipStackTexturesAtFrameEnd(frame.compositeRegionClip);
     return;
   }
@@ -6769,7 +6810,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->replaceActiveEncoder(nullptr);
     impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
     impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
-    impl_->retainTextureWithoutCompletionProof(std::move(frame.tileTexture), frame.tileDesc);
+    impl_->retainTextureAfterAbandonedFrame(std::move(frame.tileTexture), frame.tileDesc);
     return;
   }
 
@@ -8453,6 +8494,10 @@ bool RendererGeode::submitFilterBudgetChunkForTesting() {
 
 size_t RendererGeode::failedFilterTextureCountForTesting() const {
   return impl_->failedFilterTextures.size();
+}
+
+size_t RendererGeode::recoverableArenaTextureCountForTesting() const {
+  return impl_->device ? impl_->device->pendingFencedTextureBackings() : 0;
 }
 
 bool RendererGeode::hasActiveDrawingEncoderForTesting() const {

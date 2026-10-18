@@ -578,6 +578,9 @@ public:
   /// Number of filter textures retained outside reusable pools after an uncertain failure.
   [[nodiscard]] size_t failedFilterTextureCountForTesting() const;
 
+  /// Textures held after a recoverable refused upload until earlier GPU submissions complete.
+  [[nodiscard]] size_t recoverableArenaTextureCountForTesting() const;
+
   /// Whether a drawing encoder remains active for the current frame.
   [[nodiscard]] bool hasActiveDrawingEncoderForTesting() const;
 

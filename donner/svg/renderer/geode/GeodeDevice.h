@@ -437,6 +437,21 @@ public:
    */
   [[nodiscard]] bool deferDestroyTextureBacking(gpu::Texture&& texture);
 
+  /**
+   * Retain a failed frame's owned texture until this context has completed \p serial, then
+   * destroy its backing instead of recycling it with any unsubmitted writes.
+   * @param texture Owned texture handle; consumed on success.
+   * @param serial Last submission that could have named the texture.
+   * @return Whether this context accepted the handle.
+   */
+  [[nodiscard]] bool deferDestroyTextureBackingAfterSerial(gpu::Texture&& texture, uint64_t serial);
+
+  /// Retire completed failed-frame textures without blocking on GPU progress.
+  void drainFencedTextureBackings();
+
+  /// Number of failed-frame textures still awaiting a submission fence.
+  [[nodiscard]] std::size_t pendingFencedTextureBackings() const;
+
   /// Destroy queued texture backing on the owning rendering context or during exclusive teardown.
   void drainDeferredTextureBackings();
 
