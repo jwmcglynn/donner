@@ -6169,6 +6169,48 @@ TEST_F(RendererGeodeTest, ClippedVerticalOnlyFillWithEmptyVerticalBandsRenders) 
       << "A clipped fill with no vertical bands must not invalidate the frame it is drawn in.";
 }
 
+#if defined(__APPLE__)
+TEST_F(RendererGeodeTest, ArenaWriteRefusalAtNormalMetalLimitKeepsRendererUsable) {
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+             <defs><clipPath id="clip"><rect width="64" height="64"/></clipPath></defs>
+             <g clip-path="url(#clip)">)svg";
+  source.reserve(300000);
+  for (int i = 0; i < 4000; ++i) {
+    source += "<rect x=\"" + std::to_string(i % 64) + "\" y=\"" + std::to_string((i / 64) % 64) +
+              "\" width=\"1\" height=\"1\" fill=\"red\"/>";
+  }
+  source += "</g></svg>";
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error();
+  SVGDocument busyDocument = std::move(parsed).result();
+  auto simpleParsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+             <rect width="64" height="64" fill="lime"/>
+             </svg>)svg",
+      warnings);
+  ASSERT_FALSE(simpleParsed.hasError()) << simpleParsed.error();
+  SVGDocument simpleDocument = std::move(simpleParsed).result();
+
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+  RendererGeode renderer(device);
+  auto& metal = static_cast<gpu::metal::MetalDevice&>(device->runtimeDevice());
+  ASSERT_THAT(metal.pauseSubmissionsForTest(), gpu::IsOk());
+  renderer.draw(busyDocument);
+  renderer.draw(busyDocument);
+  metal.resumeSubmissionsForTest();
+  ASSERT_EQ(device->waitForQueueIdle(), geode::GpuWaitResult::Complete);
+
+  renderer.draw(simpleDocument);
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(PixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255));
+}
+#endif
+
 TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsWrongFormatWithoutConsumingTheTexture) {
   auto created = sharedDevice()->runtimeDevice().createTexture(
       {"snapshot",
