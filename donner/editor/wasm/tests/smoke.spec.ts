@@ -3707,7 +3707,10 @@ function createAnimationRegionCapture(page: Page, browserName: string, testInfo:
   const setOwner = (next: Worker) => {
     owner = next;
   };
-  const capture = async (region: CssRegion, deadlineAtMs?: number): Promise<AnimationRegionCapture> => {
+  const capture = async (
+    region: CssRegion,
+    deadlineAtMs?: number,
+  ): Promise<AnimationRegionCapture> => {
     const viewport = page.viewportSize();
     if (!viewport) throw new Error("the animation capture viewport is unavailable");
     // Firefox can omit the transferred WebGPU canvas from clipped captures. Use the same
@@ -3733,7 +3736,10 @@ function createAnimationRegionCapture(page: Page, browserName: string, testInfo:
         // submissions again when retaking an exact-background screenshot.
         if (owner !== null && !completionObserved) {
           attempt.completionDispatchEpochMs = Date.now();
-          completion = await awaitBeforeBlueDeadline(observeSubmittedCanvasGpuWork(owner), deadline);
+          completion = await awaitBeforeBlueDeadline(
+            observeSubmittedCanvasGpuWork(owner),
+            deadline,
+          );
           completionObserved = true;
         }
         attempt.completion = completion;
@@ -4387,8 +4393,17 @@ async function writeAnimationCadenceEvidence({
   measurement: AnimationCadenceMeasurement;
 }) {
   const {
-    loopBefore, schedulerBefore, loadBefore, workerSamples, ownerBefore, before, probeMainRaf,
-    probeOwnerRaf, after, mainRafSamples, ownerRaf,
+    loopBefore,
+    schedulerBefore,
+    loadBefore,
+    workerSamples,
+    ownerBefore,
+    before,
+    probeMainRaf,
+    probeOwnerRaf,
+    after,
+    mainRafSamples,
+    ownerRaf,
   } = measurement;
   const ownerAfter = await readGpuOwnerDispatchStats(page);
   const loopAfter = await page.evaluate(() => window.__donnerFrameLoopStats);
