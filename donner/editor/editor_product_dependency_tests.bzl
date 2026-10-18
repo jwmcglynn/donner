@@ -116,4 +116,11 @@ def editor_product_dependency_tests():
             size = "small",
         )
         tests.append(":" + name)
+    configured_dependency_audit_test(
+        name = "editor_shell_uses_product_backend_dependency_test",
+        target = "//donner/editor/tests:editor_shell_tests",
+        required = ["//donner/svg/renderer:renderer_geode"],
+        size = "small",
+    )
+    tests.append(":editor_shell_uses_product_backend_dependency_test")
     native.test_suite(name = "editor_product_dependency_tests", tests = tests)
