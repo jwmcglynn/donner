@@ -963,6 +963,29 @@ TEST_F(LayoutSystemTest, ShadowSizeCssWideTargetDimensionsUseParentViewport) {
             Box2d(Vector2d(1, 2), Vector2d(201, 102)));
 }
 
+TEST_F(LayoutSystemTest, ShadowSizeExplicitCssWidePropertyStateDoesNotAbort) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs><symbol id="sym" x="1" y="2" width="40" height="20"/></defs>
+      <use id="u" href="#sym" width="50" height="25"/>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  auto use = document.querySelector("#u")->entityHandle();
+  auto& useSize = use.get<SizedElementComponent>().properties;
+  useSize.width.set(PropertyState::ExplicitInitial, css::Specificity::Override());
+  useSize.height.set(PropertyState::ExplicitUnset, css::Specificity::Override());
+
+  ParseWarningSink warningSink;
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, use, document.querySelector("#sym")->unsafeEntityHandle().entity(),
+      ShadowBranchType::Main, warningSink));
+  EXPECT_EQ(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+            Box2d(Vector2d(1, 2), Vector2d(41, 22)));
+}
+
 /**
  * `<use>` referencing an inline `<svg>`: the svg's own `x`/`y` are kept, its `width`/`height`
  * are overridden by the use element's. Mirrors resvg
