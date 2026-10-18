@@ -275,6 +275,26 @@ std::optional<std::string> CombineAnimationValues(std::string_view first, std::s
   return std::nullopt;
 }
 
+void ExpandNumberPair(std::optional<std::vector<Lengthd>>& values, bool numberPair) {
+  if (numberPair && values && values->size() == 1) {
+    values->push_back(values->front());
+  }
+}
+
+std::optional<double> LengthValueDistance(std::span<const Lengthd> first,
+                                          std::span<const Lengthd> second,
+                                          const AnimationValueContext& context) {
+  if (first.size() != second.size()) {
+    return std::nullopt;
+  }
+  double distance = 0;
+  for (std::size_t i = 0; i < first.size(); ++i) {
+    distance = std::hypot(distance, ResolveAnimationLength(first[i], context, false) -
+                                        ResolveAnimationLength(second[i], context, false));
+  }
+  return distance;
+}
+
 std::optional<double> AnimationValueDistance(std::string_view first, std::string_view second,
                                              const AnimationValueContext& context) {
   if (context.angleValue) {
@@ -287,21 +307,10 @@ std::optional<double> AnimationValueDistance(std::string_view first, std::string
   }
   auto a = ParseAnimationLengths(first);
   auto b = ParseAnimationLengths(second);
-  if (context.numberPair) {
-    if (a && a->size() == 1) {
-      a->push_back(a->front());
-    }
-    if (b && b->size() == 1) {
-      b->push_back(b->front());
-    }
-  }
+  ExpandNumberPair(a, context.numberPair);
+  ExpandNumberPair(b, context.numberPair);
   if (a && b && a->size() == b->size()) {
-    double distance = 0;
-    for (std::size_t i = 0; i < a->size(); ++i) {
-      distance = std::hypot(distance, ResolveAnimationLength((*a)[i], context, false) -
-                                          ResolveAnimationLength((*b)[i], context, false));
-    }
-    return distance;
+    return LengthValueDistance(*a, *b, context);
   }
   const auto ca = ParseColor(first, context);
   const auto cb = ParseColor(second, context);
