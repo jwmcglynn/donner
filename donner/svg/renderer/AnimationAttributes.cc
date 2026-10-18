@@ -194,10 +194,10 @@ std::optional<double> Number(std::string_view value) {
   return result.result().number;
 }
 
-template <typename Component, typename Field, std::size_t N>
+template <typename Component, typename Field, typename Value, std::size_t N>
 bool ApplyNamedField(Registry& registry, Entity entity, std::string_view name,
                      Field Component::*field, std::string_view value,
-                     const std::pair<std::string_view, Field> (&values)[N]) {
+                     const std::pair<std::string_view, Value> (&values)[N]) {
   for (const auto& [candidate, parsed] : values) {
     if (candidate == value) {
       return SimpleField(registry, entity, name, field, parsed);
@@ -208,7 +208,7 @@ bool ApplyNamedField(Registry& registry, Entity entity, std::string_view name,
 
 bool ApplyLinearGradientLength(Registry& registry, Entity entity, std::string_view name,
                                Lengthd length) {
-  using Field = Lengthd LinearGradientComponent::*;
+  using Field = std::optional<Lengthd> LinearGradientComponent::*;
   static constexpr std::pair<std::string_view, Field> fields[] = {
       {"x1", &LinearGradientComponent::x1},
       {"y1", &LinearGradientComponent::y1},
@@ -225,7 +225,7 @@ bool ApplyLinearGradientLength(Registry& registry, Entity entity, std::string_vi
 
 bool ApplyRadialGradientLength(Registry& registry, Entity entity, std::string_view name,
                                Lengthd length) {
-  using Field = Lengthd RadialGradientComponent::*;
+  using Field = std::optional<Lengthd> RadialGradientComponent::*;
   static constexpr std::pair<std::string_view, Field> fields[] = {
       {"cx", &RadialGradientComponent::cx}, {"cy", &RadialGradientComponent::cy},
       {"r", &RadialGradientComponent::r},   {"fx", &RadialGradientComponent::fx},
