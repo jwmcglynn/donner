@@ -122,17 +122,20 @@ public:
     double bearingY = 0;           ///< Scaled upward bearing from baseline.
     double scale = 1.0;            ///< Native bitmap pixel scale.
     float requestedScale = 0;      ///< Scale used for this metadata query.
+    /// @fn bool BitmapGlyphMetrics::operator==(const BitmapGlyphMetrics& other) const
     /// Compare all cost and placement fields exactly.
-    bool operator==(const BitmapGlyphMetrics&) const = default;
+    /// @param other Metrics to compare.
+    /// @return True when every field matches.
+    bool operator==(const BitmapGlyphMetrics& other) const = default;
   };
 
   /// Query bounded bitmap metadata without materializing bitmap pixels.
   /// @param font Font to query.
   /// @param glyphIndex Glyph within the font.
   /// @param scale Requested scale.
-  virtual std::optional<BitmapGlyphMetrics> bitmapGlyphMetrics(FontHandle /*font*/,
-                                                               int /*glyphIndex*/,
-                                                               float /*scale*/) const {
+  virtual std::optional<BitmapGlyphMetrics> bitmapGlyphMetrics([[maybe_unused]] FontHandle font,
+                                                               [[maybe_unused]] int glyphIndex,
+                                                               [[maybe_unused]] float scale) const {
     return std::nullopt;
   }
 
@@ -143,10 +146,10 @@ public:
   /// @param scale Requested scale.
   /// @param admitted Previously queried cost and placement metadata.
   /// @param maximumRgbaBytes Maximum allowed converted RGBA storage bytes.
-  virtual std::optional<BitmapGlyph> bitmapGlyph(FontHandle /*font*/, int /*glyphIndex*/,
-                                                 float /*scale*/,
-                                                 const BitmapGlyphMetrics& /*admitted*/,
-                                                 std::size_t /*maximumRgbaBytes*/) const {
+  virtual std::optional<BitmapGlyph> bitmapGlyph(
+      [[maybe_unused]] FontHandle font, [[maybe_unused]] int glyphIndex,
+      [[maybe_unused]] float scale, [[maybe_unused]] const BitmapGlyphMetrics& admitted,
+      [[maybe_unused]] std::size_t maximumRgbaBytes) const {
     return std::nullopt;
   }
 
