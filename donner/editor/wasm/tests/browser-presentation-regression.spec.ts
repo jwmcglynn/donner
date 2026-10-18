@@ -1942,9 +1942,9 @@ async function openBasicShapes(
         return (presented?.completedSerial || 0) > previousSerial
           && presented?.inputRepresented === true
           && Math.hypot(
-            (presented?.pointerX ?? -1) - point.x,
-            (presented?.pointerY ?? -1) - point.y,
-          ) <= 1.5;
+              (presented?.pointerX ?? -1) - point.x,
+              (presented?.pointerY ?? -1) - point.y,
+            ) <= 1.5;
       },
       { point: target, previousSerial: afterSerial },
     );
