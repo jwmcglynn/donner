@@ -6,6 +6,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -982,6 +983,29 @@ TEST_F(LayoutSystemTest, ShadowSizeExplicitCssWidePropertyStateDoesNotAbort) {
   EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
       registry, shadowEntity, use, document.querySelector("#sym")->unsafeEntityHandle().entity(),
       ShadowBranchType::Main, warningSink));
+  EXPECT_EQ(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+            Box2d(Vector2d(1, 2), Vector2d(41, 22)));
+}
+
+TEST_F(LayoutSystemTest, ShadowSizeUseSetterNulloptDoesNotAbort) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs><symbol id="sym" x="1" y="2" width="40" height="20"/></defs>
+      <use id="u" href="#sym" width="50" height="25"/>
+    </svg>
+  )svg");
+
+  auto use = document.querySelector("#u")->cast<SVGUseElement>();
+  use.setWidth(std::nullopt);
+  use.setHeight(std::nullopt);
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, use.entityHandle(),
+      document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
+      warningSink));
   EXPECT_EQ(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
             Box2d(Vector2d(1, 2), Vector2d(41, 22)));
 }
