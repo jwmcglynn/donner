@@ -61,7 +61,6 @@ jobs:
 
   perf:
     strategy:
-      fail-fast: false
       matrix:
         include:
           - os: macos-26
@@ -135,19 +134,16 @@ jobs:
         env:
           TARGET_TAG: ${{ matrix.target_tag }}
         run: |
-          set -euo pipefail
-          common_flags=(
-            --config=ci
-            -c opt
-            --build_tag_filters="$TARGET_TAG"
-            --test_tag_filters="$TARGET_TAG"
-            --test_env=DONNER_BROWSER_LATENCY_GATES=${{ matrix.latency_gates }}
-            --test_env=DONNER_BROWSER_COMPLETION_CHECKS=${{ matrix.completion_checks }}
-          )
-          # Finish compilation before measuring, then run one uncached test at a time.
-          bazelisk build "${common_flags[@]}" ${{ steps.discover.outputs.targets }}
-          bazelisk test "${common_flags[@]}" \
-            --test_output=all --local_test_jobs=1 --nocache_test_results \
+          # -c opt: budgets assume production-speed codegen, not fastbuild's default.
+          # Successful test output carries the measured nanoseconds per draw.
+          bazelisk test \
+            --config=ci \
+            -c opt \
+            --test_output=all \
+            --build_tag_filters="$TARGET_TAG" \
+            --test_tag_filters="$TARGET_TAG" \
+            --test_env=DONNER_BROWSER_LATENCY_GATES=${{ matrix.latency_gates }} \
+            --test_env=DONNER_BROWSER_COMPLETION_CHECKS=${{ matrix.completion_checks }} \
             ${{ steps.discover.outputs.targets }}
 
       - name: Summarize interaction latency gates
