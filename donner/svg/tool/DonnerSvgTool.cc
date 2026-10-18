@@ -782,6 +782,9 @@ void RunInteractiveSelection(SVGDocument document, RendererTinySkia& renderer,
 std::vector<uint8_t> FitFrameToCanvas(const RendererBitmap& frame, const Vector2i& canvasSize) {
   const auto canvasRowBytes = static_cast<size_t>(canvasSize.x) * 4;
   std::vector<uint8_t> pixels(canvasRowBytes * static_cast<size_t>(canvasSize.y), 0);
+  if (frame.empty()) {
+    return pixels;
+  }
   const size_t copyBytes = static_cast<size_t>(std::min(frame.dimensions.x, canvasSize.x)) * 4;
   const int copyRows = std::min(frame.dimensions.y, canvasSize.y);
   for (int y = 0; y < copyRows; ++y) {
@@ -857,7 +860,8 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
     document.setTime(GifFrameTime(options.startSeconds, options.fps, i));
     renderer.draw(document);
     const RendererBitmap frame = renderer.takeSnapshot();
-    if (frame.empty()) {
+    const Vector2i sampledSize = document.canvasSize();
+    if (frame.empty() && sampledSize.x != 0 && sampledSize.y != 0) {
       err << "Renderer produced an empty frame at index " << i << "\n";
       return 4;
     }
