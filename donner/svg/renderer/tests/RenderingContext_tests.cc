@@ -427,7 +427,7 @@ TEST_F(RenderingContextTest, RebuildSnapshotsNestedShadowHostsBeforeTeardown) {
       break;
     }
   }
-  ASSERT_NE(nestedHost, entt::null);
+  ASSERT_NE(nestedHost, static_cast<Entity>(entt::null));
   ASSERT_FALSE(registry.all_of<ComputedShadowTreeComponent>(nestedHost));
 
   auto outerComputed = std::move(registry.get<ComputedShadowTreeComponent>(outer));
