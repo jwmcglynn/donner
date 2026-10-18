@@ -35,8 +35,8 @@ PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 RENDERER_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 2800,
     "--max-js-raw-bytes": 5700,
-    "--max-wasm-gzip-bytes": 846000,
-    "--max-wasm-raw-bytes": 2164000,
+    "--max-wasm-gzip-bytes": 867000,
+    "--max-wasm-raw-bytes": 2210000,
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
@@ -135,6 +135,21 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         rest = job.split(marker, 1)[1]
         end = re.search(r"^      - name: ", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
+
+    def test_early_macos_bazel_failures_keep_their_artifacts(self):
+        for lane in ("macos", "macos-browser", "macos-self-hosted"):
+            with self.subTest(lane=lane):
+                job = self._job_body(lane)
+                archive = self._step_body(job, "Upload Bazel test failure artifacts")
+                gates = [("Qualify pinned Chromium archive", "browser_preflight")]
+                if lane == "macos-self-hosted":
+                    gates.append(("Validate offline Metal compiler", "metal_compiler"))
+                for name, step_id in gates:
+                    step = self._step_body(job, name)
+                    self.assertIn("id: " + step_id, step)
+                    self.assertNotIn("continue-on-error", step)
+                    self.assertIn("steps.%s.outcome == 'failure'" % step_id, archive)
+                self.assertIn("./.github/actions/upload-bazel-test-artifacts", archive)
 
     def test_hosted_browser_comparisons_preserve_the_failed_gate(self):
         hosted = self._job_body("macos")

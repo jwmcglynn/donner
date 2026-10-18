@@ -21,6 +21,7 @@ js_test(
     size = "large",
     copy_data_to_bin = False,
     data = [
+        "//donner/editor/wasm/tests:chromium-launch-env.cjs",
         "//donner/editor/wasm/tests:node_modules/@playwright/test",
         "//donner/gpu/shader:BUILD.bazel",
         "//donner/gpu/shader:math_primitive_fixture",
@@ -61,6 +62,7 @@ js_test(
     size = "large",
     copy_data_to_bin = False,
     data = [
+        "//donner/editor/wasm/tests:chromium-launch-env.cjs",
         "//donner/editor/wasm/tests:node_modules/@playwright/test",
         "//donner/gpu/shader:slug_endpoint_wgsl_fixture",
         "@playwright//:chromium",

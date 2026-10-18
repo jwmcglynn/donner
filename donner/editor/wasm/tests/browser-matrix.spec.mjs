@@ -212,7 +212,8 @@ test("the browser lane walk follows every way a module loads a file beside it", 
   const target = [
     "name = \"synthetic_lane\",",
     "args = [\"--config=$(rootpath :playwright.boot-presentation.bazel.config.js)\"],",
-    "data = [\"playwright.boot-presentation.bazel.config.js\", \"playwright.bazel.config.js\"],",
+    "data = [\"playwright.boot-presentation.bazel.config.js\", \"playwright.bazel.config.js\", "
+    + "\"chromium-launch-env.cjs\"],",
   ].join("\n");
   assert.throws(() => assertListsLoadedFiles("synthetic_lane", target), {
     message: "synthetic_lane is missing playwright.config.js, loaded through "
@@ -333,6 +334,7 @@ function assertAnimationLane({ lane, tags, specFiles }) {
   );
   assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
   assert.match(lane, /"NODE_OPTIONS": ""/);
+  assert.ok(lane.includes('"chromium-launch-env.cjs"'));
   for (const name of ["DONNER_CHROMIUM_ARCHIVE", "DONNER_FIREFOX_ARCHIVE"]) {
     assert.ok(lane.includes(`"${name}":`));
   }

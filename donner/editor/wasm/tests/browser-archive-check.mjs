@@ -1,6 +1,7 @@
 import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
 import test from "node:test";
+import launchHelpers from "./chromium-launch-env.cjs";
 
 for (
   const [name, channel] of [
@@ -9,7 +10,7 @@ for (
   ]
 ) {
   test(`${name} launches from the Bazel browser archive`, async () => {
-    const browser = await chromium.launch({
+    const browser = await launchHelpers.launchChromiumForTest(chromium, {
       channel,
       headless: true,
       args: ["--no-sandbox"],

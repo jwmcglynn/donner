@@ -47,9 +47,21 @@ test_suite(
         "//donner/gpu/metal/tests:metal_color_matrix_tests",
         "//donner/gpu/metal/tests:metal_queue_writes_tests",
         "//donner/gpu/metal/tests:metal_shader_memory_validation_tests",
-        "//donner/gpu/metal/tests:metal_solid_fill_tests",
+        "//donner/gpu/metal/tests:metal_solid_fill_tests_geode",
         "//donner/gpu/metal/tests:metal_sub_rectangle_copy_tests",
     ],
+)
+
+test_suite(
+    name = "metal_offline_compiler",
+    tags = ["manual"],
+    tests = ["//donner/gpu/shader:msl_xcrun_validation_tests"],
+)
+
+test_suite(
+    name = "mac_browser_archive",
+    tags = ["manual"],
+    tests = ["//donner/editor/wasm/tests:mac_browser_archive_tests"],
 )
 
 test_suite(
