@@ -12,7 +12,7 @@
 # Xcode in place; it never prints which Xcode the runner does have.
 #
 # XCODE_APPLICATIONS_DIR and XCODEBUILD override /Applications and xcodebuild
-# for tests. XCODE_LOCATOR overrides the discovery probe only in tests.
+# for tests. XCODE_LOCATOR and XCRUN override discovery tools only in tests.
 set -euo pipefail
 
 mode="${1:-}"
@@ -52,9 +52,9 @@ if [[ "${installed}" == "true" ]]; then
     scratch="$(mktemp -d "${TMPDIR:-/tmp}/donner-xcode-locator.XXXXXX")"
     trap 'rm -rf "${scratch}"' EXIT
     locator="${scratch}/xcode-locator"
-    sdk_root="$(DEVELOPER_DIR="${developer_dir}" /usr/bin/perl -e 'alarm 30; exec @ARGV' /usr/bin/xcrun --sdk macosx --show-sdk-path 2>"${scratch}/sdk.log" || true)"
+    sdk_root="$(DEVELOPER_DIR="${developer_dir}" /usr/bin/perl -e 'alarm 30; exec @ARGV; die "Cannot execute $ARGV[0]: $!\n"' "${XCRUN:-/usr/bin/xcrun}" --sdk macosx --show-sdk-path 2>"${scratch}/sdk.log" || true)"
     if [[ -z "${sdk_root}" ]] || ! env -u SDKROOT DEVELOPER_DIR="${developer_dir}" \
-        /usr/bin/perl -e 'alarm 30; exec @ARGV' /usr/bin/xcrun clang -fobjc-arc -isysroot "${sdk_root}" \
+        /usr/bin/perl -e 'alarm 30; exec @ARGV; die "Cannot execute $ARGV[0]: $!\n"' "${XCRUN:-/usr/bin/xcrun}" clang -fobjc-arc -isysroot "${sdk_root}" \
         -framework Foundation -framework CoreServices \
         "$(dirname "${BASH_SOURCE[0]}")/ci_xcode_discoverable.m" -o "${locator}" \
         >"${scratch}/compile.log" 2>&1; then
@@ -73,7 +73,7 @@ if [[ "${installed}" == "true" ]]; then
     if [[ -n "${XCODE_LOCATOR:-}" ]]; then
       "${locator}" "${version}" "${developer_dir}" >/dev/null 2>&1 || locator_status=$?
     else
-      /usr/bin/perl -e 'alarm 30; exec @ARGV' "${locator}" "${version}" "${developer_dir}" \
+      /usr/bin/perl -e 'alarm 30; exec @ARGV; die "Cannot execute $ARGV[0]: $!\n"' "${locator}" "${version}" "${developer_dir}" \
         >/dev/null 2>&1 || locator_status=$?
     fi
     if [[ "${locator_status}" != 0 ]]; then
