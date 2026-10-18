@@ -6,6 +6,29 @@ export function presentedPulseWindow(
   notBeforeEpochMs,
   maximumElapsed = 0.5,
 ) {
+  return presentedSampleAfterClick(
+    snapshot,
+    generation,
+    target,
+    notBeforeEpochMs,
+    0.1,
+    maximumElapsed,
+  );
+}
+
+/** A later admitted tick proves a frame after the 600 ms pulse reached presentation. */
+export function presentedPulseCompletion(snapshot, generation, target, notBeforeEpochMs) {
+  return presentedSampleAfterClick(snapshot, generation, target, notBeforeEpochMs, 0.6, Infinity);
+}
+
+function presentedSampleAfterClick(
+  snapshot,
+  generation,
+  target,
+  notBeforeEpochMs,
+  minimumElapsed,
+  maximumElapsed,
+) {
   if (snapshot?.generation !== generation || !Array.isArray(snapshot.entries)) return null;
   const rows = snapshot.entries;
   const clickIndex = rows.findIndex((row) =>
@@ -29,12 +52,11 @@ export function presentedPulseWindow(
   }
   if (samples.length < 2) return null;
   const latest = samples.at(-1)[4];
-  // The 600 ms fixture is above the >58 px oracle throughout this 100-500 ms window.
   if (latest - click[4] > maximumElapsed) return null;
   for (let index = 0; index + 1 < samples.length; ++index) {
     const presented = samples[index][4];
     if (
-      presented - click[4] >= 0.1 && presented - click[4] <= maximumElapsed
+      presented - click[4] >= minimumElapsed && presented - click[4] <= maximumElapsed
       && samples[index + 1][4] > presented
     ) {
       return {

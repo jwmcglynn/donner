@@ -1,7 +1,7 @@
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
-import { presentedPulseWindow } from "./animation-pulse-observation.mjs";
+import { presentedPulseCompletion, presentedPulseWindow } from "./animation-pulse-observation.mjs";
 import {
   awaitBeforeBlueDeadline,
   captureAfterCanvasGpuCompletion,
@@ -4051,6 +4051,7 @@ async function exerciseAnimationPointerPulse({
   let preQueuedPointerTrace: unknown;
   let initialPulseObservation: unknown = null;
   let queuedPulseObservation: unknown = null;
+  let pulseCompletionTrace: unknown = null;
   let pulseClickStartedEpochMs: number | null = null;
   let pulseClickFinishedEpochMs: number | null = null;
   let delayedPulseClickStartedEpochMs: number | null = null;
@@ -4237,11 +4238,40 @@ async function exerciseAnimationPointerPulse({
     } finally {
       await heldInitialPulseFrame.release();
     }
+    const pulseCompletionDeadline = performance.now() + scaledMs(5000);
+    // Observe a post-pulse presentation before screenshots can stall worker progress.
     await expect.poll(async () => {
-      const bounds = await orb();
+      const snapshot = await awaitBeforeBlueDeadline(
+        interactionCaptureOwner.evaluate(() => {
+          const trace = (globalThis as unknown as Record<string, unknown>)
+            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+          return {
+            generation: trace?.generation,
+            entries: Array.isArray(trace) ? [...trace] : [],
+          };
+        }),
+        pulseCompletionDeadline,
+      );
+      pulseCompletionTrace = snapshot;
+      return presentedPulseCompletion(
+        snapshot,
+        initialPulseTraceGeneration,
+        initialPulseTarget,
+        pulseClickNotBefore,
+      ) !== null;
+    }, {
+      timeout: Math.max(1, pulseCompletionDeadline - performance.now()),
+      intervals: [16],
+      message: "a frame after the first pulse is presented before capture",
+    }).toBe(true);
+    await expect.poll(async () => {
+      const bounds = await orb(pulseCompletionDeadline);
       return Math.abs((bounds.maxY - bounds.minY) - (start.maxY - start.minY));
-    }, { timeout: scaledMs(5000), message: "First pulse returns to its base diameter" })
-      .toBeLessThanOrEqual(2 * scale);
+    }, {
+      timeout: Math.max(1, pulseCompletionDeadline - performance.now()),
+      intervals: [50],
+      message: "First pulse returns to its base diameter",
+    }).toBeLessThanOrEqual(2 * scale);
     // Hold raster progress longer than the pulse before delivering another click. Its target
     // remains the displayed pad, but its begin time must use the dispatch-time preview clock.
     const pulseTraceGeneration = Date.now();
@@ -4385,6 +4415,7 @@ async function exerciseAnimationPointerPulse({
           initialPulseObservation,
           preQueuedPointerTrace,
           queuedPulseObservation,
+          pulseCompletionTrace,
           pulseScreenshots: orbProbe.screenshots,
           pointerTraces,
         },
