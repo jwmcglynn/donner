@@ -1920,9 +1920,6 @@ async function openBasicShapes(
   );
   await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.76, canvasBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
-  // The picker click can remain over a layer row after it closes. Clear that hover before
-  // capturing the baseline or overlays: layer preview deliberately tints its matching shape.
-  await page.mouse.move(canvasBounds.x + 8, canvasBounds.y + 8);
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults > beforeSampleResults,
@@ -1931,6 +1928,42 @@ async function openBasicShapes(
       timeout: scaledMs(5_000),
     },
   );
+  await waitForBrowserComposite(page);
+
+  // The picker click can remain over a layer row after it closes. The render pane builds before
+  // the sidebar clears that hover, so require a second presented move after the clearing frame.
+  const blueDeadlineAtMs = performance.now() + scaledMs(5_000);
+  const clearHoverAt = { x: canvasBounds.x + 8, y: canvasBounds.y + 8 };
+  const confirmClearAt = { x: clearHoverAt.x + 8, y: clearHoverAt.y };
+  const presentedPointerAfter = (target: { x: number; y: number }, afterSerial: number) =>
+    page.evaluate(
+      ({ point, previousSerial }) => {
+        const presented = window.__donnerPresentationQueueStats;
+        return (presented?.completedSerial || 0) > previousSerial
+          && presented?.inputRepresented === true
+          && Math.hypot(
+            (presented?.pointerX ?? -1) - point.x,
+            (presented?.pointerY ?? -1) - point.y,
+          ) <= 1.5;
+      },
+      { point: target, previousSerial: afterSerial },
+    );
+  let previousSerial = await page.evaluate(
+    () => window.__donnerPresentationQueueStats?.completedSerial || 0,
+  );
+  await page.mouse.move(clearHoverAt.x, clearHoverAt.y);
+  await expect.poll(() => presentedPointerAfter(clearHoverAt, previousSerial), {
+    message: "the Layers hover-clear move must reach presentation",
+    timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
+  }).toBe(true);
+  previousSerial = await page.evaluate(
+    () => window.__donnerPresentationQueueStats?.completedSerial || 0,
+  );
+  await page.mouse.move(confirmClearAt.x, confirmClearAt.y);
+  await expect.poll(() => presentedPointerAfter(confirmClearAt, previousSerial), {
+    message: "a frame built after the Layers hover clear must reach presentation",
+    timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
+  }).toBe(true);
   await waitForBrowserComposite(page);
 
   // Gecko can return an empty image for any clipped screenshot of the transferred
@@ -1957,7 +1990,6 @@ async function openBasicShapes(
   let baselinePng: Buffer | null = null;
   let blueRect: PixelBounds | null = null;
   let screenshotTimeouts = 0;
-  const blueDeadlineAtMs = performance.now() + scaledMs(5_000);
   let lastProbe: {
     shot: Buffer;
     preGateState: InitialBlueFrameState | null;
