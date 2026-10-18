@@ -2,7 +2,6 @@
 #include "donner/svg/components/text/TextSystem.h"
 
 #include <algorithm>
-#include <functional>
 #include <optional>
 #include <unordered_map>
 
@@ -303,6 +302,355 @@ bool CanCollectTextSpan(EntityHandle handle) {
          HasSvgNamespace(*handle.registry(), handle.entity());
 }
 
+struct PendingTextSpan {
+  EntityHandle handle;
+  RcString text;
+  bool applyElementPositioning;
+  size_t depth;
+  bool preserveSpaces;
+  bool hidden = false;
+};
+
+bool IsHiddenByStyle(EntityHandle handle) {
+  const auto* style = handle.try_get<ComputedStyleComponent>();
+  return style && style->properties && style->properties->display.get().value() == Display::None;
+}
+
+bool IsHiddenByConditionalProcessing(EntityHandle handle,
+                                     const std::vector<RcString>& userLanguages) {
+  const auto* conditional = handle.try_get<ConditionalProcessingComponent>();
+  return conditional && !EvaluateConditionalProcessing(*conditional, userLanguages);
+}
+
+bool IsHiddenTextPath(EntityHandle handle) {
+  const auto* textPath = handle.try_get<TextPathComponent>();
+  if (!textPath) {
+    return false;
+  }
+
+  if (!hasTextPathGeometrySource(*textPath)) {
+    return true;
+  }
+
+  const auto* tree = handle.try_get<donner::components::TreeComponent>();
+  return !tree || tree->parent() == entt::null ||
+         !handle.registry()->any_of<TextRootComponent>(tree->parent());
+}
+
+bool IsTextHidden(EntityHandle handle, bool parentHidden,
+                  const std::vector<RcString>& userLanguages) {
+  if (parentHidden || IsHiddenByStyle(handle)) {
+    return true;
+  }
+
+  if (IsHiddenByConditionalProcessing(handle, userLanguages)) {
+    return true;
+  }
+
+  return IsHiddenTextPath(handle);
+}
+
+void TrimLeadingPendingSpace(std::vector<PendingTextSpan>& pendingSpans) {
+  for (PendingTextSpan& span : pendingSpans) {
+    if (span.text.empty()) {
+      continue;
+    }
+
+    if (span.preserveSpaces) {
+      break;
+    }
+
+    removeLeadingSpace(span.text);
+    if (!span.text.empty()) {
+      break;
+    }
+  }
+}
+
+void TrimTrailingPendingSpace(std::vector<PendingTextSpan>& pendingSpans) {
+  for (auto it = pendingSpans.rbegin(); it != pendingSpans.rend(); ++it) {
+    if (it->text.empty()) {
+      continue;
+    }
+
+    if (it->preserveSpaces) {
+      break;
+    }
+
+    removeTrailingSpace(it->text);
+    if (!it->text.empty()) {
+      break;
+    }
+  }
+}
+
+void UpdateLastVisibleSpan(const PendingTextSpan& span, size_t index,
+                           std::optional<size_t>& lastNonEmpty) {
+  if (span.hidden) {
+    lastNonEmpty = std::nullopt;
+  } else if (!span.text.empty()) {
+    lastNonEmpty = index;
+  }
+}
+
+bool HasCollapsibleBoundary(const PendingTextSpan& current, const PendingTextSpan& next) {
+  if (next.text.empty() || next.hidden || next.preserveSpaces) {
+    return false;
+  }
+
+  const bool currentEndsWithSpace =
+      !current.text.empty() && current.text.data()[current.text.size() - 1] == ' ';
+  const bool nextStartsWithSpace = next.text.data()[0] == ' ';
+  return currentEndsWithSpace && nextStartsWithSpace;
+}
+
+void CollapsePendingBoundary(PendingTextSpan& current, PendingTextSpan& next) {
+  if (!HasCollapsibleBoundary(current, next)) {
+    return;
+  }
+
+  // When collapsing across a textPath boundary, remove the textPath span's trailing space
+  // (keeping it off the path) rather than the next span's leading space. This ensures the
+  // inter-element space survives as flat text.
+  if (current.handle.all_of<TextPathComponent>() &&
+      current.handle.entity() != next.handle.entity()) {
+    removeTrailingSpace(current.text);
+  } else {
+    removeLeadingSpace(next.text);
+  }
+}
+
+void CollapseAdjacentPendingSpaces(std::vector<PendingTextSpan>& pendingSpans) {
+  std::optional<size_t> lastNonEmpty;
+  for (size_t i = 0; i + 1 < pendingSpans.size(); ++i) {
+    UpdateLastVisibleSpan(pendingSpans[i], i, lastNonEmpty);
+    if (!lastNonEmpty) {
+      continue;
+    }
+
+    CollapsePendingBoundary(pendingSpans[*lastNonEmpty], pendingSpans[i + 1]);
+  }
+}
+
+void NormalizePendingSpaces(std::vector<PendingTextSpan>& pendingSpans) {
+  if (pendingSpans.empty()) {
+    return;
+  }
+
+  TrimLeadingPendingSpace(pendingSpans);
+  CollapseAdjacentPendingSpaces(pendingSpans);
+  TrimTrailingPendingSpace(pendingSpans);
+}
+
+class ComputedTextBuilder {
+public:
+  ComputedTextBuilder(EntityHandle rootHandle, ComputedTextComponent& computed)
+      : registry_(*rootHandle.registry()), rootHandle_(rootHandle), computed_(computed) {}
+
+  void build() {
+    computed_.spans.clear();
+    computed_.textLengthOwnerFontSizes.clear();
+    computed_.ownerSpanRanges.clear();
+
+    collectUserLanguages();
+    collectSpans(rootHandle_, 0, false);
+    NormalizePendingSpaces(pendingSpans_);
+    materializeSpans();
+  }
+
+private:
+  using LengthList = SmallVector<Lengthd, 1>;
+  using LengthListMember = LengthList TextPositioningComponent::*;
+
+  void collectUserLanguages() {
+    userLanguages_ = {RcString("en")};
+    if (registry_.ctx().contains<SVGDocumentContext>()) {
+      userLanguages_ = registry_.ctx().get<SVGDocumentContext>().userLanguages;
+    }
+  }
+
+  void collectSpans(EntityHandle handle, size_t depth, bool parentHidden) {
+    if (!CanCollectTextSpan(handle)) {
+      return;
+    }
+
+    if (depth > 0 && handle.all_of<TextRootComponent>()) {
+      return;
+    }
+
+    const size_t firstSpan = pendingSpans_.size();
+    recordOwnerFontSize(handle);
+    const bool isHidden = IsTextHidden(handle, parentHidden, userLanguages_);
+    emitTextChunks(handle, depth, isHidden);
+    computed_.ownerSpanRanges[handle.entity()] = {firstSpan, pendingSpans_.size()};
+  }
+
+  void recordOwnerFontSize(EntityHandle handle) {
+    const auto* style = handle.try_get<ComputedStyleComponent>();
+    if (style && style->properties) {
+      computed_.textLengthOwnerFontSizes.try_emplace(handle.entity(),
+                                                     style->properties->fontSize.get().value());
+    }
+  }
+
+  void emitTextChunks(EntityHandle handle, size_t depth, bool isHidden) {
+    const auto& text = handle.get<TextComponent>();
+    const bool preserveSpaces = hasXmlSpacePreserve(registry_, handle.entity());
+    size_t chunkIndex = 0;
+    bool emittedFirstChunk = false;
+
+    auto emitChunk = [&](const RcString& chunk) {
+      if (!emittedFirstChunk || !chunk.empty()) {
+        pendingSpans_.push_back(
+            PendingTextSpan{handle, collapseTextWhitespace(chunk, preserveSpaces),
+                            !emittedFirstChunk, depth, preserveSpaces, isHidden});
+        emittedFirstChunk = true;
+      }
+    };
+
+    emitChunk(text.textChunks.empty() ? text.text : text.textChunks[0]);
+    donner::components::ForAllChildren(handle, [&](EntityHandle child) {
+      collectSpans(child, depth + 1, isHidden);
+      ++chunkIndex;
+      if (chunkIndex < text.textChunks.size()) {
+        emitChunk(text.textChunks[chunkIndex]);
+      }
+    });
+  }
+
+  std::optional<Lengthd> findAncestorValue(EntityHandle handle, size_t charIndex,
+                                           LengthListMember member) const {
+    Entity current = handle.entity();
+    while (current != entt::null) {
+      const auto* positioning = registry_.try_get<TextPositioningComponent>(current);
+      if (positioning && !registry_.any_of<TextPathComponent>(current)) {
+        const auto& values = positioning->*member;
+        const auto offset = entitySubtreeCharOffset_.find(current);
+        const size_t startIndex = offset != entitySubtreeCharOffset_.end() ? offset->second : 0;
+        if (startIndex < values.size() && charIndex < values.size() - startIndex) {
+          return values[startIndex + charIndex];
+        }
+      }
+
+      if (registry_.any_of<TextRootComponent>(current)) {
+        break;
+      }
+
+      const auto* tree = registry_.try_get<donner::components::TreeComponent>(current);
+      if (!tree) {
+        break;
+      }
+      current = tree->parent();
+    }
+    return std::nullopt;
+  }
+
+  void populatePositionLists(EntityHandle handle, size_t charCount,
+                             ComputedTextComponent::TextSpan& span) const {
+    span.xList.resize(charCount);
+    span.yList.resize(charCount);
+    span.dxList.resize(charCount);
+    span.dyList.resize(charCount);
+    for (size_t charIndex = 0; charIndex < charCount; ++charIndex) {
+      span.xList[charIndex] = findAncestorValue(handle, charIndex, &TextPositioningComponent::x);
+      span.yList[charIndex] = findAncestorValue(handle, charIndex, &TextPositioningComponent::y);
+      span.dxList[charIndex] = findAncestorValue(handle, charIndex, &TextPositioningComponent::dx);
+      span.dyList[charIndex] = findAncestorValue(handle, charIndex, &TextPositioningComponent::dy);
+    }
+  }
+
+  void populateRotations(EntityHandle handle, const TextPositioningComponent& positioning,
+                         bool applyPositioning, size_t charCount,
+                         ComputedTextComponent::TextSpan& span) const {
+    if (applyPositioning && !positioning.rotateDegrees.empty()) {
+      span.rotateList.assign(positioning.rotateDegrees.begin(), positioning.rotateDegrees.end());
+      return;
+    }
+
+    resolveInheritedRotations(handle, charCount, entitySubtreeCharOffset_, span.rotateList);
+  }
+
+  void advanceSubtreeOffsets(EntityHandle handle, size_t charCount) {
+    Entity current = handle.entity();
+    while (current != entt::null) {
+      entitySubtreeCharOffset_[current] += charCount;
+      const auto* tree = registry_.try_get<donner::components::TreeComponent>(current);
+      if (!tree || tree->parent() == entt::null) {
+        break;
+      }
+      current = tree->parent();
+    }
+  }
+
+  void populateTextPath(EntityHandle handle, ComputedTextComponent::TextSpan& span) {
+    bool invalidTextPathNesting = false;
+    const Entity textPathEntity =
+        findApplicableTextPathEntity(registry_, handle.entity(), invalidTextPathNesting);
+    if (textPathEntity != entt::null) {
+      const auto& textPath = registry_.get<TextPathComponent>(textPathEntity);
+      resolveTextPath(registry_, textPathEntity, textPath, span);
+      if (!span.pathSpline) {
+        // textPath href could not be resolved - mark as failed so glyphs are hidden.
+        span.textPathFailed = true;
+      } else {
+        span.textPathSourceEntity = textPathEntity;
+      }
+    } else if (invalidTextPathNesting) {
+      // Content inside a nested (invalid) textPath - hide glyphs.
+      span.textPathFailed = true;
+    }
+  }
+
+  void appendVisibleSpan(const PendingTextSpan& pending) {
+    ComputedTextComponent::TextSpan span;
+    span.text = pending.text;
+    span.start = 0;
+    span.end = static_cast<std::size_t>(pending.text.size());
+
+    const bool isTextPath = pending.handle.all_of<TextPathComponent>();
+    const bool applyPositioning = pending.applyElementPositioning && !isTextPath;
+    const size_t charCount = countCodepoints(pending.text);
+    populatePositionLists(pending.handle, charCount, span);
+    span.startsNewChunk = !isTextPath && !span.xList.empty() &&
+                          (span.xList.front().has_value() || span.yList.front().has_value());
+
+    const auto& positioning = pending.handle.get<TextPositioningComponent>();
+    populateRotations(pending.handle, positioning, applyPositioning, charCount, span);
+    advanceSubtreeOffsets(pending.handle, charCount);
+
+    span.sourceEntity = pending.handle.entity();
+    populateTextPath(pending.handle, span);
+    computed_.spans.push_back(std::move(span));
+  }
+
+  void appendHiddenSpan(const PendingTextSpan& pending) {
+    ComputedTextComponent::TextSpan span;
+    span.text = pending.text;
+    span.start = 0;
+    span.end = static_cast<std::size_t>(pending.text.size());
+    span.sourceEntity = pending.handle.entity();
+    span.hidden = true;
+    computed_.spans.push_back(std::move(span));
+  }
+
+  void materializeSpans() {
+    for (const PendingTextSpan& pending : pendingSpans_) {
+      if (pending.hidden) {
+        appendHiddenSpan(pending);
+      } else {
+        appendVisibleSpan(pending);
+      }
+    }
+  }
+
+  Registry& registry_;
+  EntityHandle rootHandle_;
+  ComputedTextComponent& computed_;
+  std::unordered_map<Entity, size_t> entitySubtreeCharOffset_;
+  std::vector<PendingTextSpan> pendingSpans_;
+  std::vector<RcString> userLanguages_;
+};
+
 }  // namespace
 
 void TextSystem::instantiateAllComputedComponents(Registry& registry,
@@ -320,289 +668,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
       (rootHandle.all_of<TextRootComponent, TextComponent, TextPositioningComponent>()));
 
   auto& computed = registry.get_or_emplace<ComputedTextComponent>(rootHandle.entity());
-  computed.spans.clear();
-  computed.textLengthOwnerFontSizes.clear();
-  computed.ownerSpanRanges.clear();
-
-  std::unordered_map<Entity, size_t> entitySubtreeCharOffset;
-
-  auto appendSpan = [&](EntityHandle handle, const RcString& spanText,
-                        const TextPositioningComponent& pos, bool applyElementPositioning) {
-    ComputedTextComponent::TextSpan span;
-    span.text = spanText;
-    span.start = 0;
-    span.end = static_cast<std::size_t>(spanText.size());
-    // Per SVG spec, <textPath> does not support x/y/dx/dy/rotate attributes.
-    // Only apply element positioning for non-textPath elements.
-    const bool isTextPath = handle.all_of<TextPathComponent>();
-    const bool applyPositioning = applyElementPositioning && !isTextPath;
-
-    const size_t charCount = countCodepoints(spanText);
-    const size_t listSize = charCount;
-
-    span.xList.resize(listSize);
-    span.yList.resize(listSize);
-    span.dxList.resize(listSize);
-    span.dyList.resize(listSize);
-
-    auto findAncestorValue = [&](size_t ci, const auto& getList) -> std::optional<Lengthd> {
-      Entity current = handle.entity();
-      while (current != entt::null) {
-        const auto* positioning = registry.try_get<TextPositioningComponent>(current);
-        if (positioning && !registry.any_of<TextPathComponent>(current)) {
-          const auto& values = getList(*positioning);
-          const auto offset = entitySubtreeCharOffset.find(current);
-          const size_t startIndex = offset != entitySubtreeCharOffset.end() ? offset->second : 0;
-          if (startIndex < values.size() && ci < values.size() - startIndex) {
-            return values[startIndex + ci];
-          }
-        }
-        if (registry.any_of<TextRootComponent>(current)) {
-          break;
-        }
-        const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-        if (!tree) {
-          break;
-        }
-        current = tree->parent();
-      }
-      return std::nullopt;
-    };
-
-    auto getX = [](const TextPositioningComponent& p) -> const auto& { return p.x; };
-    auto getY = [](const TextPositioningComponent& p) -> const auto& { return p.y; };
-    auto getDx = [](const TextPositioningComponent& p) -> const auto& { return p.dx; };
-    auto getDy = [](const TextPositioningComponent& p) -> const auto& { return p.dy; };
-
-    for (size_t ci = 0; ci < listSize; ++ci) {
-      span.xList[ci] = findAncestorValue(ci, getX);
-      span.yList[ci] = findAncestorValue(ci, getY);
-      span.dxList[ci] = findAncestorValue(ci, getDx);
-      span.dyList[ci] = findAncestorValue(ci, getDy);
-    }
-
-    span.startsNewChunk = !isTextPath && !span.xList.empty() &&
-                          (span.xList.front().has_value() || span.yList.front().has_value());
-
-    if (applyPositioning && !pos.rotateDegrees.empty()) {
-      span.rotateList.assign(pos.rotateDegrees.begin(), pos.rotateDegrees.end());
-    } else {
-      resolveInheritedRotations(handle, charCount, entitySubtreeCharOffset, span.rotateList);
-    }
-
-    Entity current = handle.entity();
-    while (current != entt::null) {
-      entitySubtreeCharOffset[current] += charCount;
-      auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-      if (!tree || tree->parent() == entt::null) {
-        break;
-      }
-      current = tree->parent();
-    }
-
-    span.sourceEntity = handle.entity();
-
-    bool invalidTextPathNesting = false;
-    const Entity textPathEntity =
-        findApplicableTextPathEntity(registry, handle.entity(), invalidTextPathNesting);
-    if (textPathEntity != entt::null) {
-      const auto& textPath = registry.get<TextPathComponent>(textPathEntity);
-      resolveTextPath(registry, textPathEntity, textPath, span);
-      if (!span.pathSpline) {
-        // textPath href could not be resolved - mark as failed so glyphs are hidden.
-        span.textPathFailed = true;
-      } else {
-        span.textPathSourceEntity = textPathEntity;
-      }
-    } else if (invalidTextPathNesting) {
-      // Content inside a nested (invalid) textPath - hide glyphs.
-      span.textPathFailed = true;
-    }
-
-    computed.spans.push_back(span);
-  };
-
-  struct PendingSpan {
-    EntityHandle handle;
-    RcString text;
-    bool applyElementPositioning;
-    size_t depth;
-    bool preserveSpaces;
-    bool hidden = false;
-  };
-
-  std::vector<PendingSpan> pendingSpans;
-
-  // User's preferred languages, used to evaluate the `systemLanguage` conditional processing
-  // attribute on text spans. Defaults to {"en"} when the document context is unavailable.
-  std::vector<RcString> userLanguages = {RcString("en")};
-  if (registry.ctx().contains<SVGDocumentContext>()) {
-    userLanguages = registry.ctx().get<SVGDocumentContext>().userLanguages;
-  }
-
-  std::function<void(EntityHandle, size_t, bool)> collectSpans = [&](EntityHandle handle,
-                                                                     size_t depth,
-                                                                     bool parentHidden) {
-    if (!CanCollectTextSpan(handle)) {
-      return;
-    }
-
-    if (depth > 0 && handle.all_of<TextRootComponent>()) {
-      return;
-    }
-
-    const size_t firstSpan = pendingSpans.size();
-
-    if (const auto* style = handle.try_get<ComputedStyleComponent>(); style && style->properties) {
-      computed.textLengthOwnerFontSizes.try_emplace(handle.entity(),
-                                                    style->properties->fontSize.get().value());
-    }
-
-    bool isHidden = parentHidden;
-    if (!isHidden) {
-      auto* style = handle.try_get<ComputedStyleComponent>();
-      if (style && style->properties && style->properties->display.get().value() == Display::None) {
-        isHidden = true;
-      }
-    }
-
-    // Conditional-processing attributes (requiredExtensions, systemLanguage) hide the span and
-    // its children when they evaluate to false, e.g. `<tspan systemLanguage="ru-RU">`.
-    if (!isHidden) {
-      if (const auto* conditional = handle.try_get<ConditionalProcessingComponent>();
-          conditional && !EvaluateConditionalProcessing(*conditional, userLanguages)) {
-        isHidden = true;
-      }
-    }
-
-    // Invalid textPath elements (empty href or nested) should hide their content
-    // so whitespace collapsing treats it as absent - preserving the surrounding
-    // inter-element whitespace from the parent's text chunks.
-    if (!isHidden) {
-      const auto* textPathComp = handle.try_get<TextPathComponent>();
-      if (textPathComp) {
-        if (!hasTextPathGeometrySource(*textPathComp)) {
-          isHidden = true;
-        } else {
-          const auto* tree = handle.try_get<donner::components::TreeComponent>();
-          if (!tree || tree->parent() == entt::null ||
-              !registry.any_of<TextRootComponent>(tree->parent())) {
-            isHidden = true;
-          }
-        }
-      }
-    }
-
-    const auto& text = handle.get<TextComponent>();
-    const bool preserveSpaces = hasXmlSpacePreserve(registry, handle.entity());
-
-    size_t chunkIndex = 0;
-    bool emittedFirstChunk = false;
-    auto emitChunk = [&](const RcString& chunk) {
-      if (!emittedFirstChunk || !chunk.empty()) {
-        pendingSpans.push_back(PendingSpan{handle, collapseTextWhitespace(chunk, preserveSpaces),
-                                           !emittedFirstChunk, depth, preserveSpaces, isHidden});
-        emittedFirstChunk = true;
-      }
-    };
-
-    if (text.textChunks.empty()) {
-      emitChunk(text.text);
-    } else {
-      emitChunk(text.textChunks[0]);
-    }
-
-    donner::components::ForAllChildren(handle, [&](EntityHandle child) {
-      collectSpans(child, depth + 1, isHidden);
-
-      ++chunkIndex;
-      if (chunkIndex < text.textChunks.size()) {
-        emitChunk(text.textChunks[chunkIndex]);
-      }
-    });
-    computed.ownerSpanRanges[handle.entity()] = {firstSpan, pendingSpans.size()};
-  };
-
-  collectSpans(rootHandle, 0, false);
-
-  if (!pendingSpans.empty()) {
-    for (auto& span : pendingSpans) {
-      if (!span.text.empty()) {
-        if (!span.preserveSpaces) {
-          removeLeadingSpace(span.text);
-          if (!span.text.empty()) {
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-    }
-
-    std::optional<size_t> lastNonEmpty;
-    for (size_t i = 0; i + 1 < pendingSpans.size(); ++i) {
-      // Hidden spans (display:none, invalid textPath) block inter-span whitespace
-      // collapsing - surrounding visible spans preserve their whitespace.
-      if (pendingSpans[i].hidden) {
-        lastNonEmpty = std::nullopt;
-      } else if (!pendingSpans[i].text.empty()) {
-        lastNonEmpty = i;
-      }
-
-      if (!lastNonEmpty.has_value()) {
-        continue;  // No previous visible span to check adjacency against.
-      }
-      size_t currentIndex = *lastNonEmpty;
-      RcString& current = pendingSpans[currentIndex].text;
-      RcString& next = pendingSpans[i + 1].text;
-      if (next.empty() || pendingSpans[i + 1].hidden) {
-        continue;
-      }
-
-      const bool currentEndsWithSpace =
-          !current.empty() && current.data()[current.size() - 1] == ' ';
-      const bool nextStartsWithSpace = next.data()[0] == ' ';
-      if (currentEndsWithSpace && nextStartsWithSpace && !pendingSpans[i + 1].preserveSpaces) {
-        // When collapsing across a textPath boundary, remove the textPath span's
-        // trailing space (keeping it off the path) rather than the next span's
-        // leading space. This ensures the inter-element space survives as flat text.
-        if (pendingSpans[currentIndex].handle.all_of<TextPathComponent>() &&
-            pendingSpans[currentIndex].handle.entity() != pendingSpans[i + 1].handle.entity()) {
-          removeTrailingSpace(current);
-        } else {
-          removeLeadingSpace(next);
-        }
-      }
-    }
-
-    for (auto it = pendingSpans.rbegin(); it != pendingSpans.rend(); ++it) {
-      if (!it->text.empty()) {
-        if (!it->preserveSpaces) {
-          removeTrailingSpace(it->text);
-          if (!it->text.empty()) {
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-    }
-  }
-
-  for (const PendingSpan& pending : pendingSpans) {
-    const auto& pos = pending.handle.get<TextPositioningComponent>();
-    if (pending.hidden) {
-      ComputedTextComponent::TextSpan span;
-      span.text = pending.text;
-      span.start = 0;
-      span.end = static_cast<std::size_t>(pending.text.size());
-      span.sourceEntity = pending.handle.entity();
-      span.hidden = true;
-      computed.spans.push_back(span);
-    } else {
-      appendSpan(pending.handle, pending.text, pos, pending.applyElementPositioning);
-    }
-  }
+  ComputedTextBuilder(rootHandle, computed).build();
 }
 
 }  // namespace donner::svg::components
