@@ -84,7 +84,7 @@ std::optional<AnimationSegment> PacedSegment(double progress, std::size_t count,
 
 struct IntervalProgress {
   std::size_t interval = 0;
-  double local = 0;
+  double fraction = 0;
 };
 
 IntervalProgress SelectIntervalProgress(double progress, std::size_t count,
@@ -129,7 +129,7 @@ std::optional<AnimationSegment> SelectAnimationSegment(double progress, std::siz
   if (discrete || selected.interval + 1 == count) {
     return AnimationSegment{selected.interval, selected.interval, 0};
   }
-  const double local = ApplySplineProgress(selected.local, selected.interval, options);
+  const double local = ApplySplineProgress(selected.fraction, selected.interval, options);
   return AnimationSegment{selected.interval, selected.interval + 1, local};
 }
 
