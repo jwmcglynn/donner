@@ -73,7 +73,8 @@ public:
 
   /**
    * Find the first entity that intersects the given point, using spatial acceleration
-   * when the document has enough elements.
+   * when the document has enough elements. Offscreen content is never hit; a hit on `<use>`
+   * content returns its shadow entity, see \ref EventTargetEntity.
    *
    * @param point Point to find the intersecting entity for
    * @param mode Hit eligibility policy.
@@ -88,6 +89,20 @@ public:
    */
   std::vector<Entity> findAllIntersecting(const Vector2d& point,
                                           HitTestMode mode = HitTestMode::SvgPointerEvents);
+
+  /**
+   * Map a rendered entity to the document-tree element that receives its pointer events.
+   *
+   * Content instantiated by `<use>` lives in a shadow tree that is rebuilt with the render tree.
+   * As in SVG 2, events on those instances target the `<use>` element, the outermost one for
+   * nested instances. Offscreen content (patterns, masks, markers and `feImage` fragments) is
+   * painted as part of the element that references it and receives no events.
+   *
+   * @param registry Registry holding \p entity.
+   * @param entity Rendered entity, such as a hit returned by \ref findIntersecting.
+   * @return The document-tree entity, or `entt::null` for offscreen content.
+   */
+  static Entity EventTargetEntity(const Registry& registry, Entity entity);
 
   /**
    * Find all entities whose world-space bounds intersect the given rectangle,

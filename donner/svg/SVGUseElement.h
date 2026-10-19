@@ -3,7 +3,7 @@
 
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
-#include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::svg {
 
@@ -198,12 +198,12 @@ namespace donner::svg {
  * | `height`  | `auto`  | Height of the instance viewport for referenced `<symbol>` or `<svg>` content. |
  * | `href`    | (none)  | URI to the element to reuse. |
  */
-class SVGUseElement : public SVGElement {
+class SVGUseElement : public SVGGraphicsElement {
   friend class details::ElementFactory;
 
 protected:
   /// Create an SVGUseElement object.
-  explicit SVGUseElement(EntityHandle handle) : SVGElement(handle) {}
+  explicit SVGUseElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
 
   /**
    * Internal constructor to create the element on an existing \ref Entity.
@@ -217,6 +217,8 @@ public:
   static constexpr ElementType Type = ElementType::Use;
   /// XML tag name, \ref xml_use.
   static constexpr std::string_view Tag{"use"};
+
+  static_assert(SVGGraphicsElement::IsBaseOf(Type));
 
   /**
    * Create a new \ref xml_use element.

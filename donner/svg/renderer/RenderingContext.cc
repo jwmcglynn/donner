@@ -1676,11 +1676,21 @@ std::optional<Box2d> TextHitBounds(Registry& registry, Entity entity) {
 }
 }  // namespace
 
+Entity RenderingContext::EventTargetEntity(const Registry& registry, Entity entity) {
+  // A `<use>` shadow root is attached under the element that instantiated it, while offscreen
+  // roots are detached, so only `<use>` content walks out of its shadow tree.
+  while (entity != entt::null && registry.all_of<ShadowEntityComponent>(entity)) {
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+    entity = tree != nullptr ? tree->parent() : Entity(entt::null);
+  }
+  return entity;
+}
+
 bool RenderingContext::prepareHitGeometry(Entity entity, HitGeometry& geometry, const Path*& path,
                                           HitTestMode mode) {
   path = nullptr;
   const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
-  if (instance == nullptr) {
+  if (instance == nullptr || EventTargetEntity(registry_, entity) == entt::null) {
     return false;
   }
   ParseWarningSink sink = ParseWarningSink::Disabled();
