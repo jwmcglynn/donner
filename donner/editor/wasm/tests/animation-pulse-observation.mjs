@@ -27,15 +27,21 @@ export function gatedPulseFrame(rendered, snapshot, generation, target, notBefor
   const clickIndex = findClick(rows, target, notBeforeEpochMs);
   if (clickIndex < 0) return { action: "step" };
   const click = rows[clickIndex];
+  const dispatchTime = click[4];
   const samples = [];
+  let previousTime = dispatchTime;
   for (const row of rows.slice(clickIndex + 1)) {
     if (!Array.isArray(row) || row.length !== 6) {
       return { action: "invalid", reason: "malformed pointer trace" };
     }
     if (row[1] === 2) return { action: "invalid", reason: "another event was dispatched" };
-    if (row[1] === 3 && Number.isFinite(row[4])) samples.push(row[4]);
+    if (row[1] !== 3) continue;
+    if (!Number.isFinite(row[4]) || row[4] < previousTime) {
+      return { action: "invalid", reason: "timeline samples are not monotonic" };
+    }
+    previousTime = row[4];
+    samples.push(row[4]);
   }
-  const dispatchTime = click[4];
   const renderedTime = rendered.at(-1);
   if (renderedTime === undefined || renderedTime - dispatchTime < kPulseWindow.minimumElapsed) {
     return { action: "step" };
