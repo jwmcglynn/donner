@@ -419,6 +419,44 @@ TEST(SVGElementLifetimeTests, CollectionDeferralRetainsDetachedRootsUntilGuardEx
   EXPECT_FALSE(document.registry().valid(rectEntity));
 }
 
+TEST(SVGElementLifetimeTests, CollectorKeepsDocumentRootMovedIntoDetachedSubtree) {
+  SVGDocument document;
+  const Entity rootEntity = document.svgElement().entityHandle().entity();
+  const Vector2i sizeBefore = document.canvasSize();
+  {
+    SVGGElement group = SVGGElement::Create(document);
+    document.svgElement().appendChild(group);
+    group.remove();
+    // Moving the root under the detached group detaches the root along with it.
+    group.appendChild(document.svgElement());
+  }
+
+  components::NodeLifetimeCollector::Collect(document.registry());
+
+  EXPECT_TRUE(document.registry().valid(rootEntity));
+  EXPECT_EQ(document.canvasSize(), sizeBefore);
+}
+
+TEST(SVGElementLifetimeTests, CollectorKeepsDocumentRootRemovedThroughXmlDocument) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"><rect/></svg>)", disabled);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed).result();
+  const Entity rootEntity = document.svgElement().entityHandle().entity();
+  {
+    std::optional<xml::XMLNode> rootNode =
+        xml::XMLNode::TryCast(document.svgElement().entityHandle());
+    ASSERT_TRUE(rootNode.has_value());
+    (void)document.xmlDocument().removeNode(*rootNode);
+  }
+
+  components::NodeLifetimeCollector::Collect(document.registry());
+
+  EXPECT_TRUE(document.registry().valid(rootEntity));
+  EXPECT_EQ(document.canvasSize(), Vector2i(10, 20));
+}
+
 TEST(SVGElementLifetimeTests, RepeatedCreateRemoveReinsertCyclesCollectDetachedNodes) {
   SVGDocument document;
   SVGSVGElement root = document.svgElement();

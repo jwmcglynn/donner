@@ -2401,6 +2401,51 @@ TEST(SVGDocument, SourceBackedRemoveDetachedElementWithoutXmlIdentityIsUnapplied
   EXPECT_THAT(document.source(), testing::Not(testing::HasSubstr("detached")));
 }
 
+TEST(SVGDocument, SourceBackedRemoveRootElementIsRefused) {
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"><rect id="child"/></svg>)");
+  const std::string sourceBefore(document.source());
+
+  xml::ApplySourceEditResult result = document.removeElement(document.svgElement());
+
+  EXPECT_FALSE(result.applied);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("document root element"));
+  EXPECT_EQ(document.source(), sourceBefore);
+  EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
+  // Sizing the document reads the root's sized-element properties.
+  EXPECT_EQ(document.canvasSize(), Vector2i(10, 20));
+}
+
+TEST(SVGDocument, SourceBackedRemoveOfRootThroughElementIsRefused) {
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"><rect id="child"/></svg>)");
+  const std::string sourceBefore(document.source());
+
+  document.svgElement().remove();
+
+  EXPECT_EQ(document.source(), sourceBefore);
+  EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
+  EXPECT_EQ(document.canvasSize(), Vector2i(10, 20));
+}
+
+TEST(SVGDocument, ProgrammaticRemoveRootElementIsRefused) {
+  SVGDocument document;
+  SVGRectElement rect = SVGRectElement::Create(document);
+  rect.setId("child");
+  document.svgElement().appendChild(rect);
+  const Vector2i sizeBefore = document.canvasSize();
+
+  xml::ApplySourceEditResult result = document.removeElement(document.svgElement());
+  document.svgElement().remove();
+
+  EXPECT_FALSE(result.applied);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("document root element"));
+  EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
+  EXPECT_EQ(document.canvasSize(), sizeBefore);
+}
+
 TEST(SVGDocument, TypedMutationHelperWrapsDomOperations) {
   SVGDocument document;
   SVGRectElement kept = SVGRectElement::Create(document);

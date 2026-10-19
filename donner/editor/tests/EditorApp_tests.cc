@@ -616,6 +616,43 @@ TEST(EditorAppTest, DeleteSelectionWithUndoRefusesAllLockedSelection) {
   EXPECT_EQ(app.selectedElements().front().id(), "r1");
 }
 
+TEST(EditorAppTest, DeleteSelectionWithUndoRefusesDocumentRoot) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  const std::string sourceBefore(app.document().document().source());
+
+  app.setSelection(app.document().document().svgElement());
+  EXPECT_FALSE(app.deleteSelectionWithUndo(sourceBefore));
+  EXPECT_FALSE(app.flushFrame());
+
+  EXPECT_THAT(app.consumeElementRemoveWritebacks(), ::testing::IsEmpty());
+  EXPECT_EQ(app.document().document().source(), sourceBefore);
+  EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
+  EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
+}
+
+TEST(EditorAppTest, DeleteSelectionWithUndoKeepsDocumentRootAndDeletesTheRest) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r2.has_value());
+
+  app.setSelection(std::vector<svg::SVGElement>{app.document().document().svgElement(), *r2});
+  const std::string sourceBefore(app.document().document().source());
+  EXPECT_TRUE(app.deleteSelectionWithUndo(sourceBefore));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("#r2").has_value());
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_TRUE(app.selectedElements().front() == app.document().document().svgElement());
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  EXPECT_THAT(std::string(app.document().document().source()),
+              ::testing::HasSubstr("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+  EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
+}
+
 TEST(EditorAppTest, GeometryMutationQueuesWithoutWaitingForDocumentWriter) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(
