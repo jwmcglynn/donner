@@ -84,7 +84,7 @@ class CiDiskCacheTests(unittest.TestCase):
 
     def test_equal_mtimes_evict_action_results_before_their_blobs(self) -> None:
         # Bazel's collector breaks mtime ties by path, so ac/ goes before cas/ and an LRU trim
-        # cannot leave an action result whose referenced blob is gone.
+        # evicts an action result before the blobs it references.
         action = self._entry("ac/aa/result", HALF, MIDDLE)
         blob = self._entry("cas/aa/blob", HALF, MIDDLE)
         self._entry("cas/bb/newer", HALF, NEW)
@@ -141,6 +141,19 @@ class CiDiskCacheTests(unittest.TestCase):
         self.assertEqual("save=true", self._save_output())
         self.assertTrue((self.cache / "link").is_symlink())
         self.assertTrue(outside.exists())
+
+    def test_symlinked_directories_are_never_followed(self) -> None:
+        outside = self.root / "outside"
+        outside.mkdir()
+        old_file = outside / "old"
+        old_file.write_bytes(b"x" * (2 * MIB))
+        os.utime(old_file, (OLD, OLD))
+        self._entry("cas/aa/kept", 100, NEW)
+        (self.cache / "linked").symlink_to(outside, target_is_directory=True)
+        self._bound("--max-mib", "1")
+        self.assertEqual("save=true", self._save_output())
+        self.assertTrue(old_file.exists())
+        self.assertTrue((self.cache / "linked").is_symlink())
 
     def test_budget_must_be_positive(self) -> None:
         with redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):

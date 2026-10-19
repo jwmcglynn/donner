@@ -735,6 +735,7 @@ jobs:
       - name: Probe runner resources after tests
         if: ${{ !cancelled() }}
         continue-on-error: true
+        timeout-minutes: 5
         shell: bash
         run: python3 tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
@@ -1435,6 +1436,7 @@ jobs:
       - name: Probe runner resources after tests
         if: ${{ !cancelled() }}
         continue-on-error: true
+        timeout-minutes: 5
         shell: bash
         run: python3 tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
@@ -1776,6 +1778,7 @@ jobs:
       - name: Probe runner resources after tests
         if: ${{ !cancelled() }}
         continue-on-error: true
+        timeout-minutes: 5
         shell: bash
         run: python3 tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 

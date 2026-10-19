@@ -25,12 +25,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Enable disk action cache
-      if: inputs.mode == 'restore'
-      shell: bash
-      run: |
-        printf '\n%s\n' 'build --disk_cache=~/.cache/bazel-disk' >> "$HOME/.bazelrc"
-
     - name: Check cache inputs
       shell: bash
       env:
@@ -48,6 +42,12 @@ runs:
           echo "::error::cache-bazel-actions max-size-mib must be a positive whole number, got '${MAX_SIZE_MIB}'."
           exit 1
         fi
+
+    - name: Enable disk action cache
+      if: inputs.mode == 'restore'
+      shell: bash
+      run: |
+        printf '\n%s\n' 'build --disk_cache=~/.cache/bazel-disk' >> "$HOME/.bazelrc"
 
     # A new revision can extend an older snapshot even when BUILD files have not changed.
     # Each platform/family has one writer; PR code only restores default-branch snapshots.

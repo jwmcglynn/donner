@@ -1605,7 +1605,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_action_cache_preserves_setup_bazel_rc_without_a_final_newline(self):
         action = self.supply_chain_files[".github/actions/cache-bazel-actions/action.yml"]
-        body = action.split("      run:", 1)[1].split("\n\n", 1)[0]
+        step = action.split("    - name: Enable disk action cache\n", 1)[1]
+        body = step.split("      run:", 1)[1].split("\n\n", 1)[0]
         script = textwrap.dedent(body.split("\n", 1)[1]) if body.strip().startswith("|") else body.strip()
         with tempfile.TemporaryDirectory() as directory:
             rc = Path(directory) / ".bazelrc"

@@ -9,8 +9,8 @@ and a hosted runner has a small disk, so every restore and save moves more bytes
 the policy of Bazel's own disk-cache garbage collector (`DiskCacheGarbageCollector`): sort
 entries by mtime, then path, and delete from the oldest. Bazel sets an entry's mtime whenever
 it stores or retrieves it, and an action-cache hit refreshes the action result before every
-blob it references, so evicting in this order never leaves an action result whose blobs are
-gone. Bazel's own collector runs only as an idle task that the next command interrupts, so it
+blob it references, so evicting in this order keeps the blobs of every action result a build
+used. At worst a cut leaves a stale action result, which Bazel's lookup treats as a miss. Bazel's own collector runs only as an idle task that the next command interrupts, so it
 cannot be relied on to finish before the save step; this script runs the same policy
 synchronously. The budget is measured as an upper bound on the uncompressed tar stream (headers
 plus 512-byte-padded data per file), which bounds the compressed archive the save uploads. Any
