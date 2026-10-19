@@ -706,6 +706,7 @@ jobs:
           download-outputs: minimal
 
       - name: Verify BuildBuddy remote execution
+        id: buildbuddy_verify
         if: steps.buildbuddy.outputs.bazel-flags != ''
         env:
           BUILDBUDDY_FLAGS: ${{ steps.buildbuddy.outputs.bazel-flags }}
@@ -801,6 +802,8 @@ jobs:
       - name: Test (hosted parity subset)
         id: hosted_parity_test
         if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.hosted_parity_tests_affected == 'true') }}
+        env:
+          BUILDBUDDY_FLAGS: ${{ steps.buildbuddy.outputs.bazel-flags }}
         shell: bash
         run: |
           set -euo pipefail
@@ -813,7 +816,7 @@ jobs:
             echo "::error::Empty target selection reached the hosted parity step."
             exit 1
           fi
-          tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk test --config=ci ${BUILDBUDDY_FLAGS} --test_output=errors \
             --build_tests_only --build_event_json_file="$RUNNER_TEMP/coverage-parity.bep.json" \
             --test_tag_filters=hosted_parity,-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $TARGETS
@@ -859,6 +862,7 @@ jobs:
         run: |
           python3 tools/ci_coverage_contract.py receipt --job linux \
             --out "$RUNNER_TEMP/coverage-receipt/coverage-receipt.json" \
+            --step "Verify BuildBuddy remote execution=${{ steps.buildbuddy_verify.outcome }}" \
             --step "Build=${{ steps.build.outcome }}" \
             --step "Test=${{ steps.test.outcome }}" \
             --step "Test local Xvfb targets=${{ steps.local_xvfb.outcome }}" \
