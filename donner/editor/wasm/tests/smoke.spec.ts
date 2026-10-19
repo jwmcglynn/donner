@@ -5018,6 +5018,21 @@ async function openAnimatedPreview(page: Page, browserName: string, testInfo: Te
   };
 }
 
+// A browser's first editor boot on a freshly provisioned host also pays one-time costs: browser
+// startup, GPU adapter and device creation, and the first shader and pipeline compilation. On the
+// hosted macOS runner the first boot took about 20 s to reach its first animation-region capture,
+// 8 s of it creating the WebGPU adapter, while the next case took about 10 s in total in a
+// relaunched browser. This case is declared first, so with the lane's single worker it runs first
+// for each browser and takes that cost under its own budget and failure diagnostics. The cases
+// after it then budget only their own boot and probes, whichever lane runs first on the host.
+test(
+  "animation preview plays on the browser's first boot",
+  async ({ page, browserName }, testInfo) => {
+    const { fatalMessages } = await openAnimatedPreview(page, browserName, testInfo);
+    expect(fatalMessages).toEqual([]);
+  },
+);
+
 test(
   "animation preview plays and dispatches mouse events",
   async ({ page, browserName }, testInfo) => {
