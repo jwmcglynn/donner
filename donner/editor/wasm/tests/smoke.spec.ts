@@ -1,7 +1,11 @@
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
-import { gatedPulseFrame, presentedPulseCompletion } from "./animation-pulse-observation.mjs";
+import {
+  gatedPulseFrame,
+  presentedPulseCompletion,
+  queuedDispatchCaughtUp,
+} from "./animation-pulse-observation.mjs";
 import {
   awaitBeforeBlueDeadline,
   captureAfterCanvasGpuCompletion,
@@ -4282,6 +4286,7 @@ async function exerciseAnimationPointerPulse({
   let delayedPulseClickFinishedEpochMs: number | null = null;
   let queuedPulseSteppingEpochMs: number | null = null;
   let heldPulseHeight: number | null = null;
+  let queuedPulseCatchUp: unknown = null;
   let removeRasterYieldDelay: (() => Promise<unknown>) | null = null;
   const initialPulseDecisions: unknown[] = [];
   const queuedPulseDecisions: unknown[] = [];
@@ -4487,6 +4492,9 @@ async function exerciseAnimationPointerPulse({
           performance.now() + scaledMs(3000),
           "one raster task yield is suspended",
         );
+        const heldRenderedTimes = await queuedGate.renderedTimes(
+          performance.now() + scaledMs(1000),
+        );
         const heldBounds = await orb();
         heldPulseHeight = heldBounds.maxY - heldBounds.minY;
         expect(
@@ -4516,6 +4524,12 @@ async function exerciseAnimationPointerPulse({
           decisions: queuedPulseDecisions,
         });
         queuedPulseObservation = retained;
+        // Frame pacing advances only admitted ticks, so state the catch-up directly: the click
+        // must begin on the dispatch-time clock, not at the held frame's document time.
+        const catchUp = queuedDispatchCaughtUp(heldRenderedTimes, retained.dispatchTime);
+        queuedPulseCatchUp = catchUp;
+        expect(catchUp.caughtUp, `queued click dispatch caught up: ${JSON.stringify(catchUp)}`)
+          .toBe(true);
         await expect.poll(async () => {
           const bounds = await orb(queuedPulseDeadline);
           return bounds.maxY - bounds.minY;
@@ -4556,6 +4570,7 @@ async function exerciseAnimationPointerPulse({
           delayedPulseClickFinishedEpochMs,
           queuedPulseSteppingEpochMs,
           heldPulseHeight,
+          queuedPulseCatchUp,
           initialPulseObservation,
           preQueuedPointerTrace,
           queuedPulseObservation,

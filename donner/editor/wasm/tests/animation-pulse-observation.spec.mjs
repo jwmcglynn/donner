@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gatedPulseFrame, presentedPulseCompletion } from "./animation-pulse-observation.mjs";
+import {
+  gatedPulseFrame,
+  presentedPulseCompletion,
+  queuedDispatchCaughtUp,
+} from "./animation-pulse-observation.mjs";
 const click = [100, 2, 0, 32, 10, true];
 const tick = (time) => [101, 3, 0, 0, time, false];
 const snapshot = (entries, generation = "current") => ({ entries, generation });
@@ -134,4 +138,23 @@ test("completion rejects stale generations, wrong targets and intervening input"
     null,
   );
   assert.equal(complete(snapshot([click, tick(10.8), tick(10.7)])), null);
+});
+
+test("a queued click must dispatch at least one pulse after the held stale frame", () => {
+  assert.deepEqual(queuedDispatchCaughtUp([20, 21.2], 22.25), {
+    caughtUp: true,
+    heldTime: 21.2,
+    dispatchTime: 22.25,
+  });
+  assert.equal(queuedDispatchCaughtUp([21.2], 21.8).caughtUp, true);
+  // Dispatching at the stale frame's time, or inside its pulse, is the catch-up regression.
+  assert.equal(queuedDispatchCaughtUp([21.2], 21.2).caughtUp, false);
+  assert.equal(queuedDispatchCaughtUp([21.2], 21.7).caughtUp, false);
+  for (const held of [[], undefined, [Number.NaN]]) {
+    assert.deepEqual(queuedDispatchCaughtUp(held, 22), {
+      caughtUp: false,
+      reason: "no held frame time",
+    });
+  }
+  assert.equal(queuedDispatchCaughtUp([21.2], Number.NaN).caughtUp, false);
 });

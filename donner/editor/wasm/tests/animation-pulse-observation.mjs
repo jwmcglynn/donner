@@ -1,6 +1,8 @@
 // The fixture pulse is expanded far enough for the pixel oracle between 100 and 500 ms after the
 // click is dispatched.
 const kPulseWindow = { minimumElapsed: 0.1, maximumElapsed: 0.5 };
+/** The fixture's click pulse lasts 600 ms of document time. */
+const kPulseDurationSeconds = 0.6;
 
 /**
  * Choose the next action of a pulse probe whose raster worker is suspended at a held task yield.
@@ -79,7 +81,14 @@ function findClick(rows, target, notBeforeEpochMs) {
 
 /** A later admitted tick proves a frame after the 600 ms pulse reached presentation. */
 export function presentedPulseCompletion(snapshot, generation, target, notBeforeEpochMs) {
-  return presentedSampleAfterClick(snapshot, generation, target, notBeforeEpochMs, 0.6, Infinity);
+  return presentedSampleAfterClick(
+    snapshot,
+    generation,
+    target,
+    notBeforeEpochMs,
+    kPulseDurationSeconds,
+    Infinity,
+  );
 }
 
 function presentedSampleAfterClick(
@@ -124,4 +133,19 @@ function presentedSampleAfterClick(
     }
   }
   return null;
+}
+
+/**
+ * Whether a click queued behind a raster stall was dispatched on the caught-up preview clock: at
+ * least one pulse after the held stale frame, rather than at that frame's document time.
+ */
+export function queuedDispatchCaughtUp(heldRenderedTimes, dispatchTime) {
+  if (
+    !Array.isArray(heldRenderedTimes) || heldRenderedTimes.length === 0
+    || !heldRenderedTimes.every(Number.isFinite) || !Number.isFinite(dispatchTime)
+  ) {
+    return { caughtUp: false, reason: "no held frame time" };
+  }
+  const heldTime = heldRenderedTimes.at(-1);
+  return { caughtUp: dispatchTime - heldTime >= kPulseDurationSeconds, heldTime, dispatchTime };
 }

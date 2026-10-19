@@ -6515,9 +6515,10 @@ void TracePreviewPointer([[maybe_unused]] int phase, [[maybe_unused]] int event,
 }
 
 /// Test-only opt-in. The browser pulse probes set `__donnerFramePacedPreviewClock` in the worker
-/// that runs this shell, so preview time advances one 60 Hz tick per admitted sample instead of
+/// that runs this shell, so each admitted sample advances preview time one 60 Hz tick instead of
 /// following the wall clock, and a slow host frame cannot carry the timeline past the window they
-/// observe. Nothing outside those tests sets it, and native builds never take this path.
+/// observe. Input still dispatches at the wall-clock time. Like the other preview trace hooks it
+/// is a worker global that no product code sets; native builds never take this path.
 bool FramePacedPreviewClockRequested() {
 #ifdef __EMSCRIPTEN__
   // clang-format off
@@ -6721,15 +6722,9 @@ void EditorShell::applyPreviewPointerInput(double nowSeconds) {
   if (!canApplyPreviewPointerInput() || !hasPreviewPointerChanges()) {
     return;
   }
-  // Frame pacing dispatches at the last admitted sample, so input does not advance time either.
-  const bool framePaced = FramePacedPreviewClockRequested();
-  const auto seconds = framePaced ? std::optional(std::max(0.0, animationPreviewLastTime_))
-                                  : animationPreviewTimeAt(nowSeconds);
+  const auto seconds = animationPreviewTimeAt(nowSeconds);
   if (!seconds) {
     return;
-  }
-  if (framePaced) {
-    rebasePreviewClock(nowSeconds, *seconds);
   }
   const auto access = app_.document().document().tryWriteAccess();
   if (!access) {
