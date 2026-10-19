@@ -439,6 +439,12 @@ let emscripten_glfw3_impl = {
     return GLFW3.isAnyElementFocused();
   },
 
+  //! emscripten_glfw3_context_is_any_other_element_focused
+  emscripten_glfw3_context_is_any_other_element_focused__proxy: 'sync',
+  emscripten_glfw3_context_is_any_other_element_focused: () => {
+    return GLFW3.isAnyOtherElementFocused();
+  },
+
   //! emscripten_glfw3_context_get_fullscreen_window
   emscripten_glfw3_context_get_fullscreen_window__proxy: 'sync',
   emscripten_glfw3_context_get_fullscreen_window: () => {
