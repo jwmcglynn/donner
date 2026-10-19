@@ -3,16 +3,14 @@
 import json
 import os
 from pathlib import Path
-import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
 from python.runfiles import runfiles
 from tools import test_timing
-from tools.test_executable_fixtures import ExecutableFixtureDirectory
+from tools.test_executable_fixtures import ExecutableFixtureDirectory, write_python_stand_in
 
 _CHECKS = [
     ["tools/lint.sh"],
@@ -45,8 +43,7 @@ class LintLaneTest(unittest.TestCase):
             encoding="utf-8",
         )
         (cls.executables.path / "bin").mkdir()
-        cls.executables.write("bin/python3", "#!/bin/sh\nexec %s %s python3 \"$@\"\n" % (
-            shlex.quote(sys.executable), shlex.quote(str(cls.recorder))))
+        write_python_stand_in(cls.executables.path / "bin" / "python3", cls.recorder, "python3")
         cls.host = cls.executables.path / "host"
         cls.host.mkdir()
         for tool in ("dirname", "sed"):
@@ -62,9 +59,7 @@ class LintLaneTest(unittest.TestCase):
         for script in self.scripts:
             shutil.copy(script, self.repo / "tools" / "ci" / script.name)
         lint = self.repo / "tools" / "lint.sh"
-        lint.write_text("#!/bin/sh\nexec %s %s tools/lint.sh \"$@\"\n" % (
-            shlex.quote(sys.executable), shlex.quote(str(self.recorder))), encoding="utf-8")
-        lint.chmod(0o755)
+        write_python_stand_in(lint, self.recorder, "tools/lint.sh")
         self.capture = self.work / "calls.jsonl"
         self.summary = self.work / "summary.md"
 

@@ -3,16 +3,14 @@
 import json
 import os
 from pathlib import Path
-import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
 from python.runfiles import runfiles
 from tools import test_timing
-from tools.test_executable_fixtures import ExecutableFixtureDirectory
+from tools.test_executable_fixtures import ExecutableFixtureDirectory, write_python_stand_in
 
 
 class LaneScriptTest(unittest.TestCase):
@@ -39,18 +37,11 @@ class LaneScriptTest(unittest.TestCase):
             encoding="utf-8")
         (cls.executables.path / "bin").mkdir()
         for tool in ("df", "sudo", "docker"):
-            cls._stand_in(cls.executables.path / "bin" / tool, tool)
+            write_python_stand_in(cls.executables.path / "bin" / tool, cls.recorder, tool)
         cls.host = cls.executables.path / "host"
         cls.host.mkdir()
-        for tool in ("dirname",):
-            os.symlink(shutil.which(tool), cls.host / tool)
+        os.symlink(shutil.which("dirname"), cls.host / "dirname")
         cls.bash = shutil.which("bash")
-
-    @classmethod
-    def _stand_in(cls, path, name):
-        path.write_text("#!/bin/sh\nexec %s %s %s \"$@\"\n" % (
-            shlex.quote(sys.executable), shlex.quote(str(cls.recorder)), name), encoding="utf-8")
-        path.chmod(0o755)
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="coverage lane ")
@@ -60,7 +51,8 @@ class LaneScriptTest(unittest.TestCase):
         (self.repo / "tools" / "ci").mkdir(parents=True)
         for name, script in self.scripts.items():
             shutil.copy(script, self.repo / "tools" / "ci" / name)
-        self._stand_in(self.repo / "tools" / "coverage.sh", "tools/coverage.sh")
+        write_python_stand_in(self.repo / "tools" / "coverage.sh", self.recorder,
+                              "tools/coverage.sh")
         self.capture = self.work / "calls.jsonl"
 
     def _run(self, script, *args, fail="", **env):
