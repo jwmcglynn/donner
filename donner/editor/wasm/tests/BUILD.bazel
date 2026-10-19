@@ -227,6 +227,7 @@ playwright_bin.playwright_test(
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
+        "firefox-launch-env.cjs",
         "first-click-breakdown.mjs",
         "flat-capture-retake.mjs",
         "gpu-image-transfer-canary.ts",
@@ -281,6 +282,7 @@ js_test(
         "browser-responsiveness.perf.ts",
         "browser-watchdog-anchor.mjs",
         "browser-watchdog-child.cjs",
+        "firefox-launch-env.cjs",
         "playwright.responsiveness.bazel.config.js",
         ":_browser_responsiveness_perf_driver",
     ],
@@ -867,6 +869,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "firefox-launch-env.cjs",
         "font-reference.spec.ts",
         "package.json",
         "playwright.font-reference.config.js",
