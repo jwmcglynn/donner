@@ -6,8 +6,10 @@
 #include <array>
 #include <functional>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
@@ -31,6 +33,7 @@
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/internal/RenderingDiagnostics.h"
@@ -532,6 +535,69 @@ TEST(SVGDocument, EmptySelectorSourceSetterReplacesMaterializedRawText) {
     ASSERT_TRUE(replaced.applied);
     ASSERT_FALSE(replaced.diagnostic.has_value());
     EXPECT_EQ(text.isEmptyForSelector(nullptr), !initiallyEmpty);
+  }
+}
+
+/// Whole-document invalidation observed after a typed text edit on a built render tree.
+struct TextEditInvalidation {
+  bool fullRebuild = false;
+  bool fullStyleRecompute = false;
+  bool siblingStyleRetained = false;
+
+  bool operator==(const TextEditInvalidation& other) const = default;
+
+  friend std::ostream& operator<<(std::ostream& os, const TextEditInvalidation& value) {
+    return os << "{fullRebuild=" << value.fullRebuild
+              << ", fullStyleRecompute=" << value.fullStyleRecompute
+              << ", siblingStyleRetained=" << value.siblingStyleRetained << "}";
+  }
+};
+
+/// Apply the editor's text-typing sequence to `#t` after marking the render tree as built.
+TextEditInvalidation TypeTextIntoBuiltDocument(std::string_view svg, std::string_view typed) {
+  SVGDocument document = ParseSVG(svg);
+  SVGElement text = document.querySelector("#t").value();
+  SVGElement sibling = document.querySelector("#r").value();
+  std::ignore = sibling.getComputedStyle();
+  auto& renderState = EnsureRenderTreeState(document.registry());
+  renderState.hasBeenBuilt = true;
+  renderState.needsFullRebuild = false;
+  renderState.needsFullStyleRecompute = false;
+  document.registry().clear<components::DirtyFlagsComponent>();
+
+  const xml::ApplySourceEditResult result = document.setElementTextContent(text, typed);
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  text.cast<SVGTextContentElement>().setTextContent(typed);
+
+  return TextEditInvalidation{
+      .fullRebuild = renderState.needsFullRebuild,
+      .fullStyleRecompute = renderState.needsFullStyleRecompute,
+      .siblingStyleRetained = sibling.entityHandle().all_of<components::ComputedStyleComponent>(),
+  };
+}
+
+TEST(SVGDocument, TypedTextWithoutEmptySelectorKeepsIncrementalInvalidation) {
+  for (const std::string_view initial : {R"(<text id="t"/>)", R"(<text id="t">S</text>)"}) {
+    SCOPED_TRACE(initial);
+    const std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg">
+      <style>rect { fill: red } text:first-child + rect { opacity: .5 }</style>
+      <rect id="r" width="10" height="10"/>)" +
+                            std::string(initial) + "</svg>";
+    EXPECT_THAT(TypeTextIntoBuiltDocument(svg, "SVG"),
+                Eq(TextEditInvalidation{.siblingStyleRetained = true}));
+  }
+}
+
+TEST(SVGDocument, TypedTextEmptinessChangeRestylesEmptySelectorDocuments) {
+  for (const std::string_view rule :
+       {"text:empty + rect { fill: red }", "svg:has(text:not(:empty)) rect { fill: red }"}) {
+    SCOPED_TRACE(rule);
+    const std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)" +
+                            std::string(rule) +
+                            R"(</style><text id="t"/><rect id="r" width="10" height="10"/></svg>)";
+    EXPECT_THAT(TypeTextIntoBuiltDocument(svg, "SVG"),
+                Eq(TextEditInvalidation{.fullRebuild = true, .fullStyleRecompute = true}));
   }
 }
 
