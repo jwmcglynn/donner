@@ -47,8 +47,8 @@ donner_cc_binary(
     ],
 )
 
-# Runs the animation example, which exits non-zero when a rendered color is unexpected, so the
-# getting-started animation walkthrough stays correct.
+# Runs the animation example, which exits non-zero when event dispatch or the lifecycle boundaries
+# differ from what the document declares, so the getting-started walkthrough stays correct.
 native_test(
     name = "svg_animation_test",
     size = "small",

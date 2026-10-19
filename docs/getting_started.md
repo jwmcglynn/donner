@@ -197,9 +197,10 @@ SVG documents loaded through `<image>` are parsed in `SecureStatic` mode, so the
 static content, unless the host replaces `SVGDocument::Settings::svgParseCallback` with its own
 parser callback.
 
-The complete program, `examples/svg_animation.cc`, checks the rendered colors at each step; run it
-with `bazel run //examples:svg_animation`. The editor's Preview mode plays animations with this
-same API, and `donner-svg --gif` exports an animation as an animated GIF (see \ref DonnerSvgTool).
+The complete program, `examples/svg_animation.cc`, checks that the click starts an animation and
+that the lifecycle boundaries match the document; run it with `bazel run //examples:svg_animation`.
+The editor's Preview mode plays animations with this same API, and `donner-svg --gif` exports an
+animation as an animated GIF (see \ref DonnerSvgTool).
 
 ## Third-Party License Attribution
 

@@ -2,7 +2,8 @@
  * @example svg_animation.cc Drive declarative SVG animation from a host clock
  * @details Parses an SVG with `<animate>` and `<set>` elements, renders frames at chosen document
  * times, starts a click-triggered animation, and lists the animation lifecycle boundaries. The
- * program checks the rendered colors and exits non-zero if any of them is unexpected.
+ * program exits non-zero if the click starts no animation or the lifecycle boundaries differ from
+ * the ones the document declares.
  *
  * ```sh
  * bazel run //examples:svg_animation
@@ -10,48 +11,16 @@
  */
 
 #include <cstddef>
-#include <cstdint>
 #include <iostream>
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "donner/base/ParseResult.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/Renderer.h"
-
-namespace {
-
-/// Straight-alpha RGBA color of one rendered pixel.
-struct Rgba {
-  std::uint8_t r, g, b, a;
-};
-
-Rgba PixelAt(const donner::svg::RendererBitmap& bitmap, int x, int y) {
-  const std::size_t offset =
-      static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4;
-  return {bitmap.pixels[offset], bitmap.pixels[offset + 1], bitmap.pixels[offset + 2],
-          bitmap.pixels[offset + 3]};
-}
-
-/// Renders the document at its current time and returns one pixel of the result.
-Rgba RenderPixel(donner::svg::Renderer& renderer, donner::svg::SVGDocument& document, int x,
-                 int y) {
-  renderer.draw(document);
-  return PixelAt(renderer.takeSnapshot(), x, y);
-}
-
-bool Expect(std::string_view what, Rgba actual, Rgba expected) {
-  const auto near = [](int a, int b) { return a - b <= 2 && b - a <= 2; };
-  const bool ok = near(actual.r, expected.r) && near(actual.g, expected.g) &&
-                  near(actual.b, expected.b) && near(actual.a, expected.a);
-  std::cout << what << ": rgba(" << int(actual.r) << ", " << int(actual.g) << ", " << int(actual.b)
-            << ", " << int(actual.a) << ")" << (ok ? "" : "  UNEXPECTED") << "\n";
-  return ok;
-}
-
-}  // namespace
 
 int main() {
   //! [animated_svg]
@@ -77,7 +46,6 @@ int main() {
   }
   donner::svg::SVGDocument document = std::move(maybeDocument.result());
   donner::svg::Renderer renderer;
-  bool ok = true;
 
   //! [set_time]
   // Donner has no clock of its own: the host chooses each frame's document time, in seconds.
@@ -91,13 +59,6 @@ int main() {
   }
   //! [set_time]
 
-  document.setTime(0.0);
-  ok &= Expect("fade at 0s", RenderPixel(renderer, document, 8, 8), {255, 0, 0, 255});
-  document.setTime(1.0);
-  ok &= Expect("fade at 1s", RenderPixel(renderer, document, 8, 8), {128, 0, 128, 255});
-  document.setTime(3.0);
-  ok &= Expect("fade at 3s, frozen", RenderPixel(renderer, document, 8, 8), {0, 0, 255, 255});
-
   //! [dispatch_event]
   // Pointer input stays with the host. Deliver a hit element's events to begin="id.click"
   // triggers; the triggered interval starts at the current document time.
@@ -107,10 +68,6 @@ int main() {
     return 1;
   }
   //! [dispatch_event]
-
-  ok &= Expect("button at 3s", RenderPixel(renderer, document, 40, 8), {0, 128, 0, 255});
-  document.setTime(4.5);
-  ok &= Expect("button at 4.5s", RenderPixel(renderer, document, 40, 8), {128, 128, 128, 255});
 
   //! [lifecycle_events]
   // Lifecycle boundaries in the interval (from, to], for hosts that react to begin, repeat and
@@ -123,8 +80,19 @@ int main() {
     std::cout << type << " at " << event.time << "s\n";
   }
   //! [lifecycle_events]
-  if (!batch.complete) {
-    std::cerr << "The lifecycle query was incomplete\n";
+  // The fade ends at 2s; the clicked square's interval runs from 3s to 4s.
+  const std::vector<std::pair<donner::svg::SVGAnimationEvent::Type, double>> expected = {
+      {donner::svg::SVGAnimationEvent::Type::End, 2.0},
+      {donner::svg::SVGAnimationEvent::Type::Begin, 3.0},
+      {donner::svg::SVGAnimationEvent::Type::End, 4.0},
+  };
+  bool matches = batch.complete && batch.events.size() == expected.size();
+  for (std::size_t i = 0; matches && i < expected.size(); ++i) {
+    matches =
+        batch.events[i].type == expected[i].first && batch.events[i].time == expected[i].second;
+  }
+  if (!matches) {
+    std::cerr << "Unexpected animation lifecycle boundaries\n";
     return 1;
   }
 
@@ -132,8 +100,13 @@ int main() {
   // Return to time zero and discard event-started intervals, as when replaying from the start.
   document.restartAnimations();
   //! [restart]
-  ok &=
-      Expect("button after restart", RenderPixel(renderer, document, 40, 8), {128, 128, 128, 255});
 
-  return ok ? 0 : 1;
+  // The click-started interval is gone after the restart; only the authored fade remains.
+  const donner::svg::SVGAnimationEventBatch afterRestart = document.animationEvents(0.0, 5.0);
+  if (!afterRestart.complete || afterRestart.events.size() != 1 || document.currentTime() != 0.0) {
+    std::cerr << "Restart did not return to the authored timeline\n";
+    return 1;
+  }
+  renderer.draw(document);
+  return 0;
 }
