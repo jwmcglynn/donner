@@ -78,8 +78,8 @@ public:
      * `static constexpr bool IsExperimental = true` are parsed as their concrete type; when false,
      * they are treated as unknown elements.
      *
-     * The SVG animation elements (`animate`, `animateTransform`, and `set`) are currently
-     * experimental and require this option. Text and filters are enabled independently.
+     * No element type is currently experimental; the SVG animation elements are parsed by default.
+     * Text and filters are enabled independently.
      */
     bool enableExperimental = false;
 

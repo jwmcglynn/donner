@@ -101,13 +101,21 @@ budget. They cannot introduce another layer of SVGZ compression or gain external
 
 Donner performs no general network fetch by itself. An application grants external-resource
 authority by installing `ResourceLoaderInterface` on a document. No loader means no external
-resource access, and secure processing modes refuse image and font loads.
+resource access, and secure processing modes refuse image and font loads. Embedded data URIs are
+self-contained and need no loader.
 
 The loader is an application security boundary. It must enforce URL policy, credentials, redirects,
 protocols, response limits, decompression limits, caching, cancellation, and tenant or origin scope
 before returning bytes. Donner's CLI uses a descriptor-relative loader confined to the input
 document's directory; it rejects absolute paths, parent traversal, symlinks, non-regular files, and
 oversized resources.
+
+A `<use>` that references an external document applies the host's supported computed styles to
+each occurrence. Explicit child declarations and `context-fill`/`context-stroke` keep their own
+paint semantics, and ordinary inherited gradients keep the host resource identity while using the
+consuming shape's bounds. Inherited host patterns, markers, URL cursors, and URL-based masks,
+clips, or filters are refused at this boundary rather than resolving their IDs in the child
+document. Shadow stylesheet scoping and merging host `@font-face` catalogs are not supported.
 
 ### Images, fonts, and filters {#ThreatModelMedia}
 
