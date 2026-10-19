@@ -213,11 +213,14 @@ def _run_check(args):
         return 1
     selection = {name: value == "true" for name, value in _pairs(args.selection,
                                                                  "--selection").items()}
-    selection["always"] = True
-    unknown = set(selection) - set(CONDITIONS) - set(ROUTES) - {"fallback"}
-    if unknown:
-        print("unknown selection %s" % sorted(unknown), file=sys.stderr)
+    # Every selection must be passed, even empty: a missing one would read as false and silently
+    # drop the classes or the lane it gates.
+    expected = (set(CONDITIONS) | set(ROUTES) | {"fallback"}) - {"always"}
+    if set(selection) != expected:
+        print("selections must be exactly %s, got %s" % (sorted(expected), sorted(selection)),
+              file=sys.stderr)
         return 2
+    selection["always"] = True
     receipts = _load_receipts(args.receipts)
     problems, excepted = check(manifest, receipts, selection)
     for line in excepted:

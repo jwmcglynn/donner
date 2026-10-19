@@ -194,10 +194,15 @@ class CoverageContractTest(unittest.TestCase):
                 path.parent.mkdir()
                 path.write_text(json.dumps(receipt), encoding="utf-8")
             manifest = runfiles.Create().Rlocation("donner/tools/ci/coverage_contract.json")
-            arguments = ["check", "--manifest", manifest, "--receipts", directory,
-                         "--selection", "fallback=true", "--selection", "self_hosted_macos=true"]
+            selections = ["fallback=true", "browser_affected=", "hosted_parity_affected=",
+                          "hosted_parity_tests_affected=", "self_hosted_macos=true"]
+            arguments = ["check", "--manifest", manifest, "--receipts", directory]
+            for selection in selections:
+                arguments += ["--selection", selection]
             self.assertEqual(0, contract.main(arguments))
+            # An unknown or a missing selection is an error, never a silent false.
             self.assertEqual(2, contract.main(arguments + ["--selection", "typo=true"]))
+            self.assertEqual(2, contract.main(arguments[:-2]))
             (root / "coverage-receipt-linux" / "coverage-receipt.json").unlink()
             self.assertEqual(1, contract.main(arguments))
 

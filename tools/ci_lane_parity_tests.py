@@ -2305,6 +2305,13 @@ class CiLaneParityTest(unittest.TestCase):
         jobs = _jobs(self.workflows["main.yml"])
         self.assertLessEqual({job for job, _ in declared},
                              set(_needs(jobs["coverage-contract"])))
+        # The check step passes one selection per condition and route the tool requires.
+        check = next(step for step in jobs["coverage-contract"]["steps"]
+                     if _step_name(step) == "Compare receipts with the coverage contract")
+        self.assertEqual(
+            sorted(re.findall(r'--selection "([a-z_]+)=', check["run"])),
+            ["browser_affected", "fallback", "hosted_parity_affected",
+             "hosted_parity_tests_affected", "self_hosted_macos"])
 
     def test_every_allowlist_entry_has_a_reason(self):
         for name, (_, reason) in STEP_OUTPUTS.items():

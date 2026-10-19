@@ -610,7 +610,8 @@ jobs:
             echo "hosted_parity_affected=true" >> "$GITHUB_OUTPUT"
           fi
           # The hosted Linux job reruns only the tagged tests (the Geode editor lane is macOS
-          # only), so it has its own selection. Fail closed as above.
+          # only), so it has its own selection. Fail closed as above; if the query fails, the
+          # step may find no tagged test and the coverage contract then reports it.
           if tagged_targets="$(
             cd "$head_dir"
             bazelisk query --keep_going \
