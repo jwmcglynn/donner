@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -20,8 +21,10 @@ class ExclusionSelectionTest(unittest.TestCase):
             root = Path(temporary)
             capture = root / "commands.jsonl"
             bazel = root / "fake bazel"
-            bazel.write_text(
-                "#!/usr/bin/env python3\n"
+            # The fixture runs on this test's own interpreter; a `#!/usr/bin/env python3`
+            # shebang would resolve a host interpreter that remote executors need not have.
+            fixture = root / "fake bazel.py"
+            fixture.write_text(
                 "import json, os, sys\n"
                 "with open(os.environ['CAPTURE'], 'a', encoding='utf-8') as output:\n"
                 "    output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
@@ -30,6 +33,11 @@ class ExclusionSelectionTest(unittest.TestCase):
                 "    print('query diagnostic', file=sys.stderr)\n"
                 "    sys.exit(int(os.environ['QUERY_STATUS']))\n"
                 "sys.exit(int(os.environ['TEST_STATUS']))\n",
+                encoding="utf-8",
+            )
+            bazel.write_text(
+                '#!/bin/sh\nexec %s %s "$@"\n'
+                % (shlex.quote(sys.executable), shlex.quote(str(fixture))),
                 encoding="utf-8",
             )
             bazel.chmod(0o755)
