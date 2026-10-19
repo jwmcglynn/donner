@@ -2153,9 +2153,9 @@ for (
       // The frame that presented the result must be an event frame. With the worker's animation
       // frames withheld, the only other frames are the driven ticks above, and one of those can
       // still be in flight when the render starts; a tick carrying the result would hide a
-      // completion wake that no longer requests a frame. That in-flight tick runs on the app
-      // thread's next turn, well before a sample raster can finish, so on a correct product it
-      // finds no result to carry; a failure here names the presenting frame in its message.
+      // completion wake that no longer requests a frame. That in-flight tick normally runs on the
+      // app thread's next turn, well before a sample raster can finish, so a failure here is
+      // either a wake regression or that rare overlap; its message names the presenting frame.
       expect(
         (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame,
         `the completed result was presented by a ${
