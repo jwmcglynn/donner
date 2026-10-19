@@ -3233,6 +3233,109 @@ ApplySourceEditResult XMLDocument::removeNode(XMLNode node) {
   return result;
 }
 
+namespace internal {
+
+/// True when \p entry can be the insertion that produced source version \p expectedVersion.
+bool IsRevertibleInsertion(const XMLDocument& document, const XMLDocument::NodeInsertion& entry,
+                           std::uint64_t expectedVersion, std::size_t remainingBytes) {
+  const XMLSourceDelta& delta = entry.insertion;
+  return IsDocumentNode(document, entry.node) && entry.node.type() != XMLNode::Type::Document &&
+         entry.node.parentElement().has_value() && delta.removedLength == 0 &&
+         delta.insertedLength != 0 && delta.offset <= document.source().size() &&
+         delta.insertedLength <= remainingBytes && delta.sourceVersion == expectedVersion;
+}
+
+/// Move earlier insertion regions to account for a later pure insertion. An insertion at an
+/// earlier region's start lands before it; one strictly inside it grows it.
+void ShiftEarlierInsertionRegions(std::vector<SourceEditRange>& regions,
+                                  const XMLSourceDelta& later) {
+  for (SourceEditRange& earlier : regions) {
+    if (later.offset <= earlier.start) {
+      earlier.start += later.insertedLength;
+      earlier.end += later.insertedLength;
+    } else if (later.offset < earlier.end) {
+      earlier.end += later.insertedLength;
+    }
+  }
+}
+
+/// Where each insertion's bytes sit in the current source, or nullopt when \p insertions are not
+/// the latest consecutive pure insertions.
+std::optional<std::vector<SourceEditRange>> LatestInsertionRegions(
+    const XMLDocument& document, std::span<const XMLDocument::NodeInsertion> insertions,
+    std::uint64_t currentVersion) {
+  const std::size_t count = insertions.size();
+  if (count - 1 > currentVersion) {
+    return std::nullopt;
+  }
+  std::vector<SourceEditRange> regions;
+  regions.reserve(count);
+  std::size_t insertedTotal = 0;
+  for (std::size_t i = 0; i < count; ++i) {
+    const XMLDocument::NodeInsertion& entry = insertions[i];
+    if (!IsRevertibleInsertion(document, entry, currentVersion - (count - 1 - i),
+                               document.source().size() - insertedTotal)) {
+      return std::nullopt;
+    }
+    insertedTotal += entry.insertion.insertedLength;
+    ShiftEarlierInsertionRegions(regions, entry.insertion);
+    regions.push_back(
+        SourceEditRange{.start = entry.insertion.offset,
+                        .end = entry.insertion.offset + entry.insertion.insertedLength});
+  }
+  return regions;
+}
+
+/// True when every inserted node's source range lies within the bytes its insertion added.
+bool InsertedNodesLieInRegions(std::string_view source,
+                               std::span<const XMLDocument::NodeInsertion> insertions,
+                               const std::vector<SourceEditRange>& regions) {
+  for (std::size_t i = 0; i < insertions.size(); ++i) {
+    const std::optional<SourceRange> location = insertions[i].node.getNodeLocation();
+    const std::optional<SourceEditRange> nodeRange =
+        location.has_value() ? ResolveEditRange(*location, source) : std::nullopt;
+    if (!nodeRange.has_value() || regions[i].end > source.size() ||
+        nodeRange->start < regions[i].start || nodeRange->end > regions[i].end) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Remove one insertion's bytes and detach its node, appending the edit to \p result.
+bool RevertNodeInsertion(XMLDocument& document, XMLSourceStore& store,
+                         const XMLDocument::NodeInsertion& entry, ApplySourceEditResult& result) {
+  XMLNode node = entry.node;
+  std::optional<XMLSourceDelta> delta =
+      store.replace(entry.insertion.offset, entry.insertion.insertedLength, std::string_view());
+  if (!delta.has_value()) {
+    result.diagnostic = MakeEditDiagnostic("Invalid source replacement for insertion revert",
+                                           MakeNodeDiagnosticRange(node));
+    return false;
+  }
+
+  ApplySourceEditResult step;
+  step.scope = ReparseScope::ElementSubtree;
+  step.sourceDeltas.push_back(*delta);
+  ClearSourceLocationsRecursive(node);
+  node.remove();
+  step.mutations.push_back(XMLMutation{
+      .kind = XMLMutation::Kind::NodeRemoved,
+      .node = node,
+      .attributeName = XMLQualifiedName(""),
+      .value = std::nullopt,
+      .scope = ReparseScope::ElementSubtree,
+  });
+  NoteConstructedSourceChange(document, step, node);
+  result.applied = true;
+  result.sourceDeltas.insert(result.sourceDeltas.end(), step.sourceDeltas.begin(),
+                             step.sourceDeltas.end());
+  result.mutations.insert(result.mutations.end(), step.mutations.begin(), step.mutations.end());
+  return true;
+}
+
+}  // namespace internal
+
 ApplySourceEditResult XMLDocument::revertNodeInsertions(std::span<const NodeInsertion> insertions) {
   ApplySourceEditResult result;
   result.scope = ReparseScope::ElementSubtree;
@@ -3248,87 +3351,25 @@ ApplySourceEditResult XMLDocument::revertNodeInsertions(std::span<const NodeInse
     return result;
   }
 
-  const std::size_t count = insertions.size();
-  const std::uint64_t currentVersion = store->sourceVersion();
-  const std::size_t sourceSize = source().size();
-  if (count - 1 > currentVersion) {
+  const std::optional<std::vector<SourceEditRange>> regions =
+      LatestInsertionRegions(*this, insertions, store->sourceVersion());
+  if (!regions.has_value()) {
     result.diagnostic = MakeEditDiagnostic(
         "Cannot revert node insertions that are not the latest source edits", diagnosticRange);
     return result;
   }
-
-  // Track where each insertion's bytes sit in the current source once later insertions have
-  // shifted or grown them. A later pure insertion at an earlier region's start lands before it.
-  std::vector<SourceEditRange> regions;
-  regions.reserve(count);
-  std::size_t insertedTotal = 0;
-  for (std::size_t i = 0; i < count; ++i) {
-    const NodeInsertion& entry = insertions[i];
-    const XMLSourceDelta& delta = entry.insertion;
-    if (!IsDocumentNode(*this, entry.node) || entry.node.type() == XMLNode::Type::Document ||
-        !entry.node.parentElement().has_value() || delta.removedLength != 0 ||
-        delta.insertedLength == 0 || delta.offset > sourceSize ||
-        delta.insertedLength > sourceSize - insertedTotal ||
-        delta.sourceVersion != currentVersion - (count - 1 - i)) {
-      result.diagnostic = MakeEditDiagnostic(
-          "Cannot revert node insertions that are not the latest source edits", diagnosticRange);
-      return result;
-    }
-    insertedTotal += delta.insertedLength;
-    for (SourceEditRange& earlier : regions) {
-      if (delta.offset <= earlier.start) {
-        earlier.start += delta.insertedLength;
-        earlier.end += delta.insertedLength;
-      } else if (delta.offset < earlier.end) {
-        earlier.end += delta.insertedLength;
-      }
-    }
-    regions.push_back(
-        SourceEditRange{.start = delta.offset, .end = delta.offset + delta.insertedLength});
-  }
-
-  for (std::size_t i = 0; i < count; ++i) {
-    const std::optional<SourceRange> location = insertions[i].node.getNodeLocation();
-    const std::optional<SourceEditRange> nodeRange =
-        location.has_value() ? ResolveEditRange(*location, source()) : std::nullopt;
-    if (!nodeRange.has_value() || regions[i].end > sourceSize ||
-        nodeRange->start < regions[i].start || nodeRange->end > regions[i].end) {
-      result.diagnostic = MakeEditDiagnostic(
-          "Cannot revert a node that lies outside its source insertion", diagnosticRange);
-      return result;
-    }
+  if (!InsertedNodesLieInRegions(source(), insertions, *regions)) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Cannot revert a node that lies outside its source insertion", diagnosticRange);
+    return result;
   }
 
   // Newest first: each revert returns the source to the state its insertion was applied to, so
   // every older delta's offset is valid again when its turn comes.
-  for (std::size_t i = count; i-- > 0;) {
-    XMLNode node = insertions[i].node;
-    const XMLSourceDelta& insertion = insertions[i].insertion;
-    std::optional<XMLSourceDelta> delta =
-        store->replace(insertion.offset, insertion.insertedLength, std::string_view());
-    if (!delta.has_value()) {
-      result.diagnostic = MakeEditDiagnostic("Invalid source replacement for insertion revert",
-                                             MakeNodeDiagnosticRange(node));
-      return result;
+  for (std::size_t i = insertions.size(); i-- > 0;) {
+    if (!RevertNodeInsertion(*this, *store, insertions[i], result)) {
+      break;
     }
-
-    ApplySourceEditResult step;
-    step.scope = ReparseScope::ElementSubtree;
-    step.sourceDeltas.push_back(*delta);
-    ClearSourceLocationsRecursive(node);
-    node.remove();
-    step.mutations.push_back(XMLMutation{
-        .kind = XMLMutation::Kind::NodeRemoved,
-        .node = node,
-        .attributeName = XMLQualifiedName(""),
-        .value = std::nullopt,
-        .scope = ReparseScope::ElementSubtree,
-    });
-    NoteConstructedSourceChange(*this, step, node);
-    result.applied = true;
-    result.sourceDeltas.insert(result.sourceDeltas.end(), step.sourceDeltas.begin(),
-                               step.sourceDeltas.end());
-    result.mutations.insert(result.mutations.end(), step.mutations.begin(), step.mutations.end());
   }
   return result;
 }
