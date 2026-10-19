@@ -49,8 +49,9 @@ class CompositorDebugPanel {
 public:
   /// Create a diagnostic panel using the supplied GPU device when present.
   /// @param geodeDevice Shared device for retaining GPU thumbnail resources, or null.
-  explicit CompositorDebugPanel(
-      std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
+  /// @param fileAccess Host filesystem authority for diagnostic exports.
+  explicit CompositorDebugPanel(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr,
+                                CompositorTelemetryFileAccess fileAccess = {});
   ~CompositorDebugPanel();
 
   CompositorDebugPanel(const CompositorDebugPanel&) = delete;
@@ -95,6 +96,11 @@ public:
 
 private:
   friend struct CompositorDebugPanelTestAccess;
+
+  /// Execute the same host-authorized export action as the diagnostic Save button.
+  bool saveHeuristicTelemetry();
+
+  CompositorTelemetryFileAccess telemetryFileAccess_;
 
 #ifdef DONNER_EDITOR_WGPU
   using ThumbnailTextureHandle = ImTextureID;
