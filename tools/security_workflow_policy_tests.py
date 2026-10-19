@@ -1646,15 +1646,31 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn("restore-keys", writer)
         self.assertNotIn("secrets.", action)
 
+    def _restoring_jobs(self):
+        """(where, steps) for every workflow job that uses the action cache."""
+        action_ref = "./.github/actions/cache-bazel-actions"
+        for path, text in sorted(self.supply_chain_files.items()):
+            if not path.startswith(".github/workflows/"):
+                continue
+            for name, job in _jobs(text).items():
+                steps = _steps(job)
+                if any(_step_action(step, 8) == action_ref for step in steps):
+                    yield "%s:%s" % (path, name), steps
+
     def test_bounded_save_is_the_only_writer_of_action_cache_snapshots(self):
         # Every restore reads the newest snapshot under the key prefix, so the bound holds for
-        # restores only while the bounded save is the one step that can write that prefix or
-        # the disk cache path.
+        # restores only while the bounded save is the one writer of that key series and the one
+        # cache step on the disk cache in a job that restores it.
         action_path = ".github/actions/cache-bazel-actions/action.yml"
         for path, text in sorted(self.supply_chain_files.items()):
             if path != action_path:
                 self.assertNotIn("bazel-actions-", text, path)
                 self.assertNotIn(".cache/bazel-disk", text, path)
+        # setup-bazel's own disk cache saves the same directory under its own keys.
+        for where, steps in self._restoring_jobs():
+            setups = [step for step in steps if _step_action(step, 8) == "bazel-contrib/setup-bazel"]
+            self.assertEqual([], [step for step in setups if _with_key(step, "disk-cache", 8)],
+                             where)
         action = self.supply_chain_files[action_path]
         savers = [step for step in _steps(action, indent=4)
                   if _step_action(step, 6) in ("actions/cache", "actions/cache/save")]

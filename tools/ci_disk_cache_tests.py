@@ -71,6 +71,7 @@ class CiDiskCacheTests(unittest.TestCase):
     def _posix_tar_bytes(self) -> int:
         """Size of the posix-format archive actions/cache would write for the cache directory."""
         gnu = shutil.which("gtar") or shutil.which("tar")
+        self.assertIsNotNone(gnu, "tar is required to measure a real archive")
         version = subprocess.run([gnu, "--version"], capture_output=True, text=True,
                                  timeout=test_timing.STALL_GUARD_SECONDS).stdout
         # The hosted runners save with GNU tar --posix (Homebrew gtar on macOS), which stores no
