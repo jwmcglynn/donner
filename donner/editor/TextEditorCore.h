@@ -202,7 +202,8 @@ public:
   /// "load a different document" flows. Pass `preserveScroll=true` when
   /// the replacement is a small in-place edit (e.g. canvas→text
   /// writeback after a transform drag) so the user's scroll position
-  /// isn't yanked out from under them.
+  /// isn't yanked out from under them. The cursor and selection are kept
+  /// where they still fit and otherwise clamped into the new text.
   void setText(std::string_view text, bool preserveScroll = false);
 
   /**
@@ -210,7 +211,8 @@ public:
    *
    * This mutates the visible buffer and recolorizes the affected region, but it does not append an
    * undo record, does not create a pending \ref SourceEditIntent, and leaves \ref isTextChanged
-   * false. Use this for XML-owned canvas writebacks that are being mirrored into the source pane.
+   * false. Existing text undo history is cleared, because its records address the previous text.
+   * Use this for XML-owned canvas writebacks that are being mirrored into the source pane.
    *
    * @param offset Byte offset in the current buffer.
    * @param removedLength Number of bytes to remove at \p offset.

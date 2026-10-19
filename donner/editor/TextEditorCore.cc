@@ -236,7 +236,13 @@ Coordinates TextEditorCore::getActualCursorCoordinates() const {
 }
 
 Coordinates TextEditorCore::sanitizeCoordinates(const Coordinates& value) const {
-  int line = std::max(0, value.line);
+  // A position before the first line clamps to the buffer start, mirroring how a position past
+  // the last line clamps to the buffer end; keeping its column would order it after (0, 0).
+  if (value.line < 0) {
+    return Coordinates(0, 0);
+  }
+
+  int line = value.line;
   int column = value.column;
 
   // Handle out of bounds line numbers
@@ -1637,6 +1643,20 @@ void TextEditorCore::setText(std::string_view text, bool preserveScroll) {
 
   text_.setText(text);
 
+  // The cursor and selection still address the previous buffer. Clamp them into the new one so a
+  // later edit of the selection never hands the buffer a coordinate past its text.
+  const EditorState previousState = state_;
+  state_.cursorPosition = sanitizeCoordinates(state_.cursorPosition);
+  state_.selectionStart = sanitizeCoordinates(state_.selectionStart);
+  state_.selectionEnd = sanitizeCoordinates(state_.selectionEnd);
+  interactiveStart_ = sanitizeCoordinates(interactiveStart_);
+  interactiveEnd_ = sanitizeCoordinates(interactiveEnd_);
+  if (state_.cursorPosition != previousState.cursorPosition ||
+      state_.selectionStart != previousState.selectionStart ||
+      state_.selectionEnd != previousState.selectionEnd) {
+    cursorPositionChanged_ = true;
+  }
+
   // Update editor state
   textChanged_ = true;
   // Only request scroll-to-top for "loaded a different document" calls.
@@ -1690,6 +1710,10 @@ void TextEditorCore::applyExternalSourceEdit(std::size_t offset, std::size_t rem
   textChanged_ = false;
   changedLines_.clear();
   pendingSourceEditIntents_.clear();
+  // Text undo records hold coordinates in the text before this edit; replaying one afterwards
+  // would delete or insert at positions the new text may not have. Drop them, as setText does.
+  undoBuffer_.clear();
+  undoIndex_ = 0;
 }
 
 // ---------------------------------------------------------------------------
