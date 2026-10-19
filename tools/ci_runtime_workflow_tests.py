@@ -1,12 +1,8 @@
 """Pins the self-hosted CI runtime boundaries that keep full runs viable."""
 
-import gzip
-import hashlib
-import json
 import os
 from pathlib import Path
 import re
-import struct
 import subprocess
 import sys
 import tempfile
@@ -40,7 +36,21 @@ RENDERER_PAYLOAD_CEILINGS = {
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
-STEP_AFTER_SIZE_CHECK = "- name: Prove the package's resolved module graph"
+# Each Editor WASM build step that runs Bazel or stages an artifact, in workflow order, with the one
+# command it runs. The commands themselves are pinned by //tools/ci:editor_wasm_lane_tests and
+# //tools/ci:editor_wasm_stage_tests.
+EDITOR_WASM_SCRIPT_STEPS = (
+    ("Prefetch Editor WASM dependencies", "tools/ci/editor_wasm_lane.sh prefetch"),
+    ("Retry Editor WASM dependency prefetch", "tools/ci/editor_wasm_lane.sh prefetch"),
+    ("Build and size-check Geode editor Wasm package", "tools/ci/editor_wasm_lane.sh build"),
+    ("Prove the package's resolved module graph",
+     'tools/ci/editor_wasm_lane.sh prove-lockfile "$RUNNER_TEMP/editor-wasm-module.lock"'),
+    ("Stage package for handoff", "python3 tools/ci/editor_wasm_stage.py package"),
+    ("Link the browser GPU bridge", "tools/ci/editor_wasm_lane.sh link-bridge"),
+    ("Stage immutable Geode deployment candidate",
+     "python3 tools/ci/editor_wasm_stage.py candidate"),
+    ("Record deployment candidate digest", "python3 tools/ci/editor_wasm_stage.py record-digest"),
+)
 def _repository_text(path):
     resolver = runfiles.Create()
     resolved = resolver.Rlocation("donner/%s" % path)
@@ -81,24 +91,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.fixture_bin = cls.executables.path
         cls.executables.write_python3()
         cls.executables.write("bash", '#!/bin/sh\nexec /bin/bash "$@"\n')
-        (cls.fixture_bin / "shasum_fixture.py").write_text(
-            "import hashlib, os, sys, time\n"
-            "time.sleep(float(os.environ['FIXTURE_HASH_STARTUP_SECONDS']))\n"
-            "with open(os.path.join(os.environ['FIXTURE_ROOT'], 'hash-starts'), 'a') as starts:\n"
-            "    starts.write(str(len(sys.argv) - 3) + '\\n')\n"
-            "assert sys.argv[1:3] == ['-a', '256']\n"
-            "for name in sys.argv[3:]:\n"
-            "    with open(name, 'rb') as stream:\n"
-            "        digest = hashlib.sha256(stream.read()).hexdigest()\n"
-            "    print(f'{digest}  {name}')\n",
-            encoding="utf-8",
-        )
-        cls.executables.write_python_entry("shasum", cls.fixture_bin / "shasum_fixture.py")
         cls.bazelrc = _repository_text(".bazelrc")
         cls.main = _repository_text(".github/workflows/main.yml")
         cls.cmake = _repository_text(".github/workflows/cmake.yml")
         cls.coverage = _repository_text(".github/workflows/coverage.yml")
         cls.editor_wasm = _repository_text(".github/workflows/editor_wasm.yml")
+        cls.editor_wasm_lane = _repository_text("tools/ci/editor_wasm_lane.sh")
         cls.lint = _repository_text(".github/workflows/lint.yml")
         cls.coverage_script = _repository_text("tools/coverage.sh")
         cls.apt_install = _repository_text(".github/actions/apt-install/action.yml")
@@ -1241,21 +1239,94 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     ),
                 )
 
+    def _editor_wasm_step_runs(self, workflow):
+        """Each Editor WASM build step's name and its `run:` lines, in workflow order."""
+        build_job = workflow.split("\n  build:\n", 1)[1]
+        steps = re.split(r"^      - (?=id: |name: )", build_job, flags=re.MULTILINE)[1:]
+        found = []
+        for step in steps:
+            name = re.search(r"^(?:        )?name: (.*)$", step, re.MULTILINE)
+            found.append((name.group(1) if name else None,
+                          re.findall(r"^        run: (.*)$", step, re.MULTILINE)))
+        return found
+
+    def test_editor_wasm_steps_each_run_one_tested_script_call(self):
+        """Each Bazel or staging step is one call of a tested script, in the original order."""
+        runs = {name: commands for name, commands in self._editor_wasm_step_runs(self.editor_wasm)}
+        names = [name for name, _ in self._editor_wasm_step_runs(self.editor_wasm)]
+        for name, command in EDITOR_WASM_SCRIPT_STEPS:
+            with self.subTest(step=name):
+                self.assertEqual(runs.get(name), [command])
+        self.assertEqual([name for name in names if name in dict(EDITOR_WASM_SCRIPT_STEPS)],
+                         [name for name, _ in EDITOR_WASM_SCRIPT_STEPS])
+        # Every other Bazel command of the job runs in tools/run-browser-ci.sh.
+        self.assertNotRegex(self.editor_wasm, r"bazelisk (?:fetch|build|test|query|cquery|run)\b")
+        # The handoff step resolves the package label the candidate's provenance records.
+        self.assertIn(
+            "          PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}\n"
+            "        run: python3 tools/ci/editor_wasm_stage.py candidate\n", self.editor_wasm)
+        # The artifact digest reaches the summary through the environment, not the script text.
+        self.assertIn(
+            "          ARTIFACT_DIGEST: ${{ steps.upload-candidate.outputs.artifact-digest }}\n"
+            "        run: python3 tools/ci/editor_wasm_stage.py record-digest\n", self.editor_wasm)
+
+    def test_editor_wasm_step_binding_detects_inline_or_reordered_steps(self):
+        workflow = self.editor_wasm
+        prove = dict(EDITOR_WASM_SCRIPT_STEPS)["Prove the package's resolved module graph"]
+        mutations = {
+            "inline command": workflow.replace(
+                "run: tools/ci/editor_wasm_lane.sh build",
+                "run: bazelisk test //tools/ci:editor_wasm_audits", 1),
+            "second command": workflow.replace(
+                "        run: tools/ci/editor_wasm_lane.sh link-bridge\n",
+                "        run: tools/ci/editor_wasm_lane.sh link-bridge\n"
+                "        run: tools/ci/editor_wasm_lane.sh prefetch\n", 1),
+            "proof and staging swapped": workflow.replace(
+                "run: " + prove, "run: python3 tools/ci/editor_wasm_stage.py package", 1).replace(
+                "id: stage-package\n        run: python3 tools/ci/editor_wasm_stage.py package",
+                "id: stage-package\n        run: " + prove, 1),
+        }
+        for name, changed in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(changed, workflow)
+                runs = self._editor_wasm_step_runs(changed)
+                commands = dict(runs)
+                self.assertNotEqual(
+                    [(step, commands.get(step)) for step, _ in EDITOR_WASM_SCRIPT_STEPS],
+                    [(step, [command]) for step, command in EDITOR_WASM_SCRIPT_STEPS])
+
+    def _lane_function(self, name, lane=None):
+        """The body of one subcommand's function in tools/ci/editor_wasm_lane.sh, continuation
+        lines joined. The opening and closing markers are both asserted, so a renamed function
+        cannot widen the body to the rest of the script."""
+        lane = self.editor_wasm_lane if lane is None else lane
+        marker = "\n%s() {\n" % name
+        self.assertEqual(1, lane.count(marker), "lane function %s not found" % name)
+        rest = lane.split(marker, 1)[1]
+        self.assertIn("\n}\n", rest)
+        return re.sub(r"\\\n\s*", "", rest.split("\n}\n", 1)[0])
+
     def test_editor_wasm_prefetch_retries_before_single_attempt_tests(self):
         """Wasm dependency fetches retry without retrying build or test failures."""
         workflow = self.editor_wasm
         self.assertIn("- id: editor-wasm-prefetch", workflow)
         prefetch = workflow.split("- id: editor-wasm-prefetch", 1)[1].split(SIZE_CHECK_STEP, 1)[0]
-        build = self._size_check_step(workflow)
-
-        self.assertEqual(8, prefetch.count("bazelisk fetch"))
+        self.assertEqual(2, prefetch.count("run: tools/ci/editor_wasm_lane.sh prefetch\n"))
         self.assertEqual(1, prefetch.count("continue-on-error: true"))
         self.assertEqual(
             1,
             prefetch.count("if: steps.editor-wasm-prefetch.outcome == 'failure'"),
         )
+        fetch = self._lane_function("prefetch")
+        self.assertEqual(4, fetch.count("bazelisk fetch"))
+        self.assertNotRegex(fetch, r"bazelisk (?:build|test)")
+
+        size_check = self._step_body(workflow, SIZE_CHECK_STEP.removeprefix("- name: "))
+        self.assertNotIn("continue-on-error", size_check)
+        build = self._size_check_phase()
         self.assertEqual(4, build.count("bazelisk test"))
-        self.assertNotIn("continue-on-error", build)
+        self.assertNotIn("bazelisk fetch", build)
+        self.assertNotIn("||", build)
         self.assertIn("//tools/ci:editor_wasm_shipped_browser_audit", build)
         self.assertIn("//tools/ci:editor_wasm_size_tests", build)
 
@@ -1265,17 +1336,20 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         The module is built explicitly: it is incompatible without Browser selection, and an
         incompatible audit inside a test_suite is skipped rather than failed.
         """
-        self._assert_editor_wasm_browser_bridge_link(self.editor_wasm)
+        self._assert_editor_wasm_browser_bridge_link(self.editor_wasm, self.editor_wasm_lane)
 
-    def _assert_editor_wasm_browser_bridge_link(self, workflow):
+    def _assert_editor_wasm_browser_bridge_link(self, workflow, lane):
         build_job = workflow.split("\n  build:\n", 1)[1].split("\n  test:\n", 1)[0]
-        link = self._step_body(build_job, "Link the browser GPU bridge")
+        step = self._step_body(build_job, "Link the browser GPU bridge")
+        self.assertIn("        run: tools/ci/editor_wasm_lane.sh link-bridge\n", step)
+        self.assertNotIn("continue-on-error", step)
+        link = self._lane_function("link_bridge", lane)
         build = link.split("bazelisk build --config=wasm-geode", 1)[1].split("bazelisk test", 1)[0]
         self.assertIn("//tools/ci:browser_bridge_link_probes", build)
         self.assertIn("//tools/ci:geode_wasm_browser_module", build)
         self.assertIn("bazelisk test --config=wasm-geode", link)
         self.assertIn("//tools/ci:geode_wasm_browser_default_audit", link)
-        self.assertNotIn("continue-on-error", link)
+        self.assertNotIn("||", link)
         module = 'name = "geode_wasm_browser_module"'
         self.assertIn(module, self.ci_target_definitions)
         definition = self.ci_target_definitions.split(module, 1)[1].split("\n)", 1)[0]
@@ -1283,38 +1357,41 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_browser_bridge_step_stays_strict_with_later_evidence_recovery(self):
         workflow = self.editor_wasm
-        link = self._step_body(workflow, "Link the browser GPU bridge")
+        lane = self.editor_wasm_lane
+        step = self._step_body(workflow, "Link the browser GPU bridge")
         self.assertIn("continue-on-error: true", workflow)
-        self.assertNotIn("continue-on-error", link)
-        self._assert_editor_wasm_browser_bridge_link(workflow)
-        for defect in ("continue-on-error", "missing-module", "missing-audit"):
+        self.assertNotIn("continue-on-error", step)
+        self._assert_editor_wasm_browser_bridge_link(workflow, lane)
+        link = lane.split("\nlink_bridge() {\n", 1)[1].split("\n}\n", 1)[0]
+        for defect in ("continue-on-error", "missing-module", "missing-audit", "masked-failure"):
             with self.subTest(defect=defect):
+                changed_workflow, changed_lane = workflow, lane
                 if defect == "continue-on-error":
-                    changed = "        continue-on-error: true\n" + link
+                    changed_workflow = workflow.replace(
+                        step, "        continue-on-error: true\n" + step, 1)
+                elif defect == "masked-failure":
+                    changed_lane = lane.replace(
+                        link, link.replace("//tools/ci:geode_wasm_browser_default_audit",
+                                           "//tools/ci:geode_wasm_browser_default_audit || true"),
+                        1)
                 else:
                     target = (
                         "//tools/ci:geode_wasm_browser_module" if defect == "missing-module"
                         else "//tools/ci:geode_wasm_browser_default_audit"
                     )
-                    changed = link.replace(target, "//tools/ci:unrelated_target")
-                    # A later mention cannot satisfy the owning link step's contract.
-                    changed_workflow = workflow.replace(link, changed, 1)
-                    changed_workflow += "\n# Later target mention: " + target + "\n"
-                if defect == "continue-on-error":
-                    changed_workflow = workflow.replace(link, changed, 1)
+                    # A later mention cannot satisfy the owning lane function's contract.
+                    changed_lane = lane.replace(
+                        link, link.replace(target, "//tools/ci:unrelated_target"), 1)
+                    changed_lane += "\n# Later target mention: " + target + "\n"
+                self.assertNotEqual((changed_workflow, changed_lane), (workflow, lane))
                 with self.assertRaises(AssertionError):
-                    self._assert_editor_wasm_browser_bridge_link(changed_workflow)
+                    self._assert_editor_wasm_browser_bridge_link(changed_workflow, changed_lane)
 
-    def _size_check_step(self, workflow):
-        """The workflow step that builds and size-checks the editor Wasm package.
-
-        Both markers are asserted: without the terminator a renamed following
-        step would silently widen this to the rest of the file, and every
-        step-scoped assertion built on it would pass vacuously.
-        """
-        self.assertIn(SIZE_CHECK_STEP, workflow)
-        self.assertIn(STEP_AFTER_SIZE_CHECK, workflow)
-        return workflow.split(SIZE_CHECK_STEP, 1)[1].split(STEP_AFTER_SIZE_CHECK, 1)[0]
+    def _size_check_phase(self):
+        """The lane commands the size-check step runs: its one call's `build` function."""
+        self.assertIn("        run: tools/ci/editor_wasm_lane.sh build\n", self._step_body(
+            self.editor_wasm, "Build and size-check Geode editor Wasm package"))
+        return self._lane_function("build")
 
     def test_editor_wasm_payload_ceilings_are_enforced(self):
         """The size test declares each enforced ceiling once, and CI cannot relax it."""
@@ -1323,9 +1400,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             ENFORCED_PAYLOAD_CEILINGS,
             "%s and ENFORCED_PAYLOAD_CEILINGS must change together" % PAYLOAD_SIZE_TEST,
         )
-        size_check_step = self._size_check_step(self.editor_wasm)
-        self.assertNotIn("--test_arg", size_check_step)
+        self.assertNotIn("--test_arg", self._size_check_phase())
+        self.assertNotIn("--test_arg", self.editor_wasm)
         self.assertEqual(0, self.editor_wasm.count("payload-budget-mode"))
+        self.assertEqual(0, self.editor_wasm_lane.count("payload-budget-mode"))
 
     def test_editor_wasm_payload_gate_detects_widened_or_repeated_ceilings(self):
         flag = "--max-wasm-raw-bytes"
@@ -1357,7 +1435,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_renderer_wasm_size_test_runs_in_the_size_check_step(self):
         """The Editor Wasm size-check step runs the suite that contains the renderer gate."""
-        step = self._size_check_step(self.editor_wasm)
+        step = self._size_check_phase()
         self.assertIn("--config=wasm-size", step)
         self.assertIn("//tools/ci:wasm_size_tests", step)
         suite_name = 'name = "wasm_size_tests"'
@@ -1367,172 +1445,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_editor_wasm_size_check_step_runs_the_gated_size_test(self):
         """The gate reads the ceilings of the target the workflow actually runs."""
-        step = self._size_check_step(self.editor_wasm)
+        step = self._size_check_phase()
         self.assertIn("//tools/ci:editor_wasm_size_tests", step)
         suite_name = 'name = "editor_wasm_size_tests"'
         self.assertIn(suite_name, self.ci_target_definitions)
         suite = self.ci_target_definitions.split(suite_name, 1)[1].split("\n)", 1)[0]
         self.assertIn(PAYLOAD_SIZE_TEST, suite)
-
-    def test_editor_wasm_handoff_resolves_artifact_and_provenance_from_metadata(self):
-        stage = self.editor_wasm.split("- name: Stage package for handoff", 1)[1].split(
-            "- name: Upload Geode package artifact", 1
-        )[0]
-        script = textwrap.dedent(stage.split("        run: |\n", 1)[1])
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            package = root / "package"
-            package.mkdir()
-            (package / "editor.wasm").write_bytes(b"package fixture")
-            bazel = root / "bazelisk"
-            bazel.write_text(
-                '#!/bin/sh\n'
-                'case "$1" in\n'
-                'query) printf "%s\\n" "//fixture:package" ;;\n'
-                'cquery) printf "%s\\n" "$PACKAGE_PATH" ;;\n'
-                '*) exit 31 ;;\n'
-                'esac\n'
-            )
-            bazel.chmod(0o755)
-            output = root / "output"
-            environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
-                               PACKAGE_PATH=str(package), RUNNER_TEMP=str(root),
-                               GITHUB_OUTPUT=str(output))
-            result = self._run_script("#!/bin/bash\n" + script, [], env=environment)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("package_target=//fixture:package\n", output.read_text())
-            staged = root / "editor-wasm-package-geode" / "editor.wasm"
-            self.assertEqual(staged.read_bytes(), b"package fixture")
-            environment["PACKAGE_PATH"] = str(package) + "\n" + str(package)
-            result = self._run_script("#!/bin/bash\n" + script, [], env=environment)
-            self.assertNotEqual(result.returncode, 0, "ambiguous artifact outputs must fail")
-        self.assertIn("PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}", self.editor_wasm)
-        self.assertIn('\\"targets\\":[\\"${PACKAGE_TARGET}\\"]', self.editor_wasm)
-
-    def _catalog_candidate_fixture(self, root):
-        package = root / "editor-wasm-package-geode"
-        (package / "fonts").mkdir(parents=True)
-        for name in ("donner_icon.svg", "editor-bootstrap.js", "editor.css", "editor.js",
-                     "enable-threads.js", "index.html", "catalog-fonts.js"):
-            (package / name).write_text(name)
-        (package / "editor.wasm").write_bytes(b"\0asm\1\0\0\0")
-        (package / "CatalogFontNotices.txt").write_text("SIL OPEN FONT LICENSE Version 1.1")
-        fonts = []
-        families = ("Bebas Neue", "Bitter", "Inter", "JetBrains Mono", "Lato", "Lora",
-                    "Montserrat", "Open Sans", "Oswald", "Pacifico", "Playfair Display",
-                    "Roboto Mono")
-        for index, family in enumerate(families):
-            payload = bytearray([index] * 64)
-            payload[:4] = b"wOF2"
-            struct.pack_into(">I", payload, 16, 128)
-            digest = hashlib.sha256(payload).hexdigest()
-            path = "fonts/%s.woff2" % digest
-            (package / path).write_bytes(payload)
-            fonts.append({"family": family, "sha256": digest, "path": path,
-                          "encoded_bytes": len(payload), "decoded_bytes": 128})
-        (package / "catalog-fonts.json").write_text(json.dumps({
-            "fonts": fonts, "encoded_bytes": 64 * len(fonts),
-        }))
-        wasm = root / "donner/editor/wasm"
-        (wasm / "tests").mkdir(parents=True)
-        (wasm / "tests/package-lock.json").write_text("{}")
-        # The proved MODULE.bazel.lock that the module-graph step snapshots into RUNNER_TEMP.
-        (root / "editor-wasm-module.lock").write_text('{"lockFileVersion": 26}\n')
-        (wasm / "catalog_package_integrity_test.py").write_text(_repository_text(
-            "donner/editor/wasm/catalog_package_integrity_test.py"))
-        return package
-
-    def _stage_catalog_candidate(self, root, hash_startup_delay=0, context=None):
-        body = self._step_body(self.editor_wasm, "Stage immutable Geode deployment candidate")
-        script = "#!/bin/bash\n" + textwrap.dedent(body.split("        run: |\n", 1)[1])
-        # The real staging job runs on macOS, where shasum is available. The
-        # workflow contract test also runs on Linux, so provide the same
-        # SHA-256 command from the fixture rather than relying on host tools.
-        return self._run_script(script, [], cwd=root, context=context, env={
-            **os.environ, "RUNNER_TEMP": str(root), "GITHUB_SHA": "a" * 40,
-            "GITHUB_RUN_ID": "12", "GITHUB_RUN_ATTEMPT": "2",
-            "PACKAGE_TARGET": "//fixture:package", "GITHUB_OUTPUT": str(root / "output"),
-            "PATH": os.environ["PATH"],
-            "FIXTURE_ROOT": str(root),
-            "FIXTURE_HASH_STARTUP_SECONDS": str(hash_startup_delay),
-        })
-
-    def test_editor_wasm_candidate_preserves_deferred_catalog_assets(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            package = self._catalog_candidate_fixture(root)
-            expected = {p.relative_to(package).as_posix(): p.read_bytes()
-                        for p in package.rglob("*") if p.is_file()}
-            result = self._stage_catalog_candidate(root)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            candidate = root / ("donner-editor-wasm-geode-" + "a" * 40)
-            site = {p.relative_to(candidate / "site").as_posix(): p.read_bytes()
-                    for p in (candidate / "site").rglob("*") if p.is_file()}
-            self.assertEqual(site, expected)
-            deploy = {p.relative_to(candidate / "deploy").as_posix(): p.read_bytes()
-                      for p in (candidate / "deploy").rglob("*") if p.is_file()}
-            self.assertEqual(gzip.decompress(deploy.pop("editor.wasm.gz")),
-                             expected.pop("editor.wasm"))
-            self.assertEqual(deploy, expected)
-            checksums = dict(line.split("  ", 1)[::-1]
-                             for line in (candidate / "SHA256SUMS").read_text().splitlines())
-            expected_checksums = {p.relative_to(candidate).as_posix():
-                                  hashlib.sha256(p.read_bytes()).hexdigest()
-                                  for directory in (candidate / "site", candidate / "deploy")
-                                  for p in directory.rglob("*") if p.is_file()}
-            self.assertEqual(checksums, expected_checksums)
-            provenance = json.loads((candidate / "provenance.json").read_text())
-            self.assertEqual(provenance["source_revision"], "a" * 40)
-            self.assertEqual(provenance["producer_run_id"], "12")
-            self.assertEqual(provenance["producer_attempt"], "2")
-            self.assertEqual(provenance["targets"], ["//fixture:package"])
-            # The candidate retains the proved module lock outside the served trees.
-            module_lock = (root / "editor-wasm-module.lock").read_bytes()
-            self.assertEqual((candidate / "MODULE.bazel.lock").read_bytes(), module_lock)
-            self.assertEqual(provenance["generated_lock_sha256"],
-                             hashlib.sha256(module_lock).hexdigest())
-            self.assertEqual(provenance["lockfile_sha256"],
-                             hashlib.sha256(b"{}").hexdigest())
-            self.assertNotIn("MODULE.bazel.lock", "".join(checksums))
-
-    def test_editor_wasm_candidate_bounds_checksum_startup_cost(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self._catalog_candidate_fixture(root)
-            result = self._stage_catalog_candidate(root, hash_startup_delay=0.25)
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-            candidate = root / ("donner-editor-wasm-geode-" + "a" * 40)
-            expected_paths = sorted(p.relative_to(candidate).as_posix()
-                                    for directory in (candidate / "site", candidate / "deploy")
-                                    for p in directory.rglob("*") if p.is_file())
-            manifest_paths = [line.split("  ", 1)[1]
-                              for line in (candidate / "SHA256SUMS").read_text().splitlines()]
-            self.assertEqual(expected_paths, manifest_paths)
-            starts = [int(line) for line in (root / "hash-starts").read_text().splitlines()]
-            # One process hashes both locks (npm and module), one hashes the whole manifest.
-            self.assertEqual([2, len(expected_paths)], starts)
-
-    def test_editor_wasm_candidate_rejects_incomplete_or_unexpected_assets(self):
-        for failure in ("corrupt-font", "extra-font", "extra-root-file", "missing-broker",
-                        "missing-module-lock"):
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                package = self._catalog_candidate_fixture(root)
-                if failure == "corrupt-font":
-                    next((package / "fonts").glob("*.woff2")).write_bytes(b"corrupt")
-                elif failure == "extra-font":
-                    (package / "fonts/extra.woff2").write_bytes(b"unexpected")
-                elif failure == "extra-root-file":
-                    (package / "unexpected.txt").write_text("unexpected")
-                elif failure == "missing-module-lock":
-                    (root / "editor-wasm-module.lock").unlink()
-                else:
-                    (package / "catalog-fonts.js").unlink()
-                result = self._stage_catalog_candidate(
-                    root, context=f"{self.id()} failure={failure}"
-                )
-                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertFalse((root / "output").exists())
 
     def _run_heartbeat_fixture(self, wrapper, log, env):
         return subprocess.run(

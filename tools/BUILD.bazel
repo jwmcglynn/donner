@@ -286,7 +286,6 @@ py_test(
         "//:github_action_definitions",
         "//donner/editor/tests:BUILD.bazel",
         "//donner/editor/tests:RunEditorWindowVulkanSurfaceTests.sh",
-        "//donner/editor/wasm:catalog_package_integrity_test.py",
         "//donner/editor/wasm:wasm_package_size_test_arguments",
         "//donner/editor/wasm/tests:BUILD.bazel",
         "//donner/editor/wasm/tests:browser-stall-diagnostics.mjs",
@@ -295,6 +294,7 @@ py_test(
         "//tools:ci_bazel_test.sh",
         "//tools:coverage.sh",
         "//tools/ci:BUILD.bazel",
+        "//tools/ci:editor_wasm_lane.sh",
     ],
     imports = ["."],
     deps = [
@@ -324,6 +324,8 @@ py_test(
         "//build_defs:rules.bzl",
         "//third_party:bazel/non_bcr_deps.bzl",
         "//tools/ci:BUILD.bazel",
+        "//tools/ci:editor_wasm_lane.sh",
+        "//tools/ci:editor_wasm_stage.py",
     ],
     deps = [
         ":test_timing",

@@ -122,70 +122,27 @@ jobs:
 
       # Repository downloads are the only retried part of this lane. Keeping
       # them separate prevents a compile or test failure from passing on retry.
+      # tools/ci/editor_wasm_lane.sh holds each Bazel phase's commands.
       - id: editor-wasm-prefetch
         name: Prefetch Editor WASM dependencies
         continue-on-error: true
-        run: |
-          bazelisk fetch \
-            //tools/ci:editor_wasm_audits
-          bazelisk fetch --config=wasm-size \
-            //tools/ci:wasm_size_tests
-          bazelisk fetch --config=editor-wasm \
-            //tools/ci:editor_wasm_size_tests
-          bazelisk fetch --config=wasm-geode \
-            //tools/ci:browser_bridge_link_probes //tools/ci:geode_wasm_browser_module
+        run: tools/ci/editor_wasm_lane.sh prefetch
 
       - name: Retry Editor WASM dependency prefetch
         if: steps.editor-wasm-prefetch.outcome == 'failure'
-        run: |
-          bazelisk fetch \
-            //tools/ci:editor_wasm_audits
-          bazelisk fetch --config=wasm-size \
-            //tools/ci:wasm_size_tests
-          bazelisk fetch --config=editor-wasm \
-            //tools/ci:editor_wasm_size_tests
-          bazelisk fetch --config=wasm-geode \
-            //tools/ci:browser_bridge_link_probes //tools/ci:geode_wasm_browser_module
+        run: tools/ci/editor_wasm_lane.sh prefetch
 
       - name: Build and size-check Geode editor Wasm package
-        run: |
-          bazelisk test --test_output=errors \
-            //tools/ci:editor_wasm_audits
-          bazelisk test --config=editor-wasm --test_output=errors \
-            //tools/ci:editor_wasm_shipped_browser_audit
-          bazelisk test --config=wasm-size --test_output=errors \
-            //tools/ci:wasm_size_tests
-          bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \
-            //tools/ci:editor_wasm_size_tests
+        run: tools/ci/editor_wasm_lane.sh build
 
-      # The repository ignores MODULE.bazel.lock, so the builds above resolved one in update mode.
-      # Rebuilding the package in error mode proves that generated lockfile is complete for the
-      # package configuration. Later steps may resolve more modules, so the proved lockfile is
-      # snapshotted here; the deployment candidate retains that snapshot and its digest, as the
-      # CLIs do.
+      # Proves the generated MODULE.bazel.lock in error mode and snapshots it before later steps
+      # can resolve more modules; the deployment candidate retains that snapshot and its digest.
       - name: Prove the package's resolved module graph
-        run: |
-          bazelisk build --config=editor-wasm --lockfile_mode=update //tools/ci:editor_wasm_package
-          bazelisk build --config=editor-wasm --lockfile_mode=error //tools/ci:editor_wasm_package
-          python3 -B -m tools.release_cli check-lockfile --lockfile MODULE.bazel.lock
-          cp MODULE.bazel.lock "$RUNNER_TEMP/editor-wasm-module.lock"
+        run: tools/ci/editor_wasm_lane.sh prove-lockfile "$RUNNER_TEMP/editor-wasm-module.lock"
 
       - name: Stage package for handoff
         id: stage-package
-        run: |
-          set -euo pipefail
-          package_target=$(bazelisk query --output=label 'labels(actual, //tools/ci:editor_wasm_package)')
-          [[ "$package_target" =~ ^//[a-zA-Z0-9_./-]+:[a-zA-Z0-9_./-]+$ ]]
-          echo "package_target=${package_target}" >> "${GITHUB_OUTPUT}"
-          pkg_rel=$(bazelisk cquery --config=editor-wasm --output=files \
-            //tools/ci:editor_wasm_package)
-          test -n "$pkg_rel"
-          [[ "$pkg_rel" != *$'\n'* ]]
-          pkg_dir=$(cd "${pkg_rel}" && pwd -P)
-          handoff_dir="${RUNNER_TEMP}/editor-wasm-package-geode"
-          mkdir -p "${handoff_dir}"
-          cp -RL "${pkg_dir}/." "${handoff_dir}/"
-          echo "handoff_dir=${handoff_dir}" >> "${GITHUB_OUTPUT}"
+        run: python3 tools/ci/editor_wasm_stage.py package
 
       - name: Upload Geode package artifact
         uses: actions/upload-artifact@v7
@@ -195,15 +152,9 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      # Both bridge link probes resolve every JavaScript entry point, with and without threads.
-      # The standalone Geode module is incompatible without Browser selection, so requesting it
-      # explicitly fails such a configuration; the configured audit then pins its browser bridge.
+      # Links both bridge probes and the standalone Geode module, then audits its browser bridge.
       - name: Link the browser GPU bridge
-        run: |
-          bazelisk build --config=wasm-geode \
-            //tools/ci:browser_bridge_link_probes //tools/ci:geode_wasm_browser_module
-          bazelisk test --config=wasm-geode --test_output=errors \
-            //tools/ci:geode_wasm_browser_default_audit
+        run: tools/ci/editor_wasm_lane.sh link-bridge
 
       # setup-node's own npm cache saves on every event, including pull
       # requests. Keep its automatic caching off and restore the npm download
@@ -317,72 +268,7 @@ jobs:
         id: stage-candidate
         env:
           PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}
-        run: |
-          set -euo pipefail
-          pkg_dir="${RUNNER_TEMP}/editor-wasm-package-geode"
-          candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-geode-${GITHUB_SHA}"
-          site_dir="${candidate_dir}/site"
-          deploy_dir="${candidate_dir}/deploy"
-          mkdir -p "${site_dir}" "${deploy_dir}"
-          cp -R "${pkg_dir}/." "${site_dir}/"
-
-          python3 donner/editor/wasm/catalog_package_integrity_test.py --package "${site_dir}"
-          expected_site_files=$(
-            {
-              printf '%s\n' \
-                CatalogFontNotices.txt \
-                catalog-fonts.js \
-                catalog-fonts.json \
-                donner_icon.svg \
-                editor-bootstrap.js \
-                editor.css \
-                editor.js \
-                editor.wasm \
-                enable-threads.js \
-                index.html
-              python3 -c 'import json, sys; print("\n".join(font["path"] for font in json.load(open(sys.argv[1]))["fonts"]))' \
-                "${site_dir}/catalog-fonts.json"
-            } | LC_ALL=C sort
-          )
-          actual_site_files=$(cd "${site_dir}" && find . -type f | sed 's|^./||' | LC_ALL=C sort)
-          if [[ "${actual_site_files}" != "${expected_site_files}" ]]; then
-            printf 'Package file set mismatch. Expected:\n%s\nActual:\n%s\n' \
-              "${expected_site_files}" "${actual_site_files}" >&2
-            exit 1
-          fi
-
-          for file in \
-            CatalogFontNotices.txt catalog-fonts.js catalog-fonts.json \
-            donner_icon.svg editor-bootstrap.js editor.css editor.js \
-            enable-threads.js index.html; do
-            cp "${site_dir}/${file}" "${deploy_dir}/${file}"
-          done
-          cp -R "${site_dir}/fonts" "${deploy_dir}/fonts"
-          gzip -n -9 -c "${site_dir}/editor.wasm" > "${deploy_dir}/editor.wasm.gz"
-          test "$(wc -c < "${deploy_dir}/editor.wasm.gz")" -le 20971520
-
-          # lockfile_sha256 is the browser harness npm lock; generated_lock_sha256 is the
-          # MODULE.bazel.lock proved by the package build and retained beside the package.
-          cp "${RUNNER_TEMP}/editor-wasm-module.lock" "${candidate_dir}/MODULE.bazel.lock"
-          lock_digests=$(shasum -a 256 donner/editor/wasm/tests/package-lock.json \
-            "${candidate_dir}/MODULE.bazel.lock" | awk '{print $1}')
-          lockfile_sha256=$(sed -n 1p <<< "${lock_digests}")
-          generated_lock_sha256=$(sed -n 2p <<< "${lock_digests}")
-          [[ "${lockfile_sha256}" =~ ^[0-9a-f]{64}$ && "${generated_lock_sha256}" =~ ^[0-9a-f]{64}$ ]]
-          printf '%s\n' \
-            "{\"source_revision\":\"${GITHUB_SHA}\",\"producer_run_id\":\"${GITHUB_RUN_ID}\",\"producer_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"lockfile_sha256\":\"${lockfile_sha256}\",\"generated_lock_sha256\":\"${generated_lock_sha256}\",\"bazel_configs\":[\"editor-wasm\"],\"targets\":[\"${PACKAGE_TARGET}\"],\"renderer\":\"geode\",\"transport_encoding\":\"gzip\"}" \
-            > "${candidate_dir}/provenance.json"
-
-          (
-            cd "${candidate_dir}"
-            manifest_paths=$(find site deploy -type f | LC_ALL=C sort)
-            manifest_files=()
-            while IFS= read -r file; do
-              manifest_files+=("${file}")
-            done <<< "${manifest_paths}"
-            shasum -a 256 "${manifest_files[@]}" > SHA256SUMS
-          )
-          echo "candidate_dir=${candidate_dir}" >> "${GITHUB_OUTPUT}"
+        run: python3 tools/ci/editor_wasm_stage.py candidate
 
       - name: Upload Geode deployment candidate
         id: upload-candidate
@@ -394,13 +280,9 @@ jobs:
           retention-days: 90
 
       - name: Record deployment candidate digest
-        run: |
-          {
-            echo "### Geode deployment candidate"
-            echo "- Source revision: \`${GITHUB_SHA}\`"
-            echo "- Artifact digest: \`${{ steps.upload-candidate.outputs.artifact-digest }}\`"
-            echo "- Generated MODULE.bazel.lock SHA-256: \`$(shasum -a 256 < "${RUNNER_TEMP}/editor-wasm-module.lock" | cut -d' ' -f1)\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload-candidate.outputs.artifact-digest }}
+        run: python3 tools/ci/editor_wasm_stage.py record-digest
 
       # Last step, after every Bazel command: evicts the action cache to its budget and saves
       # it on a main push.

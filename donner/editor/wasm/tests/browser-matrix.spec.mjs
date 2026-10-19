@@ -700,18 +700,24 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     "utf8",
   );
   const normalizedWorkflow = workflow.replace(/\\\s*\n\s*/g, " ").replace(/\s+/g, " ");
+  // The workflow's size-check step runs the lane script's `build` phase.
+  assert.match(workflow, /\n {8}run: tools\/ci\/editor_wasm_lane\.sh build\n/);
+  const lane = readFileSync(path.join(repositoryRoot, "tools/ci/editor_wasm_lane.sh"), "utf8");
+  const normalizedLane = lane.replace(/\\\s*\n\s*/g, " ").replace(/\s+/g, " ");
   assert.match(
-    normalizedWorkflow,
+    normalizedLane,
     /bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \/\/tools\/ci:editor_wasm_size_tests/,
   );
   assert.match(
-    normalizedWorkflow,
+    normalizedLane,
     /bazelisk test --test_output=errors \/\/tools\/ci:editor_wasm_audits/,
   );
-  assert.doesNotMatch(
-    workflow,
-    /editor-wasm-tiny-skia|wasm_tiny_skia|package-tiny_skia|backend:\s*tiny_skia/,
-  );
+  for (const text of [workflow, lane]) {
+    assert.doesNotMatch(
+      text,
+      /editor-wasm-tiny-skia|wasm_tiny_skia|package-tiny_skia|backend:\s*tiny_skia/,
+    );
+  }
   assert.doesNotMatch(workflow, /test:ios|playwright\\.ios/);
 
   // The browser job's lane sequence lives in tools/run-browser-ci.sh so that

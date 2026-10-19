@@ -6,6 +6,8 @@ package(default_visibility = ["//visibility:public"])
 exports_files([
     "BUILD.bazel",
     "coverage_contract.json",
+    "editor_wasm_lane.sh",
+    "editor_wasm_stage.py",
     "test_with_exclusions.py",
 ])
 
@@ -304,6 +306,38 @@ py_test(
     data = [
         "coverage_lane.sh",
         "free_runner_disk.sh",
+    ],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# The Editor WASM workflow's Bazel phases: prefetch, build, lockfile proof and bridge link.
+py_test(
+    name = "editor_wasm_lane_tests",
+    size = "small",
+    srcs = ["editor_wasm_lane_tests.py"],
+    data = [
+        "editor_wasm_lane.sh",
+        "lane.sh",
+    ],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# The Editor WASM workflow's package handoff and immutable deployment candidate.
+py_test(
+    name = "editor_wasm_stage_tests",
+    size = "small",
+    srcs = ["editor_wasm_stage_tests.py"],
+    data = [
+        "editor_wasm_stage.py",
+        "//donner/editor/wasm:catalog_package_integrity_test.py",
     ],
     deps = [
         "//tools:test_executable_fixtures",
