@@ -1334,7 +1334,9 @@ async function delayRasterTaskYields(raster: Worker, delayMs: number) {
 
 // Deliberate fault injection modelling a browser that defers a worker's promise continuation when
 // the worker is resumed from inside a test evaluation: such a resumption reaches the raster worker
-// only after this delay, while a resumption from an ordinary worker task is immediate.
+// only after this delay, while a resumption from an ordinary worker task is immediate. It checks
+// how the helpers route their resumptions; it cannot reproduce the browser behaviour itself or
+// catch an unmarked resumption site.
 const kEvaluationResumeDeferMs = Number(
   process.env.DONNER_ANIMATION_EVALUATION_RESUME_DEFER_MS ?? 0,
 );
@@ -1344,9 +1346,10 @@ if (!Number.isFinite(kEvaluationResumeDeferMs) || kEvaluationResumeDeferMs < 0) 
 
 type EvaluationResumeScope = typeof globalThis & {
   __donnerResumingFromTestEvaluation?: boolean;
-  __donnerEvaluationResumeDeferRestore?: () => void;
+  __donnerEvaluationResumeDeferred?: boolean;
 };
 
+// The raster worker's shutdown clears the yield handler and with it this deferral.
 async function deferEvaluationResumes(raster: Worker, deferMs: number) {
   await raster.evaluate((ms) => {
     const scope = globalThis as EvaluationResumeScope & {
@@ -1356,27 +1359,16 @@ async function deferEvaluationResumes(raster: Worker, deferMs: number) {
     const port = state?.channel.port1;
     const original = port?.onmessage;
     if (!state || state.closed || !port || !original) throw new Error("raster yield unavailable");
-    if (scope.__donnerEvaluationResumeDeferRestore) throw new Error("resume deferral installed");
-    const deferring = (event: MessageEvent) => {
+    if (scope.__donnerEvaluationResumeDeferred) throw new Error("resume deferral installed");
+    scope.__donnerEvaluationResumeDeferred = true;
+    port.onmessage = (event: MessageEvent) => {
       if (scope.__donnerResumingFromTestEvaluation) {
         setTimeout(() => original.call(port, event), ms);
       } else {
         original.call(port, event);
       }
     };
-    port.onmessage = deferring;
-    scope.__donnerEvaluationResumeDeferRestore = () => {
-      if (port.onmessage === deferring) port.onmessage = original;
-      delete scope.__donnerEvaluationResumeDeferRestore;
-    };
   }, deferMs);
-  return () =>
-    boundBrowserDiagnostic(
-      raster.evaluate(() => {
-        (globalThis as EvaluationResumeScope).__donnerEvaluationResumeDeferRestore?.();
-      }),
-      1000,
-    );
 }
 
 type RasterGateScope = typeof globalThis & {
@@ -1477,7 +1469,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
           const gate = (globalThis as RasterGateScope).__donnerRasterGate;
           return gate?.id === id && gate.suspended();
         }, lease.id),
-        performance.now() + 1000,
+        performance.now() + scaledMs(1000),
       ),
     renderedTimes: (deadlineAtMs: number) =>
       awaitBeforeBlueDeadline(
@@ -1518,7 +1510,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
             scope.__donnerResumingFromTestEvaluation = false;
           }
         }, lease.id),
-        performance.now() + 1000,
+        performance.now() + scaledMs(1000),
       ),
   };
 }
