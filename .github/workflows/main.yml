@@ -4,6 +4,14 @@ name: CI
 env:
   DO_NOT_TRACK: "1"
   ASPECT_TOOLS_TELEMETRY: "-all"
+  # Skips the browser cases quarantined for main's GitHub-hosted macOS job only (#1691, #1702):
+  # their GPU work can miss its budget on that runner. It is defined once, here, so every job that
+  # reproduces that job's test environment (`macos`, `macos-browser` and `macos-hosted-parity`)
+  # skips exactly the same cases. Only those jobs' gating test steps read it; every other lane
+  # still runs the quarantined cases. The advisory GPU comparisons deliberately run without it:
+  # they never set the job's outcome, and a failing session there is the evidence those issues
+  # need.
+  HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
 
 # Validate PRs targeting main or a dependency branch in a stack.
 #
@@ -213,6 +221,7 @@ jobs:
       affected: ${{ steps.determine.outputs.affected }}
       full_test: ${{ steps.determine.outputs.full_test }}
       browser_affected: ${{ steps.determine.outputs.browser_affected }}
+      hosted_parity_affected: ${{ steps.determine.outputs.hosted_parity_affected }}
       wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}
     steps:
       - name: Checkout
@@ -573,6 +582,26 @@ jobs:
           else
             echo "Browser target query failed; selecting the hosted browser job."
             echo "browser_affected=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Trusted PRs run the hosted-parity subset (the macos-hosted-parity job) only when an
+          # affected test is one whose result can depend on the runner: a `hosted_parity` test
+          # or a test of the Geode editor lane. Fail closed: a failed query selects the job.
+          if parity_targets="$(
+            cd "$head_dir"
+            bazelisk query --keep_going \
+              "attr(\"tags\", \"hosted_parity\", tests(set($affected))) union (set($affected) intersect tests(//tools/ci:editor_geode))"
+          )"; then
+            if [[ -n "$parity_targets" ]]; then
+              echo "Affected hosted-parity targets:"
+              printf '%s\n' "$parity_targets"
+              echo "hosted_parity_affected=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "hosted_parity_affected=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Hosted-parity target query failed; selecting the hosted-parity job."
+            echo "hosted_parity_affected=true" >> "$GITHUB_OUTPUT"
           fi
 
           echo "fallback=false" >> "$GITHUB_OUTPUT"
@@ -1204,13 +1233,8 @@ jobs:
       # records host load, memory and process call graphs, so only this ephemeral hosted
       # job sets it; a persistent self-hosted runner never publishes them.
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
-      # Skips the browser cases quarantined for this hosted job only (#1691, #1702): their
-      # GPU work can miss its budget on this runner. Every other lane still runs them. Both
-      # gating test steps carry it, so their test environments stay identical and Bazel keeps
-      # its analysis cache between them. The advisory GPU comparisons deliberately run without
-      # it: they never set the job's outcome, and a failing session there is the evidence
-      # those issues need.
-      HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
+      # Both gating test steps read the workflow's HOSTED_MACOS_QUARANTINE_TEST_FLAGS, so their
+      # test environments stay identical and Bazel keeps its analysis cache between them.
       # Exercise the Geode editor configuration through transitioned wrappers, which
       # locate declared shared libraries consistently on clean workers.
       GEODE_EDITOR_TARGETS: >-
@@ -1616,7 +1640,6 @@ jobs:
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted"
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
-      HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -2220,6 +2243,133 @@ jobs:
 
       - name: Upload Bazel test failure artifacts
         if: failure() && (steps.metal_compiler.outcome == 'failure' || steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      # The runner is persistent: remove the BuildBuddy key, its credential helper
+      # and the workspace fragment that names the helper, whatever the outcome.
+      - name: Remove BuildBuddy credentials
+        if: always()
+        shell: bash
+        run: rm -rf "${RUNNER_TEMP}/buildbuddy" "${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"
+
+  # Hosted-parity subset for trusted PRs. The self-hosted macOS lane above has many more and
+  # faster cores than main's GitHub-hosted `macos` job (3 CPUs, 7 GB), so a test whose result
+  # depends on the runner can pass there and then fail main. This job reruns only those tests,
+  # under the hosted job's constraints, on the same self-hosted runner: the affected tests tagged
+  # `hosted_parity` (timing, frame, animation and readiness tests and host-tool probes, kept
+  # honest by //tools:ci_lane_parity_tests) and the Geode editor lane. Plain deterministic tests
+  # stay in the fast lane, and browser tests are covered by the hosted `macos-browser` subset on
+  # the hosted image itself. The job runs only when the affected set reaches one of those tests
+  # (or falls back to //...), and only after the fast lane, so it never delays that signal on
+  # this pull request.
+  #
+  # The constraints: Bazel schedules at most the hosted runner's 3 CPUs and Bazel's default share
+  # of its memory, with main's `--jobs` and `--local_test_jobs`; main's tag filters, test
+  # environment and hosted-only quarantine; the pinned Xcode, required as on the hosted image;
+  # the same macOS deployment target. //tools:ci_lane_parity_tests compares each Bazel
+  # invocation with main's `macos` job. This narrows the divergence; it does not remove it. A
+  # Bazel scheduling cap does not slow each core to the hosted runner's speed, limit the memory a
+  # test can actually use, or reproduce the hosted runner's disk or its runner faults. The
+  # runner host's display is not changed: the editor GUI tests choose their own content scale.
+  macos-hosted-parity:
+    runs-on: [self-hosted, macOS, ARM64]
+    needs: [gatekeeper, determine-targets, macos-self-hosted]
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.hosted_parity_affected == 'true') }}
+    timeout-minutes: 60
+    # Bound to the trusted-PR BuildBuddy write environment exactly like macos-self-hosted.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
+    env:
+      # The key-affecting flags of every macOS lane (//tools:macos_cache_key_parity_tests), so
+      # this job builds with the fast lane's action keys and its builds are cache hits.
+      BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
+      # Main's hosted test environment under this lane's own name, so its test results are never
+      # shared with the hosted lane's or the fast lane's.
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted-parity"
+      # Main's hosted runner as Bazel sees it: 3 CPUs and 7168 MiB of RAM. Bazel's defaults
+      # there are --jobs=HOST_CPUS (3), --local_test_jobs=auto (the CPU budget) and a memory
+      # budget of HOST_RAM*.67 (4802 MiB); this job sets the same values explicitly. Scheduling
+      # only: none of these changes an action key.
+      HOSTED_MACOS_RESOURCE_FLAGS: "--jobs=3 --local_resources=cpu=3 --local_resources=memory=4802"
+      GEODE_EDITOR_TARGETS: >-
+        //tools/ci:editor_geode
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The hosted image always has the pinned Xcode, so this job requires it too.
+      - name: Select pinned Xcode
+        id: xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh --required
+
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
+          download-outputs: minimal
+
+      - name: Prepare self-hosted macOS toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
+          test -x /opt/homebrew/bin/bazelisk
+          test -x /opt/homebrew/bin/bazel
+          test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
+
+      - name: Refresh Xcode toolchain configuration
+        shell: bash
+        run: |
+          bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off \
+            --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
+
+      # Main's `Test` step, narrowed to the `hosted_parity` tests. --build_tests_only builds only
+      # what those tests need; main's job builds the whole selection in its Build step.
+      - name: Test
+        id: test
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the test step."
+            exit 1
+          fi
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
+            $HOSTED_MACOS_RESOURCE_FLAGS --build_tests_only \
+            --test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak \
+            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
+
+      - name: Test (Geode editor lane)
+        id: geode_test
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --config=geode --test_output=errors \
+            $HOSTED_MACOS_RESOURCE_FLAGS \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
+
+      - name: Upload Bazel test failure artifacts
+        if: failure() && (steps.test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
