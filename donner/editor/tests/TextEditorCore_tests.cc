@@ -316,6 +316,40 @@ TEST(TextBufferTests, MetricsHandleTabsUtf8OutOfRangeAndByteOffsets) {
   EXPECT_EQ(oneLine.getCoordinatesAtByteOffset(999), Coordinates(0, 3));
 }
 
+TEST(TextBufferTests, CharacterIndexStopsAtTruncatedUtf8LineEnd) {
+  TextBuffer buffer;
+  // The line ends with the lead byte of a two-byte sequence and nothing after it.
+  buffer.setText(std::string("a\xC3"));
+
+  EXPECT_EQ(buffer.getLineMaxColumn(0), 2);
+  EXPECT_EQ(buffer.getCharacterIndex(Coordinates(0, 2)), 2);
+}
+
+TEST(TextBufferTests, DeleteRangeToExclusiveEndOfLastLineStaysInBuffer) {
+  TextBuffer buffer;
+  buffer.setText("abc");
+
+  // Column 4 is one past the end of the only line, the exclusive end that includes its newline.
+  buffer.deleteRange(Coordinates(0, 1), Coordinates(0, 4));
+  EXPECT_THAT(buffer.getText(), Eq("a"));
+}
+
+TEST(TextBufferTests, RangeColumnsAreVisualColumnsOnTabAndUtf8Lines) {
+  TextBuffer buffer;
+  // With the default tab size of 2, line 0 spans visual columns 0-4 over 3 glyphs, and line 1
+  // spans columns 0-2 over 3 bytes.
+  buffer.setText(std::string("\tab\n\xC3\xA9x"));
+
+  EXPECT_THAT(buffer.getText(Coordinates(0, 2), Coordinates(0, 3)), Eq("a"));
+  EXPECT_THAT(buffer.getText(Coordinates(0, 4), Coordinates(1, 1)), Eq("\n\xC3\xA9"));
+  EXPECT_THAT(buffer.getText(Coordinates(1, 1), Coordinates(1, 2)), Eq("x"));
+  EXPECT_THAT(buffer.getText(Coordinates(1, 0), Coordinates(1, 3)), Eq("\xC3\xA9x"));
+  EXPECT_THAT(buffer.getText(Coordinates(1, 0), Coordinates(1, 1)), Eq("\xC3\xA9"));
+
+  buffer.deleteRange(Coordinates(0, 4), Coordinates(1, 1));
+  EXPECT_THAT(buffer.getText(), Eq("\tabx"));
+}
+
 TEST_F(TextEditorCoreTests, DragUpAcrossMultipleLinesPreservesOriginalAnchor) {
   BeginDrag(Coordinates(3, 5));
 
@@ -415,6 +449,58 @@ TEST_F(TextEditorCoreTests, SetTextPreserveScrollDoesNotRequestScrollToTop) {
   EXPECT_THAT(editor_.getText(), Eq("hello\nworld"));
 }
 
+TEST_F(TextEditorCoreTests, SetTextClampsCursorAndSelectionToShorterText) {
+  editor_.setCursorPosition(Coordinates(4, 8));
+  editor_.setSelection(Coordinates(3, 2), Coordinates(4, 8));
+
+  editor_.setText("abc\ndef", /*preserveScroll=*/true);
+
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(1, 3));
+  EXPECT_EQ(editor_.state().cursorPosition, Coordinates(1, 3));
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(1, 3));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(1, 3));
+  EXPECT_EQ(editor_.interactiveStart(), Coordinates(1, 3));
+  EXPECT_EQ(editor_.interactiveEnd(), Coordinates(1, 3));
+  EXPECT_FALSE(editor_.hasSelection());
+}
+
+TEST_F(TextEditorCoreTests, SetTextKeepsSelectionThatStillFits) {
+  editor_.setSelection(Coordinates(1, 2), Coordinates(1, 5));
+
+  editor_.setText("abcdefgh\nabcdefgh");
+
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(1, 2));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(1, 5));
+  EXPECT_THAT(editor_.getSelectedText(), Eq("cde"));
+}
+
+TEST_F(TextEditorCoreTests, InsertTextAfterSetTextShortensSelectedLine) {
+  // A selection restored on a long line must not outlive a replacement that shortens the line:
+  // typing afterwards used to delete the stale range and trip the buffer's coordinate assertion.
+  editor_.setCursorPosition(Coordinates(3, 8));
+  editor_.setSelection(Coordinates(3, 4), Coordinates(3, 8));
+
+  editor_.setText("abc\ndef\nghi\nxy");
+  editor_.insertText("Z");
+
+  EXPECT_THAT(editor_.getText(), Eq("abc\ndef\nghi\nxyZ"));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(3, 3));
+}
+
+TEST_F(TextEditorCoreTests, DeleteSelectionStartingAtEndOfTabLine) {
+  editor_.setText("\tab\ncd");
+  // Byte 3 is the end of line 0, visual column 4 with the default tab size of 2.
+  editor_.setSelection(editor_.getCoordinatesAtByteOffset(3),
+                       editor_.getCoordinatesAtByteOffset(5));
+  ASSERT_THAT(editor_.getSelectedText(), Eq("\nc"));
+
+  editor_.insertText("");
+  EXPECT_THAT(editor_.getText(), Eq("\tabd"));
+
+  editor_.undo();
+  EXPECT_THAT(editor_.getText(), Eq("\tab\ncd"));
+}
+
 TEST_F(TextEditorCoreTests, ResetTextChangedClearsFlagAndChangedLines) {
   editor_.setText("a\nb");
   EXPECT_TRUE(editor_.isTextChanged());
@@ -451,6 +537,23 @@ TEST_F(TextEditorCoreTests, SanitizeClampsColumnPastLineEnd) {
   Coordinates negCol(0, 0);
   negCol.column = -5;
   EXPECT_EQ(editor_.sanitizeCoordinates(negCol), Coordinates(0, 0));
+}
+
+TEST_F(TextEditorCoreTests, SanitizeClampsNegativeLineToBufferStart) {
+  Coordinates negLine(0, 5);
+  negLine.line = -1;
+  EXPECT_EQ(editor_.sanitizeCoordinates(negLine), Coordinates(0, 0));
+}
+
+TEST_F(TextEditorCoreTests, SetTextKeepsSelectionOrderedForNegativeLine) {
+  editor_.mutableState().selectionStart = Coordinates(0, 5);
+  editor_.mutableState().selectionStart.line = -1;
+  editor_.mutableState().selectionEnd = Coordinates(0, 2);
+
+  editor_.setText("abcdef");
+
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 0));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(0, 2));
 }
 
 TEST_F(TextEditorCoreTests, GetCursorPositionIsSanitized) {
@@ -1597,6 +1700,21 @@ TEST_F(TextEditorCoreTests, ApplyExternalSourceEditReplacesBytesWithoutUndo) {
   EXPECT_FALSE(editor_.canUndo());
   EXPECT_FALSE(editor_.hasPendingSourceEditIntents());
   EXPECT_FALSE(editor_.isTextChanged());
+}
+
+TEST_F(TextEditorCoreTests, ApplyExternalSourceEditDropsUndoRecordsForThePreviousText) {
+  editor_.setText("hello world");
+  editor_.setCursorPosition(Coordinates(0, 11));
+  editor_.insertText("XYZ");
+  ASSERT_TRUE(editor_.canUndo());
+
+  // The record for "XYZ" names columns 11-14, which the shorter text no longer has.
+  editor_.applyExternalSourceEdit(/*offset=*/0, /*removedLength=*/10, "");
+  ASSERT_THAT(editor_.getText(), Eq("dXYZ"));
+  EXPECT_FALSE(editor_.canUndo());
+
+  editor_.undo();
+  EXPECT_THAT(editor_.getText(), Eq("dXYZ"));
 }
 
 TEST_F(TextEditorCoreTests, ApplyExternalSourceEditShiftsCursorAfterEditPoint) {
