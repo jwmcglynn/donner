@@ -35,15 +35,31 @@ function firefoxLaunchEnvironment(environment = process.env, temporary = environ
   return { ...environment, HOME: home, CFFIXED_USER_HOME: home };
 }
 
-/** Remove a launch home, stripping any ACL the system added after launch first. */
+/**
+ * Remove a launch home, stripping any ACL the system added after launch first.
+ *
+ * ACLs are stripped only from the real files and directories in the home. `find` does not follow
+ * symlinks and `-type` excludes them, so a link inside the home never changes its target's ACL
+ * (`chmod -R -N` applies to the target of every symlink it meets, and fails on a dangling one).
+ * The delete runs even when the strip reports an error, so one bad entry does not leak the home.
+ * Exit handlers must not throw: a home that survives is reported so the next failure names it.
+ */
 function removeFirefoxHome(home) {
   if (!existsSync(home)) return;
+  let stripError;
   try {
-    execFileSync("/bin/chmod", ["-R", "-N", home], { stdio: "ignore" });
+    const realEntries = ["(", "-type", "d", "-o", "-type", "f", ")"];
+    execFileSync("/usr/bin/find", [home, ...realEntries, "-exec", "/bin/chmod", "-N", "{}", "+"], {
+      stdio: "ignore",
+    });
+  } catch (error) {
+    stripError = error;
+  }
+  try {
     rmSync(home, { recursive: true, force: true });
   } catch (error) {
-    // Exit handlers must not throw; report the leftover so the next failure names it.
-    console.error(`firefox launch home cleanup failed: ${String(error)}`);
+    const cause = stripError ? ` (ACL strip also failed: ${String(stripError)})` : "";
+    console.error(`firefox launch home cleanup failed for ${home}: ${String(error)}${cause}`);
   }
 }
 
