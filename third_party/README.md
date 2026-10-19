@@ -29,12 +29,13 @@ git subtree pull https://github.com/jwmcglynn/css-parsing-tests --prefix third_p
 ## Local modifications
 
 `third_party/emscripten-glfw` carries Donner-specific changes to its JavaScript library
-(`src/js/lib_emscripten_glfw3.js`). Keep them when updating it:
+(`src/js/lib_emscripten_glfw3.js`) and to its C++ callers in `src/cpp/emscripten/glfw3/`
+(`Clipboard.cpp`, `Context.cpp`, `Window.cpp`). Keep them when updating it:
 
 - Window resize and teardown skip `canvas.width`/`canvas.height` writes once the canvas has been
   transferred to an `OffscreenCanvas`.
 - The cursor, window title, clipboard, window focus and window size setters are proxied to the
   main thread asynchronously, so a pthread that owns the canvas never blocks on the main thread
   while a browser snapshots that canvas. The title and clipboard setters take a malloc-allocated
-  copy and free it on the main thread.
+  copy, which the C++ callers make with `strdup` and the main thread frees.
   `//donner/editor/wasm/tests:main_thread_proxy_tests` lists the remaining synchronous calls.
