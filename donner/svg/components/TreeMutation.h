@@ -25,7 +25,8 @@ public:
   static void SetValue(EntityHandle node, const RcStringOrRef& value);
 
   /**
-   * Invalidate nonlocal selector results after an element's emptiness changes.
+   * Invalidate nonlocal selector results after an element's emptiness changes. Does nothing when
+   * no stylesheet has a selector that depends on text content.
    * @param element Modified element; the caller holds document write access.
    */
   static void InvalidateTextContentStyles(EntityHandle element);

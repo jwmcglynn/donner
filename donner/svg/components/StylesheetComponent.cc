@@ -112,9 +112,12 @@ void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
   // the parse keeps it from going stale.
   attributeSelectorNames.clear();
   attributeSelectorMatchesAnyName = false;
+  selectorsDependOnTextContent = false;
   for (const css::SelectorRule& rule : stylesheet.rules()) {
     rule.selector.collectAttributeSelectorNames(attributeSelectorNames,
                                                 attributeSelectorMatchesAnyName);
+    selectorsDependOnTextContent =
+        selectorsDependOnTextContent || rule.selector.dependsOnTextContent();
   }
 }
 

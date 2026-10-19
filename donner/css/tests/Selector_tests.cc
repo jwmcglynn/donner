@@ -55,6 +55,16 @@ protected:
     return maybeSelector.result().dependsOnTreePosition();
   }
 
+  bool dependsOnTextContent(std::string_view selector) {
+    auto maybeSelector = SelectorParser::Parse(selector);
+    EXPECT_THAT(maybeSelector, NoParseError());
+    if (maybeSelector.hasError()) {
+      return false;
+    }
+
+    return maybeSelector.result().dependsOnTextContent();
+  }
+
   bool doesNotMatch(std::string_view selector, const FakeElement& element) {
     auto maybeSelector = SelectorParser::Parse(selector);
     EXPECT_THAT(maybeSelector, NoParseError());
@@ -821,6 +831,18 @@ TEST_F(SelectorTests, PseudoClassSelectorValidityCoversAnbFunctionNames) {
   invalidAnbFunction.argsIfFunction.emplace();
   invalidAnbFunction.anbValueIfAnb = AnbValue{2, 1};
   EXPECT_FALSE(invalidAnbFunction.isValid());
+}
+
+TEST_F(SelectorTests, DependsOnTextContent) {
+  EXPECT_FALSE(dependsOnTextContent("text"));
+  EXPECT_FALSE(dependsOnTextContent("text:first-child + rect, g > text"));
+  EXPECT_FALSE(dependsOnTextContent("g:has(> text):not(.cls)"));
+
+  EXPECT_TRUE(dependsOnTextContent("text:empty"));
+  EXPECT_TRUE(dependsOnTextContent("rect, text:EMPTY + rect")) << "any entry in the list counts";
+  EXPECT_TRUE(dependsOnTextContent("text:not(:empty)"));
+  EXPECT_TRUE(dependsOnTextContent("g:has(> text:is(.a, :empty))"));
+  EXPECT_TRUE(dependsOnTextContent(":nth-child(2 of :empty)"));
 }
 
 TEST_F(SelectorTests, DependsOnTreePosition) {

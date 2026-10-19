@@ -1,5 +1,6 @@
 #include "donner/svg/components/TreeMutation.h"
 
+#include <algorithm>
 #include <optional>
 #include <string_view>
 
@@ -13,6 +14,7 @@
 #include "donner/svg/components/NodeLifetimeCollector.h"
 #include "donner/svg/components/NodeLifetimeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 
 namespace donner::svg::components {
@@ -208,6 +210,13 @@ void TreeMutation::SetValue(EntityHandle node, const RcStringOrRef& value) {
 }
 
 void TreeMutation::InvalidateTextContentStyles(EntityHandle element) {
+  const auto stylesheets = element.registry()->view<StylesheetComponent>();
+  if (std::none_of(stylesheets.begin(), stylesheets.end(), [&stylesheets](Entity entity) {
+        return stylesheets.get<StylesheetComponent>(entity).selectorsDependOnTextContent;
+      })) {
+    return;
+  }
+
   MarkNeedsFullRebuild(element);
   MarkDirty(element, components::DirtyFlagsComponent::All);
 }

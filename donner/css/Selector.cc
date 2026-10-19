@@ -94,6 +94,25 @@ bool SelectorDependsOnTreePosition(const Selector& selector) {
   return false;
 }
 
+bool SelectorDependsOnTextContent(const Selector& selector) {
+  for (const ComplexSelector& complexSelector : selector.entries) {
+    for (const ComplexSelector::Entry& entry : complexSelector.entries) {
+      for (const CompoundSelector::Entry& compoundEntry : entry.compoundSelector.entries) {
+        const auto* pseudoClass = std::get_if<PseudoClassSelector>(&compoundEntry);
+        if (pseudoClass == nullptr) {
+          continue;
+        }
+        if (pseudoClass->ident.equalsLowercase("empty") ||
+            (pseudoClass->selector && SelectorDependsOnTextContent(*pseudoClass->selector))) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
 }  // namespace
 
 void Selector::collectAttributeSelectorNames(std::vector<RcString>& outNames,
@@ -103,6 +122,10 @@ void Selector::collectAttributeSelectorNames(std::vector<RcString>& outNames,
 
 bool Selector::dependsOnTreePosition() const {
   return SelectorDependsOnTreePosition(*this);
+}
+
+bool Selector::dependsOnTextContent() const {
+  return SelectorDependsOnTextContent(*this);
 }
 
 Selector::Selector() = default;

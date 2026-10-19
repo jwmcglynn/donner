@@ -123,6 +123,10 @@ struct StylesheetComponent {
    */
   bool attributeSelectorMatchesAnyName = false;
 
+  /// True when a selector in \ref stylesheet can change matching after a text edit, cached when
+  /// the stylesheet is parsed.
+  bool selectorsDependOnTextContent = false;
+
   /**
    * Returns true if the \ref xml_style element has either no `type` attribute, or if it has been
    * manually set to "text/css".
