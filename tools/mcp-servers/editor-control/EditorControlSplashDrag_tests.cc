@@ -23,13 +23,22 @@
 namespace donner::editor::mcp {
 namespace {
 
-std::filesystem::path WriteSplashDragReplay(const std::filesystem::path& outputDir) {
+/// Runfiles root, or an empty path outside a Bazel test.
+std::filesystem::path RunfilesRoot() {
   const char* srcdir = std::getenv("TEST_SRCDIR");
   const char* workspace = std::getenv("TEST_WORKSPACE");
   if (srcdir == nullptr || workspace == nullptr) {
     return {};
   }
-  std::ifstream svg(std::filesystem::path(srcdir) / workspace / "donner_splash.svg");
+  return std::filesystem::path(srcdir) / workspace;
+}
+
+std::filesystem::path WriteSplashDragReplay(const std::filesystem::path& outputDir) {
+  const std::filesystem::path root = RunfilesRoot();
+  if (root.empty()) {
+    return {};
+  }
+  std::ifstream svg(root / "donner_splash.svg");
   if (!svg.is_open()) {
     return {};
   }
@@ -110,18 +119,20 @@ TEST(EditorControlSessionTest, RejectsWorkerDocumentHoldOutsideReplayedFrames) {
   EXPECT_THAT(result.body.value("error", ""), testing::HasSubstr("within the replayed frames"));
 }
 
+/// Output directory for the fractional-zoom first-drag captures.
+std::filesystem::path FractionalFirstDragOutputDir() {
+  const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  return (outputs != nullptr ? std::filesystem::path(outputs) : TestTempDir()) /
+         "fractional-first-drag";
+}
+
 TEST(EditorControlSessionTest, FractionalZoomFirstDragCapture) {
-  const char* srcdir = std::getenv("TEST_SRCDIR");
-  const char* workspace = std::getenv("TEST_WORKSPACE");
-  ASSERT_NE(srcdir, nullptr);
-  ASSERT_NE(workspace, nullptr);
-  const std::filesystem::path root = std::filesystem::path(srcdir) / workspace;
+  const std::filesystem::path root = RunfilesRoot();
+  ASSERT_THAT(root.string(), testing::Not(testing::IsEmpty()))
+      << "TEST_SRCDIR or TEST_WORKSPACE is unset";
   const std::filesystem::path rnrPath =
       root / "tools/mcp-servers/editor-control/testdata/first-drag-fractional-zoom.rnr";
-  const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
-  const std::filesystem::path outputDir =
-      (outputs != nullptr ? std::filesystem::path(outputs) : TestTempDir()) /
-      "fractional-first-drag";
+  const std::filesystem::path outputDir = FractionalFirstDragOutputDir();
   EditorControlSession session;
   const ToolCallResult capture = session.handleToolCall(
       "replay_rnr", nlohmann::json{{"rnr_path", rnrPath.string()},
@@ -133,7 +144,15 @@ TEST(EditorControlSessionTest, FractionalZoomFirstDragCapture) {
                                    {"include_gl_images", false}});
   ASSERT_THAT(capture.isError, testing::IsFalse()) << capture.body.dump(2);
   EXPECT_THAT(capture.body.value("capture_count", 0), testing::Eq(1));
+}
 
+TEST(EditorControlSessionTest, FractionalZoomFirstDragDrainedPresentation) {
+  const std::filesystem::path root = RunfilesRoot();
+  ASSERT_THAT(root.string(), testing::Not(testing::IsEmpty()))
+      << "TEST_SRCDIR or TEST_WORKSPACE is unset";
+  const std::filesystem::path rnrPath =
+      root / "tools/mcp-servers/editor-control/testdata/first-drag-fractional-zoom.rnr";
+  const std::filesystem::path outputDir = FractionalFirstDragOutputDir();
   repro::GlRnrReplayOptions options;
   options.rnrPath = rnrPath;
   options.svgPathOverride = root / "donner_splash.svg";
