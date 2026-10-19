@@ -72,7 +72,8 @@ path.setStyle("stroke: red");
 ```
 
 Full program: [svg_tree_interaction.cc](examples/svg_tree_interaction.cc)
-([annotated](https://jwmcglynn.github.io/donner/svg_tree_interaction_8cc-example.html)), run with `bazel run //examples:svg_tree_interaction`.
+([annotated](https://jwmcglynn.github.io/donner/svg_tree_interaction_8cc-example.html)), run with
+`bazel run //examples:svg_tree_interaction`.
 
 ### Render an SVG to PNG
 
@@ -93,7 +94,8 @@ return renderer.save("output.png") ? 0 : 1;
 ```
 
 Full program: [svg_to_png.cc](examples/svg_to_png.cc)
-([annotated](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html)), run with `bazel run //examples:svg_to_png -- donner_splash.svg`.
+([annotated](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html)), run with
+`bazel run //examples:svg_to_png -- donner_splash.svg`.
 
 ## Documentation
 
@@ -103,17 +105,27 @@ Full program: [svg_to_png.cc](examples/svg_to_png.cc)
 - [SVG Element Reference](https://jwmcglynn.github.io/donner/SvgElementReference.html)
 - [System Architecture](https://jwmcglynn.github.io/donner/SystemArchitecture.html) and
   [Threat Model](docs/threat-model.md)
-- [Building Donner](https://jwmcglynn.github.io/donner/BuildingDonner.html); CMake projects can
-  build Donner with the tiny_skia backend ([CMake build](https://jwmcglynn.github.io/donner/BuildingDonner.html#cmake-build))
+- [Building Donner](https://jwmcglynn.github.io/donner/BuildingDonner.html), including the
+  [CMake build](https://jwmcglynn.github.io/donner/BuildingDonner.html#cmake-build) with the
+  tiny_skia backend
 - [Project Status](https://github.com/jwmcglynn/donner/issues/149) and
   [Build Report](docs/build_report.md)
 
 ## Other Libraries
 
-- C++ | **[LunaSVG](https://github.com/sammycage/lunasvg)**: A lightweight library with an embedded renderer, suitable for embedded applications
-- C++ | **[ThorVG](https://github.com/thorvg/thorvg)**: A production vector graphics engine with software, OpenGL/ES, and WebGPU backends and Lottie support; targets SVG Tiny 1.2 rather than full SVG
-- C | **[NanoSVG](https://github.com/memononen/nanosvg)**: A minimal single-header SVG parser and rasterizer, widely embedded where footprint matters; supports a small subset of SVG
-- Rust | **[librsvg](https://gitlab.gnome.org/GNOME/librsvg)**: Renders SVGs in one shot; does not provide a DOM or animation
-- Rust | **[resvg](https://github.com/RazrFalcon/resvg)**: Library that focuses on correctness, safety, and portability for static SVGs
-- Rust | **[Vello](https://github.com/linebender/vello)**: A GPU compute-centric 2D renderer from the Linebender ecosystem; renders SVG through companion crates rather than natively
-- Java | **[Apache Batik](https://xmlgraphics.apache.org/batik/)**: A full dynamic SVG implementation with DOM, scripting, and declarative animation; the closest reference for browser-style dynamic SVG outside a browser engine
+- C++ | **[LunaSVG](https://github.com/sammycage/lunasvg)**: A lightweight library with an embedded
+  renderer, suitable for embedded applications
+- C++ | **[ThorVG](https://github.com/thorvg/thorvg)**: A production vector graphics engine with
+  software, OpenGL/ES, and WebGPU backends and Lottie support; targets SVG Tiny 1.2 rather than full
+  SVG
+- C | **[NanoSVG](https://github.com/memononen/nanosvg)**: A minimal single-header SVG parser and
+  rasterizer, widely embedded where footprint matters; supports a small subset of SVG
+- Rust | **[librsvg](https://gitlab.gnome.org/GNOME/librsvg)**: Renders SVGs in one shot; does not
+  provide a DOM or animation
+- Rust | **[resvg](https://github.com/RazrFalcon/resvg)**: Library that focuses on correctness,
+  safety, and portability for static SVGs
+- Rust | **[Vello](https://github.com/linebender/vello)**: A GPU compute-centric 2D renderer from
+  the Linebender ecosystem; renders SVG through companion crates rather than natively
+- Java | **[Apache Batik](https://xmlgraphics.apache.org/batik/)**: A full dynamic SVG
+  implementation with DOM, scripting, and declarative animation; the closest reference for
+  browser-style dynamic SVG outside a browser engine
