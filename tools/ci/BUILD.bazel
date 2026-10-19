@@ -244,6 +244,7 @@ py_test(
     srcs = ["test_with_exclusions_tests.py"],
     data = ["test_with_exclusions.py"],
     deps = [
+        "//tools:test_executable_fixtures",
         "//tools:test_timing",
         "@rules_python//python/runfiles",
     ],

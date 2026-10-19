@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -35,7 +34,7 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
         cls.executables = ExecutableFixtureDirectory()
         cls.addClassCleanup(cls.executables.cleanup)
         cls.fixture_bin = cls.executables.path
-        cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+        cls.executables.write_python3()
         (cls.fixture_bin / "bazelisk_fixture.py").write_text(
             "import json, os, sys\n"
             "with open(os.environ['CAPTURE_COMMANDS'], 'a', encoding='utf-8') as output:\n"
@@ -44,10 +43,7 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
             "    print('\\n'.join(json.loads(os.environ['QUERY_SUITES'])[sys.argv[-1]]))\n",
             encoding="utf-8",
         )
-        cls.executables.write(
-            "bazelisk",
-            '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$FIXTURE_BIN/bazelisk_fixture.py" "$@"\n',
-        )
+        cls.executables.write_python_entry("bazelisk", cls.fixture_bin / "bazelisk_fixture.py")
 
     def _commands(self, sanitizer):
         marker = f"      - name: Test //donner/... with {sanitizer}\n        run: |\n"
@@ -64,8 +60,7 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
             capture = root / "commands.jsonl"
             query_suites = {f"tests({name})": self._expand_suite(name) for name in self.suites}
             environment = dict(os.environ, CAPTURE_COMMANDS=str(capture),
-                               QUERY_SUITES=json.dumps(query_suites),
-                               FIXTURE_PYTHON=sys.executable, FIXTURE_BIN=str(self.fixture_bin))
+                               QUERY_SUITES=json.dumps(query_suites))
             environment["PATH"] = str(self.fixture_bin) + os.pathsep + environment["PATH"]
             result = subprocess.run(
                 ["bash", "-euo", "pipefail", "-c", script],

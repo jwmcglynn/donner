@@ -346,6 +346,16 @@ py_test(
 )
 
 py_library(
+    name = "test_executable_fixtures",
+    testonly = 1,
+    srcs = ["test_executable_fixtures.py"],
+    visibility = [
+        "//build_defs:__pkg__",
+        "//tools/ci:__pkg__",
+    ],
+)
+
+py_library(
     name = "test_timing",
     testonly = 1,
     srcs = ["test_timing.py"],
@@ -642,11 +652,15 @@ py_test(
 py_test(
     name = "ci_runner_routing_tests",
     size = "small",
-    srcs = ["ci_runner_routing_tests.py"],
+    srcs = [
+        "ci_runner_routing_tests.py",
+        "test_executable_fixtures.py",
+    ],
     data = [
         "//:.github/actions/pr-trust/action.yml",
         "//:.github/workflows/main.yml",
     ],
+    imports = ["."],
     deps = ["@rules_python//python/runfiles"],
 )
 

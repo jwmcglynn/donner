@@ -10,32 +10,37 @@ import unittest
 
 from python.runfiles import runfiles
 from tools import test_timing
+from tools.test_executable_fixtures import ExecutableFixtureDirectory
 
 
 class ExclusionSelectionTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.executables = ExecutableFixtureDirectory()
+        cls.addClassCleanup(cls.executables.cleanup)
+        fixture = cls.executables.path / "fake bazel.py"
+        fixture.write_text(
+            "import json, os, sys\n"
+            "with open(os.environ['CAPTURE'], 'a', encoding='utf-8') as output:\n"
+            "    output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            "if 'query' in sys.argv:\n"
+            "    sys.stdout.write(os.environ['QUERY_OUTPUT'])\n"
+            "    print('query diagnostic', file=sys.stderr)\n"
+            "    sys.exit(int(os.environ['QUERY_STATUS']))\n"
+            "sys.exit(int(os.environ['TEST_STATUS']))\n",
+            encoding="utf-8",
+        )
+        # The space in the name keeps the child command's argument boundary under test.
+        cls.bazel = cls.executables.write_python_entry("fake bazel", fixture)
+
     def _run(self, query_output, query_status=0, test_status=0):
         resolver = runfiles.Create()
         helper = resolver.Rlocation("donner/tools/ci/test_with_exclusions.py")
         with tempfile.TemporaryDirectory(prefix="ci selection ") as temporary:
-            root = Path(temporary)
-            capture = root / "commands.jsonl"
-            bazel = root / "fake bazel"
-            bazel.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, os, sys\n"
-                "with open(os.environ['CAPTURE'], 'a', encoding='utf-8') as output:\n"
-                "    output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-                "if 'query' in sys.argv:\n"
-                "    sys.stdout.write(os.environ['QUERY_OUTPUT'])\n"
-                "    print('query diagnostic', file=sys.stderr)\n"
-                "    sys.exit(int(os.environ['QUERY_STATUS']))\n"
-                "sys.exit(int(os.environ['TEST_STATUS']))\n",
-                encoding="utf-8",
-            )
-            bazel.chmod(0o755)
+            capture = Path(temporary) / "commands.jsonl"
             result = subprocess.run(
                 [sys.executable, helper, "--exclude-suite", "//tools/ci:fixture", "--",
-                 str(bazel), "--nohome_rc", "test", "--config=asan",
+                 str(self.bazel), "--nohome_rc", "test", "--config=asan",
                  "--test_arg=argument with spaces", "--", "//donner/..."],
                 env=dict(os.environ, CAPTURE=str(capture), QUERY_OUTPUT=query_output,
                          QUERY_STATUS=str(query_status), TEST_STATUS=str(test_status)),

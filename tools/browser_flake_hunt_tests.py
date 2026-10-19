@@ -46,6 +46,7 @@ class BrowserFlakeHuntTest(unittest.TestCase):
     def setUpClass(cls):
         cls.executables = ExecutableFixtureDirectory()
         cls.addClassCleanup(cls.executables.cleanup)
+        cls.executables.write_python3()
         cls.executables.write(
             "npx",
             '#!/bin/bash\n'

@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools.test_executable_fixtures import ExecutableFixtureDirectory
+
 
 _CHECKER_PATH = Path(__file__).with_name("check_banned_patterns.py")
 _CHECKER_SPEC = importlib.util.spec_from_file_location("check_banned_patterns", _CHECKER_PATH)
@@ -20,6 +22,13 @@ _CHECKER_SPEC.loader.exec_module(check_banned_patterns)
 
 
 class CheckBannedPatternsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # lint.sh calls a bare python3; resolve it to this test's own runtime.
+        cls.executables = ExecutableFixtureDirectory()
+        cls.addClassCleanup(cls.executables.cleanup)
+        cls.executables.write_python3()
+
     def _write_source(self, source: str, filename: str = "Example.cc") -> Path:
         temp_dir = Path(tempfile.mkdtemp())
         source_path = temp_dir / "donner" / "base" / filename
@@ -512,7 +521,11 @@ class CheckBannedPatternsTests(unittest.TestCase):
             return subprocess.run(
                 [str(repo / "tools" / "lint.sh")],
                 cwd=repo,
-                env={**os.environ, "DONNER_CLANG_FORMAT": str(formatter)},
+                env={
+                    **os.environ,
+                    "DONNER_CLANG_FORMAT": str(formatter),
+                    "PATH": f"{self.executables.path}{os.pathsep}{os.environ.get('PATH', '')}",
+                },
                 check=False,
                 capture_output=True,
                 text=True,

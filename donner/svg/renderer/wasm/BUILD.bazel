@@ -113,9 +113,9 @@ filegroup(
 #
 #   bazel test --config=wasm-size //donner/svg/renderer/wasm:render_test
 #
-# Requires Node on the host (found via $DONNER_NODE, PATH, or a common install
-# location). Marked manual and gated to the tiny_skia wasm config so a plain
-# host-config wildcard build does not try to pull in the wasm outputs.
+# Node comes from the registered Bazel node runtime toolchain, never the host.
+# Marked manual and gated to the tiny_skia wasm config so a plain host-config
+# wildcard build does not try to pull in the wasm outputs.
 py_test(
     name = "render_test",
     size = "small",
@@ -123,8 +123,11 @@ py_test(
     data = [
         "render_test_driver.mjs",
         ":donner_wasm",
+        "@rules_nodejs//nodejs:current_node_runtime",
     ],
+    env = {"DONNER_NODE_PATH": "$(NODE_PATH)"},
     tags = ["manual"],
+    toolchains = ["@rules_nodejs//nodejs:current_node_runtime"],
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
     deps = ["@rules_python//python/runfiles"],
 )

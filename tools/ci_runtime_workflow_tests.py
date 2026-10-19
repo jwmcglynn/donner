@@ -79,7 +79,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.executables = ExecutableFixtureDirectory()
         cls.addClassCleanup(cls.executables.cleanup)
         cls.fixture_bin = cls.executables.path
-        cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+        cls.executables.write_python3()
         cls.executables.write("bash", '#!/bin/sh\nexec /bin/bash "$@"\n')
         (cls.fixture_bin / "shasum_fixture.py").write_text(
             "import hashlib, os, sys, time\n"
@@ -93,9 +93,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "    print(f'{digest}  {name}')\n",
             encoding="utf-8",
         )
-        cls.executables.write(
-            "shasum", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$FIXTURE_BIN/shasum_fixture.py" "$@"\n'
-        )
+        cls.executables.write_python_entry("shasum", cls.fixture_bin / "shasum_fixture.py")
         cls.bazelrc = _repository_text(".bazelrc")
         cls.main = _repository_text(".github/workflows/main.yml")
         cls.cmake = _repository_text(".github/workflows/cmake.yml")
@@ -618,8 +616,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             fixture_env = dict(os.environ if env is None else env)
             # Fixture scripts must not execute an unrelated shell startup file.
             fixture_env.pop("BASH_ENV", None)
-            fixture_env["FIXTURE_PYTHON"] = sys.executable
-            fixture_env["FIXTURE_BIN"] = str(self.fixture_bin)
             fixture_env["PATH"] = (temp_dir + os.pathsep + str(self.fixture_bin) + os.pathsep +
                                    fixture_env.get("PATH", os.defpath))
             try:
@@ -1460,7 +1456,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "GITHUB_RUN_ID": "12", "GITHUB_RUN_ATTEMPT": "2",
             "PACKAGE_TARGET": "//fixture:package", "GITHUB_OUTPUT": str(root / "output"),
             "PATH": os.environ["PATH"],
-            "FIXTURE_PYTHON": sys.executable, "FIXTURE_ROOT": str(root),
+            "FIXTURE_ROOT": str(root),
             "FIXTURE_HASH_STARTUP_SECONDS": str(hash_startup_delay),
         })
 
