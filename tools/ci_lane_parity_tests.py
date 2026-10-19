@@ -1675,9 +1675,9 @@ class CiLaneParityTest(unittest.TestCase):
         steps = [_step_name(step) for step in jobs["macos"]["steps"]]
         self.assertIn("Test", steps)
         self.assertIn("Test (browser targets)", steps)
-        self.assertIn("HOSTED_MACOS_QUARANTINE_TEST_FLAGS", self.workflows["main.yml"]["env"])
         test = next(step for step in jobs["macos"]["steps"] if _step_name(step) == "Test")
         self.assertIn("bazelisk test", test["run"])
+        self.assertIn("--config=hosted-macos-quarantine", test["run"])
         self.assertIn("main.yml", self.main_push_workflows)
 
     def test_expressions_follow_the_routing_gate(self):
@@ -2280,7 +2280,8 @@ class CiLaneParityTest(unittest.TestCase):
              "--test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,"
              "-ci-remote-gpu,-launches-browser,-fuzz_soak", "--config=other"])
         # `test:` lines do not apply to a build.
-        self.assertEqual(expand_configs("build", ["--config=hosted-parity-subset"], configs),
+        self.assertEqual(expand_configs("build", ["--config=hosted-parity-subset"], configs), [])
+        self.assertEqual(expand_configs("build", ["--config=hosted-macos"], configs),
                          list(HOSTED_MACOS_RESOURCE_FLAGS))
         (name, job_name, _), (parity, steps) = next(iter(PARITY_SUBSETS.items()))
         widened = copy.deepcopy(configs)

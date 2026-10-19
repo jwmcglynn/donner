@@ -1319,7 +1319,7 @@ jobs:
       # records host load, memory and process call graphs, so only this ephemeral hosted
       # job sets it; a persistent self-hosted runner never publishes them.
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
-      # Both gating test steps pass --config=hosted-macos-quarantine (.bazelrc), so their test
+      # Both gating test steps pass the hosted-macos-quarantine config (.bazelrc), so their test
       # environments stay identical and Bazel keeps its analysis cache between them.
       # Exercise the Geode editor configuration through transitioned wrappers, which
       # locate declared shared libraries consistently on clean workers.
