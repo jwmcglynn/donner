@@ -437,6 +437,13 @@ public:
    * Advancing the document time causes the animation system to update animated attribute values
    * on the next render. This invalidates the render tree. Non-finite values are ignored.
    *
+   * Donner has no animation clock of its own: the host supplies every sample time, typically from
+   * its frame clock. Any finite time is accepted, including an earlier one; seeking backward
+   * samples the intervals that already exist at that time rather than restarting animations. Use
+   * \ref restartAnimations to replay from time zero. Documents parsed with
+   * \ref donner::svg::ProcessingMode::SecureStatic keep their clock but never apply animated
+   * values.
+   *
    * @param seconds Document time in seconds.
    */
   void setTime(double seconds);

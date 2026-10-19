@@ -427,6 +427,27 @@ describes the editor's consumption of it.
   `ViewportState` selects a pane-bounded raster only when its pixel area is smaller
   than the full-document raster, unless the editor's 8192-pixel canvas cap requires bounds.
 
+### Animation Preview {#EditorArchAnimationPreview}
+
+The **Edit | Preview** control in the dock header above Layers (a floating panel in the compact
+layout) switches the canvas between editing and playing the document's declarative animations.
+Preview drives the document through the same public API an embedder uses (see
+\ref GettingStartedAnimation):
+
+- **Clock.** `EditorShell` reads a monotonic host clock, quantizes it to 60 Hz ticks, and passes
+  the elapsed time to `SVGDocument::setTime()` through `AsyncSVGDocument`. It advances only after
+  the previous animation frame has been presented, and not while the async renderer is busy.
+- **Start and stop.** Entering and leaving Preview both call `SVGDocument::restartAnimations()`, so
+  playback starts at time zero and Edit restores the authored state without changing the SVG source
+  or undo history. Escape also returns to Edit. Preview cannot start while a drag, Pen draft,
+  pending click, or the sample picker is active.
+- **Input.** While Preview is on, editing tools, undo/redo, clipboard and selection commands are
+  disabled; viewport navigation stays available. Each rendered frame captures bounded hit geometry,
+  so pointer events are hit-tested against the frame on screen and delivered with
+  `SVGDocument::dispatchMouseEvent()` to `begin`/`end` event triggers.
+
+The **Animation** sample in the sample catalog exercises hover, press, click and motion timing.
+
 ### Adaptive UI profile
 
 `ComputeEditorAdaptiveUiLayout` in `EditorShellLayout` is the pure policy boundary

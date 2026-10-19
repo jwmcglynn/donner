@@ -18,8 +18,8 @@ module(name = "my_svg_app")
 
 bazel_dep(name = "donner", version = "0.8.0-pre")
 # On macOS, register the Apple toolchain before rules_cc selects a host toolchain.
-bazel_dep(name = "apple_support", version = "2.8.2")
-bazel_dep(name = "rules_cc", version = "0.2.25")
+bazel_dep(name = "apple_support", version = "2.10.1")
+bazel_dep(name = "rules_cc", version = "0.2.26")
 ```
 
 Use standard `rules_cc` targets in `BUILD.bazel`:
@@ -147,6 +147,57 @@ Pixel data can also be read back with a snapshot:
 \ref svg_quickstart.cc "The quickstart example" parses a document, edits it, and renders it in one
 short program. See \ref BuildingDonner for details on choosing between tiny_skia (the compact CPU
 default) and Geode (the GPU backend).
+
+## Animating an SVG {#GettingStartedAnimation}
+
+The default parser recognizes the declarative SVG animation elements, `<animate>`, `<set>`,
+`<animateTransform>`, `<animateMotion>` and `<mpath>`, with no extra option or build flag. See
+\ref elements_animation for the supported timing and interpolation features.
+
+\snippet svg_animation.cc animated_svg
+
+Donner has no animation clock of its own. The host sets the document time in seconds with
+`SVGDocument::setTime()`, typically from its frame clock, and draws again. Each `draw()` samples
+every animation at the document's current time; nothing else needs to be called between frames.
+Any finite time is accepted, so a host can step forward, seek backward or render frames out of
+order:
+
+\snippet svg_animation.cc set_time
+
+Pointer input stays with the host. To start `begin="id.click"` and similar event-based timing, hit
+test the pointer, then deliver the event to the element under it. The triggered interval starts at
+the current document time, and the call returns `false` when no animation timing changed:
+
+\snippet svg_animation.cc dispatch_event
+
+`SVGDocument::dispatchAnimationEvent()` delivers other named events, and
+`SVGDocument::beginAnimation()` and `SVGDocument::endAnimation()` schedule an animation element's
+begin or end at an offset from the current time. Donner has no "animation finished" callback: the
+host chooses how long to play, and `SVGDocument::animationEvents()` lists the begin, repeat and end
+boundaries in a time interval so the host can react to them without sampling every frame:
+
+\snippet svg_animation.cc lifecycle_events
+
+`SVGDocument::restartAnimations()` returns the document to time zero and discards event-started
+intervals, for example when playback starts over:
+
+\snippet svg_animation.cc restart
+
+The document's processing mode, set with `SVGDocument::Settings::processingMode` when parsing,
+limits animation for untrusted content:
+
+| Mode                           | Authored animation | Host events and begin/end scheduling |
+| ------------------------------ | ------------------ | ------------------------------------ |
+| `DynamicInteractive` (default) | Runs               | Accepted                             |
+| `SecureAnimated`               | Runs               | Rejected                             |
+| `SecureStatic`                 | Never applies      | Rejected                             |
+
+SVG documents loaded through `<image>` are always parsed in `SecureStatic` mode, so they render
+their static content.
+
+The complete program, `examples/svg_animation.cc`, checks the rendered colors at each step; run it
+with `bazel run //examples:svg_animation`. The editor's Preview mode plays animations with this
+same API, and `donner-svg --gif` exports an animation as an animated GIF (see \ref DonnerSvgTool).
 
 ## Third-Party License Attribution
 

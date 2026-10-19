@@ -2,8 +2,10 @@
 @page elements_animation Animation Elements
 
 \details Declarative SVG animation elements recognized by the default parser.
-Use `SVGDocument::setTime()` to select a sample and render the document. The editor's Preview mode
-advances this clock and dispatches pointer events. Secure static documents do not animate.
+Use `SVGDocument::setTime()` to select a sample and render the document; Donner has no animation
+clock of its own. The editor's Preview mode advances this clock and dispatches pointer events.
+Secure static documents do not animate, and secure animated documents run authored timing but
+reject host events and scheduling. \ref GettingStartedAnimation shows how a host drives the clock.
 
 Clock, event, syncbase and repeat timing are supported, together with linear, discrete, paced and
 spline interpolation. Host applications can schedule begin/end instances and query lifecycle events
