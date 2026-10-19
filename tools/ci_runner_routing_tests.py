@@ -231,6 +231,9 @@ class CiRunnerRoutingTest(unittest.TestCase):
 
         self.assertIn("outputs.use_self_hosted_macos != 'true'", hosted)
         self.assertIn("outputs.use_self_hosted_macos == 'true'", self_hosted)
+        # The hosted-parity subset runs on the same runner, behind the same gate.
+        self.assertIn("outputs.use_self_hosted_macos == 'true'",
+                      self._job_body("macos-hosted-parity"))
 
     def test_hosted_browser_subset_follows_the_macos_runner_gate(self):
         # When the self-hosted macOS lane replaces the hosted job on a trusted PR, a hosted job

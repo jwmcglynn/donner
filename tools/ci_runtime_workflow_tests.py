@@ -1191,7 +1191,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         there means its Bazel membership is broken.
         That must stay red rather than inherit the change-based lanes' notice.
         """
-        for job_name in ("macos", "macos-self-hosted"):
+        for job_name in ("macos", "macos-self-hosted", "macos-hosted-parity"):
             with self.subTest(job=job_name):
                 step = self._step_body(
                     self._job_body(job_name), "Test (Geode editor lane)"

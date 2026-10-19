@@ -107,9 +107,9 @@ PARITY_ALLOWLIST = {
 }
 
 # Tests that main's hosted macOS job runs and whose result can depend on the runner's CPU count
-# or speed, display scale or host tools, each with the escape that put it here. Every test
-# tagged `hosted_parity` is listed, and every listed test is tagged, so the parity subset can
-# neither silently lose a test nor gain an unreviewed one. Browser tests (the carousel handoff,
+# or speed, display scale or host tools, each with the escape that put it here. In the BUILD
+# files listed here, the tagged rules and the listed tests must match, so a listed test cannot
+# silently leave the parity subset. Browser tests (the carousel handoff,
 # animation pulse and WebKit drag classes) are covered by the hosted macos-browser subset on the
 # hosted image itself, so they are not tagged.
 HOSTED_PARITY_TESTS = {
@@ -2145,6 +2145,8 @@ class CiLaneParityTest(unittest.TestCase):
             "the quarantine is dropped": (
                 lambda job: rewrite(job, "Test", "$HOSTED_MACOS_QUARANTINE_TEST_FLAGS ", ""),
                 ("Test", "test-env-main-only", "DONNER_HOSTED_MACOS_QUARANTINE=1")),
+            # A cap shared by every step is reported once under "*"; once only the Test step
+            # keeps it, it is reported for that step.
             "one step loses the hosted runner shape": (
                 lambda job: rewrite(job, "Test (Geode editor lane)",
                                     "$HOSTED_MACOS_RESOURCE_FLAGS ", ""),
@@ -2176,7 +2178,8 @@ class CiLaneParityTest(unittest.TestCase):
         # The routing query selects the job by this tag; the job filters by it.
         main = (Path(resolver.Rlocation("donner/.github/workflows/main.yml"))
                 .read_text(encoding="utf-8"))
-        self.assertIn('"attr(\\"tags\\", \\"hosted_parity\\", tests(set($affected)))', main)
+        self.assertIn('"attr(\\"tags\\", \\"[\\\\[ ]hosted_parity[,\\\\]]\\", '
+                      'tests(set($parity_set)))', main)
         self.assertEqual(tagged_rules('cc_test(\n    name = "a",\n    tags = ["hosted_parity"],\n)\n'
                                       'cc_test(\n    name = "b",\n    tags = ["manual"],\n)\n',
                                       "hosted_parity"), {"a"})
