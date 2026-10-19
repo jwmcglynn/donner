@@ -1843,3 +1843,14 @@ donner_cc_library(
         "@imgui",
     ],
 )
+
+# Sources whose calls from the canvas-owning pthread to the browser main thread
+# //donner/editor/wasm/tests:main_thread_proxy_tests audits.
+filegroup(
+    name = "main_thread_call_sources",
+    srcs = glob([
+        "*.cc",
+        "*.h",
+    ]),
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+)

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -248,30 +249,44 @@ void PublishEyedropperTestState(std::string_view activeFill, std::string_view ac
                                 std::size_t sourceSelectionByteLength,
                                 std::size_t sourceDiagnosticCount, bool textSyncWakePending,
                                 double documentGeneration) {
-  const std::string fill(activeFill.substr(0, kEyedropperTestFieldMaxBytes));
-  const std::string stroke(activeStroke.substr(0, kEyedropperTestFieldMaxBytes));
-  const std::string style(selectedStyle.substr(0, kEyedropperTestFieldMaxBytes));
-  const std::string text(selectedText.substr(0, kEyedropperTestFieldMaxBytes));
+  // Published every frame, so the post must not wait for the main thread: the main thread may itself
+  // be waiting on this canvas-owning pthread (a canvas snapshot). The strings are malloc-allocated
+  // copies that the main thread frees after reading.
+  const auto copy = [](std::string_view value) {
+    return value.empty() ? strdup("")
+                         : strndup(value.data(), std::min(value.size(), kEyedropperTestFieldMaxBytes));
+  };
+  char* fill = copy(activeFill);
+  char* stroke = copy(activeStroke);
+  char* style = copy(selectedStyle);
+  char* text = copy(selectedText);
   // clang-format off
-  MAIN_THREAD_EM_ASM(
+  MAIN_THREAD_ASYNC_EM_ASM(
       {
-        window['__donnerEyedropperTestState'] = ({
-          'activeFill' : UTF8ToString($0),
-          'activeStroke' : UTF8ToString($1),
-          'selectedStyle' : UTF8ToString($2),
-          'selectedText' : UTF8ToString($3),
-          'activePaintTarget' : $4 ? 'stroke' : 'fill',
-          'sourcePaneFocused' : !!$5,
-          'sourceSelectionActive' : !!$6,
-          'undoEntryCount' : Number($7),
-          'sourceBufferByteLength' : Number($8),
-          'sourceSelectionByteLength' : Number($9),
-          'sourceDiagnosticCount' : Number($10),
-          'textSyncWakePending' : !!$11,
-          'documentGeneration' : Number($12),
-        });
+        try {
+          window['__donnerEyedropperTestState'] = ({
+            'activeFill' : UTF8ToString($0),
+            'activeStroke' : UTF8ToString($1),
+            'selectedStyle' : UTF8ToString($2),
+            'selectedText' : UTF8ToString($3),
+            'activePaintTarget' : $4 ? 'stroke' : 'fill',
+            'sourcePaneFocused' : !!$5,
+            'sourceSelectionActive' : !!$6,
+            'undoEntryCount' : Number($7),
+            'sourceBufferByteLength' : Number($8),
+            'sourceSelectionByteLength' : Number($9),
+            'sourceDiagnosticCount' : Number($10),
+            'textSyncWakePending' : !!$11,
+            'documentGeneration' : Number($12),
+          });
+        } finally {
+          _free($0);
+          _free($1);
+          _free($2);
+          _free($3);
+        }
       },
-      fill.c_str(), stroke.c_str(), style.c_str(), text.c_str(), strokeActive,
+      fill, stroke, style, text, strokeActive,
       sourcePaneFocused, sourceSelectionActive, undoEntryCount,
       sourceBufferByteLength, sourceSelectionByteLength, sourceDiagnosticCount,
       textSyncWakePending, documentGeneration);
@@ -283,8 +298,9 @@ void PublishEyedropperShortcutProbe(bool wantTextInput, bool popupOpen, bool sou
                                     bool iDown, bool iPressed, bool escapeDown, bool escapePressed,
                                     bool canArm, bool appFocusLost, bool mouseLeftClicked,
                                     bool mouseLeftDown) {
+  // Fire-and-forget like PublishEyedropperTestState: published every frame by the canvas owner.
   // clang-format off
-  MAIN_THREAD_EM_ASM(
+  MAIN_THREAD_ASYNC_EM_ASM(
       {
         const previous = window['__donnerEyedropperShortcutProbe'] || {};
         const gate = ({
@@ -1623,6 +1639,10 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   gBrowserOverlayStateRequest.store(0, std::memory_order_release);
   gBrowserOverlayControlEnabled.store(BrowserOverlayControlEnabledForTesting(),
                                       std::memory_order_release);
+  // The eyedropper switch is read every frame and caches its first answer. Take that answer here,
+  // before the first frame: the query waits for the main thread, and a frame-time wait can
+  // deadlock against a canvas snapshot that waits for this thread.
+  (void)BrowserEyedropperControlEnabledForTesting();
   renderCoordinator_.asyncRenderer().setSampleThumbnailRendererCreationPlanForTesting(
       SampleThumbnailRendererCreationRequestForTesting(),
       std::chrono::milliseconds(SampleThumbnailRendererCreationDelayMsForTesting()));

@@ -33,5 +33,8 @@ git subtree pull https://github.com/jwmcglynn/css-parsing-tests --prefix third_p
 
 - Window resize and teardown skip `canvas.width`/`canvas.height` writes once the canvas has been
   transferred to an `OffscreenCanvas`.
-- The cursor setters are proxied to the main thread asynchronously, so a pthread that owns the
-  canvas never blocks on the main thread while a browser snapshots that canvas.
+- The cursor, window title, clipboard, window focus and window size setters are proxied to the
+  main thread asynchronously, so a pthread that owns the canvas never blocks on the main thread
+  while a browser snapshots that canvas. The title and clipboard setters take a malloc-allocated
+  copy and free it on the main thread.
+  `//donner/editor/wasm/tests:main_thread_proxy_tests` lists the remaining synchronous calls.

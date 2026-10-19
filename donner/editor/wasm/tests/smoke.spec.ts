@@ -5136,7 +5136,7 @@ test("page screenshots keep the canvas while hover changes the cursor", async ({
   const captures: Array<Record<string, unknown>> = [];
   // A frame's cursor call meets a screenshot on well under one capture in a hundred on a fast
   // host, so take enough captures that the unfixed deadlock is likely within one run;
-  // glfw_cursor_proxy_tests pins the fix itself deterministically.
+  // main_thread_proxy_tests pins the fix itself deterministically.
   const kCaptures = 300;
   // Each capture is a bounded step: a stalled one returns flat after the browser's snapshot
   // timeout. Extend the case by one second per capture, several times the loaded-host cost.

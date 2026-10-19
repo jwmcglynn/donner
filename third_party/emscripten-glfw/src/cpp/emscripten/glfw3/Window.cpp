@@ -23,9 +23,11 @@
 #include "ErrorHandler.h"
 #include "Cursor.h"
 #include <algorithm>
+#include <cstring>
 
 extern "C" {
-void emscripten_glfw3_context_set_title(char const *iTitle);
+// Takes ownership of a malloc-allocated title, which the main thread frees.
+void emscripten_glfw3_context_set_title(char *iOwnedTitle);
 void emscripten_glfw3_window_destroy(GLFWwindow *iWindow);
 void emscripten_glfw3_window_set_size(GLFWwindow *iWindow, int iWidth, int iHeight, int iFramebufferWidth, int iFramebufferHeight);
 void emscripten_glfw3_window_get_position(GLFWwindow *iWindow, int *oX, int *oY);
@@ -111,7 +113,8 @@ void Window::init(int iWidth, int iHeight)
   if(fConfig.fFocused)
   {
     focus();
-    emscripten_glfw3_context_set_title(getTitle());
+    if(auto title = getTitle())
+      emscripten_glfw3_context_set_title(strdup(title));
   }
 
   setCanvasSize({iWidth, iHeight});
@@ -726,7 +729,8 @@ bool Window::onFocusChange(bool iFocus)
   else
   {
     fContext->onFocus(asOpaquePtr());
-    emscripten_glfw3_context_set_title(getTitle());
+    if(auto title = getTitle())
+      emscripten_glfw3_context_set_title(strdup(title));
   }
   if(fFocusCallback)
     fFocusCallback(asOpaquePtr(), toGlfwBool(isFocused()));

@@ -148,3 +148,14 @@ donner_cc_library(
         "@imgui",
     ] + shader_apis(UI_DRAW_SHADER_FAMILIES) + linked_shader_artifacts(UI_DRAW_SHADER_FAMILIES),
 )
+
+# Sources whose calls from the canvas-owning pthread to the browser main thread
+# //donner/editor/wasm/tests:main_thread_proxy_tests audits.
+filegroup(
+    name = "main_thread_call_sources",
+    srcs = glob([
+        "*.cc",
+        "*.h",
+    ]),
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+)

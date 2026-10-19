@@ -8,6 +8,7 @@
 // The browser tier is Geode-only, so `__EMSCRIPTEN__` always implies `DONNER_EDITOR_WGPU`.
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#include <emscripten/html5.h>
 
 #include "GLFW/emscripten_glfw3.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
@@ -364,6 +365,11 @@ int CanvasCssWidth() {
 }
 int CanvasCssHeight() {
   return whole_app_worker::CssHeight();
+}
+/// Resize callback that sizes the GLFW window from the viewport mirror, without a main-thread read.
+EM_BOOL ResizeWindowFromViewportMirror(int, const EmscriptenUiEvent*, void* userData) {
+  glfwSetWindowSize(static_cast<GLFWwindow*>(userData), CanvasCssWidth(), CanvasCssHeight());
+  return EM_TRUE;
 }
 double BrowserDevicePixelRatio() {
   return whole_app_worker::DevicePixelRatio();
@@ -2018,6 +2024,15 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #endif
 #ifdef __EMSCRIPTEN__
   ImGui_ImplGlfw_InstallEmscriptenCallbacks(window_, "#canvas");
+  // ImGui's window resize callback runs on this canvas-owning pthread and reads the canvas size
+  // from the main thread synchronously. The main thread can itself be waiting on this pthread for
+  // a canvas snapshot, so replace it with one that reads the bridge's viewport mirror, which the
+  // main thread updates before the event reaches this pthread. ImGui's fullscreenchange listener
+  // makes the same read, but only on Fullscreen API changes, which the editor never requests, and it
+  // shares its document target with GLFW's own listener, so it stays.
+  emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, false, nullptr);
+  emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, window_, false,
+                                 &ResizeWindowFromViewportMirror);
 #endif
   imguiInitialized_ = true;
   valid_ = true;

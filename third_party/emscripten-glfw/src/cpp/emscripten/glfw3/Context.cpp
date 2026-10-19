@@ -19,6 +19,7 @@
 #include "Context.h"
 #include <emscripten.h>
 #include <emscripten/html5.h>
+#include <cstring>
 
 #include "ErrorHandler.h"
 
@@ -41,13 +42,15 @@ void emscripten_glfw3_context_init(emscripten::glfw3::Context *iContext,
 void emscripten_glfw3_context_destroy();
 bool emscripten_glfw3_context_is_any_element_focused();
 bool emscripten_glfw3_context_is_extension_supported(char const *iExtension);
-void emscripten_glfw3_context_set_title(char const *iTitle);
+// Takes ownership of a malloc-allocated title, which the main thread frees.
+void emscripten_glfw3_context_set_title(char *iOwnedTitle);
 double emscripten_glfw3_context_get_now();
 GLFWwindow *emscripten_glfw3_context_get_fullscreen_window();
 GLFWwindow *emscripten_glfw3_context_get_pointer_lock_window();
 int emscripten_glfw3_window_init(GLFWwindow *iWindow, char const *iCanvasSelector);
 void emscripten_glfw3_window_on_created(GLFWwindow *iWindow);
-void emscripten_glfw3_context_set_clipboard_string(char const *iContent);
+// Takes ownership of a malloc-allocated string, which the main thread frees.
+void emscripten_glfw3_context_set_clipboard_string(char *iOwnedContent);
 void emscripten_glfw3_context_open_url(char const *, char const *);
 bool emscripten_glfw3_context_is_runtime_platform_apple();
 void emscripten_glfw3_create_custom_cursor(GLFWcursor *iCursor, int iWidth, int iHeight, unsigned char *iPixels);
@@ -681,8 +684,8 @@ void Context::setWindowTitle(GLFWwindow *iWindow, char const *iTitle)
     window->setTitle(iTitle);
 
     // do we need to update the browser title?
-    if(window->isFocused() || window == findFocusedOrSingleWindow())
-      emscripten_glfw3_context_set_title(iTitle);
+    if(iTitle && (window->isFocused() || window == findFocusedOrSingleWindow()))
+      emscripten_glfw3_context_set_title(strdup(iTitle));
   }
 }
 

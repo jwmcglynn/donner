@@ -1151,12 +1151,17 @@ exports_files(
 )
 
 js_test(
-    name = "glfw_cursor_proxy_tests",
+    name = "main_thread_proxy_tests",
     size = "small",
     copy_data_to_bin = False,
-    data = ["//third_party/emscripten-glfw:emscripten_glfw3_js_library"],
-    entry_point = "glfw-cursor-proxy.spec.mjs",
+    data = [
+        "//donner/editor:main_thread_call_sources",
+        "//donner/editor/gui:main_thread_call_sources",
+        "//third_party/emscripten-glfw:emscripten_glfw3_js_library",
+    ],
+    entry_point = "main-thread-proxy.spec.mjs",
     env = {
+        "DONNER_EDITOR_SOURCES": "$(rootpaths //donner/editor:main_thread_call_sources) $(rootpaths //donner/editor/gui:main_thread_call_sources)",
         "DONNER_GLFW_JS_LIBRARY": "$(rootpath //third_party/emscripten-glfw:emscripten_glfw3_js_library)",
     },
     node_options = ["--test"],

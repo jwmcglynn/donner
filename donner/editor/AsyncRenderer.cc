@@ -996,8 +996,10 @@ void AsyncRenderer::delaySampleThumbnailRendererCreationForTesting(bool shouldDe
     return;
   }
 #ifdef __EMSCRIPTEN__
-  // clang-format off: the MAIN_THREAD_EM_ASM bodies here are JavaScript, not C++.
-  MAIN_THREAD_EM_ASM(
+  // Posted without waiting: this worker may hold work the canvas owner is waiting for while the
+  // main thread waits on the canvas owner for a snapshot. Posts from one thread keep their order.
+  // clang-format off: the MAIN_THREAD_ASYNC_EM_ASM bodies here are JavaScript, not C++.
+  MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerSampleThumbnailRendererCreationBlocked'] = ({
           'blocked' : true,
@@ -1009,8 +1011,8 @@ void AsyncRenderer::delaySampleThumbnailRendererCreationForTesting(bool shouldDe
 #endif
   std::this_thread::sleep_for(delay);
 #ifdef __EMSCRIPTEN__
-  // clang-format off: the MAIN_THREAD_EM_ASM body here is JavaScript, not C++.
-  MAIN_THREAD_EM_ASM(
+  // clang-format off: the MAIN_THREAD_ASYNC_EM_ASM body here is JavaScript, not C++.
+  MAIN_THREAD_ASYNC_EM_ASM(
       { window['__donnerSampleThumbnailRendererCreationBlocked']['blocked'] = false; });
   // clang-format on
 #endif
