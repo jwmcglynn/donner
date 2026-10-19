@@ -1,5 +1,6 @@
 #include "donner/editor/DocumentSyncController.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -671,7 +672,7 @@ TEST_F(DocumentSyncControllerTest, FailedOutlineBatchAfterEarlierEditMirrorsLive
   constexpr std::string_view source = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
   <rect id="r" fill="red"/>
   <text id="first">ABC</text>
-  <text id="second">ABC</text>
+  <g><text id="second">ABC</text></g>
 </svg>)svg";
   EditorApp app;
   TextEditor textEditor;
@@ -687,34 +688,40 @@ TEST_F(DocumentSyncControllerTest, FailedOutlineBatchAfterEarlierEditMirrorsLive
   const auto rect = document.querySelector("#r");
   const auto first = document.querySelector("#first");
   const auto second = document.querySelector("#second");
-  ASSERT_TRUE(rect.has_value());
-  ASSERT_TRUE(first.has_value());
-  ASSERT_TRUE(second.has_value());
+  ASSERT_THAT(rect, testing::Ne(std::nullopt));
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  const auto secondParent = second->parentElement();
+  ASSERT_THAT(secondParent, testing::Ne(std::nullopt));
   svg::SVGGElement firstGroup = svg::SVGGElement::Create(document);
   firstGroup.setAttribute("id", "first_outlines");
+  firstGroup.appendChild(svg::SVGGElement::Create(document));
   svg::SVGGElement secondGroup = svg::SVGGElement::Create(document);
   secondGroup.setAttribute("id", "second_outlines");
+  secondGroup.appendChild(svg::SVGGElement::Create(document));
   const std::uint64_t generationBefore = app.document().documentGeneration();
+  // The first group fits at depth 3; the second, one level deeper, is refused after the first
+  // has been staged in indented source.
+  document.xmlDocument().setSourceEditTreeLimits(8'192, 3);
 
   app.applyMutation(EditorCommand::SetAttributeCommand(*rect, "fill", "blue"));
-  // The second command has an invalid parent, forcing the batch's fail-safe
-  // after the first group has been staged in an indented source document.
   app.applyMutation(EditorCommand::ReplaceElementsCommand({
       {.parent = document.svgElement(), .original = *first, .replacement = firstGroup},
-      {.parent = *second, .original = *second, .replacement = secondGroup},
+      {.parent = *secondParent, .original = *second, .replacement = secondGroup},
   }));
-  ASSERT_TRUE(app.flushFrame());
-  EXPECT_TRUE(app.document().lastFlushResult().replacedDocument);
-  EXPECT_GT(app.document().documentGeneration(), generationBefore);
-  EXPECT_FALSE(app.document().lastParseError().has_value());
+  ASSERT_THAT(app.flushFrame(), testing::Eq(true));
+  EXPECT_THAT(app.document().lastFlushResult().replacedDocument, testing::Eq(false));
+  EXPECT_THAT(app.document().documentGeneration(), testing::Eq(generationBefore));
+  EXPECT_THAT(app.document().lastParseError(), testing::Eq(std::nullopt));
   controller.applyPendingWritebacks(app, tool, textEditor);
 
-  EXPECT_EQ(textEditor.getText(), app.document().document().source());
-  EXPECT_NE(textEditor.getText().find("fill=\"blue\""), std::string::npos);
-  EXPECT_TRUE(app.document().document().querySelector("#first").has_value());
-  EXPECT_TRUE(app.document().document().querySelector("#second").has_value());
-  EXPECT_FALSE(app.document().document().querySelector("#first_outlines").has_value());
-  EXPECT_TRUE(app.isDirty());
+  EXPECT_THAT(textEditor.getText(), testing::Eq(std::string(document.source())));
+  EXPECT_THAT(textEditor.getText(), testing::HasSubstr(R"(<rect id="r" fill="blue"/>)"));
+  EXPECT_THAT(document.source(), testing::HasSubstr("\n  <text id=\"first\">ABC</text>\n"));
+  EXPECT_THAT(document.querySelector("#first"), testing::Optional(testing::Eq(*first)));
+  EXPECT_THAT(document.querySelector("#second"), testing::Optional(testing::Eq(*second)));
+  EXPECT_THAT(document.querySelector("#first_outlines"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.isDirty(), testing::Eq(true));
 }
 
 TEST_F(DocumentSyncControllerTest, UiDeleteUndoRestoresDeletedElementAndSourceText) {

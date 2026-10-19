@@ -523,7 +523,7 @@ TEST(TextToOutlines, CapacityRefusalMustNotDeleteSourceText) {
   EXPECT_THAT(async.flushFrame(), Eq(false));
 
   EXPECT_THAT(async.document().source(), Eq(sourceBefore));
-  EXPECT_THAT(async.document().querySelector("#logo").has_value(), Eq(true));
+  EXPECT_THAT(async.document().querySelector("#logo"), testing::Optional(Eq(text)));
   EXPECT_THAT(async.lastParseError(), Eq(std::nullopt));
 }
 
@@ -728,15 +728,16 @@ TEST(TextToOutlines, DepthRefusalRestoresEntireSelection) {
   app.selectReplacementsAfterNextFlush(std::move(selectionReplacements));
   (void)app.flushFrame();
 
-  EXPECT_THAT(app.document().document().source(), Eq(sourceBefore));
-  EXPECT_GT(app.document().documentGeneration(), generationBefore);
-  EXPECT_THAT(app.document().document().querySelector("#first").has_value(), Eq(true));
-  EXPECT_THAT(app.document().document().querySelector("#second").has_value(), Eq(true));
-  EXPECT_THAT(app.document().document().querySelector("#first_outlines"), Eq(std::nullopt));
-  EXPECT_THAT(app.document().document().querySelector("#second_outlines"), Eq(std::nullopt));
-  ASSERT_THAT(app.selectedElements(), testing::SizeIs(2));
-  EXPECT_THAT(app.selectedElements()[0].id(), Eq("first"));
-  EXPECT_THAT(app.selectedElements()[1].id(), Eq("second"));
+  // The first group is staged in indented source before the second exceeds the depth limit;
+  // reverting its exact insertion restores the source without replacing the document.
+  EXPECT_THAT(document.source(), Eq(sourceBefore));
+  EXPECT_THAT(app.document().documentGeneration(), Eq(generationBefore));
+  EXPECT_THAT(app.document().lastFlushResult().replacedDocument, Eq(false));
+  EXPECT_THAT(document.querySelector("#first"), testing::Optional(Eq(*first)));
+  EXPECT_THAT(document.querySelector("#second"), testing::Optional(Eq(*second)));
+  EXPECT_THAT(document.querySelector("#first_outlines"), Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#second_outlines"), Eq(std::nullopt));
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(*first, *second));
   EXPECT_THAT(app.canUndo(), Eq(false));
   EXPECT_THAT(app.isDirty(), Eq(false));
   EXPECT_THAT(app.document().lastParseError(), Eq(std::nullopt));
