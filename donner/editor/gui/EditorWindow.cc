@@ -2028,8 +2028,8 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // from the main thread synchronously. The main thread can itself be waiting on this pthread for
   // a canvas snapshot, so replace it with one that reads the bridge's viewport mirror, which the
   // main thread updates before the event reaches this pthread. ImGui's fullscreenchange listener
-  // makes the same read, but only on Fullscreen API changes, which the editor never requests, and it
-  // shares its document target with GLFW's own listener, so it stays.
+  // makes the same read, but only on Fullscreen API changes, which the editor never requests, and
+  // it shares its document target with GLFW's own listener, so it stays.
   emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, false, nullptr);
   emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, window_, false,
                                  &ResizeWindowFromViewportMirror);

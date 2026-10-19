@@ -249,12 +249,13 @@ void PublishEyedropperTestState(std::string_view activeFill, std::string_view ac
                                 std::size_t sourceSelectionByteLength,
                                 std::size_t sourceDiagnosticCount, bool textSyncWakePending,
                                 double documentGeneration) {
-  // Published every frame, so the post must not wait for the main thread: the main thread may itself
-  // be waiting on this canvas-owning pthread (a canvas snapshot). The strings are malloc-allocated
-  // copies that the main thread frees after reading.
+  // Published every frame, so the post must not wait for the main thread: the main thread may
+  // itself be waiting on this canvas-owning pthread (a canvas snapshot). The strings are
+  // malloc-allocated copies that the main thread frees after reading.
   const auto copy = [](std::string_view value) {
-    return value.empty() ? strdup("")
-                         : strndup(value.data(), std::min(value.size(), kEyedropperTestFieldMaxBytes));
+    return value.empty()
+               ? strdup("")
+               : strndup(value.data(), std::min(value.size(), kEyedropperTestFieldMaxBytes));
   };
   char* fill = copy(activeFill);
   char* stroke = copy(activeStroke);
