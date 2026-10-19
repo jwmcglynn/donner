@@ -5,6 +5,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "BUILD.bazel",
+    "coverage_contract.json",
     "test_with_exclusions.py",
 ])
 
