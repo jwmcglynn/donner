@@ -568,12 +568,11 @@ def _runner_loss_job_violations(name, job):
     commands = [body.strip() for body in _script_bodies(job)]
     if commands != [RUNNER_LOSS_COMMANDS.get(name)]:
         violations.append("%s runs unreviewed commands: %s" % (name, commands))
-    env = dict(re.findall(r"(?m)^          ([A-Za-z_][A-Za-z0-9_]*): (.*)$", job))
-    env.pop("persist-credentials", None)
-    env.pop("sparse-checkout", None)
-    env.pop("sparse-checkout-cone-mode", None)
-    if env != RUNNER_LOSS_STEP_ENV.get(name) or job.count("env:") != 1 or \
-            not re.search(r"(?m)^        env:$", job):
+    lines = job.splitlines()
+    env_blocks = [_indented_block(lines[index + 1:], 8) for index, line in enumerate(lines)
+                  if line == "        env:"]
+    env = _mapping(env_blocks[0]) if len(env_blocks) == 1 else {}
+    if env != RUNNER_LOSS_STEP_ENV.get(name) or job.count("env:") != 1:
         violations.append("%s step environment is not the reviewed token and run ID: %s"
                           % (name, sorted(env.items())))
     gate = re.search(r"(?ms)^    if: (?:>-\n)?(.*?)^    runs-on:", job)

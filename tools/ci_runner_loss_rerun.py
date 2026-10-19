@@ -24,9 +24,9 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+import http.client
 import json
 import os
-import http.client
 import re
 import sys
 from typing import Callable, Optional
