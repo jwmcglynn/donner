@@ -1151,6 +1151,18 @@ exports_files(
 )
 
 js_test(
+    name = "glfw_cursor_proxy_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["//third_party/emscripten-glfw:emscripten_glfw3_js_library"],
+    entry_point = "glfw-cursor-proxy.spec.mjs",
+    env = {
+        "DONNER_GLFW_JS_LIBRARY": "$(rootpath //third_party/emscripten-glfw:emscripten_glfw3_js_library)",
+    },
+    node_options = ["--test"],
+)
+
+js_test(
     name = "firefox_launch_env_tests",
     size = "small",
     copy_data_to_bin = False,

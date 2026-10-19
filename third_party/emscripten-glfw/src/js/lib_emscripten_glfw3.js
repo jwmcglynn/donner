@@ -609,7 +609,19 @@ let emscripten_glfw3_impl = {
   },
 
   //! emscripten_glfw3_window_set_standard_cursor
-  emscripten_glfw3_window_set_standard_cursor__proxy: 'sync',
+  // Cursor updates are fire-and-forget, so they are proxied asynchronously. A
+  // synchronous proxy blocks the calling pthread until the main thread runs the
+  // update. When that pthread owns the transferred OffscreenCanvas, the main
+  // thread can itself be blocked waiting for that pthread: Firefox takes a
+  // canvas snapshot (page screenshots, printing, drawSnapshot) by running a task
+  // on the owning worker and waiting for it, up to
+  // `gfx.offscreencanvas.snapshot-timeout-ms` (10 s by default). A cursor change
+  // in that window deadlocks both threads until the timeout, and the snapshot
+  // comes back without the canvas. Asynchronous proxying keeps call order with
+  // the other main-thread calls from this thread. The arguments stay valid
+  // until the call runs: standard cursor CSS values are string literals and the
+  // custom cursor argument is an opaque key into `GLFW3.fCustomCursors`.
+  emscripten_glfw3_window_set_standard_cursor__proxy: 'async',
   emscripten_glfw3_window_set_standard_cursor: (glfwWindow, cursor) => {
     const ctx = GLFW3.fWindowContexts[glfwWindow];
     if(cursor)
@@ -619,7 +631,8 @@ let emscripten_glfw3_impl = {
   },
 
   //! emscripten_glfw3_window_set_custom_cursor
-  emscripten_glfw3_window_set_custom_cursor__proxy: 'sync',
+  // Asynchronous for the same reason as the standard cursor setter above.
+  emscripten_glfw3_window_set_custom_cursor__proxy: 'async',
   emscripten_glfw3_window_set_custom_cursor: (glfwWindow, glfwCursor, xhot, yhot) => {
     const ctx = GLFW3.fWindowContexts[glfwWindow];
     const cursor = GLFW3.fCustomCursors[glfwCursor];

@@ -25,3 +25,13 @@ To update a subtree, run the `pull` command and pattern-match from an `add` comm
 ```sh
 git subtree pull https://github.com/jwmcglynn/css-parsing-tests --prefix third_party/css-parsing-tests master --squash
 ```
+
+## Local modifications
+
+`third_party/emscripten-glfw` carries Donner-specific changes to its JavaScript library
+(`src/js/lib_emscripten_glfw3.js`). Keep them when updating it:
+
+- Window resize and teardown skip `canvas.width`/`canvas.height` writes once the canvas has been
+  transferred to an `OffscreenCanvas`.
+- The cursor setters are proxied to the main thread asynchronously, so a pthread that owns the
+  canvas never blocks on the main thread while a browser snapshots that canvas.
