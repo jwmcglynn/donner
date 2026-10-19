@@ -50,11 +50,40 @@ bool ExceedsReplacementBatchNodeLimit(svg::SVGDocument& document, const EditorCo
   return false;
 }
 
+// Removing each original must not be refused once its replacement is staged, so check every
+// condition removal depends on before staging anything.
+bool OriginalsAreRemovable(const EditorCommand& command) {
+  std::vector<Entity> originals;
+  originals.reserve(command.replacements.size());
+  for (const EditorCommand::ElementReplacement& replacement : command.replacements) {
+    const std::optional<xml::XMLNode> node =
+        xml::XMLNode::TryCast(replacement.original.entityHandle());
+    if (!node.has_value() || !node->getNodeLocation().has_value() ||
+        replacement.original.parentElement() != std::optional(replacement.parent)) {
+      return false;
+    }
+    const Entity entity = replacement.original.entityHandle().entity();
+    if (std::find(originals.begin(), originals.end(), entity) != originals.end()) {
+      return false;
+    }
+    originals.push_back(entity);
+  }
+  return true;
+}
+
 struct ReplacementBatchEdits {
   bool failed = false;
   bool sourceRestored = false;
   std::optional<ParseDiagnostic> failure;
   std::vector<xml::XMLSourceDelta> sourceDeltas;
+};
+
+/// Staged replacement subtrees with the single source insertion each one made, oldest first.
+struct StagedReplacements {
+  std::vector<svg::SVGElement> elements;
+  std::vector<xml::XMLSourceDelta> insertions;
+  /// False when an insertion's source edit cannot be reverted exactly.
+  bool revertible = true;
 };
 
 void AppendReplacementDeltas(ReplacementBatchEdits& edits,
@@ -64,13 +93,16 @@ void AppendReplacementDeltas(ReplacementBatchEdits& edits,
 }
 
 void StageReplacementSubtrees(svg::SVGDocument& document, const EditorCommand& command,
-                              ReplacementBatchEdits& edits, std::vector<svg::SVGElement>& staged) {
+                              ReplacementBatchEdits& edits, StagedReplacements& staged) {
   for (const EditorCommand::ElementReplacement& replacement : command.replacements) {
     xml::ApplySourceEditResult inserted =
         document.insertElement(replacement.parent, replacement.replacement, replacement.original);
     AppendReplacementDeltas(edits, inserted);
-    if (inserted.applied) {
-      staged.push_back(replacement.replacement);
+    if (inserted.applied && inserted.sourceDeltas.size() == 1) {
+      staged.elements.push_back(replacement.replacement);
+      staged.insertions.push_back(inserted.sourceDeltas.front());
+    } else if (!inserted.sourceDeltas.empty()) {
+      staged.revertible = false;
     }
     if (!inserted.applied || inserted.diagnostic.has_value()) {
       edits.failure = std::move(inserted.diagnostic);
@@ -93,23 +125,25 @@ void RemoveReplacementOriginals(svg::SVGDocument& document, const EditorCommand&
   }
 }
 
-void RollbackStagedReplacements(svg::SVGDocument& document, std::vector<svg::SVGElement>& staged,
+// Reverting the exact insertion deltas also removes the indentation each insertion added, so a
+// refusal leaves byte-identical source and needs no document replacement.
+void RollbackStagedReplacements(svg::SVGDocument& document, const StagedReplacements& staged,
                                 ReplacementBatchEdits& edits) {
-  for (auto it = staged.rbegin(); it != staged.rend(); ++it) {
-    xml::ApplySourceEditResult removed = document.removeElement(*it);
-    AppendReplacementDeltas(edits, removed);
-    if ((!removed.applied || removed.diagnostic.has_value()) && removed.diagnostic.has_value()) {
-      edits.failure = std::move(removed.diagnostic);
-    }
+  if (staged.elements.empty() || !staged.revertible) {
+    return;
   }
+  const xml::ApplySourceEditResult reverted =
+      document.revertElementInsertions(staged.elements, staged.insertions);
+  AppendReplacementDeltas(edits, reverted);
 }
 
 ReplacementBatchEdits ApplyReplacementBatchEdits(svg::SVGDocument& document,
                                                  const EditorCommand& command,
                                                  std::string_view sourceBefore) {
   ReplacementBatchEdits edits;
-  std::vector<svg::SVGElement> staged;
-  staged.reserve(command.replacements.size());
+  StagedReplacements staged;
+  staged.elements.reserve(command.replacements.size());
+  staged.insertions.reserve(command.replacements.size());
   // Nested DOM setters reuse this scope; no reader can observe a partial batch.
   [[maybe_unused]] svg::DocumentWriteAccess access = document.writeAccess();
   if (document.source() != sourceBefore) {
@@ -117,7 +151,11 @@ ReplacementBatchEdits ApplyReplacementBatchEdits(svg::SVGDocument& document,
     edits.sourceRestored = true;
     return edits;
   }
-  if (ExceedsReplacementBatchNodeLimit(document, command)) {
+  if (!OriginalsAreRemovable(command)) {
+    edits.failure = ParseDiagnostic::Warning(
+        "Text-to-outline selection no longer matches the document", FileOffset::Offset(0));
+    edits.failed = true;
+  } else if (ExceedsReplacementBatchNodeLimit(document, command)) {
     edits.failure = ParseDiagnostic::Warning(
         "Text-to-outline selection exceeds the tree-node limit", FileOffset::Offset(0));
     edits.failed = true;
@@ -462,17 +500,8 @@ void AsyncSVGDocument::applyReplacementBatch(const EditorCommand& command) {
     return;
   }
 
-  // A source-exact fallback is required if a later-stage edit cannot be rolled back.
   const std::string sourceBefore = document_->withReadAccess(
       [this](svg::DocumentReadAccess&) { return std::string(document_->source()); });
-  ParseWarningSink rollbackSink;
-  auto rollbackParsed =
-      svg::parser::SVGParser::ParseSVG(sourceBefore, rollbackSink, EditorParseOptions());
-  if (rollbackParsed.hasError()) {
-    publishParseDiagnostics(CopyWarnings(rollbackSink), std::move(rollbackParsed.error()));
-    return;
-  }
-  svg::SVGDocument rollbackDocument = std::move(rollbackParsed).result();
   const bool priorApplied = lastFlushResult_.appliedCommands;
   ReplacementBatchEdits edits = ApplyReplacementBatchEdits(*document_, command, sourceBefore);
   if (!edits.failed) {
@@ -484,8 +513,16 @@ void AsyncSVGDocument::applyReplacementBatch(const EditorCommand& command) {
   }
 
   if (!edits.sourceRestored) {
-    // Earlier edits in this flush are already incorporated in sourceBefore.
-    (void)setDocumentMaybeStructural(std::move(rollbackDocument));
+    // Fail-safe for a broken edit invariant: removal of a checked original or the exact revert of
+    // its own insertions was refused. Earlier edits in this flush are incorporated in sourceBefore.
+    ParseWarningSink rollbackSink;
+    auto rollbackParsed =
+        svg::parser::SVGParser::ParseSVG(sourceBefore, rollbackSink, EditorParseOptions());
+    if (rollbackParsed.hasError()) {
+      publishParseDiagnostics(CopyWarnings(rollbackSink), std::move(rollbackParsed.error()));
+      return;
+    }
+    (void)setDocumentMaybeStructural(std::move(rollbackParsed).result());
     lastFlushResult_.sourceDeltas.clear();
     recordAppliedCommand(command);
     lastFlushResult_.replacedDocument = true;

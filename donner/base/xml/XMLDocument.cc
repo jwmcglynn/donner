@@ -3233,6 +3233,107 @@ ApplySourceEditResult XMLDocument::removeNode(XMLNode node) {
   return result;
 }
 
+ApplySourceEditResult XMLDocument::revertNodeInsertions(std::span<const NodeInsertion> insertions) {
+  ApplySourceEditResult result;
+  result.scope = ReparseScope::ElementSubtree;
+  if (insertions.empty()) {
+    return result;
+  }
+
+  const SourceRange diagnosticRange = MakeNodeDiagnosticRange(insertions.back().node);
+  XMLSourceStore* store = sourceStore();
+  if (store == nullptr) {
+    result.diagnostic =
+        MakeEditDiagnostic("Cannot revert node insertions without source text", diagnosticRange);
+    return result;
+  }
+
+  const std::size_t count = insertions.size();
+  const std::uint64_t currentVersion = store->sourceVersion();
+  const std::size_t sourceSize = source().size();
+  if (count - 1 > currentVersion ||
+      currentVersion > std::numeric_limits<std::uint64_t>::max() - count) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Cannot revert node insertions that are not the latest source edits", diagnosticRange);
+    return result;
+  }
+
+  // Track where each insertion's bytes sit in the current source once later insertions have
+  // shifted or grown them. A later pure insertion at an earlier region's start lands before it.
+  std::vector<SourceEditRange> regions;
+  regions.reserve(count);
+  std::size_t insertedTotal = 0;
+  for (std::size_t i = 0; i < count; ++i) {
+    const NodeInsertion& entry = insertions[i];
+    const XMLSourceDelta& delta = entry.insertion;
+    if (!IsDocumentNode(*this, entry.node) || entry.node.type() == XMLNode::Type::Document ||
+        !entry.node.parentElement().has_value() || delta.removedLength != 0 ||
+        delta.insertedLength == 0 || delta.offset > sourceSize ||
+        delta.insertedLength > sourceSize - insertedTotal ||
+        delta.sourceVersion != currentVersion - (count - 1 - i)) {
+      result.diagnostic = MakeEditDiagnostic(
+          "Cannot revert node insertions that are not the latest source edits", diagnosticRange);
+      return result;
+    }
+    insertedTotal += delta.insertedLength;
+    for (SourceEditRange& earlier : regions) {
+      if (delta.offset <= earlier.start) {
+        earlier.start += delta.insertedLength;
+        earlier.end += delta.insertedLength;
+      } else if (delta.offset < earlier.end) {
+        earlier.end += delta.insertedLength;
+      }
+    }
+    regions.push_back(
+        SourceEditRange{.start = delta.offset, .end = delta.offset + delta.insertedLength});
+  }
+
+  for (std::size_t i = 0; i < count; ++i) {
+    const std::optional<SourceRange> location = insertions[i].node.getNodeLocation();
+    const std::optional<SourceEditRange> nodeRange =
+        location.has_value() ? ResolveEditRange(*location, source()) : std::nullopt;
+    if (!nodeRange.has_value() || regions[i].end > sourceSize ||
+        nodeRange->start < regions[i].start || nodeRange->end > regions[i].end) {
+      result.diagnostic = MakeEditDiagnostic(
+          "Cannot revert a node that lies outside its source insertion", diagnosticRange);
+      return result;
+    }
+  }
+
+  // Newest first: each revert returns the source to the state its insertion was applied to, so
+  // every older delta's offset is valid again when its turn comes.
+  for (std::size_t i = count; i-- > 0;) {
+    XMLNode node = insertions[i].node;
+    const XMLSourceDelta& insertion = insertions[i].insertion;
+    std::optional<XMLSourceDelta> delta =
+        store->replace(insertion.offset, insertion.insertedLength, std::string_view());
+    if (!delta.has_value()) {
+      result.diagnostic = MakeEditDiagnostic("Invalid source replacement for insertion revert",
+                                             MakeNodeDiagnosticRange(node));
+      return result;
+    }
+
+    ApplySourceEditResult step;
+    step.scope = ReparseScope::ElementSubtree;
+    step.sourceDeltas.push_back(*delta);
+    ClearSourceLocationsRecursive(node);
+    node.remove();
+    step.mutations.push_back(XMLMutation{
+        .kind = XMLMutation::Kind::NodeRemoved,
+        .node = node,
+        .attributeName = XMLQualifiedName(""),
+        .value = std::nullopt,
+        .scope = ReparseScope::ElementSubtree,
+    });
+    NoteConstructedSourceChange(*this, step, node);
+    result.applied = true;
+    result.sourceDeltas.insert(result.sourceDeltas.end(), step.sourceDeltas.begin(),
+                               step.sourceDeltas.end());
+    result.mutations.insert(result.mutations.end(), step.mutations.begin(), step.mutations.end());
+  }
+  return result;
+}
+
 ApplySourceEditResult XMLDocument::setElementText(XMLNode element, std::string_view text) {
   ApplySourceEditResult result;
   result.scope = ReparseScope::TextNode;

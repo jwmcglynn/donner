@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -2865,6 +2866,75 @@ TEST_F(XMLDocumentTests, InsertNodeAppendsSourcelessChild) {
   EXPECT_THAT(std::string(doc.source()), testing::HasSubstr("<rect"));
   ASSERT_TRUE(svg.firstChild().has_value());
   EXPECT_EQ(svg.firstChild()->tagName(), XMLQualifiedNameRef("rect"));
+}
+
+TEST_F(XMLDocumentTests, RevertNodeInsertionsRestoresIndentedSourceExactly) {
+  constexpr std::string_view kSource = "<svg>\n  <rect/>\n  <circle/>\n</svg>";
+  XMLDocument doc = ParseDocument(kSource);
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode rect = svg.firstChild().value();
+  XMLNode circle = rect.nextSibling().value();
+  XMLNode first = XMLNode::CreateElementNode(doc, "g");
+  XMLNode second = XMLNode::CreateElementNode(doc, "path");
+
+  ApplySourceEditResult insertedFirst = doc.insertNode(svg, first, rect);
+  ApplySourceEditResult insertedSecond = doc.insertNode(svg, second, circle);
+  ASSERT_THAT(insertedFirst.sourceDeltas, testing::SizeIs(1));
+  ASSERT_THAT(insertedSecond.sourceDeltas, testing::SizeIs(1));
+  ASSERT_THAT(std::string(doc.source()),
+              testing::Eq("<svg>\n  <g/>\n  <rect/>\n  <path/>\n  <circle/>\n</svg>"));
+
+  const std::array insertions{
+      XMLDocument::NodeInsertion{.node = first, .insertion = insertedFirst.sourceDeltas[0]},
+      XMLDocument::NodeInsertion{.node = second, .insertion = insertedSecond.sourceDeltas[0]},
+  };
+  ApplySourceEditResult reverted = doc.revertNodeInsertions(insertions);
+
+  EXPECT_THAT(reverted.applied, testing::Eq(true));
+  EXPECT_THAT(reverted.diagnostic, testing::Eq(std::nullopt));
+  EXPECT_THAT(std::string(doc.source()), testing::Eq(std::string(kSource)));
+  EXPECT_THAT(first.parentElement(), testing::Eq(std::nullopt));
+  EXPECT_THAT(second.parentElement(), testing::Eq(std::nullopt));
+  EXPECT_THAT(svg.firstChild(), testing::Optional(testing::Eq(rect)));
+  EXPECT_THAT(rect.nextSibling(), testing::Optional(testing::Eq(circle)));
+  EXPECT_THAT(circle.getNodeLocation(), testing::Ne(std::nullopt));
+}
+
+TEST_F(XMLDocumentTests, RevertNodeInsertionsRefusesInsertionThatIsNotTheLatestEdit) {
+  XMLDocument doc = ParseDocument("<svg>\n  <rect/>\n</svg>");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode rect = svg.firstChild().value();
+  XMLNode group = XMLNode::CreateElementNode(doc, "g");
+  ApplySourceEditResult inserted = doc.insertNode(svg, group, rect);
+  ASSERT_THAT(inserted.sourceDeltas, testing::SizeIs(1));
+  ASSERT_THAT(doc.setAttribute(rect, "x", "1").applied, testing::Eq(true));
+  const std::string sourceBefore(doc.source());
+
+  const std::array insertions{
+      XMLDocument::NodeInsertion{.node = group, .insertion = inserted.sourceDeltas[0]}};
+  ApplySourceEditResult reverted = doc.revertNodeInsertions(insertions);
+
+  EXPECT_THAT(reverted.applied, testing::Eq(false));
+  EXPECT_THAT(reverted.diagnostic, testing::Ne(std::nullopt));
+  EXPECT_THAT(std::string(doc.source()), testing::Eq(sourceBefore));
+  EXPECT_THAT(group.parentElement(), testing::Optional(testing::Eq(svg)));
+}
+
+TEST_F(XMLDocumentTests, RevertNodeInsertionsRefusesSelfClosingParentExpansion) {
+  XMLDocument doc = ParseDocument("<svg><g/></svg>");
+  XMLNode group = doc.root().firstChild()->firstChild().value();
+  XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
+  ApplySourceEditResult inserted = doc.insertNode(group, rect);
+  ASSERT_THAT(inserted.sourceDeltas, testing::SizeIs(1));
+  const std::string sourceBefore(doc.source());
+
+  const std::array insertions{
+      XMLDocument::NodeInsertion{.node = rect, .insertion = inserted.sourceDeltas[0]}};
+  ApplySourceEditResult reverted = doc.revertNodeInsertions(insertions);
+
+  EXPECT_THAT(reverted.applied, testing::Eq(false));
+  EXPECT_THAT(reverted.diagnostic, testing::Ne(std::nullopt));
+  EXPECT_THAT(std::string(doc.source()), testing::Eq(sourceBefore));
 }
 
 TEST_F(XMLDocumentTests, InsertNodeUsesClosingTagScanWhenCachedClosingTagRangeIsMissing) {

@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -300,6 +301,29 @@ public:
    * @param node Node to remove.
    */
   ApplySourceEditResult removeNode(XMLNode node);
+
+  /// One completed source-less node insertion and the source delta \ref insertNode returned.
+  struct NodeInsertion {
+    XMLNode node;              //!< Node that was inserted.
+    XMLSourceDelta insertion;  //!< The pure-insertion source delta that inserted \p node.
+  };
+
+  /**
+   * Revert node insertions that are the most recent edits to this document's source.
+   *
+   * \p insertions lists source-less node insertions in the order they were applied. Their source
+   * deltas must be pure insertions (no removed bytes) whose versions run consecutively up to the
+   * current source version, and each node's source range must lie within the bytes its delta
+   * inserted. Newest first, each delta's bytes are removed and its node is detached with an
+   * \ref XMLMutation::Kind::NodeRemoved mutation, so the source returns byte for byte to its
+   * state before the first insertion, including the indentation the insertions added. When the
+   * list does not meet these conditions, nothing changes and the result carries a diagnostic. If
+   * the source store refuses a removal part way, the newer insertions stay reverted and the result
+   * is applied with a diagnostic.
+   *
+   * @param insertions Insertions to revert, oldest first.
+   */
+  ApplySourceEditResult revertNodeInsertions(std::span<const NodeInsertion> insertions);
 
   /**
    * Replace an element's text content through this document and update owned source text.
