@@ -42,6 +42,8 @@ public:
   using Result = std::variant<ImageResource, SvgImageContent, UrlLoaderError>;
 
   /// Callback that reserves exact decoded RGBA bytes after dimensions are known but before decode.
+  /// Returning false fails the load with `UrlLoaderError::ResourceTooLarge` without exhausting the
+  /// shared byte budget; \ref decodedImageAdmissionRefused then returns true.
   using DecodedImageAdmission = std::function<bool(size_t)>;
 
   /**

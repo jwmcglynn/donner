@@ -48,7 +48,8 @@ namespace donner::svg {
  * | Shared timing | `begin`, `dur`, `end`, `fill`, `repeatCount`, `repeatDur`, `restart`, `min`, and `max`. |
  *
  * The default `fill="remove"` restores the underlying value after the active interval;
- * `fill="freeze"` keeps the replacement. Event and syncbase timing are not resolved yet.
+ * `fill="freeze"` keeps the replacement. See \ref xml_animate for shared timing behavior,
+ * including event and syncbase `begin` and `end` values.
  */
 
 /**

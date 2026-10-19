@@ -17,7 +17,7 @@ class SVGElement;
 
 /// Diagnostic record for one stylesheet rule that matched an element.
 struct SVGMatchedStyleRule {
-  Entity stylesheetEntity = entt::null;  ///< Entity carrying the matched stylesheet.
+  Entity stylesheetEntity = entt::null;  ///< Owning `<style>` or `<svg>` element key.
   std::size_t ruleIndex = 0;             ///< Index of the matched rule within the stylesheet.
   std::size_t selectorEntryIndex = 0;    ///< Index of the matched selector-list entry.
   css::Specificity specificity;          ///< Selector specificity for this match.
@@ -40,7 +40,7 @@ struct SVGStylesheetDeclaration {
 /// Stylesheet rule in a document; built-in rules have no document source ranges.
 struct SVGStylesheetRule {
   bool isUserAgentStylesheet = false;  ///< True for a built-in rule without document source ranges.
-  Entity stylesheetEntity = entt::null;                ///< Entity carrying the stylesheet.
+  Entity stylesheetEntity = entt::null;                ///< Owning `<style>` or `<svg>` element key.
   std::size_t ruleIndex = 0;                           ///< Index within the stylesheet.
   std::optional<SourceRange> ruleSourceRange;          ///< Rule range in SVG source.
   std::optional<SourceRange> selectorSourceRange;      ///< Selector range in SVG source.
@@ -49,7 +49,7 @@ struct SVGStylesheetRule {
 
 /// Stylesheet rule found at a document source offset.
 struct SVGStyleRuleAtSourceOffset {
-  Entity stylesheetEntity = entt::null;           ///< Entity carrying the stylesheet.
+  Entity stylesheetEntity = entt::null;           ///< Owning `<style>` element key.
   std::size_t ruleIndex = 0;                      ///< Index of the source rule.
   std::optional<std::size_t> selectorEntryIndex;  ///< Selector-list entry containing the offset.
   SourceRange ruleSourceRange{FileOffset::Offset(0),
@@ -67,7 +67,8 @@ struct SVGStyleRuleAtSourceOffset {
 /// @return Matched stylesheet rules in cascade scan order.
 std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& element);
 
-/// Collect source-backed author stylesheet rules in \p document.
+/// Collect source-backed author stylesheet rules in \p document, optionally with the built-in user
+/// agent stylesheet rules.
 ///
 /// @param document SVG document to inspect.
 /// @param includeUserAgent Include built-in rules without document source ranges. Defaults to
