@@ -127,6 +127,25 @@ def _counterpart_ran(counterpart, receipts):
     return step.get("tests", 0) >= counterpart.get("min_tests", 0)
 
 
+def _classes(manifest):
+    """(lane / phase / class, entry) for every class in the manifest, in order."""
+    for lane, phases in sorted(manifest["lanes"].items()):
+        for phase, classes in sorted(phases.items()):
+            for name, entry in sorted(classes.items()):
+                yield "%s / %s / %s" % (lane, phase, name), entry
+
+
+def _exception_line(where, exception):
+    return "%s: %s (owner %s, %s)" % (where, exception["reason"], exception["owner"],
+                                      exception["decision"])
+
+
+def _gap(where, counterparts):
+    expected = ", ".join("%s / %s" % (c["job"], c["step"]) for c in counterparts)
+    return "%s ran on main but not on this pull request; expected an executed %s" % (
+        where, expected)
+
+
 def check(manifest, receipts, selection):
     """(problems, exceptions used) for these receipts and this pull request's selection.
 
@@ -134,23 +153,13 @@ def check(manifest, receipts, selection):
     """
     problems = []
     excepted = []
-    for lane, phases in sorted(manifest["lanes"].items()):
-        for phase, classes in sorted(phases.items()):
-            for name, entry in sorted(classes.items()):
-                where = "%s / %s / %s" % (lane, phase, name)
-                if not _selected(entry["when"], selection):
-                    continue
-                if entry.get("exception"):
-                    excepted.append("%s: %s (owner %s, %s)" % (
-                        where, entry["exception"]["reason"], entry["exception"]["owner"],
-                        entry["exception"]["decision"]))
-                    continue
-                if not any(_counterpart_ran(counterpart, receipts)
-                           for counterpart in entry["counterparts"]):
-                    expected = ", ".join("%s / %s" % (c["job"], c["step"])
-                                         for c in entry["counterparts"])
-                    problems.append("%s ran on main but not on this pull request; expected an "
-                                    "executed %s" % (where, expected))
+    for where, entry in _classes(manifest):
+        if not _selected(entry["when"], selection):
+            continue
+        if entry.get("exception"):
+            excepted.append(_exception_line(where, entry["exception"]))
+        elif not any(_counterpart_ran(c, receipts) for c in entry["counterparts"]):
+            problems.append(_gap(where, entry["counterparts"]))
     return problems, excepted
 
 
