@@ -309,6 +309,13 @@ py_test(
 )
 
 py_library(
+    name = "test_executable_fixtures",
+    testonly = 1,
+    srcs = ["test_executable_fixtures.py"],
+    visibility = ["//build_defs:__pkg__"],
+)
+
+py_library(
     name = "test_timing",
     testonly = 1,
     srcs = ["test_timing.py"],
