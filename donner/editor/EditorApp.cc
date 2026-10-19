@@ -1033,6 +1033,27 @@ bool HasEarlierPaintingElement(const svg::SVGElement& element, const svg::SVGEle
   return false;
 }
 
+/// Elements of a selection split into those a delete removes and those it keeps.
+struct DeletionPartition {
+  std::vector<svg::SVGElement> deletable;  //!< Elements the delete removes.
+  std::vector<svg::SVGElement> kept;       //!< Locked elements and the document root.
+};
+
+/// Split \p selection for a delete: locked elements and \p documentRoot are kept.
+DeletionPartition PartitionSelectionForDeletion(std::span<const svg::SVGElement> selection,
+                                                const svg::SVGElement& documentRoot) {
+  DeletionPartition partition;
+  partition.deletable.reserve(selection.size());
+  for (const svg::SVGElement& element : selection) {
+    if (IsLocked(element) || element == documentRoot) {
+      partition.kept.push_back(element);
+    } else {
+      partition.deletable.push_back(element);
+    }
+  }
+  return partition;
+}
+
 }  // namespace
 
 EditorApp::EditorApp() = default;
@@ -1250,21 +1271,16 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
     return false;
   }
 
-  // Locked elements are protected from deletion. Filter them out before ANY
-  // delete side effect - source undo, remove writebacks, selection change.
-  // Gating only the DOM command (applyMutation's IsLockGatedCommand check)
-  // would still let the already-enqueued remove writeback splice the locked
-  // element out of the source text.
-  std::vector<svg::SVGElement> selected;
-  std::vector<svg::SVGElement> lockedSelection;
-  selected.reserve(selection_.size());
-  for (const auto& element : selection_) {
-    if (IsLocked(element)) {
-      lockedSelection.push_back(element);
-    } else {
-      selected.push_back(element);
-    }
-  }
+  // Locked elements and the document root are protected from deletion. Filter
+  // them out before ANY delete side effect - source undo, remove writebacks,
+  // selection change. Gating only the DOM command (applyMutation's
+  // IsLockGatedCommand check, or the document's refusal to remove its root)
+  // would still let the already-enqueued remove writeback splice the element
+  // out of the source text.
+  DeletionPartition partition =
+      PartitionSelectionForDeletion(selection_, document_.document().svgElement());
+  std::vector<svg::SVGElement> selected = std::move(partition.deletable);
+  std::vector<svg::SVGElement> lockedSelection = std::move(partition.kept);
   if (selected.empty()) {
     return false;
   }
@@ -1293,7 +1309,7 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
                          captureDocumentSourceSnapshot(selected.front(), sourceAfterDelete));
   }
 
-  // Locked elements survive the delete and stay selected.
+  // Locked elements and the document root survive the delete and stay selected.
   if (lockedSelection.empty()) {
     setSelection(std::nullopt);
   } else {

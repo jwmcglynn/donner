@@ -596,7 +596,8 @@ public:
   void removeChild(const SVGElement& child);
 
   /**
-   * Remove this node from its parent, if it has one. Has no effect if this has no parent.
+   * Remove this node from its parent, if it has one. Has no effect if this has no parent or is the
+   * document's root \ref SVGDocument::svgElement.
    */
   void remove();
 

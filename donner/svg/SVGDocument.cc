@@ -1522,6 +1522,19 @@ xml::ApplySourceEditResult SVGDocument::removeElement(const SVGElement& element)
   // `EntityHandle` conversions of `element.handle_` and `parent.entityHandle()` below don't fire
   // the scoped-access assert under ThreadingMode::ConcurrentDom.
   [[maybe_unused]] DocumentWriteAccess access = writeAccess();
+  // The document always has its root <svg>: layout, rendering and hit testing read the root's
+  // components unconditionally, so removing it would leave every later frame on a dead entity.
+  if (element == svgElement()) {
+    xml::ApplySourceEditResult result;
+    result.scope = xml::ReparseScope::ElementSubtree;
+    const std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.handle_);
+    result.diagnostic = ParseDiagnostic::Error(
+        "Cannot remove the document root element",
+        xmlNode.has_value() ? xmlNode->getNodeLocation().value_or(FallbackRange())
+                            : FallbackRange());
+    return result;
+  }
+
   const std::optional<SVGElement> parent = element.parentElement();
 
   if (hasSourceStore()) {

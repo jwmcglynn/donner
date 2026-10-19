@@ -47,6 +47,28 @@ std::uint32_t MaxPublicHandlesInSubtree(Registry& registry, Entity root) {
   return maxPublicHandles;
 }
 
+/// True if \p root is still a live entity whose lifetime is detached.
+bool IsStillDetachedRoot(Registry& registry, Entity root) {
+  if (root == entt::null || !registry.valid(root)) {
+    return false;
+  }
+
+  const auto* lifetime = registry.try_get<NodeLifetimeComponent>(root);
+  return lifetime != nullptr && !lifetime->isAttached();
+}
+
+/// True if \p detachedRoot is \p documentRoot or one of its ancestors.
+bool SubtreeContains(Registry& registry, Entity detachedRoot, Entity documentRoot) {
+  for (Entity current = documentRoot; current != entt::null && registry.valid(current);) {
+    if (current == detachedRoot) {
+      return true;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    current = tree != nullptr ? tree->parent() : Entity(entt::null);
+  }
+  return false;
+}
+
 bool IsCollectibleDetachedRoot(Registry& registry, Entity root) {
   if (!registry.valid(root)) {
     return false;
@@ -63,6 +85,23 @@ void ReleaseEntityResourceReservations(Registry& registry, Entity entity) {
   }
   if (auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>()) {
     budget->release(entity);
+  }
+}
+
+/// Destroy \p root and its descendants, children before parents.
+void DestroySubtree(Registry& registry, Entity root) {
+  std::vector<Entity> destroyOrder;
+  AppendPostOrder(registry, root, destroyOrder);
+  for (Entity entity : destroyOrder) {
+    if (!registry.valid(entity)) {
+      continue;
+    }
+
+    if (auto* nodeLifetime = registry.try_get<NodeLifetimeComponent>(entity)) {
+      nodeLifetime->markDestroying();
+    }
+    ReleaseEntityResourceReservations(registry, entity);
+    registry.destroy(entity);
   }
 }
 
@@ -132,12 +171,7 @@ void NodeLifetimeCollector::Collect(Registry& registry) {
   remainingRoots.reserve(detachedNodeState.detachedRoots.size());
 
   for (Entity root : detachedNodeState.detachedRoots) {
-    if (root == entt::null || !registry.valid(root)) {
-      continue;
-    }
-
-    const auto* lifetime = registry.try_get<NodeLifetimeComponent>(root);
-    if (lifetime == nullptr || lifetime->isAttached()) {
+    if (!IsStillDetachedRoot(registry, root)) {
       continue;
     }
 
@@ -149,6 +183,13 @@ void NodeLifetimeCollector::Collect(Registry& registry) {
       continue;
     }
 
+    // The document always keeps its root element: layout, rendering and hit testing read it
+    // unconditionally. A detached subtree that holds it stays alive.
+    if (SubtreeContains(registry, root, context->rootEntity)) {
+      remainingRoots.push_back(root);
+      continue;
+    }
+
     if (!IsCollectibleDetachedRoot(registry, root)) {
       detachedNodeState.lastRetainedByPublicHandles.push_back(root);
       remainingRoots.push_back(root);
@@ -156,19 +197,7 @@ void NodeLifetimeCollector::Collect(Registry& registry) {
     }
 
     detachedNodeState.lastCollectedRoots.push_back(root);
-    std::vector<Entity> destroyOrder;
-    AppendPostOrder(registry, root, destroyOrder);
-    for (Entity entity : destroyOrder) {
-      if (!registry.valid(entity)) {
-        continue;
-      }
-
-      if (auto* nodeLifetime = registry.try_get<NodeLifetimeComponent>(entity)) {
-        nodeLifetime->markDestroying();
-      }
-      ReleaseEntityResourceReservations(registry, entity);
-      registry.destroy(entity);
-    }
+    DestroySubtree(registry, root);
   }
 
   detachedNodeState.detachedRoots = std::move(remainingRoots);
