@@ -96,6 +96,11 @@ class CiDiskCacheTests(unittest.TestCase):
             self._entry("cas/zz/edge-%d" % size, size, NEW)
         self.assertLessEqual(self._posix_tar_bytes(), self._estimate())
 
+    def test_estimate_bounds_a_one_entry_archive(self) -> None:
+        # tar pads every archive to whole 10 KiB records, which dominates a small cache.
+        self._entry("ac/aa/only", 1, NEW)
+        self.assertLessEqual(self._posix_tar_bytes(), self._estimate())
+
     def _main_revision(self, generator: random.Random, revision: int, now: int) -> dict:
         """Uses part of the restored snapshot, writes new outputs, and returns both by size."""
         entries = sorted(path for path in self.cache.rglob("*") if path.is_file())
