@@ -70,6 +70,19 @@ test("a presentation proof must follow the rasterized frame", () => {
   );
 });
 
+test("a proof must be strictly later than the rasterized frame", () => {
+  assert.equal(
+    decide([10.3], snapshot([click, tick(10.3), tick(10.3)])).action,
+    "await-presentation",
+  );
+});
+
+test("reversed or non-finite timeline samples fail closed", () => {
+  assert.equal(decide([10.2], snapshot([click, tick(10.3), tick(10.2)])).action, "invalid");
+  assert.equal(decide([10.2], snapshot([click, tick(9.9)])).action, "invalid");
+  assert.equal(decide([10.2], snapshot([click, tick(Number.NaN)])).action, "invalid");
+});
+
 test("stale, malformed or interrupted traces fail closed", () => {
   assert.equal(decide([10.2], snapshot([click, tick(10.3)], "old")).action, "invalid");
   assert.equal(decide([10.2], null).action, "invalid");

@@ -4208,7 +4208,7 @@ async function exerciseAnimationPointerPulse({
   let pulseClickFinishedEpochMs: number | null = null;
   let delayedPulseClickStartedEpochMs: number | null = null;
   let delayedPulseClickFinishedEpochMs: number | null = null;
-  let delayedPulseReleaseEpochMs: number | null = null;
+  let queuedPulseSteppingEpochMs: number | null = null;
   let heldPulseHeight: number | null = null;
   let removeRasterYieldDelay: (() => Promise<unknown>) | null = null;
   const initialPulseDecisions: unknown[] = [];
@@ -4319,8 +4319,10 @@ async function exerciseAnimationPointerPulse({
     const pulseClickNotBefore = Date.now();
     pulseClickStartedEpochMs = pulseClickNotBefore;
     let initialPulseTarget: number | null = null;
-    // Gate raster progress before the click. The frame retained for capture is then the one whose
-    // document time the raster trace names, not a later frame rasterized while a hold installs.
+    // Gate raster progress before the click; the click is dispatched at the next stepped frame,
+    // without the long stall of the queued probe below. The frame retained for capture is the one
+    // whose document time the raster trace names, not a later frame rasterized while a hold
+    // installs.
     // Capture may take seconds in Firefox, so the gate holds that frame until pixels are read.
     const initialGate = await gateRasterTaskYields(raster, scaledMs(6000));
     await withRasterGate(initialGate, async () => {
@@ -4427,7 +4429,7 @@ async function exerciseAnimationPointerPulse({
       await page.mouse.click(box.x + originX + 456 * scale, pad.y);
       delayedPulseClickFinishedEpochMs = Date.now();
       const queuedPulseDeadline = performance.now() + scaledMs(5000);
-      delayedPulseReleaseEpochMs = Date.now();
+      queuedPulseSteppingEpochMs = Date.now();
       // Avoid screenshot-induced stalls while queued input is delivered. Playback cadence was
       // measured above without holds or screenshots, independently of this correctness probe.
       const retained = await retainGatedPulseFrame({
@@ -4478,7 +4480,7 @@ async function exerciseAnimationPointerPulse({
           pulseClickFinishedEpochMs,
           delayedPulseClickStartedEpochMs,
           delayedPulseClickFinishedEpochMs,
-          delayedPulseReleaseEpochMs,
+          queuedPulseSteppingEpochMs,
           heldPulseHeight,
           initialPulseObservation,
           preQueuedPointerTrace,
