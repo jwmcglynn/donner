@@ -3134,34 +3134,31 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual(re.findall(r"(?m)^\s*bazelisk test --config=(\S+) //\.\.\.$", body),
                          list(lanes))
         for lane, (tag, variant) in lanes.items():
-            flags = _lane_config_flags(lane)
-            self.assertIn("--config=ubsan", flags)
-            self.assertIn("--test_tag_filters=%s" % tag, flags)
-            self.assertIn("--build_tag_filters=%s" % tag, flags)
-            if variant:
-                self.assertIn("--config=%s" % variant, flags)
+            variant_flags = ["--config=%s" % variant] if variant else []
+            self.assertEqual(_lane_config_flags(lane),
+                             ["--config=ubsan", *variant_flags, "--test_output=errors",
+                              "--test_tag_filters=%s" % tag, "--build_tag_filters=%s" % tag], lane)
         self.assertNotRegex(body.replace("//...", ""), r"//[^\s]+")
 
     def test_sanitizer_lanes_keep_their_scope_and_filters(self):
+        # Exact lists: an extra or overriding flag in a lane fails too, and the order is pinned.
         filters = ["--build_tests_only", "--test_tag_filters=-fuzz_target,-ci-remote-gpu",
                    "--build_tag_filters=-fuzz_target,-ci-remote-gpu"]
         expected = {
-            "asan-lane": ["--config=asan", *filters],
-            "asan-lane-no-leaks": ["--config=asan", "--test_env=ASAN_OPTIONS=detect_leaks=0",
-                                   *filters],
-            "ubsan-lane": ["--config=ubsan", *filters],
-            "asan-geode-pr": ["--config=asan", "--config=geode"],
+            "asan-lane": ["--config=asan", "--test_output=errors", *filters],
+            "asan-lane-no-leaks": ["--config=asan", "--test_output=errors",
+                                   "--test_env=ASAN_OPTIONS=detect_leaks=0", *filters],
+            "ubsan-lane": ["--config=ubsan", "--test_output=errors", *filters],
+            "asan-geode-pr": ["--config=asan", "--config=geode", "--test_output=errors"],
         }
-        for lane, required in expected.items():
-            flags = _lane_config_flags(lane)
-            for flag in required:
-                self.assertIn(flag, flags, lane)
+        for lane, flags in expected.items():
+            self.assertEqual(_lane_config_flags(lane), flags, lane)
         asan = _step_body(self.sanitizers, "Test //donner/... with ASan")
         self.assertIn("--exclude-suite //tools/ci:asan_exclusions -- \\\n"
                       "            bazelisk test --config=asan-lane -- //donner/... "
                       "-//donner/svg/renderer/geode/...\n", asan)
         self.assertIn("bazelisk test --config=asan-lane-no-leaks \\\n"
-                      "            //donner/svg/renderer/geode/... //tools/ci:asan_no_leak_tests",
+                      "            //donner/svg/renderer/geode/... //tools/ci:asan_no_leak_tests\n",
                       asan)
         ubsan = _step_body(self.sanitizers, "Test //donner/... with UBSan")
         self.assertIn("--exclude-suite //tools/ci:ubsan_exclusions -- \\\n"
