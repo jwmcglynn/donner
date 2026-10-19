@@ -13,12 +13,9 @@ renderer stays the default for embedders.
 
 ### Highlights
 
-- **Donner SVG Editor**: a first working editor, native on macOS and Linux and in the browser
-  through WebAssembly. Select, move, resize and rotate shapes, draw and edit paths with the Pen
-  tool, create and style text, and work with a Layers panel (rename, reorder, hide, lock), cut, copy
-  and paste, z-ordering, a stroke and marker inspector, boolean path operations, and Convert Text to
-  Outlines. Every edit is a DOM change that the XML source pane reflects, and edits typed in the
-  source pane update the canvas in place.
+- **Donner SVG Editor**: a first working editor, native on macOS and Linux and in the browser.
+  Select and transform shapes, draw paths with the Pen tool, edit text, and organize Layers, with
+  an XML source view that stays in sync with the canvas.
 - **Geode GPU renderer**: Geode renders through Donner's own GPU runtime, on Metal on macOS,
   Vulkan on Linux, and WebGPU in the browser, and drives the editor canvas. Its WGSL shaders are
   compiled while Donner builds, and shipped products need no Rust toolchain or Rust-built GPU
