@@ -517,13 +517,16 @@ build:hosted-macos --local_resources=memory=4802
 # every other lane and local runs keep running them.
 test:hosted-macos-quarantine --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1
 
-# Reruns tests under main's hosted macOS configuration on a faster self-hosted host: the hosted
-# scheduling values, the hosted-only quarantine, and a launcher that holds each test to roughly
-# the hosted runner's CPU capacity (//tools/ci:hosted_parity_throttle). Trusted pull requests run
-# it in the macos-hosted-parity CI job.
-test:hosted-parity --config=hosted-macos
+# Runs tests at roughly main's hosted macOS speed on a faster self-hosted host: the hosted
+# scheduling values and a launcher that holds each test to roughly the hosted runner's CPU
+# capacity (//tools/ci:hosted_parity_throttle). `hosted-parity` adds the hosted-only quarantine,
+# for tests that read it. Trusted pull requests run them in the macos-hosted-parity CI job.
+# Not reproduced: the hosted runner's GPU, memory limit, disk and runner faults; the throttle
+# only stretches CPU time, by a factor calibrated on macOS.
+test:hosted-parity-runtime --config=hosted-macos
+test:hosted-parity-runtime --run_under=//tools/ci:hosted_parity_throttle
+test:hosted-parity --config=hosted-parity-runtime
 test:hosted-parity --config=hosted-macos-quarantine
-test:hosted-parity --run_under=//tools/ci:hosted_parity_throttle
 
 # The runner-sensitive subset: tests tagged `hosted_parity` (timing, frame, readiness and
 # display-scale tests and host-tool probes), with main's hosted macOS tag filters.

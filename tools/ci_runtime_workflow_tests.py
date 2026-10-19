@@ -494,11 +494,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             step = "Compare browser GPU tests (%s)" % mode
             body = self._step_body(hosted, step)
             self.assertIn("continue-on-error: true", body, step)
-            self.assertNotIn("quarantine", body, step)
-            self.assertNotIn("hosted-parity", body, step)
+            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE",
+                         "hosted-parity"):
+                self.assertNotIn(name, body, step)
         for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
-            self.assertNotIn("quarantine", self._job_body(job), job)
-            self.assertNotIn("hosted-parity", self._job_body(job), job)
+            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE",
+                         "hosted-parity"):
+                self.assertNotIn(name, self._job_body(job), job)
         resolver = runfiles.Create()
         workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
         others = [path for path in sorted(workflows.glob("*.y*ml")) if path.name != "main.yml"]

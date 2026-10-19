@@ -109,8 +109,6 @@ PARITY_ALLOWLIST = {
     _PARITY + ("*", "flag-pr-only", "--run_under=//tools/ci:hosted_parity_throttle"):
         "Hosted runner speed: the launcher holds each test to roughly the hosted runner's CPU "
         "capacity. It changes how fast a test runs, not what it runs or asserts.",
-    _PARITY + ("Test (Geode editor lane)", "test-env-pr-only", "DONNER_HOSTED_MACOS_QUARANTINE=1"):
-        "The hosted-only quarantine skips browser cases only; none run in the Geode editor lane.",
     _PARITY + ("*", "startup-pr-only", "--nohome_rc"):
         "Runner-specific: keeps the host's interactive bazelrc out of CI.",
     _PARITY + ("*", "startup-pr-only", "--nosystem_rc"):
@@ -852,8 +850,8 @@ def _expand_word(word, environment, variables):
 # Repository configs (.bazelrc) that hold a CI lane's test selection or constraints. The
 # comparison sees their flags in place of `--config=<name>`, so a lane cannot change what it runs
 # through a config out of sight. Other configs are compared by name.
-EXPANDED_CONFIGS = ("hosted-macos", "hosted-macos-quarantine", "hosted-parity",
-                    "hosted-parity-subset")
+EXPANDED_CONFIGS = ("hosted-macos", "hosted-macos-quarantine", "hosted-parity-runtime",
+                    "hosted-parity", "hosted-parity-subset")
 _RC_LINE = re.compile(r"^(build|test|common):([A-Za-z0-9_-]+)\s+(.*)$")
 
 
@@ -2252,7 +2250,7 @@ class CiLaneParityTest(unittest.TestCase):
             # keeps it, it is reported for that step.
             "one step loses the hosted runner shape": (
                 lambda job: rewrite(job, "Test (Geode editor lane)",
-                                    " --config=hosted-parity", ""),
+                                    " --config=hosted-parity-runtime", ""),
                 ("Test", "flag-pr-only", "--jobs=3")),
             "a step adds a tag filter": (
                 lambda job: rewrite(job, "Test", "--test_output=errors",
@@ -2275,8 +2273,8 @@ class CiLaneParityTest(unittest.TestCase):
         self.assertEqual(set(EXPANDED_CONFIGS), set(configs))
         self.assertEqual(
             expand_configs("test", ["--config=hosted-parity-subset", "--config=other"], configs),
-            [*HOSTED_MACOS_RESOURCE_FLAGS, "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1",
-             "--run_under=//tools/ci:hosted_parity_throttle", "--build_tests_only",
+            [*HOSTED_MACOS_RESOURCE_FLAGS, "--run_under=//tools/ci:hosted_parity_throttle",
+             "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1", "--build_tests_only",
              "--test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,"
              "-ci-remote-gpu,-launches-browser,-fuzz_soak", "--config=other"])
         # `test:` lines do not apply to a build.

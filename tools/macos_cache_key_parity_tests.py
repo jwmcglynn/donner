@@ -436,8 +436,8 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "build:hosted-macos --jobs=3\n", "build:hosted-macos --jobs=3 --copt=-O0\n", 1),
                 "step 'Test (Geode editor lane)' differs"),
             "the parity lane changes a key-affecting flag": (self.workflow.replace(
-                "--config=geode --config=hosted-parity \\\n",
-                "--config=geode --config=hosted-parity --copt=-O0 \\\n", 1),
+                "--config=geode --config=hosted-parity-runtime \\\n",
+                "--config=geode --config=hosted-parity-runtime --copt=-O0 \\\n", 1),
                 self.bazelrc, "step 'Test (Geode editor lane)' differs"),
             "the parity lane drops the Xcode pin": (self.workflow[:self.workflow.index(
                 "\n  %s:\n" % PARITY)] + self.workflow[self.workflow.index(

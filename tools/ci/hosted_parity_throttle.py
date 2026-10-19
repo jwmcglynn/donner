@@ -7,9 +7,18 @@ process tree run for RUN_FRACTION of every PERIOD_S and stops it (SIGSTOP) for t
 test's CPU work takes about 1 / RUN_FRACTION times longer in wall-clock time while its threads
 keep their relative order. GPU work, I/O and timers are not slowed.
 
-Used through `--run_under` by `--config=hosted-parity` (.bazelrc). Exits with the test's status.
-The test is always resumed before this launcher exits, including when Bazel stops it with a
-signal; a SIGKILL of this launcher leaves the test to Bazel, which kills the whole process group.
+It is an approximation. Each process in the tree is stopped and resumed separately, so
+processes of the tree can briefly run while others are stopped. The tree is listed again only
+every TREE_REFRESH_S, so a new child process runs unthrottled until then. RUN_FRACTION is
+nominal: the slowdown actually observed depends on scheduling. The value was calibrated and
+validated on macOS only.
+
+Used through `--run_under` by `--config=hosted-parity-runtime` (.bazelrc). Exits with the test's
+status. On the first SIGTERM, SIGINT, SIGHUP or SIGQUIT the launcher stops throttling, resumes
+the test, forwards that signal once, waits for the test, and then ends with the same signal, so
+Bazel sees the termination it would see without the launcher. Any error in the launcher also
+resumes the test and terminates it before re-raising. A SIGKILL of the launcher leaves the test
+to Bazel, which kills the whole process group.
 """
 
 import os
@@ -25,6 +34,7 @@ RUN_FRACTION = 0.4
 PERIOD_S = 0.02
 # How often the process tree is listed again, so new child processes are throttled too.
 TREE_REFRESH_S = 0.25
+TERMINATING_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)
 
 
 def descendants(root, table):
@@ -32,7 +42,7 @@ def descendants(root, table):
     children = {}
     for line in table.splitlines():
         fields = line.split()
-        if len(fields) == 2:
+        if len(fields) == 2 and all(field.isdigit() for field in fields):
             children.setdefault(int(fields[1]), []).append(int(fields[0]))
     found, pending = [], [root]
     while pending:
@@ -59,53 +69,95 @@ def _proc_table():
 
 
 def process_tree(root):
-    """`root` and its descendants, now."""
-    if Path("/proc/self/stat").exists():
-        return descendants(root, _proc_table())
-    table = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True,
-                           check=False).stdout
+    """`root` and its descendants, now. If they cannot be listed, `root` alone."""
+    try:
+        if Path("/proc/self/stat").exists():
+            return descendants(root, _proc_table())
+        table = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True,
+                               text=True, check=False, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return [root]
     return descendants(root, table)
 
 
-def signal_all(pids, signum):
+def signal_all(pids, signum, kill=os.kill):
     for pid in pids:
         try:
-            os.kill(pid, signum)
-        except ProcessLookupError:
+            kill(pid, signum)
+        except OSError:
             pass
 
 
-def run(command, run_fraction=RUN_FRACTION, period_s=PERIOD_S):
-    """Runs `command` throttled and returns its exit status."""
-    child = subprocess.Popen(command)
-    state = {"pids": [child.pid], "listed": 0.0}
+class Throttle:
+    """Duty-cycles one child's process tree. Sleep, clock, kill and tree listing are injectable
+    so the stop/resume sequence can be tested without real processes."""
 
-    def resume_and_forward(signum, _frame):
-        signal_all(process_tree(child.pid), signal.SIGCONT)
-        child.send_signal(signum)
+    def __init__(self, child, *, run_fraction=RUN_FRACTION, period_s=PERIOD_S, kill=os.kill,
+                 sleep=time.sleep, clock=time.monotonic, tree=process_tree):
+        self.child = child
+        self.run_fraction = run_fraction
+        self.period_s = period_s
+        self.kill = kill
+        self.sleep = sleep
+        self.clock = clock
+        self.tree = tree
+        self.terminating = None
+        self.pids = [child.pid]
+        self.listed = None
 
-    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(signum, resume_and_forward)
-    try:
-        while child.poll() is None:
-            time.sleep(period_s * run_fraction)
-            if time.monotonic() - state["listed"] > TREE_REFRESH_S:
-                state["pids"] = process_tree(child.pid)
-                state["listed"] = time.monotonic()
-            signal_all(state["pids"], signal.SIGSTOP)
-            time.sleep(period_s * (1 - run_fraction))
-            signal_all(state["pids"], signal.SIGCONT)
-    finally:
-        signal_all(process_tree(child.pid), signal.SIGCONT)
-    status = child.wait()
-    return 128 - status if status < 0 else status
+    def _resume(self):
+        signal_all(self.tree(self.child.pid), signal.SIGCONT, self.kill)
+
+    def on_signal(self, signum, _frame=None):
+        """Stops throttling, resumes the test and forwards the first terminating signal."""
+        if self.terminating is not None:
+            return
+        self.terminating = signum
+        self._resume()
+        signal_all([self.child.pid], signum, self.kill)
+
+    def cycle(self):
+        """One period: let the tree run, then stop it, then resume it."""
+        self.sleep(self.period_s * self.run_fraction)
+        if self.terminating is not None:
+            return
+        if self.listed is None or self.clock() - self.listed > TREE_REFRESH_S:
+            self.pids = self.tree(self.child.pid)
+            self.listed = self.clock()
+        signal_all(self.pids, signal.SIGSTOP, self.kill)
+        try:
+            self.sleep(self.period_s * (1 - self.run_fraction))
+        finally:
+            signal_all(self.pids, signal.SIGCONT, self.kill)
+
+    def run(self):
+        """Throttles until the child exits or a terminating signal arrives; returns its status."""
+        try:
+            while self.child.poll() is None and self.terminating is None:
+                self.cycle()
+        except BaseException:
+            self._resume()
+            signal_all([self.child.pid], signal.SIGTERM, self.kill)
+            self.child.wait()
+            raise
+        self._resume()
+        return self.child.wait()
 
 
 def main(argv):
     if not argv:
         print("usage: hosted_parity_throttle COMMAND [ARGS...]", file=sys.stderr)
         return 2
-    return run(argv)
+    child = subprocess.Popen(argv)
+    throttle = Throttle(child)
+    for signum in TERMINATING_SIGNALS:
+        signal.signal(signum, throttle.on_signal)
+    status = throttle.run()
+    if throttle.terminating is not None:
+        # End the way the test would have without the launcher.
+        signal.signal(throttle.terminating, signal.SIG_DFL)
+        os.kill(os.getpid(), throttle.terminating)
+    return 128 - status if status < 0 else status
 
 
 if __name__ == "__main__":
