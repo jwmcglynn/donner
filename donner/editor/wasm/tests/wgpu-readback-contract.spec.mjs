@@ -134,10 +134,19 @@ function makeFrameSamplePublisher(body) {
   const publish = new Function(
     "window",
     "performance",
-    ...Array.from({ length: 14 }, (_, index) => `$${index}`),
+    ...Array.from({ length: 15 }, (_, index) => `$${index}`),
     body,
   );
-  return (window, clock, triggerBits, frameMs, callbacks, heapBytes, completedAtEpochMs) =>
+  return (
+    window,
+    clock,
+    triggerBits,
+    frameMs,
+    callbacks,
+    heapBytes,
+    completedAtEpochMs,
+    eventFrame = 1,
+  ) =>
     publish(
       window,
       clock,
@@ -147,6 +156,7 @@ function makeFrameSamplePublisher(body) {
       heapBytes,
       completedAtEpochMs,
       ...Object.values(frameAttemptFixture),
+      eventFrame,
     );
 }
 
@@ -567,7 +577,8 @@ test("frame completion timestamps exclude proxy delay and retain successful admi
       "a refused surface cannot acquire a presentation timestamp",
     );
     window.__donnerHostFrameTiming.lastSurfacePresented = true;
-    publish(window, clock, 1, 15, 1, 4096, completedAtEpochMs);
+    const eventFrame = arrivalMs === 1000 ? 1 : 0;
+    publish(window, clock, 1, 15, 1, 4096, completedAtEpochMs, eventFrame);
     assert.equal(window.__donnerFrameLoopStats.lastFrameAtMs, 215);
     assert.equal(
       window.__donnerWorkerStats.presentedAtMs,
@@ -575,11 +586,22 @@ test("frame completion timestamps exclude proxy delay and retain successful admi
       "a frame timestamp must reflect completion, not its diagnostic arrival",
     );
     assert.equal(window.__donnerWorkerStats.presentationPublicationDelayMs, arrivalMs - 215);
-    publish(window, clock, 1, 25, 1, 4096, completedAtEpochMs + 15);
+    const presentingFrame = eventFrame ? "event" : "scheduled";
+    assert.equal(
+      window.__donnerWorkerStats.presentingFrame,
+      presentingFrame,
+      "the presenting frame's kind is stamped with its presentation timestamp",
+    );
+    publish(window, clock, 1, 25, 1, 4096, completedAtEpochMs + 15, 1 - eventFrame);
     assert.equal(
       window.__donnerWorkerStats.presentedAtMs,
       215,
       "later frames cannot replace the consumed result's first presentation timestamp",
+    );
+    assert.equal(
+      window.__donnerWorkerStats.presentingFrame,
+      presentingFrame,
+      "later frames cannot replace the presenting frame's kind",
     );
   }
 });
@@ -804,6 +826,7 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
       completedResults: 3,
       acceptedForPresentation: true,
       presentedAtMs: 200,
+      presentingFrame: "event",
       presentationPublicationDelayMs: 40,
       publicationDelayMs: 75,
       publishReason: "render-result",
@@ -814,6 +837,7 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
   publishFailure(window, clock, 1, 0, 5000, () => "queue-idle");
   publishFrame(window, clock, 1, 15, 1, 4096, 1215);
   const stats = window.__donnerWorkerStats;
+  assert.equal(stats.presentingFrame, undefined, "a failed publish never presented a frame");
   assert.deepEqual({
     completedResults: stats.completedResults,
     acceptedForPresentation: stats.acceptedForPresentation,
