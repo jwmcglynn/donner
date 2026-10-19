@@ -1398,6 +1398,21 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
     if (!state || state.closed || !port || !original) throw new Error("raster yield unavailable");
     let held: MessageEvent | undefined;
     let released = false;
+    // Resume the worker from an ordinary task, never from inside a test evaluation. A resumption
+    // made inside an evaluation can leave the worker's promise continuation waiting for a later,
+    // unrelated task in this worker; Firefox showed this as steps of one to two seconds.
+    const resumeChannel = new MessageChannel();
+    let resumeEvent: MessageEvent | undefined;
+    resumeChannel.port1.onmessage = () => {
+      const event = resumeEvent;
+      resumeEvent = undefined;
+      if (event) original.call(port, event);
+    };
+    const resume = (event: MessageEvent) => {
+      if (resumeEvent) throw new Error("a raster yield resumption is already pending");
+      resumeEvent = event;
+      resumeChannel.port2.postMessage(0);
+    };
     const release = () => {
       if (released) return;
       released = true;
@@ -1407,7 +1422,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
       delete scope.__donnerRasterRenderTrace;
       const event = held;
       held = undefined;
-      if (event) original.call(port, event);
+      if (event) resume(event);
     };
     port.onmessage = (event) => {
       if (held) {
@@ -1424,7 +1439,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
         const event = held;
         if (!event) throw new Error("no raster yield is held");
         held = undefined;
-        original.call(port, event);
+        resume(event);
       },
       release,
     };
