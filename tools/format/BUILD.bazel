@@ -1,5 +1,6 @@
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
-load(":clang_format_check.bzl", "clang_format_platform_compatible_with")
+load(":clang_format_check.bzl", "clang_format_check_compatible_with")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -11,17 +12,32 @@ package(default_visibility = ["//visibility:public"])
 #
 # In an exec-configured attribute (a build action) the select follows the execution platform, so
 # a remote Linux worker runs a Linux binary even when the client is macOS.
+#
+# The formatter repositories exist only in donner's own builds, so it resolves only when
+# //tools/format:check is on (donner's .bazelrc); a module that depends on donner sees the
+# incompatible stand-in instead and skips everything that needs it.
 alias(
     name = "clang_format",
     actual = select(
         {
-            ":linux_aarch64": "@clang_format_linux_aarch64//:clang-format",
-            ":linux_x86_64": "@clang_format_linux_x86_64//:clang-format",
-            ":macos_arm64": "@clang_format_macos_arm64//:clang-format",
+            ":linux_aarch64_enabled": "@clang_format_linux_aarch64//:clang-format",
+            ":linux_x86_64_enabled": "@clang_format_linux_x86_64//:clang-format",
+            ":macos_arm64_enabled": "@clang_format_macos_arm64//:clang-format",
             "//conditions:default": ":clang_format_unavailable",
         },
     ),
 )
+
+[
+    selects.config_setting_group(
+        name = platform + "_enabled",
+        match_all = [
+            ":check_enabled",
+            ":" + platform,
+        ],
+    )
+    for platform in ("linux_aarch64", "linux_x86_64", "macos_arm64")
+]
 
 # Stands in for the formatter on a platform without a pinned binary, so everything that needs the
 # formatter there is skipped as incompatible instead of failing analysis.
@@ -54,9 +70,10 @@ config_setting(
     ],
 )
 
-# Enables the `{name}_format` validation of every donner_cc_* target. Donner's .bazelrc turns it
-# on; a module that depends on donner leaves it off, so its `bazel build @donner//...` skips the
-# checks and never needs the formatter repositories, which only donner's own builds fetch.
+# Enables the formatter and the `{name}_format` validation of every donner_cc_* target. Donner's
+# .bazelrc turns it on; a module that depends on donner leaves it off, so its
+# `bazel build @donner//...` skips the formatter targets and never needs the formatter
+# repositories, which only donner's own builds fetch.
 bool_flag(
     name = "check",
     build_setting_default = False,
@@ -88,7 +105,7 @@ py_test(
         "testdata/divergent_constructs.formatted.cc.in",
         "//:clang_format_config",
     ],
-    target_compatible_with = clang_format_platform_compatible_with(),
+    target_compatible_with = clang_format_check_compatible_with(),
     deps = ["//tools:test_timing"],
 )
 
