@@ -665,9 +665,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         consumer = self._step_body(self._job_body("linux"), "Build and test CMake consumer")
         self.assertIn("python3 tools/cmake/gen_cmakelists.py --check", consumer)
         self.assertIn("cmake -S examples/cmake_consumer -B build -G Ninja", consumer)
-        for body in (linux, consumer):
-            self.assertIn("cmake --build build --target donner_cmake_consumer", body)
-            self.assertIn("ctest --test-dir build --output-on-failure", body)
+        self.assertIn("cmake --build build --target donner_cmake_consumer", consumer)
+        self.assertIn("ctest --test-dir build --output-on-failure", consumer)
+        # The CMake workflow runs the same consumer through its lane script, whose commands
+        # //tools/ci:cmake_consumer_tests pins.
+        self.assertIn("run: tools/ci/cmake_consumer.sh build --ccache\n", linux)
+        self.assertEqual(2, self.cmake.count("run: tools/ci/cmake_consumer.sh build --ccache\n"))
+        self.assertEqual(1, self.cmake.count("run: tools/ci/cmake_consumer.sh install-tools\n"))
 
     def test_retired_closure_scanner_is_not_invoked(self):
         self.assertNotIn("configured_rust_closure.py", self.main)

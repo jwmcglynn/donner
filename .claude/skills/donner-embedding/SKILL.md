@@ -200,7 +200,8 @@ add_executable(my_app main.cc)
 target_link_libraries(my_app PRIVATE donner)   # the exported umbrella target
 ```
 
-Runnable end-to-end check (same commands CI's `cmake.yml` runs):
+Runnable end-to-end check (CI's `cmake.yml` runs the same steps through
+`tools/ci/cmake_consumer.sh build`, which also configures with Ninja and the tiny_skia backend):
 
 ```sh
 python3 tools/cmake/gen_cmakelists.py
