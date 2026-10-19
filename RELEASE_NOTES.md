@@ -2,7 +2,9 @@
 
 ## v0.8: Donner SVG Editor & Engine
 
-_Upcoming release; not yet published._
+_Date: <unreleased>_
+
+These notes describe the upcoming v0.8 release, which has not been published yet.
 
 v0.8 makes Donner both an SVG editor and an engine you can embed. The editor runs on the desktop
 and in the browser on Donner's own GPU renderer, and the engine adds declarative animation, a
@@ -12,9 +14,9 @@ renderer stays the default for embedders.
 ### Highlights
 
 - **Donner SVG Editor**: a first working editor, native on macOS and Linux and in the browser
-  through WebAssembly. Select, move, resize and rotate shapes, draw and edit paths with the Pen tool,
-  create and style text, and work with a Layers panel (rename, reorder, hide, lock), cut, copy and
-  paste, z-ordering, a stroke and marker inspector, boolean path operations, and Convert Text to
+  through WebAssembly. Select, move, resize and rotate shapes, draw and edit paths with the Pen
+  tool, create and style text, and work with a Layers panel (rename, reorder, hide, lock), cut, copy
+  and paste, z-ordering, a stroke and marker inspector, boolean path operations, and Convert Text to
   Outlines. Every edit is a DOM change that the XML source pane reflects, and edits typed in the
   source pane update the canvas in place.
 - **Geode GPU renderer**: Geode renders through Donner's own GPU runtime, on Metal on macOS,
@@ -49,9 +51,13 @@ renderer stays the default for embedders.
 - **Filter graphs built in code** resolve an unset second input of `feComposite`, `feBlend` and
   `feDisplacementMap` to the previous primitive's result. Parsed documents are unaffected.
 - **`Path::strokeToFill`** returns overlapping positive-winding pieces that must be filled with
-  `FillRule::NonZero`, and returns an empty path when the outline cannot be represented.
-- **`DONNER_GPU_BACKEND`** accepts only `metal` or `vulkan`, and an unset value selects the
-  platform's backend. Any other value, including the former `wgpu`, or a backend the process
+  `FillRule::NonZero`, and returns an empty path when the outline cannot be represented. Path
+  producers can request that result with the new `PathBuilder::rejectRemainingCommands`.
+- **CSS filter functions**: a negative amount in `grayscale()`, `invert()`, `opacity()` or
+  `sepia()` rejects the whole `filter` declaration instead of clamping to zero. In presentation
+  attributes, `blur()` accepts a unitless length, as in `filter="blur(4)"`.
+- **`DONNER_GPU_BACKEND`** accepts only `metal` or `vulkan`, and an unset or empty value selects
+  the platform's backend. Any other value, including the former `wgpu`, or a backend the process
   cannot open, stops the process with an error.
 
 ### Removed

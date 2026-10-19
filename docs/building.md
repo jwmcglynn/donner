@@ -222,7 +222,9 @@ bazel build --@donner//donner/svg/renderer:renderer_backend=geode \
   --@donner//donner/svg/renderer/geode:enable_geode=true //:my_app
 ```
 
-BCR preflight covers only the default tiny-skia configuration.
+Donner's build checks that the packages Geode adds load without Donner's development-only
+dependencies, but CI does not build Geode from an external module; BCR preflight covers only the
+default tiny-skia configuration.
 
 ## Continuous integration remote cache
 

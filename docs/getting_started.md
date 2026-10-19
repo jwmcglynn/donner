@@ -166,7 +166,8 @@ order:
 
 Pointer input stays with the host. To start `begin="id.click"` and similar event-based timing, hit
 test the pointer, then deliver the event to the element under it. The triggered interval starts at
-the current document time, and the call returns `false` when no animation timing changed:
+the current document time plus any offset in the trigger, such as `click+1s`, and the call returns
+`false` when no animation timing changed:
 
 \snippet svg_animation.cc dispatch_event
 
@@ -192,8 +193,9 @@ limits animation for untrusted content:
 | `SecureAnimated`               | Runs               | Rejected                             |
 | `SecureStatic`                 | Never applies      | Rejected                             |
 
-SVG documents loaded through `<image>` are always parsed in `SecureStatic` mode, so they render
-their static content.
+SVG documents loaded through `<image>` are parsed in `SecureStatic` mode, so they render their
+static content, unless the host replaces `SVGDocument::Settings::svgParseCallback` with its own
+parser callback.
 
 The complete program, `examples/svg_animation.cc`, checks the rendered colors at each step; run it
 with `bazel run //examples:svg_animation`. The editor's Preview mode plays animations with this

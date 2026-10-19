@@ -10,8 +10,9 @@ namespace donner::svg {
  *
  * Controls which features are available when processing a document. Select the mode of a
  * top-level document with \ref donner::svg::SVGDocument::Settings::processingMode when parsing.
- * Sub-documents referenced by `<image>` are always parsed in \ref ProcessingMode::SecureStatic
- * mode, so they neither load external resources nor animate. Donner never executes scripts in any
+ * Unless the host supplies its own \ref donner::svg::SVGDocument::Settings::svgParseCallback,
+ * sub-documents referenced by `<image>` are parsed in \ref ProcessingMode::SecureStatic mode, so
+ * they neither load external resources nor animate. Donner never executes scripts in any
  * mode.
  */
 enum class ProcessingMode : uint8_t {
