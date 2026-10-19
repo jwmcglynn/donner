@@ -634,7 +634,11 @@ TEST(EditorAppTest, DeleteSelectionWithUndoRefusesDocumentRoot) {
 
 TEST(EditorAppTest, DeleteSelectionWithUndoKeepsDocumentRootAndDeletesTheRest) {
   EditorApp app;
-  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" id="root" width="100" height="100">
+           <rect id="r1" width="20" height="20"/>
+           <rect id="r2" x="50" width="20" height="20"/>
+         </svg>)"));
   auto r2 = app.document().document().querySelector("#r2");
   ASSERT_TRUE(r2.has_value());
 
@@ -643,13 +647,16 @@ TEST(EditorAppTest, DeleteSelectionWithUndoKeepsDocumentRootAndDeletesTheRest) {
   EXPECT_TRUE(app.deleteSelectionWithUndo(sourceBefore));
   ASSERT_TRUE(app.flushFrame());
 
-  EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
-  EXPECT_FALSE(app.document().document().querySelector("#r2").has_value());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_TRUE(app.selectedElements().front() == app.document().document().svgElement());
+  std::vector<svg::SVGElement> rootChildren;
+  for (std::optional<svg::SVGElement> child = app.document().document().svgElement().firstChild();
+       child.has_value(); child = child->nextSibling()) {
+    rootChildren.push_back(*child);
+  }
+  EXPECT_THAT(ElementIds(rootChildren), ::testing::ElementsAre("r1"));
+  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("root"));
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
   EXPECT_THAT(std::string(app.document().document().source()),
-              ::testing::HasSubstr("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+              ::testing::HasSubstr(R"(<svg xmlns="http://www.w3.org/2000/svg" id="root")"));
   EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
 }
 
