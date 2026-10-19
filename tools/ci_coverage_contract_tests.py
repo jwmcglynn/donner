@@ -120,10 +120,10 @@ class CoverageContractTest(unittest.TestCase):
 
     def test_a_counterpart_must_report_its_minimum_test_count(self):
         receipts = copy.deepcopy(_COMPLETE)
-        receipts["macos-browser"]["steps"]["Test (browser targets)"] = _ran(0)
+        receipts["macos-self-hosted"]["steps"]["Test (Geode editor lane)"] = _ran(0)
         problems, _ = self._check(receipts)
         self.assertEqual(1, len(problems), problems)
-        self.assertIn("macos / Test (browser targets) / browser", problems[0])
+        self.assertIn("macos / Test (Geode editor lane) / geode", problems[0])
 
     def test_a_failed_counterpart_still_counts_as_executed(self):
         # The failing job already fails the run; the contract asks only whether it ran.
