@@ -538,9 +538,9 @@ test:hosted-parity-subset --test_tag_filters=hosted_parity,-manual,-perf,-requir
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled
 
-# Cloud execution uses declared LLVM and sysroot inputs; other CI commands keep
-# their existing toolchains. Tests run on the client for GPU/display access.
-build:buildbuddy-re --config=latest_llvm
+# Cloud execution for the hosted Linux CI job. It changes only where actions run:
+# the job selects its toolchain with --config=latest_llvm on every run, with or
+# without the cloud credential. Tests run on the client for GPU/display access.
 build:buildbuddy-re --extra_execution_platforms=//tools/ci:buildbuddy_linux_x86_64
 build:buildbuddy-re --platforms=//tools/ci:buildbuddy_linux_x86_64
 build:buildbuddy-re --spawn_strategy=remote
