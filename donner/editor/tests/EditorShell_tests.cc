@@ -2662,6 +2662,161 @@ TEST(EditorShellTest, PreviewHoverDoesNotLeaveTheSharedAncestor) {
                   pair(svg::EventType::MouseOver, "b"), pair(svg::EventType::MouseEnter, "b")));
 }
 
+/// Run Preview frames until the presented frame resolves \p documentPoint to a pointer target.
+/// @return The screen position of \p documentPoint in that frame, or nullopt on timeout.
+std::optional<Vector2d> AwaitPreviewPointerTarget(gui::EditorWindow& window, EditorShell& shell,
+                                                  const Vector2d& documentPoint) {
+  for (const tests::HangGuard guard; guard.active();) {
+    RunShellFrame(window, shell);
+    const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+    if (frame) {
+      const Vector2d screenPoint = frame->viewport().documentToScreen(documentPoint);
+      if (frame->pointerTargetAt(screenPoint).has_value()) {
+        return screenPoint;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+TEST(EditorShellTest, PreviewPointerOverUseTargetsTheStableUseElementAcrossTicks) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <defs><rect id="tile" width="80" height="70" fill="red">
+        <animate attributeName="fill" values="red;blue" dur="1s" repeatCount="indefinite"/>
+      </rect></defs>
+      <use id="u" x="10" y="10" href="#tile"/>
+      <rect id="entered" y="90" width="10" height="10" visibility="hidden">
+        <set attributeName="visibility" to="visible" begin="u.mouseover"/>
+      </rect>
+      <rect id="left" x="20" y="90" width="10" height="10" visibility="hidden">
+        <set attributeName="visibility" to="visible" begin="u.mouseout"/>
+      </rect>
+    </svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  auto& app = EditorShellTestAccess::App(shell);
+  auto& document = app.document().document();
+  const auto use = document.querySelector("#u");
+  ASSERT_THAT(use, testing::Ne(std::nullopt));
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  const std::optional<Vector2d> point = AwaitPreviewPointerTarget(window, shell, Vector2d(50, 50));
+  ASSERT_TRUE(point.has_value());
+  for (const tests::HangGuard guard;
+       EditorShellTestAccess::PreviewHoveredElement(shell) != use && guard.active();) {
+    ImGui::GetIO().AddMousePosEvent(static_cast<float>(point->x), static_cast<float>(point->y));
+    RunShellFrame(window, shell);
+  }
+  ASSERT_EQ(EditorShellTestAccess::PreviewHoveredElement(shell), use);
+
+  // Each tick rebuilds the shadow content of the <use>; the target must stay the same element so
+  // the pointer never leaves and re-enters it.
+  const auto hoveredFrame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  ASSERT_NE(hoveredFrame, nullptr);
+  const auto hoveredVersion = hoveredFrame->identity().version;
+  std::set<std::uint64_t> versions;
+  std::optional<svg::SVGGraphicsElement> enteredFlag;
+  std::optional<svg::SVGGraphicsElement> leftFlag;
+  for (const tests::HangGuard guard; (versions.size() < 3 || !enteredFlag) && guard.active();) {
+    ImGui::GetIO().AddMousePosEvent(static_cast<float>(point->x), static_cast<float>(point->y));
+    RunShellFrame(window, shell);
+    const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+    if (frame == nullptr || frame->identity().version <= hoveredVersion ||
+        !versions.insert(frame->identity().version).second) {
+      continue;
+    }
+    const auto target = frame->pointerTargetAt(*point);
+    EXPECT_THAT(target, testing::Optional(*use));
+    EXPECT_THAT(EditorShellTestAccess::HoverTransition(shell, target), testing::IsEmpty());
+    enteredFlag = frame->pointerTargetAt(frame->viewport().documentToScreen(Vector2d(5, 95)));
+    if (const auto left =
+            frame->pointerTargetAt(frame->viewport().documentToScreen(Vector2d(25, 95)))) {
+      leftFlag = left;
+    }
+  }
+  EXPECT_THAT(versions, testing::SizeIs(testing::Ge(3u)));
+  EXPECT_GT(document.currentTime(), 0.0);
+  EXPECT_THAT(enteredFlag, testing::Optional(*document.querySelector("#entered")))
+      << "mouseover on the <use> instance starts its animation";
+  EXPECT_EQ(leftFlag, std::nullopt) << "re-instantiated <use> content dispatched a mouseout";
+  EXPECT_FALSE(app.hasSelection());
+  EXPECT_FALSE(app.isDirty());
+}
+
+TEST(EditorShellTest, PreviewOnGeodeSplashResolvesUseContentToDocumentElements) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  const EditorSample* splash = FindEditorSample("geode-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "geode_splash.svg"));
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  ASSERT_TRUE(AwaitPreviewPointerTarget(window, shell, Vector2d(10, 10)).has_value());
+  const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  ASSERT_NE(frame, nullptr);
+  std::set<RcString> hitIds;
+  for (double y = 340; y <= 690; y += 10) {
+    for (double x = 300; x <= 640; x += 10) {
+      const auto target =
+          frame->pointerTargetAt(frame->viewport().documentToScreen(Vector2d(x, y)));
+      ASSERT_TRUE(target.has_value()) << "the background covers the canvas at " << x << "," << y;
+      ASSERT_THAT(target->tryType(), testing::Ne(std::nullopt));
+      hitIds.insert(target->id());
+    }
+  }
+  // The rest of the splash's <use> elements are painted over by later shapes on this grid.
+  EXPECT_THAT(hitIds, testing::Contains(RcString("quartz-face")))
+      << "Hits on <use> content resolve to the <use> element";
+}
+
+TEST(EditorShellTest, SelectToolDragsAUseInstanceAndUndoRestoresIt) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <defs><rect id="tile" width="40" height="40" fill="blue"/></defs>
+      <use id="u" x="10" y="10" href="#tile"/>
+    </svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto use = app.document().document().querySelector("#u");
+  ASSERT_THAT(use, testing::Ne(std::nullopt));
+  app.setSelection(*use);
+  const auto runFrameWithMouse = [&](const Vector2d& documentPoint, bool mouseDown) {
+    const Vector2d screen = shell.viewportForReadback().documentToScreen(documentPoint);
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(static_cast<float>(screen.x), static_cast<float>(screen.y));
+    io.AddMouseButtonEvent(0, mouseDown);
+    RunShellFrame(window, shell);
+  };
+  const auto settle = [&] {
+    for (const tests::HangGuard guard; guard.active();) {
+      runFrameWithMouse(Vector2d(-20, -20), /*mouseDown=*/false);
+      if (!app.document().hasPendingMutations() && !EditorShellTestAccess::RendererBusy(shell)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  ASSERT_TRUE(settle());
+
+  runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/false);
+  runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/true);
+  runFrameWithMouse(Vector2d(25, 23), /*mouseDown=*/true);
+  runFrameWithMouse(Vector2d(35, 28), /*mouseDown=*/true);
+  runFrameWithMouse(Vector2d(35, 28), /*mouseDown=*/false);
+  ASSERT_TRUE(settle());
+
+  ASSERT_THAT(app.selectedElement(), testing::Optional(*use));
+  EXPECT_EQ(use->cast<svg::SVGGraphicsElement>().transform(), Transform2d::Translate(15.0, 8.0));
+  EXPECT_THAT(use->getAttribute("transform"), testing::Ne(std::nullopt));
+
+  app.undo();
+  ASSERT_TRUE(settle());
+  EXPECT_EQ(use->cast<svg::SVGGraphicsElement>().transform(), Transform2d());
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+}
+
 TEST(EditorShellTest, ReplacingDocumentStopsAnimationPreview) {
   gui::EditorWindow window = MakeHiddenWindow();
   ASSERT_TRUE(window.valid());

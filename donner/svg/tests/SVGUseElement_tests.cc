@@ -145,6 +145,14 @@ TEST(SVGUseElementTests, SetHref) {
   EXPECT_THAT(fragment->href(), Eq(RcString("#anotherTarget")));
 }
 
+/// Test that `<use>` is a graphics element, as in SVG 2, with an authored transform.
+TEST(SVGUseElementTests, IsAGraphicsElementWithTransform) {
+  auto fragment = instantiateSubtreeElementAs<SVGUseElement>("<use transform=\"translate(5 7)\"/>");
+  const std::optional<SVGGraphicsElement> graphics = fragment->tryCast<SVGGraphicsElement>();
+  ASSERT_THAT(graphics, Ne(std::nullopt));
+  EXPECT_THAT(graphics->transform(), TransformEq(Transform2d::Translate(5.0, 7.0)));
+}
+
 /// Test setting x and y programmatically.
 TEST(SVGUseElementTests, SetXY) {
   auto fragment = instantiateSubtreeElementAs<SVGUseElement>(R"(<use x="10" y="20" />)");

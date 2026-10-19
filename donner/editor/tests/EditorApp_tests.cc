@@ -254,6 +254,23 @@ TEST(EditorAppTest, HitTestReturnsTopElementAtPoint) {
   EXPECT_FALSE(miss.has_value());
 }
 
+TEST(EditorAppTest, EditingHitTestOverUseContentSelectsTheUseElement) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+      <defs><rect id="tile" width="20" height="20" fill="blue"/></defs>
+      <rect id="background" width="40" height="40" fill="#ccc"/>
+      <use id="instance" x="10" y="10" href="#tile"/>
+    </svg>)svg";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto hit = app.hitTest(Vector2d(20, 20));
+  ASSERT_THAT(hit, testing::Ne(std::nullopt));
+  EXPECT_THAT(hit->id(), testing::Eq("instance"));
+  const auto background = app.hitTest(Vector2d(5, 5));
+  ASSERT_THAT(background, testing::Ne(std::nullopt));
+  EXPECT_THAT(background->id(), testing::Eq("background"));
+}
+
 // Clicking on rendered text selects it: the pointer contract for text is a
 // hit anywhere inside the laid-out glyph ink bounds (including the gaps
 // between letters), like any design tool's selection pointer.
