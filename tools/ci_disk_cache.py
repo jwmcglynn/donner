@@ -197,35 +197,48 @@ def run_bound(args):
     return 0
 
 
+def list_directory(path):
+    """The entries of one directory, or none when it cannot be read."""
+    try:
+        with os.scandir(path) as iterator:
+            return list(iterator)
+    except OSError:
+        return []
+
+
+def add_usage(totals, dirent, stack):
+    """Adds one directory entry to totals [files, logical, allocated, oldest, newest]."""
+    try:
+        status = dirent.stat(follow_symlinks=False)
+    except OSError:
+        return
+    totals[2] += getattr(status, "st_blocks", 0) * 512
+    if dirent.is_dir(follow_symlinks=False):
+        stack.append(dirent.path)
+        return
+    if not dirent.is_file(follow_symlinks=False):
+        return
+    totals[0] += 1
+    totals[1] += status.st_size
+    totals[3] = min(totals[3], status.st_mtime)
+    totals[4] = max(totals[4], status.st_mtime)
+
+
 def walk_usage(root, deadline):
     """(files, logical bytes, allocated bytes, oldest mtime, newest mtime, complete)."""
-    files = logical = allocated = 0
-    oldest = newest = None
+    totals = [0, 0, 0, float("inf"), float("-inf")]
     stack = [root]
+    complete = True
     while stack:
         if time.monotonic() > deadline:
-            return files, logical, allocated, oldest, newest, False
-        current = stack.pop()
-        try:
-            iterator = os.scandir(current)
-        except OSError:
-            continue
-        with iterator:
-            for dirent in iterator:
-                try:
-                    status = dirent.stat(follow_symlinks=False)
-                except OSError:
-                    continue
-                allocated += getattr(status, "st_blocks", 0) * 512
-                if dirent.is_dir(follow_symlinks=False):
-                    stack.append(dirent.path)
-                elif dirent.is_file(follow_symlinks=False):
-                    files += 1
-                    logical += status.st_size
-                    mtime = status.st_mtime
-                    oldest = mtime if oldest is None else min(oldest, mtime)
-                    newest = mtime if newest is None else max(newest, mtime)
-    return files, logical, allocated, oldest, newest, True
+            complete = False
+            break
+        for dirent in list_directory(stack.pop()):
+            add_usage(totals, dirent, stack)
+    files, logical, allocated, oldest, newest = totals
+    if not files:
+        oldest = newest = None
+    return files, logical, allocated, oldest, newest, complete
 
 
 def probe_directory(label, path, marker):
