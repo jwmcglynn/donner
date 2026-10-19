@@ -672,6 +672,7 @@ py_test(
     srcs = ["ci_lane_parity_tests.py"],
     data = [
         "BUILD.bazel",
+        "//:.bazelrc",
         "//:github_action_definitions",
         "//donner/editor/tests:BUILD.bazel",
         "//tools/ci:coverage_contract.json",

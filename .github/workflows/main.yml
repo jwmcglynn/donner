@@ -4,14 +4,6 @@ name: CI
 env:
   DO_NOT_TRACK: "1"
   ASPECT_TOOLS_TELEMETRY: "-all"
-  # Skips the browser cases quarantined for main's GitHub-hosted macOS job only (#1691, #1702):
-  # their GPU work can miss its budget on that runner. It is defined once, here, so every job that
-  # reproduces that job's test environment (`macos`, `macos-browser` and `macos-hosted-parity`)
-  # skips exactly the same cases. Only those jobs' gating test steps read it; every other lane
-  # still runs the quarantined cases. The advisory GPU comparisons deliberately run without it:
-  # they never set the job's outcome, and a failing session there is the evidence those issues
-  # need.
-  HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
 
 # Validate PRs targeting main or a dependency branch in a stack.
 #
@@ -1327,8 +1319,8 @@ jobs:
       # records host load, memory and process call graphs, so only this ephemeral hosted
       # job sets it; a persistent self-hosted runner never publishes them.
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
-      # Both gating test steps read the workflow's HOSTED_MACOS_QUARANTINE_TEST_FLAGS, so their
-      # test environments stay identical and Bazel keeps its analysis cache between them.
+      # Both gating test steps pass --config=hosted-macos-quarantine (.bazelrc), so their test
+      # environments stay identical and Bazel keeps its analysis cache between them.
       # Exercise the Geode editor configuration through transitioned wrappers, which
       # locate declared shared libraries consistently on clean workers.
       GEODE_EDITOR_TARGETS: >-
@@ -1484,7 +1476,7 @@ jobs:
           # Tests that launch a browser run in the next step instead.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak \
-            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
+            --config=hosted-macos-quarantine \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
         # the `fuzz_soak` mutation targets; they run nightly or on demand in
@@ -1538,7 +1530,7 @@ jobs:
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --local_test_jobs=1 --build_event_json_file="$RUNNER_TEMP/coverage-browser.bep.json" \
             --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak \
-            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
+            --config=hosted-macos-quarantine \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
 
       - name: Test (Geode editor lane)
@@ -1889,7 +1881,7 @@ jobs:
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --local_test_jobs=1 --build_tests_only --build_event_json_file="$RUNNER_TEMP/coverage-browser.bep.json" \
             --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak \
-            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
+            --config=hosted-macos-quarantine \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
 
       # Diagnostic only: disk, cache and memory use once the tests have run.
@@ -2338,28 +2330,10 @@ jobs:
         run: rm -rf "${RUNNER_TEMP}/buildbuddy" "${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"
 
   macos-hosted-parity:
-    # Hosted-parity subset for trusted PRs. The self-hosted macOS lane above has many more and
-    # faster cores than main's GitHub-hosted `macos` job (3 CPUs, 7 GB), so a test whose result
-    # depends on the runner can pass there and then fail main. This job reruns only those tests
-    # on the same self-hosted runner with the hosted job's Bazel configuration: the affected tests
-    # tagged `hosted_parity` (timing, frame, readiness and display-scale tests and host-tool
-    # probes, listed in //tools:ci_lane_parity_tests) and the Geode editor lane. Plain
-    # deterministic tests stay in the fast lane. Browser tests run on the hosted image itself in
-    # the `macos-browser` subset. The job runs only when the affected set reaches one of its tests
-    # (or falls back to //...), and only after the fast lane, so it never delays that lane's
-    # result on this pull request. It can queue another pull request's fast lane on the shared
-    # runner for its duration.
-    #
-    # What matches main's hosted job: Bazel's scheduling there (--jobs and the CPU and memory
-    # budgets of a 3 CPU, 7 GB runner, with --local_test_jobs following the CPU budget), its tag
-    # filters, test environment and hosted-only quarantine, and the macOS deployment target; the
-    # pinned Xcode when this runner's Bazel can discover it. //tools:ci_lane_parity_tests
-    # compares each Bazel invocation with main's `macos` job. What does not: a scheduling budget
-    # is not CPU scarcity. Each test still runs on this host's faster cores, and the tests that
-    # open a GPU device already run one at a time in both lanes, so this job does not reproduce
-    # timing failures caused by the hosted runner's slower CPUs, its paravirtual GPU, its memory
-    # limit, its disk or its runner faults. The host's display is not changed (the editor GUI
-    # tests choose their own content scale).
+    # Hosted-parity subset for trusted PRs: after the fast lane, reruns the affected
+    # `hosted_parity` tests and the Geode editor lane under main's hosted macOS configuration
+    # (--config=hosted-parity in .bazelrc), only when the affected set reaches one. It can queue
+    # another pull request's fast lane on the shared runner for its duration.
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets, macos-self-hosted]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.hosted_parity_affected == 'true') }}
@@ -2376,11 +2350,6 @@ jobs:
       # Main's hosted test environment under this lane's own name, so its test results are never
       # shared with the hosted lane's or the fast lane's.
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted-parity"
-      # Main's hosted runner as Bazel sees it: 3 CPUs and 7168 MiB of RAM. Bazel's defaults
-      # there are --jobs=HOST_CPUS (3), --local_test_jobs=auto (the CPU budget) and a memory
-      # budget of HOST_RAM*.67 (4802 MiB); this job sets the same values explicitly. Scheduling
-      # only: none of these changes an action key.
-      HOSTED_MACOS_RESOURCE_FLAGS: "--jobs=3 --local_resources=cpu=3 --local_resources=memory=4802"
       # Free space, in GiB, required before Bazel runs: the fast lane's threshold, since this job
       # writes the same output root and can fall back to //....
       MIN_FREE_DISK_GIB: "30"
@@ -2435,10 +2404,6 @@ jobs:
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
 
-      # Main's `Test` step, narrowed to the `hosted_parity` tests. --build_tests_only builds only
-      # what those tests need; main's job builds the whole selection in its Build step. The
-      # quarantine flag only skips browser cases, none of which run here; it keeps the test
-      # environment identical to main's.
       - name: Test
         id: test
         shell: bash
@@ -2453,10 +2418,8 @@ jobs:
             echo "::error::Empty target selection reached the test step."
             exit 1
           fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
-            $HOSTED_MACOS_RESOURCE_FLAGS --build_tests_only \
-            --test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak \
-            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci \
+            --config=hosted-parity-subset --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
 
       - name: Test (Geode editor lane)
@@ -2465,8 +2428,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk --nohome_rc --nosystem_rc test --config=ci --config=geode --test_output=errors \
-            $HOSTED_MACOS_RESOURCE_FLAGS --build_event_json_file="$RUNNER_TEMP/coverage-geode.bep.json" \
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --config=geode --config=hosted-parity \
+            --test_output=errors --build_event_json_file="$RUNNER_TEMP/coverage-geode.bep.json" \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
       - name: Upload Bazel test failure artifacts

@@ -504,6 +504,34 @@ build:ci --skip_incompatible_explicit_targets
 # only in the Fuzz workflow; the `{fuzzer}` corpus replay stays on the PR gate.
 test:ci --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak
 
+# Main's GitHub-hosted macOS CI job runs on a 3 CPU, 7168 MiB virtual machine, where Bazel's
+# defaults are --jobs=HOST_CPUS and a HOST_RAM*.67 memory budget, with --local_test_jobs following
+# the CPU budget. `hosted-macos` states those scheduling values for a faster host. They change no
+# action key.
+build:hosted-macos --jobs=3
+build:hosted-macos --local_resources=cpu=3
+build:hosted-macos --local_resources=memory=4802
+
+# Browser cases quarantined on main's hosted macOS job only (#1691, #1702): their GPU work can miss
+# its budget on that runner. Only the jobs that reproduce that job's test environment pass it;
+# every other lane and local runs keep running them.
+test:hosted-macos-quarantine --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1
+
+# Reruns tests under main's hosted macOS configuration on a faster self-hosted host: the hosted
+# scheduling values, the hosted-only quarantine, and a launcher that holds each test to roughly
+# the hosted runner's CPU capacity (//tools/ci:hosted_parity_throttle). Trusted pull requests run
+# it in the macos-hosted-parity CI job.
+test:hosted-parity --config=hosted-macos
+test:hosted-parity --config=hosted-macos-quarantine
+test:hosted-parity --run_under=//tools/ci:hosted_parity_throttle
+
+# The runner-sensitive subset: tests tagged `hosted_parity` (timing, frame, readiness and
+# display-scale tests and host-tool probes), with main's hosted macOS tag filters.
+# `bazel test --config=hosted-parity-subset //...` runs what the CI lane runs.
+test:hosted-parity-subset --config=hosted-parity
+test:hosted-parity-subset --build_tests_only
+test:hosted-parity-subset --test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak
+
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled
 
