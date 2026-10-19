@@ -2876,6 +2876,8 @@ TEST_F(XMLDocumentTests, RevertNodeInsertionsRestoresIndentedSourceExactly) {
   XMLNode circle = rect.nextSibling().value();
   XMLNode first = XMLNode::CreateElementNode(doc, "g");
   XMLNode second = XMLNode::CreateElementNode(doc, "path");
+  const std::optional<SourceRange> circleLocationBefore = circle.getNodeLocation();
+  ASSERT_THAT(circleLocationBefore, testing::Ne(std::nullopt));
 
   ApplySourceEditResult insertedFirst = doc.insertNode(svg, first, rect);
   ApplySourceEditResult insertedSecond = doc.insertNode(svg, second, circle);
@@ -2897,7 +2899,7 @@ TEST_F(XMLDocumentTests, RevertNodeInsertionsRestoresIndentedSourceExactly) {
   EXPECT_THAT(second.parentElement(), testing::Eq(std::nullopt));
   EXPECT_THAT(svg.firstChild(), testing::Optional(testing::Eq(rect)));
   EXPECT_THAT(rect.nextSibling(), testing::Optional(testing::Eq(circle)));
-  EXPECT_THAT(circle.getNodeLocation(), testing::Ne(std::nullopt));
+  EXPECT_THAT(circle.getNodeLocation(), testing::Eq(circleLocationBefore));
 }
 
 TEST_F(XMLDocumentTests, RevertNodeInsertionsRefusesInsertionThatIsNotTheLatestEdit) {

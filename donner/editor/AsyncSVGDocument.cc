@@ -68,6 +68,16 @@ bool OriginalsAreRemovable(const EditorCommand& command) {
     }
     originals.push_back(entity);
   }
+  // A nested original's source range moves with its ancestor's removal.
+  for (const EditorCommand::ElementReplacement& replacement : command.replacements) {
+    for (std::optional<svg::SVGElement> ancestor = replacement.parent; ancestor.has_value();
+         ancestor = ancestor->parentElement()) {
+      if (std::find(originals.begin(), originals.end(), ancestor->entityHandle().entity()) !=
+          originals.end()) {
+        return false;
+      }
+    }
+  }
   return true;
 }
 

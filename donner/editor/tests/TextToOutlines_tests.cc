@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <future>
 #include <optional>
 #include <string>
@@ -27,6 +28,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PropertyRegistry.h"
@@ -627,8 +629,8 @@ TEST(TextToOutlines, FormattedMultipleSelectionRefusalDoesNotReparse) {
   <text id="second">ABC</text>
 </svg>)svg";
 
-  // The first insert alone must fit, so this exercises rollback of a staged
-  // group before a later capacity refusal in a formatted source document.
+  // The first insert alone fits, so only the batch-wide node check refuses
+  // the selection before any group is staged in formatted source.
   {
     EditorApp control;
     ASSERT_TRUE(control.loadFromString(source));
@@ -741,6 +743,74 @@ TEST(TextToOutlines, DepthRefusalRestoresEntireSelection) {
   EXPECT_THAT(app.canUndo(), Eq(false));
   EXPECT_THAT(app.isDirty(), Eq(false));
   EXPECT_THAT(app.document().lastParseError(), Eq(std::nullopt));
+}
+
+TEST(TextToOutlines, NestedOriginalsAreRefusedBeforeStaging) {
+  constexpr std::string_view source = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <text id="outer">AB<tspan><text id="inner">C</text></tspan></text>
+</svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  svg::SVGDocument& document = app.document().document();
+  const auto outer = document.querySelector("#outer");
+  const auto inner = document.querySelector("#inner");
+  ASSERT_THAT(outer, testing::Ne(std::nullopt));
+  ASSERT_THAT(inner, testing::Ne(std::nullopt));
+  const auto innerParent = inner->parentElement();
+  ASSERT_THAT(innerParent, testing::Ne(std::nullopt));
+  const std::string sourceBefore(document.source());
+  const std::uint64_t generationBefore = app.document().documentGeneration();
+
+  svg::SVGGElement outerGroup = svg::SVGGElement::Create(document);
+  svg::SVGGElement innerGroup = svg::SVGGElement::Create(document);
+  // Removing the outer original would also remove the inner one, so the batch
+  // must be refused before either group is staged.
+  app.applyMutation(EditorCommand::ReplaceElementsCommand({
+      {.parent = document.svgElement(), .original = *outer, .replacement = outerGroup},
+      {.parent = *innerParent, .original = *inner, .replacement = innerGroup},
+  }));
+  (void)app.flushFrame();
+
+  EXPECT_THAT(document.source(), Eq(sourceBefore));
+  EXPECT_THAT(app.document().documentGeneration(), Eq(generationBefore));
+  EXPECT_THAT(app.document().lastFlushResult().replacedDocument, Eq(false));
+  EXPECT_THAT(document.querySelector("#outer"), testing::Optional(Eq(*outer)));
+  EXPECT_THAT(document.querySelector("#inner"), testing::Optional(Eq(*inner)));
+  EXPECT_THAT(outerGroup.parentElement(), Eq(std::nullopt));
+  EXPECT_THAT(innerGroup.parentElement(), Eq(std::nullopt));
+  EXPECT_THAT(app.isDirty(), Eq(false));
+}
+
+TEST(TextToOutlines, MismatchedOriginalParentIsRefusedBeforeStaging) {
+  constexpr std::string_view source = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <text id="first">ABC</text>
+  <text id="second">ABC</text>
+</svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  svg::SVGDocument& document = app.document().document();
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  const std::string sourceBefore(document.source());
+  const std::uint64_t generationBefore = app.document().documentGeneration();
+
+  svg::SVGGElement firstGroup = svg::SVGGElement::Create(document);
+  svg::SVGGElement secondGroup = svg::SVGGElement::Create(document);
+  app.applyMutation(EditorCommand::ReplaceElementsCommand({
+      {.parent = document.svgElement(), .original = *first, .replacement = firstGroup},
+      {.parent = *second, .original = *second, .replacement = secondGroup},
+  }));
+  (void)app.flushFrame();
+
+  EXPECT_THAT(document.source(), Eq(sourceBefore));
+  EXPECT_THAT(app.document().documentGeneration(), Eq(generationBefore));
+  EXPECT_THAT(app.document().lastFlushResult().replacedDocument, Eq(false));
+  EXPECT_THAT(document.querySelector("#first"), testing::Optional(Eq(*first)));
+  EXPECT_THAT(document.querySelector("#second"), testing::Optional(Eq(*second)));
+  EXPECT_THAT(firstGroup.parentElement(), Eq(std::nullopt));
+  EXPECT_THAT(app.isDirty(), Eq(false));
 }
 
 TEST(TextToOutlines, BusyDocumentDefersOutlineReplacementLockCheck) {

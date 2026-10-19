@@ -3251,8 +3251,7 @@ ApplySourceEditResult XMLDocument::revertNodeInsertions(std::span<const NodeInse
   const std::size_t count = insertions.size();
   const std::uint64_t currentVersion = store->sourceVersion();
   const std::size_t sourceSize = source().size();
-  if (count - 1 > currentVersion ||
-      currentVersion > std::numeric_limits<std::uint64_t>::max() - count) {
+  if (count - 1 > currentVersion) {
     result.diagnostic = MakeEditDiagnostic(
         "Cannot revert node insertions that are not the latest source edits", diagnosticRange);
     return result;

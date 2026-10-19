@@ -305,7 +305,7 @@ public:
   /// One completed source-less node insertion and the source delta \ref insertNode returned.
   struct NodeInsertion {
     XMLNode node;              //!< Node that was inserted.
-    XMLSourceDelta insertion;  //!< The pure-insertion source delta that inserted \p node.
+    XMLSourceDelta insertion;  //!< The pure-insertion source delta that inserted the node.
   };
 
   /**
