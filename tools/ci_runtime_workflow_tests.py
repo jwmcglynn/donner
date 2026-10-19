@@ -466,18 +466,34 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("BROWSER_STALL", path.read_text(encoding="utf-8"), path.name)
         self.assertNotIn("BROWSER_STALL", self.bazelrc)
 
-    def test_hosted_macos_quarantine_is_set_only_by_the_hosted_job(self):
-        # The hosted macOS job skips browser cases quarantined for that runner alone (#1691,
-        # #1702). Every other lane and local runs must keep running them, so nothing else may
-        # set the switch.
+    def test_hosted_macos_quarantine_is_set_only_for_the_hosted_test_environment(self):
+        # Main's hosted macOS job skips browser cases quarantined for that runner alone (#1691,
+        # #1702). The switch is defined once, in the workflow environment, and read only by the
+        # gating test steps of the jobs that reproduce that job's test environment, so they skip
+        # exactly the same cases. Every other lane and local runs must keep running them.
         switch = "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
+        header = self.main.split("\njobs:\n", 1)[0]
+        self.assertIn('  HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "%s"\n' % switch, header)
+        self.assertEqual(self.main.count("DONNER_HOSTED_MACOS_QUARANTINE"), 1)
+        readers = {
+            "macos": ("Test", "Test (browser targets)"),
+            # The trusted-PR hosted browser subset runs main's hosted browser step.
+            "macos-browser": ("Test (browser targets)",),
+            # The trusted-PR hosted-parity subset reruns main's native test step's
+            # runner-sensitive tests under the hosted runner's constraints.
+            "macos-hosted-parity": ("Test",),
+        }
+        for job_name, steps in readers.items():
+            job = self._job_body(job_name)
+            self.assertNotIn("HOSTED_MACOS_QUARANTINE_TEST_FLAGS:", job, job_name)
+            for step in steps:
+                self.assertIn("$HOSTED_MACOS_QUARANTINE_TEST_FLAGS", self._step_body(job, step),
+                              (job_name, step))
+        self.assertEqual(self.main.count("$HOSTED_MACOS_QUARANTINE_TEST_FLAGS"),
+                         sum(len(steps) for steps in readers.values()))
         hosted = self._job_body("macos")
-        self.assertIn('      HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "%s"\n' % switch, hosted)
-        steps = ("Test", "Test (browser targets)")
-        for step in steps:
-            body = self._step_body(hosted, step)
-            self.assertIn("$BROWSER_STALL_TEST_FLAGS", body, step)
-            self.assertIn("$HOSTED_MACOS_QUARANTINE_TEST_FLAGS", body, step)
+        for step in ("Test", "Test (browser targets)"):
+            self.assertIn("$BROWSER_STALL_TEST_FLAGS", self._step_body(hosted, step), step)
         # The advisory comparisons never set the job's outcome and exist to diagnose exactly
         # these failures, so they keep running the quarantined cases.
         for mode in ("serial", "parallel"):
@@ -485,15 +501,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             body = self._step_body(hosted, step)
             self.assertIn("continue-on-error: true", body, step)
             self.assertNotIn("HOSTED_MACOS_QUARANTINE", body, step)
-        # The trusted-PR hosted browser subset runs main's hosted browser step, quarantine
-        # included, so it sees exactly what main's hosted job would.
-        subset = self._job_body("macos-browser")
-        self.assertIn('      HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "%s"\n' % switch, subset)
-        self.assertIn("$HOSTED_MACOS_QUARANTINE_TEST_FLAGS",
-                      self._step_body(subset, "Test (browser targets)"))
-        self.assertEqual(self.main.count("DONNER_HOSTED_MACOS_QUARANTINE"), 2)
-        self.assertEqual(self.main.count("HOSTED_MACOS_QUARANTINE_TEST_FLAGS"),
-                         2 + len(steps) + 1)
         for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
             self.assertNotIn("HOSTED_MACOS_QUARANTINE", self._job_body(job), job)
         resolver = runfiles.Create()
@@ -1184,7 +1191,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         there means its Bazel membership is broken.
         That must stay red rather than inherit the change-based lanes' notice.
         """
-        for job_name in ("macos", "macos-self-hosted"):
+        for job_name in ("macos", "macos-self-hosted", "macos-hosted-parity"):
             with self.subTest(job=job_name):
                 step = self._step_body(
                     self._job_body(job_name), "Test (Geode editor lane)"

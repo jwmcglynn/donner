@@ -218,9 +218,10 @@ checked-in consumer module against it. See \ref GettingStarted for the `MODULE.b
 
 The GitHub-hosted Bazel lanes can share a [BuildBuddy](https://www.buildbuddy.io/) remote cache:
 the `linux`, `macos` and `macos-browser` jobs in `main.yml`, the Editor WASM build, the Geode ASan
-pull-request lane, and the scheduled nightly full-tree build and sanitizer lanes. One self-hosted
-lane shares it too: `macos-self-hosted`, which runs only for trusted maintainer pull requests, so
-the hosted and self-hosted macOS lanes reuse each other's build results. It is a remote cache only:
+pull-request lane, and the scheduled nightly full-tree build and sanitizer lanes. Two self-hosted
+lanes share it too: `macos-self-hosted` and its hosted-parity subset `macos-hosted-parity`, which
+run only for trusted maintainer pull requests, so the hosted and self-hosted macOS lanes reuse
+each other's build results. It is a remote cache only:
 no remote execution and no build-event upload. It never affects local builds or the self-hosted
 Linux lane, which never calls the action. Without the secrets it is off and every lane builds
 exactly as it does without a cache. A pull request's base-change run (`pr_base_change.yml`, which
@@ -236,8 +237,8 @@ directory, and Bazel reads it through a small credential helper there that the f
 `--credential_helper`. The key is never a Bazel flag, because Bazel writes its rc options into its
 server log in the output base, and uploads of workspace paths cannot carry it. With no key the
 action writes nothing and the `try-import` is a silent no-op. The self-hosted runner is persistent,
-so `macos-self-hosted` deletes the key file and the fragment in a last step that runs whatever the
-job's outcome.
+so `macos-self-hosted` and `macos-hosted-parity` each delete the key file and the fragment in a
+last step that runs whatever the job's outcome.
 
 **What each run gets.** Pull request trust comes from one rule,
 `.github/actions/pr-trust`, which also decides self-hosted routing in `main.yml`:
