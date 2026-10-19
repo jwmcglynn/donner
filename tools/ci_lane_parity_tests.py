@@ -68,6 +68,31 @@ PARITY_SUBSETS = {
                                           ("Test", "Test (Geode editor lane)")),
 }
 
+# Steps of a shared job that rerun one of main's steps on a trusted PR, narrowed to the
+# `hosted_parity` tests, because the PR skips main's step there. Keyed by (workflow, job,
+# scenario); the value is (PR step, main step). The hosted Linux job skips Build and Test on
+# trusted PRs (STEP_ALLOWLIST) and reruns its runner-sensitive tests on the hosted image.
+HOSTED_PARITY_STEPS = {
+    ("main.yml", "linux", "trusted-pr"): ("Test (hosted parity subset)", "Test"),
+}
+HOSTED_PARITY_STEP_ALLOWLIST = {
+    ("main.yml", "linux", "Test (hosted parity subset)", "tag-filter-pr-only", "hosted_parity"):
+        "The parity subset: only tests whose result can depend on the runner. Every other "
+        "selected test runs on the self-hosted ARM64 lane.",
+    ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only", "--build_tests_only"):
+        "Build scope only: this step builds only what the selected tests need, because the "
+        "PR's Build step runs on the self-hosted lane.",
+    ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only",
+     "--build_event_json_file=$RUNNER_TEMP/coverage-parity.bep.json"):
+        "Records how many parity tests ran, for the coverage contract's receipt; it changes "
+        "what Bazel reports, not what it tests.",
+}
+
+# Main's hosted lanes whose phases tools/ci/coverage_contract.json declares, and the phases there
+# that run no Bazel command.
+COVERAGE_LANES = ("linux", "macos")
+COVERAGE_NON_BAZEL_PHASES = {"linux": ("Build and test CMake consumer",)}
+
 # Main's hosted macOS runner as Bazel schedules on it: 3 CPUs and 7168 MiB, so --jobs=HOST_CPUS
 # and a HOST_RAM*.67 memory budget, with --local_test_jobs following the CPU budget. The parity
 # job states the same values explicitly. Main's own job passes none of them.
@@ -106,7 +131,7 @@ PARITY_ALLOWLIST = {
         "full validation on real hardware.",
 }
 
-# Tests that main's hosted macOS job runs and whose result can depend on the runner's CPU count
+# Tests that main's hosted jobs run and whose result can depend on the runner's CPU count
 # or speed, display scale or host tools, each with the escape that put it here. In the BUILD
 # files listed here, the tagged rules and the listed tests must match, so a listed test cannot
 # silently leave the parity subset. Browser tests (the carousel handoff,
@@ -145,7 +170,11 @@ SUBSET_SETUP_REQUIRED_INPUTS = {("Setup Bazel", "cache-save"): "false"}
 
 # Steps a hosted subset runs that main's job does not, with the reason each cannot change what
 # the covered steps test.
-SUBSET_EXTRA_STEPS = {}
+SUBSET_EXTRA_STEPS = {
+    **{step: "Records which steps ran for the coverage contract after the tests finish; it "
+             "writes and uploads a receipt and changes nothing a covered step tests."
+       for step in ("Record coverage receipt", "Upload coverage receipt")},
+}
 
 # Jobs that run on a main push and on no kind of pull request, without a replacement.
 MAIN_ONLY_JOBS = {}
@@ -271,7 +300,7 @@ _SHARED_STEP_DIGESTS = {
     ("lint.yml", "gatekeeper",
      "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "8e295cc528e30377"),
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "848e079ce055213a"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "7b1d2d8e4295993a"),
     ("main.yml", "determine-targets",
      "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "711b402065f09c27"),
     ("main.yml", "gatekeeper",
@@ -374,6 +403,7 @@ _PULL_REQUEST = {
     "affected": "//donner/editor/wasm/tests:chromium_remote_smoke",
     "browser_affected": "true",
     "hosted_parity_affected": "true",
+    "hosted_parity_tests_affected": "true",
     "wgpu_reference": "false",
     "full_matrix": "false",
 }
@@ -395,17 +425,20 @@ SCENARIOS = {
         "full_matrix": "false",
         "browser_affected": "",
         "hosted_parity_affected": "",
+        "hosted_parity_tests_affected": "",
     },
     "trusted-pr": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                        renovate_pr="false"),
     # A trusted PR whose affected set reaches no browser test.
     "trusted-pr-native-only": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                                    renovate_pr="false", affected="//donner/base:base_tests",
-                                   browser_affected="false", hosted_parity_affected="false"),
+                                   browser_affected="false", hosted_parity_affected="false",
+                                   hosted_parity_tests_affected="false"),
     # A trusted PR that falls back to //... (an infrastructure change).
     "trusted-pr-fallback": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                                 renovate_pr="false", fallback="true", affected="",
-                                browser_affected="", hosted_parity_affected=""),
+                                browser_affected="", hosted_parity_affected="",
+                                hosted_parity_tests_affected=""),
     "untrusted-pr": dict(_PULL_REQUEST, use_self_hosted="false", trusted_pr="false",
                          renovate_pr="false"),
     "renovate-pr": dict(_PULL_REQUEST, use_self_hosted="false", trusted_pr="false",
@@ -439,6 +472,7 @@ _MODELLED_OUTPUTS = {
     "needs.determine-targets.outputs.wgpu_reference": "wgpu_reference",
     "needs.determine-targets.outputs.browser_affected": "browser_affected",
     "needs.determine-targets.outputs.hosted_parity_affected": "hosted_parity_affected",
+    "needs.determine-targets.outputs.hosted_parity_tests_affected": "hosted_parity_tests_affected",
     "needs.prepare.outputs.full_matrix": "full_matrix",
 }
 
@@ -1124,6 +1158,25 @@ def parity_differences(workflow, main_job_name, parity_name, steps):
     differences = _set_differences("*", "runtime-env", main_writes, parity_writes)
     differences |= {(name, "step-parity-only", "") for name in set(parity_steps) - set(steps)}
     return differences | _compared_steps(main_steps, parity_steps, steps)
+
+
+def renamed_step_differences(workflow, job_name, pr_step, main_step, scenario):
+    """How a job's `pr_step` in a pull request scenario differs from its `main_step` on main."""
+    job = _jobs(workflow)[job_name]
+    main_steps, _ = _bazel_profile(workflow, job, "main-push")
+    pr_steps, _ = _bazel_profile(workflow, job, scenario)
+    if main_step not in main_steps or pr_step not in pr_steps:
+        return {(pr_step, "step-missing", "")}
+    return _step_differences(pr_step, main_steps[main_step], pr_steps[pr_step])
+
+
+def _coverage_phases(workflow, lane):
+    """The gating checks main's hosted lane runs on a push: its Bazel steps and listed others."""
+    job = _jobs(workflow)[lane]
+    phases = {_step_name(step) for step in _gating_steps(job, "main-push")
+              if runs(step.get("if"), "main-push") and bazel_invocations(
+                  str(step.get("run") or ""), _step_environment(workflow, job, step))}
+    return phases | set(COVERAGE_NON_BAZEL_PHASES.get(lane, ()))
 
 
 _BUILD_RULE = re.compile(r"(?ms)^[a-z_]+\(\n(.*?)^\)$")
@@ -2184,13 +2237,90 @@ class CiLaneParityTest(unittest.TestCase):
                                       'cc_test(\n    name = "b",\n    tags = ["manual"],\n)\n',
                                       "hosted_parity"), {"a"})
 
+    def test_hosted_parity_steps_rerun_main_steps_narrowed(self):
+        observed = set()
+        for (name, job_name, scenario), (pr_step, main_step) in HOSTED_PARITY_STEPS.items():
+            workflow = self.workflows[name]
+            observed |= {(name, job_name) + difference for difference in
+                         renamed_step_differences(workflow, job_name, pr_step, main_step,
+                                                  scenario)}
+            with self.subTest(step=pr_step):
+                # It runs only where main's step does not, and only when the PR reaches the
+                # subset.
+                self.assertIn((name, job_name, main_step, scenario), STEP_ALLOWLIST)
+                profile, _ = _bazel_profile(workflow, _jobs(workflow)[job_name],
+                                            "trusted-pr-native-only")
+                self.assertNotIn(pr_step, profile)
+                for other in ("untrusted-pr", "renovate-pr", "main-push"):
+                    profile, _ = _bazel_profile(workflow, _jobs(workflow)[job_name], other)
+                    self.assertNotIn(pr_step, profile, other)
+        self._assert_matches_allowlist(observed, HOSTED_PARITY_STEP_ALLOWLIST,
+                                       "a hosted parity step runs main's step differently")
+
+    @staticmethod
+    def _coverage_manifest():
+        return json.loads(Path(runfiles.Create().Rlocation(
+            "donner/tools/ci/coverage_contract.json")).read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _counterparts(manifest, lane=None):
+        return [counterpart for name, phases in manifest["lanes"].items()
+                if lane in (None, name)
+                for classes in phases.values() for entry in classes.values()
+                for counterpart in entry.get("counterparts", [])]
+
+    def test_coverage_manifest_follows_the_workflow(self):
+        # tools/ci/coverage_contract.json names main's phases and their pull request
+        # counterparts by step name, so it must keep naming steps that exist and run.
+        manifest = self._coverage_manifest()
+        workflow = self.workflows["main.yml"]
+        jobs = _jobs(workflow)
+        self.assertEqual(set(COVERAGE_LANES), set(manifest["lanes"]))
+        for lane, phases in manifest["lanes"].items():
+            with self.subTest(lane=lane):
+                # Every check main's hosted lane runs is a declared phase, and nothing else is.
+                self.assertEqual(_coverage_phases(workflow, lane), set(phases))
+        for counterpart in self._counterparts(manifest):
+            with self.subTest(counterpart=counterpart):
+                job_name, step_name = counterpart["job"], counterpart["step"]
+                steps = {_step_name(step): step for step in jobs[job_name]["steps"]}
+                self.assertTrue(job_gates(workflow, job_name, "trusted-pr-fallback"))
+                # The job's receipt records the step's outcome, under the step's id.
+                receipt = steps["Record coverage receipt"]["run"]
+                self.assertIn('--step "%s=${{ steps.%s.outcome }}"' % (
+                    step_name, steps[step_name]["id"]), receipt)
+                if counterpart.get("min_tests"):
+                    self.assertIn('--bep "%s=' % step_name, receipt)
+
+    def test_coverage_manifest_covers_every_parity_step(self):
+        # Every parity step is some class's counterpart, so a parity class cannot be deleted
+        # from the manifest unnoticed, and the contract job waits for every job whose receipt
+        # it reads.
+        manifest = self._coverage_manifest()
+        declared = {(c["job"], c["step"]) for c in self._counterparts(manifest)}
+        parity_steps = {(parity, step) for parity, steps in PARITY_SUBSETS.values()
+                        for step in steps}
+        parity_steps |= {(key[1], step) for key, (step, _) in HOSTED_PARITY_STEPS.items()}
+        self.assertEqual(set(), parity_steps - declared)
+        jobs = _jobs(self.workflows["main.yml"])
+        self.assertLessEqual({job for job, _ in declared},
+                             set(_needs(jobs["coverage-contract"])))
+        # The check step passes one selection per condition and route the tool requires.
+        check = next(step for step in jobs["coverage-contract"]["steps"]
+                     if _step_name(step) == "Compare receipts with the coverage contract")
+        self.assertEqual(
+            sorted(re.findall(r'--selection "([a-z_]+)=', check["run"])),
+            ["browser_affected", "fallback", "hosted_parity_affected",
+             "hosted_parity_tests_affected", "self_hosted_macos"])
+
     def test_every_allowlist_entry_has_a_reason(self):
         for name, (_, reason) in STEP_OUTPUTS.items():
             self.assertGreater(len(reason.strip()), 20, name)
         for allowlist in (TRIGGER_ALLOWLIST, MAIN_ONLY_JOBS, INVOCATION_ALLOWLIST,
                           STEP_ALLOWLIST, COUNTERPART_ALLOWLIST, FAILURE_SWALLOW_ALLOWLIST,
                           SHARED_JOB_ALLOWLIST, SHARED_STEP_ALLOWLIST, SUBSET_ALLOWLIST,
-                          SUBSET_EXTRA_STEPS, PARITY_ALLOWLIST, HOSTED_PARITY_TESTS):
+                          SUBSET_EXTRA_STEPS, PARITY_ALLOWLIST, HOSTED_PARITY_TESTS,
+                          HOSTED_PARITY_STEP_ALLOWLIST):
             for key, reason in allowlist.items():
                 self.assertGreater(len(reason.strip()), 20, key)
 

@@ -149,6 +149,18 @@ py_test(
     ],
 )
 
+# Compares a trusted pull request's coverage receipts with tools/ci/coverage_contract.json.
+py_test(
+    name = "ci_coverage_contract_tests",
+    size = "small",
+    srcs = [
+        "ci_coverage_contract.py",
+        "ci_coverage_contract_tests.py",
+    ],
+    data = ["//tools/ci:coverage_contract.json"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
 py_test(
     name = "ci_disk_cache_tests",
     size = "small",
@@ -312,8 +324,9 @@ py_test(
         "//:github_action_definitions",
         "//build_defs:macos_app_bundle.bzl",
     ],
-    # `hosted_parity`: its result can depend on the runner, so trusted PRs rerun it under main's
-    # hosted macOS constraints (.github/workflows/main.yml, macos-hosted-parity).
+    # `hosted_parity`: its result can depend on the runner, so trusted PRs also rerun it with main's
+    # hosted configuration (.github/workflows/main.yml: macos-hosted-parity and the hosted Linux
+    # job's parity step).
     tags = ["hosted_parity"],
     deps = [
         ":test_timing",
@@ -636,6 +649,7 @@ py_test(
         "BUILD.bazel",
         "//:github_action_definitions",
         "//donner/editor/tests:BUILD.bazel",
+        "//tools/ci:coverage_contract.json",
     ],
     deps = ["@rules_python//python/runfiles"],
 )

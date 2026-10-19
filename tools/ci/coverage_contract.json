@@ -1,0 +1,214 @@
+{
+  "version": 1,
+  "description": "What each main-hosted lane in .github/workflows/main.yml runs, by phase (step) and test class, and which steps cover each class on a trusted pull request. tools/ci_coverage_contract.py checks a trusted pull request's receipts against it; //tools:ci_lane_parity_tests keeps it in step with the workflow. A class with no pull request counterpart carries a reviewed exception that names its owner and the decision behind it. A lane is checked only when its route says self-hosted jobs replaced its hosted job on the pull request.",
+  "routes": {
+    "linux": "always",
+    "macos": "self_hosted_macos"
+  },
+  "lanes": {
+    "linux": {
+      "Build": {
+        "native": {
+          "when": "always",
+          "description": "The selected targets, built by the self-hosted ARM64 lane.",
+          "counterparts": [
+            {
+              "job": "linux-self-hosted",
+              "step": "Build"
+            }
+          ]
+        },
+        "hosted-toolchain": {
+          "when": "always",
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-10-13, recorded in tools/ci_lane_parity_tests.py (STEP_ALLOWLIST)",
+            "reason": "Trusted pull requests build only on the self-hosted ARM64 lane, for speed. A build failure specific to the hosted x86_64 runner's compiler first shows on main."
+          }
+        }
+      },
+      "Test": {
+        "native": {
+          "when": "always",
+          "description": "The selected tests, run by the self-hosted ARM64 lane.",
+          "counterparts": [
+            {
+              "job": "linux-self-hosted",
+              "step": "Test"
+            }
+          ]
+        },
+        "local-display": {
+          "when": "always",
+          "description": "Tests that need the hosted runner's Xvfb display.",
+          "counterparts": [
+            {
+              "job": "linux",
+              "step": "Test local Xvfb targets"
+            }
+          ]
+        },
+        "hosted-parity": {
+          "when": "hosted_parity_tests_affected",
+          "description": "`hosted_parity` tests, whose result can depend on the runner: they must also run on the hosted x86_64 image.",
+          "counterparts": [
+            {
+              "job": "linux",
+              "step": "Test (hosted parity subset)",
+              "min_tests": 1
+            }
+          ]
+        },
+        "hosted-toolchain": {
+          "when": "always",
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-10-13, recorded in tools/ci_lane_parity_tests.py (STEP_ALLOWLIST)",
+            "reason": "Trusted pull requests run every other test only on the self-hosted ARM64 lane, for speed; only `hosted_parity` tests also run on the hosted image."
+          }
+        }
+      },
+      "Linker canary (non-lld linker support)": {
+        "linker": {
+          "when": "always",
+          "counterparts": [
+            {
+              "job": "linux",
+              "step": "Linker canary (non-lld linker support)"
+            }
+          ]
+        }
+      },
+      "Build and test CMake consumer": {
+        "cmake": {
+          "when": "always",
+          "counterparts": [
+            {
+              "job": "linux",
+              "step": "Build and test CMake consumer"
+            }
+          ]
+        }
+      }
+    },
+    "macos": {
+      "Select Metal validation profile": {
+        "metal-validation": {
+          "when": "always",
+          "description": "The self-hosted lane requires full Metal validation instead of selecting a profile.",
+          "counterparts": [
+            {
+              "job": "macos-self-hosted",
+              "step": "Require full Metal shader validation"
+            }
+          ]
+        }
+      },
+      "Metal validation preflight": {
+        "metal-preflight": {
+          "when": "always",
+          "counterparts": [
+            {
+              "job": "macos-self-hosted",
+              "step": "Metal validation preflight"
+            }
+          ]
+        }
+      },
+      "Build": {
+        "native": {
+          "when": "always",
+          "counterparts": [
+            {
+              "job": "macos-self-hosted",
+              "step": "Build"
+            }
+          ]
+        },
+        "hosted-toolchain": {
+          "when": "always",
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-10-19, #1911",
+            "reason": "The self-hosted macOS lanes build with the pinned Xcode only when the runner's Bazel can discover it, and otherwise with the runner's default Xcode, so a build failure specific to the hosted image's Xcode can first show on main."
+          }
+        }
+      },
+      "Test": {
+        "native": {
+          "when": "always",
+          "description": "The selected tests, run by the self-hosted fast lane.",
+          "counterparts": [
+            {
+              "job": "macos-self-hosted",
+              "step": "Test"
+            }
+          ]
+        },
+        "hosted-parity": {
+          "when": "hosted_parity_affected",
+          "description": "`hosted_parity` tests, rerun under the hosted runner's constraints.",
+          "counterparts": [
+            {
+              "job": "macos-hosted-parity",
+              "step": "Test"
+            }
+          ]
+        },
+        "hosted-equivalent": {
+          "when": "always",
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-10-19, #1911",
+            "reason": "To keep pull request runtime short, only the `hosted_parity` subset and the Geode editor lane rerun with main's hosted Bazel scheduling configuration; every other test runs only at the fast lane's full width. No pull request lane reproduces the hosted runner's CPU speed, GPU, memory or disk."
+          }
+        }
+      },
+      "Qualify pinned Chromium archive": {
+        "browser": {
+          "when": "browser_affected",
+          "counterparts": [
+            {
+              "job": "macos-browser",
+              "step": "Qualify pinned Chromium archive"
+            }
+          ]
+        }
+      },
+      "Test (browser targets)": {
+        "browser": {
+          "when": "browser_affected",
+          "description": "Browser tests, run on the hosted image by the macos-browser subset.",
+          "counterparts": [
+            {
+              "job": "macos-browser",
+              "step": "Test (browser targets)"
+            }
+          ]
+        }
+      },
+      "Test (Geode editor lane)": {
+        "geode": {
+          "when": "always",
+          "counterparts": [
+            {
+              "job": "macos-self-hosted",
+              "step": "Test (Geode editor lane)",
+              "min_tests": 1
+            }
+          ]
+        },
+        "hosted-parity": {
+          "when": "hosted_parity_affected",
+          "counterparts": [
+            {
+              "job": "macos-hosted-parity",
+              "step": "Test (Geode editor lane)",
+              "min_tests": 1
+            }
+          ]
+        }
+      }
+    }
+  }
+}

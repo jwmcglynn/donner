@@ -88,6 +88,12 @@ SELF_HOSTED_JOBS = {
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-self-hosted"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "macos-hosted-parity"): "use_self_hosted_macos",
+    (".github/workflows/main.yml", "coverage-contract"): "use_self_hosted_linux",
+}
+# Reviewed status functions a self-hosted job puts before its trusted gate, so it runs after a
+# needed job failed or was skipped. Joined with `&&`, it still requires the whole gate.
+SELF_HOSTED_STATUS_PREFIX = {
+    (".github/workflows/main.yml", "coverage-contract"): "!cancelled() && ",
 }
 # Reviewed conditions a self-hosted job adds after its trusted gate. Each may only narrow it: it
 # follows the gate with `&&`, so it can skip a trusted run but never admit another one.
@@ -510,8 +516,8 @@ def _buildbuddy_path_filter_violations(files, lanes):
 
 # Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
 # the runner's effective configuration, so they never leave the runner.
-SELF_HOSTED_UPLOAD_FILES = {"manifest.txt", "profile.gz", "report.md", "stall.txt",
-                            "target-list.txt"}
+SELF_HOSTED_UPLOAD_FILES = {"coverage-receipt.json", "manifest.txt", "profile.gz", "report.md",
+                            "stall.txt", "target-list.txt"}
 
 # Triggers that run with repository credentials on behalf of an event someone else controls.
 PRIVILEGED_TRIGGERS = {"discussion_comment", "issue_comment", "issues", "pull_request_review",
@@ -1059,7 +1065,9 @@ def _runner_violation(path, name, job):
         return problem
     if all(_is_hosted(labels) for labels in sets):
         return None
-    gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.%s == 'true'%s }}" % (
+    prefix = SELF_HOSTED_GATE_PREFIX.replace(
+        "${{ ", "${{ " + SELF_HOSTED_STATUS_PREFIX.get((path, name), ""), 1)
+    gate = prefix + "needs.gatekeeper.outputs.%s == 'true'%s }}" % (
         SELF_HOSTED_JOBS.get((path, name)), SELF_HOSTED_NARROWING.get((path, name), ""))
     needs = _job_key(job, "needs").strip("[]")
     admitted = ((path, name) in SELF_HOSTED_JOBS and gate == _job_key(job, "if")
@@ -1792,7 +1800,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_self_hosted_macos_uses_buildbuddy_and_removes_its_key(self):
         workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        self_hosted = workflow.split("\n  macos-self-hosted:\n", 1)[1]
+        self_hosted = _jobs(workflow)["macos-self-hosted"]
         header = self_hosted.split("    steps:\n", 1)[0]
         self.assertNotIn("--remote_cache=", header)
         self.assertNotIn("BAZEL_REMOTE_CACHE", workflow)
@@ -3264,6 +3272,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 gate + narrowing, gate + narrowing.replace(" && (", " || (", 1), 1), ungated),
             "parity narrowing dropped": (main, files[main].replace(
                 gate + narrowing, gate, 1), ungated),
+            "status prefix widened": (main, files[main].replace(
+                "${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push",
+                "${{ always() || needs.gatekeeper.outputs.is_duplicate_push", 1),
+                ungated),
             "self-hosted label": (coverage, files[coverage].replace(
                 hosted, "    runs-on: [self-hosted, linux, arm64]\n", 1), ungated),
             "custom labels only": (coverage, files[coverage].replace(
@@ -3307,12 +3319,14 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         files = self.supply_chain_files
         self.assertEqual([], _artifact_upload_violations(files))
         self.assertEqual(REVIEWED_UPLOAD_ACTIONS, _uploading_local_actions(files))
-        # The self-hosted diagnostics keep their derived report, profiles and stall notes.
+        # The self-hosted diagnostics keep their derived report, profiles and stall notes, and
+        # each self-hosted job uploads only its derived coverage receipt besides them.
         main = _jobs(files[".github/workflows/main.yml"])
         uploads = _upload_paths(main["linux-self-hosted"])
-        self.assertEqual(1, len(uploads))
+        self.assertEqual(2, len(uploads))
         self.assertEqual(SELF_HOSTED_UPLOAD_FILES,
-                         {entry.rsplit("/", 1)[-1] for entry in uploads[0]})
+                         {entry.rsplit("/", 1)[-1] for entry in uploads[0] + uploads[1]})
+        self.assertIn(["${{ runner.temp }}/coverage-receipt/coverage-receipt.json"], uploads)
 
     def test_upload_policy_rejects_raw_logs_directories_and_workspace_roots(self):
         files = self.supply_chain_files
