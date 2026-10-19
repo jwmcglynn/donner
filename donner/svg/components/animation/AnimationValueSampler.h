@@ -17,6 +17,11 @@ class AnimationResourceBudget;
 
 namespace detail {
 
+/// Recursive implementation of \ref donner::svg::components::SampleContextualAnimationRecipe.
+/// @param recipe Admitted stack to fold.
+/// @param base Value that frozen-underlying layers start from.
+/// @param underlying Value beneath the first layer.
+/// @param sampler Callable(sample, lowerValue) returning a contributed value or nullopt.
 template <typename Value, typename Sampler>
 std::optional<Value> SampleContextualAnimationRecipeImpl(const ContextualLengthRecipe& recipe,
                                                          const Value& base, Value underlying,

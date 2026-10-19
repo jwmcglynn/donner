@@ -20,6 +20,8 @@ struct AnimationInterval {
   double begin = 0;           ///< Inclusive start time.
   double end = 0;             ///< Exclusive active end time.
   double repeatDuration = 0;  ///< End of repeating content relative to begin.
+
+  /// Equality operator.
   bool operator==(const AnimationInterval&) const = default;
 };
 

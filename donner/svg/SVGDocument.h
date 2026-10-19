@@ -38,11 +38,16 @@ class SVGDocumentMutation;
 
 /// A declarative animation boundary observed over a time interval.
 struct SVGAnimationEvent {
-  enum class Type { Begin, Repeat, End };  ///< Boundary kind.
-  SVGElement animation;                    ///< Animation element producing the boundary.
-  Type type;                               ///< Boundary kind.
-  double time;                             ///< Document time in seconds.
-  uint64_t repeatIndex = 0;                ///< One-based repeat index, zero for begin/end.
+  /// Boundary kind.
+  enum class Type {
+    Begin,   ///< The animation's active interval began.
+    Repeat,  ///< The animation started a new repeat iteration.
+    End,     ///< The animation's active interval ended.
+  };
+  SVGElement animation;      ///< Animation element producing the boundary.
+  Type type;                 ///< Boundary kind.
+  double time;               ///< Document time in seconds.
+  uint64_t repeatIndex = 0;  ///< One-based repeat index, zero for begin/end.
 };
 
 /// Bounded lifecycle query result. An incomplete query returns no partial events.
@@ -382,8 +387,8 @@ public:
    * Each element must have been inserted by \ref insertElement as a new, unparented element,
    * oldest first, and \p insertions holds the single source delta each insertion returned. The
    * source returns byte for byte to its state before the first insertion and each element is
-   * detached from its parent. See \ref xml::XMLDocument::revertNodeInsertions for the conditions;
-   * when they do not hold, nothing changes and the result carries a diagnostic.
+   * detached from its parent. See \ref donner::xml::XMLDocument::revertNodeInsertions for the
+   * conditions; when they do not hold, nothing changes and the result carries a diagnostic.
    *
    * @param elements Inserted elements, oldest first.
    * @param insertions Source delta for each element, in the same order.

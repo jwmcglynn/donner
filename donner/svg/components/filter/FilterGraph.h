@@ -133,12 +133,15 @@ struct FilterInput {
   /// The input is the output of the immediately preceding primitive (or SourceGraphic for the first
   /// primitive).
   struct Previous {
+    /// Equality operator.
     bool operator==(const Previous&) const = default;
   };
 
   /// The input is a named result from a prior primitive's `result` attribute.
   struct Named {
     RcString name;  ///< The result name to reference.
+
+    /// Equality operator.
     bool operator==(const Named&) const = default;
   };
 
@@ -177,6 +180,7 @@ struct FilterInput {
     return FilterInput(Named{RcString(value)});
   }
 
+  /// Equality operator.
   bool operator==(const FilterInput&) const = default;
 };
 
@@ -722,10 +726,15 @@ enum class FilterMemoryModel : std::uint8_t {
 };
 
 /// Computes one primitive's full-surface work multiplier without changing its validation rules.
+///
+/// Each call operator returns the multiplier for one primitive type, or `std::nullopt` when the
+/// primitive's parameters exceed a filter limit and the filter must be refused.
 struct FilterWorkMultiplier {
-  const FilterNode& node;
-  FilterMemoryModel memoryModel;
+  const FilterNode& node;         //!< Node whose primitive is measured.
+  FilterMemoryModel memoryModel;  //!< Backend retention model that sets per-pixel costs.
 
+  /// Kernel taps plus fixed per-pixel overhead, refused for a non-positive order.
+  /// @param primitive Convolution parameters.
   std::optional<std::uint64_t> operator()(const filter_primitive::ConvolveMatrix& primitive) const {
     if (primitive.orderX <= 0 || primitive.orderY <= 0) {
       return std::nullopt;
@@ -735,6 +744,8 @@ struct FilterWorkMultiplier {
            4;
   }
 
+  /// Per-octave noise work, refused above the octave limit.
+  /// @param primitive Turbulence parameters.
   std::optional<std::uint64_t> operator()(const filter_primitive::Turbulence& primitive) const {
     if (primitive.numOctaves > kMaximumFilterTurbulenceOctaves) {
       return std::nullopt;
@@ -745,6 +756,7 @@ struct FilterWorkMultiplier {
     return octaves * workPerOctave + 5;
   }
 
+  /// Per-input composite work, refused above the merge input limit.
   std::optional<std::uint64_t> operator()(const filter_primitive::Merge&) const {
     if (node.inputs.size() > kMaximumFilterMergeInputs) {
       return std::nullopt;
@@ -753,20 +765,28 @@ struct FilterWorkMultiplier {
     return std::max<std::uint64_t>(inputs * 3 + 2, 5);
   }
 
+  /// A higher multiplier when either standard deviation is positive.
+  /// @param primitive Blur parameters.
   std::optional<std::uint64_t> operator()(const filter_primitive::GaussianBlur& primitive) const {
     return primitive.stdDeviationX > 0.0 || primitive.stdDeviationY > 0.0 ? 12 : 5;
   }
 
+  /// A higher multiplier when either standard deviation is positive.
+  /// @param primitive Drop shadow parameters.
   std::optional<std::uint64_t> operator()(const filter_primitive::DropShadow& primitive) const {
     return primitive.stdDeviationX > 0.0 || primitive.stdDeviationY > 0.0 ? 20 : 12;
   }
 
+  /// The morphology work limit when either radius is positive.
+  /// @param primitive Morphology parameters.
   std::optional<std::uint64_t> operator()(const filter_primitive::Morphology& primitive) const {
     return primitive.radiusX > 0.0 || primitive.radiusY > 0.0
                ? kMaximumFilterMorphologyWorkMultiplier
                : 5;
   }
 
+  /// A higher multiplier for non-pixelated sampling on the CPU memory model.
+  /// @param primitive Image parameters.
   std::optional<std::uint64_t> operator()(const filter_primitive::Image& primitive) const {
     return memoryModel == FilterMemoryModel::CpuFloatNamedResults &&
                    primitive.imageRendering != ImageRendering::Pixelated
@@ -774,6 +794,7 @@ struct FilterWorkMultiplier {
                : 5;
   }
 
+  /// Fixed per-pixel work for every other primitive.
   template <typename Primitive>
   std::optional<std::uint64_t> operator()(const Primitive&) const {
     return 5;
@@ -835,10 +856,11 @@ inline bool InitializeFilterWork(const FilterGraph& graph, std::uint64_t pixelCo
   return true;
 }
 
+/// Standard filter inputs that a graph reads, other than SourceGraphic.
 struct FilterStandardInputUsage {
-  bool sourceAlpha = false;
-  bool fillPaint = false;
-  bool strokePaint = false;
+  bool sourceAlpha = false;  //!< Some node reads SourceAlpha.
+  bool fillPaint = false;    //!< Some node reads FillPaint.
+  bool strokePaint = false;  //!< Some node reads StrokePaint.
 };
 
 /// Collects the standard inputs retained by a CPU filter execution.
@@ -857,11 +879,15 @@ inline FilterStandardInputUsage StandardInputUsage(const FilterGraph& graph) {
 }
 
 /// Computes one CPU primitive's transient float-buffer demand.
+///
+/// Each call operator returns the number of transient full-surface float buffers that one
+/// primitive type needs while it runs.
 struct CpuTransientBufferCount {
-  const FilterGraph& graph;
-  const FilterNode& node;
-  bool linearRgb;
+  const FilterGraph& graph;  //!< Graph that owns the node.
+  const FilterNode& node;    //!< Node whose primitive is measured.
+  bool linearRgb;            //!< Whether the node converts its inputs to linearRGB.
 
+  /// None when the graph's only node blurs the source graphic, otherwise one.
   std::uint64_t operator()(const filter_primitive::GaussianBlur&) const {
     const bool implicitSource =
         node.inputs.empty() ||
@@ -872,27 +898,37 @@ struct CpuTransientBufferCount {
     return graph.nodes.size() == 1 && implicitSource ? 0 : 1;
   }
 
+  /// One, plus one per input when converting to linearRGB.
   std::uint64_t operator()(const filter_primitive::Merge&) const {
     return linearRgb ? static_cast<std::uint64_t>(node.inputs.size()) + 1 : 1;
   }
 
+  /// One, plus two when converting to linearRGB.
   std::uint64_t operator()(const filter_primitive::Blend&) const { return linearRgb ? 3 : 1; }
+  /// One, plus two when converting to linearRGB.
   std::uint64_t operator()(const filter_primitive::Composite&) const { return linearRgb ? 3 : 1; }
+  /// One, plus two when converting to linearRGB.
   std::uint64_t operator()(const filter_primitive::DisplacementMap&) const {
     return linearRgb ? 3 : 1;
   }
+  /// One, plus one when converting to linearRGB.
   std::uint64_t operator()(const filter_primitive::ConvolveMatrix&) const {
     return linearRgb ? 2 : 1;
   }
+  /// One, plus one when converting to linearRGB.
   std::uint64_t operator()(const filter_primitive::Morphology&) const { return linearRgb ? 2 : 1; }
+  /// One, plus one when converting to linearRGB.
   std::uint64_t operator()(const filter_primitive::DiffuseLighting&) const {
     return linearRgb ? 2 : 1;
   }
+  /// One, plus one when converting to linearRGB.
   std::uint64_t operator()(const filter_primitive::SpecularLighting&) const {
     return linearRgb ? 2 : 1;
   }
+  /// Five, plus one when converting to linearRGB.
   std::uint64_t operator()(const filter_primitive::DropShadow&) const { return linearRgb ? 6 : 5; }
 
+  /// One for every other primitive.
   template <typename Primitive>
   std::uint64_t operator()(const Primitive&) const {
     return 1;

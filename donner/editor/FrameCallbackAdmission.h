@@ -26,11 +26,11 @@ inline std::optional<double> NextScheduledFrameDeadline(std::optional<double> pr
 
 /// Owner-thread counters; index zero is scheduled work and index one is an event frame.
 struct FrameAttemptStats {
-  std::array<uint64_t, 2> attempts{};
-  std::array<uint64_t, 2> idle{};
-  std::array<uint64_t, 2> rendered{};
-  uint64_t blockedByFrame = 0;
-  uint64_t blockedByGpu = 0;
+  std::array<uint64_t, 2> attempts{};  ///< Admission attempts.
+  std::array<uint64_t, 2> idle{};      ///< Admitted callbacks that did not run a full UI frame.
+  std::array<uint64_t, 2> rendered{};  ///< Admitted callbacks that ran a full UI frame.
+  uint64_t blockedByFrame = 0;         ///< Attempts made while another UI frame was active.
+  uint64_t blockedByGpu = 0;           ///< Attempts made while a GPU owner callback was active.
 
   /// Record the existing admission decision without changing either guard.
   /// @param eventFrame Whether this is a completion-event callback.

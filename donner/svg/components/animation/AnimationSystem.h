@@ -42,6 +42,7 @@ std::vector<Entity> CollectAnimationEntities(
 /// @return False for foreign, unbound-prefix, or excessively deep ancestry.
 bool IsAnimationInSvgNamespace(Registry& registry, Entity entity);
 
+/// Evaluates declarative SVG animation elements at a document time and applies their values.
 class AnimationSystem {
 public:
   /**
