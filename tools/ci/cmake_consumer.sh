@@ -10,6 +10,7 @@
 #       --check     first validate the checked-in generator output (gen_cmakelists.py --check)
 #       --ccache    compile through ccache, capped at $CCACHE_MAXSIZE, and report its statistics
 #       --parallel  build with N jobs; without it CMake's own default applies
+#   (--check --parallel 2 matches the CMake consumer step of the main CI workflow.)
 #
 # Each phase is a collapsible `::group::` in the GitHub Actions log, and when
 # $GITHUB_STEP_SUMMARY is set the phases and their results are appended to the job summary.
@@ -20,7 +21,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "${script_dir}/../.."
 
 usage() {
-  sed -n '3,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '3,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -67,7 +68,7 @@ build() {
 
   lane_begin "CMake consumer (tiny_skia)"
   if [[ ${use_ccache} -eq 1 ]]; then
-    lane_phase "Reset ccache statistics" ccache_reset
+    lane_phase "Reset ccache statistics and size cap" ccache_reset
   fi
   if [[ ${check} -eq 1 ]]; then
     lane_phase "Validate generated CMakeLists.txt" python3 tools/cmake/gen_cmakelists.py --check

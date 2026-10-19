@@ -5,10 +5,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "BUILD.bazel",
-    "cmake_consumer.sh",
     "coverage_contract.json",
-    "gatekeeper.py",
-    "lane.sh",
     "test_with_exclusions.py",
 ])
 

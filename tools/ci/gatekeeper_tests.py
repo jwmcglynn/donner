@@ -146,6 +146,17 @@ class GatekeeperTest(unittest.TestCase):
                 self.assertEqual(output, "docs_only=false\n")
                 self.assertIn(f"Non-doc change: {path}", result.stdout)
 
+    def test_deletions_are_not_counted(self):
+        # Pins the existing ACMR filter: a pull request that only deletes a build input next to
+        # documentation edits is classed docs-only. Changing this is a deliberate policy change.
+        _commit(self.repo, ["donner/old.cc"], "add source")
+        base = _git(self.repo, "rev-parse", "HEAD")
+        _git(self.repo, "rm", "-q", "donner/old.cc")
+        head = _commit(self.repo, ["docs/guide.md"], "delete source, edit docs")
+        result, output, _ = self._run("docs-only", **self._pull_request(base, head))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "docs_only=true\n")
+
     def test_base_drift_after_the_fork_is_not_attributed_to_the_pull_request(self):
         head = _commit(self.repo, ["docs/guide.md"], "docs")
         _git(self.repo, "checkout", "-q", "--detach", self.root)

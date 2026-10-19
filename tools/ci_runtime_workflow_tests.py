@@ -670,6 +670,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         # The CMake workflow runs the same consumer through its lane script, whose commands
         # //tools/ci:cmake_consumer_tests pins.
         self.assertIn("run: tools/ci/cmake_consumer.sh build --ccache\n", linux)
+        self.assertEqual(2, self.cmake.count("run: tools/ci/cmake_consumer.sh build --ccache\n"))
+        self.assertEqual(1, self.cmake.count("run: tools/ci/cmake_consumer.sh install-tools\n"))
 
     def test_retired_closure_scanner_is_not_invoked(self):
         self.assertNotIn("configured_rust_closure.py", self.main)
