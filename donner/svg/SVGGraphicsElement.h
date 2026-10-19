@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <optional>
 
@@ -29,13 +31,14 @@ protected:
 public:
   /// Returns true if the given element type can be cast to \ref SVGGraphicsElement.
   static constexpr bool IsBaseOf(ElementType type) {
-    return type == ElementType::A || type == ElementType::Circle || type == ElementType::Defs ||
-           type == ElementType::Ellipse || type == ElementType::G || type == ElementType::Image ||
-           type == ElementType::Line || type == ElementType::Path || type == ElementType::Polygon ||
-           type == ElementType::Polyline || type == ElementType::Rect || type == ElementType::SVG ||
-           type == ElementType::Switch || type == ElementType::Symbol ||
-           type == ElementType::Text || type == ElementType::TextPath ||
-           type == ElementType::TSpan || type == ElementType::Unknown;
+    constexpr std::array kGraphicsTypes = {
+        ElementType::A,       ElementType::Circle,   ElementType::Defs, ElementType::Ellipse,
+        ElementType::G,       ElementType::Image,    ElementType::Line, ElementType::Path,
+        ElementType::Polygon, ElementType::Polyline, ElementType::Rect, ElementType::SVG,
+        ElementType::Switch,  ElementType::Symbol,   ElementType::Text, ElementType::TextPath,
+        ElementType::TSpan,   ElementType::Unknown,  ElementType::Use,
+    };
+    return std::ranges::find(kGraphicsTypes, type) != kGraphicsTypes.end();
   }
 
   /// Get the 2d transformation for this element, which maps element coordinates into the parent's

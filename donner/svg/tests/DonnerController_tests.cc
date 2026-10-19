@@ -13,7 +13,9 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/Renderer.h"
 
+using testing::ElementsAre;
 using testing::Eq;
 using testing::Optional;
 
@@ -374,6 +376,155 @@ TEST_F(DonnerControllerTest, HoverWithNoLink) {
   )");
   DonnerController controller(document);
   EXPECT_THAT(controller.hitTestLink(Vector2d(50, 50)), Eq(std::nullopt));
+}
+
+// --- <use> instances: hits resolve to the <use> element in the document tree ---
+
+constexpr std::string_view kUseDocument = R"(
+  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+    <defs><rect id="r" width="10" height="10" fill="blue"/></defs>
+    <rect id="base" width="16" height="16" fill="green"/>
+    <use id="u" href="#r"/>
+  </svg>
+)";
+
+/// @test A captured hit snapshot over `<use>` content reports the `<use>` element, not the
+/// instantiated shadow content (SVG 2 retargets events on `<use>` instances to the `<use>`).
+TEST_F(DonnerControllerTest, CapturedHitOverUseTargetsTheUseElement) {
+  SVGDocument document = ParseSVG(kUseDocument);
+  DonnerController controller(document);
+  const auto snapshot = controller.captureHitTest();
+  ASSERT_TRUE(snapshot->complete());
+  EXPECT_THAT(snapshot->findIntersecting(Vector2d(5, 5)), Optional(*document.querySelector("#u")));
+  EXPECT_THAT(snapshot->findIntersecting(Vector2d(13, 13)),
+              Optional(*document.querySelector("#base")));
+}
+
+/// @test The live point queries resolve `<use>` content to the `<use>` element, front to back.
+TEST_F(DonnerControllerTest, FindIntersectingOverUseTargetsTheUseElement) {
+  SVGDocument document = ParseSVG(kUseDocument);
+  DonnerController controller(document);
+  const SVGElement use = *document.querySelector("#u");
+  const SVGElement base = *document.querySelector("#base");
+  EXPECT_THAT(controller.findIntersecting(Vector2d(5, 5)), Optional(use));
+  EXPECT_THAT(controller.findIntersecting(Vector2d(5, 5), HitTestMode::EditorSelection),
+              Optional(use));
+  EXPECT_THAT(controller.findAllIntersecting(Vector2d(5, 5)), ElementsAre(use, base));
+}
+
+/// @test Overlapping shapes instantiated by one `<use>` report that `<use>` element once.
+TEST_F(DonnerControllerTest, FindAllIntersectingReportsAUseElementOnce) {
+  SVGDocument document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <defs><g id="pair">
+        <rect width="10" height="10" fill="blue"/><rect width="8" height="8" fill="red"/>
+      </g></defs>
+      <rect id="base" width="16" height="16" fill="green"/>
+      <use id="u" href="#pair"/>
+    </svg>
+  )");
+  DonnerController controller(document);
+  EXPECT_THAT(controller.findAllIntersecting(Vector2d(5, 5)),
+              ElementsAre(*document.querySelector("#u"), *document.querySelector("#base")));
+}
+
+/// @test Content reached through nested `<use>` elements resolves to the outermost `<use>` in the
+/// document tree.
+TEST_F(DonnerControllerTest, NestedUseTargetsTheOutermostUseElement) {
+  SVGDocument document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <defs>
+        <rect id="r" width="10" height="10" fill="blue"/>
+        <g id="inner-group"><use id="inner" href="#r"/></g>
+      </defs>
+      <use id="outer" href="#inner-group"/>
+    </svg>
+  )");
+  DonnerController controller(document);
+  const SVGElement outer = *document.querySelector("#outer");
+  EXPECT_THAT(controller.findIntersecting(Vector2d(5, 5)), Optional(outer));
+  EXPECT_THAT(controller.captureHitTest()->findIntersecting(Vector2d(5, 5)), Optional(outer));
+}
+
+/// @test Rebuilding the render tree (as every animation tick does) recreates `<use>` shadow content
+/// but the hit target stays the same document element.
+TEST_F(DonnerControllerTest, UseTargetIsStableAcrossAnimationTicks) {
+  SVGDocument document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <defs><rect id="r" width="10" height="10" fill="blue">
+        <animate attributeName="width" from="10" to="16" dur="1s" repeatCount="indefinite"/>
+      </rect></defs>
+      <use id="u" href="#r"/>
+    </svg>
+  )");
+  DonnerController controller(document);
+  Renderer renderer;
+  const SVGElement use = *document.querySelector("#u");
+  for (const double time : {0.0, 0.25, 0.5}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    renderer.draw(document);
+    const auto snapshot = controller.captureHitTest();
+    ASSERT_TRUE(snapshot->complete());
+    EXPECT_THAT(snapshot->findIntersecting(Vector2d(5, 5)), Optional(use));
+  }
+}
+
+/// @test A link enclosing a `<use>` is found through the `<use>` element, which is the hit element.
+TEST_F(DonnerControllerTest, LinkEnclosingUseResolvesThroughTheUseElement) {
+  SVGDocument document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <defs><rect id="r" width="10" height="10" fill="blue"/></defs>
+      <a href="#target"><use id="u" href="#r"/></a>
+    </svg>
+  )");
+  DonnerController controller(document);
+  const std::optional<DonnerController::LinkHit> link = controller.hitTestLink(Vector2d(5, 5));
+  ASSERT_TRUE(link.has_value());
+  EXPECT_THAT(link->href, Eq(RcString("#target")));
+  EXPECT_EQ(link->hitElement, *document.querySelector("#u"));
+}
+
+/// @test The cursor over `<use>` content comes from the instantiated content's own style.
+TEST_F(DonnerControllerTest, CursorOverUseUsesTheInstanceStyle) {
+  SVGDocument document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <defs><rect id="r" width="10" height="10" fill="blue" style="cursor: copy"/></defs>
+      <use href="#r" style="cursor: move"/>
+    </svg>
+  )");
+  DonnerController controller(document);
+  const std::optional<Cursor> cursor = controller.cursorAt(Vector2d(5, 5));
+  ASSERT_TRUE(cursor.has_value());
+  EXPECT_EQ(cursor->fallback, CursorType::Copy);
+}
+
+/// @test Pattern and marker content is painted as part of its referencing element and is never a
+/// hit target itself; the referencing element is hit by its own geometry.
+TEST_F(DonnerControllerTest, PatternAndMarkerContentIsNotAHitTarget) {
+  SVGDocument document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <defs>
+        <pattern id="p" width="20" height="20" patternUnits="userSpaceOnUse">
+          <rect width="20" height="20" fill="blue"/>
+        </pattern>
+        <marker id="m" markerWidth="20" markerHeight="20" markerUnits="userSpaceOnUse"
+                overflow="visible">
+          <rect width="20" height="20" fill="red"/>
+        </marker>
+      </defs>
+      <rect id="filled" width="20" height="20" fill="url(#p)"/>
+      <path id="line" d="M 50 50 L 90 50" stroke="black" marker-start="url(#m)"/>
+    </svg>
+  )svg");
+  DonnerController controller(document);
+  const SVGElement filled = *document.querySelector("#filled");
+  EXPECT_THAT(controller.findAllIntersecting(Vector2d(5, 5)), ElementsAre(filled));
+  EXPECT_THAT(controller.findIntersecting(Vector2d(60, 60)), Eq(std::nullopt));
+  const auto snapshot = controller.captureHitTest();
+  ASSERT_TRUE(snapshot->complete());
+  EXPECT_THAT(snapshot->findIntersecting(Vector2d(5, 5)), Optional(filled));
+  EXPECT_THAT(snapshot->findIntersecting(Vector2d(60, 60)), Eq(std::nullopt));
 }
 
 }  // namespace donner::svg

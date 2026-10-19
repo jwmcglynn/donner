@@ -47,7 +47,8 @@ public:
   };
 
   /// Capture current hit geometry and targets for interaction with the corresponding rendered
-  /// frame.
+  /// frame. Targets resolve as for \ref findIntersecting, so they remain valid document elements
+  /// after later render-tree rebuilds.
   std::shared_ptr<const HitTestSnapshot> captureHitTest();
 
   /**
@@ -65,8 +66,8 @@ public:
     RcString href;
 
     /// The concrete painted descendant actually under the point (e.g. the nested `<rect>` inside
-    /// the `<a>`). An `<a>` paints nothing of its own, so this is always a descendant of \ref
-    /// linkElement, never the `<a>` element itself.
+    /// the `<a>`), or the `<use>` element whose content was hit. An `<a>` paints nothing of its
+    /// own, so this is always a descendant of \ref linkElement, never the `<a>` element itself.
     SVGGraphicsElement hitElement;
   };
 
@@ -86,6 +87,11 @@ public:
    * \ref SVGDocument::canvasFromDocumentTransform first. Returns the last-painted (topmost)
    * matching element.
    *
+   * Content rendered by a `<use>` element resolves to that `<use>` element (the outermost one for
+   * nested `<use>` instances), matching SVG 2 event retargeting for `<use>` instances. Pattern,
+   * mask and marker content is painted as part of the element that references it and is never
+   * returned.
+   *
    * @param point Position in document coordinates.
    * @param mode SVG event targeting by default; EditorSelection ignores pointer-events while
    * retaining visible painted geometry. Neither mode changes the document's properties.
@@ -98,7 +104,8 @@ public:
    * Return every painted element intersecting \p point, front to back.
    *
    * This supports scoped editor hit testing without allowing an element
-   * outside the active scope to occlude an eligible descendant.
+   * outside the active scope to occlude an eligible descendant. Targets resolve as for
+   * \ref findIntersecting, and each element is reported once, at its frontmost hit.
    *
    * @param point Position in document coordinates, as for \ref findIntersecting.
    * @param mode Hit eligibility policy, with the same semantics as findIntersecting.
@@ -142,8 +149,8 @@ public:
    * Resolution follows the document-tree ancestor chain, which has two consequences worth noting:
    * a `<a>` wrapping graphics (or a whole `<text>`) resolves normally, but an inline `<a>` span
    * nested *inside* a `<text>` resolves to that enclosing `<text>` rather than to the inline span,
-   * because text is hit-tested at text-element granularity. Content injected through `<use>` is
-   * resolved by the referenced subtree's own ancestry.
+   * because text is hit-tested at text-element granularity. Content rendered through `<use>`
+   * resolves to the `<use>` element, so a link applies when it encloses that `<use>` element.
    *
    * ```cpp
    * DonnerController controller(document);
@@ -161,6 +168,12 @@ public:
   std::optional<LinkHit> hitTestLink(const Vector2d& point);
 
 private:
+  /// Resolve a rendered hit to the document-tree graphics element that receives its events. Hits
+  /// on `<use>` content resolve to the `<use>` element, which outlives the shadow tree rebuilt with
+  /// the render tree.
+  /// @param registry Document registry. @param hit Entity returned by the render-tree hit test.
+  static std::optional<SVGGraphicsElement> HitTarget(Registry& registry, Entity hit);
+
   SVGDocument document_;
 };
 

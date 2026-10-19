@@ -1,10 +1,24 @@
 #include "donner/svg/DonnerController.h"
 
-#include "donner/base/Utils.h"
+#include <unordered_set>
+
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
+
+std::optional<SVGGraphicsElement> DonnerController::HitTarget(Registry& registry, Entity hit) {
+  const Entity target = components::RenderingContext::EventTargetEntity(registry, hit);
+  if (target == entt::null) {
+    return std::nullopt;
+  }
+  SVGElement element(EntityHandle(registry, target));
+  const std::optional<ElementType> type = element.tryType();
+  if (!type || !SVGGraphicsElement::IsBaseOf(*type)) {
+    return std::nullopt;
+  }
+  return element.cast<SVGGraphicsElement>();
+}
 
 struct DonnerController::HitTestSnapshot::Impl {
   std::optional<std::vector<components::RenderingContext::HitRecord>> records;
@@ -33,12 +47,16 @@ std::shared_ptr<const DonnerController::HitTestSnapshot> DonnerController::captu
   const auto access = document_.writeAccess();
   Registry& registry = access.registry();
   auto impl = std::make_shared<HitTestSnapshot::Impl>();
-  impl->records = components::RenderingContext(registry).captureHitGeometry();
-  if (impl->records) {
-    impl->targets.reserve(impl->records->size());
-    for (const auto& record : *impl->records) {
-      impl->targets.push_back(
-          SVGElement(EntityHandle(registry, record.entity)).cast<SVGGraphicsElement>());
+  auto records = components::RenderingContext(registry).captureHitGeometry();
+  if (records) {
+    impl->records.emplace();
+    impl->records->reserve(records->size());
+    impl->targets.reserve(records->size());
+    for (auto& record : *records) {
+      if (std::optional<SVGGraphicsElement> target = HitTarget(registry, record.entity)) {
+        impl->records->push_back(std::move(record));
+        impl->targets.push_back(std::move(*target));
+      }
     }
   }
   return std::shared_ptr<const HitTestSnapshot>(new HitTestSnapshot(std::move(impl)));
@@ -50,13 +68,20 @@ std::optional<SVGGraphicsElement> DonnerController::findIntersecting(const Vecto
                                                                      HitTestMode mode) {
   DocumentWriteAccess access = document_.writeAccess();
   Registry& registry = access.registry();
-  Entity entity = components::RenderingContext(registry).findIntersecting(point, mode);
-  if (entity != entt::null) {
-    SVGElement element(EntityHandle(registry, entity));
-    UTILS_RELEASE_ASSERT(element.isa<SVGGraphicsElement>());
-    return element.cast<SVGGraphicsElement>();
+  components::RenderingContext context(registry);
+  const Entity entity = context.findIntersecting(point, mode);
+  if (entity == entt::null) {
+    return std::nullopt;
   }
-
+  if (std::optional<SVGGraphicsElement> target = HitTarget(registry, entity)) {
+    return target;
+  }
+  // Like the captured snapshot, a hit without a graphics target does not occlude the hits below.
+  for (const Entity below : context.findAllIntersecting(point, mode)) {
+    if (std::optional<SVGGraphicsElement> target = HitTarget(registry, below)) {
+      return target;
+    }
+  }
   return std::nullopt;
 }
 
@@ -68,10 +93,13 @@ std::vector<SVGGraphicsElement> DonnerController::findAllIntersecting(const Vect
       components::RenderingContext(registry).findAllIntersecting(point, mode);
   std::vector<SVGGraphicsElement> results;
   results.reserve(entities.size());
+  // Several shapes instantiated by one `<use>` report that `<use>` once, at its frontmost hit.
+  std::unordered_set<Entity> reported;
   for (const Entity entity : entities) {
-    SVGElement element(EntityHandle(registry, entity));
-    UTILS_RELEASE_ASSERT(element.isa<SVGGraphicsElement>());
-    results.push_back(element.cast<SVGGraphicsElement>());
+    std::optional<SVGGraphicsElement> target = HitTarget(registry, entity);
+    if (target && reported.insert(target->entityHandle().entity()).second) {
+      results.push_back(std::move(*target));
+    }
   }
   return results;
 }
