@@ -123,6 +123,11 @@ device. `RendererGeode::setTargetTexture()` keeps only the texture's identity,
 and keeps it for every later frame until `clearTargetTexture()`. Clear it before
 presenting, because presentation invalidates the frame's handle.
 
+To wait until the GPU has finished the work a frame submitted, for example to time it, call
+`RendererGeode::waitForSubmittedWork()`. It performs no readback or presentation, waits with the
+same progress-based bound as other GPU waits, and returns `TimedOut` or `DeviceLost` instead of
+waiting indefinitely when the device stops making progress or is lost.
+
 Acquisition and presentation both report a `SurfaceStatus`.
 `SurfaceStatus::Outdated` calls for reconfiguration before another acquire.
 `Timeout` can be retried; `Lost` and `DeviceLost` stop this fixed-window
