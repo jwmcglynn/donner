@@ -54,6 +54,9 @@ bazel test --config=asan-fuzzer \
 tests _run_, so without it the command builds the entire repo under the asan-fuzzer toolchain
 (~10k actions), and any unrelated build break reports every fuzz test as `NO STATUS`. With both
 filters (exactly what `fuzz.yml` uses) only the fuzzers build.
+The nightly phases are `.bazelrc` lane configs: `bazel test --config=fuzz-lane //...` reproduces
+the default soak phase (`fuzz-lane-text-full`, `fuzz-lane-geode` and
+`fuzz-lane-production-soak` cover the others).
 
 Why `--config=asan-fuzzer` (defined in `.bazelrc`) is mandatory on macOS: Apple Clang ships no
 `libclang_rt.fuzzer_osx.a`, so fuzz targets are marked `@platforms//:incompatible` off Linux

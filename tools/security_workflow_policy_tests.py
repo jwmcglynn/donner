@@ -633,7 +633,6 @@ def _privileged_trigger_check(files, path):
     return _privileged_trigger_violations(path, files[path])
 
 
-
 def _fuzz_lane_flags(name):
     """The flags of a `fuzz-lane*` config in .bazelrc, with nested `fuzz-lane*` configs expanded.
 
@@ -650,6 +649,7 @@ def _fuzz_lane_flags(name):
     if not flags:
         raise AssertionError("no .bazelrc config named " + name)
     return flags
+
 
 def _read(path):
     resolved = runfiles.Create().Rlocation("donner/%s" % path)
@@ -2621,7 +2621,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         commands = [line for line in self.fuzz.splitlines() if "bazelisk test" in line]
         self.assertEqual(len(commands), 7)
         for line in commands:
-            lane = re.search(r"--config=(fuzz-lane[a-z-]*)", line)
+            # Exactly one lane config and the lane's targets: nothing can override the lane.
+            lane = re.fullmatch(r"\s*run: bazelisk test --config=(fuzz-lane[a-z-]*) "
+                                r"(?://\.\.\.|//tools/ci:image_loader_production_soak)", line)
             self.assertIsNotNone(lane, line)
             flags = _fuzz_lane_flags(lane.group(1))
             self.assertIn("--config=fuzz-soak", flags)
@@ -3096,6 +3098,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             self.assertIn("--test_tag_filters=%s" % tag, flags)
             self.assertIn("--build_tag_filters=%s" % tag, flags)
             self.assertNotRegex(body.replace("//...", ""), r"//[^\s]+")
+        self.assertIn("--config=text-full", _fuzz_lane_flags("fuzz-lane-text-full"))
+        self.assertIn("--config=geode", _fuzz_lane_flags("fuzz-lane-geode"))
 
     def test_production_image_decode_soak_runs_on_both_nightly_hosts(self):
         target = "//tools/ci:image_loader_production_soak"
