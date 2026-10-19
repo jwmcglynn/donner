@@ -1,4 +1,4 @@
-"""Runs the gatekeeper decisions as a workflow step would, against real git history and a fake gh."""
+"""Runs the gatekeeper decisions as a workflow step would: real git history, a fake gh."""
 
 import json
 import os
@@ -13,8 +13,10 @@ from tools import test_timing
 from tools.test_executable_fixtures import ExecutableFixtureDirectory
 
 
-# Host and user git configuration (global ignores, hooks, signing) never reaches the fixtures.
-_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+# Host and user git configuration (global ignores, hooks, signing) never reaches the fixtures,
+# and git never searches above a fixture's temporary directory for an enclosing repository.
+_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CEILING_DIRECTORIES": tempfile.gettempdir()}
 
 
 def _git(repo, *args):
@@ -193,7 +195,6 @@ class GatekeeperTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(output, "")
 
-
     # main-advanced
 
     def _checkout(self):
@@ -208,20 +209,24 @@ class GatekeeperTest(unittest.TestCase):
                          GITHUB_EVENT_NAME=event, **kwargs)
 
     def test_manual_dispatch_always_runs_without_queries(self):
-        result, output, calls = self._advanced("", event="workflow_dispatch",
-                                               cwd=self.work)
+        result, output, calls = self._advanced("", event="workflow_dispatch")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(output, "should_run=true\n")
         self.assertEqual(calls, [])
 
     def test_unchanged_main_skips(self):
         checkout = self._checkout()
-        result, output, calls = self._advanced(self.root + "\n", cwd=checkout)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(output, "should_run=false\n")
-        self.assertEqual(calls, [["run", "list", "--workflow=perf.yml", "--status=success",
-                                  "--limit=1", "--json", "headSha", "--jq", ".[0].headSha"]])
-        self.assertIn("has not advanced since the last successful perf.yml run", result.stdout)
+        for event in ("schedule", "push"):
+            with self.subTest(event=event):
+                result, output, calls = self._advanced(self.root + "\n", event=event,
+                                                       cwd=checkout)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, "should_run=false\n")
+                self.assertEqual(calls, [["run", "list", "--workflow=perf.yml",
+                                          "--status=success", "--limit=1", "--json", "headSha",
+                                          "--jq", ".[0].headSha"]])
+                self.assertIn("has not advanced since the last successful perf.yml run",
+                              result.stdout)
 
     def test_advanced_main_runs(self):
         checkout = self._checkout()
@@ -244,8 +249,8 @@ class GatekeeperTest(unittest.TestCase):
         result, output, _ = self._advanced(self.root, gh_status=4, cwd=checkout)
         self.assertEqual(result.returncode, 4)
         self.assertEqual(output, "")
-        # No origin to fetch main from.
-        result, output, calls = self._advanced(self.root, cwd=self.work)
+        # The fixture repository has no origin to fetch main from.
+        result, output, calls = self._advanced(self.root)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(output, "")
         self.assertEqual(calls, [])
@@ -254,6 +259,7 @@ class GatekeeperTest(unittest.TestCase):
         result, output, calls = self._run("main-advanced", GITHUB_EVENT_NAME="schedule")
         self.assertEqual(result.returncode, 2)
         self.assertEqual((output, calls), ("", []))
+
 
 if __name__ == "__main__":
     unittest.main()
