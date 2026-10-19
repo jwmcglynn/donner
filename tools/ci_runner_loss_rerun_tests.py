@@ -41,12 +41,17 @@ def annotation(message, level="failure"):
 
 
 def steps(*pairs):
-    """Steps in order from (name, conclusion) pairs; "pending" is a step never reached."""
+    """Steps in order from (name, conclusion) pairs.
+
+    "pending" is a step never reached, and "in_progress" is the step running when the runner
+    died; neither has a conclusion.
+    """
     result = []
     for number, (name, conclusion) in enumerate(pairs, start=1):
-        status = "pending" if conclusion == "pending" else "completed"
-        result.append({"number": number, "name": name, "status": status,
-                       "conclusion": None if conclusion == "pending" else conclusion})
+        unfinished = conclusion in ("pending", "in_progress")
+        result.append({"number": number, "name": name,
+                       "status": conclusion if unfinished else "completed",
+                       "conclusion": None if unfinished else conclusion})
     return result
 
 
@@ -78,6 +83,20 @@ LOST_IN_BUILD = job(117788702573, "macos", "failure", steps(
     ("Post Restore Bazel action cache", "pending"),
 ))
 LOST_IN_BUILD_ANNOTATIONS = [annotation(LOST), annotation(CAPACITY, "notice")]
+
+# Run 39165844514 attempt 2: the runner died while restoring the action cache, so that step
+# never got a conclusion and every later step stayed pending.
+LOST_IN_CACHE_RESTORE = job(117866907732, "macos", "failure", steps(
+    ("Set up job", "success"),
+    ("Checkout", "success"),
+    ("Setup Bazel", "success"),
+    ("Restore Bazel action cache", "in_progress"),
+    ("Build", "pending"),
+    ("Test", "pending"),
+    ("Post Restore Bazel action cache", "pending"),
+))
+LOST_IN_CACHE_RESTORE["run_attempt"] = 2
+LOST_IN_CACHE_RESTORE_ANNOTATIONS = [annotation(LOST), annotation(CAPACITY, "notice")]
 
 # Run 38696609859: the runner's own log page write failed in post-job cache save.
 IO_IN_POST = job(116294844879, "macos", "failure", steps(
@@ -130,6 +149,16 @@ class ClassifierTests(unittest.TestCase):
 
         self.assertTrue(decision.eligible)
         self.assertEqual([rerun.SIGNATURE_LOST], [job.signature for job in decision.jobs])
+
+    def test_signature_a_matches_a_step_left_in_progress_by_the_lost_runner(self):
+        decision = rerun.classify_job(LOST_IN_CACHE_RESTORE, LOST_IN_CACHE_RESTORE_ANNOTATIONS)
+
+        self.assertEqual(rerun.SIGNATURE_LOST, decision.signature)
+        # The same loss on a second attempt is still never rerun.
+        run_decision = classify(run(39165844514, run_attempt=2), [LOST_IN_CACHE_RESTORE],
+                                {117866907732: LOST_IN_CACHE_RESTORE_ANNOTATIONS})
+        self.assertFalse(run_decision.eligible)
+        self.assertEqual(["attempt 2 is not the first"], run_decision.gate_failures)
 
     def test_signature_b_runner_diag_write_failure_is_eligible(self):
         decision = classify(run(38696609859), PASSING + [IO_IN_POST],
