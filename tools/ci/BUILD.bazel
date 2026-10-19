@@ -296,6 +296,22 @@ py_test(
     ],
 )
 
+# The Coverage workflow's measurement lane and hosted-runner disk cleanup.
+py_test(
+    name = "coverage_lane_tests",
+    size = "small",
+    srcs = ["coverage_lane_tests.py"],
+    data = [
+        "coverage_lane.sh",
+        "free_runner_disk.sh",
+    ],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
 # Explicit comparisons reuse the production browser tests with unchanged test settings.
 test_suite(
     name = "browser_gpu_comparison",
