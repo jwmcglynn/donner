@@ -1333,6 +1333,7 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
             Object.is(workerStats['presentedAtMs'], undefined)) {
           workerStats['presentedAtMs'] = stats['lastFrameAtMs'];
           workerStats['presentationPublicationDelayMs'] = stats['lastFramePublicationDelayMs'];
+          workerStats['presentingFrame'] = $14 ? 'event' : 'scheduled';
         }
         window['__donnerMainLoopRenderedFrames'] =
             Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
@@ -1346,7 +1347,8 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
       static_cast<double>(attempts.idle[0]), static_cast<double>(attempts.idle[1]),
       static_cast<double>(attempts.rendered[0]), static_cast<double>(attempts.rendered[1]),
       static_cast<double>(attempts.blockedByFrame), static_cast<double>(attempts.blockedByGpu),
-      static_cast<double>(Driver().eventDeferrals));
+      static_cast<double>(Driver().eventDeferrals),
+      attempts.lastRenderedEventFrame.value_or(false) ? 1 : 0);
   // clang-format on
 
   PublishSuspendAndTickStats();

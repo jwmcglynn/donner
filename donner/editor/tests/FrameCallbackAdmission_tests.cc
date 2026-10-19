@@ -24,6 +24,19 @@ TEST(FrameCallbackAdmissionTest, DiagnosticCountersPreserveGuardAndSeparateFrame
   EXPECT_EQ(stats.blockedByGpu, 4u);
 }
 
+TEST(FrameCallbackAdmissionTest, LastRenderedFrameKindIgnoresIdleCallbacks) {
+  FrameAttemptStats stats;
+  EXPECT_FALSE(stats.lastRenderedEventFrame.has_value());
+  stats.finish(true, true);
+  EXPECT_EQ(stats.lastRenderedEventFrame, true);
+  stats.finish(false, false);
+  EXPECT_EQ(stats.lastRenderedEventFrame, true) << "An idle scheduled callback renders nothing";
+  stats.finish(false, true);
+  EXPECT_EQ(stats.lastRenderedEventFrame, false);
+  stats.finish(true, false);
+  EXPECT_EQ(stats.lastRenderedEventFrame, false) << "An idle event callback renders nothing";
+}
+
 TEST(FrameCallbackAdmissionTest, EventFrameCannotPostponeAnOwedAnimationBoundary) {
   const double boundaryMs = 1000.0 / 60.0;
   const auto next = NextScheduledFrameDeadline(boundaryMs, 2 * boundaryMs, true);

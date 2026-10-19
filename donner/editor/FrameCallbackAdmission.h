@@ -43,9 +43,17 @@ struct FrameAttemptStats {
     return !frameActive && !gpuActive;
   }
 
+  /// Whether the most recent full UI frame was an event frame; unset before the first one.
+  std::optional<bool> lastRenderedEventFrame;
+
   /// Count an admitted callback's outcome. @param eventFrame Event vs scheduled callback.
   /// @param didRender Whether the callback ran a full UI frame (not proof of surface presentation).
-  void finish(bool eventFrame, bool didRender) { ++(didRender ? rendered : idle)[eventFrame]; }
+  void finish(bool eventFrame, bool didRender) {
+    ++(didRender ? rendered : idle)[eventFrame];
+    if (didRender) {
+      lastRenderedEventFrame = eventFrame;
+    }
+  }
 };
 
 /// Start/stop and callback execution belong to the app thread; admission may run on another thread.

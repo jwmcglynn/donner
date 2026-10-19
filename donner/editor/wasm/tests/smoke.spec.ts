@@ -2150,9 +2150,16 @@ for (
       );
     }
     if (holdsScheduledFrames) {
-      // The result reached the canvas while every scheduled frame was withheld, so a wake drove
-      // it, not the scheduler. Confirm the hold really was in force throughout, then hand the
-      // withheld frames back and check the scheduler resumes.
+      // The frame that presented the result must be an event frame. With the worker's animation
+      // frames withheld, the only other frames are the driven ticks above, and one of those can
+      // still be in flight when the render starts; a tick carrying the result would hide a
+      // completion wake that no longer requests a frame.
+      expect(
+        (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame,
+        `the completed result was not presented by an event frame: ${JSON.stringify(phaseTimings)}`,
+      ).toBe("event");
+      // Confirm the hold really was in force throughout, then hand the withheld frames back and
+      // check the scheduler resumes.
       const held = await readHeldAnimationFrames(page);
       expect(held, "the withheld animation frames stayed withheld until presentation").toEqual(
         expect.objectContaining({ released: false, ranAfterRelease: 0 }),
