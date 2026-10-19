@@ -4510,8 +4510,8 @@ async function exerciseAnimationPointerPulse({
         delayedPulseClickFinishedEpochMs = Date.now();
         const queuedPulseDeadline = performance.now() + scaledMs(5000);
         queuedPulseSteppingEpochMs = Date.now();
-        // Avoid screenshot-induced stalls while queued input is delivered. Playback cadence was
-        // measured above without holds or screenshots, independently of this correctness probe.
+        // Avoid screenshot-induced stalls while queued input is delivered. Playback cadence is
+        // measured in its own case, without holds or screenshots.
         const retained = await retainGatedPulseFrame({
           gate: queuedGate,
           owner,
@@ -4862,12 +4862,9 @@ async function reportAnimationCadence({
   assertAnimationCadence(measurement, evidence);
 }
 
-// Deliberate fault injection for the animation lane: the first animated Preview each browser opens
-// in a run waits this long before loading the editor. It reproduces the one-time cost of a
-// browser's first boot on a freshly provisioned host (browser startup, GPU adapter and device
-// creation, first shader and pipeline compilation), which later boots in the same run do not pay.
-// A marker in the test's temporary directory makes it once per browser and run, also across
-// Playwright worker restarts.
+// Deliberate fault injection: the first animated Preview each browser opens in a run waits this long
+// before loading the editor, like a first boot on a freshly provisioned host. A marker in the test's
+// temporary directory applies it once per browser and run, also across worker restarts.
 const kAnimationFirstBootDelayMs = Number(
   process.env.DONNER_ANIMATION_FIRST_BOOT_DELAY_MS ?? 0,
 );
@@ -5018,13 +5015,8 @@ async function openAnimatedPreview(page: Page, browserName: string, testInfo: Te
   };
 }
 
-// A browser's first editor boot on a freshly provisioned host also pays one-time costs: browser
-// startup, GPU adapter and device creation, and the first shader and pipeline compilation. On the
-// hosted macOS runner the first boot took about 20 s to reach its first animation-region capture,
-// 8 s of it creating the WebGPU adapter, while the next case took about 10 s in total in a
-// relaunched browser. This case is declared first, so with the lane's single worker it runs first
-// for each browser and takes that cost under its own budget and failure diagnostics. The cases
-// after it then budget only their own boot and probes, whichever lane runs first on the host.
+// Declared first so that, in the single-worker animation target, each browser's one-time first-boot
+// cost (browser startup, GPU adapter creation, first shader compiles) lands here, not in the probes.
 test(
   "animation preview plays on the browser's first boot",
   async ({ page, browserName }, testInfo) => {
@@ -5033,23 +5025,16 @@ test(
   },
 );
 
+// The fixed 20 s uninstrumented playback interval is its own case, so the pulse and pointer probes
+// below do not share a budget with it.
 test(
-  "animation preview plays and dispatches mouse events",
+  "animation preview plays at its playback cadence",
   async ({ page, browserName }, testInfo) => {
-    const {
-      animationCapture,
-      box,
-      browserGpuInfo,
-      captureAnimationRegion,
-      editCenter,
-      fatalMessages,
-      orb,
-      orbProbe,
-      originX,
-      originY,
-      scale,
-      start,
-    } = await openAnimatedPreview(page, browserName, testInfo);
+    const { box, browserGpuInfo, fatalMessages } = await openAnimatedPreview(
+      page,
+      browserName,
+      testInfo,
+    );
     const cadenceMeasurement = await measureAnimationCadence(page, testInfo);
     await reportAnimationCadence({
       page,
@@ -5060,7 +5045,27 @@ test(
     });
     const { before, after } = cadenceMeasurement;
     await verifyRasterProgressWithTimersHeld(page);
-    // Observe completion only after the uninstrumented playback interval has finished.
+    expect(after.documents - before.documents).toBeGreaterThan(10);
+    expect(fatalMessages).toEqual([]);
+  },
+);
+
+test(
+  "animation preview plays and dispatches mouse events",
+  async ({ page, browserName }, testInfo) => {
+    const {
+      animationCapture,
+      box,
+      captureAnimationRegion,
+      editCenter,
+      fatalMessages,
+      orb,
+      orbProbe,
+      originX,
+      originY,
+      scale,
+      start,
+    } = await openAnimatedPreview(page, browserName, testInfo);
     await expectSurfaceFrameProbeReady(page);
     let interactionCaptureOwner: Worker | null = null;
     await expect.poll(async () => {
@@ -5070,7 +5075,6 @@ test(
     }, { message: "interaction captures observe the canvas GPU owner" }).toBe(true);
     const previewCapture = await captureAnimationRegion(box);
     await writeFile(testInfo.outputPath("animation-preview.png"), previewCapture.png);
-    expect(after.documents - before.documents).toBeGreaterThan(10);
 
     await exerciseAnimationPointerPulse({
       page,
@@ -5110,8 +5114,8 @@ test(
       start,
     } = await openAnimatedPreview(page, browserName, testInfo);
 
-    // Exercise the fault-injected lifecycle in a fresh Preview instead of inheriting the cadence
-    // and pointer/pulse case's nearly exhausted test deadline.
+    // Exercise the fault-injected lifecycle in a fresh Preview instead of inheriting the pointer
+    // pulse case's test deadline.
     await expectSurfaceFrameProbeReady(page);
     await expect.poll(async () => {
       const owner = await findCanvasOwnerWorker(page);
