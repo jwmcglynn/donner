@@ -2019,18 +2019,29 @@ for (
     await page.mouse.click(bounds.x + bounds.width * sample.xFraction, bounds.y + sample.y);
     if (holdsScheduledFrames) {
       // Input waits for a scheduled frame by design, so drive the frames that apply the click
-      // through the main-thread tick instead of the withheld worker animation frames. Stop as soon
-      // as the sample is active: its render is submitted in that same frame, so from then on only
-      // event frames remain to carry the result, apart from at most one tick that was already in
-      // flight when the activation was observed.
+      // through the main-thread tick instead of the withheld worker animation frames. The frame
+      // that activates the sample defers its render request to the following frame, so keep
+      // ticking until the raster worker has started that render. From then on only event frames
+      // remain to carry the result, apart from at most one tick that was already in flight.
       await expect.poll(async () =>
-        page.evaluate((sampleId) => {
-          if (window.__donnerActiveSampleStats?.sampleId === sampleId) return true;
+        page.evaluate(({ sampleId, beforeSample }) => {
+          const active = window.__donnerActiveSampleStats;
+          if (active?.sampleId === sampleId) {
+            const phases = (window as unknown as {
+              __donnerRasterWorkPhases?: { phase: string; publishedAtMs: number }[];
+            }).__donnerRasterWorkPhases ?? [];
+            const renderStarted = phases.some((entry) =>
+              entry.phase === "render-setup" && entry.publishedAtMs >= active.activatedAtMs
+            );
+            if (renderStarted || (window.__donnerWorkerStats?.completedResults || 0) > beforeSample) {
+              return true;
+            }
+          }
           (window as unknown as { Module: { _donner_whole_app_vsync_tick: () => void } }).Module
             ._donner_whole_app_vsync_tick();
           return false;
-        }, sample.id), {
-        message: `expected ${sample.name} to activate from driven frames`,
+        }, { sampleId: sample.id, beforeSample }), {
+        message: `expected ${sample.name} to activate and start its render from driven frames`,
         timeout: scaledMs(3000),
         intervals: [8, 16, 25, 50],
       }).toBe(true);

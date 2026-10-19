@@ -103,7 +103,9 @@ private:
 /// A request that lands before the queued frame starts is served by that frame. A request that
 /// lands while the frame runs, including one whose admission attempt loses to the frame still
 /// being pending, makes `finish()` ask for one more frame. Requests may come from any thread;
-/// `begin()` and `finish()` belong to the thread that runs the frame.
+/// `begin()` and `finish()` belong to the thread that runs the frame. The serial and the admission
+/// flag are sequentially consistent: a requester that loses the admission race and a finisher that
+/// rechecks the serial cannot both miss each other's update.
 class EventFrameWake {
 public:
   /// Start a new generation, discarding any queued frame of an earlier one.
@@ -121,12 +123,12 @@ public:
   /// Record a request. @param generation Current generation.
   /// @return true when the caller must queue the event frame; false when one is already owed.
   bool request(uint32_t generation) {
-    serial_.fetch_add(1, std::memory_order_release);
+    serial_.fetch_add(1);
     return admission_.acquire(generation);
   }
 
-  /// Mark the start of the queued frame. @return The request serial this frame serves.
-  uint32_t begin() const { return serial_.load(std::memory_order_acquire); }
+  /// Read when the queued frame starts. @return The request serial this frame serves.
+  uint32_t begin() const { return serial_.load(); }
 
   /// Finish the frame that `begin()` started.
   /// @param generation Frame token.
@@ -135,7 +137,7 @@ public:
   bool finish(uint32_t generation, uint32_t servedSerial) {
     admission_.complete(generation);
     return admission_.isCurrent(generation) &&
-           serial_.load(std::memory_order_acquire) != servedSerial &&
+           serial_.load() != servedSerial &&
            admission_.acquire(generation);
   }
 
