@@ -20,6 +20,7 @@ import shlex
 import unittest
 
 from python.runfiles import runfiles
+from tools import ci_coverage_contract as coverage_contract
 
 
 # The shared target selection: `//...` on a fallback, otherwise the affected labels. Steps that use
@@ -84,7 +85,7 @@ HOSTED_PARITY_STEP_ALLOWLIST = {
         "Build scope only: this step builds only what the selected tests need, because the "
         "PR's Build step runs on the self-hosted lane.",
     ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only",
-     "--build_event_json_file=$RUNNER_TEMP/coverage-parity.bep.json"):
+     "--build_event_json_file=$RUNNER_TEMP/coverage-hosted_parity_test.bep.json"):
         "Records how many parity tests ran, for the coverage contract's receipt; it changes "
         "what Bazel reports, not what it tests.",
 }
@@ -2457,36 +2458,43 @@ class CiLaneParityTest(unittest.TestCase):
                 self.assertEqual(_coverage_phases(workflow, lane), set(phases))
         for counterpart in self._counterparts(manifest):
             with self.subTest(counterpart=counterpart):
-                job_name, step_name = counterpart["job"], counterpart["step"]
-                steps = {_step_name(step): step for step in jobs[job_name]["steps"]}
+                job_name, step_id = counterpart["job"], counterpart["step"]
+                steps = {step.get("id"): step for step in jobs[job_name]["steps"]}
+                self.assertIn(step_id, steps)
                 self.assertTrue(job_gates(workflow, job_name, "trusted-pr-fallback"))
-                # The job's receipt records the step's outcome, under the step's id.
-                receipt = steps["Record coverage receipt"]["run"]
-                self.assertIn('--step "%s=${{ steps.%s.outcome }}"' % (
-                    step_name, steps[step_name]["id"]), receipt)
+                # The job's receipt records its whole `steps` context.
+                receipt = next(step for step in jobs[job_name]["steps"]
+                               if _step_name(step) == "Record coverage receipt")
+                self.assertEqual("python3 tools/ci_coverage_contract.py receipt %s" % job_name,
+                                 str(receipt["run"]).strip())
+                self.assertEqual({"STEPS_JSON": "${{ toJSON(steps) }}"}, receipt["env"])
+                # A minimum test count is read from the step's own build event file.
                 if counterpart.get("min_tests"):
-                    self.assertIn('--bep "%s=' % step_name, receipt)
+                    self.assertIn('--build_event_json_file="$RUNNER_TEMP/coverage-%s.bep.json"'
+                                  % step_id, steps[step_id]["run"])
 
     def test_coverage_manifest_covers_every_parity_step(self):
         # Every parity step is some class's counterpart, so a parity class cannot be deleted
         # from the manifest unnoticed, and the contract job waits for every job whose receipt
         # it reads.
         manifest = self._coverage_manifest()
-        declared = {(c["job"], c["step"]) for c in self._counterparts(manifest)}
-        parity_steps = {(parity, step) for parity, steps in PARITY_SUBSETS.values()
-                        for step in steps}
-        parity_steps |= {(key[1], step) for key, (step, _) in HOSTED_PARITY_STEPS.items()}
-        self.assertEqual(set(), parity_steps - declared)
         jobs = _jobs(self.workflows["main.yml"])
+        ids = {(job, _step_name(step)): step.get("id") for job in jobs
+               for step in jobs[job].get("steps") or []}
+        declared = {(c["job"], c["step"]) for c in self._counterparts(manifest)}
+        parity_steps = {(parity, ids[(parity, step)]) for parity, steps in PARITY_SUBSETS.values()
+                        for step in steps}
+        parity_steps |= {(key[1], ids[(key[1], step)])
+                         for key, (step, _) in HOSTED_PARITY_STEPS.items()}
+        self.assertEqual(set(), parity_steps - declared)
         self.assertLessEqual({job for job, _ in declared},
                              set(_needs(jobs["coverage-contract"])))
-        # The check step passes one selection per condition and route the tool requires.
-        check = next(step for step in jobs["coverage-contract"]["steps"]
-                     if _step_name(step) == "Compare receipts with the coverage contract")
-        self.assertEqual(
-            sorted(re.findall(r'--selection "([a-z_]+)=', check["run"])),
-            ["browser_affected", "fallback", "hosted_parity_affected",
-             "hosted_parity_tests_affected", "self_hosted_macos"])
+        # The check reads its selections from these job outputs, so each must exist on a job
+        # the contract job needs.
+        for job, output in coverage_contract.SELECTION_SOURCES.values():
+            with self.subTest(job=job, output=output):
+                self.assertIn(output, jobs[job]["outputs"])
+                self.assertIn(job, _needs(jobs["coverage-contract"]))
 
     def test_every_allowlist_entry_has_a_reason(self):
         for name, (_, reason) in STEP_OUTPUTS.items():

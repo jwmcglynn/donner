@@ -706,7 +706,10 @@ py_test(
 py_test(
     name = "ci_lane_parity_tests",
     size = "small",
-    srcs = ["ci_lane_parity_tests.py"],
+    srcs = [
+        "ci_coverage_contract.py",
+        "ci_lane_parity_tests.py",
+    ],
     data = [
         "BUILD.bazel",
         "//:.bazelrc",
@@ -714,6 +717,7 @@ py_test(
         "//donner/editor/tests:BUILD.bazel",
         "//tools/ci:coverage_contract.json",
     ],
+    main = "ci_lane_parity_tests.py",
     deps = ["@rules_python//python/runfiles"],
 )
 

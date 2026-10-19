@@ -2,10 +2,12 @@
 
 import copy
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from python.runfiles import runfiles
 
@@ -35,19 +37,18 @@ _SKIPPED = {"outcome": "skipped"}
 # The receipts of a trusted pull request whose lanes ran every phase the manifest names.
 _COMPLETE = {
     "linux": _receipt("linux", {
-        "Verify BuildBuddy remote execution": _ran(), "Build": _SKIPPED, "Test": _SKIPPED,
-        "Test local Xvfb targets": _ran(),
-        "Test (hosted parity subset)": _ran(1),
-        "Linker canary (non-lld linker support)": _ran(),
-        "Build and test CMake consumer": _ran()}),
-    "linux-self-hosted": _receipt("linux-self-hosted", {"Build": _ran(), "Test": _ran()}),
+        "buildbuddy_verify": _ran(), "build": _SKIPPED, "test": _SKIPPED, "local_xvfb": _ran(),
+        "hosted_parity_test": _ran(1),
+        "linker_canary": _ran(),
+        "cmake_consumer": _ran()}),
+    "linux-self-hosted": _receipt("linux-self-hosted", {"build": _ran(), "test": _ran()}),
     "macos-self-hosted": _receipt("macos-self-hosted", {
-        "Require full Metal shader validation": _ran(), "Metal validation preflight": _ran(),
-        "Build": _ran(), "Test": _ran(), "Test (Geode editor lane)": _ran(6)}),
+        "metal_profile": _ran(), "metal_preflight": _ran(),
+        "build": _ran(), "test": _ran(), "geode_test": _ran(6)}),
     "macos-browser": _receipt("macos-browser", {
-        "Qualify pinned Chromium archive": _ran(), "Test (browser targets)": _ran(2)}),
+        "browser_preflight": _ran(), "browser_test": _ran(2)}),
     "macos-hosted-parity": _receipt("macos-hosted-parity", {
-        "Test": _ran(3), "Test (Geode editor lane)": _ran(6)}),
+        "test": _ran(3), "geode_test": _ran(6)}),
 }
 
 _EVERYTHING = {"always": True, "browser_affected": True, "hosted_parity_affected": True,
@@ -89,8 +90,8 @@ class CoverageContractTest(unittest.TestCase):
 
     def test_skipped_self_hosted_shader_validation_fails(self):
         # Main runs no shader validation, so the self-hosted real-GPU steps are the only gate.
-        for step, entry in (("Require full Metal shader validation", "shader-validation"),
-                            ("Metal validation preflight", "shader-memory-canary")):
+        for step, entry in (("metal_profile", "shader-validation"),
+                            ("metal_preflight", "shader-memory-canary")):
             with self.subTest(step=step):
                 receipts = copy.deepcopy(_COMPLETE)
                 receipts["macos-self-hosted"]["steps"][step] = _SKIPPED
@@ -105,29 +106,29 @@ class CoverageContractTest(unittest.TestCase):
         # ARM64 lane. Its change reached a host-tool probe test (`hosted_parity`), whose result
         # differed on the hosted x86_64 image, and main went red.
         receipts = copy.deepcopy(_COMPLETE)
-        receipts["linux"]["steps"].pop("Test (hosted parity subset)")
+        receipts["linux"]["steps"].pop("hosted_parity_test")
         problems, _ = self._check(receipts)
         self.assertEqual(problems, [
             "linux / Test / hosted-parity ran on main but not on this pull request; expected an "
-            "executed linux / Test (hosted parity subset)"])
+            "executed linux / hosted_parity_test"])
         # Skipping the step fails the same way as omitting it.
-        receipts["linux"]["steps"]["Test (hosted parity subset)"] = _SKIPPED
+        receipts["linux"]["steps"]["hosted_parity_test"] = _SKIPPED
         self.assertEqual(problems, self._check(receipts)[0])
 
     def test_skipped_cloud_build_fails(self):
         # Main's hosted Linux Build runs with the cloud execution configuration. A trusted pull
         # request that did not build the tree that way before merge cannot claim that toolchain.
         receipts = copy.deepcopy(_COMPLETE)
-        receipts["linux"]["steps"]["Verify BuildBuddy remote execution"] = _SKIPPED
+        receipts["linux"]["steps"]["buildbuddy_verify"] = _SKIPPED
         problems, _ = self._check(receipts)
         gap = ("ran on main but not on this pull request; expected an executed linux / "
-               "Verify BuildBuddy remote execution")
+               "buildbuddy_verify")
         self.assertEqual(problems, [
             "linux / Build / hosted-toolchain " + gap,
             "linux / Verify BuildBuddy remote execution / cloud-build " + gap])
 
     def test_removing_a_parity_partition_fails(self):
-        for step in ("Test", "Test (Geode editor lane)"):
+        for step in ("test", "geode_test"):
             with self.subTest(step=step):
                 receipts = copy.deepcopy(_COMPLETE)
                 receipts["macos-hosted-parity"]["steps"].pop(step)
@@ -155,7 +156,7 @@ class CoverageContractTest(unittest.TestCase):
 
     def test_a_counterpart_must_report_its_minimum_test_count(self):
         receipts = copy.deepcopy(_COMPLETE)
-        receipts["macos-self-hosted"]["steps"]["Test (Geode editor lane)"] = _ran(0)
+        receipts["macos-self-hosted"]["steps"]["geode_test"] = _ran(0)
         problems, _ = self._check(receipts)
         self.assertEqual(1, len(problems), problems)
         self.assertIn("macos / Test (Geode editor lane) / geode", problems[0])
@@ -163,14 +164,14 @@ class CoverageContractTest(unittest.TestCase):
     def test_a_failed_counterpart_still_counts_as_executed(self):
         # The failing job already fails the run; the contract asks only whether it ran.
         receipts = copy.deepcopy(_COMPLETE)
-        receipts["linux-self-hosted"]["steps"]["Test"] = {"outcome": "failure"}
+        receipts["linux-self-hosted"]["steps"]["test"] = {"outcome": "failure"}
         self.assertEqual([], self._check(receipts)[0])
 
     def test_unselected_classes_need_no_counterpart(self):
         receipts = copy.deepcopy(_COMPLETE)
         del receipts["macos-hosted-parity"]
         del receipts["macos-browser"]
-        receipts["linux"]["steps"].pop("Test (hosted parity subset)")
+        receipts["linux"]["steps"].pop("hosted_parity_test")
         self.assertEqual([], self._check(receipts, {"always": True, "self_hosted_macos": True})[0])
         # A //... fallback selects every class.
         self.assertEqual(5, len(self._check(receipts, {"always": True, "fallback": True,
@@ -186,14 +187,14 @@ class CoverageContractTest(unittest.TestCase):
         problems, excepted = self._check(receipts, selection)
         self.assertEqual([], problems)
         self.assertFalse(any(line.startswith("macos /") for line in excepted))
-        receipts["linux"]["steps"]["Test (hosted parity subset)"] = _SKIPPED
+        receipts["linux"]["steps"]["hosted_parity_test"] = _SKIPPED
         self.assertEqual(1, len(self._check(receipts, selection)[0]))
         # A fallback does not change routing.
         self.assertEqual(1, len(self._check(receipts, dict(selection, fallback=True))[0]))
 
     def test_a_parity_step_that_ran_no_tests_does_not_count(self):
         receipts = copy.deepcopy(_COMPLETE)
-        receipts["linux"]["steps"]["Test (hosted parity subset)"] = _ran(0)
+        receipts["linux"]["steps"]["hosted_parity_test"] = _ran(0)
         self.assertEqual(1, len(self._check(receipts)[0]))
 
     def test_bep_counts_separate_executed_from_cached_results(self):
@@ -210,36 +211,70 @@ class CoverageContractTest(unittest.TestCase):
             {"id": {"progress": {}}, "progress": {}},
         ]
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "test.bep.json"
+            path = Path(directory) / "coverage-test.bep.json"
             path.write_text("\n".join(json.dumps(event) for event in events) + "\n",
                             encoding="utf-8")
             self.assertEqual({"tests": 3, "executed": 1}, contract.bep_counts(path))
+            # A step's build event file is found by its id; a skipped step reports no counts.
+            (Path(directory) / "coverage-skipped.bep.json").write_text("", encoding="utf-8")
             receipt = contract.make_receipt(
-                "job", {"Test": "success", "Skipped": "skipped"},
-                {"Test": str(path), "Skipped": str(path)})
+                "job", {"test": {"outcome": "success", "conclusion": "success"},
+                        "skipped": {"outcome": "skipped"}, "other": {"outcome": "success"}},
+                directory)
         self.assertEqual(receipt["steps"], {
-            "Test": {"outcome": "success", "tests": 3, "executed": 1},
-            "Skipped": {"outcome": "skipped"}})
+            "test": {"outcome": "success", "tests": 3, "executed": 1},
+            "skipped": {"outcome": "skipped"}, "other": {"outcome": "success"}})
+
+    def test_selection_comes_from_the_needs_context(self):
+        needs = {"determine-targets": {"result": "success", "outputs": {
+                     "fallback": "false", "browser_affected": "true",
+                     "hosted_parity_affected": "false"}},
+                 "gatekeeper": {"outputs": {"use_self_hosted_macos": "true"}}}
+        self.assertEqual(contract.selection_from_needs(needs), {
+            "always": True, "fallback": False, "browser_affected": True,
+            "hosted_parity_affected": False, "hosted_parity_tests_affected": False,
+            "self_hosted_macos": True})
+        # A skipped job sets no outputs, which read as false everywhere but `always`.
+        skipped = {job: {"result": "skipped", "outputs": {}}
+                   for job in ("determine-targets", "gatekeeper")}
+        self.assertEqual({"always"}, {name for name, value in
+                                      contract.selection_from_needs(skipped).items() if value})
+        # A source job missing from `needs` is an error, never a silent false.
+        for job in ("determine-targets", "gatekeeper"):
+            with self.subTest(missing=job):
+                partial = {other: value for other, value in skipped.items() if other != job}
+                with self.assertRaisesRegex(ValueError, job):
+                    contract.selection_from_needs(partial)
+
+    def test_every_selection_has_one_source(self):
+        # Each condition and route the manifest can name, apart from `always`, is read from
+        # exactly one job output, plus the //... fallback.
+        self.assertEqual(set(contract.SELECTION_SOURCES),
+                         (set(contract.CONDITIONS) | set(contract.ROUTES) | {"fallback"})
+                         - {"always"})
 
     def test_command_line_round_trip(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+        steps = {"build": {"outcome": "success"}, "test": {"outcome": "success"},
+                 "geode_test": {"outcome": "skipped"}}
+        needs = {"determine-targets": {"outputs": {"fallback": "true"}},
+                 "gatekeeper": {"outputs": {"use_self_hosted_macos": "true"}}}
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+                os.environ, {"RUNNER_TEMP": directory, "STEPS_JSON": json.dumps(steps),
+                             "NEEDS_JSON": json.dumps(needs)}):
+            self.assertEqual(0, contract.main(["receipt", "macos-self-hosted"]))
+            written = json.loads((Path(directory) / "coverage-receipt" /
+                                  "coverage-receipt.json").read_text(encoding="utf-8"))
+            self.assertEqual("macos-self-hosted", written["job"])
+            self.assertEqual("skipped", written["steps"]["geode_test"]["outcome"])
+            receipts = Path(directory) / "coverage-receipts"
             for job, receipt in _COMPLETE.items():
-                path = root / ("coverage-receipt-%s" % job) / "coverage-receipt.json"
-                path.parent.mkdir()
+                path = receipts / ("coverage-receipt-%s" % job) / "coverage-receipt.json"
+                path.parent.mkdir(parents=True)
                 path.write_text(json.dumps(receipt), encoding="utf-8")
             manifest = runfiles.Create().Rlocation("donner/tools/ci/coverage_contract.json")
-            selections = ["fallback=true", "browser_affected=", "hosted_parity_affected=",
-                          "hosted_parity_tests_affected=", "self_hosted_macos=true"]
-            arguments = ["check", "--manifest", manifest, "--receipts", directory]
-            for selection in selections:
-                arguments += ["--selection", selection]
-            self.assertEqual(0, contract.main(arguments))
-            # An unknown or a missing selection is an error, never a silent false.
-            self.assertEqual(2, contract.main(arguments + ["--selection", "typo=true"]))
-            self.assertEqual(2, contract.main(arguments[:-2]))
-            (root / "coverage-receipt-linux" / "coverage-receipt.json").unlink()
-            self.assertEqual(1, contract.main(arguments))
+            self.assertEqual(0, contract.main(["check", "--manifest", manifest]))
+            (receipts / "coverage-receipt-linux" / "coverage-receipt.json").unlink()
+            self.assertEqual(1, contract.main(["check", "--manifest", manifest]))
 
 
 if __name__ == "__main__":
