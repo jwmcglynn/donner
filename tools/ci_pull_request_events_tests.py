@@ -17,7 +17,6 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -267,7 +266,7 @@ class CiPullRequestEventsTest(unittest.TestCase):
         cls.workflows = {name: _read(name) for name in WORKFLOWS}
         cls.executables = ExecutableFixtureDirectory()
         cls.addClassCleanup(cls.executables.cleanup)
-        cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+        cls.executables.write_python3()
         # Records its arguments, then prints STUB_GH_OUTPUT and exits with STUB_GH_EXIT.
         cls.executables.write(
             "gh", '#!/bin/sh\nprintf "%s\\n" "$@" > "$STUB_GH_ARGS"\n'
@@ -370,7 +369,6 @@ class CiPullRequestEventsTest(unittest.TestCase):
                 gh_output = json.dumps([{"workflow_runs": runs or []}])
             environment = {
                 "PATH": "%s:%s" % (self.executables.path, os.environ.get("PATH", "/usr/bin:/bin")),
-                "FIXTURE_PYTHON": sys.executable,
                 "GITHUB_OUTPUT": str(output),
                 "BASE_FROM": base_from,
                 "HEAD_SHA": "0123abc",

@@ -35,7 +35,7 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
         cls.executables = ExecutableFixtureDirectory()
         cls.addClassCleanup(cls.executables.cleanup)
         cls.fixture_bin = cls.executables.path
-        cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+        cls.executables.write_python3()
         (cls.fixture_bin / "bazelisk_fixture.py").write_text(
             "import json, os, sys\n"
             "with open(os.environ['CAPTURE_COMMANDS'], 'a', encoding='utf-8') as output:\n"

@@ -79,7 +79,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.executables = ExecutableFixtureDirectory()
         cls.addClassCleanup(cls.executables.cleanup)
         cls.fixture_bin = cls.executables.path
-        cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+        cls.executables.write_python3()
         cls.executables.write("bash", '#!/bin/sh\nexec /bin/bash "$@"\n')
         (cls.fixture_bin / "shasum_fixture.py").write_text(
             "import hashlib, os, sys, time\n"

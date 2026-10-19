@@ -11,6 +11,8 @@ from pathlib import Path
 
 from python.runfiles import runfiles
 
+from test_executable_fixtures import ExecutableFixtureDirectory
+
 
 def _workflow_text(path):
     resolver = runfiles.Create()
@@ -24,6 +26,11 @@ class CiRunnerRoutingTest(unittest.TestCase):
     def setUpClass(cls):
         cls.text = _workflow_text(".github/workflows/main.yml")
         cls.trust_action = _workflow_text(".github/actions/pr-trust/action.yml")
+        # The trust and routing scripts call python3 and gh; both resolve to fixtures here.
+        cls.executables = ExecutableFixtureDirectory()
+        cls.addClassCleanup(cls.executables.cleanup)
+        cls.executables.write_python3()
+        cls.executables.write("gh", "#!/bin/sh\nprintf 'jwmcglynn\\n'\n")
 
     def _job_body(self, job):
         marker = "\n  %s:\n" % job
@@ -61,16 +68,14 @@ class CiRunnerRoutingTest(unittest.TestCase):
             event_path = root / "event.json"
             output_path = root / "output"
             event_path.write_text(json.dumps(event), encoding="utf-8")
-            gh = root / "gh"
-            gh.write_text("#!/bin/sh\nprintf 'jwmcglynn\\n'\n", encoding="utf-8")
-            gh.chmod(0o755)
             env = dict(os.environ, ACTOR=actor, TRIGGERING_ACTOR=triggering_actor,
                        EVENT_NAME=event_name, REF="refs/heads/main",
                        REPOSITORY="jwmcglynn/donner", SHA="a" * 40,
                        SELFHOSTED_LINUX_RUNNER=linux_enabled,
                        SELFHOSTED_MACOS_RUNNER=macos_enabled,
                        GITHUB_EVENT_PATH=str(event_path), GITHUB_OUTPUT=str(output_path),
-                       RUNNER_TEMP=directory, GH_TOKEN="test", PATH=f"{directory}:{os.environ['PATH']}")
+                       RUNNER_TEMP=directory, GH_TOKEN="test",
+                       PATH=f"{self.executables.path}:{os.environ['PATH']}")
             # The gatekeeper classifies trust with the shared action, then routes on its output.
             trust_path = root / "trust"
             result = subprocess.run(["bash", "-c", self._trust_script()],

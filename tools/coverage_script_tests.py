@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -52,7 +51,7 @@ class CoverageScriptTest(unittest.TestCase):
         )
         cls.executables.write("llvm-cov", "#!/bin/sh\nexit 99\n")
         cls.executables.write("llvm-profdata", "#!/bin/sh\nexit 99\n")
-        cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+        cls.executables.write_python3()
 
     def test_executable_stubs_are_shared_for_the_test_class(self):
         stub = self.fixture_bin / "bazel"
@@ -150,7 +149,6 @@ class CoverageScriptTest(unittest.TestCase):
                     **os.environ,
                     "PATH": str(self.fixture_bin) + os.pathsep + os.environ["PATH"],
                     "FIXTURE_ROOT": str(root),
-                    "FIXTURE_PYTHON": sys.executable,
                     "FIXTURE_STATUS": str(status),
                     "FIXTURE_REPORT": str(int(report)),
                     "FIXTURE_PRIVATE_ERROR": (
