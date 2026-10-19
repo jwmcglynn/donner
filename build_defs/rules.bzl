@@ -901,6 +901,13 @@ _fuzzer_soak_test = rule(
 # `per_input_timeout_seconds` on `donner_cc_fuzzer`.
 _ASAN_FUZZER_PER_INPUT_TIMEOUT_SECONDS = 60
 
+# libFuzzer `-report_slow_units` for `{fuzzer}_soak`. Once mutation has started, a unit reported
+# as taking this long is replayed in a fresh process, and the soak fails if the replay is slow too
+# (see build_defs/fuzzer_soak.sh). The per-input timeout above stays a hang guard; this is the
+# bound that catches inputs that finish, but slowly, while a stalled runner still passes. It is
+# libFuzzer's own default, made explicit because the launcher depends on the report.
+_SOAK_SLOW_UNIT_SECONDS = 10
+
 def donner_cc_fuzzer(
         name,
         corpus,
@@ -922,6 +929,10 @@ def donner_cc_fuzzer(
         not a latency budget: it only has to separate an input that never finishes from a slow
         one on a loaded runner, including first-input setup under sanitizers. Under
         `--config=asan-fuzzer` the soak uses at least 60 s. Override it only to go above 25 s.
+        A mutated input that libFuzzer reports as slow (at least 10 s, and more than 10% longer
+        than the longest unit it already reported, seeds included) still fails the soak when its
+        replay also takes 10 s or more; seed corpus replay, the process's warm-up, is held only
+        to this hang guard.
       tags: Additional Bazel tags used to select configuration-specific corpus and soak lanes.
       full_text_only: Keep the corpus, raw binary, and soak on the full-text configuration.
       routing_manifest: Optional target name for a dependency-free manifest of the exact tags
@@ -1012,7 +1023,7 @@ def donner_cc_fuzzer(
         name = name + "_soak",
         binary = ":" + name + "_bin",
         corpus = corpus_name,
-        fuzz_args = fuzz_time_args + select({
+        fuzz_args = fuzz_time_args + ["-report_slow_units=%d" % _SOAK_SLOW_UNIT_SECONDS] + select({
             "//build_defs:asan_fuzzer_enabled": [
                 "-timeout=%d" % max(per_input_timeout_seconds, _ASAN_FUZZER_PER_INPUT_TIMEOUT_SECONDS),
             ],
@@ -1022,7 +1033,9 @@ def donner_cc_fuzzer(
         size = "small",
         # An input that starts just before the time budget ends may run for up to
         # 1.5x the per-input timeout before libFuzzer reports it, so a hang must
-        # still fail as a hang rather than as a Bazel test timeout.
+        # still fail as a hang rather than as a Bazel test timeout. Replaying a reported
+        # slow unit can add up to the same again plus the launcher's 5 s report grace,
+        # which still fits: 30 s + 2 x 90 s + 5 s under `--config=asan-fuzzer`.
         timeout = "moderate",
         runtime_data = select({
             "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],

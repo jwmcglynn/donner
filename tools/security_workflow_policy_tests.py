@@ -2725,6 +2725,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("        tags = soak_tags,\n", rules)
         self.assertIn("        per_input_timeout_seconds = 25,\n", rules)
         self.assertIn("_ASAN_FUZZER_PER_INPUT_TIMEOUT_SECONDS = 60\n", rules)
+        # The hang guard does not hide a slow mutated input: the launcher replays its report.
+        self.assertIn("_SOAK_SLOW_UNIT_SECONDS = 10\n", rules)
+        self.assertIn('["-report_slow_units=%d" % _SOAK_SLOW_UNIT_SECONDS]', rules)
         self.assertIn('"//build_defs:asan_fuzzer_enabled": [', rules)
         # Every nightly soak runs under the ASan fuzzer config, so it gets the sanitizer timeout.
         # The Fuzz workflow runs only its `fuzz-lane*` configs, each of which carries both.
