@@ -107,7 +107,11 @@ IO_IN_POST = job(116294844879, "macos", "failure", steps(
 ))
 IO_IN_POST_ANNOTATIONS = [annotation(DIAG_PAGE), annotation(CAPACITY, "notice")]
 
-# Run 39165828508: a step script under _temp became unwritable, so the test steps failed.
+# Run 39165828508: Test failed first, with exit code 1, because Bazel's disk cache hit
+# `Illegal byte sequence` I/O errors and a target failed to build; the browser step then failed
+# with exit code 2. Only after both did a step script under _temp become unwritable. The
+# workload failed on its own exit codes, so this is not a runner loss to rerun; bounding the
+# disk cache is what addresses it.
 IO_IN_TEST = job(117788674812, "macos", "failure", steps(
     ("Build", "success"),
     ("Test", "failure"),
@@ -176,12 +180,49 @@ class ClassifierTests(unittest.TestCase):
         self.assertTrue(decision.eligible)
         self.assertEqual([rerun.SIGNATURE_IO], [job.signature for job in decision.jobs])
 
-    def test_signature_b_tolerates_workload_steps_failed_by_the_runner(self):
+    def test_signature_b_runner_script_write_failure_in_cleanup_is_eligible(self):
+        decision = classify(run(39000000012), PASSING + [IO_IN_POST],
+                            {116294844879: [annotation(TEMP_SCRIPT)]})
+
+        self.assertTrue(decision.eligible)
+        self.assertEqual([rerun.SIGNATURE_IO], [job.signature for job in decision.jobs])
+
+    def test_script_write_failure_after_failed_workload_steps_is_not_rerun(self):
         decision = classify(run(39165828508), PASSING + [IO_IN_TEST],
                             {117788674812: IO_IN_TEST_ANNOTATIONS})
 
-        self.assertTrue(decision.eligible)
-        self.assertEqual(rerun.SIGNATURE_IO, decision.jobs[0].signature)
+        self.assertFalse(decision.eligible)
+        self.assertEqual("runner I/O error after failed workload step(s): Test, Qualify pinned "
+                         "Chromium archive, Test (browser targets)", decision.jobs[0].reason)
+
+    def test_real_test_failure_then_a_script_write_failure_is_not_rerun(self):
+        failed_test = job(117788674813, "macos", "failure", steps(
+            ("Build", "success"),
+            ("Test", "failure"),
+            ("Post Setup Bazel", "failure"),
+        ))
+        decision = classify(run(39000000013), PASSING + [failed_test], {117788674813: [
+            annotation("Process completed with exit code 3."), annotation(TEMP_SCRIPT)]})
+
+        self.assertFalse(decision.eligible)
+        self.assertIn("failed workload step(s): Test", decision.jobs[0].reason)
+
+    def test_script_write_failure_beside_a_failed_step_without_exit_code_is_not_rerun(self):
+        # The annotation does not say which step the write failure hit, so it cannot show that
+        # the failed workload step was its casualty rather than a failure of its own.
+        decision = classify(run(39000000015), PASSING + [IO_IN_TEST],
+                            {117788674812: [annotation(TEMP_SCRIPT)]})
+
+        self.assertFalse(decision.eligible)
+        self.assertIn("failed workload step(s): Test", decision.jobs[0].reason)
+
+    def test_script_write_failure_with_an_exit_code_is_not_rerun(self):
+        decision = classify(run(39000000014), [IO_IN_POST], {116294844879: [
+            annotation(TEMP_SCRIPT), annotation("Process completed with exit code 1.")]})
+
+        self.assertFalse(decision.eligible)
+        self.assertEqual("a step exit-code failure accompanies the runner I/O error",
+                         decision.jobs[0].reason)
 
     def test_signature_b_runner_diag_write_failure_in_the_cache_save_is_eligible(self):
         decision = classify(run(39000000010), PASSING + [IO_IN_CACHE_SAVE],
@@ -210,7 +251,7 @@ class ClassifierTests(unittest.TestCase):
             annotation(CAPACITY, "notice")]})
 
         self.assertFalse(decision.eligible)
-        self.assertEqual("runner log I/O error after failed workload step(s): Test",
+        self.assertEqual("runner I/O error after failed workload step(s): Test",
                          decision.jobs[0].reason)
 
     def test_runner_loss_beside_a_real_test_failure_is_not_rerun(self):
@@ -223,11 +264,12 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual("no runner-loss annotation", decision.jobs[1].reason)
 
     def test_runner_io_failure_beside_a_real_test_failure_is_not_rerun(self):
-        decision = classify(run(39124107325), [IO_IN_TEST, LINUX_TEST_FAILURE], {
-            117788674812: IO_IN_TEST_ANNOTATIONS,
+        decision = classify(run(39124107325), [IO_IN_POST, LINUX_TEST_FAILURE], {
+            116294844879: IO_IN_POST_ANNOTATIONS,
             117665700108: LINUX_TEST_FAILURE_ANNOTATIONS})
 
         self.assertFalse(decision.eligible)
+        self.assertEqual([True, False], [job.eligible for job in decision.jobs])
 
     def test_runner_lost_after_a_failed_test_step_is_not_rerun(self):
         decision = classify(run(38671104124), PASSING + [LOST_AFTER_FAILED_TEST],
@@ -281,10 +323,11 @@ class ClassifierTests(unittest.TestCase):
                 "Write failed: Illegal byte sequence : '/Users/runner/work/_temp/x.sh'",
                 "System.IO.IOException: Illegal byte sequence : '/tmp/_diag/x.log'"):
             with self.subTest(message=message):
-                decision = classify(run(39000000005), [IO_IN_TEST], {
-                    117788674812: [annotation(message)]})
+                decision = classify(run(39000000005), [IO_IN_POST], {
+                    116294844879: [annotation(message)]})
 
                 self.assertFalse(decision.eligible)
+                self.assertIn("unrecognized annotation", decision.jobs[0].reason)
 
     def test_cancelled_and_timed_out_jobs_are_not_runner_losses(self):
         for conclusion in ("cancelled", "timed_out", None):
@@ -421,10 +464,10 @@ class MainTests(unittest.TestCase):
                       "eligible |", summary)
 
     def test_dry_run_reports_eligibility_without_rerunning(self):
-        fake = FakeGitHub(responses_for(run(39165828508), PASSING + [IO_IN_TEST],
-                                        {117788674812: IO_IN_TEST_ANNOTATIONS}))
+        fake = FakeGitHub(responses_for(run(38696609859), PASSING + [IO_IN_POST],
+                                        {116294844879: IO_IN_POST_ANNOTATIONS}))
 
-        self.assertEqual(0, self.invoke(fake, 39165828508, mode="dry-run"))
+        self.assertEqual(0, self.invoke(fake, 38696609859, mode="dry-run"))
 
         self.assertEqual([], fake.posts)
         summary = self.summary.read_text(encoding="utf-8")

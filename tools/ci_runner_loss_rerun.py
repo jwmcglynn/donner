@@ -40,8 +40,9 @@ RERUN_WORKFLOW_PATHS = frozenset({
 })
 
 LOST_COMMUNICATION = "The hosted runner lost communication with the server."
-# The runner's own diagnostic log and step-script directories. A write failure there is the
-# runner failing, whatever the workload was doing.
+# The runner's own error for a failed write to its diagnostic log or temp directory. It names a
+# runner fault, but not which step it hit; _match_signature decides whether it explains the
+# failed steps.
 ILLEGAL_BYTE_SEQUENCE = re.compile(
     r"^(?:System\.IO\.IOException: )?Illegal byte sequence : "
     r"'/Users/runner/(?:actions-runner/extracted/(?P<diag>_diag)|work/(?P<temp>_temp))/")
@@ -55,7 +56,7 @@ BENIGN_NOTICES = (
 )
 
 # The action-cache save that ends every job restoring that cache. It has no `if:` and runs after
-# every Bazel command, so it starts only when no earlier step failed the job; a runner log write
+# every Bazel command, so it starts only when no earlier step failed the job; a runner I/O
 # failure during it is post-job cleanup, like a "Post " step. The security workflow policy test
 # pins this name and position.
 CACHE_SAVE_STEP = "Save Bazel action cache"
@@ -141,7 +142,7 @@ def _failed_steps(job: dict) -> list[str]:
 
 
 def _annotation_kind(annotation: dict) -> Optional[str]:
-    """One annotation's kind: benign, lost, io, exit, or None when it matches no known kind."""
+    """One annotation's kind: benign, lost, io_diag, io_temp, exit, or None when unknown."""
     level = annotation.get("annotation_level")
     message = str(annotation.get("message") or "")
     if level == "notice":
@@ -181,18 +182,16 @@ def _is_cleanup(step: str, kinds: set[str]) -> bool:
 def _match_signature(kinds: set[str], failed_steps: list[str]) -> tuple[Optional[str], str]:
     """The signature these annotation kinds and failed steps match, or the reason none does."""
     workload_failures = [step for step in failed_steps if not _is_cleanup(step, kinds)]
-    if "io_temp" in kinds:
-        # The runner could not write a step's own script, so the steps it could not start fail
-        # as its casualties.
+    if kinds & {"io_temp", "io_diag"}:
+        # A runner log or step-script write failed. The annotations do not say which step it
+        # hit, and the fault can follow a real failure or break the workload's own I/O first,
+        # so it explains only post-job cleanup steps or the final cache save failing with it.
+        if workload_failures:
+            return None, "runner I/O error after failed workload step(s): %s" % ", ".join(
+                workload_failures)
+        if "exit" in kinds:
+            return None, "a step exit-code failure accompanies the runner I/O error"
         return SIGNATURE_IO, ""
-    if "io_diag" in kinds and not workload_failures:
-        # A runner log write failed; at most post-job cleanup steps or the final cache save
-        # failed with it.
-        return SIGNATURE_IO, ""
-    if "io_diag" in kinds:
-        # The log write may have followed a real failure, so it does not explain that failure.
-        return None, "runner log I/O error after failed workload step(s): %s" % ", ".join(
-            workload_failures)
     if "lost" not in kinds:
         return None, "no runner-loss annotation"
     if failed_steps:
