@@ -12,8 +12,8 @@ it stores or retrieves it, and an action-cache hit refreshes the action result b
 blob it references, so evicting in this order never leaves an action result whose blobs are
 gone. Bazel's own collector runs only as an idle task that the next command interrupts, so it
 cannot be relied on to finish before the save step; this script runs the same policy
-synchronously. The budget is measured as the uncompressed tar stream (512-byte header plus
-512-byte-padded data per file), which bounds the compressed archive the save uploads. Any
+synchronously. The budget is measured as an upper bound on the uncompressed tar stream (headers
+plus 512-byte-padded data per file), which bounds the compressed archive the save uploads. Any
 error, or a cache still over budget after eviction, reports `save=false`: an unsaved snapshot
 costs one cold restore, a huge one costs the runner.
 
@@ -36,6 +36,9 @@ import sys
 import time
 
 TAR_BLOCK = 512
+# Per file: a ustar header plus a pax extended header (its own header and one data block), which
+# the posix-format tar archive actions/cache writes carries for each file's times and long path.
+TAR_FILE_HEADER = 3 * TAR_BLOCK
 # The end-of-archive marker is two zero blocks.
 TAR_TRAILER = 2 * TAR_BLOCK
 # Bazel's in-flight writes. An idle server leaves only orphans of interrupted writes there.
@@ -46,8 +49,8 @@ MIB = 1024 * 1024
 
 
 def tar_bytes(size):
-    """Bytes one regular file adds to an uncompressed tar stream."""
-    return TAR_BLOCK + -(-size // TAR_BLOCK) * TAR_BLOCK
+    """Bytes one regular file adds to an uncompressed tar stream, at most."""
+    return TAR_FILE_HEADER + -(-size // TAR_BLOCK) * TAR_BLOCK
 
 
 class Entry:
@@ -92,9 +95,9 @@ def scan(root):
 
 
 def archive_estimate(entries, directories, others):
-    """Uncompressed tar stream size for these entries; directories and links take one header."""
+    """Uncompressed tar stream size for these entries, at most; directories and links are headers."""
     return (sum(tar_bytes(entry.size) for entry in entries)
-            + (directories + others) * TAR_BLOCK + TAR_TRAILER)
+            + (directories + others) * TAR_FILE_HEADER + TAR_TRAILER)
 
 
 def eviction_order(entries):

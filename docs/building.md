@@ -305,10 +305,16 @@ for that run. The sanitizer lanes use the hermetic LLVM toolchain (`--config=lat
 compiler and sysroot are action inputs.
 
 **Interplay with the GitHub Actions cache.** Only `main` saves Actions caches. They remain the
-fallback when BuildBuddy is off and are unchanged. While BuildBuddy is on, a remote cache hit with
+fallback when BuildBuddy is off. While BuildBuddy is on, a remote cache hit with
 `--remote_download_outputs=minimal` is not written to the local disk cache, so the disk action caches
 that `main` saves hold mostly actions that ran locally, and runs without BuildBuddy (forks, other
-pull requests) restore a colder snapshot.
+pull requests) restore a colder snapshot. The disk action cache snapshot is bounded: the last step
+of each job that restores it (`.github/actions/cache-bazel-actions` with `mode: save`) runs
+`tools/ci_disk_cache.py`, which evicts the least recently used entries in the order of Bazel's own
+disk-cache garbage collector until the snapshot fits its budget (3 GiB of uncompressed tar stream by
+default), and a `main` push then saves it. Bazel refreshes an entry's mtime whenever it stores or
+retrieves it, so the entries a build used are kept first. A snapshot that cannot be bounded is not
+saved. Other runs print what eviction would keep without deleting anything.
 
 **Activation.**
 

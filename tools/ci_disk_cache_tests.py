@@ -16,7 +16,7 @@ import ci_disk_cache
 
 MIB = 1024 * 1024
 # Just under half a MiB, so two entries and the directory headers fit a 1 MiB budget.
-HALF = MIB // 2 - 4096
+HALF = MIB // 2 - 8192
 # Fixture mtimes, in seconds since the epoch: older entries have smaller values.
 OLD, MIDDLE, NEW = 1_000_000, 2_000_000, 3_000_000
 
@@ -59,10 +59,10 @@ class CiDiskCacheTests(unittest.TestCase):
         return ci_disk_cache.archive_estimate(*ci_disk_cache.scan(str(self.cache)))
 
     def test_tar_bytes_counts_header_and_padded_data(self) -> None:
-        self.assertEqual(512, ci_disk_cache.tar_bytes(0))
-        self.assertEqual(1024, ci_disk_cache.tar_bytes(1))
-        self.assertEqual(1024, ci_disk_cache.tar_bytes(512))
-        self.assertEqual(1536, ci_disk_cache.tar_bytes(513))
+        self.assertEqual(1536, ci_disk_cache.tar_bytes(0))
+        self.assertEqual(2048, ci_disk_cache.tar_bytes(1))
+        self.assertEqual(2048, ci_disk_cache.tar_bytes(512))
+        self.assertEqual(2560, ci_disk_cache.tar_bytes(513))
 
     def test_cache_within_budget_is_saved_unchanged(self) -> None:
         kept = [self._entry("ac/aa/one", 1000, OLD), self._entry("cas/bb/two", 5000, NEW)]
