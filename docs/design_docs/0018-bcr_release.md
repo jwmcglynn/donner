@@ -141,6 +141,10 @@ one attempt; a failed-jobs-only rerun cannot qualify with older CLI artifacts. `
 `//tools:default_notice_freshness_tests`, `//tools:release_cli_tests`,
 `//tools:cli_notice_coverage_tests`, and `//tools:bcr_admission_tests` cover archive, binary,
 notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` covers the consumer closure audit.
+Most of the workflow's run steps call `tools/bcr_preflight.py` subcommands (scope, admission,
+consumer, CLI build, verification and explain-missing-cli), whose command sequences
+`//tools:bcr_preflight_tests` pins; the archive, registry and qualify steps call
+`tools.bcr_source` directly.
 
 ### Publish and observe
 

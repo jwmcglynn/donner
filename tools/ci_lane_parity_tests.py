@@ -308,8 +308,6 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # request definitions}. Any edit to the step, or a difference in another scenario, changes the
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
-    ("bcr_preflight.yml", "prepare",
-     "Select the preflight scope"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "20d107de730743dc"),
     ("main.yml", "determine-targets",
      "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "7b1d2d8e4295993a"),
     ("main.yml", "determine-targets",
