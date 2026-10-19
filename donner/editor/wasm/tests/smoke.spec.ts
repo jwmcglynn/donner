@@ -1380,7 +1380,7 @@ type RasterGateScope = typeof globalThis & {
     step: () => void;
     release: () => void;
   };
-  __donnerRasterRenderTrace?: number[];
+  __donnerRasterRenderTrace?: number[] & { overflow?: boolean };
 };
 
 // Hold every raster task yield and release them one at a time. The worker rasterizes at most one
@@ -1450,7 +1450,9 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
         raster.evaluate((id) => {
           const scope = globalThis as RasterGateScope;
           if (scope.__donnerRasterGate?.id !== id) throw new Error("the raster gate was released");
-          return [...(scope.__donnerRasterRenderTrace ?? [])];
+          const trace = scope.__donnerRasterRenderTrace ?? [];
+          if (trace.overflow) throw new Error("the raster render trace overflowed");
+          return [...trace];
         }, lease.id),
         deadlineAtMs,
       ),

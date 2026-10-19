@@ -54,10 +54,15 @@ EM_ASYNC_JS(void, YieldRasterTask, (), {
 
 // Opt-in, bounded test trace: the document time of each render request, recorded after this
 // worker takes document access. A test that holds this worker's task yields knows from it exactly
-// which animation sample the newest rasterized frame shows.
+// which animation sample the newest rasterized frame shows. A full trace is marked, never stale.
 EM_JS(void, TraceRasterDocumentTime, (double seconds), {
   const trace = globalThis['__donnerRasterRenderTrace'];
-  if (Array.isArray(trace) && trace.length < 256) trace.push(seconds);
+  if (!Array.isArray(trace)) return;
+  if (trace.length < 256) {
+    trace.push(seconds);
+  } else {
+    trace['overflow'] = true;
+  }
 });
 
 EM_JS(void, CloseRasterTaskYield, (), {
