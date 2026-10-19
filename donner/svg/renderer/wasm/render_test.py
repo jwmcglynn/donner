@@ -15,9 +15,9 @@ Run it against the shipped, size-optimized artifact:
 
 The module only loads outside a browser when built with assertions off (opt),
 which `--config=wasm-size` provides; the unoptimized `--config=wasm` dev build
-keeps an environment guard and is not the gate target. Node is located via
-$DONNER_NODE, then PATH, then common install locations; if none is found the
-test fails loudly rather than silently passing.
+keeps an environment guard and is not the gate target. Node is the Bazel node
+runtime toolchain declared by the target (its path arrives in $DONNER_NODE_PATH),
+so the gate never depends on a host install and runs the same Node everywhere.
 """
 
 import os
@@ -43,30 +43,19 @@ _HEIGHT = 64
 _EXPECTED_BYTES = _WIDTH * _HEIGHT * 4
 
 
-def _find_node():
-    candidates = [
-        os.environ.get("DONNER_NODE"),
-        shutil.which("node"),
-        "/opt/homebrew/bin/node",
-        "/usr/local/bin/node",
-        "/usr/bin/node",
-    ]
-    for candidate in candidates:
-        if candidate and os.path.exists(candidate):
-            return candidate
-    return None
+def _node_runfile(node_path):
+    """Maps the toolchain's execroot-relative Node path to its runfiles path."""
+    prefix = "external/"
+    return node_path[len(prefix):] if node_path.startswith(prefix) else "donner/" + node_path
 
 
 class WasmRenderTest(unittest.TestCase):
     def setUp(self):
-        self.node = _find_node()
-        self.assertIsNotNone(
-            self.node,
-            "node not found; set $DONNER_NODE or put node on PATH "
-            "(the headless wasm render gate requires Node).",
-        )
         self.r = runfiles.Create()
         self.assertIsNotNone(self.r, "runfiles not available")
+        node_path = os.environ.get("DONNER_NODE_PATH")
+        self.assertTrue(node_path, "DONNER_NODE_PATH is unset; run this test through Bazel")
+        self.node = self._rlocation(_node_runfile(node_path))
 
     def _rlocation(self, path):
         located = self.r.Rlocation(path)
