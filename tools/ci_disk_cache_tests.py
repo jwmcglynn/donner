@@ -165,9 +165,7 @@ class CiDiskCacheTests(unittest.TestCase):
         marker = self._marker(MIDDLE)
         stdout = io.StringIO()
         # Keep the probe off the host's real Bazel caches.
-        with redirect_stdout(stdout), mock.patch.dict(os.environ, {"HOME": str(self.root)}), \
-                mock.patch.object(ci_disk_cache, "output_root",
-                                  return_value=str(self.root / "output-root")):
+        with redirect_stdout(stdout), mock.patch.dict(os.environ, {"HOME": str(self.root)}):
             status = ci_disk_cache.main(["probe", "--stage", "after-test", "--cache-dir",
                                          str(self.cache), "--marker", str(marker)])
         self.assertEqual(status, 0)
@@ -175,6 +173,7 @@ class CiDiskCacheTests(unittest.TestCase):
         self.assertIn("::group::Runner resources: after-test", report)
         self.assertIn("Bazel disk cache (%s): 1 files" % self.cache, report)
         self.assertIn("restore marker", report)
+        self.assertIn("Bazel output base (%s): absent" % (self.root / ".bazel"), report)
         self.assertIn("$ df -h", report)
         self.assertIn("::endgroup::", report)
 
@@ -191,6 +190,20 @@ class CiDiskCacheTests(unittest.TestCase):
         self._entry("cas/aa/entry", 10, OLD)
         result = ci_disk_cache.walk_usage(str(self.cache), deadline=0)
         self.assertFalse(result[-1])
+
+    def test_probe_walk_checks_its_deadline_within_a_directory(self) -> None:
+        for index in range(3):
+            self._entry("cas/aa/%d" % index, 10, OLD)
+        clock = iter([0, 0] + [10] * 10)  # The loop check, one entry, then past the deadline.
+        with mock.patch.object(ci_disk_cache.time, "monotonic", lambda: next(clock)):
+            files, _, _, _, _, complete = ci_disk_cache.walk_usage(
+                str(self.cache / "cas" / "aa"), deadline=5)
+        self.assertFalse(complete)
+        self.assertEqual(1, files)
+
+    def test_ages_in_the_future_are_reported_as_such(self) -> None:
+        self.assertEqual("12 s old", ci_disk_cache.age(12))
+        self.assertEqual("dated in the future", ci_disk_cache.age(-5))
 
 
 if __name__ == "__main__":

@@ -311,7 +311,7 @@ that `main` saves hold mostly actions that ran locally, and runs without BuildBu
 pull requests) restore a colder snapshot. The disk action cache snapshot is bounded: the last step
 of each job that restores it (`.github/actions/cache-bazel-actions` with `mode: save`) runs
 `tools/ci_disk_cache.py`, which evicts the least recently used entries in the order of Bazel's own
-disk-cache garbage collector until the snapshot fits its budget (3 GiB of uncompressed tar stream by
+disk-cache garbage collector until the snapshot fits its budget (6 GiB of uncompressed tar stream by
 default), and a `main` push then saves it. Bazel refreshes an entry's mtime whenever it stores or
 retrieves it, so the entries a build used are kept first. A snapshot that cannot be bounded is not
 saved. Other runs print what eviction would keep without deleting anything.

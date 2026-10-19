@@ -737,7 +737,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
         shell: bash
-        run: python3 tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
+        run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
       - name: Upload Bazel test failure artifacts
         if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.local_xvfb.outcome == 'failure')
@@ -1438,7 +1438,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
         shell: bash
-        run: python3 tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
+        run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
       - name: Upload Bazel test failure artifacts
         if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
@@ -1780,7 +1780,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
         shell: bash
-        run: python3 tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
+        run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
       - name: Upload Bazel test failure artifacts
         if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.browser_test.outcome == 'failure')

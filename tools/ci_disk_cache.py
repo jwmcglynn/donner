@@ -234,11 +234,19 @@ def walk_usage(root, deadline):
             complete = False
             break
         for dirent in list_directory(stack.pop()):
+            if time.monotonic() > deadline:
+                complete = False
+                break
             add_usage(totals, dirent, stack)
     files, logical, allocated, oldest, newest = totals
     if not files:
         oldest = newest = None
     return files, logical, allocated, oldest, newest, complete
+
+
+def age(seconds):
+    # Bazel's install base carries mtimes in the future, so its newest file has no age.
+    return "%.0f s old" % seconds if seconds >= 0 else "dated in the future"
 
 
 def probe_directory(label, path, marker):
@@ -252,7 +260,7 @@ def probe_directory(label, path, marker):
         label, path, files, mib(logical), mib(allocated))
     if oldest is not None:
         now = time.time()
-        line += ", newest file %.0f s old, oldest %.0f s old" % (now - newest, now - oldest)
+        line += ", newest file %s, oldest %s" % (age(now - newest), age(now - oldest))
     since_ns = marker_ns(marker)
     if since_ns is not None:
         line += ", restore marker %.0f s old" % (time.time() - since_ns / 1e9)
@@ -271,21 +279,16 @@ def probe_command(argv):
     print("$ %s\n%s" % (" ".join(argv), output))
 
 
-def output_root():
-    user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
-    if platform.system() == "Darwin":
-        return "/private/var/tmp/_bazel_%s" % user
-    return "~/.cache/bazel"
-
-
 def probe(args):
-    print("::group::Runner resources: %s" % args.stage)
+    print("::group::Runner resources: %s at %s" % (
+        args.stage, time.strftime("%H:%M:%SZ", time.gmtime())))
     probe_command(["df", "-h"])
     if platform.system() == "Linux":
         probe_command(["df", "-ih", "/"])
     probe_directory("Bazel disk cache", args.cache_dir, args.marker)
     probe_directory("Bazel repository cache", "~/.cache/bazel-repo", None)
-    probe_directory("Bazel output root", output_root(), None)
+    # setup-bazel's output base, which holds the external repositories and the execroot.
+    probe_directory("Bazel output base", "~/.bazel", None)
     if platform.system() == "Darwin":
         probe_command(["sysctl", "hw.memsize", "vm.swapusage"])
         probe_command(["vm_stat"])
