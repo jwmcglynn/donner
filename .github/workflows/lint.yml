@@ -18,17 +18,9 @@ concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
-# Fast lint jobs covering checks that don't live inside `bazel test //...`:
-#
-# - clang-format 18 for every tracked project C++ source (excluding third_party/)
-# - build_defs/check_banned_patterns.py (covers the examples/ dir which
-#   is not fully enumerated by the donner_cc_* py_test lint macros)
-# - check_design_doc_provenance.py (ratchets exact model metadata on design docs)
-# - check_private_details.py (no personal paths or private network details in
-#   tracked files)
-# - gen_cmakelists.py unit tests + full --check validator (reentrant bazel
-#   prevents running --check from inside bazel test)
-# - the no-Rust-dependency verifier, with only the pinned Linux test oracle allowed.
+# Fast lint jobs covering checks that don't live inside `bazel test //...`: the whole-tree
+# checks in tools/ci/lint_lane.sh, and the gen_cmakelists.py --check validator (reentrant Bazel
+# prevents running it from inside `bazel test`).
 
 jobs:
   gatekeeper:
@@ -36,30 +28,16 @@ jobs:
     outputs:
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/ci
+
       - id: dup_push
         name: Detect duplicate push (PR already open for this branch)
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          # See main.yml for rationale; same dup-push detection.
-          if [[ "${{ github.event_name }}" != "push" ]]; then
-            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          open_prs="$(gh pr list --repo "${{ github.repository }}" \
-            --state open --head "${{ github.ref_name }}" \
-            --json number -q 'length')"
-          if [[ "${open_prs}" -gt 0 ]]; then
-            echo "Skipping push CI: open PR already covers branch '${{ github.ref_name }}'"
-            echo "is_duplicate_push=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 tools/ci/gatekeeper.py duplicate-push
 
   lint:
     runs-on: ubuntu-24.04
@@ -74,9 +52,9 @@ jobs:
           persist-credentials: false
 
       - name: Install clang-format 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-format-18
+        uses: ./.github/actions/apt-install
+        with:
+          packages: clang-format-18
 
       # Every run restores; only main pushes save (end of job), so pull
       # requests and branch pushes read main's entry without writing their own.
@@ -91,29 +69,10 @@ jobs:
             ${{ runner.os }}-bazel-lint-
             ${{ runner.os }}-bazel-
 
-      # Whole-repo banned-patterns gate. This replaces the 476 per-target
-      # `{name}_lint` py_tests the donner_cc_* macros used to emit, which cost
-      # 714 of the test suite's 2297 CPU-seconds to do what takes ~2.5 s here in
-      # one process. The file set is strictly larger than the macros reached:
-      # select()-valued and label-form srcs, manual-tagged targets, and files no
-      # target enumerates are all covered now. `tools/lint.sh` is also the
-      # documented local command, so this job and a contributor's machine run
-      # exactly the same check.
-      - name: Check source lint and formatting
-        shell: bash
-        run: tools/lint.sh
-
-      - name: Check brace lint regression
-        run: python3 tools/lint_braces_tests.py
-
-      - name: Check design document provenance
-        run: python3 tools/check_design_doc_provenance.py
-
-      - name: Check tracked files for private details
-        run: python3 tools/check_private_details.py
-
-      - name: No-Rust-dependency verifier (blocking)
-        run: python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking default
+      # The whole-tree checks that `bazel test //...` cannot run, in one documented local command;
+      # tools/ci/lint_lane.sh lists them and why.
+      - name: Lint
+        run: tools/ci/lint_lane.sh
 
       - name: Save main Bazel
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.bazel-cache.outputs.cache-hit != 'true'

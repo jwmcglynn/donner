@@ -745,6 +745,17 @@ py_test(
     ],
 )
 
+# The repository's own design documents, checked as the Lint workflow does, so `bazel test //...`
+# catches a provenance violation before CI. The test runs from the runfiles root.
+py_test(
+    name = "design_doc_provenance_test",
+    size = "small",
+    srcs = ["check_design_doc_provenance.py"],
+    args = ["--root=."],
+    data = ["//:design_doc_provenance_inputs"],
+    main = "check_design_doc_provenance.py",
+)
+
 py_binary(
     name = "check_private_details",
     srcs = ["check_private_details.py"],

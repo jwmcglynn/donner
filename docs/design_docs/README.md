@@ -9,9 +9,10 @@ Every model-authored design records the exact accountable model identifier on it
 a human-led, model-assisted design records it on a separate `Model` line.
 This provenance is preserved across later review and upgrade passes; see the
 local `AGENTS.md` contributor guidance.
-`tools/check_design_doc_provenance.py` enforces the rule in CI. Historical records whose exact
-model cannot be established from the document or repository history are ratcheted in
-`provenance_debt.txt`; that list may shrink but cannot silently grow.
+`tools/check_design_doc_provenance.py` enforces the rule in CI, and
+`//tools:design_doc_provenance_test` runs the same check under `bazel test //...`. Historical
+records whose exact model cannot be established from the document or repository history are
+ratcheted in `provenance_debt.txt`; that list may shrink but cannot silently grow.
 
 ## Browse by subsystem
 

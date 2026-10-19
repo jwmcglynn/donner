@@ -147,6 +147,17 @@ filegroup(
     visibility = ["//tools:__pkg__"],
 )
 
+# The inputs of //tools:design_doc_provenance_test: every design document and the historical
+# provenance-debt allowlist.
+filegroup(
+    name = "design_doc_provenance_inputs",
+    srcs = glob([
+        "docs/design_docs/**/*.md",
+        "docs/design_docs/provenance_debt.txt",
+    ]),
+    visibility = ["//tools:__pkg__"],
+)
+
 # Logo SVGs, which are consumed by the renderer tests.
 filegroup(
     name = "logo_svgs",

@@ -280,6 +280,22 @@ py_test(
     ],
 )
 
+# The Lint workflow's whole-tree checks, run in order as one command.
+py_test(
+    name = "lint_lane_tests",
+    size = "small",
+    srcs = ["lint_lane_tests.py"],
+    data = [
+        "lane.sh",
+        "lint_lane.sh",
+    ],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
 # Explicit comparisons reuse the production browser tests with unchanged test settings.
 test_suite(
     name = "browser_gpu_comparison",

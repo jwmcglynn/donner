@@ -166,9 +166,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     root = args.root.resolve()
+    # Not resolved: under Bazel the allowlist is a runfiles symlink, and resolving it would move it
+    # outside the root that its error messages are relative to.
     allowlist = args.allowlist or root / "docs" / "design_docs" / "provenance_debt.txt"
     try:
-        errors = check(root, allowlist.resolve())
+        errors = check(root, allowlist)
     except (OSError, ValueError) as error:
         print(f"design provenance check failed: {error}", file=sys.stderr)
         return 1

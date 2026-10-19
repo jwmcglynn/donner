@@ -293,8 +293,6 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 _SHARED_STEP_DIGESTS = {
     ("bcr_preflight.yml", "prepare",
      "Select the preflight scope"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "20d107de730743dc"),
-    ("lint.yml", "gatekeeper",
-     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "8e295cc528e30377"),
     ("main.yml", "determine-targets",
      "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "7b1d2d8e4295993a"),
     ("main.yml", "determine-targets",

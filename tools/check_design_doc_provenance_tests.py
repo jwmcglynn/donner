@@ -1,7 +1,10 @@
+import contextlib
 import importlib.util
+import io
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -96,6 +99,24 @@ class DesignDocProvenanceTests(unittest.TestCase):
 
         path.write_text("# Design: Test\n\n**Author:** GPT-5\n", encoding="utf-8")
         self.assertIn("stale provenance-debt entry", provenance.check(self.root, self.allowlist)[0])
+
+    def test_main_reports_a_stale_entry_through_a_symlinked_allowlist(self):
+        # Bazel runfiles present the allowlist as a symlink to a file outside the root.
+        relative_path = next(iter(provenance.APPROVED_HISTORICAL_DEBT))
+        path = self.root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Design: Test\n\n**Author:** GPT-5\n", encoding="utf-8")
+        with tempfile.TemporaryDirectory() as outside:
+            target = Path(outside) / "provenance_debt.txt"
+            target.write_text(f"{relative_path}\n", encoding="utf-8")
+            self.allowlist.unlink()
+            self.allowlist.symlink_to(target)
+            stderr = io.StringIO()
+            with mock.patch.object(sys, "argv", ["check", f"--root={self.root}"]), \
+                    contextlib.redirect_stderr(stderr):
+                self.assertEqual(provenance.main(), 1)
+        self.assertIn(f"{relative_path}: stale provenance-debt entry; remove it from "
+                      "docs/design_docs/provenance_debt.txt", stderr.getvalue())
 
     def test_new_allowlist_entry_is_rejected(self):
         path = self.write_design("0054-new-debt.md", "**Author:** Codex")
