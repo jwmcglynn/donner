@@ -85,7 +85,8 @@ LOST_IN_BUILD = job(117788702573, "macos", "failure", steps(
 LOST_IN_BUILD_ANNOTATIONS = [annotation(LOST), annotation(CAPACITY, "notice")]
 
 # Run 39165844514 attempt 2: the runner died while restoring the action cache, so that step
-# never got a conclusion and every later step stayed pending.
+# never got a conclusion and every later step stayed pending. The step layout is the one before
+# the action cache moved its save into a final "Save Bazel action cache" step.
 LOST_IN_CACHE_RESTORE = job(117866907732, "macos", "failure", steps(
     ("Set up job", "success"),
     ("Checkout", "success"),
@@ -95,7 +96,6 @@ LOST_IN_CACHE_RESTORE = job(117866907732, "macos", "failure", steps(
     ("Test", "pending"),
     ("Post Restore Bazel action cache", "pending"),
 ))
-LOST_IN_CACHE_RESTORE["run_attempt"] = 2
 LOST_IN_CACHE_RESTORE_ANNOTATIONS = [annotation(LOST), annotation(CAPACITY, "notice")]
 
 # Run 38696609859: the runner's own log page write failed in post-job cache save.
@@ -118,6 +118,15 @@ IO_IN_TEST_ANNOTATIONS = [annotation(TEMP_SCRIPT),
                           annotation("Process completed with exit code 2."),
                           annotation("Process completed with exit code 1."),
                           annotation(METAL, "notice"), annotation(CAPACITY, "notice")]
+
+# The same runner log page write failure once the action cache saves in its own final step
+# rather than in a post step.
+IO_IN_CACHE_SAVE = job(116294844880, "macos", "failure", steps(
+    ("Build", "success"),
+    ("Test", "success"),
+    ("Save Bazel action cache", "failure"),
+    ("Post Setup Bazel", "pending"),
+))
 
 # Run 38671104124: the test steps had already failed when the runner was lost.
 LOST_AFTER_FAILED_TEST = job(116214414886, "macos", "failure", steps(
@@ -173,6 +182,21 @@ class ClassifierTests(unittest.TestCase):
 
         self.assertTrue(decision.eligible)
         self.assertEqual(rerun.SIGNATURE_IO, decision.jobs[0].signature)
+
+    def test_signature_b_runner_diag_write_failure_in_the_cache_save_is_eligible(self):
+        decision = classify(run(39000000010), PASSING + [IO_IN_CACHE_SAVE],
+                            {116294844880: IO_IN_POST_ANNOTATIONS})
+
+        self.assertTrue(decision.eligible)
+        self.assertEqual([rerun.SIGNATURE_IO], [job.signature for job in decision.jobs])
+
+    def test_cache_save_failure_with_an_exit_code_is_not_rerun(self):
+        # The save step exited non-zero on its own; the log write failure does not explain it.
+        decision = classify(run(39000000011), [IO_IN_CACHE_SAVE], {116294844880: [
+            annotation(DIAG_PAGE), annotation("Process completed with exit code 1.")]})
+
+        self.assertFalse(decision.eligible)
+        self.assertIn("Save Bazel action cache", decision.jobs[0].reason)
 
     def test_runner_log_write_failure_after_a_failed_test_is_not_rerun(self):
         # A test that genuinely fails before the runner's own log write breaks must stay red.

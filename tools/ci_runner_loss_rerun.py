@@ -54,6 +54,12 @@ BENIGN_NOTICES = (
     "compiler.",
 )
 
+# The action-cache save that ends every job restoring that cache. It has no `if:` and runs after
+# every Bazel command, so it starts only when no earlier step failed the job; a runner log write
+# failure during it is post-job cleanup, like a "Post " step. The security workflow policy test
+# pins this name and position.
+CACHE_SAVE_STEP = "Save Bazel action cache"
+
 SIGNATURE_LOST = "A: runner lost communication"
 SIGNATURE_IO = "B: runner I/O Illegal byte sequence"
 
@@ -163,15 +169,25 @@ def _short(text: str, limit: int = 120) -> str:
     return first if len(first) <= limit else first[:limit - 3] + "..."
 
 
+def _is_cleanup(step: str, kinds: set[str]) -> bool:
+    """Whether a failed step is post-job cleanup rather than the workload under test."""
+    if step.startswith("Post "):
+        return True
+    # An exit code anywhere in the job means a step failed on its own, so the save step then
+    # counts as a workload failure.
+    return step == CACHE_SAVE_STEP and "exit" not in kinds
+
+
 def _match_signature(kinds: set[str], failed_steps: list[str]) -> tuple[Optional[str], str]:
     """The signature these annotation kinds and failed steps match, or the reason none does."""
-    workload_failures = [step for step in failed_steps if not step.startswith("Post ")]
+    workload_failures = [step for step in failed_steps if not _is_cleanup(step, kinds)]
     if "io_temp" in kinds:
         # The runner could not write a step's own script, so the steps it could not start fail
         # as its casualties.
         return SIGNATURE_IO, ""
     if "io_diag" in kinds and not workload_failures:
-        # A runner log write failed; at most post-job cleanup steps failed with it.
+        # A runner log write failed; at most post-job cleanup steps or the final cache save
+        # failed with it.
         return SIGNATURE_IO, ""
     if "io_diag" in kinds:
         # The log write may have followed a real failure, so it does not explain that failure.

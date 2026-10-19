@@ -1790,6 +1790,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertEqual(_with_key(restore, "namespace", 8),
                                  _with_key(save, "namespace", 8), where)
                 self.assertEqual(save, _steps(job)[-1], where)
+                # tools/ci_runner_loss_rerun.py treats a step of this name as post-job cleanup.
+                self.assertEqual("Save Bazel action cache", _step_key(save, "name", 8), where)
         self.assertEqual(4, restoring)
 
     def test_only_main_pushes_save_actions_caches(self):
