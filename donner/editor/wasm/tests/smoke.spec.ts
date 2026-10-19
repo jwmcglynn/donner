@@ -1798,35 +1798,59 @@ async function stopOwnerFrameProbe(worker: Worker) {
   );
 }
 
-async function delayWorkerAnimationFrames(page: Page, delayMs: number) {
+// Withhold the GPU owner's scheduled frames. Every requestAnimationFrame callback is held instead of
+// registered, so no scheduled frame can run until `releaseWorkerAnimationFrames`. While the hold is
+// in place, only event frames and explicitly driven frames reach the canvas.
+async function holdWorkerAnimationFrames(page: Page) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       Promise.any(
         page.workers().map((worker) =>
-          worker.evaluate((delay) => {
-            const scope = globalThis as typeof globalThis & { __donnerGpuOwner?: boolean };
+          worker.evaluate(() => {
+            const scope = globalThis as typeof globalThis & {
+              __donnerGpuOwner?: boolean;
+              __donnerHeldRaf?: unknown;
+            };
             if (!scope.__donnerGpuOwner) throw new Error("not the GPU owner");
-            const original = globalThis.requestAnimationFrame.bind(globalThis);
-            const ran: [number, number][] = [];
-            (globalThis as unknown as Record<string, unknown>).__donnerDelayedRafCallbacks = ran;
-            const epochMs = () => performance.timeOrigin + performance.now();
-            globalThis.requestAnimationFrame = (callback) =>
-              original((timestamp) => {
-                setTimeout(() => {
-                  const startedAt = epochMs();
-                  try {
+            const originalRequest = globalThis.requestAnimationFrame;
+            const originalCancel = globalThis.cancelAnimationFrame;
+            const held = new Map<number, FrameRequestCallback>();
+            // Real handles are small positive integers; held handles stay clear of them.
+            let nextHandle = 0x40000000;
+            let requested = 0;
+            let ranAfterRelease = 0;
+            let released = false;
+            globalThis.requestAnimationFrame = (callback) => {
+              ++requested;
+              const handle = ++nextHandle;
+              held.set(handle, callback);
+              return handle;
+            };
+            globalThis.cancelAnimationFrame = (handle) => {
+              if (!held.delete(handle)) originalCancel.call(globalThis, handle);
+            };
+            scope.__donnerHeldRaf = {
+              state: () => ({ requested, held: held.size, released, ranAfterRelease }),
+              release: () => {
+                if (released) return;
+                released = true;
+                globalThis.requestAnimationFrame = originalRequest;
+                globalThis.cancelAnimationFrame = originalCancel;
+                for (const callback of held.values()) {
+                  originalRequest.call(globalThis, (timestamp) => {
+                    ++ranAfterRelease;
                     callback(timestamp);
-                  } finally {
-                    if (ran.length < 4096) ran.push([startedAt, epochMs()]);
-                  }
-                }, delay);
-              });
-          }, delayMs)
+                  });
+                }
+                held.clear();
+              },
+            };
+          })
         ),
       ),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("GPU owner did not accept the rAF probe")), 2000);
+        timer = setTimeout(() => reject(new Error("GPU owner did not accept the rAF hold")), 2000);
       }),
     ]);
   } finally {
@@ -1834,18 +1858,34 @@ async function delayWorkerAnimationFrames(page: Page, delayMs: number) {
   }
 }
 
-// Epoch intervals in which the delayed worker rAF callbacks installed above ran.
-async function readDelayedAnimationFrameCallbacks(page: Page): Promise<[number, number][]> {
+type HeldAnimationFrameState = {
+  requested: number;
+  held: number;
+  released: boolean;
+  ranAfterRelease: number;
+};
+
+// Counters of the hold installed above, or null when no GPU owner carries one.
+async function readHeldAnimationFrames(page: Page): Promise<HeldAnimationFrameState | null> {
   for (const worker of page.workers()) {
-    const ran = await worker.evaluate(() => {
-      const scope = globalThis as unknown as Record<string, unknown>;
-      return scope.__donnerGpuOwner
-        ? (scope.__donnerDelayedRafCallbacks as [number, number][])
-        : null;
+    const state = await worker.evaluate(() => {
+      const hold = (globalThis as unknown as {
+        __donnerHeldRaf?: { state: () => HeldAnimationFrameState };
+      }).__donnerHeldRaf;
+      return hold ? hold.state() : null;
     }).catch(() => null);
-    if (ran) return ran;
+    if (state) return state;
   }
-  return [];
+  return null;
+}
+
+async function releaseWorkerAnimationFrames(page: Page) {
+  for (const worker of page.workers()) {
+    await worker.evaluate(() => {
+      (globalThis as unknown as { __donnerHeldRaf?: { release: () => void } }).__donnerHeldRaf
+        ?.release();
+    }).catch(() => null);
+  }
 }
 
 async function readCarouselFrameDiagnostics(page: Page) {
@@ -1935,10 +1975,10 @@ for (
     { id: "animation", name: "Animation", xFraction: 0.76, y: 390 },
     {
       id: "basic-shapes",
-      name: "Basic Shapes with delayed animation frames",
+      name: "Basic Shapes with withheld animation frames",
       xFraction: 0.76,
       y: 282,
-      delayWorkerRafMs: 600,
+      holdWorkerRaf: true,
     },
   ] as const
 ) {
@@ -1951,15 +1991,21 @@ for (
       return;
     }
 
-    if ("delayWorkerRafMs" in sample) {
+    // The completion wake must not depend on the scheduler's animation frames. Delaying those frames
+    // cannot show that: a delayed frame that happens to become due between the completion wake and
+    // the dispatch of its event frame legitimately carries the result first, and the event frame
+    // still follows at once. So the scheduled frames are withheld outright from before the click
+    // until the result is on the canvas.
+    const holdsScheduledFrames = "holdWorkerRaf" in sample;
+    if (holdsScheduledFrames) {
       expect(
         await page.evaluate(() =>
           (window as Window & { __donnerFrameDriver?: string }).__donnerFrameDriver
         ),
       ).toBe("worker-raf");
-      await delayWorkerAnimationFrames(page, sample.delayWorkerRafMs);
-      await expect.poll(async () => (await readDelayedAnimationFrameCallbacks(page)).length, {
-        message: "the delayed callback chain is active before the click",
+      await holdWorkerAnimationFrames(page);
+      await expect.poll(async () => (await readHeldAnimationFrames(page))?.held ?? 0, {
+        message: "the scheduler is waiting on a withheld animation frame before the click",
       }).toBeGreaterThan(0);
     }
     const deviceCreationsBeforeClick = await page.evaluate(
@@ -1971,6 +2017,24 @@ for (
     const beforeFrames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
     const clickStartedAt = await page.evaluate(() => performance.now());
     await page.mouse.click(bounds.x + bounds.width * sample.xFraction, bounds.y + sample.y);
+    if (holdsScheduledFrames) {
+      // Input waits for a scheduled frame by design, so drive the frames that apply the click
+      // through the main-thread tick instead of the withheld worker animation frames. Stop as soon
+      // as the sample is active: its render is submitted in that same frame, so from then on only
+      // event frames remain to carry the result, apart from at most one tick that was already in
+      // flight when the activation was observed.
+      await expect.poll(async () =>
+        page.evaluate((sampleId) => {
+          if (window.__donnerActiveSampleStats?.sampleId === sampleId) return true;
+          (window as unknown as { Module: { _donner_whole_app_vsync_tick: () => void } }).Module
+            ._donner_whole_app_vsync_tick();
+          return false;
+        }, sample.id), {
+        message: `expected ${sample.name} to activate from driven frames`,
+        timeout: scaledMs(3000),
+        intervals: [8, 16, 25, 50],
+      }).toBe(true);
+    }
     // The poll below only bounds a hang. How long the completed result takes to reach the canvas
     // is not a correctness property here: right after boot the GPU can still be executing earlier
     // work, such as the carousel thumbnails' first use of their render pipelines, and a frame
@@ -2068,31 +2132,26 @@ for (
       console.log(
         `carousel-presentation sample=${sample.id} timings=${JSON.stringify(phaseTimings)} worker=${
           JSON.stringify(completedWorkerStats)
-        } last=${JSON.stringify(lastPresentationState)} workerBusy=${JSON.stringify(workerBusy)}`,
+        } last=${JSON.stringify(lastPresentationState)} workerBusy=${JSON.stringify(workerBusy)}${
+          holdsScheduledFrames
+            ? ` heldFrames=${JSON.stringify(await readHeldAnimationFrames(page))}`
+            : ""
+        }`,
       );
     }
-    if ("delayWorkerRafMs" in sample) {
-      // The completed result must reach the canvas through the worker's completion wake, not by
-      // waiting for the next (deliberately delayed) animation frame: the presenting frame ran
-      // outside every delayed rAF callback.
-      const pageTimeOrigin = await page.evaluate(() => performance.timeOrigin);
-      const presentedAtEpochMs = pageTimeOrigin + completedWorkerStats!.presentedAtMs!;
-      const delayedCallbacks = await readDelayedAnimationFrameCallbacks(page);
-      expect(
-        delayedCallbacks.filter(([startedAt, endedAt]) =>
-          startedAt <= presentedAtEpochMs && presentedAtEpochMs <= endedAt
-        ),
-        `the completed result was presented by a delayed animation frame: ${
-          JSON.stringify(phaseTimings)
-        }`,
-      ).toEqual([]);
-      // Idle scheduled callbacks do not publish the full-frame tick diagnostics.
-      await expect.poll(async () => {
-        const callbacks = await readDelayedAnimationFrameCallbacks(page);
-        return callbacks.some(([startedAt], index) =>
-          index > 0 && startedAt - callbacks[index - 1][0] >= sample.delayWorkerRafMs
-        );
-      }, { message: "the injected delay separates actual scheduled callbacks" }).toBe(true);
+    if (holdsScheduledFrames) {
+      // The result reached the canvas while every scheduled frame was withheld, so a wake drove
+      // it, not the scheduler. Confirm the hold really was in force throughout, then hand the
+      // withheld frames back and check the scheduler resumes.
+      const held = await readHeldAnimationFrames(page);
+      expect(held, "the withheld animation frames stayed withheld until presentation").toEqual(
+        expect.objectContaining({ released: false, ranAfterRelease: 0 }),
+      );
+      expect(held!.held).toBeGreaterThan(0);
+      await releaseWorkerAnimationFrames(page);
+      await expect.poll(async () => (await readHeldAnimationFrames(page))?.ranAfterRelease ?? 0, {
+        message: "the scheduler resumes once its withheld animation frames are released",
+      }).toBeGreaterThan(0);
     }
     expect(phaseTimings.presentedMs).toBeDefined();
     expect(phaseTimings.completedMs).toBeDefined();

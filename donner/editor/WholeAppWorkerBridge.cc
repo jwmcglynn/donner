@@ -597,10 +597,9 @@ struct FrameDriverState {
   em_proxying_queue* proxyQueue = nullptr;
   FrameDriver driver = FrameDriver::SetTimeoutFallback;
   FrameCallbackAdmission admission;
-  FrameCallbackAdmission eventAdmission;
+  EventFrameWake eventWake;
   FrameCallbackAdmission progressAdmission;
   double progressDeadlineMs = 0;
-  std::atomic<std::uint32_t> wakeSerial{0};
   bool eventDeferred = false;
   FrameAttemptStats frameAttempts;
   uint64_t eventDeferrals = 0;
@@ -654,13 +653,13 @@ void RunPresentationProgress(void* token) {
   }
 }
 
-void QueueEventFrame(std::uint32_t generation);
+void PostEventFrame(std::uint32_t generation);
 
 void RunEventFrame(void* token) {
   FrameDriverState& state = Driver();
   const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
-  if (!state.eventAdmission.isCurrent(generation)) {
-    state.eventAdmission.complete(generation);
+  if (!state.eventWake.isCurrent(generation)) {
+    state.eventWake.cancel(generation);
     return;
   }
   if (!state.canRunFrame(state.userData)) {
@@ -668,32 +667,30 @@ void RunEventFrame(void* token) {
     state.eventDeferred = true;
     return;
   }
-  const std::uint32_t serial = state.wakeSerial.load(std::memory_order_acquire);
+  const std::uint32_t servedSerial = state.eventWake.begin();
   state.frameFn(state.userData, true);
-  state.eventAdmission.complete(generation);
-  if (state.eventAdmission.isCurrent(generation) &&
-      state.wakeSerial.load(std::memory_order_acquire) != serial) {
-    QueueEventFrame(generation);
+  if (state.eventWake.finish(generation, servedSerial)) {
+    PostEventFrame(generation);
   }
 }
 
 void ScheduleEventFrame(void* token) {
   FrameDriverState& state = Driver();
   const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
-  if (state.eventAdmission.isCurrent(generation)) {
+  if (state.eventWake.isCurrent(generation)) {
     emscripten_async_call(&RunEventFrame, token, 0);
   } else {
-    state.eventAdmission.complete(generation);
+    state.eventWake.cancel(generation);
   }
 }
 
-void QueueEventFrame(std::uint32_t generation) {
+/// Post the event frame that `EventFrameWake` admitted, or release that admission on failure.
+void PostEventFrame(std::uint32_t generation) {
   FrameDriverState& state = Driver();
-  if (state.proxyQueue && state.eventAdmission.acquire(generation)) {
-    void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
-    if (!emscripten_proxy_async(state.proxyQueue, state.appThread, &ScheduleEventFrame, token)) {
-      state.eventAdmission.complete(generation);
-    }
+  void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+  if (!state.proxyQueue ||
+      !emscripten_proxy_async(state.proxyQueue, state.appThread, &ScheduleEventFrame, token)) {
+    state.eventWake.cancel(generation);
   }
 }
 
@@ -794,7 +791,7 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
   });
   // clang-format on
   const std::uint32_t generation = state.admission.start();
-  (void)state.eventAdmission.start();
+  (void)state.eventWake.start();
   (void)state.progressAdmission.start();
   state.eventDeferred = false;
   void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
@@ -844,10 +841,9 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
 
 void RequestFrame() {
   FrameDriverState& state = Driver();
-  const std::uint32_t generation = state.eventAdmission.generation();
-  if (generation) {
-    state.wakeSerial.fetch_add(1, std::memory_order_release);
-    QueueEventFrame(generation);
+  const std::uint32_t generation = state.eventWake.generation();
+  if (generation && state.eventWake.request(generation)) {
+    PostEventFrame(generation);
   }
 }
 
@@ -870,7 +866,7 @@ void RequestPresentationProgress() {
 
 void NotifyFrameFinished() {
   FrameDriverState& state = Driver();
-  const std::uint32_t generation = state.eventAdmission.generation();
+  const std::uint32_t generation = state.eventWake.generation();
   if (state.eventDeferred && generation && state.canRunFrame(state.userData)) {
     state.eventDeferred = false;
     void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
@@ -881,7 +877,7 @@ void NotifyFrameFinished() {
 void StopFrameDriver() {
   FrameDriverState& state = Driver();
   state.admission.stop();
-  state.eventAdmission.stop();
+  state.eventWake.stop();
   state.progressAdmission.stop();
   state.pollPresentation = nullptr;
   state.eventDeferred = false;

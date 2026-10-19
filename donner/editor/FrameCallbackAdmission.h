@@ -98,4 +98,53 @@ private:
   std::atomic<uint32_t> pending_{0};
 };
 
+/// Coalesces event-frame requests into at most one queued frame without losing a request.
+///
+/// A request that lands before the queued frame starts is served by that frame. A request that
+/// lands while the frame runs, including one whose admission attempt loses to the frame still
+/// being pending, makes `finish()` ask for one more frame. Requests may come from any thread;
+/// `begin()` and `finish()` belong to the thread that runs the frame.
+class EventFrameWake {
+public:
+  /// Start a new generation, discarding any queued frame of an earlier one.
+  uint32_t start() { return admission_.start(); }
+
+  /// Reject every queued and future frame until the next `start()`.
+  void stop() { admission_.stop(); }
+
+  /// Current generation, or zero after shutdown.
+  uint32_t generation() const { return admission_.generation(); }
+
+  /// Whether a frame token still belongs to this generation. @param generation Frame token.
+  bool isCurrent(uint32_t generation) const { return admission_.isCurrent(generation); }
+
+  /// Record a request. @param generation Current generation.
+  /// @return true when the caller must queue the event frame; false when one is already owed.
+  bool request(uint32_t generation) {
+    serial_.fetch_add(1, std::memory_order_release);
+    return admission_.acquire(generation);
+  }
+
+  /// Mark the start of the queued frame. @return The request serial this frame serves.
+  uint32_t begin() const { return serial_.load(std::memory_order_acquire); }
+
+  /// Finish the frame that `begin()` started.
+  /// @param generation Frame token.
+  /// @param servedSerial Value `begin()` returned.
+  /// @return true when the caller must queue another frame for requests it did not serve.
+  bool finish(uint32_t generation, uint32_t servedSerial) {
+    admission_.complete(generation);
+    return admission_.isCurrent(generation) &&
+           serial_.load(std::memory_order_acquire) != servedSerial &&
+           admission_.acquire(generation);
+  }
+
+  /// Release a frame that will not run: a stale token or a failed post. @param generation Token.
+  void cancel(uint32_t generation) { admission_.complete(generation); }
+
+private:
+  FrameCallbackAdmission admission_;
+  std::atomic<uint32_t> serial_{0};
+};
+
 }  // namespace donner::editor

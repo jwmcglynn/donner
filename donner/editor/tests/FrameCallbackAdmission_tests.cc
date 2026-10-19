@@ -90,5 +90,76 @@ TEST(FrameCallbackAdmissionTest, StaleCompletionCannotReleaseNewGeneration) {
   EXPECT_TRUE(admission.acquire(newGeneration));
 }
 
+TEST(EventFrameWakeTest, RequestsBeforeTheFrameStartsShareOneFrame) {
+  EventFrameWake wake;
+  const auto generation = wake.start();
+  EXPECT_TRUE(wake.request(generation)) << "The first request must queue a frame";
+  for (int request = 0; request < 1024; ++request) {
+    EXPECT_FALSE(wake.request(generation)) << "A queued frame already serves later requests";
+  }
+  const auto served = wake.begin();
+  EXPECT_FALSE(wake.finish(generation, served)) << "Every request landed before the frame began";
+  EXPECT_TRUE(wake.request(generation)) << "Admission is released once the frame finishes";
+}
+
+TEST(EventFrameWakeTest, RequestDuringRunningFrameQueuesExactlyOneMore) {
+  EventFrameWake wake;
+  const auto generation = wake.start();
+  ASSERT_TRUE(wake.request(generation));
+  const auto served = wake.begin();
+  // The running frame still holds admission, so this request cannot queue its own frame.
+  EXPECT_FALSE(wake.request(generation));
+  EXPECT_FALSE(wake.request(generation));
+  ASSERT_TRUE(wake.finish(generation, served))
+      << "A request the running frame did not serve must not be dropped";
+  EXPECT_FALSE(wake.request(generation)) << "The follow-up frame is already queued";
+  const auto followUp = wake.begin();
+  EXPECT_FALSE(wake.finish(generation, followUp));
+}
+
+TEST(EventFrameWakeTest, RequestAfterFrameFinishesQueuesItsOwnFrame) {
+  EventFrameWake wake;
+  const auto generation = wake.start();
+  ASSERT_TRUE(wake.request(generation));
+  ASSERT_FALSE(wake.finish(generation, wake.begin()));
+  EXPECT_TRUE(wake.request(generation));
+}
+
+TEST(EventFrameWakeTest, CancelledPostAllowsTheNextRequestToQueue) {
+  EventFrameWake wake;
+  const auto generation = wake.start();
+  ASSERT_TRUE(wake.request(generation));
+  wake.cancel(generation);
+  EXPECT_TRUE(wake.request(generation));
+}
+
+TEST(EventFrameWakeTest, StoppedGenerationNeverQueuesAnotherFrame) {
+  EventFrameWake wake;
+  const auto generation = wake.start();
+  ASSERT_TRUE(wake.request(generation));
+  const auto served = wake.begin();
+  EXPECT_FALSE(wake.request(generation));
+  wake.stop();
+  EXPECT_FALSE(wake.isCurrent(generation));
+  EXPECT_FALSE(wake.finish(generation, served)) << "Shutdown wins over an unserved request";
+  EXPECT_FALSE(wake.request(generation));
+  EXPECT_EQ(wake.generation(), 0u);
+}
+
+TEST(EventFrameWakeTest, StaleFrameCannotReleaseOrRequeueNewGeneration) {
+  EventFrameWake wake;
+  const auto oldGeneration = wake.start();
+  ASSERT_TRUE(wake.request(oldGeneration));
+  const auto staleServed = wake.begin();
+  wake.stop();
+  const auto newGeneration = wake.start();
+  ASSERT_NE(newGeneration, oldGeneration);
+  ASSERT_TRUE(wake.request(newGeneration));
+  EXPECT_FALSE(wake.finish(oldGeneration, staleServed));
+  EXPECT_FALSE(wake.request(newGeneration)) << "The stale frame must not release the new one";
+  EXPECT_FALSE(wake.finish(newGeneration, wake.begin()));
+  EXPECT_TRUE(wake.request(newGeneration));
+}
+
 }  // namespace
 }  // namespace donner::editor
