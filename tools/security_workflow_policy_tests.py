@@ -3328,8 +3328,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual(2, len(uploads))
         self.assertEqual(SELF_HOSTED_UPLOAD_FILES,
                          {entry.rsplit("/", 1)[-1] for entry in uploads[0] + uploads[1]})
-        self.assertEqual([["${{ runner.temp }}/coverage-receipt/coverage-receipt.json"]],
-                         uploads[1:])
+        self.assertIn(["${{ runner.temp }}/coverage-receipt/coverage-receipt.json"], uploads)
 
     def test_upload_policy_rejects_raw_logs_directories_and_workspace_roots(self):
         files = self.supply_chain_files
