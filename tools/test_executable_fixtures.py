@@ -5,6 +5,8 @@ import shlex
 import sys
 import tempfile
 
+_PYTHON = shlex.quote(sys.executable)
+
 
 class ExecutableFixtureDirectory:
     """Owns immutable executable stubs reused by every test in a class."""
@@ -26,7 +28,15 @@ class ExecutableFixtureDirectory:
         resolve that name from the host: remote executors and minimal images need not provide
         one, and a host interpreter would differ from the toolchain the test declares.
         """
-        return self.write("python3", "#!/bin/sh\nexec %s \"$@\"\n" % shlex.quote(sys.executable))
+        return self.write("python3", "#!/bin/sh\nexec %s \"$@\"\n" % _PYTHON)
+
+    def write_python_entry(self, name, script):
+        """Writes an executable `name` that runs the Python file `script` on the test's runtime.
+
+        A `#!/usr/bin/env python3` shebang would resolve a host interpreter instead.
+        """
+        return self.write(name, "#!/bin/sh\nexec %s %s \"$@\"\n"
+                          % (_PYTHON, shlex.quote(str(script))))
 
     def cleanup(self):
         self._temporary.cleanup()

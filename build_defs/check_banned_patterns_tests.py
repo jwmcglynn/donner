@@ -24,7 +24,7 @@ _CHECKER_SPEC.loader.exec_module(check_banned_patterns)
 class CheckBannedPatternsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # lint.sh runs its checker with python3; resolve that to this test's own runtime.
+        # lint.sh calls a bare python3; resolve it to this test's own runtime.
         cls.executables = ExecutableFixtureDirectory()
         cls.addClassCleanup(cls.executables.cleanup)
         cls.executables.write_python3()

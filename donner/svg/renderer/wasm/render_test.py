@@ -44,9 +44,11 @@ _EXPECTED_BYTES = _WIDTH * _HEIGHT * 4
 
 
 def _node_runfile(node_path):
-    """Maps the toolchain's execroot-relative Node path to its runfiles path."""
+    """Maps the toolchain's Node path, which is in an external repository, to its runfiles path."""
     prefix = "external/"
-    return node_path[len(prefix):] if node_path.startswith(prefix) else "donner/" + node_path
+    if not node_path.startswith(prefix):
+        raise ValueError("unexpected Node toolchain path: " + node_path)
+    return node_path[len(prefix):]
 
 
 class WasmRenderTest(unittest.TestCase):

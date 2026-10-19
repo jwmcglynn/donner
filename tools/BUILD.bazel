@@ -312,7 +312,10 @@ py_library(
     name = "test_executable_fixtures",
     testonly = 1,
     srcs = ["test_executable_fixtures.py"],
-    visibility = ["//build_defs:__pkg__"],
+    visibility = [
+        "//build_defs:__pkg__",
+        "//tools/ci:__pkg__",
+    ],
 )
 
 py_library(
