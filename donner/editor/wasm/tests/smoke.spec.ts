@@ -1798,9 +1798,9 @@ async function stopOwnerFrameProbe(worker: Worker) {
   );
 }
 
-// Withhold the GPU owner's scheduled frames. Every requestAnimationFrame callback is held instead of
-// registered, so no scheduled frame can run until `releaseWorkerAnimationFrames`. While the hold is
-// in place, only event frames and explicitly driven frames reach the canvas.
+// Withhold the GPU owner's scheduled frames. Every requestAnimationFrame callback is held instead
+// of registered, so no scheduled frame can run until `releaseWorkerAnimationFrames`. While the
+// hold is in place, only event frames and explicitly driven frames reach the canvas.
 async function holdWorkerAnimationFrames(page: Page) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -1991,11 +1991,11 @@ for (
       return;
     }
 
-    // The completion wake must not depend on the scheduler's animation frames. Delaying those frames
-    // cannot show that: a delayed frame that happens to become due between the completion wake and
-    // the dispatch of its event frame legitimately carries the result first, and the event frame
-    // still follows at once. So the scheduled frames are withheld outright from before the click
-    // until the result is on the canvas.
+    // The completion wake must not depend on the scheduler's animation frames. Delaying those
+    // frames cannot show that: a delayed frame that happens to become due between the completion
+    // wake and the dispatch of its event frame legitimately carries the result first, and the event
+    // frame still follows at once. So the scheduled frames are withheld outright from before the
+    // click until the result is on the canvas.
     const holdsScheduledFrames = "holdWorkerRaf" in sample;
     if (holdsScheduledFrames) {
       expect(
@@ -2033,9 +2033,8 @@ for (
             const renderStarted = phases.some((entry) =>
               entry.phase === "render-setup" && entry.publishedAtMs >= active.activatedAtMs
             );
-            if (renderStarted || (window.__donnerWorkerStats?.completedResults || 0) > beforeSample) {
-              return true;
-            }
+            const completed = window.__donnerWorkerStats?.completedResults || 0;
+            if (renderStarted || completed > beforeSample) return true;
           }
           (window as unknown as { Module: { _donner_whole_app_vsync_tick: () => void } }).Module
             ._donner_whole_app_vsync_tick();
