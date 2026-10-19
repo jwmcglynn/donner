@@ -420,6 +420,57 @@ build:ubsan --copt=-fno-sanitize=vptr,function
 build:ubsan --linkopt=-fno-sanitize=vptr,function
 build:ubsan --strip=never
 
+# Sanitizer lanes, one per phase of the Sanitizers workflows (.github/workflows/sanitizers.yml and
+# sanitizers-pr.yml). Reproduce a phase locally with `bazel test --config=<lane>` and its targets.
+#
+# ASan and UBSan over the //donner tests. The workflow also drops each lane's exclusion suite
+# (//tools/ci:asan_exclusions, //tools/ci:ubsan_exclusions): allocation-tracker binaries replace
+# the sanitizer allocator, the WebAssembly package check only reads that package, and under ASan
+# the GL replay suite's far-zoom case exceeds its per-case watchdog. The scheduled Fuzz workflow
+# owns fuzz_target tests. Tag filters replace the default filter rather than adding to it, so they
+# repeat its ci-remote-gpu exclusion: those remote-lane wrappers rerun the executable and tests of
+# a local twin these lanes already select. Only the selected tests and their dependencies build;
+# non-test targets never execute here, so building them under a sanitizer adds no signal.
+test:asan-lane --config=asan
+test:asan-lane --test_output=errors
+test:asan-lane --build_tests_only
+test:asan-lane --test_tag_filters=-fuzz_target,-ci-remote-gpu
+test:asan-lane --build_tag_filters=-fuzz_target,-ci-remote-gpu
+# The ASan tests that run without leak detection: native Geode tests hold raw non-owning
+# webgpu.hpp handles in their harnesses, so //donner/svg/renderer/geode/... and
+# //tools/ci:asan_no_leak_tests keep ASan's memory-safety checks without its leak check.
+test:asan-lane-no-leaks --config=asan
+test:asan-lane-no-leaks --test_output=errors
+test:asan-lane-no-leaks --test_env=ASAN_OPTIONS=detect_leaks=0
+test:asan-lane-no-leaks --build_tests_only
+test:asan-lane-no-leaks --test_tag_filters=-fuzz_target,-ci-remote-gpu
+test:asan-lane-no-leaks --build_tag_filters=-fuzz_target,-ci-remote-gpu
+test:ubsan-lane --config=ubsan
+test:ubsan-lane --test_output=errors
+test:ubsan-lane --build_tests_only
+test:ubsan-lane --test_tag_filters=-fuzz_target,-ci-remote-gpu
+test:ubsan-lane --build_tag_filters=-fuzz_target,-ci-remote-gpu
+# Untrusted-input fuzzer corpora replayed deterministically under UBSan, per build variant (the
+# Fuzz workflow owns exploratory mutation).
+test:ubsan-corpus --config=ubsan
+test:ubsan-corpus --test_output=errors
+test:ubsan-corpus --test_tag_filters=fuzz_ubsan
+test:ubsan-corpus --build_tag_filters=fuzz_ubsan
+test:ubsan-corpus-text-full --config=ubsan
+test:ubsan-corpus-text-full --config=text-full
+test:ubsan-corpus-text-full --test_output=errors
+test:ubsan-corpus-text-full --test_tag_filters=fuzz_ubsan_text_full
+test:ubsan-corpus-text-full --build_tag_filters=fuzz_ubsan_text_full
+test:ubsan-corpus-geode --config=ubsan
+test:ubsan-corpus-geode --config=geode
+test:ubsan-corpus-geode --test_output=errors
+test:ubsan-corpus-geode --test_tag_filters=fuzz_ubsan_geode
+test:ubsan-corpus-geode --build_tag_filters=fuzz_ubsan_geode
+# The pull-request Geode ASan lane: //tools/ci:asan_geode_pr.
+test:asan-geode-pr --config=asan
+test:asan-geode-pr --config=geode
+test:asan-geode-pr --test_output=errors
+
 # Thread sanitizer builds
 build:tsan --config=latest_llvm
 build:tsan --linkopt=-ldl

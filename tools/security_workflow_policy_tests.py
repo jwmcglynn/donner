@@ -633,22 +633,34 @@ def _privileged_trigger_check(files, path):
     return _privileged_trigger_violations(path, files[path])
 
 
-def _fuzz_lane_flags(name):
-    """The flags of a `fuzz-lane*` config in .bazelrc, with nested `fuzz-lane*` configs expanded.
+def _lane_config_flags(name):
+    """The flags of a CI lane config in .bazelrc, with nested lane configs expanded.
 
-    Other configs (asan-fuzzer, fuzz-soak, geode, text-full) stay as `--config=<name>`.
+    A lane config is one defined only on `test:` lines (fuzz-lane*, asan-lane*, ubsan-lane,
+    ubsan-corpus*, asan-geode-pr). Build configs it names (asan, ubsan, asan-fuzzer, fuzz-soak,
+    geode, text-full) stay as `--config=<name>`.
     """
-    flags = []
+    lines = {}
     for line in _read(".bazelrc").splitlines():
-        match = re.match(r"^(?:build|test|common):(\S+)\s+(.*)$", line)
-        if not match or match.group(1) != name:
-            continue
-        for flag in shlex.split(match.group(2)):
-            nested = re.fullmatch(r"--config=(fuzz-lane[a-z-]*)", flag)
-            flags.extend(_fuzz_lane_flags(nested.group(1)) if nested else [flag])
-    if not flags:
-        raise AssertionError("no .bazelrc config named " + name)
-    return flags
+        match = re.match(r"^(build|test|common):(\S+)\s+(.*)$", line)
+        if match:
+            lines.setdefault(match.group(2), []).append((match.group(1), match.group(3)))
+
+    def is_lane(config):
+        return config in lines and all(command == "test" for command, _ in lines[config])
+
+    def expand(config):
+        if not is_lane(config):
+            raise AssertionError("no .bazelrc lane config named " + config)
+        flags = []
+        for _, text in lines[config]:
+            for flag in shlex.split(text):
+                nested = re.fullmatch(r"--config=(\S+)", flag)
+                flags.extend(expand(nested.group(1)) if nested and is_lane(nested.group(1))
+                             else [flag])
+        return flags
+
+    return expand(name)
 
 
 def _read(path):
@@ -2625,7 +2637,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             lane = re.fullmatch(r"\s*run: bazelisk test --config=(fuzz-lane[a-z-]*) "
                                 r"(?://\.\.\.|//tools/ci:image_loader_production_soak)", line)
             self.assertIsNotNone(lane, line)
-            flags = _fuzz_lane_flags(lane.group(1))
+            flags = _lane_config_flags(lane.group(1))
             self.assertIn("--config=fuzz-soak", flags)
             self.assertIn("--config=asan-fuzzer", flags)
 
@@ -3094,12 +3106,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for step, (lane, tag) in expected.items():
             body = _step_body(self.fuzz, step)
             self.assertIn("--config=%s //...\n" % lane, body)
-            flags = _fuzz_lane_flags(lane)
+            flags = _lane_config_flags(lane)
             self.assertIn("--test_tag_filters=%s" % tag, flags)
             self.assertIn("--build_tag_filters=%s" % tag, flags)
             self.assertNotRegex(body.replace("//...", ""), r"//[^\s]+")
-        self.assertIn("--config=text-full", _fuzz_lane_flags("fuzz-lane-text-full"))
-        self.assertIn("--config=geode", _fuzz_lane_flags("fuzz-lane-geode"))
+        self.assertIn("--config=text-full", _lane_config_flags("fuzz-lane-text-full"))
+        self.assertIn("--config=geode", _lane_config_flags("fuzz-lane-geode"))
 
     def test_production_image_decode_soak_runs_on_both_nightly_hosts(self):
         target = "//tools/ci:image_loader_production_soak"
@@ -3110,16 +3122,53 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             if job == "linux":
                 section = section.split("\n  macos:\n", 1)[0]
             self.assertIn("--config=fuzz-lane-production-soak " + target, section)
-        flags = _fuzz_lane_flags("fuzz-lane-production-soak")
+        flags = _lane_config_flags("fuzz-lane-production-soak")
         self.assertIn("--config=asan-fuzzer", flags)
         self.assertIn("--config=fuzz-soak", flags)
 
     def test_ubsan_corpora_are_selected_by_bazel_tags(self):
         body = _step_body(self.sanitizers, "Replay untrusted-input fuzzer corpora with UBSan")
-        for tag in ("fuzz_ubsan", "fuzz_ubsan_text_full", "fuzz_ubsan_geode"):
-            self.assertIn("--test_tag_filters=%s" % tag, body)
-            self.assertIn("--build_tag_filters=%s" % tag, body)
+        lanes = {"ubsan-corpus": ("fuzz_ubsan", None),
+                 "ubsan-corpus-text-full": ("fuzz_ubsan_text_full", "text-full"),
+                 "ubsan-corpus-geode": ("fuzz_ubsan_geode", "geode")}
+        self.assertEqual(re.findall(r"(?m)^\s*bazelisk test --config=(\S+) //\.\.\.$", body),
+                         list(lanes))
+        for lane, (tag, variant) in lanes.items():
+            flags = _lane_config_flags(lane)
+            self.assertIn("--config=ubsan", flags)
+            self.assertIn("--test_tag_filters=%s" % tag, flags)
+            self.assertIn("--build_tag_filters=%s" % tag, flags)
+            if variant:
+                self.assertIn("--config=%s" % variant, flags)
         self.assertNotRegex(body.replace("//...", ""), r"//[^\s]+")
+
+    def test_sanitizer_lanes_keep_their_scope_and_filters(self):
+        filters = ["--build_tests_only", "--test_tag_filters=-fuzz_target,-ci-remote-gpu",
+                   "--build_tag_filters=-fuzz_target,-ci-remote-gpu"]
+        expected = {
+            "asan-lane": ["--config=asan", *filters],
+            "asan-lane-no-leaks": ["--config=asan", "--test_env=ASAN_OPTIONS=detect_leaks=0",
+                                   *filters],
+            "ubsan-lane": ["--config=ubsan", *filters],
+            "asan-geode-pr": ["--config=asan", "--config=geode"],
+        }
+        for lane, required in expected.items():
+            flags = _lane_config_flags(lane)
+            for flag in required:
+                self.assertIn(flag, flags, lane)
+        asan = _step_body(self.sanitizers, "Test //donner/... with ASan")
+        self.assertIn("--exclude-suite //tools/ci:asan_exclusions -- \\\n"
+                      "            bazelisk test --config=asan-lane -- //donner/... "
+                      "-//donner/svg/renderer/geode/...\n", asan)
+        self.assertIn("bazelisk test --config=asan-lane-no-leaks \\\n"
+                      "            //donner/svg/renderer/geode/... //tools/ci:asan_no_leak_tests",
+                      asan)
+        ubsan = _step_body(self.sanitizers, "Test //donner/... with UBSan")
+        self.assertIn("--exclude-suite //tools/ci:ubsan_exclusions -- \\\n"
+                      "            bazelisk test --config=ubsan-lane -- //donner/...\n", ubsan)
+        pull_request = _read(".github/workflows/sanitizers-pr.yml")
+        self.assertIn("run: bazelisk test --config=asan-geode-pr //tools/ci:asan_geode_pr\n",
+                      pull_request)
 
     def _assert_rejected(self, check, cases):
         """Each weakened file must differ from the checked-in one and fail `check` for its reason.

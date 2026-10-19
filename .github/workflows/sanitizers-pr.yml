@@ -100,6 +100,4 @@ jobs:
           download-outputs: minimal
 
       - name: Test Geode with ASan
-        run: |
-          bazelisk test --config=asan --config=geode --test_output=errors \
-            //tools/ci:asan_geode_pr
+        run: bazelisk test --config=asan-geode-pr //tools/ci:asan_geode_pr
