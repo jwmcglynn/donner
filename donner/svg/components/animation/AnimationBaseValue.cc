@@ -259,7 +259,7 @@ std::optional<Value> InheritedResourceValue(Registry& registry, Entity target,
 
 template <typename Component, typename Value>
 std::optional<Value> InheritedResourceField(Registry& registry, Entity target,
-                                            std::optional<Value> Component::*field,
+                                            std::optional<Value> Component::* field,
                                             AnimationResourceBudget& budget,
                                             std::string_view unitAttribute = {}) {
   return InheritedResourceValue<Component, Value>(

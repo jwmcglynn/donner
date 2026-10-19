@@ -81,7 +81,7 @@ public:
   ~ScopedChildDisposition() { restore(); }
 
   bool install(void (*handler)(int), int flags) {
-    struct sigaction replacement {};
+    struct sigaction replacement{};
     replacement.sa_handler = handler;
     replacement.sa_flags = flags;
     sigemptyset(&replacement.sa_mask);
@@ -101,14 +101,14 @@ public:
   }
 
 private:
-  struct sigaction previous_ {};
+  struct sigaction previous_{};
   bool active_ = false;
 };
 
 void NotifyChild(int) {}
 
 bool SameChildDisposition(const struct sigaction& before) {
-  struct sigaction after {};
+  struct sigaction after{};
   return sigaction(SIGCHLD, nullptr, &after) == 0 && before.sa_handler == after.sa_handler &&
          before.sa_flags == after.sa_flags;
 }
@@ -132,7 +132,7 @@ int ReapingPolicyFixture(std::string_view mode, const std::filesystem::path& roo
   if (!disposition.install(handler, flags)) {
     return 10;
   }
-  struct sigaction before {};
+  struct sigaction before{};
   if (sigaction(SIGCHLD, nullptr, &before) != 0) {
     return 11;
   }

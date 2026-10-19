@@ -246,7 +246,7 @@ ChildResult childOutcome(const WaitResult& waited, bool collected, int status,
 }
 
 std::string checkChildReapingPolicy() {
-  struct sigaction disposition {};
+  struct sigaction disposition{};
   if (sigaction(SIGCHLD, nullptr, &disposition) != 0) {
     return "cannot query renderer SIGCHLD disposition";
   }
