@@ -4492,9 +4492,6 @@ async function exerciseAnimationPointerPulse({
           performance.now() + scaledMs(3000),
           "one raster task yield is suspended",
         );
-        const heldRenderedTimes = await queuedGate.renderedTimes(
-          performance.now() + scaledMs(1000),
-        );
         const heldBounds = await orb();
         heldPulseHeight = heldBounds.maxY - heldBounds.minY;
         expect(
@@ -4525,8 +4522,13 @@ async function exerciseAnimationPointerPulse({
         });
         queuedPulseObservation = retained;
         // Frame pacing advances only admitted ticks, so state the catch-up directly: the click
-        // must begin on the dispatch-time clock, not at the held frame's document time.
-        const catchUp = queuedDispatchCaughtUp(heldRenderedTimes, retained.dispatchTime);
+        // must begin on the dispatch-time clock, not at the stale clock its input was queued on.
+        const catchUp = queuedDispatchCaughtUp(
+          await readPreviewPointerTrace(owner, queuedPulseDeadline),
+          pulseTraceGeneration,
+          firstClick[3],
+          delayedPulseClickStartedEpochMs,
+        );
         queuedPulseCatchUp = catchUp;
         expect(catchUp.caughtUp, `queued click dispatch caught up: ${JSON.stringify(catchUp)}`)
           .toBe(true);

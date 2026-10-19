@@ -140,21 +140,44 @@ test("completion rejects stale generations, wrong targets and intervening input"
   assert.equal(complete(snapshot([click, tick(10.8), tick(10.7)])), null);
 });
 
-test("a queued click must dispatch at least one pulse after the held stale frame", () => {
-  assert.deepEqual(queuedDispatchCaughtUp([20, 21.2], 22.25), {
+test("a queued click must dispatch at least one pulse after its queued input time", () => {
+  const queuedEdge = (epochMs, time) => [epochMs, 1, 1, 1, time, false];
+  const dispatch = (time) => [100, 2, 0, 32, time, true];
+  const caughtUp = (entries, notBefore = 90) =>
+    queuedDispatchCaughtUp(snapshot(entries), "current", 32, notBefore);
+  assert.deepEqual(caughtUp([queuedEdge(95, 21.2), queuedEdge(96, 21.2), dispatch(22.25)]), {
     caughtUp: true,
-    heldTime: 21.2,
+    queuedTime: 21.2,
     dispatchTime: 22.25,
   });
-  assert.equal(queuedDispatchCaughtUp([21.2], 21.8).caughtUp, true);
-  // Dispatching at the stale frame's time, or inside its pulse, is the catch-up regression.
-  assert.equal(queuedDispatchCaughtUp([21.2], 21.2).caughtUp, false);
-  assert.equal(queuedDispatchCaughtUp([21.2], 21.7).caughtUp, false);
-  for (const held of [[], undefined, [Number.NaN]]) {
-    assert.deepEqual(queuedDispatchCaughtUp(held, 22), {
-      caughtUp: false,
-      reason: "no held frame time",
-    });
-  }
-  assert.equal(queuedDispatchCaughtUp([21.2], Number.NaN).caughtUp, false);
+  assert.equal(caughtUp([queuedEdge(95, 21.2), dispatch(21.8)]).caughtUp, true);
+  // Dispatching at the stale clock, or inside its pulse, is the catch-up regression.
+  assert.equal(caughtUp([queuedEdge(95, 21.2), dispatch(21.2)]).caughtUp, false);
+  assert.equal(caughtUp([queuedEdge(95, 21.2), dispatch(21.7)]).caughtUp, false);
+  // Only edges queued after the probe began, and before the dispatch, name the stale clock.
+  assert.deepEqual(caughtUp([queuedEdge(80, 10), dispatch(22)]), {
+    caughtUp: false,
+    reason: "no queued input time",
+  });
+  assert.deepEqual(caughtUp([dispatch(22), queuedEdge(101, 21.9)]), {
+    caughtUp: false,
+    reason: "no queued input time",
+  });
+  assert.deepEqual(caughtUp([queuedEdge(95, Number.NaN), dispatch(22)]), {
+    caughtUp: false,
+    reason: "no queued input time",
+  });
+  assert.deepEqual(caughtUp([queuedEdge(95, 21.2)]), {
+    caughtUp: false,
+    reason: "no queued click dispatch",
+  });
+  assert.deepEqual(
+    queuedDispatchCaughtUp(
+      snapshot([queuedEdge(95, 21.2), dispatch(22.25)], "old"),
+      "current",
+      32,
+      90,
+    ),
+    { caughtUp: false, reason: "stale pointer trace" },
+  );
 });

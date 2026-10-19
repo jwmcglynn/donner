@@ -136,16 +136,23 @@ function presentedSampleAfterClick(
 }
 
 /**
- * Whether a click queued behind a raster stall was dispatched on the caught-up preview clock: at
- * least one pulse after the held stale frame, rather than at that frame's document time.
+ * Whether a click queued behind a raster stall was dispatched on the caught-up preview clock. The
+ * editor records each queued input edge (phase 1) with the last admitted sample time, which during
+ * the stall is the stale frame's clock. The click's dispatch must begin at least one pulse later.
  */
-export function queuedDispatchCaughtUp(heldRenderedTimes, dispatchTime) {
-  if (
-    !Array.isArray(heldRenderedTimes) || heldRenderedTimes.length === 0
-    || !heldRenderedTimes.every(Number.isFinite) || !Number.isFinite(dispatchTime)
-  ) {
-    return { caughtUp: false, reason: "no held frame time" };
+export function queuedDispatchCaughtUp(snapshot, generation, target, notBeforeEpochMs) {
+  if (snapshot?.generation !== generation || !Array.isArray(snapshot.entries)) {
+    return { caughtUp: false, reason: "stale pointer trace" };
   }
-  const heldTime = heldRenderedTimes.at(-1);
-  return { caughtUp: dispatchTime - heldTime >= kPulseDurationSeconds, heldTime, dispatchTime };
+  const rows = snapshot.entries;
+  const clickIndex = findClick(rows, target, notBeforeEpochMs);
+  if (clickIndex < 0) return { caughtUp: false, reason: "no queued click dispatch" };
+  const queued = rows.slice(0, clickIndex).find((row) =>
+    Array.isArray(row) && row.length === 6 && row[1] === 1
+    && Number.isFinite(row[0]) && row[0] >= notBeforeEpochMs && Number.isFinite(row[4])
+  );
+  if (!queued) return { caughtUp: false, reason: "no queued input time" };
+  const queuedTime = queued[4];
+  const dispatchTime = rows[clickIndex][4];
+  return { caughtUp: dispatchTime - queuedTime >= kPulseDurationSeconds, queuedTime, dispatchTime };
 }
