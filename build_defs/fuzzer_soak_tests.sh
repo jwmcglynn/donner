@@ -114,6 +114,105 @@ check "stalled timeout report is explained" \
 check "complete timeout report is not treated as stalled" \
   "$(grep -c 'did not finish its timeout report' "${work}/timeout-report.err")" "0"
 
+# The per-input timeout is only a hang guard, so a slow unit must fail on its own. libFuzzer reports
+# a unit slower than -report_slow_units with a "Slowest unit" line, saves it and names the file,
+# keeps fuzzing, and exits zero. For every report after INITED, which marks the start of mutation,
+# the launcher replays that unit: a slow, failing or untimed replay fails the soak, and a fast one
+# means the process stalled. Before INITED, libFuzzer is replaying the seed corpus, the first
+# inputs of a cold process, and those keep the hang guard's headroom. The stub reports one slow
+# unit per word of SEED_REPORTS and MUTATION_REPORTS. Each word is what replaying that unit does:
+# a time in ms, "none" for no time, "hang" for a timeout report that never finishes, "unsaved"
+# for a report without a saved file, or "outside" for a file named outside the findings prefix.
+# STUB_PARTIAL_LINE puts each report after target output that has no final newline.
+cat > "${work}/slow-unit" <<'SLOW'
+#!/usr/bin/env bash
+for argument in "$@"; do
+  case "${argument}" in
+    -artifact_prefix=*) prefix="${argument#-artifact_prefix=}" ;;
+    -runs=1)
+      echo "replayed with $*" >> "${SLOW_REPLAYS}"
+      replay="$(cat "${!#}")"
+      if [[ "${replay}" == hang ]]; then
+        printf 'ALARM: working on the last Unit for 61 seconds\n' >&2
+        exec sleep 2147483647
+      fi
+      if [[ "${replay}" != none ]]; then
+        echo "Executed ${!#} in ${replay} ms" >&2
+      fi
+      exit "${STUB_REPLAY_EXIT:-0}"
+      ;;
+  esac
+done
+saved=0
+report() {
+  [[ -n "${STUB_PARTIAL_LINE:-}" ]] && printf 'target output without a newline' >&2
+  echo 'Slowest unit: 12 s:' >&2
+  if [[ "$1" == outside ]]; then
+    printf '5' > "${prefix}../slow-unit-outside"
+    echo "artifact_prefix='${prefix}'; Test unit written to ${prefix}../slow-unit-outside" >&2
+  elif [[ "$1" != unsaved ]]; then
+    saved=$((saved + 1))
+    printf '%s' "$1" > "${prefix}slow-unit-${saved}"
+    echo "artifact_prefix='${prefix}'; Test unit written to ${prefix}slow-unit-${saved}" >&2
+  fi
+}
+for replay in ${SEED_REPORTS}; do report "${replay}"; done
+printf '#2\tINITED cov: 1 ft: 1 corp: 1/1b exec/s: 0 rss: 1Mb\n' >&2
+for replay in ${MUTATION_REPORTS}; do report "${replay}"; done
+echo 'Done 3 runs in 1 second(s)' >&2
+exit "${STUB_EXIT:-0}"
+SLOW
+chmod +x "${work}/slow-unit"
+# Arguments: seed-phase reports, mutation-phase reports. STUB_EXIT and STUB_REPLAY_EXIT may be set
+# by the caller. Prints the status, the launcher's slow, stall and stalled-report message counts,
+# the number of replays and the first replay's arguments, and copies the launcher's stderr to the
+# test log.
+slow_unit() {
+  rm -rf "${outputs}" "${work}/replays"
+  mkdir -p "${outputs}"
+  touch "${work}/replays"
+  SEED_REPORTS="$1" MUTATION_REPORTS="$2" SLOW_REPLAYS="${work}/replays" \
+    TEST_UNDECLARED_OUTPUTS_DIR="${outputs}" "${runner}" "${work}/slow-unit" -timeout=60 \
+    -report_slow_units=10 > /dev/null 2> "${work}/slow-unit.err"
+  local status=$?
+  local err="${work}/slow-unit.err"
+  echo "status=${status}" \
+    "slow=$(grep -c 'reported a slow unit after the seed corpus replay' "${err}")" \
+    "stall=$(grep -c 'so the process stalled' "${err}")" \
+    "stalled_report=$(grep -c 'did not finish its timeout report' "${err}")" \
+    "replays=$(grep -c . "${work}/replays") first=[$(head -n 1 "${work}/replays")]"
+  # The launcher's messages, so a failed check can be read from the test log.
+  sed "s/^/slow unit [$1|$2]: /" "${err}" >&2
+}
+findings="${outputs}/findings"
+first="first=[replayed with -timeout=60 -artifact_prefix=${findings}/replay- -runs=1"
+first+=" ${findings}/slow-unit-1]"
+check "slow unit that replays slowly fails as a timeout" "$(slow_unit '' 12000)" \
+  "status=70 slow=1 stall=0 stalled_report=0 replays=1 ${first}"
+check "slow unit that replays fast is a stall and passes" "$(slow_unit '' 5)" \
+  "status=0 slow=0 stall=1 stalled_report=0 replays=1 ${first}"
+check "a later stall does not hide an earlier slow unit" "$(slow_unit '' '12000 5')" \
+  "status=70 slow=1 stall=0 stalled_report=0 replays=1 ${first}"
+check "every slow unit is replayed" "$(slow_unit '' '5 12000')" \
+  "status=70 slow=1 stall=1 stalled_report=0 replays=2 ${first}"
+check "slow unit whose replay prints no time fails as a timeout" "$(slow_unit '' none)" \
+  "status=70 slow=1 stall=0 stalled_report=0 replays=1 ${first}"
+check "slow unit without a saved file fails as a timeout" "$(slow_unit '' unsaved)" \
+  "status=70 slow=1 stall=0 stalled_report=0 replays=0 first=[]"
+check "slow unit named outside the findings directory fails" "$(slow_unit '' outside)" \
+  "status=70 slow=1 stall=0 stalled_report=0 replays=0 first=[]"
+check "slow unit after a partial target line is still replayed" \
+  "$(STUB_PARTIAL_LINE=1 slow_unit '' 12000)" \
+  "status=70 slow=1 stall=0 stalled_report=0 replays=1 ${first}"
+check "replay that stalls in its timeout report is stopped" "$(slow_unit '' hang)" \
+  "status=70 slow=1 stall=0 stalled_report=1 replays=1 ${first}"
+check "failing replay keeps its status" "$(STUB_REPLAY_EXIT=3 slow_unit '' 5)" \
+  "status=3 slow=1 stall=0 stalled_report=0 replays=1 ${first}"
+check "slow seed replay keeps the hang guard headroom" "$(slow_unit 12000 '')" \
+  "status=0 slow=0 stall=0 stalled_report=0 replays=0 first=[]"
+check "fuzzer failure after a slow unit keeps its status" "$(STUB_EXIT=1 slow_unit '' 12000)" \
+  "status=1 slow=0 stall=0 stalled_report=0 replays=0 first=[]"
+
 # A fuzzer that fails to start, or exits at once, finishes while the launcher is still connecting
 # its stderr relay. Bash 3.2 does not retry an open() that SIGCHLD interrupts, and on macOS a FIFO
 # reader can miss end of file when its writer exits that quickly, so a relay built on FIFOs can
