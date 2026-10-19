@@ -4,8 +4,10 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/ParseResult.h"
@@ -2876,8 +2878,15 @@ TEST_F(XMLDocumentTests, RevertNodeInsertionsRestoresIndentedSourceExactly) {
   XMLNode circle = ElementChild(svg, 1);
   XMLNode first = XMLNode::CreateElementNode(doc, "g");
   XMLNode second = XMLNode::CreateElementNode(doc, "path");
-  const std::optional<SourceRange> circleLocationBefore = circle.getNodeLocation();
-  ASSERT_THAT(circleLocationBefore, testing::Ne(std::nullopt));
+  // Compare byte offsets only: locations resolved after an edit carry no line information.
+  const auto offsetsOf = [](const XMLNode& node) {
+    const std::optional<SourceRange> location = node.getNodeLocation();
+    return location.has_value()
+               ? std::optional(std::pair(location->start.offset, location->end.offset))
+               : std::nullopt;
+  };
+  const auto circleOffsetsBefore = offsetsOf(circle);
+  ASSERT_THAT(circleOffsetsBefore, testing::Ne(std::nullopt));
 
   ApplySourceEditResult insertedFirst = doc.insertNode(svg, first, rect);
   ApplySourceEditResult insertedSecond = doc.insertNode(svg, second, circle);
@@ -2899,7 +2908,7 @@ TEST_F(XMLDocumentTests, RevertNodeInsertionsRestoresIndentedSourceExactly) {
   EXPECT_THAT(second.parentElement(), testing::Eq(std::nullopt));
   EXPECT_THAT(ElementChild(svg, 0), testing::Eq(rect));
   EXPECT_THAT(ElementChild(svg, 1), testing::Eq(circle));
-  EXPECT_THAT(circle.getNodeLocation(), testing::Eq(circleLocationBefore));
+  EXPECT_THAT(offsetsOf(circle), testing::Eq(circleOffsetsBefore));
 }
 
 TEST_F(XMLDocumentTests, RevertNodeInsertionsRefusesInsertionThatIsNotTheLatestEdit) {
