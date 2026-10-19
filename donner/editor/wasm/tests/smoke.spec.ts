@@ -1253,64 +1253,21 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
   expect(fatalMessages).toEqual([]);
 });
 
+// Hold one raster task yield until released. The gate resumes the worker from an ordinary task,
+// so the release does not wait for an unrelated task to reach the worker.
 async function holdRasterTaskYield(page: Page) {
-  const raster = await Promise.any(
-    page.workers().map(async (worker) => {
-      await worker.evaluate(() => {
-        const scope = globalThis as typeof globalThis & {
-          __donnerRasterTaskYield?: {
-            channel: MessageChannel;
-            resume: (() => void) | null;
-            closed: boolean;
-          };
-          __donnerHeldTaskYield?: () => boolean;
-          __donnerReleaseTaskYield?: () => void;
-        };
-        const state = scope.__donnerRasterTaskYield;
-        if (!state || state.closed) throw new Error("not the active raster worker");
-        const original = state.channel.port1.onmessage;
-        if (!original) throw new Error("raster yield handler missing");
-        let held: MessageEvent | undefined;
-        state.channel.port1.onmessage = (event) => {
-          if (held) throw new Error("multiple raster yield messages held");
-          held = event;
-        };
-        scope.__donnerHeldTaskYield = () => held !== undefined && state.resume !== null;
-        scope.__donnerReleaseTaskYield = () => {
-          state.channel.port1.onmessage = original;
-          const event = held;
-          held = undefined;
-          delete scope.__donnerHeldTaskYield;
-          delete scope.__donnerReleaseTaskYield;
-          if (event) original.call(state.channel.port1, event);
-        };
-      });
-      return worker;
-    }),
-  );
-  const release = () =>
-    raster.evaluate(() => {
-      const scope = globalThis as EvaluationResumeScope & {
-        __donnerReleaseTaskYield?: () => void;
-      };
-      scope.__donnerResumingFromTestEvaluation = true;
-      try {
-        scope.__donnerReleaseTaskYield?.();
-      } finally {
-        scope.__donnerResumingFromTestEvaluation = false;
-      }
-    });
+  const raster = await findRasterTaskWorker(page);
+  const gate = await gateRasterTaskYields(raster, scaledMs(20000));
   try {
-    await expect.poll(() =>
-      raster.evaluate(() => {
-        const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
-        return scope.__donnerHeldTaskYield?.() ?? false;
-      }), { timeout: scaledMs(3000), message: "one raster task yield is suspended" }).toBe(true);
+    await gate.awaitSuspended(
+      performance.now() + scaledMs(3000),
+      "one raster task yield is suspended",
+    );
   } catch (error) {
-    await release();
+    await gate.release();
     throw error;
   }
-  return { raster, release };
+  return { raster, release: gate.release, suspended: gate.isSuspended };
 }
 
 async function findRasterTaskWorker(page: Page) {
@@ -1514,6 +1471,14 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
         message,
       }).toBe(true);
     },
+    isSuspended: () =>
+      awaitBeforeBlueDeadline(
+        raster.evaluate((id) => {
+          const gate = (globalThis as RasterGateScope).__donnerRasterGate;
+          return gate?.id === id && gate.suspended();
+        }, lease.id),
+        performance.now() + 1000,
+      ),
     renderedTimes: (deadlineAtMs: number) =>
       awaitBeforeBlueDeadline(
         raster.evaluate((id) => {
@@ -4227,12 +4192,7 @@ async function finishAnimationPreview({
     } finally {
       await page.keyboard.up("Control");
     }
-    expect(
-      await heldForQuit.raster.evaluate(() => {
-        const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
-        return scope.__donnerHeldTaskYield?.() ?? false;
-      }),
-    ).toBe(true);
+    expect(await heldForQuit.suspended()).toBe(true);
   } finally {
     await heldForQuit.release();
   }
