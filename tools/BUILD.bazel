@@ -632,7 +632,11 @@ py_test(
     name = "ci_lane_parity_tests",
     size = "small",
     srcs = ["ci_lane_parity_tests.py"],
-    data = ["//:github_action_definitions"],
+    data = [
+        "BUILD.bazel",
+        "//:github_action_definitions",
+        "//donner/editor/tests:BUILD.bazel",
+    ],
     deps = ["@rules_python//python/runfiles"],
 )
 

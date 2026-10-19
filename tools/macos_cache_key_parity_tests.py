@@ -28,6 +28,9 @@ from tools import test_timing
 
 HOSTED = "macos"
 SELF_HOSTED = "macos-self-hosted"
+# Reruns the hosted job's runner-sensitive tests on the self-hosted runner under the hosted
+# runner's resource limits, with the hosted job's action keys.
+PARITY = "macos-hosted-parity"
 # Remote cache and executor flags. The macOS lanes get their remote cache only from the
 # BuildBuddy action, so neither passes any of these itself.
 REMOTE_FLAG = re.compile(r"^--(?:no)?(?:remote_|incompatible_remote_|credential_helper)")
@@ -37,12 +40,21 @@ BAZEL_INVOCATION = re.compile(
 # Flags that only select, run or report tests. They never change a build action's key.
 TEST_ONLY_FLAG = re.compile(r"^--(?:no)?(?:test_|cache_test_results|local_test_jobs|"
                             r"flaky_test_attempts|runs_per_test|keep_going|build_event_json_file)")
-# Job environment values a lane may set for itself; each may hold only test-only flags.
+# Flags that only limit how many actions Bazel runs at once, or which requested targets it
+# builds. They never change a build action's key.
+SCHEDULING_ONLY_FLAG = re.compile(r"^--(?:jobs|local_resources|build_tests_only)(?:=|$)")
+# Job or workflow environment values a lane may set for itself; each may hold only test-only flags.
 TEST_ONLY_VARIABLES = ("BAZEL_MACOS_TEST_FLAGS", "BROWSER_STALL_TEST_FLAGS",
                        "HOSTED_MACOS_QUARANTINE_TEST_FLAGS")
+# Job environment values that may hold only scheduling flags.
+SCHEDULING_VARIABLES = ("HOSTED_MACOS_RESOURCE_FLAGS",)
 # Each lane names itself in its test environment, so test results never cross runners.
 LANE_TEST_ENV = {"macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
-                 "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted"}
+                 "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted",
+                 "macos-hosted-parity": "--test_env=DONNER_CI_MACOS_LANE=hosted-parity"}
+# Every macOS lane and how it selects the pinned Xcode: the hosted image always has it, so the
+# hosted job and the parity lane that reproduces it require it.
+LANE_XCODE_MODES = ((HOSTED, "--required"), (SELF_HOSTED, "--optional"), (PARITY, "--required"))
 # The toolchain repository refresh runs before any build and takes no build flags.
 TOOLCHAIN_REFRESH = "fetch --force --lockfile_mode=off"
 SELECT_SCRIPT = "tools/ci_select_macos_xcode.sh"
@@ -68,6 +80,12 @@ def _jobs(workflow):
 
 def _job_env(job, name):
     match = re.search(r'(?m)^      %s: "([^"]*)"$' % re.escape(name), job)
+    return match.group(1) if match else None
+
+
+def _workflow_env(workflow, name):
+    match = re.search(r'(?m)^  %s: "([^"]*)"$' % re.escape(name),
+                      workflow.split("\njobs:\n", 1)[0])
     return match.group(1) if match else None
 
 
@@ -120,7 +138,8 @@ def _build_flags(command):
     words = command[BAZEL_INVOCATION.search(command).end():].split()
     test_lists = {"$" + name for name in TEST_ONLY_VARIABLES}
     return sorted(word for word in words if (word.startswith("--") and
-                                             not TEST_ONLY_FLAG.match(word)) or
+                                             not TEST_ONLY_FLAG.match(word) and
+                                             not SCHEDULING_ONLY_FLAG.match(word)) or
                   (word.startswith("$") and word not in test_lists and
                    word.startswith("$BAZEL")))
 
@@ -151,6 +170,11 @@ def _test_list_problems(name, job):
         if value is not None and not all(TEST_ONLY_FLAG.match(flag)
                                          for flag in shlex.split(value)):
             problems.append("%s %s holds a flag that is not test-only" % (name, variable))
+    for variable in SCHEDULING_VARIABLES:
+        value = _job_env(job, variable)
+        if value is not None and not all(SCHEDULING_ONLY_FLAG.match(flag)
+                                         for flag in shlex.split(value)):
+            problems.append("%s %s holds a flag that is not scheduling-only" % (name, variable))
     tests = shlex.split(_job_env(job, "BAZEL_MACOS_TEST_FLAGS") or "")
     if LANE_TEST_ENV[name] not in tests:
         problems.append("%s does not name its lane with %s" % (name, LANE_TEST_ENV[name]))
@@ -216,7 +240,7 @@ def _bazelrc_problems(bazelrc):
 # that sets any of them (job or workflow env, or a GITHUB_ENV write) can silently replace the
 # pinned Xcode, so no macOS job and no workflow-level env may name them.
 XCODE_OVERRIDES = re.compile(r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|DEVELOPER_DIR)\b")
-MACOS_JOBS = (HOSTED, SELF_HOSTED, "macos-browser")
+MACOS_JOBS = (HOSTED, SELF_HOSTED, PARITY, "macos-browser")
 
 
 def _xcode_override_problems(workflow):
@@ -246,15 +270,21 @@ def host_tool_problems(files):
 def key_parity_problems(workflow, bazelrc):
     """Every way the two macOS lanes in main.yml could stop computing identical action keys."""
     jobs = _jobs(workflow)
-    hosted, self_hosted = jobs[HOSTED], jobs[SELF_HOSTED]
-    hosted_flags = _job_env(hosted, "BAZEL_MACOS_BUILD_FLAGS")
-    self_flags = _job_env(self_hosted, "BAZEL_MACOS_BUILD_FLAGS")
-    if hosted_flags is None or self_flags is None:
+    lane_flags = {name: _job_env(jobs[name], "BAZEL_MACOS_BUILD_FLAGS")
+                  for name, _ in LANE_XCODE_MODES}
+    if None in lane_flags.values():
         return ["a macOS lane does not declare BAZEL_MACOS_BUILD_FLAGS"]
-    problems = _flag_problems(hosted_flags, self_flags) + _xcode_override_problems(workflow)
+    problems = _xcode_override_problems(workflow)
+    for name, _ in LANE_XCODE_MODES[1:]:
+        problems += _flag_problems(lane_flags[HOSTED], lane_flags[name])
+    quarantine = _workflow_env(workflow, "HOSTED_MACOS_QUARANTINE_TEST_FLAGS")
+    if quarantine is not None and not all(TEST_ONLY_FLAG.match(flag)
+                                          for flag in shlex.split(quarantine)):
+        problems.append("main.yml HOSTED_MACOS_QUARANTINE_TEST_FLAGS holds a flag that is not "
+                        "test-only")
     by_step = {}
-    for name, job, mode in ((HOSTED, hosted, "--required"),
-                            (SELF_HOSTED, self_hosted, "--optional")):
+    for name, mode in LANE_XCODE_MODES:
+        job = jobs[name]
         commands = _bazel_commands(job)
         problems += _record_commands(name, commands, by_step)
         problems += _test_list_problems(name, job)
@@ -262,7 +292,8 @@ def key_parity_problems(workflow, bazelrc):
         if "Select pinned Xcode" in [step_name for step_name, _ in _steps(job)]:
             problems += _refresh_problems(name, commands, by_step)
     for step_name, lanes_seen in sorted(by_step.items()):
-        if len(lanes_seen) == 2 and lanes_seen[HOSTED] != lanes_seen[SELF_HOSTED]:
+        if HOSTED in lanes_seen and any(flags != lanes_seen[HOSTED]
+                                        for flags in lanes_seen.values()):
             problems.append("step %r differs between the lanes: %s" % (step_name, lanes_seen))
     return problems + _bazelrc_problems(bazelrc)
 
@@ -329,8 +360,10 @@ class MacosCacheKeyParityTest(unittest.TestCase):
 
     def test_key_parity_policy_rejects_divergence(self):
         hosted_flags = 'BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"\n'
-        # Both jobs carry the same line; the self-hosted job's is the last one.
-        before, _, after = self.workflow.rpartition(hosted_flags)
+        # Every macOS lane carries the same line; split at the self-hosted job's.
+        start = self.workflow.index("\n  %s:\n" % SELF_HOSTED)
+        index = self.workflow.index(hosted_flags, start)
+        before, after = self.workflow[:index], self.workflow[index + len(hosted_flags):]
         rc_line = "build:ci-macos --host_action_env=PATH="
         cases = {
             "self-hosted drops the config": (
@@ -372,6 +405,24 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             "a lane shares its test results": (self.workflow.replace(
                 LANE_TEST_ENV["macos-self-hosted"], "--test_env=HOME", 1),
                 self.bazelrc, "does not name its lane"),
+            "the parity lane shares the hosted lane's test results": (self.workflow.replace(
+                LANE_TEST_ENV[PARITY], LANE_TEST_ENV[HOSTED], 1),
+                self.bazelrc, "does not name its lane"),
+            "the parity lane hides a build flag among its resource limits": (self.workflow.replace(
+                'HOSTED_MACOS_RESOURCE_FLAGS: "--jobs=3',
+                'HOSTED_MACOS_RESOURCE_FLAGS: "--copt=-O0 --jobs=3', 1),
+                self.bazelrc, "not scheduling-only"),
+            "the parity lane changes a key-affecting flag": (self.workflow.replace(
+                "test --config=ci --config=geode --test_output=errors \\\n"
+                "            $HOSTED_MACOS_RESOURCE_FLAGS",
+                "test --config=ci --config=geode --copt=-O0 --test_output=errors \\\n"
+                "            $HOSTED_MACOS_RESOURCE_FLAGS", 1),
+                self.bazelrc, "step 'Test (Geode editor lane)' differs"),
+            "the parity lane accepts any Xcode": (self.workflow[:self.workflow.index(
+                "\n  %s:\n" % PARITY)] + self.workflow[self.workflow.index(
+                    "\n  %s:\n" % PARITY):].replace(
+                    "ci_select_macos_xcode.sh --required", "ci_select_macos_xcode.sh --optional",
+                    1), self.bazelrc, "macos-hosted-parity selects Xcode other than"),
             "a step drops the lane flags": (self.workflow.replace(
                 "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
                 "bazelisk build --config=ci $TARGETS", 1),

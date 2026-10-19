@@ -59,6 +59,8 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-self-hosted", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/main.yml", "macos-hosted-parity", "Configure BuildBuddy remote cache",
+     None, "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/publish_bcr.yml", "publish-fork", "Create the fork branch only if absent", None,
      "<run>"): {"PUBLISH_TOKEN"},
     (".github/workflows/sanitizers-pr.yml", "asan-geode", "Configure BuildBuddy remote cache",
@@ -85,6 +87,14 @@ REVIEWED_WORKFLOW_CALLS = {
 SELF_HOSTED_JOBS = {
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-self-hosted"): "use_self_hosted_macos",
+    (".github/workflows/main.yml", "macos-hosted-parity"): "use_self_hosted_macos",
+}
+# Reviewed conditions a self-hosted job adds after its trusted gate. Each may only narrow it: it
+# follows the gate with `&&`, so it can skip a trusted run but never admit another one.
+SELF_HOSTED_NARROWING = {
+    (".github/workflows/main.yml", "macos-hosted-parity"):
+        " && (needs.determine-targets.outputs.fallback == 'true' || "
+        "needs.determine-targets.outputs.hosted_parity_affected == 'true')",
 }
 
 # A runner label set is GitHub-hosted only when it is exactly one hosted image label. Any other
@@ -256,14 +266,16 @@ BUILDBUDDY_JOBS = {
     # Hosted macOS browser subset for trusted maintainer PRs, wired exactly like `macos`.
     (".github/workflows/main.yml", "macos-browser"),
     (".github/workflows/main.yml", "macos-self-hosted"),
+    (".github/workflows/main.yml", "macos-hosted-parity"),
     (".github/workflows/sanitizers-pr.yml", "asan-geode"),
     (".github/workflows/sanitizers.yml", "asan"),
     (".github/workflows/sanitizers.yml", "ubsan"),
 }
-# The one self-hosted lane on BuildBuddy. It runs only for trusted maintainer pull requests, so it
-# holds the read-write key and no Renovate reader, and its last step removes the key from the
-# persistent runner whatever the job's outcome.
-SELF_HOSTED_BUILDBUDDY_JOBS = {(".github/workflows/main.yml", "macos-self-hosted")}
+# The self-hosted lanes on BuildBuddy: the macOS fast lane and its hosted-parity subset. They run
+# only for trusted maintainer pull requests, so each holds the read-write key and no Renovate
+# reader, and its last step removes the key from the persistent runner whatever the job's outcome.
+SELF_HOSTED_BUILDBUDDY_JOBS = {(".github/workflows/main.yml", "macos-self-hosted"),
+                               (".github/workflows/main.yml", "macos-hosted-parity")}
 BUILDBUDDY_CLEANUP = ("      - name: Remove BuildBuddy credentials\n"
                       "        if: always()\n"
                       "        shell: bash\n"
@@ -1047,8 +1059,8 @@ def _runner_violation(path, name, job):
         return problem
     if all(_is_hosted(labels) for labels in sets):
         return None
-    gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.%s == 'true' }}" % \
-        SELF_HOSTED_JOBS.get((path, name))
+    gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.%s == 'true'%s }}" % (
+        SELF_HOSTED_JOBS.get((path, name)), SELF_HOSTED_NARROWING.get((path, name), ""))
     needs = _job_key(job, "needs").strip("[]")
     admitted = ((path, name) in SELF_HOSTED_JOBS and gate == _job_key(job, "if")
                 and "gatekeeper" in _labels(needs))
@@ -3238,13 +3250,20 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         codeql = ".github/workflows/codeql.yml"
         # The full admission expression: the hosted browser subset job reads the same routing
         # output inside a different condition, and must not be the one this case mutates.
+        # The hosted-parity job extends it with a reviewed narrowing condition.
         gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.use_self_hosted_macos == 'true'"
+        narrowing = SELF_HOSTED_NARROWING[(main, "macos-hosted-parity")]
         hosted = "    runs-on: ubuntu-24.04\n"
         ungated = "without the trusted gate"
-        self.assertEqual(1, files[main].count(gate))
+        self.assertEqual(1, files[main].count(gate + " }}"))
+        self.assertEqual(1, files[main].count(gate + narrowing + " }}"))
         self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, macos-26]\n"))
         self._assert_rejected(lambda files, path: _self_hosted_violations(_workflows(files)), {
-            "ungated": (main, files[main].replace(gate, "true", 1), ungated),
+            "ungated": (main, files[main].replace(gate + " }}", "true }}", 1), ungated),
+            "parity narrowing widened": (main, files[main].replace(
+                gate + narrowing, gate + narrowing.replace(" && (", " || (", 1), 1), ungated),
+            "parity narrowing dropped": (main, files[main].replace(
+                gate + narrowing, gate, 1), ungated),
             "self-hosted label": (coverage, files[coverage].replace(
                 hosted, "    runs-on: [self-hosted, linux, arm64]\n", 1), ungated),
             "custom labels only": (coverage, files[coverage].replace(

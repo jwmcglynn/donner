@@ -56,6 +56,76 @@ HOSTED_SUBSETS = {
     ("main.yml", "macos", "trusted-pr"): ("macos-browser", ("Test (browser targets)",)),
 }
 
+# Self-hosted jobs that rerun some of a replaced job's steps on a trusted PR under main's hosted
+# runner constraints, for the PRs whose affected set reaches those steps' runner-sensitive tests.
+# Keyed like JOB_REPLACEMENTS; the value is (parity job, steps it reruns). Each step must run with
+# main's invocation apart from the reviewed PARITY_ALLOWLIST differences: the resource caps that
+# reproduce the hosted runner's scheduling, the self-hosted startup flags, the lane's own test
+# result identity and the `hosted_parity` narrowing. Removing a step, a constraint or the
+# quarantine, or widening any difference, fails.
+PARITY_SUBSETS = {
+    ("main.yml", "macos", "trusted-pr"): ("macos-hosted-parity",
+                                          ("Test", "Test (Geode editor lane)")),
+}
+
+# Main's hosted macOS runner as Bazel schedules on it: 3 CPUs and 7168 MiB, so --jobs=HOST_CPUS
+# and a HOST_RAM*.67 memory budget, with --local_test_jobs following the CPU budget. The parity
+# job states the same values explicitly. Main's own job passes none of them.
+HOSTED_MACOS_RESOURCE_FLAGS = ("--jobs=3", "--local_resources=cpu=3",
+                               "--local_resources=memory=4802")
+
+_PARITY = ("main.yml", "macos", "macos-hosted-parity")
+PARITY_ALLOWLIST = {
+    **{_PARITY + ("*", "flag-pr-only", flag):
+       "Hosted runner shape: caps Bazel's scheduling at the hosted runner's CPUs and memory "
+       "budget. It changes no action key, test, filter or environment."
+       for flag in HOSTED_MACOS_RESOURCE_FLAGS},
+    _PARITY + ("*", "startup-pr-only", "--nohome_rc"):
+        "Runner-specific: keeps the host's interactive bazelrc out of CI.",
+    _PARITY + ("*", "startup-pr-only", "--nosystem_rc"):
+        "Runner-specific: keeps any host system bazelrc out of CI.",
+    **{_PARITY + ("*", kind, value):
+       "Lane identity for test results only: parity results are never shared with the hosted "
+       "or the fast lane's."
+       for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
+                           ("test-env-pr-only", "DONNER_CI_MACOS_LANE=hosted-parity"))},
+    _PARITY + ("Test", "tag-filter-pr-only", "hosted_parity"):
+        "The parity subset: only tests whose result can depend on the runner. Every other "
+        "affected test runs in the fast lane only.",
+    _PARITY + ("Test", "flag-pr-only", "--build_tests_only"):
+        "Build scope only: main's job builds the whole selection in its Build step first; this "
+        "job builds only what the selected tests need.",
+    _PARITY + ("Test", "test-env-main-only", "DONNER_BROWSER_STALL_DIAGNOSTICS=1"):
+        "Diagnostics only: it changes what a timed-out browser test records, and this step runs "
+        "no browser test.",
+    _PARITY + ("*", "runtime-env-main-only",
+               "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_"
+               "USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"):
+        "Main may relax one Metal texture check on a paravirtual GPU; the parity lane keeps "
+        "full validation on real hardware.",
+}
+
+# Tests that main's hosted macOS job runs and whose result can depend on the runner's CPU count
+# or speed, display scale or host tools, each with the escape that put it here. Every test
+# tagged `hosted_parity` is listed, and every listed test is tagged, so the parity subset can
+# neither silently lose a test nor gain an unreviewed one. Browser tests (the carousel handoff,
+# animation pulse and WebKit drag classes) are covered by the hosted macos-browser subset on the
+# hosted image itself, so they are not tagged.
+HOSTED_PARITY_TESTS = {
+    ("donner/editor/tests/BUILD.bazel", "editor_shell_tests"):
+        "Frame-loop, drag and readiness cases that failed only on hosted macOS (#1824, #1902) "
+        "and at a different display scale (#1779).",
+    ("donner/editor/tests/BUILD.bazel", "async_renderer_tests"):
+        "Idle-wake race that failed on the hosted runner (#1791, fixed by #1805).",
+    ("donner/editor/tests/BUILD.bazel", "render_coordinator_tests"):
+        "Presentation wake and rebuild-promotion cases from the drag regressions (#1824).",
+    ("donner/editor/tests/BUILD.bazel", "editor_window_tests"):
+        "Window content scale and readback cases whose result depended on the host display "
+        "(#1779).",
+    ("tools/BUILD.bazel", "macos_cache_key_parity_tests"):
+        "Runs the Xcode selection probe against host tools (#1895).",
+}
+
 # Differences between a main step and the hosted subset's copy of it. Keyed by (workflow, main
 # job, subset job, step, kind, value). Only build-scope differences belong here: the subset must
 # test exactly what main tests.
@@ -295,13 +365,14 @@ COUNTERPART_ALLOWLIST = {
 # self-hosted routing and the remote cache wiring read; a push gets "false" for both. A PR here
 # touches no release inputs, so the BCR preflight runs its slim scope (`full_matrix`), it does
 # not reach the WebGPU reference corpus (`wgpu_reference`), and it does reach a browser test
-# (`browser_affected`).
+# (`browser_affected`) and a runner-sensitive test (`hosted_parity_affected`).
 _PULL_REQUEST = {
     "github.event_name": "pull_request",
     "github.ref": "refs/pull/1/merge",
     "fallback": "false",
     "affected": "//donner/editor/wasm/tests:chromium_remote_smoke",
     "browser_affected": "true",
+    "hosted_parity_affected": "true",
     "wgpu_reference": "false",
     "full_matrix": "false",
 }
@@ -322,17 +393,18 @@ SCENARIOS = {
         "wgpu_reference": "",
         "full_matrix": "false",
         "browser_affected": "",
+        "hosted_parity_affected": "",
     },
     "trusted-pr": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                        renovate_pr="false"),
     # A trusted PR whose affected set reaches no browser test.
     "trusted-pr-native-only": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                                    renovate_pr="false", affected="//donner/base:base_tests",
-                                   browser_affected="false"),
+                                   browser_affected="false", hosted_parity_affected="false"),
     # A trusted PR that falls back to //... (an infrastructure change).
     "trusted-pr-fallback": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                                 renovate_pr="false", fallback="true", affected="",
-                                browser_affected=""),
+                                browser_affected="", hosted_parity_affected=""),
     "untrusted-pr": dict(_PULL_REQUEST, use_self_hosted="false", trusted_pr="false",
                          renovate_pr="false"),
     "renovate-pr": dict(_PULL_REQUEST, use_self_hosted="false", trusted_pr="false",
@@ -365,6 +437,7 @@ _MODELLED_OUTPUTS = {
     "needs.determine-targets.outputs.affected": "affected",
     "needs.determine-targets.outputs.wgpu_reference": "wgpu_reference",
     "needs.determine-targets.outputs.browser_affected": "browser_affected",
+    "needs.determine-targets.outputs.hosted_parity_affected": "hosted_parity_affected",
     "needs.prepare.outputs.full_matrix": "full_matrix",
 }
 
@@ -1038,6 +1111,34 @@ def invocation_differences(workflow, main_job_name, replacement_name, only_steps
     return _fold_shared(differences, shared)
 
 
+def parity_differences(workflow, main_job_name, parity_name, steps):
+    """How a parity job's Bazel invocations differ from the main job's `steps`.
+
+    The parity job runs exactly `steps`, each compared with main's step of the same name, and
+    rewrites the same flag variables at run time.
+    """
+    jobs = _jobs(workflow)
+    main_steps, main_writes = _bazel_profile(workflow, jobs[main_job_name], "main-push")
+    parity_steps, parity_writes = _bazel_profile(workflow, jobs[parity_name], "trusted-pr")
+    differences = _set_differences("*", "runtime-env", main_writes, parity_writes)
+    differences |= {(name, "step-parity-only", "") for name in set(parity_steps) - set(steps)}
+    return differences | _compared_steps(main_steps, parity_steps, steps)
+
+
+_BUILD_RULE = re.compile(r"(?ms)^[a-z_]+\(\n(.*?)^\)$")
+_RULE_NAME = re.compile(r'(?m)^    name = "([^"]+)",$')
+
+
+def tagged_rules(build_text, tag):
+    """Names of the top-level rules in a BUILD file whose attributes name `tag`."""
+    names = set()
+    for rule in _BUILD_RULE.finditer(build_text):
+        name = _RULE_NAME.search(rule.group(1))
+        if name and ('"%s"' % tag) in rule.group(1):
+            names.add(name.group(1))
+    return names
+
+
 def _setup_view(step):
     """A setup step's identity: condition, what it runs, and its inputs as a sorted list."""
     inputs = dict(step.get("with") or {})
@@ -1470,7 +1571,7 @@ class CiLaneParityTest(unittest.TestCase):
         steps = [_step_name(step) for step in jobs["macos"]["steps"]]
         self.assertIn("Test", steps)
         self.assertIn("Test (browser targets)", steps)
-        self.assertIn("HOSTED_MACOS_QUARANTINE_TEST_FLAGS", jobs["macos"]["env"])
+        self.assertIn("HOSTED_MACOS_QUARANTINE_TEST_FLAGS", self.workflows["main.yml"]["env"])
         test = next(step for step in jobs["macos"]["steps"] if _step_name(step) == "Test")
         self.assertIn("bazelisk test", test["run"])
         self.assertIn("main.yml", self.main_push_workflows)
@@ -1991,13 +2092,99 @@ class CiLaneParityTest(unittest.TestCase):
                 # An infrastructure change falls back to //..., which reaches every browser test.
                 self.assertTrue(job_gates(workflow, subset, "trusted-pr-fallback"))
 
+    def test_parity_subsets_rerun_main_steps_under_hosted_constraints(self):
+        observed = set()
+        for (name, job_name, scenario), (parity, steps) in PARITY_SUBSETS.items():
+            workflow = self.workflows[name]
+            observed |= {(name, job_name, parity) + difference
+                         for difference in parity_differences(workflow, job_name, parity, steps)}
+            jobs = _jobs(workflow)
+            with self.subTest(parity=parity):
+                # The same pinned Xcode, required as on the hosted image.
+                self.assertEqual(
+                    _other_steps(workflow, jobs[job_name], "main-push")["Select pinned Xcode"],
+                    _other_steps(workflow, jobs[parity], scenario)["Select pinned Xcode"])
+                # It reruns tests the replacement already ran, after the replacement finishes,
+                # so the replacement's signal never waits for it.
+                self.assertIn(JOB_REPLACEMENTS[(name, job_name, scenario)], _needs(jobs[parity]))
+                self.assertFalse(_continues_on_error(jobs[parity], scenario))
+        self._assert_matches_allowlist(observed, PARITY_ALLOWLIST,
+                                       "the parity lane runs a main step differently")
+
+    def test_parity_subsets_run_only_for_affected_trusted_pull_requests(self):
+        for (name, _, scenario), (parity, _) in PARITY_SUBSETS.items():
+            workflow = self.workflows[name]
+            with self.subTest(parity=parity):
+                self.assertTrue(job_gates(workflow, parity, scenario))
+                # An infrastructure change falls back to //..., which reaches every parity test.
+                self.assertTrue(job_gates(workflow, parity, "trusted-pr-fallback"))
+                # A PR that reaches no runner-sensitive test adds no parity work.
+                self.assertFalse(job_gates(workflow, parity, "trusted-pr-native-only"))
+                for other in ("main-push", "untrusted-pr", "renovate-pr"):
+                    self.assertFalse(job_gates(workflow, parity, other), other)
+
+    def test_parity_comparison_rejects_divergence(self):
+        # Negative controls: each edit to the parity job must surface as an unreviewed
+        # difference from main's hosted job.
+        def without(job, step_name):
+            job["steps"] = [step for step in job["steps"] if _step_name(step) != step_name]
+
+        def rewrite(job, step_name, old, new):
+            step = next(step for step in job["steps"] if _step_name(step) == step_name)
+            self.assertIn(old, step["run"])
+            step["run"] = step["run"].replace(old, new)
+
+        (name, job_name, _), (parity, steps) = next(iter(PARITY_SUBSETS.items()))
+        cases = {
+            "a parity partition is removed": (
+                lambda job: without(job, "Test (Geode editor lane)"),
+                ("Test (Geode editor lane)", "step-missing", "")),
+            "the quarantine is dropped": (
+                lambda job: rewrite(job, "Test", "$HOSTED_MACOS_QUARANTINE_TEST_FLAGS ", ""),
+                ("Test", "test-env-main-only", "DONNER_HOSTED_MACOS_QUARANTINE=1")),
+            "one step loses the hosted runner shape": (
+                lambda job: rewrite(job, "Test (Geode editor lane)",
+                                    "$HOSTED_MACOS_RESOURCE_FLAGS ", ""),
+                ("Test", "flag-pr-only", "--jobs=3")),
+            "a step tests more broadly than main": (
+                lambda job: rewrite(job, "Test", "-launches-browser,", ""),
+                ("Test", "tag-filter-main-only", "-launches-browser")),
+        }
+        for case, (edit, expected) in cases.items():
+            with self.subTest(case=case):
+                workflow = json.loads(json.dumps(self.workflows[name]))
+                edit(_jobs(workflow)[parity])
+                observed = {(name, job_name, parity) + difference
+                            for difference in parity_differences(workflow, job_name, parity,
+                                                                 steps)}
+                self.assertIn((name, job_name, parity) + expected, observed - set(PARITY_ALLOWLIST))
+
+    def test_hosted_parity_tags_match_the_reviewed_list(self):
+        resolver = runfiles.Create()
+        for build_file in sorted({path for path, _ in HOSTED_PARITY_TESTS}):
+            with self.subTest(build_file=build_file):
+                text = Path(resolver.Rlocation("donner/" + build_file)).read_text(
+                    encoding="utf-8")
+                self.assertEqual(
+                    tagged_rules(text, "hosted_parity"),
+                    {rule for path, rule in HOSTED_PARITY_TESTS if path == build_file},
+                    "tag a runner-sensitive test `hosted_parity` and list it in "
+                    "HOSTED_PARITY_TESTS with the escape it covers, or remove both")
+        # The routing query selects the job by this tag; the job filters by it.
+        main = (Path(resolver.Rlocation("donner/.github/workflows/main.yml"))
+                .read_text(encoding="utf-8"))
+        self.assertIn('"attr(\\"tags\\", \\"hosted_parity\\", tests(set($affected)))', main)
+        self.assertEqual(tagged_rules('cc_test(\n    name = "a",\n    tags = ["hosted_parity"],\n)\n'
+                                      'cc_test(\n    name = "b",\n    tags = ["manual"],\n)\n',
+                                      "hosted_parity"), {"a"})
+
     def test_every_allowlist_entry_has_a_reason(self):
         for name, (_, reason) in STEP_OUTPUTS.items():
             self.assertGreater(len(reason.strip()), 20, name)
         for allowlist in (TRIGGER_ALLOWLIST, MAIN_ONLY_JOBS, INVOCATION_ALLOWLIST,
                           STEP_ALLOWLIST, COUNTERPART_ALLOWLIST, FAILURE_SWALLOW_ALLOWLIST,
                           SHARED_JOB_ALLOWLIST, SHARED_STEP_ALLOWLIST, SUBSET_ALLOWLIST,
-                          SUBSET_EXTRA_STEPS):
+                          SUBSET_EXTRA_STEPS, PARITY_ALLOWLIST, HOSTED_PARITY_TESTS):
             for key, reason in allowlist.items():
                 self.assertGreater(len(reason.strip()), 20, key)
 
