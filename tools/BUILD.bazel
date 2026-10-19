@@ -303,8 +303,6 @@ py_test(
     ],
 )
 
-# Large: its git and shell fixtures take longer than ci_runtime_workflow_tests, and on a slow host
-# the suite approaches the 300 s timeout of a medium test.
 # No workflow cancels a run, running or queued, to make room for a newer one.
 py_test(
     name = "ci_concurrency_policy_tests",
@@ -314,6 +312,8 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
+# Large: its git and shell fixtures take longer than ci_runtime_workflow_tests, and on a slow host
+# the suite approaches the 300 s timeout of a medium test.
 py_test(
     name = "security_workflow_policy_tests",
     size = "large",

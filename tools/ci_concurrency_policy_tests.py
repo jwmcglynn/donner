@@ -7,10 +7,10 @@ surfaces later, somewhere else. Two GitHub settings cancel runs:
 - Any concurrency group shared between runs also cancels a run that is still queued in that group
   when a newer one arrives, even with `cancel-in-progress: false`.
 
-So every `cancel-in-progress` is the literal `false`, and every concurrency group either contains
-`github.run_id` (one run per group) or is listed below with the reason a shared group is wanted.
-The check is textual: a group expression that uses `github.run_id` on only some events must be
-listed by a reviewer, not inferred.
+So every `cancel-in-progress` is the literal `false`, and every concurrency group is either unique
+per run or listed below with the reason a shared group is wanted. A group counts as unique only
+when it contains `github.run_id` and no `&&` or `||`: a conditional group can be unique for some
+events and shared for others, so it must be listed.
 Allowlist entries that no longer match fail too, so the lists only shrink.
 """
 
@@ -23,19 +23,22 @@ from python.runfiles import runfiles
 # Workflows that still cancel a running run, by file name.
 CANCELLING_WORKFLOWS = {
     "main.yml":
-        "Pull request runs are superseded by the next push; its concurrency block changes with "
-        "the main CI workflow's own refactor.",
+        "Pull request and non-main branch runs are superseded by the next push; its concurrency "
+        "block changes with the main CI workflow's own refactor.",
 }
 
 # Concurrency groups shared between runs, keyed by (file name, group expression).
 SHARED_GROUPS = {
     # "*": any group in that workflow, so other changes to its block do not churn this entry.
     ("main.yml", "*"):
-        "Changes with the main CI workflow's own refactor, as above.",
+        "Pull request and non-main branch runs share groups; changes with the main CI "
+        "workflow's own refactor, as above.",
     ("deploy_docs.yaml", "pages-publish"):
-        "Serializes deployments of the one Pages site; a queued older deployment is stale.",
+        "Serializes manually dispatched promotions of the one Pages site; the latest dispatch "
+        "supersedes a queued older one.",
     ("publish_bcr.yml", "bcr-publication"):
-        "Serializes BCR submissions, which push to one fork.",
+        "Serializes manual BCR submissions, which push to one fork; a queued dispatch that a "
+        "third one replaces is re-run by hand.",
     ("release.yml", "release-${{ github.event.release.tag_name }}"):
         "One publication per release tag.",
     ("rerun_runner_loss.yml",
@@ -43,24 +46,43 @@ SHARED_GROUPS = {
         "At most one rerun decision per CI run it inspects.",
 }
 
-_CONCURRENCY = re.compile(r"^(?P<indent> *)concurrency:(?P<inline>[^\n]*)\n", re.MULTILINE)
+# Workflow-level (column 0) and job-level (column 4) settings. Deeper lines, such as a script line
+# inside a `run: |` block, are not settings.
+_CONCURRENCY = re.compile(r"^(?P<indent>(?:    )?)concurrency:(?P<inline>[^\n]*)\n", re.MULTILINE)
+
+
+def _scalar(value):
+    """A plain YAML scalar without a trailing comment or surrounding quotes."""
+    value = re.sub(r"\s+#.*$", "", value).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1]
+    return value
 
 
 def _settings(workflow):
     """Yields (group, cancel-in-progress or None) for each concurrency setting in `workflow`."""
     for match in _CONCURRENCY.finditer(workflow):
-        inline = match.group("inline").strip()
+        inline = _scalar(match.group("inline"))
+        if inline.startswith("{"):
+            raise ValueError("flow-mapping concurrency settings are not supported: " + inline)
         if inline:
-            yield inline.strip("'\""), None
+            yield inline, None
             continue
         values = {}
         indent = len(match.group("indent"))
         for line in workflow[match.end():].splitlines():
-            if line.strip() and len(line) - len(line.lstrip(" ")) <= indent:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if len(line) - len(line.lstrip(" ")) <= indent:
                 break
-            key, _, value = line.strip().partition(":")
-            values[key] = value.strip()
+            key, _, value = stripped.partition(":")
+            values[key] = _scalar(value)
         yield values.get("group"), values.get("cancel-in-progress")
+
+
+def _unique_per_run(group):
+    return "github.run_id" in group and "&&" not in group and "||" not in group
 
 
 class ConcurrencyPolicyTest(unittest.TestCase):
@@ -86,21 +108,31 @@ class ConcurrencyPolicyTest(unittest.TestCase):
             for group, _ in _settings(workflow):
                 self.assertTrue(group, f"{name}: a concurrency setting without a group")
                 key = (name, "*") if (name, "*") in SHARED_GROUPS else (name, group)
-                if "github.run_id" not in group or key in SHARED_GROUPS:
+                if not _unique_per_run(group) or key in SHARED_GROUPS:
                     shared.add(key)
         self.assertEqual(shared, set(SHARED_GROUPS))
 
     def test_parser_reads_block_inline_and_job_level_settings(self):
-        workflow = ("concurrency:\n  group: a-${{ github.run_id }}\n  cancel-in-progress: false\n"
+        workflow = ("concurrency:\n  # Why.\n  group: a-${{ github.run_id }}\n\n"
+                    "  cancel-in-progress: 'false'  # trailing\n"
                     "jobs:\n  deploy:\n    concurrency:\n      group: pages\n"
-                    "      cancel-in-progress: ${{ x }}\n    steps: []\n"
-                    "  other:\n    concurrency: 'inline-group'\n")
+                    "      cancel-in-progress: ${{ x }}\n    steps:\n"
+                    "      - run: |\n          concurrency: not-a-setting\n"
+                    "  other:\n    concurrency: 'inline-group'  # note\n")
         self.assertEqual(list(_settings(workflow)), [
             ("a-${{ github.run_id }}", "false"),
             ("pages", "${{ x }}"),
             ("inline-group", None),
         ])
+        with self.assertRaises(ValueError):
+            list(_settings("concurrency: {group: g, cancel-in-progress: true}\n"))
 
+    def test_a_conditional_group_is_not_unique_per_run(self):
+        self.assertTrue(_unique_per_run("run-${{ github.workflow }}-${{ github.run_id }}"))
+        self.assertFalse(_unique_per_run(
+            "${{ github.event_name == 'pull_request' && format('pr-{0}', "
+            "github.event.pull_request.number) || format('x-{0}', github.run_id) }}"))
+        self.assertFalse(_unique_per_run("pages-publish"))
 
 if __name__ == "__main__":
     unittest.main()
