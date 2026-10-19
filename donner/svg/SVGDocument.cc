@@ -1541,6 +1541,43 @@ xml::ApplySourceEditResult SVGDocument::removeElement(const SVGElement& element)
   return xml::ApplySourceEditResult();
 }
 
+xml::ApplySourceEditResult SVGDocument::revertElementInsertions(
+    std::span<const SVGElement> elements, std::span<const xml::XMLSourceDelta> insertions) {
+  [[maybe_unused]] DocumentWriteAccess access = writeAccess();
+  xml::ApplySourceEditResult result;
+  result.scope = xml::ReparseScope::ElementSubtree;
+  if (elements.size() != insertions.size() || !hasSourceStore()) {
+    result.diagnostic = ParseDiagnostic::Error(
+        "Cannot revert element insertions without matching source edits", FallbackRange());
+    return result;
+  }
+
+  std::vector<xml::XMLDocument::NodeInsertion> nodes;
+  std::vector<SVGElement> parents;
+  nodes.reserve(elements.size());
+  parents.reserve(elements.size());
+  for (std::size_t i = 0; i < elements.size(); ++i) {
+    std::optional<xml::XMLNode> node = xml::XMLNode::TryCast(elements[i].handle_);
+    std::optional<SVGElement> parent = elements[i].parentElement();
+    if (!node.has_value() || !parent.has_value()) {
+      result.diagnostic = ParseDiagnostic::Error(
+          "Cannot revert an element without XML source identity or a parent", FallbackRange());
+      return result;
+    }
+    nodes.push_back(xml::XMLDocument::NodeInsertion{.node = *node, .insertion = insertions[i]});
+    parents.push_back(*parent);
+  }
+
+  result = xmlDocument().revertNodeInsertions(nodes);
+  applyXMLMutations(result);
+  for (std::size_t i = 0; i < elements.size(); ++i) {
+    if (!elements[i].parentElement().has_value()) {
+      MarkChildRemoved(parents[i].entityHandle());
+    }
+  }
+  return result;
+}
+
 xml::ApplySourceEditResult SVGDocument::setElementTextContent(const SVGElement& element,
                                                               std::string_view text) {
   // §concurrent-dom: this is a mutation entry point. Acquire write access up front so the implicit

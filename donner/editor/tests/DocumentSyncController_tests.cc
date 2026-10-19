@@ -1,8 +1,10 @@
 #include "donner/editor/DocumentSyncController.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <utility>
@@ -18,6 +20,7 @@
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/core/Display.h"
@@ -663,6 +666,62 @@ TEST_F(DocumentSyncControllerTest, PathOperationMirrorsInsertAndDeletesWithoutTe
   EXPECT_TRUE(app.document().document().querySelector("path").has_value());
   EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
   EXPECT_FALSE(app.document().document().querySelector("#r2").has_value());
+}
+
+TEST_F(DocumentSyncControllerTest, FailedOutlineBatchAfterEarlierEditMirrorsLiveSource) {
+  constexpr std::string_view source = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <rect id="r" fill="red"/>
+  <text id="first">ABC</text>
+  <g><text id="second">ABC</text></g>
+</svg>)svg";
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(source)};
+  ASSERT_TRUE(app.loadFromString(source));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(source);
+  textEditor.setText(source);
+  textEditor.resetTextChanged();
+
+  svg::SVGDocument& document = app.document().document();
+  const auto rect = document.querySelector("#r");
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(rect, testing::Ne(std::nullopt));
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  const auto secondParent = second->parentElement();
+  ASSERT_THAT(secondParent, testing::Ne(std::nullopt));
+  svg::SVGGElement firstGroup = svg::SVGGElement::Create(document);
+  firstGroup.setAttribute("id", "first_outlines");
+  firstGroup.appendChild(svg::SVGGElement::Create(document));
+  svg::SVGGElement secondGroup = svg::SVGGElement::Create(document);
+  secondGroup.setAttribute("id", "second_outlines");
+  secondGroup.appendChild(svg::SVGGElement::Create(document));
+  const std::uint64_t generationBefore = app.document().documentGeneration();
+  // The first group fits at depth 3; the second, one level deeper, is refused after the first
+  // has been staged in indented source.
+  document.xmlDocument().setSourceEditTreeLimits(8'192, 3);
+
+  app.applyMutation(EditorCommand::SetAttributeCommand(*rect, "fill", "blue"));
+  app.applyMutation(EditorCommand::ReplaceElementsCommand({
+      {.parent = document.svgElement(), .original = *first, .replacement = firstGroup},
+      {.parent = *secondParent, .original = *second, .replacement = secondGroup},
+  }));
+  ASSERT_THAT(app.flushFrame(), testing::Eq(true));
+  EXPECT_THAT(app.document().lastFlushResult().replacedDocument, testing::Eq(false));
+  EXPECT_THAT(app.document().documentGeneration(), testing::Eq(generationBefore));
+  EXPECT_THAT(app.document().lastParseError(), testing::Eq(std::nullopt));
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_THAT(textEditor.getText(), testing::Eq(std::string(document.source())));
+  EXPECT_THAT(textEditor.getText(), testing::HasSubstr(R"(<rect id="r" fill="blue"/>)"));
+  EXPECT_THAT(document.source(), testing::HasSubstr("\n  <text id=\"first\">ABC</text>\n"));
+  EXPECT_THAT(document.querySelector("#first"), testing::Optional(testing::Eq(*first)));
+  EXPECT_THAT(document.querySelector("#second"), testing::Optional(testing::Eq(*second)));
+  EXPECT_THAT(document.querySelector("#first_outlines"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.isDirty(), testing::Eq(true));
 }
 
 TEST_F(DocumentSyncControllerTest, UiDeleteUndoRestoresDeletedElementAndSourceText) {

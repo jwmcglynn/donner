@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -374,6 +375,21 @@ public:
    * @param element Element to remove.
    */
   xml::ApplySourceEditResult removeElement(const SVGElement& element);
+
+  /**
+   * Revert element insertions that are the most recent edits to this document's source.
+   *
+   * Each element must have been inserted by \ref insertElement as a new, unparented element,
+   * oldest first, and \p insertions holds the single source delta each insertion returned. The
+   * source returns byte for byte to its state before the first insertion and each element is
+   * detached from its parent. See \ref xml::XMLDocument::revertNodeInsertions for the conditions;
+   * when they do not hold, nothing changes and the result carries a diagnostic.
+   *
+   * @param elements Inserted elements, oldest first.
+   * @param insertions Source delta for each element, in the same order.
+   */
+  xml::ApplySourceEditResult revertElementInsertions(
+      std::span<const SVGElement> elements, std::span<const xml::XMLSourceDelta> insertions);
 
   /**
    * Replace an element's text content through this document and update owned source text.

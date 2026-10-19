@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "donner/base/Transform.h"
 #include "donner/svg/SVGElement.h"
@@ -62,6 +63,10 @@ struct EditorCommand {
     /// nodes. Not coalesced.
     InsertElement,
 
+    /// Replace every element in one text-to-outline selection as a single
+    /// all-or-nothing batch. Not coalesced.
+    ReplaceElements,
+
     /// Detach the element from its parent, making it invisible to the
     /// renderer. The ECS entity itself is NOT destroyed - it stays in
     /// the registry, just orphaned. This is a "soft delete" so any
@@ -102,6 +107,13 @@ struct EditorCommand {
 
   Kind kind = Kind::SetTransform;  //!< Operation used to interpret the command payload.
 
+  /// One source element and its fully detached replacement subtree.
+  struct ElementReplacement {
+    svg::SVGElement parent;
+    svg::SVGElement original;
+    svg::SVGElement replacement;
+  };
+
   /// Target element for SetTransform and DeleteElement. `std::nullopt`
   /// for ReplaceDocument.
   std::optional<svg::SVGElement> element;
@@ -112,6 +124,9 @@ struct EditorCommand {
   /// Optional sibling for InsertElement; inserted before this element
   /// when present, otherwise appended to the parent.
   std::optional<svg::SVGElement> referenceElement;
+
+  /// Selection-wide replacement payload for ReplaceElements.
+  std::vector<ElementReplacement> replacements;
 
   /// SetTransform payload. Default-constructed for ReplaceDocument /
   /// DeleteElement.
@@ -191,6 +206,14 @@ struct EditorCommand {
     cmd.parentElement = std::move(parent);
     cmd.element = std::move(element);
     cmd.referenceElement = std::move(reference);
+    return cmd;
+  }
+
+  /// Builds one command for an all-or-nothing selection conversion.
+  static EditorCommand ReplaceElementsCommand(std::vector<ElementReplacement> replacements) {
+    EditorCommand cmd;
+    cmd.kind = Kind::ReplaceElements;
+    cmd.replacements = std::move(replacements);
     return cmd;
   }
 

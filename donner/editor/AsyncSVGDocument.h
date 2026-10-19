@@ -43,6 +43,10 @@ public:
     bool onlyTransformCommands = false;
     bool replacedDocument = false;
     bool preserveUndoOnReparse = false;
+    /// A failed replacement batch restored its exact pre-command source.
+    bool rolledBackReplacementBatch = false;
+    /// A prior command in this flush still changed source before that rollback.
+    bool hadPriorAppliedCommandsOnRollback = false;
     /// True when at least one flushed command removed an element from the live document.
     bool removedElements = false;
     /// Entities whose existing rendered pixels may have changed because of an incremental command.
@@ -241,6 +245,16 @@ private:
   // LayoutSystem::setRawEntityFromParentTransform; ReplaceDocument
   // re-parses the bytes into a fresh SVGDocument and replaces `document_`.
   void applyOne(const EditorCommand& command);
+
+  /// Apply a text-outline selection as one all-or-nothing source/DOM edit.
+  void applyReplacementBatch(const EditorCommand& command);
+
+  /// Insert newly authored text and mirror its initial content into source.
+  void applyInsertText(const EditorCommand& command);
+
+  /// Apply an admitted queued command; return true if rollback invalidated later handles.
+  bool applyQueuedCommand(EditorCommand& command,
+                          std::unordered_map<Entity, Entity>& activeStructuralRemap);
 
   /// Accumulate flush metadata only after deferred admission accepts the command.
   void recordAppliedCommand(const EditorCommand& command);

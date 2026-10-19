@@ -180,7 +180,8 @@ public:
     // Visibility/lock metadata toggles and selection are NOT gated, so a locked
     // layer can still be shown/hidden and unlocked. See `IsLockGatedCommand`.
     const bool requiresLockCheck = command.kind == EditorCommand::Kind::SetTransform ||
-                                   command.kind == EditorCommand::Kind::DeleteElement;
+                                   command.kind == EditorCommand::Kind::DeleteElement ||
+                                   command.kind == EditorCommand::Kind::ReplaceElements;
     if (requiresLockCheck && document_.hasDocument()) {
       const auto access = document_.document().tryReadAccess();
       if (!access.has_value()) {
@@ -194,8 +195,11 @@ public:
     } else if (IsLockGatedCommand(command)) {
       return;
     }
+    const bool replacement = command.kind == EditorCommand::Kind::ReplaceElements;
     document_.applyMutation(std::move(command));
-    isDirty_ = true;
+    if (!replacement) {
+      isDirty_ = true;
+    }
   }
 
   /// Set the visibility of @p element by toggling its `display` presentation
@@ -369,6 +373,13 @@ public:
   /// Replace the current selection with the given list. Use this for
   /// marquee-resolved multi-selects.
   void setSelection(std::vector<svg::SVGElement> elements);
+
+  /// Select each replacement after the queued edit flushes, retaining its
+  /// original element when a capacity refusal leaves the replacement detached.
+  void selectReplacementsAfterNextFlush(
+      std::vector<std::pair<svg::SVGElement, svg::SVGElement>> replacements) {
+    pendingReplacementSelectionAfterFlush_ = std::move(replacements);
+  }
 
   /// Add `element` to the current selection if it isn't already
   /// selected; remove it if it is. The natural Shift+click handler.
@@ -665,6 +676,17 @@ public:
   }
 
 private:
+  /// Remap selection and undo state when a flush replaces the document.
+  bool reconcileDocumentReplacement(const std::optional<svg::SVGDocument>& documentBeforeFlush,
+                                    const std::vector<AttributeWritebackTarget>& selectionTargets,
+                                    const AsyncSVGDocument::FlushResult& documentFlush);
+
+  /// Restore an explicitly deferred selection after a document reparse.
+  void restorePendingSelectionTargets();
+
+  /// Complete a queued text-outline selection after the document flush.
+  void resolvePendingReplacementSelection(bool documentReplaced);
+
   /// Refreshes `cachedFirstSelection_` after `selection_` changes so
   /// the `selectedElement()` accessor can return a stable
   /// `const optional&`. Centralized so we can't forget it on a new
@@ -729,6 +751,8 @@ private:
   std::uint64_t hiddenElementDisplayPrunedVersion_ = 0;
   std::optional<PendingDocumentSourceUndo> pendingDocumentSourceUndo_;
   std::optional<std::vector<svg::SVGElement>> pendingSelectionAfterFlush_;
+  std::optional<std::vector<std::pair<svg::SVGElement, svg::SVGElement>>>
+      pendingReplacementSelectionAfterFlush_;
   std::optional<std::vector<AttributeWritebackTarget>> pendingSelectionRestoreTargets_;
 
   std::optional<std::string> currentFilePath_;

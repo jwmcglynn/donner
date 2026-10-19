@@ -3,8 +3,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/ParseResult.h"
@@ -2867,6 +2870,84 @@ TEST_F(XMLDocumentTests, InsertNodeAppendsSourcelessChild) {
   EXPECT_EQ(svg.firstChild()->tagName(), XMLQualifiedNameRef("rect"));
 }
 
+TEST_F(XMLDocumentTests, RevertNodeInsertionsRestoresIndentedSourceExactly) {
+  constexpr std::string_view kSource = "<svg>\n  <rect/>\n  <circle/>\n</svg>";
+  XMLDocument doc = ParseDocument(kSource);
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode rect = ElementChild(svg, 0);
+  XMLNode circle = ElementChild(svg, 1);
+  XMLNode first = XMLNode::CreateElementNode(doc, "g");
+  XMLNode second = XMLNode::CreateElementNode(doc, "path");
+  // Compare byte offsets only: locations resolved after an edit carry no line information.
+  const auto offsetsOf = [](const XMLNode& node) {
+    const std::optional<SourceRange> location = node.getNodeLocation();
+    return location.has_value()
+               ? std::optional(std::pair(location->start.offset, location->end.offset))
+               : std::nullopt;
+  };
+  const auto circleOffsetsBefore = offsetsOf(circle);
+  ASSERT_THAT(circleOffsetsBefore, testing::Ne(std::nullopt));
+
+  ApplySourceEditResult insertedFirst = doc.insertNode(svg, first, rect);
+  ApplySourceEditResult insertedSecond = doc.insertNode(svg, second, circle);
+  ASSERT_THAT(insertedFirst.sourceDeltas, testing::SizeIs(1));
+  ASSERT_THAT(insertedSecond.sourceDeltas, testing::SizeIs(1));
+  ASSERT_THAT(std::string(doc.source()),
+              testing::Eq("<svg>\n  <g/>\n  <rect/>\n  <path/>\n  <circle/>\n</svg>"));
+
+  const std::array insertions{
+      XMLDocument::NodeInsertion{.node = first, .insertion = insertedFirst.sourceDeltas[0]},
+      XMLDocument::NodeInsertion{.node = second, .insertion = insertedSecond.sourceDeltas[0]},
+  };
+  ApplySourceEditResult reverted = doc.revertNodeInsertions(insertions);
+
+  EXPECT_THAT(reverted.applied, testing::Eq(true));
+  EXPECT_THAT(reverted.diagnostic, testing::Eq(std::nullopt));
+  EXPECT_THAT(std::string(doc.source()), testing::Eq(std::string(kSource)));
+  EXPECT_THAT(first.parentElement(), testing::Eq(std::nullopt));
+  EXPECT_THAT(second.parentElement(), testing::Eq(std::nullopt));
+  EXPECT_THAT(ElementChild(svg, 0), testing::Eq(rect));
+  EXPECT_THAT(ElementChild(svg, 1), testing::Eq(circle));
+  EXPECT_THAT(offsetsOf(circle), testing::Eq(circleOffsetsBefore));
+}
+
+TEST_F(XMLDocumentTests, RevertNodeInsertionsRefusesInsertionThatIsNotTheLatestEdit) {
+  XMLDocument doc = ParseDocument("<svg>\n  <rect/>\n</svg>");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode rect = ElementChild(svg, 0);
+  XMLNode group = XMLNode::CreateElementNode(doc, "g");
+  ApplySourceEditResult inserted = doc.insertNode(svg, group, rect);
+  ASSERT_THAT(inserted.sourceDeltas, testing::SizeIs(1));
+  ASSERT_THAT(doc.setAttribute(rect, "x", "1").applied, testing::Eq(true));
+  const std::string sourceBefore(doc.source());
+
+  const std::array insertions{
+      XMLDocument::NodeInsertion{.node = group, .insertion = inserted.sourceDeltas[0]}};
+  ApplySourceEditResult reverted = doc.revertNodeInsertions(insertions);
+
+  EXPECT_THAT(reverted.applied, testing::Eq(false));
+  EXPECT_THAT(reverted.diagnostic, testing::Ne(std::nullopt));
+  EXPECT_THAT(std::string(doc.source()), testing::Eq(sourceBefore));
+  EXPECT_THAT(group.parentElement(), testing::Optional(testing::Eq(svg)));
+}
+
+TEST_F(XMLDocumentTests, RevertNodeInsertionsRefusesSelfClosingParentExpansion) {
+  XMLDocument doc = ParseDocument("<svg><g/></svg>");
+  XMLNode group = doc.root().firstChild()->firstChild().value();
+  XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
+  ApplySourceEditResult inserted = doc.insertNode(group, rect);
+  ASSERT_THAT(inserted.sourceDeltas, testing::SizeIs(1));
+  const std::string sourceBefore(doc.source());
+
+  const std::array insertions{
+      XMLDocument::NodeInsertion{.node = rect, .insertion = inserted.sourceDeltas[0]}};
+  ApplySourceEditResult reverted = doc.revertNodeInsertions(insertions);
+
+  EXPECT_THAT(reverted.applied, testing::Eq(false));
+  EXPECT_THAT(reverted.diagnostic, testing::Ne(std::nullopt));
+  EXPECT_THAT(std::string(doc.source()), testing::Eq(sourceBefore));
+}
+
 TEST_F(XMLDocumentTests, InsertNodeUsesClosingTagScanWhenCachedClosingTagRangeIsMissing) {
   XMLDocument doc = ParseDocument(R"(<svg><g></g></svg>)");
   XMLNode svg = doc.root().firstChild().value();
@@ -4247,6 +4328,15 @@ TEST_F(XMLDocumentTests, InsertNodeRejectsDocumentNodeBudgetOverflow) {
   group.appendChild(XMLNode::CreateElementNode(doc, "a"));
   group.appendChild(XMLNode::CreateElementNode(doc, "b"));
   ExpectRejectedInsert(doc, *doc.root().firstChild()->firstChild(), group, "tree-node limit");
+}
+
+TEST_F(XMLDocumentTests, RemainingSourceEditTreeNodeBudgetIncludesDetachedNodes) {
+  XMLDocument doc = ParseDocument("<svg><rect/></svg>");
+  doc.setSourceEditTreeLimits(3, 10);
+  EXPECT_EQ(doc.remainingSourceEditTreeNodeBudget(), 1u);
+
+  [[maybe_unused]] XMLNode detached = XMLNode::CreateElementNode(doc, "g");
+  EXPECT_EQ(doc.remainingSourceEditTreeNodeBudget(), 0u);
 }
 
 TEST_F(XMLDocumentTests, InsertNodeRejectsDocumentAttributeBudgetOverflow) {

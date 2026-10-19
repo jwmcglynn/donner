@@ -109,8 +109,8 @@ CommandQueue::FlushResult CommandQueue::flush() {
         result.effectiveCommands[it->second] = std::move(cmd);
       }
     } else {
-      // ReplaceDocument, InsertElement, or DeleteElement: just emit. (At most one
-      // ReplaceDocument survives the startIndex walk above.)
+      // Structural replacements, insertions, and deletions: just emit. (At
+      // most one ReplaceDocument survives the startIndex walk above.)
       result.effectiveCommands.push_back(std::move(cmd));
     }
   }

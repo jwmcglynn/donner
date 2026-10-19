@@ -3793,27 +3793,31 @@ void EditorShell::convertSelectedTextToOutlines() {
     });
   }
 
-  // Apply as ordinary structural DOM edits through the mutation seam: insert
-  // each group before its <text> (preserving paint order), populate it, then
-  // delete the <text>. Source reflection emits the deltas; entity identity
-  // elsewhere in the document survives (no reparse).
-  std::vector<svg::SVGElement> newSelection;
-  newSelection.reserve(planned.size());
+  // Build each replacement subtree while it is detached. The queued replace
+  // inserts the entire group under one structural budget check and deletes
+  // the source <text> only after that insertion succeeds. Successful edits
+  // emit source deltas and preserve unrelated entity identity; an exceptional
+  // failed rollback may reparse the original source as a fail-safe.
+  std::vector<EditorCommand::ElementReplacement> commandReplacements;
+  std::vector<std::pair<svg::SVGElement, svg::SVGElement>> selectionReplacements;
+  commandReplacements.reserve(planned.size());
+  selectionReplacements.reserve(planned.size());
   for (PlannedConversion& plan : planned) {
-    app_.applyMutation(EditorCommand::InsertElementCommand(plan.parent, plan.group, plan.text));
     for (svg::SVGElement& path : plan.paths) {
-      app_.applyMutation(EditorCommand::InsertElementCommand(plan.group, path));
+      plan.group.appendChild(path);
     }
-    app_.applyMutation(EditorCommand::DeleteElementCommand(plan.text));
-    newSelection.push_back(plan.group);
+    commandReplacements.push_back(EditorCommand::ElementReplacement{
+        .parent = plan.parent, .original = plan.text, .replacement = plan.group});
+    selectionReplacements.emplace_back(plan.text, plan.group);
   }
+  app_.applyMutation(EditorCommand::ReplaceElementsCommand(std::move(commandReplacements)));
 
   // Record one undo entry spanning the whole conversion once the queued edits
   // flush, mirroring the deferred source-edit undo used by the pen and text
   // authoring sessions.
   app_.recordDocumentSourceUndoOnNextFlush("Convert text to outlines", document.svgElement(),
                                            sourceBefore);
-  app_.setSelection(std::move(newSelection));
+  app_.selectReplacementsAfterNextFlush(std::move(selectionReplacements));
 }
 
 void EditorShell::requestRenderForAcceptedSourceEdit(std::uint64_t documentVersionBeforeTextSync) {
