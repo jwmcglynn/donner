@@ -300,7 +300,7 @@ _SHARED_STEP_DIGESTS = {
     ("lint.yml", "gatekeeper",
      "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "8e295cc528e30377"),
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "9570696a44136c27"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "7b1d2d8e4295993a"),
     ("main.yml", "determine-targets",
      "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "711b402065f09c27"),
     ("main.yml", "gatekeeper",
