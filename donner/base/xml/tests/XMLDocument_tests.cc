@@ -2872,8 +2872,8 @@ TEST_F(XMLDocumentTests, RevertNodeInsertionsRestoresIndentedSourceExactly) {
   constexpr std::string_view kSource = "<svg>\n  <rect/>\n  <circle/>\n</svg>";
   XMLDocument doc = ParseDocument(kSource);
   XMLNode svg = doc.root().firstChild().value();
-  XMLNode rect = svg.firstChild().value();
-  XMLNode circle = rect.nextSibling().value();
+  XMLNode rect = ElementChild(svg, 0);
+  XMLNode circle = ElementChild(svg, 1);
   XMLNode first = XMLNode::CreateElementNode(doc, "g");
   XMLNode second = XMLNode::CreateElementNode(doc, "path");
   const std::optional<SourceRange> circleLocationBefore = circle.getNodeLocation();
@@ -2897,15 +2897,15 @@ TEST_F(XMLDocumentTests, RevertNodeInsertionsRestoresIndentedSourceExactly) {
   EXPECT_THAT(std::string(doc.source()), testing::Eq(std::string(kSource)));
   EXPECT_THAT(first.parentElement(), testing::Eq(std::nullopt));
   EXPECT_THAT(second.parentElement(), testing::Eq(std::nullopt));
-  EXPECT_THAT(svg.firstChild(), testing::Optional(testing::Eq(rect)));
-  EXPECT_THAT(rect.nextSibling(), testing::Optional(testing::Eq(circle)));
+  EXPECT_THAT(ElementChild(svg, 0), testing::Eq(rect));
+  EXPECT_THAT(ElementChild(svg, 1), testing::Eq(circle));
   EXPECT_THAT(circle.getNodeLocation(), testing::Eq(circleLocationBefore));
 }
 
 TEST_F(XMLDocumentTests, RevertNodeInsertionsRefusesInsertionThatIsNotTheLatestEdit) {
   XMLDocument doc = ParseDocument("<svg>\n  <rect/>\n</svg>");
   XMLNode svg = doc.root().firstChild().value();
-  XMLNode rect = svg.firstChild().value();
+  XMLNode rect = ElementChild(svg, 0);
   XMLNode group = XMLNode::CreateElementNode(doc, "g");
   ApplySourceEditResult inserted = doc.insertNode(svg, group, rect);
   ASSERT_THAT(inserted.sourceDeltas, testing::SizeIs(1));
