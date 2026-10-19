@@ -19,10 +19,19 @@ const kDarwin = process.platform === "darwin";
 function temporary(t) {
   const directory = mkdtempSync(path.join(os.tmpdir(), "firefox-env-"));
   t.after(() => {
-    // Strip ACLs from real entries only: `chmod -R -N` would fail on the dangling symlink case.
+    // Strip ACLs from real entries only: `chmod -R -N` would follow the symlinks some cases plant
+    // and fail on a dangling one.
     if (kDarwin) {
       const realEntries = ["(", "-type", "d", "-o", "-type", "f", ")"];
-      execFileSync("/usr/bin/find", [directory, ...realEntries, "-exec", "/bin/chmod", "-N", "{}", "+"]);
+      execFileSync("/usr/bin/find", [
+        directory,
+        ...realEntries,
+        "-exec",
+        "/bin/chmod",
+        "-N",
+        "{}",
+        "+",
+      ]);
     }
     rmSync(directory, { recursive: true, force: true });
   });
