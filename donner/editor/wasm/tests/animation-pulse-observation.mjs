@@ -27,22 +27,30 @@ export function gatedPulseFrame(rendered, snapshot, generation, target, notBefor
   const clickIndex = findClick(rows, target, notBeforeEpochMs);
   if (clickIndex < 0) return { action: "step" };
   const click = rows[clickIndex];
-  const dispatchTime = click[4];
-  const samples = [];
-  let previousTime = dispatchTime;
+  const samples = samplesAfterClick(rows, clickIndex);
+  if (samples.reason) return { action: "invalid", reason: samples.reason };
+  return classifyRenderedFrame(click, rendered.at(-1), samples.times);
+}
+
+// Timeline sample times admitted after the click, or the reason the trace cannot be trusted.
+function samplesAfterClick(rows, clickIndex) {
+  const times = [];
+  let previousTime = rows[clickIndex][4];
   for (const row of rows.slice(clickIndex + 1)) {
-    if (!Array.isArray(row) || row.length !== 6) {
-      return { action: "invalid", reason: "malformed pointer trace" };
-    }
-    if (row[1] === 2) return { action: "invalid", reason: "another event was dispatched" };
+    if (!Array.isArray(row) || row.length !== 6) return { reason: "malformed pointer trace" };
+    if (row[1] === 2) return { reason: "another event was dispatched" };
     if (row[1] !== 3) continue;
     if (!Number.isFinite(row[4]) || row[4] < previousTime) {
-      return { action: "invalid", reason: "timeline samples are not monotonic" };
+      return { reason: "non-finite or reversed timeline sample" };
     }
     previousTime = row[4];
-    samples.push(row[4]);
+    times.push(row[4]);
   }
-  const renderedTime = rendered.at(-1);
+  return { times };
+}
+
+function classifyRenderedFrame(click, renderedTime, sampleTimes) {
+  const dispatchTime = click[4];
   if (renderedTime === undefined || renderedTime - dispatchTime < kPulseWindow.minimumElapsed) {
     return { action: "step" };
   }
@@ -55,7 +63,7 @@ export function gatedPulseFrame(rendered, snapshot, generation, target, notBefor
   if (renderedTime - dispatchTime > kPulseWindow.maximumElapsed) {
     return { action: "overshoot", ...observation };
   }
-  const proofTime = samples.find((time) => time > renderedTime);
+  const proofTime = sampleTimes.find((time) => time > renderedTime);
   if (proofTime === undefined) return { action: "await-presentation", ...observation };
   return { action: "capture", ...observation, proofTime };
 }
