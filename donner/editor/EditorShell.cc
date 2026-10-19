@@ -6514,7 +6514,26 @@ void TracePreviewPointer([[maybe_unused]] int phase, [[maybe_unused]] int event,
 #endif
 }
 
+/// Test-only opt-in. The browser pulse probes set `__donnerFramePacedPreviewClock` in the worker
+/// that runs this shell, so preview time advances one 60 Hz tick per admitted sample instead of
+/// following the wall clock, and a slow host frame cannot carry the timeline past the window they
+/// observe. Nothing outside those tests sets it, and native builds never take this path.
+bool FramePacedPreviewClockRequested() {
+#ifdef __EMSCRIPTEN__
+  // clang-format off
+  return EM_ASM_INT({ return globalThis['__donnerFramePacedPreviewClock'] === true ? 1 : 0; }) != 0;
+  // clang-format on
+#else
+  return false;
+#endif
+}
+
 }  // namespace
+
+void EditorShell::rebasePreviewClock(double nowSeconds, double seconds) {
+  // Half a tick of margin keeps the wall clock on `seconds` once frame pacing ends.
+  animationPreviewStartSeconds_ = nowSeconds - seconds - 0.5 / 60.0;
+}
 
 void EditorShell::resetPreviewPointer() {
   previewPointerInput_ = {};
@@ -6702,9 +6721,15 @@ void EditorShell::applyPreviewPointerInput(double nowSeconds) {
   if (!canApplyPreviewPointerInput() || !hasPreviewPointerChanges()) {
     return;
   }
-  const auto seconds = animationPreviewTimeAt(nowSeconds);
+  // Frame pacing dispatches at the last admitted sample, so input does not advance time either.
+  const bool framePaced = FramePacedPreviewClockRequested();
+  const auto seconds = framePaced ? std::optional(std::max(0.0, animationPreviewLastTime_))
+                                  : animationPreviewTimeAt(nowSeconds);
   if (!seconds) {
     return;
+  }
+  if (framePaced) {
+    rebasePreviewClock(nowSeconds, *seconds);
   }
   const auto access = app_.document().document().tryWriteAccess();
   if (!access) {
@@ -6797,6 +6822,13 @@ void EditorShell::advanceAnimationPreview(double nowSeconds, EditorFrameKind fra
 }
 
 void EditorShell::tickAnimationPreview(double nowSeconds) {
+  if (FramePacedPreviewClockRequested()) {
+    const double lastTick = std::round(std::max(0.0, animationPreviewLastTime_) * 60.0);
+    const double seconds = (lastTick + 1.0) / 60.0;
+    rebasePreviewClock(nowSeconds, seconds);
+    applyAnimationPreviewTime(seconds);
+    return;
+  }
   const auto seconds = animationPreviewTimeAt(nowSeconds);
   if (!seconds || *seconds == animationPreviewLastTime_) {
     TracePreviewAdvance(seconds ? 4 : 5);

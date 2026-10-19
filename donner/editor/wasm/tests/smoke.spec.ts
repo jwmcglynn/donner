@@ -1605,6 +1605,40 @@ async function withRasterGate<T>(gate: RasterGate, body: () => Promise<T>, messa
   return result as T;
 }
 
+// While a pulse probe observes its window, preview time advances one 60 Hz tick per admitted
+// sample instead of following the wall clock, so one slow host frame cannot carry the timeline past
+// the window. Wall-clock playback resumes from the same time afterwards. Only this helper sets the
+// opt-in, so it must be unset when the probe starts.
+async function withFramePacedPreviewClock<T>(owner: Worker, body: () => Promise<T>) {
+  const setPacing = (enabled: boolean) =>
+    awaitBeforeBlueDeadline(
+      owner.evaluate((on) => {
+        const scope = globalThis as unknown as Record<string, unknown>;
+        const previous = scope.__donnerFramePacedPreviewClock;
+        if (on) scope.__donnerFramePacedPreviewClock = true;
+        else delete scope.__donnerFramePacedPreviewClock;
+        return previous === undefined ? "unset" : String(previous);
+      }, enabled),
+      performance.now() + scaledMs(1000),
+    );
+  expect(await setPacing(true), "the frame-paced preview clock is test-only").toBe("unset");
+  const errors: unknown[] = [];
+  let result: T | undefined;
+  try {
+    result = await body();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await setPacing(false);
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "frame-paced pulse probe failed");
+  return result as T;
+}
+
 async function verifyRasterProgressWithTimersHeld(page: Page) {
   const raster = await Promise.any(
     page.workers().map(async (worker) => {
@@ -4363,36 +4397,37 @@ async function exerciseAnimationPointerPulse({
     // installs.
     // Capture may take seconds in Firefox, so the gate holds that frame until pixels are read.
     const initialGate = await gateRasterTaskYields(raster, scaledMs(6000));
-    await withRasterGate(initialGate, async () => {
-      await awaitBeforeBlueDeadline(
-        page.mouse.click(box.x + originX + 456 * scale, pad.y),
-        initialPulseDeadline,
-      );
-      pulseClickFinishedEpochMs = Date.now();
-      const retained = await retainGatedPulseFrame({
-        gate: initialGate,
-        owner,
-        generation: initialPulseTraceGeneration,
-        target: null,
-        notBeforeEpochMs: pulseClickNotBefore,
-        deadlineAtMs: initialPulseDeadline,
-        decisions: initialPulseDecisions,
-      });
-      initialPulseObservation = retained;
-      initialPulseTarget = retained.dispatchTarget;
-      await expect.poll(async () => {
-        const bounds = await orb(initialPulseDeadline);
-        return bounds.maxY - bounds.minY;
-      }, {
-        timeout: Math.max(1, initialPulseDeadline - performance.now()),
-        intervals: [50],
-        message: "Click triggers the radius pulse",
-      }).toBeGreaterThan(58 * scale);
-      await expectGatedFrameRetained(initialGate, retained, initialPulseDeadline);
-      if (performance.now() >= initialPulseDeadline) {
-        throw new Error("initial pulse deadline exceeded");
-      }
-    }, "initial pulse observation failed");
+    await withRasterGate(initialGate, () =>
+      withFramePacedPreviewClock(owner, async () => {
+        await awaitBeforeBlueDeadline(
+          page.mouse.click(box.x + originX + 456 * scale, pad.y),
+          initialPulseDeadline,
+        );
+        pulseClickFinishedEpochMs = Date.now();
+        const retained = await retainGatedPulseFrame({
+          gate: initialGate,
+          owner,
+          generation: initialPulseTraceGeneration,
+          target: null,
+          notBeforeEpochMs: pulseClickNotBefore,
+          deadlineAtMs: initialPulseDeadline,
+          decisions: initialPulseDecisions,
+        });
+        initialPulseObservation = retained;
+        initialPulseTarget = retained.dispatchTarget;
+        await expect.poll(async () => {
+          const bounds = await orb(initialPulseDeadline);
+          return bounds.maxY - bounds.minY;
+        }, {
+          timeout: Math.max(1, initialPulseDeadline - performance.now()),
+          intervals: [50],
+          message: "Click triggers the radius pulse",
+        }).toBeGreaterThan(58 * scale);
+        await expectGatedFrameRetained(initialGate, retained, initialPulseDeadline);
+        if (performance.now() >= initialPulseDeadline) {
+          throw new Error("initial pulse deadline exceeded");
+        }
+      }), "initial pulse observation failed");
     const pulseCompletionDeadline = performance.now() + scaledMs(5000);
     // Observe a post-pulse presentation before screenshots can stall worker progress.
     await expect.poll(async () => {
@@ -4446,53 +4481,54 @@ async function exerciseAnimationPointerPulse({
     if (!firstClick) throw new Error("the normal pulse dispatch trace is unavailable");
     // The gate holds one yield for the stall, then releases yields one at a time after the click.
     const queuedGate = await gateRasterTaskYields(raster, scaledMs(20000));
-    await withRasterGate(queuedGate, async () => {
-      await queuedGate.awaitSuspended(
-        performance.now() + scaledMs(3000),
-        "one raster task yield is suspended",
-      );
-      const heldBounds = await orb();
-      heldPulseHeight = heldBounds.maxY - heldBounds.minY;
-      expect(
-        Math.abs(heldPulseHeight - (start.maxY - start.minY)),
-        "held frame contains the base orb, not the previous pulse",
-      ).toBeLessThanOrEqual(2 * scale);
-      const heldAt = Date.now();
-      await expect.poll(() => Date.now() - heldAt, {
-        timeout: scaledMs(3000),
-        intervals: [50],
-        message: "raster stall exceeds the short pulse duration",
-      }).toBeGreaterThanOrEqual(1000);
-      delayedPulseClickStartedEpochMs = Date.now();
-      await page.mouse.click(box.x + originX + 456 * scale, pad.y);
-      delayedPulseClickFinishedEpochMs = Date.now();
-      const queuedPulseDeadline = performance.now() + scaledMs(5000);
-      queuedPulseSteppingEpochMs = Date.now();
-      // Avoid screenshot-induced stalls while queued input is delivered. Playback cadence was
-      // measured above without holds or screenshots, independently of this correctness probe.
-      const retained = await retainGatedPulseFrame({
-        gate: queuedGate,
-        owner,
-        generation: pulseTraceGeneration,
-        target: firstClick[3],
-        notBeforeEpochMs: delayedPulseClickStartedEpochMs,
-        deadlineAtMs: queuedPulseDeadline,
-        decisions: queuedPulseDecisions,
-      });
-      queuedPulseObservation = retained;
-      await expect.poll(async () => {
-        const bounds = await orb(queuedPulseDeadline);
-        return bounds.maxY - bounds.minY;
-      }, {
-        timeout: Math.max(1, queuedPulseDeadline - performance.now()),
-        intervals: [50],
-        message: "Queued click pulses after stale-frame catch-up",
-      }).toBeGreaterThan(58 * scale);
-      await expectGatedFrameRetained(queuedGate, retained, queuedPulseDeadline);
-      if (performance.now() >= queuedPulseDeadline) {
-        throw new Error("queued pulse deadline exceeded");
-      }
-    }, "queued pulse observation failed");
+    await withRasterGate(queuedGate, () =>
+      withFramePacedPreviewClock(owner, async () => {
+        await queuedGate.awaitSuspended(
+          performance.now() + scaledMs(3000),
+          "one raster task yield is suspended",
+        );
+        const heldBounds = await orb();
+        heldPulseHeight = heldBounds.maxY - heldBounds.minY;
+        expect(
+          Math.abs(heldPulseHeight - (start.maxY - start.minY)),
+          "held frame contains the base orb, not the previous pulse",
+        ).toBeLessThanOrEqual(2 * scale);
+        const heldAt = Date.now();
+        await expect.poll(() => Date.now() - heldAt, {
+          timeout: scaledMs(3000),
+          intervals: [50],
+          message: "raster stall exceeds the short pulse duration",
+        }).toBeGreaterThanOrEqual(1000);
+        delayedPulseClickStartedEpochMs = Date.now();
+        await page.mouse.click(box.x + originX + 456 * scale, pad.y);
+        delayedPulseClickFinishedEpochMs = Date.now();
+        const queuedPulseDeadline = performance.now() + scaledMs(5000);
+        queuedPulseSteppingEpochMs = Date.now();
+        // Avoid screenshot-induced stalls while queued input is delivered. Playback cadence was
+        // measured above without holds or screenshots, independently of this correctness probe.
+        const retained = await retainGatedPulseFrame({
+          gate: queuedGate,
+          owner,
+          generation: pulseTraceGeneration,
+          target: firstClick[3],
+          notBeforeEpochMs: delayedPulseClickStartedEpochMs,
+          deadlineAtMs: queuedPulseDeadline,
+          decisions: queuedPulseDecisions,
+        });
+        queuedPulseObservation = retained;
+        await expect.poll(async () => {
+          const bounds = await orb(queuedPulseDeadline);
+          return bounds.maxY - bounds.minY;
+        }, {
+          timeout: Math.max(1, queuedPulseDeadline - performance.now()),
+          intervals: [50],
+          message: "Queued click pulses after stale-frame catch-up",
+        }).toBeGreaterThan(58 * scale);
+        await expectGatedFrameRetained(queuedGate, retained, queuedPulseDeadline);
+        if (performance.now() >= queuedPulseDeadline) {
+          throw new Error("queued pulse deadline exceeded");
+        }
+      }), "queued pulse observation failed");
   } finally {
     orbProbe.setTraceScreenshots(false);
     await removeRasterYieldDelay?.();
