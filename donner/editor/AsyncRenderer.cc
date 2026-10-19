@@ -52,6 +52,19 @@ EM_ASYNC_JS(void, YieldRasterTask, (), {
   });
 });
 
+// Opt-in, bounded test trace: the document time of each render request, recorded after this
+// worker takes document access. A test that holds this worker's task yields knows from it exactly
+// which animation sample the newest rasterized frame shows. A full trace is marked, never stale.
+EM_JS(void, TraceRasterDocumentTime, (double seconds), {
+  const trace = globalThis['__donnerRasterRenderTrace'];
+  if (!Array.isArray(trace)) return;
+  if (trace.length < 256) {
+    trace.push(seconds);
+  } else {
+    trace['overflow'] = true;
+  }
+});
+
 EM_JS(void, CloseRasterTaskYield, (), {
   const state = globalThis['__donnerRasterTaskYield'];
   if (!state || state.resume) abort('raster task yield closed while pending');
@@ -983,8 +996,10 @@ void AsyncRenderer::delaySampleThumbnailRendererCreationForTesting(bool shouldDe
     return;
   }
 #ifdef __EMSCRIPTEN__
-  // clang-format off: the MAIN_THREAD_EM_ASM bodies here are JavaScript, not C++.
-  MAIN_THREAD_EM_ASM(
+  // Posted without waiting: this worker may hold work the canvas owner is waiting for while the
+  // main thread waits on the canvas owner for a snapshot. Posts from one thread keep their order.
+  // clang-format off: the MAIN_THREAD_ASYNC_EM_ASM bodies here are JavaScript, not C++.
+  MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerSampleThumbnailRendererCreationBlocked'] = ({
           'blocked' : true,
@@ -996,8 +1011,8 @@ void AsyncRenderer::delaySampleThumbnailRendererCreationForTesting(bool shouldDe
 #endif
   std::this_thread::sleep_for(delay);
 #ifdef __EMSCRIPTEN__
-  // clang-format off: the MAIN_THREAD_EM_ASM body here is JavaScript, not C++.
-  MAIN_THREAD_EM_ASM(
+  // clang-format off: the MAIN_THREAD_ASYNC_EM_ASM body here is JavaScript, not C++.
+  MAIN_THREAD_ASYNC_EM_ASM(
       { window['__donnerSampleThumbnailRendererCreationBlocked']['blocked'] = false; });
   // clang-format on
 #endif
@@ -1385,6 +1400,9 @@ void AsyncRenderer::workerLoop() {
     PublishRasterWorkPhase(RasterWorkPhase::DocumentAccess);
     documentAccess.emplace(requestDocument.writeAccess());
     PublishRasterWorkPhase(RasterWorkPhase::Rendering);
+#ifdef __EMSCRIPTEN__
+    TraceRasterDocumentTime(requestDocument.currentTime());
+#endif
     const auto documentLockAcquiredAt = std::chrono::steady_clock::now();
     const auto releaseDocumentAccess = [&]() {
       workerTiming.documentWriteLockMs = elapsedSince(documentLockAcquiredAt);

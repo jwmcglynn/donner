@@ -474,10 +474,18 @@ let emscripten_glfw3_impl = {
   },
 
   //! emscripten_glfw3_context_set_title
-  emscripten_glfw3_context_set_title__proxy: 'sync',
+  // Asynchronous like the cursor setters, because a title change can happen in any frame or focus
+  // event of the canvas-owning pthread. The caller passes a malloc-allocated copy, freed here.
+  emscripten_glfw3_context_set_title__proxy: 'async',
+  emscripten_glfw3_context_set_title__deps: ['free'],
   emscripten_glfw3_context_set_title: (title) => {
-    if(title)
+    if(!title)
+      return;
+    try {
       document.title = UTF8ToString(title);
+    } finally {
+      _free(title);
+    }
   },
 
   //! emscripten_glfw3_context_destroy
@@ -567,16 +575,22 @@ let emscripten_glfw3_impl = {
   },
 
   //! emscripten_glfw3_window_focus
-  emscripten_glfw3_window_focus__proxy: 'sync',
+  // Asynchronous like the cursor setters: a mousedown on the canvas-owning pthread can focus it.
+  emscripten_glfw3_window_focus__proxy: 'async',
   emscripten_glfw3_window_focus: (glfwWindow) => {
-    const canvas = GLFW3.fWindowContexts[glfwWindow].canvas;
-    canvas.focus();
+    const ctx = GLFW3.fWindowContexts[glfwWindow];
+    if(!ctx)
+      return;
+    ctx.canvas.focus();
   },
 
   //! emscripten_glfw3_window_set_size
-  emscripten_glfw3_window_set_size__proxy: 'sync',
+  // Asynchronous like the cursor setters: window resize events reach the canvas-owning pthread.
+  emscripten_glfw3_window_set_size__proxy: 'async',
   emscripten_glfw3_window_set_size: (glfwWindow, width, height, fbWidth, fbHeight) => {
     const ctx = GLFW3.fWindowContexts[glfwWindow];
+    if(!ctx)
+      return;
     const canvas = ctx.canvas;
 
     // A canvas whose control has been transferred to an OffscreenCanvas can no
@@ -609,7 +623,19 @@ let emscripten_glfw3_impl = {
   },
 
   //! emscripten_glfw3_window_set_standard_cursor
-  emscripten_glfw3_window_set_standard_cursor__proxy: 'sync',
+  // Cursor updates are fire-and-forget, so they are proxied asynchronously. A
+  // synchronous proxy blocks the calling pthread until the main thread runs the
+  // update. When that pthread owns the transferred OffscreenCanvas, the main
+  // thread can itself be blocked waiting for that pthread: Firefox takes a
+  // canvas snapshot (page screenshots, printing, drawSnapshot) by running a task
+  // on the owning worker and waiting for it, up to
+  // `gfx.offscreencanvas.snapshot-timeout-ms` (10 s by default). A cursor change
+  // in that window deadlocks both threads until the timeout, and the snapshot
+  // comes back without the canvas. Asynchronous proxying keeps call order with
+  // the other main-thread calls from this thread. The arguments stay valid
+  // until the call runs: standard cursor CSS values are string literals and the
+  // custom cursor argument is an opaque key into `GLFW3.fCustomCursors`.
+  emscripten_glfw3_window_set_standard_cursor__proxy: 'async',
   emscripten_glfw3_window_set_standard_cursor: (glfwWindow, cursor) => {
     const ctx = GLFW3.fWindowContexts[glfwWindow];
     if(cursor)
@@ -619,7 +645,8 @@ let emscripten_glfw3_impl = {
   },
 
   //! emscripten_glfw3_window_set_custom_cursor
-  emscripten_glfw3_window_set_custom_cursor__proxy: 'sync',
+  // Asynchronous for the same reason as the standard cursor setter above.
+  emscripten_glfw3_window_set_custom_cursor__proxy: 'async',
   emscripten_glfw3_window_set_custom_cursor: (glfwWindow, glfwCursor, xhot, yhot) => {
     const ctx = GLFW3.fWindowContexts[glfwWindow];
     const cursor = GLFW3.fCustomCursors[glfwCursor];
@@ -748,9 +775,19 @@ let emscripten_glfw3_impl = {
   },
 
   // emscripten_glfw3_context_set_clipboard_string
-  emscripten_glfw3_context_set_clipboard_string__proxy: 'sync',
-  emscripten_glfw3_context_set_clipboard_string: (content) => {
-    content = content ? UTF8ToString(content): '';
+  // Asynchronous like the cursor setters: a copy runs inside a frame of the canvas-owning pthread.
+  // The caller passes a malloc-allocated copy, freed here once decoded.
+  emscripten_glfw3_context_set_clipboard_string__proxy: 'async',
+  emscripten_glfw3_context_set_clipboard_string__deps: ['free'],
+  emscripten_glfw3_context_set_clipboard_string: (ownedContent) => {
+    if(!ownedContent)
+      return;
+    let content;
+    try {
+      content = UTF8ToString(ownedContent);
+    } finally {
+      _free(ownedContent);
+    }
     const errorHandler = (err) => {
       if(GLFW3.fClipboardCallback) {
         const errorString = stringToNewUTF8(`${err}`);

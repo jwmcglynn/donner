@@ -15,6 +15,7 @@ on:
       - ".bazelversion"
       - ".github/workflows/editor_wasm.yml"
       - ".github/actions/cache-bazel-actions/**"
+      - "tools/ci_disk_cache.py"
       - ".github/actions/buildbuddy-cache/**"
       - "BUILD.bazel"
       - "MODULE.bazel"
@@ -33,6 +34,7 @@ on:
       - ".bazelversion"
       - ".github/workflows/editor_wasm.yml"
       - ".github/actions/cache-bazel-actions/**"
+      - "tools/ci_disk_cache.py"
       - ".github/actions/buildbuddy-cache/**"
       - "BUILD.bazel"
       - "MODULE.bazel"
@@ -403,3 +405,11 @@ jobs:
             echo "- Artifact digest: \`${{ steps.upload-candidate.outputs.artifact-digest }}\`"
             echo "- Generated MODULE.bazel.lock SHA-256: \`$(shasum -a 256 < "${RUNNER_TEMP}/editor-wasm-module.lock" | cut -d' ' -f1)\`"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      # Last step, after every Bazel command: evicts the action cache to its budget and saves
+      # it on a main push.
+      - name: Save Bazel action cache
+        uses: ./.github/actions/cache-bazel-actions
+        with:
+          namespace: editor-wasm
+          mode: save

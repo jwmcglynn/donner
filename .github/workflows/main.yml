@@ -731,6 +731,14 @@ jobs:
             --test_output=errors --test_tag_filters=requires_xvfb,-fuzz_soak \
             --strategy=TestRunner=local $TARGETS
 
+      # Diagnostic only: disk, cache and memory use once the tests have run.
+      - name: Probe runner resources after tests
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
+
       - name: Upload Bazel test failure artifacts
         if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.local_xvfb.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
@@ -754,6 +762,14 @@ jobs:
             -DDONNER_RENDERER_BACKEND=tiny_skia
           cmake --build build --target donner_cmake_consumer --parallel 2
           ctest --test-dir build --output-on-failure
+
+      # Last step, after every Bazel command: evicts the action cache to its budget and saves
+      # it on a main push.
+      - name: Save Bazel action cache
+        uses: ./.github/actions/cache-bazel-actions
+        with:
+          namespace: native
+          mode: save
 
   # Admit the operator's ARM64 Linux job from a hosted runner. The FIFO wait
   # cannot run on the constrained self-hosted pool itself: newer runs could
@@ -1416,6 +1432,14 @@ jobs:
           bazelisk test --config=ci --config=geode --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
+      # Diagnostic only: disk, cache and memory use once the tests have run.
+      - name: Probe runner resources after tests
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
+
       - name: Upload Bazel test failure artifacts
         if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
@@ -1560,6 +1584,14 @@ jobs:
             ${{ runner.temp }}/browser-gpu-parallel-summary.json
           if-no-files-found: warn
           retention-days: 14
+
+      # Last step, after every Bazel command: evicts the action cache to its budget and saves
+      # it on a main push.
+      - name: Save Bazel action cache
+        uses: ./.github/actions/cache-bazel-actions
+        with:
+          namespace: native
+          mode: save
 
   # Hosted macOS browser subset for trusted PRs. Those PRs run every test on the
   # self-hosted macOS runner, which has more cores and a real GPU, so a browser test
@@ -1742,6 +1774,14 @@ jobs:
             $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
 
+      # Diagnostic only: disk, cache and memory use once the tests have run.
+      - name: Probe runner resources after tests
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
+
       - name: Upload Bazel test failure artifacts
         if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.browser_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
@@ -1886,6 +1926,14 @@ jobs:
             ${{ runner.temp }}/browser-gpu-parallel-summary.json
           if-no-files-found: warn
           retention-days: 14
+
+      # Last step, after every Bazel command: evicts the action cache to its budget and saves
+      # it on a main push.
+      - name: Save Bazel action cache
+        uses: ./.github/actions/cache-bazel-actions
+        with:
+          namespace: native
+          mode: save
 
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
   # Replaces `macos` for trusted operator PRs. Main pushes, Renovate, and

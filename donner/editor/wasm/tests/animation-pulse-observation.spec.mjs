@@ -1,80 +1,118 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { presentedPulseCompletion, presentedPulseWindow } from "./animation-pulse-observation.mjs";
+import {
+  gatedPulseFrame,
+  presentedPulseCompletion,
+  queuedDispatchCaughtUp,
+} from "./animation-pulse-observation.mjs";
 const click = [100, 2, 0, 32, 10, true];
 const tick = (time) => [101, 3, 0, 0, time, false];
 const snapshot = (entries, generation = "current") => ({ entries, generation });
-const read = (value) => presentedPulseWindow(value, "current", 32, 90);
-test("a second admitted tick proves an in-window sample was presented", () => {
-  assert.deepEqual(read(snapshot([click, tick(10.15), tick(10.2)])), {
+const decide = (rendered, value, notBefore = 90) =>
+  gatedPulseFrame(rendered, value, "current", 32, notBefore);
+
+test("frames before the expanded pulse ask for another raster step", () => {
+  assert.deepEqual(decide([], snapshot([])), { action: "step" });
+  assert.deepEqual(decide([9.5], snapshot([click])), { action: "step" });
+  assert.deepEqual(decide([9.5, 10, 10.05], snapshot([click, tick(10.05)])), { action: "step" });
+  // A click before the probe began is not this probe's dispatch.
+  assert.deepEqual(decide([10.2], snapshot([click]), 101), { action: "step" });
+});
+
+test("a single expanded frame is retained once a later sample proves its presentation", () => {
+  const observation = {
     dispatchEpochMs: 100,
+    dispatchTarget: 32,
     dispatchTime: 10,
-    presentedTime: 10.15,
-    latestTime: 10.2,
+    renderedTime: 10.25,
+  };
+  assert.deepEqual(decide([10, 10.25], snapshot([click, tick(10.25)])), {
+    action: "await-presentation",
+    ...observation,
+  });
+  assert.deepEqual(decide([10, 10.25], snapshot([click, tick(10.25), tick(10.683)])), {
+    action: "capture",
+    ...observation,
+    proofTime: 10.683,
   });
 });
 
-test("60 Hz sampling and a delayed proof remain inside the expanded pulse", () => {
-  const dispatched = 40.46666666666667;
-  const value = snapshot([
-    [100, 2, 0, 32, dispatched, true],
-    tick(40.583333333333336),
-    tick(40.9),
-  ]);
-  assert.deepEqual(read(value), {
-    dispatchEpochMs: 100,
-    dispatchTime: dispatched,
-    presentedTime: 40.583333333333336,
-    latestTime: 40.9,
-  });
-});
-
-test("a later visible pulse sample can be proved before the window ends", () => {
-  assert.deepEqual(read(snapshot([click, tick(10.4), tick(10.45)])), {
-    dispatchEpochMs: 100,
-    dispatchTime: 10,
-    presentedTime: 10.4,
-    latestTime: 10.45,
-  });
-});
-
-test("one tick and repeated identical ticks do not prove presentation", () => {
-  assert.equal(read(snapshot([click, tick(10.15)])), null);
-  assert.equal(read(snapshot([click, tick(10.15), tick(10.15)])), null);
-});
-test("historical or wrong-target clicks cannot satisfy the observation", () => {
-  assert.equal(read(snapshot([click, tick(10.15), tick(10.2)], "old")), null);
-  assert.equal(read(snapshot([[80, ...click.slice(1)], tick(10.15), tick(10.2)])), null);
-  assert.equal(read(snapshot([[100, 2, 0, 99, 10, true], tick(10.15), tick(10.2)])), null);
-});
-test("expired history and samples before dispatch cannot satisfy it", () => {
-  assert.equal(read(snapshot([click, tick(10.15), tick(10.2), tick(10.7)])), null);
-  assert.equal(read(snapshot([tick(10.15), tick(10.2), click])), null);
-});
-test("unchanged or malformed events fail closed", () => {
-  assert.equal(read(snapshot([[100, 2, 0, 32, 10, false], tick(10.15), tick(10.2)])), null);
-  assert.equal(read(snapshot([null, [100, 2], tick(10.15), tick(10.2)])), null);
-  assert.equal(read(null), null);
-});
-
-test("reversed sample time and intervening dispatch invalidate the event identity", () => {
-  assert.equal(read(snapshot([click, tick(10.3), tick(10.2)])), null);
-  assert.equal(
-    read(snapshot([click, tick(10.15), [102, 2, 2, 32, 10.16, true], tick(10.2)])),
-    null,
+test("the newest rasterized frame decides, not the newest admitted sample", () => {
+  // The admitted 10.9 sample is never rasterized while the raster yield stays held.
+  assert.deepEqual(
+    decide([10.067, 10.417], snapshot([click, tick(10.067), tick(10.417), tick(10.9)])),
+    {
+      action: "capture",
+      dispatchEpochMs: 100,
+      dispatchTarget: 32,
+      dispatchTime: 10,
+      renderedTime: 10.417,
+      proofTime: 10.9,
+    },
   );
 });
 
-test("proof and post-hold verification remain within the expanded part of the pulse", () => {
-  const value = snapshot([click, tick(10.15), tick(10.43)]);
-  assert.notEqual(read(value), null);
-  assert.notEqual(presentedPulseWindow(value, "current", 32, 90, 0.5), null);
+test("window bounds are inclusive and a frame past the window is terminal", () => {
+  const atZero = [100, 2, 0, 32, 0, true];
+  assert.equal(decide([0.1], snapshot([atZero, tick(0.1), tick(0.2)])).action, "capture");
+  assert.equal(decide([0.5], snapshot([atZero, tick(0.5), tick(0.6)])).action, "capture");
+  assert.equal(decide([0.09], snapshot([atZero, tick(0.09), tick(0.2)])).action, "step");
+  assert.equal(decide([0.501], snapshot([atZero, tick(0.501)])).action, "overshoot");
+  assert.deepEqual(decide([10.05, 10.55], snapshot([click, tick(10.05), tick(10.55)])), {
+    action: "overshoot",
+    dispatchEpochMs: 100,
+    dispatchTarget: 32,
+    dispatchTime: 10,
+    renderedTime: 10.55,
+  });
+});
+
+test("a presentation proof must follow the rasterized frame", () => {
   assert.equal(
-    presentedPulseWindow(snapshot([click, tick(10.15), tick(10.6)]), "current", 32, 90, 0.5),
-    null,
+    decide([10.3], snapshot([click, tick(10.2), tick(10.3)])).action,
+    "await-presentation",
   );
-  assert.equal(read(snapshot([click, tick(10.09), tick(10.2)])), null);
-  assert.equal(read(snapshot([click, tick(10.15), tick(10.5001)])), null);
+});
+
+test("a proof must be strictly later than the rasterized frame", () => {
+  assert.equal(
+    decide([10.3], snapshot([click, tick(10.3), tick(10.3)])).action,
+    "await-presentation",
+  );
+});
+
+test("reversed or non-finite timeline samples fail closed", () => {
+  assert.equal(decide([10.2], snapshot([click, tick(10.3), tick(10.2)])).action, "invalid");
+  assert.equal(decide([10.2], snapshot([click, tick(9.9)])).action, "invalid");
+  assert.equal(decide([10.2], snapshot([click, tick(Number.NaN)])).action, "invalid");
+});
+
+test("stale, malformed or interrupted traces fail closed", () => {
+  assert.equal(decide([10.2], snapshot([click, tick(10.3)], "old")).action, "invalid");
+  assert.equal(decide([10.2], null).action, "invalid");
+  assert.equal(decide([Number.NaN], snapshot([click])).action, "invalid");
+  assert.equal(decide(null, snapshot([click])).action, "invalid");
+  assert.equal(decide([10.2], snapshot([click, [100, 2]])).action, "invalid");
+  assert.equal(
+    decide([10.2], snapshot([click, [102, 2, 2, 32, 10.1, true], tick(10.3)])).action,
+    "invalid",
+  );
+});
+
+test("an unknown target accepts the first changed click", () => {
+  assert.equal(
+    gatedPulseFrame([10.2], snapshot([click, tick(10.2), tick(10.3)]), "current", null, 90).action,
+    "capture",
+  );
+});
+
+test("wrong-target or unchanged clicks are not this probe's dispatch", () => {
+  assert.deepEqual(decide([10.2], snapshot([[100, 2, 0, 99, 10, true], tick(10.3)])), {
+    action: "step",
+  });
+  assert.deepEqual(decide([10.2], snapshot([[100, 2, 0, 32, 10, false], tick(10.3)])), {
+    action: "step",
+  });
 });
 
 test("completion requires a presented sample after the entire pulse", () => {
@@ -100,4 +138,46 @@ test("completion rejects stale generations, wrong targets and intervening input"
     null,
   );
   assert.equal(complete(snapshot([click, tick(10.8), tick(10.7)])), null);
+});
+
+test("a queued click must dispatch at least one pulse after its queued input time", () => {
+  const queuedEdge = (epochMs, time) => [epochMs, 1, 1, 1, time, false];
+  const dispatch = (time) => [100, 2, 0, 32, time, true];
+  const caughtUp = (entries, notBefore = 90) =>
+    queuedDispatchCaughtUp(snapshot(entries), "current", 32, notBefore);
+  assert.deepEqual(caughtUp([queuedEdge(95, 21.2), queuedEdge(96, 21.2), dispatch(22.25)]), {
+    caughtUp: true,
+    queuedTime: 21.2,
+    dispatchTime: 22.25,
+  });
+  assert.equal(caughtUp([queuedEdge(95, 21.2), dispatch(21.8)]).caughtUp, true);
+  // Dispatching at the stale clock, or inside its pulse, is the catch-up regression.
+  assert.equal(caughtUp([queuedEdge(95, 21.2), dispatch(21.2)]).caughtUp, false);
+  assert.equal(caughtUp([queuedEdge(95, 21.2), dispatch(21.7)]).caughtUp, false);
+  // Only edges queued after the probe began, and before the dispatch, name the stale clock.
+  assert.deepEqual(caughtUp([queuedEdge(80, 10), dispatch(22)]), {
+    caughtUp: false,
+    reason: "no queued input time",
+  });
+  assert.deepEqual(caughtUp([dispatch(22), queuedEdge(101, 21.9)]), {
+    caughtUp: false,
+    reason: "no queued input time",
+  });
+  assert.deepEqual(caughtUp([queuedEdge(95, Number.NaN), dispatch(22)]), {
+    caughtUp: false,
+    reason: "no queued input time",
+  });
+  assert.deepEqual(caughtUp([queuedEdge(95, 21.2)]), {
+    caughtUp: false,
+    reason: "no queued click dispatch",
+  });
+  assert.deepEqual(
+    queuedDispatchCaughtUp(
+      snapshot([queuedEdge(95, 21.2), dispatch(22.25)], "old"),
+      "current",
+      32,
+      90,
+    ),
+    { caughtUp: false, reason: "stale pointer trace" },
+  );
 });

@@ -1,33 +1,119 @@
 name: Cache Bazel action outputs
-description: Restore compatible action outputs and refresh successful main builds per revision.
+description: >-
+  Restore compatible action outputs (mode restore, before the first Bazel command) and save a
+  bounded snapshot of them from successful main builds per revision (mode save, as the job's
+  last step).
 inputs:
   namespace:
     description: Build family sharing compatible action outputs on this runner platform.
     required: true
+  mode:
+    description: >-
+      "restore" enables the disk cache and restores the newest main snapshot. "save" evicts
+      least recently used entries to the budget and, on a main push, saves the snapshot. A job
+      that restores calls save as its last step, after every Bazel command.
+    required: false
+    default: restore
+  max-size-mib:
+    description: >-
+      Snapshot budget in MiB of uncompressed tar stream, which bounds the compressed archive.
+      Eviction keeps the most recently used entries within it, and a snapshot still over it is
+      not saved. It bounds the bytes every restore and save moves through the runner.
+    required: false
+    default: "6144"
 runs:
   using: composite
   steps:
+    - name: Check cache inputs
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        MAX_SIZE_MIB: ${{ inputs.max-size-mib }}
+      run: |
+        case "$MODE" in
+          restore | save) ;;
+          *)
+            echo "::error::cache-bazel-actions mode must be restore or save, got '${MODE}'."
+            exit 1
+            ;;
+        esac
+        if [[ ! "$MAX_SIZE_MIB" =~ ^[1-9][0-9]{0,5}$ ]]; then
+          echo "::error::cache-bazel-actions max-size-mib must be a positive whole number, got '${MAX_SIZE_MIB}'."
+          exit 1
+        fi
+
     - name: Enable disk action cache
+      if: inputs.mode == 'restore'
       shell: bash
       run: |
         printf '\n%s\n' 'build --disk_cache=~/.cache/bazel-disk' >> "$HOME/.bazelrc"
 
     # A new revision can extend an older snapshot even when BUILD files have not changed.
     # Each platform/family has one writer; PR code only restores default-branch snapshots.
-    - name: Restore and refresh main action cache
-      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-      uses: actions/cache@v6
-      with:
-        path: ~/.cache/bazel-disk
-        key: bazel-actions-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-${{ github.sha }}
-        restore-keys: |
-          bazel-actions-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-
-
-    - name: Restore action cache without saving
-      if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
+    # v2: v1 snapshots were saved without a bound and must never be restored again.
+    - name: Restore main action cache
+      id: restore
+      if: inputs.mode == 'restore'
       uses: actions/cache/restore@v6
       with:
         path: ~/.cache/bazel-disk
-        key: bazel-actions-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-${{ github.sha }}
+        key: bazel-actions-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-${{ github.sha }}
         restore-keys: |
-          bazel-actions-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-
+          bazel-actions-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-
+
+    # Bazel sets an entry's mtime whenever it stores or retrieves it, and the restore keeps the
+    # snapshot's mtimes, so entries newer than this marker are this job's working set. An exact
+    # key hit is a rerun of a revision whose snapshot is already saved.
+    - name: Mark restored action cache
+      if: inputs.mode == 'restore'
+      shell: bash
+      env:
+        EXACT_HIT: ${{ steps.restore.outputs.cache-hit }}
+      run: |
+        touch "${RUNNER_TEMP}/bazel-disk-restore.marker"
+        echo "BAZEL_DISK_CACHE_EXACT_HIT=${EXACT_HIT:-false}" >> "$GITHUB_ENV"
+
+    - name: Probe runner resources after restore
+      if: inputs.mode == 'restore'
+      continue-on-error: true
+      shell: bash
+      run: >-
+        python3 -u "${GITHUB_WORKSPACE}/tools/ci_disk_cache.py" probe --stage after-restore
+        --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
+
+    - name: Probe runner resources before save
+      if: inputs.mode == 'save'
+      continue-on-error: true
+      shell: bash
+      run: >-
+        python3 -u "${GITHUB_WORKSPACE}/tools/ci_disk_cache.py" probe --stage before-save
+        --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
+
+    # Only a main push evicts and saves; every other run reports what eviction would keep.
+    # The script reports save=false on any error or when the cache is still over budget.
+    - name: Bound action cache snapshot
+      id: bound
+      if: inputs.mode == 'save'
+      shell: bash
+      env:
+        MAIN_WRITE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        MAX_SIZE_MIB: ${{ inputs.max-size-mib }}
+      run: |
+        dry_run=()
+        if [[ "$MAIN_WRITE" != "true" ]]; then
+          dry_run=(--dry-run)
+        fi
+        if ! python3 "${GITHUB_WORKSPACE}/tools/ci_disk_cache.py" bound \
+            --cache-dir ~/.cache/bazel-disk --max-mib "$MAX_SIZE_MIB" \
+            --marker "${RUNNER_TEMP}/bazel-disk-restore.marker" \
+            --github-output "$GITHUB_OUTPUT" "${dry_run[@]}"; then
+          echo "::warning title=Disk cache not bounded::The bound script failed; this run does not save the Bazel disk cache."
+          echo "save=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Save main action cache
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && inputs.mode == 'save' && env.BAZEL_DISK_CACHE_EXACT_HIT != 'true' && steps.bound.outputs.save == 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ~/.cache/bazel-disk
+        key: bazel-actions-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-${{ github.sha }}

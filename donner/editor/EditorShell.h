@@ -612,6 +612,8 @@ private:
                                EditorFrameKind frameKind = EditorFrameKind::Scheduled);
   void tickAnimationPreview(double nowSeconds);
   [[nodiscard]] std::optional<double> animationPreviewTimeAt(double nowSeconds) const;
+  /// Moves the preview clock's start so the wall clock reads `seconds` at `nowSeconds`.
+  void rebasePreviewClock(double nowSeconds, double seconds);
   bool applyAnimationPreviewTime(double seconds);
   [[nodiscard]] bool previewAllowsEditing(bool allowed) const;
   void applyPreviewMenuState(MenuBarState& state) const;

@@ -18,9 +18,12 @@
 
 #include "Clipboard.h"
 
+#include <cstring>
+
 extern "C" {
 double emscripten_glfw3_context_get_now();
-void emscripten_glfw3_context_set_clipboard_string(char const *iContent);
+// Takes ownership of a malloc-allocated string, which the main thread frees.
+void emscripten_glfw3_context_set_clipboard_string(char *iOwnedContent);
 }
 
 namespace emscripten::glfw3 {
@@ -63,7 +66,7 @@ void OSClipboard::writeText(char const *iText)
   if(iText)
   {
     update(iText, nullptr);
-    emscripten_glfw3_context_set_clipboard_string(iText);
+    emscripten_glfw3_context_set_clipboard_string(strdup(iText));
   }
 }
 

@@ -1,7 +1,11 @@
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
-import { presentedPulseCompletion, presentedPulseWindow } from "./animation-pulse-observation.mjs";
+import {
+  gatedPulseFrame,
+  presentedPulseCompletion,
+  queuedDispatchCaughtUp,
+} from "./animation-pulse-observation.mjs";
 import {
   awaitBeforeBlueDeadline,
   captureAfterCanvasGpuCompletion,
@@ -38,7 +42,7 @@ import {
   holdCanvasCompletionForTest,
   observeSubmittedCanvasGpuWork,
 } from "./surface-frame-probe";
-import { scaledMs } from "./test-timing";
+import { kStallGuardMs, scaledMs } from "./test-timing";
 
 installBrowserStallDiagnostics(test);
 installFailureCanvasEvidence(test);
@@ -1253,57 +1257,21 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
   expect(fatalMessages).toEqual([]);
 });
 
+// Hold one raster task yield until released. The gate resumes the worker from an ordinary task,
+// so the release does not wait for an unrelated task to reach the worker.
 async function holdRasterTaskYield(page: Page) {
-  const raster = await Promise.any(
-    page.workers().map(async (worker) => {
-      await worker.evaluate(() => {
-        const scope = globalThis as typeof globalThis & {
-          __donnerRasterTaskYield?: {
-            channel: MessageChannel;
-            resume: (() => void) | null;
-            closed: boolean;
-          };
-          __donnerHeldTaskYield?: () => boolean;
-          __donnerReleaseTaskYield?: () => void;
-        };
-        const state = scope.__donnerRasterTaskYield;
-        if (!state || state.closed) throw new Error("not the active raster worker");
-        const original = state.channel.port1.onmessage;
-        if (!original) throw new Error("raster yield handler missing");
-        let held: MessageEvent | undefined;
-        state.channel.port1.onmessage = (event) => {
-          if (held) throw new Error("multiple raster yield messages held");
-          held = event;
-        };
-        scope.__donnerHeldTaskYield = () => held !== undefined && state.resume !== null;
-        scope.__donnerReleaseTaskYield = () => {
-          state.channel.port1.onmessage = original;
-          const event = held;
-          held = undefined;
-          delete scope.__donnerHeldTaskYield;
-          delete scope.__donnerReleaseTaskYield;
-          if (event) original.call(state.channel.port1, event);
-        };
-      });
-      return worker;
-    }),
-  );
-  const release = () =>
-    raster.evaluate(() => {
-      const scope = globalThis as typeof globalThis & { __donnerReleaseTaskYield?: () => void };
-      scope.__donnerReleaseTaskYield?.();
-    });
+  const raster = await findRasterTaskWorker(page);
+  const gate = await gateRasterTaskYields(raster, scaledMs(20000));
   try {
-    await expect.poll(() =>
-      raster.evaluate(() => {
-        const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
-        return scope.__donnerHeldTaskYield?.() ?? false;
-      }), { timeout: scaledMs(3000), message: "one raster task yield is suspended" }).toBe(true);
+    await gate.awaitSuspended(
+      performance.now() + scaledMs(3000),
+      "one raster task yield is suspended",
+    );
   } catch (error) {
-    await release();
+    await gate.release();
     throw error;
   }
-  return { raster, release };
+  return { raster, release: gate.release, suspended: gate.isSuspended };
 }
 
 async function findRasterTaskWorker(page: Page) {
@@ -1323,95 +1291,356 @@ async function findRasterTaskWorker(page: Page) {
   );
 }
 
-// A finite worker-side lease cleans up even if an installation reply arrives after the caller deadline.
-async function holdKnownRasterUntil(raster: Worker, deadlineAtMs: number) {
-  const remaining = deadlineAtMs - performance.now();
-  if (remaining < 1) throw new Error("raster hold deadline exceeded");
-  const lease = { id: `${Date.now()}-${deadlineAtMs}`, expiresEpochMs: Date.now() + remaining };
-  const installed = raster.evaluate(({ id, expiresEpochMs }) => {
+// Deliberate fault injection for the pulse probes: delay every raster task yield so document
+// frames arrive at a slow, host-independent cadence. "all" covers both pulses; "queued" covers only
+// the click delivered after a raster stall.
+const kPulseRasterYieldDelayMs = Number(process.env.DONNER_ANIMATION_PULSE_RASTER_DELAY_MS ?? 0);
+const kPulseRasterYieldDelayPhase = process.env.DONNER_ANIMATION_PULSE_RASTER_DELAY_PHASE ?? "all";
+if (
+  !Number.isFinite(kPulseRasterYieldDelayMs) || kPulseRasterYieldDelayMs < 0
+  || !["all", "queued"].includes(kPulseRasterYieldDelayPhase)
+) {
+  throw new Error("invalid DONNER_ANIMATION_PULSE_RASTER_DELAY_* fault injection");
+}
+
+async function delayRasterTaskYields(raster: Worker, delayMs: number) {
+  await raster.evaluate((ms) => {
     const scope = globalThis as typeof globalThis & {
-      __donnerRasterTaskYield?: {
-        channel: MessageChannel;
-        resume: (() => void) | null;
-        closed: boolean;
-      };
-      __donnerPulseHold?: { id: string; held: () => boolean; release: () => void };
+      __donnerRasterTaskYield?: { channel: MessageChannel; closed: boolean };
+      __donnerRasterYieldDelayRestore?: () => void;
     };
-    if (Date.now() >= expiresEpochMs) throw new Error("late raster hold installation");
-    if (scope.__donnerPulseHold) throw new Error("raster hold already installed");
     const state = scope.__donnerRasterTaskYield;
-    const original = state?.channel.port1.onmessage;
-    if (!state || state.closed || !original) throw new Error("raster yield unavailable");
+    const port = state?.channel.port1;
+    const original = port?.onmessage;
+    if (!state || state.closed || !port || !original) throw new Error("raster yield unavailable");
+    if (scope.__donnerRasterYieldDelayRestore) throw new Error("raster yield delay installed");
+    const delayed = (event: MessageEvent) => {
+      setTimeout(() => original.call(port, event), ms);
+    };
+    port.onmessage = delayed;
+    scope.__donnerRasterYieldDelayRestore = () => {
+      // Holds wrap and restore the current handler, so only an unwrapped delay is removable.
+      if (port.onmessage === delayed) port.onmessage = original;
+      delete scope.__donnerRasterYieldDelayRestore;
+    };
+  }, delayMs);
+  return () =>
+    boundBrowserDiagnostic(
+      raster.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerRasterYieldDelayRestore?: () => void;
+        };
+        scope.__donnerRasterYieldDelayRestore?.();
+      }),
+      1000,
+    );
+}
+
+// Deliberate fault injection modelling a browser that defers a worker's promise continuation when
+// the worker is resumed from inside a test evaluation: such a resumption reaches the raster worker
+// only after this delay, while a resumption from an ordinary worker task is immediate. It checks
+// how the helpers route their resumptions; it cannot reproduce the browser behaviour itself or
+// catch an unmarked resumption site.
+const kEvaluationResumeDeferMs = Number(
+  process.env.DONNER_ANIMATION_EVALUATION_RESUME_DEFER_MS ?? 0,
+);
+if (!Number.isFinite(kEvaluationResumeDeferMs) || kEvaluationResumeDeferMs < 0) {
+  throw new Error("invalid DONNER_ANIMATION_EVALUATION_RESUME_DEFER_MS fault injection");
+}
+
+type EvaluationResumeScope = typeof globalThis & {
+  __donnerResumingFromTestEvaluation?: boolean;
+  __donnerEvaluationResumeDeferred?: boolean;
+};
+
+// The raster worker's shutdown clears the yield handler and with it this deferral.
+async function deferEvaluationResumes(raster: Worker, deferMs: number) {
+  await raster.evaluate((ms) => {
+    const scope = globalThis as EvaluationResumeScope & {
+      __donnerRasterTaskYield?: { channel: MessageChannel; closed: boolean };
+    };
+    const state = scope.__donnerRasterTaskYield;
+    const port = state?.channel.port1;
+    const original = port?.onmessage;
+    if (!state || state.closed || !port || !original) throw new Error("raster yield unavailable");
+    if (scope.__donnerEvaluationResumeDeferred) throw new Error("resume deferral installed");
+    scope.__donnerEvaluationResumeDeferred = true;
+    port.onmessage = (event: MessageEvent) => {
+      if (scope.__donnerResumingFromTestEvaluation) {
+        setTimeout(() => original.call(port, event), ms);
+      } else {
+        original.call(port, event);
+      }
+    };
+  }, deferMs);
+}
+
+type RasterGateScope = typeof globalThis & {
+  __donnerRasterTaskYield?: {
+    channel: MessageChannel;
+    resume: (() => void) | null;
+    closed: boolean;
+  };
+  __donnerRasterGate?: {
+    id: string;
+    suspended: () => boolean;
+    step: () => void;
+    release: () => void;
+  };
+  __donnerRasterRenderTrace?: number[] & { overflow?: boolean };
+};
+
+// Hold every raster task yield and release them one at a time. The worker rasterizes at most one
+// frame between two yields, so while a yield is held no newer frame can reach presentation, and
+// the render trace names the document time of each rasterized frame. A finite worker-side lease
+// releases the gate if the test stops driving it.
+async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
+  const lease = { id: `${Date.now()}-${leaseMs}`, expiresEpochMs: Date.now() + leaseMs };
+  await raster.evaluate(({ id, expiresEpochMs }) => {
+    const scope = globalThis as RasterGateScope;
+    if (scope.__donnerRasterGate) throw new Error("raster gate already installed");
+    const state = scope.__donnerRasterTaskYield;
+    const port = state?.channel.port1;
+    const original = port?.onmessage;
+    if (!state || state.closed || !port || !original) throw new Error("raster yield unavailable");
     let held: MessageEvent | undefined;
     let released = false;
+    // Resume the worker from an ordinary task, never from inside a test evaluation. A resumption
+    // made inside an evaluation can leave the worker's promise continuation waiting for a later,
+    // unrelated task in this worker; Firefox showed this as steps of one to two seconds.
+    const resumeChannel = new MessageChannel();
+    let resumeEvent: MessageEvent | undefined;
+    resumeChannel.port1.onmessage = () => {
+      const event = resumeEvent;
+      resumeEvent = undefined;
+      if (event) original.call(port, event);
+    };
+    const resume = (event: MessageEvent) => {
+      if (resumeEvent) throw new Error("a raster yield resumption is already pending");
+      resumeEvent = event;
+      resumeChannel.port2.postMessage(0);
+    };
     const release = () => {
       if (released) return;
       released = true;
       clearTimeout(timer);
-      state.channel.port1.onmessage = original;
-      if (scope.__donnerPulseHold?.id === id) delete scope.__donnerPulseHold;
+      port.onmessage = original;
+      if (scope.__donnerRasterGate?.id === id) delete scope.__donnerRasterGate;
+      delete scope.__donnerRasterRenderTrace;
       const event = held;
       held = undefined;
-      if (event) original.call(state.channel.port1, event);
+      if (event) resume(event);
     };
-    scope.__donnerPulseHold = {
-      id,
-      held: () => held !== undefined && state.resume !== null,
-      release,
-    };
-    state.channel.port1.onmessage = (event) => {
-      if (Date.now() >= expiresEpochMs) {
-        release();
-        original.call(state.channel.port1, event);
-        return;
-      }
+    port.onmessage = (event) => {
       if (held) {
         release();
         throw new Error("multiple raster yield messages held");
       }
       held = event;
     };
+    scope.__donnerRasterRenderTrace = [];
+    scope.__donnerRasterGate = {
+      id,
+      suspended: () => held !== undefined && state.resume !== null,
+      step: () => {
+        const event = held;
+        if (!event) throw new Error("no raster yield is held");
+        held = undefined;
+        resume(event);
+      },
+      release,
+    };
     const timer = setTimeout(release, Math.max(1, expiresEpochMs - Date.now()));
   }, lease);
-  const release = async () => {
-    await awaitBeforeBlueDeadline(
-      raster.evaluate((id) => {
-        const scope = globalThis as unknown as {
-          __donnerPulseHold?: { id: string; release: () => void };
-        };
-        if (scope.__donnerPulseHold?.id === id) scope.__donnerPulseHold.release();
-      }, lease.id),
-      performance.now() + 1000,
-    );
-  };
-  try {
-    await awaitBeforeBlueDeadline(installed, deadlineAtMs);
-    await expect.poll(() =>
+  return {
+    async awaitSuspended(deadlineAtMs: number, message = "the raster worker suspends at a yield") {
+      await expect.poll(() =>
+        awaitBeforeBlueDeadline(
+          raster.evaluate((id) => {
+            const gate = (globalThis as RasterGateScope).__donnerRasterGate;
+            return gate?.id === id && gate.suspended();
+          }, lease.id),
+          deadlineAtMs,
+        ), {
+        timeout: Math.max(1, deadlineAtMs - performance.now()),
+        intervals: [5],
+        message,
+      }).toBe(true);
+    },
+    isSuspended: () =>
       awaitBeforeBlueDeadline(
         raster.evaluate((id) => {
-          const scope = globalThis as unknown as {
-            __donnerPulseHold?: { id: string; held: () => boolean };
-          };
-          return scope.__donnerPulseHold?.id === id && scope.__donnerPulseHold.held();
+          const gate = (globalThis as RasterGateScope).__donnerRasterGate;
+          return gate?.id === id && gate.suspended();
+        }, lease.id),
+        performance.now() + scaledMs(1000),
+      ),
+    renderedTimes: (deadlineAtMs: number) =>
+      awaitBeforeBlueDeadline(
+        raster.evaluate((id) => {
+          const scope = globalThis as RasterGateScope;
+          if (scope.__donnerRasterGate?.id !== id) throw new Error("the raster gate was released");
+          const trace = scope.__donnerRasterRenderTrace ?? [];
+          if (trace.overflow) throw new Error("the raster render trace overflowed");
+          return [...trace];
         }, lease.id),
         deadlineAtMs,
-      ), {
-      timeout: Math.max(1, deadlineAtMs - performance.now()),
-      intervals: [16],
-      message: "the known raster worker retains a pulse frame",
-    }).toBe(true);
-    return { release };
-  } catch (error) {
-    try {
-      await release();
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        "raster hold and cleanup failed; finite lease remains",
-      );
+      ),
+    step: (deadlineAtMs: number) =>
+      awaitBeforeBlueDeadline(
+        raster.evaluate((id) => {
+          const scope = globalThis as RasterGateScope & EvaluationResumeScope;
+          const gate = scope.__donnerRasterGate;
+          if (gate?.id !== id) throw new Error("the raster gate was released");
+          scope.__donnerResumingFromTestEvaluation = true;
+          try {
+            gate.step();
+          } finally {
+            scope.__donnerResumingFromTestEvaluation = false;
+          }
+        }, lease.id),
+        deadlineAtMs,
+      ),
+    release: () =>
+      awaitBeforeBlueDeadline(
+        raster.evaluate((id) => {
+          const scope = globalThis as RasterGateScope & EvaluationResumeScope;
+          const gate = scope.__donnerRasterGate;
+          if (gate?.id !== id) return;
+          scope.__donnerResumingFromTestEvaluation = true;
+          try {
+            gate.release();
+          } finally {
+            scope.__donnerResumingFromTestEvaluation = false;
+          }
+        }, lease.id),
+        performance.now() + scaledMs(1000),
+      ),
+  };
+}
+
+type RasterGate = Awaited<ReturnType<typeof gateRasterTaskYields>>;
+
+async function readPreviewPointerTrace(owner: Worker, deadlineAtMs: number) {
+  return awaitBeforeBlueDeadline(
+    owner.evaluate(() => {
+      const trace = (globalThis as unknown as Record<string, unknown>)
+        .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+      return {
+        generation: trace?.generation,
+        entries: Array.isArray(trace) ? [...trace] : [],
+      };
+    }),
+    deadlineAtMs,
+  );
+}
+
+// Step a gated raster worker until its newest rasterized frame shows the expanded pulse of this
+// click and a later timeline sample proves that frame was presented. The gate stays held, so that
+// frame remains the presented one until the caller releases the gate.
+async function retainGatedPulseFrame({
+  gate,
+  owner,
+  generation,
+  target,
+  notBeforeEpochMs,
+  deadlineAtMs,
+  decisions,
+}: {
+  gate: RasterGate;
+  owner: Worker;
+  generation: number;
+  target: number | null;
+  notBeforeEpochMs: number;
+  deadlineAtMs: number;
+  decisions: unknown[];
+}) {
+  for (;;) {
+    await gate.awaitSuspended(deadlineAtMs);
+    const rendered = await gate.renderedTimes(deadlineAtMs);
+    const snapshot = await readPreviewPointerTrace(owner, deadlineAtMs);
+    const decision = gatedPulseFrame(rendered, snapshot, generation, target, notBeforeEpochMs);
+    if (decisions.length < 128) {
+      decisions.push({ atEpochMs: Date.now(), renderedFrames: rendered.length, ...decision });
     }
-    throw error;
+    if (decision.action === "capture") return { ...decision, renderedFrames: rendered.length };
+    if (decision.action === "overshoot" || decision.action === "invalid") {
+      throw new Error(`no expanded pulse frame can be retained: ${JSON.stringify(decision)}`);
+    }
+    if (performance.now() >= deadlineAtMs) throw new Error("pulse frame deadline exceeded");
+    if (decision.action === "step") {
+      await gate.step(deadlineAtMs);
+    } else {
+      // The expanded frame is rasterized; the editor has not yet admitted the proving sample.
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
   }
+}
+
+// Capturing pixels must not let the gated worker rasterize a newer frame.
+async function expectGatedFrameRetained(
+  gate: RasterGate,
+  retained: { renderedFrames: number },
+  deadlineAtMs: number,
+) {
+  await gate.awaitSuspended(deadlineAtMs, "the raster worker is still suspended after capture");
+  expect(
+    (await gate.renderedTimes(deadlineAtMs)).length,
+    "no newer frame was rasterized during capture",
+  ).toBe(retained.renderedFrames);
+}
+
+// Run a probe against a gated raster worker and always release the gate.
+async function withRasterGate<T>(gate: RasterGate, body: () => Promise<T>, message: string) {
+  const errors: unknown[] = [];
+  let result: T | undefined;
+  try {
+    result = await body();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await gate.release();
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, message);
+  return result as T;
+}
+
+// While a pulse probe observes its window, preview time advances one 60 Hz tick per admitted
+// sample instead of following the wall clock, so one slow host frame cannot carry the timeline past
+// the window. Wall-clock playback resumes from the same time afterwards. Only this helper sets the
+// opt-in, so it must be unset when the probe starts.
+async function withFramePacedPreviewClock<T>(owner: Worker, body: () => Promise<T>) {
+  const setPacing = (enabled: boolean) =>
+    awaitBeforeBlueDeadline(
+      owner.evaluate((on) => {
+        const scope = globalThis as unknown as Record<string, unknown>;
+        const previous = scope.__donnerFramePacedPreviewClock;
+        if (on) scope.__donnerFramePacedPreviewClock = true;
+        else delete scope.__donnerFramePacedPreviewClock;
+        return previous === undefined ? "unset" : String(previous);
+      }, enabled),
+      performance.now() + scaledMs(1000),
+    );
+  expect(await setPacing(true), "the frame-paced preview clock is test-only").toBe("unset");
+  const errors: unknown[] = [];
+  let result: T | undefined;
+  try {
+    result = await body();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await setPacing(false);
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "frame-paced pulse probe failed");
+  return result as T;
 }
 
 async function verifyRasterProgressWithTimersHeld(page: Page) {
@@ -3937,6 +4166,10 @@ async function finishAnimationPreview({
   rafControls: boolean;
   captureRafControl: (name: string) => Promise<void>;
 }) {
+  if (kEvaluationResumeDeferMs > 0) {
+    // The quit probe below shuts this raster worker down, which removes the deferral with it.
+    await deferEvaluationResumes(await findRasterTaskWorker(page), kEvaluationResumeDeferMs);
+  }
   const heldForEdit = await holdRasterTaskYield(page);
   try {
     const frames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
@@ -3989,12 +4222,7 @@ async function finishAnimationPreview({
     } finally {
       await page.keyboard.up("Control");
     }
-    expect(
-      await heldForQuit.raster.evaluate(() => {
-        const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
-        return scope.__donnerHeldTaskYield?.() ?? false;
-      }),
-    ).toBe(true);
+    expect(await heldForQuit.suspended()).toBe(true);
   } finally {
     await heldForQuit.release();
   }
@@ -4056,8 +4284,12 @@ async function exerciseAnimationPointerPulse({
   let pulseClickFinishedEpochMs: number | null = null;
   let delayedPulseClickStartedEpochMs: number | null = null;
   let delayedPulseClickFinishedEpochMs: number | null = null;
-  let delayedPulseReleaseEpochMs: number | null = null;
+  let queuedPulseSteppingEpochMs: number | null = null;
   let heldPulseHeight: number | null = null;
+  let queuedPulseCatchUp: unknown = null;
+  let removeRasterYieldDelay: (() => Promise<unknown>) | null = null;
+  const initialPulseDecisions: unknown[] = [];
+  const queuedPulseDecisions: unknown[] = [];
   try {
     await Promise.all(
       page.workers().map((worker) =>
@@ -4149,7 +4381,11 @@ async function exerciseAnimationPointerPulse({
     await verifyPadInput(3, "animation-hover", () => page.mouse.up());
     orbProbe.setTraceScreenshots(true);
     if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
+    const owner = interactionCaptureOwner;
     const raster = await findRasterTaskWorker(page);
+    if (kPulseRasterYieldDelayMs > 0 && kPulseRasterYieldDelayPhase === "all") {
+      removeRasterYieldDelay = await delayRasterTaskYields(raster, kPulseRasterYieldDelayMs);
+    }
     const initialPulseTraceGeneration = Date.now();
     await interactionCaptureOwner.evaluate((generation) => {
       const trace = (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace;
@@ -4159,85 +4395,44 @@ async function exerciseAnimationPointerPulse({
     const initialPulseDeadline = performance.now() + scaledMs(5000);
     const pulseClickNotBefore = Date.now();
     pulseClickStartedEpochMs = pulseClickNotBefore;
-    await awaitBeforeBlueDeadline(
-      page.mouse.click(box.x + originX + 456 * scale, pad.y),
-      initialPulseDeadline,
-    );
-    pulseClickFinishedEpochMs = Date.now();
     let initialPulseTarget: number | null = null;
-    await expect.poll(async () => {
-      const snapshot = await awaitBeforeBlueDeadline(
-        interactionCaptureOwner.evaluate(() => {
-          const trace = (globalThis as unknown as Record<string, unknown>)
-            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
-          return {
-            generation: trace?.generation,
-            entries: Array.isArray(trace) ? [...trace] : [],
-          };
-        }),
-        initialPulseDeadline,
-      );
-      const click = snapshot.entries.find((row) =>
-        Array.isArray(row) && row.length === 6
-        && Number.isFinite(row[0]) && row[0] >= pulseClickNotBefore
-        && row[1] === 2 && row[2] === 0 && row[5] === true
-      );
-      if (!click || !Number.isFinite(click[3])) return false;
-      initialPulseTarget = click[3];
-      initialPulseObservation = presentedPulseWindow(
-        snapshot,
-        initialPulseTraceGeneration,
-        initialPulseTarget,
-        pulseClickNotBefore,
-      );
-      return initialPulseObservation !== null;
-    }, {
-      timeout: Math.max(1, initialPulseDeadline - performance.now()),
-      intervals: [16],
-      message: "the first-click pulse reaches presentation",
-    }).toBe(true);
-    const heldInitialPulseFrame = await holdKnownRasterUntil(raster, initialPulseDeadline);
-    try {
-      const heldTrace = await awaitBeforeBlueDeadline(
-        interactionCaptureOwner.evaluate(() => {
-          const trace = (globalThis as unknown as Record<string, unknown>)
-            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
-          return {
-            generation: trace?.generation,
-            entries: Array.isArray(trace) ? [...trace] : [],
-          };
-        }),
-        initialPulseDeadline,
-      );
-      const retainedObservation = presentedPulseWindow(
-        heldTrace,
-        initialPulseTraceGeneration,
-        initialPulseTarget,
-        pulseClickNotBefore,
-        0.5,
-      );
-      expect(retainedObservation, "the retained first-click frame is still inside the pulse").not
-        .toBeNull();
-      initialPulseObservation = {
-        beforeHold: initialPulseObservation,
-        afterHold: retainedObservation,
-      };
-      // The trace admits only a 100-500 ms sample where the 600 ms fixture is expanded. Hold that
-      // presented frame before asking Firefox for pixels, because capture itself may take seconds.
-      await expect.poll(async () => {
-        const bounds = await orb(initialPulseDeadline);
-        return bounds.maxY - bounds.minY;
-      }, {
-        timeout: Math.max(1, initialPulseDeadline - performance.now()),
-        intervals: [50],
-        message: "Click triggers the radius pulse",
-      }).toBeGreaterThan(58 * scale);
-      if (performance.now() >= initialPulseDeadline) {
-        throw new Error("initial pulse deadline exceeded");
-      }
-    } finally {
-      await heldInitialPulseFrame.release();
-    }
+    // Gate raster progress before the click; the click is dispatched at the next stepped frame,
+    // without the long stall of the queued probe below. The frame retained for capture is the one
+    // whose document time the raster trace names, not a later frame rasterized while a hold
+    // installs.
+    // Capture may take seconds in Firefox, so the gate holds that frame until pixels are read.
+    const initialGate = await gateRasterTaskYields(raster, scaledMs(6000));
+    await withRasterGate(initialGate, () =>
+      withFramePacedPreviewClock(owner, async () => {
+        await awaitBeforeBlueDeadline(
+          page.mouse.click(box.x + originX + 456 * scale, pad.y),
+          initialPulseDeadline,
+        );
+        pulseClickFinishedEpochMs = Date.now();
+        const retained = await retainGatedPulseFrame({
+          gate: initialGate,
+          owner,
+          generation: initialPulseTraceGeneration,
+          target: null,
+          notBeforeEpochMs: pulseClickNotBefore,
+          deadlineAtMs: initialPulseDeadline,
+          decisions: initialPulseDecisions,
+        });
+        initialPulseObservation = retained;
+        initialPulseTarget = retained.dispatchTarget;
+        await expect.poll(async () => {
+          const bounds = await orb(initialPulseDeadline);
+          return bounds.maxY - bounds.minY;
+        }, {
+          timeout: Math.max(1, initialPulseDeadline - performance.now()),
+          intervals: [50],
+          message: "Click triggers the radius pulse",
+        }).toBeGreaterThan(58 * scale);
+        await expectGatedFrameRetained(initialGate, retained, initialPulseDeadline);
+        if (performance.now() >= initialPulseDeadline) {
+          throw new Error("initial pulse deadline exceeded");
+        }
+      }), "initial pulse observation failed");
     const pulseCompletionDeadline = performance.now() + scaledMs(5000);
     // Observe a post-pulse presentation before screenshots can stall worker progress.
     await expect.poll(async () => {
@@ -4272,6 +4467,9 @@ async function exerciseAnimationPointerPulse({
       intervals: [50],
       message: "First pulse returns to its base diameter",
     }).toBeLessThanOrEqual(2 * scale);
+    if (kPulseRasterYieldDelayMs > 0 && kPulseRasterYieldDelayPhase === "queued") {
+      removeRasterYieldDelay = await delayRasterTaskYields(raster, kPulseRasterYieldDelayMs);
+    }
     // Hold raster progress longer than the pulse before delivering another click. Its target
     // remains the displayed pad, but its begin time must use the dispatch-time preview clock.
     const pulseTraceGeneration = Date.now();
@@ -4286,108 +4484,70 @@ async function exerciseAnimationPointerPulse({
       ? preQueuedPointerTrace.find((row) => row[1] === 2 && row[2] === 0 && row[5] === true)
       : undefined;
     if (!firstClick) throw new Error("the normal pulse dispatch trace is unavailable");
-    const heldForPulse = await holdRasterTaskYield(page);
-    try {
-      const heldBounds = await orb();
-      heldPulseHeight = heldBounds.maxY - heldBounds.minY;
-      expect(
-        Math.abs(heldPulseHeight - (start.maxY - start.minY)),
-        "held frame contains the base orb, not the previous pulse",
-      ).toBeLessThanOrEqual(2 * scale);
-      const heldAt = Date.now();
-      await expect.poll(() => Date.now() - heldAt, {
-        timeout: scaledMs(3000),
-        intervals: [50],
-        message: "raster stall exceeds the short pulse duration",
-      }).toBeGreaterThanOrEqual(1000);
-      delayedPulseClickStartedEpochMs = Date.now();
-      await page.mouse.click(box.x + originX + 456 * scale, pad.y);
-      delayedPulseClickFinishedEpochMs = Date.now();
-    } finally {
-      await heldForPulse.release();
-      delayedPulseReleaseEpochMs = Date.now();
-    }
-    const queuedPulseDeadline = performance.now() + scaledMs(5000);
-    // Avoid screenshot-induced stalls while queued input is delivered. A later admitted
-    // timeline sample proves an earlier in-window sample was presented; retain that frame
-    // with the existing raster hold before reading pixels. Playback cadence was measured
-    // above without holds or screenshots, independently of this queued-event correctness probe.
-    await expect.poll(async () => {
-      const snapshot = await awaitBeforeBlueDeadline(
-        interactionCaptureOwner.evaluate(() => {
-          const trace = (globalThis as unknown as Record<string, unknown>)
-            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
-          return {
-            generation: trace?.generation,
-            entries: Array.isArray(trace) ? [...trace] : [],
-          };
-        }),
-        queuedPulseDeadline,
-      );
-      queuedPulseObservation = presentedPulseWindow(
-        snapshot,
-        pulseTraceGeneration,
-        firstClick[3],
-        delayedPulseClickStartedEpochMs,
-      );
-      return queuedPulseObservation !== null;
-    }, {
-      timeout: Math.max(1, queuedPulseDeadline - performance.now()),
-      intervals: [16],
-      message: "a queued-click pulse sample reaches presentation",
-    }).toBe(true);
-    const heldPulseFrame = await holdKnownRasterUntil(heldForPulse.raster, queuedPulseDeadline);
-    const pulseErrors: unknown[] = [];
-    try {
-      const heldTrace = await awaitBeforeBlueDeadline(
-        interactionCaptureOwner.evaluate(() => {
-          const trace = (globalThis as unknown as Record<string, unknown>)
-            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
-          return {
-            generation: trace?.generation,
-            entries: Array.isArray(trace) ? [...trace] : [],
-          };
-        }),
-        queuedPulseDeadline,
-      );
-      const retainedObservation = presentedPulseWindow(
-        heldTrace,
-        pulseTraceGeneration,
-        firstClick[3],
-        delayedPulseClickStartedEpochMs,
-        0.5,
-      );
-      expect(retainedObservation, "the acknowledged hold is still inside the same pulse").not
-        .toBeNull();
-      queuedPulseObservation = {
-        beforeHold: queuedPulseObservation,
-        afterHold: retainedObservation,
-      };
-      await expect.poll(async () => {
-        const bounds = await orb(queuedPulseDeadline);
-        return bounds.maxY - bounds.minY;
-      }, {
-        timeout: Math.max(1, queuedPulseDeadline - performance.now()),
-        intervals: [50],
-        message: "Queued click pulses after stale-frame catch-up",
-      }).toBeGreaterThan(58 * scale);
-      if (performance.now() >= queuedPulseDeadline) {
-        throw new Error("queued pulse deadline exceeded");
-      }
-    } catch (error) {
-      pulseErrors.push(error);
-    } finally {
-      try {
-        await heldPulseFrame.release();
-      } catch (error) {
-        pulseErrors.push(error);
-      }
-    }
-    if (pulseErrors.length > 0) {
-      throw new AggregateError(pulseErrors, "queued pulse observation failed");
-    }
+    // The gate holds one yield for the stall, then releases yields one at a time after the click.
+    const queuedGate = await gateRasterTaskYields(raster, scaledMs(20000));
+    await withRasterGate(queuedGate, () =>
+      withFramePacedPreviewClock(owner, async () => {
+        await queuedGate.awaitSuspended(
+          performance.now() + scaledMs(3000),
+          "one raster task yield is suspended",
+        );
+        const heldBounds = await orb();
+        heldPulseHeight = heldBounds.maxY - heldBounds.minY;
+        expect(
+          Math.abs(heldPulseHeight - (start.maxY - start.minY)),
+          "held frame contains the base orb, not the previous pulse",
+        ).toBeLessThanOrEqual(2 * scale);
+        const heldAt = Date.now();
+        await expect.poll(() => Date.now() - heldAt, {
+          timeout: scaledMs(3000),
+          intervals: [50],
+          message: "raster stall exceeds the short pulse duration",
+        }).toBeGreaterThanOrEqual(1000);
+        delayedPulseClickStartedEpochMs = Date.now();
+        await page.mouse.click(box.x + originX + 456 * scale, pad.y);
+        delayedPulseClickFinishedEpochMs = Date.now();
+        const queuedPulseDeadline = performance.now() + scaledMs(5000);
+        queuedPulseSteppingEpochMs = Date.now();
+        // Avoid screenshot-induced stalls while queued input is delivered. Playback cadence was
+        // measured above without holds or screenshots, independently of this correctness probe.
+        const retained = await retainGatedPulseFrame({
+          gate: queuedGate,
+          owner,
+          generation: pulseTraceGeneration,
+          target: firstClick[3],
+          notBeforeEpochMs: delayedPulseClickStartedEpochMs,
+          deadlineAtMs: queuedPulseDeadline,
+          decisions: queuedPulseDecisions,
+        });
+        queuedPulseObservation = retained;
+        // Frame pacing advances only admitted ticks, so state the catch-up directly: the click
+        // must begin on the dispatch-time clock, not at the stale clock its input was queued on.
+        const catchUp = queuedDispatchCaughtUp(
+          await readPreviewPointerTrace(owner, queuedPulseDeadline),
+          pulseTraceGeneration,
+          firstClick[3],
+          delayedPulseClickStartedEpochMs,
+        );
+        queuedPulseCatchUp = catchUp;
+        expect(catchUp.caughtUp, `queued click dispatch caught up: ${JSON.stringify(catchUp)}`)
+          .toBe(true);
+        await expect.poll(async () => {
+          const bounds = await orb(queuedPulseDeadline);
+          return bounds.maxY - bounds.minY;
+        }, {
+          timeout: Math.max(1, queuedPulseDeadline - performance.now()),
+          intervals: [50],
+          message: "Queued click pulses after stale-frame catch-up",
+        }).toBeGreaterThan(58 * scale);
+        await expectGatedFrameRetained(queuedGate, retained, queuedPulseDeadline);
+        if (performance.now() >= queuedPulseDeadline) {
+          throw new Error("queued pulse deadline exceeded");
+        }
+      }), "queued pulse observation failed");
   } finally {
     orbProbe.setTraceScreenshots(false);
+    await removeRasterYieldDelay?.();
     const pointerTraces = await Promise.all(
       page.workers().map((worker) =>
         boundBrowserDiagnostic(
@@ -4410,12 +4570,15 @@ async function exerciseAnimationPointerPulse({
           pulseClickFinishedEpochMs,
           delayedPulseClickStartedEpochMs,
           delayedPulseClickFinishedEpochMs,
-          delayedPulseReleaseEpochMs,
+          queuedPulseSteppingEpochMs,
           heldPulseHeight,
+          queuedPulseCatchUp,
           initialPulseObservation,
           preQueuedPointerTrace,
           queuedPulseObservation,
           pulseCompletionTrace,
+          initialPulseDecisions,
+          queuedPulseDecisions,
           pulseScreenshots: orbProbe.screenshots,
           pointerTraces,
         },
@@ -4923,3 +5086,87 @@ test(
     expect(fatalMessages).toEqual([]);
   },
 );
+
+// Firefox snapshots a canvas whose control was transferred to a worker by running a task on that
+// worker and blocking the page's main thread until it answers, for at most
+// `gfx.offscreencanvas.snapshot-timeout-ms` (10 s). If the worker is itself blocked on a
+// synchronous call to the main thread, neither can proceed until that timeout, and the snapshot
+// paints the page without the canvas. While the pointer is over the ImGui panels, the GLFW backend
+// sets the OS cursor from the canvas owner on every frame, so keep the pointer moving over a panel
+// and require every page capture to include the canvas.
+test("page screenshots keep the canvas while hover changes the cursor", async ({ page }, testInfo) => {
+  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+  await expectSampleThumbnailsToSettle(page, {
+    message: "thumbnail work is drained before the captures",
+    timeout: kStallGuardMs,
+  });
+  const box = await page.locator("canvas#canvas").boundingBox();
+  if (!box) throw new Error("the editor canvas has no bounds");
+  // Open the sample the animation lane uses; its document area sets the editor's own cursor and
+  // the inspector panel on the right leaves the cursor to ImGui.
+  await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
+  const canvasCursor = () =>
+    page.evaluate(() => getComputedStyle(document.getElementById("canvas")!).cursor);
+  const documentPoint = { x: box.x + box.width * 0.4, y: box.y + box.height * 0.375 };
+  const panelPoint = { x: box.x + box.width - 200, y: box.y + box.height * 0.375 };
+  // The editor's own document cursor appears only once the opened document is interactive.
+  await page.mouse.move(documentPoint.x, documentPoint.y);
+  await expect.poll(canvasCursor, {
+    message: "the opened document sets the editor cursor",
+    timeout: kStallGuardMs,
+  }).toMatch(/^url\(/);
+  // A clip over the open document keeps each capture cheap; without the canvas it is flat.
+  const region = {
+    x: Math.round(documentPoint.x - 200),
+    y: Math.round(documentPoint.y - 150),
+    width: 400,
+    height: 300,
+  };
+  // Captured while the pointer is over the document, where the cursor comes from the editor's
+  // asynchronous registry: the region must show document content, or a flat capture below would
+  // not mean the canvas was lost.
+  expect(
+    isOnlyEditorPageBackground(await page.screenshot({ clip: region, timeout: kStallGuardMs })),
+    "the capture region shows document content",
+  ).toBe(false);
+  // The panel leaves the cursor to ImGui, whose GLFW backend sets it from the canvas owner.
+  await page.mouse.move(panelPoint.x, panelPoint.y);
+  await expect.poll(canvasCursor, { message: "the inspector panel uses an ImGui cursor" })
+    .not.toMatch(/^url\(/);
+  const captures: Array<Record<string, unknown>> = [];
+  // A frame's cursor call meets a screenshot on well under one capture in a hundred on a fast
+  // host, so take enough captures that the unfixed deadlock is likely within one run;
+  // main_thread_proxy_tests pins the fix itself deterministically.
+  const kCaptures = 300;
+  // Each capture is a bounded step: a stalled one returns flat after the browser's snapshot
+  // timeout. Extend the case by one second per capture, several times the loaded-host cost.
+  testInfo.setTimeout(testInfo.timeout + kCaptures * 1000);
+  try {
+    for (let step = 0; step < kCaptures; step++) {
+      // Every move starts new frames, and each frame sets the OS cursor from the canvas owner.
+      const x = panelPoint.x + (step % 2) * 8;
+      const y = panelPoint.y;
+      await page.mouse.move(x, y);
+      const startedAt = Date.now();
+      const capture = await page.screenshot({ clip: region, timeout: kStallGuardMs });
+      const record: Record<string, unknown> = {
+        step,
+        x,
+        y,
+        screenshotMs: Date.now() - startedAt,
+        flat: isOnlyEditorPageBackground(capture),
+      };
+      captures.push(record);
+      expect(
+        record.flat,
+        `page capture ${step} with the pointer at (${x}, ${y}) did not include the canvas`,
+      ).toBe(false);
+    }
+  } finally {
+    const recordPath = testInfo.outputPath("cursor-captures.json");
+    await writeFile(recordPath, JSON.stringify(captures, null, 2));
+    await testInfo.attach("cursor-captures", { contentType: "application/json", path: recordPath });
+  }
+  expect(await canvasCursor(), "the inspector panel kept an ImGui cursor").not.toMatch(/^url\(/);
+  expect(fatalMessages).toEqual([]);
+});
