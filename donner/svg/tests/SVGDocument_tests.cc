@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
@@ -38,6 +39,7 @@
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/internal/RenderingDiagnostics.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/Renderer.h"
 
@@ -540,13 +542,20 @@ struct TextEditInvalidation {
   bool fullRebuild = false;
   bool fullStyleRecompute = false;
   bool siblingStyleRetained = false;
+  std::optional<PaintServer> siblingFill;  ///< `#r` fill computed after the edit.
 
   bool operator==(const TextEditInvalidation& other) const = default;
 
   friend std::ostream& operator<<(std::ostream& os, const TextEditInvalidation& value) {
     return os << "{fullRebuild=" << value.fullRebuild
               << ", fullStyleRecompute=" << value.fullStyleRecompute
-              << ", siblingStyleRetained=" << value.siblingStyleRetained << "}";
+              << ", siblingStyleRetained=" << value.siblingStyleRetained << ", siblingFill=";
+    if (value.siblingFill.has_value()) {
+      os << *value.siblingFill;
+    } else {
+      os << "nullopt";
+    }
+    return os << "}";
   }
 };
 
@@ -563,18 +572,21 @@ TextEditInvalidation TypeTextIntoBuiltDocument(std::string_view svg, std::string
   document.registry().clear<components::DirtyFlagsComponent>();
 
   const xml::ApplySourceEditResult result = document.setElementTextContent(text, typed);
-  EXPECT_TRUE(result.applied);
+  EXPECT_TRUE(result.applied) << svg;
   EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
   text.cast<SVGTextContentElement>().setTextContent(typed);
 
-  return TextEditInvalidation{
+  TextEditInvalidation invalidation{
       .fullRebuild = renderState.needsFullRebuild,
       .fullStyleRecompute = renderState.needsFullStyleRecompute,
       .siblingStyleRetained = sibling.entityHandle().all_of<components::ComputedStyleComponent>(),
   };
+  invalidation.siblingFill = sibling.getComputedStyle().fill.get();
+  return invalidation;
 }
 
 TEST(SVGDocument, TypedTextWithoutEmptySelectorKeepsIncrementalInvalidation) {
+  const PaintServer kRed = PaintServer::Solid(css::Color(css::RGBA(0xFF, 0, 0, 0xFF)));
   for (const std::string_view initial : {R"(<text id="t"/>)", R"(<text id="t">S</text>)"}) {
     SCOPED_TRACE(initial);
     const std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg">
@@ -582,19 +594,24 @@ TEST(SVGDocument, TypedTextWithoutEmptySelectorKeepsIncrementalInvalidation) {
       <rect id="r" width="10" height="10"/>)" +
                             std::string(initial) + "</svg>";
     EXPECT_THAT(TypeTextIntoBuiltDocument(svg, "SVG"),
-                Eq(TextEditInvalidation{.siblingStyleRetained = true}));
+                Eq(TextEditInvalidation{.siblingStyleRetained = true, .siblingFill = kRed}));
   }
 }
 
 TEST(SVGDocument, TypedTextEmptinessChangeRestylesEmptySelectorDocuments) {
-  for (const std::string_view rule :
-       {"text:empty + rect { fill: red }", "svg:has(text:not(:empty)) rect { fill: red }"}) {
+  const PaintServer kBlack = PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 0xFF)));
+  const PaintServer kRed = PaintServer::Solid(css::Color(css::RGBA(0xFF, 0, 0, 0xFF)));
+  for (const auto& [rule, fill] :
+       {std::pair<std::string_view, PaintServer>{"text:empty + rect { fill: red }", kBlack},
+        std::pair<std::string_view, PaintServer>{"svg:has(text:not(:empty)) rect { fill: red }",
+                                                 kRed}}) {
     SCOPED_TRACE(rule);
     const std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg"><style>)" +
                             std::string(rule) +
                             R"(</style><text id="t"/><rect id="r" width="10" height="10"/></svg>)";
     EXPECT_THAT(TypeTextIntoBuiltDocument(svg, "SVG"),
-                Eq(TextEditInvalidation{.fullRebuild = true, .fullStyleRecompute = true}));
+                Eq(TextEditInvalidation{
+                    .fullRebuild = true, .fullStyleRecompute = true, .siblingFill = fill}));
   }
 }
 

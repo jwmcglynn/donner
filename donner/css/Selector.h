@@ -75,9 +75,10 @@ struct Selector {
   /**
    * Return true when matching this selector can change with an element's text content.
    *
-   * `:empty` is the only selector that inspects text, so this finds it anywhere in the selector,
-   * including inside functional pseudo-classes such as `:not()`, `:is()` and `:has()`. Callers use
-   * this to decide whether a text edit can change which elements a rule matches.
+   * `:empty` is the only supported pseudo-class that inspects text, so this finds it anywhere in
+   * the selector, including inside functional pseudo-classes such as `:not()`, `:is()` and
+   * `:has()`. Callers use this to decide whether a text edit can change which elements a rule
+   * matches.
    *
    * @return True when a text edit can change whether this selector matches.
    */
