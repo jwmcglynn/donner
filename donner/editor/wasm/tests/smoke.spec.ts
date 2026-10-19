@@ -1323,6 +1323,51 @@ async function findRasterTaskWorker(page: Page) {
   );
 }
 
+// Deliberate fault injection for the pulse probes: delay every raster task yield so document
+// frames arrive at a slow, host-independent cadence. "all" covers both pulses; "queued" covers only
+// the click delivered after a raster stall.
+const kPulseRasterYieldDelayMs = Number(process.env.DONNER_ANIMATION_PULSE_RASTER_DELAY_MS ?? 0);
+const kPulseRasterYieldDelayPhase = process.env.DONNER_ANIMATION_PULSE_RASTER_DELAY_PHASE ?? "all";
+if (
+  !Number.isFinite(kPulseRasterYieldDelayMs) || kPulseRasterYieldDelayMs < 0
+  || !["all", "queued"].includes(kPulseRasterYieldDelayPhase)
+) {
+  throw new Error("invalid DONNER_ANIMATION_PULSE_RASTER_DELAY_* fault injection");
+}
+
+async function delayRasterTaskYields(raster: Worker, delayMs: number) {
+  await raster.evaluate((ms) => {
+    const scope = globalThis as typeof globalThis & {
+      __donnerRasterTaskYield?: { channel: MessageChannel; closed: boolean };
+      __donnerRasterYieldDelayRestore?: () => void;
+    };
+    const state = scope.__donnerRasterTaskYield;
+    const port = state?.channel.port1;
+    const original = port?.onmessage;
+    if (!state || state.closed || !port || !original) throw new Error("raster yield unavailable");
+    if (scope.__donnerRasterYieldDelayRestore) throw new Error("raster yield delay installed");
+    const delayed = (event: MessageEvent) => {
+      setTimeout(() => original.call(port, event), ms);
+    };
+    port.onmessage = delayed;
+    scope.__donnerRasterYieldDelayRestore = () => {
+      // Holds wrap and restore the current handler, so only an unwrapped delay is removable.
+      if (port.onmessage === delayed) port.onmessage = original;
+      delete scope.__donnerRasterYieldDelayRestore;
+    };
+  }, delayMs);
+  return () =>
+    boundBrowserDiagnostic(
+      raster.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerRasterYieldDelayRestore?: () => void;
+        };
+        scope.__donnerRasterYieldDelayRestore?.();
+      }),
+      1000,
+    );
+}
+
 // A finite worker-side lease cleans up even if an installation reply arrives after the caller deadline.
 async function holdKnownRasterUntil(raster: Worker, deadlineAtMs: number) {
   const remaining = deadlineAtMs - performance.now();
@@ -4058,6 +4103,7 @@ async function exerciseAnimationPointerPulse({
   let delayedPulseClickFinishedEpochMs: number | null = null;
   let delayedPulseReleaseEpochMs: number | null = null;
   let heldPulseHeight: number | null = null;
+  let removeRasterYieldDelay: (() => Promise<unknown>) | null = null;
   try {
     await Promise.all(
       page.workers().map((worker) =>
@@ -4150,6 +4196,9 @@ async function exerciseAnimationPointerPulse({
     orbProbe.setTraceScreenshots(true);
     if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
     const raster = await findRasterTaskWorker(page);
+    if (kPulseRasterYieldDelayMs > 0 && kPulseRasterYieldDelayPhase === "all") {
+      removeRasterYieldDelay = await delayRasterTaskYields(raster, kPulseRasterYieldDelayMs);
+    }
     const initialPulseTraceGeneration = Date.now();
     await interactionCaptureOwner.evaluate((generation) => {
       const trace = (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace;
@@ -4272,6 +4321,9 @@ async function exerciseAnimationPointerPulse({
       intervals: [50],
       message: "First pulse returns to its base diameter",
     }).toBeLessThanOrEqual(2 * scale);
+    if (kPulseRasterYieldDelayMs > 0 && kPulseRasterYieldDelayPhase === "queued") {
+      removeRasterYieldDelay = await delayRasterTaskYields(raster, kPulseRasterYieldDelayMs);
+    }
     // Hold raster progress longer than the pulse before delivering another click. Its target
     // remains the displayed pad, but its begin time must use the dispatch-time preview clock.
     const pulseTraceGeneration = Date.now();
@@ -4388,6 +4440,7 @@ async function exerciseAnimationPointerPulse({
     }
   } finally {
     orbProbe.setTraceScreenshots(false);
+    await removeRasterYieldDelay?.();
     const pointerTraces = await Promise.all(
       page.workers().map((worker) =>
         boundBrowserDiagnostic(
