@@ -133,6 +133,7 @@ When creating a pull request:
      `//donner/editor/tests:gl_rnr_replay_tests_geode`. This matches the separate CI editor lane;
      run it explicitly in addition to the Geode variants covered by the default `//...` gate.
    - **`tools/lint.sh`** (~3 s) - the banned-patterns gate: `long long`, `std::aligned_storage`, user-defined literal operators, hidden Unicode whitespace/punctuation. This is one repo-wide scan, not a bazel test; it replaced 476 per-target `*_lint` py_tests that cost 31% of the suite's CPU to do the same work.
+   - **`tools/ci/lint_lane.sh`** - the whole Lint workflow lane: `tools/lint.sh` plus the brace-lint regression, design-doc provenance, private-detail and no-Rust-dependency checks, in CI order. Run it when the change touches anything those checks scan.
    - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
    - **`clang-format -i` on every modified C/C++ file** before committing — `git clang-format` covers staged changes. The project `.clang-format` is tuned so clang-format 18 and 19 produce identical output, so any locally-installed clang-format works.
 3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.
