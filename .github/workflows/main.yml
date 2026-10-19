@@ -2257,23 +2257,22 @@ jobs:
   macos-hosted-parity:
     # Hosted-parity subset for trusted PRs. The self-hosted macOS lane above has many more and
     # faster cores than main's GitHub-hosted `macos` job (3 CPUs, 7 GB), so a test whose result
-    # depends on the runner can pass there and then fail main. This job reruns only those tests,
-    # under the hosted job's constraints, on the same self-hosted runner: the affected tests tagged
-    # `hosted_parity` (timing, frame, animation and readiness tests and host-tool probes, kept
-    # honest by //tools:ci_lane_parity_tests) and the Geode editor lane. Plain deterministic tests
-    # stay in the fast lane, and browser tests are covered by the hosted `macos-browser` subset on
-    # the hosted image itself. The job runs only when the affected set reaches one of those tests
-    # (or falls back to //...), and only after the fast lane, so it never delays that signal on
-    # this pull request.
+    # depends on the runner can pass there and then fail main. This job reruns only those tests
+    # on the same self-hosted runner, under the hosted job's constraints: the affected tests
+    # tagged `hosted_parity` (timing, frame, readiness and display-scale tests and host-tool
+    # probes, kept honest by //tools:ci_lane_parity_tests) and the Geode editor lane. Plain
+    # deterministic tests stay in the fast lane. Browser tests run on the hosted image itself in
+    # the `macos-browser` subset. The job runs only when the affected set reaches one of its tests
+    # (or falls back to //...), and only after the fast lane, so it never delays that signal.
     #
-    # The constraints: Bazel schedules at most the hosted runner's 3 CPUs and Bazel's default share
-    # of its memory, with main's `--jobs` and `--local_test_jobs`; main's tag filters, test
-    # environment and hosted-only quarantine; the pinned Xcode, required as on the hosted image;
-    # the same macOS deployment target. //tools:ci_lane_parity_tests compares each Bazel
-    # invocation with main's `macos` job. This narrows the divergence; it does not remove it. A
-    # Bazel scheduling cap does not slow each core to the hosted runner's speed, limit the memory a
-    # test can actually use, or reproduce the hosted runner's disk or its runner faults. The
-    # runner host's display is not changed: the editor GUI tests choose their own content scale.
+    # The constraints: Bazel schedules within the hosted runner's 3 CPUs and Bazel's default share
+    # of its memory, with main's --jobs and --local_test_jobs; main's tag filters, test
+    # environment and hosted-only quarantine; the macOS deployment target; the pinned Xcode when
+    # the runner provides it. //tools:ci_lane_parity_tests compares each Bazel invocation with
+    # main's `macos` job. This narrows the divergence; it does not remove it. A scheduling cap
+    # does not slow each core to the hosted runner's speed, limit the memory a test can use, or
+    # reproduce the hosted runner's disk or its runner faults, and the host's display is not
+    # changed (the editor GUI tests choose their own content scale).
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets, macos-self-hosted]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.hosted_parity_affected == 'true') }}
@@ -2302,11 +2301,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # The hosted image always has the pinned Xcode, so this job requires it too.
+      # Selects the pinned Xcode exactly as the fast lane does. When this runner's Bazel cannot
+      # discover it, both jobs warn and build with the runner's default Xcode, so this job then
+      # tests with another Xcode than main's hosted job.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
-        run: tools/ci_select_macos_xcode.sh --required
+        run: tools/ci_select_macos_xcode.sh --optional
 
       - name: Configure BuildBuddy remote cache
         if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'

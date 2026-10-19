@@ -52,9 +52,9 @@ SCHEDULING_VARIABLES = ("HOSTED_MACOS_RESOURCE_FLAGS",)
 LANE_TEST_ENV = {"macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
                  "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted",
                  "macos-hosted-parity": "--test_env=DONNER_CI_MACOS_LANE=hosted-parity"}
-# Every macOS lane and how it selects the pinned Xcode: the hosted image always has it, so the
-# hosted job and the parity lane that reproduces it require it.
-LANE_XCODE_MODES = ((HOSTED, "--required"), (SELF_HOSTED, "--optional"), (PARITY, "--required"))
+# Every macOS lane and how it selects the pinned Xcode: the hosted image always has it; the
+# self-hosted lanes use it when their runner's Bazel can discover it.
+LANE_XCODE_MODES = ((HOSTED, "--required"), (SELF_HOSTED, "--optional"), (PARITY, "--optional"))
 # The toolchain repository refresh runs before any build and takes no build flags.
 TOOLCHAIN_REFRESH = "fetch --force --lockfile_mode=off"
 SELECT_SCRIPT = "tools/ci_select_macos_xcode.sh"
@@ -422,10 +422,10 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "test --config=ci --config=geode --copt=-O0 --test_output=errors \\\n"
                 "            $HOSTED_MACOS_RESOURCE_FLAGS", 1),
                 self.bazelrc, "step 'Test (Geode editor lane)' differs"),
-            "the parity lane accepts any Xcode": (self.workflow[:self.workflow.index(
+            "the parity lane drops the Xcode pin": (self.workflow[:self.workflow.index(
                 "\n  %s:\n" % PARITY)] + self.workflow[self.workflow.index(
                     "\n  %s:\n" % PARITY):].replace(
-                    "ci_select_macos_xcode.sh --required", "ci_select_macos_xcode.sh --optional",
+                    "run: tools/ci_select_macos_xcode.sh --optional", "run: echo skipped",
                     1), self.bazelrc, "macos-hosted-parity selects Xcode other than"),
             "a step drops the lane flags": (self.workflow.replace(
                 "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",

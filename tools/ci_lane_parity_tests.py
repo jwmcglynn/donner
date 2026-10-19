@@ -2101,9 +2101,11 @@ class CiLaneParityTest(unittest.TestCase):
                          for difference in parity_differences(workflow, job_name, parity, steps)}
             jobs = _jobs(workflow)
             with self.subTest(parity=parity):
-                # The same pinned Xcode, required as on the hosted image.
+                # The pinned Xcode, selected exactly as the replacement selects it on the same
+                # runner (INVOCATION_ALLOWLIST records how that differs from main's selection).
+                replacement = JOB_REPLACEMENTS[(name, job_name, scenario)]
                 self.assertEqual(
-                    _other_steps(workflow, jobs[job_name], "main-push")["Select pinned Xcode"],
+                    _other_steps(workflow, jobs[replacement], scenario)["Select pinned Xcode"],
                     _other_steps(workflow, jobs[parity], scenario)["Select pinned Xcode"])
                 # It reruns tests the replacement already ran, after the replacement finishes,
                 # so the replacement's signal never waits for it.
