@@ -122,6 +122,77 @@ class PagesArtifactTest(unittest.TestCase):
             pages_artifact.verify_archive(self.archive, sha256(self.archive.read_bytes()).hexdigest(),
                                           self.selected)
 
+    def _selection_environment(self) -> dict[str, str]:
+        return {
+            "GITHUB_REPOSITORY": "jwmcglynn/donner",
+            "DOC_ARTIFACT_ID": "456", "DOC_SOURCE_RUN_ID": "123", "DOC_SOURCE_ATTEMPT": "1",
+            "DOC_SOURCE_COMMIT": "a" * 40, "DOC_ARTIFACT_DIGEST": self.selected["artifact_digest"],
+            "DOC_ARCHIVE_SHA256": self.selected["archive_sha256"],
+        }
+
+    def _verify_command(self, responses: dict[str, object], environ: dict[str, str]):
+        """Runs `verify` as the deploy step does, with `gh api` answering from `responses`."""
+        calls = []
+
+        def gh(command, text):
+            calls.append(command)
+            self.assertTrue(text)
+            return json.dumps(responses[command[2]])
+
+        argv = ["pages_artifact", "verify", "--archive", str(self.archive)]
+        with mock.patch.dict("os.environ", environ), mock.patch("sys.argv", argv), \
+                mock.patch.object(pages_artifact.subprocess, "check_output", side_effect=gh), \
+                mock.patch("builtins.print"):
+            pages_artifact.main()
+        return calls
+
+    def test_verify_fetches_the_selected_metadata_like_the_previous_workflow_step(self) -> None:
+        artifact = "repos/jwmcglynn/donner/actions/artifacts/456"
+        run = "repos/jwmcglynn/donner/actions/runs/123/attempts/1"
+        calls = self._verify_command({artifact: self.artifact, run: self.run},
+                                     self._selection_environment())
+        # The two `gh api` reads the workflow step made before calling `verify`, in its order.
+        self.assertEqual(calls, [["gh", "api", artifact], ["gh", "api", run]])
+
+    def test_verify_rejects_fetched_metadata_for_another_build(self) -> None:
+        artifact = "repos/jwmcglynn/donner/actions/artifacts/456"
+        run = "repos/jwmcglynn/donner/actions/runs/123/attempts/1"
+        self.run["head_sha"] = "c" * 40
+        with self.assertRaisesRegex(ValueError, "successful main docs build"):
+            self._verify_command({artifact: self.artifact, run: self.run},
+                                 self._selection_environment())
+
+    def test_verify_fetches_nothing_for_a_noncanonical_selection(self) -> None:
+        environ = {**self._selection_environment(), "DOC_ARTIFACT_ID": "0456"}
+        # No response is configured, so any `gh api` read would fail with KeyError instead.
+        with self.assertRaisesRegex(ValueError, "canonical"):
+            self._verify_command({}, environ)
+
+    def test_summary_records_the_retained_build_like_the_previous_workflow_step(self) -> None:
+        summary = Path(self.temp.name) / "summary.md"
+        summary.write_text("earlier step\n", encoding="utf-8")
+        argv = ["pages_artifact", "summary", "--archive", str(self.archive)]
+        environ = {"GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2",
+                   "ARTIFACT_ID": "456", "GITHUB_STEP_SUMMARY": str(summary)}
+        with mock.patch.dict("os.environ", environ), mock.patch("sys.argv", argv):
+            pages_artifact.main()
+        digest = self.selected["archive_sha256"]
+        # Byte for byte what the previous inline step appended to the job summary.
+        self.assertEqual(summary.read_text(encoding="utf-8"), (
+            "earlier step\n"
+            "### Retained documentation artifact\n"
+            f"- Source commit: `{'a' * 40}`\n"
+            "- Build run: `123`, attempt `2`\n"
+            "- Pages artifact ID: `456`\n"
+            f"- artifact.tar SHA-256: `{digest}`\n"
+            "- Artifact metadata digest: retrieve from the Actions artifact API before manual "
+            "deployment\n"
+            "- Build provenance: `donner-docs-provenance-2`\n"))
+
+    def test_summary_fails_without_the_retained_archive(self) -> None:
+        with self.assertRaises(FileNotFoundError):
+            pages_artifact.build_summary(Path(self.temp.name) / "missing.tar")
+
     def test_ids_must_be_canonical_before_deployment(self) -> None:
         with self.assertRaisesRegex(ValueError, "canonical"):
             pages_artifact.positive_id("00123", "run ID")

@@ -178,6 +178,36 @@ def verify_archive(path: Path, expected_sha256: str, selected: dict[str, object]
     verify_archive_contents(path, selected)
 
 
+def fetch_metadata(selected: dict[str, object]) -> tuple[dict, dict]:
+    """Read the selected artifact's and source run attempt's metadata from the Actions API."""
+    repository = os.environ["GITHUB_REPOSITORY"]
+    artifact = _github_json(f"repos/{repository}/actions/artifacts/{selected['artifact_id']}")
+    run = _github_json(
+        f"repos/{repository}/actions/runs/{selected['run_id']}/attempts/{selected['attempt']}")
+    return artifact, run
+
+
+def _github_json(endpoint: str) -> dict:
+    return json.loads(subprocess.check_output(["gh", "api", endpoint], text=True))
+
+
+def build_summary(archive: Path) -> str:
+    """The job summary that records a retained docs build for a later manual deployment."""
+    with archive.open("rb") as stream:
+        archive_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+    environ = os.environ
+    attempt = environ.get("GITHUB_RUN_ATTEMPT", "")
+    return "".join(line + "\n" for line in (
+        "### Retained documentation artifact",
+        f"- Source commit: `{environ.get('GITHUB_SHA', '')}`",
+        f"- Build run: `{environ.get('GITHUB_RUN_ID', '')}`, attempt `{attempt}`",
+        f"- Pages artifact ID: `{environ.get('ARTIFACT_ID', '')}`",
+        f"- artifact.tar SHA-256: `{archive_sha256}`",
+        "- Artifact metadata digest: retrieve from the Actions artifact API before manual deployment",
+        f"- Build provenance: `{PROVENANCE_ARTIFACT_PREFIX}{attempt}`",
+    ))
+
+
 def write_build_marker(path: Path) -> None:
     record = _build_identity()
     path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
@@ -280,9 +310,7 @@ def verify_provenance(directory: Path, selected: dict[str, object], bazel_versio
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("inputs", "verify", "marker", "provenance"))
-    parser.add_argument("--artifact-json", type=Path)
-    parser.add_argument("--run-json", type=Path)
+    parser.add_argument("mode", choices=("inputs", "verify", "marker", "provenance", "summary"))
     parser.add_argument("--archive", type=Path)
     parser.add_argument("--lockfile", type=Path)
     parser.add_argument("--output", type=Path)
@@ -294,6 +322,16 @@ def main() -> None:
                          tool_version(["doxygen", "--version"]), tool_version(["dot", "-V"]))
         print(f"Recorded docs build provenance in {args.output}")
         return
+    if args.mode == "summary":
+        if not args.archive:
+            parser.error("summary requires --archive")
+        summary = build_summary(args.archive)
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+                output.write(summary)
+        else:
+            print(summary, end="")
+        return
     if args.mode == "marker":
         if not args.output:
             parser.error("marker requires --output")
@@ -303,10 +341,9 @@ def main() -> None:
     if args.mode == "inputs":
         print("Pages selection inputs are valid")
         return
-    if not args.artifact_json or not args.run_json or not args.archive:
-        parser.error("verify requires --artifact-json, --run-json, and --archive")
-    artifact = json.loads(args.artifact_json.read_text())
-    run = json.loads(args.run_json.read_text())
+    if not args.archive:
+        parser.error("verify requires --archive")
+    artifact, run = fetch_metadata(selected)
     verify_metadata(artifact, run, selected)
     verify_archive(args.archive, str(selected["archive_sha256"]), selected)
     print(f"Verified retained Pages artifact {selected['artifact_id']} from main {selected['source_commit']}")
@@ -315,5 +352,5 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, tarfile.TarError) as error:
+    except (ValueError, OSError, tarfile.TarError, subprocess.CalledProcessError) as error:
         raise SystemExit(f"Pages artifact validation failed: {error}") from None

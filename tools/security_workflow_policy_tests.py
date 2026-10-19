@@ -2045,13 +2045,19 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn('rm -f "$out"', download)
 
     def test_downloaded_tools_are_verified_before_extraction(self):
+        badges = ".github/workflows/badges.yaml"
+        docs_lane = _read("tools/ci/docs_lane.sh")
+        self.assertEqual(_step_body(self.supply_chain_files[DOCS_WORKFLOW], "Install Doxygen").strip(),
+                         "run: tools/ci/docs_lane.sh install-doxygen")
+        self.assertIn('readonly DOXYGEN_SHA256="%s"\n' % DOXYGEN_SHA256, docs_lane)
+        # //tools/ci:docs_lane_tests runs the script's exact download, check and extraction.
         cases = (
-            (".github/workflows/badges.yaml", "Install cloc", CLOC_SHA256),
-            (".github/workflows/deploy_docs.yaml", "Install Doxygen", DOXYGEN_SHA256),
+            (badges, _step_body(self.supply_chain_files[badges], "Install cloc"), CLOC_SHA256),
+            ("tools/ci/docs_lane.sh", docs_lane.split("\ninstall_doxygen() {\n", 1)[1],
+             '"${DOXYGEN_SHA256}  ${archive}"'),
         )
-        for path, step, digest in cases:
+        for path, body, digest in cases:
             with self.subTest(path=path):
-                body = _step_body(self.supply_chain_files[path], step)
                 self.assertIn(digest, body)
                 verification = "sha256sum --check --strict"
                 self.assertIn(verification, body)
@@ -2062,6 +2068,32 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         deploy = workflow.split("\n  deploy:\n", 1)[1]
         self.assertIn("if: github.event_name == 'workflow_dispatch'", deploy)
         self.assertIn("branches: [\"main\"]", workflow)
+
+    def test_docs_build_steps_run_their_tested_tools(self):
+        # The docs build job keeps one command per step; //tools/ci:docs_lane_tests and
+        # //tools:pages_artifact_tests pin what each command runs and writes.
+        build = self.supply_chain_files[DOCS_WORKFLOW].split("\n  deploy:\n", 1)[0]
+        steps = {
+            "Install graphviz": "uses: ./.github/actions/apt-install\n        with:\n"
+                                "          packages: graphviz\n"
+                                # A plain apt-get install keeps Graphviz's recommended fonts.
+                                "          install-recommends: \"true\"",
+            "Install Doxygen": "run: tools/ci/docs_lane.sh install-doxygen",
+            "Generate Doxygen documentation": "run: tools/build_docs.sh",
+            "Bind the docs site to this source run": "run: python3 -B -m tools.pages_artifact "
+                                                     "marker --output generated-doxygen/html/"
+                                                     "docs-build.json",
+            "Record the immutable docs selection": "env:\n          ARTIFACT_ID: "
+                                                   "${{ steps.pages.outputs.artifact_id }}\n"
+                                                   "        run: python3 -B -m "
+                                                   "tools.pages_artifact summary --archive "
+                                                   "\"$RUNNER_TEMP/artifact.tar\"",
+            "Record the docs build dependency state": "run: tools/ci/docs_lane.sh "
+                                                      "record-dependencies",
+        }
+        for name, body in steps.items():
+            with self.subTest(step=name):
+                self.assertEqual(_step_body(build, name).split("\n\n", 1)[0].strip(), body)
 
     def test_release_candidate_artifacts_share_the_maximum_retention(self):
         # tools/release_candidate.py requires each candidate artifact to stay retained through the
@@ -2202,9 +2234,14 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
         docs = self.supply_chain_files[".github/workflows/deploy_docs.yaml"]
         build = docs.split("\n  deploy:\n", 1)[0]
-        record = _step_body(build, "Record the docs build dependency state")
-        update = "bazelisk mod graph --ignore_dev_dependency --lockfile_mode=update"
-        error = "bazelisk mod graph --ignore_dev_dependency --lockfile_mode=error"
+        self.assertEqual(_step_body(build, "Record the docs build dependency state").strip(),
+                         "run: tools/ci/docs_lane.sh record-dependencies")
+        # //tools/ci:docs_lane_tests runs these phases and pins their exact commands.
+        record = _read("tools/ci/docs_lane.sh").split("record_dependencies() {", 1)[1]
+        self.assertIn("bazelisk mod graph --ignore_dev_dependency \"--lockfile_mode=$1\"",
+                      _read("tools/ci/docs_lane.sh"))
+        update = "mod_graph update"
+        error = "mod_graph error"
         self.assertLess(record.index(update), record.index(error))
         self.assertLess(record.index(error), record.index("python3 -B -m tools.pages_artifact provenance"))
         self.assertLess(build.index("- name: Upload retained Pages artifact"),
