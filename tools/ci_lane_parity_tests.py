@@ -158,6 +158,9 @@ INVOCATION_ALLOWLIST = {
        "changes no test, filter or flag."
        for step in ("Install clang-tidy", "Setup Bazel", "Restore Bazel action cache",
                     "Fetch Metal validation dependencies")},
+    ("main.yml", "macos", "macos-self-hosted", "Save Bazel action cache", "step-main-only", ""):
+        "Hosted runner teardown only: it bounds and saves the action cache that 'Restore Bazel "
+        "action cache' restored, after every test step, and changes no test, filter or flag.",
     ("main.yml", "macos", "macos-self-hosted", "Select Metal validation profile", "step-main-only",
      ""):
         "Main picks its Metal validation profile; the pull request instead requires full "
