@@ -18,6 +18,9 @@ PLATFORMS = {
     "linux-x86-64": "donner-svg_linux_x86_64",
     "darwin-arm64": "donner-svg_darwin_arm64",
 }
+# The directory the release stages each platform's CLI files in, named by its candidate record
+# role, in the order the release verifies them.
+STAGED_PLATFORMS = {"cli-linux": "linux-x86-64", "cli-macos": "darwin-arm64"}
 INPUTS = (
     ".bazelversion",
     ".bazelrc",
@@ -315,6 +318,19 @@ def verify(
     return _check_provenance(provenance, expected)
 
 
+def verify_release(*, root: Path, release: Path, commit: str, run_id: str,
+                   attempt: str) -> None:
+    """Verify every platform's staged CLI files, in `STAGED_PLATFORMS` order, before upload.
+
+    `release` is the directory the release workflow staged the record's files in. Each platform
+    is checked exactly as `verify` checks it; the first failure stops before the next platform.
+    """
+    for directory, platform in STAGED_PLATFORMS.items():
+        verify(root=root, artifacts=release / directory, platform=platform, commit=commit,
+               run_id=run_id, attempt=attempt)
+        print(f"Verified the {platform} release CLI files in {release / directory}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -333,6 +349,13 @@ def main() -> None:
             command.add_argument("--output", type=Path, required=True)
         else:
             command.add_argument("--artifacts", type=Path, required=True)
+    staged = commands.add_parser(
+        "verify-release", help="verify every platform's CLI files staged for a release")
+    staged.add_argument("--release", type=Path, required=True)
+    staged.add_argument("--commit", required=True)
+    staged.add_argument("--run-id", required=True)
+    staged.add_argument("--attempt", required=True)
+    staged.add_argument("--root", type=Path, default=Path.cwd())
     lockfile = commands.add_parser(
         "check-lockfile", help="validate a generated lockfile for a public artifact")
     lockfile.add_argument("--lockfile", type=Path, required=True)
@@ -342,6 +365,10 @@ def main() -> None:
             print(f"{check_public_lockfile(args.lockfile)}  {args.lockfile.name}")
         except (ValueError, OSError, UnicodeDecodeError) as error:
             raise SystemExit(f"Lockfile check failed: {error}") from None
+        return
+    if args.command == "verify-release":
+        verify_release(root=args.root, release=args.release, commit=args.commit,
+                       run_id=args.run_id, attempt=args.attempt)
         return
     options = dict(root=args.root, platform=args.platform, commit=args.commit,
                    run_id=args.run_id, attempt=args.attempt)

@@ -42,7 +42,8 @@ RELEASE_ROLES = ("source", "cli-linux", "cli-macos")
 PREFLIGHT_ROLES = (*RELEASE_ROLES, "bcr-entry")
 # Each published artifact's build records its generated MODULE.bazel.lock digest in provenance.
 LOCK_ROLES = ("cli-linux", "cli-macos", "editor", "docs")
-CLI_PLATFORMS = {"cli-linux": "linux-x86-64", "cli-macos": "darwin-arm64"}
+# The release stages each CLI role in a directory of its name; `release_cli` verifies them there.
+CLI_PLATFORMS = release_cli.STAGED_PLATFORMS
 # The manual workflow that assembles a record, and the artifact that retains its files.
 ASSEMBLY_WORKFLOW = ".github/workflows/release_candidate.yml"
 RECORD_ARTIFACT_PREFIX = "donner-release-candidate-"
