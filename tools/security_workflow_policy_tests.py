@@ -1621,21 +1621,53 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_compiled_action_cache_refreshes_only_from_main(self):
         action = self.supply_chain_files[".github/actions/cache-bazel-actions/action.yml"]
-        writer = action.split("    - name: Restore and refresh main action cache\n", 1)[1]
-        writer, reader = writer.split("    - name: Restore action cache without saving\n", 1)
-        self.assertIn("github.event_name != 'pull_request' && github.ref == 'refs/heads/main'", writer)
-        self.assertIn("uses: actions/cache@v6", writer)
-        self.assertIn("github.event_name == 'pull_request' || github.ref != 'refs/heads/main'", reader)
+        self.assertNotIn("uses: actions/cache@", action)
+        reader = action.split("    - name: Restore main action cache\n", 1)[1].split("\n\n", 1)[0]
+        writer = action.split("    - name: Save main action cache\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("if: inputs.mode == 'restore'\n", reader)
         self.assertIn("uses: actions/cache/restore@v6", reader)
-        for block in (writer, reader):
-            key = re.search(r"^        key: (.+)$", block, re.MULTILINE).group(1)
-            for dimension in ("runner.os", "runner.arch", "inputs.namespace", "github.sha"):
-                self.assertIn(dimension, key)
-            self.assertIn("hashFiles('.bazelversion')", key)
-            restore = block.split("restore-keys: |", 1)[1]
-            self.assertNotIn("github.sha", restore)
-            self.assertIn("inputs.namespace", restore)
+        self.assertIn("uses: actions/cache/save@v6", writer)
+        # Only a main push saves, and only a snapshot the bound step checked against its budget.
+        condition = re.search(r"^      if: (.+)$", writer, re.MULTILINE).group(1)
+        self.assertTrue(_main_write_only(condition), condition)
+        for conjunct in ("inputs.mode == 'save'", "env.BAZEL_DISK_CACHE_EXACT_HIT != 'true'",
+                         "steps.bound.outputs.save == 'true'"):
+            self.assertIn(" && " + conjunct, condition)
+        keys = [re.search(r"^        key: (.+)$", block, re.MULTILINE).group(1)
+                for block in (reader, writer)]
+        self.assertEqual(keys[0], keys[1])
+        for dimension in ("runner.os", "runner.arch", "inputs.namespace", "github.sha"):
+            self.assertIn(dimension, keys[0])
+        self.assertIn("hashFiles('.bazelversion')", keys[0])
+        restore = reader.split("restore-keys: |", 1)[1]
+        self.assertNotIn("github.sha", restore)
+        self.assertIn("inputs.namespace", restore)
+        self.assertNotIn("restore-keys", writer)
         self.assertNotIn("secrets.", action)
+
+    def test_action_cache_save_is_the_last_step_of_every_restoring_job(self):
+        # Eviction must see every Bazel command's cache use, and a job that restores without
+        # saving would freeze its namespace's snapshot on main.
+        action = "./.github/actions/cache-bazel-actions"
+        restoring = 0
+        for path, text in sorted(self.supply_chain_files.items()):
+            if not path.startswith(".github/workflows/"):
+                continue
+            for name, job in _jobs(text).items():
+                steps = [step for step in _steps(job) if _step_action(step, 8) == action]
+                if not steps:
+                    continue
+                restoring += 1
+                where = "%s:%s" % (path, name)
+                self.assertEqual(2, len(steps), where)
+                restore, save = steps
+                self.assertIsNone(_with_key(restore, "mode", 8), where)
+                self.assertEqual("save", _with_key(save, "mode", 8), where)
+                self.assertIsNone(_step_key(save, "if", 8), where)
+                self.assertEqual(_with_key(restore, "namespace", 8),
+                                 _with_key(save, "namespace", 8), where)
+                self.assertEqual(save, _steps(job)[-1], where)
+        self.assertEqual(4, restoring)
 
     def test_only_main_pushes_save_actions_caches(self):
         self.assertEqual([], _cache_write_violations(self.supply_chain_files))
@@ -1671,8 +1703,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 save_if + " && steps.ccache", "if: github.event_name != 'pull_request'"
                 " && steps.ccache", 1), "saves an Actions cache outside main"),
             "composite action writer": (action, files[action].replace(
-                "if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'\n",
-                "if: github.ref == 'refs/heads/main' || github.event_name == 'push'\n", 1),
+                "if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && ",
+                "if: github.ref == 'refs/heads/main' || github.event_name == 'push' && ", 1),
                 "saves an Actions cache outside main"),
             "setup-node cache": (wasm, files[wasm].replace(
                 "          package-manager-cache: false\n", "          cache: npm\n", 1),

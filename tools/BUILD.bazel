@@ -150,6 +150,15 @@ py_test(
 )
 
 py_test(
+    name = "ci_disk_cache_tests",
+    size = "small",
+    srcs = [
+        "ci_disk_cache.py",
+        "ci_disk_cache_tests.py",
+    ],
+)
+
+py_test(
     name = "ci_diagnostics_report_tests",
     size = "small",
     srcs = [
