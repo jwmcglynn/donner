@@ -5,7 +5,10 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "BUILD.bazel",
+    "cmake_consumer.sh",
     "coverage_contract.json",
+    "gatekeeper.py",
+    "lane.sh",
     "test_with_exclusions.py",
 ])
 
@@ -243,6 +246,36 @@ py_test(
     size = "small",
     srcs = ["test_with_exclusions_tests.py"],
     data = ["test_with_exclusions.py"],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# Run-admission decisions (duplicate push, docs-only pull request) for the workflows'
+# gatekeeper jobs.
+py_test(
+    name = "gatekeeper_tests",
+    size = "small",
+    srcs = ["gatekeeper_tests.py"],
+    data = ["gatekeeper.py"],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# The CMake consumer lane: generate, configure, build and test examples/cmake_consumer.
+py_test(
+    name = "cmake_consumer_tests",
+    size = "small",
+    srcs = ["cmake_consumer_tests.py"],
+    data = [
+        "cmake_consumer.sh",
+        "lane.sh",
+    ],
     deps = [
         "//tools:test_executable_fixtures",
         "//tools:test_timing",

@@ -293,10 +293,6 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 _SHARED_STEP_DIGESTS = {
     ("bcr_preflight.yml", "prepare",
      "Select the preflight scope"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "20d107de730743dc"),
-    ("cmake.yml", "gatekeeper",
-     "Detect docs-only PR"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "253f9952f6b681bf"),
-    ("cmake.yml", "gatekeeper",
-     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "8e295cc528e30377"),
     ("lint.yml", "gatekeeper",
      "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "8e295cc528e30377"),
     ("main.yml", "determine-targets",
