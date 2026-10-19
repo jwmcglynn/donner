@@ -82,6 +82,10 @@ HOSTED_PARITY_STEP_ALLOWLIST = {
     ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only", "--build_tests_only"):
         "Build scope only: this step builds only what the selected tests need, because the "
         "PR's Build step runs on the self-hosted lane.",
+    ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only",
+     "--build_event_json_file=$RUNNER_TEMP/coverage-parity.bep.json"):
+        "Records how many parity tests ran, for the coverage contract's receipt; it changes "
+        "what Bazel reports, not what it tests.",
 }
 
 # Main's hosted lanes whose phases tools/ci/coverage_contract.json declares, and the phases there
@@ -127,7 +131,7 @@ PARITY_ALLOWLIST = {
         "full validation on real hardware.",
 }
 
-# Tests that main's hosted macOS job runs and whose result can depend on the runner's CPU count
+# Tests that main's hosted jobs run and whose result can depend on the runner's CPU count
 # or speed, display scale or host tools, each with the escape that put it here. In the BUILD
 # files listed here, the tagged rules and the listed tests must match, so a listed test cannot
 # silently leave the parity subset. Browser tests (the carousel handoff,
@@ -399,6 +403,7 @@ _PULL_REQUEST = {
     "affected": "//donner/editor/wasm/tests:chromium_remote_smoke",
     "browser_affected": "true",
     "hosted_parity_affected": "true",
+    "hosted_parity_tests_affected": "true",
     "wgpu_reference": "false",
     "full_matrix": "false",
 }
@@ -420,17 +425,20 @@ SCENARIOS = {
         "full_matrix": "false",
         "browser_affected": "",
         "hosted_parity_affected": "",
+        "hosted_parity_tests_affected": "",
     },
     "trusted-pr": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                        renovate_pr="false"),
     # A trusted PR whose affected set reaches no browser test.
     "trusted-pr-native-only": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                                    renovate_pr="false", affected="//donner/base:base_tests",
-                                   browser_affected="false", hosted_parity_affected="false"),
+                                   browser_affected="false", hosted_parity_affected="false",
+                                   hosted_parity_tests_affected="false"),
     # A trusted PR that falls back to //... (an infrastructure change).
     "trusted-pr-fallback": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                                 renovate_pr="false", fallback="true", affected="",
-                                browser_affected="", hosted_parity_affected=""),
+                                browser_affected="", hosted_parity_affected="",
+                                hosted_parity_tests_affected=""),
     "untrusted-pr": dict(_PULL_REQUEST, use_self_hosted="false", trusted_pr="false",
                          renovate_pr="false"),
     "renovate-pr": dict(_PULL_REQUEST, use_self_hosted="false", trusted_pr="false",
@@ -464,6 +472,7 @@ _MODELLED_OUTPUTS = {
     "needs.determine-targets.outputs.wgpu_reference": "wgpu_reference",
     "needs.determine-targets.outputs.browser_affected": "browser_affected",
     "needs.determine-targets.outputs.hosted_parity_affected": "hosted_parity_affected",
+    "needs.determine-targets.outputs.hosted_parity_tests_affected": "hosted_parity_tests_affected",
     "needs.prepare.outputs.full_matrix": "full_matrix",
 }
 
@@ -2248,11 +2257,22 @@ class CiLaneParityTest(unittest.TestCase):
         self._assert_matches_allowlist(observed, HOSTED_PARITY_STEP_ALLOWLIST,
                                        "a hosted parity step runs main's step differently")
 
+    @staticmethod
+    def _coverage_manifest():
+        return json.loads(Path(runfiles.Create().Rlocation(
+            "donner/tools/ci/coverage_contract.json")).read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _counterparts(manifest, lane=None):
+        return [counterpart for name, phases in manifest["lanes"].items()
+                if lane in (None, name)
+                for classes in phases.values() for entry in classes.values()
+                for counterpart in entry.get("counterparts", [])]
+
     def test_coverage_manifest_follows_the_workflow(self):
         # tools/ci/coverage_contract.json names main's phases and their pull request
         # counterparts by step name, so it must keep naming steps that exist and run.
-        manifest = json.loads(Path(runfiles.Create().Rlocation(
-            "donner/tools/ci/coverage_contract.json")).read_text(encoding="utf-8"))
+        manifest = self._coverage_manifest()
         workflow = self.workflows["main.yml"]
         jobs = _jobs(workflow)
         self.assertEqual(set(COVERAGE_LANES), set(manifest["lanes"]))
@@ -2260,21 +2280,31 @@ class CiLaneParityTest(unittest.TestCase):
             with self.subTest(lane=lane):
                 # Every check main's hosted lane runs is a declared phase, and nothing else is.
                 self.assertEqual(_coverage_phases(workflow, lane), set(phases))
-                counterparts = [counterpart for classes in phases.values()
-                                for entry in classes.values()
-                                for counterpart in entry.get("counterparts", [])]
-                for counterpart in counterparts:
-                    job_name, step_name = counterpart["job"], counterpart["step"]
-                    steps = {_step_name(step): step for step in jobs[job_name]["steps"]}
-                    self.assertIn(step_name, steps, counterpart)
-                    self.assertTrue(job_gates(workflow, job_name, "trusted-pr-fallback"),
-                                    job_name)
-                    # The job's receipt records the step's outcome, under the step's id.
-                    receipt = steps["Record coverage receipt"]["run"]
-                    self.assertIn('--step "%s=${{ steps.%s.outcome }}"' % (
-                        step_name, steps[step_name]["id"]), receipt)
-                    if counterpart.get("min_tests"):
-                        self.assertIn('--bep "%s=' % step_name, receipt)
+        for counterpart in self._counterparts(manifest):
+            with self.subTest(counterpart=counterpart):
+                job_name, step_name = counterpart["job"], counterpart["step"]
+                steps = {_step_name(step): step for step in jobs[job_name]["steps"]}
+                self.assertTrue(job_gates(workflow, job_name, "trusted-pr-fallback"))
+                # The job's receipt records the step's outcome, under the step's id.
+                receipt = steps["Record coverage receipt"]["run"]
+                self.assertIn('--step "%s=${{ steps.%s.outcome }}"' % (
+                    step_name, steps[step_name]["id"]), receipt)
+                if counterpart.get("min_tests"):
+                    self.assertIn('--bep "%s=' % step_name, receipt)
+
+    def test_coverage_manifest_covers_every_parity_step(self):
+        # Every parity step is some class's counterpart, so a parity class cannot be deleted
+        # from the manifest unnoticed, and the contract job waits for every job whose receipt
+        # it reads.
+        manifest = self._coverage_manifest()
+        declared = {(c["job"], c["step"]) for c in self._counterparts(manifest)}
+        parity_steps = {(parity, step) for parity, steps in PARITY_SUBSETS.values()
+                        for step in steps}
+        parity_steps |= {(key[1], step) for key, (step, _) in HOSTED_PARITY_STEPS.items()}
+        self.assertEqual(set(), parity_steps - declared)
+        jobs = _jobs(self.workflows["main.yml"])
+        self.assertLessEqual({job for job, _ in declared},
+                             set(_needs(jobs["coverage-contract"])))
 
     def test_every_allowlist_entry_has_a_reason(self):
         for name, (_, reason) in STEP_OUTPUTS.items():

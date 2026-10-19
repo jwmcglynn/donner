@@ -324,8 +324,9 @@ py_test(
         "//:github_action_definitions",
         "//build_defs:macos_app_bundle.bzl",
     ],
-    # `hosted_parity`: its result can depend on the runner, so trusted PRs rerun it under main's
-    # hosted macOS constraints (.github/workflows/main.yml, macos-hosted-parity).
+    # `hosted_parity`: its result can depend on the runner, so trusted PRs also rerun it with main's
+    # hosted configuration (.github/workflows/main.yml: macos-hosted-parity and the hosted Linux
+    # job's parity step).
     tags = ["hosted_parity"],
     deps = [
         ":test_timing",

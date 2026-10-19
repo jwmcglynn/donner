@@ -222,6 +222,7 @@ jobs:
       full_test: ${{ steps.determine.outputs.full_test }}
       browser_affected: ${{ steps.determine.outputs.browser_affected }}
       hosted_parity_affected: ${{ steps.determine.outputs.hosted_parity_affected }}
+      hosted_parity_tests_affected: ${{ steps.determine.outputs.hosted_parity_tests_affected }}
       wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}
     steps:
       - name: Checkout
@@ -608,6 +609,21 @@ jobs:
             echo "Hosted-parity target query failed; selecting the hosted-parity job."
             echo "hosted_parity_affected=true" >> "$GITHUB_OUTPUT"
           fi
+          # The hosted Linux job reruns only the tagged tests (the Geode editor lane is macOS
+          # only), so it has its own selection. Fail closed as above.
+          if tagged_targets="$(
+            cd "$head_dir"
+            bazelisk query --keep_going \
+              "attr(\"tags\", \"[\\[ ]hosted_parity[,\\]]\", tests(set($parity_set)))"
+          )"; then
+            if [[ -n "$tagged_targets" ]]; then
+              echo "hosted_parity_tests_affected=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "hosted_parity_tests_affected=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "hosted_parity_tests_affected=true" >> "$GITHUB_OUTPUT"
+          fi
 
           echo "fallback=false" >> "$GITHUB_OUTPUT"
           echo "affected=$affected" >> "$GITHUB_OUTPUT"
@@ -771,7 +787,7 @@ jobs:
       # runs, when the change reaches one: main's Test step, narrowed to those tests.
       - name: Test (hosted parity subset)
         id: hosted_parity_test
-        if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.hosted_parity_affected == 'true') }}
+        if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.hosted_parity_tests_affected == 'true') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -785,7 +801,7 @@ jobs:
             exit 1
           fi
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --build_tests_only \
+            --build_tests_only --build_event_json_file="$RUNNER_TEMP/coverage-parity.bep.json" \
             --test_tag_filters=hosted_parity,-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $TARGETS
 
@@ -825,7 +841,7 @@ jobs:
 
       # The phases this job ran, for the coverage contract (tools/ci/coverage_contract.json).
       - name: Record coverage receipt
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
         shell: bash
         run: |
           python3 tools/ci_coverage_contract.py receipt --job linux \
@@ -835,15 +851,17 @@ jobs:
             --step "Test local Xvfb targets=${{ steps.local_xvfb.outcome }}" \
             --step "Test (hosted parity subset)=${{ steps.hosted_parity_test.outcome }}" \
             --step "Linker canary (non-lld linker support)=${{ steps.linker_canary.outcome }}" \
-            --step "Build and test CMake consumer=${{ steps.cmake_consumer.outcome }}"
+            --step "Build and test CMake consumer=${{ steps.cmake_consumer.outcome }}" \
+            --bep "Test (hosted parity subset)=$RUNNER_TEMP/coverage-parity.bep.json"
 
       - name: Upload coverage receipt
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: coverage-receipt-linux
           path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 3
 
       # Last step, after every Bazel command: evicts the action cache to its budget and saves
@@ -1237,8 +1255,7 @@ jobs:
           python3 tools/ci_coverage_contract.py receipt --job linux-self-hosted \
             --out "$RUNNER_TEMP/coverage-receipt/coverage-receipt.json" \
             --step "Build=${{ steps.build.outcome }}" \
-            --step "Test=${{ steps.test.outcome }}" \
-            --step "Test Linux WebGPU resvg reference=${{ steps.wgpu_resvg_reference.outcome }}"
+            --step "Test=${{ steps.test.outcome }}"
 
       - name: Upload coverage receipt
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
@@ -1247,6 +1264,7 @@ jobs:
           name: coverage-receipt-linux-self-hosted
           path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 3
 
       - name: Summarize diagnostics
@@ -2044,6 +2062,7 @@ jobs:
           name: coverage-receipt-macos-browser
           path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 3
 
       # Last step, after every Bazel command: evicts the action cache to its budget and saves
@@ -2307,6 +2326,7 @@ jobs:
           name: coverage-receipt-macos-self-hosted
           path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 3
 
       # The runner is persistent: remove the BuildBuddy key, its credential helper
@@ -2472,6 +2492,7 @@ jobs:
           name: coverage-receipt-macos-hosted-parity
           path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 3
 
       # The runner is persistent: remove the BuildBuddy key, its credential helper
@@ -2486,14 +2507,17 @@ jobs:
     # lanes run. tools/ci/coverage_contract.json declares each main-hosted phase, the classes of
     # tests it covers and the pull request steps that cover each class; every job above uploads a
     # receipt of the steps it ran, with test counts from Bazel's build events. A class this pull
-    # request's changes select must have an executed counterpart, or a reviewed exception in the
+    # request's changes select must have a counterpart that ran, or a reviewed exception in the
     # manifest that names its owner; the exceptions are printed on every run. Untrusted pull
-    # requests and main pushes run main's hosted lanes themselves, so this runs only when both
-    # self-hosted lanes replaced them. It runs no build: it reads receipts on a self-hosted Linux
-    # runner, so a trusted pull request gains no hosted job.
+    # requests and main pushes run main's hosted lanes themselves, so this runs when the
+    # self-hosted Linux lane replaced hosted Linux; when hosted macOS ran (the ci:hosted-macos
+    # label or a disabled macOS runner), the macOS lane needs no counterparts. It runs no build:
+    # it reads receipts on a self-hosted Linux runner, so a trusted pull request gains no hosted
+    # job. The hosted macOS jobs also write the browser and Geode build event files only so their
+    # Bazel invocations stay identical to the pull request copies that the receipts read.
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux, linux-self-hosted, macos-self-hosted, macos-browser, macos-hosted-parity]
-    if: ${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
+    if: ${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -2517,5 +2541,6 @@ jobs:
             --selection "fallback=${{ needs.determine-targets.outputs.fallback }}" \
             --selection "browser_affected=${{ needs.determine-targets.outputs.browser_affected }}" \
             --selection "hosted_parity_affected=${{ needs.determine-targets.outputs.hosted_parity_affected }}" \
-            --selection "wgpu_reference=${{ needs.determine-targets.outputs.wgpu_reference }}" \
+            --selection "hosted_parity_tests_affected=${{ needs.determine-targets.outputs.hosted_parity_tests_affected }}" \
+            --selection "self_hosted_macos=${{ needs.gatekeeper.outputs.use_self_hosted_macos }}" \
             | tee -a "$GITHUB_STEP_SUMMARY"

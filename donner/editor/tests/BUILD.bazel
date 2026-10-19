@@ -214,8 +214,9 @@ donner_cc_test(
     renderer_backend = "geode",
     # GPU-backed framebuffer cases need short shards and isolated local device use.
     shard_count = 8,
-    # `hosted_parity`: its result can depend on the runner, so trusted PRs rerun it under main's
-    # hosted macOS constraints (.github/workflows/main.yml, macos-hosted-parity).
+    # `hosted_parity`: its result can depend on the runner, so trusted PRs also rerun it with main's
+    # hosted configuration (.github/workflows/main.yml: macos-hosted-parity and the hosted Linux
+    # job's parity step).
     tags = [
         "exclusive-if-local",
         "hosted_parity",
@@ -325,8 +326,9 @@ donner_cc_test(
     opens_gpu_device = True,
     # Keep the software-GPU editor cases below the per-target timeout.
     shard_count = 4,
-    # `hosted_parity`: its result can depend on the runner, so trusted PRs rerun it under main's
-    # hosted macOS constraints (.github/workflows/main.yml, macos-hosted-parity).
+    # `hosted_parity`: its result can depend on the runner, so trusted PRs also rerun it with main's
+    # hosted configuration (.github/workflows/main.yml: macos-hosted-parity and the hosted Linux
+    # job's parity step).
     tags = ["hosted_parity"],
     variants = ["geode"],
     deps = [
@@ -754,8 +756,9 @@ donner_cc_test(
     # 75 independent gtest cases (wall-clock-sensitive cases live in the
     # separate async_renderer_wallclock_tests target); shard for parallelism.
     shard_count = 4,
-    # `hosted_parity`: its result can depend on the runner, so trusted PRs rerun it under main's
-    # hosted macOS constraints (.github/workflows/main.yml, macos-hosted-parity).
+    # `hosted_parity`: its result can depend on the runner, so trusted PRs also rerun it with main's
+    # hosted configuration (.github/workflows/main.yml: macos-hosted-parity and the hosted Linux
+    # job's parity step).
     tags = ["hosted_parity"],
     variants = ["geode"],
     deps = _ASYNC_RENDERER_TEST_DEPS,
@@ -765,8 +768,9 @@ donner_cc_test(
     name = "render_coordinator_tests",
     srcs = ["RenderCoordinator_tests.cc"],
     data = ["//:geode_splash.svg"],
-    # `hosted_parity`: its result can depend on the runner, so trusted PRs rerun it under main's
-    # hosted macOS constraints (.github/workflows/main.yml, macos-hosted-parity).
+    # `hosted_parity`: its result can depend on the runner, so trusted PRs also rerun it with main's
+    # hosted configuration (.github/workflows/main.yml: macos-hosted-parity and the hosted Linux
+    # job's parity step).
     tags = ["hosted_parity"],
     deps = [
         ":async_test_polling",

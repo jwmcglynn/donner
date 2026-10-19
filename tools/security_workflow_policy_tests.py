@@ -101,8 +101,6 @@ SELF_HOSTED_NARROWING = {
     (".github/workflows/main.yml", "macos-hosted-parity"):
         " && (needs.determine-targets.outputs.fallback == 'true' || "
         "needs.determine-targets.outputs.hosted_parity_affected == 'true')",
-    (".github/workflows/main.yml", "coverage-contract"):
-        " && needs.gatekeeper.outputs.use_self_hosted_macos == 'true'",
 }
 
 # A runner label set is GitHub-hosted only when it is exactly one hosted image label. Any other

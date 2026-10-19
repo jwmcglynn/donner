@@ -36,7 +36,7 @@ _SKIPPED = {"outcome": "skipped"}
 _COMPLETE = {
     "linux": _receipt("linux", {
         "Build": _SKIPPED, "Test": _SKIPPED, "Test local Xvfb targets": _ran(),
-        "Test (hosted parity subset)": _ran(),
+        "Test (hosted parity subset)": _ran(1),
         "Linker canary (non-lld linker support)": _ran(),
         "Build and test CMake consumer": _ran()}),
     "linux-self-hosted": _receipt("linux-self-hosted", {"Build": _ran(), "Test": _ran()}),
@@ -49,7 +49,8 @@ _COMPLETE = {
         "Test": _ran(3), "Test (Geode editor lane)": _ran(6)}),
 }
 
-_EVERYTHING = {"always": True, "browser_affected": True, "hosted_parity_affected": True}
+_EVERYTHING = {"always": True, "browser_affected": True, "hosted_parity_affected": True,
+               "hosted_parity_tests_affected": True, "self_hosted_macos": True}
 
 
 class CoverageContractTest(unittest.TestCase):
@@ -69,7 +70,7 @@ class CoverageContractTest(unittest.TestCase):
         problems, excepted = self._check(_COMPLETE)
         self.assertEqual([], problems)
         # Each gap the manifest accepts is reported on every run, with its owner.
-        self.assertEqual(3, len(excepted))
+        self.assertEqual(4, len(excepted))
         for line in excepted:
             self.assertIn("owner jwmcglynn", line)
         self.assertTrue(any(line.startswith("macos / Test / hosted-equivalent: ")
@@ -135,9 +136,30 @@ class CoverageContractTest(unittest.TestCase):
         del receipts["macos-hosted-parity"]
         del receipts["macos-browser"]
         receipts["linux"]["steps"].pop("Test (hosted parity subset)")
-        self.assertEqual([], self._check(receipts, {"always": True})[0])
+        self.assertEqual([], self._check(receipts, {"always": True, "self_hosted_macos": True})[0])
         # A //... fallback selects every class.
-        self.assertEqual(5, len(self._check(receipts, {"always": True, "fallback": True})[0]))
+        self.assertEqual(5, len(self._check(receipts, {"always": True, "fallback": True,
+                                                       "self_hosted_macos": True})[0]))
+
+    def test_hosted_macos_routing_still_checks_linux(self):
+        # With the ci:hosted-macos label (or the macOS runner disabled), main's hosted macOS job
+        # ran on the pull request itself, so the macOS lane needs no counterparts. Linux still
+        # ran on the self-hosted lane, and the #1889 control must still fail.
+        receipts = {job: receipt for job, receipt in copy.deepcopy(_COMPLETE).items()
+                    if job.startswith("linux")}
+        selection = dict(_EVERYTHING, self_hosted_macos=False)
+        problems, excepted = self._check(receipts, selection)
+        self.assertEqual([], problems)
+        self.assertFalse(any(line.startswith("macos /") for line in excepted))
+        receipts["linux"]["steps"]["Test (hosted parity subset)"] = _SKIPPED
+        self.assertEqual(1, len(self._check(receipts, selection)[0]))
+        # A fallback does not change routing.
+        self.assertEqual(1, len(self._check(receipts, dict(selection, fallback=True))[0]))
+
+    def test_a_parity_step_that_ran_no_tests_does_not_count(self):
+        receipts = copy.deepcopy(_COMPLETE)
+        receipts["linux"]["steps"]["Test (hosted parity subset)"] = _ran(0)
+        self.assertEqual(1, len(self._check(receipts)[0]))
 
     def test_bep_counts_separate_executed_from_cached_results(self):
         events = [
@@ -173,8 +195,9 @@ class CoverageContractTest(unittest.TestCase):
                 path.write_text(json.dumps(receipt), encoding="utf-8")
             manifest = runfiles.Create().Rlocation("donner/tools/ci/coverage_contract.json")
             arguments = ["check", "--manifest", manifest, "--receipts", directory,
-                         "--selection", "fallback=true"]
+                         "--selection", "fallback=true", "--selection", "self_hosted_macos=true"]
             self.assertEqual(0, contract.main(arguments))
+            self.assertEqual(2, contract.main(arguments + ["--selection", "typo=true"]))
             (root / "coverage-receipt-linux" / "coverage-receipt.json").unlink()
             self.assertEqual(1, contract.main(arguments))
 

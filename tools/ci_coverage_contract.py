@@ -5,13 +5,14 @@ lanes. A pull request whose lanes skipped something main runs can be green and s
 red. tools/ci/coverage_contract.json declares, for each main-hosted lane in main.yml, its phases
 (steps), the classes of tests each phase covers, and the pull request steps that cover each class
 on a trusted pull request. A class without a pull request counterpart must carry a reviewed
-exception that names an owner.
+exception that names an owner. A lane whose hosted job itself ran on the pull request (its route
+is off) needs no counterparts.
 
 Each pull request job records a receipt of the phases it ran (`receipt`): every step's outcome
 and, for steps that write a Bazel build event file, how many test targets reported a result and
 how many of those executed rather than coming from a cache. The `check` command compares the
-receipts with the manifest and fails when a class selected for this pull request has no executed
-counterpart and no exception.
+receipts with the manifest and fails when a class selected for this pull request has no
+counterpart that ran (and reported its minimum number of test targets) and no exception.
 """
 
 import argparse
@@ -21,7 +22,11 @@ import sys
 
 # Pull request selections a class can depend on, from the determine-targets job. `always` holds
 # whenever CI runs at all; a //... fallback reaches every class.
-CONDITIONS = ("always", "browser_affected", "hosted_parity_affected", "wgpu_reference")
+CONDITIONS = ("always", "browser_affected", "hosted_parity_affected",
+              "hosted_parity_tests_affected")
+# Routing outputs that say a lane's hosted job was replaced by self-hosted jobs on this pull
+# request. A fallback does not change routing.
+ROUTES = ("always", "self_hosted_macos")
 # Step outcomes that mean the step ran its command (it may have failed; the job reports that).
 EXECUTED = ("success", "failure")
 RECEIPT_VERSION = 1
@@ -71,7 +76,9 @@ def manifest_problems(manifest):
     """Structural problems of a coverage manifest."""
     if manifest.get("version") != 1 or not isinstance(manifest.get("lanes"), dict):
         return ["manifest must be version 1 with a `lanes` mapping"]
-    problems = []
+    routes = manifest.get("routes", {})
+    problems = ["%s has no route among %s" % (lane, ROUTES) for lane in sorted(manifest["lanes"])
+                if routes.get(lane) not in ROUTES]
     for lane, phases in sorted(manifest["lanes"].items()):
         for phase, classes in sorted(phases.items()):
             if not classes:
@@ -127,9 +134,16 @@ def _counterpart_ran(counterpart, receipts):
     return step.get("tests", 0) >= counterpart.get("min_tests", 0)
 
 
-def _classes(manifest):
-    """(lane / phase / class, entry) for every class in the manifest, in order."""
+def _routed(manifest, lane, selection):
+    route = manifest["routes"][lane]
+    return route == "always" or selection.get(route, False)
+
+
+def _classes(manifest, selection):
+    """(lane / phase / class, entry) for every class of a replaced lane, in order."""
     for lane, phases in sorted(manifest["lanes"].items()):
+        if not _routed(manifest, lane, selection):
+            continue
         for phase, classes in sorted(phases.items()):
             for name, entry in sorted(classes.items()):
                 yield "%s / %s / %s" % (lane, phase, name), entry
@@ -149,11 +163,11 @@ def _gap(where, counterparts):
 def check(manifest, receipts, selection):
     """(problems, exceptions used) for these receipts and this pull request's selection.
 
-    A problem is a selected class with no executed counterpart and no exception.
+    A problem is a selected class with no counterpart that ran and no exception.
     """
     problems = []
     excepted = []
-    for where, entry in _classes(manifest):
+    for where, entry in _classes(manifest, selection):
         if not _selected(entry["when"], selection):
             continue
         if entry.get("exception"):
@@ -200,7 +214,12 @@ def _run_check(args):
     selection = {name: value == "true" for name, value in _pairs(args.selection,
                                                                  "--selection").items()}
     selection["always"] = True
-    problems, excepted = check(manifest, _load_receipts(args.receipts), selection)
+    unknown = set(selection) - set(CONDITIONS) - set(ROUTES) - {"fallback"}
+    if unknown:
+        print("unknown selection %s" % sorted(unknown), file=sys.stderr)
+        return 2
+    receipts = _load_receipts(args.receipts)
+    problems, excepted = check(manifest, receipts, selection)
     for line in excepted:
         print("Coverage exception: %s" % line)
     for line in problems:
@@ -208,6 +227,9 @@ def _run_check(args):
     if not problems:
         print("Every selected main phase and class ran on this pull request or has a reviewed "
               "exception.")
+    elif any(step.get("outcome") == "failure" for receipt in receipts.values()
+             for step in receipt["steps"].values()):
+        print("A lane failed above; fix it first, since a failed job can skip later steps.")
     return 1 if problems else 0
 
 
