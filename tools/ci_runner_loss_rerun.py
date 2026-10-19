@@ -44,7 +44,7 @@ LOST_COMMUNICATION = "The hosted runner lost communication with the server."
 # runner failing, whatever the workload was doing.
 ILLEGAL_BYTE_SEQUENCE = re.compile(
     r"^(?:System\.IO\.IOException: )?Illegal byte sequence : "
-    r"'/Users/runner/(?:actions-runner/extracted/_diag|work/_temp)/")
+    r"'/Users/runner/(?:actions-runner/extracted/(?P<diag>_diag)|work/(?P<temp>_temp))/")
 EXIT_CODE = re.compile(r"^Process completed with exit code \d+\.$")
 # Notices the hosted image or the CI workflow emits on passing and failing jobs alike.
 BENIGN_NOTICES = (
@@ -144,8 +144,9 @@ def _annotation_kind(annotation: dict) -> Optional[str]:
         return None
     if message.startswith(LOST_COMMUNICATION):
         return "lost"
-    if ILLEGAL_BYTE_SEQUENCE.match(message) and "/../" not in message.split("\n", 1)[0]:
-        return "io"
+    match = ILLEGAL_BYTE_SEQUENCE.match(message)
+    if match and "/../" not in message.split("\n", 1)[0]:
+        return "io_temp" if match.group("temp") else "io_diag"
     return "exit" if EXIT_CODE.match(message) else None
 
 
@@ -164,9 +165,18 @@ def _short(text: str, limit: int = 120) -> str:
 
 def _match_signature(kinds: set[str], failed_steps: list[str]) -> tuple[Optional[str], str]:
     """The signature these annotation kinds and failed steps match, or the reason none does."""
-    if "io" in kinds:
-        # The runner itself could not write, so failed workload steps are its casualties.
+    workload_failures = [step for step in failed_steps if not step.startswith("Post ")]
+    if "io_temp" in kinds:
+        # The runner could not write a step's own script, so the steps it could not start fail
+        # as its casualties.
         return SIGNATURE_IO, ""
+    if "io_diag" in kinds and not workload_failures:
+        # A runner log write failed; at most post-job cleanup steps failed with it.
+        return SIGNATURE_IO, ""
+    if "io_diag" in kinds:
+        # The log write may have followed a real failure, so it does not explain that failure.
+        return None, "runner log I/O error after failed workload step(s): %s" % ", ".join(
+            workload_failures)
     if "lost" not in kinds:
         return None, "no runner-loss annotation"
     if failed_steps:

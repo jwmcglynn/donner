@@ -145,6 +145,21 @@ class ClassifierTests(unittest.TestCase):
         self.assertTrue(decision.eligible)
         self.assertEqual(rerun.SIGNATURE_IO, decision.jobs[0].signature)
 
+    def test_runner_log_write_failure_after_a_failed_test_is_not_rerun(self):
+        # A test that genuinely fails before the runner's own log write breaks must stay red.
+        failed_test = job(116294844879, "macos", "failure", steps(
+            ("Build", "success"),
+            ("Test", "failure"),
+            ("Post Restore Bazel action cache", "failure"),
+        ))
+        decision = classify(run(38696609859), [failed_test], {116294844879: [
+            annotation("Process completed with exit code 3."), annotation(DIAG_PAGE),
+            annotation(CAPACITY, "notice")]})
+
+        self.assertFalse(decision.eligible)
+        self.assertEqual("runner log I/O error after failed workload step(s): Test",
+                         decision.jobs[0].reason)
+
     def test_runner_loss_beside_a_real_test_failure_is_not_rerun(self):
         decision = classify(run(39124107325), [LOST_IN_BUILD, LINUX_TEST_FAILURE], {
             117788702573: LOST_IN_BUILD_ANNOTATIONS,
