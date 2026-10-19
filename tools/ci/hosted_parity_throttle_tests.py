@@ -173,6 +173,15 @@ class HostedParityThrottleTest(unittest.TestCase):
         finally:
             throttle.subprocess.run = original
 
+    def test_the_test_sees_bazels_environment(self):
+        self.assertEqual({"HOME": "/h", "LANG": "en_US.UTF-8"}, throttle.test_environment(
+            {"HOME": "/h", "LANG": "en_US.UTF-8", "PYTHONSAFEPATH": "1", "LC_CTYPE": "C.UTF-8"}))
+        # An explicit locale override stays.
+        self.assertEqual({"LC_ALL": "C", "LC_CTYPE": "UTF-8"},
+                         throttle.test_environment({"LC_ALL": "C", "LC_CTYPE": "UTF-8"}))
+        self.assertEqual({"LC_CTYPE": "en_US.UTF-8"},
+                         throttle.test_environment({"LC_CTYPE": "en_US.UTF-8"}))
+
     def test_the_test_status_passes_through(self):
         for code in (0, 1, 3):
             with self.subTest(code=code):

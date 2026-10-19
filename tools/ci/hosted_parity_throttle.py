@@ -35,6 +35,19 @@ PERIOD_S = 0.02
 # How often the process tree is listed again, so new child processes are throttled too.
 TREE_REFRESH_S = 0.25
 TERMINATING_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)
+# The locale Python sets in its own environment when it starts under the C locale (PEP 538).
+_COERCED_LOCALES = ("C.UTF-8", "C.utf8", "UTF-8")
+
+
+def test_environment(environment):
+    """The environment Bazel gave the test, without what this launcher's own Python startup
+    added: rules_python's PYTHONSAFEPATH and a coerced LC_CTYPE (Bazel's test environment sets
+    neither)."""
+    environment = dict(environment)
+    environment.pop("PYTHONSAFEPATH", None)
+    if environment.get("LC_CTYPE") in _COERCED_LOCALES and "LC_ALL" not in environment:
+        del environment["LC_CTYPE"]
+    return environment
 
 
 def descendants(root, table):
@@ -148,7 +161,7 @@ def main(argv):
     if not argv:
         print("usage: hosted_parity_throttle COMMAND [ARGS...]", file=sys.stderr)
         return 2
-    child = subprocess.Popen(argv)
+    child = subprocess.Popen(argv, env=test_environment(os.environ))
     throttle = Throttle(child)
     for signum in TERMINATING_SIGNALS:
         signal.signal(signum, throttle.on_signal)
