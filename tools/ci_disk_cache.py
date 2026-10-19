@@ -40,8 +40,9 @@ TAR_BLOCK = 512
 # Per file: a ustar header plus a pax extended header (its own header and one data block), which
 # the posix-format tar archive actions/cache writes carries for each file's times and long path.
 TAR_FILE_HEADER = 3 * TAR_BLOCK
-# The end-of-archive marker is two zero blocks.
+# The end-of-archive marker is two zero blocks, and tar pads the archive to whole records.
 TAR_TRAILER = 2 * TAR_BLOCK
+TAR_RECORD = 20 * TAR_BLOCK
 # Bazel's in-flight writes. An idle server leaves only orphans of interrupted writes there.
 TMP_DIR = "tmp"
 PROBE_WALK_SECONDS = 20
@@ -95,10 +96,15 @@ def scan(root):
     return entries, directories, others
 
 
-def archive_estimate(entries, directories, others):
-    """Uncompressed tar stream size for these entries, at most; directories and links are headers."""
+def unpadded_estimate(entries, directories, others):
+    """Tar stream bytes before record padding; directories and links are headers only."""
     return (sum(tar_bytes(entry.size) for entry in entries)
             + (directories + others) * TAR_FILE_HEADER + TAR_TRAILER)
+
+
+def archive_estimate(entries, directories, others):
+    """Uncompressed tar stream size for these entries, at most, padded to whole records."""
+    return -(-unpadded_estimate(entries, directories, others) // TAR_RECORD) * TAR_RECORD
 
 
 def eviction_order(entries):
@@ -112,7 +118,9 @@ def eviction_order(entries):
 
 def select_evictions(entries, directories, others, budget):
     """The shortest oldest-first prefix whose removal brings the archive within budget."""
-    excess = archive_estimate(entries, directories, others) - budget
+    # A padded archive fits the budget exactly when its unpadded stream fits the budget's whole
+    # records.
+    excess = unpadded_estimate(entries, directories, others) - budget // TAR_RECORD * TAR_RECORD
     evict = []
     for entry in eviction_order(entries):
         if excess <= 0 and not entry.temporary:

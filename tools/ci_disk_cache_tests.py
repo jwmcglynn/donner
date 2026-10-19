@@ -5,6 +5,9 @@ from contextlib import redirect_stdout
 import io
 import os
 from pathlib import Path
+import random
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -13,10 +16,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import ci_disk_cache
+import test_timing
 
 MIB = 1024 * 1024
 # Just under half a MiB, so two entries and the directory headers fit a 1 MiB budget.
-HALF = MIB // 2 - 8192
+HALF = MIB // 2 - 16384
 # Fixture mtimes, in seconds since the epoch: older entries have smaller values.
 OLD, MIDDLE, NEW = 1_000_000, 2_000_000, 3_000_000
 
@@ -63,6 +67,69 @@ class CiDiskCacheTests(unittest.TestCase):
         self.assertEqual(2048, ci_disk_cache.tar_bytes(1))
         self.assertEqual(2048, ci_disk_cache.tar_bytes(512))
         self.assertEqual(2560, ci_disk_cache.tar_bytes(513))
+
+    def _posix_tar_bytes(self) -> int:
+        """Size of the posix-format archive actions/cache would write for the cache directory."""
+        gnu = shutil.which("gtar") or shutil.which("tar")
+        version = subprocess.run([gnu, "--version"], capture_output=True, text=True,
+                                 timeout=test_timing.STALL_GUARD_SECONDS).stdout
+        # The hosted runners save with GNU tar --posix (Homebrew gtar on macOS), which stores no
+        # extended attributes. bsdtar writes the same format with --format=pax once its macOS
+        # metadata entries and extended attributes are off.
+        posix = (["--posix"] if "GNU tar" in version else
+                 ["--format=pax", "--no-mac-metadata", "--no-xattrs"])
+        archive = self.root / "snapshot.tar"
+        subprocess.run([gnu, *posix, "-cf", str(archive), "-P", str(self.cache)], check=True,
+                       timeout=test_timing.STALL_GUARD_SECONDS)
+        return archive.stat().st_size
+
+    def test_estimate_bounds_a_real_posix_archive(self) -> None:
+        # Real cache paths: two-level digest directories and 64-character hex names, which need
+        # pax path records once the absolute prefix is added.
+        generator = random.Random(1905)
+        for index in range(40):
+            digest = "%064x" % generator.getrandbits(256)
+            store = "ac" if index % 3 == 0 else "cas"
+            self._entry("%s/%s/%s" % (store, digest[:2], digest), generator.randrange(0, 5000),
+                        OLD + index)
+        for size in (0, 1, 511, 512, 513, 10240):
+            self._entry("cas/zz/edge-%d" % size, size, NEW)
+        self.assertLessEqual(self._posix_tar_bytes(), self._estimate())
+
+    def _main_revision(self, generator: random.Random, revision: int, now: int) -> dict:
+        """Uses part of the restored snapshot, writes new outputs, and returns both by size."""
+        entries = sorted(path for path in self.cache.rglob("*") if path.is_file())
+        used = generator.sample(entries, min(len(entries), generator.randrange(0, 6)))
+        for path in used:
+            os.utime(path, (now, now))
+        written = [self._entry("cas/%02x/r%d-%d" % (generator.randrange(256), revision, n),
+                               generator.randrange(1, 200_000), now + 1)
+                   for n in range(generator.randrange(1, 12))]
+        return {str(path): path.stat().st_size for path in used + written}
+
+    def _fits_alone(self, recent: dict, now: int) -> bool:
+        _, directories, others = ci_disk_cache.scan(str(self.cache))
+        entries = [ci_disk_cache.Entry(path, size, now, False) for path, size in recent.items()]
+        return ci_disk_cache.archive_estimate(entries, directories, others) <= MIB
+
+    def test_bound_holds_across_snapshot_growth(self) -> None:
+        # Each round is one main revision: restore the previous snapshot, use part of it, write
+        # new outputs, then bound. The cap must hold whatever the history, and the entries the
+        # latest revision used must all survive whenever they fit the budget on their own.
+        generator = random.Random(18)
+        stored = 0
+        for revision in range(25):
+            now = OLD + 1000 * (revision + 1)
+            recent = self._main_revision(generator, revision, now)
+            stored += sum(recent.values())
+            self.output.unlink(missing_ok=True)
+            self._bound("--max-mib", "1")
+            self.assertEqual("save=true", self._save_output(), revision)
+            self.assertLessEqual(self._estimate(), MIB, revision)
+            if self._fits_alone(recent, now):
+                self.assertTrue(all(os.path.exists(path) for path in recent), revision)
+        # The history stored several budgets' worth, so eviction ran in most rounds.
+        self.assertGreater(stored, 4 * MIB)
 
     def test_cache_within_budget_is_saved_unchanged(self) -> None:
         kept = [self._entry("ac/aa/one", 1000, OLD), self._entry("cas/bb/two", 5000, NEW)]

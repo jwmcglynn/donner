@@ -156,6 +156,7 @@ py_test(
         "ci_disk_cache.py",
         "ci_disk_cache_tests.py",
     ],
+    deps = [":test_timing"],
 )
 
 py_test(

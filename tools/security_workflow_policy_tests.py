@@ -1646,6 +1646,22 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn("restore-keys", writer)
         self.assertNotIn("secrets.", action)
 
+    def test_bounded_save_is_the_only_writer_of_action_cache_snapshots(self):
+        # Every restore reads the newest snapshot under the key prefix, so the bound holds for
+        # restores only while the bounded save is the one step that can write that prefix or
+        # the disk cache path.
+        action_path = ".github/actions/cache-bazel-actions/action.yml"
+        for path, text in sorted(self.supply_chain_files.items()):
+            if path != action_path:
+                self.assertNotIn("bazel-actions-", text, path)
+                self.assertNotIn(".cache/bazel-disk", text, path)
+        action = self.supply_chain_files[action_path]
+        savers = [step for step in _steps(action, indent=4)
+                  if _step_action(step, 6) in ("actions/cache", "actions/cache/save")]
+        self.assertEqual(1, len(savers))
+        self.assertIn("steps.bound.outputs.save == 'true'", _step_key(savers[0], "if", 6))
+        self.assertIn("key: bazel-actions-v2-", savers[0])
+
     def test_action_cache_save_is_the_last_step_of_every_restoring_job(self):
         # Eviction must see every Bazel command's cache use, and a job that restores without
         # saving would freeze its namespace's snapshot on main.
