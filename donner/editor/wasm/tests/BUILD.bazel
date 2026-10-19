@@ -384,6 +384,7 @@ playwright_bin.playwright_test(
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
+        "firefox-launch-env.cjs",
         "flat-capture-retake.mjs",
         "gesture-streams.ts",
         "package.json",
@@ -999,6 +1000,7 @@ playwright_bin.playwright_test(
         "canvas-color-stats.ts",
         "chromium-launch-env.cjs",
         "failure-canvas-evidence.ts",
+        "firefox-launch-env.cjs",
         "flat-capture-retake.mjs",
         "gesture-streams.ts",
         "gpu-session-console.ts",
@@ -1077,6 +1079,15 @@ js_test(
 exports_files(
     ["chromium-launch-env.cjs"],
     visibility = ["//donner/gpu/shader/browser_tests:__pkg__"],
+)
+
+js_test(
+    name = "firefox_launch_env_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["firefox-launch-env.cjs"],
+    entry_point = "firefox-launch-env.spec.mjs",
+    node_options = ["--test"],
 )
 
 js_test(
