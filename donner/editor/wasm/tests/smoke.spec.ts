@@ -1,6 +1,7 @@
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
+import { join } from "node:path";
 import {
   gatedPulseFrame,
   presentedPulseCompletion,
@@ -4861,7 +4862,36 @@ async function reportAnimationCadence({
   assertAnimationCadence(measurement, evidence);
 }
 
+// Deliberate fault injection for the animation lane: the first animated Preview each browser opens
+// in a run waits this long before loading the editor. It reproduces the one-time cost of a
+// browser's first boot on a freshly provisioned host (browser startup, GPU adapter and device
+// creation, first shader and pipeline compilation), which later boots in the same run do not pay.
+// A marker in the test's temporary directory makes it once per browser and run, also across
+// Playwright worker restarts.
+const kAnimationFirstBootDelayMs = Number(
+  process.env.DONNER_ANIMATION_FIRST_BOOT_DELAY_MS ?? 0,
+);
+if (!Number.isFinite(kAnimationFirstBootDelayMs) || kAnimationFirstBootDelayMs < 0) {
+  throw new Error("invalid DONNER_ANIMATION_FIRST_BOOT_DELAY_MS fault injection");
+}
+
+async function injectAnimationFirstBootDelay(page: Page, browserName: string) {
+  if (kAnimationFirstBootDelayMs === 0) return;
+  const temporaryDirectory = process.env.TEST_TMPDIR;
+  if (!temporaryDirectory) throw new Error("the first-boot fault injection needs TEST_TMPDIR");
+  try {
+    await writeFile(join(temporaryDirectory, `animation-first-boot-delayed-${browserName}`), "", {
+      flag: "wx",
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code === "EEXIST") return;
+    throw error;
+  }
+  await page.waitForTimeout(kAnimationFirstBootDelayMs);
+}
+
 async function openAnimatedPreview(page: Page, browserName: string, testInfo: TestInfo) {
+  await injectAnimationFirstBootDelay(page, browserName);
   const rafControls = process.env.DONNER_ANIMATION_RAF_CONTROLS === "1";
   if (rafControls) testInfo.setTimeout(testInfo.timeout + 21000);
   const rafControlSamples: Record<string, Awaited<ReturnType<typeof measurePageRaf>>> = {};
