@@ -62,7 +62,7 @@ class GatekeeperTest(unittest.TestCase):
         _git(self.repo, "config", "user.email", "fixture@example.com")
         self.root = _commit(self.repo, ["README.md"], "root")
 
-    def _run(self, decision, gh_stdout="0\n", gh_status=0, **context):
+    def _run(self, decision, gh_stdout="0\n", gh_status=0, args=(), cwd=None, **context):
         output = self.work / "github_output"
         output.write_text("", encoding="utf-8")
         capture = self.work / "gh_calls.jsonl"
@@ -73,7 +73,8 @@ class GatekeeperTest(unittest.TestCase):
                    GH_STATUS=str(gh_status), GITHUB_REPOSITORY="owner/repo",
                    GITHUB_REF="refs/heads/feature", GITHUB_REF_NAME="feature", **_GIT_ENV)
         env.update(context)
-        result = subprocess.run([sys.executable, self.script, decision], cwd=self.repo, env=env,
+        result = subprocess.run([sys.executable, self.script, decision, *args],
+                                cwd=cwd or self.repo, env=env,
                                 capture_output=True, text=True, check=False,
                                 timeout=test_timing.STALL_GUARD_SECONDS)
         calls = [json.loads(line) for line in capture.read_text().splitlines()]
@@ -192,6 +193,67 @@ class GatekeeperTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(output, "")
 
+
+    # main-advanced
+
+    def _checkout(self):
+        """A clone of the fixture repository, which is its origin."""
+        checkout = self.work / "checkout"
+        subprocess.run(["git", "clone", "-q", str(self.repo), str(checkout)], check=True,
+                       env=dict(os.environ, **_GIT_ENV), timeout=test_timing.STALL_GUARD_SECONDS)
+        return checkout
+
+    def _advanced(self, gh_stdout, event="schedule", **kwargs):
+        return self._run("main-advanced", gh_stdout=gh_stdout, args=("--workflow", "perf.yml"),
+                         GITHUB_EVENT_NAME=event, **kwargs)
+
+    def test_manual_dispatch_always_runs_without_queries(self):
+        result, output, calls = self._advanced("", event="workflow_dispatch",
+                                               cwd=self.work)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "should_run=true\n")
+        self.assertEqual(calls, [])
+
+    def test_unchanged_main_skips(self):
+        checkout = self._checkout()
+        result, output, calls = self._advanced(self.root + "\n", cwd=checkout)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "should_run=false\n")
+        self.assertEqual(calls, [["run", "list", "--workflow=perf.yml", "--status=success",
+                                  "--limit=1", "--json", "headSha", "--jq", ".[0].headSha"]])
+        self.assertIn("has not advanced since the last successful perf.yml run", result.stdout)
+
+    def test_advanced_main_runs(self):
+        checkout = self._checkout()
+        new_main = _commit(self.repo, ["donner/code.cc"], "advance main")
+        result, output, _ = self._advanced(self.root + "\n", cwd=checkout)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "should_run=true\n")
+        self.assertIn(f"advanced from {self.root} to {new_main}", result.stdout)
+
+    def test_no_previous_success_runs(self):
+        checkout = self._checkout()
+        for stdout in ("", "\n", "null\n"):
+            with self.subTest(stdout=stdout):
+                result, output, _ = self._advanced(stdout, cwd=checkout)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, "should_run=true\n")
+
+    def test_query_failures_fail_the_step_without_a_decision(self):
+        checkout = self._checkout()
+        result, output, _ = self._advanced(self.root, gh_status=4, cwd=checkout)
+        self.assertEqual(result.returncode, 4)
+        self.assertEqual(output, "")
+        # No origin to fetch main from.
+        result, output, calls = self._advanced(self.root, cwd=self.work)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(output, "")
+        self.assertEqual(calls, [])
+
+    def test_workflow_is_required(self):
+        result, output, calls = self._run("main-advanced", GITHUB_EVENT_NAME="schedule")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual((output, calls), ("", []))
 
 if __name__ == "__main__":
     unittest.main()

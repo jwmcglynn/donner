@@ -12,6 +12,10 @@ for every event. Who may run what (trust and secrets) stays in the workflow itse
                   cleanly instead of being cancelled. Needs `GH_TOKEN` for `gh pr list`.
   docs-only       `docs_only=true` for a pull request whose changes, since its merge base, are
                   all documentation. Anything that is not a pull request is never docs-only.
+  main-advanced --workflow FILE
+                  `should_run=true` for a manual dispatch, or when origin/main has moved since
+                  FILE's last successful run (or FILE has none). A scheduled nightly then skips
+                  a commit it has already passed. Needs `GH_TOKEN` for `gh run list`.
 """
 
 from __future__ import annotations
@@ -103,19 +107,40 @@ def _all_docs(paths: Iterable[str]) -> bool:
     return any_path
 
 
-_DECISIONS = {
-    "duplicate-push": ("is_duplicate_push", duplicate_push),
-    "docs-only": ("docs_only", docs_only),
-}
+def main_advanced(environ: Mapping[str, str], workflow: str) -> bool:
+    if environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
+        print(f"Manual dispatch requested; running {workflow}.")
+        return True
+    subprocess.run(["git", "fetch", "--no-tags", "--depth=1", "origin", "main"], check=True)
+    main_sha = _run(["git", "rev-parse", "origin/main"]).strip()
+    last_success = _run(["gh", "run", "list", f"--workflow={workflow}", "--status=success",
+                         "--limit=1", "--json", "headSha", "--jq", ".[0].headSha"]).strip()
+    if last_success in ("", "null"):
+        print(f"No previous successful {workflow} run found; running.")
+        return True
+    if last_success == main_sha:
+        print(f"origin/main has not advanced since the last successful {workflow} run; skipping.")
+        return False
+    print(f"origin/main advanced from {last_success} to {main_sha}; running {workflow}.")
+    return True
 
 
 def main(argv: list[str] | None = None, environ: Mapping[str, str] = os.environ) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("decision", choices=sorted(_DECISIONS))
+    decisions = parser.add_subparsers(dest="decision", required=True)
+    decisions.add_parser("duplicate-push")
+    decisions.add_parser("docs-only")
+    advanced = decisions.add_parser("main-advanced")
+    advanced.add_argument("--workflow", required=True,
+                          help="workflow file whose last successful run is compared, e.g. perf.yml")
     args = parser.parse_args(argv)
-    output_name, decide = _DECISIONS[args.decision]
-    _write_output(environ, output_name, decide(environ))
+    if args.decision == "duplicate-push":
+        _write_output(environ, "is_duplicate_push", duplicate_push(environ))
+    elif args.decision == "docs-only":
+        _write_output(environ, "docs_only", docs_only(environ))
+    else:
+        _write_output(environ, "should_run", main_advanced(environ, args.workflow))
     return 0
 
 
