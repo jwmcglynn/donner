@@ -413,13 +413,12 @@ TEST(SVGDocument, EmptySelectorPreservesAndRefreshesProjectedGenericText) {
   EXPECT_FALSE(document.querySelector("#generic:empty").has_value());
   auto attribute = ReplaceInSource(document, "id=\"generic\"", "id=\"generic\" class=\"new\"");
   ASSERT_TRUE(attribute.applied);
-  ASSERT_FALSE(attribute.diagnostic.has_value());
+  ASSERT_THAT(attribute.diagnostic, Eq(std::nullopt));
   EXPECT_FALSE(document.querySelector("#generic:empty").has_value());
   auto replacement = ReplaceInSource(document, "<g id=\"generic\" class=\"new\">word<!--c--> </g>",
                                      "<g id=\"generic\"/>");
   ASSERT_TRUE(replacement.applied);
-  ASSERT_FALSE(replacement.diagnostic.has_value())
-      << (replacement.diagnostic ? replacement.diagnostic->reason : "");
+  ASSERT_THAT(replacement.diagnostic, Eq(std::nullopt));
   EXPECT_TRUE(document.querySelector("#generic:empty").has_value());
   EXPECT_FALSE(document.querySelector("#data:empty").has_value());
 }
@@ -431,8 +430,7 @@ TEST(SVGDocument, EmptySelectorTextAuthoritySurvivesSourceAndTypedEdits) {
   auto replacement = ReplaceInSource(document, "<text id=\"text\">initial</text>",
                                      "<text id=\"text\">new<!--c--><![CDATA[word]]></text>");
   ASSERT_TRUE(replacement.applied);
-  ASSERT_FALSE(replacement.diagnostic.has_value())
-      << (replacement.diagnostic ? replacement.diagnostic->reason : "");
+  ASSERT_THAT(replacement.diagnostic, Eq(std::nullopt));
   auto text = document.querySelector("#text")->cast<SVGTextElement>();
   auto node = xml::XMLNode::TryCast(text.unsafeEntityHandle()).value();
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
@@ -451,8 +449,7 @@ TEST(SVGDocument, EmptySelectorTextAuthoritySurvivesSourceAndTypedEdits) {
   EXPECT_TRUE(text.isEmptyForSelector(nullptr));
   replacement = ReplaceInSource(document, "title</title>", "new<![CDATA[word]]></title>");
   ASSERT_TRUE(replacement.applied);
-  ASSERT_FALSE(replacement.diagnostic.has_value())
-      << (replacement.diagnostic ? replacement.diagnostic->reason : "");
+  ASSERT_THAT(replacement.diagnostic, Eq(std::nullopt));
   auto title = document.querySelector("#title")->cast<SVGTitleElement>();
   EXPECT_FALSE(title.isEmptyForSelector(nullptr));
   title.setTextContent("");
@@ -475,10 +472,10 @@ TEST(SVGDocument, EmptySelectorKeepsRetainedAuthorityForRawTextDeltas) {
   EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.2));
   EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.4));
   auto changed = ReplaceInSource(document, "word", "new");
-  ASSERT_FALSE(changed.diagnostic.has_value());
+  ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));
   EXPECT_FALSE(text.isEmptyForSelector(nullptr));
   changed = ReplaceInSource(document, "new", " ");
-  ASSERT_FALSE(changed.diagnostic.has_value());
+  ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));
   EXPECT_TRUE(text.isEmptyForSelector(nullptr));
   EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.8));
   EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.6));
@@ -508,12 +505,12 @@ TEST(SVGDocument, EmptySelectorSourceSetterReplacesMaterializedRawText) {
         ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">seed</text></svg>)");
     const std::string replacement = "<text id=\"t\">" + std::string(content) + "</text>";
     auto changed = ReplaceInSource(document, "<text id=\"t\">seed</text>", replacement);
-    ASSERT_FALSE(changed.diagnostic.has_value());
+    ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));
     auto text = document.querySelector("#t").value();
     for (const std::string_view value : {" ", "new & <text>", ""}) {
       auto replaced = document.setElementTextContent(text, value);
       ASSERT_TRUE(replaced.applied);
-      ASSERT_FALSE(replaced.diagnostic.has_value());
+      ASSERT_THAT(replaced.diagnostic, Eq(std::nullopt));
       auto fresh = ParseSVG(document.source());
       EXPECT_EQ(text.isEmptyForSelector(nullptr),
                 fresh.querySelector("#t")->isEmptyForSelector(nullptr));
@@ -528,12 +525,12 @@ TEST(SVGDocument, EmptySelectorSourceSetterReplacesMaterializedRawText) {
     auto changed =
         ReplaceInSource(document, "<text id=\"t\">seed</text>",
                         initiallyEmpty ? "<text id=\"t\"> </text>" : "<text id=\"t\">word</text>");
-    ASSERT_FALSE(changed.diagnostic.has_value());
+    ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));
     auto text = document.querySelector("#t").value();
     EXPECT_EQ(text.isEmptyForSelector(nullptr), initiallyEmpty);
     auto replaced = document.setElementTextContent(text, initiallyEmpty ? "new" : " ");
     ASSERT_TRUE(replaced.applied);
-    ASSERT_FALSE(replaced.diagnostic.has_value());
+    ASSERT_THAT(replaced.diagnostic, Eq(std::nullopt));
     EXPECT_EQ(text.isEmptyForSelector(nullptr), !initiallyEmpty);
   }
 }
@@ -606,13 +603,13 @@ TEST(SVGDocument, QuerySelectorSkipsRetainedRawTextAndComments) {
       ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">seed</text></svg>)");
   auto changed = ReplaceInSource(document, "<text id=\"t\">seed</text>",
                                  "<text id=\"t\">word<![CDATA[other]]><!--c--></text>");
-  ASSERT_FALSE(changed.diagnostic.has_value());
+  ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));
   auto text = document.querySelector("#t").value();
   ASSERT_FALSE(text.querySelector("*").has_value());
   EXPECT_FALSE(text.querySelector(":defined").has_value());
   changed = ReplaceInSource(document, "word<![CDATA[other]]><!--c-->",
                             "word<![CDATA[other]]><!--c--><tspan id=\"real\"/>");
-  ASSERT_FALSE(changed.diagnostic.has_value());
+  ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));
   EXPECT_THAT(text.querySelector("*")->id(), Eq("real"));
   EXPECT_THAT(text.querySelector(":defined")->id(), Eq("real"));
 }
