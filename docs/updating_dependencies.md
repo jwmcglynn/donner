@@ -20,6 +20,20 @@ EnTT and brotli by fixed revisions; and woff2 by the commit `non_bcr_deps.bzl` n
 this rule; do not copy them, and ask the operator before adding a dependency that has no usable
 release.
 
+## clang-format
+
+The C++ formatter is clang-format from the PyPI `clang-format` wheels, one per supported platform
+(`clang_format_*` in `third_party/bazel/non_bcr_deps.bzl`), each pinned by its version-named file
+and `sha256`. To move to another release:
+
+1. Update every wheel's path and `sha256` from the release's PyPI file list, and the version in
+   the URL template and comment.
+2. Update `tools/format/clang_format_fixture_test.py` and
+   `tools/format/testdata/divergent_constructs.formatted.cc.in` for the new version's output.
+3. Reformat the repository with `tools/format/clang_format.sh -i` in the same change, so
+   `bazel test //...` and the Lint lane pass, and afterwards add the resulting main commit to
+   `.git-blame-ignore-revs`.
+
 ## Bazel LLVM Toolchain
 
 Donner uses `toolchains_llvm` from the Bazel Central Registry. To update it, bump its version in

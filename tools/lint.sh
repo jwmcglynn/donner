@@ -12,7 +12,8 @@
 # files no target lists at all were never linted. This scans the trees.
 #
 # Checks enforced (see docs/coding_style.md and build_defs/check_banned_patterns.py):
-# clang-format 18 including required braces, no `long long`, no `std::aligned_storage`,
+# the repository's pinned clang-format (tools/format/clang_format.sh) including required braces,
+# no `long long`, no `std::aligned_storage`,
 # no user-defined literal operators, no hidden Unicode whitespace or typographic
 # punctuation, and no new or worsened supported out-of-line method definition
 # above the local decision-point complexity limit.
@@ -74,9 +75,12 @@ fi
 
 python3 "${kChecker}" "${sources[@]}"
 
-# clang-format 18 is the repository's formatting baseline. A full-tree check keeps
-# InsertBraces enforcement independent of Bazel target reachability. Include tracked
-# C++ utilities outside donner/ and examples/ while leaving vendored code alone.
+# The pinned clang-format (//tools/format:clang_format) is the repository's formatting baseline;
+# `bazel test //...` checks the files Bazel targets list with the same binary. This full-tree
+# check also covers files no target lists, and keeps InsertBraces enforcement independent of
+# Bazel target reachability. Include tracked C++ utilities outside donner/ and examples/ while
+# leaving vendored code alone. DONNER_CLANG_FORMAT overrides the command, for example with
+# "xcrun clang-format" on Xcode 27.1, which matched the pinned binary when it was pinned.
 format_sources=("${sources[@]}")
 if [[ ${lint_explicit_roots} -eq 0 ]]; then
   format_sources=()
@@ -86,12 +90,17 @@ if [[ ${lint_explicit_roots} -eq 0 ]]; then
     fi
   done < <(git ls-files -z -- '*.cc' '*.h' '*.cpp' '*.hpp' '*.mm')
 fi
-formatter="${DONNER_CLANG_FORMAT:-clang-format-18}"
-if ! command -v "${formatter}" >/dev/null 2>&1; then
-  echo "lint.sh: clang-format 18 is required (set DONNER_CLANG_FORMAT to its path)" >&2
+# An executable path is one word even with spaces; anything else is a command line.
+if [[ -n "${DONNER_CLANG_FORMAT:-}" && -x "${DONNER_CLANG_FORMAT}" ]]; then
+  formatter=("${DONNER_CLANG_FORMAT}")
+else
+  read -r -a formatter <<<"${DONNER_CLANG_FORMAT:-tools/format/clang_format.sh}"
+fi
+if ! command -v "${formatter[0]:-}" >/dev/null 2>&1; then
+  echo "lint.sh: formatter not found: ${DONNER_CLANG_FORMAT:-tools/format/clang_format.sh}" >&2
   exit 1
 fi
-"${formatter}" --dry-run --Werror --style="file:${repo_root}/.clang-format" \
+"${formatter[@]}" --dry-run --Werror --style="file:${repo_root}/.clang-format" \
   "${format_sources[@]}"
 
 # CodeFactor evaluates complexity only on changed methods. Mirror that locally without making

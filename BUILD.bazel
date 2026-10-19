@@ -84,6 +84,12 @@ filegroup(
 )
 
 filegroup(
+    name = "clang_format_config",
+    srcs = [".clang-format"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "github_action_definitions",
     srcs = glob([
         ".github/actions/*/action.yml",

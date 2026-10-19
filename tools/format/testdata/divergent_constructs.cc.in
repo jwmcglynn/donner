@@ -1,0 +1,40 @@
+// Constructs whose formatting changed between clang-format releases. The formatter pin is
+// checked against the committed formatted copy of this file.
+#include <sys/stat.h>
+
+#include <chrono>
+#include <optional>
+#include <string>
+
+namespace fixture {
+
+struct Options {
+  std::string name;
+  int count = 0;
+};
+
+struct Field {
+  std::string Options::*text;
+  int Options::*number;
+};
+
+int Options::*CountField() { return &Options::count; }
+
+bool Exists(const char* path) {
+  struct stat status {};
+  return ::stat(path, &status) == 0;
+}
+
+template <typename PollFn>
+auto PollForResult(PollFn&& poll,
+                   std::chrono::steady_clock::time_point deadline) -> decltype(poll()) {
+  return poll();
+}
+
+template <typename SnapshotFn>
+auto RunWhileTheDocumentWriterHolds(int app,
+                                    SnapshotFn&& snapshot) -> std::optional<decltype(snapshot())> {
+  return snapshot();
+}
+
+}  // namespace fixture

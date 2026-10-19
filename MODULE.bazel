@@ -50,6 +50,9 @@ non_bcr_deps = use_extension("//third_party:bazel/non_bcr_deps.bzl", "non_bcr_de
 use_repo(
     non_bcr_deps,
     "bazel_clang_tidy",
+    "clang_format_linux_aarch64",
+    "clang_format_linux_x86_64",
+    "clang_format_macos_arm64",
     "harfbuzz",
     "sysroot_linux_aarch64",
     "sysroot_linux_x86_64",

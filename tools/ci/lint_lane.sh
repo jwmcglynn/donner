@@ -2,10 +2,11 @@
 #
 # lint_lane.sh - the Lint workflow's checks, in the workflow's order, as one command.
 #
-# These checks read the whole tracked tree, git history or host clang-format 18, so they run here
-# rather than as tests reachable from `bazel test //...`:
+# These checks read the whole tracked tree or git history, so they run here rather than as tests
+# reachable from `bazel test //...`:
 #
-#   - tools/lint.sh: banned patterns, clang-format 18 and changed-method complexity
+#   - tools/lint.sh: banned patterns, the pinned clang-format over every tracked C++ file, and
+#     changed-method complexity
 #   - tools/lint_braces_tests.py: brace enforcement through tools/lint.sh itself
 #   - tools/check_design_doc_provenance.py (also //tools:design_doc_provenance_test)
 #   - tools/check_private_details.py over every tracked file

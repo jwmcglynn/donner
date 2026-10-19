@@ -59,7 +59,7 @@
 
 ## Formatting
 
-- **Run `clang-format -i` on every modified C/C++ file before committing.** `git clang-format` covers staged changes. The project `.clang-format` (Google + 100-col, see `.clang-format`) is tuned so clang-format 18 and 19 produce identical output — use whichever is on your `$PATH`.
+- **Run `tools/format/clang_format.sh -i` on every modified C/C++ file before committing.** It is the pinned clang-format 21.1.6 that `bazel test //...` and the Lint lane check with; Xcode 27.1's `xcrun clang-format` matched it byte for byte when it was pinned. Other versions can differ.
 
 ## Debugging Discipline
 

@@ -13,6 +13,7 @@ shipped over BCR:
 - wgpu_native     : WebGPU (Geode renderer)     (--//donner/svg/renderer/geode:enable_geode=true)
 - tracy           : In-process profiling client (//donner/editor only — see check_banned_patterns.py)
 - bazel_clang_tidy: clang-tidy aspect           (--config=clang-tidy)
+- clang_format_*: Pinned C++ formatter       (//tools/format, checks on in donner's .bazelrc)
 - sysroot_linux_*: Hermetic Debian Bullseye sysroots for Bazel remote execution
                    (--config=re). Wired into the `llvm_toolchain` via its
                    `sysroot`, `extra_compiler_files` and `extra_linker_files`
@@ -235,6 +236,46 @@ filegroup(
         type = "tar.xz",
         urls = ["https://commondatastorage.googleapis.com/chrome-linux-sysroot/c7176a4c7aacbf46bda58a029f39f79a68008d3dee6518f154dcf5161a5486d8"],
     )
+
+    # clang-format 21.1.6, the repository's C++ formatter (//tools/format:clang_format). Each
+    # repository is one platform's wheel of the PyPI `clang-format` 21.1.6 release, a standalone
+    # clang-format built from LLVM tag `llvmorg-21.1.6`, pinned by its version-named file and
+    # SHA-256. The wheels are built from the LLVM sources by the third-party clang-format wheel
+    # project on PyPI, not published by LLVM; their output matched the LLVM 21.1.6 toolchain's
+    # clang-format byte for byte when pinned. The `{name}_format` validations (gated on
+    # //tools/format:check, which donner's .bazelrc enables), the fixture test and
+    # tools/format/clang_format.sh use it.
+    _CLANG_FORMAT_WHEELS = [
+        struct(
+            name = "clang_format_macos_arm64",
+            path = "f8/94/46762b38563b4aea840c706149f7d5b3eeed450c0ba874bb77b0de635674",
+            tag = "macosx_11_0_arm64",
+            sha256 = "74880cb25886c1bb4a95307efeb40f19eba3f1fd86ddee88166814b9ed2600ef",
+        ),
+        struct(
+            name = "clang_format_linux_aarch64",
+            path = "51/59/0fc0ae742a5156ae9af1fb80359557ebb8e52096a2bfcb46e889728c15b7",
+            tag = "manylinux_2_26_aarch64.manylinux_2_28_aarch64",
+            sha256 = "20102f69df02282280d5c7dac682987cb82fee9ff89c034c653154019b17a5ef",
+        ),
+        struct(
+            name = "clang_format_linux_x86_64",
+            path = "01/75/e7d82087df0922054f08351ce5e3528d0b0ce64dcc140c00ec1df016a0c6",
+            tag = "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+            sha256 = "8a9d82d1d67ffdc491a0a1ce04d7740b6e7ccb1d9b6d2ab90b009040614030e9",
+        ),
+    ]
+    for wheel in _CLANG_FORMAT_WHEELS:
+        http_archive(
+            name = wheel.name,
+            build_file = "//third_party:BUILD.clang_format_wheel",
+            sha256 = wheel.sha256,
+            type = "zip",
+            urls = ["https://files.pythonhosted.org/packages/{}/clang_format-21.1.6-py2.py3-none-{}.whl".format(
+                wheel.path,
+                wheel.tag,
+            )],
+        )
 
 non_bcr_deps = module_extension(
     implementation = _non_bcr_deps_impl,

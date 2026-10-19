@@ -1,0 +1,10 @@
+load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
+
+# One platform's clang-format, from the PyPI `clang-format` wheel. See
+# third_party/bazel/non_bcr_deps.bzl.
+native_binary(
+    name = "clang-format",
+    src = "clang_format/data/bin/clang-format",
+    out = "clang-format",
+    visibility = ["//visibility:public"],
+)
