@@ -26,6 +26,7 @@ import argparse
 from dataclasses import dataclass, field
 import json
 import os
+import http.client
 import re
 import sys
 from typing import Callable, Optional
@@ -109,15 +110,27 @@ def run_gate_failures(run: dict) -> list[str]:
     )
     failures = [message % (run.get(key),) for key, allowed, message in expected
                 if run.get(key) not in allowed]
-    head = (run.get("head_repository") or {}).get("full_name")
-    base = (run.get("repository") or {}).get("full_name")
+    head = _mapping(run.get("head_repository")).get("full_name")
+    base = _mapping(run.get("repository")).get("full_name")
     if not head or head != base:
         failures.append("head repository %r is not the repository %r" % (head, base))
     return failures
 
 
+def _mapping(value: object) -> dict:
+    """A nested API object, or an empty one when the field is absent or null."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ApiError("expected an object, got %s" % type(value).__name__)
+    return value
+
+
 def _failed_steps(job: dict) -> list[str]:
-    return [str(step.get("name")) for step in job.get("steps") or []
+    job_steps = job.get("steps") or []
+    if not isinstance(job_steps, list):
+        raise ApiError("job %r steps are not a list" % job.get("id"))
+    return [str(step.get("name")) for step in map(_mapping, job_steps)
             if step.get("conclusion") not in UNFAILED_STEP_CONCLUSIONS]
 
 
@@ -138,10 +151,10 @@ def _annotation_kind(annotation: dict) -> Optional[str]:
 
 def _annotation_kinds(annotations: list[dict]) -> tuple[set[str], list[str]]:
     """The kinds present, and the message of every annotation that matches no known kind."""
-    kinds = {_annotation_kind(annotation) for annotation in annotations}
-    unknown = [str(annotation.get("message") or "") for annotation in annotations
-               if _annotation_kind(annotation) is None]
-    return kinds - {None, "benign"}, unknown
+    classified = [(annotation, _annotation_kind(annotation)) for annotation in annotations]
+    unknown = [str(annotation.get("message") or "") for annotation, kind in classified
+               if kind is None]
+    return {kind for _, kind in classified} - {None, "benign"}, unknown
 
 
 def _short(text: str, limit: int = 120) -> str:
@@ -219,7 +232,7 @@ class GitHub:
         try:
             with self._opener(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 body = response.read()
-        except (urllib.error.URLError, OSError, ValueError) as error:
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
             raise ApiError("%s %s failed: %s" % (method, path, error)) from error
         if not body:
             return None
@@ -253,15 +266,16 @@ class GitHub:
         raise ApiError("run %d has more than %d pages of jobs" % (run_id, MAX_PAGES))
 
     def annotations(self, job_id: int) -> list[dict]:
+        """Every annotation, paging until an empty page so a short page never ends the list."""
         found: list[dict] = []
         for page in range(1, MAX_PAGES + 1):
             path = "/check-runs/%d/annotations?per_page=%d&page=%d" % (job_id, PER_PAGE, page)
             batch = self.request("GET", path)
             if not isinstance(batch, list):
                 raise ApiError("GET %s did not return a list" % path)
-            found.extend(_objects(batch, "annotation"))
-            if len(batch) < PER_PAGE:
+            if not batch:
                 return found
+            found.extend(_objects(batch, "annotation"))
         raise ApiError("job %d has more than %d pages of annotations" % (job_id, MAX_PAGES))
 
     def rerun_failed_jobs(self, run_id: int) -> None:
@@ -296,11 +310,19 @@ def render_summary(decision: RunDecision, mode: str, outcome: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def decide(client: GitHub, run_id: int) -> RunDecision:
+def _fetch_run(client: GitHub, run_id: int) -> dict:
     run = client.run(run_id)
-    if int(run.get("id") or 0) != run_id:
+    if run.get("id") != run_id:
         raise ApiError("run %d response names run %r" % (run_id, run.get("id")))
+    return run
+
+
+def decide(client: GitHub, run_id: int) -> RunDecision:
+    run = _fetch_run(client, run_id)
     return classify_run(run, client.first_attempt_jobs(run_id), client.annotations)
+
+
+FAILED_CLOSED = (ApiError, AttributeError, KeyError, TypeError, ValueError)
 
 
 def execute(client: GitHub, run_id: int, mode: str) -> tuple[RunDecision, str]:
@@ -313,15 +335,20 @@ def execute(client: GitHub, run_id: int, mode: str) -> tuple[RunDecision, str]:
         if mode != "rerun":
             return decision, "eligible; dry run, no rerun requested"
         # Recheck immediately before acting: a person may have started attempt 2 meanwhile.
-        current = run_gate_failures(client.run(run_id))
+        current = run_gate_failures(_fetch_run(client, run_id))
         if current:
             decision.gate_failures.extend(current)
             return decision, "no rerun"
-        client.rerun_failed_jobs(run_id)
-        return decision, "rerun of failed jobs requested"
-    except (ApiError, KeyError, TypeError, ValueError) as error:
+    except FAILED_CLOSED as error:
         decision.error = str(error)
         return decision, "no rerun (failed closed)"
+    try:
+        client.rerun_failed_jobs(run_id)
+    except ApiError as error:
+        # GitHub may have accepted the request before the connection failed.
+        decision.error = str(error)
+        return decision, "rerun request failed; whether a rerun started is unknown"
+    return decision, "rerun of failed jobs requested"
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

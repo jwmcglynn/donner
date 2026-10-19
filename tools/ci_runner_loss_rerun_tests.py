@@ -308,8 +308,17 @@ def responses_for(run_value, jobs, annotations):
         ("POST", "/actions/runs/%d/rerun-failed-jobs" % run_id): "",
     }
     for job_id, found in annotations.items():
-        responses[("GET", "/check-runs/%d/annotations?per_page=100&page=1" % job_id)] = found
+        responses[("GET", annotations_path(job_id, 1))] = found
+        responses[("GET", annotations_path(job_id, 2))] = []
     return responses
+
+
+def annotations_path(job_id, page):
+    return "/check-runs/%d/annotations?per_page=100&page=%d" % (job_id, page)
+
+
+def jobs_path(run_id, page):
+    return "/actions/runs/%d/attempts/1/jobs?per_page=100&page=%d" % (run_id, page)
 
 
 class MainTests(unittest.TestCase):
@@ -340,8 +349,8 @@ class MainTests(unittest.TestCase):
                           "rerun-failed-jobs" % REPOSITORY], fake.posts)
         summary = self.summary.read_text(encoding="utf-8")
         self.assertIn("rerun of failed jobs requested", summary)
-        self.assertIn("| macos (117788702573) | failure | A: runner lost communication | eligible |",
-                      summary)
+        self.assertIn("| macos (117788702573) | failure | A: runner lost communication | "
+                      "eligible |", summary)
 
     def test_dry_run_reports_eligibility_without_rerunning(self):
         fake = FakeGitHub(responses_for(run(39165828508), PASSING + [IO_IN_TEST],
@@ -376,9 +385,15 @@ class MainTests(unittest.TestCase):
         self.assertIn("attempt 2 is not the first", self.summary.read_text(encoding="utf-8"))
 
     def test_attempt_started_during_classification_is_not_rerun(self):
+        self.assert_recheck_blocks_rerun(run(39165844514, run_attempt=2, status="queued"), 0)
+
+    def test_recheck_naming_another_run_is_not_rerun(self):
+        self.assert_recheck_blocks_rerun(run(1), 1)
+
+    def assert_recheck_blocks_rerun(self, second, expected_status):
         responses = responses_for(run(39165844514), [LOST_IN_BUILD],
                                   {117788702573: LOST_IN_BUILD_ANNOTATIONS})
-        first, second = run(39165844514), run(39165844514, run_attempt=2, status="queued")
+        first = run(39165844514)
         fake = FakeGitHub(responses)
         served = iter([first, second])
         original_call = fake.__call__
@@ -388,9 +403,11 @@ class MainTests(unittest.TestCase):
                 fake.responses[("GET", "/actions/runs/39165844514")] = next(served)
             return original_call(request, timeout)
 
-        self.assertEqual(0, self.invoke(call, 39165844514))
+        self.assertEqual(expected_status, self.invoke(call, 39165844514))
 
-        self.assertEqual([], [url for method, url in fake.requests if method == "POST"])
+        self.assertEqual([], fake.posts)
+        self.assertEqual(2, sum(1 for method, url in fake.requests
+                                if url.endswith("/actions/runs/39165844514")))
 
     def test_api_errors_fail_closed_without_rerunning(self):
         failures = {
@@ -421,13 +438,91 @@ class MainTests(unittest.TestCase):
             with self.subTest(label):
                 responses = responses_for(run(39165844514), [LOST_IN_BUILD],
                                           {117788702573: LOST_IN_BUILD_ANNOTATIONS})
-                jobs_path = "/actions/runs/39165844514/attempts/1/jobs?per_page=100&page=1"
-                responses[("GET", jobs_path)] = jobs_response
+                responses[("GET", jobs_path(39165844514, 1))] = jobs_response
+                responses[("GET", jobs_path(39165844514, 2))] = {"total_count": 3, "jobs": []}
                 fake = FakeGitHub(responses)
 
                 self.assertEqual(1, self.invoke(fake, 39165844514))
 
                 self.assertEqual([], fake.posts)
+
+    def test_malformed_nested_fields_fail_closed(self):
+        cases = {
+            "steps not a list": ("job", dict(LOST_IN_BUILD, steps="Build")),
+            "step not an object": ("job", dict(LOST_IN_BUILD, steps=["Build"])),
+            "head repository not an object": ("run", run(39165844514, head_repository="x")),
+        }
+        for label, (kind, value) in cases.items():
+            with self.subTest(label):
+                jobs = [value] if kind == "job" else [LOST_IN_BUILD]
+                run_value = value if kind == "run" else run(39165844514)
+                fake = FakeGitHub(responses_for(run_value, jobs,
+                                                {117788702573: LOST_IN_BUILD_ANNOTATIONS}))
+
+                self.assertEqual(1, self.invoke(fake, 39165844514))
+
+                self.assertEqual([], fake.posts)
+                self.assertIn("failed closed", self.summary.read_text(encoding="utf-8"))
+
+    def test_jobs_are_read_across_pages_and_counted(self):
+        responses = responses_for(run(39165844514), [], {
+            117788702573: LOST_IN_BUILD_ANNOTATIONS, 117665700108: LINUX_TEST_FAILURE_ANNOTATIONS})
+        responses[("GET", jobs_path(39165844514, 1))] = {"total_count": 2, "jobs": [LOST_IN_BUILD]}
+        responses[("GET", jobs_path(39165844514, 2))] = {"total_count": 2,
+                                                         "jobs": [LINUX_TEST_FAILURE]}
+        fake = FakeGitHub(responses)
+
+        self.assertEqual(0, self.invoke(fake, 39165844514))
+
+        self.assertEqual([], fake.posts)
+        self.assertIn("linux (117665700108)", self.summary.read_text(encoding="utf-8"))
+
+    def test_more_jobs_than_the_reported_total_fails_closed(self):
+        responses = responses_for(run(39165844514), [LOST_IN_BUILD],
+                                  {117788702573: LOST_IN_BUILD_ANNOTATIONS})
+        responses[("GET", jobs_path(39165844514, 1))] = {
+            "total_count": 1, "jobs": [LOST_IN_BUILD, LINUX_TEST_FAILURE]}
+        fake = FakeGitHub(responses)
+
+        self.assertEqual(1, self.invoke(fake, 39165844514))
+
+        self.assertEqual([], fake.posts)
+
+    def test_an_unknown_annotation_on_a_later_page_blocks_the_rerun(self):
+        responses = responses_for(run(39165844514), [LOST_IN_BUILD],
+                                  {117788702573: LOST_IN_BUILD_ANNOTATIONS})
+        responses[("GET", annotations_path(117788702573, 2))] = [
+            annotation("Failed to CreateArtifact: Unable to make request: ENOTFOUND")]
+        responses[("GET", annotations_path(117788702573, 3))] = []
+        fake = FakeGitHub(responses)
+
+        self.assertEqual(0, self.invoke(fake, 39165844514))
+
+        self.assertEqual([], fake.posts)
+        self.assertIn("unrecognized annotation", self.summary.read_text(encoding="utf-8"))
+
+    def test_annotations_that_are_not_a_list_fail_closed(self):
+        responses = responses_for(run(39165844514), [LOST_IN_BUILD],
+                                  {117788702573: LOST_IN_BUILD_ANNOTATIONS})
+        responses[("GET", annotations_path(117788702573, 1))] = {"message": LOST}
+        fake = FakeGitHub(responses)
+
+        self.assertEqual(1, self.invoke(fake, 39165844514))
+
+        self.assertEqual([], fake.posts)
+
+    def test_failed_rerun_request_is_reported_as_unknown(self):
+        responses = responses_for(run(39165844514), [LOST_IN_BUILD],
+                                  {117788702573: LOST_IN_BUILD_ANNOTATIONS})
+        responses[("POST", "/actions/runs/39165844514/rerun-failed-jobs")] = (
+            urllib.error.HTTPError("url", 502, "Bad Gateway", {}, None))
+        fake = FakeGitHub(responses)
+
+        self.assertEqual(1, self.invoke(fake, 39165844514))
+
+        self.assertEqual(1, len(fake.posts))
+        self.assertIn("whether a rerun started is unknown",
+                      self.summary.read_text(encoding="utf-8"))
 
     def test_mismatched_run_response_fails_closed(self):
         responses = responses_for(run(39165844514), [LOST_IN_BUILD],

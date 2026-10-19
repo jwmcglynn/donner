@@ -537,10 +537,13 @@ RUNNER_LOSS_COMMANDS = {
     "rerun": 'python3 %s --mode rerun --run-id "$RUN_ID"' % RUNNER_LOSS_SCRIPT,
     "dry-run": 'python3 %s --mode dry-run --run-id "$RUN_ID"' % RUNNER_LOSS_SCRIPT,
 }
-RUNNER_LOSS_RUN_IDS = {
-    "rerun": "RUN_ID: ${{ github.event.workflow_run.id }}",
-    "dry-run": "RUN_ID: ${{ inputs.run_id }}",
+# The only environment each job's step receives: the workflow token and the run to classify.
+RUNNER_LOSS_STEP_ENV = {
+    "rerun": {"GH_TOKEN": "${{ github.token }}",
+              "RUN_ID": "${{ github.event.workflow_run.id }}"},
+    "dry-run": {"GH_TOKEN": "${{ github.token }}", "RUN_ID": "${{ inputs.run_id }}"},
 }
+RUNNER_LOSS_WORKFLOW_ENV = ['  DO_NOT_TRACK: "1"', '  ASPECT_TOOLS_TELEMETRY: "-all"']
 RUNNER_LOSS_JOB_GATES = {
     "rerun": ("github.event_name == 'workflow_run'",
               "github.event.workflow_run.head_branch == 'main'",
@@ -565,12 +568,18 @@ def _runner_loss_job_violations(name, job):
     commands = [body.strip() for body in _script_bodies(job)]
     if commands != [RUNNER_LOSS_COMMANDS.get(name)]:
         violations.append("%s runs unreviewed commands: %s" % (name, commands))
-    if RUNNER_LOSS_RUN_IDS.get(name) not in job:
-        violations.append("%s takes its run ID from an unreviewed field" % name)
-    gate = " ".join(job.split("runs-on:", 1)[0].split())
-    violations.extend("%s is not gated by %s" % (name, condition)
-                      for condition in RUNNER_LOSS_JOB_GATES.get(name, ("<unreviewed job>",))
-                      if condition not in gate)
+    env = dict(re.findall(r"(?m)^          ([A-Za-z_][A-Za-z0-9_]*): (.*)$", job))
+    env.pop("persist-credentials", None)
+    env.pop("sparse-checkout", None)
+    env.pop("sparse-checkout-cone-mode", None)
+    if env != RUNNER_LOSS_STEP_ENV.get(name) or job.count("env:") != 1 or \
+            not re.search(r"(?m)^        env:$", job):
+        violations.append("%s step environment is not the reviewed token and run ID: %s"
+                          % (name, sorted(env.items())))
+    gate = re.search(r"(?ms)^    if: (?:>-\n)?(.*?)^    runs-on:", job)
+    expected = "${{ %s }}" % " && ".join(RUNNER_LOSS_JOB_GATES.get(name, ("<unreviewed>",)))
+    if not gate or " ".join(gate.group(1).split()) != expected:
+        violations.append("%s gate is not exactly %s" % (name, expected))
     return violations
 
 
@@ -584,6 +593,9 @@ def _runner_loss_violations(workflow):
         violations.append("runner-loss workflow_run filter changed")
     violations.extend("runner-loss workflow reads %r" % match.group(0)
                       for match in RUNNER_LOSS_FORBIDDEN.finditer(workflow))
+    if [line for line in _top_level_block(workflow, "env") or [] if line.strip()
+            and not _is_comment(line)] != RUNNER_LOSS_WORKFLOW_ENV:
+        violations.append("runner-loss workflow environment changed")
     jobs = _jobs(workflow)
     if set(jobs) != set(RUNNER_LOSS_COMMANDS):
         violations.append("runner-loss jobs changed: %s" % sorted(jobs))
@@ -3162,7 +3174,33 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "      github.event.workflow_run.event == 'push' &&\n", "", 1), "'push'"),
             "repeat attempts": (path, workflow.replace(
                 "      github.event.workflow_run.run_attempt == 1 }}",
-                "      true }}", 1), "run_attempt == 1"),
+                "      github.event.workflow_run.run_attempt >= 1 }}", 1), "gate is not exactly"),
+            "widened gate": (path, workflow.replace(
+                "      github.event.workflow_run.run_attempt == 1 }}",
+                "      github.event.workflow_run.run_attempt == 1 || true }}", 1),
+                "gate is not exactly"),
+            "dispatch reaches the write job": (path, workflow.replace(
+                "${{ github.event_name == 'workflow_run' &&",
+                "${{ github.event_name == 'workflow_dispatch' || "
+                "github.event_name == 'workflow_run' &&",
+                1), "gate is not exactly"),
+            "dry run on workflow_run": (path, workflow.replace(
+                "if: ${{ github.event_name == 'workflow_dispatch' }}",
+                "if: ${{ github.event_name == 'workflow_dispatch' || "
+                "github.event_name == 'workflow_run' }}", 1), "gate is not exactly"),
+            "extra step env": (path, workflow.replace(
+                "          RUN_ID: ${{ github.event.workflow_run.id }}\n",
+                "          RUN_ID: ${{ github.event.workflow_run.id }}\n"
+                "          PYTHONPATH: ${{ github.event.workflow_run.display_title }}\n", 1),
+                "step environment"),
+            "job env": (path, workflow.replace(
+                "    timeout-minutes: 5\n    permissions:\n      actions: write\n",
+                "    timeout-minutes: 5\n    env:\n      PYTHONPATH: tools\n"
+                "    permissions:\n      actions: write\n", 1), "step environment"),
+            "workflow env": (path, workflow.replace(
+                '  ASPECT_TOOLS_TELEMETRY: "-all"\n',
+                '  ASPECT_TOOLS_TELEMETRY: "-all"\n  PYTHONSTARTUP: tools/x.py\n', 1),
+                "workflow environment changed"),
             "branch filter": (path, workflow.replace(
                 "    branches: [main]\n", "    branches: ['**']\n", 1), "filter changed"),
             "other workflows": (path, workflow.replace(
@@ -3171,7 +3209,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "event text run ID": (path, workflow.replace(
                 "RUN_ID: ${{ github.event.workflow_run.id }}",
                 "RUN_ID: ${{ github.event.workflow_run.display_title }}", 1),
-                "unreviewed field"),
+                "step environment"),
             "secret": (path, workflow.replace(
                 "GH_TOKEN: ${{ github.token }}", "GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}", 1),
                 "secrets."),
