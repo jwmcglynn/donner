@@ -101,12 +101,13 @@ int main() {
   document.restartAnimations();
   //! [restart]
 
-  // The click-started interval is gone after the restart; only the authored fade remains.
+  // The click-started interval is gone after the restart; only the authored fade's end remains.
   const donner::svg::SVGAnimationEventBatch afterRestart = document.animationEvents(0.0, 5.0);
-  if (!afterRestart.complete || afterRestart.events.size() != 1 || document.currentTime() != 0.0) {
+  if (!afterRestart.complete || afterRestart.events.size() != 1 ||
+      afterRestart.events[0].type != donner::svg::SVGAnimationEvent::Type::End ||
+      afterRestart.events[0].time != 2.0 || document.currentTime() != 0.0) {
     std::cerr << "Restart did not return to the authored timeline\n";
     return 1;
   }
-  renderer.draw(document);
   return 0;
 }
