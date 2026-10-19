@@ -337,9 +337,10 @@ STEP_ALLOWLIST = {
        for workflow, job in (("editor_wasm.yml", "build"), ("main.yml", "linux"),
                              ("main.yml", "macos"))
        for scenario in ("untrusted-pr", "renovate-pr")},
-    # Accepted risk: the self-hosted Linux lane builds with another architecture and the
-    # hermetic LLVM toolchain with libc++, so a failure specific to the hosted runner's
-    # toolchain or speed first shows on main.
+    # Accepted risk: the self-hosted Linux lane builds and tests on another architecture, so a
+    # test failure specific to the hosted runner's architecture or speed first shows on main.
+    # The hosted job's cloud build step builds main's hosted toolchain configuration before
+    # merge, and its parity subset reruns the runner-sensitive tests.
     ("main.yml", "linux", "Build", "trusted-pr"): _TRUSTED_LINUX_REASON,
     ("main.yml", "linux", "Test", "trusted-pr"): _TRUSTED_LINUX_REASON,
 }

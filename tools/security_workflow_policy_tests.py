@@ -44,7 +44,7 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/editor_wasm.yml", "build", "Configure BuildBuddy read-only cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
-    (".github/workflows/github_hosted_nightly.yml", "build", "Configure BuildBuddy remote cache", "buildbuddy",
+    (".github/workflows/github_hosted_nightly.yml", "build", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/main.yml", "linux", "Configure BuildBuddy remote cache", "buildbuddy",
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
@@ -648,6 +648,20 @@ def _read_supply_chain_files():
         str(path.relative_to(github.parent)): path.read_text(encoding="utf-8")
         for path in paths
     }
+
+
+_REMOTE_EXECUTION_INPUT = re.compile(r"(?m)^\s+remote-execution: (.*)$")
+
+
+def _workflow_steps(files):
+    """((workflow, job, step name), step text) for every step of every workflow."""
+    for path, text in files.items():
+        if not path.startswith(".github/workflows/"):
+            continue
+        for job, body in _jobs(text).items():
+            for step in re.split(r"(?m)^      - ", body)[1:]:
+                name = re.match(r"name: (.*)", step)
+                yield (path, job, name.group(1).strip() if name else None), step
 
 
 def _step_body(workflow, name):
@@ -2989,6 +3003,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "reader": (dict(event="pull_request", write="", read="read-fixture",
                             renovate="true"), 1),
             "invalid value": (dict(REMOTE_EXECUTION="yes"), 1),
+            "trusted PR writer": (dict(event="pull_request", ref="refs/pull/1/merge",
+                                       trusted="true"), 0),
+            "self-hosted macOS writer": (dict(event="pull_request", ref="refs/pull/1/merge",
+                                              trusted="true", RUNNER_ENVIRONMENT="self-hosted",
+                                              RUNNER_OS="macOS"), 1),
         }
         for name, (overrides, expected) in cases.items():
             with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
@@ -3005,6 +3024,20 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                               (Path(directory) / "output").read_text().splitlines())
                 self.assertFalse(any(line.startswith("build --remote_executor=")
                                      for line in fragment.splitlines()))
+
+    def test_only_the_hosted_linux_writer_opts_into_remote_execution(self):
+        # The action fails closed on the wrong runner, but a workflow could still hand the cloud
+        # flags to another command. Pin who opts in and every command that consumes the flags.
+        steps = list(_workflow_steps(self.supply_chain_files))
+        opted_in = {key + (_REMOTE_EXECUTION_INPUT.search(step).group(1).strip(),)
+                    for key, step in steps if _REMOTE_EXECUTION_INPUT.search(step)}
+        consumers = {key for key, step in steps if "outputs.bazel-flags" in step}
+        main = ".github/workflows/main.yml"
+        self.assertEqual({(main, "linux", "Configure BuildBuddy remote cache", '"true"')},
+                         opted_in)
+        self.assertEqual({(main, "linux", step) for step in (
+            "Verify BuildBuddy remote execution", "Build", "Test",
+            "Test (hosted parity subset)")}, consumers)
 
     def test_bazelrc_leaves_the_buildbuddy_fallback_to_the_fragment(self):
         # A later rc line, a command section such as `test`, or a config such as --config=ci
