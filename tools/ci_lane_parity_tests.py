@@ -84,9 +84,10 @@ PARITY_ALLOWLIST = {
         "Runner-specific: keeps the host's interactive bazelrc out of CI.",
     _PARITY + ("*", "startup-pr-only", "--nosystem_rc"):
         "Runner-specific: keeps any host system bazelrc out of CI.",
-    **{_PARITY + ("*", kind, value):
+    **{_PARITY + (step, kind, value):
        "Lane identity for test results only: parity results are never shared with the hosted "
        "or the fast lane's."
+       for step in ("Test", "Test (Geode editor lane)")
        for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
                            ("test-env-pr-only", "DONNER_CI_MACOS_LANE=hosted-parity"))},
     _PARITY + ("Test", "tag-filter-pr-only", "hosted_parity"):
@@ -270,7 +271,7 @@ _SHARED_STEP_DIGESTS = {
     ("lint.yml", "gatekeeper",
      "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "8e295cc528e30377"),
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "b0bc38d4847fafdb"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "f904913ff7e76643"),
     ("main.yml", "determine-targets",
      "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "711b402065f09c27"),
     ("main.yml", "gatekeeper",
