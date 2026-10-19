@@ -290,7 +290,7 @@ def render_summary(decision: RunDecision, mode: str, outcome: str) -> str:
     for job in decision.jobs:
         lines.append("| %s (%d) | %s | %s | %s |" % (
             _cell(job.name), job.job_id, _cell(job.conclusion),
-            _cell(job.signature or job.reason), "rerun" if job.eligible else "not eligible"))
+            _cell(job.signature or job.reason), "eligible" if job.eligible else "not eligible"))
     if not decision.jobs:
         lines.append("| (none) | | | |")
     return "\n".join(lines) + "\n"

@@ -340,7 +340,7 @@ class MainTests(unittest.TestCase):
                           "rerun-failed-jobs" % REPOSITORY], fake.posts)
         summary = self.summary.read_text(encoding="utf-8")
         self.assertIn("rerun of failed jobs requested", summary)
-        self.assertIn("| macos (117788702573) | failure | A: runner lost communication | rerun |",
+        self.assertIn("| macos (117788702573) | failure | A: runner lost communication | eligible |",
                       summary)
 
     def test_dry_run_reports_eligibility_without_rerunning(self):
