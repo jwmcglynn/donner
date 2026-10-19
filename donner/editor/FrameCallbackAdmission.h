@@ -136,8 +136,7 @@ public:
   /// @return true when the caller must queue another frame for requests it did not serve.
   bool finish(uint32_t generation, uint32_t servedSerial) {
     admission_.complete(generation);
-    return admission_.isCurrent(generation) &&
-           serial_.load() != servedSerial &&
+    return admission_.isCurrent(generation) && serial_.load() != servedSerial &&
            admission_.acquire(generation);
   }
 
