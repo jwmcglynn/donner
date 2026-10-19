@@ -18,8 +18,7 @@ inputs:
     description: >-
       Snapshot budget in MiB of uncompressed tar stream, which bounds the compressed archive.
       Eviction keeps the most recently used entries within it, and a snapshot still over it is
-      not saved. A hosted runner's small disk holds the checkout, every restored cache, the
-      Bazel output tree and the archive the save writes.
+      not saved. It bounds the bytes every restore and save moves through the runner.
     required: false
     default: "6144"
 runs:

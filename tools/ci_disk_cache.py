@@ -245,7 +245,7 @@ def walk_usage(root, deadline):
 
 
 def age(seconds):
-    # Bazel's install base carries mtimes in the future, so its newest file has no age.
+    # Some files Bazel extracts carry mtimes in the future, so they have no age.
     return "%.0f s old" % seconds if seconds >= 0 else "dated in the future"
 
 
