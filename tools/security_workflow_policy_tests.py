@@ -27,6 +27,7 @@ WRITE_SCOPES = {
     (".github/workflows/deploy_docs.yaml", "deploy"): {"id-token", "pages"},
     (".github/workflows/release.yml", "publish-release-artifacts"): {"contents"},
     (".github/workflows/release_candidate.yml", "attest-record"): {"attestations", "id-token"},
+    (".github/workflows/rerun_runner_loss.yml", "rerun"): {"actions"},
 }
 
 # Exact reviewed step consumers: workflow, job, name, id, action (or the run script marker).
@@ -540,6 +541,95 @@ PRIVATE_NETWORK_LITERAL = re.compile(
     r"(?i:\bf[cd][0-9a-f]{2}:[0-9a-f]{0,4}:[0-9a-f:]*)|"
     r"(?i:\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:local|lan|internal|home\.arpa|ts\.net)\b)|"
     r"/(?:Users|home)/(?!(?:runner|linuxbrew)\b)[A-Za-z0-9._-]+")
+
+
+# The one reviewed workflow_run consumer: it reruns a main run's failed jobs once when every failure
+# is a hosted-runner loss. A privileged trigger runs with the default branch's definition and an
+# elevated token, so its shape is pinned: it checks out only the default branch's classifier, runs
+# exactly the reviewed commands, reads no head ref of the triggering run, and acts only on main
+# push first attempts.
+RUNNER_LOSS_WORKFLOW = ".github/workflows/rerun_runner_loss.yml"
+RUNNER_LOSS_TRIGGERS = {"workflow_run", "workflow_dispatch"}
+RUNNER_LOSS_SCRIPT = "tools/ci_runner_loss_rerun.py"
+RUNNER_LOSS_COMMANDS = {
+    "rerun": 'python3 %s --mode rerun --run-id "$RUN_ID"' % RUNNER_LOSS_SCRIPT,
+    "dry-run": 'python3 %s --mode dry-run --run-id "$RUN_ID"' % RUNNER_LOSS_SCRIPT,
+}
+# The only environment each job's step receives: the workflow token and the run to classify.
+RUNNER_LOSS_STEP_ENV = {
+    "rerun": {"GH_TOKEN": "${{ github.token }}",
+              "RUN_ID": "${{ github.event.workflow_run.id }}"},
+    "dry-run": {"GH_TOKEN": "${{ github.token }}", "RUN_ID": "${{ inputs.run_id }}"},
+}
+RUNNER_LOSS_WORKFLOW_ENV = ['  DO_NOT_TRACK: "1"', '  ASPECT_TOOLS_TELEMETRY: "-all"']
+RUNNER_LOSS_JOB_GATES = {
+    "rerun": ("github.event_name == 'workflow_run'",
+              "github.event.workflow_run.head_branch == 'main'",
+              "github.event.workflow_run.event == 'push'",
+              "github.event.workflow_run.conclusion == 'failure'",
+              "github.event.workflow_run.run_attempt == 1"),
+    "dry-run": ("github.event_name == 'workflow_dispatch'",),
+}
+# Triggering-run fields that name code or refs outside the default branch.
+RUNNER_LOSS_FORBIDDEN = re.compile(r"head_sha|head_commit|head_repository|pull_requests|"
+                                   r"\bref:|repository:|secrets\.|github\.head_ref")
+
+
+def _runner_loss_job_violations(name, job):
+    violations = []
+    uses = re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*(\S+)", job)
+    if len(uses) != 1 or not uses[0].startswith("actions/checkout@"):
+        violations.append("%s runs actions other than one checkout: %s" % (name, uses))
+    if ("sparse-checkout: %s\n" % RUNNER_LOSS_SCRIPT) not in job or \
+            "sparse-checkout-cone-mode: false" not in job:
+        violations.append("%s checks out more than the classifier" % name)
+    commands = [body.strip() for body in _script_bodies(job)]
+    if commands != [RUNNER_LOSS_COMMANDS.get(name)]:
+        violations.append("%s runs unreviewed commands: %s" % (name, commands))
+    lines = job.splitlines()
+    env_blocks = [_indented_block(lines[index + 1:], 8) for index, line in enumerate(lines)
+                  if line == "        env:"]
+    env = _mapping(env_blocks[0]) if len(env_blocks) == 1 else {}
+    if env != RUNNER_LOSS_STEP_ENV.get(name) or job.count("env:") != 1:
+        violations.append("%s step environment is not the reviewed token and run ID: %s"
+                          % (name, sorted(env.items())))
+    gate = re.search(r"(?ms)^    if: (?:>-\n)?(.*?)^    runs-on:", job)
+    expected = "${{ %s }}" % " && ".join(RUNNER_LOSS_JOB_GATES.get(name, ("<unreviewed>",)))
+    if not gate or " ".join(gate.group(1).split()) != expected:
+        violations.append("%s gate is not exactly %s" % (name, expected))
+    return violations
+
+
+def _runner_loss_violations(workflow):
+    """Ways the reviewed workflow_run consumer differs from its pinned shape."""
+    violations = []
+    if _triggers(workflow) != RUNNER_LOSS_TRIGGERS:
+        violations.append("runner-loss triggers changed: %s" % sorted(_triggers(workflow)))
+    if not re.search(r'(?m)^    workflows: \["CI", "Editor WASM"\]\n    types: \[completed\]\n'
+                     r'    branches: \[main\]$', workflow):
+        violations.append("runner-loss workflow_run filter changed")
+    violations.extend("runner-loss workflow reads %r" % match.group(0)
+                      for match in RUNNER_LOSS_FORBIDDEN.finditer(workflow))
+    if [line for line in _top_level_block(workflow, "env") or [] if line.strip()
+            and not _is_comment(line)] != RUNNER_LOSS_WORKFLOW_ENV:
+        violations.append("runner-loss workflow environment changed")
+    jobs = _jobs(workflow)
+    if set(jobs) != set(RUNNER_LOSS_COMMANDS):
+        violations.append("runner-loss jobs changed: %s" % sorted(jobs))
+    for name, job in sorted(jobs.items()):
+        violations.extend(_runner_loss_job_violations(name, job))
+    return violations
+
+
+def _privileged_trigger_violations(path, workflow):
+    events = _triggers(workflow) & PRIVILEGED_TRIGGERS
+    if path == RUNNER_LOSS_WORKFLOW and events == {"workflow_run"}:
+        return _runner_loss_violations(workflow)
+    return sorted(events)
+
+
+def _privileged_trigger_check(files, path):
+    return _privileged_trigger_violations(path, files[path])
 
 
 def _read(path):
@@ -1720,6 +1810,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertEqual(_with_key(restore, "namespace", 8),
                                  _with_key(save, "namespace", 8), where)
                 self.assertEqual(save, _steps(job)[-1], where)
+                # tools/ci_runner_loss_rerun.py treats a step of this name as post-job cleanup.
+                self.assertEqual("Save Bazel action cache", _step_key(save, "name", 8), where)
         self.assertEqual(4, restoring)
 
     def test_only_main_pushes_save_actions_caches(self):
@@ -3060,13 +3152,15 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for path, events in sorted(triggers.items()):
             with self.subTest(path=path):
                 self.assertTrue(events)
-                self.assertEqual(set(), events & PRIVILEGED_TRIGGERS)
+                self.assertEqual([], _privileged_trigger_violations(
+                    path, self.supply_chain_files[path]))
+        self.assertEqual(RUNNER_LOSS_TRIGGERS, triggers[RUNNER_LOSS_WORKFLOW])
         self.assertEqual({"release"}, triggers[".github/workflows/release.yml"])
         self.assertEqual({"workflow_dispatch"}, triggers[".github/workflows/publish_bcr.yml"])
         self.assertEqual({"workflow_dispatch"}, triggers[CANDIDATE_WORKFLOW])
         sanitizers = ".github/workflows/sanitizers.yml"
         dispatch = "  workflow_dispatch:\n"
-        self._assert_rejected(lambda files, path: _triggers(files[path]) & PRIVILEGED_TRIGGERS, {
+        self._assert_rejected(_privileged_trigger_check, {
             "workflow_run": (sanitizers, self.sanitizers.replace(
                 dispatch, dispatch + "  workflow_run:\n    workflows: [CI]\n", 1), "workflow_run"),
             "inline target": (sanitizers, re.sub(
@@ -3074,6 +3168,77 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 count=1), "pull_request_target"),
             "issues": (sanitizers, self.sanitizers.replace(
                 dispatch, dispatch + "  issues:\n", 1), "issues"),
+        })
+
+    def test_runner_loss_rerun_policy_rejects_widened_workflow_run_consumers(self):
+        path = RUNNER_LOSS_WORKFLOW
+        workflow = self.supply_chain_files[path]
+        checkout = "          sparse-checkout: %s\n" % RUNNER_LOSS_SCRIPT
+        rerun_command = RUNNER_LOSS_COMMANDS["rerun"]
+        self._assert_rejected(_privileged_trigger_check, {
+            "head checkout": (path, workflow.replace(
+                checkout, checkout + "          ref: ${{ github.event.workflow_run.head_sha }}\n",
+                1), "head_sha"),
+            "whole checkout": (path, workflow.replace(checkout, "", 1), "more than the classifier"),
+            "extra command": (path, workflow.replace(
+                rerun_command, rerun_command + " && bash tools/other.sh", 1),
+                "unreviewed commands"),
+            "extra action": (path, workflow.replace(
+                "      - name: Classify failed jobs and rerun runner losses\n",
+                "      - uses: actions/setup-python@v6\n"
+                "      - name: Classify failed jobs and rerun runner losses\n", 1),
+                "actions other than one checkout"),
+            "any branch": (path, workflow.replace(
+                "      github.event.workflow_run.head_branch == 'main' &&\n", "", 1),
+                "head_branch == 'main'"),
+            "pull request runs": (path, workflow.replace(
+                "      github.event.workflow_run.event == 'push' &&\n", "", 1), "'push'"),
+            "repeat attempts": (path, workflow.replace(
+                "      github.event.workflow_run.run_attempt == 1 }}",
+                "      github.event.workflow_run.run_attempt >= 1 }}", 1), "gate is not exactly"),
+            "widened gate": (path, workflow.replace(
+                "      github.event.workflow_run.run_attempt == 1 }}",
+                "      github.event.workflow_run.run_attempt == 1 || true }}", 1),
+                "gate is not exactly"),
+            "dispatch reaches the write job": (path, workflow.replace(
+                "${{ github.event_name == 'workflow_run' &&",
+                "${{ github.event_name == 'workflow_dispatch' || "
+                "github.event_name == 'workflow_run' &&",
+                1), "gate is not exactly"),
+            "dry run on workflow_run": (path, workflow.replace(
+                "if: ${{ github.event_name == 'workflow_dispatch' }}",
+                "if: ${{ github.event_name == 'workflow_dispatch' || "
+                "github.event_name == 'workflow_run' }}", 1), "gate is not exactly"),
+            "extra step env": (path, workflow.replace(
+                "          RUN_ID: ${{ github.event.workflow_run.id }}\n",
+                "          RUN_ID: ${{ github.event.workflow_run.id }}\n"
+                "          PYTHONPATH: ${{ github.event.workflow_run.display_title }}\n", 1),
+                "step environment"),
+            "job env": (path, workflow.replace(
+                "    timeout-minutes: 5\n    permissions:\n      actions: write\n",
+                "    timeout-minutes: 5\n    env:\n      PYTHONPATH: tools\n"
+                "    permissions:\n      actions: write\n", 1), "step environment"),
+            "workflow env": (path, workflow.replace(
+                '  ASPECT_TOOLS_TELEMETRY: "-all"\n',
+                '  ASPECT_TOOLS_TELEMETRY: "-all"\n  PYTHONSTARTUP: tools/x.py\n', 1),
+                "workflow environment changed"),
+            "branch filter": (path, workflow.replace(
+                "    branches: [main]\n", "    branches: ['**']\n", 1), "filter changed"),
+            "other workflows": (path, workflow.replace(
+                'workflows: ["CI", "Editor WASM"]', 'workflows: ["CI", "Perf"]', 1),
+                "filter changed"),
+            "event text run ID": (path, workflow.replace(
+                "RUN_ID: ${{ github.event.workflow_run.id }}",
+                "RUN_ID: ${{ github.event.workflow_run.display_title }}", 1),
+                "step environment"),
+            "secret": (path, workflow.replace(
+                "GH_TOKEN: ${{ github.token }}", "GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}", 1),
+                "secrets."),
+            "new trigger": (path, workflow.replace(
+                "  workflow_dispatch:\n", "  workflow_dispatch:\n  issue_comment:\n", 1),
+                "issue_comment"),
+            "dispatch removed": (path, workflow.replace(
+                "  workflow_dispatch:\n", "  push:\n", 1), "triggers changed"),
         })
 
     def test_each_secret_is_read_only_by_its_reviewed_step(self):

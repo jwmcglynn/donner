@@ -1,0 +1,91 @@
+name: Rerun runner loss
+
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
+# A GitHub-hosted runner can die mid-job: the service reports that it lost communication, or the
+# runner's own log and step-script writes fail with `Illegal byte sequence`. Neither is a result
+# of the code under test. When a main push run of CI or Editor WASM fails on its first attempt,
+# tools/ci_runner_loss_rerun.py classifies every failed job and reruns the failed jobs once, only
+# when each one carries a runner-loss signature. Any other failure leaves the run red. The step
+# summary lists every job with its signature or the reason it is not eligible, so recoveries stay
+# visible.
+#
+# Trust boundary: workflow_run always runs this file and its checkout from the default branch,
+# never from the triggering run's head. The job reads run metadata only through the REST API,
+# passes the run ID to the script through the environment (the script accepts digits only), and
+# holds no secret beyond the workflow token.
+#
+# workflow_run fires only for this file as it exists on the default branch. To check a decision
+# by hand, dispatch this workflow with a run ID: the dry run classifies that run's first attempt
+# and writes the same summary, with a read-only token and no rerun.
+on:
+  workflow_run:
+    workflows: ["CI", "Editor WASM"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Workflow run ID to classify (dry run; never reruns)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One classification per triggering run. A second event for the same run waits for the first
+# instead of racing it to a duplicate rerun request.
+concurrency:
+  group: rerun-runner-loss-${{ github.event.workflow_run.id || inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  rerun:
+    if: >-
+      ${{ github.event_name == 'workflow_run' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/ci_runner_loss_rerun.py
+          sparse-checkout-cone-mode: false
+
+      - name: Classify failed jobs and rerun runner losses
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python3 tools/ci_runner_loss_rerun.py --mode rerun --run-id "$RUN_ID"
+
+  dry-run:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/ci_runner_loss_rerun.py
+          sparse-checkout-cone-mode: false
+
+      - name: Classify failed jobs without rerunning
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: python3 tools/ci_runner_loss_rerun.py --mode dry-run --run-id "$RUN_ID"

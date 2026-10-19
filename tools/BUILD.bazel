@@ -180,6 +180,17 @@ py_test(
     ],
 )
 
+# Classifies a failed main CI run's jobs against the hosted-runner loss signatures; the
+# rerun_runner_loss workflow runs it.
+py_test(
+    name = "ci_runner_loss_rerun_tests",
+    size = "small",
+    srcs = [
+        "ci_runner_loss_rerun.py",
+        "ci_runner_loss_rerun_tests.py",
+    ],
+)
+
 py_test(
     name = "ci_bazel_test_tests",
     size = "small",
