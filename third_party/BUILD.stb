@@ -7,9 +7,22 @@ STB_COPTS = [
     "-Wno-self-assign",
 ]
 
+config_setting(
+    name = "fastbuild",
+    values = {"compilation_mode": "fastbuild"},
+)
+
+# The PNG encoder is a CPU-bound loop (per-row filter selection plus deflate) that tests and
+# editor captures run on full framebuffers. Unoptimized fastbuild code took 0.4 to 1.4 s per 0.8
+# to 2.7 megapixel capture, so optimize it in fastbuild. Optimized builds keep their own level
+# (size-budgeted Wasm builds use -Oz), and debug builds stay unoptimized. The encoded bytes do
+# not depend on the optimization level.
 STB_IMAGE_WRITE_COPTS = STB_COPTS + [
     "-Wno-deprecated-declarations",
-]
+] + select({
+    ":fastbuild": ["-O2"],
+    "//conditions:default": [],
+})
 
 stb_library(
     name = "c_lexer",

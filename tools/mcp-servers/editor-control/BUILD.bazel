@@ -100,6 +100,10 @@ donner_cc_test(
     ],
     opens_gpu_device = True,
     renderer_backend = EDITOR_RENDERER_BACKEND,
+    # Each replay starts its own editor window and shell, then renders and captures framebuffers
+    # of up to 3200x1800 pixels. On a software Vulkan device the suite needs about 50 s in total, so
+    # shards keep each process well inside the small-test timeout.
+    shard_count = 4,
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
     deps = [
         ":editor_control_session",
