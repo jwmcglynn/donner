@@ -13,7 +13,7 @@ renderer stays the default for embedders.
 
 ### Highlights
 
-- **Donner SVG Editor**: a first working editor, native on macOS and Linux and in the browser.
+- **Donner SVG Editor**: a first working editor, native on macOS and Linux, and in the browser.
   Select and transform shapes, draw paths with the Pen tool, edit text, and organize Layers, with
   an XML source view that stays in sync with the canvas.
 - **Geode GPU renderer**: Geode renders through Donner's own GPU runtime, on Metal on macOS,
