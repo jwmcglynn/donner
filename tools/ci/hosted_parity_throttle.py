@@ -42,7 +42,8 @@ _COERCED_LOCALES = ("C.UTF-8", "C.utf8", "UTF-8")
 def test_environment(environment):
     """The environment Bazel gave the test, without what this launcher's own Python startup
     added: rules_python's PYTHONSAFEPATH and a coerced LC_CTYPE (Bazel's test environment sets
-    neither)."""
+    neither). An LC_CTYPE of exactly a coercion value passed with --test_env would be dropped
+    too, since it cannot be told apart; no configuration here passes one."""
     environment = dict(environment)
     environment.pop("PYTHONSAFEPATH", None)
     if environment.get("LC_CTYPE") in _COERCED_LOCALES and "LC_ALL" not in environment:
