@@ -1802,7 +1802,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_self_hosted_macos_uses_buildbuddy_and_removes_its_key(self):
         workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        self_hosted = workflow.split("\n  macos-self-hosted:\n", 1)[1]
+        self_hosted = _jobs(workflow)["macos-self-hosted"]
         header = self_hosted.split("    steps:\n", 1)[0]
         self.assertNotIn("--remote_cache=", header)
         self.assertNotIn("BAZEL_REMOTE_CACHE", workflow)
@@ -3275,7 +3275,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "parity narrowing dropped": (main, files[main].replace(
                 gate + narrowing, gate, 1), ungated),
             "status prefix widened": (main, files[main].replace(
-                "${{ !cancelled() && needs.gatekeeper", "${{ always() || needs.gatekeeper", 1),
+                "${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push",
+                "${{ always() || needs.gatekeeper.outputs.is_duplicate_push", 1),
                 ungated),
             "self-hosted label": (coverage, files[coverage].replace(
                 hosted, "    runs-on: [self-hosted, linux, arm64]\n", 1), ungated),
@@ -3320,12 +3321,15 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         files = self.supply_chain_files
         self.assertEqual([], _artifact_upload_violations(files))
         self.assertEqual(REVIEWED_UPLOAD_ACTIONS, _uploading_local_actions(files))
-        # The self-hosted diagnostics keep their derived report, profiles and stall notes.
+        # The self-hosted diagnostics keep their derived report, profiles and stall notes, and
+        # each self-hosted job uploads only its derived coverage receipt besides them.
         main = _jobs(files[".github/workflows/main.yml"])
         uploads = _upload_paths(main["linux-self-hosted"])
-        self.assertEqual(1, len(uploads))
+        self.assertEqual(2, len(uploads))
         self.assertEqual(SELF_HOSTED_UPLOAD_FILES,
-                         {entry.rsplit("/", 1)[-1] for entry in uploads[0]})
+                         {entry.rsplit("/", 1)[-1] for entry in uploads[0] + uploads[1]})
+        self.assertEqual([["${{ runner.temp }}/coverage-receipt/coverage-receipt.json"]],
+                         uploads[1:])
 
     def test_upload_policy_rejects_raw_logs_directories_and_workspace_roots(self):
         files = self.supply_chain_files

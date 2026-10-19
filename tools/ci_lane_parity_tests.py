@@ -166,7 +166,11 @@ SUBSET_SETUP_REQUIRED_INPUTS = {("Setup Bazel", "cache-save"): "false"}
 
 # Steps a hosted subset runs that main's job does not, with the reason each cannot change what
 # the covered steps test.
-SUBSET_EXTRA_STEPS = {}
+SUBSET_EXTRA_STEPS = {
+    **{step: "Records which steps ran for the coverage contract after the tests finish; it "
+             "writes and uploads a receipt and changes nothing a covered step tests."
+       for step in ("Record coverage receipt", "Upload coverage receipt")},
+}
 
 # Jobs that run on a main push and on no kind of pull request, without a replacement.
 MAIN_ONLY_JOBS = {}
