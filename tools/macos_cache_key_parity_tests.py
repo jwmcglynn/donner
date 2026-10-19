@@ -162,19 +162,21 @@ def _flag_problems(hosted_flags, self_flags):
     return problems
 
 
+def _flag_list_problems(owner, values, pattern, kind):
+    """Problems of flag lists (name to value or None) that may hold only `kind` flags."""
+    return ["%s %s holds a flag that is not %s" % (owner, variable, kind)
+            for variable, value in values.items()
+            if value is not None and not all(pattern.match(flag) for flag in shlex.split(value))]
+
+
 def _test_list_problems(name, job):
-    """Problems of a lane's test-only environment lists and its lane name."""
-    problems = []
-    for variable in TEST_ONLY_VARIABLES:
-        value = _job_env(job, variable)
-        if value is not None and not all(TEST_ONLY_FLAG.match(flag)
-                                         for flag in shlex.split(value)):
-            problems.append("%s %s holds a flag that is not test-only" % (name, variable))
-    for variable in SCHEDULING_VARIABLES:
-        value = _job_env(job, variable)
-        if value is not None and not all(SCHEDULING_ONLY_FLAG.match(flag)
-                                         for flag in shlex.split(value)):
-            problems.append("%s %s holds a flag that is not scheduling-only" % (name, variable))
+    """Problems of a lane's test-only and scheduling-only environment lists and its lane name."""
+    problems = _flag_list_problems(
+        name, {variable: _job_env(job, variable) for variable in TEST_ONLY_VARIABLES},
+        TEST_ONLY_FLAG, "test-only")
+    problems += _flag_list_problems(
+        name, {variable: _job_env(job, variable) for variable in SCHEDULING_VARIABLES},
+        SCHEDULING_ONLY_FLAG, "scheduling-only")
     tests = shlex.split(_job_env(job, "BAZEL_MACOS_TEST_FLAGS") or "")
     if LANE_TEST_ENV[name] not in tests:
         problems.append("%s does not name its lane with %s" % (name, LANE_TEST_ENV[name]))
@@ -277,11 +279,9 @@ def key_parity_problems(workflow, bazelrc):
     problems = _xcode_override_problems(workflow)
     for name, _ in LANE_XCODE_MODES[1:]:
         problems += _flag_problems(lane_flags[HOSTED], lane_flags[name])
-    quarantine = _workflow_env(workflow, "HOSTED_MACOS_QUARANTINE_TEST_FLAGS")
-    if quarantine is not None and not all(TEST_ONLY_FLAG.match(flag)
-                                          for flag in shlex.split(quarantine)):
-        problems.append("main.yml HOSTED_MACOS_QUARANTINE_TEST_FLAGS holds a flag that is not "
-                        "test-only")
+    problems += _flag_list_problems(
+        "main.yml", {variable: _workflow_env(workflow, variable)
+                     for variable in TEST_ONLY_VARIABLES}, TEST_ONLY_FLAG, "test-only")
     by_step = {}
     for name, mode in LANE_XCODE_MODES:
         job = jobs[name]
@@ -291,11 +291,15 @@ def key_parity_problems(workflow, bazelrc):
         problems += _select_problems(name, _steps(job), commands, mode)
         if "Select pinned Xcode" in [step_name for step_name, _ in _steps(job)]:
             problems += _refresh_problems(name, commands, by_step)
-    for step_name, lanes_seen in sorted(by_step.items()):
-        if HOSTED in lanes_seen and any(flags != lanes_seen[HOSTED]
-                                        for flags in lanes_seen.values()):
-            problems.append("step %r differs between the lanes: %s" % (step_name, lanes_seen))
-    return problems + _bazelrc_problems(bazelrc)
+    return problems + _step_divergence(by_step) + _bazelrc_problems(bazelrc)
+
+
+def _step_divergence(by_step):
+    """Steps whose key-affecting flags differ from the hosted lane's copy of the step."""
+    return ["step %r differs between the lanes: %s" % (step_name, lanes_seen)
+            for step_name, lanes_seen in sorted(by_step.items())
+            if HOSTED in lanes_seen
+            and any(flags != lanes_seen[HOSTED] for flags in lanes_seen.values())]
 
 
 def private_backend_problems(files):
