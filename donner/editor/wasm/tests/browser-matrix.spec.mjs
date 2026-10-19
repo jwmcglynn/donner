@@ -320,13 +320,13 @@ function assertFontReferenceLane({ lane, tags, specFiles }) {
   );
 }
 
-function assertAnimationLane({ lane, tags, specFiles }) {
+function assertAnimationLane({ lane, tags, specFiles }, grep) {
   assert.deepEqual(specFiles, ["smoke.spec.ts"]);
   assert.ok(tags.includes("launches-browser"));
   assert.ok(tags.includes("requires_desktop_session"));
   assert.ok(!tags.includes("manual") && !tags.includes("perf"));
   assert.match(lane, /--config=\$\(rootpath :playwright\.animation\.bazel\.config\.js\)/);
-  assert.match(lane, /--grep=animation\.preview\.plays/);
+  assert.match(lane, grep);
   assert.doesNotMatch(
     lane,
     /--project(?:=|"|\s)/,
@@ -362,7 +362,9 @@ function assertBrowserLane(lane) {
   } else if (laneName === "chromium_composited_invariants_test") {
     assertCompositedLane(contract, "chromium");
   } else if (laneName === "animation_preview_browser_test") {
-    assertAnimationLane(contract);
+    assertAnimationLane(contract, /--grep=animation\.preview\.plays/);
+  } else if (laneName === "canvas_snapshot_browser_test") {
+    assertAnimationLane(contract, /--grep=page screenshots keep the canvas/);
   } else if (laneName === "font_reference_probe") {
     assertFontReferenceLane(contract);
   } else {
@@ -437,6 +439,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       "animation_preview_browser_test",
       "boot_presentation_test",
       "browser_presentation_regression_test",
+      "canvas_snapshot_browser_test",
       "catalog_font_loading_test",
       "chromium_composited_invariants_test",
       "chromium_remote_smoke",

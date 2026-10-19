@@ -42,7 +42,7 @@ import {
   holdCanvasCompletionForTest,
   observeSubmittedCanvasGpuWork,
 } from "./surface-frame-probe";
-import { scaledMs } from "./test-timing";
+import { kStallGuardMs, scaledMs } from "./test-timing";
 
 installBrowserStallDiagnostics(test);
 installFailureCanvasEvidence(test);
@@ -5086,3 +5086,87 @@ test(
     expect(fatalMessages).toEqual([]);
   },
 );
+
+// Firefox snapshots a canvas whose control was transferred to a worker by running a task on that
+// worker and blocking the page's main thread until it answers, for at most
+// `gfx.offscreencanvas.snapshot-timeout-ms` (10 s). If the worker is itself blocked on a
+// synchronous call to the main thread, neither can proceed until that timeout, and the snapshot
+// paints the page without the canvas. While the pointer is over the ImGui panels, the GLFW backend
+// sets the OS cursor from the canvas owner on every frame, so keep the pointer moving over a panel
+// and require every page capture to include the canvas.
+test("page screenshots keep the canvas while hover changes the cursor", async ({ page }, testInfo) => {
+  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+  await expectSampleThumbnailsToSettle(page, {
+    message: "thumbnail work is drained before the captures",
+    timeout: kStallGuardMs,
+  });
+  const box = await page.locator("canvas#canvas").boundingBox();
+  if (!box) throw new Error("the editor canvas has no bounds");
+  // Open the sample the animation lane uses; its document area sets the editor's own cursor and
+  // the inspector panel on the right leaves the cursor to ImGui.
+  await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
+  const canvasCursor = () =>
+    page.evaluate(() => getComputedStyle(document.getElementById("canvas")!).cursor);
+  const documentPoint = { x: box.x + box.width * 0.4, y: box.y + box.height * 0.375 };
+  const panelPoint = { x: box.x + box.width - 200, y: box.y + box.height * 0.375 };
+  // The editor's own document cursor appears only once the opened document is interactive.
+  await page.mouse.move(documentPoint.x, documentPoint.y);
+  await expect.poll(canvasCursor, {
+    message: "the opened document sets the editor cursor",
+    timeout: kStallGuardMs,
+  }).toMatch(/^url\(/);
+  // A clip over the open document keeps each capture cheap; without the canvas it is flat.
+  const region = {
+    x: Math.round(documentPoint.x - 200),
+    y: Math.round(documentPoint.y - 150),
+    width: 400,
+    height: 300,
+  };
+  // Captured while the pointer is over the document, where the cursor comes from the editor's
+  // asynchronous registry: the region must show document content, or a flat capture below would
+  // not mean the canvas was lost.
+  expect(
+    isOnlyEditorPageBackground(await page.screenshot({ clip: region, timeout: kStallGuardMs })),
+    "the capture region shows document content",
+  ).toBe(false);
+  // The panel leaves the cursor to ImGui, whose GLFW backend sets it from the canvas owner.
+  await page.mouse.move(panelPoint.x, panelPoint.y);
+  await expect.poll(canvasCursor, { message: "the inspector panel uses an ImGui cursor" })
+    .not.toMatch(/^url\(/);
+  const captures: Array<Record<string, unknown>> = [];
+  // A frame's cursor call meets a screenshot on well under one capture in a hundred on a fast
+  // host, so take enough captures that the unfixed deadlock is likely within one run;
+  // glfw_cursor_proxy_tests pins the fix itself deterministically.
+  const kCaptures = 300;
+  // Each capture is a bounded step: a stalled one returns flat after the browser's snapshot
+  // timeout. Extend the case by one second per capture, several times the loaded-host cost.
+  testInfo.setTimeout(testInfo.timeout + kCaptures * 1000);
+  try {
+    for (let step = 0; step < kCaptures; step++) {
+      // Every move starts new frames, and each frame sets the OS cursor from the canvas owner.
+      const x = panelPoint.x + (step % 2) * 8;
+      const y = panelPoint.y;
+      await page.mouse.move(x, y);
+      const startedAt = Date.now();
+      const capture = await page.screenshot({ clip: region, timeout: kStallGuardMs });
+      const record: Record<string, unknown> = {
+        step,
+        x,
+        y,
+        screenshotMs: Date.now() - startedAt,
+        flat: isOnlyEditorPageBackground(capture),
+      };
+      captures.push(record);
+      expect(
+        record.flat,
+        `page capture ${step} with the pointer at (${x}, ${y}) did not include the canvas`,
+      ).toBe(false);
+    }
+  } finally {
+    const recordPath = testInfo.outputPath("cursor-captures.json");
+    await writeFile(recordPath, JSON.stringify(captures, null, 2));
+    await testInfo.attach("cursor-captures", { contentType: "application/json", path: recordPath });
+  }
+  expect(await canvasCursor(), "the inspector panel kept an ImGui cursor").not.toMatch(/^url\(/);
+  expect(fatalMessages).toEqual([]);
+});
