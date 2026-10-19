@@ -785,6 +785,7 @@ TEST(TextToOutlines, MismatchedOriginalParentIsRefusedBeforeStaging) {
   constexpr std::string_view source = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
   <text id="first">ABC</text>
   <text id="second">ABC</text>
+  <g id="other"/>
 </svg>)svg";
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(source));
@@ -792,7 +793,9 @@ TEST(TextToOutlines, MismatchedOriginalParentIsRefusedBeforeStaging) {
   const auto first = document.querySelector("#first");
   const auto second = document.querySelector("#second");
   ASSERT_THAT(first, testing::Ne(std::nullopt));
+  const auto other = document.querySelector("#other");
   ASSERT_THAT(second, testing::Ne(std::nullopt));
+  ASSERT_THAT(other, testing::Ne(std::nullopt));
   const std::string sourceBefore(document.source());
   const std::uint64_t generationBefore = app.document().documentGeneration();
 
@@ -800,7 +803,7 @@ TEST(TextToOutlines, MismatchedOriginalParentIsRefusedBeforeStaging) {
   svg::SVGGElement secondGroup = svg::SVGGElement::Create(document);
   app.applyMutation(EditorCommand::ReplaceElementsCommand({
       {.parent = document.svgElement(), .original = *first, .replacement = firstGroup},
-      {.parent = *second, .original = *second, .replacement = secondGroup},
+      {.parent = *other, .original = *second, .replacement = secondGroup},
   }));
   (void)app.flushFrame();
 
@@ -810,6 +813,7 @@ TEST(TextToOutlines, MismatchedOriginalParentIsRefusedBeforeStaging) {
   EXPECT_THAT(document.querySelector("#first"), testing::Optional(Eq(*first)));
   EXPECT_THAT(document.querySelector("#second"), testing::Optional(Eq(*second)));
   EXPECT_THAT(firstGroup.parentElement(), Eq(std::nullopt));
+  EXPECT_THAT(secondGroup.parentElement(), Eq(std::nullopt));
   EXPECT_THAT(app.isDirty(), Eq(false));
 }
 
