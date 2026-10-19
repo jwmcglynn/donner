@@ -39,15 +39,14 @@ BAZEL_INVOCATION = re.compile(
     r"\bbazel(?:isk)?(?:\s+--[a-z_]+)*\s+(build|test|fetch|query|cquery|coverage|run)\b")
 # Flags that only select, run or report tests. They never change a build action's key.
 TEST_ONLY_FLAG = re.compile(r"^--(?:no)?(?:test_|cache_test_results|local_test_jobs|"
-                            r"flaky_test_attempts|runs_per_test|keep_going|build_event_json_file)")
+                            r"flaky_test_attempts|runs_per_test|keep_going|build_event_json_file|"
+                            r"run_under)")
 # Flags that only limit how many actions Bazel runs at once, or which requested targets it
 # builds. They never change a build action's key.
 SCHEDULING_ONLY_FLAG = re.compile(r"^--(?:jobs|local_resources|build_tests_only)(?:=|$)")
-# Job or workflow environment values a lane may set for itself; each may hold only test-only flags.
-TEST_ONLY_VARIABLES = ("BAZEL_MACOS_TEST_FLAGS", "BROWSER_STALL_TEST_FLAGS",
-                       "HOSTED_MACOS_QUARANTINE_TEST_FLAGS")
-# Job environment values that may hold only scheduling flags.
-SCHEDULING_VARIABLES = ("HOSTED_MACOS_RESOURCE_FLAGS",)
+# Job environment values a lane may set for itself; each may hold only test-only flags.
+TEST_ONLY_VARIABLES = ("BAZEL_MACOS_TEST_FLAGS", "BROWSER_STALL_TEST_FLAGS")
+_RC_LINE = re.compile(r"^(?:build|test|common):([A-Za-z0-9_-]+)\s+(.*)$")
 # Each lane names itself in its test environment, so test results never cross runners.
 LANE_TEST_ENV = {"macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
                  "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted",
@@ -132,14 +131,37 @@ def _bazel_commands(job):
             if BAZEL_INVOCATION.search(command)]
 
 
-def _build_flags(command):
+def neutral_configs(bazelrc):
+    """Repository configs whose flags, through any configs they name, are all test-only or
+    scheduling-only, so passing one never changes a build action's key."""
+    flags = {}
+    for line in bazelrc.splitlines():
+        match = _RC_LINE.match(line)
+        if match:
+            flags.setdefault(match.group(1), []).extend(shlex.split(match.group(2)))
+
+    def neutral(name, seen):
+        return name in flags and name not in seen and all(
+            neutral(flag.split("=", 1)[1], seen | {name}) if flag.startswith("--config=")
+            else TEST_ONLY_FLAG.match(flag) or SCHEDULING_ONLY_FLAG.match(flag)
+            for flag in flags[name])
+
+    return frozenset(name for name in flags if neutral(name, frozenset()))
+
+
+def _key_affecting(word, neutral):
+    if word.startswith("--config=") and word.split("=", 1)[1] in neutral:
+        return False
+    return not TEST_ONLY_FLAG.match(word) and not SCHEDULING_ONLY_FLAG.match(word)
+
+
+def _build_flags(command, neutral=frozenset()):
     """The key-affecting words of a Bazel command: build flags and environment lists after the
-    command, without test-only flags, test-only lists or targets."""
+    command, without test-only flags, test-only lists, test-only configs or targets."""
     words = command[BAZEL_INVOCATION.search(command).end():].split()
     test_lists = {"$" + name for name in TEST_ONLY_VARIABLES}
     return sorted(word for word in words if (word.startswith("--") and
-                                             not TEST_ONLY_FLAG.match(word) and
-                                             not SCHEDULING_ONLY_FLAG.match(word)) or
+                                             _key_affecting(word, neutral)) or
                   (word.startswith("$") and word not in test_lists and
                    word.startswith("$BAZEL")))
 
@@ -170,20 +192,17 @@ def _flag_list_problems(owner, values, pattern, kind):
 
 
 def _test_list_problems(name, job):
-    """Problems of a lane's test-only and scheduling-only environment lists and its lane name."""
+    """Problems of a lane's test-only environment lists and its lane name."""
     problems = _flag_list_problems(
         name, {variable: _job_env(job, variable) for variable in TEST_ONLY_VARIABLES},
         TEST_ONLY_FLAG, "test-only")
-    problems += _flag_list_problems(
-        name, {variable: _job_env(job, variable) for variable in SCHEDULING_VARIABLES},
-        SCHEDULING_ONLY_FLAG, "scheduling-only")
     tests = shlex.split(_job_env(job, "BAZEL_MACOS_TEST_FLAGS") or "")
     if LANE_TEST_ENV[name] not in tests:
         problems.append("%s does not name its lane with %s" % (name, LANE_TEST_ENV[name]))
     return problems
 
 
-def _record_commands(name, commands, by_step):
+def _record_commands(name, commands, by_step, neutral=frozenset()):
     """Record each build command's configs by step; problems for commands without the lane flags."""
     problems = []
     for step_name, command in commands:
@@ -193,7 +212,7 @@ def _record_commands(name, commands, by_step):
         if LANE_FLAGS not in command:
             problems.append("%s step %r runs Bazel without %s" % (name, step_name, LANE_FLAGS))
         by_step.setdefault(step_name, {}).setdefault(name, set()).add(
-            tuple(_build_flags(command)))
+            tuple(_build_flags(command, neutral)))
     return problems
 
 
@@ -282,11 +301,12 @@ def key_parity_problems(workflow, bazelrc):
     problems += _flag_list_problems(
         "main.yml", {variable: _workflow_env(workflow, variable)
                      for variable in TEST_ONLY_VARIABLES}, TEST_ONLY_FLAG, "test-only")
+    neutral = neutral_configs(bazelrc)
     by_step = {}
     for name, mode in LANE_XCODE_MODES:
         job = jobs[name]
         commands = _bazel_commands(job)
-        problems += _record_commands(name, commands, by_step)
+        problems += _record_commands(name, commands, by_step, neutral)
         problems += _test_list_problems(name, job)
         problems += _select_problems(name, _steps(job), commands, mode)
         if "Select pinned Xcode" in [step_name for step_name, _ in _steps(job)]:
@@ -412,15 +432,12 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             "the parity lane shares the hosted lane's test results": (self.workflow.replace(
                 LANE_TEST_ENV[PARITY], LANE_TEST_ENV[HOSTED], 1),
                 self.bazelrc, "does not name its lane"),
-            "the parity lane hides a build flag among its resource limits": (self.workflow.replace(
-                'HOSTED_MACOS_RESOURCE_FLAGS: "--jobs=3',
-                'HOSTED_MACOS_RESOURCE_FLAGS: "--copt=-O0 --jobs=3', 1),
-                self.bazelrc, "not scheduling-only"),
+            "the parity configuration hides a build flag": (self.workflow, self.bazelrc.replace(
+                "build:hosted-macos --jobs=3\n", "build:hosted-macos --jobs=3 --copt=-O0\n", 1),
+                "step 'Test (Geode editor lane)' differs"),
             "the parity lane changes a key-affecting flag": (self.workflow.replace(
-                "test --config=ci --config=geode --test_output=errors \\\n"
-                "            $HOSTED_MACOS_RESOURCE_FLAGS",
-                "test --config=ci --config=geode --copt=-O0 --test_output=errors \\\n"
-                "            $HOSTED_MACOS_RESOURCE_FLAGS", 1),
+                "--config=geode --config=hosted-parity-runtime \\\n",
+                "--config=geode --config=hosted-parity-runtime --copt=-O0 \\\n", 1),
                 self.bazelrc, "step 'Test (Geode editor lane)' differs"),
             "the parity lane drops the Xcode pin": (self.workflow[:self.workflow.index(
                 "\n  %s:\n" % PARITY)] + self.workflow[self.workflow.index(

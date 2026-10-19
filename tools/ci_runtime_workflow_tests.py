@@ -466,29 +466,25 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_hosted_macos_quarantine_is_set_only_for_the_hosted_test_environment(self):
         # Main's hosted macOS job skips browser cases quarantined for that runner alone (#1691,
-        # #1702). The switch is defined once, in the workflow environment, and read only by the
-        # gating test steps of the jobs that reproduce that job's test environment, so they skip
-        # exactly the same cases. Every other lane and local runs must keep running them.
-        switch = "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
-        header = self.main.split("\njobs:\n", 1)[0]
-        self.assertIn('  HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "%s"\n' % switch, header)
-        self.assertEqual(self.main.count("DONNER_HOSTED_MACOS_QUARANTINE"), 1)
+        # #1702). The switch is one .bazelrc config, passed only by the gating test steps of the
+        # jobs that reproduce that job's test environment, so they skip exactly the same cases.
+        # Every other lane and local runs must keep running them.
         readers = {
             "macos": ("Test", "Test (browser targets)"),
             # The trusted-PR hosted browser subset runs main's hosted browser step.
             "macos-browser": ("Test (browser targets)",),
-            # The trusted-PR hosted-parity subset reruns main's native test step's
-            # runner-sensitive tests under the hosted runner's constraints.
-            "macos-hosted-parity": ("Test",),
         }
         for job_name, steps in readers.items():
             job = self._job_body(job_name)
-            self.assertNotIn("HOSTED_MACOS_QUARANTINE_TEST_FLAGS:", job, job_name)
             for step in steps:
-                self.assertIn("$HOSTED_MACOS_QUARANTINE_TEST_FLAGS", self._step_body(job, step),
+                self.assertIn("--config=hosted-macos-quarantine", self._step_body(job, step),
                               (job_name, step))
-        self.assertEqual(self.main.count("$HOSTED_MACOS_QUARANTINE_TEST_FLAGS"),
+        self.assertEqual(self.main.count("--config=hosted-macos-quarantine"),
                          sum(len(steps) for steps in readers.values()))
+        # The trusted-PR hosted-parity subset gets it through --config=hosted-parity.
+        parity = self._job_body("macos-hosted-parity")
+        self.assertIn("--config=hosted-parity-subset", self._step_body(parity, "Test"))
+        self.assertNotIn("DONNER_HOSTED_MACOS_QUARANTINE", self.main)
         hosted = self._job_body("macos")
         for step in ("Test", "Test (browser targets)"):
             self.assertIn("$BROWSER_STALL_TEST_FLAGS", self._step_body(hosted, step), step)
@@ -498,9 +494,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             step = "Compare browser GPU tests (%s)" % mode
             body = self._step_body(hosted, step)
             self.assertIn("continue-on-error: true", body, step)
-            self.assertNotIn("HOSTED_MACOS_QUARANTINE", body, step)
+            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE",
+                         "hosted-parity"):
+                self.assertNotIn(name, body, step)
         for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
-            self.assertNotIn("HOSTED_MACOS_QUARANTINE", self._job_body(job), job)
+            for name in ("hosted-macos-quarantine", "DONNER_HOSTED_MACOS_QUARANTINE",
+                         "hosted-parity"):
+                self.assertNotIn(name, self._job_body(job), job)
         resolver = runfiles.Create()
         workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
         others = [path for path in sorted(workflows.glob("*.y*ml")) if path.name != "main.yml"]
@@ -508,9 +508,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         actions = sorted((workflows.parent / "actions").glob("*/action.y*ml"))
         self.assertGreater(len(actions), 3)
         for path in others + actions:
-            self.assertNotIn("HOSTED_MACOS_QUARANTINE", path.read_text(encoding="utf-8"),
-                             path.name)
-        self.assertNotIn("HOSTED_MACOS_QUARANTINE", self.bazelrc)
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("HOSTED_MACOS_QUARANTINE", text, path.name)
+            self.assertNotIn("hosted-macos-quarantine", text, path.name)
+        # In the repository bazelrc it is one named config, which no other config or default
+        # names except the hosted-parity config.
+        self.assertEqual(
+            [line for line in self.bazelrc.splitlines() if "HOSTED_MACOS_QUARANTINE" in line
+             or "hosted-macos-quarantine" in line],
+            ["test:hosted-macos-quarantine --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1",
+             "test:hosted-parity --config=hosted-macos-quarantine"])
 
     def test_quarantine_report_lane_is_enabled_only_by_the_scheduled_editor_wasm_run(self):
         # The report-only lane lifts the Firefox quarantine of #1634 and never fails its job.

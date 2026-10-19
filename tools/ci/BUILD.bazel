@@ -399,3 +399,19 @@ py_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
 )
+
+# The --run_under launcher of --config=hosted-parity (.bazelrc): it holds each test to roughly the
+# CPU capacity of main's hosted macOS runner.
+py_binary(
+    name = "hosted_parity_throttle",
+    srcs = ["hosted_parity_throttle.py"],
+)
+
+py_test(
+    name = "hosted_parity_throttle_tests",
+    size = "small",
+    srcs = [
+        "hosted_parity_throttle.py",
+        "hosted_parity_throttle_tests.py",
+    ],
+)

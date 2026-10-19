@@ -11,6 +11,7 @@ Every difference must be listed in an allowlist below with the reason it is acce
 that no longer matches a difference also fails, so the lists shrink as gaps close.
 """
 
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -95,7 +96,7 @@ COVERAGE_NON_BAZEL_PHASES = {"linux": ("Build and test CMake consumer",)}
 
 # Main's hosted macOS runner as Bazel schedules on it: 3 CPUs and 7168 MiB, so --jobs=HOST_CPUS
 # and a HOST_RAM*.67 memory budget, with --local_test_jobs following the CPU budget. The parity
-# job states the same values explicitly. Main's own job passes none of them.
+# lane states the same values through --config=hosted-macos. Main's own job passes none of them.
 HOSTED_MACOS_RESOURCE_FLAGS = ("--jobs=3", "--local_resources=cpu=3",
                                "--local_resources=memory=4802")
 
@@ -105,6 +106,9 @@ PARITY_ALLOWLIST = {
        "Hosted runner shape: caps Bazel's scheduling at the hosted runner's CPUs and memory "
        "budget. It changes no action key, test, filter or environment."
        for flag in HOSTED_MACOS_RESOURCE_FLAGS},
+    _PARITY + ("*", "flag-pr-only", "--run_under=//tools/ci:hosted_parity_throttle"):
+        "Hosted runner speed: the launcher holds each test to roughly the hosted runner's CPU "
+        "capacity. It changes how fast a test runs, not what it runs or asserts.",
     _PARITY + ("*", "startup-pr-only", "--nohome_rc"):
         "Runner-specific: keeps the host's interactive bazelrc out of CI.",
     _PARITY + ("*", "startup-pr-only", "--nosystem_rc"):
@@ -837,6 +841,49 @@ def _expand_word(word, environment, variables):
     return [_expand(word, environment)]
 
 
+# Repository configs (.bazelrc) that hold a CI lane's test selection or constraints. The
+# comparison sees their flags in place of `--config=<name>`, so a lane cannot change what it runs
+# through a config out of sight. Other configs are compared by name.
+EXPANDED_CONFIGS = ("hosted-macos", "hosted-macos-quarantine", "hosted-parity-runtime",
+                    "hosted-parity", "hosted-parity-subset")
+_RC_LINE = re.compile(r"^(build|test|common):([A-Za-z0-9_-]+)\s+(.*)$")
+
+
+def bazelrc_configs(text):
+    """{config: [(command, flags)]} for each EXPANDED_CONFIGS entry in a bazelrc."""
+    configs = {}
+    for line in text.splitlines():
+        match = _RC_LINE.match(line)
+        if match and match.group(2) in EXPANDED_CONFIGS:
+            configs.setdefault(match.group(2), []).append(
+                (match.group(1), shlex.split(match.group(3))))
+    return configs
+
+
+_CONFIGS = []
+
+
+def _repository_configs():
+    if not _CONFIGS:
+        _CONFIGS.append(bazelrc_configs(Path(runfiles.Create().Rlocation(
+            "donner/.bazelrc")).read_text(encoding="utf-8")))
+    return _CONFIGS[0]
+
+
+def expand_configs(command, options, configs):
+    """Options with each expanded `--config=<name>` replaced by its flags, in place."""
+    expanded = []
+    for option in options:
+        name = option.split("=", 1)[1] if option.startswith("--config=") else None
+        if name not in configs:
+            expanded.append(option)
+            continue
+        for kind, flags in configs[name]:
+            if kind != "test" or command == "test":
+                expanded.extend(expand_configs(command, flags, configs))
+    return expanded
+
+
 def _invocation(line, environment, variables):
     """One `bazelisk build` or `bazelisk test` command line as option sets, or None."""
     match = re.search(r"(?:^|\s)(bazelisk|bazel)\s(.*)$", line)
@@ -850,7 +897,8 @@ def _invocation(line, environment, variables):
     if not words or words[0] not in BAZEL_COMMANDS:
         return None
     command = words.pop(0)
-    options = [word for word in words if word.startswith("--")]
+    options = expand_configs(command, [word for word in words if word.startswith("--")],
+                             _repository_configs())
     return {
         "command": command,
         "wrapped": "tools/ci_bazel_test.sh" in line[: match.start(1)],
@@ -1619,9 +1667,9 @@ class CiLaneParityTest(unittest.TestCase):
         steps = [_step_name(step) for step in jobs["macos"]["steps"]]
         self.assertIn("Test", steps)
         self.assertIn("Test (browser targets)", steps)
-        self.assertIn("HOSTED_MACOS_QUARANTINE_TEST_FLAGS", self.workflows["main.yml"]["env"])
         test = next(step for step in jobs["macos"]["steps"] if _step_name(step) == "Test")
         self.assertIn("bazelisk test", test["run"])
+        self.assertIn("--config=hosted-macos-quarantine", test["run"])
         self.assertIn("main.yml", self.main_push_workflows)
 
     def test_expressions_follow_the_routing_gate(self):
@@ -2189,17 +2237,18 @@ class CiLaneParityTest(unittest.TestCase):
             "a parity partition is removed": (
                 lambda job: without(job, "Test (Geode editor lane)"),
                 ("Test (Geode editor lane)", "step-missing", "")),
-            "the quarantine is dropped": (
-                lambda job: rewrite(job, "Test", "$HOSTED_MACOS_QUARANTINE_TEST_FLAGS ", ""),
+            "the subset configuration is dropped": (
+                lambda job: rewrite(job, "Test", "--config=hosted-parity-subset ", ""),
                 ("Test", "test-env-main-only", "DONNER_HOSTED_MACOS_QUARANTINE=1")),
             # A cap shared by every step is reported once under "*"; once only the Test step
             # keeps it, it is reported for that step.
             "one step loses the hosted runner shape": (
                 lambda job: rewrite(job, "Test (Geode editor lane)",
-                                    "$HOSTED_MACOS_RESOURCE_FLAGS ", ""),
+                                    " --config=hosted-parity-runtime", ""),
                 ("Test", "flag-pr-only", "--jobs=3")),
-            "a step tests more broadly than main": (
-                lambda job: rewrite(job, "Test", "-launches-browser,", ""),
+            "a step adds a tag filter": (
+                lambda job: rewrite(job, "Test", "--test_output=errors",
+                                    "--test_output=errors --test_tag_filters=hosted_parity"),
                 ("Test", "tag-filter-main-only", "-launches-browser")),
         }
         for case, (edit, expected) in cases.items():
@@ -2210,6 +2259,33 @@ class CiLaneParityTest(unittest.TestCase):
                             for difference in parity_differences(workflow, job_name, parity,
                                                                  steps)}
                 self.assertIn((name, job_name, parity) + expected, observed - set(PARITY_ALLOWLIST))
+
+    def test_parity_configs_are_compared_by_their_flags(self):
+        # The parity lane's selection and constraints live in .bazelrc configs, which the
+        # comparison expands, so widening a config fails like widening the workflow.
+        configs = _repository_configs()
+        self.assertEqual(set(EXPANDED_CONFIGS), set(configs))
+        self.assertEqual(
+            expand_configs("test", ["--config=hosted-parity-subset", "--config=other"], configs),
+            [*HOSTED_MACOS_RESOURCE_FLAGS, "--run_under=//tools/ci:hosted_parity_throttle",
+             "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1", "--build_tests_only",
+             "--test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,"
+             "-ci-remote-gpu,-launches-browser,-fuzz_soak", "--config=other"])
+        # `test:` lines do not apply to a build.
+        self.assertEqual(expand_configs("build", ["--config=hosted-parity-subset"], configs), [])
+        self.assertEqual(expand_configs("build", ["--config=hosted-macos"], configs),
+                         list(HOSTED_MACOS_RESOURCE_FLAGS))
+        (name, job_name, _), (parity, steps) = next(iter(PARITY_SUBSETS.items()))
+        widened = copy.deepcopy(configs)
+        widened["hosted-parity-subset"] = [
+            (kind, [flag.replace("-launches-browser,", "") for flag in flags])
+            for kind, flags in widened["hosted-parity-subset"]]
+        _CONFIGS[0] = widened
+        try:
+            observed = parity_differences(self.workflows[name], job_name, parity, steps)
+        finally:
+            _CONFIGS[0] = configs
+        self.assertIn(("Test", "tag-filter-main-only", "-launches-browser"), observed)
 
     def test_hosted_parity_tags_match_the_reviewed_list(self):
         resolver = runfiles.Create()
