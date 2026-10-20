@@ -1655,23 +1655,32 @@ _PATH_CONVERSION_ON = re.compile(
     r"|nobuild_event_\w+_file_path_conversion=(?:false|no|0))$")
 
 
-def build_event_file_problems(workflows):
-    """Gating Bazel commands whose build event file would depend on the remote cache."""
-    problems = set()
+def _build_event_flag_problems(flags):
+    """Why one Bazel command's build event file could depend on the remote cache."""
+    if not any(_BUILD_EVENT_FILE.match(flag) for flag in flags):
+        return []
+    problems = [flag for flag in flags if _PATH_CONVERSION_ON.match(flag)]
+    if "--config=ci" not in flags:
+        problems.append("writes a build event file without --config=ci")
+    return problems
+
+
+def _gating_bazel_commands(workflows):
+    """(workflow, job, step, invocation) for each Bazel command a gating step runs."""
     for name, workflow in workflows.items():
         for job_name, job in _jobs(workflow).items():
             for step in _bazel_running_steps(workflow, job):
-                where = "%s %s %s" % (name, job_name, _step_name(step))
-                for invocation in bazel_invocations(str(step.get("run") or ""),
+                script = str(step.get("run") or "")
+                for invocation in bazel_invocations(script,
                                                     _step_environment(workflow, job, step)):
-                    flags = invocation["flags"]
-                    if not any(_BUILD_EVENT_FILE.match(flag) for flag in flags):
-                        continue
-                    if "--config=ci" not in flags:
-                        problems.add(where + ": writes a build event file without --config=ci")
-                    problems.update("%s: %s" % (where, flag) for flag in flags
-                                    if _PATH_CONVERSION_ON.match(flag))
-    return sorted(problems)
+                    yield name, job_name, _step_name(step), invocation
+
+
+def build_event_file_problems(workflows):
+    """Gating Bazel commands whose build event file would depend on the remote cache."""
+    return sorted({"%s %s %s: %s" % (name, job, step, problem)
+                   for name, job, step, invocation in _gating_bazel_commands(workflows)
+                   for problem in _build_event_flag_problems(invocation["flags"])})
 
 
 class CiLaneParityTest(unittest.TestCase):
