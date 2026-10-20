@@ -92,17 +92,19 @@ struct Shortcut {
    * Compares the set keys and modifiers against the keys currently pressed.
    *
    * @param io Reference to ImGuiIO containing the current keyboard state.
+   * @param repeat Whether a key held past ImGui's key-repeat delay matches again. The editor
+   * draws frames only on events, so a single frame can outlast that delay while the key is down.
    * @return true if the shortcut matches, false otherwise.
    */
-  bool matches(const ImGuiIO& io) const {
+  bool matches(const ImGuiIO& io, bool repeat = true) const {
     if (key1 == ImGuiKey_None) {
       return false;
     }
 
-    bool keyPressed = ImGui::IsKeyPressed(key1) ||
-                      (key1 == ImGuiKey_Enter && ImGui::IsKeyPressed(ImGuiKey_KeypadEnter));
+    bool keyPressed = ImGui::IsKeyPressed(key1, repeat) ||
+                      (key1 == ImGuiKey_Enter && ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, repeat));
     if (key2 != ImGuiKey_None) {
-      keyPressed = keyPressed && ImGui::IsKeyPressed(key2);
+      keyPressed = keyPressed && ImGui::IsKeyPressed(key2, repeat);
     }
 
     const bool wantAlt = HasModifier(modifiers, ShortcutModifier::Alt);
@@ -979,6 +981,19 @@ public:
   int insertTextAt(Coordinates& /* inout */ where, std::string_view text, bool indent = false);
 
 private:
+  /**
+   * Report whether holding the shortcut for \p id repeats its action.
+   *
+   * Actions that move the cursor or edit one character or word at a time repeat while their key is
+   * held, as typing does. Actions that act on the selection, the clipboard, the undo history or the
+   * whole document (paste, cut, copy, undo, redo, select all, line duplication and commenting,
+   * find, replace, and opening autocomplete) run once per press. The policy belongs to the action,
+   * so it holds for a shortcut rebound with \ref setShortcut.
+   *
+   * @param id The action to query.
+   */
+  static bool shortcutRepeats(ShortcutId id);
+
   using RegexList = std::vector<std::pair<std::regex, ColorIndex>>;
   using UndoBuffer = TextEditorCore::UndoBuffer;
 

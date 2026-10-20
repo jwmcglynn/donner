@@ -1,6 +1,7 @@
 #include "donner/editor/TextEditor.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -595,7 +596,7 @@ void TextEditor::handleKeyboardInputs() {
     ShortcutId currentAction = ShortcutId::Count;
     bool additionalChecks = true;
 
-    if (shortcut.matches(io)) {
+    if (shortcut.matches(io, shortcutRepeats(static_cast<ShortcutId>(i)))) {
       currentAction = static_cast<ShortcutId>(i);
 
       switch (currentAction) {
@@ -4087,7 +4088,8 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
                       ImVec2(calculateUISize(220), height), true, ImGuiWindowFlags_NoScrollbar);
 
     // Process find next shortcut
-    findNext_ = shortcuts_[static_cast<int>(ShortcutId::FindNext)].matches(ImGui::GetIO());
+    findNext_ = shortcuts_[static_cast<int>(ShortcutId::FindNext)].matches(
+        ImGui::GetIO(), shortcutRepeats(ShortcutId::FindNext));
 
     if (findJustOpened_) {
       findWord_ = getSelectedText();
@@ -4366,6 +4368,16 @@ bool TextEditor::hasSelection() const {
 
 void TextEditor::setShortcut(ShortcutId id, Shortcut shortcut) {
   shortcuts_[static_cast<int>(id)] = shortcut;
+}
+
+bool TextEditor::shortcutRepeats(ShortcutId id) {
+  static constexpr std::array kOncePerPress = {
+      ShortcutId::Undo,          ShortcutId::Redo,         ShortcutId::Copy,
+      ShortcutId::Paste,         ShortcutId::Cut,          ShortcutId::SelectAll,
+      ShortcutId::DuplicateLine, ShortcutId::CommentLines, ShortcutId::UncommentLines,
+      ShortcutId::Find,          ShortcutId::Replace,      ShortcutId::AutocompleteOpen,
+  };
+  return std::find(kOncePerPress.begin(), kOncePerPress.end(), id) == kOncePerPress.end();
 }
 
 void TextEditor::copy() {
