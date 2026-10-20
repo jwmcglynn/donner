@@ -2781,7 +2781,6 @@ TEST(EditorShellTest, SelectToolDragsAUseInstanceAndUndoRestoresIt) {
   EditorApp& app = EditorShellTestAccess::App(shell);
   const auto use = app.document().document().querySelector("#u");
   ASSERT_THAT(use, testing::Ne(std::nullopt));
-  app.setSelection(*use);
   const auto runFrameWithMouse = [&](const Vector2d& documentPoint, bool mouseDown) {
     const Vector2d screen = shell.viewportForReadback().documentToScreen(documentPoint);
     ImGuiIO& io = ImGui::GetIO();
@@ -2792,7 +2791,9 @@ TEST(EditorShellTest, SelectToolDragsAUseInstanceAndUndoRestoresIt) {
   const auto settle = [&] {
     for (const tests::HangGuard guard; guard.active();) {
       runFrameWithMouse(Vector2d(-20, -20), /*mouseDown=*/false);
-      if (!app.document().hasPendingMutations() && !EditorShellTestAccess::RendererBusy(shell)) {
+      if (!app.document().hasPendingMutations() && !EditorShellTestAccess::RendererBusy(shell) &&
+          EditorShellTestAccess::DisplayedDocVersion(shell) ==
+              app.document().currentFrameVersion()) {
         return true;
       }
     }
@@ -2800,8 +2801,38 @@ TEST(EditorShellTest, SelectToolDragsAUseInstanceAndUndoRestoresIt) {
   };
   ASSERT_TRUE(settle());
 
-  runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/false);
+  // Keep the render worker inside its document access across the input below, as raster work that
+  // has not reached a cancellation check does. A selected <use> has no cached selection bounds, so
+  // the shell buffers the press until it can hit-test the document.
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  renderer.setReplayRenderDelayIgnoresCancellationForTesting(true);
+  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(1000));
+  app.setSelection(*use);
+  for (const tests::HangGuard guard;
+       !EditorShellTestAccess::RendererBusy(shell) && guard.active();) {
+    EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+    runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/false);
+  }
+  ASSERT_TRUE(EditorShellTestAccess::RendererBusy(shell)) << "The selection change must render";
+  // The worker takes the document on its own thread; wait until it holds it before pressing.
+  for (const tests::HangGuard guard;
+       app.document().document().tryWriteAccess().has_value() && guard.active();) {
+    std::this_thread::sleep_for(tests::kPollInterval);
+  }
+  ASSERT_FALSE(app.document().document().tryWriteAccess().has_value())
+      << "The render worker never took the document";
   runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/true);
+  ASSERT_TRUE(EditorShellTestAccess::HasPendingClick(shell))
+      << "The press must wait while the worker holds the document";
+  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+  renderer.setReplayRenderDelayIgnoresCancellationForTesting(false);
+  // A user's press outlasts the render: hold the button until the shell dispatches the press.
+  for (const tests::HangGuard guard;
+       EditorShellTestAccess::HasPendingClick(shell) && guard.active();) {
+    runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/true);
+  }
+  ASSERT_FALSE(EditorShellTestAccess::HasPendingClick(shell))
+      << "The press was never dispatched after the worker released the document";
   runFrameWithMouse(Vector2d(25, 23), /*mouseDown=*/true);
   runFrameWithMouse(Vector2d(35, 28), /*mouseDown=*/true);
   runFrameWithMouse(Vector2d(35, 28), /*mouseDown=*/false);
