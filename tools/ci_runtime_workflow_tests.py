@@ -1,5 +1,6 @@
 """Pins the self-hosted CI runtime boundaries that keep full runs viable."""
 
+import itertools
 import json
 import os
 from pathlib import Path
@@ -58,6 +59,16 @@ def _repository_text(path):
     resolved = resolver.Rlocation("donner/%s" % path)
     with open(resolved, encoding="utf-8") as handle:
         return handle.read()
+
+
+def _rule_text(build_text, name):
+    """The attributes of the BUILD rule named `name`."""
+    return build_text.split('name = "%s",' % name, 1)[1].split("\n)\n", 1)[0]
+
+
+def _assignment_block(build_text, name):
+    """The body of a top-level `name = {...}` assignment in a BUILD file."""
+    return build_text.split("\n%s = " % name, 1)[1].split("\n}", 1)[0]
 
 
 def _declared_payload_ceilings(size_test_arguments, enforced=ENFORCED_PAYLOAD_CEILINGS):
@@ -240,8 +251,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         hosted = self._job_body("macos")
         main_test = self._step_body(hosted, "Test")
         self.assertIn(
-            "--test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,"
-            "-launches-browser,-fuzz_soak ",
+            "--test_tag_filters=-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,"
+            "-ci-remote-gpu,-launches-browser,-fuzz_soak ",
             main_test,
         )
         browser = self._step_body(hosted, "Test (browser targets)")
@@ -806,52 +817,112 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             self.assertEqual(sys.executable, result.stdout.strip())
 
-    def test_metal_profile_selection_is_bounded_and_precedes_the_full_build(self):
-        hosted = self._job_body("macos")
-        fetching = self._step_body(hosted, "Fetch Metal validation dependencies")
-        self.assertIn("nick-fields/retry@v4", fetching)
-        self.assertIn("bazelisk fetch --config=ci", fetching)
-        self.assertIn("max_attempts: 3", fetching)
-        self.assertNotIn("bazelisk test", fetching)
-        self.assertLess(hosted.index("Fetch Metal validation dependencies"),
-                        hosted.index("Select Metal validation profile"))
-        selection = self._step_body(hosted, "Select Metal validation profile")
-        self.assertIn("//tools/ci:metal_profile", selection)
-        self.assertIn("tools/metal_validation_profile.py", selection)
-        self.assertIn("--nocache_test_results", selection)
-        case_start = selection.index('          case "$profile" in')
-        case_end = selection.index("          esac", case_start) + len("          esac")
-        script = "#!/bin/bash\nset -euo pipefail\n" + textwrap.dedent(selection[case_start:case_end])
-        for profile, expected_status, expected_flags in (
-            ("full", 0, ""),
-            ("paravirtual-texture-usage-off", 0,
-             "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
-             "--test_env=DONNER_CI_MACOS_LANE=hosted\n"),
-            ("unknown", 1, ""),
-            ("", 1, ""),
-        ):
-            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
-                env_file = Path(temporary) / "environment"
-                summary = Path(temporary) / "summary"
-                result = self._run_script(script, [], env={
-                    "profile": profile, "GITHUB_ENV": str(env_file),
-                    "GITHUB_STEP_SUMMARY": str(summary),
-                })
-                self.assertEqual(expected_status, result.returncode, result.stderr)
-                self.assertEqual(expected_flags, env_file.read_text() if env_file.exists() else "")
-        for job_name in ("macos", "macos-self-hosted"):
+    def test_shader_validation_runs_only_on_the_self_hosted_real_gpu(self):
+        # The hosted image's virtual GPU cannot run Metal shader validation
+        # (docs/metal_validation.md), so the hosted jobs run their Metal tests with API validation
+        # only and skip the tests that assert validation; the self-hosted job keeps both gates
+        # mandatory.
+        for job_name in ("macos", "macos-browser"):
             job = self._job_body(job_name)
-            preflight = self._step_body(job, "Metal validation preflight")
-            self.assertIn("--nocache_test_results", preflight)
-            self.assertLess(job.index("Metal validation preflight"), job.index("- name: Build"))
-            self.assertIn("//tools/ci:metal_preflight", preflight)
-            self.assertIn("steps.metal_preflight.outcome == 'failure'", job)
+            for step in ("Select Metal validation profile", "Metal validation preflight",
+                         "Fetch Metal validation dependencies"):
+                self.assertNotIn("- name: %s\n" % step, job, job_name)
+            self.assertNotIn("metal_profile", job, job_name)
+            self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", job, job_name)
+            self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", job, job_name)
+        hosted_test = self._step_body(self._job_body("macos"), "Test")
+        self.assertIn("-requires_shader_validation", hosted_test)
         trusted = self._job_body("macos-self-hosted")
-        required = self._step_body(trusted, "Require full Metal shader validation")
-        self.assertIn("--test_tag_filters=", required)
-        self.assertIn("--nocache_test_results", required)
-        self.assertIn("//tools/ci:metal_full_validation", required)
         self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", trusted)
+        self.assertNotIn("requires_shader_validation", self._step_body(trusted, "Test"))
+        required = self._step_body(trusted, "Require full Metal shader validation")
+        preflight = self._step_body(trusted, "Metal validation preflight")
+        for step, target in ((required, "//tools/ci:metal_full_validation"),
+                             (preflight, "//tools/ci:metal_preflight")):
+            self.assertIn(target, step)
+            self.assertIn("--nocache_test_results", step)
+            # Mandatory: never skipped, never allowed to fail.
+            self.assertNotRegex(step, r"(?m)^ {8}(if|continue-on-error):")
+            self.assertLess(trusted.index(step), trusted.index("      - name: Build\n"))
+        self.assertIn("--test_tag_filters=", required)
+        self.assertIn("steps.metal_profile.outcome == 'failure'", trusted)
+        self.assertIn("steps.metal_preflight.outcome == 'failure'", trusted)
+        suites = _repository_text("tools/ci/BUILD.bazel")
+        preflight_suite = suites.split('name = "metal_preflight"', 1)[1].split(")", 1)[0]
+        self.assertIn("//donner/gpu/metal/tests:metal_shader_memory_validation_tests",
+                      preflight_suite)
+        metal = _repository_text("donner/gpu/metal/tests/BUILD.bazel")
+        for target in ("metal_validation_profile", "metal_shader_memory_validation_tests"):
+            self.assertIn('tags = ["requires_shader_validation"]', _rule_text(metal, target),
+                          target)
+
+    def test_api_only_metal_config_is_named_only_by_the_hosted_test_step(self):
+        needles = ("hosted-macos-unvalidated", "metal_shader_validation")
+        self.assertIn("--config=hosted-macos-unvalidated",
+                      self._step_body(self._job_body("macos"), "Test"))
+        # main.yml names the config only in that step and never names the setting, so neither a
+        # self-hosted lane nor workflow-level env can carry it into another lane.
+        workflow = _repository_text(".github/workflows/main.yml")
+        self.assertEqual(1, workflow.count(needles[0]))
+        self.assertEqual(0, workflow.count(needles[1]))
+        workflows = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml")).parent
+        others = [path for path in sorted(workflows.glob("*.y*ml")) if path.name != "main.yml"]
+        actions = sorted((workflows.parent / "actions").glob("*/action.y*ml"))
+        self.assertGreater(len(others), 5)
+        self.assertGreater(len(actions), 3)
+        # Keyed by repository path: every composite action file is named action.yml.
+        texts = [(str(path.relative_to(workflows.parent.parent)), path.read_text(encoding="utf-8"))
+                 for path in others + actions]
+        texts += [(script, _repository_text(script))
+                  for script in ("tools/ci_bazel_test.sh", "tools/ci/editor_wasm_lane.sh")]
+        self.assertEqual(len(others) + len(actions) + 2, len({name for name, _ in texts}))
+        for (name, text), needle in itertools.product(texts, needles):
+            self.assertNotIn(needle, text, name)
+        # The config's definition is the only .bazelrc line that names it or the setting, so no
+        # other config (qualified or not, `--config=x` or `--config x`) can pull it in.
+        bazelrc = [line for line in _repository_text(".bazelrc").splitlines()
+                   if not line.lstrip().startswith("#")]
+        definition = ["test:hosted-macos-unvalidated --//build_defs:metal_shader_validation=off"]
+        for needle in needles:
+            self.assertEqual(definition, [line for line in bazelrc if needle in line], needle)
+
+    def test_metal_device_tests_default_to_full_shader_validation(self):
+        metal = _repository_text("donner/gpu/metal/tests/BUILD.bazel")
+        build_defs = _repository_text("build_defs/BUILD.bazel")
+        # The setting defaults to full validation, and only `off` selects API-only validation.
+        self.assertIn('build_setting_default = "on"',
+                      _rule_text(build_defs, "metal_shader_validation"))
+        self.assertIn('":metal_shader_validation": "off",',
+                      _rule_text(build_defs, "metal_shader_validation_off"))
+        self.assertIn('\n_METAL_API_VALIDATION_ENV = select({\n'
+                      '    "//build_defs:metal_shader_validation_off": '
+                      '_METAL_API_ONLY_VALIDATION_ENV,\n'
+                      '    "//conditions:default": _METAL_SHADER_VALIDATION_ENV,\n'
+                      '})\n', metal)
+        self.assertIn('    env = select({\n'
+                      '        "//build_defs:metal_shader_validation_off": '
+                      '_METAL_API_ONLY_VALIDATION_ENV,\n'
+                      '        "//conditions:default": {\n'
+                      '            "MTL_DEBUG_LAYER": "1",\n'
+                      '            "MTL_SHADER_VALIDATION": "1",\n'
+                      '        },\n'
+                      '    }),\n', _rule_text(metal, "metal_device_loss_tests"))
+        # The API-only env keeps API validation and is reachable only through those two selects.
+        self.assertEqual(3, metal.count("_METAL_API_ONLY_VALIDATION_ENV"))
+        self.assertEqual(1, metal.count('"MTL_SHADER_VALIDATION": "0"'))
+        api_only = _assignment_block(metal, "_METAL_API_ONLY_VALIDATION_ENV")
+        self.assertIn('"MTL_DEBUG_LAYER": "1"', api_only)
+        self.assertIn('"MTL_SHADER_VALIDATION": "0"', api_only)
+        # The probe and the canary assert shader validation, so they never take the setting.
+        self.assertIn('"MTL_SHADER_VALIDATION": "1"',
+                      _assignment_block(metal, "_METAL_SHADER_VALIDATION_ENV"))
+        self.assertIn("_METAL_VALIDATION_PROBE_ENV = dict(\n    _METAL_SHADER_VALIDATION_ENV,",
+                      metal)
+        for target, env in (("metal_validation_profile", "_METAL_VALIDATION_PROBE_ENV"),
+                            ("metal_full_validation_required", "_METAL_VALIDATION_PROBE_ENV"),
+                            ("metal_shader_memory_validation_tests",
+                             "_METAL_SHADER_VALIDATION_ENV")):
+            self.assertIn("    env = %s,\n" % env, _rule_text(metal, target), target)
 
     def test_bazel_version_change_selects_full_suite_before_graph_hashing(self):
         """A Bazel upgrade changes the query graph, not just two version files."""

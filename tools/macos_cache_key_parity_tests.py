@@ -37,10 +37,14 @@ REMOTE_FLAG = re.compile(r"^--(?:no)?(?:remote_|incompatible_remote_|credential_
 LANE_FLAGS = "$BAZEL_MACOS_BUILD_FLAGS"
 BAZEL_INVOCATION = re.compile(
     r"\bbazel(?:isk)?(?:\s+--[a-z_]+)*\s+(build|test|fetch|query|cquery|coverage|run)\b")
-# Flags that only select, run or report tests. They never change a build action's key.
+# Flags that only select, run or report tests. They never change a build action's key. The Metal
+# shader-validation setting qualifies because its only use selects the Metal device tests' `env`
+# attribute: Bazel's visibility check keeps every other package from selecting on it
+# (test_metal_shader_validation_setting_selects_only_test_environment), and an aquery of those
+# tests' compile, archive and link actions gave identical action keys with it on and off.
 TEST_ONLY_FLAG = re.compile(r"^--(?:no)?(?:test_|cache_test_results|local_test_jobs|"
                             r"flaky_test_attempts|runs_per_test|keep_going|build_event_json_file|"
-                            r"run_under)")
+                            r"run_under|//build_defs:metal_shader_validation=)")
 # Flags that only limit how many actions Bazel runs at once, or which requested targets it
 # builds. They never change a build action's key.
 SCHEDULING_ONLY_FLAG = re.compile(r"^--(?:jobs|local_resources|build_tests_only)(?:=|$)")
@@ -51,13 +55,15 @@ _RC_LINE = re.compile(r"^(?:build|test|common):([A-Za-z0-9_-]+)\s+(.*)$")
 LANE_TEST_ENV = {"macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
                  "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted",
                  "macos-hosted-parity": "--test_env=DONNER_CI_MACOS_LANE=hosted-parity"}
-# Every macOS lane and how it selects the pinned Xcode: the hosted image always has it; the
-# self-hosted lanes use it when their runner's Bazel can discover it.
-LANE_XCODE_MODES = ((HOSTED, "--required"), (SELF_HOSTED, "--optional"), (PARITY, "--optional"))
+# The main.yml lanes that must compute identical action keys. Every macOS job, in any workflow,
+# selects the pinned Xcode and fails without it.
+LANES = (HOSTED, SELF_HOSTED, PARITY)
 # The toolchain repository refresh runs before any build and takes no build flags.
 TOOLCHAIN_REFRESH = "fetch --force --lockfile_mode=off"
 SELECT_SCRIPT = "tools/ci_select_macos_xcode.sh"
 PIN_FILE = "tools/ci_macos_xcode.txt"
+# The GitHub-hosted image that ships the pinned Xcode. Every GitHub-hosted macOS job runs on it.
+HOSTED_XCODE_IMAGE = "xcode-27"
 
 
 def _path(path):
@@ -216,17 +222,18 @@ def _record_commands(name, commands, by_step, neutral=frozenset()):
     return problems
 
 
-def _select_problems(name, steps, commands, mode):
-    """Problems of a lane's pinned-Xcode selection and where it runs."""
+def _select_problems(name, steps, commands, step_id=True):
+    """Problems of a job's pinned-Xcode selection and where it runs."""
     names = [step_name for step_name, _ in steps]
     if "Select pinned Xcode" not in names:
         return ["%s does not select the pinned Xcode" % name]
     problems = []
     select_index = names.index("Select pinned Xcode")
     select = steps[select_index][1]
-    if (_logical_commands(select) != ["%s %s" % (SELECT_SCRIPT, mode)] or
-            "id: xcode" not in select):
-        problems.append("%s selects Xcode other than with %s %s" % (name, SELECT_SCRIPT, mode))
+    if (_logical_commands(select) != [SELECT_SCRIPT] or
+            re.search(r"(?m)^\s*continue-on-error:", select) or
+            (step_id and "id: xcode" not in select)):
+        problems.append("%s selects Xcode other than with %s" % (name, SELECT_SCRIPT))
     first_bazel = min((names.index(step_name) for step_name, _ in commands), default=len(names))
     if first_bazel < select_index:
         problems.append("%s runs Bazel before selecting the pinned Xcode" % name)
@@ -260,7 +267,8 @@ def _bazelrc_problems(bazelrc):
 # Test hooks of tools/ci_select_macos_xcode.sh, and the variable it sets itself. A workflow
 # that sets any of them (job or workflow env, or a GITHUB_ENV write) can silently replace the
 # pinned Xcode, so no macOS job and no workflow-level env may name them.
-XCODE_OVERRIDES = re.compile(r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|DEVELOPER_DIR)\b")
+XCODE_OVERRIDES = re.compile(
+    r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|LSREGISTER|DEVELOPER_DIR)\b")
 MACOS_JOBS = (HOSTED, SELF_HOSTED, PARITY, "macos-browser")
 
 
@@ -291,24 +299,23 @@ def host_tool_problems(files):
 def key_parity_problems(workflow, bazelrc):
     """Every way the two macOS lanes in main.yml could stop computing identical action keys."""
     jobs = _jobs(workflow)
-    lane_flags = {name: _job_env(jobs[name], "BAZEL_MACOS_BUILD_FLAGS")
-                  for name, _ in LANE_XCODE_MODES}
+    lane_flags = {name: _job_env(jobs[name], "BAZEL_MACOS_BUILD_FLAGS") for name in LANES}
     if None in lane_flags.values():
         return ["a macOS lane does not declare BAZEL_MACOS_BUILD_FLAGS"]
     problems = _xcode_override_problems(workflow)
-    for name, _ in LANE_XCODE_MODES[1:]:
+    for name in LANES[1:]:
         problems += _flag_problems(lane_flags[HOSTED], lane_flags[name])
     problems += _flag_list_problems(
         "main.yml", {variable: _workflow_env(workflow, variable)
                      for variable in TEST_ONLY_VARIABLES}, TEST_ONLY_FLAG, "test-only")
     neutral = neutral_configs(bazelrc)
     by_step = {}
-    for name, mode in LANE_XCODE_MODES:
+    for name in LANES:
         job = jobs[name]
         commands = _bazel_commands(job)
         problems += _record_commands(name, commands, by_step, neutral)
         problems += _test_list_problems(name, job)
-        problems += _select_problems(name, _steps(job), commands, mode)
+        problems += _select_problems(name, _steps(job), commands)
         if "Select pinned Xcode" in [step_name for step_name, _ in _steps(job)]:
             problems += _refresh_problems(name, commands, by_step)
     return problems + _step_divergence(by_step) + _bazelrc_problems(bazelrc)
@@ -341,6 +348,84 @@ def private_backend_problems(files):
     return problems
 
 
+# Reviewed `runs-on` expressions that name a macOS label no job run can select.
+UNREACHABLE_MACOS_RUNNERS = {
+    (".github/workflows/codeql.yml", "analyze"):
+        "Only a `swift` matrix entry would run on macOS, and the matrix has none.",
+}
+SELECT_CONDITIONS = ("", "runner.os == 'macOS'")
+
+
+def _runner_labels(job):
+    """(labels, self_hosted) for a job's runner: literal labels, or the literal values of the
+    matrix key or expression branches its `runs-on` names."""
+    runs_on = re.search(r"(?m)^    runs-on: (.+)$", job)
+    if not runs_on:
+        return set(), False
+    value = runs_on.group(1).strip()
+    matrix = re.fullmatch(r"\$\{\{ matrix\.([a-z_]+) \}\}", value)
+    if matrix:
+        key = re.escape(matrix.group(1))
+        labels = set()
+        for listed in re.findall(r"(?m)^ +%s: \[([^\]]*)\]$" % key, job):
+            labels.update(label.strip() for label in listed.split(","))
+        labels.update(re.findall(r"(?m)^ +- %s: ([A-Za-z0-9.-]+)$" % key, job))
+        return labels, False
+    if value.startswith("${{"):
+        return set(re.findall(r"'([A-Za-z0-9.-]+)'", value)), False
+    labels = {label.strip() for label in value.strip("[]").split(",")}
+    return labels, "self-hosted" in labels
+
+
+def _is_macos(label):
+    return label == "macOS" or label.startswith(("macos", "xcode-"))
+
+
+def _macos_jobs(files):
+    """(owner, job, self-hosted, macOS labels) for every workflow job that can run on macOS."""
+    jobs = []
+    for path, text in sorted(files.items()):
+        if not path.startswith(".github/workflows/"):
+            continue
+        for name, job in _jobs(text).items():
+            labels, self_hosted = _runner_labels(job)
+            macos = {label for label in labels if _is_macos(label)}
+            if macos and (path, name) not in UNREACHABLE_MACOS_RUNNERS:
+                jobs.append(("%s:%s" % (path, name), job, self_hosted, macos))
+    return jobs
+
+
+def _select_order_problems(owner, steps):
+    """Problems of when and under which condition a job selects the pinned Xcode."""
+    names = [step_name for step_name, _ in steps]
+    if "Select pinned Xcode" not in names:
+        return []
+    select_index = names.index("Select pinned Xcode")
+    problems = []
+    condition = re.search(r"(?m)^\s*if: (.+)$", steps[select_index][1])
+    if (condition.group(1).strip() if condition else "") not in SELECT_CONDITIONS:
+        problems.append("%s selects the pinned Xcode only conditionally" % owner)
+    problems += ["%s runs %r before selecting the pinned Xcode" % (
+        owner, step_name or step.splitlines()[0]) for step_name, step in steps[:select_index]
+        if "uses: actions/checkout@" not in step and step_name != "Check runner disk space"]
+    return problems
+
+
+def macos_job_problems(files):
+    """Every macOS job selects the pinned Xcode before it builds, and every GitHub-hosted one runs
+    on the image that ships it."""
+    problems = []
+    for owner, job, self_hosted, macos in _macos_jobs(files):
+        if not self_hosted and macos != {HOSTED_XCODE_IMAGE}:
+            problems.append("%s runs on %s, not the %s image that ships the pinned Xcode" % (
+                owner, sorted(macos), HOSTED_XCODE_IMAGE))
+        steps = _steps(job)
+        problems += _select_problems(owner, steps, _bazel_commands(job),
+                                     step_id="steps.xcode.outputs" in job)
+        problems += _select_order_problems(owner, steps)
+    return problems
+
+
 def _workflow_files():
     main = _path(".github/workflows/main.yml")
     github = main.parent.parent
@@ -368,6 +453,29 @@ class MacosCacheKeyParityTest(unittest.TestCase):
 
     def test_macos_lanes_pass_identical_key_affecting_flags(self):
         self.assertEqual([], key_parity_problems(self.workflow, self.bazelrc))
+
+    def test_metal_shader_validation_setting_selects_only_test_environment(self):
+        build_defs = _read("build_defs/BUILD.bazel")
+        metal = _read("donner/gpu/metal/tests/BUILD.bazel")
+
+        def rule(text, kind, name):
+            return text.split('%s(\n    name = "%s",' % (kind, name), 1)[1].split("\n)\n", 1)[0]
+
+        # Only the Metal tests package can select on the setting; Bazel rejects any other use.
+        self.assertIn('visibility = ["//visibility:private"]',
+                      rule(build_defs, "string_flag", "metal_shader_validation"))
+        self.assertIn('visibility = ["//donner/gpu/metal/tests:__pkg__"]',
+                      rule(build_defs, "config_setting", "metal_shader_validation_off"))
+        # Named only by the flag, the config_setting and its flag_values key.
+        self.assertEqual(3, build_defs.count("metal_shader_validation"))
+        # There, each select on it is a test's `env`, never a build attribute.
+        uses = metal.split('"//build_defs:metal_shader_validation_off"')
+        self.assertEqual(3, len(uses), "the shared device-test env and metal_device_loss_tests")
+        self.assertTrue(uses[0].endswith("\n_METAL_API_VALIDATION_ENV = select({\n    "))
+        self.assertTrue(uses[1].endswith("\n    env = select({\n        "))
+        for line in metal.splitlines():
+            if "_METAL_API_VALIDATION_ENV" in line and "= select(" not in line:
+                self.assertEqual("    env = _METAL_API_VALIDATION_ENV,", line)
 
     def test_only_unconfigured_queries_are_exempt_from_build_flags(self):
         recorded = {}
@@ -442,7 +550,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             "the parity lane drops the Xcode pin": (self.workflow[:self.workflow.index(
                 "\n  %s:\n" % PARITY)] + self.workflow[self.workflow.index(
                     "\n  %s:\n" % PARITY):].replace(
-                    "run: tools/ci_select_macos_xcode.sh --optional", "run: echo skipped",
+                    "run: tools/ci_select_macos_xcode.sh\n", "run: echo skipped\n",
                     1), self.bazelrc, "macos-hosted-parity selects Xcode other than"),
             "a step drops the lane flags": (self.workflow.replace(
                 "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
@@ -453,12 +561,20 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "bazelisk build --config=ci --config=geode $BAZEL_MACOS_BUILD_FLAGS $TARGETS", 1),
                 self.bazelrc, "step 'Build' differs"),
             "hosted skips the Xcode pin": (self.workflow.replace(
-                "run: tools/ci_select_macos_xcode.sh --required",
-                "run: echo skipped", 1), self.bazelrc, "selects Xcode other than"),
-            "self-hosted Xcode selection removed": (self.workflow.replace(
+                "run: tools/ci_select_macos_xcode.sh\n",
+                "run: echo skipped\n", 1), self.bazelrc, "macos selects Xcode other than"),
+            "self-hosted Xcode selection removed": (before + hosted_flags + after.replace(
                 "      - name: Select pinned Xcode\n        id: xcode\n        shell: bash\n"
-                "        run: tools/ci_select_macos_xcode.sh --optional\n", "", 1),
-                self.bazelrc, "does not select the pinned Xcode"),
+                "        run: tools/ci_select_macos_xcode.sh\n", "", 1),
+                self.bazelrc, "macos-self-hosted does not select the pinned Xcode"),
+            "self-hosted makes the pin optional again": (before + hosted_flags + after.replace(
+                "run: tools/ci_select_macos_xcode.sh\n",
+                "run: tools/ci_select_macos_xcode.sh --optional\n", 1),
+                self.bazelrc, "macos-self-hosted selects Xcode other than"),
+            "self-hosted tolerates a failed selection": (before + hosted_flags + after.replace(
+                "        run: tools/ci_select_macos_xcode.sh\n",
+                "        continue-on-error: true\n        run: tools/ci_select_macos_xcode.sh\n",
+                1), self.bazelrc, "macos-self-hosted selects Xcode other than"),
             "unpinned host tool PATH": (self.workflow, self.bazelrc.replace(
                 rc_line, "build:ci-macos --host_action_env=PATH=/usr/bin:", 1),
                 "pin exactly one PATH"),
@@ -487,11 +603,11 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         files = _workflow_files()
         self.assertEqual([], private_backend_problems(files))
         main = ".github/workflows/main.yml"
-        hosted_step = ("      - name: Fetch Metal validation dependencies\n"
+        hosted_step = ("      - name: Install clang-tidy\n"
                        "        env:\n          URL: ${{ secrets.BAZEL_REMOTE_CACHE }}\n")
         cases = {
             "hosted secret": files[main].replace(
-                "      - name: Fetch Metal validation dependencies\n", hosted_step, 1),
+                "      - name: Install clang-tidy\n", hosted_step, 1),
             "hosted remote execution": files[main].replace(
                 "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
                 "bazelisk build --config=ci --config=re $BAZEL_MACOS_BUILD_FLAGS $TARGETS", 1),
@@ -503,27 +619,83 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.assertNotEqual(text, files[main])
                 self.assertTrue(private_backend_problems({**files, main: text}))
 
+    def test_every_macos_job_selects_the_pin_on_the_image_that_ships_it(self):
+        files = _workflow_files()
+        self.assertEqual([], macos_job_problems(files))
+        # Each reviewed exception still names a macOS label, and its reason still holds.
+        for path, name in UNREACHABLE_MACOS_RUNNERS:
+            labels, _ = _runner_labels(_jobs(files[path])[name])
+            self.assertTrue(any(_is_macos(label) for label in labels), (path, name))
+        codeql = _jobs(files[".github/workflows/codeql.yml"])["analyze"]
+        self.assertEqual(set(re.findall(r"(?m)^\s*-?\s*language:\s*['\"]?([A-Za-z-]+)", codeql)),
+                         {"c-cpp", "javascript-typescript", "python"})
+        self.assertEqual({owner for owner, *_ in _macos_jobs(files)}, {
+            ".github/workflows/" + job for job in (
+                "main.yml:" + HOSTED, "main.yml:macos-browser", "main.yml:" + SELF_HOSTED,
+                "main.yml:" + PARITY, "cmake.yml:macos", "editor_wasm.yml:build",
+                "bcr_preflight.yml:consumer", "bcr_preflight.yml:cli-macos", "fuzz.yml:macos",
+                "perf.yml:perf")})
+        cmake, wasm = ".github/workflows/cmake.yml", ".github/workflows/editor_wasm.yml"
+        fuzz, bcr = ".github/workflows/fuzz.yml", ".github/workflows/bcr_preflight.yml"
+        perf = ".github/workflows/perf.yml"
+        split = files[fuzz].index("\n  macos:\n")
+        fuzz_head, fuzz_macos = files[fuzz][:split], files[fuzz][split:]
+        select = ("      - name: Select pinned Xcode\n        shell: bash\n"
+                  "        run: tools/ci_select_macos_xcode.sh\n")
+        cases = {
+            "the previous hosted image": (cmake, files[cmake].replace(
+                "runs-on: xcode-27", "runs-on: macos-26", 1), "not the xcode-27 image"),
+            "a matrix entry on another image": (perf, files[perf].replace(
+                "- os: xcode-27", "- os: macos-latest", 1), "not the xcode-27 image"),
+            "no selection": (wasm, files[wasm].replace(select, "", 1), "does not select"),
+            "selection after a build tool": (fuzz, fuzz_head + fuzz_macos.replace(
+                select, "", 1).replace("      - name: Soak", select + "\n      - name: Soak", 1),
+                "runs 'Setup Bazel' before selecting"),
+            "selection that can be skipped": (bcr, files[bcr].replace(
+                "if: runner.os == 'macOS'", "if: github.event_name == 'push'", 1),
+                "only conditionally"),
+            "selection with an argument": (cmake, files[cmake].replace(
+                "run: tools/ci_select_macos_xcode.sh\n",
+                "run: tools/ci_select_macos_xcode.sh --optional\n", 1),
+                "selects Xcode other than"),
+        }
+        for name, (path, text, expected) in cases.items():
+            with self.subTest(case=name):
+                self.assertNotEqual(text, files[path])
+                problems = macos_job_problems({**files, path: text})
+                self.assertTrue(any(expected in problem for problem in problems), problems)
+
     def test_pin_names_one_hosted_xcode_version_and_build(self):
         lines = [line for line in _read(PIN_FILE).splitlines()
                  if line.strip() and not line.lstrip().startswith("#")]
         self.assertEqual(1, len(lines))
         self.assertRegex(lines[0], r"^\d+\.\d+(?:\.\d+)? \d+[A-Z]\d+[a-z]?$")
 
-    def _select(self, mode, installed, locator_status=0, missing_xcrun=False):
-        """Runs the selection script against a fake Applications directory."""
+    def _select(self, discovered=("{root}/Xcode-any-name.app/Contents/Developer",),
+                reported="Xcode {version}\nBuild version {build}", locator_status=0,
+                missing_xcrun=False, args=(), runner="github-hosted"):
+        """Runs the selection script with a fake LaunchServices probe and xcodebuild.
+
+        `discovered` lists the developer directories the probe reports for the pinned version;
+        `locator_status=None` makes the script build the real probe with a failing fake xcrun.
+        """
         version, build = [line for line in _read(PIN_FILE).splitlines()
                           if line.strip() and not line.startswith("#")][0].split()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            if installed is not None:
-                (root / ("Xcode_%s.app" % version) / "Contents" / "Developer").mkdir(parents=True)
+
+            def fill(text):
+                return text.format(root=root, version=version, build=build)
+
             xcodebuild = root / "xcodebuild"
-            reported = installed or ""
-            xcodebuild.write_text("#!/bin/sh\nprintf '%%s' '%s'\n" % reported.replace(
-                "{version}", version).replace("{build}", build), encoding="utf-8")
+            # xcodebuild can print unrelated warnings on stderr; only stdout is the version.
+            xcodebuild.write_text("#!/bin/sh\necho 'objc[1]: simulated noise' >&2\n"
+                                  "printf '%%s' '%s'\n" % fill(reported), encoding="utf-8")
             xcodebuild.chmod(0o755)
             locator = root / "xcode-locator"
-            locator.write_text("#!/bin/sh\nexit %d\n" % (locator_status or 0), encoding="utf-8")
+            locator.write_text("#!/bin/sh\nprintf '%s'\nexit %d\n" % (
+                "".join(fill(line) + "\\n" for line in discovered), locator_status or 0),
+                encoding="utf-8")
             locator.chmod(0o755)
             xcrun = root / "xcrun"
             if not missing_xcrun:
@@ -534,85 +706,84 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             env_file.write_text("")
             output_file.write_text("")
             result = subprocess.run(
-                ["/bin/bash", str(_path(SELECT_SCRIPT)), mode],
+                ["/bin/bash", str(_path(SELECT_SCRIPT)), *args],
                 # The test's own PATH: a fixed /usr/bin:/bin lacks coreutils on hosts that
                 # keep them elsewhere, such as NixOS remote-execution workers.
                 env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_ENV": str(env_file),
                      "GITHUB_OUTPUT": str(output_file), "RUNNER_ARCH": "ARM64",
-                     "BAZEL_MACOS_BUILD_FLAGS": "--config=ci-macos",
-                     "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild),
+                     "BAZEL_MACOS_BUILD_FLAGS": "--config=ci-macos", "XCODEBUILD": str(xcodebuild),
                      "XCODE_LOCATOR": str(locator) if locator_status is not None else "",
-                     "XCRUN": str(xcrun), "XCODE_PROBE_PYTHON": sys.executable},
+                     "XCRUN": str(xcrun), "XCODE_PROBE_PYTHON": sys.executable,
+                     "RUNNER_ENVIRONMENT": runner},
                 capture_output=True, text=True, timeout=test_timing.STALL_GUARD_SECONDS,
                 check=False)
             return (result.returncode, env_file.read_text(), output_file.read_text(),
                     result.stdout + result.stderr, version, build, root)
 
-    def test_select_script_exports_the_pinned_xcode_only_when_it_is_installed(self):
-        exact = "Xcode {version}\nBuild version {build}"
-        other_build = "Xcode {version}\nBuild version 99Z999"
-        for mode in ("--required", "--optional"):
-            with self.subTest(mode=mode, case="installed"):
-                code, env, output, log, version, build, root = self._select(mode, exact)
-                self.assertEqual(0, code, log)
-                self.assertEqual(env.splitlines(), [
-                    "DEVELOPER_DIR=%s/Xcode_%s.app/Contents/Developer" % (root, version),
-                    "BAZEL_MACOS_BUILD_FLAGS=--config=ci-macos --xcode_version=%s" % version])
-                self.assertEqual(output, "cache_partition=macos-ARM64-xcode-%s-%s\n" % (
-                    version, build))
-        for case, installed in (("absent", None), ("other build", other_build)):
-            with self.subTest(mode="--required", case=case):
-                code, env, output, log, *_ = self._select("--required", installed)
+    def test_select_script_exports_the_one_discovered_pinned_xcode(self):
+        code, env, output, log, version, build, root = self._select()
+        self.assertEqual(0, code, log)
+        self.assertEqual(env.splitlines(), [
+            "DEVELOPER_DIR=%s/Xcode-any-name.app/Contents/Developer" % root,
+            "BAZEL_MACOS_BUILD_FLAGS=--config=ci-macos --xcode_version=%s" % version])
+        self.assertEqual(output, "cache_partition=macos-ARM64-xcode-%s-%s\n" % (version, build))
+        self.assertIn("Selected the pinned Xcode %s (%s)." % (version, build), log)
+        self.assertNotIn("simulated noise", log)
+
+    def test_select_script_fails_without_exactly_the_pinned_xcode(self):
+        cases = {
+            "not discoverable": (dict(discovered=()), "LaunchServices lists no Xcode"),
+            "ambiguous": (dict(discovered=("{root}/A.app/Contents/Developer",
+                                           "{root}/B.app/Contents/Developer")),
+                          "is ambiguous: 2 installations"),
+            "other build": (dict(reported="Xcode {version}\nBuild version 99Z999"),
+                            "is not the Xcode that Bazel discovers"),
+            "other version": (dict(reported="Xcode {version}.1\nBuild version {build}"),
+                              "is not the Xcode that Bazel discovers"),
+            "probe failure": (dict(locator_status=2), "probe failed (exit 2)"),
+        }
+        for name, (arguments, expected) in cases.items():
+            with self.subTest(case=name):
+                code, env, output, log, *_ = self._select(**arguments)
                 self.assertEqual(1, code, log)
                 self.assertEqual("", env)
-                self.assertEqual("cache_partition=\n", output)
-            with self.subTest(mode="--optional", case=case):
-                code, env, output, log, *_ = self._select("--optional", installed)
-                self.assertEqual(0, code, log)
-                self.assertEqual("", env)
-                self.assertEqual("cache_partition=\n", output)
-                self.assertIn("::warning::", log)
-                # The warning names only the public pin, never what the runner has.
-                self.assertNotIn("99Z999", log)
-
-    def test_undiscoverable_pin_does_not_select_toolchain_or_shared_cache(self):
-        for status in (1, 2):
-            for mode in ("--required", "--optional"):
-                with self.subTest(status=status, mode=mode):
-                    code, env, output, log, *_ = self._select(
-                        mode, "Xcode {version}\nBuild version {build}", locator_status=status)
-                    self.assertEqual(1 if mode == "--required" else 0, code, log)
-                    self.assertEqual("", env)
-                    self.assertEqual("cache_partition=\n", output)
-                    self.assertIn("::error::" if mode == "--required" else "::warning::", log)
-                    self.assertIn("cannot be discovered" if status == 1 else "probe failed", log)
+                self.assertEqual("", output)
+                self.assertIn("::error::", log)
+                self.assertIn(expected, log)
+        # A mismatch names what the runner has, so the failing job is diagnosable.
+        *_, log, _, _, _ = self._select(reported="Xcode {version}\nBuild version 99Z999")
+        self.assertIn("Build version 99Z999", log)
+        self.assertIn("simulated noise", log)
+        # A self-hosted runner's paths never reach its public log.
+        for arguments in (dict(reported="Xcode {version}\nBuild version 99Z999"),
+                          dict(discovered=("{root}/A.app/Contents/Developer",
+                                           "{root}/B.app/Contents/Developer"))):
+            with self.subTest(runner="self-hosted", **{k: str(v) for k, v in arguments.items()}):
+                code, _, _, log, _, _, root = self._select(runner="self-hosted", **arguments)
+                self.assertEqual(1, code, log)
+                self.assertNotIn(str(root), log)
 
     def test_probe_sdk_failure_keeps_diagnostics_before_scratch_cleanup(self):
-        for mode in ("--required", "--optional"):
-            with self.subTest(mode=mode):
-                code, _, _, log, *_ = self._select(
-                    mode, "Xcode {version}\nBuild version {build}", locator_status=None)
-                self.assertEqual(1 if mode == "--required" else 0, code, log)
-                self.assertRegex(log, r"Xcode discovery probe diagnostics \(sdk.log\):\n[^\n]+")
-                self.assertIn("simulated-sdk-failure", log)
-                self.assertIn("could not be built", log)
+        code, env, output, log, *_ = self._select(locator_status=None)
+        self.assertEqual(1, code, log)
+        self.assertEqual(("", ""), (env, output))
+        self.assertRegex(log, r"Xcode discovery probe diagnostics \(sdk.log\):\n[^\n]+")
+        self.assertIn("simulated-sdk-failure", log)
+        self.assertIn("could not be built", log)
 
     def test_probe_exec_failure_is_diagnosed(self):
-        code, env, output, log, *_ = self._select(
-            "--required", "Xcode {version}\nBuild version {build}",
-            locator_status=None, missing_xcrun=True)
+        code, env, output, log, *_ = self._select(locator_status=None, missing_xcrun=True)
         self.assertEqual(1, code, log)
-        self.assertEqual("", env)
-        self.assertEqual("cache_partition=\n", output)
+        self.assertEqual(("", ""), (env, output))
         self.assertIn("Cannot execute", log)
         self.assertIn("Xcode discovery probe diagnostics (sdk.log):", log)
 
-    def test_select_script_rejects_an_unknown_mode(self):
-        result = subprocess.run(["/bin/bash", str(_path(SELECT_SCRIPT))], capture_output=True,
-                                text=True, timeout=test_timing.STALL_GUARD_SECONDS,
-                                check=False)
-        self.assertEqual(2, result.returncode)
-
+    def test_select_script_takes_no_mode(self):
+        for args in (("--optional",), ("--required",)):
+            with self.subTest(args=args):
+                code, env, output, log, *_ = self._select(args=args)
+                self.assertEqual(2, code, log)
+                self.assertEqual(("", ""), (env, output))
 
 if __name__ == "__main__":
     unittest.main()

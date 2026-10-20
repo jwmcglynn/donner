@@ -101,6 +101,21 @@ HOSTED_MACOS_RESOURCE_FLAGS = ("--jobs=3", "--local_resources=cpu=3",
                                "--local_resources=memory=4802")
 
 _PARITY = ("main.yml", "macos", "macos-hosted-parity")
+# Main's hosted image cannot run Metal shader validation (docs/metal_validation.md).
+HOSTED_NO_SHADER_VALIDATION = (
+    "Main's hosted virtual GPU cannot run Metal shader validation, so its Metal tests run with "
+    "the texture check off and unvalidated. Accepted risk: main tests a different GPU with "
+    "weaker checks; pull request lanes on a real GPU keep full validation.")
+TEXTURE_USAGE_SPLIT = (("test-env-main-only", "MTL_SHADER_VALIDATION_TEXTURE_USAGE=0"),
+                       ("test-env-pr-only", "MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"))
+HOSTED_UNVALIDATED_CONFIG = (
+    "Main's hosted virtual GPU cannot compile shader-validated Metal pipelines, so its Metal "
+    "device tests request API validation only; the flag selects their test environment and no "
+    "build action. Accepted risk: main tests those kernels without shader validation; the pull "
+    "request lanes on a real GPU keep it.")
+HOSTED_SKIPS_SHADER_VALIDATION_TESTS = (
+    "Main runs fewer tests: the validation probe and the out-of-bounds canary assert shader "
+    "validation, which main's hosted virtual GPU cannot run.")
 PARITY_ALLOWLIST = {
     **{_PARITY + ("*", "flag-pr-only", flag):
        "Hosted runner shape: caps Bazel's scheduling at the hosted runner's CPUs and memory "
@@ -128,11 +143,12 @@ PARITY_ALLOWLIST = {
     _PARITY + ("Test", "test-env-main-only", "DONNER_BROWSER_STALL_DIAGNOSTICS=1"):
         "Diagnostics only: it changes what a timed-out browser test records, and this step runs "
         "no browser test.",
-    _PARITY + ("*", "runtime-env-main-only",
-               "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_"
-               "USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"):
-        "Main may relax one Metal texture check on a paravirtual GPU; the parity lane keeps "
-        "full validation on real hardware.",
+    **{_PARITY + (step, kind, value): HOSTED_NO_SHADER_VALIDATION
+       for step in ("Test", "Test (Geode editor lane)") for kind, value in TEXTURE_USAGE_SPLIT},
+    _PARITY + ("Test", "tag-filter-main-only", "-requires_shader_validation"):
+        HOSTED_SKIPS_SHADER_VALIDATION_TESTS,
+    _PARITY + ("Test", "flag-main-only", "--config=hosted-macos-unvalidated"):
+        HOSTED_UNVALIDATED_CONFIG,
 }
 
 # Tests that main's hosted jobs run and whose result can depend on the runner's CPU count
@@ -225,34 +241,27 @@ INVOCATION_ALLOWLIST = {
     # keys stay identical (//tools:macos_cache_key_parity_tests).
     **{("main.yml", "macos", "macos-self-hosted", step, kind, value):
        "Lane identity for test results only; it does not change what runs."
-       for step in ("Metal validation preflight", "Qualify pinned Chromium archive",
-                    "Test", "Test (browser targets)",
+       for step in ("Qualify pinned Chromium archive", "Test", "Test (browser targets)",
                     "Test (Geode editor lane)")
        for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
                            ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted"))},
+    **{("main.yml", "macos", "macos-self-hosted", step, kind, value):
+       HOSTED_NO_SHADER_VALIDATION
+       for step in ("Qualify pinned Chromium archive", "Test", "Test (browser targets)",
+                    "Test (Geode editor lane)")
+       for kind, value in TEXTURE_USAGE_SPLIT},
+    ("main.yml", "macos", "macos-self-hosted", "Test", "tag-filter-main-only",
+     "-requires_shader_validation"): HOSTED_SKIPS_SHADER_VALIDATION_TESTS,
+    ("main.yml", "macos", "macos-self-hosted", "Test", "flag-main-only",
+     "--config=hosted-macos-unvalidated"): HOSTED_UNVALIDATED_CONFIG,
     # A changed non-Bazel step is keyed by a digest of both rendered definitions, so any edit to
     # what the step runs (its action, inputs, script, shell, its own env and the variables it
     # names) changes the digest and needs a new review. Overrides of the Xcode selection's test
     # hooks from job env or earlier steps are rejected by //tools:macos_cache_key_parity_tests.
-    # Both lanes select the pinned Xcode. The hosted image always ships it (--required). The
-    # self-hosted runner may not, and then builds with its runner's default Xcode and its remote
-    # cache off (--optional): that pull request run then tests a different Xcode than main.
-    ("main.yml", "macos", "macos-self-hosted", "Select pinned Xcode", "step-changed",
-     "7609f8b75ac703d1"):
-        "Same pinned Xcode when installed; a self-hosted runner without it warns and builds with "
-        "its default Xcode and no remote cache.",
     # The refresh passes the self-hosted lane's rc-skipping startup flags.
     ("main.yml", "macos", "macos-self-hosted", "Refresh Xcode toolchain configuration",
      "step-changed", "c3adecb0303d2d56"):
         "Same repositories refreshed; only the runner-specific startup flags differ.",
-    # The hosted runner has a paravirtual GPU whose Metal validation layer cannot check texture
-    # usage, so the hosted lane picks its validation profile at run time. The self-hosted runner
-    # requires full validation instead, which is stricter.
-    ("main.yml", "macos", "macos-self-hosted", "*", "runtime-env-main-only",
-     "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
-     "--test_env=DONNER_CI_MACOS_LANE=hosted"):
-        "Main may relax one Metal texture check on a paravirtual GPU; the pull request runs "
-        "full validation.",
     # Setup the hosted runner needs and the self-hosted runner has already: the host provides
     # Bazelisk, Homebrew LLVM and the Xcode tools ("Prepare self-hosted macOS toolchain"),
     # and keeps Bazel's repository and action state between runs. The Bazel steps then fetch
@@ -260,15 +269,13 @@ INVOCATION_ALLOWLIST = {
     **{("main.yml", "macos", "macos-self-hosted", step, "step-main-only", ""):
        "Hosted runner setup only; the self-hosted runner is provisioned with it, and it "
        "changes no test, filter or flag."
-       for step in ("Install clang-tidy", "Setup Bazel", "Restore Bazel action cache",
-                    "Fetch Metal validation dependencies")},
+       for step in ("Install clang-tidy", "Setup Bazel", "Restore Bazel action cache")},
+    ("main.yml", "macos", "macos-self-hosted", "Free hosted macOS disk", "step-main-only", ""):
+        "Hosted runner setup only: it deletes the image's unused Xcodes and simulator runtimes so "
+        "a cold build fits on its disk, and changes no test, filter or flag.",
     ("main.yml", "macos", "macos-self-hosted", "Save Bazel action cache", "step-main-only", ""):
         "Hosted runner teardown only: it bounds and saves the action cache that 'Restore Bazel "
         "action cache' restored, after every test step, and changes no test, filter or flag.",
-    ("main.yml", "macos", "macos-self-hosted", "Select Metal validation profile", "step-main-only",
-     ""):
-        "Main picks its Metal validation profile; the pull request instead requires full "
-        "validation in 'Require full Metal shader validation'.",
 }
 
 # Differences in how a job that runs on both main and a pull request runs Bazel in each, keyed
@@ -767,6 +774,12 @@ class _Expression:
         raise ValueError("unsupported function %s" % name)
 
 
+# A condition that only compares a matrix entry's runner OS selects the same entries on main and
+# on pull requests, so such a step stays under every check. Any other use of runner.os is
+# unmodelled and fails the test.
+_RUNNER_OS_ONLY = re.compile(r"^(?:\$\{\{\s*)?runner\.os (?:==|!=) '[A-Za-z]+'(?:\s*\}\})?$")
+
+
 def _truthy(value):
     return value not in (False, "", None, 0)
 
@@ -804,6 +817,8 @@ def runs(condition, scenario):
         return True
     if isinstance(condition, bool):
         return condition
+    if _RUNNER_OS_ONLY.match(str(condition).strip()):
+        return True
     return _truthy(_Expression(str(condition), _context(scenario)).evaluate())
 
 
@@ -1739,6 +1754,17 @@ class CiLaneParityTest(unittest.TestCase):
         self.assertTrue(runs("${{ github.event_name == 'push' || false }}", "main-push"))
         with self.assertRaises(ValueError):
             runs("${{ github.unknown_context == 'x' }}", "main-push")
+        # A step gated only on a matrix entry's OS stays under every check in every scenario;
+        # combining the OS with anything else could hide a main-only step, so it is unmodelled.
+        for scenario in ("main-push", "trusted-pr"):
+            for condition in ("runner.os == 'macOS'", "${{ runner.os != 'Linux' }}"):
+                with self.subTest(scenario=scenario, condition=condition):
+                    self.assertTrue(runs(condition, scenario))
+            for condition in ("runner.os != 'macOS' || github.event_name == 'push'",
+                              "!(runner.os == 'macOS')", "contains(runner.os, 'mac')"):
+                with self.subTest(scenario=scenario, condition=condition):
+                    with self.assertRaisesRegex(ValueError, "unmodelled context runner.os"):
+                        runs(condition, scenario)
 
     def test_every_main_push_workflow_runs_on_pull_requests(self):
         self._assert_matches_allowlist(

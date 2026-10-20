@@ -1320,7 +1320,7 @@ jobs:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
   macos:
-    runs-on: macos-26
+    runs-on: xcode-27
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
@@ -1338,14 +1338,24 @@ jobs:
       # flags (//tools:macos_cache_key_parity_tests).
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
-      # sandbox; Homebrew's tool wrappers require HOME.
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted"
+      # sandbox; Homebrew's tool wrappers require HOME. The hosted image's virtual
+      # GPU cannot run Metal shader validation (docs/metal_validation.md): with the
+      # texture check on, validated pipelines fail to compile, so it stays off here.
+      # The Metal device tests request API validation only, through the config the
+      # Test step passes.
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"
+      # Free space, in GiB, required after the caches are restored: a cold build of the tree
+      # peaked near 27 GiB on this image, before tests and browser trees.
+      MIN_FREE_DISK_GIB: "45"
       # Enables the browser tests' timeout recorder (browser-stall-diagnostics.mjs). It
       # records host load, memory and process call graphs, so only this ephemeral hosted
       # job sets it; a persistent self-hosted runner never publishes them.
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
-      # Both gating test steps pass the hosted-macos-quarantine config (.bazelrc), so their test
-      # environments stay identical and Bazel keeps its analysis cache between them.
+      # Both gating test steps pass the hosted-macos-quarantine config (.bazelrc). Only the Test
+      # step adds the config that gives the Metal device tests API validation only.
+      # Each Bazel step here changes a build option from the step before it (Build passes no
+      # test configs, and the Chromium qualification step omits the quarantine config), so each
+      # discards Bazel's analysis cache and re-analyzes, about 15 to 35 s per step on this image.
       # Exercise the Geode editor configuration through transitioned wrappers, which
       # locate declared shared libraries consistently on clean workers.
       GEODE_EDITOR_TARGETS: >-
@@ -1356,12 +1366,19 @@ jobs:
         with:
           persist-credentials: false
 
-      # Apple toolchain action keys carry the Xcode version and build, so both
-      # macOS lanes build with the one pinned in tools/ci_macos_xcode.txt.
+      # Every macOS lane builds with the Xcode pinned in tools/ci_macos_xcode.txt,
+      # so their action keys and remote cache partition match. The xcode-27
+      # image ships it beside other Xcodes; the step fails the job when the
+      # runner does not have exactly that version and build.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
-        run: tools/ci_select_macos_xcode.sh --required
+        run: tools/ci_select_macos_xcode.sh
+
+      # The xcode-27 image starts with far less free disk than a cold build of the tree needs.
+      - name: Free hosted macOS disk
+        shell: bash
+        run: tools/ci/free_hosted_macos_disk.sh
 
       - name: Install clang-tidy
         uses: nick-fields/retry@v4
@@ -1410,6 +1427,12 @@ jobs:
           cache-partition: ${{ steps.xcode.outputs.cache_partition }}
           download-outputs: minimal
 
+      # Before Bazel, so a full disk fails in seconds with a clear error instead of an ENOSPC
+      # late in the build.
+      - name: Check runner disk space
+        shell: bash
+        run: tools/ci_check_runner_disk.sh
+
       # Regenerate the Xcode and Apple toolchain repositories for the selected
       # Xcode, as macos-self-hosted does; a restored external cache must not
       # carry another Xcode's.
@@ -1420,49 +1443,6 @@ jobs:
             --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
-
-      - name: Fetch Metal validation dependencies
-        uses: nick-fields/retry@v4
-        with:
-          timeout_minutes: 5
-          max_attempts: 3
-          retry_wait_seconds: 15
-          command: >-
-            bazelisk fetch --config=ci $BAZEL_MACOS_BUILD_FLAGS
-            //donner/gpu/metal/tests:all
-
-      - name: Select Metal validation profile
-        id: metal_profile
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazelisk test --config=ci --nocache_test_results --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //tools/ci:metal_profile
-          profile=$(python3 tools/metal_validation_profile.py \
-            bazel-testlogs/donner/gpu/metal/tests/metal_validation_profile/test.log)
-          case "$profile" in
-            full)
-              echo "Metal shader validation: full." >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            paravirtual-texture-usage-off)
-              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted" >> "$GITHUB_ENV"
-              echo "Metal: verified virtual-GPU texture-check exception; API, buffer, threadgroup, and pixel checks remain active. A full-validation receipt for the PR head is required before merge. See docs/metal_validation.md." >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            *)
-              echo "::error::Unsupported Metal validation profile."
-              exit 1
-              ;;
-          esac
-
-      - name: Metal validation preflight
-        id: metal_preflight
-        shell: bash
-        run: |
-          set -euo pipefail
-          tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //tools/ci:metal_preflight
 
       - name: Build
         shell: bash
@@ -1498,10 +1478,14 @@ jobs:
           # Metal validation before merge (docs/metal_validation.md). Main's
           # hosted result alone does not establish that hardware signal.
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
+          # Its virtual GPU cannot run shader validation either, so the tests that assert it
+          # (the validation profile probe and the out-of-bounds canary) run only on the
+          # self-hosted real GPU (docs/metal_validation.md).
+          echo "::notice::Excluding requires_shader_validation targets: the hosted macOS image's virtual GPU cannot run Metal shader validation."
           # Tests that launch a browser run in the next step instead.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak \
-            --config=hosted-macos-quarantine \
+            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,-ci-remote-gpu,-launches-browser,-fuzz_soak \
+            --config=hosted-macos-quarantine --config=hosted-macos-unvalidated \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
         # the `fuzz_soak` mutation targets; they run nightly or on demand in
@@ -1577,7 +1561,7 @@ jobs:
         run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
+        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -1738,7 +1722,7 @@ jobs:
   # native suite and saves no cache: it restores main's caches only. Untrusted PRs
   # and main pushes already run the full hosted `macos` job, so it never runs there.
   macos-browser:
-    runs-on: macos-26
+    runs-on: xcode-27
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.browser_affected == 'true') }}
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
@@ -1750,8 +1734,9 @@ jobs:
     # compares the browser step's Bazel invocation between the two.
     env:
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
+      MIN_FREE_DISK_GIB: "45"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1763,7 +1748,12 @@ jobs:
       - name: Select pinned Xcode
         id: xcode
         shell: bash
-        run: tools/ci_select_macos_xcode.sh --required
+        run: tools/ci_select_macos_xcode.sh
+
+      # The xcode-27 image starts with far less free disk than a cold build of the tree needs.
+      - name: Free hosted macOS disk
+        shell: bash
+        run: tools/ci/free_hosted_macos_disk.sh
 
       # Not used by browser tests. It keeps this job's setup identical to the `macos`
       # job's, which the lane parity test requires.
@@ -1814,6 +1804,12 @@ jobs:
           cache-partition: ${{ steps.xcode.outputs.cache_partition }}
           download-outputs: minimal
 
+      # Before Bazel, so a full disk fails in seconds with a clear error instead of an ENOSPC
+      # late in the build.
+      - name: Check runner disk space
+        shell: bash
+        run: tools/ci_check_runner_disk.sh
+
       # Regenerate the Xcode and Apple toolchain repositories for the selected
       # Xcode, as the `macos` job does.
       - name: Refresh Xcode toolchain configuration
@@ -1823,43 +1819,6 @@ jobs:
             --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
-
-      - name: Fetch Metal validation dependencies
-        uses: nick-fields/retry@v4
-        with:
-          timeout_minutes: 5
-          max_attempts: 3
-          retry_wait_seconds: 15
-          command: >-
-            bazelisk fetch --config=ci $BAZEL_MACOS_BUILD_FLAGS
-            //donner/gpu/metal/tests:all
-
-      # The `macos` job's profile selection can rewrite BAZEL_MACOS_TEST_FLAGS on a
-      # virtual GPU. Run the same selection so the browser tests see the same test
-      # environment main's hosted job gives them.
-      - name: Select Metal validation profile
-        id: metal_profile
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazelisk test --config=ci --nocache_test_results --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //tools/ci:metal_profile
-          profile=$(python3 tools/metal_validation_profile.py \
-            bazel-testlogs/donner/gpu/metal/tests/metal_validation_profile/test.log)
-          case "$profile" in
-            full)
-              echo "Metal shader validation: full." >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            paravirtual-texture-usage-off)
-              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted" >> "$GITHUB_ENV"
-              echo "Metal: verified virtual-GPU texture-check exception for the browser subset." >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            *)
-              echo "::error::Unsupported Metal validation profile."
-              exit 1
-              ;;
-          esac
 
       # Same command as the `macos` job's browser step: the PR's selected targets,
       # filtered to tests that launch a browser, one at a time. That job builds the
@@ -1918,7 +1877,7 @@ jobs:
         run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.browser_test.outcome == 'failure')
+        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.browser_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -2144,19 +2103,17 @@ jobs:
         shell: bash
         run: tools/ci_check_runner_disk.sh
 
-      # Builds with the Xcode pinned in tools/ci_macos_xcode.txt when it is
-      # installed, so action keys match the hosted macOS lanes'. Without it the
-      # job warns and keeps the runner's default Xcode; the step never prints
-      # which Xcode the runner has.
+      # Builds with the Xcode pinned in tools/ci_macos_xcode.txt, so action keys
+      # match the hosted macOS lanes'. A runner without exactly that version and
+      # build fails here rather than building with another Xcode.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
-        run: tools/ci_select_macos_xcode.sh --optional
+        run: tools/ci_select_macos_xcode.sh
 
       # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
-      # the pinned Xcode's partition (docs/building.md). Without the pinned
-      # Xcode the partition is empty and the action leaves the cache off, so
-      # entries built with another Xcode never reach the shared partition. It
+      # the pinned Xcode's partition (docs/building.md). The action fails
+      # rather than writing to another partition when this runner has none. It
       # runs before "Prepare self-hosted macOS toolchain", the first step that
       # touches Bazel.
       - name: Configure BuildBuddy remote cache
@@ -2197,6 +2154,8 @@ jobs:
         timeout-minutes: 2
         run: python3 tools/ci_metal_toolchain.py --describe
 
+      # The only shader-validation gate in CI: the hosted image's virtual GPU cannot run it,
+      # so main runs none. Both steps are mandatory whenever this job runs.
       - name: Require full Metal shader validation
         id: metal_profile
         shell: bash
@@ -2369,8 +2328,7 @@ jobs:
       deployment: false
     env:
       # The key-affecting flags of every macOS lane (//tools:macos_cache_key_parity_tests), so
-      # this job builds with the fast lane's action keys: its builds hit the remote cache when
-      # the pinned Xcode is selected, and otherwise the fast lane's outputs on this runner.
+      # this job builds with the fast lane's action keys and its builds hit the remote cache.
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       # Main's hosted test environment under this lane's own name, so its test results are never
       # shared with the hosted lane's or the fast lane's.
@@ -2393,13 +2351,12 @@ jobs:
         shell: bash
         run: tools/ci_check_runner_disk.sh
 
-      # Selects the pinned Xcode exactly as the fast lane does. When this runner's Bazel cannot
-      # discover it, both jobs warn and build with the runner's default Xcode, so this job then
-      # tests with another Xcode than main's hosted job.
+      # Selects the pinned Xcode exactly as the fast lane does, so this job tests with main's
+      # hosted Xcode.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
-        run: tools/ci_select_macos_xcode.sh --optional
+        run: tools/ci_select_macos_xcode.sh
 
       - name: Configure BuildBuddy remote cache
         if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'

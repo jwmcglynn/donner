@@ -246,7 +246,7 @@ class CiRunnerRoutingTest(unittest.TestCase):
         # the hosted job runs anyway (main pushes, untrusted PRs, the ci:hosted-macos label).
         subset = self._job_body("macos-browser")
         condition = subset.split("    if: ", 1)[1].split("\n", 1)[0]
-        self.assertIn("    runs-on: macos-26\n", subset)
+        self.assertIn("    runs-on: xcode-27\n", subset)
         self.assertIn("github.event_name == 'pull_request'", condition)
         self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", condition)
         self.assertIn("(needs.determine-targets.outputs.fallback == 'true' || "

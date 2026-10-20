@@ -400,6 +400,8 @@ def _full_validation_options(configs, jobs):
         "--test_env=MTL_SHADER_VALIDATION_DEFAULT_STATE=all",
         "--test_env=MTL_SHADER_VALIDATION_DISABLE_PIPELINES=",
         "--test_env=MTL_SHADER_VALIDATION_ENABLE_PIPELINES=",
+        # Last, so no --config above can select the Metal tests' API-only environment.
+        "--//build_defs:metal_shader_validation=on",
     ])
     return common
 

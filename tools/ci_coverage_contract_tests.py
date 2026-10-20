@@ -66,16 +66,38 @@ class CoverageContractTest(unittest.TestCase):
 
     def test_checked_in_manifest_is_well_formed(self):
         self.assertEqual([], contract.manifest_problems(self.manifest))
+        for value, entry in (("not a bool", {"when": "always", "pr_only": "yes", "counterparts": [
+                {"job": "macos-self-hosted", "step": "Build"}]}),
+                             ("on an exception", {"when": "always", "pr_only": True, "exception": {
+                                 "owner": "o", "decision": "d", "reason": "r"}})):
+            with self.subTest(value=value):
+                problems = contract.manifest_problems(
+                    {"version": 1, "routes": {"macos": "always"},
+                     "lanes": {"macos": {"Test": {"x": entry}}}})
+                self.assertTrue(any("pr_only" in problem for problem in problems), problems)
 
     def test_complete_receipts_pass_and_report_every_exception(self):
         problems, excepted = self._check(_COMPLETE)
         self.assertEqual([], problems)
         # Each gap the manifest accepts is reported on every run, with its owner.
-        self.assertEqual(3, len(excepted))
+        self.assertEqual(4, len(excepted))
         for line in excepted:
             self.assertIn("owner jwmcglynn", line)
-        self.assertTrue(any(line.startswith("macos / Test / hosted-equivalent: ")
-                            for line in excepted))
+        for exception in ("hosted-equivalent", "hosted-shader-validation"):
+            self.assertTrue(any(line.startswith("macos / Test / %s: " % exception)
+                                for line in excepted), exception)
+
+    def test_skipped_self_hosted_shader_validation_fails(self):
+        # Main runs no shader validation, so the self-hosted real-GPU steps are the only gate.
+        for step, entry in (("Require full Metal shader validation", "shader-validation"),
+                            ("Metal validation preflight", "shader-memory-canary")):
+            with self.subTest(step=step):
+                receipts = copy.deepcopy(_COMPLETE)
+                receipts["macos-self-hosted"]["steps"][step] = _SKIPPED
+                problems, _ = self._check(receipts)
+                self.assertEqual(problems, [
+                    "macos / Test / %s is required on this pull request but did not run; "
+                    "expected an executed macos-self-hosted / %s" % (entry, step)])
 
     def test_replayed_skipped_hosted_linux_test_fails(self):
         # Negative control from #1889: the trusted pull request's hosted Linux job skipped

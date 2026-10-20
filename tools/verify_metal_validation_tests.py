@@ -412,6 +412,7 @@ class MetalEvidenceTest(unittest.TestCase):
             "--test_env=MTL_SHADER_VALIDATION_DEFAULT_STATE=all",
             "--test_env=MTL_SHADER_VALIDATION_DISABLE_PIPELINES=",
             "--test_env=MTL_SHADER_VALIDATION_ENABLE_PIPELINES=",
+            "--//build_defs:metal_shader_validation=on",
         ], verifier._full_validation_options(["--config=ci", "--config=re"], 4))
 
     def test_source_and_explicit_configuration_changes_still_block_receipts(self):

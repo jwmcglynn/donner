@@ -149,17 +149,16 @@ runs:
         # headers, which are not action inputs, so an image update changes no
         # cache key. Partition the cache per runner image so an entry is only
         # ever reused on the image that produced it. The macOS lanes instead
-        # name the pinned Xcode: Apple toolchain actions carry its version and
-        # build in their keys, and both macOS runners build with it.
-        # A self-hosted runner has no image identity: it gets a partition only
-        # from the pinned Xcode, and without one the cache stays off.
+        # name the pinned Xcode (tools/ci_macos_xcode.txt), which every macOS
+        # runner builds with.
+        # A self-hosted runner has no image identity: its partition must come
+        # from the pinned Xcode, so a self-hosted job without one is an error.
         if [[ -n "${CACHE_PARTITION:-}" ]]; then
           [[ "${CACHE_PARTITION}" =~ ^[A-Za-z0-9]+(-[A-Za-z0-9.]+)+$ ]] ||
             fail "invalid cache-partition value."
           image="${CACHE_PARTITION}"
         elif [[ "${RUNNER_ENVIRONMENT}" == "self-hosted" ]]; then
-          echo "::warning::BuildBuddy: no cache partition for this self-hosted runner; remote cache disabled."
-          exit 0
+          fail "a self-hosted runner needs the pinned Xcode's cache-partition."
         else
           image="${ImageOS:-}-${ImageVersion:-}-${RUNNER_ARCH:-}"
           if [[ ! "${image}" =~ ^[A-Za-z0-9]+-[A-Za-z0-9.]+-[A-Za-z0-9]+$ ]]; then

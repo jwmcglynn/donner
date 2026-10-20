@@ -69,12 +69,6 @@ test_suite(
 )
 
 test_suite(
-    name = "metal_profile",
-    tags = ["manual"],
-    tests = ["//donner/gpu/metal/tests:metal_validation_profile"],
-)
-
-test_suite(
     name = "metal_full_validation",
     tags = ["manual"],
     tests = ["//donner/gpu/metal/tests:metal_full_validation_required"],
@@ -356,6 +350,19 @@ py_test(
         "docs_lane.sh",
         "lane.sh",
     ],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# The GitHub-hosted macOS disk cleanup.
+py_test(
+    name = "free_hosted_macos_disk_tests",
+    size = "small",
+    srcs = ["free_hosted_macos_disk_tests.py"],
+    data = ["free_hosted_macos_disk.sh"],
     deps = [
         "//tools:test_executable_fixtures",
         "//tools:test_timing",

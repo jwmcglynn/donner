@@ -73,8 +73,11 @@ jobs:
         uses: ./.github/actions/pr-trust
 
   build:
-    runs-on: macos-26
+    runs-on: xcode-27
     needs: trust
+    env:
+      # Free space, in GiB, required after the caches are restored.
+      MIN_FREE_DISK_GIB: "45"
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
     # runs allowed to write bind it, so other runs never receive that key.
     environment:
@@ -84,6 +87,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Select pinned Xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh
+
+      # The xcode-27 image starts with far less free disk than a cold build of the tree needs.
+      - name: Free hosted macOS disk
+        shell: bash
+        run: tools/ci/free_hosted_macos_disk.sh
 
       - name: Setup Bazel for native browser comparison and Wasm build
         uses: bazel-contrib/setup-bazel@0.19.0
@@ -119,6 +131,12 @@ jobs:
           read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
           renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
           download-outputs: toplevel
+
+      # Before Bazel, so a full disk fails in seconds with a clear error instead of an ENOSPC
+      # late in the build.
+      - name: Check runner disk space
+        shell: bash
+        run: tools/ci_check_runner_disk.sh
 
       # Repository downloads are the only retried part of this lane. Keeping
       # them separate prevents a compile or test failure from passing on retry.

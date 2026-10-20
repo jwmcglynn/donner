@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Fails a self-hosted CI job in seconds, with a clear error, when the runner is low on disk,
+# Fails a macOS CI job in seconds, with a clear error, when the runner is low on disk,
 # instead of minutes to an hour later as a Bazel ENOSPC, a job timeout or a lost runner
 # connection, which read like failures of the change under test.
 #
 # MIN_FREE_DISK_GIB is the free space, in GiB, required on every filesystem the job writes.
-# The job sets no --output_user_root, and --nohome_rc --nosystem_rc skip any user or system rc,
-# so Bazel writes its macOS default output root and the `build:ci` repository cache.
+# The self-hosted jobs set no --output_user_root, and --nohome_rc --nosystem_rc skip any user or
+# system rc, so Bazel writes its macOS default output root and the `build:ci` repository cache.
+# On a GitHub-hosted runner every one of these paths is on the same data volume.
 set -euo pipefail
 trap 'echo "::error title=Disk space check failed::The runner disk space check failed unexpectedly (exit $?, line $LINENO). Fix the check or the runner before retrying."' ERR
 case "${MIN_FREE_DISK_GIB:-}" in

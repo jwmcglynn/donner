@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "What each main-hosted lane in .github/workflows/main.yml runs, by phase (step) and test class, and which steps cover each class on a trusted pull request. tools/ci_coverage_contract.py checks a trusted pull request's receipts against it; //tools:ci_lane_parity_tests keeps it in step with the workflow. A class with no pull request counterpart carries a reviewed exception that names its owner and the decision behind it. A lane is checked only when its route says self-hosted jobs replaced its hosted job on the pull request.",
+  "description": "What each main-hosted lane in .github/workflows/main.yml runs, by phase (step) and test class, and which steps cover each class on a trusted pull request. tools/ci_coverage_contract.py checks a trusted pull request's receipts against it; //tools:ci_lane_parity_tests keeps it in step with the workflow. A `pr_only` class is a pull request gate that main lacks. A class with no pull request counterpart carries a reviewed exception that names its owner and the decision behind it. A lane is checked only when its route says self-hosted jobs replaced its hosted job on the pull request.",
   "routes": {
     "linux": "always",
     "macos": "self_hosted_macos"
@@ -106,29 +106,6 @@
       }
     },
     "macos": {
-      "Select Metal validation profile": {
-        "metal-validation": {
-          "when": "always",
-          "description": "The self-hosted lane requires full Metal validation instead of selecting a profile.",
-          "counterparts": [
-            {
-              "job": "macos-self-hosted",
-              "step": "Require full Metal shader validation"
-            }
-          ]
-        }
-      },
-      "Metal validation preflight": {
-        "metal-preflight": {
-          "when": "always",
-          "counterparts": [
-            {
-              "job": "macos-self-hosted",
-              "step": "Metal validation preflight"
-            }
-          ]
-        }
-      },
       "Build": {
         "native": {
           "when": "always",
@@ -144,7 +121,7 @@
           "exception": {
             "owner": "jwmcglynn",
             "decision": "Maintainer decision 2026-10-19, #1911",
-            "reason": "The self-hosted macOS lanes build with the pinned Xcode only when the runner's Bazel can discover it, and otherwise with the runner's default Xcode, so a build failure specific to the hosted image's Xcode can first show on main."
+            "reason": "By default, trusted pull requests run the macOS Build step only on the self-hosted lane, with the same pinned Xcode, so a build failure specific to the hosted image's other host tools (Command Line Tools, Homebrew) can first show on main."
           }
         }
       },
@@ -175,6 +152,36 @@
             "owner": "jwmcglynn",
             "decision": "Maintainer decision 2026-10-19, #1911",
             "reason": "To keep pull request runtime short, only the `hosted_parity` subset and the Geode editor lane rerun with main's hosted Bazel scheduling configuration; every other test runs only at the fast lane's full width. No pull request lane reproduces the hosted runner's CPU speed, GPU, memory or disk."
+          }
+        },
+        "shader-validation": {
+          "when": "always",
+          "pr_only": true,
+          "description": "Full Metal shader validation on a real GPU. Main runs none: the hosted image's virtual GPU cannot (see hosted-shader-validation), so this step is the only shader-validation gate.",
+          "counterparts": [
+            {
+              "job": "macos-self-hosted",
+              "step": "Require full Metal shader validation"
+            }
+          ]
+        },
+        "shader-memory-canary": {
+          "when": "always",
+          "pr_only": true,
+          "description": "The Metal preflight, including the deliberate out-of-bounds read that shader validation must abort, on a real GPU.",
+          "counterparts": [
+            {
+              "job": "macos-self-hosted",
+              "step": "Metal validation preflight"
+            }
+          ]
+        },
+        "hosted-shader-validation": {
+          "when": "always",
+          "exception": {
+            "owner": "jwmcglynn",
+            "decision": "Maintainer decision 2026-10-20, #1952",
+            "reason": "Main's hosted macOS lane runs its Metal tests without shader validation and skips the tests that assert it: on the xcode-27 image (macOS 27.0.1, 26A434) the virtual GPU reports pipeline validation disabled and does not abort a deliberate out-of-bounds read (https://github.com/jwmcglynn/donner/actions/runs/39381507143). Shader validation runs only on the self-hosted real GPU, for trusted pull requests routed to it; any other pull request needs a local verifier receipt before merge."
           }
         }
       },

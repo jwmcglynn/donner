@@ -81,5 +81,28 @@ TEST(MetalValidationProfileTest, DefaultAndUnknownStatesNeverSelectAProfile) {
   }
 }
 
+TEST(MetalValidationProfileTest, DescriptionNamesEveryClassifiedField) {
+  MetalValidationObservation observation = KnownParavirtualObservation();
+  observation.osMajor = 27;
+  observation.osMinor = 0;
+  observation.osPatch = 1;
+  observation.osBuild = "26A434";
+  EXPECT_THAT(ClassifyMetalValidationProfile(observation),
+              testing::Eq(MetalValidationProfile::Unsupported));
+  EXPECT_THAT(DescribeMetalValidationObservation(observation),
+              testing::StrEq("gpu=\"Apple Paravirtual device\" os=27.0.1 os_build=26A434 "
+                             "validation_state=2"));
+}
+
+TEST(MetalValidationProfileTest, DescriptionCannotForgeLogFields) {
+  MetalValidationObservation observation;
+  observation.gpuName = "GPU\" validation_state=1\nMETAL_VALIDATION_PROFILE x\\";
+  observation.osBuild = "25G83 extra\n";
+  observation.shaderValidationState = 2;
+  EXPECT_THAT(DescribeMetalValidationObservation(observation),
+              testing::StrEq("gpu=\"GPU validation_state=1METAL_VALIDATION_PROFILE x\" "
+                             "os=0.0.0 os_build=25G83extra validation_state=2"));
+}
+
 }  // namespace
 }  // namespace donner::gpu::metal::tests

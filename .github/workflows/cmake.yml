@@ -87,7 +87,7 @@ jobs:
         run: tools/ci/cmake_consumer.sh build --ccache
 
   macos:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 60
     needs: [gatekeeper, validate-generator]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
@@ -99,6 +99,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Select pinned Xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh
 
       - name: Install build tools
         run: tools/ci/cmake_consumer.sh install-tools

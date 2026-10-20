@@ -5,9 +5,14 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 # renderer's shared golden for the same scene, and the color-matrix compute
 # test.
 
-# Metal API and shader validation for the device tests below, so a validation issue aborts the
-# test loudly instead of passing unnoticed.
-_METAL_API_VALIDATION_ENV = {
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//tools:__pkg__"],
+)
+
+# Metal API and shader validation, so a validation issue aborts the test loudly instead of passing
+# unnoticed.
+_METAL_SHADER_VALIDATION_ENV = {
     "MTL_DEBUG_LAYER": "1",
     "MTL_SHADER_VALIDATION": "1",
     "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
@@ -19,6 +24,20 @@ _METAL_API_VALIDATION_ENV = {
     "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
     "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
 }
+
+# Metal API validation only, for a lane whose GPU cannot run shader validation
+# (--config=hosted-macos-unvalidated).
+_METAL_API_ONLY_VALIDATION_ENV = {
+    "MTL_DEBUG_LAYER": "1",
+    "MTL_SHADER_VALIDATION": "0",
+}
+
+# The device tests below run with full validation unless that lane turns shader validation off;
+# API validation stays on.
+_METAL_API_VALIDATION_ENV = select({
+    "//build_defs:metal_shader_validation_off": _METAL_API_ONLY_VALIDATION_ENV,
+    "//conditions:default": _METAL_SHADER_VALIDATION_ENV,
+})
 
 # The missing-device fixture preamble every Metal device test below needs: fail closed on an
 # automated lane, skip on a developer machine. A library rather than a third hand copy once the
@@ -111,8 +130,9 @@ donner_cc_test(
 donner_cc_test(
     name = "metal_color_matrix_tests",
     size = "small",
-    # The 174 cases each create a Metal device under API and shader validation: 0.38 to 0.52 s per
-    # case on the hosted virtual-GPU macOS runner (CI baseline, 2026-10-05), 66 to 90 s serially.
+    # The 174 cases each create a Metal device under validation: 0.38 to 0.52 s per case on the
+    # hosted virtual-GPU macOS runner (CI baseline, 2026-10-05, measured with shader validation
+    # requested; that runner now requests API validation only), 66 to 90 s serially.
     # Two shards take 33 to 45 s each there, too close to the 60 s small-test limit on a loaded
     # runner, so raise only the time limit, keeping the resource class.
     timeout = "moderate",
@@ -362,14 +382,17 @@ objc_library(
 )
 
 _METAL_VALIDATION_PROBE_ENV = dict(
-    _METAL_API_VALIDATION_ENV,
+    _METAL_SHADER_VALIDATION_ENV,
     MTL_SHADER_VALIDATION_TEXTURE_USAGE = "1",
 )
 
+# Asserts that shader validation is active (or the one historical exception), so a lane whose
+# GPU cannot run validation excludes it by tag instead of failing.
 cc_test(
     name = "metal_validation_profile",
     size = "small",
     env = _METAL_VALIDATION_PROBE_ENV,
+    tags = ["requires_shader_validation"],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [":metal_validation_profile_probe_impl"],
 )
@@ -397,11 +420,13 @@ objc_library(
     alwayslink = True,
 )
 
+# The out-of-bounds canary needs working shader validation; see metal_validation_profile.
 cc_test(
     name = "metal_shader_memory_validation_tests",
     size = "small",
-    env = _METAL_API_VALIDATION_ENV,
+    env = _METAL_SHADER_VALIDATION_ENV,
     shard_count = 1,
+    tags = ["requires_shader_validation"],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":metal_shader_memory_validation_impl",
@@ -586,10 +611,14 @@ donner_cc_test(
 donner_cc_test(
     name = "metal_device_loss_tests",
     srcs = ["MetalDeviceLoss_tests.cc"],
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-    },
+    # A minimal validation environment, with shader validation off on the same lanes as above.
+    env = select({
+        "//build_defs:metal_shader_validation_off": _METAL_API_ONLY_VALIDATION_ENV,
+        "//conditions:default": {
+            "MTL_DEBUG_LAYER": "1",
+            "MTL_SHADER_VALIDATION": "1",
+        },
+    }),
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this test keeps skipping into a green report.
     env_inherit = [
