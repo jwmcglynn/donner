@@ -61,6 +61,11 @@ void AddUnreparsedSpan(XMLDocument& document, std::size_t start, std::size_t end
 
 namespace {
 
+/// The type of an optional node, so an unexpected node prints what it is.
+std::optional<XMLNode::Type> NodeType(const std::optional<XMLNode>& node) {
+  return node ? std::optional<XMLNode::Type>(node->type()) : std::nullopt;
+}
+
 /// Parse \p xml and return the resulting source-backed document, asserting no parse error.
 XMLDocument ParseDocument(std::string_view xml, const XMLParser::Options& options = {}) {
   ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(xml, options);
@@ -3677,7 +3682,7 @@ TEST_F(XMLDocumentTests, SetElementTextReplacesAllTextOnlyContent) {
       ASSERT_TRUE(result.applied);
       ASSERT_THAT(result.diagnostic, Eq(std::nullopt));
       EXPECT_THAT(text.value(), Optional(Eq(value)));
-      EXPECT_FALSE(text.firstChild().has_value());
+      EXPECT_THAT(NodeType(text.firstChild()), Eq(std::nullopt));
       EXPECT_EQ(doc.source(), value.empty() ? "<svg><text></text></svg>"
                                             : "<svg><text>new &amp; &lt;text&gt;</text></svg>");
       EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeValueChanged));
@@ -3699,7 +3704,7 @@ TEST_F(XMLDocumentTests, SetElementTextOwnsSourceViewAndClearsSourcelessText) {
   empty.appendChild(XMLNode::CreateDataNode(emptyDoc, "word"));
   auto cleared = emptyDoc.setElementText(empty, "");
   ASSERT_TRUE(cleared.applied);
-  EXPECT_FALSE(empty.firstChild().has_value());
+  EXPECT_THAT(NodeType(empty.firstChild()), Eq(std::nullopt));
   EXPECT_EQ(emptyDoc.source(), "<svg><text/></svg>");
 }
 
