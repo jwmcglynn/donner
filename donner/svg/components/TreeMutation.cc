@@ -183,6 +183,24 @@ bool HasNonWhitespaceValue(EntityHandle node) {
              std::string_view::npos;
 }
 
+/// Whether \p node is an XML text, CDATA, comment or other non-element node.
+bool IsNonElementXmlNode(EntityHandle node) {
+  const auto xmlNode = xml::XMLNode::TryCast(node);
+  return xmlNode && xmlNode->type() != xml::XMLNode::Type::Element;
+}
+
+/// Invalidate \p parent after \p removed leaves it. Only element children feed structural
+/// selectors and the render tree; a removed text or comment node changes at most the parent's
+/// text content.
+void MarkChildRemoved(EntityHandle parent, EntityHandle removed) {
+  if (!IsNonElementXmlNode(removed)) {
+    MarkNeedsFullRebuild(parent);
+  } else if (HasNonWhitespaceValue(removed)) {
+    TreeMutation::InvalidateTextContentStyles(parent);
+  }
+  MarkDirty(parent, components::DirtyFlagsComponent::All);
+}
+
 void CheckReferenceChild(EntityHandle parent, EntityHandle referenceNode) {
   if (!referenceNode) {
     return;
@@ -287,8 +305,7 @@ void TreeMutation::RemoveChild(EntityHandle parent, EntityHandle child) {
 
   parent.get<donner::components::TreeComponent>().removeChild(*parent.registry(), child.entity());
 
-  MarkNeedsFullRebuild(parent);
-  MarkDirty(parent, components::DirtyFlagsComponent::All);
+  MarkChildRemoved(parent, child);
   MarkDetachedSubtree(child);
   components::NodeLifetimeCollector::Collect(*parent.registry());
   BumpMutationRevision(parent);
@@ -306,8 +323,7 @@ void TreeMutation::Remove(EntityHandle entity) {
   EntityHandle parent(*entity.registry(), parentEntity);
   entity.get<donner::components::TreeComponent>().remove(*entity.registry());
 
-  MarkNeedsFullRebuild(parent);
-  MarkDirty(parent, components::DirtyFlagsComponent::All);
+  MarkChildRemoved(parent, entity);
   MarkDetachedSubtree(entity);
   components::NodeLifetimeCollector::Collect(*entity.registry());
   BumpMutationRevision(parent);
