@@ -417,17 +417,17 @@ TEST(SVGDocument, EmptySelectorPreservesAndRefreshesProjectedGenericText) {
   auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
     <g id="generic">word<!--c--> </g><g id="data"><![CDATA[word]]></g>
   </svg>)svg");
-  EXPECT_THAT(QueriedId(document.querySelector("#generic:empty")), testing::Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(document.querySelector("#generic:empty")), Eq(std::nullopt));
   auto attribute = ReplaceInSource(document, "id=\"generic\"", "id=\"generic\" class=\"new\"");
   ASSERT_TRUE(attribute.applied);
   ASSERT_THAT(attribute.diagnostic, Eq(std::nullopt));
-  EXPECT_THAT(QueriedId(document.querySelector("#generic:empty")), testing::Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(document.querySelector("#generic:empty")), Eq(std::nullopt));
   auto replacement = ReplaceInSource(document, "<g id=\"generic\" class=\"new\">word<!--c--> </g>",
                                      "<g id=\"generic\"/>");
   ASSERT_TRUE(replacement.applied);
   ASSERT_THAT(replacement.diagnostic, Eq(std::nullopt));
   EXPECT_THAT(QueriedId(document.querySelector("#generic:empty")), Optional(testing::_));
-  EXPECT_THAT(QueriedId(document.querySelector("#data:empty")), testing::Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(document.querySelector("#data:empty")), Eq(std::nullopt));
 }
 
 TEST(SVGDocument, EmptySelectorTextAuthoritySurvivesSourceAndTypedEdits) {
@@ -657,8 +657,8 @@ TEST(SVGDocument, QuerySelectorSkipsRetainedRawTextAndComments) {
                                  "<text id=\"t\">word<![CDATA[other]]><!--c--></text>");
   ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));
   auto text = document.querySelector("#t").value();
-  ASSERT_THAT(QueriedId(text.querySelector("*")), testing::Eq(std::nullopt));
-  EXPECT_THAT(QueriedId(text.querySelector(":defined")), testing::Eq(std::nullopt));
+  ASSERT_THAT(QueriedId(text.querySelector("*")), Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(text.querySelector(":defined")), Eq(std::nullopt));
   changed = ReplaceInSource(document, "word<![CDATA[other]]><!--c-->",
                             "word<![CDATA[other]]><!--c--><tspan id=\"real\"/>");
   ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));

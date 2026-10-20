@@ -183,19 +183,16 @@ bool HasNonWhitespaceValue(EntityHandle node) {
              std::string_view::npos;
 }
 
-/// Whether \p node is an XML text, CDATA, comment or other non-element node.
-bool IsNonElementXmlNode(EntityHandle node) {
-  const auto xmlNode = xml::XMLNode::TryCast(node);
-  return xmlNode && xmlNode->type() != xml::XMLNode::Type::Element;
-}
-
 /// Invalidate \p parent after \p removed leaves it. Only element children feed structural
-/// selectors and the render tree; a removed text or comment node changes at most the parent's
-/// text content.
+/// selectors and the render tree; a removed text or CDATA node changes at most the parent's text
+/// content, and a comment or other non-element node changes neither.
 void MarkChildRemoved(EntityHandle parent, EntityHandle removed) {
-  if (!IsNonElementXmlNode(removed)) {
+  const auto xmlNode = xml::XMLNode::TryCast(removed);
+  if (!xmlNode || xmlNode->type() == xml::XMLNode::Type::Element) {
     MarkNeedsFullRebuild(parent);
-  } else if (HasNonWhitespaceValue(removed)) {
+  } else if ((xmlNode->type() == xml::XMLNode::Type::Data ||
+              xmlNode->type() == xml::XMLNode::Type::CData) &&
+             HasNonWhitespaceValue(removed)) {
     TreeMutation::InvalidateTextContentStyles(parent);
   }
   MarkDirty(parent, components::DirtyFlagsComponent::All);
