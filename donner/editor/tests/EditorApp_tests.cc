@@ -96,6 +96,16 @@ std::vector<std::string> ElementIds(const Elements& elements) {
   return ids;
 }
 
+/// Ids of the document root's element children, in document order.
+std::vector<std::string> RootChildIds(EditorApp& app) {
+  std::vector<svg::SVGElement> children;
+  for (std::optional<svg::SVGElement> child = app.document().document().svgElement().firstChild();
+       child.has_value(); child = child->nextSibling()) {
+    children.push_back(*child);
+  }
+  return ElementIds(children);
+}
+
 template <typename Elements>
 std::vector<std::optional<std::string>> AttributeValues(const Elements& elements,
                                                         std::string_view name) {
@@ -627,7 +637,7 @@ TEST(EditorAppTest, DeleteSelectionWithUndoRefusesDocumentRoot) {
 
   EXPECT_THAT(app.consumeElementRemoveWritebacks(), ::testing::IsEmpty());
   EXPECT_EQ(app.document().document().source(), sourceBefore);
-  EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_THAT(RootChildIds(app), ::testing::ElementsAre("r1", "r2"));
   EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
   EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
 }
@@ -647,12 +657,7 @@ TEST(EditorAppTest, DeleteSelectionWithUndoKeepsDocumentRootAndDeletesTheRest) {
   EXPECT_TRUE(app.deleteSelectionWithUndo(sourceBefore));
   ASSERT_TRUE(app.flushFrame());
 
-  std::vector<svg::SVGElement> rootChildren;
-  for (std::optional<svg::SVGElement> child = app.document().document().svgElement().firstChild();
-       child.has_value(); child = child->nextSibling()) {
-    rootChildren.push_back(*child);
-  }
-  EXPECT_THAT(ElementIds(rootChildren), ::testing::ElementsAre("r1"));
+  EXPECT_THAT(RootChildIds(app), ::testing::ElementsAre("r1"));
   EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("root"));
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
   EXPECT_THAT(std::string(app.document().document().source()),
