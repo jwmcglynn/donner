@@ -1,11 +1,14 @@
 """Reject stale, incomplete, skipped, or relaxed Metal validation evidence."""
 
+import ast
 import hashlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+
+from python.runfiles import runfiles
 
 import metal_validation_profile as profile
 import verify_metal_validation as verifier
@@ -398,7 +401,7 @@ class MetalEvidenceTest(unittest.TestCase):
     def test_full_validation_options_preserve_the_required_execution_policy(self):
         self.assertEqual([
             "--config=ci", "--config=re", "--jobs=4", "--remote_local_fallback=false",
-            "--build_event_json_file_path_conversion",
+            "--build_event_json_file_path_conversion", "--noskip_incompatible_explicit_targets",
             "--test_tag_filters=", "--test_filter=", "--runs_per_test=1",
             "--flaky_test_attempts=1", "--nocache_test_results", "--test_output=all",
             "--test_env=MTL_DEBUG_LAYER=1", "--test_env=MTL_SHADER_VALIDATION=1",
@@ -428,6 +431,40 @@ class MetalEvidenceTest(unittest.TestCase):
             with mock.patch.object(verifier, "clean_revision", return_value="original"):
                 with self.assertRaisesRegex(ValueError, "Explicit configuration changed"):
                     verifier._verify_inputs_unchanged(root, "original", [rc], hashes)
+
+
+def _build_calls(path):
+    """The top-level rule and macro calls of a BUILD file in this repository, by `name`."""
+    location = runfiles.Create().Rlocation("donner/" + path)
+    tree = ast.parse(Path(location).read_text(encoding="utf-8"), path)
+    calls = {}
+    for statement in tree.body:
+        call = getattr(statement, "value", None)
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+            continue
+        keywords = {keyword.arg: keyword.value for keyword in call.keywords}
+        if "name" in keywords:
+            calls[ast.literal_eval(keywords["name"])] = (call.func.id, keywords)
+    return calls
+
+
+class MetalRequiredTargetTest(unittest.TestCase):
+    """The receipt must require exactly the targets the self-hosted lane runs, all buildable."""
+
+    def test_required_targets_match_the_self_hosted_preflight_suite(self):
+        # The solid-fill test is Geode-only, so the default-configuration base target is
+        # incompatible and only its Geode variant can produce evidence; the suite names it.
+        _, suite = _build_calls("tools/ci/BUILD.bazel")["metal_preflight"]
+        self.assertEqual(sorted(ast.literal_eval(suite["tests"])), sorted(verifier.TARGETS))
+
+    def test_missing_targets_are_named_in_the_refusal(self):
+        events = verifier._InvocationEvents(started={"uuid": "invocation"},
+                                            finished={"exitCode": {"name": "SUCCESS"}})
+        events.summaries = {verifier.CAPABILITY: {}}
+        with self.assertRaisesRegex(ValueError, "missing: //donner/gpu/metal/tests:absent; "
+                                                "unexpected: none"):
+            verifier._validate_invocation(
+                events, {verifier.CAPABILITY, verifier.PACKAGE + "absent"})
 
 
 if __name__ == "__main__":

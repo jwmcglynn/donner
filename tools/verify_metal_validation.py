@@ -20,9 +20,11 @@ from metal_validation_profile import parse_profile
 
 PACKAGE = "//donner/gpu/metal/tests:"
 CAPABILITY = PACKAGE + "metal_full_validation_required"
+# The self-hosted lane's //tools/ci:metal_preflight suite. The solid-fill test drives Geode's
+# checkerboard pipeline, so only its Geode variant builds without a renderer backend selection.
 TARGETS = tuple(PACKAGE + name for name in (
     "metal_buffer_bounds_tests", "metal_color_matrix_tests", "metal_queue_writes_tests",
-    "metal_solid_fill_tests", "metal_sub_rectangle_copy_tests",
+    "metal_solid_fill_tests_geode", "metal_sub_rectangle_copy_tests",
     "metal_shader_memory_validation_tests",
 ))
 MAX_LOG_BYTES = 16 * 1024 * 1024
@@ -252,8 +254,13 @@ def _validate_invocation(events, expected):
     exit_code = events.finished.get("exitCode", {})
     if exit_code.get("name") != "SUCCESS" or exit_code.get("code", 0) != 0:
         raise ValueError("The event stream does not record a successful completed build")
-    if events.started is None or set(events.summaries) != expected:
-        raise ValueError("Invocation did not complete every required test target")
+    if events.started is None:
+        raise ValueError("The event stream does not record an invocation start")
+    if set(events.summaries) != expected:
+        missing = ", ".join(sorted(expected - set(events.summaries))) or "none"
+        unexpected = ", ".join(sorted(set(events.summaries) - expected)) or "none"
+        raise ValueError("Invocation did not complete every required test target "
+                         f"(missing: {missing}; unexpected: {unexpected})")
 
 
 def _summary_shard_count(summary):
@@ -387,8 +394,11 @@ def _full_validation_options(configs, jobs):
     # `--config=ci` names event-file outputs by local path. With a remote cache or executor,
     # restore content-addressed names, so each saved test log and XML must match the digest
     # Bazel recorded for this invocation, not just its path.
+    # `--config=ci` also skips explicitly requested targets that are incompatible with the build
+    # configuration. Every target here is required, so such a target must fail the build with
+    # Bazel's reason instead of silently leaving the receipt without its evidence.
     common = [*configs, f"--jobs={jobs}", "--remote_local_fallback=false",
-              "--build_event_json_file_path_conversion",
+              "--build_event_json_file_path_conversion", "--noskip_incompatible_explicit_targets",
               "--test_tag_filters=", "--test_filter=", "--runs_per_test=1",
               "--flaky_test_attempts=1", "--nocache_test_results", "--test_output=all"]
     for name in ("MTL_DEBUG_LAYER", "MTL_SHADER_VALIDATION", "MTL_SHADER_VALIDATION_TEXTURE_USAGE",
