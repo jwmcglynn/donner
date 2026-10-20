@@ -2791,7 +2791,9 @@ TEST(EditorShellTest, SelectToolDragsAUseInstanceAndUndoRestoresIt) {
   const auto settle = [&] {
     for (const tests::HangGuard guard; guard.active();) {
       runFrameWithMouse(Vector2d(-20, -20), /*mouseDown=*/false);
-      if (!app.document().hasPendingMutations() && !EditorShellTestAccess::RendererBusy(shell)) {
+      if (!app.document().hasPendingMutations() && !EditorShellTestAccess::RendererBusy(shell) &&
+          EditorShellTestAccess::DisplayedDocVersion(shell) ==
+              app.document().currentFrameVersion()) {
         return true;
       }
     }
@@ -2820,11 +2822,20 @@ TEST(EditorShellTest, SelectToolDragsAUseInstanceAndUndoRestoresIt) {
   ASSERT_FALSE(app.document().document().tryWriteAccess().has_value())
       << "The render worker never took the document";
   runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/true);
+  ASSERT_TRUE(EditorShellTestAccess::HasPendingClick(shell))
+      << "The press must wait while the worker holds the document";
+  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+  renderer.setReplayRenderDelayIgnoresCancellationForTesting(false);
+  // A user's press outlasts the render: hold the button until the shell dispatches the press.
+  for (const tests::HangGuard guard;
+       EditorShellTestAccess::HasPendingClick(shell) && guard.active();) {
+    runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/true);
+  }
+  ASSERT_FALSE(EditorShellTestAccess::HasPendingClick(shell))
+      << "The press was never dispatched after the worker released the document";
   runFrameWithMouse(Vector2d(25, 23), /*mouseDown=*/true);
   runFrameWithMouse(Vector2d(35, 28), /*mouseDown=*/true);
   runFrameWithMouse(Vector2d(35, 28), /*mouseDown=*/false);
-  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
-  renderer.setReplayRenderDelayIgnoresCancellationForTesting(false);
   ASSERT_TRUE(settle());
 
   ASSERT_THAT(app.selectedElement(), testing::Optional(*use));
