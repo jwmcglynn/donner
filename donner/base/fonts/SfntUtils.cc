@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -511,6 +512,21 @@ uint32_t SfntTag(std::string_view tag) {
          (static_cast<uint32_t>(static_cast<uint8_t>(tag[1])) << 16) |
          (static_cast<uint32_t>(static_cast<uint8_t>(tag[2])) << 8) |
          static_cast<uint32_t>(static_cast<uint8_t>(tag[3]));
+}
+
+uint32_t SfntTableChecksum(std::span<const uint8_t> data, uint32_t initial) {
+  uint32_t checksum = initial;
+  const size_t wholeWordBytes = data.size() & ~size_t{3};
+  const uint8_t* bytes = data.data();
+  for (size_t offset = 0; offset < wholeWordBytes; offset += 4) {
+    checksum += ReadBe32(bytes + offset);
+  }
+  if (wholeWordBytes < data.size()) {
+    uint8_t lastWord[4] = {0, 0, 0, 0};
+    std::memcpy(lastWord, bytes + wholeWordBytes, data.size() - wholeWordBytes);
+    checksum += ReadBe32(lastWord);
+  }
+  return checksum;
 }
 
 SfntFont::SfntFont() = default;

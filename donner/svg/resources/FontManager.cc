@@ -149,19 +149,9 @@ std::vector<uint8_t> reconstructSfnt(const fonts::WoffFont& woff) {
   uint8_t* dir = out + 12;
 
   for (const auto& table : woff.tables) {
-    // Compute checksum: sum of 32-bit words (big-endian, zero-padded to 4 bytes).
-    uint32_t checksum = 0;
     const size_t paddedLen = (table.data.size() + 3) & ~size_t{3};
-    for (size_t i = 0; i < paddedLen; i += 4) {
-      uint32_t word = 0;
-      for (size_t j = 0; j < 4 && (i + j) < table.data.size(); ++j) {
-        word |= static_cast<uint32_t>(table.data[i + j]) << (24 - 8 * j);
-      }
-      checksum += word;
-    }
-
     writeBE32(dir, table.tag);
-    writeBE32(dir + 4, checksum);
+    writeBE32(dir + 4, fonts::SfntTableChecksum(table.data));
     writeBE32(dir + 8, dataOffset);
     writeBE32(dir + 12, static_cast<uint32_t>(table.data.size()));
     dir += 16;

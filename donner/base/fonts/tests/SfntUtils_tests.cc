@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -589,6 +590,23 @@ uint64_t RepeatedComponentWork(size_t componentCount, size_t childPoints) {
   const uint64_t components = componentCount;
   return 1 + components * (childWork + childVertices + 1) +
          childVertices * components * (components + 1) / 2;
+}
+
+TEST(SfntUtils, TableChecksumSumsBigEndianWordsWithZeroPadding) {
+  const std::vector<uint8_t> table = {0x00, 0x01, 0x02, 0x03, 0xFF, 0xFF, 0xFF, 0xFF, 0x80, 0x01};
+  // 0x00010203 + 0xFFFFFFFF + 0x80010000, modulo 2^32.
+  constexpr uint32_t kExpected = 0x80020202u;
+  EXPECT_EQ(SfntTableChecksum(table), kExpected);
+  EXPECT_EQ(SfntTableChecksum({}), 0u);
+  EXPECT_EQ(SfntTableChecksum(std::span<const uint8_t>(table).first(3)), 0x00010200u);
+
+  for (const size_t split : {size_t{0}, size_t{4}, size_t{8}}) {
+    SCOPED_TRACE(split);
+    const std::span<const uint8_t> bytes(table);
+    EXPECT_EQ(SfntTableChecksum(bytes.subspan(split), SfntTableChecksum(bytes.first(split))),
+              kExpected)
+        << "chunk sums must compose when every chunk but the last is whole words";
+  }
 }
 
 TEST(SfntUtils, SortsDirectoryForBoundedLookup) {
