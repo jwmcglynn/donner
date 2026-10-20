@@ -14,10 +14,6 @@ permissions:
   contents: read
   pull-requests: read
 
-concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
-
 # Fast lint jobs covering checks that don't live inside `bazel test //...`: the whole-tree
 # checks in tools/ci/lint_lane.sh, and the gen_cmakelists.py --check validator (reentrant Bazel
 # prevents running it from inside `bazel test`).

@@ -18,12 +18,6 @@ on:
 permissions:
   contents: read
 
-# Superseded PR pushes cancel their in-flight sanitizer run so a rapid push
-# storm does not pile up redundant hosted sanitizer builds.
-concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   # Classify pull request trust at job level, so the build job can bind the
   # BuildBuddy write environment only for runs allowed to write.
