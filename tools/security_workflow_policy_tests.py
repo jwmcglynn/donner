@@ -107,7 +107,7 @@ SELF_HOSTED_NARROWING = {
 
 # A runner label set is GitHub-hosted only when it is exactly one hosted image label. Any other
 # label, label list or runner group can route a job to a self-hosted runner.
-HOSTED_IMAGES = frozenset({"ubuntu-24.04", "ubuntu-latest", "macos-26", "macos-latest"})
+HOSTED_IMAGES = frozenset({"ubuntu-24.04", "ubuntu-latest", "xcode-27", "macos-latest"})
 
 SELF_HOSTED_GATE_PREFIX = (
     "${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && "
@@ -1769,7 +1769,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_failed_hosted_perf_retains_test_failure_artifacts(self):
         workflow = self.supply_chain_files[".github/workflows/perf.yml"]
         job = workflow.split("\n  perf:\n", 1)[1]
-        self.assertIn("- os: macos-26", job)
+        self.assertIn("- os: xcode-27", job)
         self.assertIn("- os: ubuntu-24.04", job)
         self.assertIn("runs-on: ${{ matrix.os }}", job)
         test_step = _step_body(job, "Test perf-tagged targets")
@@ -2371,7 +2371,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual(redirect, labels, "the audit must read the file the query wrote")
         self.assertLess(run.index("bazelisk build"), run.index("bazelisk cquery"))
         self.assertIn("matrix:", consumer)
-        self.assertIn("os: [ubuntu-24.04, macos-26]", consumer)
+        self.assertIn("os: [ubuntu-24.04, xcode-27]", consumer)
         self.assertIn("bazel: ['7.x', '8.x']", consumer)
 
     def _bcr_scope(self, changed=(), event_name="pull_request", base=None, renamed=None):
@@ -2467,11 +2467,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         # The slim check always runs: prepare and the Ubuntu consumer on the newest Bazel.
         self.assertEqual("", _job_key(jobs["prepare"], "if"))
         self.assertEqual("", _job_key(jobs["consumer"], "if"))
-        self.assertIn("        os: [ubuntu-24.04, macos-26]\n", jobs["consumer"])
+        self.assertIn("        os: [ubuntu-24.04, xcode-27]\n", jobs["consumer"])
         self.assertIn("        bazel: ['7.x', '8.x']\n", jobs["consumer"])
         exclusions = _indented_block(
             jobs["consumer"].split("        exclude:\n", 1)[1].splitlines(), 8)
-        self.assertEqual(["          - os: ${{ %s && 'none' || 'macos-26' }}" % full,
+        self.assertEqual(["          - os: ${{ %s && 'none' || 'xcode-27' }}" % full,
                           "          - bazel: ${{ %s && 'none' || '7.x' }}" % full],
                          [line for line in exclusions if line.strip() and not _is_comment(line)])
         for job in ("cli-linux", "cli-macos", "qualify"):
@@ -2972,11 +2972,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "      - name: Prepare self-hosted macOS toolchain\n", 1),
                 "does not pair one writer with no reader"),
             "Bazel before the self-hosted cache": (main, files[main].replace(
-                "      - name: Select pinned Xcode\n        id: xcode\n        shell: bash\n"
-                "        run: tools/ci_select_macos_xcode.sh --optional\n",
+                "      # build fails here rather than building with another Xcode.\n"
+                "      - name: Select pinned Xcode\n",
+                "      # build fails here rather than building with another Xcode.\n"
                 "      - name: Early build\n        run: bazelisk --nohome_rc build //donner/base\n\n"
-                "      - name: Select pinned Xcode\n        id: xcode\n        shell: bash\n"
-                "        run: tools/ci_select_macos_xcode.sh --optional\n", 1),
+                "      - name: Select pinned Xcode\n", 1),
                 "runs Bazel before configuring BuildBuddy"),
         })
 
@@ -3055,7 +3055,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 CACHE_PARTITION="ubuntu24-20261005.1-X64"), 0, "write"),
             "self-hosted macOS without a partition": (dict(
                 event="pull_request", ref="refs/pull/1/merge", write=write, trusted="true",
-                RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="macOS"), 0, None),
+                RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="macOS"), 1, None),
             "key that could break the helper's JSON": (dict(
                 event="push", write='key"]},"x":["y'), 1, None),
             "self-hosted Linux trusted pull request": (dict(
@@ -3209,7 +3209,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_buildbuddy_cache_partition_replaces_only_the_image_identity(self):
         write = "write-key-fixture"
-        partition = "macos-ARM64-xcode-26.6-17F113"
+        partition = "macos-ARM64-xcode-27.1-27A9275"
         with tempfile.TemporaryDirectory() as directory:
             code, fragment, _, output = self._run_buildbuddy_action(
                 Path(directory), event="push", write=write, CACHE_PARTITION=partition,
@@ -3660,8 +3660,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         workflows = _workflows(self.supply_chain_files)
         self.assertEqual([], _self_hosted_violations(workflows))
         # Matrix and reviewed-expression runners resolve to hosted images.
-        hosted = {".github/workflows/bcr_preflight.yml": ("consumer", ["ubuntu-24.04", "macos-26"]),
-                  ".github/workflows/perf.yml": ("perf", ["macos-26", "ubuntu-24.04"])}
+        hosted = {".github/workflows/bcr_preflight.yml": ("consumer", ["ubuntu-24.04", "xcode-27"]),
+                  ".github/workflows/perf.yml": ("perf", ["xcode-27", "ubuntu-24.04"])}
         for path, (job, labels) in hosted.items():
             expected = [{label} for label in labels]
             with self.subTest(path=path):
@@ -3678,7 +3678,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         main = ".github/workflows/main.yml"
         workflow = _workflows(self.supply_chain_files)[main]
         job = _jobs(workflow)["macos-browser"]
-        self.assertEqual("macos-26", _job_key(job, "runs-on"))
+        self.assertEqual("xcode-27", _job_key(job, "runs-on"))
         self.assertNotIn((main, "macos-browser"), SELF_HOSTED_JOBS)
         condition = _job_key(job, "if")
         self.assertIn("github.event_name == 'pull_request'", condition)
@@ -3709,7 +3709,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         ungated = "without the trusted gate"
         self.assertEqual(1, files[main].count(gate + " }}"))
         self.assertEqual(1, files[main].count(gate + narrowing + " }}"))
-        self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, macos-26]\n"))
+        self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, xcode-27]\n"))
         self._assert_rejected(lambda files, path: _self_hosted_violations(_workflows(files)), {
             "ungated": (main, files[main].replace(gate + " }}", "true }}", 1), ungated),
             "parity narrowing widened": (main, files[main].replace(
@@ -3733,12 +3733,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "variable runner": (coverage, files[coverage].replace(
                 hosted, "    runs-on: ${{ vars.COVERAGE_RUNNER }}\n", 1), "mutable input"),
             "matrix label": (bcr, files[bcr].replace(
-                "        os: [ubuntu-24.04, macos-26]\n", "        os: [ubuntu-24.04, arm64]\n", 1),
+                "        os: [ubuntu-24.04, xcode-27]\n", "        os: [ubuntu-24.04, arm64]\n", 1),
                 ungated),
             "matrix include label": (perf, files[perf].replace(
                 "          - os: ubuntu-24.04\n", "          - os: linux-arm64\n", 1), ungated),
             "computed matrix": (bcr, files[bcr].replace(
-                "        os: [ubuntu-24.04, macos-26]\n", "        os: ${{ fromJSON(vars.OS) }}\n",
+                "        os: [ubuntu-24.04, xcode-27]\n", "        os: ${{ fromJSON(vars.OS) }}\n",
                 1), "non-literal matrix"),
             "computed include beside exclusions": (bcr, files[bcr].replace(
                 "        exclude:\n",

@@ -129,7 +129,7 @@ ends that state.
   - An empty affected set, missing SHAs, or the `ci:full-test` label also fall back to `//...`.
     The label additionally sets the job's `full_test` output, which the hosted-lane gates read.
   - Check the job log before assuming under-selection — the fallback may already have fired.
-- **linux** (ubuntu-24.04) and **macos** (macos-26) — GitHub-hosted lanes running
+- **linux** (ubuntu-24.04) and **macos** (xcode-27) - GitHub-hosted lanes running
   `bazelisk build/test --config=ci` on the selected targets. Note `test:ci` sets
   `--test_tag_filters=-perf`, so perf-tagged wall-clock tests never gate a PR (they run nightly
   in `perf.yml`).
@@ -141,7 +141,7 @@ ends that state.
   dead self-hosted runner can never hang main's required check. Never "simplify" these gates —
   the double-actor check prevents collaborator reruns from executing on (or poisoning the cache
   of) the operator's runner.
-- **macos-browser** (macos-26) - GitHub-hosted. Runs only on a trusted PR whose macOS lane went to
+- **macos-browser** (xcode-27) - GitHub-hosted. Runs only on a trusted PR whose macOS lane went to
   `macos-self-hosted`, when `determine-targets` reports `browser_affected == 'true'` (an affected
   test is tagged `launches-browser`, or a browser test dependency manifest changed) or the
   selection falls back to `//...`. It runs the hosted `macos` job's browser step unchanged (same

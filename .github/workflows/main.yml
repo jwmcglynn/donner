@@ -1320,7 +1320,7 @@ jobs:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
   macos:
-    runs-on: macos-26
+    runs-on: xcode-27
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
@@ -1356,12 +1356,14 @@ jobs:
         with:
           persist-credentials: false
 
-      # Apple toolchain action keys carry the Xcode version and build, so both
-      # macOS lanes build with the one pinned in tools/ci_macos_xcode.txt.
+      # Every macOS lane builds with the Xcode pinned in tools/ci_macos_xcode.txt,
+      # so their action keys and remote cache partition match. The xcode-27
+      # image ships it beside other Xcodes; the step fails the job when the
+      # runner does not have exactly that version and build.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
-        run: tools/ci_select_macos_xcode.sh --required
+        run: tools/ci_select_macos_xcode.sh
 
       - name: Install clang-tidy
         uses: nick-fields/retry@v4
@@ -1738,7 +1740,7 @@ jobs:
   # native suite and saves no cache: it restores main's caches only. Untrusted PRs
   # and main pushes already run the full hosted `macos` job, so it never runs there.
   macos-browser:
-    runs-on: macos-26
+    runs-on: xcode-27
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.browser_affected == 'true') }}
     # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
@@ -1763,7 +1765,7 @@ jobs:
       - name: Select pinned Xcode
         id: xcode
         shell: bash
-        run: tools/ci_select_macos_xcode.sh --required
+        run: tools/ci_select_macos_xcode.sh
 
       # Not used by browser tests. It keeps this job's setup identical to the `macos`
       # job's, which the lane parity test requires.
@@ -2144,19 +2146,17 @@ jobs:
         shell: bash
         run: tools/ci_check_runner_disk.sh
 
-      # Builds with the Xcode pinned in tools/ci_macos_xcode.txt when it is
-      # installed, so action keys match the hosted macOS lanes'. Without it the
-      # job warns and keeps the runner's default Xcode; the step never prints
-      # which Xcode the runner has.
+      # Builds with the Xcode pinned in tools/ci_macos_xcode.txt, so action keys
+      # match the hosted macOS lanes'. A runner without exactly that version and
+      # build fails here rather than building with another Xcode.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
-        run: tools/ci_select_macos_xcode.sh --optional
+        run: tools/ci_select_macos_xcode.sh
 
       # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
-      # the pinned Xcode's partition (docs/building.md). Without the pinned
-      # Xcode the partition is empty and the action leaves the cache off, so
-      # entries built with another Xcode never reach the shared partition. It
+      # the pinned Xcode's partition (docs/building.md). The action fails
+      # rather than writing to another partition when this runner has none. It
       # runs before "Prepare self-hosted macOS toolchain", the first step that
       # touches Bazel.
       - name: Configure BuildBuddy remote cache
@@ -2369,8 +2369,7 @@ jobs:
       deployment: false
     env:
       # The key-affecting flags of every macOS lane (//tools:macos_cache_key_parity_tests), so
-      # this job builds with the fast lane's action keys: its builds hit the remote cache when
-      # the pinned Xcode is selected, and otherwise the fast lane's outputs on this runner.
+      # this job builds with the fast lane's action keys and its builds hit the remote cache.
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       # Main's hosted test environment under this lane's own name, so its test results are never
       # shared with the hosted lane's or the fast lane's.
@@ -2393,13 +2392,12 @@ jobs:
         shell: bash
         run: tools/ci_check_runner_disk.sh
 
-      # Selects the pinned Xcode exactly as the fast lane does. When this runner's Bazel cannot
-      # discover it, both jobs warn and build with the runner's default Xcode, so this job then
-      # tests with another Xcode than main's hosted job.
+      # Selects the pinned Xcode exactly as the fast lane does, so this job tests with main's
+      # hosted Xcode.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
-        run: tools/ci_select_macos_xcode.sh --optional
+        run: tools/ci_select_macos_xcode.sh
 
       - name: Configure BuildBuddy remote cache
         if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'

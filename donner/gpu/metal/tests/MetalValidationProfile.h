@@ -33,4 +33,11 @@ struct MetalValidationObservation {
 MetalValidationProfile ClassifyMetalValidationProfile(
     const MetalValidationObservation& observation);
 
+/// Describes an observation for a failure log, so an unrecognized device, OS or validation state
+/// can be requalified from the log alone. The device name keeps only printable ASCII other than
+/// quotes and backslashes.
+/// @param observation Observed device, OS, and actual pipeline validation state.
+/// @return `gpu="<name>" os=<major>.<minor>.<patch> os_build=<build> validation_state=<raw>`.
+std::string DescribeMetalValidationObservation(const MetalValidationObservation& observation);
+
 }  // namespace donner::gpu::metal::tests

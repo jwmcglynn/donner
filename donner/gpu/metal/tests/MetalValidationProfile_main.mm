@@ -1,5 +1,6 @@
 /// @file
-/// Probes native Metal validation without dispatching a shader or printing runtime inventory.
+/// Probes native Metal validation without dispatching a shader. It prints the observed device, OS
+/// and validation state only when it cannot recognize them.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -151,6 +152,8 @@ int RunProfileProbe(int argc, char** argv) {
   }
   const MetalValidationProfile profile = ClassifyMetalValidationProfile(observation);
   if (profile == MetalValidationProfile::Unsupported) {
+    std::cerr << "METAL_VALIDATION_PROFILE_OBSERVED "
+              << DescribeMetalValidationObservation(observation) << '\n';
     return FailProbe(ProbeFailure::UnsupportedProfile);
   }
   if (requireFull &&

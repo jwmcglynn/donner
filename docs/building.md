@@ -321,13 +321,16 @@ and system headers. Those files are not Bazel action inputs, so a runner image u
 cache key. The action therefore sets `--remote_instance_name` to the runner image and version, and
 an entry is reused only on the image that produced it. After an image update the first runs on the
 new image start cold. The macOS lanes instead build with the Xcode pinned in
-`tools/ci_macos_xcode.txt` and use a partition named after it: Apple toolchain actions carry the
-Xcode version and build in their keys, and `--config=ci-macos` pins the action `PATH`, so the hosted
-and self-hosted macOS runners produce identical build action keys. Test results stay per lane:
-each lane names itself in its test environment, because a result depends on the runner's GPU. A
-self-hosted runner without a pinned Xcode discoverable by Bazel gets no partition, and the action leaves the cache off
-for that run. The sanitizer lanes use the hermetic LLVM toolchain (`--config=latest_llvm`), whose
-compiler and sysroot are action inputs.
+`tools/ci_macos_xcode.txt` and use a partition named after it: C++ compiles reach Xcode's compiler
+and SDK through the host, so their keys alone cannot tell two Xcodes apart, and `--config=ci-macos`
+pins the action `PATH`, so the hosted and self-hosted macOS runners produce identical build action
+keys. Test results stay per lane: each lane names itself in its test environment, because a result
+depends on the runner's GPU. `tools/ci_select_macos_xcode.sh` finds the pinned version through
+LaunchServices, as Bazel's Xcode locator does, so the install path may differ between runners, and
+it fails the job unless exactly one such Xcode is registered and it reports the pinned build. The
+GitHub-hosted macOS jobs run on the `xcode-27` image, which ships the pinned Xcode beside other
+versions; a self-hosted macOS runner must have the same version and build. The sanitizer lanes use
+the hermetic LLVM toolchain (`--config=latest_llvm`), whose compiler and sysroot are action inputs.
 
 **Interplay with the GitHub Actions cache.** Only `main` saves Actions caches. They remain the
 fallback when BuildBuddy is off. While BuildBuddy is on, a remote cache hit with

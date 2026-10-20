@@ -144,7 +144,7 @@
           "exception": {
             "owner": "jwmcglynn",
             "decision": "Maintainer decision 2026-10-19, #1911",
-            "reason": "The self-hosted macOS lanes build with the pinned Xcode only when the runner's Bazel can discover it, and otherwise with the runner's default Xcode, so a build failure specific to the hosted image's Xcode can first show on main."
+            "reason": "By default, trusted pull requests run the macOS Build step only on the self-hosted lane, with the same pinned Xcode, so a build failure specific to the hosted image's other host tools (Command Line Tools, Homebrew) can first show on main."
           }
         }
       },

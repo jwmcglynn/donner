@@ -1,11 +1,13 @@
-# The Xcode every macOS CI lane in main.yml builds with: "<version> <build>".
+# The Xcode every macOS CI job builds with: "<version> <build>".
 #
-# Apple toolchain actions carry the selected Xcode's version and build in their
-# environment (XCODE_VERSION_OVERRIDE, APPLE_SDK_VERSION_OVERRIDE), so lanes on
-# different Xcodes never share a remote cache entry. The GitHub-hosted macos-26
-# image installs this Xcode at /Applications/Xcode_<version>.app; the
-# self-hosted macOS runner must install the same version and build at the same
-# path for its cache entries to serve the hosted lanes. Update this line only
-# to a version the hosted image ships, and install it on the self-hosted runner
-# in the same change window. tools/ci_select_macos_xcode.sh reads it.
-26.6 17F113
+# Objective-C compile, archive and link actions carry the selected Xcode's
+# version and build in their environment, but C++ compiles reach Xcode's
+# compiler and SDK through the host, so their keys need not change with it.
+# The macOS lanes therefore share one remote cache partition named after this
+# Xcode, and every macOS job must build with it. The GitHub-hosted xcode-27
+# image ships this version and build, and the self-hosted macOS runner must
+# have the same one; where each installs it does not matter.
+# tools/ci_select_macos_xcode.sh reads this line and fails any macOS job whose
+# runner does not have exactly this Xcode, so update it only to a version and
+# build the hosted image ships, together with the self-hosted runner.
+27.1 27A9275

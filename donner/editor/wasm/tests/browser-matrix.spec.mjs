@@ -1110,7 +1110,7 @@ test("only the hosted macOS Perf job reports latency gates without enforcing the
   const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/perf.yml"), "utf8");
   assert.deepEqual(
     perfMatrixSetting(workflow, "latency_gates"),
-    [["macos-26", "report"], ["ubuntu-24.04", "enforce"]],
+    [["xcode-27", "report"], ["ubuntu-24.04", "enforce"]],
     "only the GitHub-hosted macOS entry, which runs the browser lane, may report gate misses",
   );
   assert.match(
@@ -1267,7 +1267,7 @@ test("only the hosted macOS Perf job reports the completion checks without enfor
   const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/perf.yml"), "utf8");
   assert.deepEqual(
     perfMatrixSetting(workflow, "completion_checks"),
-    [["macos-26", "report"], ["ubuntu-24.04", "enforce"]],
+    [["xcode-27", "report"], ["ubuntu-24.04", "enforce"]],
   );
   assert.match(
     perfStep(workflow, "Test perf-tagged targets"),

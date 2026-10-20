@@ -234,13 +234,6 @@ INVOCATION_ALLOWLIST = {
     # what the step runs (its action, inputs, script, shell, its own env and the variables it
     # names) changes the digest and needs a new review. Overrides of the Xcode selection's test
     # hooks from job env or earlier steps are rejected by //tools:macos_cache_key_parity_tests.
-    # Both lanes select the pinned Xcode. The hosted image always ships it (--required). The
-    # self-hosted runner may not, and then builds with its runner's default Xcode and its remote
-    # cache off (--optional): that pull request run then tests a different Xcode than main.
-    ("main.yml", "macos", "macos-self-hosted", "Select pinned Xcode", "step-changed",
-     "7609f8b75ac703d1"):
-        "Same pinned Xcode when installed; a self-hosted runner without it warns and builds with "
-        "its default Xcode and no remote cache.",
     # The refresh passes the self-hosted lane's rc-skipping startup flags.
     ("main.yml", "macos", "macos-self-hosted", "Refresh Xcode toolchain configuration",
      "step-changed", "c3adecb0303d2d56"):
@@ -767,6 +760,12 @@ class _Expression:
         raise ValueError("unsupported function %s" % name)
 
 
+# A condition that only compares a matrix entry's runner OS selects the same entries on main and
+# on pull requests, so such a step stays under every check. Any other use of runner.os is
+# unmodelled and fails the test.
+_RUNNER_OS_ONLY = re.compile(r"^(?:\$\{\{\s*)?runner\.os (?:==|!=) '[A-Za-z]+'(?:\s*\}\})?$")
+
+
 def _truthy(value):
     return value not in (False, "", None, 0)
 
@@ -804,6 +803,8 @@ def runs(condition, scenario):
         return True
     if isinstance(condition, bool):
         return condition
+    if _RUNNER_OS_ONLY.match(str(condition).strip()):
+        return True
     return _truthy(_Expression(str(condition), _context(scenario)).evaluate())
 
 
@@ -1739,6 +1740,17 @@ class CiLaneParityTest(unittest.TestCase):
         self.assertTrue(runs("${{ github.event_name == 'push' || false }}", "main-push"))
         with self.assertRaises(ValueError):
             runs("${{ github.unknown_context == 'x' }}", "main-push")
+        # A step gated only on a matrix entry's OS stays under every check in every scenario;
+        # combining the OS with anything else could hide a main-only step, so it is unmodelled.
+        for scenario in ("main-push", "trusted-pr"):
+            for condition in ("runner.os == 'macOS'", "${{ runner.os != 'Linux' }}"):
+                with self.subTest(scenario=scenario, condition=condition):
+                    self.assertTrue(runs(condition, scenario))
+            for condition in ("runner.os != 'macOS' || github.event_name == 'push'",
+                              "!(runner.os == 'macOS')", "contains(runner.os, 'mac')"):
+                with self.subTest(scenario=scenario, condition=condition):
+                    with self.assertRaisesRegex(ValueError, "unmodelled context runner.os"):
+                        runs(condition, scenario)
 
     def test_every_main_push_workflow_runs_on_pull_requests(self):
         self._assert_matches_allowlist(

@@ -1,6 +1,7 @@
 #include "donner/gpu/metal/tests/MetalValidationProfile.h"
 
 #include <ostream>
+#include <sstream>
 
 namespace donner::gpu::metal::tests {
 
@@ -25,6 +26,26 @@ MetalValidationProfile ClassifyMetalValidationProfile(
     return MetalValidationProfile::ParavirtualTextureUsageOff;
   }
   return MetalValidationProfile::Unsupported;
+}
+
+std::string DescribeMetalValidationObservation(const MetalValidationObservation& observation) {
+  std::string name;
+  for (const char c : observation.gpuName) {
+    if (c >= ' ' && c <= '~' && c != '"' && c != '\\') {
+      name.push_back(c);
+    }
+  }
+  std::string build;
+  for (const char c : observation.osBuild) {
+    if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
+      build.push_back(c);
+    }
+  }
+  std::ostringstream os;
+  os << "gpu=\"" << name << "\" os=" << observation.osMajor << '.' << observation.osMinor << '.'
+     << observation.osPatch << " os_build=" << build
+     << " validation_state=" << observation.shaderValidationState;
+  return os.str();
 }
 
 }  // namespace donner::gpu::metal::tests
