@@ -271,7 +271,10 @@ py_test(
         "verify_metal_validation.py",
         "verify_metal_validation_tests.py",
     ],
+    # The required-target check reads the self-hosted preflight suite.
+    data = ["//tools/ci:BUILD.bazel"],
     imports = ["."],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 # Medium: dozens of shell fixtures run in sequence, and on a slow host their total plus one firing
