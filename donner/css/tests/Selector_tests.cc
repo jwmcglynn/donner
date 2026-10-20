@@ -35,6 +35,16 @@ protected:
     return maybeSelector.result().matches(element).matched;
   }
 
+  bool dependsOnPseudoTreePosition(std::string_view name) {
+    CompoundSelector compound;
+    compound.entries.emplace_back(PseudoClassSelector(RcString(name)));
+    ComplexSelector complex;
+    complex.entries.push_back({Combinator::Descendant, std::move(compound)});
+    Selector selector;
+    selector.entries.push_back(std::move(complex));
+    return selector.dependsOnTreePosition();
+  }
+
   bool dependsOnTreePosition(std::string_view selector) {
     auto maybeSelector = SelectorParser::Parse(selector);
     EXPECT_THAT(maybeSelector, NoParseError());
@@ -43,6 +53,16 @@ protected:
     }
 
     return maybeSelector.result().dependsOnTreePosition();
+  }
+
+  bool dependsOnTextContent(std::string_view selector) {
+    auto maybeSelector = SelectorParser::Parse(selector);
+    EXPECT_THAT(maybeSelector, NoParseError());
+    if (maybeSelector.hasError()) {
+      return false;
+    }
+
+    return maybeSelector.result().dependsOnTextContent();
   }
 
   bool doesNotMatch(std::string_view selector, const FakeElement& element) {
@@ -55,6 +75,115 @@ protected:
     return !maybeSelector.result().matches(element).matched;
   }
 };
+
+TEST_F(SelectorTests, HasRelativeSiblingArguments) {
+  FakeElement parent("parent");
+  FakeElement anchor("anchor");
+  FakeElement a("a");
+  FakeElement b("b");
+  FakeElement inner("inner");
+  FakeElement leaf("leaf");
+  parent.appendChild(anchor);
+  parent.appendChild(a);
+  parent.appendChild(b);
+  a.appendChild(inner);
+  inner.appendChild(leaf);
+
+  for (const char* selector :
+       {":has(+ a)", ":has(~ b)", ":has(+ a inner)", ":has(+ a > inner > leaf)", ":has(+ a + b)",
+        ":has(+ a:is(a))", ":has(+ :where(a))"}) {
+    SCOPED_TRACE(selector);
+    EXPECT_TRUE(matches(selector, anchor));
+  }
+  EXPECT_FALSE(matches(":has(+ b)", anchor));
+  EXPECT_FALSE(matches(":has(+ a > leaf)", anchor));
+  EXPECT_FALSE(matches(":has(~ anchor)", b));
+}
+
+TEST_F(SelectorTests, HasAnchorsTheLeadingCompound) {
+  FakeElement root("root");
+  FakeElement branch("branch");
+  FakeElement a("a");
+  FakeElement nestedA("a");
+  FakeElement b("b");
+  root.appendChild(branch);
+  branch.appendChild(a);
+  a.appendChild(nestedA);
+  nestedA.appendChild(b);
+
+  EXPECT_FALSE(matches(":has(> a b)", root));
+  EXPECT_TRUE(matches(":has(> a b)", branch));
+  EXPECT_TRUE(matches(":has(a > b)", root));
+  EXPECT_TRUE(matches(":has(> branch a > b)", root));
+}
+
+TEST_F(SelectorTests, SupportedPseudoClassesSurviveForgivingLists) {
+  FakeElement root("root");
+  FakeElement a("a");
+  root.appendChild(a);
+  for (const char* selector :
+       {":is(:not(.missing))", ":where(:defined)", ":is(:has(> a))", ":has(> :is(a))",
+        ":has(> :where(a))", ":has(:is(:has(a), a))", ":has(:is(::before, a))"}) {
+    SCOPED_TRACE(selector);
+    EXPECT_TRUE(matches(selector, root));
+  }
+  EXPECT_TRUE(matches(":nth-child(1 of :is(a))", a));
+  EXPECT_TRUE(matches(":is(.missing, :root)", root));
+  EXPECT_FALSE(matches(":is(:not(:unsupported))", root));
+}
+
+TEST_F(SelectorTests, HasSiblingTraversalSharesTheWorkBudget) {
+  FakeElement parent("parent");
+  FakeElement a("a");
+  FakeElement b("b");
+  parent.appendChild(a);
+  parent.appendChild(b);
+  auto parsed = SelectorParser::Parse(":has(~ b)");
+  ASSERT_THAT(parsed, NoParseError());
+  SelectorTraversalBudget budget(1);
+  SelectorMatchOptions<FakeElement> options;
+  options.traversalBudget = &budget;
+  EXPECT_FALSE(parsed.result().matches(a, options).matched);
+  EXPECT_TRUE(budget.rejected());
+  EXPECT_EQ(budget.steps(), 1u);
+}
+
+TEST_F(SelectorTests, ClassAndIncludesUseCssWhitespace) {
+  FakeElement element("g");
+  for (const char separator : {' ', '\t', '\n', '\r', '\f'}) {
+    SCOPED_TRACE(static_cast<int>(separator));
+    const std::string tokens = std::string("first") + separator + "second";
+    element.setClassName(RcString(tokens));
+    element.setAttribute("tokens", RcString(tokens));
+    EXPECT_TRUE(matches(".second", element));
+    EXPECT_TRUE(matches("[tokens~=second]", element));
+    EXPECT_TRUE(matches("[tokens~=SECOND i]", element));
+  }
+  element.setClassName("first\vsecond");
+  element.setAttribute("tokens", "first\vsecond");
+  EXPECT_FALSE(matches(".second", element));
+  EXPECT_FALSE(matches("[tokens~=second]", element));
+  element.setAttribute("tokens", "");
+  EXPECT_FALSE(matches("[tokens~='']", element));
+}
+
+TEST_F(SelectorTests, ForgivingScopeFunctionsKeepAncestorContext) {
+  FakeElement root("root");
+  FakeElement mid("mid");
+  root.appendChild(mid);
+  SelectorMatchOptions<FakeElement> options;
+  options.scopeElement = &root;
+  for (const char* input : {":scope > mid", ":is(:scope) > mid", ":where(:scope) > mid"}) {
+    SCOPED_TRACE(input);
+    auto selector = SelectorParser::Parse(input);
+    ASSERT_THAT(selector, NoParseError());
+    EXPECT_TRUE(selector.result().matches(mid, options).matched);
+  }
+  auto nth = SelectorParser::Parse(":nth-child(1 of :scope)");
+  ASSERT_THAT(nth, NoParseError());
+  options.scopeElement = &mid;
+  EXPECT_TRUE(nth.result().matches(mid, options).matched);
+}
 
 TEST_F(SelectorTests, TypeMatch) {
   FakeElement root("rect");
@@ -407,7 +536,7 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   EXPECT_TRUE(matches(":nth-of-type(2)", children["child4"]));
 
   // [of S] is not supported for :nth-of-type
-  EXPECT_TRUE(doesNotMatch(":nth-of-type(1 of type1)", children["child1"]));
+  EXPECT_TRUE(SelectorParser::Parse(":nth-of-type(1 of type1)").hasError());
 
   // :nth-last-of-type(...)
   EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", children["child1"]));
@@ -418,7 +547,7 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChild) {
   EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1)", children["child5"]));
 
   // [of S] is not supported
-  EXPECT_TRUE(doesNotMatch(":nth-last-of-type(1 of type2)", children["child8"]));
+  EXPECT_TRUE(SelectorParser::Parse(":nth-last-of-type(1 of type2)").hasError());
 
   // :first-of-type
   EXPECT_TRUE(matches(":first-of-type", children["child1"]));
@@ -518,7 +647,7 @@ TEST_F(SelectorTests, NthSelectorsRequireNonNegativeN) {
   }
 }
 
-TEST_F(SelectorTests, PseudoClassSelectorNthChildForgivingSelectorList) {
+TEST_F(SelectorTests, PseudoClassSelectorNthChildNestedForgivingList) {
   // Setup: Create a simple tree structure
   FakeElement root("root");
   FakeElement parent("div");
@@ -539,33 +668,33 @@ TEST_F(SelectorTests, PseudoClassSelectorNthChildForgivingSelectorList) {
 
   SCOPED_TRACE(testing::Message() << "*** Tree structure:\n" << root.printAsTree() << "\n");
 
-  // Test :nth-child with forgiving selector list
-  EXPECT_TRUE(matches(":nth-child(2 of p, div, span)", children[1]))
+  // Test :nth-child with an explicitly forgiving :is() list
+  EXPECT_TRUE(matches(":nth-child(2 of :is(p, div, span))", children[1]))
       << "Should match 2nd child, which is a p element";
-  EXPECT_TRUE(matches(":nth-child(3 of span, :invalid, p)", children[2]))
+  EXPECT_TRUE(matches(":nth-child(3 of :is(span, :invalid, p))", children[2]))
       << "Should match 3rd child (span) despite invalid selector in list";
-  EXPECT_FALSE(matches(":nth-child(1 of p, :invalid)", children[0]))
+  EXPECT_FALSE(matches(":nth-child(1 of :is(p, :invalid))", children[0]))
       << "Should not match 1st child (span) as it doesn't match any valid selector in the list";
 
-  // Test :nth-last-child with forgiving selector list
-  EXPECT_TRUE(matches(":nth-last-child(2 of p, span, :invalid)", children[3]))
+  // Test :nth-last-child with an explicitly forgiving :is() list
+  EXPECT_TRUE(matches(":nth-last-child(2 of :is(p, span, :invalid))", children[3]))
       << "Should match 2nd-to-last child, which is a p element";
-  EXPECT_TRUE(matches(":nth-last-child(1 of span, :invalid, div)", children[4]))
+  EXPECT_TRUE(matches(":nth-last-child(1 of :is(span, :invalid, div))", children[4]))
       << "Should match last child (span) despite invalid selector in list";
-  EXPECT_FALSE(matches(":nth-last-child(3 of p, :invalid)", children[2]))
+  EXPECT_FALSE(matches(":nth-last-child(3 of :is(p, :invalid))", children[2]))
       << "Should not match 3rd-to-last child (span) as it doesn't match any valid selector in the "
          "list";
 
-  // Test complex selectors within the forgiving list
-  EXPECT_TRUE(matches(":nth-child(odd of span, p[class], div > *)", children[2]))
+  // Test complex selectors within the nested forgiving list
+  EXPECT_TRUE(matches(":nth-child(odd of :is(span, p[class], div > *))", children[2]))
       << "Should match 3rd child (span) with complex selectors in the list";
-  EXPECT_TRUE(matches(":nth-last-child(even of p, :invalid)", children[1]))
+  EXPECT_TRUE(matches(":nth-last-child(even of :is(p, :invalid))", children[1]))
       << "Should match 2nd-to-last child (p) with complex selectors and an invalid selector";
 
   // Test with all invalid selectors
-  EXPECT_FALSE(matches(":nth-child(1 of :invalid1, :invalid2)", children[0]))
+  EXPECT_FALSE(matches(":nth-child(1 of :is(:invalid1, :invalid2))", children[0]))
       << "Should not match when all selectors in the list are invalid";
-  EXPECT_FALSE(matches(":nth-last-child(1 of :invalid1, :invalid2)", children[4]))
+  EXPECT_FALSE(matches(":nth-last-child(1 of :is(:invalid1, :invalid2))", children[4]))
       << "Should not match when all selectors in the list are invalid";
 }
 
@@ -704,6 +833,18 @@ TEST_F(SelectorTests, PseudoClassSelectorValidityCoversAnbFunctionNames) {
   EXPECT_FALSE(invalidAnbFunction.isValid());
 }
 
+TEST_F(SelectorTests, DependsOnTextContent) {
+  EXPECT_FALSE(dependsOnTextContent("text"));
+  EXPECT_FALSE(dependsOnTextContent("text:first-child + rect, g > text"));
+  EXPECT_FALSE(dependsOnTextContent("g:has(> text):not(.cls)"));
+
+  EXPECT_TRUE(dependsOnTextContent("text:empty"));
+  EXPECT_TRUE(dependsOnTextContent("rect, text:EMPTY + rect")) << "any entry in the list counts";
+  EXPECT_TRUE(dependsOnTextContent("text:not(:empty)"));
+  EXPECT_TRUE(dependsOnTextContent("g:has(> text:is(.a, :empty))"));
+  EXPECT_TRUE(dependsOnTextContent(":nth-child(2 of :empty)"));
+}
+
 TEST_F(SelectorTests, DependsOnTreePosition) {
   EXPECT_FALSE(dependsOnTreePosition("rect"));
   EXPECT_FALSE(dependsOnTreePosition("#layer"));
@@ -725,14 +866,14 @@ TEST_F(SelectorTests, DependsOnTreePosition) {
   EXPECT_TRUE(dependsOnTreePosition(":root"));
 
   EXPECT_TRUE(dependsOnTreePosition(":scope"));
-  EXPECT_TRUE(dependsOnTreePosition("rect:focus-within"));
+  EXPECT_TRUE(dependsOnPseudoTreePosition("focus-within"));
   EXPECT_TRUE(dependsOnTreePosition("g:has(> rect)"));
 
   // State pseudo-classes and pseudo-elements match on the element alone.
-  EXPECT_FALSE(dependsOnTreePosition("rect:hover"));
-  EXPECT_FALSE(dependsOnTreePosition("a:visited"));
-  EXPECT_FALSE(dependsOnTreePosition("a:any-link"));
-  EXPECT_FALSE(dependsOnTreePosition("rect:lang(en)"));
+  EXPECT_FALSE(dependsOnPseudoTreePosition("hover"));
+  EXPECT_FALSE(dependsOnPseudoTreePosition("visited"));
+  EXPECT_FALSE(dependsOnPseudoTreePosition("any-link"));
+  EXPECT_FALSE(dependsOnPseudoTreePosition("lang"));
   EXPECT_FALSE(dependsOnTreePosition("rect::before"));
 
   // `:is()`, `:not()` and `:where()` inherit the answer from the selectors inside them.
@@ -743,7 +884,7 @@ TEST_F(SelectorTests, DependsOnTreePosition) {
   EXPECT_TRUE(dependsOnTreePosition("rect:where(#layer > circle)"));
 
   // An unrecognized pseudo-class fails closed.
-  EXPECT_TRUE(dependsOnTreePosition("rect:future-pseudo-class"));
+  EXPECT_TRUE(dependsOnPseudoTreePosition("future-pseudo-class"));
 }
 
 TEST_F(SelectorTests, Specificity) {
@@ -751,7 +892,7 @@ TEST_F(SelectorTests, Specificity) {
   EXPECT_THAT(computeSpecificity(".test"), SpecificityIs(Specificity::FromABC(0, 1, 0)));
   EXPECT_THAT(computeSpecificity("#test"), SpecificityIs(Specificity::FromABC(1, 0, 0)));
   EXPECT_THAT(computeSpecificity("::after"), SpecificityIs(Specificity::FromABC(0, 0, 1)));
-  EXPECT_THAT(computeSpecificity(":after(one)"), SpecificityIs(Specificity::FromABC(0, 1, 0)));
+  EXPECT_THAT(computeSpecificity(":nth-child(odd)"), SpecificityIs(Specificity::FromABC(0, 1, 0)));
   EXPECT_THAT(computeSpecificity("a[attr=value]"), SpecificityIs(Specificity::FromABC(0, 1, 1)));
 
   EXPECT_THAT(computeSpecificity("*"), SpecificityIs(Specificity::FromABC(0, 0, 0)))

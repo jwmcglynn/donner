@@ -658,6 +658,12 @@ private:
    */
   std::optional<ParseDiagnostic> projectXMLSubtree(const xml::XMLNode& node, bool contentsReparsed);
 
+  /// Project the subtree while the caller handles selector authority on a rejected projection.
+  /// @param node XML element subtree root.
+  /// @param contentsReparsed Whether authored contents were replaced from source.
+  std::optional<ParseDiagnostic> projectXMLSubtreeContents(const xml::XMLNode& node,
+                                                           bool contentsReparsed);
+
   void assertScopedRegistryAccessAllowed() const {
     UTILS_RELEASE_ASSERT_MSG(
         documentState_->threadingMode() != ThreadingMode::ConcurrentDom ||

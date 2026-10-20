@@ -328,12 +328,11 @@ public:
   /**
    * Replace an element's text content through this document and update owned source text.
    *
-   * Replaces the element's tracked text value range when it has one, otherwise inserts the
-   * escaped text before the element's closing tag (expanding a self-closing tag). Element
-   * children are not touched, so this only supports elements whose content is text-only -
-   * mixed-content elements replace just the one tracked text run, which after parsing is the
-   * last one the parser read. Emits an \ref XMLMutation::Kind::NodeValueChanged mutation on
-   * success.
+   * Elements without element children replace their entire authored content, including CDATA,
+   * and detach obsolete non-element nodes. A self-closing element expands when needed.
+   * With element children, only the tracked text run is replaced; element children are untouched.
+   * Emits a parent \ref XMLMutation::Kind::NodeValueChanged receipt on success. The input may alias
+   * the document source or a child value; it is copied before mutation.
    *
    * @param element Element whose text content to replace.
    * @param text New raw (unescaped) text content; empty clears the content.

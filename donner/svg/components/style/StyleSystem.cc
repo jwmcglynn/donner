@@ -30,6 +30,7 @@
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/PaintAnimationStyle.h"
 #include "donner/svg/components/style/ScalarAnimationStyle.h"
+#include "donner/svg/components/style/SelectorContent.h"
 #include "donner/svg/components/style/StyleComponent.h"
 
 namespace donner::svg::components {
@@ -357,32 +358,40 @@ struct ShadowedElementAdapter {
     return isSVGElement ? std::make_optional(create(target)) : std::nullopt;
   }
 
-  std::optional<ShadowedElementAdapter> firstChild() const {
+  std::optional<ShadowedElementAdapter> firstChild(
+      css::SelectorTraversalBudget* budget = nullptr) const {
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).firstChild();
-    return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
+    return findElementSibling(target, true, budget);
   }
 
-  std::optional<ShadowedElementAdapter> lastChild() const {
+  std::optional<ShadowedElementAdapter> lastChild(
+      css::SelectorTraversalBudget* budget = nullptr) const {
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).lastChild();
-    return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
+    return findElementSibling(target, false, budget);
   }
 
-  std::optional<ShadowedElementAdapter> previousSibling() const {
+  std::optional<ShadowedElementAdapter> previousSibling(
+      css::SelectorTraversalBudget* budget = nullptr) const {
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).previousSibling();
-    return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
+    return findElementSibling(target, false, budget);
   }
 
-  std::optional<ShadowedElementAdapter> nextSibling() const {
+  std::optional<ShadowedElementAdapter> nextSibling(
+      css::SelectorTraversalBudget* budget = nullptr) const {
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).nextSibling();
-    return target != entt::null ? std::make_optional(create(target)) : std::nullopt;
+    return findElementSibling(target, true, budget);
   }
 
   xml::XMLQualifiedName tagName() const {
     return registry_.get().get<donner::components::TreeComponent>(treeEntity_).tagName();
+  }
+
+  bool isEmptyForSelector(css::SelectorTraversalBudget* budget) const {
+    return IsSelectorEmpty(registry_.get(), dataEntity_, budget);
   }
 
   bool isKnownType() const {
@@ -435,6 +444,24 @@ struct ShadowedElementAdapter {
   }
 
 private:
+  std::optional<ShadowedElementAdapter> findElementSibling(
+      Entity target, bool forward, css::SelectorTraversalBudget* budget) const {
+    for (; target != entt::null;
+         target = forward
+                      ? registry_.get().get<donner::components::TreeComponent>(target).nextSibling()
+                      : registry_.get()
+                            .get<donner::components::TreeComponent>(target)
+                            .previousSibling()) {
+      if (registry_.get().all_of<ElementTypeComponent>(resolveData(target))) {
+        return create(target);
+      }
+      if (budget != nullptr && !budget->consume()) {
+        return std::nullopt;
+      }
+    }
+    return std::nullopt;
+  }
+
   /// Resolve a tree entity to its data entity: shadow entities proxy their light entity.
   Entity resolveData(Entity treeEntity) const {
     const auto* shadowComponent = registry_.get().try_get<ShadowEntityComponent>(treeEntity);

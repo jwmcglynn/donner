@@ -324,7 +324,7 @@ std::optional<RcString> XMLNode::value() const {
 }
 
 void XMLNode::setValue(const RcStringOrRef& value) {
-  handle_.get_or_emplace<components::XMLValueComponent>().value = RcString(value);
+  handle_.registry()->ctx().get<donner::components::TreeMutationContext>().setValue(handle_, value);
 }
 
 bool XMLNode::hasAttribute(const XMLQualifiedNameRef& name) const {

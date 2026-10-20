@@ -79,13 +79,15 @@ struct CompoundSelector {
   template <ElementLike T>
   bool matches(const T& element, bool requirePrimary,
                const SelectorMatchOptions<T>& options) const {
+    SelectorMatchOptions<T> nestedOptions = options;
+    nestedOptions.allowScopeOnlyMatch = !requirePrimary;
     for (const auto& entry : entries) {
       if (!std::visit(
-              [&element, &options, requirePrimary](auto&& selector) -> bool {
+              [&element, &nestedOptions, requirePrimary](auto&& selector) -> bool {
                 using SelectorType = std::remove_cvref_t<decltype(selector)>;
                 if constexpr (std::is_same_v<SelectorType, PseudoClassSelector>) {
                   const PseudoClassSelector::PseudoMatchResult result =
-                      selector.matches(element, options);
+                      selector.matches(element, nestedOptions);
                   if (!result.isPrimary && requirePrimary) {
                     return false;
                   }

@@ -25,6 +25,22 @@ std::vector<ComponentValue> TokenizeString(std::string_view str) {
 
 }  // namespace
 
+TEST(SelectorParser, Level4StrictPseudoClassArguments) {
+  for (const char* selector :
+       {":unsupported", ":unsupported(x)", ":hover", ":not(:hover)", ":not(.ok, :unsupported)",
+        ":has(> .ok, :unsupported)", ":has(:has(a))", ":has(::before)", ":has(a::before)", ":has()",
+        ":not()", ":nth-child(1 of .ok, :unsupported)"}) {
+    SCOPED_TRACE(selector);
+    EXPECT_TRUE(SelectorParser::Parse(selector).hasError());
+  }
+  for (const char* selector :
+       {":is(.ok, :unsupported)", ":where(.ok, :unsupported)", ":is()", ":is(:not(.other))",
+        ":is(:has(> a))", ":has(> :is(a, :unsupported))", ":nth-child(1 of :is(.ok))"}) {
+    SCOPED_TRACE(selector);
+    EXPECT_THAT(SelectorParser::Parse(selector), NoParseError());
+  }
+}
+
 TEST(SelectorParser, Empty) {
   EXPECT_THAT(SelectorParser::Parse(""),
               AllOf(ParseErrorPos(0, 0), ParseErrorIs("No selectors found")));
@@ -161,33 +177,19 @@ TEST(SelectorParser, PseudoElementSelectorToString) {
 }
 
 TEST(SelectorParser, PseudoClassSelector) {
-  EXPECT_THAT(SelectorParser::Parse(":after"),
-              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs("after")))));
-  EXPECT_THAT(
-      SelectorParser::Parse(":after()"),
-      ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs("after", ElementsAre())))));
-
-  EXPECT_THAT(SelectorParser::Parse(":after(one two)"),
-              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs(
-                  "after", ElementsAre(TokenIsIdent("one"), TokenIsWhitespace(" "),
-                                       TokenIsIdent("two")))))));
+  EXPECT_THAT(SelectorParser::Parse(":root"),
+              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs("root")))));
+  for (const char* selector : {":after", ":after()", ":after(one two)"}) {
+    EXPECT_TRUE(SelectorParser::Parse(selector).hasError());
+  }
+  EXPECT_THAT(SelectorParser::Parse(":where()"), NoParseError());
+  EXPECT_THAT(SelectorParser::Parse(":where(one two)"), NoParseError());
 }
 
 TEST(SelectorParser, PseudoClassSelectorToString) {
-  EXPECT_THAT(SelectorParser::Parse(":after"),
+  EXPECT_THAT(SelectorParser::Parse(":root"),
               ParseResultIs(ToStringIs(
-                  "Selector(ComplexSelector(CompoundSelector(PseudoClassSelector(after))))")));
-  EXPECT_THAT(
-      SelectorParser::Parse(":after()"),
-      ParseResultIs(ToStringIs(
-          "Selector(ComplexSelector(CompoundSelector(PseudoClassSelector(after args[]))))")));
-
-  EXPECT_THAT(
-      SelectorParser::Parse(":after(one two)"),
-      ParseResultIs(ToStringIs(
-          "Selector(ComplexSelector(CompoundSelector(PseudoClassSelector(after args[Token { "
-          "Ident(one) offset: FileOffset[offset 7] }, Token { Whitespace(' ', len=1) offset: "
-          "FileOffset[offset 10] }, Token { Ident(two) offset: FileOffset[offset 11] }, ]))))")));
+                  "Selector(ComplexSelector(CompoundSelector(PseudoClassSelector(root))))")));
 }
 
 TEST(SelectorParser, AttributeSelector) {
@@ -542,19 +544,12 @@ TEST(SelectorParsing, ForgivingRelativeSelectorList) {
                    ComplexSelectorIs(EntryIs(Combinator::NextSibling, TypeSelectorIs("ol")))));
 }
 
-TEST(SelectorParser, InvalidNthChildSuffixesDoNotRejectTheSelector) {
-  EXPECT_THAT(SelectorParser::Parse(":nth-child(2n foo)"),
-              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs(
-                  "nth-child", ElementsAre(testing::_, testing::_, testing::_))))));
-
-  EXPECT_THAT(SelectorParser::Parse(":nth-child(2n of)"),
-              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs(
-                  "nth-child", ElementsAre(testing::_, testing::_, testing::_))))));
-
-  EXPECT_THAT(SelectorParser::Parse(":nth-of-type(2n of .item)"),
-              ParseResultIs(ComplexSelectorIs(EntryIs(PseudoClassSelectorIs(
-                  "nth-of-type", ElementsAre(testing::_, testing::_, testing::_, testing::_,
-                                             testing::_, testing::_))))));
+TEST(SelectorParser, InvalidNthChildSuffixesRejectTheSelector) {
+  for (const char* selector :
+       {":nth-child(2n foo)", ":nth-child(2n of)", ":nth-of-type(2n of .item)"}) {
+    SCOPED_TRACE(selector);
+    EXPECT_TRUE(SelectorParser::Parse(selector).hasError());
+  }
 }
 
 // TODO: Add more tests from

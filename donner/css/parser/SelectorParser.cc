@@ -111,14 +111,18 @@ class SelectorParserImpl {
 public:
   /**
    * Construct a new SelectorParserImpl over a list of \ref ComponentValue.
+   * @param components Tokenized selector input.
+   * @param insideHas Whether this input is nested inside a :has() argument.
    */
-  SelectorParserImpl(std::span<const ComponentValue> components) : stream_(components) {}
+  SelectorParserImpl(std::span<const ComponentValue> components, bool insideHas = false)
+      : stream_(components), insideHas_(insideHas) {}
 
   /**
    * Parse the selector list.
+   * @param relative Allow a leading combinator in each list entry.
    */
-  ParseResult<Selector> parse() {
-    auto maybeSelector = handleComplexSelectorList();
+  ParseResult<Selector> parse(bool relative = false) {
+    auto maybeSelector = handleComplexSelectorList(relative);
     if (!maybeSelector) {
       assert(error_.has_value());
       return std::move(error_.value());
@@ -219,7 +223,7 @@ public:
   }
 
 private:
-  std::optional<Selector> handleComplexSelectorList() {
+  std::optional<Selector> handleComplexSelectorList(bool relative = false) {
     skipWhitespace();
 
     if (isEOF()) {
@@ -228,7 +232,7 @@ private:
     }
 
     Selector result;
-    if (auto complexSelector = handleComplexSelector()) {
+    if (auto complexSelector = relative ? handleRelativeSelector() : handleComplexSelector()) {
       result.entries.emplace_back(std::move(*complexSelector));
     } else {
       // Error has already been set inside handleComplexSelector.
@@ -241,7 +245,7 @@ private:
                                               // comma or EOF.
       skipWhitespace();
 
-      if (auto complexSelector = handleComplexSelector()) {
+      if (auto complexSelector = relative ? handleRelativeSelector() : handleComplexSelector()) {
         result.entries.emplace_back(std::move(*complexSelector));
       } else {
         // Error has already been set inside handleComplexSelector.
@@ -266,11 +270,11 @@ private:
 
     skipWhitespace();
 
-    Selector selector = parseForgivingSelectorList();
-    if (selector.entries.empty()) {
-      setError("Failed to parse selector after 'of' keyword");
+    auto parsed = handleComplexSelectorList();
+    if (!parsed) {
       return std::nullopt;
     }
+    Selector selector = std::move(*parsed);
 
     skipWhitespace();
 
@@ -541,7 +545,7 @@ private:
     if (anbResult.remainingComponents.empty()) {
       return AnbValueAndSelector{anbResult.value, nullptr};
     } else if (anbSupportedWithOptionalSelector) {
-      SelectorParserImpl parser(anbResult.remainingComponents);
+      SelectorParserImpl parser(anbResult.remainingComponents, insideHas_);
 
       ParseResult<Selector> selectorResult = parser.parseMicrosyntaxTypeSuffix();
       if (selectorResult.hasError()) {
@@ -577,16 +581,40 @@ private:
       return std::make_unique<Selector>(std::move(selectorResult).result());
     };
 
-    SelectorParserImpl parser(pseudoClass.argsIfFunction.value());
+    SelectorParserImpl parser(pseudoClass.argsIfFunction.value(),
+                              insideHas_ || pseudoClass.ident.equalsLowercase("has"));
     if (pseudoClass.ident.equalsLowercase("is") || pseudoClass.ident.equalsLowercase("where")) {
       return unwrap(parser.parseForgivingSelectorList());
     } else if (pseudoClass.ident.equalsLowercase("not")) {
       return unwrap(parser.parse());
     } else if (pseudoClass.ident.equalsLowercase("has")) {
-      return unwrap(parser.parseForgivingRelativeSelectorList());
+      return unwrap(parser.parse(/*relative=*/true));
     } else {
       return nullptr;
     }
+  }
+
+  std::optional<PseudoClassSelector> handleSupportedPseudoClass() {
+    auto result = handlePseudoClassSelector();
+    if (!result) {
+      return std::nullopt;
+    }
+    PseudoClassSelector& pseudoClass = *result;
+    if (insideHas_ && pseudoClass.ident.equalsLowercase("has")) {
+      setError("Nested :has() is not allowed");
+      return std::nullopt;
+    }
+    if (auto anbAndSelector = parseAnbArgumentsIfNeeded(pseudoClass)) {
+      pseudoClass.anbValueIfAnb = anbAndSelector->value;
+      pseudoClass.selector = std::move(anbAndSelector->selector);
+    } else if (auto selector = parseSelectorIfNeeded(pseudoClass)) {
+      pseudoClass.selector = std::move(selector);
+    }
+    if (!pseudoClass.isValid()) {
+      setError("Unsupported or invalid pseudo-class :" + pseudoClass.ident);
+      return std::nullopt;
+    }
+    return result;
   }
 
   std::optional<SubclassSelector> handleSubclassSelector() {
@@ -604,19 +632,10 @@ private:
       } else if (nextDelimIs('.')) {
         return handleClassSelector();
       } else if (nextTokenIs<Token::Colon>()) {
-        if (auto maybePseudoClass = handlePseudoClassSelector()) {
-          PseudoClassSelector& pseudoClass = maybePseudoClass.value();
-          if (auto anbAndSelector = parseAnbArgumentsIfNeeded(pseudoClass)) {
-            pseudoClass.anbValueIfAnb = anbAndSelector->value;
-            pseudoClass.selector = std::move(anbAndSelector->selector);
-          } else if (auto selector = parseSelectorIfNeeded(pseudoClass)) {
-            pseudoClass.selector = std::move(selector);
-          }
-          return pseudoClass;
-        } else {
-          // Error is set by handlePseudoClassSelector.
-          return std::nullopt;
+        if (auto pseudoClass = handleSupportedPseudoClass()) {
+          return std::move(*pseudoClass);
         }
+        return std::nullopt;
       }
     } else if (nextIs<SimpleBlock>()) {
       return handleAttributeSelector();
@@ -626,6 +645,10 @@ private:
   }
 
   std::optional<PseudoElementSelector> handlePseudoElementSelector() {
+    if (insideHas_) {
+      setError("Pseudo-elements are not allowed within :has()");
+      return std::nullopt;
+    }
     // <pseudo-element-selector> = ':' <pseudo-class-selector>
     expectAndConsumeToken<Token::Colon>();
 
@@ -1007,6 +1030,7 @@ private:
   details::ComponentValueStream stream_;
   std::optional<ParseDiagnostic> error_;
   std::vector<ParseDiagnostic> warnings_;
+  bool insideHas_ = false;
 };
 
 ParseResult<Selector> SelectorParser::ParseComponents(std::span<const ComponentValue> components) {

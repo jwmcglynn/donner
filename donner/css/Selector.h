@@ -73,6 +73,18 @@ struct Selector {
   bool dependsOnTreePosition() const;
 
   /**
+   * Return true when matching this selector can change with an element's text content.
+   *
+   * `:empty` is the only supported pseudo-class that inspects text, so this finds it anywhere in
+   * the selector, including inside functional pseudo-classes such as `:not()`, `:is()` and
+   * `:has()`. Callers use this to decide whether a text edit can change which elements a rule
+   * matches.
+   *
+   * @return True when a text edit can change whether this selector matches.
+   */
+  bool dependsOnTextContent() const;
+
+  /**
    * Get the max specificity of all ComplexSelectors in the Selector.
    */
   Specificity::ABC maxSpecificity() const {
@@ -125,6 +137,7 @@ struct Selector {
 template <ElementLike T>
 std::optional<PseudoClassSelector::PseudoMatchResult> PseudoClassSelector::matchesSimpleState(
     const T& element, const SelectorMatchOptions<T>& options) const {
+  const SelectorTraversalNavigation<T> navigation(options.traversalBudget);
   if (ident.equalsLowercase("root")) {
     return !element.parentElement().has_value();
   }
@@ -134,16 +147,22 @@ std::optional<PseudoClassSelector::PseudoMatchResult> PseudoClassSelector::match
     return PseudoMatchResult(matched, /* isPrimary */ false);
   }
   if (ident.equalsLowercase("empty")) {
-    return !element.firstChild().has_value();
+    if constexpr (requires {
+                    { element.isEmptyForSelector(options.traversalBudget) } -> std::same_as<bool>;
+                  }) {
+      return element.isEmptyForSelector(options.traversalBudget);
+    }
+    return !navigation.firstChild(element).has_value();
   }
   if (ident.equalsLowercase("first-child")) {
-    return !element.previousSibling().has_value();
+    return !navigation.previousSibling(element).has_value();
   }
   if (ident.equalsLowercase("last-child")) {
-    return !element.nextSibling().has_value();
+    return !navigation.nextSibling(element).has_value();
   }
   if (ident.equalsLowercase("only-child")) {
-    return !element.previousSibling().has_value() && !element.nextSibling().has_value();
+    return !navigation.previousSibling(element).has_value() &&
+           !navigation.nextSibling(element).has_value();
   }
   if (ident.equalsLowercase("defined")) {
     return element.isKnownType();
@@ -197,15 +216,12 @@ PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matchesHasFunction(
     return PseudoMatchResult(false);
   }
 
-  SelectorMatchOptions<T> optionsOverride = options;
-  optionsOverride.relativeToElement = &element;
-  ElementTraversalGenerator<T> elements = allChildrenRecursiveGenerator(element);
-  while (elements.next()) {
-    if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
-      return PseudoMatchResult(false);
-    }
-    if (selector->matches(elements.getValue(), optionsOverride).matched) {
+  for (const ComplexSelector& relative : selector->entries) {
+    if (relative.matchesRelativeToAnchor(element, options)) {
       return PseudoMatchResult(true);
+    }
+    if (options.traversalBudget != nullptr && options.traversalBudget->rejected()) {
+      return PseudoMatchResult(false);
     }
   }
   return PseudoMatchResult(false);

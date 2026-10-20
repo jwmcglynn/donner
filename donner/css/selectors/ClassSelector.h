@@ -53,7 +53,7 @@ struct ClassSelector {
     // Returns true if attribute value is a whitespace-separated list of values, and one of them
     // exactly matches the matcher value.
     const RcString className = element.className();
-    for (auto str : StringUtils::Split(className, ' ')) {
+    for (auto str : StringUtils::SplitAsciiWhitespace(className)) {
       if (str == name) {
         return true;
       }

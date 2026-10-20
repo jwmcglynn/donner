@@ -67,10 +67,10 @@ concept OptionalSelectorLike = requires(const T t, const ElementType element) {
  * - `:root` - Selects the element if it is the root of the document.
  * - `:is(S)` - Selects the element if it matches any of the selectors in the argument list.
  * - `:not(S)` - Selects the element if it does not match `S`.
- * - `:where(S)` - Selects the element if it matches all of the selectors in the argument list.
+ * - `:where(S)` - Selects the element if it matches any of the selectors in the argument list.
  *
- * Not yet implemented, see https://github.com/jwmcglynn/donner/issues/3:
- * - `:has(S)` - Selects the element if any of its descendants match `S`.
+ * - `:scope` - Selects the reference element used to anchor a scoped query.
+ * - `:has(S)` - Selects an element if a relative selector in `S` matches from that anchor.
  * - `:defined` - Selects if the element is supported by the user agent (donner svg in this
  *    case).
  *
@@ -129,23 +129,7 @@ struct PseudoClassSelector {
    *
    * @see https://www.w3.org/TR/selectors-4/#invalid
    */
-  bool isValid() const {
-    if (!argsIfFunction.has_value()) {
-      // Check for valid non-function pseudo-classes
-      return ident.equalsLowercase("root") || ident.equalsLowercase("empty") ||
-             ident.equalsLowercase("first-child") || ident.equalsLowercase("last-child") ||
-             ident.equalsLowercase("only-child") || ident.equalsLowercase("first-of-type") ||
-             ident.equalsLowercase("last-of-type") || ident.equalsLowercase("only-of-type");
-    } else {
-      // It's a function.
-      if (anbValueIfAnb.has_value()) {
-        return ident.equalsLowercase("nth-child") || ident.equalsLowercase("nth-last-child") ||
-               ident.equalsLowercase("nth-of-type") || ident.equalsLowercase("nth-last-of-type");
-      }
-    }
-
-    return false;
-  }
+  bool isValid() const;
 
   /**
    * Result of \ref matches, returns if the selector matched and if it can be treated as a
@@ -214,15 +198,18 @@ private:
         return true;
       }
       if constexpr (requires { matchingType->matches(child, options); }) {
-        return matchingType->matches(child, options).matched;
+        SelectorMatchOptions<T> filterOptions = options;
+        filterOptions.allowScopeOnlyMatch = true;
+        return matchingType->matches(child, filterOptions).matched;
       } else {
         return matchingType->matches(child);
       }
     };
+    const SelectorTraversalNavigation<T> navigation(options.traversalBudget);
     int childIndex = 1;
     if (!fromEnd) {
-      for (std::optional<T> child = parent.firstChild(); child;
-           child = child.value().nextSibling()) {
+      for (std::optional<T> child = navigation.firstChild(parent); child;
+           child = navigation.nextSibling(*child)) {
         if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
           return -1;
         }
@@ -237,8 +224,8 @@ private:
         }
       }
     } else {
-      for (std::optional<T> child = parent.lastChild(); child;
-           child = child.value().previousSibling()) {
+      for (std::optional<T> child = navigation.lastChild(parent); child;
+           child = navigation.previousSibling(*child)) {
         if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
           return -1;
         }
@@ -254,16 +241,16 @@ private:
       }
     }
 
-    assert(matchingType &&
-           "Should only reach end of child list if there is a Selector skipping elements");
+    // A filter or exhausted navigation can finish before reaching this element.
     return -1;
   }
 
   template <ElementLike T>
   static bool isFirstOfType(const T& element, const xml::XMLQualifiedNameRef& type,
                             SelectorTraversalBudget* traversalBudget) {
-    for (std::optional<T> child = element.previousSibling(); child;
-         child = child.value().previousSibling()) {
+    const SelectorTraversalNavigation<T> navigation(traversalBudget);
+    for (std::optional<T> child = navigation.previousSibling(element); child;
+         child = navigation.previousSibling(*child)) {
       if (traversalBudget != nullptr && !traversalBudget->consume()) {
         return false;
       }
@@ -278,8 +265,9 @@ private:
   template <ElementLike T>
   static bool isLastOfType(const T& element, const xml::XMLQualifiedNameRef& type,
                            SelectorTraversalBudget* traversalBudget) {
-    for (std::optional<T> child = element.nextSibling(); child;
-         child = child.value().nextSibling()) {
+    const SelectorTraversalNavigation<T> navigation(traversalBudget);
+    for (std::optional<T> child = navigation.nextSibling(element); child;
+         child = navigation.nextSibling(*child)) {
       if (traversalBudget != nullptr && !traversalBudget->consume()) {
         return false;
       }

@@ -4,7 +4,9 @@
 #include <functional>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/RcStringOrRef.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/components/XMLValueComponent.h"
 
 namespace donner::components {
 
@@ -28,7 +30,8 @@ struct TreeMutationContext {
         appendChild(DefaultAppendChild),
         replaceChild(DefaultReplaceChild),
         removeChild(DefaultRemoveChild),
-        remove(DefaultRemove) {}
+        remove(DefaultRemove),
+        setValue(DefaultSetValue) {}
 
   /// Callback for `insertBefore(parent, newNode, referenceNode)`.
   std::function<void(EntityHandle parent, EntityHandle newNode, EntityHandle referenceNode)>
@@ -46,6 +49,16 @@ struct TreeMutationContext {
 
   /// Callback for `remove(entity)`.
   std::function<void(EntityHandle entity)> remove;
+
+  /// Callback for a node value assignment, allowing document-specific style invalidation.
+  std::function<void(EntityHandle node, const RcStringOrRef& value)> setValue;
+
+  /// Assign a value in the basic XML model.
+  /// @param node Node receiving the new value.
+  /// @param value New text or node value.
+  static void DefaultSetValue(EntityHandle node, const RcStringOrRef& value) {
+    node.get_or_emplace<donner::xml::components::XMLValueComponent>().value = RcString(value);
+  }
 
   /// Basic XML defaults - operate on \ref TreeComponent directly.
   static void DefaultInsertBefore(EntityHandle parent, EntityHandle newNode,

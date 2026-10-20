@@ -61,6 +61,11 @@ void AddUnreparsedSpan(XMLDocument& document, std::size_t start, std::size_t end
 
 namespace {
 
+/// The type of an optional node, so an unexpected node prints what it is.
+std::optional<XMLNode::Type> NodeType(const std::optional<XMLNode>& node) {
+  return node ? std::optional<XMLNode::Type>(node->type()) : std::nullopt;
+}
+
 /// Parse \p xml and return the resulting source-backed document, asserting no parse error.
 XMLDocument ParseDocument(std::string_view xml, const XMLParser::Options& options = {}) {
   ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(xml, options);
@@ -3665,6 +3670,44 @@ TEST_F(XMLDocumentTests, SetElementTextReplacesExistingTextAndEscapesSource) {
   EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeValueChanged));
 }
 
+TEST_F(XMLDocumentTests, SetElementTextReplacesAllTextOnlyContent) {
+  for (const std::string_view content :
+       {"one<![CDATA[two]]>", "<![CDATA[one]]>", "one<!-- comment -->two"}) {
+    for (const std::string_view value : {"new & <text>", ""}) {
+      SCOPED_TRACE(content);
+      SCOPED_TRACE(value);
+      XMLDocument doc = ParseDocument("<svg><text>" + std::string(content) + "</text></svg>");
+      XMLNode text = doc.root().firstChild()->firstChild().value();
+      auto result = doc.setElementText(text, value);
+      ASSERT_TRUE(result.applied);
+      ASSERT_THAT(result.diagnostic, Eq(std::nullopt));
+      EXPECT_THAT(text.value(), Optional(Eq(value)));
+      EXPECT_THAT(NodeType(text.firstChild()), Eq(std::nullopt));
+      EXPECT_EQ(doc.source(), value.empty() ? "<svg><text></text></svg>"
+                                            : "<svg><text>new &amp; &lt;text&gt;</text></svg>");
+      EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeValueChanged));
+    }
+  }
+}
+
+TEST_F(XMLDocumentTests, SetElementTextOwnsSourceViewAndClearsSourcelessText) {
+  XMLDocument doc = ParseDocument("<svg><text>source-backed text</text></svg>");
+  XMLNode text = doc.root().firstChild()->firstChild().value();
+  const std::string_view value = doc.source().substr(doc.source().find("source-backed"), 18);
+  auto replaced = doc.setElementText(text, value);
+  ASSERT_TRUE(replaced.applied);
+  EXPECT_THAT(text.value(), Optional(Eq("source-backed text")));
+  EXPECT_EQ(doc.source(), "<svg><text>source-backed text</text></svg>");
+
+  XMLDocument emptyDoc = ParseDocument("<svg><text/></svg>");
+  XMLNode empty = emptyDoc.root().firstChild()->firstChild().value();
+  empty.appendChild(XMLNode::CreateDataNode(emptyDoc, "word"));
+  auto cleared = emptyDoc.setElementText(empty, "");
+  ASSERT_TRUE(cleared.applied);
+  EXPECT_THAT(NodeType(empty.firstChild()), Eq(std::nullopt));
+  EXPECT_EQ(emptyDoc.source(), "<svg><text/></svg>");
+}
+
 TEST_F(XMLDocumentTests, SetElementTextClearsExistingText) {
   XMLDocument doc = ParseDocument(R"(<svg><text>hello</text></svg>)");
   XMLNode text = doc.root().firstChild()->firstChild().value();
@@ -4474,7 +4517,7 @@ TEST_F(XMLDocumentTests, RemoveNodeAfterSetSourceCannotUseOldRange) {
   EXPECT_EQ(doc.source(), kReplacement);
 }
 
-TEST_F(XMLDocumentTests, SetElementTextWithReversedValueRangeClearsRangeAndAppends) {
+TEST_F(XMLDocumentTests, SetElementTextWithReversedValueRangeUsesCompleteContentRange) {
   XMLDocument doc = ParseDocument(R"(<text>hello</text>)");
   XMLNode text = doc.root().firstChild().value();
   const std::size_t textOffset = doc.source().find("hello");
@@ -4485,14 +4528,13 @@ TEST_F(XMLDocumentTests, SetElementTextWithReversedValueRangeClearsRangeAndAppen
       SourceRange{FileOffset::Offset(textOffset + 5), FileOffset::Offset(textOffset)});
   EXPECT_THAT(text.getValueLocation(), Eq(std::nullopt));
 
-  // With no tracked value range, setElementText falls back to inserting before the closing
-  // tag instead of replacing the existing text.
+  // The complete opening/closing boundaries remain valid after the value range is cleared.
   ApplySourceEditResult result = doc.setElementText(text, "world");
 
   EXPECT_TRUE(result.applied);
   EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
   EXPECT_THAT(text.value(), Optional(Eq("world")));
-  EXPECT_EQ(doc.source(), R"(<text>helloworld</text>)");
+  EXPECT_EQ(doc.source(), R"(<text>world</text>)");
 }
 
 //

@@ -15,6 +15,9 @@ namespace donner {
  *
  * The type must support tree traversal operations, such as `parentElement()` and
  * `previousSibling()`, and type and class information to match against the respective selectors.
+ * Adapters with non-element children may provide `isEmptyForSelector(budget)` so `:empty`
+ * can inspect text nodes while charging the shared selector traversal budget. Element-only
+ * adapters need no additional hook.
  */
 template <typename T>
 concept ElementLike =

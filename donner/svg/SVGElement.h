@@ -26,6 +26,10 @@ class ParseResult;
 
 }  // namespace donner
 
+namespace donner::css {
+class SelectorTraversalBudget;
+}  // namespace donner::css
+
 namespace donner::editor {
 
 class AsyncSVGDocument;
@@ -500,12 +504,26 @@ public:
    */
   std::optional<SVGElement> firstChild() const;
 
+  /// Selector navigation charging skipped non-element nodes. @param budget Shared work budget.
+  std::optional<SVGElement> firstChild(css::SelectorTraversalBudget* budget) const;
+
+  /**
+   * Whether this element is empty under the CSS :empty content rules.
+   * Comments and processing instructions do not count; document whitespace is ignored.
+   * @param budget Optional shared node-visit budget; exhaustion returns false.
+   * @return True when no element or non-whitespace text children exist.
+   */
+  bool isEmptyForSelector(css::SelectorTraversalBudget* budget = nullptr) const;
+
   /**
    * Get the last child of this element, if it exists.
    *
    * @return The last child element, or \c std::nullopt if the element has no children.
    */
   std::optional<SVGElement> lastChild() const;
+
+  /// Selector navigation charging skipped non-element nodes. @param budget Shared work budget.
+  std::optional<SVGElement> lastChild(css::SelectorTraversalBudget* budget) const;
 
   /**
    * Get the previous sibling of this element, if it exists.
@@ -514,6 +532,9 @@ public:
    * sibling.
    */
   std::optional<SVGElement> previousSibling() const;
+
+  /// Selector navigation charging skipped non-element nodes. @param budget Shared work budget.
+  std::optional<SVGElement> previousSibling(css::SelectorTraversalBudget* budget) const;
 
   /**
    * Get the next sibling of this element, if it exists.
@@ -524,6 +545,9 @@ public:
    * @return The next sibling element, or \c std::nullopt if the element has no next sibling.
    */
   std::optional<SVGElement> nextSibling() const;
+
+  /// Selector navigation charging skipped non-element nodes. @param budget Shared work budget.
+  std::optional<SVGElement> nextSibling(css::SelectorTraversalBudget* budget) const;
 
   /**
    * Insert \p newNode as a child, before \p referenceNode. If \p referenceNode is std::nullopt,

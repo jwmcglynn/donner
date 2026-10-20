@@ -1,13 +1,21 @@
 #include "donner/svg/components/TreeMutation.h"
 
+#include <algorithm>
 #include <optional>
+#include <string_view>
 
 #include "donner/base/Utils.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/components/TreeMutationContext.h"
+#include "donner/base/xml/components/XMLValueComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/NodeLifetimeCollector.h"
 #include "donner/svg/components/NodeLifetimeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
 
 namespace donner::svg::components {
 namespace {
@@ -58,6 +66,7 @@ components::RenderTreeState& GetRenderTreeState(EntityHandle handle) {
 }
 
 void MarkNeedsFullRebuild(EntityHandle handle) {
+  handle.registry()->clear<ComputedStyleComponent>();
   auto& renderState = GetRenderTreeState(handle);
   renderState.needsFullRebuild = true;
   renderState.needsFullStyleRecompute = true;
@@ -154,6 +163,41 @@ void MarkOldParentDirty(EntityHandle node) {
   MarkDirty(oldParentHandle, components::DirtyFlagsComponent::All);
 }
 
+std::optional<EntityHandle> TextValueParent(EntityHandle node) {
+  const auto xmlNode = xml::XMLNode::TryCast(node);
+  if (!xmlNode || (xmlNode->type() != xml::XMLNode::Type::Data &&
+                   xmlNode->type() != xml::XMLNode::Type::CData)) {
+    return std::nullopt;
+  }
+  const Entity parent = ParentOf(node);
+  if (parent == entt::null || !node.registry()->all_of<ElementTypeComponent>(parent)) {
+    return std::nullopt;
+  }
+  return EntityHandle(*node.registry(), parent);
+}
+
+bool HasNonWhitespaceValue(EntityHandle node) {
+  const auto* value = node.try_get<donner::xml::components::XMLValueComponent>();
+  return value &&
+         std::string_view(value->value.data(), value->value.size()).find_first_not_of(" \t\r\n") !=
+             std::string_view::npos;
+}
+
+/// Invalidate \p parent after \p removed leaves it. Only element children feed structural
+/// selectors and the render tree; a removed text or CDATA node changes at most the parent's text
+/// content, and a comment or other non-element node changes neither.
+void MarkChildRemoved(EntityHandle parent, EntityHandle removed) {
+  const auto xmlNode = xml::XMLNode::TryCast(removed);
+  if (!xmlNode || xmlNode->type() == xml::XMLNode::Type::Element) {
+    MarkNeedsFullRebuild(parent);
+  } else if ((xmlNode->type() == xml::XMLNode::Type::Data ||
+              xmlNode->type() == xml::XMLNode::Type::CData) &&
+             HasNonWhitespaceValue(removed)) {
+    TreeMutation::InvalidateTextContentStyles(parent);
+  }
+  MarkDirty(parent, components::DirtyFlagsComponent::All);
+}
+
 void CheckReferenceChild(EntityHandle parent, EntityHandle referenceNode) {
   if (!referenceNode) {
     return;
@@ -166,6 +210,31 @@ void CheckReferenceChild(EntityHandle parent, EntityHandle referenceNode) {
 }
 
 }  // namespace
+
+void TreeMutation::SetValue(EntityHandle node, const RcStringOrRef& value) {
+  [[maybe_unused]] std::optional<DocumentWriteAccess> access = AcquireWriteAccess(node);
+  const auto parent = TextValueParent(node);
+  const bool hadText = HasNonWhitespaceValue(node);
+  donner::components::TreeMutationContext::DefaultSetValue(node, value);
+  if (parent) {
+    BumpMutationRevision(*parent);
+    if (hadText != HasNonWhitespaceValue(node)) {
+      InvalidateTextContentStyles(*parent);
+    }
+  }
+}
+
+void TreeMutation::InvalidateTextContentStyles(EntityHandle element) {
+  const auto stylesheets = element.registry()->view<StylesheetComponent>();
+  if (std::none_of(stylesheets.begin(), stylesheets.end(), [&stylesheets](Entity entity) {
+        return stylesheets.get<StylesheetComponent>(entity).selectorsDependOnTextContent;
+      })) {
+    return;
+  }
+
+  MarkNeedsFullRebuild(element);
+  MarkDirty(element, components::DirtyFlagsComponent::All);
+}
 
 void TreeMutation::InsertBefore(EntityHandle parent, EntityHandle newNode,
                                 EntityHandle referenceNode) {
@@ -233,8 +302,7 @@ void TreeMutation::RemoveChild(EntityHandle parent, EntityHandle child) {
 
   parent.get<donner::components::TreeComponent>().removeChild(*parent.registry(), child.entity());
 
-  MarkNeedsFullRebuild(parent);
-  MarkDirty(parent, components::DirtyFlagsComponent::All);
+  MarkChildRemoved(parent, child);
   MarkDetachedSubtree(child);
   components::NodeLifetimeCollector::Collect(*parent.registry());
   BumpMutationRevision(parent);
@@ -252,8 +320,7 @@ void TreeMutation::Remove(EntityHandle entity) {
   EntityHandle parent(*entity.registry(), parentEntity);
   entity.get<donner::components::TreeComponent>().remove(*entity.registry());
 
-  MarkNeedsFullRebuild(parent);
-  MarkDirty(parent, components::DirtyFlagsComponent::All);
+  MarkChildRemoved(parent, entity);
   MarkDetachedSubtree(entity);
   components::NodeLifetimeCollector::Collect(*entity.registry());
   BumpMutationRevision(parent);
