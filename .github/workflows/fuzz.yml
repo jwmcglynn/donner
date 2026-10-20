@@ -69,44 +69,16 @@ jobs:
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
-        run: |
-          bazelisk test \
-            --config=asan-fuzzer \
-            --config=fuzz-soak \
-            --test_output=errors \
-            --test_tag_filters=fuzz_target \
-            --build_tag_filters=fuzz_target \
-            //...
+        run: bazelisk test --config=fuzz-lane //...
 
       - name: Test text-full fuzzers
-        run: |
-          bazelisk test \
-            --config=asan-fuzzer \
-            --config=fuzz-soak \
-            --config=text-full \
-            --test_output=errors \
-            --test_tag_filters=fuzz_text_full \
-            --build_tag_filters=fuzz_text_full \
-            //...
+        run: bazelisk test --config=fuzz-lane-text-full //...
 
       - name: Soak image loader at production decode budget
-        run: |
-          bazelisk test \
-            --config=asan-fuzzer \
-            --config=fuzz-soak \
-            --test_output=errors \
-            //tools/ci:image_loader_production_soak
+        run: bazelisk test --config=fuzz-lane-production-soak //tools/ci:image_loader_production_soak
 
       - name: Test Geode render fuzzers
-        run: |
-          bazelisk test \
-            --config=geode \
-            --config=asan-fuzzer \
-            --config=fuzz-soak \
-            --test_output=errors \
-            --test_tag_filters=fuzz_geode \
-            --build_tag_filters=fuzz_geode \
-            //...
+        run: bazelisk test --config=fuzz-lane-geode //...
 
       - name: Retain failed test evidence
         if: failure()
@@ -135,33 +107,13 @@ jobs:
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
-        run: |
-          bazelisk test \
-            --config=asan-fuzzer \
-            --config=fuzz-soak \
-            --test_output=errors \
-            --test_tag_filters=fuzz_target \
-            --build_tag_filters=fuzz_target \
-            //...
+        run: bazelisk test --config=fuzz-lane //...
 
       - name: Test text-full fuzzers
-        run: |
-          bazelisk test \
-            --config=asan-fuzzer \
-            --config=fuzz-soak \
-            --config=text-full \
-            --test_output=errors \
-            --test_tag_filters=fuzz_text_full \
-            --build_tag_filters=fuzz_text_full \
-            //...
+        run: bazelisk test --config=fuzz-lane-text-full //...
 
       - name: Soak image loader at production decode budget
-        run: |
-          bazelisk test \
-            --config=asan-fuzzer \
-            --config=fuzz-soak \
-            --test_output=errors \
-            //tools/ci:image_loader_production_soak
+        run: bazelisk test --config=fuzz-lane-production-soak //tools/ci:image_loader_production_soak
 
       - name: Retain failed test evidence
         if: failure()
