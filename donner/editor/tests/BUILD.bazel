@@ -306,6 +306,7 @@ donner_cc_test(
         "//donner/svg/renderer/tests:mock_renderer_interface",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:font_catalog",
+        "//donner/svg/resources:font_catalog_types",
         "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",
     ],
