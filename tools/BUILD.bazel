@@ -284,6 +284,7 @@ py_test(
         "//:.github/workflows/lint.yml",
         "//:.github/workflows/main.yml",
         "//:github_action_definitions",
+        "//build_defs:BUILD.bazel",
         "//donner/editor/tests:BUILD.bazel",
         "//donner/editor/tests:RunEditorWindowVulkanSurfaceTests.sh",
         "//donner/editor/wasm:wasm_package_size_test_arguments",
@@ -347,7 +348,9 @@ py_test(
         "ci_xcode_discoverable.m",
         "//:.bazelrc",
         "//:github_action_definitions",
+        "//build_defs:BUILD.bazel",
         "//build_defs:macos_app_bundle.bzl",
+        "//donner/gpu/metal/tests:BUILD.bazel",
     ],
     # `hosted_parity`: its result can depend on the runner, so trusted PRs also rerun it with main's
     # hosted configuration (.github/workflows/main.yml: macos-hosted-parity and the hosted Linux

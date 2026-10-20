@@ -826,13 +826,18 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             job = self._job_body(job_name)
             self.assertNotIn("hosted-macos-unvalidated", job, job_name)
             self.assertNotIn("metal_shader_validation", job, job_name)
-        bazelrc = _repository_text(".bazelrc")
-        setting = [line for line in bazelrc.splitlines()
-                   if "metal_shader_validation" in line and not line.startswith("#")]
-        self.assertEqual(setting,
-                         ["test:hosted-macos-unvalidated --//build_defs:metal_shader_validation=off"])
-        self.assertNotRegex(bazelrc, r"(?m)^\S+:(?!hosted-macos-unvalidated\s)\S*\s.*"
-                                     r"--config=hosted-macos-unvalidated")
+        # main.yml names the config only in that step and never names the setting, so no
+        # workflow-level env can carry either into another lane.
+        workflow = _repository_text(".github/workflows/main.yml")
+        self.assertEqual(1, workflow.count("hosted-macos-unvalidated"))
+        self.assertEqual(0, workflow.count("metal_shader_validation"))
+        # The config's definition is the only .bazelrc line that names it or the setting, so no
+        # other config (qualified or not, `--config=x` or `--config x`) can pull it in.
+        bazelrc = [line for line in _repository_text(".bazelrc").splitlines()
+                   if not line.lstrip().startswith("#")]
+        definition = ["test:hosted-macos-unvalidated --//build_defs:metal_shader_validation=off"]
+        for needle in ("hosted-macos-unvalidated", "metal_shader_validation"):
+            self.assertEqual(definition, [line for line in bazelrc if needle in line], needle)
         trusted = self._job_body("macos-self-hosted")
         self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", trusted)
         self.assertNotIn("requires_shader_validation", self._step_body(trusted, "Test"))
@@ -853,9 +858,30 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("//donner/gpu/metal/tests:metal_shader_memory_validation_tests",
                       preflight_suite)
         metal = _repository_text("donner/gpu/metal/tests/BUILD.bazel")
+
+        def rule(text, name):
+            return text.split('name = "%s",' % name, 1)[1].split("\n)\n", 1)[0]
+
+        def block(text, name):
+            return text.split("\n%s = " % name, 1)[1].split("\n}", 1)[0]
+
         for target in ("metal_validation_profile", "metal_shader_memory_validation_tests"):
-            rule = metal.split('name = "%s",' % target, 1)[1].split("\n)\n", 1)[0]
-            self.assertIn('tags = ["requires_shader_validation"]', rule, target)
+            self.assertIn('tags = ["requires_shader_validation"]', rule(metal, target), target)
+        # The setting defaults to full validation, and turning it off keeps API validation.
+        self.assertIn('build_setting_default = "on"',
+                      rule(_repository_text("build_defs/BUILD.bazel"), "metal_shader_validation"))
+        api_only = block(metal, "_METAL_API_ONLY_VALIDATION_ENV")
+        self.assertIn('"MTL_DEBUG_LAYER": "1"', api_only)
+        self.assertIn('"MTL_SHADER_VALIDATION": "0"', api_only)
+        # The probe and the canary assert shader validation, so they never take the setting.
+        self.assertIn('"MTL_SHADER_VALIDATION": "1"', block(metal, "_METAL_SHADER_VALIDATION_ENV"))
+        self.assertIn("_METAL_VALIDATION_PROBE_ENV = dict(\n    _METAL_SHADER_VALIDATION_ENV,",
+                      metal)
+        for target, env in (("metal_validation_profile", "_METAL_VALIDATION_PROBE_ENV"),
+                            ("metal_full_validation_required", "_METAL_VALIDATION_PROBE_ENV"),
+                            ("metal_shader_memory_validation_tests",
+                             "_METAL_SHADER_VALIDATION_ENV")):
+            self.assertIn("    env = %s,\n" % env, rule(metal, target), target)
 
     def test_bazel_version_change_selects_full_suite_before_graph_hashing(self):
         """A Bazel upgrade changes the query graph, not just two version files."""

@@ -38,7 +38,10 @@ LANE_FLAGS = "$BAZEL_MACOS_BUILD_FLAGS"
 BAZEL_INVOCATION = re.compile(
     r"\bbazel(?:isk)?(?:\s+--[a-z_]+)*\s+(build|test|fetch|query|cquery|coverage|run)\b")
 # Flags that only select, run or report tests. They never change a build action's key. The Metal
-# shader-validation setting only selects the Metal device tests' `env` attribute.
+# shader-validation setting qualifies because its only use selects the Metal device tests' `env`
+# attribute: Bazel's visibility check keeps every other package from selecting on it
+# (test_metal_shader_validation_setting_selects_only_test_environment), and an aquery of those
+# tests' compile, archive and link actions gave identical action keys with it on and off.
 TEST_ONLY_FLAG = re.compile(r"^--(?:no)?(?:test_|cache_test_results|local_test_jobs|"
                             r"flaky_test_attempts|runs_per_test|keep_going|build_event_json_file|"
                             r"run_under|//build_defs:metal_shader_validation=)")
@@ -450,6 +453,28 @@ class MacosCacheKeyParityTest(unittest.TestCase):
 
     def test_macos_lanes_pass_identical_key_affecting_flags(self):
         self.assertEqual([], key_parity_problems(self.workflow, self.bazelrc))
+
+    def test_metal_shader_validation_setting_selects_only_test_environment(self):
+        build_defs = _read("build_defs/BUILD.bazel")
+        metal = _read("donner/gpu/metal/tests/BUILD.bazel")
+
+        def rule(text, kind, name):
+            return text.split('%s(\n    name = "%s",' % (kind, name), 1)[1].split("\n)\n", 1)[0]
+
+        # Only the Metal tests package can select on the setting; Bazel rejects any other use.
+        self.assertIn('visibility = ["//visibility:private"]',
+                      rule(build_defs, "string_flag", "metal_shader_validation"))
+        self.assertIn('visibility = ["//donner/gpu/metal/tests:__pkg__"]',
+                      rule(build_defs, "config_setting", "metal_shader_validation_off"))
+        self.assertEqual(1, build_defs.count('":metal_shader_validation"'))
+        # There, each select on it is a test's `env`, never a build attribute.
+        uses = metal.split('"//build_defs:metal_shader_validation_off"')
+        self.assertEqual(3, len(uses), "the shared device-test env and metal_device_loss_tests")
+        self.assertTrue(uses[0].endswith("\n_METAL_API_VALIDATION_ENV = select({\n    "))
+        self.assertTrue(uses[1].endswith("\n    env = select({\n        "))
+        for line in metal.splitlines():
+            if "_METAL_API_VALIDATION_ENV" in line and "= select(" not in line:
+                self.assertEqual("    env = _METAL_API_VALIDATION_ENV,", line)
 
     def test_only_unconfigured_queries_are_exempt_from_build_flags(self):
         recorded = {}

@@ -1350,8 +1350,11 @@ jobs:
       # records host load, memory and process call graphs, so only this ephemeral hosted
       # job sets it; a persistent self-hosted runner never publishes them.
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
-      # Both gating test steps pass the hosted-macos-quarantine config (.bazelrc), so their test
-      # environments stay identical and Bazel keeps its analysis cache between them.
+      # Both gating test steps pass the hosted-macos-quarantine config (.bazelrc). Only the Test
+      # step adds the config that gives the Metal device tests API validation only.
+      # Each Bazel step here changes a build option from the step before it (Build passes no
+      # test configs, and the Chromium qualification step omits the quarantine config), so each
+      # discards Bazel's analysis cache and re-analyzes, about 15 to 35 s per step on this image.
       # Exercise the Geode editor configuration through transitioned wrappers, which
       # locate declared shared libraries consistently on clean workers.
       GEODE_EDITOR_TARGETS: >-

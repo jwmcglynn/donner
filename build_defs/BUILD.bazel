@@ -17,6 +17,13 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+# Read by the macOS cache-key parity test, which checks who can select on the Metal validation
+# setting below.
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//tools:__pkg__"],
+)
+
 py_test(
     name = "check_banned_patterns_tests",
     size = "small",
@@ -216,7 +223,8 @@ config_setting(
 
 # Whether the Metal device tests request shader validation. A lane whose GPU cannot run it (the
 # GitHub-hosted macOS image's virtual GPU) sets `off` through --config=hosted-macos-unvalidated;
-# API validation stays on either way.
+# API validation stays on either way. Test environment only: do not select on this in build rules,
+# so the setting never changes a build action.
 string_flag(
     name = "metal_shader_validation",
     build_setting_default = "on",
@@ -224,7 +232,7 @@ string_flag(
         "on",
         "off",
     ],
-    visibility = ["//visibility:public"],
+    visibility = ["//visibility:private"],
 )
 
 config_setting(
@@ -232,7 +240,7 @@ config_setting(
     flag_values = {
         ":metal_shader_validation": "off",
     },
-    visibility = ["//visibility:public"],
+    visibility = ["//donner/gpu/metal/tests:__pkg__"],
 )
 
 banned_deps_test(
