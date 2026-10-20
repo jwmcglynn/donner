@@ -572,9 +572,9 @@ test-time check of the backends underneath it:
   `donner/gpu/metal/tests/BUILD.bazel`), so a validation fault fails the test on a real GPU. The
   hosted macOS image's virtual GPU cannot run shader validation, so hosted CI, including `main`,
   runs these tests with API validation only (no shader validation) and skips the ones that assert
-  validation. The self-hosted macOS
-  lane is the only CI shader-validation gate; a PR that did not run it at its head needs full
-  validation on capable hardware before merge. See [Metal validation](metal_validation.md).
+  validation. The self-hosted macOS lane is the only CI shader-validation gate; a PR that did not
+  run it at its head needs full validation on capable hardware before merge. See
+  [Metal validation](metal_validation.md).
 - **Vulkan.** `VulkanDevice` enables `VK_LAYER_KHRONOS_validation` whenever the loader enumerates
   it, with a debug-utils messenger that latches every error-severity message into the device's
   error state. Later waits and operations on that device then fail with the message instead of

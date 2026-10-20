@@ -17,8 +17,8 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-# Read by the macOS cache-key parity test, which checks who can select on the Metal validation
-# setting below.
+# Read by the CI policy tests, which check the Metal validation setting below and who can select
+# on it.
 exports_files(
     ["BUILD.bazel"],
     visibility = ["//tools:__pkg__"],

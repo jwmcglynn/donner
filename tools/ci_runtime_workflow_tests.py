@@ -831,6 +831,17 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         workflow = _repository_text(".github/workflows/main.yml")
         self.assertEqual(1, workflow.count("hosted-macos-unvalidated"))
         self.assertEqual(0, workflow.count("metal_shader_validation"))
+        workflows = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml")).parent
+        others = [path for path in sorted(workflows.glob("*.y*ml")) if path.name != "main.yml"]
+        actions = sorted((workflows.parent / "actions").glob("*/action.y*ml"))
+        self.assertGreater(len(others), 5)
+        self.assertGreater(len(actions), 3)
+        for path in others + actions:
+            for needle in ("hosted-macos-unvalidated", "metal_shader_validation"):
+                self.assertNotIn(needle, path.read_text(encoding="utf-8"), path.name)
+        for script in ("tools/ci_bazel_test.sh", "tools/ci/editor_wasm_lane.sh"):
+            for needle in ("hosted-macos-unvalidated", "metal_shader_validation"):
+                self.assertNotIn(needle, _repository_text(script), script)
         # The config's definition is the only .bazelrc line that names it or the setting, so no
         # other config (qualified or not, `--config=x` or `--config x`) can pull it in.
         bazelrc = [line for line in _repository_text(".bazelrc").splitlines()
@@ -870,6 +881,23 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         # The setting defaults to full validation, and turning it off keeps API validation.
         self.assertIn('build_setting_default = "on"',
                       rule(_repository_text("build_defs/BUILD.bazel"), "metal_shader_validation"))
+        # `off` selects API-only validation and nothing else does, in both selects.
+        self.assertIn('":metal_shader_validation": "off",',
+                      rule(_repository_text("build_defs/BUILD.bazel"),
+                           "metal_shader_validation_off"))
+        self.assertIn('\n_METAL_API_VALIDATION_ENV = select({\n'
+                      '    "//build_defs:metal_shader_validation_off": '
+                      '_METAL_API_ONLY_VALIDATION_ENV,\n'
+                      '    "//conditions:default": _METAL_SHADER_VALIDATION_ENV,\n'
+                      '})\n', metal)
+        self.assertIn('    env = select({\n'
+                      '        "//build_defs:metal_shader_validation_off": '
+                      '_METAL_API_ONLY_VALIDATION_ENV,\n'
+                      '        "//conditions:default": {\n'
+                      '            "MTL_DEBUG_LAYER": "1",\n'
+                      '            "MTL_SHADER_VALIDATION": "1",\n'
+                      '        },\n'
+                      '    }),\n', rule(metal, "metal_device_loss_tests"))
         api_only = block(metal, "_METAL_API_ONLY_VALIDATION_ENV")
         self.assertIn('"MTL_DEBUG_LAYER": "1"', api_only)
         self.assertIn('"MTL_SHADER_VALIDATION": "0"', api_only)

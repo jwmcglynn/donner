@@ -466,7 +466,8 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                       rule(build_defs, "string_flag", "metal_shader_validation"))
         self.assertIn('visibility = ["//donner/gpu/metal/tests:__pkg__"]',
                       rule(build_defs, "config_setting", "metal_shader_validation_off"))
-        self.assertEqual(1, build_defs.count('":metal_shader_validation"'))
+        # Named only by the flag, the config_setting and its flag_values key.
+        self.assertEqual(3, build_defs.count("metal_shader_validation"))
         # There, each select on it is a test's `env`, never a build attribute.
         uses = metal.split('"//build_defs:metal_shader_validation_off"')
         self.assertEqual(3, len(uses), "the shared device-test env and metal_device_loss_tests")

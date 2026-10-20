@@ -1340,8 +1340,9 @@ jobs:
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME. The hosted image's virtual
       # GPU cannot run Metal shader validation (docs/metal_validation.md): with the
-      # texture check on, validated pipelines fail to compile, so the Metal tests
-      # here run with it off, unvalidated.
+      # texture check on, validated pipelines fail to compile, so it stays off here.
+      # The Metal device tests request API validation only, through the config the
+      # Test step passes.
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"
       # Free space, in GiB, required after the caches are restored: a cold build of the tree
       # peaked near 27 GiB on this image, before tests and browser trees.
