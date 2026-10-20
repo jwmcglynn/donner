@@ -1667,11 +1667,11 @@ def _build_event_flag_problems(flags):
     return problems
 
 
-def _gating_bazel_commands(workflows):
-    """(workflow, job, step, invocation) for each Bazel command a gating step runs."""
+def _bazel_commands(workflows):
+    """(workflow, job, step, invocation) for each Bazel command in any step, whatever its `if:`."""
     for name, workflow in workflows.items():
         for job_name, job in _jobs(workflow).items():
-            for step in _bazel_running_steps(workflow, job):
+            for step in job.get("steps") or []:
                 script = str(step.get("run") or "")
                 for invocation in bazel_invocations(script,
                                                     _step_environment(workflow, job, step)):
@@ -1679,9 +1679,9 @@ def _gating_bazel_commands(workflows):
 
 
 def build_event_file_problems(workflows):
-    """Gating Bazel commands whose build event file would depend on the remote cache."""
+    """Bazel commands whose build event file would depend on the remote cache."""
     return sorted({"%s %s %s: %s" % (name, job, step, problem)
-                   for name, job, step, invocation in _gating_bazel_commands(workflows)
+                   for name, job, step, invocation in _bazel_commands(workflows)
                    for problem in _build_event_flag_problems(invocation["flags"])})
 
 
@@ -1834,12 +1834,7 @@ class CiLaneParityTest(unittest.TestCase):
         # A later config on the same command line would override `common:ci`.
         self.assertEqual([], [line for line in rc_lines if not line.startswith("#") and any(
             _PATH_CONVERSION_ON.match(word) for word in line.split())])
-        main_push = {name: self.workflows[name] for name in self.main_push_workflows}
-        self.assertEqual([], build_event_file_problems(main_push))
-        # Workflows main pushes do not run are not evaluated above; none writes an event file.
-        for name, path in ((path.name, path) for path in _workflow_paths()):
-            if name not in self.main_push_workflows:
-                self.assertNotIn("--build_event_", path.read_text(encoding="utf-8"), name)
+        self.assertEqual([], build_event_file_problems(self.workflows))
 
     def test_build_event_file_problems_are_found(self):
         geode = "Test (Geode editor lane)"
