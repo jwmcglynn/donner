@@ -101,6 +101,16 @@ HOSTED_MACOS_RESOURCE_FLAGS = ("--jobs=3", "--local_resources=cpu=3",
                                "--local_resources=memory=4802")
 
 _PARITY = ("main.yml", "macos", "macos-hosted-parity")
+# Main's hosted image cannot run Metal shader validation (docs/metal_validation.md).
+HOSTED_NO_SHADER_VALIDATION = (
+    "Main's hosted virtual GPU cannot run Metal shader validation, so its Metal tests run with "
+    "the texture check off and unvalidated. Accepted risk: main tests a different GPU with "
+    "weaker checks; pull request lanes on a real GPU keep full validation.")
+TEXTURE_USAGE_SPLIT = (("test-env-main-only", "MTL_SHADER_VALIDATION_TEXTURE_USAGE=0"),
+                       ("test-env-pr-only", "MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"))
+HOSTED_SKIPS_SHADER_VALIDATION_TESTS = (
+    "Main runs fewer tests: the validation probe and the out-of-bounds canary assert shader "
+    "validation, which main's hosted virtual GPU cannot run.")
 PARITY_ALLOWLIST = {
     **{_PARITY + ("*", "flag-pr-only", flag):
        "Hosted runner shape: caps Bazel's scheduling at the hosted runner's CPUs and memory "
@@ -128,11 +138,10 @@ PARITY_ALLOWLIST = {
     _PARITY + ("Test", "test-env-main-only", "DONNER_BROWSER_STALL_DIAGNOSTICS=1"):
         "Diagnostics only: it changes what a timed-out browser test records, and this step runs "
         "no browser test.",
-    _PARITY + ("*", "runtime-env-main-only",
-               "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_"
-               "USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"):
-        "Main may relax one Metal texture check on a paravirtual GPU; the parity lane keeps "
-        "full validation on real hardware.",
+    **{_PARITY + (step, kind, value): HOSTED_NO_SHADER_VALIDATION
+       for step in ("Test", "Test (Geode editor lane)") for kind, value in TEXTURE_USAGE_SPLIT},
+    _PARITY + ("Test", "tag-filter-main-only", "-requires_shader_validation"):
+        HOSTED_SKIPS_SHADER_VALIDATION_TESTS,
 }
 
 # Tests that main's hosted jobs run and whose result can depend on the runner's CPU count
@@ -225,11 +234,17 @@ INVOCATION_ALLOWLIST = {
     # keys stay identical (//tools:macos_cache_key_parity_tests).
     **{("main.yml", "macos", "macos-self-hosted", step, kind, value):
        "Lane identity for test results only; it does not change what runs."
-       for step in ("Metal validation preflight", "Qualify pinned Chromium archive",
-                    "Test", "Test (browser targets)",
+       for step in ("Qualify pinned Chromium archive", "Test", "Test (browser targets)",
                     "Test (Geode editor lane)")
        for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
                            ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted"))},
+    **{("main.yml", "macos", "macos-self-hosted", step, kind, value):
+       HOSTED_NO_SHADER_VALIDATION
+       for step in ("Qualify pinned Chromium archive", "Test", "Test (browser targets)",
+                    "Test (Geode editor lane)")
+       for kind, value in TEXTURE_USAGE_SPLIT},
+    ("main.yml", "macos", "macos-self-hosted", "Test", "tag-filter-main-only",
+     "-requires_shader_validation"): HOSTED_SKIPS_SHADER_VALIDATION_TESTS,
     # A changed non-Bazel step is keyed by a digest of both rendered definitions, so any edit to
     # what the step runs (its action, inputs, script, shell, its own env and the variables it
     # names) changes the digest and needs a new review. Overrides of the Xcode selection's test
@@ -238,14 +253,6 @@ INVOCATION_ALLOWLIST = {
     ("main.yml", "macos", "macos-self-hosted", "Refresh Xcode toolchain configuration",
      "step-changed", "c3adecb0303d2d56"):
         "Same repositories refreshed; only the runner-specific startup flags differ.",
-    # The hosted runner has a paravirtual GPU whose Metal validation layer cannot check texture
-    # usage, so the hosted lane picks its validation profile at run time. The self-hosted runner
-    # requires full validation instead, which is stricter.
-    ("main.yml", "macos", "macos-self-hosted", "*", "runtime-env-main-only",
-     "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
-     "--test_env=DONNER_CI_MACOS_LANE=hosted"):
-        "Main may relax one Metal texture check on a paravirtual GPU; the pull request runs "
-        "full validation.",
     # Setup the hosted runner needs and the self-hosted runner has already: the host provides
     # Bazelisk, Homebrew LLVM and the Xcode tools ("Prepare self-hosted macOS toolchain"),
     # and keeps Bazel's repository and action state between runs. The Bazel steps then fetch
@@ -253,15 +260,10 @@ INVOCATION_ALLOWLIST = {
     **{("main.yml", "macos", "macos-self-hosted", step, "step-main-only", ""):
        "Hosted runner setup only; the self-hosted runner is provisioned with it, and it "
        "changes no test, filter or flag."
-       for step in ("Install clang-tidy", "Setup Bazel", "Restore Bazel action cache",
-                    "Fetch Metal validation dependencies")},
+       for step in ("Install clang-tidy", "Setup Bazel", "Restore Bazel action cache")},
     ("main.yml", "macos", "macos-self-hosted", "Save Bazel action cache", "step-main-only", ""):
         "Hosted runner teardown only: it bounds and saves the action cache that 'Restore Bazel "
         "action cache' restored, after every test step, and changes no test, filter or flag.",
-    ("main.yml", "macos", "macos-self-hosted", "Select Metal validation profile", "step-main-only",
-     ""):
-        "Main picks its Metal validation profile; the pull request instead requires full "
-        "validation in 'Require full Metal shader validation'.",
 }
 
 # Differences in how a job that runs on both main and a pull request runs Bazel in each, keyed

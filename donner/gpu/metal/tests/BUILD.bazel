@@ -5,6 +5,11 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 # renderer's shared golden for the same scene, and the color-matrix compute
 # test.
 
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//tools:__pkg__"],
+)
+
 # Metal API and shader validation for the device tests below, so a validation issue aborts the
 # test loudly instead of passing unnoticed.
 _METAL_API_VALIDATION_ENV = {
@@ -366,10 +371,13 @@ _METAL_VALIDATION_PROBE_ENV = dict(
     MTL_SHADER_VALIDATION_TEXTURE_USAGE = "1",
 )
 
+# Asserts that shader validation is active (or the one historical exception), so a lane whose
+# GPU cannot run validation excludes it by tag instead of failing.
 cc_test(
     name = "metal_validation_profile",
     size = "small",
     env = _METAL_VALIDATION_PROBE_ENV,
+    tags = ["requires_shader_validation"],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [":metal_validation_profile_probe_impl"],
 )
@@ -397,11 +405,13 @@ objc_library(
     alwayslink = True,
 )
 
+# The out-of-bounds canary needs working shader validation; see metal_validation_profile.
 cc_test(
     name = "metal_shader_memory_validation_tests",
     size = "small",
     env = _METAL_API_VALIDATION_ENV,
     shard_count = 1,
+    tags = ["requires_shader_validation"],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":metal_shader_memory_validation_impl",

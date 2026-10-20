@@ -53,6 +53,8 @@ BENIGN_NOTICES = (
     "queue times.",
     "Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal "
     "compiler.",
+    "Excluding requires_shader_validation targets: the hosted macOS image's virtual GPU cannot "
+    "run Metal shader validation.",
 )
 
 # The action-cache save that ends every job restoring that cache. It has no `if:` and runs after

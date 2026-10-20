@@ -575,11 +575,11 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         files = _workflow_files()
         self.assertEqual([], private_backend_problems(files))
         main = ".github/workflows/main.yml"
-        hosted_step = ("      - name: Fetch Metal validation dependencies\n"
+        hosted_step = ("      - name: Install clang-tidy\n"
                        "        env:\n          URL: ${{ secrets.BAZEL_REMOTE_CACHE }}\n")
         cases = {
             "hosted secret": files[main].replace(
-                "      - name: Fetch Metal validation dependencies\n", hosted_step, 1),
+                "      - name: Install clang-tidy\n", hosted_step, 1),
             "hosted remote execution": files[main].replace(
                 "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
                 "bazelisk build --config=ci --config=re $BAZEL_MACOS_BUILD_FLAGS $TARGETS", 1),

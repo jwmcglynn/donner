@@ -240,8 +240,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         hosted = self._job_body("macos")
         main_test = self._step_body(hosted, "Test")
         self.assertIn(
-            "--test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,"
-            "-launches-browser,-fuzz_soak ",
+            "--test_tag_filters=-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,"
+            "-ci-remote-gpu,-launches-browser,-fuzz_soak ",
             main_test,
         )
         browser = self._step_body(hosted, "Test (browser targets)")
@@ -806,52 +806,43 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             self.assertEqual(sys.executable, result.stdout.strip())
 
-    def test_metal_profile_selection_is_bounded_and_precedes_the_full_build(self):
-        hosted = self._job_body("macos")
-        fetching = self._step_body(hosted, "Fetch Metal validation dependencies")
-        self.assertIn("nick-fields/retry@v4", fetching)
-        self.assertIn("bazelisk fetch --config=ci", fetching)
-        self.assertIn("max_attempts: 3", fetching)
-        self.assertNotIn("bazelisk test", fetching)
-        self.assertLess(hosted.index("Fetch Metal validation dependencies"),
-                        hosted.index("Select Metal validation profile"))
-        selection = self._step_body(hosted, "Select Metal validation profile")
-        self.assertIn("//tools/ci:metal_profile", selection)
-        self.assertIn("tools/metal_validation_profile.py", selection)
-        self.assertIn("--nocache_test_results", selection)
-        case_start = selection.index('          case "$profile" in')
-        case_end = selection.index("          esac", case_start) + len("          esac")
-        script = "#!/bin/bash\nset -euo pipefail\n" + textwrap.dedent(selection[case_start:case_end])
-        for profile, expected_status, expected_flags in (
-            ("full", 0, ""),
-            ("paravirtual-texture-usage-off", 0,
-             "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
-             "--test_env=DONNER_CI_MACOS_LANE=hosted\n"),
-            ("unknown", 1, ""),
-            ("", 1, ""),
-        ):
-            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
-                env_file = Path(temporary) / "environment"
-                summary = Path(temporary) / "summary"
-                result = self._run_script(script, [], env={
-                    "profile": profile, "GITHUB_ENV": str(env_file),
-                    "GITHUB_STEP_SUMMARY": str(summary),
-                })
-                self.assertEqual(expected_status, result.returncode, result.stderr)
-                self.assertEqual(expected_flags, env_file.read_text() if env_file.exists() else "")
-        for job_name in ("macos", "macos-self-hosted"):
+    def test_shader_validation_runs_only_on_the_self_hosted_real_gpu(self):
+        # The hosted image's virtual GPU cannot run Metal shader validation
+        # (docs/metal_validation.md), so the hosted jobs run their Metal tests unvalidated and
+        # skip the tests that assert validation; the self-hosted job keeps both gates mandatory.
+        for job_name in ("macos", "macos-browser"):
             job = self._job_body(job_name)
-            preflight = self._step_body(job, "Metal validation preflight")
-            self.assertIn("--nocache_test_results", preflight)
-            self.assertLess(job.index("Metal validation preflight"), job.index("- name: Build"))
-            self.assertIn("//tools/ci:metal_preflight", preflight)
-            self.assertIn("steps.metal_preflight.outcome == 'failure'", job)
+            for step in ("Select Metal validation profile", "Metal validation preflight",
+                         "Fetch Metal validation dependencies"):
+                self.assertNotIn("- name: %s\n" % step, job, job_name)
+            self.assertNotIn("metal_profile", job, job_name)
+            self.assertIn("--test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", job, job_name)
+            self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", job, job_name)
+        hosted_test = self._step_body(self._job_body("macos"), "Test")
+        self.assertIn("-requires_shader_validation", hosted_test)
         trusted = self._job_body("macos-self-hosted")
-        required = self._step_body(trusted, "Require full Metal shader validation")
-        self.assertIn("--test_tag_filters=", required)
-        self.assertIn("--nocache_test_results", required)
-        self.assertIn("//tools/ci:metal_full_validation", required)
         self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", trusted)
+        self.assertNotIn("requires_shader_validation", self._step_body(trusted, "Test"))
+        required = self._step_body(trusted, "Require full Metal shader validation")
+        preflight = self._step_body(trusted, "Metal validation preflight")
+        for step, target in ((required, "//tools/ci:metal_full_validation"),
+                             (preflight, "//tools/ci:metal_preflight")):
+            self.assertIn(target, step)
+            self.assertIn("--nocache_test_results", step)
+            # Mandatory: never skipped, never allowed to fail.
+            self.assertNotRegex(step, r"(?m)^ {8}(if|continue-on-error):")
+            self.assertLess(trusted.index(step), trusted.index("      - name: Build\n"))
+        self.assertIn("--test_tag_filters=", required)
+        self.assertIn("steps.metal_profile.outcome == 'failure'", trusted)
+        self.assertIn("steps.metal_preflight.outcome == 'failure'", trusted)
+        suites = _repository_text("tools/ci/BUILD.bazel")
+        preflight_suite = suites.split('name = "metal_preflight"', 1)[1].split(")", 1)[0]
+        self.assertIn("//donner/gpu/metal/tests:metal_shader_memory_validation_tests",
+                      preflight_suite)
+        metal = _repository_text("donner/gpu/metal/tests/BUILD.bazel")
+        for target in ("metal_validation_profile", "metal_shader_memory_validation_tests"):
+            rule = metal.split('name = "%s",' % target, 1)[1].split("\n)\n", 1)[0]
+            self.assertIn('tags = ["requires_shader_validation"]', rule, target)
 
     def test_bazel_version_change_selects_full_suite_before_graph_hashing(self):
         """A Bazel upgrade changes the query graph, not just two version files."""

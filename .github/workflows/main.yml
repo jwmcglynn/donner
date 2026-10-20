@@ -1338,8 +1338,11 @@ jobs:
       # flags (//tools:macos_cache_key_parity_tests).
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
-      # sandbox; Homebrew's tool wrappers require HOME.
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted"
+      # sandbox; Homebrew's tool wrappers require HOME. The hosted image's virtual
+      # GPU cannot run Metal shader validation (docs/metal_validation.md): with the
+      # texture check on, validated pipelines fail to compile, so the Metal tests
+      # here run with it off, unvalidated.
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"
       # Enables the browser tests' timeout recorder (browser-stall-diagnostics.mjs). It
       # records host load, memory and process call graphs, so only this ephemeral hosted
       # job sets it; a persistent self-hosted runner never publishes them.
@@ -1423,49 +1426,6 @@ jobs:
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
 
-      - name: Fetch Metal validation dependencies
-        uses: nick-fields/retry@v4
-        with:
-          timeout_minutes: 5
-          max_attempts: 3
-          retry_wait_seconds: 15
-          command: >-
-            bazelisk fetch --config=ci $BAZEL_MACOS_BUILD_FLAGS
-            //donner/gpu/metal/tests:all
-
-      - name: Select Metal validation profile
-        id: metal_profile
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazelisk test --config=ci --nocache_test_results --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //tools/ci:metal_profile
-          profile=$(python3 tools/metal_validation_profile.py \
-            bazel-testlogs/donner/gpu/metal/tests/metal_validation_profile/test.log)
-          case "$profile" in
-            full)
-              echo "Metal shader validation: full." >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            paravirtual-texture-usage-off)
-              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted" >> "$GITHUB_ENV"
-              echo "Metal: verified virtual-GPU texture-check exception; API, buffer, threadgroup, and pixel checks remain active. A full-validation receipt for the PR head is required before merge. See docs/metal_validation.md." >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            *)
-              echo "::error::Unsupported Metal validation profile."
-              exit 1
-              ;;
-          esac
-
-      - name: Metal validation preflight
-        id: metal_preflight
-        shell: bash
-        run: |
-          set -euo pipefail
-          tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //tools/ci:metal_preflight
-
       - name: Build
         shell: bash
         run: |
@@ -1500,9 +1460,13 @@ jobs:
           # Metal validation before merge (docs/metal_validation.md). Main's
           # hosted result alone does not establish that hardware signal.
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
+          # Its virtual GPU cannot run shader validation either, so the tests that assert it
+          # (the validation profile probe and the out-of-bounds canary) run only on the
+          # self-hosted real GPU (docs/metal_validation.md).
+          echo "::notice::Excluding requires_shader_validation targets: the hosted macOS image's virtual GPU cannot run Metal shader validation."
           # Tests that launch a browser run in the next step instead.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak \
+            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,-ci-remote-gpu,-launches-browser,-fuzz_soak \
             --config=hosted-macos-quarantine \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
@@ -1579,7 +1543,7 @@ jobs:
         run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
+        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -1752,7 +1716,7 @@ jobs:
     # compares the browser step's Bazel invocation between the two.
     env:
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
     steps:
       - name: Checkout
@@ -1826,43 +1790,6 @@ jobs:
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
 
-      - name: Fetch Metal validation dependencies
-        uses: nick-fields/retry@v4
-        with:
-          timeout_minutes: 5
-          max_attempts: 3
-          retry_wait_seconds: 15
-          command: >-
-            bazelisk fetch --config=ci $BAZEL_MACOS_BUILD_FLAGS
-            //donner/gpu/metal/tests:all
-
-      # The `macos` job's profile selection can rewrite BAZEL_MACOS_TEST_FLAGS on a
-      # virtual GPU. Run the same selection so the browser tests see the same test
-      # environment main's hosted job gives them.
-      - name: Select Metal validation profile
-        id: metal_profile
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazelisk test --config=ci --nocache_test_results --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //tools/ci:metal_profile
-          profile=$(python3 tools/metal_validation_profile.py \
-            bazel-testlogs/donner/gpu/metal/tests/metal_validation_profile/test.log)
-          case "$profile" in
-            full)
-              echo "Metal shader validation: full." >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            paravirtual-texture-usage-off)
-              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted" >> "$GITHUB_ENV"
-              echo "Metal: verified virtual-GPU texture-check exception for the browser subset." >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            *)
-              echo "::error::Unsupported Metal validation profile."
-              exit 1
-              ;;
-          esac
-
       # Same command as the `macos` job's browser step: the PR's selected targets,
       # filtered to tests that launch a browser, one at a time. That job builds the
       # whole selection in its Build step first; this job has no Build step, and
@@ -1920,7 +1847,7 @@ jobs:
         run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.browser_test.outcome == 'failure')
+        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.browser_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -2197,6 +2124,8 @@ jobs:
         timeout-minutes: 2
         run: python3 tools/ci_metal_toolchain.py --describe
 
+      # The only shader-validation gate in CI: the hosted image's virtual GPU cannot run it,
+      # so main runs none. Both steps are mandatory whenever this job runs.
       - name: Require full Metal shader validation
         id: metal_profile
         shell: bash

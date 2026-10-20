@@ -69,12 +69,6 @@ test_suite(
 )
 
 test_suite(
-    name = "metal_profile",
-    tags = ["manual"],
-    tests = ["//donner/gpu/metal/tests:metal_validation_profile"],
-)
-
-test_suite(
     name = "metal_full_validation",
     tags = ["manual"],
     tests = ["//donner/gpu/metal/tests:metal_full_validation_required"],

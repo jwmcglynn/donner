@@ -68,7 +68,11 @@ def _class_problems(where, entry):
                         % where)
     problems += _counterpart_problems(where, counterparts)
     problems += _exception_problems(where, exception)
-    unknown = set(entry) - {"when", "counterparts", "exception", "description"}
+    if not isinstance(entry.get("pr_only", False), bool) or (
+            entry.get("pr_only") and not counterparts):
+        problems.append("%s pr_only must be true or false, and only on a class with "
+                        "counterparts" % where)
+    unknown = set(entry) - {"when", "counterparts", "exception", "description", "pr_only"}
     return problems + _problem_list("%s has unknown key" % where, sorted(unknown))
 
 
@@ -154,8 +158,11 @@ def _exception_line(where, exception):
                                       exception["decision"])
 
 
-def _gap(where, counterparts):
-    expected = ", ".join("%s / %s" % (c["job"], c["step"]) for c in counterparts)
+def _gap(where, entry):
+    expected = ", ".join("%s / %s" % (c["job"], c["step"]) for c in entry["counterparts"])
+    if entry.get("pr_only"):
+        return "%s is required on this pull request but did not run; expected an executed %s" % (
+            where, expected)
     return "%s ran on main but not on this pull request; expected an executed %s" % (
         where, expected)
 
@@ -173,7 +180,7 @@ def check(manifest, receipts, selection):
         if entry.get("exception"):
             excepted.append(_exception_line(where, entry["exception"]))
         elif not any(_counterpart_ran(c, receipts) for c in entry["counterparts"]):
-            problems.append(_gap(where, entry["counterparts"]))
+            problems.append(_gap(where, entry))
     return problems, excepted
 
 

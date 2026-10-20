@@ -26,6 +26,8 @@ CAPACITY = ("Due to capacity constraints, jobs targeting macOS arm64 runners may
             "longer queue times.")
 METAL = ("Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal "
          "compiler.")
+SHADER_VALIDATION = ("Excluding requires_shader_validation targets: the hosted macOS image's "
+                     "virtual GPU cannot run Metal shader validation.")
 DIAG_PAGE = (
     "System.IO.IOException: Illegal byte sequence : '/Users/runner/actions-runner/extracted/_diag/"
     "pages/3907064f-31bb-8f13-bafa-25873b53f7d2_17cdf819-5d70-46a9-bcad-b728863fed71_2.log'\n"
@@ -121,7 +123,8 @@ IO_IN_TEST = job(117788674812, "macos", "failure", steps(
 IO_IN_TEST_ANNOTATIONS = [annotation(TEMP_SCRIPT),
                           annotation("Process completed with exit code 2."),
                           annotation("Process completed with exit code 1."),
-                          annotation(METAL, "notice"), annotation(CAPACITY, "notice")]
+                          annotation(METAL, "notice"), annotation(SHADER_VALIDATION, "notice"),
+                          annotation(CAPACITY, "notice")]
 
 # The same runner log page write failure once the action cache saves in its own final step
 # rather than in a post step.
