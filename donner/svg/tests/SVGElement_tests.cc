@@ -38,6 +38,11 @@ namespace donner::svg {
 
 namespace {
 
+/// The id of a query result, so a presence assertion prints which element matched.
+std::optional<RcString> QueriedId(const std::optional<SVGElement>& element) {
+  return element ? std::optional<RcString>(element->id()) : std::nullopt;
+}
+
 class SVGElementTests : public testing::Test {
 protected:
   SVGElementTests() { document_.setCanvasSize(800, 600); }
@@ -101,10 +106,11 @@ TEST_F(SVGElementTests, EmptySelectorIncludesTextAndCDataContent) {
   </svg>)svg");
   for (const char* id : {"word", "cdata", "entity", "nbsp", "child"}) {
     SCOPED_TRACE(id);
-    EXPECT_FALSE(doc.querySelector(std::string("#") + id + ":empty").has_value());
+    EXPECT_THAT(QueriedId(doc.querySelector(std::string("#") + id + ":empty")),
+                testing::Eq(std::nullopt));
   }
-  EXPECT_TRUE(doc.querySelector("#spaces:empty").has_value());
-  EXPECT_TRUE(doc.querySelector("#comment:empty").has_value());
+  EXPECT_THAT(QueriedId(doc.querySelector("#spaces:empty")), Optional(testing::_));
+  EXPECT_THAT(QueriedId(doc.querySelector("#comment:empty")), Optional(testing::_));
 }
 
 TEST_F(SVGElementTests, EmptySelectorRetainsGenericAndDescriptiveText) {
@@ -117,16 +123,18 @@ TEST_F(SVGElementTests, EmptySelectorRetainsGenericAndDescriptiveText) {
   </svg>)svg");
   for (const char* id : {"mixed", "cdata", "title", "desc", "metadata", "style"}) {
     SCOPED_TRACE(id);
-    EXPECT_FALSE(doc.querySelector(std::string("#") + id + ":empty").has_value());
+    EXPECT_THAT(QueriedId(doc.querySelector(std::string("#") + id + ":empty")),
+                testing::Eq(std::nullopt));
   }
   doc.querySelector("#mixed")->setAttribute("class", "changed");
-  EXPECT_FALSE(doc.querySelector("#mixed:empty").has_value());
+  EXPECT_THAT(QueriedId(doc.querySelector("#mixed:empty")), testing::Eq(std::nullopt));
   doc.querySelector("#title")->cast<SVGTitleElement>().setTextContent("");
   doc.querySelector("#desc")->cast<SVGDescElement>().setTextContent("");
   doc.querySelector("#metadata")->cast<SVGMetadataElement>().setTextContent("");
   doc.querySelector("#style")->cast<SVGStyleElement>().setContents("");
   for (const char* id : {"title", "desc", "metadata", "style"}) {
-    EXPECT_TRUE(doc.querySelector(std::string("#") + id + ":empty").has_value());
+    EXPECT_THAT(QueriedId(doc.querySelector(std::string("#") + id + ":empty")),
+                Optional(testing::_));
   }
 }
 
@@ -148,11 +156,11 @@ TEST_F(SVGElementTests, EmptySelectorTextChangesInvalidateNonlocalStyles) {
   EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.2));
   EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.4));
   text.setTextContent("");
-  EXPECT_TRUE(doc.querySelector("#text:empty").has_value());
+  EXPECT_THAT(QueriedId(doc.querySelector("#text:empty")), Optional(testing::_));
   EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.8));
   EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.6));
   text.appendText("new");
-  EXPECT_FALSE(doc.querySelector("#text:empty").has_value());
+  EXPECT_THAT(QueriedId(doc.querySelector("#text:empty")), testing::Eq(std::nullopt));
   EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.2));
   EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.4));
 }
@@ -167,15 +175,15 @@ TEST_F(SVGElementTests, EmptySelectorTracksRawTextValueChanges) {
   auto text = xml::XMLNode::CreateDataNode(xmlDocument, "word");
   auto node = xml::XMLNode::TryCast(target.unsafeEntityHandle()).value();
   node.appendChild(text);
-  EXPECT_FALSE(doc.querySelector("#target:empty").has_value());
+  EXPECT_THAT(QueriedId(doc.querySelector("#target:empty")), testing::Eq(std::nullopt));
   EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.2));
   text.setValue(" ");
-  EXPECT_TRUE(doc.querySelector("#target:empty").has_value());
+  EXPECT_THAT(QueriedId(doc.querySelector("#target:empty")), Optional(testing::_));
   EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.8));
   text.setValue("new");
   EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.2));
   node.removeChild(text);
-  EXPECT_TRUE(doc.querySelector("#target:empty").has_value());
+  EXPECT_THAT(QueriedId(doc.querySelector("#target:empty")), Optional(testing::_));
 }
 
 TEST_F(SVGElementTests, EmptySelectorTracksRawTextUnderTypedElements) {

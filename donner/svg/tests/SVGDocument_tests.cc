@@ -60,6 +60,11 @@ SVGDocument ParseSVG(std::string_view input, parser::SVGParser::Options options 
   return std::move(maybeResult).result();
 }
 
+/// The id of a query result, so a presence assertion prints which element matched.
+std::optional<RcString> QueriedId(const std::optional<SVGElement>& element) {
+  return element ? std::optional<RcString>(element->id()) : std::nullopt;
+}
+
 /// Matcher to check for an element with the given id.
 MATCHER_P(ElementIdEq, id, "") {
   return arg.id() == id;
@@ -412,17 +417,17 @@ TEST(SVGDocument, EmptySelectorPreservesAndRefreshesProjectedGenericText) {
   auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
     <g id="generic">word<!--c--> </g><g id="data"><![CDATA[word]]></g>
   </svg>)svg");
-  EXPECT_FALSE(document.querySelector("#generic:empty").has_value());
+  EXPECT_THAT(QueriedId(document.querySelector("#generic:empty")), testing::Eq(std::nullopt));
   auto attribute = ReplaceInSource(document, "id=\"generic\"", "id=\"generic\" class=\"new\"");
   ASSERT_TRUE(attribute.applied);
   ASSERT_THAT(attribute.diagnostic, Eq(std::nullopt));
-  EXPECT_FALSE(document.querySelector("#generic:empty").has_value());
+  EXPECT_THAT(QueriedId(document.querySelector("#generic:empty")), testing::Eq(std::nullopt));
   auto replacement = ReplaceInSource(document, "<g id=\"generic\" class=\"new\">word<!--c--> </g>",
                                      "<g id=\"generic\"/>");
   ASSERT_TRUE(replacement.applied);
   ASSERT_THAT(replacement.diagnostic, Eq(std::nullopt));
-  EXPECT_TRUE(document.querySelector("#generic:empty").has_value());
-  EXPECT_FALSE(document.querySelector("#data:empty").has_value());
+  EXPECT_THAT(QueriedId(document.querySelector("#generic:empty")), Optional(testing::_));
+  EXPECT_THAT(QueriedId(document.querySelector("#data:empty")), testing::Eq(std::nullopt));
 }
 
 TEST(SVGDocument, EmptySelectorTextAuthoritySurvivesSourceAndTypedEdits) {
@@ -560,8 +565,14 @@ struct TextEditInvalidation {
 };
 
 /// Apply the editor's text-typing sequence to `#t` after marking the render tree as built.
-TextEditInvalidation TypeTextIntoBuiltDocument(std::string_view svg, std::string_view typed) {
+/// \p prepare runs on the parsed document first, before any style is computed.
+TextEditInvalidation TypeTextIntoBuiltDocument(
+    std::string_view svg, std::string_view typed,
+    const std::function<void(SVGDocument&)>& prepare = {}) {
   SVGDocument document = ParseSVG(svg);
+  if (prepare) {
+    prepare(document);
+  }
   SVGElement text = document.querySelector("#t").value();
   SVGElement sibling = document.querySelector("#r").value();
   std::ignore = sibling.getComputedStyle();
@@ -598,6 +609,30 @@ TEST(SVGDocument, TypedTextWithoutEmptySelectorKeepsIncrementalInvalidation) {
   }
 }
 
+TEST(SVGDocument, TypedTextReplacingRawTextChildrenKeepsIncrementalInvalidation) {
+  const PaintServer kRed = PaintServer::Solid(css::Color(css::RGBA(0xFF, 0, 0, 0xFF)));
+  constexpr std::string_view kSvg = R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>rect { fill: red }</style><rect id="r" width="10" height="10"/><text id="t">seed</text>
+  </svg>)";
+  // An incremental source edit retains the text's Data and CDATA children, which the typed setter
+  // then discards; removing them must not count as a structural edit.
+  const auto materializeRawText = [](SVGDocument& document) {
+    const auto changed = ReplaceInSource(document, R"(<text id="t">seed</text>)",
+                                         R"(<text id="t">word<![CDATA[other]]></text>)");
+    ASSERT_TRUE(changed.applied);
+    ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));
+    const std::optional<xml::XMLNode> text =
+        xml::XMLNode::TryCast(document.querySelector("#t")->unsafeEntityHandle());
+    ASSERT_THAT(text, Optional(testing::_));
+    const std::optional<xml::XMLNode> firstChild = text->firstChild();
+    EXPECT_THAT(firstChild ? std::optional(firstChild->type()) : std::nullopt,
+                Optional(xml::XMLNode::Type::Data))
+        << "the edit must retain raw text children";
+  };
+  EXPECT_THAT(TypeTextIntoBuiltDocument(kSvg, "SVG", materializeRawText),
+              Eq(TextEditInvalidation{.siblingStyleRetained = true, .siblingFill = kRed}));
+}
+
 TEST(SVGDocument, TypedTextEmptinessChangeRestylesEmptySelectorDocuments) {
   const PaintServer kBlack = PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 0xFF)));
   const PaintServer kRed = PaintServer::Solid(css::Color(css::RGBA(0xFF, 0, 0, 0xFF)));
@@ -622,8 +657,8 @@ TEST(SVGDocument, QuerySelectorSkipsRetainedRawTextAndComments) {
                                  "<text id=\"t\">word<![CDATA[other]]><!--c--></text>");
   ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));
   auto text = document.querySelector("#t").value();
-  ASSERT_FALSE(text.querySelector("*").has_value());
-  EXPECT_FALSE(text.querySelector(":defined").has_value());
+  ASSERT_THAT(QueriedId(text.querySelector("*")), testing::Eq(std::nullopt));
+  EXPECT_THAT(QueriedId(text.querySelector(":defined")), testing::Eq(std::nullopt));
   changed = ReplaceInSource(document, "word<![CDATA[other]]><!--c-->",
                             "word<![CDATA[other]]><!--c--><tspan id=\"real\"/>");
   ASSERT_THAT(changed.diagnostic, Eq(std::nullopt));
