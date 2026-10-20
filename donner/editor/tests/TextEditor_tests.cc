@@ -335,6 +335,35 @@ protected:
     ImGui::Render();
   }
 
+  // Renders a keyboard-handling frame that adds no input events, so every key pressed in an
+  // earlier frame stays held, and that lasts `deltaSeconds`. The editor draws frames only on
+  // events, so one frame can last longer than ImGui's key-repeat delay while a key is down.
+  void RenderHeldKeyFrame(float deltaSeconds) {
+    ImGuiIO& io = ImGui::GetIO();
+    // Pin ImGui's repeat timing so a held frame of `deltaSeconds` repeats exactly once.
+    io.KeyRepeatDelay = kKeyRepeatDelaySeconds;
+    io.KeyRepeatRate = kKeyRepeatRateSeconds;
+    const float previousDeltaTime = io.DeltaTime;
+    io.DeltaTime = deltaSeconds;
+    RenderEditorFrameWithKeyboard({});
+    io.DeltaTime = previousDeltaTime;
+  }
+
+  // Presses `key` (with Ctrl when `ctrl` is set) for one frame, then holds it through a frame
+  // longer than the key-repeat delay, then releases it.
+  void PressAndHoldAcrossLongFrame(ImGuiKey key, bool ctrl) {
+    ResetKeyboardState({key}, ctrl);
+    RenderEditorFrameWithKeyboard({key}, /*characters=*/"", ctrl);
+    RenderHeldKeyFrame(kLongFrameSeconds);
+    ResetKeyboardState({key}, ctrl);
+  }
+
+  /// ImGui's default key-repeat delay and rate.
+  static constexpr float kKeyRepeatDelaySeconds = 0.275f;
+  static constexpr float kKeyRepeatRateSeconds = 0.05f;
+  /// A frame comfortably longer than the key-repeat delay.
+  static constexpr float kLongFrameSeconds = 0.4f;
+
   // True if the editor's `BeginChild` window has been created in a prior frame.
   [[nodiscard]] bool EditorChildWindowExists() const {
     const ImGuiContext* context = ImGui::GetCurrentContext();
@@ -4730,6 +4759,86 @@ TEST_F(TextEditorTests, CtrlZUndoThroughRenderPath) {
   RenderEditorFrameWithKeyboard({ImGuiKey_Z}, /*characters=*/"", /*ctrl=*/true);
 
   EXPECT_EQ(editor.getText(), "Hello") << "Ctrl+Z through the render path should undo";
+}
+
+TEST_F(TextEditorTests, HeldCtrlVAcrossLongFramePastesOnce) {
+  editor.setText("");
+  ImGui::SetClipboardText("XYZ");
+
+  PressAndHoldAcrossLongFrame(ImGuiKey_V, /*ctrl=*/true);
+
+  EXPECT_EQ(editor.getText(), "XYZ");
+}
+
+TEST_F(TextEditorTests, HeldReboundPasteAcrossLongFramePastesOnce) {
+  // The once-per-press policy belongs to the paste action, not to Ctrl+V.
+  editor.setShortcut(TextEditor::ShortcutId::Paste, Shortcut(ImGuiKey_B, ShortcutModifier::Ctrl));
+  editor.setText("");
+  ImGui::SetClipboardText("XYZ");
+
+  PressAndHoldAcrossLongFrame(ImGuiKey_B, /*ctrl=*/true);
+
+  EXPECT_EQ(editor.getText(), "XYZ");
+}
+
+// A repeated cut finds an empty selection and does nothing, so this case guards the single cut
+// rather than reproducing the repeat.
+TEST_F(TextEditorTests, HeldCtrlXAcrossLongFrameCutsOnce) {
+  editor.setText("Hello world");
+  editor.setSelection(Coordinates(0, 0), Coordinates(0, 6));
+  editor.setCursorPosition(Coordinates(0, 6));
+  ImGui::SetClipboardText("");
+
+  PressAndHoldAcrossLongFrame(ImGuiKey_X, /*ctrl=*/true);
+
+  EXPECT_EQ(editor.getText(), "world");
+  EXPECT_STREQ(ImGui::GetClipboardText(), "Hello ");
+}
+
+TEST_F(TextEditorTests, HeldCtrlZAcrossLongFrameUndoesOnce) {
+  editor.setText("Hello");
+  editor.setCursorPosition(Coordinates(0, 5));
+  EnterCharacter('!');
+  EnterCharacter('?');
+  ASSERT_EQ(editor.getText(), "Hello!?");
+
+  PressAndHoldAcrossLongFrame(ImGuiKey_Z, /*ctrl=*/true);
+
+  EXPECT_EQ(editor.getText(), "Hello!");
+}
+
+TEST_F(TextEditorTests, HeldCtrlYAcrossLongFrameRedoesOnce) {
+  editor.setText("Hello");
+  editor.setCursorPosition(Coordinates(0, 5));
+  EnterCharacter('!');
+  EnterCharacter('?');
+  editor.undo();
+  editor.undo();
+  ASSERT_EQ(editor.getText(), "Hello");
+
+  PressAndHoldAcrossLongFrame(ImGuiKey_Y, /*ctrl=*/true);
+
+  EXPECT_EQ(editor.getText(), "Hello!");
+}
+
+TEST_F(TextEditorTests, HeldRightArrowAcrossLongFrameKeepsRepeating) {
+  editor.setText("abcdef");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  PressAndHoldAcrossLongFrame(ImGuiKey_RightArrow, /*ctrl=*/false);
+
+  // The press moves one column and the held long frame repeats once more.
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 2));
+}
+
+TEST_F(TextEditorTests, HeldBackspaceAcrossLongFrameKeepsRepeating) {
+  editor.setText("abcdef");
+  editor.setCursorPosition(Coordinates(0, 6));
+
+  PressAndHoldAcrossLongFrame(ImGuiKey_Backspace, /*ctrl=*/false);
+
+  // Deleting one character at a time repeats like typing does: the press and one repeat.
+  EXPECT_EQ(editor.getText(), "abcd");
 }
 
 // ============================================================================
