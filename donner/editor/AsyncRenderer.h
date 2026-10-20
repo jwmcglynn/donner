@@ -642,6 +642,16 @@ public:
    */
   void setReplayRenderDelayForTesting(std::chrono::milliseconds delay);
 
+  /**
+   * Keep the replay render delay running after a cancel request, as raster work keeps the document
+   * until it reaches its next cancellation check, so input can arrive while the worker holds it.
+   *
+   * @param ignore True to finish every later delay even after cancellation.
+   */
+  void setReplayRenderDelayIgnoresCancellationForTesting(bool ignore) {
+    replayRenderDelayIgnoresCancellationForTesting_.store(ignore, std::memory_order_release);
+  }
+
   /// Pause queued renders before they acquire the document, for deterministic handoff replays.
   /// Shutdown always releases this pause.
   void setReplayDocumentAccessBlockedForTesting(bool blocked);
@@ -996,6 +1006,10 @@ private:
   void workerLoop();
   /// Wait for the replay-only input pause; returns with the worker mutex held, including shutdown.
   void waitForReplayDocumentAccess(std::unique_lock<std::mutex>& lock);
+  /// Run the replay-only render delay inside the worker's document access.
+  /// @return True when no delay is set; otherwise false if the render is cancelled when the delay
+  /// ends.
+  bool runReplayRenderDelay();
   /// Poll an idle GPU context, then wait for work with a short completion timer only while needed.
   /// Returns with \p lock held so the worker can consume its state without a race.
   /// @param lock Deferred worker-state lock. @param timing Receives the preceding idle-pass
@@ -1237,6 +1251,8 @@ private:
 
   /// Replay/test-only fixed delay injected into each worker render attempt.
   std::atomic<std::chrono::milliseconds::rep> replayRenderDelayMsForTesting_{0};
+  /// Replay/test-only: finish the injected delay even after a cancel request.
+  std::atomic<bool> replayRenderDelayIgnoresCancellationForTesting_{false};
   /// Test-only pause before a worker consumes its submitted document.
   std::atomic<bool> replayDocumentAccessBlockedForTesting_{false};
 

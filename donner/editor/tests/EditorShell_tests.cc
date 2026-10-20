@@ -2781,7 +2781,6 @@ TEST(EditorShellTest, SelectToolDragsAUseInstanceAndUndoRestoresIt) {
   EditorApp& app = EditorShellTestAccess::App(shell);
   const auto use = app.document().document().querySelector("#u");
   ASSERT_THAT(use, testing::Ne(std::nullopt));
-  app.setSelection(*use);
   const auto runFrameWithMouse = [&](const Vector2d& documentPoint, bool mouseDown) {
     const Vector2d screen = shell.viewportForReadback().documentToScreen(documentPoint);
     ImGuiIO& io = ImGui::GetIO();
@@ -2800,11 +2799,32 @@ TEST(EditorShellTest, SelectToolDragsAUseInstanceAndUndoRestoresIt) {
   };
   ASSERT_TRUE(settle());
 
-  runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/false);
+  // Keep the render worker inside its document access across the input below, as raster work that
+  // has not reached a cancellation check does. A selected <use> has no cached selection bounds, so
+  // the shell buffers the press until it can hit-test the document.
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  renderer.setReplayRenderDelayIgnoresCancellationForTesting(true);
+  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(1000));
+  app.setSelection(*use);
+  for (const tests::HangGuard guard;
+       !EditorShellTestAccess::RendererBusy(shell) && guard.active();) {
+    EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+    runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/false);
+  }
+  ASSERT_TRUE(EditorShellTestAccess::RendererBusy(shell)) << "The selection change must render";
+  // The worker takes the document on its own thread; wait until it holds it before pressing.
+  for (const tests::HangGuard guard;
+       app.document().document().tryWriteAccess().has_value() && guard.active();) {
+    std::this_thread::sleep_for(tests::kPollInterval);
+  }
+  ASSERT_FALSE(app.document().document().tryWriteAccess().has_value())
+      << "The render worker never took the document";
   runFrameWithMouse(Vector2d(20, 20), /*mouseDown=*/true);
   runFrameWithMouse(Vector2d(25, 23), /*mouseDown=*/true);
   runFrameWithMouse(Vector2d(35, 28), /*mouseDown=*/true);
   runFrameWithMouse(Vector2d(35, 28), /*mouseDown=*/false);
+  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+  renderer.setReplayRenderDelayIgnoresCancellationForTesting(false);
   ASSERT_TRUE(settle());
 
   ASSERT_THAT(app.selectedElement(), testing::Optional(*use));

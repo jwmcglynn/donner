@@ -684,6 +684,27 @@ void AsyncRenderer::setReplayRenderDelayForTesting(std::chrono::milliseconds del
   replayRenderDelayMsForTesting_.store(clampedDelay.count(), std::memory_order_release);
 }
 
+bool AsyncRenderer::runReplayRenderDelay() {
+  const std::chrono::milliseconds replayDelay(
+      replayRenderDelayMsForTesting_.load(std::memory_order_acquire));
+  if (replayDelay.count() <= 0) {
+    return true;
+  }
+  const auto delayDeadline = std::chrono::steady_clock::now() + replayDelay;
+  const bool ignoreCancellation =
+      replayRenderDelayIgnoresCancellationForTesting_.load(std::memory_order_acquire);
+  while (ignoreCancellation || !cancelRender_.isCancelled()) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= delayDeadline) {
+      break;
+    }
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(delayDeadline - now);
+    std::this_thread::sleep_for(std::min(remaining, std::chrono::milliseconds(1)));
+  }
+  return !cancelRender_.isCancelled();
+}
+
 void AsyncRenderer::setReplayDocumentAccessBlockedForTesting(bool blocked) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1881,22 +1902,7 @@ void AsyncRenderer::workerLoop() {
       };
     };
 
-    bool renderCompleted = true;
-    const std::chrono::milliseconds replayDelay(
-        replayRenderDelayMsForTesting_.load(std::memory_order_acquire));
-    if (replayDelay.count() > 0) {
-      const auto delayDeadline = std::chrono::steady_clock::now() + replayDelay;
-      while (!cancelRender_.isCancelled()) {
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= delayDeadline) {
-          break;
-        }
-        const auto remaining =
-            std::chrono::duration_cast<std::chrono::milliseconds>(delayDeadline - now);
-        std::this_thread::sleep_for(std::min(remaining, std::chrono::milliseconds(1)));
-      }
-      renderCompleted = !cancelRender_.isCancelled();
-    }
+    bool renderCompleted = runReplayRenderDelay();
     if (renderCompleted) {
       ZoneScopedN("Compositor::renderFrame");
       // The final worker timing below intentionally covers the whole
