@@ -1,0 +1,6 @@
+# Commits that only reformat code, skipped by `git blame`.
+# GitHub reads this file automatically. For local blame, run once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Format C++ with the pinned clang-format 21.1.6 (#1932)
+c45b6ff72edd56b43c9395fb701c97a9faea936b
