@@ -38,6 +38,13 @@ inputs:
     description: Seconds to wait between attempts.
     required: false
     default: "15"
+  install-recommends:
+    description: >-
+      "true" also installs the packages' recommended packages, as a plain
+      `apt-get install` does; the default "false" passes
+      `--no-install-recommends`.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -49,6 +56,7 @@ runs:
         APT_ATTEMPTS: ${{ inputs.attempts }}
         APT_ATTEMPT_TIMEOUT: ${{ inputs.attempt-timeout }}
         APT_RETRY_WAIT: ${{ inputs.retry-wait-seconds }}
+        APT_INSTALL_RECOMMENDS: ${{ inputs.install-recommends }}
       run: |
         set -euo pipefail
 
@@ -64,6 +72,15 @@ runs:
           exit 1
         fi
 
+        case "$APT_INSTALL_RECOMMENDS" in
+          true) recommends=() ;;
+          false) recommends=(--no-install-recommends) ;;
+          *)
+            echo "apt-install: install-recommends must be true or false" >&2
+            exit 1
+            ;;
+        esac
+
         export DEBIAN_FRONTEND=noninteractive
 
         attempt=1
@@ -76,7 +93,7 @@ runs:
             sudo -E apt-get -o Acquire::Retries=3 update || status=$?
           if [ "$status" -eq 0 ]; then
             timeout --signal=TERM --kill-after=30s "$APT_ATTEMPT_TIMEOUT" \
-              sudo -E apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              sudo -E apt-get -o Acquire::Retries=3 install -y ${recommends[@]+"${recommends[@]}"} \
                 "${packages[@]}" || status=$?
           fi
           echo "::endgroup::"

@@ -1,8 +1,10 @@
 """Pins the self-hosted CI runtime boundaries that keep full runs viable."""
 
+import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from python.runfiles import runfiles
-from test_executable_fixtures import ExecutableFixtureDirectory
+from test_executable_fixtures import ExecutableFixtureDirectory, write_python_stand_in
 from tools import test_timing
 
 
@@ -1221,6 +1223,55 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         # that fails here would succeed there.
         for block in self.main.split("uses: nick-fields/retry")[1:]:
             self.assertNotIn("apt-get", block.split("- name:", 1)[0])
+
+    def test_shared_apt_action_installs_recommends_only_when_asked(self):
+        """The action's script runs the same apt commands as before, recommends opt-in."""
+        script = textwrap.dedent(self.apt_install.split("      run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as temp:
+            stubs = Path(temp) / "bin"
+            stubs.mkdir()
+            calls = Path(temp) / "calls.jsonl"
+            recorder = stubs / "record.py"
+            recorder.write_text(
+                "import json, os, sys\n"
+                "with open(os.environ['CAPTURE'], 'a', encoding='utf-8') as capture:\n"
+                "    capture.write(json.dumps(sys.argv[1:]) + '\\n')\n",
+                encoding="utf-8")
+            for name, body in (
+                    # sudo -E and timeout's own options are dropped; the command still runs.
+                    ("sudo", '[ "$1" = -E ] && shift\nexec "$@"\n'),
+                    ("timeout", 'shift 3\nexec "$@"\n')):
+                path = stubs / name
+                path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+                path.chmod(0o755)
+            write_python_stand_in(stubs / "apt-get", recorder)
+            os.symlink(shutil.which("tr"), stubs / "tr")
+
+            def run(recommends):
+                calls.write_text("", encoding="utf-8")
+                env = dict(os.environ, PATH=str(stubs), CAPTURE=str(calls),
+                           APT_PACKAGES="graphviz\nfonts-liberation2", APT_ATTEMPTS="1",
+                           APT_ATTEMPT_TIMEOUT="15m", APT_RETRY_WAIT="0",
+                           APT_INSTALL_RECOMMENDS=recommends)
+                result = subprocess.run(["/bin/bash", "-c", script], env=env,
+                                        capture_output=True, text=True, check=False,
+                                        timeout=test_timing.STALL_GUARD_SECONDS)
+                return result, [json.loads(line) for line in calls.read_text().splitlines()]
+
+            update = ["-o", "Acquire::Retries=3", "update"]
+            install = ["-o", "Acquire::Retries=3", "install", "-y"]
+            packages = ["graphviz", "fonts-liberation2"]
+            for recommends, expected in (
+                    ("false", install + ["--no-install-recommends"] + packages),
+                    ("true", install + packages)):
+                with self.subTest(recommends=recommends):
+                    result, recorded = run(recommends)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(recorded, [update, expected, ["clean"]])
+            result, recorded = run("yes")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("install-recommends must be true or false", result.stderr)
+            self.assertEqual(recorded, [])
 
     def test_cmake_generator_validation_retries_only_after_failure(self):
         """Transient Bazel query failures get one retry without masking a persistent failure."""

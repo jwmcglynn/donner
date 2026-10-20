@@ -324,6 +324,7 @@ py_test(
         "//build_defs:rules.bzl",
         "//third_party:bazel/non_bcr_deps.bzl",
         "//tools/ci:BUILD.bazel",
+        "//tools/ci:docs_lane.sh",
         "//tools/ci:editor_wasm_lane.sh",
         "//tools/ci:editor_wasm_stage.py",
     ],
