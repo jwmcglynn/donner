@@ -1081,7 +1081,7 @@ TEST_F(StyleSystemTest, EmptySelectorUsesAuthoredChildrenAfterShadowInstantiatio
                                         shape.entityHandle().entity(), RcString("#shape"),
                                         warnings);
     ASSERT_THAT(shadow.mainBranch, testing::Optional(testing::_));
-    ASSERT_FALSE(shadow.mainBranch->shadowEntities.empty());
+    ASSERT_THAT(shadow.mainBranch->shadowEntities, testing::Not(testing::IsEmpty()));
     EntityHandle proxy(document.registry(), shadow.mainBranch->shadowEntities.front());
     const auto& proxyProperties = styleSystem.computeStyle(proxy, warnings).properties;
     ASSERT_THAT(proxyProperties, testing::Optional(testing::_));

@@ -498,7 +498,7 @@ TEST(SVGDocument, EmptySelectorIgnoresRejectedRawTextProjection) {
   auto changed = ReplaceInSource(document, "<text id=\"t\"> </text>",
                                  "<text id=\"t\">word<![CDATA[other]]></text>");
   ASSERT_TRUE(changed.applied);
-  ASSERT_TRUE(changed.diagnostic.has_value());
+  ASSERT_THAT(changed.diagnostic, Optional(testing::_));
   EXPECT_THAT(changed.diagnostic->reason, testing::HasSubstr("too many chunks"));
   EXPECT_EQ(text.entityHandle().get<components::TextComponent>().text, " ");
   EXPECT_TRUE(text.isEmptyForSelector(nullptr));
