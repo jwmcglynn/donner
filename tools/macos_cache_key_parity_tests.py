@@ -37,10 +37,11 @@ REMOTE_FLAG = re.compile(r"^--(?:no)?(?:remote_|incompatible_remote_|credential_
 LANE_FLAGS = "$BAZEL_MACOS_BUILD_FLAGS"
 BAZEL_INVOCATION = re.compile(
     r"\bbazel(?:isk)?(?:\s+--[a-z_]+)*\s+(build|test|fetch|query|cquery|coverage|run)\b")
-# Flags that only select, run or report tests. They never change a build action's key.
+# Flags that only select, run or report tests. They never change a build action's key. The Metal
+# shader-validation setting only selects the Metal device tests' `env` attribute.
 TEST_ONLY_FLAG = re.compile(r"^--(?:no)?(?:test_|cache_test_results|local_test_jobs|"
                             r"flaky_test_attempts|runs_per_test|keep_going|build_event_json_file|"
-                            r"run_under)")
+                            r"run_under|//build_defs:metal_shader_validation=)")
 # Flags that only limit how many actions Bazel runs at once, or which requested targets it
 # builds. They never change a build action's key.
 SCHEDULING_ONLY_FLAG = re.compile(r"^--(?:jobs|local_resources|build_tests_only)(?:=|$)")

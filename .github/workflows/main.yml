@@ -1481,7 +1481,7 @@ jobs:
           # Tests that launch a browser run in the next step instead.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,-ci-remote-gpu,-launches-browser,-fuzz_soak \
-            --config=hosted-macos-quarantine \
+            --config=hosted-macos-quarantine --config=hosted-macos-unvalidated \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
         # the `fuzz_soak` mutation targets; they run nightly or on demand in

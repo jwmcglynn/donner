@@ -611,6 +611,11 @@ build:hosted-macos --local_resources=memory=4802
 # every other lane and local runs keep running them.
 test:hosted-macos-quarantine --test_env=DONNER_HOSTED_MACOS_QUARANTINE=1
 
+# Main's hosted macOS job: its virtual GPU cannot compile shader-validated Metal pipelines, so the
+# Metal device tests run there with API validation only (docs/metal_validation.md). It changes
+# only those tests' environment, not any build action. Every other lane keeps shader validation.
+test:hosted-macos-unvalidated --//build_defs:metal_shader_validation=off
+
 # Runs tests at roughly main's hosted macOS speed on a faster self-hosted host: the hosted
 # scheduling values and a launcher that holds each test to roughly the hosted runner's CPU
 # capacity (//tools/ci:hosted_parity_throttle). `hosted-parity` adds the hosted-only quarantine,

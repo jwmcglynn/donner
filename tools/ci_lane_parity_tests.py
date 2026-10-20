@@ -108,6 +108,11 @@ HOSTED_NO_SHADER_VALIDATION = (
     "weaker checks; pull request lanes on a real GPU keep full validation.")
 TEXTURE_USAGE_SPLIT = (("test-env-main-only", "MTL_SHADER_VALIDATION_TEXTURE_USAGE=0"),
                        ("test-env-pr-only", "MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"))
+HOSTED_UNVALIDATED_CONFIG = (
+    "Main's hosted virtual GPU cannot compile shader-validated Metal pipelines, so its Metal "
+    "device tests request API validation only; the flag selects their test environment and no "
+    "build action. Accepted risk: main tests those kernels without shader validation; the pull "
+    "request lanes on a real GPU keep it.")
 HOSTED_SKIPS_SHADER_VALIDATION_TESTS = (
     "Main runs fewer tests: the validation probe and the out-of-bounds canary assert shader "
     "validation, which main's hosted virtual GPU cannot run.")
@@ -142,6 +147,8 @@ PARITY_ALLOWLIST = {
        for step in ("Test", "Test (Geode editor lane)") for kind, value in TEXTURE_USAGE_SPLIT},
     _PARITY + ("Test", "tag-filter-main-only", "-requires_shader_validation"):
         HOSTED_SKIPS_SHADER_VALIDATION_TESTS,
+    _PARITY + ("Test", "flag-main-only", "--config=hosted-macos-unvalidated"):
+        HOSTED_UNVALIDATED_CONFIG,
 }
 
 # Tests that main's hosted jobs run and whose result can depend on the runner's CPU count
@@ -245,6 +252,8 @@ INVOCATION_ALLOWLIST = {
        for kind, value in TEXTURE_USAGE_SPLIT},
     ("main.yml", "macos", "macos-self-hosted", "Test", "tag-filter-main-only",
      "-requires_shader_validation"): HOSTED_SKIPS_SHADER_VALIDATION_TESTS,
+    ("main.yml", "macos", "macos-self-hosted", "Test", "flag-main-only",
+     "--config=hosted-macos-unvalidated"): HOSTED_UNVALIDATED_CONFIG,
     # A changed non-Bazel step is keyed by a digest of both rendered definitions, so any edit to
     # what the step runs (its action, inputs, script, shell, its own env and the variables it
     # names) changes the digest and needs a new review. Overrides of the Xcode selection's test

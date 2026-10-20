@@ -820,6 +820,19 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=1", job, job_name)
         hosted_test = self._step_body(self._job_body("macos"), "Test")
         self.assertIn("-requires_shader_validation", hosted_test)
+        self.assertIn("--config=hosted-macos-unvalidated", hosted_test)
+        # Only main's hosted job turns shader validation off; every self-hosted lane keeps it.
+        for job_name in ("macos-self-hosted", "macos-hosted-parity"):
+            job = self._job_body(job_name)
+            self.assertNotIn("hosted-macos-unvalidated", job, job_name)
+            self.assertNotIn("metal_shader_validation", job, job_name)
+        bazelrc = _repository_text(".bazelrc")
+        setting = [line for line in bazelrc.splitlines()
+                   if "metal_shader_validation" in line and not line.startswith("#")]
+        self.assertEqual(setting,
+                         ["test:hosted-macos-unvalidated --//build_defs:metal_shader_validation=off"])
+        self.assertNotRegex(bazelrc, r"(?m)^\S+:(?!hosted-macos-unvalidated\s)\S*\s.*"
+                                     r"--config=hosted-macos-unvalidated")
         trusted = self._job_body("macos-self-hosted")
         self.assertNotIn("MTL_SHADER_VALIDATION_TEXTURE_USAGE=0", trusted)
         self.assertNotIn("requires_shader_validation", self._step_body(trusted, "Test"))

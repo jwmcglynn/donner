@@ -214,6 +214,27 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+# Whether the Metal device tests request shader validation. A lane whose GPU cannot run it (the
+# GitHub-hosted macOS image's virtual GPU) sets `off` through --config=hosted-macos-unvalidated;
+# API validation stays on either way.
+string_flag(
+    name = "metal_shader_validation",
+    build_setting_default = "on",
+    values = [
+        "on",
+        "off",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "metal_shader_validation_off",
+    flag_values = {
+        ":metal_shader_validation": "off",
+    },
+    visibility = ["//visibility:public"],
+)
+
 banned_deps_test(
     name = "check_banned_deps_test",
     size = "small",
