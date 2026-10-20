@@ -40,9 +40,10 @@ namespace donner::svg::components {
  *       public DOM API.
  */
 struct ComputedTextComponent {
+  /// Half-open range of indices into `spans`.
   struct OwnerSpanRange {
-    size_t begin = 0;
-    size_t end = 0;
+    size_t begin = 0;  ///< First span index.
+    size_t end = 0;    ///< One past the last span index.
   };
 
   /**

@@ -876,8 +876,9 @@ private:
  * crash, and neither ASAN nor a sanitizer build will flag it. The precondition for any borrow
  * held across statements is therefore: no erasure or geometry replacement between the borrow
  * and its last use. Occurrence-specific styles can recompute geometry within one frame; the
- * driver disables deferred geometry borrowing for those paths while preserving their cache key.
- * The backend consumes the borrow during the draw call.
+ * driver disables deferred geometry borrowing for those paths while preserving their cache key
+ * (see \ref PathShape::allowDeferredGeometry), so the backend consumes those borrows during the
+ * draw call.
  *
  * Passing a borrowed path instead of a copy is what keeps a steady-state frame free of
  * per-drawable path allocations: the driver hands every backend a pointer straight at the

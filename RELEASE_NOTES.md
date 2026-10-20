@@ -1,189 +1,70 @@
 # Donner
 
-## v0.8 — Donner SVG Editor & Engine
+## v0.8: Donner SVG Editor & Engine
 
 _Date: <unreleased>_
 
-v0.8 positions Donner as **Donner SVG Editor & Engine**: an editor application plus a reusable SVG
-rendering, geometry, and DOM engine. The planned release brings together the accumulated editor,
-Geode, and path work and provides an on-demand showcase demo generated through the editor's own
-authoring paths.
+These notes describe the upcoming v0.8 release, which has not been published yet.
+
+v0.8 makes Donner both an SVG editor and an engine you can embed. The editor runs on the desktop
+and in the browser on Donner's own GPU renderer, and the engine adds declarative animation, a
+native GPU backend, and hardened handling of untrusted documents, while the compact tiny-skia CPU
+renderer stays the default for embedders.
 
 ### Highlights
 
-- **Native GPU runtime**: Geode renders and presents through Donner's own GPU runtime, with native
-  Metal on macOS, native Vulkan on Linux, and the browser's WebGPU in the WebAssembly editor and
-  the standalone Geode WebAssembly renderer (`--config=wasm-geode`), which uses one browser GPU
-  device. Each platform uses its native backend by default.
-  `DONNER_GPU_BACKEND=metal` or `vulkan` asks for one explicitly, and a request the host cannot
-  serve stops the process instead of silently switching backends. The editor settles each surface
-  format before compiling UI and renderer pipelines, while headless and replay paths use explicit
-  offscreen targets. The [GPU Runtime Reference](docs/gpu_runtime.md) documents device ownership,
-  backend selection, and failure handling.
-- **No Rust in shipped products**: shipped products contain neither a Rust-built GPU library nor
-  the transitional WebGPU adapter, and the WebAssembly builds no longer bundle a separate WebGPU
-  library. Building the Donner libraries from the source archive needs no Rust toolchain. A pinned
-  wgpu-native backend remains only as a test-only Linux reference for resvg pixel comparisons.
-- **Compile-time WGSL shaders**: Geode's shaders are compiled while Donner itself is built, so
-  shader mismatches fail the build instead of the first frame, and Donner's shader compiler stays
-  out of the application. Native products carry only their platform's shader form (Metal on
-  macOS, SPIR-V on Linux). See `docs/wgsl_compiler.md` for the supported WGSL subset.
-- **Geode editor rendering**: the editor renders through the Geode GPU backend on the desktop and
-  in the browser. The browser editor keeps its document tiles on the GPU through presentation and
-  draws them straight into the canvas with the same composition path as the desktop editor,
-  instead of copying tile pixels between threads.
-- **Bounded GPU waits**: a hung GPU surfaces as a lost device instead of a hung process, and a
-  slow GPU that is still finishing work is no longer mistaken for a hung one. The waits that
-  detect a hang measure time without progress rather than the time a whole backlog takes; the
-  GPU Runtime Reference lists the few waits that keep a fixed budget.
-- **Fluid canvas rendering**: zoom, drag, overlay, and large selections stay responsive. Dragging
-  a shape inside a masked group, such as one of the shapes inside the splash's geode artwork,
-  rebuilds the group from cached pieces each frame instead of re-rendering it, and the release
-  settles crisp. Artwork,
-  selection chrome and camera placement are published together as one frame, so repeated drag,
-  release and zoom no longer pair the artwork with a stale selection.
-- **In-tree path operations + editor pathfinder fixes**: boolean path operations backed by in-tree
-  PathOps, with Pen/pathfinder stability fixes.
-- **Compound path unbundle**: split a compound path into its component subpaths.
-- **Complete Layers panel**: editable document/group/subgroup/shape hierarchy with Donner-rendered
-  thumbnails, stable names, per-row show/hide and lock toggles, inline rename, drag-to-reorder, and
-  canvas/source selection sync. All reordering and renaming is performed as DOM mutations, not source-
-  text edits.
-- **Shape clipboard**: cut/copy/paste of selected shapes and groups with source sync, undo, default
-  paste offset, Paste in Front, and deterministic ID handling.
-- **Tuned Pen tool**: line/curve anchors, close/cancel, live preview, immediate bounds/overlay
-  updates, and root-contained source insertion. New paths take the selected shape's fill, stroke,
-  and stroke width instead of a fixed default style.
-- **Stroke inspector**: width steps and presets, cap and join previews drawn from real SVG strokes,
-  dash controls, and a marker picker with filled and open arrows, a dot, and a diamond. Choosing a
-  marker adds a reusable `context-stroke` marker definition to `<defs>` and applies it in one
-  undoable edit. Consecutive fill, stroke, and width edits made while a render is in flight all
-  apply, and zoomed-in tiles refresh together after a paint change.
-- **Text authoring UI**: create and edit short SVG text from the editor. Bold, Italic, and
-  Underline (Cmd/Ctrl+B, I, U) apply while typing and to selected text objects.
-- **Convert Text to Outlines**: convert selected `<text>` into deterministic path geometry using
-  Donner's text layout and glyph outlines.
-- **Viewport SVG export**: export the current editor viewport as cropped SVG, clipped to the
-  document's bounds with its aspect ratio preserved, with an optional selection-overlay variant.
-- **Clip guides**: a selected shape's effective clip path is drawn as a subdued dashed guide that
-  stays with the element that owns the clip. Compound clips and soft masks show no guide.
-- **Live stylesheet editing**: valid edits to a `<style>` block apply while you type in the source
-  pane.
-- **macOS app**: `bazel run //donner/editor` builds and runs the editor as a macOS app with its
-  icon and native AppKit menus.
-- **Cascade-safe element rename**: rename an element's id from the editor as a DOM-level operation
-  that repoints references and rewrites matching `#id` selectors inside `<style>` blocks, so the
-  cascade stays intact.
-- **Z-order reordering**: bring selected elements forward/backward/to-front/to-back via DOM moves,
-  keeping document order, paint order, and the source projection in sync.
-- **Element locks persist across load**: user/`data-*` attributes (including
-  `data-donner-locked`) are preserved when an SVG is parsed, so layer locks set in the editor survive
-  saving and reloading.
-- **DOM-first structured source editing**: typing in the source pane performs incremental reparse
-  that updates the live DOM tree in place, preserving entity identity, selection, and references
-  across the keystroke. A structural-fingerprint guard prevents the whole-document diff fallback from
-  desyncing the DOM and source on similar-sibling edits.
-- **v0.8 showcase demo**: the built-in sample catalog generates an outlined, overlay-enabled
-  showcase from the canonical `donner_splash.svg` at runtime; derived splash variants are not
-  checked in.
-
-See the [Project Roadmap](docs/ProjectRoadmap.md) and
-[v0.8 Showcase design doc](docs/design_docs/0047-v0_8_showcase.md) for details.
-
-### Fixes and Internals
-
-- **Filter graph `in2` default.** A filter-graph node that leaves a two-input primitive's second
-  input unpopulated (`feComposite`, `feBlend`, `feDisplacementMap`) now resolves it to the previous
-  primitive's result on both the tiny-skia and Geode backends, per the Filter Effects defaulting
-  rule, instead of the source graphic or the node's own first input. Parsed SVG documents are
-  unaffected because the attribute layer always populates both inputs; this is a behavior change
-  for embedders that build a `FilterGraph` directly.
-- **Filter subregion clipping hardening (security)**: fixed two heap-buffer-overflows in the
-  tiny-skia filter pipeline (`applySubregionClipping` and `ClipFilterOutputToRegion`) where the
-  kept-rect origin was clamped only at the low end; both axes are now clamped to the output bounds.
-  Affects rendering of untrusted SVG filter regions.
-- **Offset filters on Geode**: when a filter containing `feOffset` has a region that starts above
-  or left of the render surface, a clip path inside it no longer reports a lost device, and group
-  opacity, `mix-blend-mode`, masks, and nested filters inside it draw in place instead of stretched
-  or shifted.
-- **Layers thumbnails render through Donner**: layer previews are rasterized by the Donner renderer
-  and blitted as textures, replacing the prior hand-drawn ImGui silhouette so previews match real
-  render output.
-- **Stroke outlines are NonZero unions**: `Path::strokeToFill` now returns a union of overlapping,
-  positive-winding pieces that must be filled with `FillRule::NonZero`, which closes the coverage
-  gaps where a stroke overlapped itself (thin crossbars, narrow closed paths, fractional-offset
-  dashes). It fails closed to an empty path when the outline cannot be represented, either because
-  the aggregate point budget is exhausted or because a piece's corner products overflow a double;
-  `PathBuilder::rejectRemainingCommands` is the new public hook producers use to request that
-  result. Round caps, joins, and dots are subdivided no finer than the coordinates can represent,
-  so a round stroke on enormous coordinates no longer takes unbounded time.
-- **Hit testing**: curves whose control hull cannot reach the query point are skipped before they
-  are subdivided, so many distant curves no longer exhaust the hit-test budget and hide a hit on
-  another shape.
-- **Text**: the full text backend no longer treats Thaana as a cursive script.
-- **Inherited flood and stop colors**: `flood-color` and `stop-color` set to `inherit` now resolve
-  through computed styles, so a color specified on a non-painting ancestor no longer produces a
-  black flood or a wrong gradient stop.
-- **CSS filter functions**: a negative amount in `grayscale()`, `invert()`, `opacity()`, or
-  `sepia()` now rejects the whole `filter` declaration and keeps the previous valid value, instead
-  of clamping to zero. In SVG presentation attributes, `blur()` accepts a unitless length in user
-  units, as in `filter="blur(4)"`; CSS declarations still require a unit, and a negative length or
-  extra argument rejects the declaration.
-- **Editor previews**: layer thumbnails and font previews wait until a newly accepted document
-  render has been presented, and while they wait they wake the editor once rather than every
-  frame.
-- **GPU resource lifetime**: completed GPU work is retired while the editor is idle, without
-  waiting for another frame. On Metal, every backend call drains the Objective-C objects it
-  created, so threads without their own autorelease pool, such as the editor's render worker, no
-  longer keep finished frames' resources resident; at most 512 command buffers are in flight per
-  device, and waits for GPU work sleep until it completes instead of polling every millisecond.
-- **Surface recovery**: the editor canvas recovers after a transient surface loss instead of
-  staying blank.
+- **Donner SVG Editor**: a first working editor, native on macOS and Linux, and in the browser.
+  Select and transform shapes, draw paths with the Pen tool, edit text, and organize Layers, with
+  an XML source view that stays in sync with the canvas.
+- **Geode GPU renderer**: Geode renders through Donner's own GPU runtime, on Metal on macOS,
+  Vulkan on Linux, and WebGPU in the browser, and drives the editor canvas. Its WGSL shaders are
+  compiled while Donner builds, and shipped products need no Rust toolchain or Rust-built GPU
+  library. A hung GPU is reported as a lost device instead of a hung process. Enable it with
+  `--config=geode`; see the [GPU Runtime Reference](docs/gpu_runtime.md).
+- **tiny-skia by default**: the compact CPU renderer remains the default backend for Bazel,
+  Bazel Central Registry and CMake consumers, with no GPU dependency.
+- **Declarative animation**: `<animate>`, `<set>`, `<animateTransform>`, `<animateMotion>` and
+  `<mpath>` parse by default, with clock, event, syncbase and repeat timing and linear, discrete,
+  paced and spline interpolation. The host supplies the clock with `SVGDocument::setTime()` and
+  delivers pointer events; the editor's Preview mode plays animations, and
+  `donner-svg --gif` exports animated GIFs. See
+  "Animating an SVG" in [Getting Started](docs/getting_started.md).
+- **Text**: create and edit text in the editor, with Bold, Italic and Underline, and convert it to
+  path outlines. A frame now draws up to 65,536 glyphs by default, configurable with
+  `RendererInterface::setMaximumGlyphs`.
+- **Security hardening**: bounded parsing, decoding and rendering of untrusted SVG, CSS, images
+  and fonts, continuous fuzzing that now includes rasterizing documents with the default renderer,
+  and fixes for two heap buffer overflows in tiny-skia filter region clipping. Secure processing
+  modes keep SVG images static and offline. The [threat model](docs/threat-model.md) documents the
+  trust boundaries.
 
 ### Behavior Changes
 
-- **User-defined attributes are retained by default.** `SVGParser::Options::disableUserAttributes`
-  now defaults to `false`, so a parse keeps `data-*` and other non-presentation attributes. CSS
-  attribute selectors such as `rect[data-role="status"]` match without opting in, whole-tree
-  consumers see the attributes through `getAttribute`, and editor round-trips no longer silently
-  drop the author's own attributes. Parses retain more per document; set the option to `true` to
-  restore the previous skip-for-performance behavior when custom attributes are known to be
-  irrelevant.
-- **Foreign-namespace elements are retained, and never render.** Elements outside the SVG
-  namespace are kept in the tree as unknown elements instead of being detached, so the tree stays
-  complete for selectors, export checks, and source projection, and their SVG-namespace children
-  still project. They are marked non-rendering: neither the foreign element nor its subtree paints.
-  A retained foreign subtree counts against `maximumTreeNodes` and `maximumTreeDepth` like any
-  other content, and reports a single unsupported-namespace warning at the top of the subtree.
-- **More text per frame, with a configurable glyph cap.** A frame previously stopped drawing text
-  after 1024 distinct glyph outlines, which on the default backend meant 1024 glyphs, and Geode
-  kept at most 1024 outlines resident per document. `RendererInterface::setMaximumGlyphs` now sets
-  one cap for glyphs drawn per frame, distinct outlines decoded per frame, and Geode's resident
-  outlines, defaulting to 65,536 (`RendererTextMaterializationBudget::kDefaultMaximumGlyphs`).
-  Per-frame budgets are sized for about ten dense pages of text. The text budget grows to 256 MiB,
-  16M path commands, and 32M points: roughly 44,000 Latin or 29,000 CJK glyphs on TinySkia, which
-  charges every glyph its outline decode. Geode's frame geometry budget grows to 4Mi items and
-  256 MiB. Every scene-batched resident draw, including batched glyph occurrences and per-entity
-  paths, now charges that budget its instance record rather than a copy of its resident geometry,
-  but still counts the geometry's items as work, so more of them fit per frame. TinySkia reserves a
-  stroke draw call only for stroked text, and Geode charges each cached glyph its own footprint,
-  so outline-less glyphs count against the byte budget. Clip paths keep their previous 1024-shape
-  and 64 MiB limits.
-- **`DONNER_GPU_BACKEND` accepts only native backends.** Native builds accept `metal` or `vulkan`
-  in any letter case; an unset or empty value selects the platform's native backend. A value that
-  names no backend, including the former `wgpu`, stops the process with a message listing the
-  accepted values, and so does a named backend that the process cannot open. WebAssembly builds
-  always use the browser's WebGPU.
+- **User-defined attributes are kept by default.** `SVGParser::Options::disableUserAttributes`
+  now defaults to `false`, so `data-*` and other custom attributes survive parsing and match CSS
+  attribute selectors. Set it to `true` to skip them.
+- **Foreign-namespace elements are kept in the tree and never render.** They count against the
+  parser's tree size and depth limits.
+- **Filter graphs built in code** resolve an unset second input of `feComposite`, `feBlend` and
+  `feDisplacementMap` to the previous primitive's result. Parsed documents are unaffected.
+- **`Path::strokeToFill`** returns overlapping positive-winding pieces that must be filled with
+  `FillRule::NonZero`, and returns an empty path when the outline cannot be represented. Path
+  producers can request that result with the new `PathBuilder::rejectRemainingCommands`.
+- **CSS filter functions**: a negative amount in `grayscale()`, `invert()`, `opacity()` or
+  `sepia()` rejects the whole `filter` declaration instead of clamping to zero. In presentation
+  attributes, `blur()` accepts a unitless length, as in `filter="blur(4)"`.
+- **`DONNER_GPU_BACKEND`** accepts only `metal` or `vulkan`, and an unset or empty value selects
+  the platform's backend. Any other value, including the former `wgpu`, or a backend the process
+  cannot open, stops the process with an error.
 
 ### Removed
 
-- Full-Skia renderer backend removed. `tiny-skia` remains the default backend and Geode remains
-  available.
-- The transitional WebGPU adapter and its Rust-built wgpu-native libraries are removed from every
-  production build, and the WebAssembly builds no longer bundle emdawnwebgpu.
+- The full Skia renderer backend; use tiny-skia or Geode.
+- The transitional WebGPU adapter and its Rust-built wgpu-native libraries from every production
+  build.
 - `RendererTextMaterializationBudget::kMaximumUniqueOutlines`,
-  `RendererTextMaterializationBudget::kMaximumGlyphOccurrences`, and
-  `GeodeGlyphCache::kDefaultMaxEntries` are replaced by `kDefaultMaximumGlyphs` and
+  `RendererTextMaterializationBudget::kMaximumGlyphOccurrences` and
+  `GeodeGlyphCache::kDefaultMaxEntries`, replaced by `kDefaultMaximumGlyphs` and
   `RendererInterface::setMaximumGlyphs`.
 
 ### Security support
@@ -191,15 +72,15 @@ See the [Project Roadmap](docs/ProjectRoadmap.md) and
 v0.8 is the only version supported with security updates; v0.5 and v0.1 are no longer supported.
 See `SECURITY.md`.
 
-**Full Changelog:** generated when the `v0.8.0` tag is cut.
+### What's Included
 
-### Planned Release Contents
-
-- The Donner SVG Editor as both a native desktop application and a WebAssembly edition.
-- `donner-svg`, a CLI tool for rendering and previewing SVG files.
-- An embeddable C++ API for parsing, inspecting, modifying, and rendering SVGs.
-- Prebuilt `donner-svg_linux_x86_64` and `donner-svg_darwin_arm64` binaries, each with a
-  `.NOTICE.txt` listing the third-party licenses it includes, to be attached by release automation.
+- The Donner SVG Editor as a native desktop application and a WebAssembly edition.
+- `donner-svg`, a CLI tool that renders SVG files to PNG or animated GIF and previews them in the
+  terminal.
+- An embeddable C++20 API for parsing, inspecting, modifying, animating and rendering SVGs.
+- Prebuilt `donner-svg_linux_x86_64` and `donner-svg_darwin_arm64` binaries, each with a checksum,
+  build provenance and a `.NOTICE.txt` listing the third-party licenses it includes, attached by
+  release automation.
 
 Parse an SVG, find an element by its `data-*` attribute, restyle it, and render it to a PNG with
 the default renderer:
@@ -240,6 +121,8 @@ if (!renderer.save("output.png")) {
 
 The complete program is `examples/svg_quickstart.cc`; run it with
 `bazel run //examples:svg_quickstart`.
+
+**Full Changelog:** generated when the `v0.8.0` tag is cut.
 
 ## v0.5.0
 

@@ -169,8 +169,8 @@ embeddable runtime, and ecosystem integration.
 
 ### SVG Animation
 
-The animation feature branch implements the declarative timeline, interpolation, motion paths and
-interactive editor Preview. Presentation coverage and qualification remain in progress; see the
+The declarative timeline, interpolation, motion paths and interactive editor Preview are merged to
+main and ship in v0.8. Presentation coverage and qualification remain in progress; see the
 [animation design and support matrix](design_docs/animation.md) and
 [#1239](https://github.com/jwmcglynn/donner/issues/1239).
 

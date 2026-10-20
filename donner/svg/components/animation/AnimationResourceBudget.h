@@ -11,6 +11,7 @@ namespace donner::svg::components {
 /** Shared contextual preparation allowance; used only by serialized document preparation. */
 class AnimationContextualWorkBudget {
 public:
+  /// Total preparation work admitted between resets.
   static constexpr std::size_t kMaximumWork = 4 * 1024 * 1024;
 
   /// Remaining preparation work across this render operation's document occurrences.

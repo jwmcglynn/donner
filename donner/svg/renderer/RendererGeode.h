@@ -191,9 +191,9 @@ private:
  * Per-frame performance instrumentation for RendererGeode.
  *
  * Returned by `RendererGeode::lastFrameTimings()`. Each field reports the
- * cost of the most recent `beginFrame`→`endFrame` window. Counters are the
- * durable CI signal; the GPU-timestamp fields are advisory and require
- * `enableTimestamps(true)` + driver support (see `GeodeDevice`).
+ * cost of the most recent `beginFrame` to `endFrame` window. Counters are the
+ * durable CI signal. GPU timestamps are not captured yet, so the GPU-timestamp
+ * fields are always zero.
  *
  * `GeodePerf_tests.cc` pins the steady-state ceilings these drive toward.
  */
@@ -469,6 +469,8 @@ public:
    * will drive the `renderPassNs` / `totalGpuNs` fields of
    * `lastFrameTimings()`. Counters (the primary regression signal) are
    * always on regardless of this flag.
+   *
+   * @param enabled Whether to capture GPU timestamps; currently ignored.
    */
   void enableTimestamps(bool enabled);
 

@@ -110,9 +110,9 @@ struct FilterRegionSample {
  * subregion in execution order; no document handles or borrowed transforms are retained.
  */
 struct FilterRegionContext {
-  using FilterGraph = components::FilterGraph;
-  using FilterInput = components::FilterInput;
-  using FilterNode = components::FilterNode;
+  using FilterGraph = components::FilterGraph;  ///< Filter graph type.
+  using FilterInput = components::FilterInput;  ///< Primitive input reference type.
+  using FilterNode = components::FilterNode;    ///< Primitive node type.
 
   /// Build a coordinate snapshot for the actual source raster and referencing filter.
   /// @param graph Effective filter units and object bounds.
@@ -260,25 +260,26 @@ struct FilterRegionContext {
     return resolveSize(length, extent, boundingBoxDimension);
   }
 
-  Box2d filterRegion;
-  Transform2d deviceFromFilter;
-  double scaleX = 1.0;
-  double scaleY = 1.0;
-  bool isObjectBoundingBox = false;
-  double boundingBoxWidth = 1.0;
-  double boundingBoxHeight = 1.0;
-  double boundingBoxX = 0.0;
-  double boundingBoxY = 0.0;
-  bool invertible = true;
-  Transform2d filterFromDevice;
-  Box2d primitiveUnitsBounds;
-  bool historyInDeviceSpace = false;
-  Box2d historyFilterRegion;
-  Box2d historySourceRegion;
-  std::optional<Box2d> fillPaintRegion;
-  std::optional<Box2d> strokePaintRegion;
-  Box2d previousOutputSubregion;
-  std::unordered_map<std::string, Box2d> namedSubregions;
+  Box2d filterRegion;                 ///< Filter region in user coordinates.
+  Transform2d deviceFromFilter;       ///< Filter-to-device transform.
+  double scaleX = 1.0;                ///< Device scale along X derived from deviceFromFilter.
+  double scaleY = 1.0;                ///< Device scale along Y derived from deviceFromFilter.
+  bool isObjectBoundingBox = false;   ///< Whether primitiveUnits is objectBoundingBox.
+  double boundingBoxWidth = 1.0;      ///< Element bounding box width, or 1 without one.
+  double boundingBoxHeight = 1.0;     ///< Element bounding box height, or 1 without one.
+  double boundingBoxX = 0.0;          ///< Element bounding box left edge, or 0 without one.
+  double boundingBoxY = 0.0;          ///< Element bounding box top edge, or 0 without one.
+  bool invertible = true;             ///< Whether deviceFromFilter has a finite inverse.
+  Transform2d filterFromDevice;       ///< Finite inverse of deviceFromFilter, or identity if none.
+  Box2d primitiveUnitsBounds;         ///< Reference bounds for percentage primitive lengths.
+  bool historyInDeviceSpace = false;  ///< Whether subregion history is kept in raster space.
+  Box2d historyFilterRegion;          ///< Region that clips default subregions, in history space.
+  Box2d historySourceRegion;          ///< Subregion of the standard inputs, in history space.
+  std::optional<Box2d> fillPaintRegion;    ///< FillPaint coverage bounds, when admitted.
+  std::optional<Box2d> strokePaintRegion;  ///< StrokePaint coverage bounds, when admitted.
+  Box2d previousOutputSubregion;           ///< Subregion of the most recently recorded primitive.
+  std::unordered_map<std::string, Box2d>
+      namedSubregions;  ///< Subregions of recorded primitives, by result name.
 
 private:
   void storeSubregion(const FilterNode& node, const Box2d& bounds) {

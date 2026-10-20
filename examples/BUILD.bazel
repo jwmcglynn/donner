@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:native_binary.bzl", "native_test")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_multi_transitioned_test", "identical_code_folding_linkopts")
 load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
@@ -35,6 +36,24 @@ donner_cc_binary(
         "//donner/base",
         "@donner",
     ],
+)
+
+donner_cc_binary(
+    name = "svg_animation",
+    srcs = ["svg_animation.cc"],
+    deps = [
+        "//donner/base",
+        "@donner",
+    ],
+)
+
+# Runs the animation example, which exits non-zero when event dispatch or the lifecycle boundaries
+# differ from what the document declares, so the getting-started walkthrough stays correct.
+native_test(
+    name = "svg_animation_test",
+    size = "small",
+    src = ":svg_animation",
+    out = "svg_animation_test_bin",
 )
 
 donner_cc_binary(

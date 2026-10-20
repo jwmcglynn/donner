@@ -35,6 +35,9 @@ public:
   public:
     /// Find the frontmost hit in the captured document geometry.
     /// @param point Point in document coordinates.
+    /// @return The frontmost hit target at \p point, resolved as for
+    /// \ref DonnerController::findIntersecting, or \c std::nullopt when nothing is hit or the
+    /// capture is incomplete.
     std::optional<SVGGraphicsElement> findIntersecting(const Vector2d& point) const;
     /// False when capture exceeded its resource budget; queries then fail closed.
     bool complete() const;
@@ -49,6 +52,7 @@ public:
   /// Capture current hit geometry and targets for interaction with the corresponding rendered
   /// frame. Targets resolve as for \ref findIntersecting, so they remain valid document elements
   /// after later render-tree rebuilds.
+  /// @return A snapshot; check \ref HitTestSnapshot::complete for budget exhaustion.
   std::shared_ptr<const HitTestSnapshot> captureHitTest();
 
   /**

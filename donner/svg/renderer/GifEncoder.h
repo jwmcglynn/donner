@@ -91,7 +91,9 @@ public:
    * Create an encoder and write the GIF header, logical screen descriptor and NETSCAPE2.0 loop
    * extension.
    *
-   * @param options Encoder configuration. Invalid dimensions make every \ref addFrame call fail.
+   * @param options Encoder configuration. Invalid dimensions or limits, or a workspace or header
+   *   that exceeds the configured limits, make every \ref addFrame call fail; \ref error reports
+   *   the reason.
    */
   explicit GifEncoder(const Options& options);
 

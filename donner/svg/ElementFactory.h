@@ -82,6 +82,7 @@ private:
    *
    * @param tagName Local name of the element.
    * @param experimentalElementsEnabled Whether experimental element types are enabled.
+   * @return The type index, or \c std::nullopt when no enabled element type claims \p tagName.
    */
   static std::optional<std::size_t> FindType(std::string_view tagName,
                                              bool experimentalElementsEnabled);

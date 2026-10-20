@@ -214,6 +214,18 @@ Bazel 7 and 8, it builds `@donner//donner/base`, `@donner//donner/css`, `@donner
 checked-in consumer module against it. See \ref GettingStarted for the `MODULE.bazel`,
 `BUILD.bazel` and `.bazelrc` a consumer needs.
 
+A consumer module can build the same `Renderer` API on Geode by setting the two flags that
+`--config=geode` sets inside this repository:
+
+```sh
+bazel build --@donner//donner/svg/renderer:renderer_backend=geode \
+  --@donner//donner/svg/renderer/geode:enable_geode=true //:my_app
+```
+
+Donner's build checks that the packages Geode adds load without Donner's development-only
+dependencies, but CI does not build Geode from an external module; BCR preflight covers only the
+default tiny-skia configuration.
+
 ## Continuous integration remote cache
 
 The GitHub-hosted Bazel lanes can share a [BuildBuddy](https://www.buildbuddy.io/) remote cache:

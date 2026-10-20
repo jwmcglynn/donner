@@ -261,9 +261,11 @@ public:
   /// Maximum scalar parameters retained by ParseCommands.
   static constexpr std::size_t kMaximumParameters = kMaximumPoints * 2;
 
-  /** Parse authored command parameters with the same grammar as Parse, without expanding geometry.
+  /**
+   * Parse authored command parameters with the same grammar as Parse, without expanding geometry.
    * The result retains relative commands, shorthand curves and arc parameters. Like Parse, it may
    * contain a completed prefix and an error; incomplete commands are omitted.
+   *
    * @param d SVG path data.
    * @return Owned commands and/or an error, bounded by kMaximumCommands and kMaximumParameters.
    */

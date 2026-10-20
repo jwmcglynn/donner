@@ -27,14 +27,15 @@ class RenderingContext {
 public:
   /// Evaluated pointer-event geometry shared by live queries and immutable frame captures.
   struct HitGeometry {
-    Box2d documentBounds;
-    std::optional<Box2d> textBounds;
-    Transform2d entityFromDocumentTransform;
-    FillRule fillRule = FillRule::NonZero;
-    double strokeWidth = 0.0;
-    bool testFill = false;
-    bool testStroke = false;
-    bool boundsOnly = false;
+    Box2d documentBounds;  ///< Shape bounds in document space, inflated by the stroke width.
+    std::optional<Box2d> textBounds;  ///< Text ink bounds in entity space; set for text roots.
+    Transform2d entityFromDocumentTransform;  ///< Maps document-space points to entity space.
+    FillRule fillRule = FillRule::NonZero;    ///< Computed fill rule for the fill test.
+    double strokeWidth = 0.0;  ///< Computed stroke width, or zero when the stroke is unpainted.
+    bool testFill = false;     ///< Whether the fill area is hit-testable.
+    bool testStroke = false;   ///< Whether the stroke area is hit-testable.
+    bool boundsOnly = false;   ///< Whether `pointer-events: bounding-box` hits the whole bounds.
+
     /// Test a point using an optional prepared path borrowed for the duration of this call.
     /// @param point Document-space point. @param path Prepared shape path, or null for bounds.
     bool contains(const Vector2d& point, const Path* path) const;

@@ -31,8 +31,8 @@ namespace donner::css {
  * | `#id.class` | (1, 1, 0) |
  * | `#id.class div` | (1, 1, 1) |
  * | `#id.class > div` | (1, 1, 1) |
- * | `[class=~"class"]` | (1, 1, 1) |
-
+ * | `[class~="class"]` | (0, 1, 0) |
+ *
  * For example, the selector `#id.class` has a specificity of (1, 1, 0), while `div > p` has a
  * specificity of (0, 0, 2).
  *
@@ -178,6 +178,7 @@ public:
    * Already-important ranks and explicit non-CSS overrides are unchanged.
    *
    * @param specificity Original declaration rank.
+   * @return The important rank for \p specificity's origin, with its selector specificity.
    */
   static constexpr Specificity Important(Specificity specificity) {
     switch (specificity.special_) {

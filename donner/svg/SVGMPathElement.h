@@ -25,7 +25,11 @@ class SVGMPathElement : public SVGElement {
 protected:
   /// Wrap an existing element.
   explicit SVGMPathElement(EntityHandle handle) : SVGElement(handle) {}
-  /// Initialize the element on the supplied internal handle.
+  /**
+   * Initialize the element on the supplied internal handle.
+   *
+   * @param handle Internal handle to initialize.
+   */
   static SVGMPathElement CreateOn(EntityHandle handle);
 
 public:

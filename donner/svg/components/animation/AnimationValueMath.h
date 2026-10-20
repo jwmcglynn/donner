@@ -81,7 +81,6 @@ std::optional<std::string> CombineAnimationValues(std::string_view first, std::s
  * @param first First value.
  * @param second Second value.
  * @param context Relative unit and color context.
- * @param secondIsOffset Treat the second length operand as an additive displacement.
  * @return Distance, or nullopt when no distance function is defined.
  */
 std::optional<double> AnimationValueDistance(std::string_view first, std::string_view second,

@@ -1,8 +1,8 @@
 # Design: SVG Animation
 
 **Status:** Implementing. Declarative timing, interpolation, motion paths and editor Preview are
-implemented on the animation feature branch. Qualification and the remaining integration checklist
-below gate completion.
+merged to main ([#1893](https://github.com/jwmcglynn/donner/pull/1893)) and parsed by default. The
+remaining checklist items below track follow-up qualification.
 **Author:** Unknown
 **Model:** Not recorded
 **Drafted by:** Claude Opus 4.6

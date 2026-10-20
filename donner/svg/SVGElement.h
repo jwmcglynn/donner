@@ -143,7 +143,11 @@ public:
     return documentHandle_->write();
   }
 
-  /// Acquire batched write access to this anchor's document.
+  /**
+   * Acquire batched write access to this anchor's document.
+   *
+   * @param commitOnScopeExit If true, commit one mutation revision when the batch leaves scope.
+   */
   DocumentMutationBatch mutationBatch(bool commitOnScopeExit = true) const;
 
   /// Assert that legacy raw ECS access is scoped when required by the document mode.
