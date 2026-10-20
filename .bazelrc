@@ -482,13 +482,13 @@ build:ci --skip_incompatible_explicit_targets
 
 # The remote cache is an optimization, so losing it must never fail a command
 # that otherwise succeeded. With path conversion on (Bazel's default), a local
-# build event file is written through the remote-cache uploader: each file it
-# names, such as a test log, is uploaded first and referenced by a bytestream://
-# URI. If the cache becomes unreachable mid-run, that upload fails and Bazel
-# exits 38 ("Unable to write all BEP events to file") after every test passed,
-# and the same exit replaces a failing test's exit 3. Plain file:// paths keep
-# the local event file independent of the cache. The CI readers of these files
-# use test status, counts and timings, never the file URIs.
+# build event file is written through the remote-cache uploader, which names
+# each referenced file by a bytestream:// URI: it queries the cache for every
+# file and uploads the test and build logs. If the cache becomes unreachable
+# mid-run, Bazel exits 38 ("Unable to write all BEP events to file") after every
+# test passed, and the same exit replaces a failing test's exit 3. Plain file://
+# paths keep the local event file independent of the cache. The CI readers of
+# these files use test status, counts and timings, never the file URIs.
 common:ci --nobuild_event_json_file_path_conversion
 common:ci --nobuild_event_binary_file_path_conversion
 common:ci --nobuild_event_text_file_path_conversion

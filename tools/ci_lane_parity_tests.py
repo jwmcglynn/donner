@@ -1650,9 +1650,10 @@ def _bazel_running_steps(workflow, job):
 # cannot fail a Bazel command whose build and tests passed (see .bazelrc).
 BUILD_EVENT_FILE_FORMATS = ("json", "binary", "text")
 _BUILD_EVENT_FILE = re.compile(r"--build_event_(?:%s)_file=" % "|".join(BUILD_EVENT_FILE_FORMATS))
+# Any spelling that turns path conversion back on, including the old `experimental_` names.
 _PATH_CONVERSION_ON = re.compile(
-    r"--(?:build_event_\w+_file_path_conversion(?:=(?:true|yes|1))?"
-    r"|nobuild_event_\w+_file_path_conversion=(?:false|no|0))$")
+    r"--(?:experimental_)?build_event_\w+_file_path_conversion(?:=(?:true|yes|1))?$",
+    re.IGNORECASE)
 
 
 def _build_event_flag_problems(flags):
@@ -1660,6 +1661,7 @@ def _build_event_flag_problems(flags):
     if not any(_BUILD_EVENT_FILE.match(flag) for flag in flags):
         return []
     problems = [flag for flag in flags if _PATH_CONVERSION_ON.match(flag)]
+    # `ci` is not in EXPANDED_CONFIGS, so `--config=ci` is still in the flags here.
     if "--config=ci" not in flags:
         problems.append("writes a build event file without --config=ci")
     return problems
@@ -1827,9 +1829,17 @@ class CiLaneParityTest(unittest.TestCase):
         rc_lines = set(Path(runfiles.Create().Rlocation("donner/.bazelrc"))
                        .read_text(encoding="utf-8").splitlines())
         for kind in BUILD_EVENT_FILE_FORMATS:
-            self.assertIn("common:ci --nobuild_event_%s_file_path_conversion" % kind, rc_lines)
+            line = "common:ci --nobuild_event_%s_file_path_conversion" % kind
+            self.assertTrue(line in rc_lines, ".bazelrc lacks: " + line)
+        # A later config on the same command line would override `common:ci`.
+        self.assertEqual([], [line for line in rc_lines if not line.startswith("#") and any(
+            _PATH_CONVERSION_ON.match(word) for word in line.split())])
         main_push = {name: self.workflows[name] for name in self.main_push_workflows}
         self.assertEqual([], build_event_file_problems(main_push))
+        # Workflows main pushes do not run are not evaluated above; none writes an event file.
+        for name, path in ((path.name, path) for path in _workflow_paths()):
+            if name not in self.main_push_workflows:
+                self.assertNotIn("--build_event_", path.read_text(encoding="utf-8"), name)
 
     def test_build_event_file_problems_are_found(self):
         geode = "Test (Geode editor lane)"
@@ -1841,8 +1851,8 @@ class CiLaneParityTest(unittest.TestCase):
                 ("bazelisk test --config=geode", "without --config=ci"),
                 (command + " --build_event_json_file_path_conversion",
                  "--build_event_json_file_path_conversion"),
-                (command + " --nobuild_event_json_file_path_conversion=false",
-                 "--nobuild_event_json_file_path_conversion=false")):
+                (command + " --experimental_build_event_json_file_path_conversion=True",
+                 "--experimental_build_event_json_file_path_conversion=True")):
             workflow = parse_workflow(text.replace(command, replacement))
             problems = build_event_file_problems({"main.yml": workflow})
             self.assertTrue(any(geode in entry and problem in entry for entry in problems),
