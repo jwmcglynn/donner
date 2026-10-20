@@ -59,6 +59,12 @@ export async function supervise(executable, args, options = {}) {
   let monitor;
   let stopping = false;
   let terminationIssued = false;
+  // Set when the group kill fails; the group, and so the driver, may then never exit.
+  let terminationError = null;
+  let markTerminationFailed;
+  const terminationFailed = new Promise((resolve) => {
+    markTerminationFailed = resolve;
+  });
   let cleanup;
   let heartbeatSessionId;
   let teardownDeadline;
@@ -66,6 +72,7 @@ export async function supervise(executable, args, options = {}) {
   const receipt = () => ({
     reason,
     reportingError,
+    terminationError,
     rootPid: anchor.pid,
     rootIdentity,
     peakRssBytes,
@@ -92,7 +99,12 @@ export async function supervise(executable, args, options = {}) {
     try {
       process.kill(-anchor.pid, "SIGKILL");
     } catch (error) {
-      if (error.code !== "ESRCH") throw error;
+      if (error.code === "ESRCH") return;
+      // The group may still be running. Record that rather than throwing, so the caller's
+      // cleanup and final report still run, and stop waiting for a driver that may never exit.
+      terminationError = error.message;
+      reason ??= `test process group termination failed: ${error.message}`;
+      markTerminationFailed();
     }
   };
   const stop = (failure) => {
@@ -222,11 +234,24 @@ export async function supervise(executable, args, options = {}) {
   monitor = setInterval(sample, intervalMs);
   let exit;
   try {
-    exit = await driverExited;
+    exit = await Promise.race([
+      driverExited,
+      terminationFailed.then(() => ({ code: null, signal: null })),
+    ]);
   } finally {
     clearInterval(monitor);
     terminateGroup();
-    await anchorExited;
+    // The anchor lives until its group is killed, so only a delivered kill lets it exit.
+    if (terminationError === null) {
+      await anchorExited;
+    } else {
+      // Release the surviving anchor's handle and IPC channel so this process can still exit.
+      // A disconnect also makes the anchor end its own group, a fallback for the failed kill;
+      // the cleanup checks below still decide whether the group is gone.
+      anchor.removeAllListeners("message");
+      if (anchor.connected) anchor.disconnect();
+      anchor.unref();
+    }
     const unverifiable = (failure) => {
       reportingError ??= failure;
       reason ??= `test process cleanup verification unavailable: ${failure}`;
@@ -244,7 +269,12 @@ export async function supervise(executable, args, options = {}) {
           groupGone = true;
           break;
         }
-        if (error.code !== "EPERM") throw error;
+        // Any other probe failure leaves the group's state unknown. Throwing here would skip
+        // the rest of this cleanup and replace the driver's own outcome, so fail closed.
+        if (error.code !== "EPERM") {
+          unverifiable(`group probe failed: ${error.message}`);
+          break;
+        }
         // A denied probe needs a process listing to show that the group is gone.
         try {
           if (ownedGroup(listProcesses(), anchor.pid).length === 0) {

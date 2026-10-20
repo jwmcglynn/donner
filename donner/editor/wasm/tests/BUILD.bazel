@@ -1,10 +1,46 @@
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwright_bin = "bin")
+load("@npm//donner/editor/wasm/tests:eslint/package_json.bzl", eslint_bin = "bin")
 
 package(default_visibility = ["//visibility:public"])
 
 npm_link_all_packages(name = "node_modules")
+
+# Runs the JavaScript lint rules CodeFactor applies (see eslint.config.mjs) on every file
+# CodeFactor analyzes, so a finding fails `bazel test //...` before review. A JavaScript file
+# outside this package needs an entry here; tools/check_js_lint_coverage.py (Lint lane) fails
+# when one is missing.
+eslint_bin.eslint_test(
+    name = "js_lint_test",
+    size = "small",
+    args = [
+        "--config",
+        "$(rootpath :eslint.config.mjs)",
+        "--no-warn-ignored",
+        ".",
+    ],
+    copy_data_to_bin = False,
+    data = glob([
+        "*.js",
+        "*.mjs",
+    ]) + [
+        ":node_modules/@eslint/js",
+        ":node_modules/globals",
+        "//donner/editor/wasm:catalog-fonts.js",
+        "//donner/editor/wasm:editor-bootstrap.js",
+        "//donner/editor/wasm:enable-threads.js",
+        "//donner/gpu/browser:library_donner_gpu.js",
+        "//donner/gpu/shader/browser_tests:SlugEndpointChromium_tests.mjs",
+        "//donner/gpu/shader/browser_tests:WgslChromiumCompilation_tests.mjs",
+        "//donner/svg/renderer/wasm:render_test_driver.mjs",
+        "//examples:svg_viewer_test.mjs",
+        "//tools:treemap.js",
+        "//tools:treemap.test.js",
+    ],
+    # Coverage runs skip lint tests.
+    tags = ["lint"],
+)
 
 playwright_bin.playwright_test(
     name = "chromium_remote_smoke",
@@ -316,6 +352,7 @@ js_test(
         "browser-watchdog.mjs",
         "browser-watchdog-anchor.mjs",
         "browser-watchdog-child.cjs",
+        "test-timing.cjs",
         ":node_modules/@playwright/test",
     ],
     entry_point = "browser-watchdog.spec.mjs",

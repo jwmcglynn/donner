@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -17,6 +17,7 @@ import {
   supervise,
 } from "./browser-watchdog.mjs";
 
+const { kStallGuardMs } = createRequire(import.meta.url)("./test-timing.cjs");
 const directory = () =>
   fs.mkdtempSync(path.join(process.env.TEST_TMPDIR ?? os.tmpdir(), "watchdog-"));
 test("ownership excludes unrelated processes and follows descendants", () => {
@@ -504,12 +505,12 @@ test("termination is issued once even when the stop and exit paths both run", as
   }
 });
 
-async function superviseWithDeniedGroupProbe(options) {
+async function superviseWithDeniedGroupProbe(options, code = "EPERM") {
   const original = process.kill;
   process.kill = function(pid, signal) {
     if (pid < 0 && signal === 0) {
-      const error = new Error("denied signal-zero probe");
-      error.code = "EPERM";
+      const error = new Error(`${code} signal-zero probe`);
+      error.code = code;
       throw error;
     }
     return original.call(this, pid, signal);
@@ -551,6 +552,140 @@ test("a denied signal-zero probe without any process listing fails closed", asyn
     /cleanup verification unavailable: group enumeration failed: simulated/,
   );
   assert.deepEqual(result.cleanup, { groupGone: false, survivors: null });
+});
+
+function assertFinalReport(result, listeners) {
+  assert.ok(result.cleanup, "cleanup ran to completion");
+  const report = JSON.parse(fs.readFileSync(result.reportFile, "utf8"));
+  assert.deepEqual(report.cleanup, result.cleanup, "the final receipt records the cleanup");
+  assert.equal(report.reason, result.reason);
+  assert.deepEqual(["SIGTERM", "SIGINT"].map((signal) => process.listenerCount(signal)), listeners);
+}
+test("an unexpected signal-zero probe failure fails closed and finishes cleanup", async () => {
+  const listeners = ["SIGTERM", "SIGINT"].map((signal) => process.listenerCount(signal));
+  const result = await superviseWithDeniedGroupProbe({}, "EINVAL");
+  assert.match(
+    result.reason,
+    /cleanup verification unavailable: group probe failed: EINVAL signal-zero probe/,
+  );
+  assert.deepEqual(result.cleanup, { groupGone: false, survivors: [] });
+  assert.equal(result.exit.code, 0, "the driver's own exit is still reported");
+  assertFinalReport(result, listeners);
+});
+// Supervises `args` with every group kill denied, ending the group after the test if it is left.
+async function superviseWithDeniedGroupKill(t, args, options) {
+  const original = process.kill;
+  let deniedGroup;
+  // The group may outlive the denied kill if the anchor's disconnect fallback fails; end it after
+  // the test.
+  t.after(() => {
+    if (deniedGroup === undefined) return;
+    try {
+      original.call(process, deniedGroup, "SIGKILL");
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+  });
+  process.kill = function(pid, signal) {
+    if (pid < 0 && signal === "SIGKILL") {
+      deniedGroup = pid;
+      const error = new Error("denied group termination");
+      error.code = "EPERM";
+      throw error;
+    }
+    return original.call(this, pid, signal);
+  };
+  try {
+    return await supervise(process.execPath, args, {
+      outputDir: directory(),
+      intervalMs: 20,
+      ...options,
+    });
+  } finally {
+    process.kill = original;
+  }
+}
+test("a failed group termination fails closed and still finishes cleanup", async (t) => {
+  const listeners = ["SIGTERM", "SIGINT"].map((signal) => process.listenerCount(signal));
+  const result = await superviseWithDeniedGroupKill(t, ["-e", "process.exit(0)"]);
+  assert.equal(result.reason, "test process group termination failed: denied group termination");
+  assert.equal(result.terminationError, "denied group termination");
+  assert.equal(result.exit.code, 0, "the driver's own exit is still reported");
+  assertFinalReport(result, listeners);
+});
+test(
+  "a failed group termination after a stop does not wait for the driver",
+  { timeout: kStallGuardMs },
+  async (t) => {
+    const listeners = ["SIGTERM", "SIGINT"].map((signal) => process.listenerCount(signal));
+    const result = await superviseWithDeniedGroupKill(t, ["-e", "setInterval(() => {}, 1000)"], {
+      deadlineMs: 150,
+    });
+    assert.equal(result.reason, "test deadline exceeded", "the first cause is kept");
+    assert.equal(result.terminationError, "denied group termination");
+    assert.deepEqual(result.exit, { code: null, signal: null });
+    assertFinalReport(result, listeners);
+  },
+);
+
+// Whether a process group still has a member.
+function groupAlive(group) {
+  try {
+    process.kill(group, 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+test("a supervisor whose group kill failed still exits", async (t) => {
+  // A separate process, so a handle left open on the surviving anchor would keep it alive.
+  const watchdog = new URL("./browser-watchdog.mjs", import.meta.url).href;
+  const script = `
+    import { supervise } from ${JSON.stringify(watchdog)};
+    const original = process.kill;
+    process.kill = function(pid, signal) {
+      if (pid < 0 && signal === "SIGKILL") {
+        console.log(JSON.stringify({ deniedGroup: pid }));
+        const error = new Error("denied group termination");
+        error.code = "EPERM";
+        throw error;
+      }
+      return original.call(this, pid, signal);
+    };
+    const result = await supervise(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      outputDir: ${JSON.stringify(directory())},
+      intervalMs: 20,
+      deadlineMs: 150,
+    });
+    process.exitCode = result.reason ? 1 : 0;
+  `;
+  const denied = [];
+  // The group may outlive the denied kill if the anchor's disconnect fallback fails; end it
+  // after the test.
+  t.after(() => {
+    for (const group of denied) {
+      if (groupAlive(group)) process.kill(group, "SIGKILL");
+    }
+  });
+  // SIGKILL on timeout: the supervisor's own SIGTERM handler would otherwise absorb it.
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf8",
+    timeout: kStallGuardMs,
+    killSignal: "SIGKILL",
+  });
+  for (const line of child.stdout.split("\n")) {
+    if (line.startsWith('{"deniedGroup"')) denied.push(JSON.parse(line).deniedGroup);
+  }
+  assert.equal(child.error, undefined, "the supervisor exits without being killed");
+  assert.equal(child.status, 1, child.stderr);
+  assert.equal(denied.length, 1);
+  // Disconnecting from the anchor makes it end its own group, the fallback for the failed kill.
+  const deadline = Date.now() + kStallGuardMs;
+  while (groupAlive(denied[0]) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(groupAlive(denied[0]), false, "the anchor ended its group");
 });
 
 test("a rejected worker diagnostic remains unavailable for known GPU ownership", async () => {

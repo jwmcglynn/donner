@@ -8,6 +8,14 @@ exports_files([
     "run-browser-ci.sh",
 ])
 
+exports_files(
+    [
+        "treemap.js",
+        "treemap.test.js",
+    ],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+)
+
 refresh_compile_commands(
     name = "refresh_compile_commands",
     targets = "//donner/...",
@@ -310,6 +318,17 @@ py_test(
     srcs = ["ci_concurrency_policy_tests.py"],
     data = ["//:github_action_definitions"],
     deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
+    name = "check_js_lint_coverage_tests",
+    size = "small",
+    srcs = [
+        "check_js_lint_coverage.py",
+        "check_js_lint_coverage_tests.py",
+    ],
+    main = "check_js_lint_coverage_tests.py",
+    deps = [":test_timing"],
 )
 
 # Large: its git and shell fixtures take longer than ci_runtime_workflow_tests, and on a slow host

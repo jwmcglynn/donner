@@ -27,6 +27,18 @@
       }
     },
     {
+      "description": "ESLint matches the release CodeFactor uses; see docs/updating_dependencies.md.",
+      "matchPackageNames": [
+        "eslint",
+        "@eslint/js",
+        "globals"
+      ],
+      "matchFileNames": [
+        "donner/editor/wasm/tests/package.json"
+      ],
+      "enabled": false
+    },
+    {
       "matchDepNames": [
         "skia"
       ],

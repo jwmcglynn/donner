@@ -284,3 +284,8 @@ wasm_cc_binary(
     cc_target = ":render_test",
     tags = ["manual"],
 )
+
+exports_files(
+    ["svg_viewer_test.mjs"],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+)
