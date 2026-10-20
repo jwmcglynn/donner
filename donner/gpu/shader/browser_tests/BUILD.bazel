@@ -13,6 +13,14 @@ exports_files(
     visibility = ["//tools:__pkg__"],
 )
 
+exports_files(
+    [
+        "SlugEndpointChromium_tests.mjs",
+        "WgslChromiumCompilation_tests.mjs",
+    ],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+)
+
 # The browser compiler checks the emitted bytes independently of Donner's own WGSL frontend.
 # It validates modules only; editor/browser pixel acceptance remains a separate target. The shipped
 # artifact targets are read from the production shader package's BUILD file.

@@ -17,6 +17,7 @@ _CHECKS = [
     ["python3", "tools/lint_braces_tests.py"],
     ["python3", "tools/check_design_doc_provenance.py"],
     ["python3", "tools/check_private_details.py"],
+    ["python3", "tools/check_js_lint_coverage.py"],
     ["python3", "tools/rust_boundary/check_no_rust_dependencies.py", "--blocking", "default"],
 ]
 
@@ -102,6 +103,13 @@ class LintLaneTest(unittest.TestCase):
         result, calls = self._run("donner")
         self.assertEqual(result.returncode, 2)
         self.assertEqual(calls, [])
+        # The usage text is the script's whole header comment, and nothing past it.
+        usage = result.stderr.splitlines()
+        self.assertEqual(usage[0], "lint_lane.sh - the Lint workflow's checks, in the workflow's "
+                         "order, as one command.")
+        self.assertIn("  - tools/check_js_lint_coverage.py: every tracked JavaScript file is in "
+                      "the ESLint test", usage)
+        self.assertEqual(usage[-1], "check ends the lane with its exit status.")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@
 #   - tools/lint_braces_tests.py: brace enforcement through tools/lint.sh itself
 #   - tools/check_design_doc_provenance.py (also //tools:design_doc_provenance_test)
 #   - tools/check_private_details.py over every tracked file
+#   - tools/check_js_lint_coverage.py: every tracked JavaScript file is in the ESLint test
 #   - the lexical no-Rust-dependency verifier, which also scans paths .bazelignore hides
 #
 # Usage: tools/ci/lint_lane.sh
@@ -22,7 +23,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "${script_dir}/../.."
 
 if [[ $# -ne 0 ]]; then
-  sed -n '3,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '3,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 fi
 
@@ -34,5 +35,6 @@ lane_phase "Check source lint and formatting" tools/lint.sh
 lane_phase "Check brace lint regression" python3 tools/lint_braces_tests.py
 lane_phase "Check design document provenance" python3 tools/check_design_doc_provenance.py
 lane_phase "Check tracked files for private details" python3 tools/check_private_details.py
+lane_phase "Check JavaScript lint coverage" python3 tools/check_js_lint_coverage.py
 lane_phase "No-Rust-dependency verifier (blocking)" \
   python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking default

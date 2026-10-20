@@ -34,6 +34,21 @@ and `sha256`. To move to another release:
    `bazel test //...` and the Lint lane pass, and afterwards add the resulting main commit to
    `.git-blame-ignore-revs`.
 
+## ESLint
+
+`//donner/editor/wasm/tests:js_lint_test` runs ESLint with the rules CodeFactor applies, so a
+CodeFactor finding fails `bazel test //...` first. `eslint` and `@eslint/js` are pinned in
+`donner/editor/wasm/tests/package.json` to the ESLint release that CodeFactor lists for its
+analysis, and `globals` to the version that release's environments use. Renovate leaves these
+three alone. When CodeFactor moves to another release, or changes its default configuration
+(`.eslintrc.json` in `codefactor-io/default-configs`):
+
+1. Update the versions in `package.json`, then regenerate `package-lock.json`
+   (`npm install --package-lock-only --ignore-scripts`) and `pnpm-lock.yaml`
+   (`pnpm install --lockfile-only --ignore-scripts`, pnpm 9 or later) in that directory.
+2. Mirror any rule or environment change in `donner/editor/wasm/tests/eslint.config.mjs`, and
+   fix new findings in the same change.
+
 ## Bazel LLVM Toolchain
 
 Donner uses `toolchains_llvm` from the Bazel Central Registry. To update it, bump its version in

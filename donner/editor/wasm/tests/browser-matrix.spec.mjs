@@ -1884,17 +1884,17 @@ test("Playwright evidence upload retries only transport while retaining terminal
     "utf8",
   );
   const uploads = [...workflow.matchAll(
-    /      - name: Upload Playwright evidence[^\n]*\n([\s\S]*?)(?=\n      - name:|$)/g,
+    / {6}- name: Upload Playwright evidence[^\n]*\n([\s\S]*?)(?=\n {6}- name:|$)/g,
   )].map(([text]) => ({
-    id: text.match(/        id: ([\w-]+)/)?.[1],
-    condition: text.match(/        if: \$\{\{ (.*?) \}\}/)?.[1],
+    id: text.match(/ {8}id: ([\w-]+)/)?.[1],
+    condition: text.match(/ {8}if: \$\{\{ (.*?) \}\}/)?.[1],
     continueOnError: text.includes("        continue-on-error: true"),
-    action: text.match(/        uses: (.*)/)?.[1],
-    name: text.match(/          name: (.*)/)?.[1],
-    path: text.match(/          path: (.*)/)?.[1],
-    retention: text.match(/          retention-days: (.*)/)?.[1],
-    missing: text.match(/          if-no-files-found: (.*)/)?.[1],
-    overwrite: text.match(/          overwrite: (.*)/)?.[1],
+    action: text.match(/ {8}uses: (.*)/)?.[1],
+    name: text.match(/ {10}name: (.*)/)?.[1],
+    path: text.match(/ {10}path: (.*)/)?.[1],
+    retention: text.match(/ {10}retention-days: (.*)/)?.[1],
+    missing: text.match(/ {10}if-no-files-found: (.*)/)?.[1],
+    overwrite: text.match(/ {10}overwrite: (.*)/)?.[1],
   }));
   assert.equal(uploads.length, 3, "bound transport attempts to three");
   assert.equal(
