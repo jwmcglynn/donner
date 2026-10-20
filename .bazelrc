@@ -480,6 +480,19 @@ build:ci --repository_cache=~/.cache/bazel-repo
 # Avoids needing the `ci:full-test` PR label as a workaround.
 build:ci --skip_incompatible_explicit_targets
 
+# The remote cache is an optimization, so losing it must never fail a command
+# that otherwise succeeded. With path conversion on (Bazel's default), a local
+# build event file is written through the remote-cache uploader: each file it
+# names, such as a test log, is uploaded first and referenced by a bytestream://
+# URI. If the cache becomes unreachable mid-run, that upload fails and Bazel
+# exits 38 ("Unable to write all BEP events to file") after every test passed,
+# and the same exit replaces a failing test's exit 3. Plain file:// paths keep
+# the local event file independent of the cache. The CI readers of these files
+# use test status, counts and timings, never the file URIs.
+common:ci --nobuild_event_json_file_path_conversion
+common:ci --nobuild_event_binary_file_path_conversion
+common:ci --nobuild_event_text_file_path_conversion
+
 # Remote-execution queue priority convention: CI actions run at priority 0, the
 # floor of the server-supported range (0-2147483647; the backend rejects
 # negative values), while interactive development clients set higher values in

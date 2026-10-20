@@ -368,7 +368,6 @@ COUNTERPART_ALLOWLIST = {
     ], "Runner-specific remote execution settings; they choose where actions run and which "
        "outputs come back, not what is built or tested."),
     **_counterpart_entries("linux", "linux-self-hosted", [
-        ("*", "flag-pr-only", "--nobuild_event_json_file_path_conversion"),
         ("Build", "flag-pr-only", "--build_event_json_file=$DIAG_DIR/build/bep.json"),
         ("Build", "flag-pr-only", "--execution_log_compact_file=$DIAG_DIR/build/exec.log.zst"),
         ("Build", "flag-pr-only", "--profile=$DIAG_DIR/build/profile.gz"),
@@ -1647,6 +1646,34 @@ def _bazel_running_steps(workflow, job):
     return list(seen.values())
 
 
+# `--config=ci` writes local build event files with plain file paths, so losing the remote cache
+# cannot fail a Bazel command whose build and tests passed (see .bazelrc).
+BUILD_EVENT_FILE_FORMATS = ("json", "binary", "text")
+_BUILD_EVENT_FILE = re.compile(r"--build_event_(?:%s)_file=" % "|".join(BUILD_EVENT_FILE_FORMATS))
+_PATH_CONVERSION_ON = re.compile(
+    r"--(?:build_event_\w+_file_path_conversion(?:=(?:true|yes|1))?"
+    r"|nobuild_event_\w+_file_path_conversion=(?:false|no|0))$")
+
+
+def build_event_file_problems(workflows):
+    """Gating Bazel commands whose build event file would depend on the remote cache."""
+    problems = set()
+    for name, workflow in workflows.items():
+        for job_name, job in _jobs(workflow).items():
+            for step in _bazel_running_steps(workflow, job):
+                where = "%s %s %s" % (name, job_name, _step_name(step))
+                for invocation in bazel_invocations(str(step.get("run") or ""),
+                                                    _step_environment(workflow, job, step)):
+                    flags = invocation["flags"]
+                    if not any(_BUILD_EVENT_FILE.match(flag) for flag in flags):
+                        continue
+                    if "--config=ci" not in flags:
+                        problems.add(where + ": writes a build event file without --config=ci")
+                    problems.update("%s: %s" % (where, flag) for flag in flags
+                                    if _PATH_CONVERSION_ON.match(flag))
+    return sorted(problems)
+
+
 class CiLaneParityTest(unittest.TestCase):
     maxDiff = None
 
@@ -1786,6 +1813,30 @@ class CiLaneParityTest(unittest.TestCase):
             failure_swallowing_lines(self.workflows, self.main_push_workflows),
             FAILURE_SWALLOW_ALLOWLIST,
             "a step that runs Bazel can turn its failure into success")
+
+    def test_build_event_files_do_not_depend_on_the_remote_cache(self):
+        rc_lines = set(Path(runfiles.Create().Rlocation("donner/.bazelrc"))
+                       .read_text(encoding="utf-8").splitlines())
+        for kind in BUILD_EVENT_FILE_FORMATS:
+            self.assertIn("common:ci --nobuild_event_%s_file_path_conversion" % kind, rc_lines)
+        self.assertEqual([], build_event_file_problems(self.workflows))
+
+    def test_build_event_file_problems_are_found(self):
+        geode = "Test (Geode editor lane)"
+        main = next(path for path in _workflow_paths() if path.name == "main.yml")
+        text = main.read_text(encoding="utf-8")
+        command = "bazelisk test --config=ci --config=geode"
+        self.assertIn(command, text)
+        for replacement, problem in (
+                ("bazelisk test --config=geode", "without --config=ci"),
+                (command + " --build_event_json_file_path_conversion",
+                 "--build_event_json_file_path_conversion"),
+                (command + " --nobuild_event_json_file_path_conversion=false",
+                 "--nobuild_event_json_file_path_conversion=false")):
+            workflow = parse_workflow(text.replace(command, replacement))
+            problems = build_event_file_problems({"main.yml": workflow})
+            self.assertTrue(any(geode in entry and problem in entry for entry in problems),
+                            (replacement, problems))
 
     def test_failure_swallowing_lines_are_found(self):
         workflow = parse_workflow(

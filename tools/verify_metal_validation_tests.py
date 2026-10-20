@@ -398,6 +398,7 @@ class MetalEvidenceTest(unittest.TestCase):
     def test_full_validation_options_preserve_the_required_execution_policy(self):
         self.assertEqual([
             "--config=ci", "--config=re", "--jobs=4", "--remote_local_fallback=false",
+            "--build_event_json_file_path_conversion",
             "--test_tag_filters=", "--test_filter=", "--runs_per_test=1",
             "--flaky_test_attempts=1", "--nocache_test_results", "--test_output=all",
             "--test_env=MTL_DEBUG_LAYER=1", "--test_env=MTL_SHADER_VALIDATION=1",
