@@ -5431,9 +5431,12 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   );
   await page.keyboard.down("Control");
   await page.keyboard.down("v");
+  // Release Ctrl+V as soon as the frame that consumes it has run. Holding it through an idle wait
+  // would let a later frame see a key held past the repeat delay.
   await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
     message: "the editor paste shortcut must reach an app frame",
     timeout: scaledMs(4_000),
+    intervals: [8, 16],
   }).toBeGreaterThan(beforeEditorPasteFrame);
   await page.keyboard.up("v");
   await page.keyboard.up("Control");
