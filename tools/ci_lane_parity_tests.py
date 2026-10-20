@@ -273,7 +273,12 @@ INVOCATION_ALLOWLIST = {
 
 # Differences in how a job that runs on both main and a pull request runs Bazel in each, keyed
 # by (workflow, job, scenario, step, kind, value).
-SHARED_JOB_ALLOWLIST = {}
+SHARED_JOB_ALLOWLIST = {
+    ("main.yml", "linux", scenario, step, "flag-main-only", "--config=buildbuddy-re"):
+        "Cloud execution requires the trusted writer key; other PRs use the hosted toolchain. "
+        "Trusted PRs exercise the cloud compile probe before merge."
+    for scenario in ("untrusted-pr", "renovate-pr") for step in ("Build", "Test")
+}
 
 # (action, input) pairs whose value differs between main and pull requests by policy, pinned by
 # the security policy tests: Actions cache saves are main-only, and BuildBuddy write access
@@ -325,13 +330,17 @@ _CACHE_WRITER_REASON = (
     "stricter than main's.")
 
 STEP_ALLOWLIST = {
+    **{("main.yml", "linux", "Verify BuildBuddy remote execution", scenario):
+       "The cold cloud-execution probe needs a trusted writer credential; trusted PRs run it."
+       for scenario in ("untrusted-pr", "renovate-pr")},
     **{(workflow, job, "Configure BuildBuddy remote cache", scenario): _CACHE_WRITER_REASON
        for workflow, job in (("editor_wasm.yml", "build"), ("main.yml", "linux"),
                              ("main.yml", "macos"))
        for scenario in ("untrusted-pr", "renovate-pr")},
-    # Accepted risk: the self-hosted Linux lane builds with another architecture and the
-    # hermetic LLVM toolchain with libc++, so a failure specific to the hosted runner's
-    # toolchain or speed first shows on main.
+    # Accepted risk: the self-hosted Linux lane builds and tests on another architecture, so a
+    # test failure specific to the hosted runner's architecture or speed first shows on main.
+    # The hosted job's cloud build step builds main's hosted toolchain configuration before
+    # merge, and its parity subset reruns the runner-sensitive tests.
     ("main.yml", "linux", "Build", "trusted-pr"): _TRUSTED_LINUX_REASON,
     ("main.yml", "linux", "Test", "trusted-pr"): _TRUSTED_LINUX_REASON,
 }
@@ -354,9 +363,14 @@ def _counterpart_entries(main_job, counterpart, entries, reason):
 
 COUNTERPART_ALLOWLIST = {
     **_counterpart_entries("linux", "linux-self-hosted", [
+        ("*", "flag-main-only", "--config=buildbuddy-re"),
+    ], "Hosted Linux uses cloud LLVM execution; the self-hosted lane has its own LLVM executor. "
+       "Tests remain on the hosted runner for its display dependencies."),
+    **_counterpart_entries("linux", "linux-self-hosted", [
         ("*", "flag-pr-only", "--config=latest_llvm"),
     ], "Accepted toolchain difference: the self-hosted ARM64 lane builds with the hermetic LLVM "
-       "toolchain and libc++, while hosted Linux uses the runner image's clang and libstdc++."),
+       "toolchain and libc++; hosted Linux selects cloud LLVM for trusted writers and the runner "
+       "toolchain otherwise."),
     **_counterpart_entries("linux", "linux-self-hosted", [
         ("*", "flag-pr-only", "--strategy=TestRunner=remote"),
         ("*", "flag-pr-only", "--remote_local_fallback=false"),
@@ -765,6 +779,8 @@ def _context(scenario):
     values = SCENARIOS[scenario]
 
     def lookup(name):
+        if name == "steps.buildbuddy.outputs.bazel-flags":
+            return "--config=buildbuddy-re" if scenario == "main-push" or values["trusted_pr"] == "true" else ""
         if name in ("github.event_name", "github.ref"):
             return values[name]
         if name.startswith("needs.gatekeeper.outputs.use_self_hosted_"):

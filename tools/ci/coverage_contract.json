@@ -7,6 +7,18 @@
   },
   "lanes": {
     "linux": {
+      "Verify BuildBuddy remote execution": {
+        "cloud-build": {
+          "when": "always",
+          "description": "A cold compile on the cloud executor, then the whole tree built with main's cloud execution configuration. The hosted job runs this step on trusted pull requests as well.",
+          "counterparts": [
+            {
+              "job": "linux",
+              "step": "Verify BuildBuddy remote execution"
+            }
+          ]
+        }
+      },
       "Build": {
         "native": {
           "when": "always",
@@ -20,11 +32,13 @@
         },
         "hosted-toolchain": {
           "when": "always",
-          "exception": {
-            "owner": "jwmcglynn",
-            "decision": "Maintainer decision 2026-10-13, recorded in tools/ci_lane_parity_tests.py (STEP_ALLOWLIST)",
-            "reason": "Trusted pull requests build only on the self-hosted ARM64 lane, for speed. A build failure specific to the hosted x86_64 runner's compiler first shows on main."
-          }
+          "description": "Main's hosted toolchain while main's cloud execution configuration is active: the cloud LLVM configuration that main's Build step uses, built for the whole tree on the hosted job before merge.",
+          "counterparts": [
+            {
+              "job": "linux",
+              "step": "Verify BuildBuddy remote execution"
+            }
+          ]
         }
       },
       "Test": {

@@ -221,8 +221,11 @@ the `linux`, `macos` and `macos-browser` jobs in `main.yml`, the Editor WASM bui
 pull-request lane, and the scheduled nightly full-tree build and sanitizer lanes. Two self-hosted
 lanes share it too: `macos-self-hosted` and its hosted-parity subset `macos-hosted-parity`, which
 run only for trusted maintainer pull requests, so the hosted and self-hosted macOS lanes reuse
-each other's build results. It is a remote cache only:
-no remote execution and no build-event upload. It never affects local builds or the self-hosted
+each other's build results. Trusted Linux writers also use cloud remote execution for the
+native build and test-build commands of the `linux` job in `main.yml`. Tests themselves run on
+the GitHub runner, where the display and graphics dependencies are installed. The other lanes,
+including the hosted nightly build that checks the runner's own toolchain, use cache only.
+Build events are not uploaded. It never affects local builds or the self-hosted
 Linux lane, which never calls the action. Without the secrets it is off and every lane builds
 exactly as it does without a cache. A pull request's base-change run (`pr_base_change.yml`, which
 calls `main.yml` as a reusable workflow) applies the same trust gate: its jobs bind the
@@ -239,6 +242,22 @@ server log in the output base, and uploads of workspace paths cannot carry it. W
 action writes nothing and the `try-import` is a silent no-op. The self-hosted runner is persistent,
 so `macos-self-hosted` and `macos-hosted-parity` each delete the key file and the fragment in a
 last step that runs whatever the job's outcome.
+
+**Linux remote execution.** The writer step opts in with `remote-execution: "true"`. Its
+`bazel-flags` output is `--config=buildbuddy-re` only after credentials and endpoint setup succeed;
+selected build commands consume that output. With no key or an unreachable endpoint at setup,
+this output is empty and those commands retain their ordinary local toolchain. The configuration
+selects the declared LLVM 21 toolchain and Linux sysroot, a digest-pinned BuildBuddy Ubuntu 22.04
+x86_64 execution image, and 50 concurrent actions. Execution failures after setup fail the build
+with local fallback disabled, so a cloud executor outage during a job turns that job red rather
+than silently building another way. The build-information generator alone executes locally because
+it reads the real Git checkout; this does not permit local compilation or linking. A cold base-library
+compile checks the execution log for an actual remote compile rather than a cache hit, then
+builds `//...` with the same cloud configuration on trusted pull requests as well as main. The
+PR-to-main coverage contract counts that step as the pull request's check of main's hosted
+toolchain, so a trusted pull request whose setup produced no cloud flags fails the contract. Linker canaries keep their normal runner toolchain, and
+Renovate, macOS, and self-hosted lanes do not opt in. macOS cloud execution requires a separately
+configured compatible executor pool; the cache does not provide one.
 
 **What each run gets.** Pull request trust comes from one rule,
 `.github/actions/pr-trust`, which also decides self-hosted routing in `main.yml`:
@@ -322,7 +341,9 @@ saved. Other runs print what eviction would keep without deleting anything.
 1. Create a BuildBuddy organization.
 2. Create two API keys. The read-write key needs cache write access (BuildBuddy's "Read+Write"
    key type). The read-only key must have no cache write access ("Read-only"). Neither needs
-   executor or organization-admin rights.
+   organization-admin rights. Linux builds also need Remote Execution enabled for the organization
+   and the read-write key. Where BuildBuddy controls execution access per key, leave it off the
+   read-only key, which is treated as public.
 3. Create the GitHub Environment `buildbuddy-write` (Settings -> Environments) with no protection
    rules or reviewers, and add the read-write key to it as the environment secret
    `BUILDBUDDY_API_KEY`. Do not add a repository secret with that name. Leave its deployment

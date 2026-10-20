@@ -35,7 +35,8 @@ _SKIPPED = {"outcome": "skipped"}
 # The receipts of a trusted pull request whose lanes ran every phase the manifest names.
 _COMPLETE = {
     "linux": _receipt("linux", {
-        "Build": _SKIPPED, "Test": _SKIPPED, "Test local Xvfb targets": _ran(),
+        "Verify BuildBuddy remote execution": _ran(), "Build": _SKIPPED, "Test": _SKIPPED,
+        "Test local Xvfb targets": _ran(),
         "Test (hosted parity subset)": _ran(1),
         "Linker canary (non-lld linker support)": _ran(),
         "Build and test CMake consumer": _ran()}),
@@ -70,7 +71,7 @@ class CoverageContractTest(unittest.TestCase):
         problems, excepted = self._check(_COMPLETE)
         self.assertEqual([], problems)
         # Each gap the manifest accepts is reported on every run, with its owner.
-        self.assertEqual(4, len(excepted))
+        self.assertEqual(3, len(excepted))
         for line in excepted:
             self.assertIn("owner jwmcglynn", line)
         self.assertTrue(any(line.startswith("macos / Test / hosted-equivalent: ")
@@ -90,6 +91,18 @@ class CoverageContractTest(unittest.TestCase):
         # Skipping the step fails the same way as omitting it.
         receipts["linux"]["steps"]["Test (hosted parity subset)"] = _SKIPPED
         self.assertEqual(problems, self._check(receipts)[0])
+
+    def test_skipped_cloud_build_fails(self):
+        # Main's hosted Linux Build runs with the cloud execution configuration. A trusted pull
+        # request that did not build the tree that way before merge cannot claim that toolchain.
+        receipts = copy.deepcopy(_COMPLETE)
+        receipts["linux"]["steps"]["Verify BuildBuddy remote execution"] = _SKIPPED
+        problems, _ = self._check(receipts)
+        gap = ("ran on main but not on this pull request; expected an executed linux / "
+               "Verify BuildBuddy remote execution")
+        self.assertEqual(problems, [
+            "linux / Build / hosted-toolchain " + gap,
+            "linux / Verify BuildBuddy remote execution / cloud-build " + gap])
 
     def test_removing_a_parity_partition_fails(self):
         for step in ("Test", "Test (Geode editor lane)"):

@@ -538,6 +538,19 @@ test:hosted-parity-subset --test_tag_filters=hosted_parity,-manual,-perf,-requir
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled
 
+# Cloud execution uses declared LLVM and sysroot inputs; other CI commands keep
+# their existing toolchains. Tests run on the client for GPU/display access.
+build:buildbuddy-re --config=latest_llvm
+build:buildbuddy-re --extra_execution_platforms=//tools/ci:buildbuddy_linux_x86_64
+build:buildbuddy-re --platforms=//tools/ci:buildbuddy_linux_x86_64
+build:buildbuddy-re --spawn_strategy=remote
+# This metadata action reads the real Git checkout.
+build:buildbuddy-re --strategy_regexp="^Executing genrule //donner/editor:editor_build_info_txt$=local"
+build:buildbuddy-re --strategy=TestRunner=local
+build:buildbuddy-re --noremote_local_fallback
+build:buildbuddy-re --remote_timeout=600s
+build:buildbuddy-re --jobs=50
+
 # CI lanes on the BuildBuddy remote cache (the GitHub-hosted lanes and the
 # self-hosted macOS lane) may write a remote-cache fragment here via the
 # .github/actions/buildbuddy-cache composite action when that run receives a

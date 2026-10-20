@@ -687,10 +687,12 @@ jobs:
       # read-only repository secret still reaches every same-repository run of
       # this job, so it is treated as public: it can only read the cache.
       - name: Configure BuildBuddy remote cache
+        id: buildbuddy
         if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          remote-execution: "true"
           trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
           download-outputs: minimal
@@ -703,9 +705,27 @@ jobs:
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
           download-outputs: minimal
 
+      - name: Verify BuildBuddy remote execution
+        id: buildbuddy_verify
+        if: steps.buildbuddy.outputs.bazel-flags != ''
+        env:
+          BUILDBUDDY_FLAGS: ${{ steps.buildbuddy.outputs.bazel-flags }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk build --config=ci ${BUILDBUDDY_FLAGS} --remote_accept_cached=false --disk_cache= \
+            "--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}" \
+            --execution_log_json_file="${RUNNER_TEMP}/buildbuddy-execution.json" \
+            //tools/ci:buildbuddy_compile_probe
+          jq -s -e 'any(.[]; .mnemonic == "CppCompile" and .runner == "remote" and .cacheHit != true)' \
+            "${RUNNER_TEMP}/buildbuddy-execution.json"
+          bazelisk build --config=ci ${BUILDBUDDY_FLAGS} //...
+
       - name: Build
         id: build
         if: ${{ needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
+        env:
+          BUILDBUDDY_FLAGS: ${{ steps.buildbuddy.outputs.bazel-flags }}
         shell: bash
         run: |
           set -euo pipefail
@@ -714,11 +734,13 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk build --config=ci $TARGETS
+          bazelisk build --config=ci ${BUILDBUDDY_FLAGS} $TARGETS
 
       - name: Test
         if: ${{ needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
         id: test
+        env:
+          BUILDBUDDY_FLAGS: ${{ steps.buildbuddy.outputs.bazel-flags }}
         shell: bash
         run: |
           set -euo pipefail
@@ -742,7 +764,7 @@ jobs:
           # targets (docs, tooling, a vendored subtree tested from its own
           # workspace), which `bazel test` reports as exit 4. The wrapper
           # maps only that status to success; every other failure still fails.
-          tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk test --config=ci ${BUILDBUDDY_FLAGS} --test_output=errors \
             --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $TARGETS
 
@@ -781,6 +803,8 @@ jobs:
       - name: Test (hosted parity subset)
         id: hosted_parity_test
         if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.hosted_parity_tests_affected == 'true') }}
+        env:
+          BUILDBUDDY_FLAGS: ${{ steps.buildbuddy.outputs.bazel-flags }}
         shell: bash
         run: |
           set -euo pipefail
@@ -793,7 +817,7 @@ jobs:
             echo "::error::Empty target selection reached the hosted parity step."
             exit 1
           fi
-          tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk test --config=ci ${BUILDBUDDY_FLAGS} --test_output=errors \
             --build_tests_only --build_event_json_file="$RUNNER_TEMP/coverage-parity.bep.json" \
             --test_tag_filters=hosted_parity,-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $TARGETS
@@ -839,6 +863,7 @@ jobs:
         run: |
           python3 tools/ci_coverage_contract.py receipt --job linux \
             --out "$RUNNER_TEMP/coverage-receipt/coverage-receipt.json" \
+            --step "Verify BuildBuddy remote execution=${{ steps.buildbuddy_verify.outcome }}" \
             --step "Build=${{ steps.build.outcome }}" \
             --step "Test=${{ steps.test.outcome }}" \
             --step "Test local Xvfb targets=${{ steps.local_xvfb.outcome }}" \
