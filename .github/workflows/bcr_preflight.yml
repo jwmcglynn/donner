@@ -296,6 +296,8 @@ jobs:
     runs-on: xcode-27
     env:
       SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
+      # Free space, in GiB, required before the build.
+      MIN_FREE_DISK_GIB: "45"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -303,10 +305,16 @@ jobs:
       - name: Select pinned Xcode
         shell: bash
         run: tools/ci_select_macos_xcode.sh
+      - name: Free hosted macOS disk
+        shell: bash
+        run: tools/ci/free_hosted_macos_disk.sh
       - uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      - name: Check runner disk space
+        shell: bash
+        run: tools/ci_check_runner_disk.sh
       - name: Build and bind the macOS CLI to the preflight candidate
         run: |
           bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg //tools/ci:release_svg_notice \

@@ -1343,6 +1343,9 @@ jobs:
       # texture check on, validated pipelines fail to compile, so the Metal tests
       # here run with it off, unvalidated.
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"
+      # Free space, in GiB, required after the caches are restored: a cold build of the tree
+      # peaked near 27 GiB on this image, before tests and browser trees.
+      MIN_FREE_DISK_GIB: "45"
       # Enables the browser tests' timeout recorder (browser-stall-diagnostics.mjs). It
       # records host load, memory and process call graphs, so only this ephemeral hosted
       # job sets it; a persistent self-hosted runner never publishes them.
@@ -1367,6 +1370,11 @@ jobs:
         id: xcode
         shell: bash
         run: tools/ci_select_macos_xcode.sh
+
+      # The xcode-27 image starts with far less free disk than a cold build of the tree needs.
+      - name: Free hosted macOS disk
+        shell: bash
+        run: tools/ci/free_hosted_macos_disk.sh
 
       - name: Install clang-tidy
         uses: nick-fields/retry@v4
@@ -1414,6 +1422,12 @@ jobs:
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
           cache-partition: ${{ steps.xcode.outputs.cache_partition }}
           download-outputs: minimal
+
+      # Before Bazel, so a full disk fails in seconds with a clear error instead of an ENOSPC
+      # late in the build.
+      - name: Check runner disk space
+        shell: bash
+        run: tools/ci_check_runner_disk.sh
 
       # Regenerate the Xcode and Apple toolchain repositories for the selected
       # Xcode, as macos-self-hosted does; a restored external cache must not
@@ -1718,6 +1732,7 @@ jobs:
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
+      MIN_FREE_DISK_GIB: "45"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1730,6 +1745,11 @@ jobs:
         id: xcode
         shell: bash
         run: tools/ci_select_macos_xcode.sh
+
+      # The xcode-27 image starts with far less free disk than a cold build of the tree needs.
+      - name: Free hosted macOS disk
+        shell: bash
+        run: tools/ci/free_hosted_macos_disk.sh
 
       # Not used by browser tests. It keeps this job's setup identical to the `macos`
       # job's, which the lane parity test requires.
@@ -1779,6 +1799,12 @@ jobs:
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
           cache-partition: ${{ steps.xcode.outputs.cache_partition }}
           download-outputs: minimal
+
+      # Before Bazel, so a full disk fails in seconds with a clear error instead of an ENOSPC
+      # late in the build.
+      - name: Check runner disk space
+        shell: bash
+        run: tools/ci_check_runner_disk.sh
 
       # Regenerate the Xcode and Apple toolchain repositories for the selected
       # Xcode, as the `macos` job does.

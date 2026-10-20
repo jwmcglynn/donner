@@ -261,6 +261,9 @@ INVOCATION_ALLOWLIST = {
        "Hosted runner setup only; the self-hosted runner is provisioned with it, and it "
        "changes no test, filter or flag."
        for step in ("Install clang-tidy", "Setup Bazel", "Restore Bazel action cache")},
+    ("main.yml", "macos", "macos-self-hosted", "Free hosted macOS disk", "step-main-only", ""):
+        "Hosted runner setup only: it deletes the image's unused Xcodes and simulator runtimes so "
+        "a cold build fits on its disk, and changes no test, filter or flag.",
     ("main.yml", "macos", "macos-self-hosted", "Save Bazel action cache", "step-main-only", ""):
         "Hosted runner teardown only: it bounds and saves the action cache that 'Restore Bazel "
         "action cache' restored, after every test step, and changes no test, filter or flag.",

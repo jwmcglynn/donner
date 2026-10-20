@@ -263,7 +263,8 @@ def _bazelrc_problems(bazelrc):
 # Test hooks of tools/ci_select_macos_xcode.sh, and the variable it sets itself. A workflow
 # that sets any of them (job or workflow env, or a GITHUB_ENV write) can silently replace the
 # pinned Xcode, so no macOS job and no workflow-level env may name them.
-XCODE_OVERRIDES = re.compile(r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|DEVELOPER_DIR)\b")
+XCODE_OVERRIDES = re.compile(
+    r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|LSREGISTER|DEVELOPER_DIR)\b")
 MACOS_JOBS = (HOSTED, SELF_HOSTED, PARITY, "macos-browser")
 
 
