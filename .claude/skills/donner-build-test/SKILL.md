@@ -47,11 +47,12 @@ terminal previews. Missing diagnostics means quiet mode, not a broken harness â€
 1. Update the owned branch against its actual PR base. Independent PRs normally use `origin/main`;
    genuine dependencies use the supported stacked-PR workflow and retain the reviewed parent base.
    Do not rebase another worker's branch or run Git commands in another worker's checkout.
-2. Format changed files (clang-format 18 and 19 produce identical output under the project
-   `.clang-format`; bare `git clang-format` only covers uncommitted changes, so pass the branch
-   base for already-committed work):
+2. Format changed files with the pinned clang-format 21.1.6 (`tools/format/clang_format.sh`;
+   Xcode 27.1's `xcrun clang-format` matched it when pinned); `bazel test //...` fails on
+   unformatted sources of `donner_cc_*` targets:
    ```sh
-   git-clang-format <base-ref>                                        # C/C++, whole branch
+   git diff --name-only --diff-filter=d <base-ref> -- '*.cc' '*.h' '*.cpp' '*.hpp' '*.mm' \
+     | xargs -r tools/format/clang_format.sh -i
    git diff --name-only <base-ref> | grep -E '(BUILD|\.bzl)$' | xargs -r buildifier
    ```
 3. `bazel test //...` â€” must be fully green before merge readiness. It remains the default pre-push

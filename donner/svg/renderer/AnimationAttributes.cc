@@ -177,7 +177,7 @@ bool OverrideField(Registry& registry, Entity entity, std::string_view name, con
 }
 
 template <typename Component, typename Field, typename Value>
-bool SimpleField(Registry& registry, Entity entity, std::string_view name, Field Component::*field,
+bool SimpleField(Registry& registry, Entity entity, std::string_view name, Field Component::* field,
                  const Value& value, bool create = false) {
   return OverrideField<Component>(
       registry, entity, name, Field(value),
@@ -196,7 +196,7 @@ std::optional<double> Number(std::string_view value) {
 
 template <typename Component, typename Field, typename Value, std::size_t N>
 bool ApplyNamedField(Registry& registry, Entity entity, std::string_view name,
-                     Field Component::*field, std::string_view value,
+                     Field Component::* field, std::string_view value,
                      const std::pair<std::string_view, Value> (&values)[N]) {
   for (const auto& [candidate, parsed] : values) {
     if (candidate == value) {

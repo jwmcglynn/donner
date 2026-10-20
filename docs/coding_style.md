@@ -192,8 +192,10 @@ The column limit is set at **100 characters**.
 The `.clang-format` file in the repository root is the source of truth for formatting.
 Use braces around every `if`, `else`, `for`, `while`, and `do` body, including one-line bodies.
 `InsertBraces: true` in `.clang-format` and `readability-braces-around-statements` in
-`.clang-tidy` enforce the rule. Run `tools/lint.sh` locally; CI checks the complete project-owned
-C++ source tree with clang-format 18.
+`.clang-tidy` enforce the rule. Format with `tools/format/clang_format.sh`, the pinned
+clang-format 21.1.6; Xcode 27.1's `xcrun clang-format` matched it byte for byte when it was
+pinned. `bazel test //...` checks the plain `srcs` and `hdrs` of every `donner_cc_*` library, test
+and binary, and `tools/lint.sh` checks the complete project-owned C++ source tree.
 
 ## Language and Library Features
 

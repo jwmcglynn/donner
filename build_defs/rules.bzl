@@ -4,38 +4,52 @@ Helper rules, such as for building fuzzers.
 
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load(
+    "//tools/format:clang_format_check.bzl",
+    "clang_format_check",
+    "clang_format_check_compatible_with",
+)
 
-def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
-    """Emits nothing. The banned-patterns check is now one repo-wide scan.
+def _source_format_check(name, srcs, hdrs, **_kwargs):
+    """Emits `{name}_format`, which fails the build when a listed source is not clang-formatted.
 
-    This used to emit one `{name}_lint` py_test per
-    donner_cc_{library,test,binary,fuzzer}, producing 476 test targets. Measured
-    from a full self-hosted CI run's build event log, those 476 targets burned
-    714 of the suite's 2297 test CPU-seconds - 31% of the entire test suite -
-    to run a regex scan whose real work is 2.5 seconds for the whole repository
-    in a single process. Essentially all of it was per-target interpreter
-    startup, runfiles staging, and test-runner overhead; the scan itself is
-    microseconds per file.
+    The check is a validation action (//tools/format:clang_format_check.bzl), not a test: one
+    cached action per target, so in donner's own builds `bazel build //...` and
+    `bazel test //...` both enforce formatting without a test runner per target. Only plain
+    file paths of donner_cc_library, donner_cc_test and donner_cc_binary are checked;
+    `select()`-valued lists and labels are skipped, and lanes with `--build_tests_only` skip
+    the check. The Lint lane's `tools/lint.sh` formats the whole tracked tree with the same
+    binary, including everything else.
 
-    The check did not shrink, it got BROADER. `tools/lint.sh` feeds
-    check_banned_patterns.py every C++ file under donner/ and examples/,
-    including the ones this macro could never see: `select()`-valued srcs/hdrs
-    (skipped outright above), label-form srcs from other rules, files no target
-    lists at all, and anything tagged `manual`. Verified clean over all 2479
-    files at the commit that made this change.
-
-    The signature is preserved so the call sites in donner_cc_library /
-    donner_cc_test / donner_cc_binary stay unchanged, and so this rationale
-    sits where the next reader will look for the missing `_lint` targets.
+    The banned-patterns scan that used to be emitted here as one py_test per target is the
+    repo-wide `tools/lint.sh` scan: 476 per-target tests cost 31% of the suite's CPU time for a
+    regex pass that takes seconds in one process.
 
     Args:
-      name: Unused; parent target name.
-      srcs: Unused; source files.
-      hdrs: Unused; header files.
-      tags: Unused; tags from the parent rule.
+      name: Parent target name.
+      srcs: Source files.
+      hdrs: Header files.
       **_kwargs: Unused.
     """
-    _ = (name, srcs, hdrs, tags)  # @unused
+    files = []
+    for group in (srcs, hdrs):
+        if type(group) != "list":
+            continue
+        files.extend([
+            f
+            for f in group
+            if type(f) == "string" and ":" not in f and not f.startswith(("//", "@"))
+        ])
+    if not files:
+        return
+    clang_format_check(
+        name = name + "_format",
+        srcs = files,
+        testonly = True,
+        # Off unless --//tools/format:check, which only donner's own .bazelrc sets.
+        target_compatible_with = clang_format_check_compatible_with(),
+        visibility = ["//visibility:private"],
+    )
 
 def libc_compat_deps():
     """
@@ -602,11 +616,10 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
         **kwargs
     )
 
-    _banned_patterns_lint_test(
+    _source_format_check(
         name = name,
         srcs = srcs,
         hdrs = kwargs.get("hdrs", []),
-        tags = tags,
     )
 
 # Standard variant specs for donner_cc_test(variants = ...).
@@ -694,11 +707,10 @@ def donner_cc_test(
         **kwargs
     )
 
-    _banned_patterns_lint_test(
+    _source_format_check(
         name = name,
         srcs = srcs,
         hdrs = kwargs.get("hdrs", []),
-        tags = tags,
     )
 
     if variants:
@@ -818,11 +830,10 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
         **kwargs
     )
 
-    _banned_patterns_lint_test(
+    _source_format_check(
         name = name,
         srcs = srcs,
         hdrs = hdrs,
-        tags = tags,
     )
 
 def _fuzzer_routing_manifest_impl(ctx):

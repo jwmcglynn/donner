@@ -65,8 +65,8 @@ private:
  * @return The first engaged result, or an empty optional if the deadline passed first.
  */
 template <typename PollFn>
-auto PollForResult(PollFn&& poll,
-                   std::chrono::steady_clock::time_point deadline) -> decltype(poll()) {
+auto PollForResult(PollFn&& poll, std::chrono::steady_clock::time_point deadline)
+    -> decltype(poll()) {
   while (std::chrono::steady_clock::now() < deadline) {
     if (auto result = poll(); result.has_value()) {
       return result;

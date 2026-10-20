@@ -353,6 +353,7 @@ py_library(
     visibility = [
         "//build_defs:__pkg__",
         "//tools/ci:__pkg__",
+        "//tools/format:__pkg__",
     ],
 )
 

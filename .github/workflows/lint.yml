@@ -51,11 +51,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install clang-format 18
-        uses: ./.github/actions/apt-install
-        with:
-          packages: clang-format-18
-
       # Every run restores; only main pushes save (end of job), so pull
       # requests and branch pushes read main's entry without writing their own.
       - name: Restore Bazel

@@ -1,0 +1,122 @@
+load("@bazel_skylib//lib:selects.bzl", "selects")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load(":clang_format_check.bzl", "clang_format_check_compatible_with")
+
+package(default_visibility = ["//visibility:public"])
+
+# The repository's C++ formatter: clang-format 21.1.6, a standalone build of LLVM tag
+# llvmorg-21.1.6 pinned per platform in third_party/bazel/non_bcr_deps.bzl. Over the whole
+# repository its output matched the LLVM 21.1.6 toolchain's clang-format and Xcode 27.1's
+# `xcrun clang-format` byte for byte. //tools/format:clang_format_fixture_test pins the
+# constructs whose layout differs between releases, so a formatter change that moves them fails.
+#
+# In an exec-configured attribute (a build action) the select follows the execution platform, so
+# a remote Linux worker runs a Linux binary even when the client is macOS.
+#
+# The formatter repositories exist only in donner's own builds, so it resolves only when
+# //tools/format:check is on (donner's .bazelrc); a module that depends on donner sees the
+# incompatible stand-in instead and skips everything that needs it.
+alias(
+    name = "clang_format",
+    actual = select(
+        {
+            ":linux_aarch64_enabled": "@clang_format_linux_aarch64//:clang-format",
+            ":linux_x86_64_enabled": "@clang_format_linux_x86_64//:clang-format",
+            ":macos_arm64_enabled": "@clang_format_macos_arm64//:clang-format",
+            "//conditions:default": ":clang_format_unavailable",
+        },
+    ),
+)
+
+[
+    selects.config_setting_group(
+        name = platform + "_enabled",
+        match_all = [
+            ":check_enabled",
+            ":" + platform,
+        ],
+    )
+    for platform in ("linux_aarch64", "linux_x86_64", "macos_arm64")
+]
+
+# Stands in for the formatter on a platform without a pinned binary, so everything that needs the
+# formatter there is skipped as incompatible instead of failing analysis.
+filegroup(
+    name = "clang_format_unavailable",
+    target_compatible_with = ["@platforms//:incompatible"],
+)
+
+config_setting(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "macos_arm64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+# Enables the formatter and the `{name}_format` validation of every donner_cc_* target. Donner's
+# .bazelrc turns it on; a module that depends on donner leaves it off, so its
+# `bazel build @donner//...` skips the formatter targets and never needs the formatter
+# repositories, which only donner's own builds fetch.
+bool_flag(
+    name = "check",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "check_enabled",
+    flag_values = {":check": "true"},
+)
+
+exports_files([
+    "clang_format.sh",
+    "clang_format_check.bzl",
+])
+
+py_test(
+    name = "clang_format_fixture_test",
+    size = "small",
+    srcs = ["clang_format_fixture_test.py"],
+    args = [
+        "$(rootpath :clang_format)",
+        "$(rootpath //:clang_format_config)",
+        "$(rootpath testdata/divergent_constructs.cc.in)",
+        "$(rootpath testdata/divergent_constructs.formatted.cc.in)",
+    ],
+    data = [
+        ":clang_format",
+        "testdata/divergent_constructs.cc.in",
+        "testdata/divergent_constructs.formatted.cc.in",
+        "//:clang_format_config",
+    ],
+    target_compatible_with = clang_format_check_compatible_with(),
+    deps = ["//tools:test_timing"],
+)
+
+py_test(
+    name = "clang_format_wrapper_test",
+    size = "small",
+    srcs = ["clang_format_wrapper_test.py"],
+    data = ["clang_format.sh"],
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)

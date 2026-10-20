@@ -176,11 +176,11 @@ Do not freeze the exemption lists in your head — read the current `exempt_path
 
 ## 8. Formatting before commit
 
-- **C++:** `clang-format -i <files>` on every modified file, or `git clang-format` for staged
-  changes. Config is `.clang-format` (Google-based, `ColumnLimit: 100`); it is tuned so
-  clang-format 18 and 19 agree — use either. Newer major versions are unvalidated: if your local
-  clang-format reformats lines you didn't touch, restrict the diff to your edits (or pin 18/19)
-  rather than committing whole-file churn.
+- **C++:** `tools/format/clang_format.sh -i <files>` on every modified file. It runs the pinned
+  clang-format 21.1.6 (`//tools/format:clang_format`) that `bazel test //...` and the Lint lane
+  check with; Xcode 27.1's `xcrun clang-format` matched it when pinned. Config is `.clang-format`
+  (Google-based, `ColumnLimit: 100`). Other clang-format versions can differ; do not commit their
+  output.
 - **TS / JSON / Markdown / TOML:** `dprint fmt` (config `dprint.json`: lineWidth 100, indent 2).
   dprint may not be installed locally — the config file is authoritative; match it manually if
   the binary is missing.

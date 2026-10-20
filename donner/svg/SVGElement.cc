@@ -65,7 +65,7 @@ bool ShouldInvalidateDescendantStyles(std::string_view name) {
 
 void markNeedsFullStyleRecompute(EntityHandle handle);
 
-Lengthd components::LineComponent::*LineCoordinateField(std::string_view name) {
+Lengthd components::LineComponent::* LineCoordinateField(std::string_view name) {
   if (name == "x1") {
     return &components::LineComponent::x1;
   }

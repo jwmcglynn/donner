@@ -74,11 +74,11 @@ std::optional<Options> ParseOptions(int argc, char** argv) {
   Options options;
   struct StringFlag {
     std::string_view name;
-    std::string Options::*field;
+    std::string Options::* field;
   };
   struct IntFlag {
     std::string_view name;
-    int Options::*field;
+    int Options::* field;
     int minimum;
     int maximum;
   };

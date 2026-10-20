@@ -1,11 +1,9 @@
 ---
 BasedOnStyle: Google
 AccessModifierOffset: -2
-# Standalone `{ stmt; }` scope blocks stay on one line. clang-format 18
-# and 19 disagree on the default `Never` here — 18 keeps such blocks
-# inline regardless, 19 reflows them. `Empty` is the smallest setting
-# that makes both versions agree on standalone scope blocks while
-# keeping `if (x) { return; }` / `while (y) { step(); }` reflowed
+# The repository formats with the pinned clang-format 21.1.6 (tools/format/clang_format.sh).
+# Standalone `{ stmt; }` scope blocks stay on one line: `Empty` is the smallest setting that
+# keeps such blocks inline while `if (x) { return; }` / `while (y) { step(); }` are reflowed
 # across multiple lines, matching prior project style.
 AllowShortBlocksOnASingleLine: Empty
 AllowShortCaseLabelsOnASingleLine: true

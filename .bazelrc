@@ -527,6 +527,11 @@ build:clang-tidy --output_groups=report
 # Optionally override the .clang-tidy config file target
 build:clang-tidy --@bazel_clang_tidy//:clang_tidy_config=//:clang_tidy_config
 
+# Check C++ formatting with the pinned clang-format in every donner build: each donner_cc_*
+# target's `{name}_format` validation (//tools/format). Modules that depend on donner do not read
+# this file, so the check stays off for them.
+common --//tools/format:check
+
 ##
 ## Test config
 ##

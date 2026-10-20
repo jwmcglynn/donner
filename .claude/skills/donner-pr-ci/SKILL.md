@@ -25,8 +25,8 @@ description: >
    `BUILD.bazel` change that adds/removes/renames targets or deps — also run it with
    `--check --build` (`--build` requires `--check`); plain `--check` is static and misses real
    compile drift that `cmake.yml` will catch in CI.
-4. `clang-format -i` on every modified C/C++ file (`git clang-format` covers staged changes).
-   clang-format 18 and 19 produce identical output with the project `.clang-format`.
+4. `tools/format/clang_format.sh -i` on every modified C/C++ file: the pinned clang-format
+   21.1.6 that `bazel test //...` and the Lint lane check with. Other versions can differ.
 5. For fuzzer-sensitive changes (anything matching `fuzz.yml`'s PR paths:
    `**/*_fuzzer.{cc,cpp,h}`, `**/corpus/**`, `build_defs/rules.bzl`, or the workflow itself):
    `bazel test --config=asan-fuzzer <fuzzer target>`. On macOS this

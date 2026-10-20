@@ -106,8 +106,8 @@ svg::SVGElement QuerySelector(EditorApp& app, std::string_view selector) {
  * @return The snapshot's result, or nothing if it was still blocked when the guard expired.
  */
 template <typename SnapshotFn>
-auto RunWhileDocumentWriterHolds(EditorApp& app,
-                                 SnapshotFn&& snapshot) -> std::optional<decltype(snapshot())> {
+auto RunWhileDocumentWriterHolds(EditorApp& app, SnapshotFn&& snapshot)
+    -> std::optional<decltype(snapshot())> {
   std::promise<void> writerReady;
   std::promise<void> releaseWriter;
   auto release = releaseWriter.get_future();
