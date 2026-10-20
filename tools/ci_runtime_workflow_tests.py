@@ -1095,23 +1095,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         build = jobs["build"]
         generate = build[build.index("        name: Generate coverage\n"):]
         generate = generate[: generate.index("\n      - ")]
-        guard_start = generate.index("          if [[ -f coverage-report/coverage_skipped ]]; then")
-        guard_end = generate.index("          fi\n", guard_start) + len("          fi\n")
-        self.assertLess(generate.index("tools/coverage.sh"), guard_start)
-        guard = "set -euo pipefail\n" + textwrap.dedent(generate[guard_start:guard_end])
-        with tempfile.TemporaryDirectory() as directory:
-            for skipped, expected in ((False, 0), (True, 1)):
-                with self.subTest(skipped=skipped):
-                    report_dir = Path(directory) / "coverage-report"
-                    report_dir.mkdir(exist_ok=True)
-                    marker = report_dir / "coverage_skipped"
-                    if skipped:
-                        marker.write_text("all_skipped\n", encoding="utf-8")
-                    result = subprocess.run(
-                        ["bash", "-c", guard], cwd=directory, capture_output=True,
-                        text=True, check=False,
-                    )
-                    self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
+        # The lane script fails on the skip marker; //tools/ci:coverage_lane_tests runs it.
+        self.assertIn("run: tools/ci/coverage_lane.sh\n", generate + "\n")
+        self.assertNotRegex(generate, r"(?m)^        (if|continue-on-error): ")
 
         self.assertNotIn("report_written", self.coverage)
         consumers = []

@@ -3,16 +3,14 @@
 import json
 import os
 from pathlib import Path
-import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
 from python.runfiles import runfiles
 from tools import test_timing
-from tools.test_executable_fixtures import ExecutableFixtureDirectory
+from tools.test_executable_fixtures import ExecutableFixtureDirectory, write_python_stand_in
 
 _TOOLS = ("brew", "ccache", "cmake", "ctest", "ninja", "python3")
 
@@ -40,8 +38,7 @@ class CMakeConsumerTest(unittest.TestCase):
         )
         (cls.executables.path / "bin").mkdir()
         for tool in _TOOLS:
-            cls.executables.write("bin/" + tool, "#!/bin/sh\nexec %s %s %s \"$@\"\n" % (
-                shlex.quote(sys.executable), shlex.quote(str(recorder)), tool))
+            write_python_stand_in(cls.executables.path / "bin" / tool, recorder, tool)
         cls.bin = cls.executables.path / "bin"
         # The only host tools the script itself needs. Keeping every other host directory off
         # PATH means a runner's own cmake, ccache or ninja can never stand in for a fake.

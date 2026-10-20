@@ -92,7 +92,13 @@ class CoverageWorkflowTest(unittest.TestCase):
         self.assertIn("if: github.ref != 'refs/heads/main'", guard)
         self.assertIn("exit 1", guard)
         generate = self._step_body(build, "Generate coverage")
-        self.assertIn("if [[ -f coverage-report/coverage_skipped ]]; then", generate)
+        # The lane fails when coverage.sh skipped every target; //tools/ci:coverage_lane_tests
+        # pins that behavior.
+        self.assertIn("run: tools/ci/coverage_lane.sh\n", generate)
+        self.assertIn("run: tools/ci/free_runner_disk.sh\n",
+                      self._step_body(build, "Free hosted runner disk"))
+        self.assertIn("uses: ./.github/actions/apt-install\n",
+                      self._step_body(build, "Install system dependencies"))
         self.assertIn("cache-save: ${{ github.ref == 'refs/heads/main' }}\n", build)
         proof = self._step_body(build, "Generate coverage proof")
         self.assertIn("python3 tools/coverage_run_proof.py", proof)

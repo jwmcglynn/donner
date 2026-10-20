@@ -57,27 +57,7 @@ jobs:
 
       - name: Free hosted runner disk
         shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "::group::Disk before cleanup"
-          df -h /
-          echo "::endgroup::"
-
-          sudo rm -rf \
-            /opt/ghc \
-            /opt/hostedtoolcache/CodeQL \
-            /usr/local/.ghcup \
-            /usr/local/lib/android \
-            /usr/local/share/boost \
-            /usr/share/dotnet \
-            /usr/share/swift
-          docker system prune --all --force || true
-          sudo apt-get clean
-
-          echo "::group::Disk after cleanup"
-          df -h /
-          echo "::endgroup::"
+        run: tools/ci/free_runner_disk.sh
 
       - name: Set up JDK 11
         uses: actions/setup-java@v5
@@ -97,41 +77,18 @@ jobs:
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libncurses-dev pkg-config libfontconfig1-dev libfreetype6-dev \
-            mesa-vulkan-drivers libvulkan1 libvulkan-dev \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+        uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            libncurses-dev pkg-config libfontconfig1-dev libfreetype6-dev
+            mesa-vulkan-drivers libvulkan1 libvulkan-dev
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
             libgl1-mesa-dev libosmesa6-dev
-          sudo apt-get clean
 
       - id: coverage
         name: Generate coverage
         shell: bash
-        run: |
-          set -euo pipefail
-          read -r -a TARGETS <<< "$COVERAGE_TARGETS"
-          printf "Coverage targets:\n"
-          printf "  %s\n" "${TARGETS[@]}"
-          echo "::group::Disk before coverage"
-          df -h / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
-          echo "::endgroup::"
-          tools/coverage.sh --quiet --no-html "${TARGETS[@]}"
-          echo "::group::Disk after coverage"
-          df -h / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
-          echo "::endgroup::"
-
-          # tools/coverage.sh exits 0 without a report when every selected
-          # target was skipped as incompatible with the host platform. That is
-          # a legitimate local outcome for explicit labels, but the complete
-          # product tree on this runner always has compatible tests, so here it
-          # means a classification regression. Fail rather than finish green
-          # with no baseline uploaded.
-          if [[ -f coverage-report/coverage_skipped ]]; then
-            echo "::error::Coverage produced no report: every selected target was skipped as incompatible with this runner. The complete product tree must produce a report."
-            exit 1
-          fi
+        run: tools/ci/coverage_lane.sh
 
       - name: Generate coverage proof
         shell: bash
