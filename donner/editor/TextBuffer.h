@@ -209,8 +209,9 @@ public:
   }
 
   /**
-   * Get the text in [start, end), inclusive of start and exclusive of end,
-   * or adapt as needed for your coordinate conventions.
+   * Get the text in [start, end), inclusive of start and exclusive of end. Columns are visual
+   * columns, as everywhere else in this buffer, so they are converted to glyph indices before the
+   * glyphs are read.
    */
   std::string getText(const Coordinates& start, const Coordinates& end) const {
     if (!isValidCoord(start) || !isValidCoord(end, /*exclusiveEnd=*/true)) {
@@ -220,13 +221,16 @@ public:
       return {};
     }
 
+    const int startIndex = getCharacterIndex(start);
+    const int endIndex = getCharacterIndex(end);
+
     std::string result;
     // If start.line == end.line, just grab the substring
     if (start.line == end.line) {
       auto& line = lines_[start.line];
-      const int beginCol = std::min(start.column, end.column);
-      const int endCol = std::max(start.column, end.column);
-      for (int c = beginCol; c < endCol && c < (int)line.size(); ++c) {
+      const int beginIndex = std::min(startIndex, endIndex);
+      const int stopIndex = std::max(startIndex, endIndex);
+      for (int c = beginIndex; c < stopIndex && c < (int)line.size(); ++c) {
         result.push_back(line[c].character);
       }
       return result;
@@ -234,7 +238,7 @@ public:
     // Otherwise, grab partial from the first line
     {
       auto& line = lines_[start.line];
-      for (int c = start.column; c < (int)line.size(); ++c) {
+      for (int c = startIndex; c < (int)line.size(); ++c) {
         result.push_back(line[c].character);
       }
     }
@@ -250,7 +254,7 @@ public:
     if (start.line < end.line && end.line < (int)lines_.size()) {
       result.push_back('\n');
       auto& line = lines_[end.line];
-      for (int c = 0; c < end.column && c < (int)line.size(); ++c) {
+      for (int c = 0; c < endIndex && c < (int)line.size(); ++c) {
         result.push_back(line[c].character);
       }
     }
@@ -403,8 +407,13 @@ public:
 
     Coordinates actualEnd = end;
     if (end.column == getLineMaxColumn(end.line) + 1) {
-      actualEnd.line++;
-      actualEnd.column = 0;
+      // One past the end includes the line's newline. The last line has none, so stop at its end.
+      if (end.line + 1 < static_cast<int>(lines_.size())) {
+        actualEnd.line++;
+        actualEnd.column = 0;
+      } else {
+        actualEnd.column = getLineMaxColumn(end.line);
+      }
     }
 
     const int startIndex = getCharacterIndex(start);
@@ -556,7 +565,8 @@ public:
       index += glyphByteLength(line[index].character);
     }
 
-    return index;
+    // A truncated UTF-8 sequence at the end of the line must not step past the last glyph.
+    return std::min(index, static_cast<int>(line.size()));
   }
 
   /**
@@ -704,7 +714,8 @@ private:
   }
 
   /**
-   * Check if a coordinate is valid.
+   * Check if a coordinate is valid. Columns are visual columns, so the bound is the line's
+   * tab-expanded width from \ref getLineMaxColumn, not its glyph count.
    *
    * @param coord The coordinate to check.
    * @param exclusiveEnd If true, the coordinate is considered valid if it is one past the end, to
@@ -712,9 +723,10 @@ private:
    */
   bool isValidCoord(const Coordinates& coord, bool exclusiveEnd = false) const {
     if (coord.line >= 0 && coord.line < (int)lines_.size()) {
-      if (coord.column >= 0 && coord.column <= (int)lines_[coord.line].size()) {
+      const int maxColumn = getLineMaxColumn(coord.line);
+      if (coord.column >= 0 && coord.column <= maxColumn) {
         return true;
-      } else if (exclusiveEnd && coord.column == (int)lines_[coord.line].size() + 1) {
+      } else if (exclusiveEnd && coord.column == maxColumn + 1) {
         return true;
       }
     }
