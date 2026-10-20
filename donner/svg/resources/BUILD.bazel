@@ -179,6 +179,7 @@ donner_cc_library(
     deps = [
         ":font_catalog_types",
         "//donner/base",
+        "//donner/base/fonts:sfnt_utils",
         "//third_party/google_fonts:google_fonts_catalog_inc",
     ] + select({
         "@platforms//os:emscripten": ["//third_party/public-sans"],

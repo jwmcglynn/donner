@@ -24,6 +24,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/resources/FontCatalogTypes.h"
 
 namespace donner::editor {
 
@@ -281,6 +282,11 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
     result.outcome = SampleThumbnailRenderOutcome::Cancelled;
     return result;
   }
+
+  // A preview's font loads run on the shared worker; a foreground render's cancellation must be
+  // able to end them as well as the drawing between them.
+  const svg::ScopedFontLoadInterruption interruptFontLoads(
+      [&cancellation] { return cancellation.isCancelled(); });
 
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = svg::parser::SVGParser::ParseSVG(request.source, warnings);
