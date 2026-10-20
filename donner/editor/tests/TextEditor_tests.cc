@@ -4828,7 +4828,9 @@ TEST_F(TextEditorTests, HeldRightArrowAcrossLongFrameKeepsRepeating) {
   PressAndHoldAcrossLongFrame(ImGuiKey_RightArrow, /*ctrl=*/false);
 
   // The press moves one column and the held long frame repeats once more.
-  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 2));
+  EXPECT_THAT(editor.getCursorPosition(),
+              ::testing::AllOf(::testing::Field("line", &Coordinates::line, 0),
+                               ::testing::Field("column", &Coordinates::column, 2)));
 }
 
 TEST_F(TextEditorTests, HeldBackspaceAcrossLongFrameKeepsRepeating) {
