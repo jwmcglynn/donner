@@ -250,6 +250,7 @@ void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteNa
         // presented something else. Absent is also the more useful answer
         // here: this publish is the one that never presented.
         delete stats['presentedAtMs'];
+        delete stats['presentingFrame'];
         delete stats['presentationPublicationDelayMs'];
         delete stats['resultFramePresented'];
         delete stats['framesPresentedWithoutResult'];
