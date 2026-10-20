@@ -314,6 +314,7 @@ py_test(
         "//:github_action_definitions",
         "//build_defs:rules.bzl",
         "//third_party:bazel/non_bcr_deps.bzl",
+        "//tools/ci:BUILD.bazel",
     ],
     deps = [
         ":test_timing",

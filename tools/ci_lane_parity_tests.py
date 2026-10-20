@@ -275,7 +275,8 @@ INVOCATION_ALLOWLIST = {
 # by (workflow, job, scenario, step, kind, value).
 SHARED_JOB_ALLOWLIST = {
     ("main.yml", "linux", scenario, step, "flag-main-only", "--config=buildbuddy-re"):
-        "Cloud execution requires the trusted writer key; other PRs use the hosted toolchain. "
+        "Cloud execution requires the trusted writer key, so other PRs run the same build and "
+        "test commands, with the same declared LLVM toolchain, on the hosted runner itself. "
         "Trusted PRs exercise the cloud compile probe before merge."
     for scenario in ("untrusted-pr", "renovate-pr") for step in ("Build", "Test")
 }
@@ -364,13 +365,9 @@ def _counterpart_entries(main_job, counterpart, entries, reason):
 COUNTERPART_ALLOWLIST = {
     **_counterpart_entries("linux", "linux-self-hosted", [
         ("*", "flag-main-only", "--config=buildbuddy-re"),
-    ], "Hosted Linux uses cloud LLVM execution; the self-hosted lane has its own LLVM executor. "
-       "Tests remain on the hosted runner for its display dependencies."),
-    **_counterpart_entries("linux", "linux-self-hosted", [
-        ("*", "flag-pr-only", "--config=latest_llvm"),
-    ], "Accepted toolchain difference: the self-hosted ARM64 lane builds with the hermetic LLVM "
-       "toolchain and libc++; hosted Linux selects cloud LLVM for trusted writers and the runner "
-       "toolchain otherwise."),
+    ], "Where actions run, not what they build: both lanes use the declared LLVM toolchain, and "
+       "hosted Linux runs its compiles on the cloud executor while the self-hosted lane has its "
+       "own executor. Tests remain on the hosted runner for its display dependencies."),
     **_counterpart_entries("linux", "linux-self-hosted", [
         ("*", "flag-pr-only", "--strategy=TestRunner=remote"),
         ("*", "flag-pr-only", "--remote_local_fallback=false"),

@@ -3018,20 +3018,56 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertEqual(sorted(BUILDBUDDY_FALLBACK), _fallback_lines(fragment))
 
     def test_buildbuddy_execution_config_preserves_local_test_runtime(self):
-        rc = _read(".bazelrc")
-        self.assertIn("build:buildbuddy-re --config=latest_llvm", rc.splitlines())
-        self.assertIn("build:buildbuddy-re --spawn_strategy=remote", rc.splitlines())
-        self.assertIn('build:buildbuddy-re --strategy_regexp="^Executing genrule '
-                      '//donner/editor:editor_build_info_txt$=local"', rc.splitlines())
-        self.assertNotIn("build:buildbuddy-re --strategy=Genrule=local", rc.splitlines())
-        self.assertIn("build:buildbuddy-re --strategy=TestRunner=local", rc.splitlines())
-        self.assertIn("build:buildbuddy-re --noremote_local_fallback", rc.splitlines())
+        # The cloud config changes only where actions run. Its exact contents are pinned, so a
+        # toolchain, target selection, tag filter or test environment cannot hide in it and
+        # change what main's hosted Linux steps build or test.
+        self.assertEqual([
+            "build:buildbuddy-re --extra_execution_platforms=//tools/ci:buildbuddy_linux_x86_64",
+            "build:buildbuddy-re --platforms=//tools/ci:buildbuddy_linux_x86_64",
+            "build:buildbuddy-re --spawn_strategy=remote",
+            'build:buildbuddy-re --strategy_regexp="^Executing genrule '
+            '//donner/editor:editor_build_info_txt$=local"',
+            "build:buildbuddy-re --strategy=TestRunner=local",
+            "build:buildbuddy-re --noremote_local_fallback",
+            "build:buildbuddy-re --remote_timeout=600s",
+            "build:buildbuddy-re --jobs=50",
+        ], [line for line in _read(".bazelrc").splitlines()
+            if re.match(r"\s*[a-z]+:buildbuddy-re\b", line)])
         main = self.supply_chain_files[".github/workflows/main.yml"]
         probe = _step_body(main, "Verify BuildBuddy remote execution")
         self.assertIn("--remote_accept_cached=false --disk_cache=", probe)
         self.assertIn("--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}", probe)
         self.assertIn('.runner == "remote" and .cacheHit != true', probe)
-        self.assertIn("bazelisk build --config=ci ${BUILDBUDDY_FLAGS} //...", probe)
+        self.assertIn("bazelisk build --config=ci --config=latest_llvm ${BUILDBUDDY_FLAGS} //...",
+                      probe)
+        # Every hosted Linux Bazel step selects the declared LLVM toolchain itself, so a run
+        # without the cloud credential builds what main builds. Only the linker canary keeps the
+        # runner's toolchain, because it checks the runner's non-lld linker.
+        linux = _jobs(main)["linux"]
+        bazel_steps = {name: _step_body(linux, name)
+                       for name in re.findall(r"(?m)^      - name: (.*)$", linux)
+                       if "bazelisk " in _step_body(linux, name)}
+        self.assertEqual({"Linker canary (non-lld linker support)"},
+                         {name for name, body in bazel_steps.items()
+                          if "--config=latest_llvm" not in body})
+        for name, body in bazel_steps.items():
+            code = "\n".join(line for line in body.splitlines()
+                             if not line.lstrip().startswith("#"))
+            joined = re.sub(r"\\\n\s*", " ", code)
+            for command in re.findall(r"\bbazel(?:isk)? \S.*", joined):
+                expected = ("--linkopt=-fuse-ld=gold"
+                            if name.startswith("Linker canary") else "--config=latest_llvm")
+                self.assertIn(expected, command, name)
+            self.assertNotIn("llvm_latest", body, name)
+        # The cloud target platform carries no constraint beyond x86_64 Linux, so it selects the
+        # same toolchains and select() branches as a run on the hosted runner.
+        platform = re.search(r'(?ms)^platform\(\n    name = "buildbuddy_linux_x86_64",\n(.*?)^\)$',
+                             _read("tools/ci/BUILD.bazel")).group(1)
+        constraints = re.search(r"(?ms)^    constraint_values = \[\n(.*?)^    \],$", platform)
+        self.assertEqual(["@platforms//cpu:x86_64", "@platforms//os:linux"],
+                         re.findall(r'"([^"]+)"', constraints.group(1)))
+        self.assertEqual(["constraint_values", "exec_properties", "name", "visibility"],
+                         sorted(re.findall(r"(?m)^    ([a-z_]+) =", "    name =\n" + platform)))
 
     def test_buildbuddy_remote_execution_requires_linux_writer(self):
         cases = {
@@ -3056,8 +3092,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 if expected:
                     self.assertIsNone(fragment)
                     continue
-                self.assertIn("build:buildbuddy-re --remote_executor=grpcs://remote.buildbuddy.io",
-                              fragment.splitlines())
+                # The fragment adds only the executor endpoint to the cloud config.
+                self.assertEqual(
+                    ["build:buildbuddy-re --remote_executor=grpcs://remote.buildbuddy.io"],
+                    [line for line in fragment.splitlines() if "buildbuddy-re" in line])
                 self.assertIn("bazel-flags=--config=buildbuddy-re",
                               (Path(directory) / "output").read_text().splitlines())
                 self.assertFalse(any(line.startswith("build --remote_executor=")
