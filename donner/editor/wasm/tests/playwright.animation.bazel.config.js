@@ -1,7 +1,7 @@
 const base = require("./playwright.bazel.config.js");
 const { devices } = require("@playwright/test");
 const { browserExecutablePaths } = require("./prepare-browser-archives.js");
-const { firefoxLaunchEnvironment } = require("./firefox-launch-env.cjs");
+const { firefoxLaunchOptions } = require("./firefox-launch-env.cjs");
 const executables = browserExecutablePaths(process.env);
 
 module.exports = {
@@ -27,7 +27,7 @@ module.exports = {
         launchOptions: {
           executablePath: executables.firefox,
           timeout: 30000,
-          env: firefoxLaunchEnvironment(process.env),
+          ...firefoxLaunchOptions(process.env),
           firefoxUserPrefs: { "dom.webgpu.enabled": true },
         },
       },

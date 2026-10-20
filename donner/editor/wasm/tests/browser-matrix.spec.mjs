@@ -1290,6 +1290,64 @@ test("only the two tracked responsiveness checks go through the completion check
   );
 });
 
+// The first-boot case takes each browser's one-time startup cost, so the animation cases after it
+// budget only their own boot and probes. That holds only while the lane runs one worker, in
+// declaration order, with every case selected by the lane's grep.
+test("each animation preview browser boots in its own case before the timed cases", () => {
+  const spec = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
+  const titles = [
+    "animation preview plays on the browser's first boot",
+    "animation preview plays at its playback cadence",
+    "animation preview plays and dispatches mouse events",
+    "animation preview plays through cancellation and shutdown while raster task yields are held",
+  ];
+  const declarations = titles.map((title) => {
+    const declared = spec.indexOf(`test(\n  ${JSON.stringify(title)},`);
+    assert.notEqual(declared, -1, `${title} is a top-level case`);
+    return declared;
+  });
+  assert.deepEqual([...declarations].sort((a, b) => a - b), declarations, "declaration order");
+  const animationCases = [...spec.matchAll(/^test(?:\.\w+)?\(\s*"(animation preview [^"]*)"/gm)]
+    .map(([, title]) => title);
+  assert.deepEqual(animationCases, titles, "no other animation preview case runs before it");
+
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const lane = buildFile
+    .split("playwright_bin.playwright_test(\n")
+    .find((body) => body.startsWith('    name = "animation_preview_browser_test",'))
+    ?.split("\n)\n")[0];
+  assert.ok(lane, "the animation lane is declared");
+  const grep = /"--grep=([^"]+)"/.exec(lane)?.[1];
+  assert.ok(grep, "the animation lane selects its cases with --grep");
+  for (const title of titles) assert.match(title, new RegExp(grep), `${title} matches the lane`);
+  assert.doesNotMatch(lane, /shard_count/, "the animation lane is not sharded");
+
+  const configs = [
+    "playwright.animation.bazel.config.js",
+    "playwright.bazel.config.js",
+    "playwright.config.js",
+  ].map((file) => readFileSync(path.join(testDirectory, file), "utf8"));
+  for (const config of configs) assert.doesNotMatch(config, /fullyParallel/);
+  assert.match(configs[1], /^ {2}workers: 1,$/m, "the lane runs one Playwright worker");
+  assert.doesNotMatch(configs[0], /workers/, "the animation config keeps the one worker");
+  assert.doesNotMatch(spec, /describe\.configure|test\.describe\.parallel/);
+});
+
+// A Firefox launched with only the private home can still wait for AppKit window restoration.
+test("every config that uses the Firefox launch helper takes the full launch options", () => {
+  const configs = readdirSync(testDirectory)
+    .filter((file) => /^playwright\..*config\.js$/.test(file));
+  const users = configs.filter((file) =>
+    readFileSync(path.join(testDirectory, file), "utf8").includes("firefox-launch-env.cjs")
+  );
+  assert.ok(users.includes("playwright.animation.bazel.config.js"), "the scan finds the configs");
+  for (const file of users) {
+    const source = readFileSync(path.join(testDirectory, file), "utf8");
+    assert.doesNotMatch(source, /firefoxLaunchEnvironment/, `${file} uses the full launch options`);
+    assert.match(source, /\.\.\.firefoxLaunchOptions\(/, `${file} spreads the launch options`);
+  }
+});
+
 test("hosted macOS quarantines read only the hosted job's switch and name their issue", () => {
   const definition = "const kHostedMacosQuarantine = "
     + "process.env.DONNER_HOSTED_MACOS_QUARANTINE === \"1\";";
