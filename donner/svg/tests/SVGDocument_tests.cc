@@ -2409,8 +2409,9 @@ TEST(SVGDocument, SourceBackedRemoveRootElementIsRefused) {
   xml::ApplySourceEditResult result = document.removeElement(document.svgElement());
 
   EXPECT_FALSE(result.applied);
-  ASSERT_TRUE(result.diagnostic.has_value());
-  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("document root element"));
+  EXPECT_THAT(result.diagnostic,
+              Optional(testing::Field("reason", &ParseDiagnostic::reason,
+                                      testing::HasSubstr("document root element"))));
   EXPECT_EQ(document.source(), sourceBefore);
   EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
   // Sizing the document reads the root's sized-element properties.
@@ -2440,8 +2441,9 @@ TEST(SVGDocument, ProgrammaticRemoveRootElementIsRefused) {
   document.svgElement().remove();
 
   EXPECT_FALSE(result.applied);
-  ASSERT_TRUE(result.diagnostic.has_value());
-  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("document root element"));
+  EXPECT_THAT(result.diagnostic,
+              Optional(testing::Field("reason", &ParseDiagnostic::reason,
+                                      testing::HasSubstr("document root element"))));
   EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
   EXPECT_EQ(document.canvasSize(), sizeBefore);
 }
