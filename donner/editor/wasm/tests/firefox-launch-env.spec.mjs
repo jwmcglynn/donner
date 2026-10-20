@@ -124,3 +124,20 @@ test("non-macOS and standalone launches keep the caller environment", (t) => {
 test("a relative temporary directory fails before launch", { skip: !kDarwin }, () => {
   assert.throws(() => helpers.firefoxLaunchEnvironment({}, "relative"), /absolute/);
 });
+
+test("macOS Firefox launches skip AppKit window restoration", () => {
+  assert.deepEqual(
+    helpers.firefoxLaunchArguments("darwin"),
+    ["-ApplePersistenceIgnoreState", "YES"],
+  );
+  assert.deepEqual(helpers.firefoxLaunchArguments("linux"), []);
+});
+
+test("launch options combine the private home and launch arguments", { skip: !kDarwin }, (t) => {
+  const directory = temporary(t);
+  const options = helpers.firefoxLaunchOptions({ TEST_TMPDIR: directory, KEEP: "value" });
+  assert.deepEqual(Object.keys(options).sort(), ["args", "env"]);
+  assert.deepEqual(options.args, helpers.firefoxLaunchArguments());
+  assert.equal(options.env.KEEP, "value");
+  assert.equal(path.dirname(options.env.HOME), directory);
+});

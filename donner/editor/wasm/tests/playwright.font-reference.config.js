@@ -1,5 +1,5 @@
 const path = require("node:path");
-const { firefoxLaunchEnvironment } = require("./firefox-launch-env.cjs");
+const { firefoxLaunchOptions } = require("./firefox-launch-env.cjs");
 const { stallGuardFor } = require("./test-timing.cjs");
 
 module.exports = {
@@ -20,7 +20,7 @@ module.exports = {
       use: {
         browserName: "firefox",
         headless: false,
-        launchOptions: { env: firefoxLaunchEnvironment(process.env), timeout: 15000 },
+        launchOptions: { ...firefoxLaunchOptions(process.env), timeout: 15000 },
       },
     },
   ],

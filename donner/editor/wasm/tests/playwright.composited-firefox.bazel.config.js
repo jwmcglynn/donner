@@ -1,6 +1,6 @@
 const baseConfig = require("./playwright.bazel.config.js");
 const firefoxConfig = require("./playwright.composited-firefox.config.js");
-const { firefoxLaunchEnvironment } = require("./firefox-launch-env.cjs");
+const { firefoxLaunchOptions } = require("./firefox-launch-env.cjs");
 
 module.exports = {
   ...baseConfig,
@@ -22,7 +22,7 @@ module.exports = {
       },
       launchOptions: {
         ...project.use.launchOptions,
-        env: firefoxLaunchEnvironment(project.use.launchOptions?.env ?? process.env),
+        ...firefoxLaunchOptions(project.use.launchOptions?.env ?? process.env),
         timeout: 15000,
       },
     },

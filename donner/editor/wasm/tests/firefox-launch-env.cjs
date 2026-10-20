@@ -63,4 +63,36 @@ function removeFirefoxHome(home) {
   }
 }
 
-module.exports = { firefoxLaunchEnvironment, removeFirefoxHome };
+/**
+ * Command-line arguments for a Bazel-owned Firefox on macOS.
+ *
+ * During launch AppKit restores an app's saved windows. Before it does, it waits for the per-user
+ * window-restoration service to answer a request about the app's saved state. A test action runs in
+ * a launchd domain without that service, so the wait ends only when the request fails. That is
+ * usually at once, but on a loaded host it has taken from several seconds to past the launch
+ * timeout. A test browser has no windows to restore. `-ApplePersistenceIgnoreState YES` sets the
+ * user default in its argument domain, which no other domain overrides, and AppKit then skips the
+ * restoration, wait included. Firefox's own command line reports the flag as unrecognized and skips
+ * it together with its value.
+ *
+ * @param platform The platform to launch on, normally `process.platform`.
+ */
+function firefoxLaunchArguments(platform = process.platform) {
+  return platform === "darwin" ? ["-ApplePersistenceIgnoreState", "YES"] : [];
+}
+
+/**
+ * Launch options every Bazel-owned Firefox needs; spread them into a project's `launchOptions`.
+ *
+ * @param environment The environment to extend, as for `firefoxLaunchEnvironment`.
+ */
+function firefoxLaunchOptions(environment = process.env) {
+  return { env: firefoxLaunchEnvironment(environment), args: firefoxLaunchArguments() };
+}
+
+module.exports = {
+  firefoxLaunchArguments,
+  firefoxLaunchEnvironment,
+  firefoxLaunchOptions,
+  removeFirefoxHome,
+};

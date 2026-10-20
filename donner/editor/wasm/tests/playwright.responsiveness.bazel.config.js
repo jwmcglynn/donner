@@ -1,6 +1,6 @@
 const baseConfig = require("./playwright.bazel.config.js");
 const { browserExecutablePaths } = require("./prepare-browser-archives.js");
-const { firefoxLaunchEnvironment } = require("./firefox-launch-env.cjs");
+const { firefoxLaunchOptions } = require("./firefox-launch-env.cjs");
 const executables = browserExecutablePaths(process.env);
 
 function firefoxProfileEnvironment() {
@@ -72,7 +72,7 @@ module.exports = {
             ? require("node:path").join(process.env.TEST_TMPDIR, "firefox-aqua.sh")
             : executables.firefox,
           timeout: 15000,
-          env: firefoxLaunchEnvironment(firefoxProfileEnvironment()),
+          ...firefoxLaunchOptions(firefoxProfileEnvironment()),
           firefoxUserPrefs: {
             "dom.webgpu.enabled": true,
             "layout.css.devPixelsPerPx": "2.0",
@@ -100,7 +100,7 @@ module.exports = {
             ? require("node:path").join(process.env.TEST_TMPDIR, "firefox-aqua.sh")
             : executables.firefox,
           timeout: 15000,
-          env: firefoxLaunchEnvironment(firefoxProfileEnvironment()),
+          ...firefoxLaunchOptions(firefoxProfileEnvironment()),
           firefoxUserPrefs: { "dom.webgpu.enabled": true, "layout.css.devPixelsPerPx": "1.0" },
         },
       },
