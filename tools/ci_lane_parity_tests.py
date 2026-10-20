@@ -382,7 +382,6 @@ COUNTERPART_ALLOWLIST = {
     ], "Runner-specific remote execution settings; they choose where actions run and which "
        "outputs come back, not what is built or tested."),
     **_counterpart_entries("linux", "linux-self-hosted", [
-        ("*", "flag-pr-only", "--nobuild_event_json_file_path_conversion"),
         ("Build", "flag-pr-only", "--build_event_json_file=$DIAG_DIR/build/bep.json"),
         ("Build", "flag-pr-only", "--execution_log_compact_file=$DIAG_DIR/build/exec.log.zst"),
         ("Build", "flag-pr-only", "--profile=$DIAG_DIR/build/profile.gz"),
@@ -1663,6 +1662,45 @@ def _bazel_running_steps(workflow, job):
     return list(seen.values())
 
 
+# `--config=ci` writes local build event files with plain file paths, so losing the remote cache
+# cannot fail a Bazel command whose build and tests passed (see .bazelrc).
+BUILD_EVENT_FILE_FORMATS = ("json", "binary", "text")
+_BUILD_EVENT_FILE = re.compile(r"--build_event_(?:%s)_file=" % "|".join(BUILD_EVENT_FILE_FORMATS))
+# Any spelling that turns path conversion back on, including the old `experimental_` names.
+_PATH_CONVERSION_ON = re.compile(
+    r"--(?:experimental_)?build_event_\w+_file_path_conversion(?:=(?:true|yes|1))?$",
+    re.IGNORECASE)
+
+
+def _build_event_flag_problems(flags):
+    """Why one Bazel command's build event file could depend on the remote cache."""
+    if not any(_BUILD_EVENT_FILE.match(flag) for flag in flags):
+        return []
+    problems = [flag for flag in flags if _PATH_CONVERSION_ON.match(flag)]
+    # `ci` is not in EXPANDED_CONFIGS, so `--config=ci` is still in the flags here.
+    if "--config=ci" not in flags:
+        problems.append("writes a build event file without --config=ci")
+    return problems
+
+
+def _bazel_commands(workflows):
+    """(workflow, job, step, invocation) for each Bazel command in any step, whatever its `if:`."""
+    for name, workflow in workflows.items():
+        for job_name, job in _jobs(workflow).items():
+            for step in job.get("steps") or []:
+                script = str(step.get("run") or "")
+                for invocation in bazel_invocations(script,
+                                                    _step_environment(workflow, job, step)):
+                    yield name, job_name, _step_name(step), invocation
+
+
+def build_event_file_problems(workflows):
+    """Bazel commands whose build event file would depend on the remote cache."""
+    return sorted({"%s %s %s: %s" % (name, job, step, problem)
+                   for name, job, step, invocation in _bazel_commands(workflows)
+                   for problem in _build_event_flag_problems(invocation["flags"])})
+
+
 class CiLaneParityTest(unittest.TestCase):
     maxDiff = None
 
@@ -1802,6 +1840,34 @@ class CiLaneParityTest(unittest.TestCase):
             failure_swallowing_lines(self.workflows, self.main_push_workflows),
             FAILURE_SWALLOW_ALLOWLIST,
             "a step that runs Bazel can turn its failure into success")
+
+    def test_build_event_files_do_not_depend_on_the_remote_cache(self):
+        rc_lines = set(Path(runfiles.Create().Rlocation("donner/.bazelrc"))
+                       .read_text(encoding="utf-8").splitlines())
+        for kind in BUILD_EVENT_FILE_FORMATS:
+            line = "common:ci --nobuild_event_%s_file_path_conversion" % kind
+            self.assertTrue(line in rc_lines, ".bazelrc lacks: " + line)
+        # A later config on the same command line would override `common:ci`.
+        self.assertEqual([], [line for line in rc_lines if not line.startswith("#") and any(
+            _PATH_CONVERSION_ON.match(word) for word in line.split())])
+        self.assertEqual([], build_event_file_problems(self.workflows))
+
+    def test_build_event_file_problems_are_found(self):
+        geode = "Test (Geode editor lane)"
+        main = next(path for path in _workflow_paths() if path.name == "main.yml")
+        text = main.read_text(encoding="utf-8")
+        command = "bazelisk test --config=ci --config=geode"
+        self.assertIn(command, text)
+        for replacement, problem in (
+                ("bazelisk test --config=geode", "without --config=ci"),
+                (command + " --build_event_json_file_path_conversion",
+                 "--build_event_json_file_path_conversion"),
+                (command + " --experimental_build_event_json_file_path_conversion=True",
+                 "--experimental_build_event_json_file_path_conversion=True")):
+            workflow = parse_workflow(text.replace(command, replacement))
+            problems = build_event_file_problems({"main.yml": workflow})
+            self.assertTrue(any(geode in entry and problem in entry for entry in problems),
+                            (replacement, problems))
 
     def test_failure_swallowing_lines_are_found(self):
         workflow = parse_workflow(

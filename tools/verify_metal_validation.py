@@ -384,7 +384,11 @@ def _prepare_artifacts(receipt):
 
 
 def _full_validation_options(configs, jobs):
+    # `--config=ci` names event-file outputs by local path. With a remote cache or executor,
+    # restore content-addressed names, so each saved test log and XML must match the digest
+    # Bazel recorded for this invocation, not just its path.
     common = [*configs, f"--jobs={jobs}", "--remote_local_fallback=false",
+              "--build_event_json_file_path_conversion",
               "--test_tag_filters=", "--test_filter=", "--runs_per_test=1",
               "--flaky_test_attempts=1", "--nocache_test_results", "--test_output=all"]
     for name in ("MTL_DEBUG_LAYER", "MTL_SHADER_VALIDATION", "MTL_SHADER_VALIDATION_TEXTURE_USAGE",
