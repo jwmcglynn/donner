@@ -15,6 +15,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/AsyncRenderer.h"
@@ -25,6 +26,7 @@
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/FontCatalog.h"
+#include "donner/svg/resources/FontCatalogTypes.h"
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::editor {
@@ -240,6 +242,114 @@ TEST(SampleThumbnailAsyncTest, MainDocumentPreemptsThumbnailDuringSnapshotReadba
   std::optional<SampleThumbnailRenderResult> cancelled = WaitForThumbnailResult(renderer);
   ASSERT_TRUE(cancelled.has_value());
   EXPECT_EQ(cancelled->key, 51u);
+  EXPECT_EQ(cancelled->outcome, SampleThumbnailRenderOutcome::Cancelled);
+}
+
+struct BlockingFontLoadState {
+  std::atomic<bool> entered{false};
+  /// Set by the test once its assertions are done; until then a load can only end by interruption.
+  std::atomic<bool> released{false};
+  /// Whether the load ended because the loading thread asked it to stop.
+  std::atomic<bool> interrupted{false};
+};
+
+/// Holds every load of its one family until the loading thread interrupts it or the test releases
+/// it, standing in for a provider that rebuilds a large system font.
+class BlockingFontProvider : public svg::FontFamilyProvider {
+public:
+  static constexpr std::string_view kFamily = "Blocking Preview Family";
+
+  explicit BlockingFontProvider(std::shared_ptr<BlockingFontLoadState> state)
+      : state_(std::move(state)) {}
+
+  std::vector<svg::FontFamilyInfo> families() const override {
+    return {svg::FontFamilyInfo{std::string(kFamily), svg::FontSource::System,
+                                svg::FontCategory::Unknown}};
+  }
+
+  bool hasFamily(std::string_view family) const override { return family == kFamily; }
+
+  std::vector<uint8_t> loadFamilyData(std::string_view /*family*/,
+                                      const svg::FontFaceRequest& /*request*/) const override {
+    state_->entered.store(true, std::memory_order_release);
+    WaitUntil([&] {
+      if (svg::ScopedFontLoadInterruption::Requested()) {
+        state_->interrupted.store(true, std::memory_order_release);
+        return true;
+      }
+      return state_->released.load(std::memory_order_acquire);
+    });
+    return {};
+  }
+
+private:
+  std::shared_ptr<BlockingFontLoadState> state_;
+};
+
+/// Releases a \ref BlockingFontLoadState when the test ends, including on an early `ASSERT`, so
+/// the worker can join. Declare it after the `AsyncRenderer` so it runs first.
+class ScopedFontLoadRelease {
+public:
+  explicit ScopedFontLoadRelease(std::shared_ptr<BlockingFontLoadState> state)
+      : state_(std::move(state)) {}
+  ~ScopedFontLoadRelease() { state_->released.store(true, std::memory_order_release); }
+
+  ScopedFontLoadRelease(const ScopedFontLoadRelease&) = delete;
+  ScopedFontLoadRelease& operator=(const ScopedFontLoadRelease&) = delete;
+
+private:
+  std::shared_ptr<BlockingFontLoadState> state_;
+};
+
+TEST(SampleThumbnailAsyncTest, MainDocumentPreemptsThumbnailDuringProviderFontLoad) {
+  const auto fontLoadState = std::make_shared<BlockingFontLoadState>();
+  const BlockingFontProvider provider(fontLoadState);
+  const ScopedDefaultFontProvider installProvider(&provider);
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = svg::parser::SVGParser::ParseSVG(kBlueSvg, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  svg::SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(64, 48);
+  svg::Renderer documentRenderer;
+  svg::Renderer thumbnailRoot;
+
+  AsyncRenderer renderer;
+  const ScopedFontLoadRelease releaseFontLoadAtEnd(fontLoadState);
+  SampleThumbnailRenderRequest preview =
+      ThumbnailRequest(52u,
+                       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 24">
+        <text x="2" y="18" font-family="Blocking Preview Family">Aa</text></svg>)svg",
+                       thumbnailRoot);
+  preview.kind = AuxiliaryPreviewKind::FontFamily;
+  ASSERT_TRUE(renderer.requestSampleThumbnail(std::move(preview)));
+  ASSERT_TRUE(WaitUntil([&] { return fontLoadState->entered.load(std::memory_order_acquire); }))
+      << "Expected the thumbnail to reach its provider font load";
+
+  RenderRequest mainRequest(documentRenderer, document);
+  mainRequest.version = 2u;
+  mainRequest.documentGeneration = 2u;
+  mainRequest.rasterViewport = EditorRasterViewport{
+      .documentRect = Box2d::FromXYWH(0.0, 0.0, 64.0, 48.0),
+      .outputSizePx = Vector2i(64, 48),
+      .semanticCanvasSizePx = Vector2i(64, 48),
+      .outputFromDocument = Transform2d(),
+  };
+
+  // The font load never finishes on its own, so the main result can only arrive by interrupting it.
+  renderer.requestRender(mainRequest);
+  const std::optional<RenderResult> mainResult =
+      PollForResult([&] { return renderer.pollResult(); });
+
+  ASSERT_TRUE(mainResult.has_value())
+      << "Main-document work must not wait behind a preview's provider font load";
+  EXPECT_EQ(mainResult->version, 2u);
+  EXPECT_TRUE(fontLoadState->interrupted.load(std::memory_order_acquire))
+      << "The main render must interrupt the preview's font load, not wait for it";
+  EXPECT_FALSE(fontLoadState->released.load(std::memory_order_acquire));
+  std::optional<SampleThumbnailRenderResult> cancelled = WaitForThumbnailResult(renderer);
+  ASSERT_TRUE(cancelled.has_value());
+  EXPECT_EQ(cancelled->key, 52u);
   EXPECT_EQ(cancelled->outcome, SampleThumbnailRenderOutcome::Cancelled);
 }
 

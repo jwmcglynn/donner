@@ -3,10 +3,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/svg/core/FontStretch.h"
@@ -226,11 +228,53 @@ public:
    * supports that format. They are not necessarily raw sfnt and must not be passed directly to
    * an SFNT-only consumer such as an ImGui TTF loader.
    *
+   * A synchronous provider whose load cost grows with the font's size should poll \ref
+   * ScopedFontLoadInterruption::Requested and may return an empty vector once it is true.
+   *
    * @param family Family name to load (case-insensitive).
    * @param request Face within the family to prefer.
    */
   virtual std::vector<uint8_t> loadFamilyData(std::string_view family,
                                               const FontFaceRequest& request) const = 0;
+};
+
+/**
+ * Lets the calling thread abandon provider font loads that are no longer wanted.
+ *
+ * Background work, such as rendering a font preview, installs one for its duration so that a
+ * foreground render can preempt it even while it is inside a long \ref
+ * FontFamilyProvider::loadFamilyData call. Install it only around work whose output is discarded
+ * once the scope reports an interruption: an interrupted load resolves to a fallback face that
+ * is not cached. An inner scope replaces the outer one until it ends.
+ */
+class ScopedFontLoadInterruption {
+public:
+  /**
+   * Install \p interrupted as this thread's interruption check.
+   *
+   * @param interrupted Returns true once loads on this thread should stop; called only on this
+   *   thread, while this scope is the innermost one.
+   */
+  explicit ScopedFontLoadInterruption(std::function<bool()> interrupted)
+      : interrupted_(std::move(interrupted)), previous_(current_) {
+    current_ = this;
+  }
+
+  /// Restore the enclosing scope, if any.
+  ~ScopedFontLoadInterruption() { current_ = previous_; }
+
+  ScopedFontLoadInterruption(const ScopedFontLoadInterruption&) = delete;
+  ScopedFontLoadInterruption& operator=(const ScopedFontLoadInterruption&) = delete;
+
+  /// Whether the innermost scope on this thread asks loads to stop. @return False with no scope.
+  static bool Requested() {
+    return current_ != nullptr && current_->interrupted_ && current_->interrupted_();
+  }
+
+private:
+  static inline thread_local ScopedFontLoadInterruption* current_ = nullptr;
+  std::function<bool()> interrupted_;
+  ScopedFontLoadInterruption* previous_;
 };
 
 }  // namespace donner::svg

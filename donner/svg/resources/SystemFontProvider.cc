@@ -14,6 +14,10 @@
 #include <cstring>
 #include <iterator>
 #include <limits>
+#include <optional>
+#include <span>
+
+#include "donner/base/fonts/SfntUtils.h"
 
 namespace donner::svg {
 
@@ -77,9 +81,26 @@ void writeBE16(uint8_t* p, uint16_t v) {
   p[1] = static_cast<uint8_t>(v & 0xFF);
 }
 
+/// Bytes summed between interruption checks. System fonts reach hundreds of megabytes, so one table
+/// can otherwise hold the loading thread for seconds.
+constexpr size_t kChecksumChunkBytes = size_t{1} << 20;
+
+/// Checksum of \p data, polling \ref ScopedFontLoadInterruption between chunks.
+std::optional<uint32_t> InterruptibleTableChecksum(std::span<const uint8_t> data) {
+  uint32_t checksum = 0;
+  for (size_t offset = 0; offset < data.size(); offset += kChecksumChunkBytes) {
+    if (ScopedFontLoadInterruption::Requested()) {
+      return std::nullopt;
+    }
+    checksum = fonts::SfntTableChecksum(
+        data.subspan(offset, std::min(kChecksumChunkBytes, data.size() - offset)), checksum);
+  }
+  return checksum;
+}
+
 /// Reconstruct a flat sfnt byte stream from a CTFont's tables. This works for fonts backed by
 /// `.ttc`/`.dfont` collections, where reading the file bytes directly would not yield a single
-/// usable font. Returns empty on failure.
+/// usable font. Returns empty on failure or when \ref ScopedFontLoadInterruption asks it to stop.
 std::vector<uint8_t> buildSfntFromCTFont(CTFontRef font) {
   CFRef<CFArrayRef> tags(CTFontCopyAvailableTables(font, kCTFontTableOptionNoOptions));
   if (!tags) {
@@ -100,6 +121,9 @@ std::vector<uint8_t> buildSfntFromCTFont(CTFontRef font) {
 
   bool hasCff = false;
   for (CFIndex i = 0; i < numTablesSigned; ++i) {
+    if (ScopedFontLoadInterruption::Requested()) {
+      return {};
+    }
     const auto tag =
         static_cast<uint32_t>(reinterpret_cast<uintptr_t>(CFArrayGetValueAtIndex(tags.get(), i)));
     CFRef<CFDataRef> tableData(
@@ -133,6 +157,9 @@ std::vector<uint8_t> buildSfntFromCTFont(CTFontRef font) {
   searchRange *= 16;
   const uint16_t rangeShift = realNumTables * 16 - searchRange;
 
+  if (ScopedFontLoadInterruption::Requested()) {
+    return {};
+  }
   const size_t headerSize = 12 + static_cast<size_t>(realNumTables) * 16;
   size_t totalSize = headerSize;
   for (const Table& table : tables) {
@@ -150,17 +177,13 @@ std::vector<uint8_t> buildSfntFromCTFont(CTFontRef font) {
   uint32_t dataOffset = static_cast<uint32_t>(headerSize);
   uint8_t* dir = out + 12;
   for (const Table& table : tables) {
-    uint32_t checksum = 0;
-    const size_t paddedLen = (table.data.size() + 3) & ~size_t{3};
-    for (size_t i = 0; i < paddedLen; i += 4) {
-      uint32_t word = 0;
-      for (size_t j = 0; j < 4 && (i + j) < table.data.size(); ++j) {
-        word |= static_cast<uint32_t>(table.data[i + j]) << (24 - 8 * j);
-      }
-      checksum += word;
+    const std::optional<uint32_t> checksum = InterruptibleTableChecksum(table.data);
+    if (!checksum.has_value()) {
+      return {};
     }
+    const size_t paddedLen = (table.data.size() + 3) & ~size_t{3};
     writeBE32(dir, table.tag);
-    writeBE32(dir + 4, checksum);
+    writeBE32(dir + 4, *checksum);
     writeBE32(dir + 8, dataOffset);
     writeBE32(dir + 12, static_cast<uint32_t>(table.data.size()));
     dir += 16;

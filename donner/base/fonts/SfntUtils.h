@@ -44,6 +44,20 @@ inline uint32_t ReadBe32(const uint8_t* p) {
 /// Convert a four-byte sfnt tag to its big-endian integer representation.
 uint32_t SfntTag(std::string_view tag);
 
+/**
+ * Compute an sfnt table-directory checksum: the sum, modulo 2^32, of the table's big-endian
+ * 32-bit words, with a final partial word padded with zero bytes.
+ *
+ * Checksums of consecutive chunks add up, so a long table can be summed in pieces by passing each
+ * piece's result as the next piece's \p initial; every piece but the last must be a multiple of
+ * four bytes long.
+ *
+ * @param data Table bytes, or the next chunk of them.
+ * @param initial Sum of the preceding chunks of the same table.
+ * @return The checksum of everything summed so far.
+ */
+uint32_t SfntTableChecksum(std::span<const uint8_t> data, uint32_t initial = 0);
+
 /// Caller-selected limits for one sfnt validation.
 struct SfntValidationOptions {
   /// Maximum CFF structure and CharString work permitted for this call.
