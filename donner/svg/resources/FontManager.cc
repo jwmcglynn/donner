@@ -858,6 +858,10 @@ FontHandle FontManager::findProviderFont(std::string_view family,
     }
     rememberProviderDependency(lookup, FontFaceLoadState::Resolving);
     const std::vector<uint8_t> data = provider_->loadFamilyData(lookup.family, lookup.request);
+    if (ScopedFontLoadInterruption::Requested()) {
+      // The interrupted work discards its output; skip validating and retaining the face.
+      return fallbackFont();
+    }
     if (lookup.isCatalog() && data.empty()) {
       // Encoded-store eviction can race the availability read. This remains a pending face.
       rememberProviderDependency(lookup, FontFaceLoadState::WaitingForBytes);

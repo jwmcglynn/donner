@@ -157,6 +157,9 @@ std::vector<uint8_t> buildSfntFromCTFont(CTFontRef font) {
   searchRange *= 16;
   const uint16_t rangeShift = realNumTables * 16 - searchRange;
 
+  if (ScopedFontLoadInterruption::Requested()) {
+    return {};
+  }
   const size_t headerSize = 12 + static_cast<size_t>(realNumTables) * 16;
   size_t totalSize = headerSize;
   for (const Table& table : tables) {

@@ -228,8 +228,8 @@ public:
    * supports that format. They are not necessarily raw sfnt and must not be passed directly to
    * an SFNT-only consumer such as an ImGui TTF loader.
    *
-   * A load whose cost grows with the font's size should poll \ref
-   * ScopedFontLoadInterruption::Requested and return an empty vector once it is true.
+   * A synchronous provider whose load cost grows with the font's size should poll \ref
+   * ScopedFontLoadInterruption::Requested and may return an empty vector once it is true.
    *
    * @param family Family name to load (case-insensitive).
    * @param request Face within the family to prefer.
@@ -243,7 +243,9 @@ public:
  *
  * Background work, such as rendering a font preview, installs one for its duration so that a
  * foreground render can preempt it even while it is inside a long \ref
- * FontFamilyProvider::loadFamilyData call. An inner scope replaces the outer one until it ends.
+ * FontFamilyProvider::loadFamilyData call. Install it only around work whose output is discarded
+ * once the scope reports an interruption: an interrupted load resolves to a fallback face that
+ * is not cached. An inner scope replaces the outer one until it ends.
  */
 class ScopedFontLoadInterruption {
 public:

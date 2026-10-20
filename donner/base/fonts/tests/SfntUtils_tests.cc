@@ -607,6 +607,17 @@ TEST(SfntUtils, TableChecksumSumsBigEndianWordsWithZeroPadding) {
               kExpected)
         << "chunk sums must compose when every chunk but the last is whole words";
   }
+
+  std::vector<uint8_t> large((size_t{1} << 20) + 6);
+  for (size_t i = 0; i < large.size(); ++i) {
+    large[i] = static_cast<uint8_t>(i * 7u + 3u);
+  }
+  const std::span<const uint8_t> largeBytes(large);
+  const size_t megabyte = size_t{1} << 20;
+  EXPECT_EQ(SfntTableChecksum(largeBytes.subspan(megabyte),
+                              SfntTableChecksum(largeBytes.first(megabyte))),
+            SfntTableChecksum(largeBytes))
+      << "a megabyte chunk boundary must compose like any other whole-word split";
 }
 
 TEST(SfntUtils, SortsDirectoryForBoundedLookup) {

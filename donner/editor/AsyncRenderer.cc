@@ -357,6 +357,12 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
       }
     }
 #endif
+    if (cancellation.isCancelled()) {
+      // A font load interrupted during outline conversion falls back to another face.
+      result.bitmap = {};
+      result.outlinedSvg.clear();
+      result.outcome = SampleThumbnailRenderOutcome::Cancelled;
+    }
   }
   return result;
 }
