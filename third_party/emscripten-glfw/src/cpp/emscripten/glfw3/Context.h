@@ -121,6 +121,10 @@ public:
   void onFocus(GLFWwindow *iWindow) { fLastKnownFocusedWindow = iWindow; }
   bool onKeyDown(Keyboard::Event const &iEvent);
   bool onKeyUp(Keyboard::Event const &iEvent);
+#ifdef __EMSCRIPTEN_PTHREADS__
+  // Applies a keyboard event the main-thread listener forwarded to this context's thread.
+  void applyForwardedKeyboardEvent(bool iKeyDown, Keyboard::Event const &iEvent);
+#endif
 
 private:
   Context();

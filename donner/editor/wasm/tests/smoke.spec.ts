@@ -4148,6 +4148,60 @@ function createAnimationCadenceReader(page: Page, samples: unknown[]) {
   };
 }
 
+// Deliberate fault injection: how long the app thread's event loop is held while a test dispatches
+// input. Pointer events reach that thread through its proxied event queue, so they wait behind the
+// hold; the hold must outlast the dispatch, which the helper checks rather than assumes.
+const kAppThreadInputHoldMs = 3000;
+
+// Busy-hold the app thread's event loop while `dispatch` sends input from the page, so every event
+// is still undelivered when the hold ends and the app must apply them in the order they were sent.
+async function dispatchWhileAppThreadHeld(
+  page: Page,
+  owner: Worker,
+  dispatch: () => Promise<void>,
+) {
+  const channel = `donner-app-thread-hold-${Date.now()}`;
+  await page.evaluate((name) => {
+    const scope = window as typeof window & { __donnerAppThreadHoldStarted?: Promise<void> };
+    scope.__donnerAppThreadHoldStarted = new Promise<void>((resolve) => {
+      const listener = new BroadcastChannel(name);
+      listener.onmessage = () => {
+        listener.close();
+        resolve();
+      };
+    });
+  }, channel);
+  const hold = owner.evaluate(({ name, holdMs }) => {
+    const notifier = new BroadcastChannel(name);
+    const startedEpochMs = Date.now();
+    notifier.postMessage("held");
+    while (Date.now() - startedEpochMs < holdMs) continue;
+    notifier.close();
+    return Date.now();
+  }, { name: channel, holdMs: kAppThreadInputHoldMs });
+  try {
+    // A hold that fails or ends before the page sees it start must fail here, not hang.
+    const holdEnded = hold.then(() => {
+      throw new Error("the app-thread hold ended before the page observed it");
+    });
+    holdEnded.catch(() => undefined);
+    await Promise.race([
+      page.evaluate(() =>
+        (window as typeof window & { __donnerAppThreadHoldStarted?: Promise<void> })
+          .__donnerAppThreadHoldStarted
+      ),
+      holdEnded,
+    ]);
+    await dispatch();
+    const dispatchedEpochMs = await page.evaluate(() => Date.now());
+    const releasedEpochMs = await hold;
+    expect(dispatchedEpochMs, "input dispatch finishes while the app thread is held")
+      .toBeLessThan(releasedEpochMs);
+  } finally {
+    await hold.catch(() => undefined);
+  }
+}
+
 async function finishAnimationPreview({
   page,
   editCenter,
@@ -4203,24 +4257,20 @@ async function finishAnimationPreview({
   const shutdowns = await page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0);
   const heldForQuit = await holdRasterTaskYield(page);
   try {
-    const frames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
-    await page.mouse.click(editCenter.x, editCenter.y);
-    await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
-      timeout: scaledMs(3000),
-      message: "Edit action is applied before quitting",
-    }).toBeGreaterThan(frames + 1);
-    await page.keyboard.down("Control");
     try {
-      try {
+      // Shortcuts are ignored during Preview, so the quit works only if the Edit click is applied
+      // first. Dispatch both while the app thread is held, so neither has reached it yet.
+      await dispatchWhileAppThreadHeld(page, owner, async () => {
+        await page.mouse.click(editCenter.x, editCenter.y);
+        await page.keyboard.down("Control");
         await page.keyboard.down("q");
-        await expect.poll(() => page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0), {
-          timeout: scaledMs(5000),
-          message: "shutdown begins while the raster yield remains held",
-        }).toBeGreaterThan(shutdowns);
-      } finally {
-        await page.keyboard.up("q");
-      }
+      });
+      await expect.poll(() => page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0), {
+        timeout: scaledMs(5000),
+        message: "shutdown begins while the raster yield remains held",
+      }).toBeGreaterThan(shutdowns);
     } finally {
+      await page.keyboard.up("q");
       await page.keyboard.up("Control");
     }
     expect(await heldForQuit.suspended()).toBe(true);

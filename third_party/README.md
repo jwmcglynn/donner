@@ -39,3 +39,7 @@ git subtree pull https://github.com/jwmcglynn/css-parsing-tests --prefix third_p
   while a browser snapshots that canvas. The title and clipboard setters take a malloc-allocated
   copy, which the C++ callers make with `strdup` and the main thread frees.
   `//donner/editor/wasm/tests:main_thread_proxy_tests` lists the remaining synchronous calls.
+- Keyboard events, which the listener receives on the main thread, are forwarded through Emscripten's
+  system proxying queue to the thread that created the GLFW context, the same queue that carries
+  mouse and focus events, so that thread applies all input in order. The main thread decides only
+  whether to prevent the browser default.

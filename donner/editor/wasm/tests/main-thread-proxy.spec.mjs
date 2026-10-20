@@ -61,6 +61,8 @@ const kSyncGlfwFunctions = {
   emscripten_glfw3_window_get_computed_visibility: "window creation only",
   emscripten_glfw3_window_set_visibility: "window creation only; the editor never shows or hides it",
   emscripten_glfw3_context_is_any_element_focused: "called from the keyboard listener on the main thread",
+  emscripten_glfw3_context_is_any_other_element_focused:
+    "called from the keyboard listener on the main thread",
   emscripten_glfw3_context_get_fullscreen_window: "fullscreen changes; the editor never requests fullscreen",
   emscripten_glfw3_context_get_pointer_lock_window: "pointer-lock changes; the editor never locks the pointer",
   emscripten_glfw3_context_open_url: "the editor opens links through its own launcher",

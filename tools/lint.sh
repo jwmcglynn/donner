@@ -112,6 +112,7 @@ if ! git rev-parse --verify --quiet "${complexity_base_ref}^{commit}" >/dev/null
   exit 1
 fi
 
+# Vendored code under third_party/ keeps its upstream style; the full-tree scan above skips it too.
 complexity_sources=()
 if [[ ${lint_explicit_roots} -gt 0 ]]; then
   complexity_sources=("${sources[@]}")
@@ -126,7 +127,7 @@ else
         '*.cc' '*.cpp' '*.h' '*.hpp' '*.mm'
       git diff --name-only --diff-filter=ACMR HEAD -- '*.cc' '*.cpp' '*.h' '*.hpp' '*.mm'
       git ls-files --others --exclude-standard -- '*.cc' '*.cpp' '*.h' '*.hpp' '*.mm'
-    } | sort -u
+    } | sort -u | grep -v '^third_party/'
   )
 fi
 

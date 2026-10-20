@@ -21,6 +21,15 @@
 #include <emscripten/html5.h>
 #include <cstring>
 
+#ifdef __EMSCRIPTEN_PTHREADS__
+#include <emscripten/proxying.h>
+#include <pthread.h>
+#include <atomic>
+#include <bitset>
+#include <memory>
+#include <string>
+#endif
+
 #include "ErrorHandler.h"
 
 #ifndef EMSCRIPTEN_GLFW3_DISABLE_JOYSTICK
@@ -41,6 +50,7 @@ void emscripten_glfw3_context_init(emscripten::glfw3::Context *iContext,
                                    ScaleChangeCallback, WindowResizeCallback, KeyboardCallback, ClipboardStringCallback, RequestFullscreen, ErrorHandler);
 void emscripten_glfw3_context_destroy();
 bool emscripten_glfw3_context_is_any_element_focused();
+bool emscripten_glfw3_context_is_any_other_element_focused();
 bool emscripten_glfw3_context_is_extension_supported(char const *iExtension);
 // Takes ownership of a malloc-allocated title, which the main thread frees.
 void emscripten_glfw3_context_set_title(char *iOwnedTitle);
@@ -85,6 +95,127 @@ void ContextWindowResizeCallback(Context *iContext, GLFWwindow *iWindow, int iWi
   iContext->onWindowResize(iWindow, iWidth, iHeight);
 }
 
+#ifdef __EMSCRIPTEN_PTHREADS__
+namespace {
+
+// Keyboard events arrive on the browser main thread, while the context, its windows and the GLFW
+// callbacks belong to the thread that created the context. Mouse and focus events reach that owner
+// thread through the system proxying queue; keyboard events take the same queue, so the owner
+// applies all input in the order it happened. The main thread still answers whether to prevent the
+// browser default before the listener returns, reading only the DOM and the state below.
+
+// Written on the owner thread before the listener is registered, so main-thread reads follow them.
+Context const *kKeyboardContext = nullptr;
+uint64_t kKeyboardContextGeneration = 0;
+pthread_t kKeyboardOwnerThread{};
+// Written on the owner thread as windows come and go; read on the main thread.
+std::atomic<GLFWwindow *> kKeyboardWindow{};
+// Main thread only: keys whose key down was forwarded, so a key up prevents the browser default
+// only for a key the window saw pressed.
+std::bitset<GLFW_KEY_LAST + 1> kForwardedKeysDown{};
+
+struct ForwardedKeyboardEvent
+{
+  Context *fContext;
+  uint64_t fGeneration;
+  bool fKeyDown;
+  std::string fCode;
+  std::string fKey;
+  bool fRepeat;
+  int fCodepoint;
+  int fModifierBits;
+};
+
+void RunForwardedKeyboardEvent(void *iArg)
+{
+  std::unique_ptr<ForwardedKeyboardEvent> event{static_cast<ForwardedKeyboardEvent *>(iArg)};
+  if(event->fContext != kKeyboardContext || event->fGeneration != kKeyboardContextGeneration)
+    return;
+  Keyboard::Event keyboardEvent{event->fCode.c_str(), event->fKey.c_str(), event->fRepeat, event->fCodepoint, event->fModifierBits};
+  event->fContext->applyForwardedKeyboardEvent(event->fKeyDown, keyboardEvent);
+}
+
+void PostKeyboardEvent(Context *iContext, bool iKeyDown, Keyboard::Event const &iEvent)
+{
+  auto event = std::make_unique<ForwardedKeyboardEvent>(ForwardedKeyboardEvent{
+    iContext, kKeyboardContextGeneration, iKeyDown, iEvent.code ? iEvent.code : "", iEvent.key ? iEvent.key : "",
+    iEvent.repeat, iEvent.codepoint, iEvent.modifierBits});
+  if(emscripten_proxy_async(emscripten_proxy_get_system_queue(), kKeyboardOwnerThread, RunForwardedKeyboardEvent, event.get()))
+    event.release();
+  else
+    kErrorHandler.logError(GLFW_PLATFORM_ERROR, "Error while forwarding a keyboard event");
+}
+
+// Whether the browser default is prevented, decided once on the main thread; the owner applies the
+// event with no browser key callback.
+bool PreventsBrowserDefault(Context const *iContext, GLFWwindow *iWindow, bool iKeyDown, glfw_key_t iKey, Keyboard::Event const &iEvent)
+{
+  const auto browserKeyCallback = iContext->getBrowserKeyCallback();
+  if(!browserKeyCallback)
+    return true;
+  const int action = iKeyDown ? (iEvent.repeat ? GLFW_REPEAT : GLFW_PRESS) : GLFW_RELEASE;
+  return !browserKeyCallback(iWindow, iKey, Keyboard::getKeyScancode(iKey), action, iEvent.modifierBits);
+}
+
+bool IsKeyboardOwnerThread()
+{
+  return pthread_equal(pthread_self(), kKeyboardOwnerThread) != 0;
+}
+
+bool ForwardKeyboardEvent(Context *iContext, bool iKeyDown, Keyboard::Event const &iEvent)
+{
+  GLFWwindow *window = kKeyboardWindow.load(std::memory_order_acquire);
+  // A key down goes to the window unless another page element has focus. The DOM is current here,
+  // while the window's own focus flag waits behind queued focus events.
+  if(!window || (iKeyDown && emscripten_glfw3_context_is_any_other_element_focused()))
+    return false;
+  const glfw_key_t key = keyboard::scancodeToKeyCode(keyboard::keyboardEventCodeToScancode(iEvent.code));
+  const bool known = key != GLFW_KEY_UNKNOWN;
+  if(!iKeyDown && known && !kForwardedKeysDown.test(key))
+    return false;
+  PostKeyboardEvent(iContext, iKeyDown, iEvent);
+  if(!known)
+    return false;
+  kForwardedKeysDown.set(key, iKeyDown);
+  return PreventsBrowserDefault(iContext, window, iKeyDown, key, iEvent);
+}
+
+void SetKeyboardWindow(GLFWwindow *iWindow)
+{
+  kKeyboardWindow.store(iWindow, std::memory_order_release);
+}
+
+void ClearKeyboardWindow(GLFWwindow *iWindow)
+{
+  kKeyboardWindow.compare_exchange_strong(iWindow, nullptr, std::memory_order_acq_rel);
+}
+
+}
+#endif
+
+#ifdef __EMSCRIPTEN_PTHREADS__
+//------------------------------------------------------------------------
+// Context::applyForwardedKeyboardEvent
+//------------------------------------------------------------------------
+void Context::applyForwardedKeyboardEvent(bool iKeyDown, Keyboard::Event const &iEvent)
+{
+  // Same routing as onKeyDown and onKeyUp, without the browser key callback, which already ran.
+  if(iKeyDown)
+  {
+    if(auto w = findFocusedOrSingleWindow())
+      w->onKeyDown(iEvent, {});
+    return;
+  }
+#ifndef EMSCRIPTEN_GLFW3_DISABLE_MULTI_WINDOW_SUPPORT
+  for(auto &w: fWindows)
+    w->onKeyUp(iEvent, {});
+#else
+  if(fSingleWindow)
+    fSingleWindow->onKeyUp(iEvent, {});
+#endif
+}
+#endif
+
 //------------------------------------------------------------------------
 // ContextKeyboardCallback
 //------------------------------------------------------------------------
@@ -97,6 +228,10 @@ bool ContextKeyboardCallback(emscripten::glfw3::Context *iContext,
                              int iModifierBits)
 {
   Keyboard::Event event{iCode, iKey, iRepeat, iCodepoint, iModifierBits};
+#ifdef __EMSCRIPTEN_PTHREADS__
+  if(!IsKeyboardOwnerThread())
+    return ForwardKeyboardEvent(iContext, iKeyDown, event);
+#endif
   if(iKeyDown)
     return iContext->onKeyDown(event);
   else
@@ -124,6 +259,11 @@ void ContextErrorHandler(int iErrorCode, char const *iErrorMessage)
 //------------------------------------------------------------------------
 Context::Context()
 {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  ++kKeyboardContextGeneration;
+  kKeyboardContext = this;
+  kKeyboardOwnerThread = pthread_self();
+#endif
   fScale = static_cast<float>(emscripten_get_device_pixel_ratio());
   emscripten_glfw3_context_init(this,
                                 fScale,
@@ -141,6 +281,10 @@ Context::Context()
 //------------------------------------------------------------------------
 Context::~Context()
 {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  if(kKeyboardContext == this)
+    kKeyboardContext = nullptr;
+#endif
   terminate();
   addOrRemoveEventListeners(false);
   emscripten_glfw3_context_destroy();
@@ -152,6 +296,9 @@ Context::~Context()
 //------------------------------------------------------------------------
 void Context::terminate()
 {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  SetKeyboardWindow(nullptr);
+#endif
   fCurrentWindow = nullptr;
 
 #ifndef EMSCRIPTEN_GLFW3_DISABLE_MULTI_WINDOW_SUPPORT
@@ -630,6 +777,9 @@ GLFWwindow *Context::createWindow(int iWidth, int iHeight, const char* iTitle, G
 #else
   fSingleWindow = window;
 #endif
+#ifdef __EMSCRIPTEN_PTHREADS__
+  SetKeyboardWindow(window->asOpaquePtr());
+#endif
 
   if(window->isFocused())
     fLastKnownFocusedWindow = window->asOpaquePtr();
@@ -646,6 +796,9 @@ GLFWwindow *Context::createWindow(int iWidth, int iHeight, const char* iTitle, G
 //------------------------------------------------------------------------
 void Context::destroyWindow(GLFWwindow *iWindow)
 {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  ClearKeyboardWindow(iWindow);
+#endif
 #ifndef EMSCRIPTEN_GLFW3_DISABLE_MULTI_WINDOW_SUPPORT
   auto iter = std::find_if(fWindows.begin(), fWindows.end(), [iWindow](auto &w) { return w->asOpaquePtr() == iWindow; });
   if(iter != fWindows.end())
@@ -660,6 +813,10 @@ void Context::destroyWindow(GLFWwindow *iWindow)
     if(fLastKnownFocusedWindow == iWindow)
       fLastKnownFocusedWindow = nullptr;
     fWindows.erase(iter);
+#ifdef __EMSCRIPTEN_PTHREADS__
+    if(!fWindows.empty() && !kKeyboardWindow.load(std::memory_order_acquire))
+      SetKeyboardWindow(fWindows.back()->asOpaquePtr());
+#endif
   }
 #else
   if(fSingleWindow && fSingleWindow->asOpaquePtr() == iWindow)
