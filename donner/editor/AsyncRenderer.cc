@@ -745,6 +745,68 @@ void AsyncRenderer::releaseReplayResultHoldForTesting() {
   }
 }
 
+namespace {
+std::atomic<AsyncRenderer::CompletionBarrier> g_completionBarrierForTesting{
+    AsyncRenderer::CompletionBarrier::Off};
+}  // namespace
+
+AsyncRenderer::CompletionBarrier AsyncRenderer::requestCompletionBarrierForTesting() {
+  CompletionBarrier previous = CompletionBarrier::Off;
+  g_completionBarrierForTesting.compare_exchange_strong(previous, CompletionBarrier::Requested);
+  return previous;
+}
+
+void AsyncRenderer::armRequestedCompletionBarrierForTesting() {
+  CompletionBarrier expected = CompletionBarrier::Requested;
+  g_completionBarrierForTesting.compare_exchange_strong(expected, CompletionBarrier::Armed);
+}
+
+AsyncRenderer::CompletionBarrier AsyncRenderer::releaseCompletionBarrierForTesting() {
+  return g_completionBarrierForTesting.exchange(CompletionBarrier::Off);
+}
+
+AsyncRenderer::CompletionBarrier AsyncRenderer::completionBarrierForTesting() {
+  return g_completionBarrierForTesting.load();
+}
+
+void AsyncRenderer::waitAtCompletionBarrierForTesting() {
+  if (g_completionBarrierForTesting.load(std::memory_order_relaxed) != CompletionBarrier::Armed) {
+    return;
+  }
+  std::unique_lock<std::mutex> lock(mutex_);
+  // Only a render that will publish a result waits. A cancelled, superseded or shut-down render
+  // publishes nothing, so holding it would only delay the work that replaces it.
+  const auto publishesResult = [this] {
+    const auto* rendering = std::get_if<RenderingState>(&workerState_);
+    return rendering != nullptr && !rendering->pendingRequest.has_value();
+  };
+  CompletionBarrier armed = CompletionBarrier::Armed;
+  if (!publishesResult() ||
+      !g_completionBarrierForTesting.compare_exchange_strong(armed, CompletionBarrier::Holding)) {
+    return;
+  }
+  // The release is a global store that cannot notify `cv_`, so it is polled.
+  while (g_completionBarrierForTesting.load() == CompletionBarrier::Holding && publishesResult()) {
+    cv_.wait_for(lock, std::chrono::milliseconds(1));
+  }
+  // A render that stopped publishing leaves the barrier armed for the render that replaces it.
+  CompletionBarrier holding = CompletionBarrier::Holding;
+  g_completionBarrierForTesting.compare_exchange_strong(holding, CompletionBarrier::Armed);
+}
+
+#ifdef __EMSCRIPTEN__
+/// Browser-test access to the completion barrier. @param command 0 reads the state, 1 requests the
+/// barrier and 2 releases it. @return The state before the command, as a number.
+extern "C" EMSCRIPTEN_KEEPALIVE std::uint32_t donner_render_completion_barrier_for_testing(
+    int command) {
+  const AsyncRenderer::CompletionBarrier previous =
+      command == 1   ? AsyncRenderer::requestCompletionBarrierForTesting()
+      : command == 2 ? AsyncRenderer::releaseCompletionBarrierForTesting()
+                     : AsyncRenderer::completionBarrierForTesting();
+  return static_cast<std::uint32_t>(previous);
+}
+#endif
+
 void AsyncRenderer::requestRender(const RenderRequest& request) {
   bool signalCancel = false;
   {
@@ -2148,6 +2210,7 @@ void AsyncRenderer::workerLoop() {
       AddTransientBytes(MemoryCategory::WorkerFrameSnapshot, snapshotBytes);
     }
 
+    waitAtCompletionBarrierForTesting();
     std::function<void()> wake;
     bool notifyStateChange = false;
     {

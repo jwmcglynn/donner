@@ -707,7 +707,8 @@ void RunDrivenFrame(void* token) {
 
 void CompleteProxiedFrame(std::uint32_t generation) {
   FrameDriverState& state = Driver();
-  if (state.pendingFrames.fetch_sub(1, std::memory_order_relaxed) == 0) {
+  // Release: a reader that sees the count drop has also seen this frame finish.
+  if (state.pendingFrames.fetch_sub(1, std::memory_order_release) == 0) {
     std::abort();
   }
   state.admission.complete(generation);
@@ -756,6 +757,12 @@ extern "C" EMSCRIPTEN_KEEPALIVE bool donner_whole_app_vsync_tick(std::uint32_t g
 
 extern "C" EMSCRIPTEN_KEEPALIVE std::uint32_t donner_whole_app_vsync_peak_pending() {
   return Driver().peakPendingFrames.load(std::memory_order_relaxed);
+}
+
+/// Main-thread ticks admitted but not yet finished on the app thread. Once a test stops calling
+/// `donner_whole_app_vsync_tick`, zero means no driven frame is queued or running.
+extern "C" EMSCRIPTEN_KEEPALIVE std::uint32_t donner_whole_app_vsync_pending() {
+  return Driver().pendingFrames.load(std::memory_order_acquire);
 }
 
 // clang-format off

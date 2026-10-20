@@ -1888,6 +1888,23 @@ async function releaseWorkerAnimationFrames(page: Page) {
   }
 }
 
+// The test-only barrier between a finished document render and its result
+// (`AsyncRenderer::requestCompletionBarrierForTesting`). A request arms it when the next sample
+// activates; the first render of that sample to finish then waits in "holding", with no result to
+// poll and no completion wake fired, until it is released. Each command returns the prior state.
+const completionBarrierStates = ["off", "requested", "armed", "holding"] as const;
+
+async function completionBarrier(page: Page, command: "read" | "request" | "release") {
+  const state = await page.evaluate(
+    (code) =>
+      (window as unknown as {
+        Module: { _donner_render_completion_barrier_for_testing: (command: number) => number };
+      }).Module._donner_render_completion_barrier_for_testing(code),
+    { read: 0, request: 1, release: 2 }[command],
+  );
+  return completionBarrierStates[state] ?? `unknown ${state}`;
+}
+
 async function readCarouselFrameDiagnostics(page: Page) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -2007,6 +2024,8 @@ for (
       await expect.poll(async () => (await readHeldAnimationFrames(page))?.held ?? 0, {
         message: "the scheduler is waiting on a withheld animation frame before the click",
       }).toBeGreaterThan(0);
+      expect(await completionBarrier(page, "request"), "the completion barrier is test-only")
+        .toBe("off");
     }
     const deviceCreationsBeforeClick = await page.evaluate(
       () => window.__donnerHeadlessDeviceCreations ?? -1,
@@ -2020,30 +2039,47 @@ for (
     if (holdsScheduledFrames) {
       // Input waits for a scheduled frame by design, so drive the frames that apply the click
       // through the main-thread tick instead of the withheld worker animation frames. The frame
-      // that activates the sample defers its render request to the following frame, so keep
-      // ticking until the raster worker has started that render. From then on only event frames
-      // remain to carry the result, apart from at most one tick that was already in flight.
+      // that activates the sample arms the completion barrier and defers its render request to a
+      // following frame, so keep ticking until the raster worker holds that finished render.
       await expect.poll(async () =>
-        page.evaluate(({ sampleId, beforeSample }) => {
-          const active = window.__donnerActiveSampleStats;
-          if (active?.sampleId === sampleId) {
-            const phases = (window as unknown as {
-              __donnerRasterWorkPhases?: { phase: string; publishedAtMs: number }[];
-            }).__donnerRasterWorkPhases ?? [];
-            const renderStarted = phases.some((entry) =>
-              entry.phase === "render-setup" && entry.publishedAtMs >= active.activatedAtMs
-            );
-            const completed = window.__donnerWorkerStats?.completedResults || 0;
-            if (renderStarted || completed > beforeSample) return true;
-          }
-          (window as unknown as { Module: { _donner_whole_app_vsync_tick: () => void } }).Module
-            ._donner_whole_app_vsync_tick();
+        page.evaluate((holding) => {
+          const module = (window as unknown as {
+            Module: {
+              _donner_render_completion_barrier_for_testing: (command: number) => number;
+              _donner_whole_app_vsync_tick: () => void;
+            };
+          }).Module;
+          if (module._donner_render_completion_barrier_for_testing(0) === holding) return true;
+          module._donner_whole_app_vsync_tick();
           return false;
-        }, { sampleId: sample.id, beforeSample }), {
-        message: `expected ${sample.name} to activate and start its render from driven frames`,
+        }, completionBarrierStates.indexOf("holding")), {
+        message: `expected ${sample.name} to activate and finish its render from driven frames`,
         timeout: scaledMs(3000),
         intervals: [8, 16, 25, 50],
       }).toBe(true);
+      // A tick called just before the poll saw the hold can still be queued or running. Let every
+      // driven tick finish while the result cannot exist yet; from then on only an event frame can
+      // poll it.
+      await expect.poll(
+        () =>
+          page.evaluate(() =>
+            (window as unknown as { Module: { _donner_whole_app_vsync_pending: () => number } })
+              .Module._donner_whole_app_vsync_pending()
+          ),
+        {
+          message: "every driven tick has finished before the held render is released",
+          timeout: scaledMs(3000),
+        },
+      ).toBe(0);
+      // A draining tick may have superseded the held render; the barrier then holds the render
+      // that replaced it. No driven tick runs now, so only an event frame could supersede the hold
+      // before the release.
+      await expect.poll(() => completionBarrier(page, "read"), {
+        message: "the sample's finished render is held once driven ticks have drained",
+        timeout: scaledMs(3000),
+      }).toBe("holding");
+      expect(await completionBarrier(page, "release"), "the finished render was still held")
+        .toBe("holding");
     }
     // The poll below only bounds a hang. How long the completed result takes to reach the canvas
     // is not a correctness property here: right after boot the GPU can still be executing earlier
@@ -2151,11 +2187,9 @@ for (
     }
     if (holdsScheduledFrames) {
       // The frame that presented the result must be an event frame. With the worker's animation
-      // frames withheld, the only other frames are the driven ticks above, and one of those can
-      // still be in flight when the render starts; a tick carrying the result would hide a
-      // completion wake that no longer requests a frame. That in-flight tick normally runs on the
-      // app thread's next turn, well before a sample raster can finish, so a failure here is
-      // either a wake regression or that rare overlap; its message names the presenting frame.
+      // frames withheld, the only other frames are the driven ticks above, and every one of those
+      // finished before the result existed; a tick carrying the result would hide a completion
+      // wake that no longer requests a frame.
       expect(
         (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame,
         `the completed result was presented by a ${

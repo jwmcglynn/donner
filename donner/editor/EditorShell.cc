@@ -2496,6 +2496,9 @@ void EditorShell::processPendingSampleLoad() {
   std::string error;
   if (tryLoadSource(sample->source, std::nullopt, &error)) {
     activeSampleId_ = sampleId;
+    // Test-only: a completion barrier a test requested holds only this sample's renders. The
+    // previous document's render was cancelled above, so it cannot be the one held.
+    AsyncRenderer::armRequestedCompletionBarrierForTesting();
 #ifdef __EMSCRIPTEN__
     PublishActiveSampleId(activeSampleId_.c_str());
 #endif

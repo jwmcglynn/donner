@@ -1077,6 +1077,113 @@ TEST(AsyncRendererTest, ReplayDocumentHoldAllowsShutdown) {
   EXPECT_THAT(asyncRenderer.isBusy(), testing::IsFalse());
 }
 
+/// The completion barrier is process-wide. Each case turns it off on exit so a failure cannot leave
+/// it armed for later cases.
+class CompletionBarrierTest : public testing::Test {
+protected:
+  using Barrier = AsyncRenderer::CompletionBarrier;
+
+  CompletionBarrierTest() { document_.setCanvasSize(8, 8); }
+  ~CompletionBarrierTest() override { (void)AsyncRenderer::releaseCompletionBarrierForTesting(); }
+
+  static void armBarrier() {
+    ASSERT_EQ(AsyncRenderer::requestCompletionBarrierForTesting(), Barrier::Off);
+    AsyncRenderer::armRequestedCompletionBarrierForTesting();
+    ASSERT_EQ(AsyncRenderer::completionBarrierForTesting(), Barrier::Armed);
+  }
+
+  static bool waitForBarrier(Barrier state) {
+    return WaitUntil([state] { return AsyncRenderer::completionBarrierForTesting() == state; });
+  }
+
+  RenderRequest request(std::uint64_t version) {
+    RenderRequest request(renderer_, document_);
+    request.version = version;
+    return request;
+  }
+
+  svg::SVGDocument document_ =
+      svg::instantiateSubtree(R"svg(<rect width="8" height="8" fill="blue"/>)svg");
+  svg::Renderer renderer_;
+};
+
+TEST_F(CompletionBarrierTest, HoldsAFinishedRenderOnlyOnceArmed) {
+  std::atomic<int> wakeCount = 0;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setWakeCallback([&] { ++wakeCount; });
+
+  // Every sample activation arms the barrier; without a request that must change nothing.
+  AsyncRenderer::armRequestedCompletionBarrierForTesting();
+  EXPECT_EQ(AsyncRenderer::completionBarrierForTesting(), Barrier::Off);
+  ASSERT_EQ(AsyncRenderer::requestCompletionBarrierForTesting(), Barrier::Off);
+  asyncRenderer.requestRender(request(1));
+  ASSERT_TRUE(WaitForNoRenderInFlight(asyncRenderer));
+  const std::optional<RenderResult> unheld =
+      PollForResult([&] { return asyncRenderer.pollResult(); });
+  ASSERT_TRUE(unheld.has_value()) << "A requested barrier holds nothing until it is armed.";
+  EXPECT_EQ(unheld->version, 1u);
+  // The wake fires after the result is staged; count it before measuring the held render.
+  ASSERT_TRUE(WaitUntil([&] { return wakeCount >= 1; }));
+  EXPECT_EQ(AsyncRenderer::completionBarrierForTesting(), Barrier::Requested);
+
+  AsyncRenderer::armRequestedCompletionBarrierForTesting();
+  const int wakesBeforeHold = wakeCount;
+  asyncRenderer.requestRender(request(2));
+  ASSERT_TRUE(waitForBarrier(Barrier::Holding));
+  EXPECT_TRUE(asyncRenderer.isBusy());
+  EXPECT_EQ(asyncRenderer.pollResult(), std::nullopt) << "A held render has no result to poll.";
+  EXPECT_EQ(wakeCount, wakesBeforeHold) << "A held render has not fired its completion wake.";
+
+  EXPECT_EQ(AsyncRenderer::releaseCompletionBarrierForTesting(), Barrier::Holding);
+  ASSERT_TRUE(WaitUntil([&] { return wakeCount > wakesBeforeHold; }))
+      << "The released render must wake its owner.";
+  const std::optional<RenderResult> held =
+      PollForResult([&] { return asyncRenderer.pollResult(); });
+  ASSERT_TRUE(held.has_value());
+  EXPECT_EQ(held->version, 2u);
+  EXPECT_EQ(AsyncRenderer::completionBarrierForTesting(), Barrier::Off);
+}
+
+TEST_F(CompletionBarrierTest, PassesASupersededRenderAndHoldsItsReplacement) {
+  AsyncRenderer asyncRenderer;
+  ASSERT_NO_FATAL_FAILURE(armBarrier());
+  asyncRenderer.requestRender(request(1));
+  ASSERT_TRUE(waitForBarrier(Barrier::Holding));
+
+  // Pause the replacement before it renders, so the barrier is seen re-armed in between.
+  asyncRenderer.setReplayDocumentAccessBlockedForTesting(true);
+  asyncRenderer.requestRender(request(2));
+  ASSERT_TRUE(waitForBarrier(Barrier::Armed))
+      << "A superseded render publishes nothing, so it must pass the barrier unreleased.";
+  asyncRenderer.setReplayDocumentAccessBlockedForTesting(false);
+  ASSERT_TRUE(waitForBarrier(Barrier::Holding)) << "The replacement must be held in turn.";
+  EXPECT_EQ(asyncRenderer.pollResult(), std::nullopt);
+
+  EXPECT_EQ(AsyncRenderer::releaseCompletionBarrierForTesting(), Barrier::Holding);
+  const std::optional<RenderResult> result =
+      PollForResult([&] { return asyncRenderer.pollResult(); });
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->version, 2u);
+}
+
+TEST_F(CompletionBarrierTest, PassesCancelledAndShutDownRenders) {
+  AsyncRenderer asyncRenderer;
+  ASSERT_NO_FATAL_FAILURE(armBarrier());
+  asyncRenderer.requestRender(request(1));
+  ASSERT_TRUE(waitForBarrier(Barrier::Holding));
+  asyncRenderer.cancelInFlight();
+  ASSERT_TRUE(WaitForNoRenderInFlight(asyncRenderer))
+      << "A cancelled render must pass the barrier unreleased.";
+  EXPECT_EQ(asyncRenderer.pollResult(), std::nullopt);
+  EXPECT_EQ(AsyncRenderer::completionBarrierForTesting(), Barrier::Armed);
+
+  asyncRenderer.requestRender(request(2));
+  ASSERT_TRUE(waitForBarrier(Barrier::Holding));
+  // Shutdown joins the worker, so returning at all shows the held render passed.
+  asyncRenderer.shutdown();
+  EXPECT_EQ(AsyncRenderer::completionBarrierForTesting(), Barrier::Armed);
+}
+
 TEST(AsyncRendererTest, DeferredCompositorWarmupParticipatesInDocumentAccessGate) {
   AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
 
