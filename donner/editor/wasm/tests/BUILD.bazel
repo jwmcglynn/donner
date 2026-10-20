@@ -781,6 +781,7 @@ js_test(
         "//donner/editor/wasm:BUILD.bazel",
         "//donner/gpu/browser:library_donner_gpu.js",
         "//tools:run-browser-ci.sh",
+        "//tools/ci:editor_wasm_lane.sh",
     ],
     entry_point = "browser-matrix.spec.mjs",
     # Loading Playwright config initializes its llhttp WebAssembly module.
@@ -823,6 +824,7 @@ js_test(
         "//donner/svg/renderer/geode:GeodeBrowserRoot.cc",
         "//donner/svg/renderer/geode:GeodeDevice.cc",
         "//tools:run-browser-ci.sh",
+        "//tools/ci:editor_wasm_lane.sh",
     ],
     entry_point = "selector-tests.mjs",
     env = {"NODE_OPTIONS": ""},

@@ -1249,32 +1249,69 @@ def _unsafe_upload(entry, self_hosted):
 
 # Upload paths taken from a step output in a job that configures BuildBuddy, each reviewed with
 # the one value its producing step writes: a named subdirectory of runner.temp, never the root
-# that also holds the BuildBuddy key directory.
+# that also holds the BuildBuddy key directory. The producing step is exactly one call of a
+# reviewed script, which assigns that value once from the runner's temporary directory and writes
+# the output once, from that assignment. Keyed like the upload; the value is (producer command,
+# script, reviewed assignment).
+EDITOR_WASM_STAGE = "tools/ci/editor_wasm_stage.py"
 REVIEWED_OUTPUT_UPLOADS = {
     (".github/workflows/editor_wasm.yml", "build",
      "${{ steps.stage-package.outputs.handoff_dir }}"):
-        'handoff_dir="${RUNNER_TEMP}/editor-wasm-package-geode"',
+        ("python3 %s package" % EDITOR_WASM_STAGE, EDITOR_WASM_STAGE,
+         'handoff_dir = f"{runner_temp}/editor-wasm-package-geode"'),
     (".github/workflows/editor_wasm.yml", "build",
      "${{ steps.stage-candidate.outputs.candidate_dir }}"):
-        'candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-geode-${GITHUB_SHA}"',
+        ("python3 %s candidate" % EDITOR_WASM_STAGE, EDITOR_WASM_STAGE,
+         'candidate_dir = f"{runner_temp}/donner-editor-wasm-geode-{environ[\'GITHUB_SHA\']}"'),
 }
+# The one source of `runner_temp` in a reviewed script.
+REVIEWED_RUNNER_TEMP = 'runner_temp = environ["RUNNER_TEMP"]'
+# A reviewed script opens the step output file only in its `_write_output` helper.
+REVIEWED_OUTPUT_FILE = 'environ["GITHUB_OUTPUT"]'
 
 
-def _reviewed_output_upload(path, name, job, entry):
+def _writes_outputs_only_through_helper(text):
+    """Whether the script reads GITHUB_OUTPUT exactly once, inside `_write_output`; the only
+    other mention allowed is the name in its required-environment list."""
+    helper = next((part for part in re.split(r"(?m)^def ", text)
+                   if part.startswith("_write_output(")), "")
+    return (text.count(REVIEWED_OUTPUT_FILE) == 1 and helper.count(REVIEWED_OUTPUT_FILE) == 1 and
+            len(re.findall(r"""["']GITHUB_OUTPUT["']""", text)) == 2)
+
+
+def _reviewed_script(files, script):
+    """A reviewed script's text: the test's replacement in `files`, else the checked-in one."""
+    return files[script] if script in files else _read(script)
+
+
+def _reviewed_output_upload(path, name, job, entry, files):
     """Whether an upload path is a reviewed step output whose producer writes it exactly once,
     from the reviewed value."""
-    assignment = REVIEWED_OUTPUT_UPLOADS.get((path, name, entry))
+    reviewed = REVIEWED_OUTPUT_UPLOADS.get((path, name, entry))
     match = re.fullmatch(r"\$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_]+) \}\}", entry)
-    if assignment is None or not match:
+    if reviewed is None or not match:
         return False
+    command, script, assignment = reviewed
     producers = [step for step in _steps(job) if _step_identity_value(step, "id") == match.group(1)]
     if len(producers) != 1:
         return False
+    # The step runs the command alone: one `run:` line, with no continuation lines.
+    lines = producers[0].splitlines()
+    runs = [index for index, line in enumerate(lines) if line.startswith("        run:")]
+    if (len(runs) != 1 or lines[runs[0]] != "        run: " + command or
+            any(line.startswith("         ") for line in lines[runs[0] + 1:runs[0] + 2])):
+        return False
     variable = match.group(2)
-    writes = re.findall(r'echo "%s=[^"]*" >> "\$\{GITHUB_OUTPUT\}"' % variable, producers[0])
-    return (writes == ['echo "%s=${%s}" >> "${GITHUB_OUTPUT}"' % (variable, variable)] and
-            producers[0].count(assignment) == 1 and
-            len(re.findall(r"(?m)^\s*%s=" % variable, producers[0])) == 1)
+    text = _reviewed_script(files, script)
+    function = next((part for part in re.split(r"(?m)^def ", text) if assignment in part), "")
+    names = re.findall(r"_write_output\(environ, ([^,]*),", text)
+    writes = re.findall(r'_write_output\(environ, "%s", ([^)]*)\)' % variable, text)
+    return (_writes_outputs_only_through_helper(text) and
+            all(re.fullmatch(r'"[a-z_]+"', name) for name in names) and
+            writes == [variable] and function.count(assignment) == 1 and
+            len(re.findall(r"(?m)^\s*%s = " % variable, text)) == 1 and
+            function.count(REVIEWED_RUNNER_TEMP) == 1 and
+            len(re.findall(r"(?m)^\s*runner_temp = ", function)) == 1)
 
 
 def _reaches_buildbuddy_credential(entry):
@@ -1294,22 +1331,22 @@ def _reaches_buildbuddy_credential(entry):
         "buildbuddy" in entry.lower() or "*" in entry.split("/", 1)[0]
 
 
-def _credential_upload_violations(path, name, job):
+def _credential_upload_violations(path, name, job, files):
     """The BuildBuddy key lives under runner.temp/buildbuddy, so a job that configures it may
     upload only paths that can reach neither that directory nor the runner.temp root."""
     return ["%s:%s uploads %s after writing a cache credential" % (path, name, entry)
             for entries in _upload_paths(job) for entry in entries
-            if not _reviewed_output_upload(path, name, job, entry.strip())
+            if not _reviewed_output_upload(path, name, job, entry.strip(), files)
             and _reaches_buildbuddy_credential(entry)]
 
 
-def _upload_violations(path, name, job, uploading_actions):
+def _upload_violations(path, name, job, uploading_actions, files):
     violations = []
     local = set(re.findall(r"uses: (\./\.github/actions/[A-Za-z0-9_-]+)", job))
     # The reviewed collector copies only Bazel test logs, so it stays usable in jobs that
     # configure a cache credential.
     if BUILDBUDDY_ACTION in job:
-        violations.extend(_credential_upload_violations(path, name, job))
+        violations.extend(_credential_upload_violations(path, name, job, files))
     for action in sorted(local & uploading_actions - REVIEWED_UPLOAD_ACTIONS):
         violations.append("%s:%s uploads through unreviewed action %s" % (path, name, action))
     self_hosted = (path, name) in SELF_HOSTED_JOBS
@@ -1337,7 +1374,7 @@ def _artifact_upload_violations(files):
     return _reviewed_action_upload_violations(files) + [
         violation for path, workflow in _workflows(files).items()
         for name, job in _jobs(workflow).items()
-        for violation in _upload_violations(path, name, job, uploading_actions)]
+        for violation in _upload_violations(path, name, job, uploading_actions, files)]
 
 
 # A publication or record-assembly workflow promotes retained bytes; it never builds them. These
@@ -2138,20 +2175,30 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         # Each artifact a release candidate binds records the generated MODULE.bazel.lock its
         # build resolved and proved in error mode, never a committed lockfile.
         editor = self.supply_chain_files[".github/workflows/editor_wasm.yml"]
-        prove = _step_body(editor, "Prove the package's resolved module graph")
+        self.assertIn('        run: tools/ci/editor_wasm_lane.sh prove-lockfile '
+                      '"$RUNNER_TEMP/editor-wasm-module.lock"\n',
+                      _step_body(editor, "Prove the package's resolved module graph"))
+        lane = _read("tools/ci/editor_wasm_lane.sh")
+        prove = re.sub(r"\\\n\s*", "", lane.split("\nprove_lockfile() {\n", 1)[1].split(
+            "\n}\n", 1)[0])
         update = "bazelisk build --config=editor-wasm --lockfile_mode=update //tools/ci:editor_wasm_package"
         error = "bazelisk build --config=editor-wasm --lockfile_mode=error //tools/ci:editor_wasm_package"
         check = "python3 -B -m tools.release_cli check-lockfile --lockfile MODULE.bazel.lock"
-        snapshot = 'cp MODULE.bazel.lock "$RUNNER_TEMP/editor-wasm-module.lock"'
+        snapshot = 'cp MODULE.bazel.lock "${snapshot}"'
+        self.assertIn('local snapshot="$1"', prove)
         self.assertLess(prove.index(update), prove.index(error))
         self.assertLess(prove.index(error), prove.index(check))
         self.assertLess(prove.index(check), prove.index(snapshot))
         self.assertLess(editor.index("- name: Prove the package's resolved module graph"),
                         editor.index("- name: Stage package for handoff"))
-        stage = _step_body(editor, "Stage immutable Geode deployment candidate")
-        self.assertIn('cp "${RUNNER_TEMP}/editor-wasm-module.lock" '
-                      '"${candidate_dir}/MODULE.bazel.lock"', stage)
-        self.assertIn('\\"generated_lock_sha256\\":\\"${generated_lock_sha256}\\"', stage)
+        self.assertIn("        run: python3 %s candidate\n" % EDITOR_WASM_STAGE,
+                      _step_body(editor, "Stage immutable Geode deployment candidate"))
+        stage = _read(EDITOR_WASM_STAGE)
+        self.assertIn('_copy_file(Path(f"{runner_temp}/editor-wasm-module.lock"), module_lock)',
+                      stage)
+        self.assertIn('module_lock = Path(candidate_dir) / "MODULE.bazel.lock"', stage)
+        self.assertIn("generated_lock_sha256 = _sha256(module_lock)", stage)
+        self.assertIn('"generated_lock_sha256":"%s"', stage)
 
         docs = self.supply_chain_files[".github/workflows/deploy_docs.yaml"]
         build = docs.split("\n  deploy:\n", 1)[0]
@@ -3724,14 +3771,20 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "reviewed output in another job": (main, files[main].replace(
                 summary, "${{ steps.stage-package.outputs.handoff_dir }}", 1),
                 "after writing a cache credential"),
-            "reviewed output written twice": (wasm, files[wasm].replace(
-                '          echo "handoff_dir=${handoff_dir}" >> "${GITHUB_OUTPUT}"\n',
-                '          echo "handoff_dir=${handoff_dir}" >> "${GITHUB_OUTPUT}"\n'
+            "reviewed output producer runs another command": (wasm, files[wasm].replace(
+                "        run: python3 tools/ci/editor_wasm_stage.py package\n",
+                "        run: |\n          python3 tools/ci/editor_wasm_stage.py package\n"
                 '          echo "handoff_dir=${RUNNER_TEMP}" >> "${GITHUB_OUTPUT}"\n', 1),
                 "after writing a cache credential"),
-            "reviewed output retargeted": (wasm, files[wasm].replace(
-                'handoff_dir="${RUNNER_TEMP}/editor-wasm-package-geode"',
-                'handoff_dir="${RUNNER_TEMP}"', 1), "after writing a cache credential"),
+            "reviewed output producer command continued": (wasm, files[wasm].replace(
+                "        run: python3 tools/ci/editor_wasm_stage.py package\n",
+                "        run: python3 tools/ci/editor_wasm_stage.py package\n"
+                "          && cp -R ${RUNNER_TEMP} .\n", 1),
+                "after writing a cache credential"),
+            "reviewed output from another script": (wasm, files[wasm].replace(
+                "run: python3 tools/ci/editor_wasm_stage.py package",
+                "run: python3 tools/ci/other_stage.py package", 1),
+                "after writing a cache credential"),
             "credential glob": (main, files[main].replace(
                 summary, "${{ runner.temp }}/**", 1), "after writing a cache credential"),
             "credential absolute temp": (main, files[main].replace(
@@ -3748,6 +3801,40 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 files[".github/actions/apt-install/action.yml"]
                 + "    - uses: actions/upload-artifact@v7\n", "unreviewed action"),
         })
+
+    def test_reviewed_output_scripts_write_only_the_reviewed_values(self):
+        files = self.supply_chain_files
+        stage = _read(EDITOR_WASM_STAGE)
+        handoff = 'handoff_dir = f"{runner_temp}/editor-wasm-package-geode"'
+        write = '_write_output(environ, "handoff_dir", handoff_dir)'
+        self.assertEqual(1, stage.count(handoff))
+        self.assertEqual(1, stage.count(write))
+        weakened = {
+            "written twice": stage.replace(
+                write, write + '\n    _write_output(environ, "handoff_dir", runner_temp)', 1),
+            "written from another value": stage.replace(
+                write, '_write_output(environ, "handoff_dir", runner_temp)', 1),
+            "retargeted": stage.replace(handoff, 'handoff_dir = f"{runner_temp}"', 1),
+            "reassigned": stage.replace(handoff, handoff + "\n    handoff_dir = runner_temp", 1),
+            "temporary directory redefined": stage.replace(
+                handoff, 'runner_temp = "/"\n    ' + handoff, 1),
+            "candidate retargeted": stage.replace(
+                "/donner-editor-wasm-geode-{environ['GITHUB_SHA']}", "", 1),
+            "output name built at run time": stage.replace(
+                write, write + '\n    _write_output(environ, "handoff" + "_dir", runner_temp)', 1),
+            "output file written directly": stage.replace(
+                write, write + '\n    with open(environ["GITHUB_OUTPUT"], "a") as output:'
+                '\n        output.write(f"handoff_dir={runner_temp}\\n")', 1),
+            "output file named indirectly": stage.replace(
+                write, write + '\n    name = "GITHUB_OUTPUT"'
+                '\n    Path(environ[name]).write_text(f"handoff_dir={runner_temp}\\n")', 1),
+        }
+        for name, text in weakened.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(text, stage)
+                violations = _artifact_upload_violations({**files, EDITOR_WASM_STAGE: text})
+                self.assertTrue(any("after writing a cache credential" in item
+                                    for item in violations), violations)
 
     def test_scripts_never_interpolate_untrusted_event_text(self):
         for path, text in sorted(self.supply_chain_files.items()):
