@@ -449,7 +449,7 @@ def _build_calls(path):
 
 
 class MetalRequiredTargetTest(unittest.TestCase):
-    """The receipt must require exactly the targets the self-hosted lane runs, all buildable."""
+    """The receipt must require exactly the targets the self-hosted lane runs."""
 
     def test_required_targets_match_the_self_hosted_preflight_suite(self):
         # The solid-fill test is Geode-only, so the default-configuration base target is

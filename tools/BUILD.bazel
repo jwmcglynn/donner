@@ -271,11 +271,8 @@ py_test(
         "verify_metal_validation.py",
         "verify_metal_validation_tests.py",
     ],
-    # The required-target checks read the Metal tests and the self-hosted preflight suite.
-    data = [
-        "//donner/gpu/metal/tests:BUILD.bazel",
-        "//tools/ci:BUILD.bazel",
-    ],
+    # The required-target check reads the self-hosted preflight suite.
+    data = ["//tools/ci:BUILD.bazel"],
     imports = ["."],
     deps = ["@rules_python//python/runfiles"],
 )
