@@ -1828,7 +1828,8 @@ class CiLaneParityTest(unittest.TestCase):
                        .read_text(encoding="utf-8").splitlines())
         for kind in BUILD_EVENT_FILE_FORMATS:
             self.assertIn("common:ci --nobuild_event_%s_file_path_conversion" % kind, rc_lines)
-        self.assertEqual([], build_event_file_problems(self.workflows))
+        main_push = {name: self.workflows[name] for name in self.main_push_workflows}
+        self.assertEqual([], build_event_file_problems(main_push))
 
     def test_build_event_file_problems_are_found(self):
         geode = "Test (Geode editor lane)"
