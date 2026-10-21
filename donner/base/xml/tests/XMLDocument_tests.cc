@@ -4648,7 +4648,7 @@ TEST_F(XMLDocumentTests, ApplySourceEditOnEmptySourceFallsBackToDocumentScope) {
 
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::Document);
-  EXPECT_THAT(result, DiagnosticReasonContains("Only attribute-value"));
+  EXPECT_THAT(result, DiagnosticReasonContains("parser policy is unavailable"));
   EXPECT_EQ(doc.source(), "<svg/>");
 }
 
