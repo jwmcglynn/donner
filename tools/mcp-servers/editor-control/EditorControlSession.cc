@@ -216,6 +216,26 @@ json EditorControlSession::toolList() {
            }},
       },
       {
+          {"name", "history"},
+          {"description",
+           "Undo or redo one entry of the editor's undo timeline through the same EditorApp path "
+           "as Edit > Undo / Redo and the canvas Cmd+Z / Cmd+Shift+Z shortcuts. `applied` "
+           "reports that an entry was consumed; compare the source to see what changed."},
+          {"inputSchema",
+           {
+               {"type", "object"},
+               {"properties",
+                {
+                    {"action", {{"type", "string"}, {"enum", json::array({"undo", "redo"})}}},
+                    {"render_after", {{"type", "boolean"}, {"default", true}}},
+                    {"include_final_frame", {{"type", "boolean"}, {"default", false}}},
+                    {"include_tile_images", {{"type", "boolean"}, {"default", false}}},
+                    {"embed_png_base64", {{"type", "boolean"}, {"default", false}}},
+                }},
+               {"required", json::array({"action"})},
+           }},
+      },
+      {
           {"name", "set_active_tool"},
           {"description",
            "Set the active headless canvas tool. Recorded .rnr sessions store this as a semantic "
@@ -501,59 +521,43 @@ ToolCallResult EditorControlSession::handleToolCall(std::string_view name, const
   if (!arguments.is_object()) {
     return MakeErrorResult("tool arguments must be a JSON object");
   }
-  if (name == "load_document") {
-    return loadDocument(arguments);
-  }
-  if (name == "load_svg") {
-    return loadSvg(arguments);
-  }
-  if (name == "get_svg_source") {
-    return getSvgSource(arguments);
-  }
-  if (name == "edit_svg_source") {
-    return editSvgSource(arguments);
-  }
-  if (name == "select_by_selector") {
-    return selectBySelector(arguments);
-  }
-  if (name == "click_layer_button") {
-    return clickLayerButton(arguments);
-  }
-  if (name == "set_active_tool") {
-    return setActiveTool(arguments);
-  }
-  if (name == "set_style_property") {
-    return setStyleProperty(arguments);
-  }
-  if (name == "pen_path") {
-    return penPath(arguments);
-  }
-  if (name == "drag_selector") {
-    return dragSelector(arguments);
-  }
-  if (name == "transform_selector") {
-    return transformSelector(arguments);
-  }
-  if (name == "pointer_gesture") {
-    return pointerGesture(arguments);
-  }
-  if (name == "render_frame") {
-    return renderFrameTool(arguments);
-  }
-  if (name == "session_state") {
-    return sessionState(arguments);
-  }
-  if (name == "start_rnr_recording") {
-    return startRnrRecording(arguments);
-  }
-  if (name == "stop_rnr_recording") {
-    return stopRnrRecording(arguments);
-  }
-  if (name == "rnr_recording_state") {
-    return rnrRecordingState(arguments);
-  }
-  if (name == "replay_rnr") {
-    return replayRnr(arguments);
+
+  using Handler = ToolCallResult (*)(EditorControlSession&, const json&);
+  static constexpr auto kHandlers = std::to_array<std::pair<std::string_view, Handler>>({
+      {"load_document", [](EditorControlSession& s, const json& a) { return s.loadDocument(a); }},
+      {"load_svg", [](EditorControlSession& s, const json& a) { return s.loadSvg(a); }},
+      {"get_svg_source", [](EditorControlSession& s, const json& a) { return s.getSvgSource(a); }},
+      {"edit_svg_source",
+       [](EditorControlSession& s, const json& a) { return s.editSvgSource(a); }},
+      {"select_by_selector",
+       [](EditorControlSession& s, const json& a) { return s.selectBySelector(a); }},
+      {"click_layer_button",
+       [](EditorControlSession& s, const json& a) { return s.clickLayerButton(a); }},
+      {"history", [](EditorControlSession& s, const json& a) { return s.historyAction(a); }},
+      {"set_active_tool",
+       [](EditorControlSession& s, const json& a) { return s.setActiveTool(a); }},
+      {"set_style_property",
+       [](EditorControlSession& s, const json& a) { return s.setStyleProperty(a); }},
+      {"pen_path", [](EditorControlSession& s, const json& a) { return s.penPath(a); }},
+      {"drag_selector", [](EditorControlSession& s, const json& a) { return s.dragSelector(a); }},
+      {"transform_selector",
+       [](EditorControlSession& s, const json& a) { return s.transformSelector(a); }},
+      {"pointer_gesture",
+       [](EditorControlSession& s, const json& a) { return s.pointerGesture(a); }},
+      {"render_frame", [](EditorControlSession& s, const json& a) { return s.renderFrameTool(a); }},
+      {"session_state", [](EditorControlSession& s, const json& a) { return s.sessionState(a); }},
+      {"start_rnr_recording",
+       [](EditorControlSession& s, const json& a) { return s.startRnrRecording(a); }},
+      {"stop_rnr_recording",
+       [](EditorControlSession& s, const json& a) { return s.stopRnrRecording(a); }},
+      {"rnr_recording_state",
+       [](EditorControlSession& s, const json& a) { return s.rnrRecordingState(a); }},
+      {"replay_rnr", [](EditorControlSession& s, const json& a) { return s.replayRnr(a); }},
+  });
+  for (const auto& [toolName, handler] : kHandlers) {
+    if (toolName == name) {
+      return handler(*this, arguments);
+    }
   }
 
   return MakeErrorResult("unknown tool: " + std::string(name));

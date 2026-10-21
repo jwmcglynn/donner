@@ -136,6 +136,7 @@ private:
   ToolCallResult editSvgSource(const nlohmann::json& arguments);
   ToolCallResult selectBySelector(const nlohmann::json& arguments);
   ToolCallResult clickLayerButton(const nlohmann::json& arguments);
+  ToolCallResult historyAction(const nlohmann::json& arguments);
   ToolCallResult setActiveTool(const nlohmann::json& arguments);
   ToolCallResult setStyleProperty(const nlohmann::json& arguments);
   ToolCallResult penPath(const nlohmann::json& arguments);
@@ -196,6 +197,8 @@ private:
   [[nodiscard]] Vector2d currentRecordingScreenPoint(const Vector2d& documentPoint) const;
   [[nodiscard]] bool syncCanvasSize(const ViewportState& viewport);
   [[nodiscard]] bool drainPendingWritebacks();
+  /// Undo or redo one timeline entry and flush it, as the shell does; false if none applied.
+  bool applyHistoryAction(bool undo);
   void syncSourceTextFromDocumentIfChanged();
   [[nodiscard]] bool setActiveToolForReplay(std::string_view tool, std::string* error);
   [[nodiscard]] bool applyStylePropertyForReplay(std::string_view propertyName,
