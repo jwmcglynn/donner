@@ -22,6 +22,27 @@ std::size_t BoundedSampleCount(std::size_t sampleCount) noexcept {
   return std::min(sampleCount, kSamplePickerMaxVisibleSamples);
 }
 
+float SampleTextWidth(float cardWidth) {
+  const EditorTheme& theme = EditorTheme::Active();
+  return std::max(1.0f, cardWidth - kThumbnailWidth - 2.0f * theme.space2 - theme.space3);
+}
+
+ImVec2 WrappedTextSize(std::string_view text, float width) {
+  return ImGui::CalcTextSize(text.data(), text.data() + text.size(), false, width);
+}
+
+float SampleCardHeight(std::span<const EditorSample> samples, float cardWidth) {
+  const EditorTheme& theme = EditorTheme::Active();
+  const float textWidth = SampleTextWidth(cardWidth);
+  float height = kCardHeight;
+  for (const EditorSample& sample : samples.first(BoundedSampleCount(samples.size()))) {
+    const float textHeight = WrappedTextSize(sample.title, textWidth).y + 2.0f +
+                             WrappedTextSize(SamplePickerDescription(sample.id), textWidth).y;
+    height = std::max(height, textHeight + 2.0f * theme.space2);
+  }
+  return height;
+}
+
 void DrawSampleButton(const EditorSample& sample, std::string_view description,
                       const SamplePickerState& state, float width, float height,
                       const SamplePickerThumbnail& thumbnail, SamplePickerActions* actions,
@@ -69,11 +90,16 @@ void DrawSampleButton(const EditorSample& sample, std::string_view description,
   }
   drawList->AddRect(thumbnailSlotMin, thumbnailSlotMax, theme.borderSubtle, theme.radiusControl);
   const float textX = thumbnailSlotMax.x + theme.space3;
-  const float titleY = min.y + (height - ImGui::GetTextLineHeight() * 2.0f - 2.0f) * 0.5f;
-  drawList->AddText(ImVec2(textX, titleY), theme.textPrimary, sample.title.data(),
-                    sample.title.data() + sample.title.size());
-  drawList->AddText(ImVec2(textX, titleY + ImGui::GetTextLineHeight() + 2.0f), theme.textMuted,
-                    description.data(), description.data() + description.size());
+  const float textWidth = SampleTextWidth(width);
+  const float titleHeight = WrappedTextSize(sample.title, textWidth).y;
+  const float textHeight = titleHeight + 2.0f + WrappedTextSize(description, textWidth).y;
+  const float titleY = min.y + (height - textHeight) * 0.5f;
+  drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(), ImVec2(textX, titleY),
+                    theme.textPrimary, sample.title.data(),
+                    sample.title.data() + sample.title.size(), textWidth);
+  drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
+                    ImVec2(textX, titleY + titleHeight + 2.0f), theme.textMuted, description.data(),
+                    description.data() + description.size(), textWidth);
   drawList->PopClipRect();
 
   if (clicked) {
@@ -162,7 +188,8 @@ SamplePickerActions SamplePickerPresenter::render(
   const EditorTheme& theme = EditorTheme::Active();
   const float availableWidth = ImGui::GetContentRegionAvail().x;
   const std::span<const EditorSample> samples = GetEditorSampleCatalog();
-  const SamplePickerLayout layout = ComputeSamplePickerLayout(availableWidth, samples.size());
+  SamplePickerLayout layout = ComputeSamplePickerLayout(availableWidth, samples.size());
+  layout.cardHeight = SampleCardHeight(samples, layout.cardWidth);
 
   const float dismissSize = kSamplePickerMinTouchTarget;
   ImGui::SetCursorPosX(std::max(0.0f, availableWidth - dismissSize));
