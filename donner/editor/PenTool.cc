@@ -193,17 +193,16 @@ void PenTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         return;
       }
     }
-
-    if (!state->closed && !modifiers.command) {
-      continueSelectedPath(editor, pathElement, *state, documentPoint, modifiers);
-      return;
-    }
   }
 
   if (modifiers.command) {
     return;  // Point-edit only: never start a new path with Cmd/Ctrl held.
   }
 
+  // A click that misses the selected path's points and segments starts a fresh
+  // path. Only a click on the selected path's open endpoint (handled above)
+  // resumes drafting it, so a just-committed path is never extended by an
+  // unrelated click.
   startNewPath(editor, documentPoint);
 }
 
@@ -542,27 +541,6 @@ void PenTool::startNewPath(EditorApp& editor, const Vector2d& documentPoint) {
   svg::SVGElement parent = document.svgElement();
   editor.applyMutation(EditorCommand::InsertElementCommand(parent, path));
   editor.setSelection(path);
-}
-
-void PenTool::continueSelectedPath(EditorApp& editor, const svg::SVGPathElement& path,
-                                   const SelectedPathState& state, const Vector2d& documentPoint,
-                                   const MouseModifiers& modifiers) {
-  beginPenSession(editor);
-
-  activePath_ = path;
-  sessionUndoAnchor_ = path;
-  anchors_ = state.anchors;
-  closed_ = false;
-  startPoint_ = anchors_.front().point;
-  currentPoint_ = anchors_.back().point;
-  rebuildActivePathData();
-  if (shouldCloseAt(documentPoint, modifiers)) {
-    closePath(editor, documentPoint,
-              kPointHitScreenTolerance / std::max(modifiers.pixelsPerDocUnit, 0.000001));
-    return;
-  }
-
-  appendLine(editor, constrainedPoint(documentPoint, modifiers));
 }
 
 void PenTool::rebuildActivePathData() {

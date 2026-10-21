@@ -1078,16 +1078,24 @@ TEST_F(PenToolTest, PreviewSegmentPathCoversLineCurveShiftAndCloseAffordance) {
   EXPECT_EQ(curvePreview->toSVGPathData(), "M 10 10 C 20 10 30 20 30 20");
 }
 
-TEST_F(PenToolTest, SelectedOpenPathCanBeContinued) {
+TEST_F(PenToolTest, ClickAwayFromSelectedOpenPathStartsNewPath) {
   ASSERT_TRUE(app.loadFromString(kOpenPathSvg));
   auto selected = app.document().document().querySelector("#p");
   ASSERT_TRUE(selected.has_value());
   app.setSelection(*selected);
 
+  // (10,10) misses the selected path's anchors and segment, so the click
+  // starts a new path instead of extending the selected one.
   tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(10.0, 10.0));
   ASSERT_TRUE(app.flushFrame());
 
-  EXPECT_EQ(selected->cast<svg::SVGPathElement>().d(), "M 0 0 L 10 0 L 10 10");
+  EXPECT_THAT(std::string_view(selected->cast<svg::SVGPathElement>().d()),
+              testing::Eq("M 0 0 L 10 0"));
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(1));
+  EXPECT_THAT(app.selectedElements().front(), testing::Ne(*selected));
+  EXPECT_THAT(std::string_view(app.selectedElements().front().cast<svg::SVGPathElement>().d()),
+              testing::Eq("M 10 10"));
   EXPECT_TRUE(tool.isDrafting());
 }
 
@@ -1116,8 +1124,11 @@ TEST_F(PenToolTest, SelectedOpenPathContinuesUnderConcurrentDom) {
   ASSERT_EQ(app.document().document().threadingMode(), svg::ThreadingMode::ConcurrentDom);
 
   // At c0e8c53f this aborts via the release assert inside SVGPathElement::d().
-  // After the fix the selected-path read is wrapped in a read-access scope and
-  // the path continues normally.
+  // After the fix the selected-path read is wrapped in a read-access scope:
+  // clicking the open endpoint resumes drafting, and the next click appends.
+  tool.onMouseDown(app, Vector2d(10.0, 0.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(10.0, 0.0));
+  ASSERT_TRUE(tool.isDrafting());
   tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
   ASSERT_TRUE(app.flushFrame());
 
