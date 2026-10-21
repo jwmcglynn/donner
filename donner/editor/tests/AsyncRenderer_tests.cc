@@ -7251,8 +7251,7 @@ TEST(RenderCoordinatorTest, CoveredBoundedResultPresentsAndZoomOutWaitsForOvervi
   ASSERT_THAT(waitForCoordinator(), testing::IsTrue());
   ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
   EXPECT_THAT(textures.overviewTiles().empty(), testing::IsTrue());
-  EXPECT_THAT(coordinator.displayedDocVersion(),
-              testing::Eq(app.document().currentFrameVersion()));
+  EXPECT_THAT(coordinator.displayedDocVersion(), testing::Eq(app.document().currentFrameVersion()));
 
   const Box2d pane(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize);
   const auto coverage = textures.coverageDiagnostics();
@@ -7260,7 +7259,7 @@ TEST(RenderCoordinatorTest, CoveredBoundedResultPresentsAndZoomOutWaitsForOvervi
   ASSERT_THAT(FramePresentation::ActiveRasterCoversPane(coverage, viewport, pane),
               testing::IsTrue());
   const auto shown = coordinator.buildFramePresentation(app, selectTool, viewport, pane,
-                                                         SelectionChromeDetail::Full);
+                                                        SelectionChromeDetail::Full);
   ASSERT_THAT(shown, testing::NotNull());
   EXPECT_THAT(shown->usesOverviewRaster(), testing::IsFalse());
 
@@ -7271,7 +7270,7 @@ TEST(RenderCoordinatorTest, CoveredBoundedResultPresentsAndZoomOutWaitsForOvervi
               testing::IsFalse());
   EXPECT_THAT(shown->viewport().zoom, testing::Not(testing::DoubleEq(viewport.zoom)));
   const auto held = coordinator.buildFramePresentation(app, selectTool, viewport, pane,
-                                                        SelectionChromeDetail::Full);
+                                                       SelectionChromeDetail::Full);
   EXPECT_THAT(held, testing::Eq(shown));
   EXPECT_THAT(coordinator.frameRepairPending(), testing::IsTrue());
   EXPECT_THAT(textures.overviewTiles().empty(), testing::IsTrue());
@@ -7282,12 +7281,11 @@ TEST(RenderCoordinatorTest, CoveredBoundedResultPresentsAndZoomOutWaitsForOvervi
   ASSERT_THAT(waitForCoordinator(), testing::IsTrue());
   EXPECT_THAT(textures.overviewTiles().empty(), testing::IsFalse());
   const auto recovered = coordinator.buildFramePresentation(app, selectTool, viewport, pane,
-                                                             SelectionChromeDetail::Full);
+                                                            SelectionChromeDetail::Full);
   ASSERT_THAT(recovered, testing::NotNull());
   EXPECT_THAT(recovered, testing::Ne(shown));
   EXPECT_THAT(recovered->viewport().zoom, testing::DoubleEq(viewport.zoom));
   EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
-
 }
 
 TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPreReparseCachedLayer) {
