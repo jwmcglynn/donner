@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <fstream>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <sstream>
 #include <string>
@@ -26,6 +27,18 @@
 #include "gtest/gtest.h"
 
 namespace donner::editor {
+
+/// Name hover intents in matcher failures instead of printing raw bytes.
+void PrintTo(PenHoverIntent intent, std::ostream* os) {
+  switch (intent) {
+    case PenHoverIntent::PlaceAnchor: *os << "PlaceAnchor"; return;
+    case PenHoverIntent::ClosePath: *os << "ClosePath"; return;
+    case PenHoverIntent::DragAnchor: *os << "DragAnchor"; return;
+    case PenHoverIntent::InsertAnchor: *os << "InsertAnchor"; return;
+  }
+  *os << "PenHoverIntent(" << static_cast<int>(intent) << ")";
+}
+
 namespace {
 
 constexpr std::string_view kEmptySvg =
@@ -953,6 +966,55 @@ TEST_F(PenToolTest, ClickNearStartClosesPath) {
 
   EXPECT_EQ(path().d(), "M 10 10 L 40 10 L 40 40 Z");
   EXPECT_FALSE(tool.isDrafting());
+}
+
+// A committed path stays selected, but the next pen click away from its open
+// endpoint must start a fresh path, and clicking that new path's first anchor
+// must close it. Continuing the committed path from an arbitrary click joined
+// two separate shapes with a long connecting segment and left the "close"
+// click as just another appended point.
+TEST_F(PenToolTest, ClickAfterCommitStartsNewPathThatClosesOnItsFirstAnchor) {
+  MouseModifiers modifiers;
+  modifiers.pixelsPerDocUnit = 1.0;
+  const auto click = [&](const Vector2d& point) {
+    tool.onMouseDown(app, point, modifiers);
+    tool.onMouseUp(app, point);
+    ASSERT_TRUE(app.flushFrame());
+  };
+
+  for (const Vector2d& point :
+       {Vector2d(20.0, 170.0), Vector2d(60.0, 140.0), Vector2d(90.0, 170.0)}) {
+    ASSERT_NO_FATAL_FAILURE(click(point));
+  }
+  ASSERT_TRUE(tool.commitOpenPath(app));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_FALSE(tool.isDrafting());
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(1));
+  const svg::SVGElement firstPath = app.selectedElements().front();
+
+  for (const Vector2d& point :
+       {Vector2d(150.0, 170.0), Vector2d(190.0, 140.0), Vector2d(230.0, 170.0)}) {
+    ASSERT_NO_FATAL_FAILURE(click(point));
+  }
+  EXPECT_TRUE(tool.wouldCloseAt(Vector2d(150.0, 170.0), modifiers))
+      << "hovering the new path's first anchor must offer to close it";
+  EXPECT_THAT(tool.hoverIntentAt(app, Vector2d(150.0, 170.0), modifiers),
+              testing::Eq(PenHoverIntent::ClosePath))
+      << "the pen cursor over the new path's first anchor must show the close badge";
+  ASSERT_NO_FATAL_FAILURE(click(Vector2d(150.0, 170.0)));
+  EXPECT_FALSE(tool.isDrafting());
+
+  std::vector<std::string> pathData;
+  for (std::optional<svg::SVGElement> child = app.document().document().svgElement().firstChild();
+       child.has_value(); child = child->nextSibling()) {
+    if (child->isa<svg::SVGPathElement>()) {
+      pathData.emplace_back(std::string_view(child->cast<svg::SVGPathElement>().d()));
+    }
+  }
+  EXPECT_THAT(pathData, testing::ElementsAre("M 20 170 L 60 140 L 90 170",
+                                             "M 150 170 L 190 140 L 230 170 Z"));
+  EXPECT_THAT(std::string_view(firstPath.cast<svg::SVGPathElement>().d()),
+              testing::Eq("M 20 170 L 60 140 L 90 170"));
 }
 
 TEST_F(PenToolTest, ShiftConstrainsNextSegment) {
