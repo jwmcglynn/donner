@@ -566,7 +566,7 @@ Box2d ResizeLeafBounds(const Leaf& leaf, const Transform2d& documentFromStartDoc
 }  // namespace
 
 std::function<std::optional<Box2d>(const Transform2d&)> CaptureSelectionBoundsAfterAxisScale(
-    const svg::SVGElement& root) {
+    const svg::SVGElement& root, bool includeOrdinaryBounds) {
   std::vector<Leaf> leaves;
   root.withWriteAccess([&](svg::DocumentWriteAccess&, EntityHandle) {
     for (const auto& geometry : CollectRenderableGeometry(root)) {
@@ -580,7 +580,7 @@ std::function<std::optional<Box2d>(const Transform2d&)> CaptureSelectionBoundsAf
       }
     }
   });
-  if (std::ranges::none_of(leaves, [](const Leaf& leaf) {
+  if (!includeOrdinaryBounds && std::ranges::none_of(leaves, [](const Leaf& leaf) {
         return leaf.hostStroke.has_value() || leaf.textStroke.has_value();
       })) {
     return {};

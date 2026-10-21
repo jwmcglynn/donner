@@ -2225,6 +2225,7 @@ void SidebarPresenter::finishStrokeScalarEdit(EditorApp& liveApp, StrokeScalarFi
 }
 
 bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
+  completedTransformBaseline_.reset();
   if (!inspectorSnapshot_.transform.has_value()) {
     return false;
   }
@@ -2396,7 +2397,8 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
             Box2d(Vector2d(cellMin.x, cellMin.y), Vector2d(cellMax.x, cellMax.y));
 
         if (liveApp != nullptr && liveEditable && ImGui::IsItemActivated()) {
-          beginTransformEdit(*liveApp, TransformField::Matrix, i, "Edit transform");
+          beginTransformWidgetEdit(*liveApp, TransformField::Matrix, i, "Edit transform", &value,
+                                   "%.6g", cell.changed);
         }
         if (transformEdit_.has_value() && transformEdit_->field == TransformField::Matrix &&
             transformEdit_->matrixIndex == i && !transformEdit_->pendingCommit) {
@@ -2437,7 +2439,8 @@ bool SidebarPresenter::renderTransformFieldDrag(EditorApp* liveApp, TransformFie
 
   bool queuedMutation = false;
   if (liveApp != nullptr && canEdit && ImGui::IsItemActivated()) {
-    beginTransformEdit(*liveApp, field, /*matrixIndex=*/0, undoLabel);
+    beginTransformWidgetEdit(*liveApp, field, /*matrixIndex=*/0, undoLabel, &value, format,
+                             edit.changed);
   }
   if (transformEdit_.has_value() && transformEdit_->field == field &&
       !transformEdit_->pendingCommit) {
@@ -2509,7 +2512,19 @@ void SidebarPresenter::restoreTransformFieldOnCancel(const InspectorNumericEdit&
                : InitialTransformFieldValue(state);
 }
 
+void SidebarPresenter::discardCompletedTransformBaseline(const EditorApp& app) {
+  if (completedTransformBaseline_.has_value() &&
+      (!app.hasDocument() ||
+       completedTransformBaseline_->state.document != app.document().document().handle() ||
+       completedTransformBaseline_->state.documentGeneration !=
+           app.document().documentGeneration() ||
+       completedTransformBaseline_->frameVersion != app.document().currentFrameVersion())) {
+    completedTransformBaseline_.reset();
+  }
+}
+
 void SidebarPresenter::discardForeignTransformEdit(const EditorApp& app) {
+  discardCompletedTransformBaseline(app);
   if (!transformEdit_.has_value()) {
     return;
   }
@@ -2557,8 +2572,6 @@ bool SidebarPresenter::updateTransformFieldValue(EditorApp* liveApp, double valu
 
 void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField field, int matrixIndex,
                                           const char* undoLabel) {
-  // A previous edit still holding state (e.g. its commit was deferred) must
-  // land its undo entry before the slot is reused.
   if (transformEdit_.has_value()) {
     commitTransformEdit(liveApp);
   }
@@ -2566,51 +2579,147 @@ void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField fie
     return;
   }
   const svg::SVGElement element = liveApp.selectedElements().front();
-
   if (!element.isa<svg::SVGGraphicsElement>()) {
     return;
   }
+  auto completed = takeCompletedTransformBaseline(liveApp, element);
+  TransformEditState state = completed.has_value() && completed->restored
+                                 ? std::move(completed->state)
+                                 : captureTransformBaseline(liveApp, element, field);
+  if (completed.has_value() && !completed->restored) {
+    carryCommittedTransformBaseline(element, completed->state, state);
+  }
+  prepareTransformBoundsEvaluator(element, field, state);
+  initializeTransformField(state, field, matrixIndex, undoLabel);
+  transformEdit_ = std::move(state);
+}
 
-  TransformEditState state{
-      .element = element,
-      .document = liveApp.document().document().handle(),
-      .documentGeneration = liveApp.document().documentGeneration(),
-      .itemId = ImGui::GetCurrentContext() != nullptr ? ImGui::GetActiveID() : 0,
-      .field = field,
-      .matrixIndex = matrixIndex,
-      .undoLabel = undoLabel};
-  // `transform()` and the Inspector bounds may materialize lazy layout state and
-  // therefore acquire document write access. Do not wrap these DOM getters in
-  // a read scope: ConcurrentDom uses a non-recursive lock, so upgrading that
-  // scope would deadlock on field activation.
+std::optional<SidebarPresenter::CompletedTransformBaseline>
+SidebarPresenter::takeCompletedTransformBaseline(EditorApp& app, const svg::SVGElement& element) {
+  auto result = std::move(completedTransformBaseline_);
+  completedTransformBaseline_.reset();
+  if (!result.has_value() || result->frameVersion != app.document().currentFrameVersion() ||
+      result->state.document != app.document().document().handle() ||
+      result->state.documentGeneration != app.document().documentGeneration() ||
+      result->state.element != element) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+SidebarPresenter::TransformEditState SidebarPresenter::captureTransformBaseline(
+    EditorApp& app, const svg::SVGElement& element, TransformField field) {
+  TransformEditState state{.element = element,
+                           .document = app.document().document().handle(),
+                           .documentGeneration = app.document().documentGeneration(),
+                           .field = field};
+  // These getters can materialize layout state and acquire document write access. Do not hold
+  // a read scope while capturing the baseline: ConcurrentDom uses a non-recursive lock.
   state.startTransform = element.cast<svg::SVGGraphicsElement>().transform();
   state.startBounds = InspectorBounds(element);
-  if (HasPaintedInspectorBounds(element) &&
-      (field == TransformField::Width || field == TransformField::Height)) {
-    state.boundsAfterAxisScale = CaptureSelectionBoundsAfterAxisScale(element);
-  }
   state.documentFromParent = DocumentFromParentTransform(element);
-  if (const double determinant = state.documentFromParent.determinant();
-      std::isfinite(determinant) && determinant != 0.0) {
+  const double determinant = state.documentFromParent.determinant();
+  if (std::isfinite(determinant) && determinant != 0.0) {
     state.parentFromDocument = state.documentFromParent.inverse();
   }
-  // Verbatim attribute bytes so undo restores the user's original source
-  // text instead of the canonical serializer output.
   state.sourceTransformAttributeValue = element.getAttribute("transform");
+  state.unitViewBox = PercentReference(app.document().document());
+  state.unitFontMetrics = TypedUnitFontMetrics(app.document().document().svgElement(), element);
+  state.writebackTarget = captureAttributeWritebackTarget(element);
+  return state;
+}
+
+void SidebarPresenter::carryCommittedTransformBaseline(const svg::SVGElement& element,
+                                                       const TransformEditState& completed,
+                                                       TransformEditState& next) {
+  const RcString serialized = serializeTransformForWriteback(
+      completed.sourceTransformAttributeValue, completed.currentTransform);
+  next.sourceTransformAttributeValue =
+      std::string_view(serialized).empty() ? std::nullopt : std::optional<RcString>(serialized);
+  next.writebackTarget = completed.writebackTarget;
+  const bool pendingGeometry = next.startTransform != completed.currentTransform;
+  next.startTransform = completed.currentTransform;
+  if (pendingGeometry) {
+    next.boundsAfterAxisScale = captureAdjustedTransformBounds(element, next, true);
+    next.startBounds =
+        next.boundsAfterAxisScale ? next.boundsAfterAxisScale(Transform2d()) : std::nullopt;
+  }
+}
+
+std::function<std::optional<Box2d>(const Transform2d&)>
+SidebarPresenter::captureAdjustedTransformBounds(const svg::SVGElement& element,
+                                                 const TransformEditState& state,
+                                                 bool includeOrdinaryBounds) {
+  auto evaluate = CaptureSelectionBoundsAfterAxisScale(element, includeOrdinaryBounds);
+  if (!evaluate) {
+    return {};
+  }
+  const Transform2d actual =
+      element.cast<svg::SVGGraphicsElement>().transform() * state.documentFromParent;
+  const Transform2d desired = state.startTransform * state.documentFromParent;
+  if (actual == desired) {
+    return evaluate;
+  }
+  const double determinant = actual.determinant();
+  if (!std::isfinite(determinant) || determinant == 0.0) {
+    return {};
+  }
+  const Transform2d correction = actual.inverse() * desired;
+  return [evaluate = std::move(evaluate), correction](const Transform2d& change) {
+    return evaluate(correction * change);
+  };
+}
+
+void SidebarPresenter::prepareTransformBoundsEvaluator(const svg::SVGElement& element,
+                                                       TransformField field,
+                                                       TransformEditState& state) {
+  if ((field == TransformField::Width || field == TransformField::Height) &&
+      HasPaintedInspectorBounds(element) && !state.boundsAfterAxisScale) {
+    state.boundsAfterAxisScale = captureAdjustedTransformBounds(element, state, false);
+  }
+}
+
+void SidebarPresenter::initializeTransformField(TransformEditState& state, TransformField field,
+                                                int matrixIndex, const char* undoLabel) {
+  state.itemId = ImGui::GetCurrentContext() != nullptr ? ImGui::GetActiveID() : 0;
+  state.field = field;
+  state.matrixIndex = matrixIndex;
+  state.undoLabel = undoLabel;
   state.currentTransform = state.startTransform;
   state.startDecomposed = DecomposeTransform(state.startTransform);
-  state.unitViewBox = PercentReference(liveApp.document().document());
-  state.unitFontMetrics = TypedUnitFontMetrics(liveApp.document().document().svgElement(), element);
-  // Captured now, while the source is still in sync with the DOM, so undo
-  // and the source writeback resolve the element after document changes.
-  state.writebackTarget = captureAttributeWritebackTarget(element);
+  state.boundsEvaluationCount = 0;
+  state.changed = false;
+  state.pendingCommit = false;
+  state.pendingValue = false;
+  state.lastTextRejected = false;
+  state.restoringStart = false;
   for (int i = 0; i < 6; ++i) {
     state.matrixValues[static_cast<std::size_t>(i)] = state.startTransform.data[i];
   }
-
   state.fieldValue = InitialTransformFieldValue(state);
+}
 
-  transformEdit_ = std::move(state);
+void SidebarPresenter::beginTransformWidgetEdit(EditorApp& app, TransformField field,
+                                                int matrixIndex, const char* undoLabel,
+                                                double* value, const char* format, bool changed) {
+  beginTransformEdit(app, field, matrixIndex, undoLabel);
+  if (transformEdit_.has_value() && !changed && *value != transformEdit_->fieldValue) {
+    *value = transformEdit_->fieldValue;
+    refreshTransformInputBaseline(*value, format);
+  }
+}
+
+void SidebarPresenter::refreshTransformInputBaseline(double value, const char* format) {
+  ImGuiInputTextState* input = ImGui::GetInputTextState(ImGui::GetItemID());
+  if (input == nullptr || input->Edited) {
+    return;
+  }
+  std::array<char, 64> buffer{};
+  const int size = ImGui::DataTypeFormatString(buffer.data(), buffer.size(), ImGuiDataType_Double,
+                                               &value, format);
+  input->InitialTextA.resize(size + 1);
+  std::copy_n(buffer.data(), size + 1, input->InitialTextA.Data);
+  input->ReloadUserBufAndSelectAll();
 }
 
 double SidebarPresenter::InitialTransformFieldValue(const TransformEditState& state) {
@@ -2759,6 +2868,8 @@ void SidebarPresenter::commitTransformEdit(EditorApp& liveApp) {
           .restoreSourceTransformAttributeValue = true,
       });
     }
+    completedTransformBaseline_ = CompletedTransformBaseline{
+        std::move(state), liveApp.document().currentFrameVersion(), true};
     return;
   }
 
@@ -2790,6 +2901,8 @@ void SidebarPresenter::commitTransformEdit(EditorApp& liveApp) {
         .sourceTransformAttributeValue = state.sourceTransformAttributeValue,
     });
   }
+  completedTransformBaseline_ =
+      CompletedTransformBaseline{std::move(state), liveApp.document().currentFrameVersion(), false};
 }
 
 }  // namespace donner::editor

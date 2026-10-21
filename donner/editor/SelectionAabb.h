@@ -74,9 +74,11 @@ namespace donner::editor {
 /// document-axis scale and translation, without mutating the document. Host-space strokes
 /// are expanded after the proposed transform; other painted bounds scale with the geometry.
 /// @param root Group whose current renderable descendants form the baseline.
+/// @param includeOrdinaryBounds Also retain ordinary fill/stroke bounds for a pending affine edit.
 /// @return An evaluator independent of later DOM mutations.
 [[nodiscard]] std::function<std::optional<Box2d>(const Transform2d&)>
-CaptureSelectionBoundsAfterAxisScale(const svg::SVGElement& root);
+CaptureSelectionBoundsAfterAxisScale(const svg::SVGElement& root,
+                                     bool includeOrdinaryBounds = false);
 
 /// Snapshot world-space bounds for renderable content (geometry and text)
 /// painted after a single selected element. This is a conservative occlusion hint for the

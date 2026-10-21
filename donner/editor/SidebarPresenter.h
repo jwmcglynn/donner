@@ -445,6 +445,30 @@ private:
     bool pendingValue = false;
   };
 
+  struct CompletedTransformBaseline {
+    TransformEditState state;
+    std::uint64_t frameVersion;
+    bool restored;
+  };
+  std::optional<CompletedTransformBaseline> takeCompletedTransformBaseline(
+      EditorApp& app, const svg::SVGElement& element);
+  TransformEditState captureTransformBaseline(EditorApp& app, const svg::SVGElement& element,
+                                              TransformField field);
+  void carryCommittedTransformBaseline(const svg::SVGElement& element,
+                                       const TransformEditState& completed,
+                                       TransformEditState& next);
+  void prepareTransformBoundsEvaluator(const svg::SVGElement& element, TransformField field,
+                                       TransformEditState& state);
+  static std::function<std::optional<Box2d>(const Transform2d&)> captureAdjustedTransformBounds(
+      const svg::SVGElement& element, const TransformEditState& state, bool includeOrdinaryBounds);
+  static void initializeTransformField(TransformEditState& state, TransformField field,
+                                       int matrixIndex, const char* undoLabel);
+  void beginTransformWidgetEdit(EditorApp& app, TransformField field, int matrixIndex,
+                                const char* undoLabel, double* value, const char* format,
+                                bool changed);
+  static void refreshTransformInputBaseline(double value, const char* format);
+
+  void discardCompletedTransformBaseline(const EditorApp& app);
   void discardForeignTransformEdit(const EditorApp& app);
   bool flushPendingTransformValue(EditorApp* liveApp);
   bool updateTransformFieldValue(EditorApp* liveApp, double value, bool changed, bool deactivated);
@@ -675,6 +699,8 @@ private:
   };
   std::optional<InspectorBoundsCache> inspectorBoundsCache_;
   std::optional<TransformEditState> transformEdit_;
+  /// Completed baseline available only before its queued mutation flush or the next panel render.
+  std::optional<CompletedTransformBaseline> completedTransformBaseline_;
   std::array<std::optional<Box2d>, 5> transformFieldRects_;
   std::array<std::optional<Box2d>, 6> matrixFieldRects_;
   std::optional<Box2d> strokeIncrementRect_;

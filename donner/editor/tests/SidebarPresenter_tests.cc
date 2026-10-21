@@ -2927,15 +2927,19 @@ TEST_F(SidebarPresenterImGuiTest, TransformFieldHandoffKeepsRollbackAndAcceptedU
     ASSERT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 25.5, 20.0, 5.0, 50.0));
     if (scenario.reject) {
       ImGui::GetIO().AddInputCharactersUTF8("furlongs");
+    } else if (scenario.busy) {
+      ReplaceFocusedInput(presenter, nullptr, scenario.window, "8", ImVec2(-1.0f, -1.0f), 280.0f);
     }
     RenderInspectorFrame(presenter, scenario.busy ? nullptr : &app, scenario.window);
     ASSERT_NO_FATAL_FAILURE(MoveTransformFocus(presenter, app, scenario.window,
                                                SidebarPresenter::TransformField::PositionX,
                                                scenario.busy, flush));
     const std::string beforeX = text.getText();
+    ASSERT_THAT(presenter.hasTransformEditForTesting(), testing::IsTrue());
     ReplaceFocusedInput(presenter, &app, scenario.window, "70", ImVec2(-1.0f, -1.0f), 280.0f);
+    RenderInspectorFrame(presenter, &app, scenario.window);
     flush();
-    const double expectedWidth = scenario.reject ? 100.0 : 5.0;
+    const double expectedWidth = scenario.reject ? 100.0 : (scenario.busy ? 8.0 : 5.0);
     EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 70.0, 20.0, expectedWidth, 50.0));
     ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
     RenderInspectorFrame(presenter, &app, scenario.window);
@@ -2948,12 +2952,6 @@ TEST_F(SidebarPresenterImGuiTest, TransformFieldHandoffKeepsRollbackAndAcceptedU
     flush();
     EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 25.5, 20.0, expectedWidth, 50.0));
     EXPECT_THAT(text.getText(), testing::Eq(beforeX));
-    app.redo();
-    flush();
-    EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 70.0, 20.0, expectedWidth, 50.0));
-    EXPECT_THAT(text.getText(), testing::Eq(afterX));
-    app.undo();
-    flush();
     if (!scenario.reject) {
       app.undo();
       flush();
@@ -2962,6 +2960,17 @@ TEST_F(SidebarPresenterImGuiTest, TransformFieldHandoffKeepsRollbackAndAcceptedU
     EXPECT_THAT(text.getText(), testing::Eq(source));
     EXPECT_THAT(app.document().document().source(), testing::Eq(source));
     EXPECT_THAT(app.canUndo(), testing::IsFalse());
+    if (!scenario.reject) {
+      app.redo();
+      flush();
+      EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 25.5, 20.0, expectedWidth, 50.0));
+      EXPECT_THAT(text.getText(), testing::Eq(beforeX));
+    }
+    app.redo();
+    flush();
+    EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 70.0, 20.0, expectedWidth, 50.0));
+    EXPECT_THAT(text.getText(), testing::Eq(afterX));
+    EXPECT_THAT(app.canRedo(), testing::IsFalse());
   }
 }
 
