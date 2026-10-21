@@ -776,9 +776,87 @@ TEST_F(TextEditorCoreTests, MoveHomeAndEndJumpToLineExtents) {
 TEST_F(TextEditorCoreTests, MoveTopAndBottomJumpToBufferExtents) {
   editor_.setCursorPosition(Coordinates(2, 5));
   editor_.moveBottom();
-  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(4, 0));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(4, 10));
   editor_.moveTop();
   EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 0));
+}
+
+TEST_F(TextEditorCoreTests, WordMoveRightStopsAtEachWordEndAcrossLines) {
+  editor_.setText("  <ellipse id=\"e\"/>\nnext word");
+  editor_.setCursorPosition(Coordinates(0, 5));
+
+  std::vector<Coordinates> stops;
+  for (int i = 0; i < 6; ++i) {
+    editor_.moveRight(1, /*select=*/false, /*wordMode=*/true);
+    stops.push_back(editor_.getCursorPosition());
+  }
+
+  EXPECT_THAT(stops, ElementsAre(Coordinates(0, 10), Coordinates(0, 13), Coordinates(0, 16),
+                                 Coordinates(1, 4), Coordinates(1, 9), Coordinates(1, 9)));
+}
+
+TEST_F(TextEditorCoreTests, WordMoveLeftStopsAtEachWordStartAcrossLines) {
+  editor_.setText("  <ellipse id=\"e\"/>\nnext word");
+  editor_.setCursorPosition(Coordinates(1, 2));
+
+  std::vector<Coordinates> stops;
+  for (int i = 0; i < 6; ++i) {
+    editor_.moveLeft(1, /*select=*/false, /*wordMode=*/true);
+    stops.push_back(editor_.getCursorPosition());
+  }
+
+  EXPECT_THAT(stops, ElementsAre(Coordinates(1, 0), Coordinates(0, 15), Coordinates(0, 11),
+                                 Coordinates(0, 3), Coordinates(0, 0), Coordinates(0, 0)));
+}
+
+TEST_F(TextEditorCoreTests, WordMovesTreatMultiByteCharactersAsWordCharacters) {
+  editor_.setText("caf\xC3\xA9 au");
+  editor_.setCursorPosition(Coordinates(0, 0));
+
+  std::vector<Coordinates> stops;
+  editor_.moveRight(1, /*select=*/false, /*wordMode=*/true);
+  stops.push_back(editor_.getCursorPosition());
+  editor_.moveRight(1, /*select=*/false, /*wordMode=*/true);
+  stops.push_back(editor_.getCursorPosition());
+  editor_.moveLeft(1, /*select=*/false, /*wordMode=*/true);
+  stops.push_back(editor_.getCursorPosition());
+  editor_.moveLeft(1, /*select=*/false, /*wordMode=*/true);
+  stops.push_back(editor_.getCursorPosition());
+
+  EXPECT_THAT(stops, ElementsAre(Coordinates(0, 4), Coordinates(0, 7), Coordinates(0, 5),
+                                 Coordinates(0, 0)));
+}
+
+TEST_F(TextEditorCoreTests, ShiftWordMovesExtendSelectionFromTheAnchor) {
+  editor_.setText("  <ellipse id=\"e\"/>");
+  editor_.setCursorPosition(Coordinates(0, 5));
+  editor_.interactiveStart() = Coordinates(0, 5);
+  editor_.interactiveEnd() = Coordinates(0, 5);
+
+  editor_.moveRight(1, /*select=*/true, /*wordMode=*/true);
+  EXPECT_EQ(editor_.getSelectedText(), "lipse");
+
+  // Back past the anchor to the start of the word: the selection now runs from there to the
+  // anchor.
+  editor_.moveLeft(1, /*select=*/true, /*wordMode=*/true);
+  EXPECT_EQ(editor_.getSelectedText(), "el");
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 3));
+}
+
+TEST_F(TextEditorCoreTests, ShiftMoveTopAndBottomKeepTheSelectionAnchor) {
+  editor_.setCursorPosition(Coordinates(2, 4));
+  editor_.interactiveStart() = Coordinates(2, 4);
+  editor_.interactiveEnd() = Coordinates(2, 4);
+  editor_.moveRight(2, /*select=*/true);
+  ASSERT_EQ(editor_.getSelectedText(), "45");
+
+  editor_.moveTop(/*select=*/true);
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 0));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(2, 4));
+
+  editor_.moveBottom(/*select=*/true);
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(2, 4));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(4, 10));
 }
 
 TEST_F(TextEditorCoreTests, ShiftMoveRightExtendsSelection) {
@@ -884,7 +962,7 @@ TEST_F(TextEditorCoreTests, ShiftMoveTopAndBottomCreateFullRangeSelection) {
   editor_.setCursorPosition(Coordinates(1, 3));
   editor_.moveBottom(/*select=*/true);
   EXPECT_EQ(editor_.getSelectionStart(), Coordinates(1, 3));
-  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(4, 0));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(4, 10));
 }
 
 TEST_F(TextEditorCoreTests, ShiftHomeAndEndExtendFromInteractiveSide) {

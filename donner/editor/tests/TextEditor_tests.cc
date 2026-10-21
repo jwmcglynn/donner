@@ -349,14 +349,25 @@ protected:
     io.DeltaTime = previousDeltaTime;
   }
 
-  // Presses `key` (with Ctrl when `ctrl` is set) for one frame, then holds it through a frame
-  // longer than the key-repeat delay, then releases it.
-  void PressAndHoldAcrossLongFrame(ImGuiKey key, bool ctrl) {
-    ResetKeyboardState({key}, ctrl);
-    RenderEditorFrameWithKeyboard({key}, /*characters=*/"", ctrl);
+  // Presses `key` with the given modifiers for one frame, then holds it through a frame longer
+  // than the key-repeat delay, then releases it.
+  void PressAndHoldAcrossLongFrame(ImGuiKey key, bool ctrl, bool shift = false, bool alt = false) {
+    ResetKeyboardState({key}, ctrl, shift, alt);
+    RenderEditorFrameWithKeyboard({key}, /*characters=*/"", ctrl, shift, alt);
     RenderHeldKeyFrame(kLongFrameSeconds);
-    ResetKeyboardState({key}, ctrl);
+    ResetKeyboardState({key}, ctrl, shift, alt);
   }
+
+  // Presses and releases `key` with the given modifiers through the keyboard render path. ImGui
+  // reports a held macOS Command key as `io.KeyCtrl`, so `command` drives that modifier.
+  void PressKey(ImGuiKey key, bool command = false, bool shift = false, bool option = false) {
+    ResetKeyboardState({key}, command, shift, option);
+    RenderEditorFrameWithKeyboard({key}, /*characters=*/"", command, shift, option);
+    ResetKeyboardState({key}, command, shift, option);
+  }
+
+  // Types `text` through the keyboard render path.
+  void TypeText(std::string_view text) { RenderEditorFrameWithKeyboard({}, text); }
 
   /// ImGui's default key-repeat delay and rate.
   static constexpr float kKeyRepeatDelaySeconds = 0.275f;
@@ -2482,9 +2493,8 @@ TEST_F(TextEditorTests, MoveBottomJumpsToDocumentEnd) {
   editor.setText("Line1\nLine2\nLine3");
   editor.setCursorPosition(Coordinates(0, 0));
   editor.moveBottom(false);
-  // moveBottom moves to (lastLine, 0), not end of last line
-  EXPECT_EQ(editor.getCursorPosition(), Coordinates(2, 0))
-      << "moveBottom should move cursor to (lastLine, 0)";
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(2, 5))
+      << "moveBottom should move cursor to the end of the last line";
 }
 
 TEST_F(TextEditorTests, PublicEditingWrappersForwardToCore) {
@@ -2509,7 +2519,7 @@ TEST_F(TextEditorTests, PublicEditingWrappersForwardToCore) {
   editor.moveTop(false);
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 0));
   editor.moveBottom(false);
-  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 0));
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 12));
 
   editor.setCursorPosition(Coordinates(0, 1));
   editor.selectWordUnderCursor();
@@ -4841,6 +4851,128 @@ TEST_F(TextEditorTests, HeldBackspaceAcrossLongFrameKeepsRepeating) {
 
   // Deleting one character at a time repeats like typing does: the press and one repeat.
   EXPECT_EQ(editor.getText(), "abcd");
+}
+
+TEST_F(TextEditorTests, HeldShiftRightAcrossLongFrameKeepsExtendingSelection) {
+  editor.setText("abcdef");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  PressAndHoldAcrossLongFrame(ImGuiKey_RightArrow, /*ctrl=*/false, /*shift=*/true);
+
+  EXPECT_EQ(editor.getSelectedText(), "ab");
+}
+
+TEST_F(TextEditorTests, HeldOptionRightAcrossLongFrameKeepsMovingByWord) {
+  editor.setText("one two three");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  PressAndHoldAcrossLongFrame(ImGuiKey_RightArrow, /*ctrl=*/false, /*shift=*/false, /*alt=*/true);
+
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 7));
+}
+
+// ============================================================================
+// SOURCE NAVIGATION KEYS
+//
+// macOS text-editing conventions: Home/End and Command+Left/Right move to the line start and end,
+// Option+Left/Right move by word, Command+Up/Down move to the document start and end, and Shift
+// extends the selection for each of them.
+// ============================================================================
+
+constexpr std::string_view kNavigationText = "<svg>\n  <ellipse id=\"e\"/>\n</svg>";
+
+struct NavigationKeyCase {
+  std::string_view name;
+  ImGuiKey key;
+  bool command = false;
+  bool shift = false;
+  bool option = false;
+  Coordinates expectedCursor;
+  std::string_view expectedSelection;
+};
+
+TEST_F(TextEditorTests, NavigationKeysMoveAndExtendFromInsideAWord) {
+  // Every case starts with the caret inside `<el|lipse`.
+  const NavigationKeyCase cases[] = {
+      {"Home", ImGuiKey_Home, false, false, false, Coordinates(1, 0), ""},
+      {"End", ImGuiKey_End, false, false, false, Coordinates(1, 19), ""},
+      {"Shift+Home", ImGuiKey_Home, false, true, false, Coordinates(1, 0), "  <el"},
+      {"Shift+End", ImGuiKey_End, false, true, false, Coordinates(1, 19), "lipse id=\"e\"/>"},
+      {"Shift+Left", ImGuiKey_LeftArrow, false, true, false, Coordinates(1, 4), "l"},
+      {"Shift+Right", ImGuiKey_RightArrow, false, true, false, Coordinates(1, 6), "l"},
+      {"Option+Left", ImGuiKey_LeftArrow, false, false, true, Coordinates(1, 3), ""},
+      {"Option+Right", ImGuiKey_RightArrow, false, false, true, Coordinates(1, 10), ""},
+      {"Option+Shift+Left", ImGuiKey_LeftArrow, false, true, true, Coordinates(1, 3), "el"},
+      {"Option+Shift+Right", ImGuiKey_RightArrow, false, true, true, Coordinates(1, 10), "lipse"},
+      {"Command+Left", ImGuiKey_LeftArrow, true, false, false, Coordinates(1, 0), ""},
+      {"Command+Right", ImGuiKey_RightArrow, true, false, false, Coordinates(1, 19), ""},
+      {"Command+Shift+Left", ImGuiKey_LeftArrow, true, true, false, Coordinates(1, 0), "  <el"},
+      {"Command+Shift+Right", ImGuiKey_RightArrow, true, true, false, Coordinates(1, 19),
+       "lipse id=\"e\"/>"},
+      {"Command+Up", ImGuiKey_UpArrow, true, false, false, Coordinates(0, 0), ""},
+      {"Command+Down", ImGuiKey_DownArrow, true, false, false, Coordinates(2, 6), ""},
+      {"Command+Shift+Up", ImGuiKey_UpArrow, true, true, false, Coordinates(0, 0),
+       "<svg>\n  <el"},
+      {"Command+Shift+Down", ImGuiKey_DownArrow, true, true, false, Coordinates(2, 6),
+       "lipse id=\"e\"/>\n</svg>"},
+      {"Command+Home", ImGuiKey_Home, true, false, false, Coordinates(0, 0), ""},
+      {"Command+End", ImGuiKey_End, true, false, false, Coordinates(2, 6), ""},
+      {"Page Down", ImGuiKey_PageDown, false, false, false, Coordinates(2, 5), ""},
+      {"Shift+Page Up", ImGuiKey_PageUp, false, true, false, Coordinates(0, 5), "\n  <el"},
+  };
+
+  for (const NavigationKeyCase& navigation : cases) {
+    SCOPED_TRACE(navigation.name);
+    editor.setText(kNavigationText);
+    editor.setCursorPosition(Coordinates(1, 5));
+    editor.clearSelection();
+
+    PressKey(navigation.key, navigation.command, navigation.shift, navigation.option);
+
+    EXPECT_EQ(editor.getCursorPosition(), navigation.expectedCursor);
+    EXPECT_EQ(editor.getSelectedText(), navigation.expectedSelection);
+    EXPECT_EQ(editor.getText(), kNavigationText);
+  }
+}
+
+// The reported sequence: each navigation key is followed by a typed digit, which must land where
+// the key moved the caret.
+TEST_F(TextEditorTests, TypingAfterNavigationKeysLandsAtTheNewCaret) {
+  editor.setText("<svg>\n  <ellipse id=\"e\"/>\n  <rect/>\n</svg>");
+  editor.setCursorPosition(Coordinates(1, 5));
+
+  PressKey(ImGuiKey_Home);
+  TypeText("1");
+  for (int i = 0; i < 3; ++i) {
+    PressKey(ImGuiKey_RightArrow, /*command=*/false, /*shift=*/true);
+  }
+  TypeText("2");
+  PressKey(ImGuiKey_RightArrow, /*command=*/false, /*shift=*/false, /*option=*/true);
+  TypeText("3");
+  PressKey(ImGuiKey_RightArrow, /*command=*/true);
+  TypeText("4");
+  PressKey(ImGuiKey_DownArrow);
+  TypeText("5");
+
+  EXPECT_EQ(editor.getText(), "<svg>\n12ellipse3 id=\"e\"/>4\n  <rect/>5\n</svg>");
+}
+
+// With macOS behaviors enabled, ImGui reports the Command key as `io.KeyCtrl`; this drives the key
+// the way a Mac keyboard delivers it rather than through the remapped modifier.
+TEST_F(TextEditorTests, MacCommandKeyMovesToLineEnd) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.ConfigMacOSXBehaviors = true;
+  editor.setText(kNavigationText);
+  editor.setCursorPosition(Coordinates(1, 5));
+  ResetKeyboardState({ImGuiKey_RightArrow});
+
+  io.AddKeyEvent(ImGuiMod_Super, true);
+  RenderEditorFrameWithKeyboard({ImGuiKey_RightArrow});
+  io.AddKeyEvent(ImGuiMod_Super, false);
+  ResetKeyboardState({ImGuiKey_RightArrow});
+
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 19));
+  EXPECT_EQ(editor.getText(), kNavigationText);
 }
 
 // ============================================================================
