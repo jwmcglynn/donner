@@ -2783,7 +2783,10 @@ TEST(EditorShellTest, LeavingPreviewRestoresAnAnimatedUseToItsAuthoredPosition) 
       animatedTarget = frame->pointerTargetAt(frame->viewport().documentToScreen(animatedPoint));
     }
   }
-  ASSERT_EQ(animatedTarget, use) << "clicking the <use> in Preview starts its animation";
+  ASSERT_THAT(animatedTarget, testing::Optional(testing::AllOf(
+                                  testing::Property("id", &svg::SVGElement::id, testing::Eq("u")),
+                                  testing::Eq(*use))))
+      << "clicking the <use> in Preview starts its animation";
 
   ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
   RunShellFrame(window, shell);
