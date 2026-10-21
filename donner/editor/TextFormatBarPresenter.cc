@@ -9,14 +9,20 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/Box.h"
 #include "donner/base/FormatNumber.h"
+#include "donner/base/Length.h"
 #include "donner/base/RcString.h"
-#include "donner/base/parser/NumberParser.h"
+#include "donner/base/RelativeLengthMetrics.h"
+#include "donner/base/SmallVector.h"
 #include "donner/editor/AttachedNumericStepper.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/core/FontStyle.h"
+#include "donner/svg/core/TextDecoration.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
 
@@ -40,16 +46,6 @@ bool ContainsCaseInsensitive(std::string_view haystack, std::string_view needle)
   auto it = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(),
                         [&](char a, char b) { return lower(a) == lower(b); });
   return it != haystack.end();
-}
-
-/// Parse a leading number from an attribute value (e.g. "16", "16px"). Returns
-/// nullopt when no number is present.
-std::optional<double> ParseLeadingNumber(std::string_view value) {
-  const auto result = ::donner::parser::NumberParser::Parse(value);
-  if (result.hasError()) {
-    return std::nullopt;
-  }
-  return result.result().number;
 }
 
 /// Draws the loaded preview or its pending/failure label inside the current font row.
@@ -122,7 +118,6 @@ bool RenderFontFamilyRow(const FormatBarFontFamily& family, bool selected,
 
 using internal::AssignBuffer;
 using internal::ContainsCaseInsensitive;
-using internal::ParseLeadingNumber;
 
 bool FormatBarShouldShow(bool hasSingleTextSelection, bool textEditingActive) {
   return hasSingleTextSelection || textEditingActive;
@@ -132,34 +127,38 @@ void ReadTextFormatState(const svg::SVGElement& text, FormatBarState* state) {
   if (state == nullptr) {
     return;
   }
-  // §concurrent-dom: reading attributes (raw ECS access) from the UI thread
-  // needs a scoped read access while the live editor keeps the document in
-  // ThreadingMode::ConcurrentDom, mirroring TextInspectorPanel.
-  text.withReadAccess([&](svg::DocumentReadAccess&, EntityHandle) {
-    if (auto family = text.getAttribute("font-family")) {
-      state->fontFamily = std::string(std::string_view(*family));
-    } else {
-      state->fontFamily.clear();
-    }
-
-    state->hasFontSize = false;
-    state->fontSize = 0.0f;
-    if (auto size = text.getAttribute("font-size")) {
-      if (auto parsed = ParseLeadingNumber(std::string_view(*size))) {
-        state->fontSize = static_cast<float>(*parsed);
-        state->hasFontSize = true;
-      }
-    }
-
-    const auto weight = text.getAttribute("font-weight");
-    state->bold = weight.has_value() && std::string_view(*weight) == "bold";
-
-    const auto style = text.getAttribute("font-style");
-    state->italic = style.has_value() && std::string_view(*style) == "italic";
-
-    const auto decoration = text.getAttribute("text-decoration");
-    state->underline = decoration.has_value() && std::string_view(*decoration) == "underline";
+  // Hold write access while reading: the returned style lives in the document
+  // registry, which a concurrent restyle may otherwise replace mid-read.
+  text.withWriteAccess([&](svg::DocumentWriteAccess&, EntityHandle) {
+    ReadTextFormatState(text.getComputedStyle(), state);
   });
+}
+
+void ReadTextFormatState(const svg::PropertyRegistry& style, FormatBarState* state) {
+  if (state == nullptr) {
+    return;
+  }
+
+  // `get()` returns the value by copy; keep it alive for the loop.
+  const SmallVector<RcString, 1> families = style.fontFamily.get().value();
+  state->fontFamily.clear();
+  for (const RcString& family : families) {
+    if (!state->fontFamily.empty()) {
+      state->fontFamily += ", ";
+    }
+    state->fontFamily += std::string_view(family);
+  }
+
+  const double fontSize =
+      style.fontSize.get().value().toPixels(Box2d(), FontMetrics(), Lengthd::Extent::Mixed);
+  state->hasFontSize = std::isfinite(fontSize);
+  state->fontSize = state->hasFontSize ? static_cast<float>(fontSize) : 0.0f;
+
+  // 700 is the `bold` keyword; lighter weights do not light up the Bold toggle.
+  state->bold = style.fontWeight.get().value() >= 700;
+  state->italic = style.fontStyle.get().value() == svg::FontStyle::Italic;
+  state->underline =
+      svg::hasFlag(style.textDecoration.get().value(), svg::TextDecoration::Underline);
 }
 
 bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const FormatBarState& state,

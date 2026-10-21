@@ -146,14 +146,13 @@ TEST(TextFormatBarPresenterActionsTest, ReadsDefaultsWhenStyleAttributesAbsent) 
   FormatBarState state;
   ReadTextFormatState(*text, &state);
 
-  EXPECT_TRUE(state.fontFamily.empty());
-  EXPECT_FALSE(state.hasFontSize);
-  EXPECT_FALSE(state.bold);
-  EXPECT_FALSE(state.italic);
-  EXPECT_FALSE(state.underline);
+  // With nothing specified the bar shows the initial values the text renders
+  // with: the `serif` family and the 12px `medium` size.
+  EXPECT_THAT(state, FormatStateIs("serif", 12.0f, /*bold=*/false, /*italic=*/false,
+                                   /*underline=*/false));
 }
 
-TEST(TextFormatBarPresenterActionsTest, ReadsUnparseableFontSizeAsAbsent) {
+TEST(TextFormatBarPresenterActionsTest, ReadsKeywordFontSizeAsComputedPixels) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -165,9 +164,9 @@ TEST(TextFormatBarPresenterActionsTest, ReadsUnparseableFontSizeAsAbsent) {
   FormatBarState state;
   ReadTextFormatState(*text, &state);
 
-  // "large" has no leading number, so the size control shows no resolved size.
-  EXPECT_FALSE(state.hasFontSize);
-  EXPECT_FLOAT_EQ(state.fontSize, 0.0f);
+  // The `large` keyword resolves to 1.2 times the 12px `medium` size.
+  EXPECT_THAT(state, FormatStateIs("serif", 14.4f, /*bold=*/false, /*italic=*/false,
+                                   /*underline=*/false));
 }
 
 TEST(TextFormatBarPresenterActionsTest, ReadsNonMatchingStyleValuesAsUnset) {

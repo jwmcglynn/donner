@@ -248,8 +248,8 @@ private:
   [[nodiscard]] std::optional<svg::SVGElement> querySelector(std::string_view selector);
   [[nodiscard]] std::optional<Box2d> elementWorldBounds(const svg::SVGElement& element) const;
   [[nodiscard]] nlohmann::json selectedElementJson() const;
-  /// Text format bar state for a single selected `<text>`, read the way the editor shell reads
-  /// it, or null for any other selection.
+  /// Text format bar state for a single selected `<text>`, read from its computed style (computing
+  /// it if the renderer has not), or null for any other selection.
   [[nodiscard]] nlohmann::json textFormatJson() const;
 
   [[nodiscard]] bool ensureDocumentLoaded(std::string* error) const;

@@ -3648,32 +3648,51 @@ bool EditorShell::formatBarShouldShow() const {
   const std::vector<svg::SVGElement>& selection = app_.selectedElements();
   bool hasSingleTextSelection = false;
   if (selection.size() == 1u && app_.hasDocument()) {
+    const bool snapshotShowsBar =
+        formatBarSnapshotSelection_ == selection.front() && formatBarSelectionSnapshot_.visible;
     if (auto access = app_.document().document().tryReadAccess(); access.has_value()) {
-      hasSingleTextSelection = selection.front().type() == svg::ElementType::Text;
-    } else {
+      // Match refreshFormatBarSnapshot: the bar shows once the text has a
+      // computed style, and keeps showing its snapshot while an edit has
+      // dropped that style until the next render, so the region the bar
+      // reserves for input is always the region it draws.
       hasSingleTextSelection =
-          formatBarSnapshotSelection_ == selection.front() && formatBarSelectionSnapshot_.visible;
+          selection.front().type() == svg::ElementType::Text &&
+          (selection.front().computedStyleIfPresent() != nullptr || snapshotShowsBar);
+    } else {
+      hasSingleTextSelection = snapshotShowsBar;
     }
   }
   const bool textEditingActive = activeTool_ == ActiveTool::Text && textTool_.isEditing();
   return FormatBarShouldShow(hasSingleTextSelection, textEditingActive);
 }
 
-FormatBarState EditorShell::computeFormatBarState() {
-  const std::vector<svg::SVGElement>& selection = app_.selectedElements();
-  const std::optional<svg::SVGElement> singleSelection =
-      selection.size() == 1u ? std::optional<svg::SVGElement>(selection.front()) : std::nullopt;
+void EditorShell::refreshFormatBarSnapshot(const std::optional<svg::SVGElement>& singleSelection) {
   if (!singleSelection.has_value() || !app_.hasDocument()) {
     formatBarSnapshotSelection_ = singleSelection;
     formatBarSelectionSnapshot_ = {};
   } else if (auto access = app_.document().document().tryReadAccess(); access.has_value()) {
-    formatBarSnapshotSelection_ = singleSelection;
-    formatBarSelectionSnapshot_ = {};
-    formatBarSelectionSnapshot_.visible = singleSelection->type() == svg::ElementType::Text;
-    if (formatBarSelectionSnapshot_.visible) {
-      ReadTextFormatState(*singleSelection, &formatBarSelectionSnapshot_);
+    // Read the style the renderer already computed: computing it here would
+    // need write access, which this read scope cannot provide. Until a
+    // just-selected text has a computed style, keep the previous snapshot.
+    const bool isText = singleSelection->type() == svg::ElementType::Text;
+    const svg::PropertyRegistry* style =
+        isText ? singleSelection->computedStyleIfPresent() : nullptr;
+    if (!isText || style != nullptr) {
+      formatBarSnapshotSelection_ = singleSelection;
+      formatBarSelectionSnapshot_ = {};
+      formatBarSelectionSnapshot_.visible = isText;
+      if (style != nullptr) {
+        ReadTextFormatState(*style, &formatBarSelectionSnapshot_);
+      }
     }
   }
+}
+
+FormatBarState EditorShell::computeFormatBarState() {
+  const std::vector<svg::SVGElement>& selection = app_.selectedElements();
+  const std::optional<svg::SVGElement> singleSelection =
+      selection.size() == 1u ? std::optional<svg::SVGElement>(selection.front()) : std::nullopt;
+  refreshFormatBarSnapshot(singleSelection);
 
   FormatBarState state = singleSelection == formatBarSnapshotSelection_
                              ? formatBarSelectionSnapshot_
