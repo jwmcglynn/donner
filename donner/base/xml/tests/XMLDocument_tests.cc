@@ -1783,6 +1783,26 @@ TEST_F(XMLDocumentTests, RenameDoesNotIgnoreChangedRetainedText) {
     EXPECT_THAT(retained.value(), Optional(Eq("changed")));
   }
 }
+TEST_F(XMLDocumentTests, RenameDoesNotIgnoreRemovedRetainedText) {
+  for (const bool cdata : {false, true}) {
+    SCOPED_TRACE(cdata ? "CDATA" : "text");
+    const std::string first = cdata ? "<![CDATA[first]]>" : "first";
+    const std::string second = cdata ? "<![CDATA[second]]>" : "second";
+    XMLDocument doc = ParseDocument("<svg>" + first + "<peer/>" + second + "<g><rect/></g></svg>",
+                                    XMLParser::Options::ParseAll());
+    XMLNode svg = doc.root().firstChild().value();
+    XMLNode removed = svg.firstChild().value();
+    XMLNode retained = removed.nextSibling()->nextSibling().value();
+    ASSERT_THAT(retained.value(), Optional(Eq("second")));
+    removed.remove();
+    // Removal alone must not be mistaken for parser/projection filtering.
+
+    const auto opening = CompleteClosingFirstGroupRename(doc);
+    EXPECT_THAT(opening.applied, testing::IsTrue());
+    EXPECT_THAT(doc.sourceDiagnostic(), Optional(testing::_));
+    EXPECT_THAT(retained.value(), Optional(Eq("second")));
+  }
+}
 
 // The incremental reparse keeps comments that the initial parse dropped, so a renamed element's
 // children can differ in shape from its reparse. Children with matching ids still keep their nodes.
