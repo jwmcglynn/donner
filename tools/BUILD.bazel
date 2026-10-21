@@ -353,6 +353,7 @@ py_test(
         "//tools/ci:editor_wasm_stage.py",
     ],
     deps = [
+        ":bcr_preflight",
         ":test_timing",
         "@rules_python//python/runfiles",
     ],
@@ -426,6 +427,24 @@ py_test(
 py_library(
     name = "bcr_source",
     srcs = ["bcr_source.py"],
+)
+
+# The BCR Preflight workflow's step commands: scope selection, registry admission, the consumer
+# closure audit, the release CLI builds and their verification.
+py_library(
+    name = "bcr_preflight",
+    srcs = ["bcr_preflight.py"],
+)
+
+py_test(
+    name = "bcr_preflight_tests",
+    size = "small",
+    srcs = ["bcr_preflight_tests.py"],
+    deps = [
+        ":bcr_preflight",
+        ":test_executable_fixtures",
+        ":test_timing",
+    ],
 )
 
 py_test(

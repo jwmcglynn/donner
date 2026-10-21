@@ -68,45 +68,11 @@ jobs:
       # and every other pull request run the slim check: this archive, the
       # registry admission check and one Ubuntu consumer on the newest Bazel,
       # so archive and basic consumer breakage still shows at once. A diff
-      # that cannot be listed selects the full matrix.
+      # that cannot be listed selects the full matrix. tools/bcr_preflight.py
+      # lists the release and packaging inputs.
       - name: Select the preflight scope
         id: scope
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          full_matrix=true
-          if [[ "$EVENT_NAME" == "push" ]]; then
-            full_matrix=false
-          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
-            if diff_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")" &&
-                changed="$(git -c core.quotePath=false diff --no-renames --name-only \
-                  "$diff_base" "$HEAD_SHA")" &&
-                [[ -n "$changed" ]]; then
-              full_matrix=false
-              while IFS= read -r path; do
-                case "$path" in
-                  MODULE.bazel|MODULE.bazel.lock|.bazelversion|.bazelrc|.bcr/*|\
-                  examples/bazel_consumer/*|third_party/licenses/*|third_party/bazel/*|\
-                  third_party/BUILD*|third_party/*.BUILD|third_party/*.bzl|\
-                  third_party/patches/*|build_defs/licenses.bzl|build_defs/dep_audit.bzl|\
-                  tools/BUILD.bazel|tools/bcr_*|tools/release_*|tools/notice*|\
-                  tools/render_notice*|tools/default_notice*|tools/ci/BUILD.bazel|\
-                  tools/ci/release_*|.github/workflows/bcr_preflight.yml|\
-                  .github/workflows/publish_bcr.yml|.github/workflows/release.yml)
-                    echo "Full preflight matrix selected by $path"
-                    full_matrix=true
-                    break
-                    ;;
-                esac
-              done <<< "$changed"
-            else
-              echo "Could not list the pull request's changes; selecting the full matrix."
-            fi
-          fi
-          echo "full_matrix=$full_matrix" >> "$GITHUB_OUTPUT"
+        run: python3 -B -m tools.bcr_preflight scope
 
       - name: Prepare committed source archive
         id: archive
@@ -149,14 +115,7 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ steps.archive.outputs.source_commit }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          python3 -m venv "$RUNNER_TEMP/bcr-validator"
-          "$RUNNER_TEMP/bcr-validator/bin/pip" install --require-hashes \
-            -r ../upstream-bcr/tools/requirements_lock.txt
-          "$RUNNER_TEMP/bcr-validator/bin/python" -B -m tools.bcr_admission \
-            --upstream ../upstream-bcr --registry "$RUNNER_TEMP/donner-bcr/registry" \
-            --artifacts "$RUNNER_TEMP/donner-bcr/artifacts" --commit "$SOURCE_COMMIT" \
-            --report "$RUNNER_TEMP/donner-bcr/admission.json"
+        run: python3 -B -m tools.bcr_preflight admission --upstream ../upstream-bcr
 
       - name: Preserve candidate source bytes
         uses: actions/upload-artifact@v7
@@ -216,37 +175,10 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.entry_artifact }}
           path: ${{ runner.temp }}/donner-bcr/entry
+      # Test and build from a consumer module, then audit the configured
+      # closure of the Donner libraries it built (tools/bcr_preflight.py).
       - name: Exercise the archive through registry resolution
-        run: |
-          python3 -B -m tools.bcr_source consumer --artifacts "$RUNNER_TEMP/donner-bcr/artifacts" \
-            --registry "$RUNNER_TEMP/donner-bcr/entry/registry" \
-            --output "$RUNNER_TEMP/donner-bcr/consumer-test" --commit "$SOURCE_COMMIT"
-          cd "$RUNNER_TEMP/donner-bcr/consumer-test/consumer"
-          bazelisk test --lockfile_mode=off \
-            --registry="file://${RUNNER_TEMP}/donner-bcr/consumer-test/registry" \
-            --registry=https://bcr.bazel.build //:all
-          bazelisk build --lockfile_mode=off \
-            --registry="file://${RUNNER_TEMP}/donner-bcr/consumer-test/registry" \
-            --registry=https://bcr.bazel.build \
-            @donner//donner/base:base @donner//donner/css:css \
-            @donner//donner/svg:svg @donner//donner/svg/renderer:renderer
-
-          # Audit the configured closure of the Donner libraries built above, not the consumer
-          # test, whose GoogleTest/pixelmatch dev deps must not mask Donner's production
-          # dependency boundary. The audit rejects development-only, Geode, WebGPU and test
-          # targets and any Rust rule, source, toolchain or crate, requires a cc_toolchain rule
-          # and a C++ exec tool outside the libraries' configuration, then requires Rust rows
-          # appended to this query output to be rejected.
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" = "$SOURCE_COMMIT"
-          bazelisk cquery --lockfile_mode=off \
-            --registry="file://${RUNNER_TEMP}/donner-bcr/consumer-test/registry" \
-            --registry=https://bcr.bazel.build \
-            'deps(@donner//donner/base:base + @donner//donner/css:css +
-              @donner//donner/svg:svg + @donner//donner/svg/renderer:renderer)' \
-            --output=label_kind > "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"
-          python3 -B "$GITHUB_WORKSPACE/tools/bcr_dependency_closure.py" \
-            --module "$GITHUB_WORKSPACE/MODULE.bazel" \
-            --labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"
+        run: python3 -B -m tools.bcr_preflight consumer
 
   cli-linux:
     needs: prepare
@@ -264,24 +196,10 @@ jobs:
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
       - name: Install CLI build dependencies
         run: sudo apt-get install -y libncurses-dev
+      # Resolve, prove the lockfile, test NOTICE coverage, then package
+      # (tools/bcr_preflight.py).
       - name: Build and bind the Linux CLI to the preflight candidate
-        run: |
-          # The repository ignores MODULE.bazel.lock. Resolve once, then prove
-          # the build is complete under that generated, retained lockfile.
-          # The compiler identity probe shares the CLI's configuration, so provenance
-          # names the compiler Bazel used rather than the runner's default c++.
-          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg //tools/ci:release_svg_notice \
-            //tools/ci:release_compiler_identity
-          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg //tools/ci:release_svg_notice \
-            //tools/ci:release_compiler_identity
-          # The NOTICE must attribute every third-party component in this configuration's closure.
-          bazelisk test --lockfile_mode=error -c opt //tools/ci:release_svg_notice_coverage
-          python3 -B -m tools.release_cli package \
-            --platform linux-x86-64 --binary bazel-bin/donner/svg/tool/donner-svg \
-            --notice bazel-bin/third_party/licenses/notice_cli.txt \
-            --compiler-probe bazel-bin/tools/ci/release_compiler_identity \
-            --output "$RUNNER_TEMP/donner-cli-linux" --commit "$SOURCE_COMMIT" \
-            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+        run: python3 -B -m tools.bcr_preflight cli --platform linux-x86-64
       - uses: actions/upload-artifact@v7
         with:
           name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
@@ -316,19 +234,7 @@ jobs:
         shell: bash
         run: tools/ci_check_runner_disk.sh
       - name: Build and bind the macOS CLI to the preflight candidate
-        run: |
-          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg //tools/ci:release_svg_notice \
-            //tools/ci:release_compiler_identity
-          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg //tools/ci:release_svg_notice \
-            //tools/ci:release_compiler_identity
-          # The NOTICE must attribute every third-party component in this configuration's closure.
-          bazelisk test --lockfile_mode=error -c opt //tools/ci:release_svg_notice_coverage
-          python3 -B -m tools.release_cli package \
-            --platform darwin-arm64 --binary bazel-bin/donner/svg/tool/donner-svg \
-            --notice bazel-bin/third_party/licenses/notice_cli.txt \
-            --compiler-probe bazel-bin/tools/ci/release_compiler_identity \
-            --output "$RUNNER_TEMP/donner-cli-macos" --commit "$SOURCE_COMMIT" \
-            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+        run: python3 -B -m tools.bcr_preflight cli --platform darwin-arm64
       - uses: actions/upload-artifact@v7
         with:
           name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
@@ -369,24 +275,9 @@ jobs:
           path: ${{ runner.temp }}/donner-bcr/cli-macos
       - name: Explain missing CLI artifacts
         if: failure() && (steps.cli-linux-artifact.outcome == 'failure' || steps.cli-macos-artifact.outcome == 'failure')
-        env:
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          if [ "$RUN_ATTEMPT" -gt 1 ]; then
-            echo "::error::If the download error above is 'Artifact not found', this attempt reran only failed jobs, and the CLI artifacts are bound to the attempt that built them; rerun all jobs."
-          fi
-          echo "::error::Otherwise the download failed for another reason; see the error above and the GitHub status page before rerunning."
-          exit 1
+        run: python3 -B -m tools.bcr_preflight explain-missing-cli
       - name: Verify the exact preflight source and CLI bytes
-        run: |
-          python3 -B -m tools.bcr_source verify \
-            --artifacts "$RUNNER_TEMP/donner-bcr/source" --commit "$SOURCE_COMMIT"
-          python3 -B -m tools.release_cli verify \
-            --artifacts "$RUNNER_TEMP/donner-bcr/cli-linux" --platform linux-x86-64 \
-            --commit "$SOURCE_COMMIT" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
-          python3 -B -m tools.release_cli verify \
-            --artifacts "$RUNNER_TEMP/donner-bcr/cli-macos" --platform darwin-arm64 \
-            --commit "$SOURCE_COMMIT" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+        run: python3 -B -m tools.bcr_preflight verify --with-source
       - name: Attest the preflight build artifacts
         uses: actions/attest-build-provenance@v3.2.0
         with:
@@ -426,22 +317,9 @@ jobs:
           path: ${{ runner.temp }}/donner-bcr/cli-macos
       - name: Explain missing CLI artifacts
         if: failure() && (steps.cli-linux-artifact.outcome == 'failure' || steps.cli-macos-artifact.outcome == 'failure')
-        env:
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          if [ "$RUN_ATTEMPT" -gt 1 ]; then
-            echo "::error::If the download error above is 'Artifact not found', this attempt reran only failed jobs, and the CLI artifacts are bound to the attempt that built them; rerun all jobs."
-          fi
-          echo "::error::Otherwise the download failed for another reason; see the error above and the GitHub status page before rerunning."
-          exit 1
+        run: python3 -B -m tools.bcr_preflight explain-missing-cli
       - name: Verify both CLI artifacts from this preflight attempt
-        run: |
-          python3 -B -m tools.release_cli verify \
-            --artifacts "$RUNNER_TEMP/donner-bcr/cli-linux" --platform linux-x86-64 \
-            --commit "$SOURCE_COMMIT" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
-          python3 -B -m tools.release_cli verify \
-            --artifacts "$RUNNER_TEMP/donner-bcr/cli-macos" --platform darwin-arm64 \
-            --commit "$SOURCE_COMMIT" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+        run: python3 -B -m tools.bcr_preflight verify
       - name: Bind the source archive to the completed test matrix
         run: |
           python3 -B -m tools.bcr_source qualify --artifacts "$RUNNER_TEMP/donner-bcr/artifacts" \

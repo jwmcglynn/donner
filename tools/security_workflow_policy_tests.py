@@ -1,17 +1,20 @@
 """Pins review-driven security workflow selection and scheduling policy."""
 
 from collections import Counter
+import dataclasses
 import json
 import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
 
 from python.runfiles import runfiles
+from tools import bcr_preflight
 from tools import test_timing
 
 
@@ -702,6 +705,35 @@ def _step_body(workflow, name):
     body = workflow.split(marker, 1)[1]
     next_step = re.search(r"^      - name:", body, re.MULTILINE)
     return body[: next_step.start()] if next_step else body
+
+
+# The BCR preflight lanes' commands, pinned for a fixed layout, commit and workspace.
+_BCR_LAYOUT = bcr_preflight.Layout("/temp")
+_BCR_COMMIT = "c" * 40
+
+
+def _bcr_consumer_plan():
+    return bcr_preflight.consumer_plan(_BCR_LAYOUT, "/workspace", _BCR_COMMIT)
+
+
+def _bcr_preflight_commands(job):
+    """(step name, subcommand) of each step that runs tools/bcr_preflight.py, in order."""
+    commands = []
+    for step in _steps(job):
+        run = _step_key(step, "run", 8)
+        if run and "bcr_preflight" in run:
+            prefix = "python3 -B -m tools.bcr_preflight "
+            commands.append((_step_key(step, "name", 8),
+                             run[len(prefix):] if run.startswith(prefix) else run))
+    return commands
+
+
+def _run_bcr_preflight(args, environ, cwd=None):
+    """Runs the committed tools/bcr_preflight.py with only the given environment."""
+    environ = dict({"PATH": os.environ.get("PATH", os.defpath)}, **environ)
+    return subprocess.run([sys.executable, "-B", bcr_preflight.__file__, *args], cwd=cwd,
+                          env=environ, text=True, capture_output=True, check=False,
+                          timeout=test_timing.STALL_GUARD_SECONDS)
 
 
 def _run_bodies(workflow):
@@ -2317,29 +2349,69 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("workflow_dispatch:", preflight)
         self.assertNotIn("secrets.", preflight)
         self.assertNotIn("contents: write", preflight)
-        self.assertIn("tools.bcr_admission", preflight)
         self.assertIn("needs: [prepare, consumer, cli-linux, cli-macos]", preflight)
-        self.assertEqual(preflight.count("tools.release_cli package"), 2)
-        self.assertEqual(preflight.count("tools.release_cli verify"), 4)
+        jobs = _jobs(preflight)
+        # Each step runs one tools/bcr_preflight.py subcommand, whose commands are pinned below.
+        self.assertEqual(_bcr_preflight_commands(jobs["prepare"]), [
+            ("Select the preflight scope", "scope"),
+            ("Validate registry admission against the candidate bytes",
+             "admission --upstream ../upstream-bcr")])
+        self.assertEqual(_bcr_preflight_commands(jobs["consumer"]), [
+            ("Exercise the archive through registry resolution", "consumer")])
+        self.assertEqual(_bcr_preflight_commands(jobs["cli-linux"]), [
+            ("Build and bind the Linux CLI to the preflight candidate",
+             "cli --platform linux-x86-64")])
+        self.assertEqual(_bcr_preflight_commands(jobs["cli-macos"]), [
+            ("Build and bind the macOS CLI to the preflight candidate",
+             "cli --platform darwin-arm64")])
+        self.assertEqual(_bcr_preflight_commands(jobs["attest-artifacts"]), [
+            ("Explain missing CLI artifacts", "explain-missing-cli"),
+            ("Verify the exact preflight source and CLI bytes", "verify --with-source")])
+        self.assertEqual(_bcr_preflight_commands(jobs["qualify"]), [
+            ("Explain missing CLI artifacts", "explain-missing-cli"),
+            ("Verify both CLI artifacts from this preflight attempt", "verify")])
+        admission = [command.argv for command in bcr_preflight.admission_plan(
+            _BCR_LAYOUT, "../upstream-bcr", _BCR_COMMIT)]
+        self.assertEqual(admission[1][:4], ("/temp/bcr-validator/bin/pip", "install",
+                                            "--require-hashes", "-r"))
+        self.assertEqual(admission[-1][:5], ("/temp/bcr-validator/bin/python", "-B", "-m",
+                                             "tools.bcr_admission", "--upstream"))
         # Each CLI ships the NOTICE built with it, after the closure coverage test passes. The
         # compiler identity probe is built in the same invocations, so its configuration (and
         # therefore its compiler) is the CLI's.
-        for mode in ("update", "error"):
-            self.assertEqual(preflight.count(
-                f"bazelisk build --lockfile_mode={mode} -c opt "
-                "//tools/ci:release_svg //tools/ci:release_svg_notice \\\n"
-                "            //tools/ci:release_compiler_identity\n"), 2)
-        self.assertEqual(preflight.count(
-            "--compiler-probe bazel-bin/tools/ci/release_compiler_identity \\\n"), 2)
-        self.assertNotIn("c++ --version", preflight)
-        self.assertEqual(preflight.count(
-            "bazelisk test --lockfile_mode=error -c opt //tools/ci:release_svg_notice_coverage\n"), 2)
-        self.assertEqual(preflight.count(
-            "--notice bazel-bin/third_party/licenses/notice_cli.txt \\\n"), 2)
-        for job_name in ("cli-linux", "cli-macos"):
-            job = preflight.split("\n  %s:\n" % job_name, 1)[1].split("\n  cli-macos:\n", 1)[0]
-            self.assertLess(job.index("//tools/ci:release_svg_notice_coverage"),
-                            job.index("tools.release_cli package"))
+        targets = ("//tools/ci:release_svg", "//tools/ci:release_svg_notice",
+                   "//tools/ci:release_compiler_identity")
+        for platform in ("linux-x86-64", "darwin-arm64"):
+            with self.subTest(platform=platform):
+                commands = [command.argv for command in bcr_preflight.cli_plan(
+                    _BCR_LAYOUT, platform, _BCR_COMMIT, "7", "2")]
+                self.assertEqual(commands[:3], [
+                    ("bazelisk", "build", "--lockfile_mode=update", "-c", "opt", *targets),
+                    ("bazelisk", "build", "--lockfile_mode=error", "-c", "opt", *targets),
+                    ("bazelisk", "test", "--lockfile_mode=error", "-c", "opt",
+                     "//tools/ci:release_svg_notice_coverage")])
+                self.assertEqual(len(commands), 4, "the package step must be the last command")
+                package = " ".join(commands[3])
+                self.assertTrue(package.startswith(
+                    "python3 -B -m tools.release_cli package --platform %s " % platform))
+                for argument in ("--binary bazel-bin/donner/svg/tool/donner-svg",
+                                 "--notice bazel-bin/third_party/licenses/notice_cli.txt",
+                                 "--compiler-probe bazel-bin/tools/ci/release_compiler_identity",
+                                 "--commit %s --run-id 7 --attempt 2" % _BCR_COMMIT):
+                    self.assertIn(" %s " % argument, package + " ")
+                self.assertNotIn("c++", package)
+        for with_source, count in ((True, 3), (False, 2)):
+            commands = [" ".join(command.argv) for command in bcr_preflight.verify_plan(
+                _BCR_LAYOUT, _BCR_COMMIT, "7", "2", with_source)]
+            self.assertEqual(len(commands), count)
+            self.assertEqual(with_source, commands[0].startswith(
+                "python3 -B -m tools.bcr_source verify --artifacts /temp/donner-bcr/source "
+                "--commit " + _BCR_COMMIT))
+            for platform, short in (("linux-x86-64", "linux"), ("darwin-arm64", "macos")):
+                self.assertIn(
+                    "python3 -B -m tools.release_cli verify --artifacts /temp/donner-bcr/cli-%s "
+                    "--platform %s --commit %s --run-id 7 --attempt 2"
+                    % (short, platform, _BCR_COMMIT), commands)
         for platform in ("linux_x86_64", "darwin_arm64"):
             self.assertIn(f"/donner-svg_{platform}.NOTICE.txt\n", preflight)
         self.assertIn("actions/attest-build-provenance@", preflight)
@@ -2349,6 +2421,44 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("retention-days: 90", preflight)
         self.assertIn("donner-bcr-qualified-${{ github.run_attempt }}", preflight)
         self.assertIn("tools.bcr_source qualify", preflight)
+
+    def test_bcr_preflight_steps_share_the_workflow_artifact_layout(self):
+        # tools/bcr_preflight.py finds its inputs and writes its outputs under the runner's
+        # temporary directory. The workflow's own upload, download and attestation steps must
+        # name the same directories, or a step would verify or ship other bytes.
+        preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        jobs = _jobs(preflight)
+        temp = bcr_preflight.Layout("${{ runner.temp }}")
+        shell = bcr_preflight.Layout("$RUNNER_TEMP")
+        expected = {
+            "prepare": ['--output "%s"' % shell.artifacts, '--output "%s"' % shell.registry,
+                        "local-registry: " + temp.registry,
+                        "local-artifact-path: " + temp.artifacts,
+                        "path: %s/\n" % temp.artifacts, "%s/\n" % temp.registry,
+                        temp.admission_report + "\n"],
+            "consumer": ["path: " + temp.artifacts + "\n",
+                         "path: " + temp.entry_registry.rsplit("/registry", 1)[0] + "\n"],
+            "cli-linux": ["path: %s/\n" % temp.cli_output("linux-x86-64")],
+            "cli-macos": ["path: %s/\n" % temp.cli_output("darwin-arm64")],
+            "attest-artifacts": ["path: " + temp.source + "\n",
+                                 temp.source + "/*.tar.gz\n"],
+            "qualify": ["path: " + temp.artifacts + "\n",
+                        '--artifacts "%s"' % shell.artifacts],
+        }
+        for job in ("attest-artifacts", "qualify"):
+            for platform, name in (("linux-x86-64", "linux_x86_64"),
+                                   ("darwin-arm64", "darwin_arm64")):
+                expected[job].append("path: %s\n" % temp.cli_download(platform))
+                if job == "attest-artifacts":
+                    expected[job].extend("%s/donner-svg_%s%s\n" % (
+                        temp.cli_download(platform), name, suffix)
+                        for suffix in ("", ".bazel.lock", ".NOTICE.txt"))
+        for job, fragments in expected.items():
+            for fragment in fragments:
+                with self.subTest(job=job, fragment=fragment):
+                    self.assertIn(fragment, jobs[job])
+        # The validator's environment stays outside every retained directory.
+        self.assertFalse(temp.validator.startswith(temp.bcr + "/"))
 
     def test_bcr_cli_artifacts_stay_bound_to_one_attempt_with_a_rerun_explanation(self):
         # The CLI artifacts are bound to the attempt that built them, which the release path
@@ -2371,74 +2481,79 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 downloads.append(job.index(download))
             explain_at = job.index("      - name: Explain missing CLI artifacts\n")
             self.assertLess(max(downloads), explain_at, job_name)
-            explain = _step_body(job, "Explain missing CLI artifacts")
-            self.assertIn(
-                "if: failure() && (steps.cli-linux-artifact.outcome == 'failure'"
-                " || steps.cli-macos-artifact.outcome == 'failure')",
-                explain,
-                job_name,
-            )
-            # A download can also fail for transient reasons, so the explanation is conditional,
-            # and the attempt reaches the script through the environment, not an expression.
-            self.assertIn("RUN_ATTEMPT: ${{ github.run_attempt }}", explain, job_name)
-            script = explain.split("        run: |\n", 1)[1]
-            self.assertNotIn("${{", script, job_name)
-            self.assertIn('if [ "$RUN_ATTEMPT" -gt 1 ]; then', script, job_name)
-            for message in (
-                "If the download error above is 'Artifact not found', this attempt reran only"
-                " failed jobs, and the CLI artifacts are bound to the attempt that built them;"
-                " rerun all jobs.",
-                "Otherwise the download failed for another reason; see the error above and the"
-                " GitHub status page before rerunning.",
-            ):
-                self.assertIn(message, script, job_name)
-            self.assertLess(
-                script.index("rerun all jobs."), script.index("Otherwise the download"), job_name)
-            self.assertIn("exit 1", script, job_name)
+            # A download can also fail for transient reasons, so the explanation is conditional.
+            self.assertEqual(
+                _step_body(job, "Explain missing CLI artifacts"),
+                "        if: failure() && (steps.cli-linux-artifact.outcome == 'failure'"
+                " || steps.cli-macos-artifact.outcome == 'failure')\n"
+                "        run: python3 -B -m tools.bcr_preflight explain-missing-cli\n",
+                job_name)
+        # The attempt reaches the explanation through the runner's environment, not an
+        # expression; the first message applies only to a rerun.
+        rerun = ("::error::If the download error above is 'Artifact not found', this attempt "
+                 "reran only failed jobs, and the CLI artifacts are bound to the attempt that "
+                 "built them; rerun all jobs.")
+        other = ("::error::Otherwise the download failed for another reason; see the error "
+                 "above and the GitHub status page before rerunning.")
+        for attempt, lines in (("1", [other]), ("2", [rerun, other]), ("", [other])):
+            with self.subTest(attempt=attempt):
+                result = _run_bcr_preflight(["explain-missing-cli"],
+                                            {"GITHUB_RUN_ATTEMPT": attempt})
+                self.assertEqual(1, result.returncode)
+                self.assertEqual(lines, result.stdout.splitlines())
 
-    def _bcr_consumer_audit(self, preflight):
-        """The consumer job, its audit step, the step's run body, query and audit call."""
+    def _bcr_consumer_audit(self, preflight, plan):
+        """The consumer job, its step, and the plan's query and audit commands."""
         consumer = preflight.split("\n  consumer:\n", 1)[1].split("\n  cli-linux:\n", 1)[0]
         step = _step_body(consumer, "Exercise the archive through registry resolution")
-        run = step.split("        run: |\n", 1)[1]
-        audit = "tools/bcr_dependency_closure.py"
-        query = run.split("bazelisk cquery", 1)[1].split(audit, 1)[0]
-        return consumer, step, run, query, run.split(audit, 1)[1]
+        audits = [command for command in plan
+                  if any(part.endswith("tools/bcr_dependency_closure.py")
+                         for part in command.argv)]
+        queries = [command for command in plan if command.argv[:2] == ("bazelisk", "cquery")]
+        return consumer, step, queries, audits
 
-    def _assert_bcr_consumer_audit(self, preflight):
-        audit = "tools/bcr_dependency_closure.py"
-        self.assertEqual(preflight.count(audit), 1)
-        consumer, step, run, query, audit_call = self._bcr_consumer_audit(preflight)
-        self.assertEqual(run.count(audit), 1)
+    def _assert_bcr_consumer_audit(self, preflight, plan):
+        consumer, step, queries, audits = self._bcr_consumer_audit(preflight, plan)
+        # The step runs only the consumer lane, with the default fail-fast shell, so the lane's
+        # status (the first failing command's) is the step's.
         self.assertNotIn("continue-on-error", consumer)
-        self.assertNotRegex(step, r"(?m)^        (?:if|continue-on-error|shell):")
-        self.assertNotIn("|", run, "a pipe or || would hide the query or audit status")
-        self.assertNotIn("set +e", run)
+        self.assertEqual("        run: python3 -B -m tools.bcr_preflight consumer\n", step)
+        self.assertEqual(len(audits), 1)
+        self.assertEqual(len(queries), 1)
+        query, audit = queries[0], audits[0]
+        # The audit is the lane's last command, so its status is the lane's.
+        self.assertIs(plan[-1], audit, "a command after the audit would replace its status")
+        self.assertEqual(audit.argv[:2], ("python3", "-B"))
+        expression = query.argv[-2]
         for library in ("base:base", "css:css", "svg:svg", "svg/renderer:renderer"):
-            self.assertIn("@donner//donner/%s" % library, query)
-        self.assertIn("--output=label_kind", query)
-        for narrowing in ("--noimplicit_deps", "--notool_deps", "--implicit_deps=",
-                          "--tool_deps=", "--keep_going"):
-            self.assertNotIn(narrowing, run)
-        # The audit is the step's last command, so its status is the step's status.
-        audit_command = run[run.rindex("python3 -B", 0, run.index(audit)):].rstrip()
-        joined = re.sub(r"\\\n\s*", " ", audit_command)
-        self.assertNotIn("\n", joined, "a command after the audit would replace its status")
-        self.assertNotRegex(joined, r";|&&")
-        redirect = re.findall(r'> ("[^"]+")', query)
-        labels = re.findall(r'--labels ("[^"]+")', audit_call)
-        self.assertEqual(len(redirect), 1)
-        self.assertEqual(redirect, labels, "the audit must read the file the query wrote")
-        self.assertLess(run.index("bazelisk build"), run.index("bazelisk cquery"))
+            self.assertIn("@donner//donner/%s" % library, expression)
+        self.assertTrue(expression.startswith("deps("))
+        self.assertEqual(query.argv[-1], "--output=label_kind")
+        for command in plan:
+            for narrowing in ("--noimplicit_deps", "--notool_deps", "--implicit_deps=",
+                              "--tool_deps=", "--keep_going"):
+                self.assertFalse(any(part.startswith(narrowing) for part in command.argv),
+                                 command.argv)
+        labels = audit.argv[audit.argv.index("--labels") + 1]
+        self.assertIsNotNone(query.stdout)
+        self.assertEqual(query.stdout, labels, "the audit must read the file the query wrote")
+        builds = [index for index, command in enumerate(plan)
+                  if command.argv[:2] == ("bazelisk", "build")]
+        self.assertEqual(len(builds), 1)
+        self.assertLess(builds[0], plan.index(query))
+        # The audit tools and MODULE.bazel come from the source commit's checkout.
+        heads = [index for index, command in enumerate(plan)
+                 if command.argv[-2:] == ("rev-parse", "HEAD")]
+        self.assertEqual(len(heads), 1)
+        self.assertEqual(plan[heads[0]].expect_stdout, _BCR_COMMIT)
+        self.assertLess(heads[0], plan.index(query))
         self.assertIn("matrix:", consumer)
         self.assertIn("os: [ubuntu-24.04, xcode-27]", consumer)
         self.assertIn("bazel: ['7.x', '8.x']", consumer)
 
-    def _bcr_scope(self, changed=(), event_name="pull_request", base=None, renamed=None):
-        """Run the preflight scope step on a fixture repository; returns `full_matrix`."""
-        preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
-        step = _step_body(_jobs(preflight)["prepare"], "Select the preflight scope")
-        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    def _bcr_scope(self, changed=(), event_name="pull_request", base=None, renamed=None,
+                   event=None):
+        """Run the preflight scope on a fixture repository; returns `full_matrix`."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo = root / "repo"
@@ -2471,11 +2586,14 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 write(path, "change\n")
             git("commit", "-q", "--allow-empty", "-m", "head")
             output = root / "output"
-            result = subprocess.run(
-                ["/bin/bash", "-c", script], cwd=repo, text=True, capture_output=True,
-                env=dict(env, EVENT_NAME=event_name, BASE_SHA=base or base_sha,
-                         HEAD_SHA=git("rev-parse", "HEAD"), GITHUB_OUTPUT=str(output)),
-                timeout=test_timing.STALL_GUARD_SECONDS)
+            event_path = root / "event.json"
+            if event is None:
+                event = {"pull_request": {"base": {"sha": base or base_sha},
+                                          "head": {"sha": git("rev-parse", "HEAD")}}}
+            event_path.write_text(json.dumps(event), encoding="utf-8")
+            result = _run_bcr_preflight(["scope"], dict(
+                env, GITHUB_EVENT_NAME=event_name, GITHUB_EVENT_PATH=str(event_path),
+                GITHUB_OUTPUT=str(output)), cwd=repo)
             self.assertEqual(0, result.returncode, result.stderr)
             values = dict(line.split("=", 1) for line in output.read_text().splitlines())
             return values["full_matrix"]
@@ -2493,6 +2611,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                         [".bazelrc"], [".bcr/presubmit.yml"], ["examples/bazel_consumer/main.cc"],
                         ["third_party/licenses/BUILD.bazel"], ["tools/bcr_source.py"],
                         ["tools/bcr_dependency_closure.py"], ["tools/release_cli.py"],
+                        ["tools/bcr_preflight.py"],
                         ["tools/notice_coverage_check.py"], ["tools/render_notice.py"],
                         ["tools/ci/BUILD.bazel"], ["tools/ci/release_compiler_identity.cc"],
                         ["tools/BUILD.bazel"], ["tools/default_notice_freshness_tests.py"],
@@ -2518,12 +2637,17 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual("true", self._bcr_scope(event_name="workflow_dispatch"))
         self.assertEqual("true", self._bcr_scope(["donner/a.cc"], base="0" * 40))
         self.assertEqual("true", self._bcr_scope([]))
+        self.assertEqual("true", self._bcr_scope(["donner/a.cc"], event={}))
         preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
         self.assertTrue({"push", "pull_request", "schedule", "workflow_dispatch"} <=
                         _triggers(preflight))
         jobs = _jobs(preflight)
         full = "needs.prepare.outputs.full_matrix == 'true'"
         self.assertIn("full_matrix: ${{ steps.scope.outputs.full_matrix }}", jobs["prepare"])
+        # The scope reads the event from the runner, so one step definition serves every event.
+        self.assertEqual("        id: scope\n        run: python3 -B -m tools.bcr_preflight scope\n",
+                         _step_body(jobs["prepare"], "Select the preflight scope").rstrip("\n")
+                         + "\n")
         # The slim check always runs: prepare and the Ubuntu consumer on the newest Bazel.
         self.assertEqual("", _job_key(jobs["prepare"], "if"))
         self.assertEqual("", _job_key(jobs["consumer"], "if"))
@@ -2543,42 +2667,60 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_bcr_consumers_audit_the_configured_closure_for_rust(self):
         preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
-        self._assert_bcr_consumer_audit(preflight)
+        self._assert_bcr_consumer_audit(preflight, _bcr_consumer_plan())
 
     def test_bcr_consumer_audit_contract_rejects_weakened_steps(self):
         preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
         step = "      - name: Exercise the archive through registry resolution\n"
-        audit_call = '"$GITHUB_WORKSPACE/tools/bcr_dependency_closure.py"'
-        query = "--output=label_kind"
-        _, _, run, _, _ = self._bcr_consumer_audit(preflight)
-        redirect = re.findall(r'> ("[^"]+")', run)[0]
-        weakened = {
+        run = "        run: python3 -B -m tools.bcr_preflight consumer\n"
+        plan = _bcr_consumer_plan()
+        query = next(command for command in plan if command.argv[:2] == ("bazelisk", "cquery"))
+        audit = plan[-1]
+
+        def with_query(*extra):
+            changed = dataclasses.replace(query, argv=query.argv + extra)
+            return [changed if command is query else command for command in plan]
+
+        labels_at = audit.argv.index("--labels") + 1
+        other_labels = dataclasses.replace(audit, argv=audit.argv[:labels_at] + (
+            "/temp/other.labels",) + audit.argv[labels_at + 1:])
+        weakened_workflows = {
             "continue-on-error": preflight.replace(
                 step, step + "        continue-on-error: true\n"),
             "if": preflight.replace(step, step + "        if: always()\n"),
-            "or true": preflight.replace(audit_call, audit_call + " || true", 1),
-            "no implicit deps": preflight.replace(query, query + " --noimplicit_deps", 1),
-            "no tool deps": preflight.replace(query, query + " --notool_deps", 1),
-            "keep going": preflight.replace(query, query + " --keep_going", 1),
-            "implicit deps false": preflight.replace(query, query + " --implicit_deps=false", 1),
-            "tool deps false": preflight.replace(query, query + " --tool_deps=false", 1),
+            "or true": preflight.replace(run, run[:-1] + " || true\n", 1),
             "shell": preflight.replace(step, step + "        shell: bash {0}\n"),
             "set +e": preflight.replace(
-                "          test \"$(git -C", "          set +e\n          test \"$(git -C", 1),
-            "semicolon true": preflight.replace(
-                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"',
-                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"; true', 1),
-            "command after the audit": preflight.replace(
-                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"\n',
-                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"\n          true\n', 1),
-            "other labels file": preflight.replace(
-                "--labels " + redirect, '--labels "$RUNNER_TEMP/other.labels"', 1),
+                run, "        run: |\n          set +e\n          "
+                "python3 -B -m tools.bcr_preflight consumer\n", 1),
+            "semicolon true": preflight.replace(run, run[:-1] + "; true\n", 1),
+            "other subcommand": preflight.replace(run, run.replace("consumer", "scope"), 1),
         }
-        for name, workflow in weakened.items():
+        weakened_plans = {
+            "no implicit deps": with_query("--noimplicit_deps"),
+            "no tool deps": with_query("--notool_deps"),
+            "keep going": with_query("--keep_going"),
+            "implicit deps false": with_query("--implicit_deps=false"),
+            "tool deps false": with_query("--tool_deps=false"),
+            "command after the audit": plan + [bcr_preflight.Command("Pass", ("true",))],
+            "no audit": plan[:-1],
+            "other labels file": plan[:-1] + [other_labels],
+            "unwritten labels file": [dataclasses.replace(query, stdout=None)
+                                      if command is query else command for command in plan],
+            "no source commit check": [command for command in plan
+                                       if command.expect_stdout is None],
+            "query before build": sorted(plan, key=lambda command: command.argv[1] != "cquery"),
+        }
+        for name, workflow in weakened_workflows.items():
             with self.subTest(name=name):
                 self.assertNotEqual(workflow, preflight)
                 with self.assertRaises(AssertionError):
-                    self._assert_bcr_consumer_audit(workflow)
+                    self._assert_bcr_consumer_audit(workflow, plan)
+        for name, weakened in weakened_plans.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(weakened, plan)
+                with self.assertRaises(AssertionError):
+                    self._assert_bcr_consumer_audit(preflight, weakened)
 
     def test_bcr_fork_preparation_requires_manual_approval_and_never_files_a_pr(self):
         workflow = self.supply_chain_files[".github/workflows/publish_bcr.yml"]
