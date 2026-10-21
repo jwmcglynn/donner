@@ -99,6 +99,26 @@ std::optional<Box2d> InspectorBounds(const svg::SVGElement& element) {
   return std::nullopt;
 }
 
+std::function<std::optional<Box2d>(const Transform2d&)> CaptureInspectorFillBounds(
+    const svg::SVGElement& element) {
+  if (!element.isa<svg::SVGGeometryElement>()) {
+    return {};
+  }
+  const auto geometry = element.cast<svg::SVGGeometryElement>();
+  if (!geometry.worldBounds().has_value()) {
+    return {};
+  }
+  auto spline = geometry.computedSpline();
+  if (!spline.has_value()) {
+    return {};
+  }
+  const Transform2d documentFromGeometry = geometry.elementFromWorld();
+  return [spline = std::move(*spline), documentFromGeometry](
+             const Transform2d& targetDocumentFromStartDocument) -> std::optional<Box2d> {
+    return spline.transformedBounds(documentFromGeometry * targetDocumentFromStartDocument);
+  };
+}
+
 /// Below this document-space span (in user units), a bounds axis is treated
 /// as degenerate and the matching Width / Height field is disabled - a scale
 /// factor against a ~zero span would explode.
@@ -2651,7 +2671,9 @@ std::function<std::optional<Box2d>(const Transform2d&)>
 SidebarPresenter::captureAdjustedTransformBounds(const svg::SVGElement& element,
                                                  const TransformEditState& state,
                                                  bool includeOrdinaryBounds) {
-  auto evaluate = CaptureSelectionBoundsAfterAxisScale(element, includeOrdinaryBounds);
+  auto evaluate = includeOrdinaryBounds && !HasPaintedInspectorBounds(element)
+                      ? CaptureInspectorFillBounds(element)
+                      : CaptureSelectionBoundsAfterAxisScale(element, includeOrdinaryBounds);
   if (!evaluate) {
     return {};
   }
