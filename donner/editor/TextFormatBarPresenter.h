@@ -206,6 +206,13 @@ public:
   }
 
 private:
+  /// Render the bounded free-text family field, preserving oversized seeds without committing them.
+  void renderFontFamilyInput(FormatBarActions& actions);
+  /// Render searchable family rows and emit CSS-safe picker values.
+  void renderFontFamilyMenu(const FormatBarState& state, FormatBarActions& actions);
+  /// Render the size field and steps, retaining its geometry for the later preset popup.
+  void renderFontSizeInput(const FormatBarState& state, FormatBarActions& actions, ImVec2& fieldMin,
+                           ImVec2& fieldMax, bool& fieldActivated);
   void renderFontSizePresetPopup(const FormatBarState& state, const ImVec2& fieldMin,
                                  const ImVec2& fieldMax, bool fieldActivated,
                                  FormatBarActions* actions);
