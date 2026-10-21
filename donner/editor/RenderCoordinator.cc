@@ -537,6 +537,18 @@ bool HasCompleteVisibleCachedCoverage(const GlTextureCache* textures, const View
          std::abs(cachedScale.y - visibleScale.y) <= kScaleTolerance;
 }
 
+bool ActiveResultCoversPane(const RenderResult& result, const ViewportState& viewport) {
+  const PresentationCoverageDiagnostics activeCoverage{
+      .activeTilesViewportBounded = result.rasterViewport.viewportBounded,
+      .activeRasterDocumentRect = result.rasterViewport.documentRect,
+  };
+  const Box2d paneClipRect(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize);
+  // A matching overview is needed only when the current pane would actually sample it.
+  // The frame builder repeats this proof for its exact clip before choosing any raster.
+  return result.compositedPreview && result.compositedPreview->valid() &&
+         FramePresentation::ActiveRasterCoversPane(activeCoverage, viewport, paneClipRect);
+}
+
 bool RasterViewportCanPresentCurrentViewport(const EditorRasterViewport& rendered,
                                              const EditorRasterViewport& current) {
   return SameRasterViewport(rendered, current) ||
@@ -1611,9 +1623,12 @@ bool RenderCoordinator::hasMatchingPendingOverview(const RenderResult& result,
 
 bool RenderCoordinator::canPresentWithOverview(const RenderResult& result,
                                                const EditorRasterViewport& rasterViewport,
-                                               EditorApp& app,
+                                               const ViewportState& viewport, EditorApp& app,
                                                const GlTextureCache& textures) const {
   if (!result.rasterViewport.viewportBounded || !rasterViewport.viewportBounded) {
+    return true;
+  }
+  if (ActiveResultCoversPane(result, viewport)) {
     return true;
   }
   const auto overview =
@@ -1733,11 +1748,10 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     rejectRenderResult(resultOpt);
     return;
   }
-  if (!canPresentWithOverview(result, rasterViewport, app, textures)) {
-    // A viewport-bounded result covers only the currently rasterized window. Never make it the
-    // sole presented content: zooming out would expose checkerboard for missing tile coverage
-    // instead of document transparency. Keep the previous presentation until an overview infill
-    // exists underneath the crisp bounded tiles.
+  if (!canPresentWithOverview(result, rasterViewport, viewport, app, textures)) {
+    // This bounded result leaves part of the current pane uncovered. Keep the previous
+    // presentation until a matching overview can supply that missing coverage. A later camera
+    // change repeats the same coverage proof before the frame builder chooses any raster.
     renderWorker_.asyncRenderer.discardUnpresentedResult(result);
     rejectPreparedPresentation(FramePresentationFailure::MissingOverview);
     return;

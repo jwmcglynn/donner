@@ -110,6 +110,14 @@ public:
       const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
       const FramePresentationInput& input);
 
+  /// Whether active raster coverage contains every visible artboard point in this pane.
+  /// @param coverage Active raster extent and whether it is viewport-bounded.
+  /// @param viewport Camera mapping for the prospective frame.
+  /// @param paneClipRect Logical screen-space clip for that pane.
+  [[nodiscard]] static bool ActiveRasterCoversPane(const PresentationCoverageDiagnostics& coverage,
+                                                   const ViewportState& viewport,
+                                                   const Box2d& paneClipRect);
+
   /// Check whether a candidate can preserve every affine pose already visible to the user.
   /// @param capture Candidate geometry and pose provenance.
   /// @param tiles Candidate renderer-owned tile identities.

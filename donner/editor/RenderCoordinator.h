@@ -699,9 +699,10 @@ private:
   void acceptOverviewResult(RenderResult result, EditorApp& app, GlTextureCache& textures);
   /// Whether the staged overview and detailed result describe the current document.
   bool hasMatchingPendingOverview(const RenderResult& result, EditorApp& app) const;
-  /// Whether a detailed result has coherent full-document coverage behind it.
+  /// Whether active coverage or its matching overview can cover the current pane.
   bool canPresentWithOverview(const RenderResult& result,
-                              const EditorRasterViewport& rasterViewport, EditorApp& app,
+                              const EditorRasterViewport& rasterViewport,
+                              const ViewportState& viewport, EditorApp& app,
                               const GlTextureCache& textures) const;
   /// Consume stale staging and determine whether full-document coverage needs refreshing.
   bool requiresFreshOverview(bool available, std::uint64_t currentVersion) const;
