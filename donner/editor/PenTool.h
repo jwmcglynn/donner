@@ -279,9 +279,9 @@ private:
   /// (mirrored handles along the neighbor chord, one third of the distance to
   /// each neighbor).
   void convertAnchorSmoothness(std::size_t index);
-  /// Apply pointer movement to the active MoveAnchor/Move*Handle drag.
   /// Preserve click-only actions until the pointer actually leaves its press position.
   [[nodiscard]] bool shouldSampleDragAt(const Vector2d& documentPoint) const;
+  /// Apply pointer movement to the active MoveAnchor/Move*Handle drag.
   [[nodiscard]] bool updatePointDrag(const Vector2d& documentPoint,
                                      const MouseModifiers& modifiers);
 
