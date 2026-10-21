@@ -288,9 +288,10 @@ one.
 
 **Main and pull request partitions.** The action prefixes `--remote_instance_name` with `main-`
 for `main` push, schedule and dispatch runs and for the Renovate reader, and with `pr-` for
-trusted pull requests. Release artifacts (the Editor WASM package) and qualification evidence (CI,
-sanitizer and nightly test results) come only from `main` runs, so by default they reuse only
-entries that `main` wrote, and a pull request's work in progress never reaches them by accident.
+trusted pull requests. Release artifacts (the Editor WASM package) and qualification evidence (CI
+and sanitizer test results), like the other scheduled lanes, come only from `main` runs, so they
+reuse only entries that `main` wrote, and a pull request's work in progress never reaches them by
+accident.
 Pull requests still reuse each other's entries, including between the hosted and self-hosted
 macOS lanes. Both classes share one key, which can name any instance, so the prefixes guard
 against accidental cross-use, not against a writer that holds the key; that boundary is the
