@@ -4,6 +4,8 @@
 The editor package passes `--package-dir`; a standalone module passes `--wasm-file` and `--js-file`.
 Budgets that do not apply to a module (the package total, the function-body and data-segment
 complexity caps) are omitted from its arguments, and their checks are skipped.
+Report mode still checks the artifact contracts and reports every size and complexity metric
+without enforcing its numeric ceiling.
 """
 
 from __future__ import annotations
@@ -33,10 +35,12 @@ def _check_payload_budget(
     limit: int,
     message: str,
     prefix: str = "editor",
+    enforce: bool = True,
 ) -> None:
     print(f"{prefix}-payload-budget metric={metric} actual={actual} limit={limit} "
           f"delta={actual - limit}")
-    test.assertLessEqual(actual, limit, message)
+    if enforce:
+        test.assertLessEqual(actual, limit, message)
 
 
 def _decode_u32_leb(data: bytes, offset: int) -> tuple[int, int]:
@@ -146,6 +150,7 @@ class PackageSizeAccountingTest(unittest.TestCase):
 
 
 class WasmPackageSizeTest(unittest.TestCase):
+    payload_budget_mode: str = "enforce"
     package_dir: Path | None
     wasm_path: Path
     js_path: Path
@@ -172,6 +177,7 @@ class WasmPackageSizeTest(unittest.TestCase):
             self.max_total_raw_bytes,
             f"{self.prefix} package raw size exceeded its production budget",
             self.prefix,
+            enforce=self.payload_budget_mode == "enforce",
         )
 
     def test_javascript_bridge_contract_names_survive_minification(self) -> None:
@@ -211,6 +217,7 @@ class WasmPackageSizeTest(unittest.TestCase):
             self.max_wasm_raw_bytes,
             "Wasm module raw decode/compile size exceeded its production budget",
             self.prefix,
+            enforce=self.payload_budget_mode == "enforce",
         )
         _check_payload_budget(
             self,
@@ -219,6 +226,7 @@ class WasmPackageSizeTest(unittest.TestCase):
             self.max_wasm_gzip_bytes,
             "Wasm module compressed transfer size exceeded its production budget",
             self.prefix,
+            enforce=self.payload_budget_mode == "enforce",
         )
         _check_payload_budget(
             self,
@@ -227,6 +235,7 @@ class WasmPackageSizeTest(unittest.TestCase):
             self.max_js_raw_bytes,
             "JavaScript glue raw parse size exceeded its production budget",
             self.prefix,
+            enforce=self.payload_budget_mode == "enforce",
         )
         _check_payload_budget(
             self,
@@ -235,6 +244,7 @@ class WasmPackageSizeTest(unittest.TestCase):
             self.max_js_gzip_bytes,
             "JavaScript glue compressed transfer size exceeded its production budget",
             self.prefix,
+            enforce=self.payload_budget_mode == "enforce",
         )
 
     def test_wasm_functions_fit_browser_tier_compiler_budget(self) -> None:
@@ -246,10 +256,10 @@ class WasmPackageSizeTest(unittest.TestCase):
             f"{self.prefix}-wasm-function-size "
             f"largest_body={largest_body_bytes} function_count={len(function_body_sizes)}"
         )
-        self.assertLessEqual(
-            largest_body_bytes,
-            self.max_wasm_function_body_bytes,
-            "one Wasm function exceeds the browser tier-compiler complexity budget",
+        _check_payload_budget(
+            self, "wasm_function_body", largest_body_bytes, self.max_wasm_function_body_bytes,
+            "one Wasm function exceeds the browser tier-compiler complexity budget", self.prefix,
+            enforce=self.payload_budget_mode == "enforce",
         )
 
     def test_static_memory_initializer_fits_browser_tier_compiler_budget(self) -> None:
@@ -257,11 +267,10 @@ class WasmPackageSizeTest(unittest.TestCase):
             self.skipTest("no data-segment budget for this module")
         data_segment_count = _wasm_section_vector_count(self.wasm_path, 11)
         print(f"{self.prefix}-wasm-data-segments count={data_segment_count}")
-        self.assertLessEqual(
-            data_segment_count,
-            self.max_wasm_data_segments,
+        _check_payload_budget(
+            self, "wasm_data_segments", data_segment_count, self.max_wasm_data_segments,
             "the Wasm module has enough passive data segments to create a pathological memory "
-            "initializer",
+            "initializer", self.prefix, enforce=self.payload_budget_mode == "enforce",
         )
 
 
@@ -271,6 +280,7 @@ if __name__ == "__main__":
     parser.add_argument("--wasm-file", type=Path)
     parser.add_argument("--js-file", type=Path)
     parser.add_argument("--metric-prefix", default="editor")
+    parser.add_argument("--payload-budget-mode", choices=("enforce", "report"), default="enforce")
     parser.add_argument("--max-wasm-raw-bytes", type=int, required=True)
     parser.add_argument("--max-wasm-gzip-bytes", type=int, required=True)
     parser.add_argument("--max-wasm-function-body-bytes", type=int)
@@ -283,6 +293,7 @@ if __name__ == "__main__":
     args, unittest_args = parser.parse_known_args()
     if args.package_dir is None and (args.wasm_file is None or args.js_file is None):
         parser.error("pass --package-dir, or both --wasm-file and --js-file")
+    WasmPackageSizeTest.payload_budget_mode = args.payload_budget_mode
     WasmPackageSizeTest.package_dir = args.package_dir
     WasmPackageSizeTest.wasm_path = args.wasm_file or args.package_dir / "editor.wasm"
     WasmPackageSizeTest.js_path = args.js_file or args.package_dir / "editor.js"

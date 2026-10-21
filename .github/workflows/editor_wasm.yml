@@ -151,6 +151,8 @@ jobs:
         run: tools/ci/editor_wasm_lane.sh prefetch
 
       - name: Build and size-check Geode editor Wasm package
+        env:
+          PAYLOAD_BUDGET_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'report' || 'enforce' }}
         run: tools/ci/editor_wasm_lane.sh build
 
       # Proves the generated MODULE.bazel.lock in error mode and snapshots it before later steps

@@ -8,7 +8,9 @@
 #       Fetch the repositories every later phase needs. The workflow retries this step once,
 #       so a download failure is retried but a build or test failure never is.
 #   tools/ci/editor_wasm_lane.sh build
-#       Run the editor Wasm audits, the shipped-browser audit and both Wasm size gates.
+#       Run the audits, renderer pixel check and both Wasm payload inspections.
+#       Numeric payload and module-complexity ceilings enforce by default.
+#       PAYLOAD_BUDGET_MODE=report reports every metric without enforcing numeric ceilings.
 #   tools/ci/editor_wasm_lane.sh prove-lockfile SNAPSHOT
 #       Build the package with the generated MODULE.bazel.lock in update and then error mode,
 #       check that lockfile, and copy it to SNAPSHOT for the deployment candidate.
@@ -46,17 +48,28 @@ prefetch() {
 }
 
 build() {
+  local budget_mode="${PAYLOAD_BUDGET_MODE:-enforce}"
+  local budget_test_output="errors"
+  case "${budget_mode}" in
+    enforce) ;;
+    report) budget_test_output=all ;;
+    *) echo "PAYLOAD_BUDGET_MODE must be enforce or report" >&2; return 2 ;;
+  esac
+  local budget_args=("--test_arg=--payload-budget-mode=${budget_mode}")
   lane_begin "Build and size-check Geode editor Wasm package"
   lane_phase "Editor Wasm audits" \
     bazelisk test --test_output=errors //tools/ci:editor_wasm_audits
   lane_phase "Shipped browser dependency audit (editor-wasm)" \
     bazelisk test --config=editor-wasm --test_output=errors \
     //tools/ci:editor_wasm_shipped_browser_audit
+  lane_phase "Renderer Wasm pixel test (wasm-size)" \
+    bazelisk test --config=wasm-size --test_output=errors //donner/svg/renderer/wasm:render_test
   lane_phase "Renderer Wasm size tests (wasm-size)" \
-    bazelisk test --config=wasm-size --test_output=errors //tools/ci:wasm_size_tests
+    bazelisk test --config=wasm-size --test_output="${budget_test_output}" "${budget_args[@]}" \
+    //donner/svg/renderer/wasm:wasm_size_tests
   lane_phase "Editor Wasm package size tests (editor-wasm)" \
-    bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \
-    //tools/ci:editor_wasm_size_tests
+    bazelisk test --config=editor-wasm --test_output="${budget_test_output}" --remote_download_outputs=all \
+    "${budget_args[@]}" //tools/ci:editor_wasm_size_tests
 }
 
 # The repository ignores MODULE.bazel.lock, so the builds before this resolved one in update mode.

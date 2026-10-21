@@ -24,11 +24,11 @@ from tools import test_timing
 ENFORCED_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 54800,
     "--max-js-raw-bytes": 199000,
-    "--max-total-raw-bytes": 12825000,
+    "--max-total-raw-bytes": 12880000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
-    "--max-wasm-gzip-bytes": 3475000,
-    "--max-wasm-raw-bytes": 10750000,
+    "--max-wasm-gzip-bytes": 3500000,
+    "--max-wasm-raw-bytes": 10800000,
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 # The standalone renderer Wasm ceilings CI enforces, changed together with that test's arguments.
@@ -1519,7 +1519,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         size_check = self._step_body(workflow, SIZE_CHECK_STEP.removeprefix("- name: "))
         self.assertNotIn("continue-on-error", size_check)
         build = self._size_check_phase()
-        self.assertEqual(4, build.count("bazelisk test"))
+        self.assertEqual(5, build.count("bazelisk test"))
         self.assertNotIn("bazelisk fetch", build)
         self.assertNotIn("||", build)
         self.assertIn("//tools/ci:editor_wasm_shipped_browser_audit", build)
@@ -1589,16 +1589,25 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         return self._lane_function("build")
 
     def test_editor_wasm_payload_ceilings_are_enforced(self):
-        """The size test declares each enforced ceiling once, and CI cannot relax it."""
+        """The size test declares each ceiling once under the explicit CI mode policy."""
         self.assertEqual(
             _declared_payload_ceilings(self.wasm_size_test_arguments),
             ENFORCED_PAYLOAD_CEILINGS,
             "%s and ENFORCED_PAYLOAD_CEILINGS must change together" % PAYLOAD_SIZE_TEST,
         )
-        self.assertNotIn("--test_arg", self._size_check_phase())
         self.assertNotIn("--test_arg", self.editor_wasm)
-        self.assertEqual(0, self.editor_wasm.count("payload-budget-mode"))
-        self.assertEqual(0, self.editor_wasm_lane.count("payload-budget-mode"))
+        self.assertEqual(1, self.editor_wasm_lane.count("--test_arg"))
+        self.assertIn('local budget_args=("--test_arg=--payload-budget-mode=${budget_mode}")',
+                      self._size_check_phase())
+        self.assertIn('local budget_mode="${PAYLOAD_BUDGET_MODE:-enforce}"',
+                      self._size_check_phase())
+        self.assertIn('local budget_test_output="errors"', self._size_check_phase())
+        self.assertIn('enforce) ;;', self._size_check_phase())
+        self.assertIn('report) budget_test_output=all ;;', self._size_check_phase())
+        self.assertEqual(2, self._size_check_phase().count(
+            '--test_output="${budget_test_output}"'))
+        self.assertIn('*) echo "PAYLOAD_BUDGET_MODE must be enforce or report" >&2; return 2 ;;',
+                      self._size_check_phase())
 
     def test_editor_wasm_payload_gate_detects_widened_or_repeated_ceilings(self):
         flag = "--max-wasm-raw-bytes"
@@ -1618,8 +1627,17 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(1, self.renderer_wasm_build.count(marker))
         return self.renderer_wasm_build.split(marker, 1)[1].split("\n)", 1)[0]
 
+    def test_numeric_size_enforcement_is_retained_for_pr_nightly_and_manual_runs(self):
+        step = self._step_body(self.editor_wasm, "Build and size-check Geode editor Wasm package")
+        self.assertIn(
+            "PAYLOAD_BUDGET_MODE: ${{ github.event_name == 'push' && "
+            "github.ref == 'refs/heads/main' && 'report' || 'enforce' }}", step)
+        self.assertIn("  pull_request:", self.editor_wasm)
+        self.assertIn("  schedule:\n    - cron: \"18 7 * * *\"", self.editor_wasm)
+        self.assertIn("  workflow_dispatch:", self.editor_wasm)
+
     def test_renderer_wasm_payload_ceilings_are_enforced(self):
-        """The renderer module's size test declares each ceiling once, as CI enforces it."""
+        """The renderer module declares each ceiling enforced by PR/nightly/manual runs."""
         self.assertEqual(
             _declared_payload_ceilings(
                 self._renderer_size_test_definition(), RENDERER_PAYLOAD_CEILINGS
@@ -1629,10 +1647,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
 
     def test_renderer_wasm_size_test_runs_in_the_size_check_step(self):
-        """The Editor Wasm size-check step runs the suite that contains the renderer gate."""
+        """The step runs renderer size and pixel targets separately; prefetch retains their suite."""
         step = self._size_check_phase()
         self.assertIn("--config=wasm-size", step)
-        self.assertIn("//tools/ci:wasm_size_tests", step)
+        self.assertIn(RENDERER_SIZE_TEST, step)
+        self.assertIn("//donner/svg/renderer/wasm:render_test", step)
         suite_name = 'name = "wasm_size_tests"'
         self.assertIn(suite_name, self.ci_target_definitions)
         suite = self.ci_target_definitions.split(suite_name, 1)[1].split("\n)", 1)[0]

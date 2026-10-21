@@ -359,6 +359,7 @@ py_test(
     size = "small",
     srcs = ["editor_wasm_lane_tests.py"],
     data = [
+        "//donner/editor/wasm:wasm_package_size_tests.py",
         "editor_wasm_lane.sh",
         "lane.sh",
     ],
