@@ -2435,15 +2435,17 @@ ApplySourceEditResult ApplyOpeningTagRename(XMLDocument& document, const XMLEdit
   return result;
 }
 
-bool MayBeOmittedByInitialParse(const XMLNode& node) {
+bool MayBeOmittedFromLiveTree(const XMLNode& node) {
+  // XML options omit comments/instructions; SVG projection also removes text nodes after capture.
   return node.type() == XMLNode::Type::Comment ||
-         node.type() == XMLNode::Type::ProcessingInstruction;
+         node.type() == XMLNode::Type::ProcessingInstruction ||
+         node.type() == XMLNode::Type::Data || node.type() == XMLNode::Type::CData;
 }
 
-/// Whether a parsed-only comment or instruction occurs before the next live node.
+/// Whether a parsed-only filtered node occurs before the next live node.
 bool CanSkipFilteredParsedNode(const XMLNode& parsed, const std::optional<XMLNode>& live,
                                std::size_t sourceOffsetBase) {
-  if (!MayBeOmittedByInitialParse(parsed)) {
+  if (!MayBeOmittedFromLiveTree(parsed)) {
     return false;
   }
   const auto parsedSpan = NodeSpanInCurrentCoords(parsed);
@@ -2458,10 +2460,10 @@ bool CanSkipFilteredParsedNode(const XMLNode& parsed, const std::optional<XMLNod
          parsedSpan->end <= liveSpan->start - sourceOffsetBase;
 }
 
-/// Retained comments and instructions must correspond to the same source span, even if duplicated.
+/// Retained filtered-node types must correspond to the same source span, even if duplicated.
 bool RetainedFilteredNodeMatchesSource(const XMLNode& live, const XMLNode& parsed,
                                        std::size_t sourceOffsetBase) {
-  if (!MayBeOmittedByInitialParse(live)) {
+  if (!MayBeOmittedFromLiveTree(live)) {
     return true;
   }
   const auto liveSpan = NodeSpanInCurrentCoords(live);
