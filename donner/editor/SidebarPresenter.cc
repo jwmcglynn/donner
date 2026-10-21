@@ -26,10 +26,13 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/LockState.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/StrokeMarkerPrefabs.h"
 #include "donner/editor/UndoTimeline.h"
+#include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "embed_resources/BootstrapIcons.h"
 #include "embed_resources/EditorIcons.h"
@@ -68,6 +71,26 @@ InspectorStyleDisplayValue FormatInspectorStyleValue(std::string_view serialized
 }
 
 namespace {
+
+/// Document-space bounds behind the Inspector's Position and Size fields. Path
+/// geometry reports its fill bounds. `<text>` and `<g>` have no path geometry of
+/// their own, so they report the box their selection chrome draws: the text's
+/// laid-out frame, or the union of the group's rendered children. Other elements
+/// have no bounds, and their Position and Size fields stay disabled.
+std::optional<Box2d> InspectorBounds(const svg::SVGElement& element) {
+  if (element.isa<svg::SVGGeometryElement>()) {
+    return element.cast<svg::SVGGeometryElement>().worldBounds();
+  }
+  if (element.isa<svg::SVGTextElement>() || element.isa<svg::SVGGElement>()) {
+    const std::array<svg::SVGElement, 1> selection{element};
+    const std::vector<Box2d> bounds =
+        SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+    if (!bounds.empty()) {
+      return bounds.front();
+    }
+  }
+  return std::nullopt;
+}
 
 bool IsAncestorOrSelf(const donner::svg::SVGElement& ancestor,
                       const donner::svg::SVGElement& node) {
@@ -838,9 +861,7 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
       inspector.titleText += ">";
     }
 
-    if (selected.isa<donner::svg::SVGGeometryElement>()) {
-      inspector.bounds = selected.cast<donner::svg::SVGGeometryElement>().worldBounds();
-    }
+    inspector.bounds = InspectorBounds(selected);
     if (selected.isa<donner::svg::SVGGraphicsElement>()) {
       inspector.transform = selected.cast<donner::svg::SVGGraphicsElement>().transform();
     }
@@ -1990,14 +2011,12 @@ void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField fie
       .field = field,
       .matrixIndex = matrixIndex,
       .undoLabel = undoLabel};
-  // `transform()` and `worldBounds()` may materialize lazy layout state and
+  // `transform()` and the Inspector bounds may materialize lazy layout state and
   // therefore acquire document write access. Do not wrap these DOM getters in
   // a read scope: ConcurrentDom uses a non-recursive lock, so upgrading that
   // scope would deadlock on field activation.
   state.startTransform = element.cast<svg::SVGGraphicsElement>().transform();
-  if (element.isa<svg::SVGGeometryElement>()) {
-    state.startBounds = element.cast<svg::SVGGeometryElement>().worldBounds();
-  }
+  state.startBounds = InspectorBounds(element);
   // Verbatim attribute bytes so undo restores the user's original source
   // text instead of the canonical serializer output.
   state.sourceTransformAttributeValue = element.getAttribute("transform");
