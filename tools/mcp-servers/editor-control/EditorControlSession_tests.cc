@@ -1011,6 +1011,41 @@ TEST(EditorControlSessionTest, SourcePaneSvgProjectionFailureKeepsPreviewStale) 
 }
 
 // Source-pane dispatch honors canvas overrides the same way the reload dispatch does.
+TEST(EditorControlSessionTest, SourcePaneDispatchRejectsPathChangesBeforeEditingTheDraft) {
+  constexpr std::string_view kScene =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"/></svg>)";
+  for (const std::string replacementPath : {std::string("renamed.svg"), std::string()}) {
+    EditorControlSession session;
+    ASSERT_FALSE(session
+                     .handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                      {"source_path", "original.svg"},
+                                                      {"render_after_load", false}})
+                     .isError);
+    const auto before = session.handleToolCall("get_svg_source", json::object());
+    ASSERT_FALSE(before.isError);
+    const json edits = json::array(
+        {json{{"offset", kScene.find("red")}, {"delete_count", 3}, {"insert", "blue"}}});
+    const auto rejected =
+        session.handleToolCall("edit_svg_source", json{{"dispatch", "source_pane"},
+                                                       {"source_path", replacementPath},
+                                                       {"edits", edits},
+                                                       {"render_after_edit", false}});
+    EXPECT_TRUE(rejected.isError) << rejected.body.dump(2);
+    const auto unchanged = session.handleToolCall("get_svg_source", json::object());
+    EXPECT_EQ(unchanged.body, before.body);
+    const auto accepted =
+        session.handleToolCall("edit_svg_source", json{{"dispatch", "source_pane"},
+                                                       {"source_path", "original.svg"},
+                                                       {"edits", edits},
+                                                       {"render_after_edit", false}});
+    ASSERT_FALSE(accepted.isError) << accepted.body.dump(2);
+    EXPECT_EQ(accepted.body["source"]["source_path"], "original.svg");
+    EXPECT_GT(accepted.body["source"]["source_revision"], before.body["source"]["source_revision"]);
+    EXPECT_THAT(session.handleToolCall("get_svg_source", json::object()).body.value("text", ""),
+                testing::HasSubstr("blue"));
+  }
+}
+
 TEST(EditorControlSessionTest, SourcePaneDispatchAppliesCanvasOverrides) {
   constexpr std::string_view kScene =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><rect width="40" height="20" fill="red"/></svg>)svg";
