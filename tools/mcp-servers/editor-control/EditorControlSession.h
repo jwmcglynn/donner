@@ -16,6 +16,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/PenTool.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/editor/SidebarPresenter.h"
 #include "donner/editor/TextTool.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -145,6 +146,7 @@ private:
   ToolCallResult pointerGesture(const nlohmann::json& arguments);
   ToolCallResult renderFrameTool(const nlohmann::json& arguments);
   ToolCallResult sessionState(const nlohmann::json& arguments);
+  ToolCallResult inspectorState(const nlohmann::json& arguments);
   ToolCallResult startRnrRecording(const nlohmann::json& arguments);
   ToolCallResult stopRnrRecording(const nlohmann::json& arguments);
   ToolCallResult replayRnr(const nlohmann::json& arguments);
@@ -241,6 +243,9 @@ private:
   std::unique_ptr<SelectTool> selectTool_;
   PenTool penTool_;
   TextTool textTool_;
+  /// Inspector model refreshed by `inspector_state`, so the reported geometry is the same snapshot
+  /// the editor sidebar renders.
+  SidebarPresenter inspector_;
   enum class ActiveReplayTool : std::uint8_t {
     Select,
     Pen,
