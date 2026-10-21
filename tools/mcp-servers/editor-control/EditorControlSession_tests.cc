@@ -925,6 +925,39 @@ TEST(EditorControlSessionTest, SourcePaneTagRenameUndoRestoresElement) {
       << "the edits must not reparse the document";
 }
 
+// A source-pane keystroke that leaves the source malformed keeps the last valid DOM, so the
+// session must report its preview as stale until a later keystroke repairs the source.
+TEST(EditorControlSessionTest, SourcePaneMalformedEditKeepsPreviewStale) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><g id="group"><rect width="40" height="20"/></g></svg>)svg";
+  EditorControlSession session;
+  ASSERT_FALSE(session
+                   .handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                    {"render_after_load", false}})
+                   .isError);
+  const std::size_t tagOffset = std::string_view(kScene).find("<g id") + 1;
+
+  const ToolCallResult broken = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits",
+            json::array({json{{"offset", tagOffset}, {"delete_count", 1}, {"insert", "a"}}})},
+           {"render_after_edit", false}});
+  ASSERT_FALSE(broken.isError) << broken.body.dump(2);
+  EXPECT_FALSE(broken.body["source_diagnostic"].is_null()) << broken.body.dump(2);
+  EXPECT_TRUE(broken.body["source"].value("preview_stale", false)) << broken.body.dump(2);
+
+  const ToolCallResult repaired = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits",
+            json::array({json{{"offset", tagOffset}, {"delete_count", 1}, {"insert", "g"}}})},
+           {"render_after_edit", false}});
+  ASSERT_FALSE(repaired.isError) << repaired.body.dump(2);
+  EXPECT_TRUE(repaired.body["source_diagnostic"].is_null()) << repaired.body.dump(2);
+  EXPECT_FALSE(repaired.body["source"].value("preview_stale", true)) << repaired.body.dump(2);
+}
+
 TEST(EditorControlSessionTest, InvalidSvgSourceEditKeepsDraftAndStalePreview) {
   constexpr std::string_view kScene =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
