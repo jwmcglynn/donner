@@ -231,6 +231,11 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   if (currentSelection.size() != 1) {
     return false;
   }
+  // The root's bounds cover the whole canvas, so re-dragging it from a press inside them would keep
+  // every click on the root and no child could be selected from the canvas.
+  if (currentSelection.front() == editor.document().document().svgElement()) {
+    return false;
+  }
   // Bounds are caller-supplied so this path is race-safe during a
   // busy render. EditorShell passes the pre-snapshotted bounds from
   // `SelectionBoundsCache::displayedBoundsDoc` (no live registry read);
