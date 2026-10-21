@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "donner/base/Path.h"
+#include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGPathElement.h"
@@ -88,18 +89,25 @@ public:
   /// @param documentPoint Pointer location in SVG document coordinates.
   /// @param buttonHeld Whether the left mouse button is down.
   /// @param modifiers Modifier-key state for the drag.
+  /// @param deferCommit Keep the latest pointer sample local until document access is available.
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
                    MouseModifiers modifiers, bool deferCommit = false);
 
-  /// Commit the latest coalesced drag and release once the document worker is idle.
+  /// Commit the latest coalesced drag and release; call when the document worker is idle.
+  /// @param editor Editor state and mutation queue owning the pending gesture.
   void flushPendingDrag(EditorApp& editor);
   /// Whether the previous gesture still awaits document settlement.
   [[nodiscard]] bool hasDeferredRelease() const { return pendingDragRelease_.has_value(); }
   /// Keep a release local until document access is available.
+  /// @param editor Editor state used to bind the release to its document and selection.
+  /// @param documentPoint Final pointer location in SVG document coordinates.
   void deferMouseUp(EditorApp& editor, const Vector2d& documentPoint);
   /// Owning element-space path geometry for the current local drag.
+  /// @return Cached geometry, or nullptr when no bounded preview is available.
   [[nodiscard]] std::shared_ptr<const Path> previewPath() const;
   /// Owning preview only while the original pen subject and deferred document remain selected.
+  /// @param editor Editor state used to validate the owning document and selection.
+  /// @return Cached geometry, or nullptr when the preview is unavailable or no longer current.
   [[nodiscard]] std::shared_ptr<const Path> previewPathForSelection(const EditorApp& editor) const;
 
   /// Handle mouse release. Commits the dragged anchor's handles if it moved.
@@ -179,7 +187,9 @@ public:
   [[nodiscard]] bool isDraggingAnchor() const { return dragMode_ != DragMode::None; }
 
   /// Current path data for tests and UI diagnostics.
-  [[nodiscard]] const std::string& activePathData() const;
+  /// @return Reference to this tool's cached string, whose contents change when the path is
+  /// rebuilt.
+  [[nodiscard]] const std::string& activePathData() const UTILS_LIFETIME_BOUND;
   /// Maximum points retained by the immediate preview; larger paths use normal raster updates.
   static constexpr std::size_t kMaximumPreviewPoints = 4096;
   /// Actual anchor visits made by lazy preview construction.

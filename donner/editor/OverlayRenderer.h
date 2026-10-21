@@ -315,6 +315,9 @@ class OverlayRenderer {
 public:
   /// Replace one cached path's geometry using owning document-space data, without DOM access.
   /// Paint and clipping eligibility must already have been validated by the caller's capture.
+  /// @param snapshot Owning copy of the captured selection chrome.
+  /// @param pathDoc Replacement geometry copied into the snapshot in document coordinates.
+  /// @return Updated snapshot, or the unchanged copy when it has no live path preview.
   static SelectionChromeSnapshot withLivePathGeometry(SelectionChromeSnapshot snapshot,
                                                       const Path& pathDoc);
 

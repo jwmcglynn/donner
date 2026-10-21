@@ -402,6 +402,7 @@ public:
     penLivePreviewElement_ = std::move(element);
   }
   /// Latest owning element-space path, consumed with the cached pen paint and selection identity.
+  /// @param geometry Owning path geometry, or nullptr to retire the current preview.
   void setPenLivePreviewGeometry(std::shared_ptr<const Path> geometry) {
     penLivePreviewGeometry_ = std::move(geometry);
   }
