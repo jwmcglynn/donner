@@ -1072,6 +1072,57 @@ int ElementDepth(const svg::SVGElement& element) {
   return depth;
 }
 
+/// The ancestors of \p elements below \p scopeRoot, each once, deepest first.
+std::vector<svg::SVGElement> AncestorsDeepestFirst(std::span<const svg::SVGElement> elements,
+                                                   const svg::SVGElement& scopeRoot) {
+  std::unordered_set<Entity> visited;
+  std::vector<std::pair<int, svg::SVGElement>> ancestors;
+  for (const svg::SVGElement& element : elements) {
+    for (std::optional<svg::SVGElement> parent = element.parentElement();
+         parent.has_value() && *parent != scopeRoot; parent = parent->parentElement()) {
+      if (!visited.insert(EntityOf(*parent)).second) {
+        break;  // The rest of this chain was already collected.
+      }
+      ancestors.emplace_back(ElementDepth(*parent), *parent);
+    }
+  }
+  std::stable_sort(ancestors.begin(), ancestors.end(),
+                   [](const auto& lhs, const auto& rhs) { return lhs.first > rhs.first; });
+
+  std::vector<svg::SVGElement> result;
+  result.reserve(ancestors.size());
+  for (const auto& [depth, ancestor] : ancestors) {
+    result.push_back(ancestor);
+  }
+  return result;
+}
+
+/// True when \p group is an unlocked `<g>` that has child elements, all of them in \p deleted.
+bool IsEmptiedGroup(const svg::SVGElement& group, const std::unordered_set<Entity>& deleted) {
+  if (group.tryType() != svg::ElementType::G || IsLocked(group) ||
+      !group.firstChild().has_value()) {
+    return false;
+  }
+  for (std::optional<svg::SVGElement> child = group.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (!deleted.contains(EntityOf(*child))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// True when an ancestor of \p element is in \p deleted.
+bool HasDeletedAncestor(const svg::SVGElement& element, const std::unordered_set<Entity>& deleted) {
+  for (std::optional<svg::SVGElement> parent = element.parentElement(); parent.has_value();
+       parent = parent->parentElement()) {
+    if (deleted.contains(EntityOf(*parent))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Extend \p deletable with the `<g>` groups that deleting it leaves with no child elements, below
  * \p scopeRoot, so a delete never leaves an empty wrapper behind. A group that keeps any child,
@@ -1086,48 +1137,16 @@ std::vector<svg::SVGElement> WithEmptiedGroups(std::vector<svg::SVGElement> dele
     deleted.insert(EntityOf(element));
   }
 
-  // Each ancestor group once, deepest first, so nested groups are decided before their parents.
-  std::unordered_set<Entity> visitedAncestors;
-  std::vector<std::pair<int, svg::SVGElement>> ancestors;
-  for (const svg::SVGElement& element : deletable) {
-    for (std::optional<svg::SVGElement> parent = element.parentElement();
-         parent.has_value() && *parent != scopeRoot; parent = parent->parentElement()) {
-      if (!visitedAncestors.insert(EntityOf(*parent)).second) {
-        break;
-      }
-      ancestors.emplace_back(ElementDepth(*parent), *parent);
-    }
-  }
-  std::stable_sort(ancestors.begin(), ancestors.end(),
-                   [](const auto& lhs, const auto& rhs) { return lhs.first > rhs.first; });
-
-  for (const auto& [depth, group] : ancestors) {
-    if (deleted.contains(EntityOf(group)) || group.tryType() != svg::ElementType::G ||
-        IsLocked(group) || !group.firstChild().has_value()) {
-      continue;
-    }
-    bool emptied = true;
-    for (std::optional<svg::SVGElement> child = group.firstChild(); child.has_value();
-         child = child->nextSibling()) {
-      if (!deleted.contains(EntityOf(*child))) {
-        emptied = false;
-        break;
-      }
-    }
-    if (emptied) {
+  // Deepest first, so a nested group is decided before its parent.
+  for (const svg::SVGElement& group : AncestorsDeepestFirst(deletable, scopeRoot)) {
+    if (!deleted.contains(EntityOf(group)) && IsEmptiedGroup(group, deleted)) {
       deleted.insert(EntityOf(group));
       deletable.push_back(group);
     }
   }
 
   std::erase_if(deletable, [&deleted](const svg::SVGElement& element) {
-    for (std::optional<svg::SVGElement> parent = element.parentElement(); parent.has_value();
-         parent = parent->parentElement()) {
-      if (deleted.contains(EntityOf(*parent))) {
-        return true;
-      }
-    }
-    return false;
+    return HasDeletedAncestor(element, deleted);
   });
   return deletable;
 }
