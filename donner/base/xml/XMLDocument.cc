@@ -3212,6 +3212,27 @@ std::optional<XMLAttributeAtSourceOffset> XMLDocument::attributeAtSourceOffset(
   return std::nullopt;
 }
 
+namespace {
+
+/// Prolog edits can change declarations used by every later fragment.
+bool SourceEditNeedsDocumentContext(const XMLDocument& document,
+                                    const SourceEditClassification& classification,
+                                    SourceEditRange range) {
+  if (classification.scope != ReparseScope::Document) {
+    return false;
+  }
+  for (auto child = document.root().firstChild(); child; child = child->nextSibling()) {
+    if (child->type() != XMLNode::Type::Element) {
+      continue;
+    }
+    const auto start = child->sourceStartOffset();
+    return !start || !start->offset || range.start <= *start->offset;
+  }
+  return true;
+}
+
+}  // namespace
+
 ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) {
   ApplySourceEditResult result;
   result.scope = ReparseScope::Document;
@@ -3243,6 +3264,8 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
 
   // Capture the validated fragment span before the replacement; node locations resolve
   // against current bytes, so capturing after would silently shift the span.
+  const bool requiresDocumentContext =
+      SourceEditNeedsDocumentContext(*this, classification, *range);
   const ClassificationTarget classified = ClassifiedEditTarget(*this, classification, *range);
   const SourceEditRange fragmentSpan = classified.span;
   const XMLNode mutationNode = classified.node;
@@ -3274,7 +3297,7 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
   if (result.diagnostic.has_value()) {
     if (!isNoOp) {
       registry_->ctx().get<XMLDocumentContext>().sourceRequiresDocumentReparse |=
-          classification.scope == ReparseScope::Document;
+          requiresDocumentContext;
       AddUnreparsedSpan(*this, validatedSpan.start, validatedSpan.end, *result.diagnostic);
     }
   } else {
