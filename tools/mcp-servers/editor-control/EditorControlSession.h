@@ -132,7 +132,7 @@ public:
 private:
   ToolCallResult loadDocument(const nlohmann::json& arguments);
   ToolCallResult loadSvg(const nlohmann::json& arguments);
-  ToolCallResult getSvgSource(const nlohmann::json& arguments) const;
+  ToolCallResult getSvgSource(const nlohmann::json& arguments);
   ToolCallResult editSvgSource(const nlohmann::json& arguments);
   ToolCallResult selectBySelector(const nlohmann::json& arguments);
   ToolCallResult clickLayerButton(const nlohmann::json& arguments);
@@ -143,7 +143,7 @@ private:
   ToolCallResult transformSelector(const nlohmann::json& arguments);
   ToolCallResult pointerGesture(const nlohmann::json& arguments);
   ToolCallResult renderFrameTool(const nlohmann::json& arguments);
-  ToolCallResult sessionState(const nlohmann::json& arguments) const;
+  ToolCallResult sessionState(const nlohmann::json& arguments);
   ToolCallResult startRnrRecording(const nlohmann::json& arguments);
   ToolCallResult stopRnrRecording(const nlohmann::json& arguments);
   ToolCallResult replayRnr(const nlohmann::json& arguments);
@@ -195,6 +195,14 @@ private:
   [[nodiscard]] repro::ReproViewport currentReproViewport() const;
   [[nodiscard]] Vector2d currentRecordingScreenPoint(const Vector2d& documentPoint) const;
   [[nodiscard]] bool syncCanvasSize(const ViewportState& viewport);
+  /**
+   * Apply every completed gesture writeback to the document and refresh the source draft.
+   *
+   * Every tool calls this before it reads, reports or records source state, so the source it
+   * observes includes every gesture completed by an earlier tool call.
+   *
+   * @return True if a writeback changed the document.
+   */
   [[nodiscard]] bool drainPendingWritebacks();
   void syncSourceTextFromDocumentIfChanged();
   [[nodiscard]] bool setActiveToolForReplay(std::string_view tool, std::string* error);

@@ -541,6 +541,7 @@ ToolCallResult EditorControlSession::startRnrRecording(const json& arguments) {
   if (!ensureDocumentLoaded(&error)) {
     return MakeErrorResult(error);
   }
+  (void)drainPendingWritebacks();
   if (rnrRecording_.active) {
     return MakeErrorResult("an .rnr recording is already active");
   }

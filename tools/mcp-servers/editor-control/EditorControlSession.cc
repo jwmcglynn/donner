@@ -120,7 +120,9 @@ json EditorControlSession::toolList() {
       {
           {"name", "get_svg_source"},
           {"description",
-           "Return the editable SVG source draft currently owned by the headless editor session."},
+           "Return the editable SVG source draft currently owned by the headless editor session. "
+           "The draft includes the source writeback of every gesture completed by an earlier "
+           "tool call."},
           {"inputSchema",
            {
                {"type", "object"},
@@ -237,7 +239,8 @@ json EditorControlSession::toolList() {
           {"name", "pointer_gesture"},
           {"description",
            "Dispatch a recorded click, double-click, or drag through the active canvas tool. "
-           "Idle tail frames make timed chrome such as caret blink replayable."},
+           "Idle tail frames make timed chrome such as caret blink replayable. The reported "
+           "source includes the gesture's writeback."},
           {"inputSchema",
            {
                {"type", "object"},
@@ -404,7 +407,9 @@ json EditorControlSession::toolList() {
       },
       {
           {"name", "session_state"},
-          {"description", "Return selection, canvas, and compositor diagnostics."},
+          {"description",
+           "Return selection, canvas, and compositor diagnostics. Completed gesture writebacks "
+           "are applied first, so the source and dirty state include the last gesture."},
           {"inputSchema", {{"type", "object"}, {"properties", json::object()}}},
       },
       {

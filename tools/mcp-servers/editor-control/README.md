@@ -89,6 +89,15 @@ draft that changed underneath the MCP client. `render_frame`, `session_state`,
 and source-edit responses include `preview_stale` so an agent can tell when the
 attached image is the last valid rendering rather than the current draft.
 
+A completed gesture's source writeback is applied before any later tool reads,
+reports or records source state: `get_svg_source`, `session_state`, the
+`pointer_gesture` response and the source embedded by `start_rnr_recording`
+include the last drag or transform, and their `source_revision` matches what a
+following `render_frame` or `edit_svg_source` call observes, so an
+`expected_source_revision` read after a gesture is accepted. Because it applies
+the writeback, `session_state` also reports the dirty state that writeback
+produced.
+
 Each render stage includes both:
 
 - `composited_preview`: the worker-side split tile list from `AsyncRenderer`.

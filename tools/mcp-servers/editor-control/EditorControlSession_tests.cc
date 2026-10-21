@@ -1928,5 +1928,176 @@ TEST(EditorControlSessionTest, RecordingAdmissionEnforcesAggregatePixelFrames) {
       8u);
 }
 
+constexpr std::string_view kGestureWritebackScene =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+  <rect id="bg" width="400" height="300" fill="#eeeeee"/>
+  <g id="outer" transform="translate(40 30) rotate(10)">
+    <rect id="inner-a" x="10" y="10" width="80" height="60" fill="#2f6fed"/>
+  </g>
+  <rect id="free" x="250" y="180" width="100" height="80" fill="#35a16b"/>
+</svg>)svg";
+
+/// Returns the start tag of the element whose `id` attribute is \p id, or an empty string.
+std::string ElementStartTag(std::string_view source, std::string_view id) {
+  const std::string idAttribute = "id=\"" + std::string(id) + "\"";
+  const std::size_t idPos = source.find(idAttribute);
+  if (idPos == std::string_view::npos) {
+    return {};
+  }
+  const std::size_t start = source.rfind('<', idPos);
+  const std::size_t end = source.find('>', idPos);
+  if (start == std::string_view::npos || end == std::string_view::npos) {
+    return {};
+  }
+  return std::string(source.substr(start, end - start + 1));
+}
+
+json ReadSourceText(EditorControlSession* session) {
+  const ToolCallResult source = session->handleToolCall("get_svg_source", json::object());
+  EXPECT_FALSE(source.isError) << source.body.dump(2);
+  return source.body;
+}
+
+void LoadGestureWritebackScene(EditorControlSession* session) {
+  const ToolCallResult load =
+      session->handleToolCall("load_svg", json{{"svg_source", std::string(kGestureWritebackScene)},
+                                               {"canvas_width", 800},
+                                               {"canvas_height", 600},
+                                               {"render_after_load", false}});
+  ASSERT_FALSE(load.isError) << load.body.dump(2);
+}
+
+/// Asserts that the first source read after a gesture already carries its writeback: the element
+/// gained a `transform`, the revision advanced exactly once, and later reads that drain writebacks
+/// (`render_frame`) observe the same revision and hash rather than a newer one.
+void ExpectFirstReadReflectsGesture(EditorControlSession* session, const json& sourceBefore,
+                                    std::string_view elementId) {
+  const json afterGesture = ReadSourceText(session);
+  EXPECT_THAT(ElementStartTag(afterGesture.value("text", ""), elementId),
+              ::testing::HasSubstr("transform=\""))
+      << afterGesture.dump(2);
+  EXPECT_EQ(afterGesture["source"].value("source_revision", 0u),
+            sourceBefore.value("source_revision", 0u) + 1u)
+      << afterGesture.dump(2);
+  EXPECT_FALSE(afterGesture["source"].value("preview_stale", true)) << afterGesture.dump(2);
+
+  const ToolCallResult render =
+      session->handleToolCall("render_frame", json{{"include_final_frame", false}});
+  ASSERT_FALSE(render.isError) << render.body.dump(2);
+  EXPECT_EQ(render.body["source"], afterGesture["source"]);
+  EXPECT_EQ(ReadSourceText(session)["source"], afterGesture["source"]);
+}
+
+TEST(EditorControlSessionTest, GetSvgSourceReflectsCompletedDrag) {
+  EditorControlSession session;
+  ASSERT_NO_FATAL_FAILURE(LoadGestureWritebackScene(&session));
+  const json sourceBefore = ReadSourceState(&session);
+
+  const ToolCallResult drag =
+      session.handleToolCall("drag_selector", json{{"selector", "#inner-a"},
+                                                   {"delta_x", 23.5},
+                                                   {"delta_y", 11.25},
+                                                   {"frames", 6},
+                                                   {"selection_mode", "hit_test"}});
+  ASSERT_FALSE(drag.isError) << drag.body.dump(2);
+  ExpectFirstReadReflectsGesture(&session, sourceBefore, "inner-a");
+}
+
+TEST(EditorControlSessionTest, GetSvgSourceReflectsCompletedTransformHandleDrag) {
+  EditorControlSession session;
+  ASSERT_NO_FATAL_FAILURE(LoadGestureWritebackScene(&session));
+  const ToolCallResult select =
+      session.handleToolCall("select_by_selector", json{{"selector", "#free"}, {"render", false}});
+  ASSERT_FALSE(select.isError) << select.body.dump(2);
+  const json sourceBefore = ReadSourceState(&session);
+
+  const ToolCallResult scale =
+      session.handleToolCall("transform_selector", json{{"selector", "#free"},
+                                                        {"mode", "scale"},
+                                                        {"corner", "bottom_right"},
+                                                        {"delta_x", 20.0},
+                                                        {"delta_y", 10.0},
+                                                        {"frames", 2}});
+  ASSERT_FALSE(scale.isError) << scale.body.dump(2);
+  ExpectFirstReadReflectsGesture(&session, sourceBefore, "free");
+}
+
+TEST(EditorControlSessionTest, SessionStateReportsSourceAfterCompletedDrag) {
+  EditorControlSession session;
+  ASSERT_NO_FATAL_FAILURE(LoadGestureWritebackScene(&session));
+  const json sourceBefore = ReadSourceState(&session);
+
+  const ToolCallResult drag = session.handleToolCall(
+      "drag_selector", json{{"selector", "#free"}, {"delta_x", 12.0}, {"frames", 2}});
+  ASSERT_FALSE(drag.isError) << drag.body.dump(2);
+
+  const ToolCallResult state = session.handleToolCall("session_state", json::object());
+  ASSERT_FALSE(state.isError) << state.body.dump(2);
+  EXPECT_EQ(state.body["source"].value("source_revision", 0u),
+            sourceBefore.value("source_revision", 0u) + 1u)
+      << state.body.dump(2);
+  EXPECT_EQ(ReadSourceState(&session), state.body["source"]);
+  EXPECT_THAT(ElementStartTag(ReadSourceText(&session).value("text", ""), "free"),
+              ::testing::HasSubstr("transform=\""));
+}
+
+TEST(EditorControlSessionTest, EditSvgSourceAcceptsRevisionReadAfterCompletedDrag) {
+  EditorControlSession session;
+  ASSERT_NO_FATAL_FAILURE(LoadGestureWritebackScene(&session));
+
+  const ToolCallResult drag = session.handleToolCall(
+      "drag_selector", json{{"selector", "#free"}, {"delta_x", 12.0}, {"frames", 2}});
+  ASSERT_FALSE(drag.isError) << drag.body.dump(2);
+
+  const json read = ReadSourceText(&session);
+  const ToolCallResult edit = session.handleToolCall(
+      "edit_svg_source",
+      json{{"expected_source_revision", read["source"].value("source_revision", 0u)},
+           {"replace_source", read.value("text", "")},
+           {"render_after_edit", false}});
+  EXPECT_FALSE(edit.isError) << edit.body.dump(2);
+}
+
+TEST(EditorControlSessionTest, StartRnrRecordingEmbedsSourceAfterCompletedDrag) {
+  EditorControlSession session;
+  ASSERT_NO_FATAL_FAILURE(LoadGestureWritebackScene(&session));
+  const json sourceBefore = ReadSourceState(&session);
+
+  const ToolCallResult drag = session.handleToolCall(
+      "drag_selector", json{{"selector", "#free"}, {"delta_x", 12.0}, {"frames", 2}});
+  ASSERT_FALSE(drag.isError) << drag.body.dump(2);
+
+  const ToolCallResult start = session.handleToolCall("start_rnr_recording", json::object());
+  ASSERT_FALSE(start.isError) << start.body.dump(2);
+  EXPECT_NE(start.body.value("svg_hash", ""), sourceBefore.value("source_hash", ""))
+      << start.body.dump(2);
+  EXPECT_EQ(start.body.value("svg_hash", ""), ReadSourceState(&session).value("source_hash", ""))
+      << start.body.dump(2);
+
+  const ToolCallResult stop =
+      session.handleToolCall("stop_rnr_recording", json{{"write_file", false}});
+  EXPECT_FALSE(stop.isError) << stop.body.dump(2);
+}
+
+TEST(EditorControlSessionTest, PointerGestureDragReportsSourceWithItsWriteback) {
+  EditorControlSession session;
+  ASSERT_NO_FATAL_FAILURE(LoadGestureWritebackScene(&session));
+  const json sourceBefore = ReadSourceState(&session);
+
+  const ToolCallResult gesture = session.handleToolCall(
+      "pointer_gesture",
+      json{{"start_x", 300.0}, {"start_y", 220.0}, {"end_x", 320.0}, {"end_y", 230.0}});
+  ASSERT_FALSE(gesture.isError) << gesture.body.dump(2);
+  EXPECT_EQ(gesture.body["source"].value("source_revision", 0u),
+            sourceBefore.value("source_revision", 0u) + 1u)
+      << gesture.body.dump(2);
+
+  const json afterGesture = ReadSourceText(&session);
+  EXPECT_EQ(afterGesture["source"], gesture.body["source"]);
+  EXPECT_THAT(ElementStartTag(afterGesture.value("text", ""), "free"),
+              ::testing::HasSubstr("transform=\"translate(20"))
+      << afterGesture.dump(2);
+}
+
 }  // namespace
 }  // namespace donner::editor::mcp
