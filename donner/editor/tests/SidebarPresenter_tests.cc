@@ -1326,6 +1326,19 @@ protected:
     TypeIntoStrokeWidth(presenter, &app, windowName, text, windowHeight);
   }
 
+  static void TypeIntoDashOffset(SidebarPresenter& presenter, EditorApp& app, const char* window,
+                                 std::string_view text) {
+    constexpr float kHeight = 600.0f;
+    const ImVec2 away(-1.0f, -1.0f);
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    const auto offset = presenter.strokeDashOffsetRectForTesting();
+    ASSERT_THAT(offset, testing::Optional(testing::_));
+    RenderInspectorFrame(presenter, &app, window, RectCenter(*offset), true, kHeight);
+    RenderInspectorFrame(presenter, &app, window, RectCenter(*offset), false, kHeight);
+    ImGui::GetIO().AddInputCharactersUTF8(std::string(text).c_str());
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+  }
+
   static std::vector<ImDrawVert> TextureVertices(ImTextureID texture) {
     std::vector<ImDrawVert> vertices;
     const ImDrawData* data = ImGui::GetDrawData();
@@ -3005,7 +3018,15 @@ TEST_F(SidebarPresenterImGuiTest, StartedStrokeWidthStaysWithItsOriginalSelectio
 }
 
 TEST_F(SidebarPresenterImGuiTest, EarlierWidthActivationCancelsRejectedDashOffsetBeforeItsOwnEdit) {
-  for (const bool busy : {false, true}) {
+  struct Scenario {
+    bool busy;
+    bool commitWidth;
+    const char* window;
+  };
+  for (const Scenario scenario : {Scenario{false, false, "##offset_to_width_cancel"},
+                                  Scenario{true, false, "##offset_to_width_busy_cancel"},
+                                  Scenario{false, true, "##offset_to_width_commit"},
+                                  Scenario{true, true, "##offset_to_width_busy_commit"}}) {
     constexpr std::string_view source =
         R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><path id="target" d="M10 40 L110 40" stroke="black" stroke-dasharray="4 2" stroke-dashoffset="2"/></svg>)";
     EditorApp app;
@@ -3013,23 +3034,17 @@ TEST_F(SidebarPresenterImGuiTest, EarlierWidthActivationCancelsRejectedDashOffse
     ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
     const auto target = app.selectedElement();
     ASSERT_THAT(target, testing::Optional(testing::_));
-    const char* window = busy ? "##offset_to_width_busy" : "##offset_to_width";
+    const char* window = scenario.window;
     SCOPED_TRACE(window);
     constexpr float kHeight = 600.0f;
     const ImVec2 away(-1.0f, -1.0f);
-    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
-    const auto offset = presenter.strokeDashOffsetRectForTesting();
+    ASSERT_NO_FATAL_FAILURE(TypeIntoDashOffset(presenter, app, window, "5"));
     const auto width = presenter.strokeWidthRectForTesting();
-    ASSERT_THAT(offset, testing::Optional(testing::_));
     ASSERT_THAT(width, testing::Optional(testing::_));
-    RenderInspectorFrame(presenter, &app, window, RectCenter(*offset), true, kHeight);
-    RenderInspectorFrame(presenter, &app, window, RectCenter(*offset), false, kHeight);
-    ImGui::GetIO().AddInputCharactersUTF8("5");
-    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
     (void)app.flushFrame();
     ASSERT_THAT(target->getAttribute("style"),
                 testing::Optional(testing::Eq(RcString("stroke-dashoffset: 5"))));
-    EditorApp* available = busy ? nullptr : &app;
+    EditorApp* available = scenario.busy ? nullptr : &app;
     ImGui::GetIO().AddInputCharactersUTF8("furlongs");
     RenderInspectorFrame(presenter, available, window, away, false, kHeight);
     RenderInspectorFrame(presenter, available, window, RectCenter(*width), true, kHeight);
@@ -3043,11 +3058,23 @@ TEST_F(SidebarPresenterImGuiTest, EarlierWidthActivationCancelsRejectedDashOffse
     ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, window, "", kHeight));
     ReplaceFocusedInput(presenter, &app, window, "7", away, kHeight);
     (void)app.flushFrame();
-    ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+    const ImGuiKey finish = scenario.commitWidth ? ImGuiKey_Enter : ImGuiKey_Escape;
+    ImGui::GetIO().AddKeyEvent(finish, true);
     RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
-    ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+    ImGui::GetIO().AddKeyEvent(finish, false);
     RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
     (void)app.flushFrame();
+    if (scenario.commitWidth) {
+      EXPECT_THAT(target->getAttribute("style"),
+                  testing::Optional(testing::Eq(RcString("stroke-width: 7"))));
+      EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+      app.undo();
+      (void)app.flushFrame();
+      const auto restored = app.document().document().querySelector("#target");
+      ASSERT_THAT(restored, testing::Optional(testing::_));
+      EXPECT_THAT(restored->getAttribute("style"), testing::Eq(std::nullopt));
+      continue;
+    }
     EXPECT_THAT(target->getAttribute("style"), testing::Eq(std::nullopt));
     EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
 
@@ -3065,6 +3092,52 @@ TEST_F(SidebarPresenterImGuiTest, EarlierWidthActivationCancelsRejectedDashOffse
     const auto restored = app.document().document().querySelector("#target");
     ASSERT_THAT(restored, testing::Optional(testing::_));
     EXPECT_THAT(restored->getAttribute("style"), testing::Eq(std::nullopt));
+  }
+}
+
+TEST_F(SidebarPresenterImGuiTest, EarlierWidthActivationKeepsAcceptedDashOffsetUndoSeparate) {
+  for (const bool busy : {false, true}) {
+    constexpr std::string_view source =
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><path id="target" d="M10 40 L110 40" stroke="black" stroke-dasharray="4 2" stroke-dashoffset="2"/></svg>)";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+    const auto target = app.selectedElement();
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    const char* window = busy ? "##accepted_offset_busy" : "##accepted_offset";
+    SCOPED_TRACE(window);
+    constexpr float kHeight = 600.0f;
+    const ImVec2 away(-1.0f, -1.0f);
+    ASSERT_NO_FATAL_FAILURE(TypeIntoDashOffset(presenter, app, window, "5"));
+    (void)app.flushFrame();
+    const auto width = presenter.strokeWidthRectForTesting();
+    ASSERT_THAT(width, testing::Optional(testing::_));
+    EditorApp* available = busy ? nullptr : &app;
+    RenderInspectorFrame(presenter, available, window, RectCenter(*width), true, kHeight);
+    RenderInspectorFrame(presenter, available, window, RectCenter(*width), false, kHeight);
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    (void)app.flushFrame();
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+    ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, window, "", kHeight));
+    ReplaceFocusedInput(presenter, &app, window, "8", away, kHeight);
+    (void)app.flushFrame();
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    (void)app.flushFrame();
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(2u));
+    app.undo();
+    (void)app.flushFrame();
+    const auto afterWidthUndo = app.document().document().querySelector("#target");
+    ASSERT_THAT(afterWidthUndo, testing::Optional(testing::_));
+    EXPECT_THAT(afterWidthUndo->getAttribute("style"),
+                testing::Optional(testing::Eq(RcString("stroke-dashoffset: 5"))));
+    app.undo();
+    (void)app.flushFrame();
+    const auto afterOffsetUndo = app.document().document().querySelector("#target");
+    ASSERT_THAT(afterOffsetUndo, testing::Optional(testing::_));
+    EXPECT_THAT(afterOffsetUndo->getAttribute("style"), testing::Eq(std::nullopt));
   }
 }
 
