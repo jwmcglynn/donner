@@ -107,15 +107,25 @@ class SVGDocument {
 public:
   struct Settings;
 
-  /// Current loader, callback and resource-envelope identity for full-reparse admission.
-  struct ResourcePolicySnapshot {
-    std::uint64_t generation = 0;  ///< Loader, processing-mode and callback revision.
-    std::shared_ptr<const components::DocumentResourceFamilyBudget> familyBudget;  ///< Shared cap.
-    std::size_t maximumPayloadBytes = 0;  ///< Local parsed-payload cap.
+  /// Opaque, equality-comparable identity of the current resource-loading and parsing policy.
+  class ResourcePolicySnapshot {
+  public:
     bool operator==(const ResourcePolicySnapshot&) const = default;
+
+  private:
+    friend class SVGDocument;
+    ResourcePolicySnapshot(std::uint64_t generation, std::shared_ptr<const void> familyIdentity,
+                           std::size_t maximumPayloadBytes)
+        : generation_(generation),
+          familyIdentity_(std::move(familyIdentity)),
+          maximumPayloadBytes_(maximumPayloadBytes) {}
+
+    std::uint64_t generation_;
+    std::shared_ptr<const void> familyIdentity_;
+    std::size_t maximumPayloadBytes_;
   };
 
-  /// Return a policy snapshot, or nullopt if resource envelopes are missing or inconsistent.
+  /// Capture policy identity, or nullopt when the current resource policy is inconsistent.
   std::optional<ResourcePolicySnapshot> resourcePolicySnapshot() const;
   /// Callback used to parse external SVG content referenced from within a document.
   using SvgParseCallback = std::function<std::optional<SVGDocumentHandle>(
