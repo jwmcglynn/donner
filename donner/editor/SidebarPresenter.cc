@@ -72,6 +72,10 @@ InspectorStyleDisplayValue FormatInspectorStyleValue(std::string_view serialized
 
 namespace {
 
+bool HasPaintedInspectorBounds(const svg::SVGElement& element) {
+  return element.isa<svg::SVGTextElement>() || element.isa<svg::SVGGElement>();
+}
+
 /// Document-space bounds behind the Inspector's Position and Size fields. Path
 /// geometry reports its fill bounds. `<text>` and `<g>` have no path geometry of
 /// their own, so they report the box their selection chrome draws: the text's
@@ -83,7 +87,7 @@ std::optional<Box2d> InspectorBounds(const svg::SVGElement& element) {
   if (element.isa<svg::SVGGeometryElement>()) {
     return element.cast<svg::SVGGeometryElement>().worldBounds();
   }
-  if (element.isa<svg::SVGTextElement>() || element.isa<svg::SVGGElement>()) {
+  if (HasPaintedInspectorBounds(element)) {
     const std::vector<Box2d> bounds =
         SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(&element, 1));
     if (!bounds.empty()) {
@@ -2172,7 +2176,7 @@ void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField fie
   // scope would deadlock on field activation.
   state.startTransform = element.cast<svg::SVGGraphicsElement>().transform();
   state.startBounds = InspectorBounds(element);
-  if ((element.isa<svg::SVGGElement>() || element.isa<svg::SVGTextElement>()) &&
+  if (HasPaintedInspectorBounds(element) &&
       (field == TransformField::Width || field == TransformField::Height)) {
     state.boundsAfterAxisScale = CaptureSelectionBoundsAfterAxisScale(element);
   }
