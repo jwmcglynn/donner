@@ -1693,6 +1693,76 @@ TEST_F(XMLDocumentTests, ApplySourceEditRenamingClosingTagFirstReconcilesDiagnos
   EXPECT_EQ(doc.source(), R"(<svg><a id="group"><rect id="child" x="7"/></a></svg>)");
 }
 
+ApplySourceEditResult CompleteClosingFirstGroupRename(XMLDocument& doc) {
+  const std::size_t closeOffset = doc.source().find("</g>") + 2;
+  const auto closing = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(closeOffset), FileOffset::Offset(closeOffset + 1)},
+      .replacement = "a",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  EXPECT_TRUE(closing.applied);
+  EXPECT_THAT(doc.sourceDiagnostic(), Optional(testing::_));
+  const std::size_t openOffset = doc.source().find("<g") + 1;
+  return doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(openOffset), FileOffset::Offset(openOffset + 1)},
+      .replacement = "a",
+      .sourceVersion = doc.sourceVersion(),
+  });
+}
+
+TEST_F(XMLDocumentTests, RenameReconcilesFilteredAncestorCommentsAndInstructions) {
+  for (const std::string_view omitted : {"<!--note-->", "<?note value?>"}) {
+    SCOPED_TRACE(omitted);
+    const std::string prefix = "<svg>" + std::string(omitted);
+    const std::string suffix = std::string(omitted) + "<rect id='sibling'/></svg>";
+    XMLDocument doc = ParseDocument(prefix + "<g><rect id='child' x='1'/></g>" + suffix);
+    const XMLNode svg = doc.root().firstChild().value();
+    const XMLNode child = svg.firstChild()->firstChild().value();
+    const XMLNode sibling = svg.lastChild().value();
+
+    const auto opening = CompleteClosingFirstGroupRename(doc);
+    EXPECT_TRUE(opening.applied);
+    EXPECT_THAT(opening.diagnostic, Eq(std::nullopt));
+    EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+    ASSERT_THAT(svg.firstChild(), Optional(testing::_));
+    EXPECT_EQ(svg.firstChild()->tagName(), XMLQualifiedNameRef("a"));
+    EXPECT_THAT(svg.firstChild()->firstChild(), Optional(child));
+    EXPECT_THAT(svg.firstChild()->nextSibling(), Optional(sibling));
+    EXPECT_THAT(sibling.nextSibling(), Eq(std::nullopt));
+    EXPECT_EQ(doc.source(), prefix + "<a><rect id='child' x='1'/></a>" + suffix);
+
+    const std::size_t valueOffset = doc.source().find("x='1'") + 3;
+    const auto changed = doc.applySourceEdit(XMLEditIntent{
+        .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 1)},
+        .replacement = "7",
+        .sourceVersion = doc.sourceVersion(),
+    });
+    EXPECT_THAT(changed.diagnostic, Eq(std::nullopt));
+    EXPECT_EQ(changed.scope, ReparseScope::AttributeValue);
+    EXPECT_THAT(child.getAttribute("x"), Optional(Eq("7")));
+  }
+}
+
+TEST_F(XMLDocumentTests, RenameDoesNotIgnoreChangedRetainedCommentsOrInstructions) {
+  for (const std::string_view retained : {"<!--same-->", "<?note same?>"}) {
+    SCOPED_TRACE(retained);
+    XMLDocument doc = ParseDocument(
+        "<svg>" + std::string(retained) + std::string(retained) + "<g><rect/></g></svg>",
+        XMLParser::Options::ParseAll());
+    XMLNode svg = doc.root().firstChild().value();
+    XMLNode first = svg.firstChild().value();
+    XMLNode second = first.nextSibling().value();
+    first.remove();
+    second.setValue("changed");
+
+    const auto opening = CompleteClosingFirstGroupRename(doc);
+    EXPECT_TRUE(opening.applied);
+    EXPECT_THAT(doc.sourceDiagnostic(), Optional(testing::_));
+    EXPECT_THAT(svg.firstChild(), Optional(second));
+    EXPECT_EQ(second.value(), "changed");
+  }
+}
+
 // The incremental reparse keeps comments that the initial parse dropped, so a renamed element's
 // children can differ in shape from its reparse. Children with matching ids still keep their nodes.
 TEST_F(XMLDocumentTests, ApplySourceEditRenameKeepsIdentifiedChildrenWhenReparseAddsComment) {

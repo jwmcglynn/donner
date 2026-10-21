@@ -1562,8 +1562,9 @@ TEST(EditorSyncTest, OpeningTagRenameAndUndoEditTheDocumentIncrementally) {
 TEST(EditorSyncTest, RenamingBothTagsOfAGroupStaysIncremental) {
   constexpr std::string_view kSvg =
       "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\">"
-      "<rect id=\"r\" width=\"4\" height=\"4\"/><g id=\"grp\"><rect id=\"inner\" x=\"8\" "
-      "width=\"4\" height=\"4\"/></g></svg>";
+      "<!--before--><rect id=\"r\" width=\"4\" height=\"4\"/><g id=\"grp\"><rect id=\"inner\" "
+      "x=\"8\" "
+      "width=\"4\" height=\"4\"/></g><?after value?></svg>";
   for (const bool preciseIntent : {true, false}) {
     SCOPED_TRACE(preciseIntent ? "source edit intents" : "whole-text diff");
     EditorApp app;
@@ -1573,7 +1574,7 @@ TEST(EditorSyncTest, RenamingBothTagsOfAGroupStaysIncremental) {
 
     std::string previousSourceText(kSvg);
     std::string source(kSvg);
-    const SourceEditIntent closing = RetypeCharacter(&source, source.find("g></svg>"), "a");
+    const SourceEditIntent closing = RetypeCharacter(&source, source.find("</g>") + 2, "a");
     EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, closing, source, &previousSourceText)
                     .dispatchedMutation);
     (void)app.flushFrame();
