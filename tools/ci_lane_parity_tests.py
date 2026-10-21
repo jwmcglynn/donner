@@ -263,6 +263,12 @@ INVOCATION_ALLOWLIST = {
     ("main.yml", "macos", "macos-self-hosted", "Refresh Xcode toolchain configuration",
      "step-changed", "c3adecb0303d2d56"):
         "Same repositories refreshed; only the runner-specific startup flags differ.",
+    # The self-hosted lane runs only for trusted pull requests, so it holds only the pull request
+    # cache key; the hosted lane also handles main's key for main runs.
+    ("main.yml", "macos", "macos-self-hosted", "Configure BuildBuddy remote cache",
+     "step-changed", "adbb2081fc658a35"):
+        "Remote cache credentials only: the self-hosted lane never holds main's key. A cache "
+        "changes how fast results arrive, not which tests run or what they assert.",
     # Setup the hosted runner needs and the self-hosted runner has already: the host provides
     # Bazelisk, Homebrew LLVM and the Xcode tools ("Prepare self-hosted macOS toolchain"),
     # and keeps Bazel's repository and action state between runs. The Bazel steps then fetch
@@ -331,10 +337,10 @@ _TRUSTED_LINUX_REASON = (
     "self-hosted lane, for speed; hosted Linux covers main pushes and untrusted PRs")
 
 _CACHE_WRITER_REASON = (
-    "Remote cache wiring only: main and trusted PRs read and write the BuildBuddy cache, Renovate "
-    "PRs read it through the read-only step, and other PRs build without it. A cache changes how "
-    "fast results arrive, not which tests run or what they assert, and a colder PR build is "
-    "stricter than main's.")
+    "Remote cache wiring only: main and trusted PRs each read and write their own BuildBuddy "
+    "cache, Renovate PRs read main's through the read-only step, and other PRs build without it. "
+    "A cache changes how fast results arrive, not which tests run or what they assert, and a "
+    "colder PR build is stricter than main's.")
 
 STEP_ALLOWLIST = {
     **{("main.yml", "linux", "Verify BuildBuddy remote execution", scenario):
