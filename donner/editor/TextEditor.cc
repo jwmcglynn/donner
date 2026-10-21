@@ -1974,7 +1974,7 @@ std::optional<TextEditor::FocusReferenceSourceUnderline> TextEditor::focusRefere
   const float underlineY = startPos.y + TextBaselineOffsetY() + std::max(1.5f * uiScale_, 1.5f);
   return FocusReferenceSourceUnderline{
       .sourceToken =
-          referenceAttributeValueRange(position.line, underlineStartIndex, underlineEndIndex),
+          scanReferenceAttributeValue(position.line, underlineStartIndex, underlineEndIndex).range,
       .start = ImVec2(startPos.x, underlineY),
       .end = ImVec2(endPos.x, underlineY),
   };
@@ -2171,47 +2171,72 @@ void TextEditor::remapReferenceChipVisualAnchor(std::optional<ReferenceChipVisua
   anchor->sourceToken = MapSourceByteRangeForEdit(anchor->sourceToken, intent, bufferSize);
 }
 
-int TextEditor::referenceAttributeQuoteIndex(int lineIndex, int tokenStartIndex) const {
+int TextEditor::referenceAttributeBoundaryIndex(int lineIndex, int tokenStartIndex,
+                                                ReferenceAttributeScanBudget& budget) const {
   const Line& line = text_.getLineGlyphs(lineIndex);
-  const auto boundary = [](char ch) { return ch == '\'' || ch == '"' || ch == '<'; };
-  int quoteIndex = tokenStartIndex - 1;
-  while (quoteIndex >= 0 && !boundary(line[quoteIndex].character)) {
-    --quoteIndex;
+  for (int index = tokenStartIndex - 1; index >= 0; --index) {
+    if (!budget.consume()) {
+      return -1;
+    }
+    const char ch = line[index].character;
+    if (ch == '\'' || ch == '"' || ch == '<') {
+      return index;
+    }
   }
-  if (quoteIndex < 0 || line[quoteIndex].character == '<') {
-    return -1;
-  }
-  int assignmentIndex = quoteIndex - 1;
-  while (assignmentIndex >= 0 &&
-         std::isspace(static_cast<unsigned char>(line[assignmentIndex].character))) {
-    --assignmentIndex;
-  }
-  return assignmentIndex >= 0 && line[assignmentIndex].character == '=' ? quoteIndex : -1;
+  return -1;
 }
 
-SourceByteRange TextEditor::referenceAttributeValueRange(int lineIndex, int tokenStartIndex,
-                                                         int tokenEndIndex) const {
-  // Retain geometry only when the complete quoted attribute value is known.
-  // A bare identifier cannot prove that surrounding URL syntax stayed unchanged.
+bool TextEditor::referenceAttributeHasAssignment(int lineIndex, int quoteIndex,
+                                                 ReferenceAttributeScanBudget& budget) const {
   const Line& line = text_.getLineGlyphs(lineIndex);
-  const int quoteIndex = referenceAttributeQuoteIndex(lineIndex, tokenStartIndex);
-  if (quoteIndex < 0) {
-    return {};
+  for (int index = quoteIndex - 1; index >= 0; --index) {
+    if (!budget.consume()) {
+      return false;
+    }
+    const char ch = line[index].character;
+    if (!std::isspace(static_cast<unsigned char>(ch))) {
+      return ch == '=';
+    }
   }
-  const char quote = line[quoteIndex].character;
-  int quoteEnd = tokenEndIndex;
-  while (quoteEnd < static_cast<int>(line.size()) && line[quoteEnd].character != quote) {
-    ++quoteEnd;
+  return false;
+}
+
+int TextEditor::referenceAttributeEndIndex(int lineIndex, int tokenEndIndex, char quote,
+                                           ReferenceAttributeScanBudget& budget) const {
+  const Line& line = text_.getLineGlyphs(lineIndex);
+  for (int index = tokenEndIndex; index < static_cast<int>(line.size()); ++index) {
+    if (!budget.consume()) {
+      return -1;
+    }
+    if (line[index].character == quote) {
+      return index;
+    }
   }
-  if (quoteEnd == static_cast<int>(line.size())) {
-    return {};
+  return -1;
+}
+
+TextEditor::ReferenceAttributeValueScan TextEditor::scanReferenceAttributeValue(
+    int lineIndex, int tokenStartIndex, int tokenEndIndex) const {
+  // Retain geometry only when the complete quoted attribute value is known.
+  // All three scans share one bounded budget; exhaustion leaves no retained anchor.
+  ReferenceAttributeScanBudget budget;
+  ReferenceAttributeValueScan result;
+  const int quoteIndex = referenceAttributeBoundaryIndex(lineIndex, tokenStartIndex, budget);
+  if (quoteIndex >= 0 && text_.getLineGlyphs(lineIndex)[quoteIndex].character != '<' &&
+      referenceAttributeHasAssignment(lineIndex, quoteIndex, budget)) {
+    const char quote = text_.getLineGlyphs(lineIndex)[quoteIndex].character;
+    const int quoteEnd = referenceAttributeEndIndex(lineIndex, tokenEndIndex, quote, budget);
+    if (quoteEnd >= 0) {
+      result.range = SourceByteRange{
+          .start = getByteOffsetAtCoordinates(
+              Coordinates(lineIndex, text_.getCharacterColumn(lineIndex, quoteIndex + 1))),
+          .end = getByteOffsetAtCoordinates(
+              Coordinates(lineIndex, text_.getCharacterColumn(lineIndex, quoteEnd))),
+      };
+    }
   }
-  return SourceByteRange{
-      .start = getByteOffsetAtCoordinates(
-          Coordinates(lineIndex, text_.getCharacterColumn(lineIndex, quoteIndex + 1))),
-      .end = getByteOffsetAtCoordinates(
-          Coordinates(lineIndex, text_.getCharacterColumn(lineIndex, quoteEnd))),
-  };
+  result.examined = ReferenceAttributeScanBudget::kMaximumExamined - budget.remaining;
+  return result;
 }
 
 std::optional<TextEditor::SourceStyleChipBounds> TextEditor::referenceChipVisualBounds(

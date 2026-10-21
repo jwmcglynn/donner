@@ -1397,6 +1397,22 @@ private:
     }
   };
 
+  struct ReferenceAttributeScanBudget {
+    static constexpr std::size_t kMaximumExamined = 256;
+    std::size_t remaining = kMaximumExamined;
+    bool consume() {
+      if (remaining == 0) {
+        return false;
+      }
+      --remaining;
+      return true;
+    }
+  };
+  struct ReferenceAttributeValueScan {
+    SourceByteRange range;
+    std::size_t examined = 0;
+  };
+
   struct ReferenceChipVisualAnchor {
     SourceByteRange targetHeader;
     SourceByteRange sourceToken;
@@ -1463,9 +1479,15 @@ private:
   static void remapReferenceChipVisualAnchor(std::optional<ReferenceChipVisualAnchor>& anchor,
                                              const SourceEditIntent& intent,
                                              std::size_t bufferSize);
-  [[nodiscard]] int referenceAttributeQuoteIndex(int lineIndex, int tokenStartIndex) const;
-  [[nodiscard]] SourceByteRange referenceAttributeValueRange(int lineIndex, int tokenStartIndex,
-                                                             int tokenEndIndex) const;
+  [[nodiscard]] int referenceAttributeBoundaryIndex(int lineIndex, int tokenStartIndex,
+                                                    ReferenceAttributeScanBudget& budget) const;
+  [[nodiscard]] bool referenceAttributeHasAssignment(int lineIndex, int quoteIndex,
+                                                     ReferenceAttributeScanBudget& budget) const;
+  [[nodiscard]] int referenceAttributeEndIndex(int lineIndex, int tokenEndIndex, char quote,
+                                               ReferenceAttributeScanBudget& budget) const;
+  [[nodiscard]] ReferenceAttributeValueScan scanReferenceAttributeValue(int lineIndex,
+                                                                        int tokenStartIndex,
+                                                                        int tokenEndIndex) const;
   [[nodiscard]] std::optional<SourceStyleChipBounds> referenceChipVisualBounds(
       const ReferenceChipVisualAnchor& anchor) const;
   [[nodiscard]] std::optional<SourceStyleChipBounds> sourceStyleChipBoundsForDecoration(

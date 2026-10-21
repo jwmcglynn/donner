@@ -865,6 +865,13 @@ protected:
     return addedVertices;
   }
 
+  [[nodiscard]] auto ReferenceAttributeScan(int lineIndex, int startIndex, int endIndex) const {
+    return editor.scanReferenceAttributeValue(lineIndex, startIndex, endIndex);
+  }
+  [[nodiscard]] static constexpr std::size_t ReferenceAttributeScanLimit() {
+    return TextEditor::ReferenceAttributeScanBudget::kMaximumExamined;
+  }
+
   [[nodiscard]] std::size_t SourceStyleChipHitRectCount() const {
     return editor.sourceStyleChipHitRects_.size();
   }
@@ -3802,6 +3809,67 @@ TEST_F(TextEditorTests, ReferenceRopeVisualAnchorInvalidatesSourceIdentityChange
     EXPECT_FLOAT_EQ(invalidated->tip.y, uncached->tip.y);
     EXPECT_EQ(SourceStyleChipHitRectCount(), 0u);
     EXPECT_THAT(editor.takeClickedSourceStyleChipId(), testing::Eq(std::nullopt));
+  }
+}
+
+TEST_F(TextEditorTests, ReferenceRopeAttributeScanSharesBoundedWorkBudget) {
+  struct ScanCase {
+    std::size_t before;
+    std::size_t after;
+    std::size_t assignmentWhitespace;
+    bool retained;
+  };
+  const std::size_t limit = ReferenceAttributeScanLimit();
+  const std::array<ScanCase, 5> cases = {{
+      {100, 100, 0, true},
+      {limit + 32, 0, 0, false},
+      {0, limit + 32, 0, false},
+      {0, 0, limit + 32, false},
+      {160, 160, 0, false},
+  }};
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.before);
+    SCOPED_TRACE(item.after);
+    SCOPED_TRACE(item.assignmentWhitespace);
+    const std::string header = "<linearGradient id=\"paint\"/>";
+    const std::string attribute = "<rect fill=" + std::string(item.assignmentWhitespace, ' ') +
+                                  "\"" + std::string(item.before, ' ') + "url(#paint)" +
+                                  std::string(item.after, ' ') + "\"/>";
+    editor.setText(header + "\n" + attribute + "\n");
+    const int tokenStart = static_cast<int>(attribute.find("#paint"));
+    const auto scan = ReferenceAttributeScan(1, tokenStart, tokenStart + 6);
+    EXPECT_THAT(scan.examined, testing::Le(limit));
+    EXPECT_THAT(scan.range.end > scan.range.start, testing::Eq(item.retained));
+    if (!item.retained) {
+      EXPECT_THAT(scan.examined, testing::Eq(limit));
+    }
+    const FocusReferenceLink link{
+        .from = SourcePoint{.line = 1, .column = tokenStart + 1},
+        .to = SourcePoint{.line = 0, .column = static_cast<int>(header.size())},
+    };
+    editor.setSourceStyleDecorations({TextEditor::SourceStyleDecoration{
+        .id = 94,
+        .range = SourceByteRange{.start = 0, .end = header.size()},
+        .chipRange = SourceByteRange{.start = 0, .end = header.size()},
+        .showChip = true,
+        .chipCount = 2,
+        .chipKind = TextEditor::SourceStyleChipKind::ReferenceCount,
+    }});
+    editor.setFocusPartition(FocusPartition{.fullColor = {LineRange{.startLine = 0, .endLine = 3}},
+                                            .referenceLinks = {link}});
+    RenderEditorFrame(ImVec2(640.0f, 200.0f));
+    const auto before = FocusReferenceLayout(link, 0);
+    ASSERT_THAT(before, testing::Optional(testing::_));
+    editor.clearSourceStyleDecorations();
+    RenderEditorFrame(ImVec2(640.0f, 200.0f));
+    const auto after = FocusReferenceLayout(link, 0);
+    ASSERT_THAT(after, testing::Optional(testing::_));
+    if (item.retained) {
+      EXPECT_THAT(after->tip.x, testing::FloatEq(before->tip.x));
+      EXPECT_THAT(after->tip.y, testing::FloatEq(before->tip.y));
+    } else {
+      EXPECT_THAT(after->tip.x, testing::Not(testing::FloatEq(before->tip.x)));
+    }
   }
 }
 
