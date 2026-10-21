@@ -1,6 +1,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
+#include <string_view>
+#include <tuple>
+
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -62,6 +66,56 @@ TEST(RendererAnimationLayoutBase, SymbolReferencePointAnimatesAndRestores) {
   editor::tests::CompareBitmapToBitmap(
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(base),
       "symbol-reference-restored", editor::tests::PixelmatchIdentityParams());
+}
+
+// A `<use>` or nested `<svg>` position is layout state, and `<use>` content is a shadow copy of
+// its referenced element. When an animation stops applying, whether it ended or was restarted,
+// every instance must return to its authored position.
+TEST(RendererAnimationLayoutBase, AnimatedPositionsRestoreAfterEndAndRestart) {
+  struct Case {
+    const char* name;
+    std::string_view beforeAnimation;
+    std::string_view afterAnimation;
+  };
+  for (const auto item : {
+           Case{"use", "<defs><rect id='t' width='4' height='16'/></defs><use href='#t' x='2'>",
+                "</use>"},
+           Case{"nested-svg",
+                "<defs><rect id='t' width='4' height='16'/></defs><svg x='2'><use href='#t'/>",
+                "</svg>"},
+           Case{"use-shadow-content", "<defs><rect id='t' x='2' width='4' height='16'>",
+                "</rect></defs><use href='#t'/>"},
+       }) {
+    SCOPED_TRACE(item.name);
+    const auto withAnimation = [&](std::string_view animation) {
+      return std::string(item.beforeAnimation) + std::string(animation) +
+             std::string(item.afterAnimation);
+    };
+    auto document =
+        instantiateSubtree(withAnimation("<set attributeName='x' to='10' begin='1s' dur='2s'/>"),
+                           parser::SVGParser::Options(), Vector2i(16, 16));
+    auto moved = instantiateSubtree(withAnimation("<set attributeName='x' to='10'/>"),
+                                    parser::SVGParser::Options(), Vector2i(16, 16));
+    auto base =
+        instantiateSubtree(withAnimation(""), parser::SVGParser::Options(), Vector2i(16, 16));
+    const auto baseBitmap = RenderDocumentWithActiveBackend(base);
+
+    document.setTime(2);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(moved),
+        std::string(item.name) + "-active", editor::tests::PixelmatchIdentityParams());
+    document.setTime(4);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document), baseBitmap,
+                                         std::string(item.name) + "-ended",
+                                         editor::tests::PixelmatchIdentityParams());
+
+    document.setTime(2);
+    std::ignore = RenderDocumentWithActiveBackend(document);
+    document.restartAnimations();
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document), baseBitmap,
+                                         std::string(item.name) + "-restarted",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 }  // namespace

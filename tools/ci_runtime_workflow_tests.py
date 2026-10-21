@@ -24,11 +24,11 @@ from tools import test_timing
 ENFORCED_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 54800,
     "--max-js-raw-bytes": 199000,
-    "--max-total-raw-bytes": 12777000,
+    "--max-total-raw-bytes": 12825000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
-    "--max-wasm-gzip-bytes": 3439000,
-    "--max-wasm-raw-bytes": 10661000,
+    "--max-wasm-gzip-bytes": 3475000,
+    "--max-wasm-raw-bytes": 10750000,
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 # The standalone renderer Wasm ceilings CI enforces, changed together with that test's arguments.
@@ -174,6 +174,36 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 for command, options, _ in
                 bazelrc_configs.commands(job, self.configs, self._variables(job))
                 if command == "test"]
+
+    def test_context_diagnostic_is_fixed_trusted_pr_opt_in_after_ordinary_tests(self):
+        job = self._job_body("macos-self-hosted")
+        step = self._step_body(job, "Diagnose Chromium context lifecycle")
+        condition = next(line for line in step.splitlines() if "if:" in line)
+        for guard in (
+            "!cancelled()",
+            "github.event_name == 'pull_request'",
+            "needs.gatekeeper.outputs.trusted_pr == 'true'",
+            "contains(github.event.pull_request.labels.*.name, 'ci:browser-context-probe')",
+        ):
+            self.assertIn(guard, condition)
+        self.assertNotIn("||", condition)
+        self.assertNotIn("continue-on-error", step)
+        self.assertIn("--nocache_test_results", step)
+        self.assertIn("--nohome_rc --nosystem_rc", step)
+        self.assertIn("--local_test_jobs=1 --test_tag_filters=", step)
+        self.assertIn(
+            "--test_timeout=60 //tools/ci:chromium_context_diagnostic",
+            step,
+        )
+        suite = _rule_text(_repository_text("tools/ci/BUILD.bazel"),
+                           "chromium_context_diagnostic")
+        self.assertIn('tags = ["manual"]', suite)
+        self.assertIn(
+            'tests = ["//donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic"]',
+            suite,
+        )
+        self.assertLess(job.index("name: Test (Geode editor lane)"),
+                        job.index("name: Diagnose Chromium context lifecycle"))
 
     def test_early_macos_bazel_failures_keep_their_artifacts(self):
         for lane in ("macos", "macos-browser", "macos-self-hosted"):

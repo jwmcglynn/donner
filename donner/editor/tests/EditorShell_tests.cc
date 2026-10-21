@@ -2748,6 +2748,66 @@ TEST(EditorShellTest, PreviewPointerOverUseTargetsTheStableUseElementAcrossTicks
   EXPECT_FALSE(app.isDirty());
 }
 
+// Leaving Preview with Escape must return a clicked, still-animating <use> to the authored
+// document: Edit mode shows and hit-tests the instance where the source puts it.
+TEST(EditorShellTest, LeavingPreviewRestoresAnAnimatedUseToItsAuthoredPosition) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <defs><rect id="tile" width="20" height="20" fill="blue"/></defs>
+      <use id="u" href="#tile" x="10" y="40">
+        <set attributeName="x" to="70" begin="click"/>
+      </use>
+    </svg>)svg";
+  const Vector2d authoredPoint(20, 50);
+  const Vector2d animatedPoint(80, 50);
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  auto& app = EditorShellTestAccess::App(shell);
+  const auto use = app.document().document().querySelector("#u");
+  ASSERT_THAT(use, testing::Ne(std::nullopt));
+  const std::string sourceBefore(app.document().document().source());
+
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  const std::optional<Vector2d> point = AwaitPreviewPointerTarget(window, shell, authoredPoint);
+  ASSERT_TRUE(point.has_value());
+  for (const bool down : {false, true, false}) {
+    ImGui::GetIO().AddMousePosEvent(static_cast<float>(point->x), static_cast<float>(point->y));
+    ImGui::GetIO().AddMouseButtonEvent(0, down);
+    RunShellFrame(window, shell);
+  }
+  std::optional<svg::SVGElement> animatedTarget;
+  for (const tests::HangGuard guard; animatedTarget != use && guard.active();) {
+    RunShellFrame(window, shell);
+    if (const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation()) {
+      animatedTarget = frame->pointerTargetAt(frame->viewport().documentToScreen(animatedPoint));
+    }
+  }
+  ASSERT_THAT(animatedTarget, testing::Optional(testing::AllOf(
+                                  testing::Property("id", &svg::SVGElement::id, testing::Eq("u")),
+                                  testing::Eq(*use))))
+      << "clicking the <use> in Preview starts its animation";
+
+  ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+  RunShellFrame(window, shell);
+  ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+  RunShellFrame(window, shell);
+  ASSERT_FALSE(EditorShellTestAccess::IsAnimationPreview(shell));
+  for (const tests::HangGuard guard;
+       !EditorShellTestAccess::PreviewInputReady(shell) && guard.active();) {
+    RunShellFrame(window, shell);
+  }
+  ASSERT_TRUE(EditorShellTestAccess::PreviewInputReady(shell));
+
+  const auto authoredHit = app.hitTest(authoredPoint);
+  ASSERT_THAT(authoredHit, testing::Ne(std::nullopt));
+  EXPECT_THAT(authoredHit->id(), testing::Eq("u"));
+  EXPECT_THAT(app.hitTest(animatedPoint), testing::Eq(std::nullopt))
+      << "the <use> stayed at its Preview position after leaving Preview";
+  EXPECT_EQ(app.document().document().source(), sourceBefore);
+  EXPECT_FALSE(app.isDirty());
+}
+
 TEST(EditorShellTest, PreviewOnGeodeSplashResolvesUseContentToDocumentElements) {
   gui::EditorWindow window = MakeHiddenWindow();
   ASSERT_TRUE(window.valid());
