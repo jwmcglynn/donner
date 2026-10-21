@@ -667,6 +667,40 @@ public:
   /// Leaves any staged result intact for normal polling and wakes the owner outside the mutex.
   void releaseReplayResultHoldForTesting();
 
+  /// State of the test-only completion barrier; see `requestCompletionBarrierForTesting`.
+  enum class CompletionBarrier : std::uint32_t {
+    Off,        ///< Every render publishes its result as soon as it finishes.
+    Requested,  ///< Armed by the next `armRequestedCompletionBarrierForTesting` call.
+    Armed,      ///< The next render that finishes with a result to publish will wait.
+    Holding,    ///< A finished render is waiting, unpublished and without its completion wake.
+  };
+
+  /**
+   * Request a test-only barrier between a finished foreground render and its result.
+   *
+   * The next `armRequestedCompletionBarrierForTesting` call arms it; the editor makes that call
+   * when a sample becomes the active document, so only renders of that document can be held. The
+   * first armed render that finishes with a result to publish then waits in `Holding` until
+   * `releaseCompletionBarrierForTesting`: no frame can poll its result and its completion wake has
+   * not fired. A held render that is cancelled, superseded or shut down publishes nothing, so it
+   * passes and the barrier stays armed for the next render. A browser test uses this to stop
+   * driving frames and let them drain before a result can exist. The barrier is process-wide so a
+   * browser test can reach it without a renderer instance; product code never requests it.
+   *
+   * @return The state before the call; the request applies only when that was `Off`.
+   */
+  static CompletionBarrier requestCompletionBarrierForTesting();
+
+  /// Arm a requested completion barrier; without a request this does nothing.
+  static void armRequestedCompletionBarrierForTesting();
+
+  /// Turn the completion barrier off, letting a held render publish its result.
+  /// @return The state before the call.
+  static CompletionBarrier releaseCompletionBarrierForTesting();
+
+  /// Current completion barrier state.
+  static CompletionBarrier completionBarrierForTesting();
+
   /**
    * Drop every compositor tile a completed render produced, as a render whose tile payloads all
    * failed would, so tests can drive the result that carries nothing to present. Unlike a real
@@ -1010,6 +1044,8 @@ private:
   /// @return True when no delay is set; otherwise false if the render is cancelled when the delay
   /// ends.
   bool runReplayRenderDelay();
+  /// Wait at an armed completion barrier while this finished render still has a result to publish.
+  void waitAtCompletionBarrierForTesting();
   /// Poll an idle GPU context, then wait for work with a short completion timer only while needed.
   /// Returns with \p lock held so the worker can consume its state without a race.
   /// @param lock Deferred worker-state lock. @param timing Receives the preceding idle-pass
