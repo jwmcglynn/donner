@@ -1649,6 +1649,69 @@ TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameRoundTrips) {
   EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
 }
 
+// A rename adds an element while the replaced one stays live, so it is refused before any bytes
+// change when the document is at its node or attribute limit.
+TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameRespectsTreeLimits) {
+  struct LimitCase {
+    std::string_view name;
+    XMLParser::Options options;
+    std::string_view reason;
+  };
+  XMLParser::Options nodeLimit;
+  nodeLimit.maxElements = 2;
+  XMLParser::Options attributeLimit;
+  attributeLimit.maxTotalAttributes = 2;
+  for (const LimitCase& limitCase :
+       {LimitCase{"nodes", nodeLimit, "tree-node limit"},
+        LimitCase{"attributes", attributeLimit, "total-attribute limit"}}) {
+    SCOPED_TRACE(limitCase.name);
+    XMLDocument doc = ParseDocument(R"(<svg><rect a="1" b="2"/></svg>)", limitCase.options);
+    const std::string sourceBefore(doc.source());
+    const std::uint64_t versionBefore = doc.sourceVersion();
+    const std::size_t tagOffset = doc.source().find("rect");
+
+    ApplySourceEditResult result = doc.applySourceEdit(XMLEditIntent{
+        .range = SourceRange{FileOffset::Offset(tagOffset), FileOffset::Offset(tagOffset + 4)},
+        .replacement = "circle",
+        .sourceVersion = doc.sourceVersion(),
+    });
+
+    EXPECT_FALSE(result.applied);
+    EXPECT_THAT(result, DiagnosticReasonContains(limitCase.reason));
+    EXPECT_EQ(doc.source(), sourceBefore);
+    EXPECT_EQ(doc.sourceVersion(), versionBefore);
+    EXPECT_EQ(doc.root().firstChild()->firstChild()->tagName(), XMLQualifiedNameRef("rect"));
+  }
+}
+
+// The document element is not replaced by a source edit: renaming it is reported, and undoing the
+// keystroke clears the report.
+TEST_F(XMLDocumentTests, ApplySourceEditDocumentElementRenameIsReportedAndUndoable) {
+  XMLDocument doc = ParseDocument(R"(<svg><rect/></svg>)");
+  XMLNode svg = doc.root().firstChild().value();
+  const std::size_t insertOffset = std::string_view("<svg").size();
+
+  ApplySourceEditResult typed = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset)},
+      .replacement = "X",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  EXPECT_TRUE(typed.applied);
+  EXPECT_THAT(typed, DiagnosticReasonContains("document element cannot be renamed"));
+  EXPECT_EQ(doc.root().firstChild(), std::optional<XMLNode>(svg));
+  EXPECT_EQ(svg.tagName(), XMLQualifiedNameRef("svg"));
+
+  ApplySourceEditResult undone = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset + 1)},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  EXPECT_TRUE(undone.applied);
+  EXPECT_THAT(undone.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(doc.source(), R"(<svg><rect/></svg>)");
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+}
+
 // An element with content needs both tags renamed. The opening-tag edit alone leaves mismatched
 // tags, which is reported; renaming the closing tag to match then replaces the element with its
 // content intact.
