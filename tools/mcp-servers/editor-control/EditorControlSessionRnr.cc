@@ -37,6 +37,7 @@
 #include "donner/editor/PresentationRenderScheduler.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/SelectionTransformHandles.h"
+#include "donner/editor/TransformSyntaxPreserving.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/GlRnrReplay.h"
 #include "donner/editor/repro/ReplayResourceBudget.h"
@@ -440,9 +441,10 @@ bool DrainWritebackAndReparseSource(EditorApp* app, SelectTool* selectTool, std:
   std::vector<TextPatch> patches;
   patches.reserve(1u + completed->extras.size());
 
-  const auto appendPatchForTarget = [&](const AttributeWritebackTarget& target,
-                                        const Transform2d& transform) {
-    const RcString serialized = toSVGTransformString(transform);
+  const auto appendPatchForTarget = [&](const SelectTool::CompletedDragWriteback& writeback) {
+    const AttributeWritebackTarget& target = writeback.target;
+    const RcString serialized = serializeTransformForWriteback(
+        writeback.sourceTransformAttributeValue, writeback.transform);
     std::optional<TextPatch> patch;
     if (std::string_view(serialized).empty()) {
       patch = buildAttributeRemoveWriteback(*source, target, "transform");
@@ -454,9 +456,9 @@ bool DrainWritebackAndReparseSource(EditorApp* app, SelectTool* selectTool, std:
     }
   };
 
-  appendPatchForTarget(completed->target, completed->transform);
+  appendPatchForTarget(*completed);
   for (const SelectTool::CompletedDragWriteback& extra : completed->extras) {
-    appendPatchForTarget(extra.target, extra.transform);
+    appendPatchForTarget(extra);
   }
   if (patches.empty()) {
     return false;

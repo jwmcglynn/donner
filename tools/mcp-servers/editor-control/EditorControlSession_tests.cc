@@ -943,6 +943,38 @@ TEST(EditorControlSessionTest, DocumentDragMovesWorldBoundsByTheRequestedDelta) 
   }
 }
 
+TEST(EditorControlSessionTest, DragWritebackSerializesTransformLikeTheEditor) {
+  // The session writes a finished drag back through the editor's writeback serializer, so the
+  // source it reports is what the editor would write: an authored translate/rotate list keeps its
+  // form instead of collapsing to matrix().
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+<rect id="target" width="20" height="20" fill="red" transform="translate(10 10) rotate(30)"/></svg>)svg";
+
+  EditorControlSession session;
+  const ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", kScene},
+                                              {"canvas_width", 300},
+                                              {"canvas_height", 200},
+                                              {"render_after_load", false}});
+  ASSERT_FALSE(load.isError) << load.body.dump(2);
+  const ToolCallResult drag =
+      session.handleToolCall("drag_selector", json{{"selector", "#target"},
+                                                   {"delta_x", 50.0},
+                                                   {"delta_y", 30.0},
+                                                   {"frames", 2},
+                                                   {"render_mouse_down", false},
+                                                   {"include_final_frame", false}});
+  ASSERT_FALSE(drag.isError) << drag.body.dump(2);
+  const ToolCallResult tool = session.handleToolCall("set_active_tool", json{{"tool", "select"}});
+  ASSERT_FALSE(tool.isError) << tool.body.dump(2);
+
+  const ToolCallResult source = session.handleToolCall("get_svg_source", json::object());
+  ASSERT_TRUE(source.body.value("ok", false)) << source.body.dump(2);
+  EXPECT_THAT(source.body.value("text", ""),
+              testing::HasSubstr(R"svg(transform="translate(60 40) rotate(30)")svg"));
+}
+
 TEST(EditorControlSessionTest, ScreenSpaceReplayConvertsDragDistanceByViewportZoom) {
   constexpr std::string_view kScene = R"svg(<svg xmlns="http://www.w3.org/2000/svg"
     width="300" height="200"><rect id="target" x="20" y="30" width="40" height="20"/>
