@@ -2433,6 +2433,77 @@ ApplySourceEditResult ApplyOpeningTagRename(XMLDocument& document, const XMLEdit
   return result;
 }
 
+/// Whether \p node's subtree has the same names, attributes and values as \p parsedNode's.
+bool SubtreeMatchesParsed(const XMLNode& node, const XMLNode& parsedNode) {
+  std::vector<std::pair<XMLNode, XMLNode>> pending{{node, parsedNode}};
+  while (!pending.empty()) {
+    const auto [current, parsed] = pending.back();
+    pending.pop_back();
+    if (!HasCompatibleNodeIdentity(current, parsed) ||
+        BuildAttributeMap(current) != BuildAttributeMap(parsed) ||
+        current.value() != parsed.value()) {
+      return false;
+    }
+    std::optional<XMLNode> currentChild = current.firstChild();
+    std::optional<XMLNode> parsedChild = parsed.firstChild();
+    for (; currentChild && parsedChild;
+         currentChild = currentChild->nextSibling(), parsedChild = parsedChild->nextSibling()) {
+      pending.emplace_back(*currentChild, *parsedChild);
+    }
+    if (currentChild || parsedChild) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * After a rename, clear pending spans of the enclosing elements whose source the tree now matches.
+ *
+ * Renaming the closing tag first records a failure over the enclosing element, and the opening
+ * tag edit that completes the rename only revalidates the renamed element. Each enclosing element
+ * that owns a pending span is parsed from its current source and its span is cleared when the tree
+ * already matches; the tree itself is not changed.
+ */
+void ClearSpansReconciledByRename(XMLDocument& document, const ApplySourceEditResult& result) {
+  auto& spans = document.registry().ctx().get<XMLDocumentContext>().unreparsedSpans;
+  std::optional<XMLNode> renamed;
+  for (const XMLMutation& mutation : result.mutations) {
+    if (mutation.kind == XMLMutation::Kind::NodeInserted) {
+      renamed = mutation.node;
+    }
+  }
+  if (spans.empty() || !renamed.has_value()) {
+    return;
+  }
+
+  for (std::optional<XMLNode> ancestor = renamed->parentElement();
+       ancestor.has_value() && ancestor->type() == XMLNode::Type::Element;
+       ancestor = ancestor->parentElement()) {
+    const std::optional<SourceEditRange> span = NodeSpanInCurrentCoords(*ancestor);
+    const auto pendingIt = std::find_if(
+        spans.begin(), spans.end(), [&span](const XMLDocumentContext::UnreparsedSpan& pending) {
+          return span.has_value() && pending.start == span->start && pending.end == span->end;
+        });
+    if (pendingIt == spans.end()) {
+      continue;
+    }
+    const std::string_view fragment =
+        document.source().substr(span->start, span->end - span->start);
+    ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseElement(
+        fragment, IncrementalReparseOptions(document, fragment.size()));
+    if (parsed.hasError()) {
+      return;
+    }
+    std::optional<XMLNode> parsedNode = parsed.result().root().firstChild();
+    if (!parsedNode.has_value() || parsedNode->nextSibling().has_value() ||
+        !SubtreeMatchesParsed(*ancestor, *parsedNode)) {
+      return;
+    }
+    spans.erase(pendingIt);
+  }
+}
+
 ApplySourceEditResult ApplyOpeningTagSourceEdit(XMLDocument& document, const XMLEditIntent& intent,
                                                 const OpeningTagEdit& edit,
                                                 ApplySourceEditResult result) {
@@ -3103,6 +3174,9 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
     }
   } else {
     RemoveSpansCoveredByAny(*this, {validatedSpan});
+    if (classification.openingTag.has_value()) {
+      ClearSpansReconciledByRename(*this, result);
+    }
   }
   EmitSpansChangedIfNeeded(*this, result, mutationNode, diagnosticBefore);
   return result;
