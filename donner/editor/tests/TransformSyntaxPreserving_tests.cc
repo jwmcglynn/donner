@@ -299,6 +299,16 @@ TEST(TransformSyntaxPreserving, WrapperPreservesAnExactlySingularMatrix) {
               testing::Eq(parentFromElement.transformPosition(point)));
 }
 
+TEST(TransformSyntaxPreserving, WrapperPreservesTheNullspaceOfASingularMatrix) {
+  const Transform2d parentFromElement = ParseMatrix("matrix(1.1234564, 0, 2.2469128, 0, 0, 0)");
+  const std::string written = serializeTransformForWriteback(std::nullopt, parentFromElement).str();
+  const Transform2d parentFromWritten = ParseMatrix(written);
+  const Vector2d point(-2000000.0, 1000000.0);
+  EXPECT_EQ(written, toSVGTransformString(parentFromElement).str());
+  EXPECT_THAT(parentFromWritten.transformPosition(point),
+              testing::Eq(parentFromElement.transformPosition(point)));
+}
+
 TEST(TransformSyntaxPreserving, WrapperWritesCanonicalMatrixAtEditPrecision) {
   // A drag at a non-integer zoom produces repeating decimals in every matrix entry.
   const Transform2d parentFromElement =
