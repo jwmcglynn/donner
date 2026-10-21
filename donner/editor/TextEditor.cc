@@ -155,7 +155,7 @@ std::vector<TextEditor::ShortcutBindings> TextEditor::getDefaultShortcuts() {
        Shortcut(ImGuiKey_DownArrow, kCtrl | kShift)},
       // Editing operations
       {ShortcutId::Undo, Shortcut(ImGuiKey_Z, kCtrl), Shortcut()},
-      {ShortcutId::Redo, Shortcut(ImGuiKey_Y, kCtrl), Shortcut()},
+      {ShortcutId::Redo, Shortcut(ImGuiKey_Y, kCtrl), Shortcut(ImGuiKey_Z, kCtrl | kShift)},
       {ShortcutId::DeleteRight, Shortcut(ImGuiKey_Delete, kShift), Shortcut()},
       {ShortcutId::ForwardDelete, Shortcut(ImGuiKey_Delete), Shortcut()},
       {ShortcutId::ForwardDeleteWord, Shortcut(ImGuiKey_Delete, kCtrl), Shortcut()},
