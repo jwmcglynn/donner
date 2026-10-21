@@ -1282,7 +1282,7 @@ bool SidebarPresenter::renderStrokeControlsPanel(EditorApp* liveApp,
   const bool canMutate =
       liveApp != nullptr && liveApp->hasSelection() && inspectorSnapshot_.strokeEditable;
   const bool restoredCancelledEdit = settlePendingStrokeEdit(liveApp);
-  ImGui::BeginDisabled(!inspectorSnapshot_.strokeEditable);
+  ImGui::BeginDisabled(!inspectorSnapshot_.strokeEditable || strokeCancellationPending());
   const StrokeRenderContext context{liveApp, theme, ImGui::GetCursorPosX(), canMutate,
                                     iconTextureProvider};
   bool queuedMutation = renderStrokeWidthRow(context) || restoredCancelledEdit;
@@ -1391,9 +1391,12 @@ bool SidebarPresenter::settlePendingStrokeEdit(EditorApp* liveApp) {
   return restored;
 }
 
+bool SidebarPresenter::strokeCancellationPending() const {
+  return strokeLengthEditStart_.has_value() && strokeLengthEditStart_->pendingCancel;
+}
+
 bool SidebarPresenter::finishPendingStrokeCancel(EditorApp* liveApp) {
-  if (liveApp == nullptr || !strokeLengthEditStart_.has_value() ||
-      !strokeLengthEditStart_->pendingCancel) {
+  if (liveApp == nullptr || !strokeCancellationPending()) {
     return false;
   }
   const StrokeLengthEditStart start = std::move(*strokeLengthEditStart_);
@@ -1407,6 +1410,9 @@ bool SidebarPresenter::finishPendingStrokeCancel(EditorApp* liveApp) {
 
 void SidebarPresenter::beginStrokeLengthEdit(const StrokeRenderContext& context,
                                              StrokeScalarField field, LengthUnit unit) {
+  if (strokeCancellationPending()) {
+    return;
+  }
   StrokeLengthEditStart start{.field = field, .unit = unit, .styles = {}, .activeWidth = {}};
   if (context.app != nullptr) {
     start.activeWidth = context.app->activePaintStyle().strokeWidth;

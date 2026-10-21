@@ -2970,6 +2970,10 @@ TEST_F(SidebarPresenterImGuiTest, StrokeWidthBusyReactivationKeepsPendingCancell
 
   EXPECT_THAT(target->getAttribute("style"), testing::Eq(std::nullopt));
   EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "7", kHeight));
+  (void)app.flushFrame();
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 7"))));
 }
 
 TEST_F(SidebarPresenterImGuiTest, StrokeWidthAcceptsATypedUnitAndKeepsIt) {

@@ -535,6 +535,7 @@ private:
   void noteStrokeLengthText(StrokeScalarField field, const InspectorLengthEdit& edit);
   /// Restore the selection for a cancelled typed stroke edit once a live app is available.
   /// @return Whether mutations were queued.
+  bool strokeCancellationPending() const;
   bool finishPendingStrokeCancel(EditorApp* liveApp);
   /// Finish typed stroke edits left pending by a busy frame: a deferred cancel, then a deferred
   /// commit. Returns whether mutations were queued.
