@@ -22,8 +22,10 @@
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
@@ -434,6 +436,317 @@ TEST(SidebarTransformEditTest, UndoRestoresPreEditTransform) {
   ASSERT_TRUE(bounds.has_value());
   EXPECT_NEAR(bounds->topLeft.x, startBounds.topLeft.x, 1e-6);
   EXPECT_NEAR(bounds->topLeft.y, startBounds.topLeft.y, 1e-6);
+}
+
+constexpr std::string_view kTextAndGroupSvg =
+    R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180" viewBox="0 0 260 180">
+         <text id="t" x="100" y="150" font-size="24" fill="#17202a">Hi</text>
+         <g id="grp" transform="translate(170 95) rotate(15)">
+           <rect id="gr" width="50" height="40" fill="#8a4fff"/>
+           <text id="gt" x="10" y="70" font-size="12">Label</text>
+         </g>
+       </svg>)SVG";
+
+// The Inspector's Position and Size fields come from the snapshot bounds. A
+// `<text>` has no path geometry, so the snapshot used to carry no bounds and
+// the fields showed 0.00 while the canvas drew a selection box around the
+// glyphs. The Inspector must report the same laid-out frame the selection
+// chrome uses.
+TEST(SidebarTransformEditTest, TextSelectionReportsItsLaidOutFrameAndMovesByPosition) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_TRUE(app.loadFromString(kTextAndGroupSvg));
+  app.setCleanSourceText(kTextAndGroupSvg);
+  const std::optional<svg::SVGElement> text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+  presenter.refreshSnapshot(app);
+
+  const std::optional<Box2d> frame = TextWorldFrameBounds(text->cast<svg::SVGTextElement>());
+  ASSERT_TRUE(frame.has_value()) << "the text must lay out to a non-empty frame";
+  ASSERT_THAT(frame->width(), testing::Gt(0.0));
+  ASSERT_THAT(frame->height(), testing::Gt(0.0));
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(), testing::Optional(testing::Eq(*frame)));
+
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::PositionX, 120.0));
+  const std::optional<Box2d>& moved = presenter.inspectorBoundsForTesting();
+  ASSERT_TRUE(moved.has_value());
+  EXPECT_THAT(moved->topLeft.x, testing::DoubleNear(120.0, 1e-6));
+  EXPECT_THAT(moved->topLeft.y, testing::DoubleNear(frame->topLeft.y, 1e-6));
+  EXPECT_THAT(moved->width(), testing::DoubleNear(frame->width(), 1e-6));
+  EXPECT_THAT(moved->height(), testing::DoubleNear(frame->height(), 1e-6));
+}
+
+// A group has no geometry of its own either; its Inspector bounds are the
+// union of its rendered children, matching its selection box, and Position
+// edits move the whole group.
+TEST(SidebarTransformEditTest, GroupSelectionReportsTheUnionOfItsChildrenAndMovesByPosition) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_TRUE(app.loadFromString(kTextAndGroupSvg));
+  app.setCleanSourceText(kTextAndGroupSvg);
+  const std::optional<svg::SVGElement> group = app.document().document().querySelector("#grp");
+  const std::optional<svg::SVGElement> rect = app.document().document().querySelector("#gr");
+  const std::optional<svg::SVGElement> label = app.document().document().querySelector("#gt");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(rect.has_value());
+  ASSERT_TRUE(label.has_value());
+  app.setSelection(*group);
+  presenter.refreshSnapshot(app);
+
+  std::optional<Box2d> expected = rect->cast<svg::SVGGeometryElement>().worldBounds();
+  const std::optional<Box2d> labelFrame = TextWorldFrameBounds(label->cast<svg::SVGTextElement>());
+  ASSERT_TRUE(expected.has_value());
+  ASSERT_TRUE(labelFrame.has_value());
+  expected->addBox(*labelFrame);
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(), testing::Optional(testing::Eq(*expected)));
+
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::PositionY, 20.0));
+  const std::optional<Box2d>& moved = presenter.inspectorBoundsForTesting();
+  ASSERT_TRUE(moved.has_value());
+  EXPECT_THAT(moved->topLeft.x, testing::DoubleNear(expected->topLeft.x, 1e-6));
+  EXPECT_THAT(moved->topLeft.y, testing::DoubleNear(20.0, 1e-6));
+  EXPECT_THAT(moved->width(), testing::DoubleNear(expected->width(), 1e-6));
+  EXPECT_THAT(moved->height(), testing::DoubleNear(expected->height(), 1e-6));
+}
+
+// Inspector values are document-space, the same space as the bounds they
+// show. An element under a transformed ancestor must move and resize by the
+// typed document-space amount, not by that amount in its parent's frame.
+TEST(SidebarTransformEditTest, EditsUnderTransformedParentApplyInDocumentSpace) {
+  constexpr std::string_view kNestedSvg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+         <g transform="translate(20 10) scale(2)">
+           <g transform="rotate(90)">
+             <text id="target" x="10" y="-20" font-size="12">Nested</text>
+           </g>
+         </g>
+       </svg>)SVG";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kNestedSvg));
+  const Box2d start = *presenter.inspectorBoundsForTesting();
+
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(
+      app, presenter, SidebarPresenter::TransformField::PositionX, start.topLeft.x + 10.0));
+  const Box2d moved = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(moved.topLeft.x, testing::DoubleNear(start.topLeft.x + 10.0, 1e-6));
+  EXPECT_THAT(moved.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
+  EXPECT_THAT(moved.width(), testing::DoubleNear(start.width(), 1e-6));
+  EXPECT_THAT(moved.height(), testing::DoubleNear(start.height(), 1e-6));
+
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(
+      app, presenter, SidebarPresenter::TransformField::Width, moved.width() * 2.0));
+  const Box2d resized = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(resized.topLeft.x, testing::DoubleNear(moved.topLeft.x, 1e-6));
+  EXPECT_THAT(resized.topLeft.y, testing::DoubleNear(moved.topLeft.y, 1e-6));
+  EXPECT_THAT(resized.width(), testing::DoubleNear(moved.width() * 2.0, 1e-6));
+  EXPECT_THAT(resized.height(), testing::DoubleNear(moved.height(), 1e-6));
+}
+
+// The Rotation field shows the rotation of the element's own transform, so an
+// edit must produce exactly the typed local angle even under a reflected or
+// non-uniformly scaled ancestor, keeping the transform decomposable.
+TEST(SidebarTransformEditTest, GroupSizeEditsPreserveNonScalingStrokeAndPaintedOrigin) {
+  constexpr std::string_view kSvg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400">
+        <g id="target"><rect x="20" y="30" width="100" height="50" fill="red"
+          stroke="black" stroke-width="10" vector-effect="non-scaling-stroke"/></g>
+      </svg>)SVG";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kSvg));
+  ASSERT_THAT(presenter.inspectorBoundsForTesting(), testing::Ne(std::nullopt));
+  const Box2d start = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(start.width(), testing::DoubleNear(110.0, 1e-6));
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::Width, 220.0));
+  const Box2d wide = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(wide.width(), testing::DoubleNear(220.0, 1e-6));
+  EXPECT_THAT(wide.topLeft, testing::Eq(start.topLeft));
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::Height, 120.0));
+  const Box2d tall = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(tall.height(), testing::DoubleNear(120.0, 1e-6));
+  EXPECT_THAT(tall.width(), testing::DoubleNear(220.0, 1e-6));
+  EXPECT_THAT(tall.topLeft, testing::Eq(start.topLeft));
+}
+
+TEST(SidebarTransformEditTest, MixedGroupResizeUnderAffineParentAttainsPaintedSize) {
+  for (const std::string_view parent :
+       {"translate(80 40) rotate(25) scale(2 1)", "translate(200 40) scale(-1 2) skewX(20)"}) {
+    SCOPED_TRACE(parent);
+    const std::string source =
+        std::string(
+            R"(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"><g transform=")") +
+        std::string(parent) + R"SVG("><g id="target"><g transform="translate(10 15) rotate(12)">
+          <rect width="80" height="40" stroke="black" stroke-width="10"
+            vector-effect="non-scaling-stroke"/>
+          <path d="M 0 0 L 30 10 L 55 0" fill="none" stroke="red" stroke-width="6"
+            stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+          </g><rect x="90" y="20" width="30" height="50" stroke="blue" stroke-width="4"/>
+          <text x="20" y="90" font-size="16">Label</text></g></g></svg>)SVG";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+    const Box2d start = *presenter.inspectorBoundsForTesting();
+    ASSERT_NO_FATAL_FAILURE(EditTransformField(
+        app, presenter, SidebarPresenter::TransformField::Width, start.width() * 1.7));
+    const Box2d resized = *presenter.inspectorBoundsForTesting();
+    EXPECT_THAT(resized.width(), testing::DoubleNear(start.width() * 1.7, 1e-5));
+    EXPECT_THAT(resized.topLeft.x, testing::DoubleNear(start.topLeft.x, 1e-6));
+    EXPECT_THAT(resized.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
+    ASSERT_THAT(app.canUndo(), testing::IsTrue());
+    app.undo();
+    app.flushFrame();
+    presenter.refreshSnapshot(app);
+    EXPECT_THAT(presenter.inspectorBoundsForTesting()->width(),
+                testing::DoubleNear(start.width(), 1e-6));
+    app.redo();
+    app.flushFrame();
+    presenter.refreshSnapshot(app);
+    EXPECT_THAT(presenter.inspectorBoundsForTesting()->width(),
+                testing::DoubleNear(resized.width(), 1e-6));
+  }
+}
+
+TEST(SidebarTransformEditTest, GroupResizePredictsLocallyExpandedNonScalingStrokes) {
+  constexpr std::string_view kSvg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400">
+        <defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse">
+          <rect width="4" height="4" fill="blue"/></pattern></defs>
+        <g id="target"><rect x="20" y="30" width="100" height="50" fill="red"
+          stroke="url(#p)" stroke-width="10" vector-effect="non-scaling-stroke"/>
+          <text x="15" y="110" font-size="24" stroke="black" stroke-width="3"
+            vector-effect="non-scaling-stroke">Wide Label</text></g>
+      </svg>)SVG";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kSvg));
+  const Box2d start = *presenter.inspectorBoundsForTesting();
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(
+      app, presenter, SidebarPresenter::TransformField::Width, start.width() * 1.7));
+  const Box2d resized = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(resized.width(), testing::DoubleNear(start.width() * 1.7, 1e-5));
+  EXPECT_THAT(resized.topLeft.x, testing::DoubleNear(start.topLeft.x, 1e-6));
+  EXPECT_THAT(resized.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
+}
+
+TEST(SidebarTransformEditTest, SelectedTextSizePreservesNonScalingStrokeAndPaintedOrigin) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400">
+        <text id="target" x="40" y="80" font-size="24" stroke="black" stroke-width="10"
+          vector-effect="non-scaling-stroke">Wide Label</text></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kSvg));
+  const Box2d start = *presenter.inspectorBoundsForTesting();
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(
+      app, presenter, SidebarPresenter::TransformField::Width, start.width() * 2.0));
+  const Box2d wide = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(wide.width(), testing::DoubleNear(start.width() * 2.0, 1e-6));
+  EXPECT_THAT(wide.topLeft.x, testing::DoubleNear(start.topLeft.x, 1e-6));
+  EXPECT_THAT(wide.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(
+      app, presenter, SidebarPresenter::TransformField::Height, wide.height() * 1.5));
+  const Box2d tall = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(tall.height(), testing::DoubleNear(wide.height() * 1.5, 1e-6));
+  EXPECT_THAT(tall.topLeft.x, testing::DoubleNear(start.topLeft.x, 1e-6));
+  EXPECT_THAT(tall.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
+}
+
+TEST(SidebarTransformEditTest, ManyLeafGroupResizePreservesPaintedBounds) {
+  std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000"><g id="target">)";
+  for (int i = 0; i < 128; ++i) {
+    source += "<g transform=\"translate(" + std::to_string(i * 4) +
+              " 10)\"><rect width=\"30\" height=\"20\" stroke=\"black\" stroke-width=\"4\" "
+              "vector-effect=\"" +
+              std::string(i % 2 == 0 ? "non-scaling-stroke" : "none") + "\"/></g>";
+  }
+  source += "</g></svg>";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  const Box2d start = *presenter.inspectorBoundsForTesting();
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::Width);
+  EXPECT_THAT(presenter.applyTransformEditForTesting(app, start.width() * 2.0), testing::IsTrue());
+  EXPECT_THAT(presenter.resizeBoundsEvaluationCountForTesting(), testing::Le(6u));
+  presenter.commitTransformEditForTesting(app);
+  app.flushFrame();
+  presenter.refreshSnapshot(app);
+  const Box2d resized = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(resized.width(), testing::DoubleNear(start.width() * 2.0, 1e-6));
+  EXPECT_THAT(resized.topLeft.x, testing::DoubleNear(start.topLeft.x, 1e-6));
+  EXPECT_THAT(resized.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
+}
+
+TEST(SidebarTransformEditTest, OrdinaryGroupSizeUsesTheDirectAffinePath) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400">
+        <g id="target"><rect width="100" height="50" stroke="black" stroke-width="10"/></g></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kSvg));
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::Width);
+  EXPECT_THAT(presenter.applyTransformEditForTesting(app, 220.0), testing::IsTrue());
+  EXPECT_THAT(presenter.resizeBoundsEvaluationCountForTesting(), testing::Eq(0u));
+  presenter.commitTransformEditForTesting(app);
+  app.flushFrame();
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.inspectorBoundsForTesting()->width(), testing::DoubleNear(220.0, 1e-6));
+}
+
+TEST(SidebarTransformEditTest, UnattainablePaintedGroupSizeDoesNotMutateTheDocument) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400">
+        <g id="target"><rect width="100" height="50" stroke="black" stroke-width="10"
+          vector-effect="non-scaling-stroke"/></g></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kSvg));
+  const auto originalTransform = presenter.inspectorTransformForTesting();
+  const std::string originalSource(app.cleanSourceText());
+  for (const double value : {5.0, 0.0, std::numeric_limits<double>::infinity()}) {
+    SCOPED_TRACE(value);
+    presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::Width);
+    EXPECT_THAT(presenter.applyTransformEditForTesting(app, value), testing::IsFalse());
+    presenter.commitTransformEditForTesting(app);
+    app.flushFrame();
+    presenter.refreshSnapshot(app);
+    EXPECT_THAT(presenter.inspectorTransformForTesting(), testing::Eq(originalTransform));
+    EXPECT_THAT(std::string(app.cleanSourceText()), testing::Eq(originalSource));
+    EXPECT_THAT(app.canUndo(), testing::IsFalse());
+  }
+}
+
+TEST(SidebarTransformEditTest, RotationUnderNonUniformOrMirroredParentKeepsTypedLocalAngle) {
+  for (const std::string_view parentTransform : {"scale(-1 1)", "scale(2 1)"}) {
+    SCOPED_TRACE(parentTransform);
+    const std::string svg =
+        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">)") +
+        R"(<g transform="translate(200 100) )" + std::string(parentTransform) + R"(">)" +
+        R"(<rect id="target" x="10" y="20" width="40" height="30"/></g></svg>)";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, svg));
+    const Box2d start = *presenter.inspectorBoundsForTesting();
+
+    ASSERT_NO_FATAL_FAILURE(
+        EditTransformField(app, presenter, SidebarPresenter::TransformField::Rotation, 45.0));
+    const std::optional<DecomposedTransform> decomposed =
+        DecomposeTransform(*presenter.inspectorTransformForTesting());
+    ASSERT_TRUE(decomposed.has_value()) << "rotation must not skew the local transform";
+    EXPECT_THAT(decomposed->rotationRadians * MathConstants<double>::kRadToDeg,
+                testing::DoubleNear(45.0, 1e-6));
+    const Box2d rotated = *presenter.inspectorBoundsForTesting();
+    const Vector2d startCenter = (start.topLeft + start.bottomRight) * 0.5;
+    const Vector2d rotatedCenter = (rotated.topLeft + rotated.bottomRight) * 0.5;
+    EXPECT_THAT(rotatedCenter.x, testing::DoubleNear(startCenter.x, 1e-6));
+    EXPECT_THAT(rotatedCenter.y, testing::DoubleNear(startCenter.y, 1e-6));
+  }
 }
 
 TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle) {

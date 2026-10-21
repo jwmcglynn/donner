@@ -368,6 +368,7 @@ TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
   EXPECT_TRUE(hasTool("transform_selector"));
   EXPECT_TRUE(hasTool("pointer_gesture"));
   EXPECT_TRUE(hasTool("render_frame"));
+  EXPECT_TRUE(hasTool("inspector_state"));
   EXPECT_TRUE(hasTool("get_svg_source"));
   EXPECT_TRUE(hasTool("edit_svg_source"));
   EXPECT_TRUE(hasTool("set_active_tool"));
@@ -717,6 +718,53 @@ TEST(EditorControlSessionTest, UndoAfterLayerVisibilityClickRestoresOnlyTheToggl
   EXPECT_THAT(undone, testing::HasSubstr("transform="))
       << "undo must leave the earlier drag applied:\n"
       << undone;
+}
+
+TEST(EditorControlSessionTest, InspectorStateReportsTheInspectorGeometryForTheSelection) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
+  <rect id="target" x="10" y="20" width="100" height="50" fill="red"/>
+  <text id="label" x="10" y="60" font-size="12">Hi</text>
+</svg>)svg";
+
+  EditorControlSession session;
+  EXPECT_TRUE(session.handleToolCall("inspector_state", json::object()).isError)
+      << "inspector_state requires a loaded document";
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                                {"canvas_width", 120},
+                                                                {"canvas_height", 80},
+                                                                {"render_after_load", false}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  ToolCallResult none = session.handleToolCall("inspector_state", json::object());
+  ASSERT_FALSE(none.isError) << none.body.dump(2);
+  EXPECT_THAT(none.body["has_selection"], testing::Eq(json(false)));
+  EXPECT_THAT(none.body["bounds_doc"], testing::Eq(json(nullptr)));
+
+  ToolCallResult select = session.handleToolCall("select_by_selector",
+                                                 json{{"selector", "#target"}, {"render", false}});
+  ASSERT_TRUE(select.body.value("ok", false)) << select.body.dump(2);
+
+  ToolCallResult inspector = session.handleToolCall("inspector_state", json::object());
+  ASSERT_FALSE(inspector.isError) << inspector.body.dump(2);
+  EXPECT_THAT(inspector.body["has_selection"], testing::Eq(json(true)));
+  EXPECT_THAT(inspector.body.value("title", ""), testing::HasSubstr("rect id=\"target\""));
+  EXPECT_THAT(inspector.body["bounds_doc"]["top_left"], testing::Eq(json{{"x", 10.0}, {"y", 20.0}}))
+      << inspector.body.dump(2);
+  EXPECT_THAT(inspector.body["bounds_doc"]["size"], testing::Eq(json{{"x", 100.0}, {"y", 50.0}}))
+      << inspector.body.dump(2);
+  EXPECT_THAT(inspector.body["transform"], testing::Not(testing::Eq(json(nullptr))));
+
+  ToolCallResult selectText =
+      session.handleToolCall("select_by_selector", json{{"selector", "#label"}, {"render", false}});
+  ASSERT_TRUE(selectText.body.value("ok", false)) << selectText.body.dump(2);
+  ToolCallResult textInspector = session.handleToolCall("inspector_state", json::object());
+  ASSERT_FALSE(textInspector.isError) << textInspector.body.dump(2);
+  const json& textBody = textInspector.body;
+  ASSERT_TRUE(textBody["bounds_doc"].is_object()) << textBody.dump(2);
+  const json& textSize = textBody["bounds_doc"]["size"];
+  EXPECT_THAT(textSize.value("x", 0.0), testing::Gt(0.0)) << textBody.dump(2);
+  EXPECT_THAT(textSize.value("y", 0.0), testing::Gt(0.0)) << textBody.dump(2);
 }
 
 TEST(EditorControlSessionTest, InvalidToolCallReturnsErrorResult) {

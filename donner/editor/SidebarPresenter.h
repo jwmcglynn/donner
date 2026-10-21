@@ -198,6 +198,11 @@ public:
     return inspectorSnapshot_.computedStyleSwatches;
   }
 
+  /// Return painted-bounds evaluations used by the active resize edit.
+  [[nodiscard]] std::size_t resizeBoundsEvaluationCountForTesting() const {
+    return transformEdit_.has_value() ? transformEdit_->boundsEvaluationCount : 0;
+  }
+
   /// Return document-space bounds captured for the inspector selection.
   [[nodiscard]] const std::optional<Box2d>& inspectorBoundsForTesting() const {
     return inspectorSnapshot_.bounds;
@@ -400,8 +405,15 @@ private:
     const char* undoLabel = "";            ///< Undo timeline label for the completed edit.
     Transform2d startTransform;            ///< Local transform at activation.
     Transform2d currentTransform;          ///< Last transform queued via SetTransformCommand.
-    std::optional<Box2d> startBounds;      ///< Document-space bounds at activation, if any.
+    std::function<std::optional<Box2d>(const Transform2d&)> boundsAfterAxisScale;
+    mutable std::size_t boundsEvaluationCount =
+        0;                             ///< Work performed by the last painted size solve.
+    std::optional<Box2d> startBounds;  ///< Document-space bounds at activation, if any.
     std::optional<DecomposedTransform> startDecomposed;  ///< Decomposition of `startTransform`.
+    /// Parent coordinates to document coordinates at activation.
+    Transform2d documentFromParent;
+    /// Inverse of `documentFromParent`, or nullopt when the parent is degenerate.
+    std::optional<Transform2d> parentFromDocument;
 
     /// Stable locator so undo / source writeback survive document identity changes.
     std::optional<AttributeWritebackTarget> writebackTarget;
@@ -429,6 +441,8 @@ private:
   /// Populate stroke values and marker choices for the current selection.
   void captureStrokeSnapshot(const EditorApp& app, std::span<const svg::SVGElement> selection,
                              InspectorSnapshot& inspector);
+  /// Inspector bounds for @p element, recomputed only when the element or the document changed.
+  std::optional<Box2d> cachedInspectorBounds(const EditorApp& app, const svg::SVGElement& element);
   /// Re-scan marker IDs only when the source or root changed.
   void refreshMarkerCache(const EditorApp& app);
   void renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node, TreeViewState& state,
@@ -515,6 +529,17 @@ private:
   /// @param state Baseline and field being edited.
   static double InitialTransformFieldValue(const TransformEditState& state);
 
+  /// Document-space change that the Position or Size field at @p value applies
+  /// to the edit baseline, or nullopt when it cannot apply one.
+  static std::optional<Transform2d> DocumentFieldChange(const TransformEditState& state,
+                                                        double value);
+
+  /// New parent-from-entity transform for a Rotation edit to @p value degrees,
+  /// rotating in the parent frame about the bounds center (or the element
+  /// origin when there are no bounds).
+  static std::optional<Transform2d> RotatedParentFromEntity(const TransformEditState& state,
+                                                            double value);
+
   /// Compose the new local transform for the in-progress edit at @p value.
   [[nodiscard]] Transform2d composeFieldTransform(const TransformEditState& state,
                                                   double value) const;
@@ -528,6 +553,18 @@ private:
 
   std::optional<TreeNodeSnapshot> treeSnapshot_;
   InspectorSnapshot inspectorSnapshot_;
+
+  /// Inspector bounds of one element at one document frame version. Text and group bounds walk
+  /// laid-out glyphs or every rendered descendant, so the per-frame snapshot reuses them until
+  /// the selection, the document, or its layout inputs such as the canvas size change.
+  struct InspectorBoundsCache {
+    svg::SVGElement element;               ///< Element the bounds belong to.
+    std::uint64_t documentGeneration = 0;  ///< Document generation they were computed in.
+    std::uint64_t frameVersion = 0;        ///< Document frame version they were computed at.
+    std::uint64_t domRevision = 0;         ///< DOM mutation revision they were computed at.
+    std::optional<Box2d> bounds;           ///< Cached Inspector bounds.
+  };
+  std::optional<InspectorBoundsCache> inspectorBoundsCache_;
   std::optional<TransformEditState> transformEdit_;
   std::array<std::optional<Box2d>, 5> transformFieldRects_;
   std::array<std::optional<Box2d>, 6> matrixFieldRects_;

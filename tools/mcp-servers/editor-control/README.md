@@ -67,6 +67,9 @@ build before the first proxied request after startup.
 - `render_frame`: Render the current editor state and return the final frame
   plus split compositor and presentation tile metadata.
 - `session_state`: Inspect selection, canvas, and compositor diagnostic state.
+- `inspector_state`: Refresh the Inspector panel's model for the current
+  selection and return its title, the document-space bounds behind the Position
+  and Size fields (`null` when the Inspector has none), and the transform.
 - `start_rnr_recording`: Start recording subsequent MCP-driven gestures to the
   existing editor `.rnr` NDJSON format.
 - `stop_rnr_recording`: Stop the active recording and optionally write it to

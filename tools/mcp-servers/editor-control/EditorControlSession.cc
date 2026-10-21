@@ -24,6 +24,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <unordered_set>
@@ -436,6 +437,14 @@ json EditorControlSession::toolList() {
           {"inputSchema", {{"type", "object"}, {"properties", json::object()}}},
       },
       {
+          {"name", "inspector_state"},
+          {"description",
+           "Return the Inspector panel's model for the current selection: whether a single "
+           "element is inspected, its title, the document-space bounds behind the Position and "
+           "Size fields (null when the Inspector has none), and its transform."},
+          {"inputSchema", {{"type", "object"}, {"properties", json::object()}}},
+      },
+      {
           {"name", "start_rnr_recording"},
           {"description", "Start recording subsequent MCP-driven editor gestures to an .rnr file."},
           {"inputSchema",
@@ -553,6 +562,8 @@ ToolCallResult EditorControlSession::handleToolCall(std::string_view name, const
       {"pointer_gesture",
        [](EditorControlSession& s, const json& a) { return s.pointerGesture(a); }},
       {"render_frame", [](EditorControlSession& s, const json& a) { return s.renderFrameTool(a); }},
+      {"inspector_state",
+       [](EditorControlSession& s, const json& a) { return s.inspectorState(a); }},
       {"session_state", [](EditorControlSession& s, const json& a) { return s.sessionState(a); }},
       {"start_rnr_recording",
        [](EditorControlSession& s, const json& a) { return s.startRnrRecording(a); }},
