@@ -655,6 +655,22 @@ json EditorControlSession::selectedElementJson() const {
   return ElementJson(*app_.selectedElement());
 }
 
+json EditorControlSession::textFormatJson() const {
+  const std::vector<svg::SVGElement>& selection = app_.selectedElements();
+  if (selection.size() != 1u || selection.front().type() != svg::ElementType::Text) {
+    return nullptr;
+  }
+  FormatBarState state;
+  ReadTextFormatState(selection.front(), &state);
+  return json{
+      {"font_family", state.fontFamily},
+      {"font_size", state.hasFontSize ? json(state.fontSize) : json(nullptr)},
+      {"bold", state.bold},
+      {"italic", state.italic},
+      {"underline", state.underline},
+  };
+}
+
 bool EditorControlSession::ensureDocumentLoaded(std::string* error) const {
   if (!app_.hasDocument()) {
     *error = "no SVG document loaded";

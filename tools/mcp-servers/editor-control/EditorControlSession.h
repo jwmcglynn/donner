@@ -19,6 +19,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SidebarPresenter.h"
 #include "donner/editor/SourceEditIntent.h"
+#include "donner/editor/TextFormatBarPresenter.h"
 #include "donner/editor/TextTool.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -247,6 +248,9 @@ private:
   [[nodiscard]] std::optional<svg::SVGElement> querySelector(std::string_view selector);
   [[nodiscard]] std::optional<Box2d> elementWorldBounds(const svg::SVGElement& element) const;
   [[nodiscard]] nlohmann::json selectedElementJson() const;
+  /// Text format bar state for a single selected `<text>`, read the way the editor shell reads
+  /// it, or null for any other selection.
+  [[nodiscard]] nlohmann::json textFormatJson() const;
 
   [[nodiscard]] bool ensureDocumentLoaded(std::string* error) const;
   [[nodiscard]] bool waitUntilIdle(std::string* error);

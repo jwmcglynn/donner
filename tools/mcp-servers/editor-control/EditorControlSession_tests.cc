@@ -775,6 +775,37 @@ TEST(EditorControlSessionTest, InspectorStateReportsTheInspectorGeometryForTheSe
   EXPECT_THAT(textSize.value("y", 0.0), testing::Gt(0.0)) << textBody.dump(2);
 }
 
+TEST(EditorControlSessionTest, SelectBySelectorReportsTextFormatBarState) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
+  <rect id="r" width="10" height="10"/>
+  <text id="t" x="10" y="40" font-family="Fira Code" font-size="24" font-weight="bold">Hi</text>
+</svg>)svg";
+
+  EditorControlSession session;
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                                {"canvas_width", 120},
+                                                                {"canvas_height", 80},
+                                                                {"render_after_load", false}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  ToolCallResult rect =
+      session.handleToolCall("select_by_selector", json{{"selector", "#r"}, {"render", false}});
+  ASSERT_TRUE(rect.body.value("ok", false)) << rect.body.dump(2);
+  EXPECT_THAT(rect.body["text_format"], testing::Eq(json(nullptr)));
+
+  ToolCallResult text =
+      session.handleToolCall("select_by_selector", json{{"selector", "#t"}, {"render", false}});
+  ASSERT_TRUE(text.body.value("ok", false)) << text.body.dump(2);
+  EXPECT_THAT(text.body["text_format"], testing::Eq(json{{"font_family", "Fira Code"},
+                                                         {"font_size", 24.0},
+                                                         {"bold", true},
+                                                         {"italic", false},
+                                                         {"underline", false}}))
+      << text.body.dump(2);
+}
+
+
 TEST(EditorControlSessionTest, InvalidToolCallReturnsErrorResult) {
   EditorControlSession session;
 
