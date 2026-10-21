@@ -401,6 +401,10 @@ public:
   void setPenLivePreviewElement(std::optional<svg::SVGElement> element) {
     penLivePreviewElement_ = std::move(element);
   }
+  /// Latest owning element-space path, consumed with the cached pen paint and selection identity.
+  void setPenLivePreviewGeometry(std::shared_ptr<const Path> geometry) {
+    penLivePreviewGeometry_ = std::move(geometry);
+  }
   /// @return the active pen live-preview element, if any.
   [[nodiscard]] const std::optional<svg::SVGElement>& penLivePreviewElement() const {
     return penLivePreviewElement_;
@@ -654,6 +658,7 @@ private:
   std::shared_ptr<const FramePresentation> framePresentation_;
   std::shared_ptr<const CapturedPresentation> selectedSceneCapture_;
   std::shared_ptr<const CapturedPresentation> livePathCapture_;
+  std::shared_ptr<const Path> penLivePreviewGeometry_;
   std::uint64_t nextPresentationFrameId_ = 1;
   bool presentationNeedsRender_ = false;
   bool frameRepresentsCurrentIntent_ = false;

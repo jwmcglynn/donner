@@ -570,24 +570,62 @@ void FramePresentation::finishChrome(const FramePresentationInput& input,
       input.viewport.screenToDocument(input.paneClipRect).inflatedBy(64.0 / pixelsPerDocUnit));
 }
 
-void FramePresentation::applyLivePathReplacement(const FramePresentationInput& input) {
+bool FramePresentation::canUseLivePathReplacement(const FramePresentationInput& input) const {
   const auto& replacement = input.livePathReplacement;
   if (replacement == nullptr || replacement->objects().size() != 1 ||
       replacement->selection() != input.selection ||
       replacement->identity().documentGeneration != identity_.documentGeneration ||
       replacement->identity().presentationEpoch != identity_.presentationEpoch) {
-    return;
+    return false;
   }
   const auto& object = replacement->objects().front();
   if (!object.chrome.livePathPreview.has_value() ||
       !resources_->capture()->canProject(object.entity) ||
       !replacement->canProject(object.entity) || !HasObjectTile(tiles_, object.entity)) {
+    return false;
+  }
+  return true;
+}
+
+std::optional<SelectionChromeSnapshot> FramePresentation::livePathReplacementChrome(
+    const FramePresentationInput& input) const {
+  auto replacementChrome = input.livePathReplacement->objects().front().chrome;
+  const auto& replacement = input.livePathReplacement;
+  const auto& object = replacement->objects().front();
+  if (input.penPathGeometryLocal != nullptr) {
+    const auto pose = replacement->pose(object.entity);
+    if (!pose.has_value() || !FinitePresentationTransform(pose->documentFromElement)) {
+      return std::nullopt;
+    }
+    if (replacementChrome.livePathPreview->strokeColor.has_value()) {
+      const auto x = pose->documentFromElement.transformVector(Vector2d(1, 0));
+      const auto y = pose->documentFromElement.transformVector(Vector2d(0, 1));
+      if (std::abs(x.dot(x) - 1.0) > 1e-9 || std::abs(y.dot(y) - 1.0) > 1e-9 ||
+          std::abs(x.dot(y)) > 1e-9) {
+        return std::nullopt;
+      }
+    }
+    replacementChrome = OverlayRenderer::withLivePathGeometry(
+        std::move(replacementChrome),
+        input.penPathGeometryLocal->transformed(pose->documentFromElement));
+  }
+  return replacementChrome;
+}
+
+void FramePresentation::applyLivePathReplacement(const FramePresentationInput& input) {
+  if (!canUseLivePathReplacement(input)) {
+    return;
+  }
+  const auto& replacement = input.livePathReplacement;
+  const auto& object = replacement->objects().front();
+  auto replacementChrome = livePathReplacementChrome(input);
+  if (!replacementChrome.has_value()) {
     return;
   }
   livePathCapture_ = replacement;
   replacementPaint_.emplace();
-  replacementPaint_->livePathPreview = object.chrome.livePathPreview;
-  chrome_ = object.chrome;
+  replacementPaint_->livePathPreview = replacementChrome->livePathPreview;
+  chrome_ = std::move(*replacementChrome);
   chrome_.livePathPreview.reset();
   poses_ = replacement->poses();
   hasSelectionGeometry_ = true;
@@ -601,11 +639,11 @@ std::optional<SelectionChromeSnapshot> FramePresentation::liveAdornment(
     return std::nullopt;
   }
   auto chrome = item.chrome;
-  const auto& replacement = livePathCapture_->objects().front().chrome;
+  const auto& replacement = chrome_;
   chrome.hoverPaths = replacement.paths;
   chrome.hoverAabbsDoc = replacement.aabbsDoc;
   if (chrome.lockedFlash.has_value()) {
-    chrome.lockedFlash->pathDoc = replacement.livePathPreview->pathDoc;
+    chrome.lockedFlash->pathDoc = replacementPaint_->livePathPreview->pathDoc;
   }
   return chrome;
 }

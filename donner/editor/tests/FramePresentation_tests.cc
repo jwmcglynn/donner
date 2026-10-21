@@ -382,6 +382,57 @@ TEST(FramePresentationTest, SolidPenReplacementCarriesMatchingPaintAndChrome) {
   EXPECT_THAT(artworkOnly->selectionBounds(), SizeIs(1));
 }
 
+TEST(FramePresentationTest, LatestPenGeometryUsesOwningPaintAndFullCapturedTransform) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+    <path id="path" transform="matrix(-1 .2 .4 2 70 5)" d="M10 10 L30 10 L30 30 Z" fill="red"/>
+    </svg>)svg"));
+  const auto path = *app.document().document().querySelector("#path");
+  app.setSelection(path);
+  SelectTool tool;
+  const Entity entity = path.unsafeEntityHandle().entity();
+  const std::array independent{entity};
+  const auto capture = CapturedPresentation::Capture(app.document().document(), Identity(app, 1),
+                                                     app.selectedElements(), {}, independent,
+                                                     app.selectedElements());
+  const auto resources = FramePresentationTestAccess::resources(capture, {RectTile(entity, 10, 0)});
+  const auto replacement = CapturedPresentation::Capture(app.document().document(),
+                                                         Identity(app, 2), app.selectedElements(),
+                                                         {}, independent, {}, std::nullopt, path);
+  const Path latest = PathBuilder().moveTo({10, 10}).curveTo({20, 60}, {40, 20}, {60, 30}).build();
+  auto input = Input(app, tool, 1);
+  input.livePathReplacement = replacement;
+  input.penPathGeometryLocal = std::make_shared<const Path>(latest);
+  input.pendingDocumentMutations = true;
+  input.decorations.sourceHover = {entity};
+  const auto frame = FramePresentation::Build(resources, input).frame;
+  ASSERT_NE(frame, nullptr);
+  ASSERT_THAT(frame->replacementPaint(), testing::Ne(std::nullopt));
+  const Path expected = latest.transformed(replacement->pose(entity)->documentFromElement);
+  EXPECT_THAT(frame->replacementPaint()->livePathPreview->pathDoc, testing::Eq(expected));
+  ASSERT_THAT(frame->chrome().paths, SizeIs(1));
+  EXPECT_THAT(frame->chrome().paths.front().pathDoc, testing::Eq(expected));
+  ASSERT_THAT(frame->chrome().hoverPaths, SizeIs(1));
+  EXPECT_THAT(frame->chrome().hoverPaths.front().pathDoc, testing::Eq(expected));
+  EXPECT_THAT(path.getAttribute("d"), testing::Optional(RcString("M10 10 L30 10 L30 30 Z")));
+
+  input.frameId++;
+  input.livePathReplacement.reset();
+  const auto missing = FramePresentation::Build(resources, input).frame;
+  ASSERT_NE(missing, nullptr);
+  EXPECT_THAT(missing->replacementPaint(), testing::Eq(std::nullopt));
+  input.frameId++;
+  auto wrongIdentity = Identity(app, 3);
+  ++wrongIdentity.documentGeneration;
+  input.livePathReplacement = CapturedPresentation::Capture(
+      app.document().document(), wrongIdentity, app.selectedElements(), {}, independent, {},
+      std::nullopt, path);
+  const auto wrongDocument = FramePresentation::Build(resources, input).frame;
+  ASSERT_NE(wrongDocument, nullptr);
+  EXPECT_THAT(wrongDocument->replacementPaint(), testing::Eq(std::nullopt));
+}
+
 TEST(FramePresentationTest, FrameCameraAndGeometryIgnoreLaterUiChanges) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kRect));

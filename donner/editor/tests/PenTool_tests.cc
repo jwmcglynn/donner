@@ -91,6 +91,179 @@ protected:
   PenTool tool;
 };
 
+TEST_F(PenToolTest, BusyDragKeepsOnlyLatestGeometryUntilIdleCommitAndRelease) {
+  tool.onMouseDown(app, Vector2d(10, 20), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseUp(app, Vector2d(10, 20));
+  tool.onMouseDown(app, Vector2d(50, 20), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  const std::string before(path().d());
+  for (int i = 0; i < 100; ++i) {
+    tool.onMouseMove(app, Vector2d(20 + i, 30), true, MouseModifiers{}, true);
+  }
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  EXPECT_EQ(path().d(), before);
+  const auto latest = tool.previewPath();
+  ASSERT_THAT(latest, testing::Ne(nullptr));
+  // A release with no preceding move must still preserve its final sample.
+  tool.deferMouseUp(app, Vector2d(130, 40));
+  EXPECT_TRUE(tool.isDraggingAnchor());
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  EXPECT_EQ(path().d(), before);
+  tool.flushPendingDrag(app);
+  EXPECT_FALSE(tool.isDraggingAnchor());
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(std::string(path().d()), testing::HasSubstr("-30 0 50 20"));
+}
+
+TEST_F(PenToolTest, DeferredReleaseFreezesItsGestureUntilTheNextPressIsAdmitted) {
+  tool.onMouseDown(app, {10, 20}, MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseUp(app, {10, 20});
+  tool.onMouseDown(app, {50, 20}, MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  tool.deferMouseUp(app, {130, 40});
+  const Path released = *tool.previewPath();
+  // The shell buffers the next press while busy, but still samples its held pointer.
+  tool.onMouseMove(app, {200, 100}, true, MouseModifiers{}, true);
+  tool.deferMouseUp(app, {220, 120});
+  EXPECT_THAT(*tool.previewPath(), testing::Eq(released));
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  tool.flushPendingDrag(app);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(std::string(path().d()), testing::HasSubstr("-30 0 50 20"));
+  EXPECT_FALSE(tool.isDraggingAnchor());
+  tool.onMouseDown(app, {200, 100}, MouseModifiers{});
+  tool.onMouseUp(app, {200, 100});
+  tool.commitOpenPath(app);
+  (void)app.flushFrame();
+  EXPECT_THAT(std::string(path().d()), testing::HasSubstr("200 100"));
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  app.undo();
+  (void)app.flushFrame();
+  EXPECT_THAT(app.document().document().querySelector("path"), testing::Eq(std::nullopt));
+  app.redo();
+  (void)app.flushFrame();
+  EXPECT_THAT(app.document().document().querySelector("path"), testing::Ne(std::nullopt));
+}
+
+TEST_F(PenToolTest, DeferredPenGeometryCannotMutateAChangedSelection) {
+  tool.onMouseDown(app, Vector2d(10, 20), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  const auto original = path();
+  tool.onMouseMove(app, Vector2d(30, 40), true, MouseModifiers{}, true);
+  app.setSelection(std::nullopt);
+  EXPECT_THAT(tool.previewPathForSelection(app), testing::Eq(nullptr));
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  tool.flushPendingDrag(app);
+  EXPECT_FALSE(tool.isDrafting());
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  EXPECT_EQ(original.d(), "M 10 20");
+}
+
+TEST_F(PenToolTest, DeferredReleaseCommitsOneUndoablePathAndRedoRestoresIt) {
+  tool.onMouseDown(app, {10, 20}, MouseModifiers{});
+  tool.onMouseUp(app, {10, 20});
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseDown(app, {50, 20}, MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseMove(app, {80, 60}, true, MouseModifiers{}, true);
+  tool.deferMouseUp(app, {90, 60});
+  tool.flushPendingDrag(app);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(tool.commitOpenPath(app));
+  ASSERT_TRUE(app.flushFrame());
+  const std::string committed(path().d());
+  app.undo();
+  app.flushFrame();
+  EXPECT_THAT(app.document().document().querySelector("path"), testing::Eq(std::nullopt));
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(path().d(), committed);
+}
+
+TEST_F(PenToolTest, CancelRetiresDeferredGeometryWithoutResurrectingTheDraft) {
+  tool.onMouseDown(app, {10, 20}, MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseMove(app, {30, 40}, true, MouseModifiers{}, true);
+  tool.deferMouseUp(app, {40, 50});
+  tool.cancel(app);
+  ASSERT_TRUE(app.flushFrame());
+  tool.flushPendingDrag(app);
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  EXPECT_FALSE(tool.isDrafting());
+  EXPECT_THAT(app.document().document().querySelector("path"), testing::Eq(std::nullopt));
+}
+
+TEST_F(PenToolTest, DocumentReplacementInvalidatesDeferredGeometryEvenWithASelectedPath) {
+  tool.onMouseDown(app, {10, 20}, MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseMove(app, {30, 40}, true, MouseModifiers{}, true);
+  tool.deferMouseUp(app, {40, 50});
+  ASSERT_TRUE(app.loadFromString(kOpenPathSvg));
+  app.setSelection(*app.document().document().querySelector("#p"));
+  EXPECT_THAT(tool.previewPathForSelection(app), testing::Eq(nullptr));
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  tool.flushPendingDrag(app);
+  EXPECT_FALSE(tool.isDrafting());
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  EXPECT_EQ(path().d(), "M 0 0 L 10 0");
+}
+
+TEST_F(PenToolTest, PreviewWorkIsCachedAndBoundedDuringNearLimitPointerStorms) {
+  for (const std::size_t count : {PenTool::kMaximumPreviewPoints, std::size_t(128 * 1024 - 1)}) {
+    EditorApp app;
+    PenTool tool;
+    std::string data = "M0 0";
+    for (std::size_t i = 1; i < count; ++i) {
+      data += (i % 2 == 0) ? "l1-1" : "l1 1";
+    }
+    ASSERT_TRUE(app.loadFromString("<svg xmlns=\"http://www.w3.org/2000/svg\"><path id=\"p\" d=\"" +
+                                   data + "\" fill=\"none\" stroke=\"black\"/></svg>"));
+    const auto selected = app.document().document().querySelector("#p");
+    ASSERT_THAT(selected, testing::Ne(std::nullopt))
+        << "point count " << count << testing::PrintToString(app.document().parseDiagnostics());
+    app.setSelection(*selected);
+    const auto parsed = selected->cast<svg::SVGPathElement>().computedSpline();
+    ASSERT_THAT(parsed, testing::Ne(std::nullopt));
+    ASSERT_EQ(parsed->points().size(), count);
+    tool.cancel();
+    tool.onMouseDown(app, {0, 0}, MouseModifiers{.command = true});
+    ASSERT_TRUE(tool.isDraggingAnchor());
+    const auto serialized = tool.serializationCountForDiagnostics();
+    const auto initialWork = tool.previewWorkForDiagnostics();
+    const auto began = std::chrono::steady_clock::now();
+    for (int i = 1; i <= 1000; ++i) {
+      tool.onMouseMove(app, {double(i) / 10.0, 2}, true, MouseModifiers{}, true);
+      EXPECT_EQ(tool.hoverIntentAt(app, {double(i) / 10.0, 2}, MouseModifiers{}),
+                PenHoverIntent::DragAnchor);
+    }
+    EXPECT_EQ(tool.serializationCountForDiagnostics(), serialized);
+    EXPECT_EQ(tool.previewWorkForDiagnostics(), initialWork);
+    const auto preview = tool.previewPathForSelection(app);
+    if (count == PenTool::kMaximumPreviewPoints) {
+      ASSERT_THAT(preview, testing::Ne(nullptr));
+      EXPECT_LE(preview->points().size(), PenTool::kMaximumPreviewPoints);
+      EXPECT_LE(tool.previewWorkForDiagnostics() - initialWork, PenTool::kMaximumPreviewPoints + 1);
+    } else {
+      EXPECT_THAT(preview, testing::Eq(nullptr));
+      EXPECT_EQ(tool.previewWorkForDiagnostics(), initialWork);
+    }
+    const auto builtWork = tool.previewWorkForDiagnostics();
+    for (int frame = 0; frame < 100; ++frame) {
+      EXPECT_THAT(tool.previewPathForSelection(app), testing::Eq(preview));
+    }
+    EXPECT_EQ(tool.previewWorkForDiagnostics(), builtWork);
+    EXPECT_FALSE(app.document().hasPendingMutations());
+    RecordProperty("preview_points_" + std::to_string(count), count);
+    RecordProperty("preview_work_" + std::to_string(count), builtWork - initialWork);
+    RecordProperty("pointer_storm_us_" + std::to_string(count),
+                   std::chrono::duration_cast<std::chrono::microseconds>(
+                       std::chrono::steady_clock::now() - began)
+                       .count());
+  }
+}
+
 TEST_F(PenToolTest, FirstClickInsertsSelectedPath) {
   tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
   ASSERT_TRUE(app.flushFrame());

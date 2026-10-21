@@ -15,6 +15,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -88,7 +89,18 @@ public:
   /// @param buttonHeld Whether the left mouse button is down.
   /// @param modifiers Modifier-key state for the drag.
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
-                   MouseModifiers modifiers);
+                   MouseModifiers modifiers, bool deferCommit = false);
+
+  /// Commit the latest coalesced drag and release once the document worker is idle.
+  void flushPendingDrag(EditorApp& editor);
+  /// Whether the previous gesture still awaits document settlement.
+  [[nodiscard]] bool hasDeferredRelease() const { return pendingDragRelease_.has_value(); }
+  /// Keep a release local until document access is available.
+  void deferMouseUp(EditorApp& editor, const Vector2d& documentPoint);
+  /// Owning element-space path geometry for the current local drag.
+  [[nodiscard]] std::shared_ptr<const Path> previewPath() const;
+  /// Owning preview only while the original pen subject and deferred document remain selected.
+  [[nodiscard]] std::shared_ptr<const Path> previewPathForSelection(const EditorApp& editor) const;
 
   /// Handle mouse release. Commits the dragged anchor's handles if it moved.
   ///
@@ -167,7 +179,15 @@ public:
   [[nodiscard]] bool isDraggingAnchor() const { return dragMode_ != DragMode::None; }
 
   /// Current path data for tests and UI diagnostics.
-  [[nodiscard]] const std::string& activePathData() const { return activePathData_; }
+  [[nodiscard]] const std::string& activePathData() const;
+  /// Maximum points retained by the immediate preview; larger paths use normal raster updates.
+  static constexpr std::size_t kMaximumPreviewPoints = 4096;
+  /// Actual anchor visits made by lazy preview construction.
+  [[nodiscard]] std::uint64_t previewWorkForDiagnostics() const { return previewWork_; }
+  /// Number of complete SVG path serializations, including explicit diagnostic requests.
+  [[nodiscard]] std::uint64_t serializationCountForDiagnostics() const {
+    return serializationCount_;
+  }
 
 private:
   struct Anchor {
@@ -267,7 +287,23 @@ private:
   std::vector<Anchor> anchors_;
   Vector2d startPoint_ = Vector2d::Zero();
   Vector2d currentPoint_ = Vector2d::Zero();
-  std::string activePathData_;
+  mutable std::string activePathData_;
+  mutable bool pathDataDirty_ = false;
+  mutable bool previewDirty_ = true;
+  mutable std::shared_ptr<const Path> previewGeometry_;
+  mutable std::uint64_t previewWork_ = 0;
+  mutable std::uint64_t serializationCount_ = 0;
+  MouseModifiers lastDragModifiers_;
+  bool pendingDragCommit_ = false;
+  void appendPreviewSegment(PathBuilder& builder, const Anchor& previous,
+                            const Anchor& current) const;
+  void appendPreviewClosingSegment(PathBuilder& builder) const;
+  PenHoverIntent draftHoverIntent(const Vector2d& documentPoint, const MouseModifiers& modifiers,
+                                  double toleranceDoc) const;
+
+  std::optional<Vector2d> pendingDragRelease_;
+  std::optional<svg::SVGElement> pendingDragSelection_;
+  std::uint64_t pendingDragGeneration_ = 0;
   bool closed_ = false;
 
   /// Active drag state. `dragIndex_` is the anchor being shaped/moved (or

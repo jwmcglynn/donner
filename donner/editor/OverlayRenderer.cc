@@ -868,6 +868,26 @@ bool CapturePathEditingPoints(SelectionChromeDetail detail) {
 }
 }  // namespace
 
+SelectionChromeSnapshot OverlayRenderer::withLivePathGeometry(SelectionChromeSnapshot snapshot,
+                                                              const Path& pathDoc) {
+  if (!snapshot.livePathPreview.has_value()) {
+    return snapshot;
+  }
+  snapshot.livePathPreview->pathDoc = pathDoc;
+  const bool hidden = !snapshot.paths.empty() && snapshot.paths.front().displayNone;
+  snapshot.paths = {{.pathDoc = pathDoc, .displayNone = hidden}};
+  snapshot.pathAnchorPointsDoc.clear();
+  snapshot.pathControlLinesDoc.clear();
+  snapshot.pathControlPointsDoc.clear();
+  AppendPathPointChrome(pathDoc, LinearScale(snapshot.canvasFromDoc), snapshot.devicePixelRatio,
+                        std::nullopt, &snapshot.pathAnchorPointsDoc, &snapshot.pathControlLinesDoc,
+                        &snapshot.pathControlPointsDoc);
+  snapshot.aabbsDoc = {pathDoc.bounds()};
+  snapshot.handleAnchorsDoc = SelectionTransformCornerPoints(pathDoc.bounds());
+  snapshot.orientedBoundsDoc.reset();
+  return snapshot;
+}
+
 SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
     const Transform2d& canvasFromDoc,

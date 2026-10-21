@@ -430,6 +430,15 @@ private:
   bool trySavePath(std::string_view path, std::string* error, bool* retryWhenReady = nullptr);
 #ifndef __EMSCRIPTEN__
   void applyPendingDocumentSpaceReplayInputForTesting();
+  void applyReplayHitSelection(const EditorShellDocumentReplayInput& input);
+  void applyReplayPointerPress(const EditorShellDocumentReplayInput& input);
+  void applyReplayPointerMove(const EditorShellDocumentReplayInput& input);
+  void moveReplayTextPointer(const EditorShellDocumentReplayInput& input);
+  void applyReplayPointerRelease(const EditorShellDocumentReplayInput& input);
+  void releaseReplaySelectionPointer(const EditorShellDocumentReplayInput& input);
+  void updateReplayPenChrome(const EditorShellDocumentReplayInput& input);
+  void updateReplayTextChrome();
+
 #endif
 
   // Shape clipboard. These run when the
@@ -558,6 +567,39 @@ private:
       bool rotateCursorLocked, bool toolEligible, bool showPanCursor, bool selectToolActive,
       bool penToolActive, bool textToolActive, double pointerHitTestPixelsPerDocUnit);
   void refreshPendingClickSelectionBounds(bool documentWriteAvailable);
+  void movePenPointer(const Vector2d& documentPoint, MouseModifiers modifiers);
+  void releasePenPointer(const Vector2d& documentPoint);
+  void updatePenHoverPointer(bool penToolActive, bool spaceHeld,
+                             double pointerHitTestPixelsPerDocUnit);
+  struct FramePaneLayout {
+    bool compact;
+    float originY;
+    float height;
+    EditorMainPaneLayout panes;
+  };
+  void adoptPresentedSample();
+  void flushIdleDocumentMutations();
+  void refreshDocumentViewBoxCache();
+  FramePaneLayout computeFramePaneLayout(const Vector2i& windowSize);
+  void layoutDockViewport(const FramePaneLayout& layout, const Vector2i& windowSize);
+  void refreshSelectionAfterPointerInput();
+  bool replayTextPointerIsActive() const;
+  struct BufferedClickIntent {
+    SelectionTransformHandleIntent handle;
+    bool redragEligible;
+    bool leftMouseDown;
+    bool selectDragIntent;
+    bool occludedSelectedPress;
+  };
+  bool bufferedClickCanStartMarquee(bool selectToolActive,
+                                    const SelectionTransformHandleIntent& handle);
+  BufferedClickIntent prepareBufferedClickIntent(bool selectToolActive,
+                                                 double pointerHitTestPixelsPerDocUnit);
+  bool tryBufferedSelectionRedrag(const BufferedClickIntent& intent, bool documentWriteAvailable);
+  void dispatchBufferedToolPress(bool selectToolActive, bool penToolActive, bool textToolActive,
+                                 bool leftMouseDown);
+  void dispatchIdleBufferedClick(bool selectToolActive, bool penToolActive, bool textToolActive,
+                                 const BufferedClickIntent& intent);
   [[gnu::noinline]] void dispatchBufferedRenderPaneClick(bool selectToolActive, bool penToolActive,
                                                          bool textToolActive,
                                                          double pointerHitTestPixelsPerDocUnit);
@@ -805,12 +847,14 @@ private:
     Box2d documentBounds;
     Box2d screenBounds;
     Vector2d chipAnchorScreen = Vector2d::Zero();
+    Box2d imageScreenRect;
   };
   [[nodiscard]] std::optional<Box2d> referenceHighlightChipScreenRect(std::string_view label) const;
   [[nodiscard]] std::optional<SelectionChipBounds> selectionChipBounds(
       const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) const;
-  [[nodiscard]] std::optional<Box2d> selectionSizeChipScreenRect(
-      std::string_view label, const Vector2d& chipAnchorScreen) const;
+  [[nodiscard]] std::optional<Box2d> selectionSizeChipScreenRect(std::string_view label,
+                                                                 const Vector2d& chipAnchorScreen,
+                                                                 const Box2d& imageRect) const;
   void renderSelectionSizeChip(
       const SelectionTransformHandleIntent& hoverTransformIntent,
       const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
