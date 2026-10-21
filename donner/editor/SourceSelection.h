@@ -95,7 +95,8 @@ std::optional<svg::SVGElement> FindElementAtSourceOffset(const svg::SVGDocument&
  * Unlike \ref donner::editor::FindElementAtSourceOffset "FindElementAtSourceOffset", this treats
  * positions immediately after an opening or closing tag as still referring to that tag's element.
  * This is useful for cursor and hover interactions where the UI position can land on the character
- * cell after the source token.
+ * cell after the source token. The exception is the document root: a position at or after the end
+ * of the root element, such as right after `</svg>`, refers to no element.
  *
  * @param document Source-backed SVG document to inspect.
  * @param source Source text corresponding to \p document.

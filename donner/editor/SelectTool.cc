@@ -218,17 +218,23 @@ std::optional<svg::SVGElement> NearestEditableGroupAncestor(
   return std::nullopt;
 }
 
+/// True when \p selection is one element other than the document root. The root's bounds cover the
+/// whole canvas, so re-dragging it from a press inside them would keep every click on the root and
+/// no child could be selected from the canvas.
+/// @param editor Editor owning the document.
+/// @param selection Current selection.
+bool IsSingleNonRootSelection(EditorApp& editor, std::span<const svg::SVGElement> selection) {
+  return selection.size() == 1 && selection.front() != editor.document().document().svgElement();
+}
+
 }  // namespace
 
 bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
                                           MouseModifiers modifiers,
                                           std::span<const Box2d> selectionBoundsDoc,
                                           std::span<const Box2d> occludingBoundsDoc) {
-  if (modifiers.shift) {
-    return false;
-  }
   const auto& currentSelection = editor.selectedElements();
-  if (currentSelection.size() != 1) {
+  if (modifiers.shift || !IsSingleNonRootSelection(editor, currentSelection)) {
     return false;
   }
   // Bounds are caller-supplied so this path is race-safe during a

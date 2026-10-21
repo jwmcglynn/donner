@@ -34,6 +34,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/css/CSS.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/LayersPanel.h"
@@ -177,7 +178,9 @@ json EditorControlSession::toolList() {
       },
       {
           {"name", "select_by_selector"},
-          {"description", "Select the first element matching a CSS selector."},
+          {"description",
+           "Select the first element matching a CSS selector, in document order starting with the "
+           "root <svg> (for example `:root`)."},
           {"inputSchema",
            {
                {"type", "object"},
@@ -603,7 +606,18 @@ void EditorControlSession::syncSourceTextFromDocumentIfChanged() {
 }
 
 std::optional<svg::SVGElement> EditorControlSession::querySelector(std::string_view selector) {
-  return app_.document().document().querySelector(selector);
+  svg::SVGDocument& document = app_.document().document();
+  // SVGDocument::querySelector searches below the root, which comes first in document order.
+  if (const std::optional<css::Selector> parsed = css::CSS::ParseSelector(selector);
+      parsed.has_value()) {
+    const svg::SVGElement root = document.svgElement();
+    const bool rootMatches = document.withReadAccess(
+        [&parsed, &root](svg::DocumentReadAccess&) { return parsed->matches(root).matched; });
+    if (rootMatches) {
+      return root;
+    }
+  }
+  return document.querySelector(selector);
 }
 
 std::optional<Box2d> EditorControlSession::elementWorldBounds(

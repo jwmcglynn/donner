@@ -75,6 +75,26 @@ bool RangeEndsAt(std::string_view source, const std::optional<SourceRange>& rang
   return end.has_value() && *end == offset;
 }
 
+/// True when \p element's parsed source range ends at or before \p offset.
+/// @param element Element whose node location to check.
+/// @param source Source text the location resolves against.
+/// @param offset Byte offset in \p source.
+bool ElementEndsAtOrBefore(const svg::SVGElement& element, std::string_view source,
+                           std::size_t offset) {
+  const std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.entityHandle());
+  if (!xmlNode.has_value()) {
+    return false;
+  }
+
+  const std::optional<SourceRange> range = xmlNode->getNodeLocation();
+  if (!range.has_value()) {
+    return false;
+  }
+
+  const std::optional<std::size_t> end = ResolveFileOffset(source, range->end);
+  return end.has_value() && *end <= offset;
+}
+
 bool ElementTagEndsAt(const svg::SVGElement& element, std::string_view source, std::size_t offset) {
   const std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.entityHandle());
   return xmlNode.has_value() && (RangeEndsAt(source, xmlNode->getOpeningTagLocation(), offset) ||
@@ -173,6 +193,12 @@ std::optional<svg::SVGElement> FindElementNearSourceOffset(const svg::SVGDocumen
   return document.withReadAccess([&document, source, offset](
                                      svg::DocumentReadAccess&) -> std::optional<svg::SVGElement> {
     const svg::SVGElement root = document.svgElement();
+    // A position at or after the root's end is outside every element. Clicking below the last
+    // source line lands there, right after `</svg>`, and must not select the root.
+    if (ElementEndsAtOrBefore(root, source, offset)) {
+      return std::nullopt;
+    }
+
     std::optional<svg::SVGElement> current =
         offset < source.size() ? FindElementAtSourceOffsetImpl(root, source, offset) : std::nullopt;
     if (offset == 0) {

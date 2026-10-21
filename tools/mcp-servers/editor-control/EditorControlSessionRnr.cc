@@ -35,6 +35,8 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/PresentationRenderScheduler.h"
+#include "donner/editor/SelectionAabb.h"
+#include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/GlRnrReplay.h"
 #include "donner/editor/repro/ReplayResourceBudget.h"
@@ -1522,9 +1524,31 @@ void EditorControlSession::replayMouseDown(const Vector2d& documentPoint,
     penTool_.onMouseDown(app_, documentPoint, modifiers);
   } else if (activeReplayTool_ == ActiveReplayTool::Text) {
     textTool_.onMouseDown(app_, documentPoint, modifiers);
-  } else {
+  } else if (!tryStartSelectedBoundsRedrag(documentPoint, modifiers)) {
     selectTool_->onMouseDown(app_, documentPoint, modifiers);
   }
+}
+
+bool EditorControlSession::tryStartSelectedBoundsRedrag(const Vector2d& documentPoint,
+                                                        MouseModifiers modifiers) {
+  if (modifiers.shift || modifiers.doubleClick) {
+    return false;
+  }
+
+  const std::span<const svg::SVGElement> selection(app_.selectedElements());
+  const std::vector<Box2d> selectionBoundsDoc = SnapshotSelectionWorldBounds(selection);
+  if (selectionBoundsDoc.empty()) {
+    return false;
+  }
+  const SelectionTransformHandleIntent handleIntent = HitTestSelectionTransformHandles(
+      selectionBoundsDoc, documentPoint, modifiers.pixelsPerDocUnit, /*includeRotate=*/true);
+  if (handleIntent.kind != SelectionTransformHandleKind::None) {
+    return false;
+  }
+
+  const std::vector<Box2d> occludingBoundsDoc = SnapshotSelectionOccludingWorldBounds(selection);
+  return selectTool_->tryStartRedragOnSelected(app_, documentPoint, modifiers, selectionBoundsDoc,
+                                               occludingBoundsDoc);
 }
 
 void EditorControlSession::replayMouseMove(const Vector2d& documentPoint, bool buttonHeld,

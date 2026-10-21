@@ -1375,6 +1375,27 @@ TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseOnShiftClick) {
   EXPECT_FALSE(tool.isDragging());
 }
 
+// The root `<svg>`'s bounds cover the whole canvas. Re-dragging it from a press inside them would
+// keep the root selected for every click, so a child could never be selected from the canvas.
+TEST_F(SelectToolTest, TryRedragOnSelectedRefusesTheDocumentRoot) {
+  app.setSelection(app.document().document().svgElement());
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_FALSE(bounds.empty());
+
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(60.0, 60.0), MouseModifiers{}, bounds));
+  EXPECT_FALSE(tool.isDragging());
+}
+
+TEST_F(SelectToolTest, PressOnEmptyCanvasWithRootSelectedClearsTheSelection) {
+  app.setSelection(app.document().document().svgElement());
+
+  tool.onMouseDown(app, Vector2d(60.0, 60.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(60.0, 60.0));
+
+  EXPECT_THAT(app.selectedElement(), testing::Eq(std::nullopt));
+}
+
 TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseWhenNothingSelected) {
   // No prior selection.
   EXPECT_FALSE(app.selectedElement().has_value());

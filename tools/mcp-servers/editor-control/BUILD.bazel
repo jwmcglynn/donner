@@ -26,6 +26,7 @@ cc_library(
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
     deps = [
         "//donner/base",
+        "//donner/css",
         "//donner/editor:async_renderer",
         "//donner/editor:composited_presentation",
         "//donner/editor:editor_app",
