@@ -141,8 +141,11 @@ void ClearTextProjectionProvenance(EntityHandle handle) {
       link && handle.registry()->valid(link->parent)) {
     if (auto* records = handle.registry()->try_get<ProjectedTextRecordsComponent>(link->parent)) {
       const Entity original = handle.entity();
-      std::erase_if(records->records,
-                    [original](const auto& record) { return record.originalNode == original; });
+      if (std::erase_if(records->records, [original](const auto& record) {
+            return record.originalNode == original;
+          }) != 0) {
+        UpdateProjectionPrefix(*records, 0);
+      }
     }
   }
   handle.remove<ProjectedTextParentComponent>();
