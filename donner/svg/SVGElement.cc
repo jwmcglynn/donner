@@ -961,6 +961,11 @@ void SVGElement::removeChild(const SVGElement& child) {
 void SVGElement::remove() {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   SVGDocument document = ownerDocument();
+  // The document root cannot be removed. remove() has no result, so this is a silent no-op;
+  // SVGDocument::removeElement returns a diagnostic for the same request.
+  if (*this == document.svgElement()) {
+    return;
+  }
   if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
     (void)document.removeElement(*this);
     return;

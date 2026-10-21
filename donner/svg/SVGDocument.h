@@ -377,6 +377,9 @@ public:
   /**
    * Remove an element from the document tree and return any XML-owned source edit result.
    *
+   * The root \ref svgElement cannot be removed: the result is unapplied and carries a diagnostic,
+   * and the document and its source are unchanged.
+   *
    * @param element Element to remove.
    */
   xml::ApplySourceEditResult removeElement(const SVGElement& element);

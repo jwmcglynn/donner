@@ -1,3 +1,4 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -7,6 +8,8 @@
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/BaseTestUtils.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
@@ -417,6 +420,47 @@ TEST(SVGElementLifetimeTests, CollectionDeferralRetainsDetachedRootsUntilGuardEx
   EXPECT_EQ(diagnostics.maxRetainedSnapshotOrObserverEpoch, 0u);
   EXPECT_EQ(diagnostics.collectedInLastPass, 1u);
   EXPECT_FALSE(document.registry().valid(rectEntity));
+}
+
+TEST(SVGElementLifetimeTests, CollectorKeepsDocumentRootMovedIntoDetachedSubtree) {
+  SVGDocument document;
+  const Entity rootEntity = document.svgElement().entityHandle().entity();
+  const Vector2i sizeBefore = document.canvasSize();
+  {
+    SVGGElement group = SVGGElement::Create(document);
+    document.svgElement().appendChild(group);
+    group.remove();
+    // Moving the root under the detached group detaches the root along with it.
+    group.appendChild(document.svgElement());
+  }
+
+  components::NodeLifetimeCollector::Collect(document.registry());
+
+  EXPECT_TRUE(document.registry().valid(rootEntity));
+  EXPECT_THAT(document.canvasSize(), Vector2Eq(sizeBefore.x, sizeBefore.y));
+}
+
+TEST(SVGElementLifetimeTests, CollectorKeepsDocumentRootRemovedThroughXmlDocument) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"><rect/></svg>)", disabled);
+  ASSERT_THAT(parsed, NoParseError());
+  SVGDocument document = std::move(parsed).result();
+  const Entity rootEntity = document.svgElement().entityHandle().entity();
+  {
+    std::optional<xml::XMLNode> rootNode =
+        xml::XMLNode::TryCast(document.svgElement().entityHandle());
+    ASSERT_THAT(rootNode,
+                testing::Optional(testing::ResultOf(
+                    "tag name", [](const xml::XMLNode& node) { return node.tagName().name.str(); },
+                    testing::Eq("svg"))));
+    (void)document.xmlDocument().removeNode(*rootNode);
+  }
+
+  components::NodeLifetimeCollector::Collect(document.registry());
+
+  EXPECT_TRUE(document.registry().valid(rootEntity));
+  EXPECT_THAT(document.canvasSize(), Vector2Eq(10, 20));
 }
 
 TEST(SVGElementLifetimeTests, RepeatedCreateRemoveReinsertCyclesCollectDetachedNodes) {

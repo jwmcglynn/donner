@@ -15,6 +15,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
@@ -2399,6 +2400,53 @@ TEST(SVGDocument, SourceBackedRemoveDetachedElementWithoutXmlIdentityIsUnapplied
   EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
   EXPECT_THAT(document.querySelector("#detached"), Eq(std::nullopt));
   EXPECT_THAT(document.source(), testing::Not(testing::HasSubstr("detached")));
+}
+
+TEST(SVGDocument, SourceBackedRemoveRootElementIsRefused) {
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"><rect id="child"/></svg>)");
+  const std::string sourceBefore(document.source());
+
+  xml::ApplySourceEditResult result = document.removeElement(document.svgElement());
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result.diagnostic,
+              Optional(testing::Field("reason", &ParseDiagnostic::reason,
+                                      testing::HasSubstr("document root element"))));
+  EXPECT_EQ(document.source(), sourceBefore);
+  EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
+  // Sizing the document reads the root's sized-element properties.
+  EXPECT_THAT(document.canvasSize(), Vector2Eq(10, 20));
+}
+
+TEST(SVGDocument, SourceBackedRemoveOfRootThroughElementIsRefused) {
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"><rect id="child"/></svg>)");
+  const std::string sourceBefore(document.source());
+
+  document.svgElement().remove();
+
+  EXPECT_EQ(document.source(), sourceBefore);
+  EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
+  EXPECT_THAT(document.canvasSize(), Vector2Eq(10, 20));
+}
+
+TEST(SVGDocument, ProgrammaticRemoveRootElementIsRefused) {
+  SVGDocument document;
+  SVGRectElement rect = SVGRectElement::Create(document);
+  rect.setId("child");
+  document.svgElement().appendChild(rect);
+  const Vector2i sizeBefore = document.canvasSize();
+
+  xml::ApplySourceEditResult result = document.removeElement(document.svgElement());
+  document.svgElement().remove();
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result.diagnostic,
+              Optional(testing::Field("reason", &ParseDiagnostic::reason,
+                                      testing::HasSubstr("document root element"))));
+  EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
+  EXPECT_THAT(document.canvasSize(), Vector2Eq(sizeBefore.x, sizeBefore.y));
 }
 
 TEST(SVGDocument, TypedMutationHelperWrapsDomOperations) {

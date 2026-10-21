@@ -9,6 +9,7 @@
 
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/SourceSync.h"
@@ -94,6 +95,16 @@ std::vector<std::string> ElementIds(const Elements& elements) {
     ids.emplace_back(element.id().str());
   }
   return ids;
+}
+
+/// Ids of the document root's element children, in document order.
+std::vector<std::string> RootChildIds(EditorApp& app) {
+  std::vector<svg::SVGElement> children;
+  for (std::optional<svg::SVGElement> child = app.document().document().svgElement().firstChild();
+       child.has_value(); child = child->nextSibling()) {
+    children.push_back(*child);
+  }
+  return ElementIds(children);
 }
 
 template <typename Elements>
@@ -614,6 +625,45 @@ TEST(EditorAppTest, DeleteSelectionWithUndoRefusesAllLockedSelection) {
   EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
   ASSERT_EQ(app.selectedElements().size(), 1u);
   EXPECT_EQ(app.selectedElements().front().id(), "r1");
+}
+
+TEST(EditorAppTest, DeleteSelectionWithUndoRefusesDocumentRoot) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  const std::string sourceBefore(app.document().document().source());
+
+  app.setSelection(app.document().document().svgElement());
+  EXPECT_FALSE(app.deleteSelectionWithUndo(sourceBefore));
+  EXPECT_FALSE(app.flushFrame());
+
+  EXPECT_THAT(app.consumeElementRemoveWritebacks(), ::testing::IsEmpty());
+  EXPECT_EQ(app.document().document().source(), sourceBefore);
+  EXPECT_THAT(RootChildIds(app), ::testing::ElementsAre("r1", "r2"));
+  EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
+  EXPECT_THAT(app.document().document().canvasSize(), Vector2Eq(100, 100));
+}
+
+TEST(EditorAppTest, DeleteSelectionWithUndoKeepsDocumentRootAndDeletesTheRest) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" id="root" width="100" height="100">
+           <rect id="r1" width="20" height="20"/>
+           <rect id="r2" x="50" width="20" height="20"/>
+         </svg>)"));
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_THAT(r2, ::testing::Optional(::testing::Property("id", &svg::SVGElement::id, "r2")));
+
+  app.setSelection(std::vector<svg::SVGElement>{app.document().document().svgElement(), *r2});
+  const std::string sourceBefore(app.document().document().source());
+  EXPECT_TRUE(app.deleteSelectionWithUndo(sourceBefore));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(RootChildIds(app), ::testing::ElementsAre("r1"));
+  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("root"));
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  EXPECT_THAT(std::string(app.document().document().source()),
+              ::testing::HasSubstr(R"(<svg xmlns="http://www.w3.org/2000/svg" id="root")"));
+  EXPECT_THAT(app.document().document().canvasSize(), Vector2Eq(100, 100));
 }
 
 TEST(EditorAppTest, GeometryMutationQueuesWithoutWaitingForDocumentWriter) {
