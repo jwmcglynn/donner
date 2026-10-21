@@ -323,7 +323,8 @@ and the bound environment delivers only one of them; the action fails the job if
 reaches any run but main's, or the pull request key any run but a trusted pull request's. Lanes
 that never run on `main` (the self-hosted macOS lanes and the Geode ASan pull-request lane) do
 not reference main's key at all. The hosted macOS browser subset also runs only for pull requests,
-but keeps the `macos` job's exact setup, so main's environment branch is dead there. Renovate and untrusted runs bind neither environment.
+but keeps the `macos` job's exact setup, so main's environment branch is dead there. Renovate and
+untrusted runs bind neither environment.
 `deployment: false` uses the environment's secrets without creating deployment records. In
 `main.yml` the trust outputs come from the `gatekeeper` job; the Editor WASM and Geode ASan
 workflows run a small `trust` job first, because an environment is chosen before a job's steps run.
