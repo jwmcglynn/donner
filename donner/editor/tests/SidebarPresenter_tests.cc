@@ -18,6 +18,7 @@
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Transform.h"
+#include "donner/editor/AttachedNumericStepper.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
@@ -91,6 +92,70 @@ Transform2d MakeMatrix(double a, double b, double c, double d, double e, double 
 void ExpectTransformNear(const Transform2d& actual, const Transform2d& expected, double tolerance) {
   for (int i = 0; i < 6; ++i) {
     EXPECT_NEAR(actual.data[i], expected.data[i], tolerance) << "matrix component " << i;
+  }
+}
+
+/// Bounds of a placed preset popup with the given width and height.
+Box2d PlacedPopupRect(const NumericPresetPopupPlacement& placement, double width, double height) {
+  const double top = placement.opensAbove ? placement.anchor.y - height : placement.anchor.y;
+  return Box2d(Vector2d(placement.anchor.x, top),
+               Vector2d(placement.anchor.x + width, top + height));
+}
+
+TEST(NumericPresetPopupPlacementTest, OpensBelowWhenTheListFits) {
+  const Box2d control(Vector2d(100.0, 100.0), Vector2d(220.0, 120.0));
+  const Box2d bounds(Vector2d(0.0, 0.0), Vector2d(400.0, 600.0));
+  const NumericPresetPopupPlacement placement =
+      PlaceNumericPresetPopup(control, 300.0, 120.0, bounds, 3.0);
+  EXPECT_THAT(placement.opensAbove, testing::IsFalse());
+  EXPECT_THAT(placement.anchor, testing::Eq(Vector2d(100.0, 123.0)));
+  EXPECT_THAT(placement.maximumHeight, testing::DoubleEq(300.0));
+}
+
+TEST(NumericPresetPopupPlacementTest, FlipsAboveWhenOnlyAboveFits) {
+  // The Inspector's stroke Width field in a 700-pixel-tall editor window.
+  const Box2d control(Vector2d(938.0, 485.0), Vector2d(1056.0, 507.0));
+  const Box2d bounds(Vector2d(3.0, 3.0), Vector2d(1277.0, 697.0));
+  const NumericPresetPopupPlacement placement =
+      PlaceNumericPresetPopup(control, 300.0, 118.0, bounds, 3.0);
+  EXPECT_THAT(placement.opensAbove, testing::IsTrue());
+  EXPECT_THAT(placement.anchor, testing::Eq(Vector2d(938.0, 482.0)));
+  EXPECT_THAT(placement.maximumHeight, testing::DoubleEq(300.0));
+  EXPECT_THAT(PlacedPopupRect(placement, 118.0, placement.maximumHeight), DoesNotOverlap(control));
+}
+
+TEST(NumericPresetPopupPlacementTest, ShrinksOnTheRoomierSideWhenNeitherFits) {
+  const Box2d bounds(Vector2d(3.0, 3.0), Vector2d(1277.0, 400.0));
+  const Box2d lowControl(Vector2d(938.0, 250.0), Vector2d(1056.0, 272.0));
+  const NumericPresetPopupPlacement above =
+      PlaceNumericPresetPopup(lowControl, 300.0, 118.0, bounds, 3.0);
+  EXPECT_THAT(above.opensAbove, testing::IsTrue());
+  EXPECT_THAT(above.maximumHeight, testing::DoubleEq(244.0));
+  EXPECT_THAT(PlacedPopupRect(above, 118.0, above.maximumHeight), DoesNotOverlap(lowControl));
+
+  const Box2d highControl(Vector2d(938.0, 100.0), Vector2d(1056.0, 122.0));
+  const NumericPresetPopupPlacement below =
+      PlaceNumericPresetPopup(highControl, 300.0, 118.0, bounds, 3.0);
+  EXPECT_THAT(below.opensAbove, testing::IsFalse());
+  EXPECT_THAT(below.maximumHeight, testing::DoubleEq(275.0));
+  EXPECT_THAT(PlacedPopupRect(below, 118.0, below.maximumHeight), DoesNotOverlap(highControl));
+}
+
+TEST(NumericPresetPopupPlacementTest, NeverOverlapsTheControlAndStaysInBounds) {
+  const Box2d bounds(Vector2d(3.0, 3.0), Vector2d(397.0, 297.0));
+  for (double top = 3.0; top + 20.0 <= 297.0; top += 7.0) {
+    for (double left = -50.0; left <= 380.0; left += 61.0) {
+      const Box2d control(Vector2d(left, top), Vector2d(left + 120.0, top + 20.0));
+      const NumericPresetPopupPlacement placement =
+          PlaceNumericPresetPopup(control, 300.0, 120.0, bounds, 3.0);
+      const Box2d popup = PlacedPopupRect(placement, 120.0, placement.maximumHeight);
+      SCOPED_TRACE(testing::Message() << "control " << control << ", popup " << popup);
+      EXPECT_THAT(popup, DoesNotOverlap(control));
+      EXPECT_THAT(popup.topLeft.x, testing::Ge(bounds.topLeft.x));
+      EXPECT_THAT(popup.bottomRight.x, testing::Le(bounds.bottomRight.x));
+      EXPECT_THAT(popup.topLeft.y, testing::Ge(bounds.topLeft.y));
+      EXPECT_THAT(popup.bottomRight.y, testing::Le(bounds.bottomRight.y));
+    }
   }
 }
 

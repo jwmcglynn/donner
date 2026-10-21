@@ -1025,6 +1025,7 @@ donner_cc_test(
     srcs = ["SidebarPresenter_tests.cc"],
     deps = [
         "//donner/base",
+        "//donner/editor:attached_numeric_stepper",
         "//donner/editor:editor_app",
         "//donner/editor:embedded_svg_icon",
         "//donner/editor:imgui_headers",

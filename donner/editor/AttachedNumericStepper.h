@@ -2,6 +2,7 @@
 /// @file
 
 #include "donner/base/Box.h"
+#include "donner/base/Vector2.h"
 
 struct ImVec2;
 
@@ -35,11 +36,41 @@ struct AttachedNumericStepperResult {
                                                                         const ImVec2& fieldMax,
                                                                         const EditorTheme& theme);
 
-/// Open a preset popup beneath a focused numeric input without stealing its typing focus.
+/// Where a numeric preset popup opens relative to the control it belongs to.
+struct NumericPresetPopupPlacement {
+  /// Screen-space anchor: the popup's top-left corner when it opens below the control, or its
+  /// bottom-left corner when it opens above.
+  Vector2d anchor;
+  bool opensAbove = false;     ///< True when the popup opens above the control.
+  double maximumHeight = 0.0;  ///< Tallest popup that fits on the chosen side; contents scroll.
+};
+
+/**
+ * Choose a preset popup position that never overlaps the control it belongs to.
+ *
+ * The popup opens below the control when its preferred height fits there, otherwise above when it
+ * fits there, otherwise on the side with more room with its height reduced so the list scrolls.
+ * Horizontally it follows the control's left edge, shifted only to stay inside the bounds when
+ * it fits within them.
+ *
+ * @param control Screen-space rectangle of the numeric field plus its attached stepper.
+ * @param preferredHeight Height the popup needs to show all choices, capped by the caller's limit.
+ * @param width Popup width.
+ * @param bounds Screen-space rectangle the popup must stay within.
+ * @param gap Vertical spacing kept between the control and the popup.
+ */
+[[nodiscard]] NumericPresetPopupPlacement PlaceNumericPresetPopup(const Box2d& control,
+                                                                  double preferredHeight,
+                                                                  double width, const Box2d& bounds,
+                                                                  double gap);
+
+/// Open a preset popup next to a focused numeric input without stealing its typing focus.
 ///
 /// Call after rendering the input and its attached stepper. The caller must pair a true return
 /// with ImGui::EndPopup(). Single-click activation keeps the field editable while expanding the
-/// preset choices. Its width matches the numeric field plus attached stepper.
+/// preset choices. Its width matches the numeric field plus attached stepper. It opens below the
+/// field when the list fits there, otherwise above, and never covers the field (see
+/// \ref PlaceNumericPresetPopup).
 ///
 /// @param popupId Stable ImGui popup ID in the caller's current ID scope.
 /// @param fieldMin Minimum screen-space corner of the numeric input.
