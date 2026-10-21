@@ -35,11 +35,13 @@ std::optional<std::string_view> ActiveInputText(ImGuiID id) {
   return std::string_view(state->TextA.Data, static_cast<std::size_t>(state->CurLenA));
 }
 
-/// Whether the text of input widget \p id is still what ImGui filled in when it activated.
+/// Whether input widget \p id still has its initial text and has never been edited.
 bool IsUntouchedInput(ImGuiID id, std::string_view text) {
   const ImGuiInputTextState* state = ImGui::GetInputTextState(id);
-  return state != nullptr && state->InitialTextA.Data != nullptr &&
-         text == std::string_view(state->InitialTextA.Data);
+  const ImGuiContext& context = *ImGui::GetCurrentContext();
+  const bool editedWhileActive = ImGui::GetActiveID() == id && context.ActiveIdHasBeenEditedBefore;
+  return state != nullptr && state->InitialTextA.Data != nullptr && !editedWhileActive &&
+         !ImGui::IsItemDeactivatedAfterEdit() && text == std::string_view(state->InitialTextA.Data);
 }
 
 /// Outline the last item in the destructive color and explain what it accepts.

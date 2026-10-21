@@ -999,6 +999,7 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
   InspectorSnapshot inspector;
   inspector.document = app.document().document().handle();
   inspector.documentGeneration = app.document().documentGeneration();
+  inspector.selection = selectionList;
   captureStrokeSnapshot(app, selectionList, inspector);
   inspector.pathOperationAvailability.reserve(kPathOperationButtons.size());
   for (const PathOperationButton& button : kPathOperationButtons) {
@@ -1332,14 +1333,14 @@ bool SidebarPresenter::renderStrokeWidthField(const StrokeRenderContext& context
     const ImVec2 max = ImGui::GetItemRectMax();
     strokeWidthRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
   }
+  beginStrokeLengthEdit(context, StrokeScalarField::Width, widthLength.unit);
   bool queuedMutation = false;
   if (edit.typed.has_value() && context.canMutate) {
     *width = static_cast<float>(edit.typed->value);
     queuedMutation = applyStrokeWidth(*context.app, *edit.typed);
   }
   queuedMutation =
-      restoreStrokeLengthOnCancel(context, StrokeScalarField::Width, widthLength, edit) ||
-      queuedMutation;
+      restoreStrokeLengthOnCancel(context, StrokeScalarField::Width, edit) || queuedMutation;
   trackStrokeScalarItem(context, StrokeScalarField::Width);
   if (!edit.rejected && ImGui::IsItemHovered()) {
     ImGui::SetTooltip(widthLength.unit == LengthUnit::None ? "Stroke width in user units"
@@ -1360,11 +1361,8 @@ bool SidebarPresenter::applyStrokeWidth(EditorApp& liveApp, Lengthd width) {
 }
 
 bool SidebarPresenter::restoreStrokeLengthOnCancel(const StrokeRenderContext& context,
-                                                   StrokeScalarField field, const Lengthd& shown,
+                                                   StrokeScalarField field,
                                                    const InspectorLengthEdit& edit) {
-  if (ImGui::IsItemActivated()) {
-    beginStrokeLengthEdit(context, field, shown.unit);
-  }
   noteStrokeLengthText(field, edit);
   if (!ImGui::IsItemDeactivated() || !strokeLengthEditStart_.has_value() ||
       strokeLengthEditStart_->field != field) {
@@ -1419,18 +1417,22 @@ void SidebarPresenter::beginStrokeLengthEdit(const StrokeRenderContext& context,
   if (strokeCancellationPending()) {
     return;
   }
-  StrokeLengthEditStart start{.owner = strokeEditOwner(context.app),
-                              .field = field,
-                              .unit = unit,
-                              .styles = {},
-                              .activeWidth = {}};
-  if (context.app != nullptr) {
+  if (ImGui::IsItemActivated()) {
+    strokeLengthEditStart_ = StrokeLengthEditStart{.owner = strokeEditOwner(context.app),
+                                                   .field = field,
+                                                   .selection = inspectorSnapshot_.selection,
+                                                   .unit = unit,
+                                                   .styles = {},
+                                                   .activeWidth = {}};
+  }
+  if (context.canMutate && strokeLengthEditStart_.has_value() &&
+      strokeLengthEditStart_->field == field && strokeLengthEditStart_->styles.empty()) {
+    StrokeLengthEditStart& start = *strokeLengthEditStart_;
     start.activeWidth = context.app->activePaintStyle().strokeWidth;
     for (const svg::SVGElement& element : context.app->selectedElements()) {
       start.styles.emplace_back(element, element.getAttribute("style"));
     }
   }
-  strokeLengthEditStart_ = std::move(start);
 }
 
 bool SidebarPresenter::restoreStrokeStyles(EditorApp& liveApp, const StrokeLengthEditStart& start) {
@@ -1851,13 +1853,13 @@ bool SidebarPresenter::renderDashOffsetRow(const StrokeRenderContext& context) {
   const ImVec2 min = ImGui::GetItemRectMin();
   const ImVec2 max = ImGui::GetItemRectMax();
   strokeDashOffsetRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+  beginStrokeLengthEdit(context, StrokeScalarField::DashOffset, offsetLength.unit);
   bool queuedMutation = false;
   if (edit.typed.has_value() && context.canMutate) {
     queuedMutation = applyStrokeDashOffset(*context.app, *edit.typed);
   }
   queuedMutation =
-      restoreStrokeLengthOnCancel(context, StrokeScalarField::DashOffset, offsetLength, edit) ||
-      queuedMutation;
+      restoreStrokeLengthOnCancel(context, StrokeScalarField::DashOffset, edit) || queuedMutation;
   trackStrokeScalarItem(context, StrokeScalarField::DashOffset);
   return renderDashOffsetStepper(context, offsetLength, min, max) || queuedMutation;
 }
@@ -2041,6 +2043,19 @@ void SidebarPresenter::discardForeignStrokeEdits(const EditorApp& app) {
   };
   discard(strokeLengthEditStart_);
   discard(strokeScalarEdit_);
+  discardUnstartedStrokeEditForSelection(app);
+}
+
+void SidebarPresenter::discardUnstartedStrokeEditForSelection(const EditorApp& app) {
+  if (!strokeLengthEditStart_.has_value() || !strokeLengthEditStart_->styles.empty() ||
+      strokeLengthEditStart_->selection == app.selectedElements()) {
+    return;
+  }
+  if (ImGui::GetCurrentContext() != nullptr &&
+      ImGui::GetActiveID() == strokeLengthEditStart_->owner.itemId) {
+    ImGui::ClearActiveID();
+  }
+  strokeLengthEditStart_.reset();
 }
 
 void SidebarPresenter::beginStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field) {

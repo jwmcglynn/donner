@@ -378,6 +378,7 @@ private:
     svg::SVGDocumentHandle document;       ///< Document whose values the snapshot contains.
     std::uint64_t documentGeneration = 0;  ///< Owning document generation.
     bool hasSelection = false;
+    std::vector<svg::SVGElement> selection;  ///< Identities behind the cached inspector values.
     bool transformEditable = false;
     bool strokeEditable = false;
     Lengthd strokeWidth = Lengthd(1.0);
@@ -511,11 +512,10 @@ private:
   /// is left with rejected text or Escape after typed values were applied.
   /// @param context Stroke panel rendering context.
   /// @param field Field rendered as the last item.
-  /// @param shown Value the field shows before typing.
   /// @param edit Outcome of the field's frame.
   /// @return Whether a mutation was queued.
   bool restoreStrokeLengthOnCancel(const StrokeRenderContext& context, StrokeScalarField field,
-                                   const Lengthd& shown, const InspectorLengthEdit& edit);
+                                   const InspectorLengthEdit& edit);
   /// Document and input widget owning a deferred stroke edit.
   struct StrokeEditOwner {
     svg::SVGDocumentHandle document;
@@ -524,19 +524,22 @@ private:
   };
   StrokeEditOwner strokeEditOwner(const EditorApp* app) const;
   void discardForeignStrokeEdits(const EditorApp& app);
+  /// Drop a busy-started edit if its cached selection changed before baseline capture.
+  void discardUnstartedStrokeEditForSelection(const EditorApp& app);
 
   /// Value of a stroke length field when its typing began.
   struct StrokeLengthEditStart {
-    StrokeEditOwner owner;    ///< Original document and input widget.
-    StrokeScalarField field;  ///< Field being typed into.
-    LengthUnit unit;          ///< Unit shown before typing, kept by typed bare numbers.
+    StrokeEditOwner owner;                   ///< Original document and input widget.
+    StrokeScalarField field;                 ///< Field being typed into.
+    std::vector<svg::SVGElement> selection;  ///< Selection that activated the field.
+    LengthUnit unit;  ///< Unit shown before typing, kept by typed bare numbers.
     /// Each selected element's `style` attribute before typing, restored on cancel.
     std::vector<std::pair<svg::SVGElement, std::optional<RcString>>> styles;
     Lengthd activeWidth;            ///< Stroke width for new shapes before typing.
     bool lastTextRejected = false;  ///< The text was rejected on the last frame that had it.
     bool pendingCancel = false;     ///< Cancelled while the document was busy; restore later.
   };
-  /// Capture \p field's starting unit and the selection's styles when typing begins.
+  /// Capture \p field's unit on activation, and its styles before the first live mutation.
   void beginStrokeLengthEdit(const StrokeRenderContext& context, StrokeScalarField field,
                              LengthUnit unit);
   /// Put back the selection's styles from before typing; returns whether mutations were queued.
