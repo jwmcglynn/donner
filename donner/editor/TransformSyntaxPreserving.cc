@@ -449,6 +449,32 @@ std::optional<RcString> TryRotateOnly(const Fn& rf, const Transform2d& target) {
   return std::nullopt;
 }
 
+/// The canonical \ref donner::toSVGTransformString form of @p target with every number at edit
+/// precision, so a writeback with no author form reads like one that updates an author form. An
+/// empty result means the rounded transform is the identity.
+RcString CanonicalTransformAtEditPrecision(const Transform2d& target) {
+  const RcString canonical = toSVGTransformString(target);
+  std::optional<std::vector<Fn>> fns = ParseFunctionList(std::string_view(canonical));
+  if (!fns.has_value()) {
+    return canonical;
+  }
+  for (Fn& fn : *fns) {
+    for (Arg& arg : fn.args) {
+      arg.text = FormatEditedNumber(arg.value);
+    }
+  }
+
+  const std::string candidate = RenderList(*fns);
+  auto parsed = svg::parser::TransformParser::Parse(candidate);
+  if (parsed.hasError() || !TransformsClose(parsed.result(), target)) {
+    return canonical;
+  }
+  if (parsed.result().isIdentity()) {
+    return RcString();
+  }
+  return RcString(candidate);
+}
+
 }  // namespace
 
 std::optional<RcString> reserializeTransformPreservingSyntax(std::string_view authorSource,
@@ -503,7 +529,7 @@ RcString serializeTransformForWriteback(const std::optional<RcString>& authorSou
       return *preserved;
     }
   }
-  return toSVGTransformString(target);
+  return CanonicalTransformAtEditPrecision(target);
 }
 
 }  // namespace donner::editor

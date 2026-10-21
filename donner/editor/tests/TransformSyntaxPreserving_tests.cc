@@ -187,15 +187,23 @@ TEST(TransformSyntaxPreserving, WrapperPrefersAuthorForm) {
 TEST(TransformSyntaxPreserving, WrapperFallsBackToCanonicalWithoutAuthorSource) {
   const Transform2d target = Transform2d::Rotate(60.0 * kDeg);
   // No author source: the canonical function, with the angle at edit precision.
-  EXPECT_EQ(std::string_view(serializeTransformForWriteback(std::nullopt, target)), "rotate(60)");
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, target).str(), "rotate(60)");
 }
 
 TEST(TransformSyntaxPreserving, WrapperWritesCanonicalTranslateAtEditPrecision) {
   // A drag inside a rotated group, on an element with no transform of its own, writes back a
   // canonical translate. It reads at the same six-decimal precision as an author-form update.
   const Transform2d target = Transform2d::Translate(Vector2d(25.09652419453986, 6.99835504621448));
-  EXPECT_EQ(std::string_view(serializeTransformForWriteback(std::nullopt, target)),
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, target).str(),
             "translate(25.096524, 6.998355)");
+}
+
+TEST(TransformSyntaxPreserving, WrapperClearsAttributeWhenRoundedCanonicalIsIdentity) {
+  // Dragging back to the start leaves floating-point residue below edit precision: the attribute
+  // is removed, as for an exact identity, rather than written as translate(0).
+  const Transform2d target = Transform2d::Translate(Vector2d(3.0e-7, -2.0e-7));
+  ASSERT_FALSE(target.isIdentity());
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, target).str(), "");
 }
 
 TEST(TransformSyntaxPreserving, WrapperWritesCanonicalMatrixAtEditPrecision) {

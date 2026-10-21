@@ -33,8 +33,10 @@ namespace donner::editor {
 
 /// Serialize @p target for a `transform=` writeback, preserving the author's
 /// syntax from @p authorSource where possible and otherwise emitting the
-/// canonical \ref donner::toSVGTransformString form. An empty result means the
-/// attribute should be removed (the transform is the identity).
+/// canonical \ref donner::toSVGTransformString form. Edited numbers are written at
+/// six-decimal edit precision in both forms, in their shortest round-trip decimal
+/// representation. An empty result means the attribute should be removed (the
+/// transform is the identity at that precision).
 [[nodiscard]] RcString serializeTransformForWriteback(const std::optional<RcString>& authorSource,
                                                       const Transform2d& target);
 
