@@ -1900,7 +1900,7 @@ std::uint64_t PublicParseInvocationCountForTesting() {
 }  // namespace internal
 
 std::optional<XMLParser::Options> XMLParser::SourceOptions(const XMLDocument& document) {
-  const auto& context = document.registry().ctx().get<components::XMLDocumentContext>();
+  const auto& context = document.sharedRegistry()->ctx().get<components::XMLDocumentContext>();
   const auto& captured = context.sourceParserOptions;
   const XMLSourceStore* store = document.sourceStore();
   if (!store || !captured || captured->sourceStore.lock().get() != store) {
