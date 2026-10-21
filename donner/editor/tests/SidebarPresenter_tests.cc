@@ -3045,14 +3045,15 @@ TEST_F(SidebarPresenterImGuiTest, BusyStrokedGeometryHandoffsKeepFillOnlyBoundsA
     double height;
   };
   for (const bool nonScaling : {false, true}) {
-    for (const Scenario scenario : {
-             Scenario{SidebarPresenter::TransformField::PositionY, "40", 40, 100, 50},
-             Scenario{SidebarPresenter::TransformField::Width, "70", 20, 70, 50},
-             Scenario{SidebarPresenter::TransformField::Height, "80", 20, 100, 80}}) {
+    for (const Scenario scenario :
+         {Scenario{SidebarPresenter::TransformField::PositionY, "40", 40, 100, 50},
+          Scenario{SidebarPresenter::TransformField::Width, "70", 20, 70, 50},
+          Scenario{SidebarPresenter::TransformField::Height, "80", 20, 100, 80}}) {
       SCOPED_TRACE(nonScaling);
       SCOPED_TRACE(scenario.value);
       const std::string source =
-          std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect id="target" x="10" y="20" width="100" height="50" transform="translate(15.5, 0)" fill="red" stroke="black" stroke-width="10")svg") +
+          std::string(
+              R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect id="target" x="10" y="20" width="100" height="50" transform="translate(15.5, 0)" fill="red" stroke="black" stroke-width="10")svg") +
           (nonScaling ? R"( vector-effect="non-scaling-stroke")" : "") + "/>" + "</svg>";
       EditorApp app;
       SidebarPresenter presenter;
@@ -3073,12 +3074,14 @@ TEST_F(SidebarPresenterImGuiTest, BusyStrokedGeometryHandoffsKeepFillOnlyBoundsA
       ASSERT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 5, 20, 100, 50));
       ReplaceFocusedInput(presenter, nullptr, kWindow, "30", ImVec2(-1, -1), 280);
       RenderInspectorFrame(presenter, nullptr, kWindow);
-      ASSERT_NO_FATAL_FAILURE(MoveTransformFocus(presenter, app, kWindow, scenario.next, true, flush));
+      ASSERT_NO_FATAL_FAILURE(
+          MoveTransformFocus(presenter, app, kWindow, scenario.next, true, flush));
       const std::string firstSource = text.getText();
       ReplaceFocusedInput(presenter, &app, kWindow, scenario.value, ImVec2(-1, -1), 280);
       RenderInspectorFrame(presenter, &app, kWindow);
       flush();
-      EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 30, scenario.y, scenario.width, scenario.height));
+      EXPECT_NO_FATAL_FAILURE(
+          ExpectInspectorBounds(presenter, 30, scenario.y, scenario.width, scenario.height));
       ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
       RenderInspectorFrame(presenter, &app, kWindow);
       ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
@@ -3086,18 +3089,23 @@ TEST_F(SidebarPresenterImGuiTest, BusyStrokedGeometryHandoffsKeepFillOnlyBoundsA
       flush();
       EXPECT_EQ(app.undoTimeline().entryCount(), 2u);
       const std::string finalSource = text.getText();
-      app.undo(); flush();
+      app.undo();
+      flush();
       EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 30, 20, 100, 50));
       EXPECT_EQ(text.getText(), firstSource);
-      app.undo(); flush();
+      app.undo();
+      flush();
       EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 25.5, 20, 100, 50));
       EXPECT_EQ(text.getText(), source);
       EXPECT_FALSE(app.canUndo());
-      app.redo(); flush();
+      app.redo();
+      flush();
       EXPECT_EQ(text.getText(), firstSource);
-      app.redo(); flush();
+      app.redo();
+      flush();
       EXPECT_EQ(text.getText(), finalSource);
-      EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 30, scenario.y, scenario.width, scenario.height));
+      EXPECT_NO_FATAL_FAILURE(
+          ExpectInspectorBounds(presenter, 30, scenario.y, scenario.width, scenario.height));
     }
   }
 }
