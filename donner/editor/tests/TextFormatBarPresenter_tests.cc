@@ -927,6 +927,18 @@ TEST_F(TextFormatBarPresenterInputTest, DropdownReplacesOversizedSeedAndRestores
   EXPECT_THAT(restored, testing::Eq(picked.fontFamily));
 }
 
+TEST_F(TextFormatBarPresenterInputTest, DropdownFamilyWithCommaEmitsOneQuotedFamily) {
+  FormatBarState state = MakeState();
+  state.families.front().name = "Example, Sans";
+  Frame(state);
+  OpenComboPopup(state, ImVec2(FamilyArrowLeft() + frameHeight_ * 0.5f, RowCenterY()));
+  const auto picked = ClickFirstActionRowInPopup(
+      state, FamilyArrowLeft(),
+      [](const FormatBarActions& action) { return action.setFontFamily; });
+  ASSERT_TRUE(picked.setFontFamily);
+  EXPECT_THAT(picked.fontFamily, testing::Eq(R"("Example, Sans")"));
+}
+
 TEST_F(TextFormatBarPresenterInputTest, ExternalFamilyChangeReseedsFreeTextBuffer) {
   FormatBarState state = MakeState();
   state.fontFamily = "Alpha";

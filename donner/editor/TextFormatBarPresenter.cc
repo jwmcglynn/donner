@@ -380,14 +380,15 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
           ImGui::TextDisabled(family.source == svg::FontSource::Bundled ? "Bundled" : "System");
           shownGroup = family.source;
         }
+        const std::string familyCss = internal::EditableFontFamily(family.name);
         const bool chosen =
-            internal::RenderFontFamilyRow(family, family.name == state.fontFamily, actions);
+            internal::RenderFontFamilyRow(family, familyCss == state.fontFamily, actions);
         if (chosen) {
           actions.setFontFamily = true;
-          actions.fontFamily = family.name;
-          AssignBuffer(fontFamilyBuffer_, family.name);
-          fontFamilySeedTruncated_ = family.name.size() >= fontFamilyBuffer_.size();
-          lastSyncedFamily_ = family.name;
+          actions.fontFamily = familyCss;
+          AssignBuffer(fontFamilyBuffer_, familyCss);
+          fontFamilySeedTruncated_ = familyCss.size() >= fontFamilyBuffer_.size();
+          lastSyncedFamily_ = familyCss;
         }
       }
       ImGui::EndCombo();
