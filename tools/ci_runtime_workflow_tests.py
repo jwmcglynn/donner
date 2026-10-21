@@ -191,6 +191,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("--nocache_test_results", step)
         self.assertIn("--nohome_rc --nosystem_rc", step)
         self.assertIn("--local_test_jobs=1 --test_tag_filters=", step)
+        self.assertIn("--test_timeout=60 //donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic", step)
         self.assertIn("//donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic", step)
         self.assertLess(job.index("name: Test (Geode editor lane)"),
                         job.index("name: Diagnose Chromium context lifecycle"))
