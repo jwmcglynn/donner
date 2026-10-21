@@ -21,9 +21,9 @@ on:
     types: [opened, synchronize, reopened]
   workflow_call:
     # The repository secrets a step here reads. A called workflow receives only the
-    # secrets its caller passes. A job that binds the buildbuddy-write environment can
-    # also read that environment's key; base-change runs bind it only for trusted
-    # maintainer pull requests, which may write the cache.
+    # secrets its caller passes. A job that binds a BuildBuddy environment can also read
+    # that environment's key; base-change runs are pull requests, so they never bind
+    # buildbuddy-write, and trusted maintainer ones bind buildbuddy-pr.
     secrets:
       BUILDBUDDY_API_KEY_READONLY:
         required: false
@@ -649,10 +649,10 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
-    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
-    # runs allowed to write bind it, so other runs never receive that key.
+    # Main's BuildBuddy key is a secret of the buildbuddy-write environment, bound only for main
+    # runs. Trusted pull requests bind buildbuddy-pr, whose key writes a separate cache.
     environment:
-      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      name: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'buildbuddy-write' || (needs.gatekeeper.outputs.trusted_pr == 'true' && 'buildbuddy-pr' || '') }}
       deployment: false
     steps:
       - name: Checkout
@@ -682,8 +682,8 @@ jobs:
           namespace: native
 
       # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
-      # runs and trusted maintainer pull requests read and write; Renovate pull
-      # requests only read; every other run configures no remote cache. The
+      # runs write main's cache, trusted maintainer pull requests a separate one; Renovate
+      # pull requests only read main's; every other run configures no remote cache. The
       # read-only repository secret still reaches every same-repository run of
       # this job, so it is treated as public: it can only read the cache.
       - name: Configure BuildBuddy remote cache
@@ -692,6 +692,7 @@ jobs:
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          pr-api-key: ${{ secrets.BUILDBUDDY_PR_API_KEY }}
           remote-execution: "true"
           trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
@@ -1313,10 +1314,10 @@ jobs:
     runs-on: xcode-27
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
-    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
-    # runs allowed to write bind it, so other runs never receive that key.
+    # Main's BuildBuddy key is a secret of the buildbuddy-write environment, bound only for main
+    # runs. Trusted pull requests bind buildbuddy-pr, whose key writes a separate cache.
     environment:
-      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      name: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'buildbuddy-write' || (needs.gatekeeper.outputs.trusted_pr == 'true' && 'buildbuddy-pr' || '') }}
       deployment: false
     env:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
@@ -1394,8 +1395,8 @@ jobs:
           namespace: native
 
       # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
-      # runs and trusted maintainer pull requests read and write; Renovate pull
-      # requests only read; every other run configures no remote cache. The
+      # runs write main's cache, trusted maintainer pull requests a separate one; Renovate
+      # pull requests only read main's; every other run configures no remote cache. The
       # read-only repository secret still reaches every same-repository run of
       # this job, so it is treated as public: it can only read the cache.
       - name: Configure BuildBuddy remote cache
@@ -1403,6 +1404,7 @@ jobs:
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          pr-api-key: ${{ secrets.BUILDBUDDY_PR_API_KEY }}
           trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
           cache-partition: ${{ steps.xcode.outputs.cache_partition }}
@@ -1715,10 +1717,10 @@ jobs:
     runs-on: xcode-27
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.browser_affected == 'true') }}
-    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
-    # runs allowed to write bind it, so other runs never receive that key.
+    # Main's BuildBuddy key is a secret of the buildbuddy-write environment, bound only for main
+    # runs. Trusted pull requests bind buildbuddy-pr, whose key writes a separate cache.
     environment:
-      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      name: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'buildbuddy-write' || (needs.gatekeeper.outputs.trusted_pr == 'true' && 'buildbuddy-pr' || '') }}
       deployment: false
     # Keep this environment identical to the `macos` job's; ci_lane_parity_tests
     # compares the browser step's Bazel invocation between the two.
@@ -1771,8 +1773,8 @@ jobs:
           namespace: native
 
       # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
-      # runs and trusted maintainer pull requests read and write; Renovate pull
-      # requests only read; every other run configures no remote cache. The
+      # runs write main's cache, trusted maintainer pull requests a separate one; Renovate
+      # pull requests only read main's; every other run configures no remote cache. The
       # read-only repository secret still reaches every same-repository run of
       # this job, so it is treated as public: it can only read the cache.
       - name: Configure BuildBuddy remote cache
@@ -1780,6 +1782,7 @@ jobs:
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          pr-api-key: ${{ secrets.BUILDBUDDY_PR_API_KEY }}
           trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
           cache-partition: ${{ steps.xcode.outputs.cache_partition }}
@@ -2051,12 +2054,11 @@ jobs:
     # Bound at 60 min so healthy affected-target runs have buffer while a stuck
     # run still fails instead of tailing for hours.
     timeout-minutes: 60
-    # Shares the BuildBuddy remote cache with the GitHub-hosted macOS lanes, the
+    # Shares the pull request BuildBuddy cache with the GitHub-hosted macOS lanes, the
     # one self-hosted lane allowed to. This job only runs for trusted maintainer
-    # pull requests, so it binds the buildbuddy-write environment exactly as the
-    # `macos` job does for them.
+    # pull requests, so it binds only buildbuddy-pr and never holds main's key.
     environment:
-      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      name: ${{ needs.gatekeeper.outputs.trusted_pr == 'true' && 'buildbuddy-pr' || '' }}
       deployment: false
     env:
       # The runner host may have user or system Bazel rc files. The invocations
@@ -2098,16 +2100,16 @@ jobs:
         shell: bash
         run: tools/ci_select_macos_xcode.sh
 
-      # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
-      # the pinned Xcode's partition (docs/building.md). The action fails
+      # Pull request BuildBuddy cache, shared with the GitHub-hosted macOS lanes'
+      # pull request runs under the pinned Xcode's partition (docs/building.md). The action fails
       # rather than writing to another partition when this runner has none. It
       # runs before "Prepare self-hosted macOS toolchain", the first step that
       # touches Bazel.
       - name: Configure BuildBuddy remote cache
-        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        if: needs.gatekeeper.outputs.trusted_pr == 'true'
         uses: ./.github/actions/buildbuddy-cache
         with:
-          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          pr-api-key: ${{ secrets.BUILDBUDDY_PR_API_KEY }}
           trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
           cache-partition: ${{ steps.xcode.outputs.cache_partition }}
@@ -2300,9 +2302,9 @@ jobs:
     needs: [gatekeeper, determine-targets, macos-self-hosted]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.hosted_parity_affected == 'true') }}
     timeout-minutes: 60
-    # Bound to the trusted-PR BuildBuddy write environment exactly like macos-self-hosted.
+    # Bound to the trusted pull request BuildBuddy environment exactly like macos-self-hosted.
     environment:
-      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      name: ${{ needs.gatekeeper.outputs.trusted_pr == 'true' && 'buildbuddy-pr' || '' }}
       deployment: false
     env:
       # The key-affecting flags of every macOS lane (//tools:macos_cache_key_parity_tests), so
@@ -2337,10 +2339,10 @@ jobs:
         run: tools/ci_select_macos_xcode.sh
 
       - name: Configure BuildBuddy remote cache
-        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        if: needs.gatekeeper.outputs.trusted_pr == 'true'
         uses: ./.github/actions/buildbuddy-cache
         with:
-          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          pr-api-key: ${{ secrets.BUILDBUDDY_PR_API_KEY }}
           trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
           cache-partition: ${{ steps.xcode.outputs.cache_partition }}
