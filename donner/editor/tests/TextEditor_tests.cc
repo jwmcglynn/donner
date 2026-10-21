@@ -3924,6 +3924,56 @@ TEST_F(TextEditorTests, ReferenceRopeAttributeRangesBoundPrecedingLineWork) {
   }
 }
 
+TEST_F(TextEditorTests, ReferenceRopeRetainsVisualAnchorAcrossRangeOnlyFocusRefresh) {
+  const std::string header = "<linearGradient id=\"paint\"/>";
+  const std::string reference = "<rect fill=\"url(#paint)\"/>";
+  editor.setText(header + "\n" + reference + "\n");
+  const FocusReferenceLink link{
+      .from = SourcePoint{.line = 1, .column = static_cast<int>(reference.find("#paint") + 1)},
+      .to = SourcePoint{.line = 0, .column = static_cast<int>(header.size())},
+  };
+  ASSERT_THAT(editor.setSourceStyleDecorations({TextEditor::SourceStyleDecoration{
+                  .id = 94,
+                  .range = SourceByteRange{.start = 0, .end = header.size()},
+                  .chipRange = SourceByteRange{.start = 0, .end = header.size()},
+                  .showChip = true,
+                  .chipCount = 2,
+                  .chipKind = TextEditor::SourceStyleChipKind::ReferenceCount,
+              }}),
+              testing::IsTrue());
+  editor.setFocusPartition(FocusPartition{.fullColor = {LineRange{.startLine = 0, .endLine = 3}},
+                                          .referenceLinks = {link}});
+  RenderEditorFrame(ImVec2(640.0f, 200.0f));
+  const auto before = FocusReferenceLayout(link, 0);
+  ASSERT_THAT(before, testing::Optional(testing::_));
+  editor.clearSourceStyleDecorations();
+  RenderEditorFrame(ImVec2(640.0f, 200.0f));
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 1, .endLine = 2}},
+      .referenceColor = {LineRange{.startLine = 0, .endLine = 1}},
+      .dimmed = {LineRange{.startLine = 2, .endLine = 3}},
+      .referenceLinks = {link},
+  });
+  RenderEditorFrame(ImVec2(640.0f, 200.0f));
+  const auto after = FocusReferenceLayout(link, 0);
+  ASSERT_THAT(after, testing::Optional(testing::_));
+  EXPECT_THAT(after->tip.x, testing::FloatEq(before->tip.x));
+  EXPECT_THAT(after->tip.y, testing::FloatEq(before->tip.y));
+  EXPECT_THAT(SourceStyleChipHitRectCount(), testing::Eq(0u));
+  EXPECT_THAT(editor.takeClickedSourceStyleChipId(), testing::Eq(std::nullopt));
+
+  FocusReferenceLink changed = link;
+  ++changed.from.column;
+  editor.setFocusPartition(FocusPartition{.fullColor = {LineRange{.startLine = 0, .endLine = 3}},
+                                          .referenceLinks = {changed}});
+  editor.setFocusPartition(FocusPartition{.fullColor = {LineRange{.startLine = 0, .endLine = 3}},
+                                          .referenceLinks = {link}});
+  RenderEditorFrame(ImVec2(640.0f, 200.0f));
+  const auto changedIdentity = FocusReferenceLayout(link, 0);
+  ASSERT_THAT(changedIdentity, testing::Optional(testing::_));
+  EXPECT_THAT(changedIdentity->tip.x, testing::Not(testing::FloatEq(before->tip.x)));
+}
+
 TEST_F(TextEditorTests, FocusReferenceConnectorTargetsSelectorChipByRangeStart) {
   editor.setText(
       ".hit { fill: red; }\n"
