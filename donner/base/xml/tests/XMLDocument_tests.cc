@@ -1794,7 +1794,7 @@ TEST_F(XMLDocumentTests, RenameUsesOnlyCurrentParentTextProjectionProvenance) {
       XMLNode svg = doc.root().firstChild().value();
       XMLNode omitted = svg.firstChild().value();
       omitted.removeForProjection();
-      ASSERT_THAT(svg.projectedTextChildren(), ElementsAre(omitted));
+      ASSERT_THAT(svg.projectedTextChildren(), testing::ElementsAre(omitted));
       if (action == "removed") {
         omitted.remove();
       } else if (action == "reattached") {
