@@ -323,30 +323,35 @@ class CiPullRequestEventsTest(unittest.TestCase):
         # caller group would deadlock the call.
         self.assertIsNone(_concurrency(self._workflow("pr_base_change.yml")))
 
-    def test_a_push_supersedes_the_previous_push_run_of_a_pull_request(self):
-        first, _ = self._main_concurrency("pr-opened")
-        for run in ("pr-push", "pr-reopened"):
+    def test_pushes_preserve_earlier_pull_request_runs(self):
+        groups = set()
+        for run in ("pr-opened", "pr-push", "pr-reopened"):
             with self.subTest(run=run):
-                self.assertEqual(self._main_concurrency(run), (first, True))
+                group, cancel = self._main_concurrency(run)
+                self.assertFalse(cancel)
+                self.assertNotIn(group, groups)
+                groups.add(group)
 
-    def test_a_base_change_run_neither_cancels_nor_joins_the_push_run(self):
+    def test_a_base_change_run_neither_cancels_nor_joins_other_runs(self):
         push_group, _ = self._main_concurrency("pr-push")
         base_group, cancel = self._main_concurrency("base-change")
         self.assertNotEqual(base_group, push_group)
-        self.assertTrue(cancel)
-        callee_group, _ = self._main_concurrency("base-change-callee-name")
+        self.assertFalse(cancel)
+        callee_group, callee_cancel = self._main_concurrency("base-change-callee-name")
         self.assertNotEqual(callee_group, push_group)
-        # A second base change supersedes the first.
-        self.assertEqual(self._main_concurrency("base-change-again"), (base_group, True))
+        self.assertFalse(callee_cancel)
+        again_group, again_cancel = self._main_concurrency("base-change-again")
+        self.assertNotEqual(again_group, base_group)
+        self.assertFalse(again_cancel)
 
-    def test_main_push_runs_keep_their_own_never_cancelled_groups(self):
-        groups = {run: self._main_concurrency(run) for run in ("main-push", "main-push-next")}
-        self.assertEqual(groups, {"main-push": ("push-CI-1006", False),
-                                  "main-push-next": ("push-CI-1007", False)})
-        self.assertEqual(self._main_concurrency("branch-push"),
-                         self._main_concurrency("branch-push-next"))
-        self.assertEqual(self._main_concurrency("branch-push"),
-                         ("push-CI-refs/heads/feature", True))
+    def test_main_and_branch_pushes_keep_their_own_never_cancelled_groups(self):
+        groups = set()
+        for run in ("main-push", "main-push-next", "branch-push", "branch-push-next"):
+            with self.subTest(run=run):
+                group, cancel = self._main_concurrency(run)
+                self.assertFalse(cancel)
+                self.assertNotIn(group, groups)
+                groups.add(group)
 
     def test_evaluator_follows_github_operand_semantics(self):
         context = {"a": "", "b": "x"}
