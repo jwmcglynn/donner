@@ -19,6 +19,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/DocumentState.h"
+#include "donner/svg/DonnerController.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -885,11 +886,15 @@ TEST(OverlayRendererTest, RemovingCssGeometryRestoresAttributePreviewEligibility
   EXPECT_THAT(CaptureLivePathPreview(*path).livePathPreview, testing::Eq(std::nullopt));
 
   path->setStyle("");
+  ASSERT_THAT(svg::DonnerController(app.document().document()).captureHitTest()->complete(),
+              testing::IsTrue());
   const auto restored = CaptureLivePathPreview(*path);
   ASSERT_THAT(restored.livePathPreview, testing::Ne(std::nullopt));
   EXPECT_THAT(restored.livePathPreview->pathDoc.bounds(),
               testing::Eq(Box2d::FromXYWH(10, 10, 20, 20)));
   path->setStyle("d: 'M40 40 L60 40 L60 60 Z'");
+  ASSERT_THAT(svg::DonnerController(app.document().document()).captureHitTest()->complete(),
+              testing::IsTrue());
   EXPECT_THAT(CaptureLivePathPreview(*path).livePathPreview, testing::Eq(std::nullopt));
 }
 
