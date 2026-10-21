@@ -110,35 +110,49 @@ void RecordDiscardedTextForParent(const std::optional<SVGElement>& element, cons
   }
 }
 
-template <typename T>
-void ParseTextContents(SVGParserContext& context, T element, const XMLNode& node) {
+struct ProjectedTextSize {
   std::size_t contentBytes = 0;
   std::size_t chunkCount = 0;
+};
+
+/// Measure direct text children before reserving their projected storage.
+/// @param element Element whose payload budget records an overflow rejection.
+/// @param node XML parent containing the source children.
+/// @param includeElementChunks Whether nested elements need empty text-chunk markers.
+/// @return Content bytes and chunk count, or nullopt after recording an overflow rejection.
+std::optional<ProjectedTextSize> MeasureProjectedText(SVGElement element, const XMLNode& node,
+                                                      bool includeElementChunks) {
+  ProjectedTextSize size;
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
     if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
-      ++chunkCount;
-      if (auto value = child->value(); value && !CheckedAdd(contentBytes, value->size())) {
-        auto& budget = element.entityHandle()
-                           .registry()
-                           ->ctx()
-                           .template get<components::ParsedPayloadResourceBudget>();
+      ++size.chunkCount;
+      if (auto value = child->value(); value && !CheckedAdd(size.contentBytes, value->size())) {
+        auto& budget =
+            element.entityHandle().registry()->ctx().get<components::ParsedPayloadResourceBudget>();
         budget.recordRejection();
-        return;
+        return std::nullopt;
       }
-    } else if (child->type() == XMLNode::Type::Element) {
-      ++chunkCount;
+    } else if (includeElementChunks && child->type() == XMLNode::Type::Element) {
+      ++size.chunkCount;
     }
   }
+  return size;
+}
 
-  if (!ReserveContentProjection(context, element.entityHandle(), contentBytes, chunkCount,
-                                components::ParsedPayloadResourceBudget::Category::ProjectedText,
-                                "Text content")) {
+void ParseTextContents(SVGParserContext& context, SVGElement element, const XMLNode& node) {
+  const std::optional<ProjectedTextSize> size = MeasureProjectedText(element, node, true);
+  if (!size) {
+    return;
+  }
+  if (!ReserveContentProjection(
+          context, element.entityHandle(), size->contentBytes, size->chunkCount,
+          components::ParsedPayloadResourceBudget::Category::ProjectedText, "Text content")) {
     return;
   }
 
   std::string combined;
-  combined.reserve(contentBytes);
-  auto& textComponent = element.entityHandle().template get_or_emplace<components::TextComponent>();
+  combined.reserve(size->contentBytes);
+  auto& textComponent = element.entityHandle().get_or_emplace<components::TextComponent>();
   textComponent.textChunks.clear();
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
     if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
@@ -386,32 +400,20 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGTextPathElement>(SVGParserCo
  * @param element The descriptive element to capture text for.
  * @param node The XML node containing the text content.
  */
-template <typename T>
-void ParseDescriptiveText(SVGParserContext& context, T element, const XMLNode& node) {
-  std::size_t contentBytes = 0;
-  std::size_t chunkCount = 0;
-  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
-    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
-      ++chunkCount;
-      if (auto value = child->value(); value && !CheckedAdd(contentBytes, value->size())) {
-        element.entityHandle()
-            .registry()
-            ->ctx()
-            .template get<components::ParsedPayloadResourceBudget>()
-            .recordRejection();
-        return;
-      }
-    }
+void ParseDescriptiveText(SVGParserContext& context, SVGElement element, const XMLNode& node) {
+  const std::optional<ProjectedTextSize> size = MeasureProjectedText(element, node, false);
+  if (!size) {
+    return;
   }
-
-  if (!ReserveContentProjection(context, element.entityHandle(), contentBytes, chunkCount,
+  if (!ReserveContentProjection(context, element.entityHandle(), size->contentBytes,
+                                size->chunkCount,
                                 components::ParsedPayloadResourceBudget::Category::ProjectedText,
                                 "Descriptive content")) {
     return;
   }
 
   std::string combined;
-  combined.reserve(contentBytes);
+  combined.reserve(size->contentBytes);
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
     if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
       if (auto value = child->value()) {
@@ -421,8 +423,7 @@ void ParseDescriptiveText(SVGParserContext& context, T element, const XMLNode& n
   }
 
   if (!combined.empty()) {
-    auto& component =
-        element.entityHandle().template get_or_emplace<components::DescriptiveTextComponent>();
+    auto& component = element.entityHandle().get_or_emplace<components::DescriptiveTextComponent>();
     component.text = RcString(combined);
   }
 }
