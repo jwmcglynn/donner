@@ -41,7 +41,8 @@ build before the first proxied request after startup.
   parsed revision. Pass `dispatch: "source_pane"` to apply each edit as one
   source-pane keystroke through the editor's incremental source sync instead of
   reparsing the draft; the response reports whether the document source matches
-  the draft and any incremental-edit diagnostic.
+  the draft and any incremental-edit diagnostic. This mode preserves `source_path`; use
+  `dispatch: "reload"` to change it.
 - `select_by_selector`: Select the first element matching a CSS selector, in
   document order starting with the root `<svg>` (so `:root` selects the root),
   and optionally prewarm the compositor. Every selector-based tool resolves

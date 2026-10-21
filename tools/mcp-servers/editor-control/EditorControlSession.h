@@ -133,6 +133,7 @@ public:
   };
 
 private:
+  friend struct EditorControlSessionTestAccess;
   ToolCallResult loadDocument(const nlohmann::json& arguments);
   ToolCallResult loadSvg(const nlohmann::json& arguments);
   ToolCallResult getSvgSource(const nlohmann::json& arguments);
@@ -157,8 +158,8 @@ private:
   ToolCallResult loadSvgSource(std::string_view source, const LoadOptions& options,
                                std::string_view sourcePath);
   /// Why `edit_svg_source` cannot use `dispatch: source_pane` for this request, if it cannot.
-  [[nodiscard]] std::optional<std::string> sourcePaneDispatchError(bool replaceSource, bool edits,
-                                                                   bool allowParseFailure) const;
+  [[nodiscard]] std::optional<std::string> sourcePaneDispatchError(
+      bool replaceSource, bool edits, bool allowParseFailure, std::string_view sourcePath) const;
   /// Apply the requested canvas size and device pixel ratio to the loaded document.
   void applyCanvasOptions(const LoadOptions& options);
   /// Mark the preview current after source-pane edits, or keep it stale with the pending reason.

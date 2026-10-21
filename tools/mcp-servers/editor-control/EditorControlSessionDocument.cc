@@ -299,7 +299,10 @@ ToolCallResult EditorControlSession::getSvgSource(const json& arguments) {
 }
 
 std::optional<std::string> EditorControlSession::sourcePaneDispatchError(
-    bool replaceSource, bool edits, bool allowParseFailure) const {
+    bool replaceSource, bool edits, bool allowParseFailure, std::string_view sourcePath) const {
+  if (sourcePath != currentSourcePath_) {
+    return "dispatch 'source_pane' cannot change source_path; use dispatch 'reload'";
+  }
   if (!allowParseFailure) {
     // Like the source pane, each keystroke commits its bytes even when it leaves them malformed.
     return "dispatch 'source_pane' always keeps malformed edits; allow_parse_failure must be true";
@@ -459,7 +462,7 @@ ToolCallResult EditorControlSession::editSvgSource(const json& arguments) {
 
   if (sourcePaneDispatch) {
     if (std::optional<std::string> sourcePaneError =
-            sourcePaneDispatchError(hasReplaceSource, hasEdits, allowParseFailure)) {
+            sourcePaneDispatchError(hasReplaceSource, hasEdits, allowParseFailure, sourcePath)) {
       return MakeErrorResult(*sourcePaneError);
     }
   }

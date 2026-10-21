@@ -28,6 +28,10 @@
 
 namespace donner::editor::mcp {
 
+struct EditorControlSessionTestAccess {
+  static EditorApp& app(EditorControlSession& session) { return session.app_; }
+};
+
 TEST(EditorControlSessionTest, MetadataOnlyTileKeepsMovableLayerOwnership) {
   EditorControlSession::HeadlessTextureCache cache;
   RenderResult::CompositedPreview preview;
@@ -1021,6 +1025,13 @@ TEST(EditorControlSessionTest, SourcePaneDispatchRejectsPathChangesBeforeEditing
                                                       {"source_path", "original.svg"},
                                                       {"render_after_load", false}})
                      .isError);
+    ASSERT_FALSE(
+        session.handleToolCall("select_by_selector", json{{"selector", "rect"}, {"render", false}})
+            .isError);
+    EditorApp& app = EditorControlSessionTestAccess::app(session);
+    const auto selected = app.selectedElements();
+    const bool wasDirty = app.isDirty();
+    const auto filePath = app.currentFilePath();
     const auto before = session.handleToolCall("get_svg_source", json::object());
     ASSERT_FALSE(before.isError);
     const json edits = json::array(
@@ -1033,6 +1044,9 @@ TEST(EditorControlSessionTest, SourcePaneDispatchRejectsPathChangesBeforeEditing
     EXPECT_TRUE(rejected.isError) << rejected.body.dump(2);
     const auto unchanged = session.handleToolCall("get_svg_source", json::object());
     EXPECT_EQ(unchanged.body, before.body);
+    EXPECT_EQ(app.selectedElements(), selected);
+    EXPECT_EQ(app.isDirty(), wasDirty);
+    EXPECT_THAT(app.currentFilePath(), testing::Eq(filePath));
     const auto accepted =
         session.handleToolCall("edit_svg_source", json{{"dispatch", "source_pane"},
                                                        {"source_path", "original.svg"},
@@ -1043,6 +1057,15 @@ TEST(EditorControlSessionTest, SourcePaneDispatchRejectsPathChangesBeforeEditing
     EXPECT_GT(accepted.body["source"]["source_revision"], before.body["source"]["source_revision"]);
     EXPECT_THAT(session.handleToolCall("get_svg_source", json::object()).body.value("text", ""),
                 testing::HasSubstr("blue"));
+    const auto omitted = session.handleToolCall(
+        "edit_svg_source",
+        json{{"dispatch", "source_pane"},
+             {"edits",
+              json::array(
+                  {json{{"offset", kScene.find("red")}, {"delete_count", 4}, {"insert", "red"}}})},
+             {"render_after_edit", false}});
+    ASSERT_FALSE(omitted.isError) << omitted.body.dump(2);
+    EXPECT_EQ(omitted.body["source"]["source_path"], "original.svg");
   }
 }
 
