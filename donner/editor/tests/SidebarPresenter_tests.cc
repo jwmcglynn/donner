@@ -3005,11 +3005,25 @@ TEST_F(SidebarPresenterImGuiTest, TransformRollbackHandoffRetainsPaintedSizeAndP
     ASSERT_NO_FATAL_FAILURE(MoveTransformFocus(
         presenter, app, kWindow, SidebarPresenter::TransformField::Width, false, flush));
     const std::string desired = std::to_string(initial.width() * 2.0);
+    // A host-space stroke can change the other painted extent as its join geometry changes.
+    // Compare with the same resize begun directly from the restored document.
+    EditorApp directApp;
+    SidebarPresenter directPresenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(directApp, directPresenter, source));
+    ASSERT_NO_FATAL_FAILURE(BeginTransformFieldText(directPresenter, directApp,
+        "##painted_direct_resize", SidebarPresenter::TransformField::Width, desired.c_str()));
+    RenderInspectorFrame(directPresenter, &directApp, "##painted_direct_resize");
+    (void)directApp.flushFrame();
+    directPresenter.refreshSnapshot(directApp);
+    const Box2d expected = *directPresenter.inspectorBoundsForTesting();
+    // Return focus to the handoff field before replacing its contents.
+    ASSERT_NO_FATAL_FAILURE(MoveTransformFocus(
+        presenter, app, kWindow, SidebarPresenter::TransformField::Width, false, flush));
     ReplaceFocusedInput(presenter, &app, kWindow, desired, ImVec2(-1.0f, -1.0f), 280.0f);
     RenderInspectorFrame(presenter, &app, kWindow);
     flush();
     EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, initial.topLeft.x, initial.topLeft.y,
-                                                  initial.width() * 2.0, initial.height()));
+                                                  initial.width() * 2.0, expected.height()));
     ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
     RenderInspectorFrame(presenter, &app, kWindow);
     ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
