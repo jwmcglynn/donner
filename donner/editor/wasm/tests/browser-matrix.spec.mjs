@@ -1944,7 +1944,7 @@ test("Playwright evidence upload retries only transport while retaining terminal
 test("Chromium context diagnostics stay bounded, manual, and independent of the editor", () => {
   const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
   const diagnostic = buildFile.match(
-    /js_test\(\n    name = "chromium_context_lifecycle_diagnostic",([\s\S]*?)\n\)/,
+    /js_test\(\n {4}name = "chromium_context_lifecycle_diagnostic",([\s\S]*?)\n\)/,
   );
   assert.ok(diagnostic, "expected the explicit browser-only diagnostic target");
   assert.match(diagnostic[1], /timeout = "short"/);
