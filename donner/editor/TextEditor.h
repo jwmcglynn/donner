@@ -3,6 +3,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
@@ -49,7 +50,7 @@ enum class ShortcutModifier : uint8_t {
 };
 
 /// Combine two ShortcutModifier flags using bitwise OR.
-inline ShortcutModifier operator|(ShortcutModifier lhs, ShortcutModifier rhs) {
+constexpr ShortcutModifier operator|(ShortcutModifier lhs, ShortcutModifier rhs) {
   return static_cast<ShortcutModifier>(static_cast<uint8_t>(lhs) | static_cast<uint8_t>(rhs));
 }
 
@@ -68,14 +69,14 @@ struct Shortcut {
   ShortcutModifier modifiers = ShortcutModifier::None;  ///< Combined modifiers
 
   /// Default constructor
-  Shortcut() = default;
+  constexpr Shortcut() = default;
 
   /**
    * Constructs a shortcut with a single key and optional modifiers.
    * @param k Primary key.
    * @param m Modifier flags combined using bitwise OR.
    */
-  Shortcut(ImGuiKey k, ShortcutModifier m = ShortcutModifier::None)
+  constexpr Shortcut(ImGuiKey k, ShortcutModifier m = ShortcutModifier::None)
       : key1(k), key2(ImGuiKey_None), modifiers(m) {}
 
   /**
@@ -84,7 +85,7 @@ struct Shortcut {
    * @param k2 Secondary key.
    * @param m Modifier flags combined using bitwise OR.
    */
-  Shortcut(ImGuiKey k1, ImGuiKey k2, ShortcutModifier m = ShortcutModifier::None)
+  constexpr Shortcut(ImGuiKey k1, ImGuiKey k2, ShortcutModifier m = ShortcutModifier::None)
       : key1(k1), key2(k2), modifiers(m) {}
 
   /**
@@ -190,6 +191,10 @@ public:
     UncommentLines,
     Count
   };
+
+  /// Up to two key bindings for one action; any set binding triggers it, and an unset binding
+  /// (`key1` is `ImGuiKey_None`) never matches.
+  using ShortcutBindings = std::array<Shortcut, 2>;
 
   // Type aliases re-exporting the canonical definitions from
   // `TextEditorCore`. These keep the existing `TextEditor::Palette`,
@@ -507,20 +512,20 @@ public:
    */
   void moveDown(int amount = 1, bool select = false);
 
-  /// Move the cursor left by character steps.
-  /// @param amount Number of character steps.
+  /// Move the cursor left by characters or words.
+  /// @param amount Number of steps.
   /// @param select Whether to extend the selection.
-  /// @param wordMode Reserved by the core; movement is currently characterwise.
+  /// @param wordMode Whether each step moves to the start of the current or previous word.
   void moveLeft(int amount = 1, bool select = false, bool wordMode = false);
-  /// Move the cursor right by character steps.
-  /// @param amount Number of character steps.
+  /// Move the cursor right by characters or words.
+  /// @param amount Number of steps.
   /// @param select Whether to extend the selection.
-  /// @param wordMode Reserved by the core; movement is currently characterwise.
+  /// @param wordMode Whether each step moves to the end of the current or next word.
   void moveRight(int amount = 1, bool select = false, bool wordMode = false);
   /// Move the cursor to the start of the first line.
   /// @param select Whether to extend the selection.
   void moveTop(bool select = false);
-  /// Move the cursor to the start of the final line.
+  /// Move the cursor to the end of the final line.
   /// @param select Whether to extend the selection.
   void moveBottom(bool select = false);
   /// Move the cursor to the start of its current line.
@@ -828,7 +833,7 @@ public:
   void setEditorFontSize(float size) { editorFontSize_ = size; }
 
   /**
-   * Bind a keyboard shortcut to an editor action.
+   * Bind a keyboard shortcut to an editor action, replacing every existing binding for it.
    *
    * @param id The action to bind
    * @param shortcut The keyboard shortcut to bind to the action
@@ -936,9 +941,15 @@ public:
    * and search) to specific key combinations. The returned shortcuts
    * can be further customized at runtime.
    *
-   * @return A vector of Shortcut objects representing the default shortcuts.
+   * Navigation follows macOS text editing: Home/End and Ctrl+Left/Right move to the line start and
+   * end, Alt+Left/Right move by word, Ctrl+Up/Down and Ctrl+Home/End move to the document start and
+   * end, and Shift extends the selection. `Ctrl` is ImGui's primary shortcut modifier, which ImGui
+   * reports for the Command key on macOS.
+   *
+   * @return The bindings for each action, indexed by \ref ShortcutId. Any binding triggers its
+   * action.
    */
-  static std::vector<Shortcut> getDefaultShortcuts();
+  static std::vector<ShortcutBindings> getDefaultShortcuts();
   /// Return the static default dark syntax palette.
   static const Palette& getDarkPalette();
 
@@ -993,6 +1004,75 @@ private:
    * @param id The action to query.
    */
   static bool shortcutRepeats(ShortcutId id);
+
+  /**
+   * Report whether any binding for \p id matches the current key state, honoring
+   * \ref shortcutRepeats.
+   *
+   * @param id The action to query.
+   * @param io ImGui input state for the current frame.
+   * @return True if a binding for \p id fires this frame.
+   */
+  bool shortcutMatches(ShortcutId id, const ImGuiIO& io) const;
+
+  /// Number of rows Page Up and Page Down move: the visible height less one row of context.
+  int pageMoveLines() const;
+
+  /**
+   * Move the caret by one page of visible rows. With soft wrapping or a focus view the rows are
+   * visual rows, so a wrapped source line counts once per row it occupies.
+   *
+   * @param direction -1 to move up, +1 to move down.
+   * @param select Whether to extend the selection.
+   */
+  void movePage(int direction, bool select);
+
+  /// Input state a caret navigation action waits for.
+  enum class NavigationGate : std::uint8_t {
+    Always,                            ///< Runs whenever its key matches.
+    EditorFocused,                     ///< Runs while the text, not find or replace, has focus.
+    EditorFocusedWithoutAutocomplete,  ///< Also held back while the autocomplete list is open.
+  };
+
+  /// How a caret navigation action moves the caret.
+  enum class CaretMove : std::uint8_t {
+    Horizontal,  ///< Left or right by a character or a word.
+    Vertical,    ///< Up or down one line.
+    LineEdge,    ///< To the start or end of the line.
+    Page,        ///< Up or down one page.
+    Document,    ///< To the start or end of the document.
+  };
+
+  /// A caret navigation action, dispatched from a table rather than per-action branches.
+  struct NavigationAction {
+    ShortcutId id;        ///< Action this entry dispatches.
+    CaretMove move;       ///< How the caret moves.
+    bool backward;        ///< Whether it moves toward the start: left, up, line or document start.
+    bool word;            ///< Whether a horizontal move steps by word.
+    bool select;          ///< Whether the move extends the selection.
+    NavigationGate gate;  ///< Input state the action waits for.
+  };
+
+  /// Move the caret as \p action describes.
+  /// @param action The navigation entry to run.
+  void runNavigation(const NavigationAction& action);
+
+  /**
+   * Return the navigation entry for \p id.
+   *
+   * @param id The action to look up.
+   * @return The entry, or nullptr when \p id is not a caret navigation action.
+   */
+  static const NavigationAction* findNavigationAction(ShortcutId id);
+
+  /**
+   * Report whether a navigation action with \p gate may run this frame.
+   *
+   * @param gate Input state the action waits for.
+   * @param editorFocused Whether the text, rather than the find or replace field, has focus.
+   * @return True if the action may run.
+   */
+  bool navigationAllowed(NavigationGate gate, bool editorFocused) const;
 
   using RegexList = std::vector<std::pair<std::regex, ColorIndex>>;
   using UndoBuffer = TextEditorCore::UndoBuffer;
@@ -1262,7 +1342,7 @@ private:
   std::size_t autocompleteReplacementEndOffset_ = 0;    //!< Provider replacement end
 
   // Keyboard shortcuts
-  std::vector<Shortcut> shortcuts_;  //!< Configured shortcuts
+  std::vector<ShortcutBindings> shortcuts_;  //!< Configured bindings, indexed by ShortcutId
 
   // Visual markers. The `scrollbarMarkers_` flag + `changedLines_` diff
   // set are owned by `core_` so insert/delete bookkeeping stays in one

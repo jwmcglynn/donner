@@ -303,22 +303,30 @@ public:
   /// @param amount Number of lines to move.
   /// @param select Whether to extend the selection.
   void moveDown(int amount = 1, bool select = false);
-  /// Move the cursor left by character steps.
+  /// Move the cursor left by characters or words.
   /// @param amount Number of steps to move.
   /// @param select Whether to extend the selection.
-  /// @param wordMode Reserved; the current core moves by characters.
+  /// @param wordMode Whether each step moves to the start of the current or previous word,
+  /// continuing onto earlier lines.
   void moveLeft(int amount = 1, bool select = false, bool wordMode = false);
-  /// Move the cursor right by character steps.
+  /// Move the cursor right by characters or words.
   /// @param amount Number of steps to move.
   /// @param select Whether to extend the selection.
-  /// @param wordMode Reserved; the current core moves by characters.
+  /// @param wordMode Whether each step moves to the end of the current or next word, continuing
+  /// onto later lines.
   void moveRight(int amount = 1, bool select = false, bool wordMode = false);
   /// Move the cursor to the start of the buffer.
   /// @param select Whether to extend the selection.
   void moveTop(bool select = false);
-  /// Move the cursor to the start of the final line.
+  /// Move the cursor to the end of the final line.
   /// @param select Whether to extend the selection.
   void moveBottom(bool select = false);
+  /// Move the cursor to \p position. With \p select the selection extends from its anchor, the
+  /// end the cursor did not occupy; otherwise it collapses to the cursor.
+  /// @param position New cursor position.
+  /// @param select Whether to extend the selection.
+  void moveCursorTo(const Coordinates& position, bool select);
+
   /// Move the cursor to the start of its current line.
   /// @param select Whether to extend the selection.
   void moveHome(bool select = false);
@@ -709,6 +717,16 @@ private:
 
   Coordinates interactiveStart_;
   Coordinates interactiveEnd_;
+
+  /// Return the start of the word before \p from: separators before it are skipped, onto earlier
+  /// lines if needed, and then the word characters.
+  /// @param from Position to search back from.
+  Coordinates previousWordStart(const Coordinates& from) const;
+
+  /// Return the end of the word after \p from: separators after it are skipped, onto later lines
+  /// if needed, and then the word characters.
+  /// @param from Position to search forward from.
+  Coordinates nextWordEnd(const Coordinates& from) const;
 
   void applySelection(const Coordinates& start, const Coordinates& end, SelectionMode mode,
                       bool updateInteractiveBounds);

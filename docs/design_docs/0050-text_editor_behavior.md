@@ -11,7 +11,7 @@ The Donner `TextEditor` widget (1296 lines of header, 4130 lines of implementati
 ## Goals
 
 - Provide a comprehensive behavioral inventory of TextEditor, organized by category, with specific `file:line` citations.
-- Identify deviations from standard editor behavior (e.g., Alt+arrow word movement not wired, Ctrl+Delete / Ctrl+Backspace word deletion unimplemented, word-mode shortcuts declared but unused).
+- Identify deviations from standard editor behavior (e.g., Ctrl+Delete / Ctrl+Backspace word deletion unimplemented).
 - Catalog bug-level issues and missing features with priority (P0 = critical, P1 = important, P2 = nice-to-have).
 - Establish test coverage baseline and identify gaps.
 - Propose a concrete, prioritized Implementation Plan as a checklist of specific test cases (25-40 tests in first batch).
@@ -53,11 +53,9 @@ VS Code / TextMate / Xcode set user expectations for:
 ### Known Deviations
 
 From code inspection (`TextEditor.cc` lines 2962–3100):
-- **Word movement shortcuts declared but unused** (lines 70, 73, 77, 80): `MoveWordLeft`, `SelectWordLeft`, `MoveWordRight`, `SelectWordRight` are in `ShortcutId` enum and wired in `getDefaultShortcuts()` to Ctrl+Left/Right, but the implementation of `moveLeft()` and `moveRight()` (lines 2962, 2995) **ignore the `wordMode` parameter** (comment `/*wordMode*/` at line 2962).
 - **Ctrl+Delete / Ctrl+Backspace not implemented**: shortcuts exist (lines 113, 116) but `executeAction()` (lines 830–874) has no handlers for `ForwardDeleteWord` or `BackwardDeleteWord`.
 - **Unindent (Shift+Tab) not fully wired**: shortcut exists (line 194) but `executeAction()` doesn't handle it (lines 830–874).
-- **Word boundary detection**: uses syntax-highlighting color changes as word boundaries (lines 423–436, 441–479), which is different from alphanumeric boundaries in VS Code.
-- **Tab stop at start of document**: `moveDown()` on empty document or last line doesn't clamp correctly (line 3046 moves to `(totalLines-1, 0)` but doesn't check if that's valid).
+- **Double-click word boundary detection**: uses syntax-highlighting color changes as word boundaries (lines 423-436, 441-479), which is different from alphanumeric boundaries in VS Code.
 
 ## Implementation Plan
 
@@ -74,7 +72,7 @@ These form the foundation of any text editor and must work reliably.
   - [ ] Test: Home key moves cursor to column 0 of current line.
   - [ ] Test: End key moves cursor to end of current line.
   - [ ] Test: Ctrl+Home (MoveTop) moves to (0, 0).
-  - [ ] Test: Ctrl+End (MoveBottom) moves to (last_line, 0).
+  - [x] Test: Ctrl+End and Command+Down (MoveBottom) move to the end of the last line.
   - [ ] Test: Page Up / Page Down move by page size.
 
 - [ ] **Selection via Keyboard (Shift+Arrow)**
@@ -119,12 +117,12 @@ These form the foundation of any text editor and must work reliably.
 
 ### Milestone 2: P1 Behaviors (Expected Features)
 
-- [ ] **Word Movement (Ctrl+Arrow)**
-  - [ ] Test: Ctrl+Left moves cursor to start of previous word.
-  - [ ] Test: Ctrl+Right moves cursor to start of next word.
-  - [ ] Test: Ctrl+Shift+Left selects to start of previous word.
-  - [ ] Test: Ctrl+Shift+Right selects to end of current / start of next word.
-  - [ ] Test: Word boundary respects syntax color transitions (lines 423–436, 461–479).
+- [x] **Word Movement (Option+Arrow, macOS conventions)**
+  - [x] Test: Option+Left moves cursor to start of the current or previous word.
+  - [x] Test: Option+Right moves cursor to end of the current or next word.
+  - [x] Test: Option+Shift+Left/Right extend the selection by word.
+  - Words are runs of ASCII letters, digits, `_` and non-ASCII bytes, not syntax color transitions.
+  - Home/End and Command+Left/Right move to the line start and end, Command+Up/Down move to the document start and end, Page Up/Down move by visible rows, and Shift extends the selection for each.
 
 - [ ] **Word Deletion**
   - [ ] Test: Ctrl+Backspace deletes word to the left of cursor.
@@ -215,7 +213,6 @@ These form the foundation of any text editor and must work reliably.
 
 | Issue | File:Line | Observed | Expected | Severity |
 |-------|-----------|----------|----------|----------|
-| **wordMode parameter unused in moveLeft/moveRight** | TextEditor.cc:2962, 2995 | Ctrl+Left/Right don't move by word; they move by character | Ctrl+Left/Right should skip by word boundary (alphanumeric or color boundary) | P0 |
 | **Unindent (Shift+Tab) not handled** | executeAction() lines 830–874 | Shift+Tab does nothing in editor (no case for ShortcutId::Unindent) | Should reduce indentation or shift selection left | P0 |
 | **Ctrl+Delete / Ctrl+Backspace not implemented** | executeAction() lines 830–874, backspace()/delete_() | Ctrl+Delete and Ctrl+Backspace are wired as shortcuts but do nothing | Should delete word to right/left | P0 |
 
@@ -223,7 +220,6 @@ These form the foundation of any text editor and must work reliably.
 
 | Issue | File:Line | Observed | Expected | Severity |
 |-------|-----------|----------|----------|----------|
-| **moveBottom() doesn't set cursor to end of last line** | TextEditor.cc:3044–3056 | Cursor moves to (lastLine, 0), not end of last line | Cursor should move to end of last line content | P1 |
 | **Copy without selection behavior inconsistent** | copy() lines 3360–3376 | Copies entire current line if no selection | Some editors don't copy if no selection; behavior should be configurable or documented | P1 |
 | **Delete at end of line (handleEndOfLineDelete) merges with next line silently** | handleEndOfLineDelete() lines 3100–3131 | No visual feedback; can be surprising | Consider auto-scroll or explicit feedback | P1 |
 | **Selection mode not reset after operations** | setSelection() lines 1396–1454 | SelectionMode (Normal/Word/Line) can persist after non-selection operations | Should reset to Normal after certain ops | P1 |
@@ -292,7 +288,7 @@ bazel test //donner/editor/tests:text_editor_tests
 ### Validation Criteria
 
 - All P0 tests pass (cursor movement, selection, insertion, deletion, undo/redo, double-click).
-- P1 tests capture known bugs (word movement, word deletion, unindent) and fail until fixes land.
+- P1 tests capture known bugs (word deletion, unindent) and fail until fixes land.
 - Code coverage of TextEditor public API exceeds 70% for navigation, editing, and selection paths.
 - No malloc, no exceptions, no undefined behavior (verified by AddressSanitizer / UBSan in CI).
 
@@ -301,9 +297,8 @@ bazel test //donner/editor/tests:text_editor_tests
 1. **Write test file** `donner/editor/tests/TextEditor_tests.cc` with 25–40 tests covering P0/P1 behaviors.
 2. **Add BUILD.bazel target** `text_editor_tests` to `donner/editor/tests/BUILD.bazel`.
 3. **Run tests** via `bazel test //donner/editor/tests:text_editor_tests` and document failures.
-4. **Create follow-up issues** for each P0 bug (word movement, unindent, Ctrl+Delete/Ctrl+Backspace) and P1 polish items.
-5. **Refactor word movement** to actually use `findWordStart()` / `findNextWord()` helpers and respect word boundaries.
-6. **Implement word deletion** (Ctrl+Delete / Ctrl+Backspace) in `executeAction()` and add helper functions.
+4. **Create follow-up issues** for each P0 bug (unindent, Ctrl+Delete/Ctrl+Backspace) and P1 polish items.
+5. **Implement word deletion** (Ctrl+Delete / Ctrl+Backspace) in `executeAction()` and add helper functions.
 
 ## Deviations from Standard Editor Behavior
 
@@ -311,7 +306,7 @@ bazel test //donner/editor/tests:text_editor_tests
 
 **Baseline (VS Code / TextMate / Xcode):** Alt+Left/Right moves by word boundary.
 
-**Donner:** Not implemented. On macOS, Donner uses Ctrl for word movement (per `getDefaultShortcuts()` line 70–80), which aligns with VS Code on macOS (Cmd on Mac, Ctrl on Windows/Linux). However, **the wordMode parameter is ignored**, so all movement is character-by-character.
+**Donner:** Matches the macOS baseline on every platform: Option (Alt)+Left/Right move by word, and Command (ImGui's primary modifier, Ctrl off macOS)+Left/Right move to the line start and end. Windows and Linux editors usually use Ctrl+Left/Right for word movement instead.
 
 ### Copy Without Selection
 
@@ -337,12 +332,12 @@ bazel test //donner/editor/tests:text_editor_tests
 
 | Function | File:Line | Purpose |
 |----------|-----------|---------|
-| `moveLeft()` | TextEditor.cc:2962 | Cursor left; unused wordMode param |
-| `moveRight()` | TextEditor.cc:2995 | Cursor right; unused wordMode param |
+| `moveLeft()` | TextEditorCore.cc | Cursor left by character or word |
+| `moveRight()` | TextEditorCore.cc | Cursor right by character or word |
 | `moveUp()` | TextEditor.cc:2901 | Cursor up by line |
 | `moveDown()` | TextEditor.cc:2924 | Cursor down by line |
 | `moveTop()` | TextEditor.cc:3029 | Jump to doc start (Ctrl+Home) |
-| `moveBottom()` | TextEditor.cc:3044 | Jump to doc end (Ctrl+End) |
+| `moveBottom()` | TextEditorCore.cc | Jump to end of the last line (Ctrl+End, Command+Down) |
 | `moveHome()` | TextEditor.cc:3058 | Jump to line start (Home) |
 | `moveEnd()` | TextEditor.cc:3079 | Jump to line end (End) |
 | `backspace()` | TextEditor.cc:3300 | Delete char before cursor |
