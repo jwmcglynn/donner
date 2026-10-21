@@ -42,6 +42,7 @@
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorDockLayout.h"
+#include "donner/editor/EditorParseOptions.h"
 #include "donner/editor/EditorSampleCatalog.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
@@ -5521,6 +5522,7 @@ void EditorShell::renderRenderPanePresentation(
   };
   renderPanePresenter_.render(paneState);
   if (!contentOnlyCaptureThisFrame_) {
+    renderDocumentLoadFailureNotice();
     renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
     renderReferenceHighlightChip();
     renderTextToolHint();
@@ -6397,6 +6399,120 @@ void EditorShell::renderCanvasZoomControl() {
   drawList->AddText(ImVec2(min.x + (max.x - min.x - textSize.x) * 0.5f,
                            min.y + (max.y - min.y - textSize.y) * 0.5f),
                     theme.textPrimary, label);
+}
+
+namespace {
+
+/// Width of the canvas notice shown when a document could not be loaded, in logical pixels.
+constexpr float kLoadFailureNoticeWidth = 360.0f;
+/// Smallest canvas width the notice is drawn in, in logical pixels.
+constexpr float kLoadFailureNoticeMinWidth = 200.0f;
+/// Smallest canvas height the notice is drawn in, in logical pixels.
+constexpr double kLoadFailureNoticeMinHeight = 160.0;
+
+/// First error among \p diagnostics, or null when there is none.
+const SourceDiagnostic* FirstSourceError(std::span<const SourceDiagnostic> diagnostics) {
+  const auto it =
+      std::ranges::find(diagnostics, DiagnosticSeverity::Error, &SourceDiagnostic::severity);
+  return it == diagnostics.end() ? nullptr : &*it;
+}
+
+}  // namespace
+
+void EditorShell::renderDocumentLoadFailureNotice() {
+  loadFailureRevealButtonRect_.reset();
+  const std::optional<ParseDiagnostic>& parseError = app_.document().lastParseError();
+  if (showSamplePicker_ || app_.hasDocument() || !parseError.has_value()) {
+    return;
+  }
+  const ViewportState& viewport = interactionController_.viewport();
+  const EditorTheme& theme = EditorTheme::Active();
+  const float width =
+      std::min(kLoadFailureNoticeWidth, static_cast<float>(viewport.paneSize.x) - theme.space8);
+  if (width < kLoadFailureNoticeMinWidth || viewport.paneSize.y < kLoadFailureNoticeMinHeight) {
+    return;
+  }
+  const SourceDiagnostic* sourceError = FirstSourceError(textEditor_.sourceDiagnostics());
+  const internal::DocumentLoadFailureNotice notice = internal::DocumentLoadFailureNoticeFor(
+      std::string_view(parseError->reason),
+      sourceError != nullptr ? std::optional(sourceError->line) : std::nullopt);
+
+  const Vector2d paneCenter = viewport.paneCenter();
+  ImGui::SetNextWindowPos(
+      ImVec2(static_cast<float>(paneCenter.x), static_cast<float>(paneCenter.y)), ImGuiCond_Always,
+      ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSizeConstraints(
+      ImVec2(width, 0.0f), ImVec2(width, static_cast<float>(viewport.paneSize.y) - theme.space8));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(theme.space6, theme.space6));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, theme.radiusContainer);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(theme.space2, theme.space2));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(theme.surfaceOverlay));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(theme.borderStrong));
+  constexpr ImGuiWindowFlags kNoticeFlags =
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+      ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing |
+      ImGuiWindowFlags_AlwaysAutoResize;
+  if (ImGui::Begin("###canvas_load_failure", nullptr, kNoticeFlags)) {
+    renderDocumentLoadFailureNoticeContents(notice);
+  }
+  ImGui::End();
+  ImGui::PopStyleColor(2);
+  ImGui::PopStyleVar(4);
+}
+
+void EditorShell::renderDocumentLoadFailureNoticeContents(
+    const internal::DocumentLoadFailureNotice& notice) {
+  const EditorTheme& theme = EditorTheme::Active();
+  ImGui::PushTextWrapPos(0.0f);
+  // An amber rule marks the notice as a warning without an icon font dependency.
+  const ImVec2 ruleStart = ImGui::GetCursorScreenPos();
+  ImGui::GetWindowDrawList()->AddRectFilled(
+      ruleStart, ImVec2(ruleStart.x + 32.0f, ruleStart.y + 3.0f), theme.warning, 1.5f);
+  ImGui::Dummy(ImVec2(0.0f, 3.0f + theme.space1));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(theme.textPrimary));
+  if (uiFontBold_ != nullptr) {
+    ImGui::PushFont(uiFontBold_);
+  }
+  ImGui::TextUnformatted(notice.title.c_str());
+  if (uiFontBold_ != nullptr) {
+    ImGui::PopFont();
+  }
+  ImGui::PopStyleColor();
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(theme.textMuted));
+  ImGui::TextUnformatted(notice.detail.c_str());
+  ImGui::PopStyleColor();
+  ImGui::PopTextWrapPos();
+  // The compact touch layout has no source pane to show.
+  if (adaptiveUiLayout_.compactTouch()) {
+    return;
+  }
+  ImGui::Dummy(ImVec2(0.0f, theme.space1));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme.radiusControl);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(theme.space3, theme.space2));
+  ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(theme.accentDefault));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::ColorConvertU32ToFloat4(theme.accentHover));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::ColorConvertU32ToFloat4(theme.accentActive));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(theme.accentInk));
+  if (ImGui::Button("Show in Source")) {
+    revealLoadFailureInSource();
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Open the source pane at the problem");
+  }
+  loadFailureRevealButtonRect_ =
+      Box2d(Vector2d(ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y),
+            Vector2d(ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y));
+  ImGui::PopStyleColor(4);
+  ImGui::PopStyleVar(2);
+}
+
+void EditorShell::revealLoadFailureInSource() {
+  if (const SourceDiagnostic* error = FirstSourceError(textEditor_.sourceDiagnostics())) {
+    revealSourceRange(error->range);
+  } else {
+    setSourcePaneVisible(true);
+  }
 }
 
 void EditorShell::renderTextToolHint() {
@@ -9442,6 +9558,41 @@ void EditorShell::runFrame() {
 }
 
 namespace internal {
+
+namespace {
+
+/// Format \p value with thousands separators, e.g. "8,192".
+std::string WithThousandsSeparators(std::size_t value) {
+  std::string text = std::to_string(value);
+  for (std::size_t i = text.size(); i > 3; i -= 3) {
+    text.insert(i - 3, ",");
+  }
+  return text;
+}
+
+}  // namespace
+
+DocumentLoadFailureNotice DocumentLoadFailureNoticeFor(std::string_view reason,
+                                                       std::optional<std::size_t> line) {
+  if (reason == "Maximum element count exceeded") {
+    // The limit counts every XML tree node, so whitespace between elements and comments count too.
+    std::string detail = "The editor loads up to " +
+                         WithThousandsSeparators(EditorParseOptions().maximumTreeNodes) +
+                         " elements, text runs and comments";
+    detail += line.has_value() ? ", and this file passes that limit at line " +
+                                     WithThousandsSeparators(*line) + "."
+                               : ".";
+    return {.title = "This document is too large to open", .detail = std::move(detail)};
+  }
+  std::string detail(reason.empty() ? std::string_view("The SVG could not be parsed") : reason);
+  if (line.has_value()) {
+    detail += " on line " + WithThousandsSeparators(*line);
+  }
+  if (!detail.ends_with('.')) {
+    detail += '.';
+  }
+  return {.title = "This document could not be opened", .detail = std::move(detail)};
+}
 
 std::string_view TextToolHintLabel(bool isEditing, bool isDraggingBox, bool touchPreferred) {
   if (isEditing || isDraggingBox) {

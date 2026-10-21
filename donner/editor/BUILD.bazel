@@ -1228,6 +1228,7 @@ donner_cc_library(
         ":editor_app",
         ":editor_dock_layout",
         ":editor_input_bridge",
+        ":editor_parse_options",
         ":editor_sample_catalog",
         ":editor_shell_layout",
         ":editor_shell_presentation",

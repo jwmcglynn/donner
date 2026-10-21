@@ -213,6 +213,22 @@ template <typename Resolver>
 [[nodiscard]] PendingClickIdleAction PendingClickIdleActionForState(
     bool leftMouseDown, bool pendingClickCanStartMarquee, bool selectHoldElapsed,
     bool selectDragIntent);
+/// Copy for the canvas notice shown when an opened document could not be loaded.
+struct DocumentLoadFailureNotice {
+  std::string title;   //!< One-line summary of why the canvas is empty.
+  std::string detail;  //!< The problem, including the limit that was exceeded when there is one.
+
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
+  bool operator==(const DocumentLoadFailureNotice& other) const = default;
+};
+
+/// Explain a fatal parse diagnostic for the canvas notice.
+/// @param reason Parser diagnostic text.
+/// @param line One-based source line of the problem, when known.
+[[nodiscard]] DocumentLoadFailureNotice DocumentLoadFailureNoticeFor(
+    std::string_view reason, std::optional<std::size_t> line);
+
 /// Discoverability hint for the idle text tool ("double-click places point
 /// text, drag draws a box"). Empty while a session or box drag is active -
 /// the hint only shows when the next click/drag would act on empty canvas.

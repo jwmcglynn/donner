@@ -85,6 +85,7 @@ class NativeMenuMac;
 #endif
 
 namespace internal {
+struct DocumentLoadFailureNotice;
 struct ToolbarPaintState;
 struct ToolbarPaintSlotState;
 enum class FillStrokeWidgetRegion;
@@ -569,6 +570,14 @@ private:
   void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderEditingScopeBreadcrumb();
   void renderCanvasZoomControl();
+  /// Explain on the canvas why an opened document did not load, with a button that shows the
+  /// problem in the source pane.
+  void renderDocumentLoadFailureNotice();
+  /// Draw the notice body inside its window.
+  /// @param notice Title and detail to show.
+  void renderDocumentLoadFailureNoticeContents(const internal::DocumentLoadFailureNotice& notice);
+  /// Open the source pane with the first parse error selected and flashed.
+  void revealLoadFailureInSource();
   [[nodiscard]] std::optional<Entity> toolbarPaintSelectionIdentity(
       bool rendererBusy, const svg::SVGDocumentHandle& currentPaintDocument);
   void renderFillStrokeToolbarWidget();
@@ -1029,6 +1038,8 @@ private:
 
   std::string lastWindowTitle_;
   bool viewportInitialized_ = false;
+  /// Screen rectangle of the load-failure notice's Show in Source button, while it is shown.
+  std::optional<Box2d> loadFailureRevealButtonRect_;
   /// Window framebuffer size the last full UI frame laid out against.
   Vector2i lastFullFrameWindowSize_ = Vector2i(-1, -1);
   /// Previous frame's canvas (render pane) content-region size. The fallback half of
