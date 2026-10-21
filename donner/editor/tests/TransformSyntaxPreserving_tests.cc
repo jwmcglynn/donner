@@ -273,6 +273,18 @@ TEST(TransformSyntaxPreserving, WrapperKeepsTheSmallAxisOfAnAnisotropicScale) {
       "scale(1000, 0.000123456)");
 }
 
+TEST(TransformSyntaxPreserving, WrapperKeepsFullPrecisionForANearlySingularMatrix) {
+  // Nearly parallel columns: rounding each entry to six decimals would move the point
+  // (-1e8, 1e8) from about (49, 51) to (0, 100), so the writeback keeps full precision.
+  Transform2d parentFromElement;
+  parentFromElement.data[0] = 1.0;
+  parentFromElement.data[1] = 1.0;
+  parentFromElement.data[2] = 1.00000049;
+  parentFromElement.data[3] = 1.00000051;
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, parentFromElement).str(),
+            toSVGTransformString(parentFromElement).str());
+}
+
 TEST(TransformSyntaxPreserving, WrapperWritesCanonicalMatrixAtEditPrecision) {
   // A drag at a non-integer zoom produces repeating decimals in every matrix entry.
   const Transform2d parentFromElement =

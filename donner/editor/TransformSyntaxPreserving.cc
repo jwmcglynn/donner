@@ -483,9 +483,10 @@ double RoundLinearEntry(double value, std::optional<int> decimals) {
   return decimals.has_value() ? RoundToDecimals(value, *decimals) : value;
 }
 
-/// Determinant of the linear part of @p transform.
-double LinearDeterminant(const Transform2d& transform) {
-  return transform.data[0] * transform.data[3] - transform.data[1] * transform.data[2];
+/// Determinant of the linear part of @p parentFromElement.
+double LinearDeterminant(const Transform2d& parentFromElement) {
+  return parentFromElement.data[0] * parentFromElement.data[3] -
+         parentFromElement.data[1] * parentFromElement.data[2];
 }
 
 /// Precision for each column of a transform's linear part.
@@ -538,12 +539,19 @@ void FormatCanonicalArgs(std::vector<Fn>& fns, const ColumnDecimals& columnDecim
 }
 
 /// Whether @p parentFromWritten, the re-parsed rounded text, may stand in for
-/// @p parentFromElement: close to it, and not singular unless the original is.
+/// @p parentFromElement: close to it, and, when @p parentFromElement is invertible, with an inverse
+/// close to its inverse. The inverse check rejects a rounding that visibly reshapes a thin axis of
+/// a nearly singular transform even when the rounded entries are close.
 bool IsFaithfulRounding(const Transform2d& parentFromWritten,
                         const Transform2d& parentFromElement) {
-  return TransformsClose(parentFromWritten, parentFromElement) &&
-         (LinearDeterminant(parentFromWritten) != 0.0 ||
-          LinearDeterminant(parentFromElement) == 0.0);
+  if (!TransformsClose(parentFromWritten, parentFromElement)) {
+    return false;
+  }
+  if (LinearDeterminant(parentFromElement) == 0.0) {
+    return true;
+  }
+  return LinearDeterminant(parentFromWritten) != 0.0 &&
+         TransformsClose(parentFromWritten.inverse(), parentFromElement.inverse());
 }
 
 /// The canonical \ref donner::toSVGTransformString form of @p parentFromElement at edit precision,
