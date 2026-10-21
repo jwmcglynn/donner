@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "What each main-hosted lane in .github/workflows/main.yml runs, by phase (step) and test class, and which steps cover each class on a trusted pull request. tools/ci_coverage_contract.py checks a trusted pull request's receipts against it; //tools:ci_lane_parity_tests keeps it in step with the workflow. A `pr_only` class is a pull request gate that main lacks. A class with no pull request counterpart carries a reviewed exception that names its owner and the decision behind it. A lane is checked only when its route says self-hosted jobs replaced its hosted job on the pull request.",
+  "description": "What each main-hosted lane in .github/workflows/main.yml runs, by phase (step) and test class, and which steps (by step id) cover each class on a trusted pull request. tools/ci_coverage_contract.py checks a trusted pull request's receipts against it; //tools:ci_lane_parity_tests keeps it in step with the workflow. A `pr_only` class is a pull request gate that main lacks. A class with no pull request counterpart carries a reviewed exception that names its owner and the decision behind it. A lane is checked only when its route says self-hosted jobs replaced its hosted job on the pull request.",
   "routes": {
     "linux": "always",
     "macos": "self_hosted_macos"
@@ -14,7 +14,7 @@
           "counterparts": [
             {
               "job": "linux",
-              "step": "Verify BuildBuddy remote execution"
+              "step": "buildbuddy_verify"
             }
           ]
         }
@@ -26,7 +26,7 @@
           "counterparts": [
             {
               "job": "linux-self-hosted",
-              "step": "Build"
+              "step": "build"
             }
           ]
         },
@@ -36,7 +36,7 @@
           "counterparts": [
             {
               "job": "linux",
-              "step": "Verify BuildBuddy remote execution"
+              "step": "buildbuddy_verify"
             }
           ]
         }
@@ -48,7 +48,7 @@
           "counterparts": [
             {
               "job": "linux-self-hosted",
-              "step": "Test"
+              "step": "test"
             }
           ]
         },
@@ -58,17 +58,17 @@
           "counterparts": [
             {
               "job": "linux",
-              "step": "Test local Xvfb targets"
+              "step": "local_xvfb"
             }
           ]
         },
         "hosted-parity": {
           "when": "hosted_parity_tests_affected",
-          "description": "`hosted_parity` tests, whose result can depend on the runner: they must also run on the hosted x86_64 image.",
+          "description": "`hosted_parity` tests, whose result can depend on the runner, also run on the hosted x86_64 image: no self-hosted x86_64 runner exists, so the hosted image is the only x86_64 venue (maintainer decision 2026-10-19, #1912).",
           "counterparts": [
             {
               "job": "linux",
-              "step": "Test (hosted parity subset)",
+              "step": "hosted_parity_test",
               "min_tests": 1
             }
           ]
@@ -88,7 +88,7 @@
           "counterparts": [
             {
               "job": "linux",
-              "step": "Linker canary (non-lld linker support)"
+              "step": "linker_canary"
             }
           ]
         }
@@ -99,7 +99,7 @@
           "counterparts": [
             {
               "job": "linux",
-              "step": "Build and test CMake consumer"
+              "step": "cmake_consumer"
             }
           ]
         }
@@ -112,7 +112,7 @@
           "counterparts": [
             {
               "job": "macos-self-hosted",
-              "step": "Build"
+              "step": "build"
             }
           ]
         },
@@ -132,7 +132,7 @@
           "counterparts": [
             {
               "job": "macos-self-hosted",
-              "step": "Test"
+              "step": "test"
             }
           ]
         },
@@ -142,7 +142,7 @@
           "counterparts": [
             {
               "job": "macos-hosted-parity",
-              "step": "Test"
+              "step": "test"
             }
           ]
         },
@@ -161,7 +161,7 @@
           "counterparts": [
             {
               "job": "macos-self-hosted",
-              "step": "Require full Metal shader validation"
+              "step": "metal_profile"
             }
           ]
         },
@@ -172,7 +172,7 @@
           "counterparts": [
             {
               "job": "macos-self-hosted",
-              "step": "Metal validation preflight"
+              "step": "metal_preflight"
             }
           ]
         },
@@ -191,7 +191,7 @@
           "counterparts": [
             {
               "job": "macos-browser",
-              "step": "Qualify pinned Chromium archive"
+              "step": "browser_preflight"
             }
           ]
         }
@@ -203,7 +203,7 @@
           "counterparts": [
             {
               "job": "macos-browser",
-              "step": "Test (browser targets)"
+              "step": "browser_test"
             }
           ]
         }
@@ -214,7 +214,7 @@
           "counterparts": [
             {
               "job": "macos-self-hosted",
-              "step": "Test (Geode editor lane)",
+              "step": "geode_test",
               "min_tests": 1
             }
           ]
@@ -224,7 +224,7 @@
           "counterparts": [
             {
               "job": "macos-hosted-parity",
-              "step": "Test (Geode editor lane)",
+              "step": "geode_test",
               "min_tests": 1
             }
           ]

@@ -8,15 +8,18 @@ on a trusted pull request. A class without a pull request counterpart must carry
 exception that names an owner. A lane whose hosted job itself ran on the pull request (its route
 is off) needs no counterparts.
 
-Each pull request job records a receipt of the phases it ran (`receipt`): every step's outcome
-and, for steps that write a Bazel build event file, how many test targets reported a result and
-how many of those executed rather than coming from a cache. The `check` command compares the
-receipts with the manifest and fails when a class selected for this pull request has no
-counterpart that ran (and reported its minimum number of test targets) and no exception.
+Each pull request job records a receipt of the steps it ran (`receipt JOB`, with the job's
+`steps` context as JSON in STEPS_JSON): every step's outcome and, for a step that wrote
+$RUNNER_TEMP/coverage-<step id>.bep.json, how many test targets reported a result and how many of
+those executed rather than coming from a cache. The `check` command (with the contract job's
+`needs` context as JSON in NEEDS_JSON) compares the receipts with the manifest and fails when a
+class selected for this pull request has no counterpart that ran (and reported its minimum number
+of test targets) and no exception.
 """
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -27,6 +30,15 @@ CONDITIONS = ("always", "browser_affected", "hosted_parity_affected",
 # Routing outputs that say a lane's hosted job was replaced by self-hosted jobs on this pull
 # request. A fallback does not change routing.
 ROUTES = ("always", "self_hosted_macos")
+# Where each selection comes from in the contract job's `needs` context: (job, output).
+SELECTION_SOURCES = {
+    "fallback": ("determine-targets", "fallback"),
+    "browser_affected": ("determine-targets", "browser_affected"),
+    "hosted_parity_affected": ("determine-targets", "hosted_parity_affected"),
+    "hosted_parity_tests_affected": ("determine-targets", "hosted_parity_tests_affected"),
+    "self_hosted_macos": ("gatekeeper", "use_self_hosted_macos"),
+}
+MANIFEST = "tools/ci/coverage_contract.json"
 # Step outcomes that mean the step ran its command (it may have failed; the job reports that).
 EXECUTED = ("success", "failure")
 RECEIPT_VERSION = 1
@@ -114,16 +126,30 @@ def bep_counts(path):
     return {"tests": len(summaries), "executed": len(executed & summaries)}
 
 
-def make_receipt(job, outcomes, beps):
-    """A receipt for one job: each step's outcome and, where recorded, its test counts."""
+def make_receipt(job, steps_context, bep_directory):
+    """A receipt for one job from its `steps` context: each step's outcome and, where the step
+    wrote coverage-<id>.bep.json in `bep_directory`, its test counts."""
     steps = {}
-    for step, outcome in outcomes.items():
-        entry = {"outcome": outcome}
-        bep = beps.get(step)
-        if outcome in EXECUTED and bep is not None and Path(bep).is_file():
+    for step, context in steps_context.items():
+        entry = {"outcome": context.get("outcome", "")}
+        bep = Path(bep_directory) / ("coverage-%s.bep.json" % step)
+        if entry["outcome"] in EXECUTED and bep.is_file():
             entry.update(bep_counts(bep))
         steps[step] = entry
     return {"version": RECEIPT_VERSION, "job": job, "steps": steps}
+
+
+def selection_from_needs(needs):
+    """The check's selections from the contract job's `needs` context. An output a job did not
+    set, as when the job was skipped, reads as empty, which is false. A source job missing from
+    `needs` is a configuration error, never a silent false."""
+    missing = sorted({job for job, _ in SELECTION_SOURCES.values()} - set(needs))
+    if missing:
+        raise ValueError("the contract job does not need %s" % ", ".join(missing))
+    selection = {name: (needs[job] or {}).get("outputs", {}).get(output, "") == "true"
+                 for name, (job, output) in SELECTION_SOURCES.items()}
+    selection["always"] = True
+    return selection
 
 
 def _selected(condition, selection):
@@ -184,16 +210,6 @@ def check(manifest, receipts, selection):
     return problems, excepted
 
 
-def _pairs(values, flag):
-    pairs = {}
-    for value in values:
-        name, separator, rest = value.partition("=")
-        if not separator or not name:
-            raise SystemExit("%s expects NAME=VALUE, got %r" % (flag, value))
-        pairs[name] = rest
-    return pairs
-
-
 def _load_receipts(directory):
     receipts = {}
     for path in sorted(Path(directory).rglob("coverage-receipt.json")):
@@ -204,32 +220,19 @@ def _load_receipts(directory):
     return receipts
 
 
-def _run_receipt(args):
-    receipt = make_receipt(args.job, _pairs(args.step, "--step"), _pairs(args.bep, "--bep"))
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-                              encoding="utf-8")
+def _receipt_path():
+    return Path(os.environ["RUNNER_TEMP"]) / "coverage-receipt" / "coverage-receipt.json"
+
+
+def _run_receipt(job):
+    receipt = make_receipt(job, json.loads(os.environ["STEPS_JSON"]), os.environ["RUNNER_TEMP"])
+    path = _receipt_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
 
-def _run_check(args):
-    manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    structure = manifest_problems(manifest)
-    if structure:
-        print("\n".join(structure), file=sys.stderr)
-        return 1
-    selection = {name: value == "true" for name, value in _pairs(args.selection,
-                                                                 "--selection").items()}
-    # Every selection must be passed, even empty: a missing one would read as false and silently
-    # drop the classes or the lane it gates.
-    expected = (set(CONDITIONS) | set(ROUTES) | {"fallback"}) - {"always"}
-    if set(selection) != expected:
-        print("selections must be exactly %s, got %s" % (sorted(expected), sorted(selection)),
-              file=sys.stderr)
-        return 2
-    selection["always"] = True
-    receipts = _load_receipts(args.receipts)
-    problems, excepted = check(manifest, receipts, selection)
+def _report(problems, excepted, receipts):
     for line in excepted:
         print("Coverage exception: %s" % line)
     for line in problems:
@@ -240,23 +243,38 @@ def _run_check(args):
     elif any(step.get("outcome") == "failure" for receipt in receipts.values()
              for step in receipt["steps"].values()):
         print("A lane failed above; fix it first, since a failed job can skip later steps.")
+
+
+def _run_check(manifest_path, receipts_directory):
+    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    structure = manifest_problems(manifest)
+    if structure:
+        print("\n".join(structure), file=sys.stderr)
+        return 1
+    try:
+        selection = selection_from_needs(json.loads(os.environ["NEEDS_JSON"]))
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 2
+    receipts = _load_receipts(receipts_directory)
+    problems, excepted = check(manifest, receipts, selection)
+    _report(problems, excepted, receipts)
     return 1 if problems else 0
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     commands = parser.add_subparsers(dest="command", required=True)
-    receipt = commands.add_parser("receipt", help="record the phases one job ran")
-    receipt.add_argument("--job", required=True)
-    receipt.add_argument("--out", required=True)
-    receipt.add_argument("--step", action="append", default=[], help="STEP=OUTCOME")
-    receipt.add_argument("--bep", action="append", default=[], help="STEP=BEP_JSON_PATH")
+    receipt = commands.add_parser("receipt", help="record the steps one job ran")
+    receipt.add_argument("job")
     compare = commands.add_parser("check", help="compare receipts with the manifest")
-    compare.add_argument("--manifest", required=True)
-    compare.add_argument("--receipts", required=True)
-    compare.add_argument("--selection", action="append", default=[], help="CONDITION=true|false")
+    compare.add_argument("--manifest", default=MANIFEST)
+    compare.add_argument("--receipts", help="default: $RUNNER_TEMP/coverage-receipts")
     args = parser.parse_args(argv)
-    return _run_receipt(args) if args.command == "receipt" else _run_check(args)
+    if args.command == "receipt":
+        return _run_receipt(args.job)
+    receipts = args.receipts or str(Path(os.environ["RUNNER_TEMP"]) / "coverage-receipts")
+    return _run_check(args.manifest, receipts)
 
 
 if __name__ == "__main__":
