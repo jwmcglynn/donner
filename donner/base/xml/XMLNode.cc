@@ -43,14 +43,14 @@ struct SourceOffsetComponent {
   std::optional<SourceAnchorSpan> closingTagSpan;
   std::optional<SourceAnchorSpan> valueSpan;
   std::uint64_t anchorSourceVersion = 0;
-  /// Parent whose projection deliberately removed this text node, while its source stays intact.
-  std::optional<Entity> projectionParent;
+};
+
+struct ProjectedTextParentComponent {
+  Entity parent;
 };
 
 void ClearTextProjectionProvenance(EntityHandle handle) {
-  if (auto* offset = handle.try_get<SourceOffsetComponent>()) {
-    offset->projectionParent.reset();
-  }
+  handle.remove<ProjectedTextParentComponent>();
 }
 
 /// Serialize an XMLQualifiedNameRef to XML syntax (ns:name or just name).
@@ -229,6 +229,54 @@ XMLNode XMLNode::CreateDocumentNode(XMLDocument& document) {
   const Entity entity = CreateEntity(document.registry(), Type::Document);
   return XMLNode(EntityHandle(document.registry(), entity));
 }
+
+namespace {
+
+std::optional<ResolvedSourceSpan> ResolvedNodeSpan(EntityHandle node) {
+  const auto* source = node.try_get<SourceOffsetComponent>();
+  if (source == nullptr) {
+    return std::nullopt;
+  }
+  XMLSourceStore* store = GetSourceStore(node);
+  const auto start = ResolveStartOffset(*source, store);
+  const auto end = ResolveEndOffset(*source, store);
+  if (!start || !end || !start->offset || !end->offset || *start->offset >= *end->offset) {
+    return std::nullopt;
+  }
+  return ResolvedSourceSpan{*start->offset, *end->offset};
+}
+
+bool SourceSpansOverlap(const std::optional<ResolvedSourceSpan>& first,
+                        const ResolvedSourceSpan& second) {
+  return first.has_value() && first->start < second.end && second.start < first->end;
+}
+
+/// A retained incarnation supersedes any older projected text overlapping its source span.
+void ClearOverlappingTextProjection(EntityHandle child, Entity parent) {
+  if (parent == entt::null || !child.all_of<XMLNodeTypeComponent>()) {
+    return;
+  }
+  const XMLNode::Type type = child.get<XMLNodeTypeComponent>().type();
+  if (type != XMLNode::Type::Data && type != XMLNode::Type::CData) {
+    return;
+  }
+  const auto span = ResolvedNodeSpan(child);
+  if (!span.has_value()) {
+    return;
+  }
+  std::vector<Entity> stale;
+  for (Entity entity : child.registry()->view<ProjectedTextParentComponent>()) {
+    if (child.registry()->get<ProjectedTextParentComponent>(entity).parent == parent &&
+        SourceSpansOverlap(ResolvedNodeSpan(EntityHandle(*child.registry(), entity)), *span)) {
+      stale.push_back(entity);
+    }
+  }
+  for (Entity entity : stale) {
+    child.registry()->remove<ProjectedTextParentComponent>(entity);
+  }
+}
+
+}  // namespace
 
 XMLNode XMLNode::CreateElementNode(XMLDocument& document, const XMLQualifiedNameRef& tagName) {
   const Entity entity = CreateEntity(document.registry(), Type::Element, tagName);
@@ -609,6 +657,7 @@ std::optional<XMLNode> XMLNode::nextSibling() const {
 // gating on `find<TreeMutationContext>()` + falling back to a direct TreeComponent path.
 void XMLNode::insertBefore(const XMLNode& newNode, std::optional<XMLNode> referenceNode) {
   ClearTextProjectionProvenance(newNode.handle_);
+  ClearOverlappingTextProjection(newNode.handle_, handle_.entity());
   auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
   mutations.insertBefore(handle_, newNode.handle_,
                          referenceNode ? referenceNode->handle_ : EntityHandle());
@@ -616,6 +665,7 @@ void XMLNode::insertBefore(const XMLNode& newNode, std::optional<XMLNode> refere
 
 void XMLNode::appendChild(const XMLNode& child) {
   ClearTextProjectionProvenance(child.handle_);
+  ClearOverlappingTextProjection(child.handle_, handle_.entity());
   auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
   mutations.appendChild(handle_, child.handle_);
 }
@@ -623,18 +673,22 @@ void XMLNode::appendChild(const XMLNode& child) {
 void XMLNode::replaceChild(const XMLNode& newChild, const XMLNode& oldChild) {
   ClearTextProjectionProvenance(newChild.handle_);
   ClearTextProjectionProvenance(oldChild.handle_);
+  ClearOverlappingTextProjection(newChild.handle_, handle_.entity());
+  ClearOverlappingTextProjection(oldChild.handle_, handle_.entity());
   auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
   mutations.replaceChild(handle_, newChild.handle_, oldChild.handle_);
 }
 
 void XMLNode::removeChild(const XMLNode& child) {
   ClearTextProjectionProvenance(child.handle_);
+  ClearOverlappingTextProjection(child.handle_, handle_.entity());
   auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
   mutations.removeChild(handle_, child.handle_);
 }
 
 void XMLNode::remove() {
   ClearTextProjectionProvenance(handle_);
+  ClearOverlappingTextProjection(handle_, handle_.get<TreeComponent>().parent());
   auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
   mutations.remove(handle_);
 }
@@ -644,17 +698,16 @@ void XMLNode::removeForProjection() {
   const auto parent = parentElement();
   remove();
   if (isText && parent.has_value()) {
-    if (auto* offset = handle_.try_get<SourceOffsetComponent>()) {
-      offset->projectionParent = parent->handle_.entity();
+    if (handle_.all_of<SourceOffsetComponent>()) {
+      handle_.emplace_or_replace<ProjectedTextParentComponent>(parent->handle_.entity());
     }
   }
 }
 
 std::vector<XMLNode> XMLNode::projectedTextChildren() const {
   std::vector<XMLNode> result;
-  for (const auto entity : registry().view<SourceOffsetComponent>()) {
-    const auto& offset = registry().get<SourceOffsetComponent>(entity);
-    if (offset.projectionParent != handle_.entity()) {
+  for (const auto entity : registry().view<ProjectedTextParentComponent, SourceOffsetComponent>()) {
+    if (registry().get<ProjectedTextParentComponent>(entity).parent != handle_.entity()) {
       continue;
     }
     const auto node = TryCast(toHandle(entity));
@@ -685,6 +738,7 @@ void XMLNode::setSourceStartOffset(FileOffset offset) {
   auto& sourceOffset = handle_.get_or_emplace<SourceOffsetComponent>();
   sourceOffset.startOffset = offset;
   UpdateSourceAnchorSpan(handle_, sourceOffset);
+  ClearOverlappingTextProjection(handle_, handle_.get<TreeComponent>().parent());
 }
 
 std::optional<FileOffset> XMLNode::sourceEndOffset() const {
@@ -699,6 +753,7 @@ void XMLNode::setSourceEndOffset(FileOffset offset) {
   auto& sourceOffset = handle_.get_or_emplace<SourceOffsetComponent>();
   sourceOffset.endOffset = offset;
   UpdateSourceAnchorSpan(handle_, sourceOffset);
+  ClearOverlappingTextProjection(handle_, handle_.get<TreeComponent>().parent());
 }
 
 void XMLNode::setOpeningTagLocation(SourceRange range) {
@@ -750,6 +805,7 @@ void XMLNode::clearValueLocation() {
 }
 
 void XMLNode::clearSourceLocation() {
+  ClearTextProjectionProvenance(handle_);
   if (auto* attributes = handle_.try_get<AttributesComponent>()) {
     SmallVector<XMLQualifiedNameRef, 10> names = attributes->attributes();
     for (const XMLQualifiedNameRef& name : names) {
