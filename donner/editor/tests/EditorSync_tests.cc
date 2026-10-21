@@ -1564,7 +1564,7 @@ TEST(EditorSyncTest, OpeningTagRenameAndUndoEditTheDocumentIncrementally) {
 // Renaming a group's closing tag and then its opening tag, as a person retyping both tags does,
 // stays incremental: the whole-text path must not fall back to a document reparse.
 TEST(EditorSyncTest, LoadingFormattedSiblingsHasLinearProjectionSpanWork) {
-  constexpr std::size_t kSiblingCount = 1024;
+  constexpr std::size_t kSiblingCount = 4000;
   std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
   for (std::size_t i = 0; i < kSiblingCount; ++i) {
     source += "\n  <rect width=\"1\" height=\"1\"/>";
@@ -1575,8 +1575,29 @@ TEST(EditorSyncTest, LoadingFormattedSiblingsHasLinearProjectionSpanWork) {
   const auto root = app.document().document().xmlDocument().root().firstChild();
   ASSERT_THAT(root, testing::Optional(testing::_));
   const auto work = xml::internal::ProjectedTextSpanResolutionCountForTesting(*root);
+  RecordProperty("initial_projection_span_resolutions", std::to_string(work));
   EXPECT_THAT(work, testing::Le(6 * (kSiblingCount + 1)));
   EXPECT_THAT(root->projectedTextChildren(), testing::SizeIs(kSiblingCount + 1));
+  std::string previousSource(source);
+  const std::size_t lastWidth = source.rfind("width=\"1\"");
+  ASSERT_THAT(lastWidth, testing::Ne(std::string::npos));
+  const auto edit = RetypeCharacter(&source, lastWidth + 7, "2");
+  ASSERT_THAT(DispatchSourceEdit(app, true, edit, source, &previousSource).dispatchedMutation,
+              testing::IsTrue());
+  app.flushFrame();
+  const auto beforeRefresh = xml::internal::ProjectedTextSpanResolutionCountForTesting(*root);
+  EXPECT_THAT(root->projectedTextChildren(), testing::SizeIs(kSiblingCount + 1));
+  const auto afterRefresh = xml::internal::ProjectedTextSpanResolutionCountForTesting(*root);
+  RecordProperty("late_edit_projection_span_resolutions", std::to_string(afterRefresh - beforeRefresh));
+  EXPECT_THAT(afterRefresh - beforeRefresh, testing::Le(2 * (kSiblingCount + 1)));
+  EXPECT_THAT(root->projectedTextChildren(), testing::SizeIs(kSiblingCount + 1));
+  EXPECT_EQ(xml::internal::ProjectedTextSpanResolutionCountForTesting(*root), afterRefresh);
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto reloaded = app.document().document().xmlDocument().root().firstChild();
+  ASSERT_THAT(reloaded, testing::Optional(testing::_));
+  const auto reloadWork = xml::internal::ProjectedTextSpanResolutionCountForTesting(*reloaded);
+  RecordProperty("reload_projection_span_resolutions", std::to_string(reloadWork));
+  EXPECT_THAT(reloadWork, testing::Le(6 * (kSiblingCount + 1)));
 }
 
 TEST(EditorSyncTest, RenamingBothTagsOfAGroupStaysIncremental) {
