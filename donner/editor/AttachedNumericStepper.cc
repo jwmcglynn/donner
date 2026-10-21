@@ -1,11 +1,33 @@
 #include "donner/editor/AttachedNumericStepper.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 
 namespace donner::editor {
+
+namespace {
+
+/// Vertical spacing between a numeric control and its preset popup.
+constexpr double kPresetPopupGap = 3.0;
+
+/// Height the open popup needs for all of its choices, measured from the contents it submitted
+/// last frame, capped at \p maximumHeight. ImGui hides a popup for its first frame while it
+/// measures, so the first visible frame already has an exact measurement.
+double PreferredPopupHeight(ImGuiID popupId, float maximumHeight) {
+  for (const ImGuiPopupData& popup : ImGui::GetCurrentContext()->OpenPopupStack) {
+    if (popup.PopupId == popupId && popup.Window != nullptr) {
+      return std::min(static_cast<double>(ImGui::CalcWindowNextAutoFitSize(popup.Window).y),
+                      static_cast<double>(maximumHeight));
+    }
+  }
+  return maximumHeight;
+}
+
+}  // namespace
 
 AttachedNumericStepperResult RenderAttachedNumericStepper(const char* id, const ImVec2& fieldMin,
                                                           const ImVec2& fieldMax,
@@ -63,16 +85,56 @@ AttachedNumericStepperResult RenderAttachedNumericStepper(const char* id, const 
   return result;
 }
 
+NumericPresetPopupPlacement PlaceNumericPresetPopup(const Box2d& control, double preferredHeight,
+                                                    double width, const Box2d& bounds, double gap) {
+  const double spaceBelow = std::max(0.0, bounds.bottomRight.y - (control.bottomRight.y + gap));
+  const double spaceAbove = std::max(0.0, (control.topLeft.y - gap) - bounds.topLeft.y);
+  const bool opensAbove =
+      preferredHeight > spaceBelow && (preferredHeight <= spaceAbove || spaceAbove > spaceBelow);
+  const double available = opensAbove ? spaceAbove : spaceBelow;
+  const double x =
+      std::max(bounds.topLeft.x, std::min(control.topLeft.x, bounds.bottomRight.x - width));
+  return NumericPresetPopupPlacement{
+      .anchor = Vector2d(x, opensAbove ? control.topLeft.y - gap : control.bottomRight.y + gap),
+      .opensAbove = opensAbove,
+      .maximumHeight = std::min(preferredHeight, available),
+  };
+}
+
 bool BeginHybridNumericPresetPopup(const char* popupId, const ImVec2& fieldMin,
                                    const ImVec2& fieldMax, bool fieldActivated,
                                    float maximumHeight) {
   if (fieldActivated) {
     ImGui::OpenPopup(popupId);
   }
-  ImGui::SetNextWindowPos(ImVec2(fieldMin.x, fieldMax.y + 3.0f), ImGuiCond_Appearing);
+  const ImGuiID id = ImGui::GetID(popupId);
+  if (!ImGui::IsPopupOpen(id, ImGuiPopupFlags_None)) {
+    return false;
+  }
+
   const float controlWidth = fieldMax.x - fieldMin.x + kAttachedNumericStepperWidth;
-  ImGui::SetNextWindowSizeConstraints(ImVec2(controlWidth, 0.0f),
-                                      ImVec2(controlWidth, maximumHeight));
+  const ImGuiViewport* viewport = ImGui::GetWindowViewport();
+  const ImVec2 padding = ImGui::GetStyle().DisplaySafeAreaPadding;
+  const Box2d bounds(Vector2d(viewport->Pos.x + padding.x, viewport->Pos.y + padding.y),
+                     Vector2d(viewport->Pos.x + viewport->Size.x - padding.x,
+                              viewport->Pos.y + viewport->Size.y - padding.y));
+  const Box2d control(Vector2d(fieldMin.x, fieldMin.y),
+                      Vector2d(fieldMax.x + kAttachedNumericStepperWidth, fieldMax.y));
+  const NumericPresetPopupPlacement placement = PlaceNumericPresetPopup(
+      control, PreferredPopupHeight(id, maximumHeight), controlWidth, bounds, kPresetPopupGap);
+  // ImGui enforces a minimum window height, so a popup with less room than one row would spill
+  // over the field; skip drawing it until the window has room again.
+  if (placement.maximumHeight < ImGui::GetFrameHeightWithSpacing()) {
+    return false;
+  }
+
+  // Placing the popup every frame keeps ImGui from re-fitting it into the display over the field.
+  ImGui::SetNextWindowPos(
+      ImVec2(static_cast<float>(placement.anchor.x), static_cast<float>(placement.anchor.y)),
+      ImGuiCond_Always, ImVec2(0.0f, placement.opensAbove ? 1.0f : 0.0f));
+  ImGui::SetNextWindowSizeConstraints(
+      ImVec2(controlWidth, 0.0f),
+      ImVec2(controlWidth, static_cast<float>(placement.maximumHeight)));
   return ImGui::BeginPopup(popupId,
                            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNavFocus);
 }

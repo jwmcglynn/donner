@@ -1078,9 +1078,15 @@ bool SidebarPresenter::renderStrokeWidthRow(const StrokeRenderContext& context) 
   float width = static_cast<float>(widthLength.value);
   bool queuedMutation = renderStrokeWidthField(context, widthLength, &width);
   const bool fieldActivated = ImGui::IsItemActivated();
+  // Enter or Escape ends typing; the presets must not linger over an unfocused field.
+  const bool fieldDismissed =
+      ImGui::IsItemDeactivated() && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                                     ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false) ||
+                                     ImGui::IsKeyPressed(ImGuiKey_Escape, false));
   queuedMutation = renderStrokeWidthStepper(context, widthLength, width) || queuedMutation;
   queuedMutation =
-      renderStrokeWidthPresetPopup(context, widthLength, fieldActivated) || queuedMutation;
+      renderStrokeWidthPresetPopup(context, widthLength, fieldActivated, fieldDismissed) ||
+      queuedMutation;
   return queuedMutation;
 }
 
@@ -1145,8 +1151,8 @@ bool SidebarPresenter::renderStrokeWidthStepper(const StrokeRenderContext& conte
 }
 
 bool SidebarPresenter::renderStrokeWidthPresetPopup(const StrokeRenderContext& context,
-                                                    const Lengthd& widthLength,
-                                                    bool fieldActivated) {
+                                                    const Lengthd& widthLength, bool fieldActivated,
+                                                    bool fieldDismissed) {
   strokeWidthPresetRects_.fill(std::nullopt);
   if (!strokeWidthRect_.has_value()) {
     return false;
@@ -1157,6 +1163,11 @@ bool SidebarPresenter::renderStrokeWidthPresetPopup(const StrokeRenderContext& c
                         static_cast<float>(field.bottomRight.y));
   if (!BeginHybridNumericPresetPopup("##stroke_width_presets", fieldMin, fieldMax,
                                      fieldActivated && context.canMutate, 300.0f)) {
+    return false;
+  }
+  if (fieldDismissed) {
+    ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
     return false;
   }
 

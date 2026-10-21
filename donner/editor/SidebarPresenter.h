@@ -460,7 +460,7 @@ private:
   bool renderStrokeWidthStepper(const StrokeRenderContext& context, const Lengthd& widthLength,
                                 float width);
   bool renderStrokeWidthPresetPopup(const StrokeRenderContext& context, const Lengthd& widthLength,
-                                    bool fieldActivated);
+                                    bool fieldActivated, bool fieldDismissed);
   bool renderStrokeWidthPresetRow(const StrokeRenderContext& context, const Lengthd& widthLength,
                                   const IconTexture& texture, std::size_t index);
   bool renderStrokeCapRow(const StrokeRenderContext& context);
