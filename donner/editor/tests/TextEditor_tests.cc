@@ -4827,6 +4827,47 @@ TEST_F(TextEditorTests, HeldCtrlYAcrossLongFrameRedoesOnce) {
   EXPECT_EQ(editor.getText(), "Hello!");
 }
 
+// Cmd+Shift+Z is the Edit menu's advertised Redo chord (ImGui reports Cmd as Ctrl on macOS), so
+// it must redo in the source pane as well as on the canvas. Ctrl+Y stays as an alias.
+TEST_F(TextEditorTests, CtrlShiftZRedoesThroughRenderPath) {
+  editor.setText("Hello");
+  editor.setCursorPosition(Coordinates(0, 5));
+  EnterCharacter('!');
+  editor.undo();
+  ASSERT_EQ(editor.getText(), "Hello");
+
+  ResetKeyboardState({ImGuiKey_Z}, /*ctrl=*/true, /*shift=*/true);
+  RenderEditorFrameWithKeyboard({ImGuiKey_Z}, /*characters=*/"", /*ctrl=*/true, /*shift=*/true);
+
+  EXPECT_EQ(editor.getText(), "Hello!") << "Ctrl+Shift+Z through the render path should redo";
+}
+
+TEST_F(TextEditorTests, HeldCtrlShiftZAcrossLongFrameRedoesOnce) {
+  editor.setText("Hello");
+  editor.setCursorPosition(Coordinates(0, 5));
+  EnterCharacter('!');
+  EnterCharacter('?');
+  editor.undo();
+  editor.undo();
+  ASSERT_EQ(editor.getText(), "Hello");
+
+  PressAndHoldAcrossLongFrame(ImGuiKey_Z, /*ctrl=*/true, /*shift=*/true);
+
+  EXPECT_EQ(editor.getText(), "Hello!");
+}
+
+TEST_F(TextEditorTests, CtrlShiftZWithNothingToRedoKeepsText) {
+  editor.setText("Hello");
+  editor.setCursorPosition(Coordinates(0, 5));
+  EnterCharacter('!');
+  ASSERT_EQ(editor.getText(), "Hello!");
+
+  ResetKeyboardState({ImGuiKey_Z}, /*ctrl=*/true, /*shift=*/true);
+  RenderEditorFrameWithKeyboard({ImGuiKey_Z}, /*characters=*/"", /*ctrl=*/true, /*shift=*/true);
+
+  EXPECT_EQ(editor.getText(), "Hello!") << "Ctrl+Shift+Z must not undo";
+}
+
 TEST_F(TextEditorTests, HeldRightArrowAcrossLongFrameKeepsRepeating) {
   editor.setText("abcdef");
   editor.setCursorPosition(Coordinates(0, 0));
