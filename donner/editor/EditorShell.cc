@@ -1725,9 +1725,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     nativeMenu_.reset();
   }
 #endif
-  // Safari cannot safely resume a second WebGPU device's Promise completion while the main
-  // pthread is suspended in the Asyncify readbacks used to rasterize custom cursors. Start the
-  // renderer pthread only after all synchronous UI GPU setup and its wake callback are complete.
+  // UI GPU setup may suspend this owner in browser calls. Admit the raster thread only after
+  // that setup and its wake callback are ready, so the worker's device requests can progress.
 #ifdef __EMSCRIPTEN__
   const bool workerStartedBeforeExplicitStart =
       renderCoordinator_.asyncRenderer().workerStartedForTesting();
