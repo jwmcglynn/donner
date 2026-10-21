@@ -488,18 +488,15 @@ double LinearDeterminant(const Transform2d& transform) {
   return transform.data[0] * transform.data[3] - transform.data[1] * transform.data[2];
 }
 
-/// The canonical \ref donner::toSVGTransformString form of @p parentFromElement at edit precision,
-/// so a writeback with no author form reads like one that updates an author form. Translations and
-/// angles are written at six decimals and each linear column at \ref LinearColumnDecimals. When
-/// rounding clears the off-diagonal entries, the function form is chosen from the rounded matrix,
-/// so sub-precision residue selects the simplest function (`translate(5)` rather than a matrix).
-/// Otherwise it is chosen from the exact linear part, which keeps rotations recognizable. A
-/// rounding that would make a nonsingular transform singular falls back to full precision. An empty
-/// result means the transform is the identity at that precision.
-RcString CanonicalTransformAtEditPrecision(const Transform2d& parentFromElement) {
-  const std::array<std::optional<int>, 2> columnDecimals = {
-      LinearColumnDecimals(parentFromElement.data[0], parentFromElement.data[1]),
-      LinearColumnDecimals(parentFromElement.data[2], parentFromElement.data[3])};
+/// Precision for each column of a transform's linear part.
+using ColumnDecimals = std::array<std::optional<int>, 2>;
+
+/// @p parentFromElement with its translation at edit precision. When rounding its linear part
+/// clears the off-diagonal entries, the rounded linear part is used too, so sub-precision residue
+/// selects the simplest canonical function (`translate(5)` rather than a matrix); otherwise the
+/// exact linear part is kept, which keeps rotations recognizable.
+Transform2d SnapForCanonicalForm(const Transform2d& parentFromElement,
+                                 const ColumnDecimals& columnDecimals) {
   Transform2d parentFromElementSnapped = parentFromElement;
   parentFromElementSnapped.data[4] = RoundToEditPrecision(parentFromElement.data[4]);
   parentFromElementSnapped.data[5] = RoundToEditPrecision(parentFromElement.data[5]);
@@ -508,38 +505,70 @@ RcString CanonicalTransformAtEditPrecision(const Transform2d& parentFromElement)
     parentFromElementRounded.data[k] =
         RoundLinearEntry(parentFromElement.data[k], columnDecimals[k / 2]);
   }
-  if (parentFromElementRounded.data[1] == 0.0 && parentFromElementRounded.data[2] == 0.0) {
-    parentFromElementSnapped = parentFromElementRounded;
-  }
+  const bool offDiagonalCleared =
+      parentFromElementRounded.data[1] == 0.0 && parentFromElementRounded.data[2] == 0.0;
+  return offDiagonalCleared ? parentFromElementRounded : parentFromElementSnapped;
+}
 
-  const RcString canonical = toSVGTransformString(parentFromElementSnapped);
+/// The linear-part column of argument @p index of canonical function @p fn, or `std::nullopt` for
+/// a translation or angle argument.
+std::optional<std::size_t> LinearColumnOfArg(const Fn& fn, std::size_t index) {
+  if (fn.name == "scale") {
+    return index;
+  }
+  if (fn.name == "matrix" && index < 4) {
+    return index / 2;
+  }
+  return std::nullopt;
+}
+
+/// Write every argument of @p fns at edit precision: translations and angles at six decimals, and
+/// linear entries at their column's precision.
+void FormatCanonicalArgs(std::vector<Fn>& fns, const ColumnDecimals& columnDecimals) {
+  for (Fn& fn : fns) {
+    for (std::size_t k = 0; k < fn.args.size(); ++k) {
+      Arg& arg = fn.args[k];
+      const std::optional<std::size_t> column = LinearColumnOfArg(fn, k);
+      arg.text =
+          column.has_value()
+              ? detail::FormatNumberForSVG(RoundLinearEntry(arg.value, columnDecimals[*column]))
+              : FormatEditedNumber(arg.value);
+    }
+  }
+}
+
+/// Whether @p parentFromWritten, the re-parsed rounded text, may stand in for
+/// @p parentFromElement: close to it, and not singular unless the original is.
+bool IsFaithfulRounding(const Transform2d& parentFromWritten,
+                        const Transform2d& parentFromElement) {
+  return TransformsClose(parentFromWritten, parentFromElement) &&
+         (LinearDeterminant(parentFromWritten) != 0.0 ||
+          LinearDeterminant(parentFromElement) == 0.0);
+}
+
+/// The canonical \ref donner::toSVGTransformString form of @p parentFromElement at edit precision,
+/// so a writeback with no author form reads like one that updates an author form. Translations and
+/// angles are written at six decimals and each linear column at \ref LinearColumnDecimals. A
+/// rounding that is not faithful falls back to full precision. An empty result means the transform
+/// is the identity at that precision.
+RcString CanonicalTransformAtEditPrecision(const Transform2d& parentFromElement) {
+  const ColumnDecimals columnDecimals = {
+      LinearColumnDecimals(parentFromElement.data[0], parentFromElement.data[1]),
+      LinearColumnDecimals(parentFromElement.data[2], parentFromElement.data[3])};
+  const RcString canonical =
+      toSVGTransformString(SnapForCanonicalForm(parentFromElement, columnDecimals));
   std::optional<std::vector<Fn>> fns = ParseFunctionList(std::string_view(canonical));
   if (!fns.has_value()) {
     return canonical;
   }
-  for (Fn& fn : *fns) {
-    for (std::size_t k = 0; k < fn.args.size(); ++k) {
-      Arg& arg = fn.args[k];
-      if (fn.name == "scale") {
-        arg.text = detail::FormatNumberForSVG(RoundLinearEntry(arg.value, columnDecimals[k]));
-      } else if (fn.name == "matrix" && k < 4) {
-        arg.text = detail::FormatNumberForSVG(RoundLinearEntry(arg.value, columnDecimals[k / 2]));
-      } else {
-        arg.text = FormatEditedNumber(arg.value);
-      }
-    }
-  }
+  FormatCanonicalArgs(*fns, columnDecimals);
 
   const std::string candidate = RenderList(*fns);
   auto parsed = svg::parser::TransformParser::Parse(candidate);
-  if (parsed.hasError() || !TransformsClose(parsed.result(), parentFromElement) ||
-      (LinearDeterminant(parsed.result()) == 0.0 && LinearDeterminant(parentFromElement) != 0.0)) {
+  if (parsed.hasError() || !IsFaithfulRounding(parsed.result(), parentFromElement)) {
     return toSVGTransformString(parentFromElement);
   }
-  if (parsed.result().isIdentity()) {
-    return RcString();
-  }
-  return RcString(candidate);
+  return parsed.result().isIdentity() ? RcString() : RcString(candidate);
 }
 
 }  // namespace
