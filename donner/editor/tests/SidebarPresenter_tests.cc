@@ -512,6 +512,40 @@ TEST(SidebarTransformEditTest, GroupSelectionReportsTheUnionOfItsChildrenAndMove
   EXPECT_THAT(moved->height(), testing::DoubleNear(expected->height(), 1e-6));
 }
 
+// Inspector values are document-space, the same space as the bounds they
+// show. An element under a transformed ancestor must move and resize by the
+// typed document-space amount, not by that amount in its parent's frame.
+TEST(SidebarTransformEditTest, EditsUnderTransformedParentApplyInDocumentSpace) {
+  constexpr std::string_view kNestedSvg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+         <g transform="translate(20 10) scale(2)">
+           <g transform="rotate(90)">
+             <text id="target" x="10" y="-20" font-size="12">Nested</text>
+           </g>
+         </g>
+       </svg>)SVG";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kNestedSvg));
+  const Box2d start = *presenter.inspectorBoundsForTesting();
+
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(
+      app, presenter, SidebarPresenter::TransformField::PositionX, start.topLeft.x + 10.0));
+  const Box2d moved = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(moved.topLeft.x, testing::DoubleNear(start.topLeft.x + 10.0, 1e-6));
+  EXPECT_THAT(moved.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
+  EXPECT_THAT(moved.width(), testing::DoubleNear(start.width(), 1e-6));
+  EXPECT_THAT(moved.height(), testing::DoubleNear(start.height(), 1e-6));
+
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(
+      app, presenter, SidebarPresenter::TransformField::Width, moved.width() * 2.0));
+  const Box2d resized = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(resized.topLeft.x, testing::DoubleNear(moved.topLeft.x, 1e-6));
+  EXPECT_THAT(resized.topLeft.y, testing::DoubleNear(moved.topLeft.y, 1e-6));
+  EXPECT_THAT(resized.width(), testing::DoubleNear(moved.width() * 2.0, 1e-6));
+  EXPECT_THAT(resized.height(), testing::DoubleNear(moved.height(), 1e-6));
+}
+
 TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kInspectorSvg));
