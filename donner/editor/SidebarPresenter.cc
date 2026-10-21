@@ -816,12 +816,17 @@ std::optional<Box2d> SidebarPresenter::cachedInspectorBounds(const EditorApp& ap
                                                              const svg::SVGElement& element) {
   const std::uint64_t documentGeneration = app.document().documentGeneration();
   const std::uint64_t frameVersion = app.document().currentFrameVersion();
+  // Canvas commits change layout without an editor frame version bump, but do
+  // advance the DOM revision.
+  const std::uint64_t domRevision = app.document().document().handle()->revision();
   if (!inspectorBoundsCache_.has_value() || inspectorBoundsCache_->element != element ||
       inspectorBoundsCache_->documentGeneration != documentGeneration ||
-      inspectorBoundsCache_->frameVersion != frameVersion) {
+      inspectorBoundsCache_->frameVersion != frameVersion ||
+      inspectorBoundsCache_->domRevision != domRevision) {
     inspectorBoundsCache_ = InspectorBoundsCache{.element = element,
                                                  .documentGeneration = documentGeneration,
                                                  .frameVersion = frameVersion,
+                                                 .domRevision = domRevision,
                                                  .bounds = InspectorBounds(element)};
   }
   return inspectorBoundsCache_->bounds;

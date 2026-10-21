@@ -533,11 +533,12 @@ private:
 
   /// Inspector bounds of one element at one document frame version. Text and group bounds walk
   /// laid-out glyphs or every rendered descendant, so the per-frame snapshot reuses them until
-  /// the selection or the document changes.
+  /// the selection, the document, or its layout inputs such as the canvas size change.
   struct InspectorBoundsCache {
     svg::SVGElement element;               ///< Element the bounds belong to.
     std::uint64_t documentGeneration = 0;  ///< Document generation they were computed in.
     std::uint64_t frameVersion = 0;        ///< Document frame version they were computed at.
+    std::uint64_t domRevision = 0;         ///< DOM mutation revision they were computed at.
     std::optional<Box2d> bounds;           ///< Cached Inspector bounds.
   };
   std::optional<InspectorBoundsCache> inspectorBoundsCache_;
