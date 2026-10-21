@@ -198,6 +198,11 @@ public:
     return inspectorSnapshot_.computedStyleSwatches;
   }
 
+  /// Return painted-bounds evaluations used by the active resize edit.
+  [[nodiscard]] std::size_t resizeBoundsEvaluationCountForTesting() const {
+    return transformEdit_.has_value() ? transformEdit_->boundsEvaluationCount : 0;
+  }
+
   /// Return document-space bounds captured for the inspector selection.
   [[nodiscard]] const std::optional<Box2d>& inspectorBoundsForTesting() const {
     return inspectorSnapshot_.bounds;
@@ -401,6 +406,8 @@ private:
     Transform2d startTransform;            ///< Local transform at activation.
     Transform2d currentTransform;          ///< Last transform queued via SetTransformCommand.
     std::function<std::optional<Box2d>(const Transform2d&)> boundsAfterAxisScale;
+    mutable std::size_t boundsEvaluationCount =
+        0;                             ///< Work performed by the last painted size solve.
     std::optional<Box2d> startBounds;  ///< Document-space bounds at activation, if any.
     std::optional<DecomposedTransform> startDecomposed;  ///< Decomposition of `startTransform`.
     /// Parent coordinates to document coordinates at activation.

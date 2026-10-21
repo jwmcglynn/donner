@@ -634,6 +634,48 @@ TEST(SidebarTransformEditTest, GroupResizePredictsLocallyExpandedNonScalingStrok
   EXPECT_THAT(resized.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
 }
 
+TEST(SidebarTransformEditTest, ManyLeafGroupResizePreservesPaintedBounds) {
+  std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000"><g id="target">)";
+  for (int i = 0; i < 128; ++i) {
+    source += "<g transform=\"translate(" + std::to_string(i * 4) +
+              " 10)\"><rect width=\"30\" height=\"20\" stroke=\"black\" stroke-width=\"4\" "
+              "vector-effect=\"" +
+              std::string(i % 2 == 0 ? "non-scaling-stroke" : "none") + "\"/></g>";
+  }
+  source += "</g></svg>";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  const Box2d start = *presenter.inspectorBoundsForTesting();
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::Width);
+  EXPECT_THAT(presenter.applyTransformEditForTesting(app, start.width() * 2.0), testing::IsTrue());
+  EXPECT_THAT(presenter.resizeBoundsEvaluationCountForTesting(), testing::Le(6u));
+  presenter.commitTransformEditForTesting(app);
+  app.flushFrame();
+  presenter.refreshSnapshot(app);
+  const Box2d resized = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(resized.width(), testing::DoubleNear(start.width() * 2.0, 1e-6));
+  EXPECT_THAT(resized.topLeft.x, testing::DoubleNear(start.topLeft.x, 1e-6));
+  EXPECT_THAT(resized.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
+}
+
+TEST(SidebarTransformEditTest, OrdinaryGroupSizeUsesTheDirectAffinePath) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400">
+        <g id="target"><rect width="100" height="50" stroke="black" stroke-width="10"/></g></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kSvg));
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::Width);
+  EXPECT_THAT(presenter.applyTransformEditForTesting(app, 220.0), testing::IsTrue());
+  EXPECT_THAT(presenter.resizeBoundsEvaluationCountForTesting(), testing::Eq(0u));
+  presenter.commitTransformEditForTesting(app);
+  app.flushFrame();
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.inspectorBoundsForTesting()->width(), testing::DoubleNear(220.0, 1e-6));
+}
+
 TEST(SidebarTransformEditTest, UnattainablePaintedGroupSizeDoesNotMutateTheDocument) {
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400">

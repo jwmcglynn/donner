@@ -140,11 +140,14 @@ std::optional<Transform2d> SizeChange(const std::optional<Box2d>& box, double va
 /// Solve against immutable painted geometry, then move the painted origin back to its baseline.
 std::optional<Transform2d> PaintedSizeChange(
     const Box2d& start, double value, bool horizontal,
-    const std::function<std::optional<Box2d>(const Transform2d&)>& evaluate) {
+    const std::function<std::optional<Box2d>(const Transform2d&)>& evaluate,
+    std::size_t* evaluationCount) {
   if (!(value > kMinimumSpanForScale) || !std::isfinite(value)) {
     return std::nullopt;
   }
+  *evaluationCount = 0;
   const auto scaledBounds = [&](double factor) {
+    ++*evaluationCount;
     return evaluate(Transform2d::Scale(horizontal ? factor : 1.0, horizontal ? 1.0 : factor));
   };
   const auto extent = [&](const Box2d& bounds) {
@@ -165,25 +168,34 @@ std::optional<Transform2d> PaintedSizeChange(
   if (!bounds.has_value() || !std::isfinite(extent(*bounds)) || extent(*bounds) < value) {
     return std::nullopt;
   }
-  for (int i = 0; i < 64; ++i) {
-    const double middle = (lower + upper) * 0.5;
-    bounds = scaledBounds(middle);
+  const double tolerance = 1e-10 * std::max(1.0, value);
+  double lowerExtent = extent(*minimum);
+  double upperExtent = extent(*bounds);
+  double factor = upper;
+  for (int i = 0; i < 64 && std::abs(extent(*bounds) - value) > tolerance; ++i) {
+    // Interpolation solves fixed-padding rectangular bounds directly. Safeguard curved or
+    // changing joins against a stalled endpoint, retaining a bounded shrinking interval.
+    const double fraction =
+        std::clamp((value - lowerExtent) / (upperExtent - lowerExtent), 0.05, 0.95);
+    factor = lower + (upper - lower) * fraction;
+    bounds = scaledBounds(factor);
     if (!bounds.has_value() || !std::isfinite(extent(*bounds))) {
       return std::nullopt;
     }
     if (extent(*bounds) < value) {
-      lower = middle;
+      lower = factor;
+      lowerExtent = extent(*bounds);
     } else {
-      upper = middle;
+      upper = factor;
+      upperExtent = extent(*bounds);
     }
   }
-  bounds = scaledBounds(upper);
   // Join topology can change during a scale. Accept only an actually attained extent,
   // including after a discontinuity; a failed solve never changes the live transform.
   if (!bounds.has_value() || std::abs(extent(*bounds) - value) > 1e-7 * std::max(1.0, value)) {
     return std::nullopt;
   }
-  return Transform2d::Scale(horizontal ? upper : 1.0, horizontal ? 1.0 : upper) *
+  return Transform2d::Scale(horizontal ? factor : 1.0, horizontal ? 1.0 : factor) *
          Transform2d::Translate(start.topLeft - bounds->topLeft);
 }
 
@@ -2181,7 +2193,7 @@ std::optional<Transform2d> SidebarPresenter::DocumentFieldChange(const Transform
     case TransformField::Height:
       if (state.boundsAfterAxisScale && state.startBounds.has_value()) {
         return PaintedSizeChange(*state.startBounds, value, state.field == TransformField::Width,
-                                 state.boundsAfterAxisScale);
+                                 state.boundsAfterAxisScale, &state.boundsEvaluationCount);
       }
       return SizeChange(state.startBounds, value, state.field == TransformField::Width);
     case TransformField::Rotation:

@@ -1,5 +1,6 @@
 #include "donner/editor/SelectionAabb.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -519,6 +520,11 @@ std::function<std::optional<Box2d>(const Transform2d&)> CaptureSelectionBoundsAf
       }
     }
   });
+  if (std::ranges::none_of(leaves, [](const Leaf& leaf) {
+        return leaf.hostStroke.has_value() || leaf.textStroke.has_value();
+      })) {
+    return {};
+  }
   return [leaves = std::move(leaves)](const Transform2d& documentFromStartDocument) {
     std::optional<Box2d> merged;
     for (const Leaf& leaf : leaves) {
