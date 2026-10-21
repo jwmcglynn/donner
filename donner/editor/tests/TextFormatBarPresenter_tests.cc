@@ -1,5 +1,6 @@
 #include "donner/editor/TextFormatBarPresenter.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -26,6 +27,17 @@ std::optional<std::string> TextAttribute(EditorApp& app, std::string_view name) 
     return std::nullopt;
   }
   return std::string(std::string_view(*value));
+}
+
+/// Matches every font field the format bar shows, naming the mismatched field.
+auto FormatStateIs(std::string_view family, float size, bool bold, bool italic, bool underline) {
+  return testing::AllOf(
+      testing::Field("fontFamily", &FormatBarState::fontFamily, testing::StrEq(family)),
+      testing::Field("hasFontSize", &FormatBarState::hasFontSize, testing::IsTrue()),
+      testing::Field("fontSize", &FormatBarState::fontSize, testing::FloatEq(size)),
+      testing::Field("bold", &FormatBarState::bold, testing::Eq(bold)),
+      testing::Field("italic", &FormatBarState::italic, testing::Eq(italic)),
+      testing::Field("underline", &FormatBarState::underline, testing::Eq(underline)));
 }
 
 // ---------------------------------------------------------------------------
@@ -62,6 +74,64 @@ TEST(TextFormatBarPresenterActionsTest, ReadsFamilySizeAndStyleFlags) {
   EXPECT_TRUE(state.bold);
   EXPECT_TRUE(state.italic);
   EXPECT_TRUE(state.underline);
+}
+
+// Text commonly inherits its font from a parent group or sets it through CSS.
+// The format bar must show the values the text actually renders with, not
+// only attributes written on the <text> element itself.
+TEST(TextFormatBarPresenterActionsTest, ReadsInheritedAndCssFontValues) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <style>#css { font-family: Fira Code; font-size: 18px; text-decoration: underline; }</style>
+           <g font-family="sans-serif" font-size="20" font-weight="bold" font-style="italic">
+             <text id="inherited">Hover and hold</text>
+             <text id="relative" font-size="1.5em">Bigger</text>
+           </g>
+           <text id="css">Styled</text>
+         </svg>)"));
+
+  const auto read = [&](std::string_view id) {
+    const std::optional<svg::SVGElement> text =
+        app.document().document().querySelector("#" + std::string(id));
+    EXPECT_TRUE(text.has_value()) << id;
+    FormatBarState state;
+    if (text.has_value()) {
+      ReadTextFormatState(*text, &state);
+    }
+    return state;
+  };
+
+  EXPECT_THAT(read("inherited"), FormatStateIs("sans-serif", 20.0f, /*bold=*/true,
+                                               /*italic=*/true, /*underline=*/false));
+  EXPECT_THAT(read("relative"), FormatStateIs("sans-serif", 30.0f, /*bold=*/true,
+                                              /*italic=*/true, /*underline=*/false))
+      << "1.5em of the inherited 20px";
+  EXPECT_THAT(read("css"), FormatStateIs("Fira Code", 18.0f, /*bold=*/false, /*italic=*/false,
+                                         /*underline=*/true));
+}
+
+// The Bold toggle flips what the bar shows. For bold inherited from a group it
+// must write `normal` on the text, not re-assert `bold`.
+TEST(TextFormatBarPresenterActionsTest, ToggleBoldOnInheritedBoldWritesNormal) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <g font-weight="bold"><text id="t">Hi</text></g>
+         </svg>)"));
+  const std::optional<svg::SVGElement> text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+
+  FormatBarState state;
+  ReadTextFormatState(*text, &state);
+  FormatBarActions actions;
+  actions.toggleBold = true;
+  EXPECT_THAT(ApplyFormatBarActionsToSelection(actions, state,
+                                               /*routeTogglesToSelection=*/true, app),
+              testing::IsTrue());
+  EXPECT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(TextAttribute(app, "font-weight"), testing::Optional(testing::StrEq("normal")));
 }
 
 TEST(TextFormatBarPresenterActionsTest, ReadsDefaultsWhenStyleAttributesAbsent) {
