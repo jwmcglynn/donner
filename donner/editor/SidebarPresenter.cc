@@ -2172,7 +2172,7 @@ void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField fie
   // scope would deadlock on field activation.
   state.startTransform = element.cast<svg::SVGGraphicsElement>().transform();
   state.startBounds = InspectorBounds(element);
-  if (element.isa<svg::SVGGElement>() &&
+  if ((element.isa<svg::SVGGElement>() || element.isa<svg::SVGTextElement>()) &&
       (field == TransformField::Width || field == TransformField::Height)) {
     state.boundsAfterAxisScale = CaptureSelectionBoundsAfterAxisScale(element);
   }

@@ -643,14 +643,14 @@ TEST(SidebarTransformEditTest, SelectedTextSizePreservesNonScalingStrokeAndPaint
   SidebarPresenter presenter;
   ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kSvg));
   const Box2d start = *presenter.inspectorBoundsForTesting();
-  ASSERT_NO_FATAL_FAILURE(EditTransformField(app, presenter, SidebarPresenter::TransformField::Width,
-                                             start.width() * 2.0));
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(
+      app, presenter, SidebarPresenter::TransformField::Width, start.width() * 2.0));
   const Box2d wide = *presenter.inspectorBoundsForTesting();
   EXPECT_THAT(wide.width(), testing::DoubleNear(start.width() * 2.0, 1e-6));
   EXPECT_THAT(wide.topLeft.x, testing::DoubleNear(start.topLeft.x, 1e-6));
   EXPECT_THAT(wide.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
-  ASSERT_NO_FATAL_FAILURE(EditTransformField(app, presenter, SidebarPresenter::TransformField::Height,
-                                             wide.height() * 1.5));
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(
+      app, presenter, SidebarPresenter::TransformField::Height, wide.height() * 1.5));
   const Box2d tall = *presenter.inspectorBoundsForTesting();
   EXPECT_THAT(tall.height(), testing::DoubleNear(wide.height() * 1.5, 1e-6));
   EXPECT_THAT(tall.topLeft.x, testing::DoubleNear(start.topLeft.x, 1e-6));
