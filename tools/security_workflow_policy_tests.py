@@ -4432,7 +4432,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         path = ".github/workflows/main.yml"
         anchor = "run: python3 tools/ci/gatekeeper.py duplicate-push"
         self.assertIn(anchor, files[path])
-        for expression in ("github.head_ref", "github.ref_name", "github['head_ref']",
+        for expression in ("github.ref", "github['ref']", "github [ 'ref' ]",
+                           "github.event.inputs.sha", "github.event.client_payload.action",
+                           "github.head_ref", "github.ref_name", "github['head_ref']",
                            "github.event.pull_request.title",
                            "github.event['pull_request']['title']",
                            "github.event.pull_request.head.ref",
