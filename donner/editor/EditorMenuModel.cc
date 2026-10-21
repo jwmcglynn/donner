@@ -80,7 +80,8 @@ constexpr std::array kViewItems = {
     Separator(),
     Item("Zoom In", "Cmd+=", MenuBarCommand::ZoomIn),
     Item("Zoom Out", "Cmd+-", MenuBarCommand::ZoomOut),
-    Item("Actual Size", "Cmd+0", MenuBarCommand::ActualSize),
+    Item("Zoom to Fit", "Cmd+0", MenuBarCommand::ZoomToFit),
+    Item("Actual Size", "Cmd+1", MenuBarCommand::ActualSize),
     Submenu("Source Font Size", kSourceFontSizeItems),
     Separator(),
     Item("Compositor Debug Info", "", MenuBarCommand::ToggleCompositorDebugPanel),
@@ -216,6 +217,7 @@ bool ShortcutEnabledForFocus(MenuBarCommand command, bool sourcePaneFocused) {
   switch (command) {
     case MenuBarCommand::ZoomIn:
     case MenuBarCommand::ZoomOut:
+    case MenuBarCommand::ZoomToFit:
     case MenuBarCommand::ActualSize: return !sourcePaneFocused;
     case MenuBarCommand::IncreaseSourceFontSize:
     case MenuBarCommand::DecreaseSourceFontSize:

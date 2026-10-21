@@ -21,10 +21,11 @@
 ///     bitmap output and the GL texture upload care about this.
 ///
 /// Zoom semantics: `zoom == 1.0` means **100%** - one SVG `viewBox`
-/// unit takes exactly one screen pixel. This is the initial state
-/// when the editor opens and the target of `Cmd+0` / View → Reset
-/// Zoom. The user can pan freely if the document doesn't fit the
-/// window.
+/// unit takes exactly one screen pixel. This is the target of `Cmd+1` /
+/// View → Actual Size, and the initial state when a document fits the
+/// window at 100%; a larger document opens fitted to the window, as
+/// `Cmd+0` / View → Zoom to Fit does. The user can pan freely if the
+/// document doesn't fit the window.
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
@@ -174,9 +175,25 @@ struct ViewportState {
   /// Reset to 100%, with the document viewBox center anchored at the
   /// pane center. After this call, `pixelsPerDocUnit() == 1.0` and
   /// `documentToScreen(documentViewBoxCenter()) == paneCenter`. This
-  /// is the initial state when the editor opens, and the target of
-  /// Cmd+0 / View → Reset Zoom / View → Actual Size.
+  /// is the target of Cmd+1 / View → Actual Size.
   void resetTo100Percent();
+
+  /// Zoom so the whole document viewBox fills `fitScreenRect` as closely as its aspect ratio
+  /// allows, centered in that rectangle. This is the target of Cmd+0 / View → Zoom to Fit. The
+  /// zoom is clamped to `[kMinZoom, kMaxZoom]`; an empty document or rectangle resets to 100%.
+  ///
+  /// @param fitScreenRect Unobstructed canvas area, in screen pixels.
+  void zoomToFit(const Box2d& fitScreenRect);
+
+  /// Whether the whole document viewBox fits inside `fitScreenRect` at 100%.
+  ///
+  /// @param fitScreenRect Unobstructed canvas area, in screen pixels.
+  [[nodiscard]] bool documentFitsAtActualSize(const Box2d& fitScreenRect) const;
+
+  /// Show a newly opened document: at 100% when it fits `fitScreenRect`, otherwise fitted to it.
+  ///
+  /// @param fitScreenRect Unobstructed canvas area, in screen pixels.
+  void resetToInitialView(const Box2d& fitScreenRect);
 
   // ---------------------------------------------------------------------------
   // Convenience getters.

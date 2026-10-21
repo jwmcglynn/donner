@@ -280,6 +280,60 @@ constexpr std::string_view kBlankPenCanvasSvg =
 // carousel) latches on the load frame itself, because the dock layout is already settled then.
 constexpr std::uint64_t kFirstPresentedReplayFrame = 2;
 
+TEST(GlRnrReplayTest, RecordedZeroShortcutRespectsTheRecordingVersion) {
+  for (const int version : {4, 5}) {
+    SCOPED_TRACE(version);
+    const std::filesystem::path outputDir =
+        DiagnosticOutputDir() / ("zoom_shortcut_version_" + std::to_string(version));
+    std::filesystem::create_directories(outputDir);
+    repro::ReproFile file;
+    file.metadata.formatVersion = version;
+    file.metadata.svgSource = std::string(kStaticContentOnlySvg);
+    file.metadata.svgBasename = "zoom.svg";
+    file.metadata.windowWidth = 1280;
+    file.metadata.windowHeight = 720;
+    file.metadata.displayScale = 1.0;
+    for (std::uint64_t index = 0; index < 8; ++index) {
+      repro::ReproFrame frame;
+      frame.index = index;
+      frame.timestampSeconds = static_cast<double>(index) / 60.0;
+      frame.deltaMs = 1000.0 / 60.0;
+      frame.mouseX = 400.0;
+      frame.mouseY = 300.0;
+      if (index == 4 || index == 5) {
+        frame.modifiers = 1;
+        repro::ReproEvent event;
+        event.kind = index == 4 ? repro::ReproEvent::Kind::KeyDown : repro::ReproEvent::Kind::KeyUp;
+        event.key = static_cast<int>(ImGuiKey_0);
+        frame.events.push_back(event);
+      }
+      file.frames.push_back(frame);
+    }
+    const std::filesystem::path recording = outputDir / "zoom.rnr";
+    ASSERT_TRUE(repro::WriteReproFile(recording, file));
+    repro::GlRnrReplayOptions options;
+    options.rnrPath = recording;
+    options.outputDir = outputDir;
+    options.captureFrames = {7};
+    options.pace = false;
+    options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+    repro::GlRnrReplayResult result;
+    std::string error;
+    ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+    const auto* before = FindFrameDiagnostics(result, 3);
+    const auto* after = FindFrameDiagnostics(result, 7);
+    ASSERT_NE(before, nullptr);
+    ASSERT_NE(after, nullptr);
+    ASSERT_THAT(before->viewportDesiredCanvas.x, testing::Gt(0));
+    if (version < 5) {
+      EXPECT_THAT(after->viewportDesiredCanvas, testing::Eq(before->viewportDesiredCanvas));
+    } else {
+      EXPECT_THAT(after->viewportDesiredCanvas.x, testing::Gt(before->viewportDesiredCanvas.x));
+    }
+    RemoveDiagnosticOutputOnSuccess(outputDir);
+  }
+}
+
 std::optional<std::filesystem::path> WriteStaticContentReplay(
     const std::filesystem::path& outputDir, std::string_view name, std::uint64_t lastFrame) {
   std::error_code createDirError;

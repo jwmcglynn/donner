@@ -304,7 +304,11 @@ void WriteExpectation(std::ostream& os, const ReproExpectation& expect) {
 }
 
 void WriteMetadataLine(std::ostream& os, const ReproMetadata& meta) {
-  os << "{\"v\":" << kReproFileVersion << ",\"svg\":";
+  // A recording keeps the version it was made under, which selects how replay opens the document.
+  const int version = meta.formatVersion >= 1 && meta.formatVersion <= kReproFileVersion
+                          ? meta.formatVersion
+                          : kReproFileVersion;
+  os << "{\"v\":" << version << ",\"svg\":";
   WriteQuotedJsonString(os, meta.svgPath);
   os << ",\"wnd\":[" << meta.windowWidth << ',' << meta.windowHeight << ']'
      << ",\"scale\":" << meta.displayScale << ",\"exp\":" << (meta.experimentalMode ? 1 : 0);
@@ -1493,6 +1497,7 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
         return std::nullopt;
       }
       ReproMetadata meta;
+      meta.formatVersion = version;
       auto svgRest = FindKey(view, "svg", budget);
       if (!svgRest.empty()) {
         auto s = ReadString(svgRest, kMaximumReproSvgPathBytes, budget);

@@ -62,6 +62,10 @@
 /// Since v4 frame records can also carry semantic editor actions:
 ///   - `a`: ordered action objects for tool/paint operations that are not raw
 ///     pointer input.
+///
+/// Since v5 a document larger than the canvas opens fitted to it, as in the
+/// live editor. Earlier recordings replay with the document at 100%, the
+/// view their screen coordinates were recorded against.
 
 #include <cstddef>
 #include <cstdint>
@@ -81,7 +85,11 @@ namespace donner::editor::repro {
 ///   mouse-down hit-test checkpoints
 /// - v3: adds optional embedded SVG source snapshots
 /// - v4: adds semantic frame actions (`a`)
-constexpr int kReproFileVersion = 4;
+/// - v5: documents larger than the canvas open fitted to it
+constexpr int kReproFileVersion = 5;
+
+/// First file version recorded with large documents opening fitted to the canvas.
+constexpr int kFirstReproVersionWithFittedOpen = 5;
 
 /// Maximum accepted `.donner-repro` file size.
 constexpr size_t kMaximumReproFileSize = 64 * 1024 * 1024;
@@ -390,6 +398,9 @@ struct ReproMetadata {
   /// no explicit SVG path override is provided, so repros can remain
   /// deterministic even if the original file changes later.
   std::optional<std::string> svgSource;
+  /// File format version read from the metadata line, or the current version for new files. The
+  /// writer preserves it, so a rewritten older recording keeps replaying the way it was recorded.
+  int formatVersion = kReproFileVersion;
   /// Logical window size at start. Replayer sets this on its mock window.
   int windowWidth = 0;
   /// Logical window height at start, before DPI scaling.

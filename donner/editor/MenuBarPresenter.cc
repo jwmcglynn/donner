@@ -52,6 +52,7 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
       return;
     case MenuBarCommand::ZoomIn: actions->zoomIn = true; return;
     case MenuBarCommand::ZoomOut: actions->zoomOut = true; return;
+    case MenuBarCommand::ZoomToFit: actions->zoomToFit = true; return;
     case MenuBarCommand::ActualSize: actions->actualSize = true; return;
     case MenuBarCommand::IncreaseSourceFontSize: actions->increaseSourceFontSize = true; return;
     case MenuBarCommand::DecreaseSourceFontSize: actions->decreaseSourceFontSize = true; return;

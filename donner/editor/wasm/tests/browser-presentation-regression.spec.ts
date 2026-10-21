@@ -3522,6 +3522,14 @@ test("Geode crown face paints at each held pointer position before release", asy
     timeout: scaledMs(5_000),
   });
   await waitForBrowserComposite(page);
+  // Geode Splash is larger than this canvas and opens fitted; the held-move expectations below
+  // are calibrated for its 100% view, so switch to Actual Size first.
+  await page.keyboard.press("Control+1");
+  await expect.poll(async () => (await readViewportStats(page)).zoom, {
+    message: "Actual Size must show Geode Splash at 100%",
+    timeout: scaledMs(4_000),
+  }).toBe(1);
+  await waitForBrowserComposite(page);
 
   const viewport = await readViewportStats(page);
   const screenFromDocument = (x: number, y: number) => ({
@@ -5489,12 +5497,14 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   );
   await waitForBrowserComposite(page);
   await retainEyedropperPng("eyedropper-alpha-settled-document.png", await page.screenshot());
-  // Source replacement preserves the old document's pan. Use the editor's
-  // visible 100% control to center this new, much smaller viewBox in the pane.
+  // Source replacement preserves the old document's pan. Use the canvas zoom
+  // control's Actual Size item to center this new, much smaller viewBox in the
+  // pane. The control opens its menu upward; Actual Size is the row just above it.
   const resetZoom = {
     x: offscreenViewport.paneX + 34,
     y: offscreenViewport.paneY + offscreenViewport.paneHeight - 24,
   };
+  const actualSizeItem = { x: resetZoom.x + 16, y: resetZoom.y - 32 };
   const beforeResetOffset = Math.hypot(
     offscreenViewport.documentX + offscreenViewport.documentWidth / 2
       - (offscreenViewport.paneX + offscreenViewport.paneWidth / 2),
@@ -5511,7 +5521,8 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     })
   }`);
   const beforeResetFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
-  await clickAppliedPoint(page, resetZoom, "center the replacement SVG with the 100% control");
+  await clickAppliedPoint(page, resetZoom, "open the canvas zoom menu");
+  await clickAppliedPoint(page, actualSizeItem, "center the replacement SVG with Actual Size");
   await expect.poll(async () => {
     const state = await page.evaluate(() => ({
       viewport: window.__donnerViewportStats,

@@ -219,6 +219,16 @@ public:
   ///
   /// @return True if the viewport mapping changed.
   [[nodiscard]] bool resetToActualSize();
+  /// Fit the whole document into the unobstructed canvas area.
+  ///
+  /// @param fitScreenRect Unobstructed canvas area, in screen pixels.
+  /// @return True if the viewport mapping changed.
+  [[nodiscard]] bool zoomToFit(const Box2d& fitScreenRect);
+  /// Show a newly opened document at 100%, or fitted when it is larger than the canvas area.
+  ///
+  /// @param fitScreenRect Unobstructed canvas area, in screen pixels.
+  /// @return True if the viewport mapping changed.
+  [[nodiscard]] bool resetToInitialView(const Box2d& fitScreenRect);
   /// Apply a multiplicative zoom around a screen-space focal point.
   ///
   /// @param factor Zoom multiplier.

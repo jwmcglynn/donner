@@ -1059,6 +1059,14 @@ public:
     shell.applyPreviewPointerInput(nowSeconds);
   }
   static bool IsAnimationPreview(const EditorShell& shell) { return shell.animationPreview_; }
+  static bool ViewportInitialized(const EditorShell& shell) { return shell.viewportInitialized_; }
+  static Box2d ToolPaletteRect(const EditorShell& shell) {
+    const ViewportState& viewport = shell.interactionController_.viewport();
+    return shell.toolPaletteScreenRect(
+        ImVec2(static_cast<float>(viewport.paneOrigin.x),
+               static_cast<float>(viewport.paneOrigin.y)),
+        ImVec2(static_cast<float>(viewport.paneSize.x), static_cast<float>(viewport.paneSize.y)));
+  }
   static bool AnimationResetPending(const EditorShell& shell) {
     return shell.animationResetPending_;
   }
@@ -1393,6 +1401,10 @@ public:
 
   static void SetReferenceHighlightActive(EditorShell& shell, bool active) {
     shell.referenceHighlightActive_ = active;
+  }
+
+  static Box2d CanvasZoomControlRect(const EditorShell& shell) {
+    return shell.canvasZoomControlScreenRect();
   }
 
   static void ConfigureViewport(EditorShell& shell, const Box2d& documentViewBox) {
@@ -5063,6 +5075,13 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
     return false;
   };
   ASSERT_TRUE(settleFrame("initial", app.document().currentFrameVersion()));
+  // The splash is larger than this canvas, so it opens fitted; Actual Size leaves it partly
+  // offscreen, the view this regression needs.
+  MenuBarActions actualSize;
+  actualSize.actualSize = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actualSize);
+  ASSERT_DOUBLE_EQ(shell.viewportForReadback().zoom, 1.0);
+  ASSERT_TRUE(settleFrame("actual size", app.document().currentFrameVersion()));
   app.setSelection(*shine);
   ASSERT_THAT(settleFrame("selected", app.document().currentFrameVersion(),
                           /*requireSelectedCache=*/true),
@@ -8043,6 +8062,150 @@ TEST(EditorShellTest, SourceFontMenuActionsResizeTextClampAndReset) {
   EXPECT_NEAR(renderSource(), originalHeight, 0.01f);
   EXPECT_DOUBLE_EQ(shell.viewportForReadback().zoom, canvasZoom);
   EXPECT_FLOAT_EQ(window.editorFonts().code->Scale, 1.0f);
+}
+
+MATCHER_P(LiesWithin, outer, "lies within " + testing::PrintToString(outer)) {
+  constexpr double kTolerance = 1e-6;
+  return arg.topLeft.x >= outer.topLeft.x - kTolerance &&
+         arg.topLeft.y >= outer.topLeft.y - kTolerance &&
+         arg.bottomRight.x <= outer.bottomRight.x + kTolerance &&
+         arg.bottomRight.y <= outer.bottomRight.y + kTolerance;
+}
+
+/// Screen rectangle of the render pane.
+Box2d PaneScreenRect(const ViewportState& viewport) {
+  return Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize);
+}
+
+/// Open \p source in a 1280x700 editor, a typical laptop window, and run frames
+/// until the shell latches the document's initial view.
+/// @return False when the initial view never latched.
+bool OpenAndLatchInitialView(gui::EditorWindow& window, EditorShell& shell) {
+  for (const tests::HangGuard guard;
+       !EditorShellTestAccess::ViewportInitialized(shell) && guard.active();) {
+    RunShellFrame(window, shell);
+  }
+  return EditorShellTestAccess::ViewportInitialized(shell);
+}
+
+gui::EditorWindow MakeQaSizedWindow() {
+  return gui::EditorWindow(
+      TestWindowOptions({.title = "Zoom to fit", .initialWidth = 1280, .initialHeight = 700}, 1.0));
+}
+
+constexpr std::string_view kSmallArtboardSvg = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+    <rect width="200" height="100" fill="#2f6fed"/>
+  </svg>)svg";
+
+// The Geode Splash sample (1536x1024) is larger than the canvas of a typical window. It must
+// open with the whole artboard visible and clear of the floating tool palette, not cropped at 100%.
+TEST(EditorShellTest, DocumentLargerThanTheCanvasOpensFittedToIt) {
+  gui::EditorWindow window = MakeQaSizedWindow();
+  ASSERT_TRUE(window.valid());
+  const EditorSample* splash = FindEditorSample("geode-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "geode_splash.svg"));
+  ASSERT_TRUE(OpenAndLatchInitialView(window, shell));
+
+  const ViewportState& viewport = shell.viewportForReadback();
+  const Box2d artboard = viewport.imageScreenRect();
+  const Box2d pane = PaneScreenRect(viewport);
+  EXPECT_THAT(viewport.zoom, testing::Lt(1.0));
+  EXPECT_THAT(artboard, LiesWithin(pane)) << "the artboard opened cropped";
+  EXPECT_THAT(artboard.topLeft.y,
+              testing::Ge(EditorShellTestAccess::ToolPaletteRect(shell).bottomRight.y))
+      << "the tool palette covers the top of the fitted artboard";
+  EXPECT_THAT(std::max(artboard.width() / pane.width(), artboard.height() / pane.height()),
+              testing::Gt(0.75))
+      << "a fitted artboard fills the canvas on its limiting axis";
+}
+
+/// Press Cmd (Ctrl) plus \p key through real shell frames, as the keyboard delivers it.
+void PressCommandShortcutInFrames(gui::EditorWindow& window, EditorShell& shell, ImGuiKey key) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiMod_Ctrl, true);
+  io.AddKeyEvent(key, true);
+  RunShellFrame(window, shell);
+  io.AddKeyEvent(key, false);
+  io.AddKeyEvent(ImGuiMod_Ctrl, false);
+  RunShellFrame(window, shell);
+}
+
+// A large document opens in exactly the view Zoom to Fit produces, so pressing Cmd+0 after opening
+// it, or after Cmd+1, returns to that view.
+TEST(EditorShellTest, ZoomToFitMatchesTheViewALargeDocumentOpensIn) {
+  gui::EditorWindow window = MakeQaSizedWindow();
+  ASSERT_TRUE(window.valid());
+  const EditorSample* splash = FindEditorSample("geode-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "geode_splash.svg"));
+  ASSERT_TRUE(OpenAndLatchInitialView(window, shell));
+  RunShellFrame(window, shell);
+  const ViewportState opened = shell.viewportForReadback();
+  ASSERT_THAT(opened.zoom, testing::Lt(1.0));
+
+  PressCommandShortcutInFrames(window, shell, ImGuiKey_1);
+  ASSERT_DOUBLE_EQ(shell.viewportForReadback().zoom, 1.0);
+  PressCommandShortcutInFrames(window, shell, ImGuiKey_0);
+  const ViewportState fitted = shell.viewportForReadback();
+  EXPECT_DOUBLE_EQ(fitted.zoom, opened.zoom);
+  EXPECT_EQ(fitted.imageScreenRect(), opened.imageScreenRect());
+}
+
+TEST(EditorShellTest, DocumentThatFitsOpensAtActualSize) {
+  gui::EditorWindow window = MakeQaSizedWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kSmallArtboardSvg));
+  ASSERT_TRUE(OpenAndLatchInitialView(window, shell));
+  EXPECT_DOUBLE_EQ(shell.viewportForReadback().zoom, 1.0);
+}
+
+// Cmd+0 fits the artboard to the canvas, and Cmd+1 returns to 100%, as in Illustrator.
+TEST(EditorShellTest, ZoomToFitAndActualSizeShortcuts) {
+  gui::EditorWindow window = MakeQaSizedWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kSmallArtboardSvg));
+  ASSERT_TRUE(OpenAndLatchInitialView(window, shell));
+  const Box2d pane = PaneScreenRect(shell.viewportForReadback());
+
+  DriveGlobalShortcut(shell, {ImGuiKey_0}, /*ctrl=*/true);
+  RunShellFrame(window, shell);
+  const ViewportState fitted = shell.viewportForReadback();
+  EXPECT_THAT(fitted.zoom, testing::Gt(2.0)) << "Cmd+0 must enlarge a small artboard to fit";
+  EXPECT_THAT(fitted.imageScreenRect(), LiesWithin(pane));
+
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  DriveGlobalShortcut(shell, {ImGuiKey_1}, /*ctrl=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+  EXPECT_DOUBLE_EQ(shell.viewportForReadback().zoom, 1.0);
+}
+
+TEST(EditorShellTest, CanvasZoomControlClickPreservesLegacyReplayBehavior) {
+  for (const bool legacy : {true, false}) {
+    SCOPED_TRACE(legacy ? "legacy recording" : "current editor");
+    gui::EditorWindow window = MakeQaSizedWindow();
+    ASSERT_TRUE(window.valid());
+    EditorShellOptions options = OptionsWithSource(kSmallArtboardSvg);
+    options.useLegacyCanvasZoomControls = legacy;
+    EditorShell shell(window, options);
+    ASSERT_TRUE(OpenAndLatchInitialView(window, shell));
+    PressCommandShortcutInFrames(window, shell, ImGuiKey_Equal);
+    const double zoomed = shell.viewportForReadback().zoom;
+    ASSERT_THAT(zoomed, testing::Gt(1.0));
+    const Box2d control = EditorShellTestAccess::CanvasZoomControlRect(shell);
+    const Vector2d center = (control.topLeft + control.bottomRight) * 0.5;
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(static_cast<float>(center.x), static_cast<float>(center.y));
+    RunShellFrame(window, shell);
+    io.AddMouseButtonEvent(0, true);
+    RunShellFrame(window, shell);
+    io.AddMouseButtonEvent(0, false);
+    RunShellFrame(window, shell);
+
+    EXPECT_DOUBLE_EQ(shell.viewportForReadback().zoom, legacy ? 1.0 : zoomed);
+    EXPECT_EQ(!ImGui::GetCurrentContext()->OpenPopupStack.empty(), !legacy);
+  }
 }
 
 TEST(EditorShellTest, GlobalShortcutsSwitchToolsZoomAndSourceFocus) {
