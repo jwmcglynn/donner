@@ -534,14 +534,15 @@ std::optional<Leaf> CaptureTextResizeLeaf(const svg::SVGTextElement& text,
   const bool hasStroke = !style.stroke.get().value().is<svg::PaintServer::None>();
   if (includeOrdinaryBounds ||
       (hasStroke && style.vectorEffect.get().value() == svg::VectorEffect::NonScalingStroke)) {
-    leaf.textStroke = TextStroke{AuthoredTextBoxLocal(text).value_or(text.objectBoundingBox()),
-                                 text.inkBoundingBox(),
-                                 text.elementFromWorld(),
-                                 hasStroke ? style.strokeWidth.get().value().value : 0.0,
-                                 style.strokeLinecap.get().value(),
-                                 style.strokeLinejoin.get().value(),
-                                 style.strokeMiterlimit.get().value(),
-                                 style.vectorEffect.get().value() == svg::VectorEffect::NonScalingStroke};
+    leaf.textStroke =
+        TextStroke{AuthoredTextBoxLocal(text).value_or(text.objectBoundingBox()),
+                   text.inkBoundingBox(),
+                   text.elementFromWorld(),
+                   hasStroke ? style.strokeWidth.get().value().value : 0.0,
+                   style.strokeLinecap.get().value(),
+                   style.strokeLinejoin.get().value(),
+                   style.strokeMiterlimit.get().value(),
+                   style.vectorEffect.get().value() == svg::VectorEffect::NonScalingStroke};
   }
   return leaf;
 }
@@ -568,9 +569,11 @@ Box2d GeometryResizeBounds(const HostStroke& stroke, const Transform2d& document
 Box2d TextResizeBounds(const TextStroke& stroke, const Transform2d& documentFromStartDocument) {
   const Transform2d documentFromText = stroke.documentFromText * documentFromStartDocument;
   Box2d frame = stroke.frameLocal;
-  const double width = svg::EffectiveStrokeWidth(
-      stroke.width, stroke.nonScaling ? svg::NonScalingStrokeMode::ScaledLocal
-                                    : svg::NonScalingStrokeMode::Scaling, documentFromText);
+  const double width =
+      svg::EffectiveStrokeWidth(stroke.width,
+                                stroke.nonScaling ? svg::NonScalingStrokeMode::ScaledLocal
+                                                  : svg::NonScalingStrokeMode::Scaling,
+                                documentFromText);
   const double padding =
       svg::StrokeCullHalfExtent(width, stroke.cap, stroke.join, stroke.miterLimit);
   if (!stroke.inkLocal.isEmpty() && width > 0.0 && std::isfinite(padding)) {
@@ -605,7 +608,8 @@ std::function<std::optional<Box2d>(const Transform2d&)> CaptureSelectionBoundsAf
   std::vector<Leaf> leaves;
   root.withWriteAccess([&](svg::DocumentWriteAccess&, EntityHandle) {
     for (const auto& geometry : CollectRenderableGeometry(root)) {
-      if (auto leaf = CaptureGeometryResizeLeaf(geometry, includeOrdinaryBounds); leaf.has_value()) {
+      if (auto leaf = CaptureGeometryResizeLeaf(geometry, includeOrdinaryBounds);
+          leaf.has_value()) {
         leaves.push_back(std::move(*leaf));
       }
     }

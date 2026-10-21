@@ -3002,8 +3002,9 @@ TEST_F(SidebarPresenterImGuiTest, TransformRollbackHandoffRetainsPaintedSizeAndP
     EditorApp directApp;
     SidebarPresenter directPresenter;
     ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(directApp, directPresenter, source));
-    ASSERT_NO_FATAL_FAILURE(BeginTransformFieldText(directPresenter, directApp,
-        "##painted_direct_resize", SidebarPresenter::TransformField::Width, desired.c_str()));
+    ASSERT_NO_FATAL_FAILURE(
+        BeginTransformFieldText(directPresenter, directApp, "##painted_direct_resize",
+                                SidebarPresenter::TransformField::Width, desired.c_str()));
     RenderInspectorFrame(directPresenter, &directApp, "##painted_direct_resize");
     (void)directApp.flushFrame();
     directPresenter.refreshSnapshot(directApp);
