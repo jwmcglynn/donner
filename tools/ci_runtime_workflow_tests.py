@@ -1519,7 +1519,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         size_check = self._step_body(workflow, SIZE_CHECK_STEP.removeprefix("- name: "))
         self.assertNotIn("continue-on-error", size_check)
         build = self._size_check_phase()
-        self.assertEqual(4, build.count("bazelisk test"))
+        self.assertEqual(5, build.count("bazelisk test"))
         self.assertNotIn("bazelisk fetch", build)
         self.assertNotIn("||", build)
         self.assertIn("//tools/ci:editor_wasm_shipped_browser_audit", build)
