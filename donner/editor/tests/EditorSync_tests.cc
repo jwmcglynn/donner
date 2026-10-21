@@ -24,6 +24,10 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+namespace donner::xml::internal {
+std::uint64_t ProjectedTextSpanResolutionCountForTesting(const XMLNode& parent);
+}  // namespace donner::xml::internal
+
 namespace donner::editor {
 namespace {
 
@@ -1559,6 +1563,22 @@ TEST(EditorSyncTest, OpeningTagRenameAndUndoEditTheDocumentIncrementally) {
 
 // Renaming a group's closing tag and then its opening tag, as a person retyping both tags does,
 // stays incremental: the whole-text path must not fall back to a document reparse.
+TEST(EditorSyncTest, LoadingFormattedSiblingsHasLinearProjectionSpanWork) {
+  constexpr std::size_t kSiblingCount = 1024;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+  for (std::size_t i = 0; i < kSiblingCount; ++i) {
+    source += "\n  <rect width=\"1\" height=\"1\"/>";
+  }
+  source += "\n</svg>";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto root = app.document().document().xmlDocument().root().firstChild();
+  ASSERT_THAT(root, testing::Optional(testing::_));
+  const auto work = xml::internal::ProjectedTextSpanResolutionCountForTesting(*root);
+  EXPECT_THAT(work, testing::Le(6 * (kSiblingCount + 1)));
+  EXPECT_THAT(root->projectedTextChildren(), testing::SizeIs(kSiblingCount + 1));
+}
+
 TEST(EditorSyncTest, RenamingBothTagsOfAGroupStaysIncremental) {
   constexpr std::string_view kSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="12">

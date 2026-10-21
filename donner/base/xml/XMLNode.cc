@@ -109,6 +109,7 @@ struct ProjectedTextRecordsComponent {
   ProjectedTextRecordsComponent(ProjectedTextRecordsComponent&&) noexcept = default;
   ProjectedTextRecordsComponent& operator=(ProjectedTextRecordsComponent&&) noexcept = default;
   std::vector<ProjectedTextRecord> records;
+  std::uint64_t spanResolutions = 0;
 };
 static_assert(!std::is_copy_constructible_v<ProjectedTextRecordsComponent>);
 static_assert(std::is_nothrow_move_constructible_v<ProjectedTextRecordsComponent>);
@@ -301,6 +302,16 @@ std::optional<FileOffset> ResolveEndOffset(const SourceOffsetComponent& offset,
 
 }  // namespace
 
+namespace internal {
+
+/// Actual source-span resolutions performed by this parent's projection bookkeeping.
+std::uint64_t ProjectedTextSpanResolutionCountForTesting(const XMLNode& parent) {
+  const auto* records = parent.entityHandle().try_get<ProjectedTextRecordsComponent>();
+  return records ? records->spanResolutions : 0;
+}
+
+}  // namespace internal
+
 XMLNode::XMLNode(EntityHandle handle) : handle_(handle) {}
 
 XMLNode XMLNode::CreateDocumentNode(XMLDocument& document) {
@@ -330,10 +341,11 @@ bool SourceSpansOverlap(const std::optional<ResolvedSourceSpan>& first,
 }
 
 void PruneProjectedTextRecords(ProjectedTextRecordsComponent& component, XMLSourceStore* store) {
-  std::erase_if(component.records, [store](const auto& record) {
+  std::erase_if(component.records, [store, &component](const auto& record) {
     if (record.store.get() != store) {
       return true;
     }
+    ++component.spanResolutions;
     const auto span = store->resolveSpan(record.span);
     return !span.has_value() || span->start >= span->end;
   });
@@ -357,6 +369,7 @@ void ClearOverlappingTextProjection(EntityHandle child, Entity parent) {
   PruneProjectedTextRecords(*records, store);
   if (const auto span = ResolvedNodeSpan(child); span.has_value()) {
     std::erase_if(records->records, [&](const auto& record) {
+      ++records->spanResolutions;
       return SourceSpansOverlap(store->resolveSpan(record.span), *span);
     });
   }
@@ -377,11 +390,12 @@ void CaptureProjectedText(EntityHandle child, EntityHandle parent) {
   if (!store || !source || !source->anchorSpan) {
     return;
   }
+  auto& records = parent.get_or_emplace<ProjectedTextRecordsComponent>();
+  ++records.spanResolutions;
   const auto span = store->resolveSpan(*source->anchorSpan);
   if (!span || span->start >= span->end) {
     return;
   }
-  auto& records = parent.get_or_emplace<ProjectedTextRecordsComponent>();
   PruneProjectedTextRecords(records, store.get());
   const auto budget = GetProjectionRecordBudget(*child.registry());
   if (budget->liveRecords >= context.maximumSourceEditTreeNodes) {
@@ -843,6 +857,7 @@ std::vector<XMLNode::ProjectedTextChild> XMLNode::projectedTextChildren() const 
   PruneProjectedTextRecords(*records, store);
   result.reserve(records->records.size());
   for (const auto& record : records->records) {
+    ++records->spanResolutions;
     const auto span = store->resolveSpan(record.span);
     result.push_back(ProjectedTextChild{record.type, record.value, span->start, span->end});
   }
