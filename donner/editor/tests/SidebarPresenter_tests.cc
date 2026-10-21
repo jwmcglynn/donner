@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <span>
@@ -19,10 +20,13 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/Transform.h"
 #include "donner/editor/AttachedNumericStepper.h"
+#include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
+#include "donner/editor/SelectTool.h"
 #include "donner/editor/SelectionAabb.h"
+#include "donner/editor/TextEditor.h"
 #include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGTextElement.h"
@@ -1279,6 +1283,47 @@ protected:
     RenderInspectorFrame(presenter, app, windowName, mouse, false, height);
     io.AddInputCharactersUTF8(std::string(text).c_str());
     return RenderInspectorFrame(presenter, app, windowName, mouse, false, height, {}, capture);
+  }
+
+  static void BeginTransformFieldText(SidebarPresenter& presenter, EditorApp& app,
+                                      const char* window, SidebarPresenter::TransformField field,
+                                      std::string_view text) {
+    RenderInspectorFrame(presenter, &app, window);
+    const auto bounds = presenter.transformFieldRectForTesting(field);
+    ASSERT_THAT(bounds, testing::Optional(testing::_));
+    const ImVec2 center = RectCenter(*bounds);
+    RenderInspectorFrame(presenter, &app, window, center, false);
+    RenderInspectorFrame(presenter, &app, window, center, true);
+    RenderInspectorFrame(presenter, &app, window, center, false);
+    ASSERT_NE(ImGui::GetCurrentContext()->TempInputId, 0u);
+    ImGui::GetIO().AddInputCharactersUTF8(std::string(text).c_str());
+    RenderInspectorFrame(presenter, &app, window);
+  }
+
+  static void MoveTransformFocus(SidebarPresenter& presenter, EditorApp& app, const char* window,
+                                 SidebarPresenter::TransformField field, bool busy,
+                                 const std::function<void()>& flush) {
+    const auto bounds = presenter.transformFieldRectForTesting(field);
+    ASSERT_THAT(bounds, testing::Optional(testing::_));
+    const ImVec2 center = RectCenter(*bounds);
+    if (busy) {
+      RenderInspectorFrame(presenter, nullptr, window, center, true);
+      RenderInspectorFrame(presenter, nullptr, window, center, false);
+    }
+    RenderInspectorFrame(presenter, &app, window, center, true);
+    flush();
+    RenderInspectorFrame(presenter, &app, window, center, false);
+    flush();
+  }
+
+  static void ExpectInspectorBounds(const SidebarPresenter& presenter, double x, double y,
+                                    double width, double height) {
+    const auto bounds = presenter.inspectorBoundsForTesting();
+    ASSERT_THAT(bounds, testing::Optional(testing::_));
+    EXPECT_THAT(bounds->topLeft.x, testing::DoubleNear(x, 1e-5));
+    EXPECT_THAT(bounds->topLeft.y, testing::DoubleNear(y, 1e-5));
+    EXPECT_THAT(bounds->width(), testing::DoubleNear(width, 1e-5));
+    EXPECT_THAT(bounds->height(), testing::DoubleNear(height, 1e-5));
   }
 
   /// Click a transform field into text entry, replace its text, then press \p finishKey.
@@ -2847,6 +2892,124 @@ TEST_F(SidebarPresenterImGuiTest, TransformEscapeAfterALiveValueRestoresTheOrigi
   EXPECT_THAT(bounds->topLeft.x, testing::DoubleEq(10.0));
   EXPECT_THAT(target->getAttribute("transform"), testing::Eq(std::nullopt));
   EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformFieldHandoffKeepsRollbackAndAcceptedUndoSeparate) {
+  struct Scenario {
+    bool reject;
+    bool busy;
+    const char* window;
+  };
+  for (const Scenario scenario : {Scenario{true, false, "##transform_handoff_reject"},
+                                  Scenario{true, true, "##transform_handoff_busy_reject"},
+                                  Scenario{false, false, "##transform_handoff_accept"},
+                                  Scenario{false, true, "##transform_handoff_busy_accept"}}) {
+    SCOPED_TRACE(scenario.window);
+    constexpr std::string_view source =
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect id="target" x="10" y="20" width="100" height="50" transform="translate(15.5, 0)"/></svg>)";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+    DocumentSyncController sync{std::string(source)};
+    SelectTool select;
+    TextEditor text;
+    text.setText(source);
+    const auto flush = [&] {
+      (void)app.flushFrame();
+      sync.applyPendingWritebacks(app, select, text);
+      presenter.refreshSnapshot(app);
+    };
+    ASSERT_NO_FATAL_FAILURE(BeginTransformFieldText(presenter, app, scenario.window,
+                                                    SidebarPresenter::TransformField::Width, "5"));
+    flush();
+    ASSERT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 25.5, 20.0, 5.0, 50.0));
+    if (scenario.reject) {
+      ImGui::GetIO().AddInputCharactersUTF8("furlongs");
+    }
+    RenderInspectorFrame(presenter, scenario.busy ? nullptr : &app, scenario.window);
+    ASSERT_NO_FATAL_FAILURE(MoveTransformFocus(presenter, app, scenario.window,
+                                               SidebarPresenter::TransformField::PositionX,
+                                               scenario.busy, flush));
+    const std::string beforeX = text.getText();
+    ReplaceFocusedInput(presenter, &app, scenario.window, "70", ImVec2(-1.0f, -1.0f), 280.0f);
+    flush();
+    const double expectedWidth = scenario.reject ? 100.0 : 5.0;
+    EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 70.0, 20.0, expectedWidth, 50.0));
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+    RenderInspectorFrame(presenter, &app, scenario.window);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
+    RenderInspectorFrame(presenter, &app, scenario.window);
+    flush();
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(scenario.reject ? 1u : 2u));
+    const std::string afterX = text.getText();
+    app.undo();
+    flush();
+    EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 25.5, 20.0, expectedWidth, 50.0));
+    EXPECT_THAT(text.getText(), testing::Eq(beforeX));
+    app.redo();
+    flush();
+    EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 70.0, 20.0, expectedWidth, 50.0));
+    EXPECT_THAT(text.getText(), testing::Eq(afterX));
+    app.undo();
+    flush();
+    if (!scenario.reject) {
+      app.undo();
+      flush();
+    }
+    EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, 25.5, 20.0, 100.0, 50.0));
+    EXPECT_THAT(text.getText(), testing::Eq(source));
+    EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+    EXPECT_THAT(app.canUndo(), testing::IsFalse());
+  }
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformRollbackHandoffRetainsPaintedSizeAndParentCoordinates) {
+  for (const std::string_view parent :
+       {"translate(0 0)", "translate(80 40) rotate(25) scale(2 1)"}) {
+    SCOPED_TRACE(parent);
+    const std::string source =
+        std::string(
+            R"(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"><g transform=")") +
+        std::string(parent) +
+        R"("><g id="target"><rect x="20" y="30" width="100" height="50" fill="red" stroke="black" stroke-width="10" vector-effect="non-scaling-stroke"/></g></g></svg>)";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+    DocumentSyncController sync{source};
+    SelectTool select;
+    TextEditor text;
+    text.setText(source);
+    const auto flush = [&] {
+      (void)app.flushFrame();
+      sync.applyPendingWritebacks(app, select, text);
+      presenter.refreshSnapshot(app);
+    };
+    const Box2d initial = *presenter.inspectorBoundsForTesting();
+    constexpr char kWindow[] = "##painted_transform_handoff";
+    ASSERT_NO_FATAL_FAILURE(BeginTransformFieldText(
+        presenter, app, kWindow, SidebarPresenter::TransformField::PositionX, "5"));
+    flush();
+    ImGui::GetIO().AddInputCharactersUTF8("furlongs");
+    RenderInspectorFrame(presenter, &app, kWindow);
+    ASSERT_NO_FATAL_FAILURE(MoveTransformFocus(
+        presenter, app, kWindow, SidebarPresenter::TransformField::Width, false, flush));
+    const std::string desired = std::to_string(initial.width() * 2.0);
+    ReplaceFocusedInput(presenter, &app, kWindow, desired, ImVec2(-1.0f, -1.0f), 280.0f);
+    flush();
+    EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, initial.topLeft.x, initial.topLeft.y,
+                                                  initial.width() * 2.0, initial.height()));
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+    RenderInspectorFrame(presenter, &app, kWindow);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
+    RenderInspectorFrame(presenter, &app, kWindow);
+    flush();
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+    app.undo();
+    flush();
+    EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, initial.topLeft.x, initial.topLeft.y,
+                                                  initial.width(), initial.height()));
+    EXPECT_THAT(text.getText(), testing::Eq(source));
+  }
 }
 
 TEST_F(SidebarPresenterImGuiTest, TransformPercentAndEmConvertAgainstTheDocumentAndFont) {
