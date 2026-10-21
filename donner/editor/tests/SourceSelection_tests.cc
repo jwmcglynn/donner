@@ -1,5 +1,6 @@
 #include "donner/editor/SourceSelection.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <optional>
@@ -262,11 +263,12 @@ TEST(SourceSelectionTest, CaretAfterRootClosingTagSelectsNothing) {
     textEditor.setText(source);
     textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(rootEnd));
 
-    EXPECT_EQ(FindElementAtSourceCursor(app.document().document(), textEditor), std::nullopt);
-    EXPECT_EQ(FindElementNearSourceOffset(app.document().document(), source, rootEnd),
-              std::nullopt);
-    EXPECT_EQ(FindElementNearSourceOffset(app.document().document(), source, source.size()),
-              std::nullopt);
+    EXPECT_THAT(FindElementAtSourceCursor(app.document().document(), textEditor),
+                testing::Eq(std::nullopt));
+    EXPECT_THAT(FindElementNearSourceOffset(app.document().document(), source, rootEnd),
+                testing::Eq(std::nullopt));
+    EXPECT_THAT(FindElementNearSourceOffset(app.document().document(), source, source.size()),
+                testing::Eq(std::nullopt));
   }
 }
 
@@ -277,8 +279,9 @@ TEST(SourceSelectionTest, CaretInsideRootClosingTagStillSelectsRoot) {
   const std::size_t closingTag = source.rfind("</svg>");
   ASSERT_NE(closingTag, std::string::npos);
 
-  EXPECT_EQ(FindElementNearSourceOffset(app.document().document(), source, closingTag + 2),
-            app.document().document().svgElement());
+  const svg::SVGElement root = app.document().document().svgElement();
+  EXPECT_THAT(FindElementNearSourceOffset(app.document().document(), source, closingTag + 2),
+              testing::Optional(testing::Eq(root)));
 }
 
 TEST(SourceSelectionTest, SourceOffsetFindersRejectDocumentEndAndEmptySource) {
