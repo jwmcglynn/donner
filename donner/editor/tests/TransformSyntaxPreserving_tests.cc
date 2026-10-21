@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -185,9 +186,55 @@ TEST(TransformSyntaxPreserving, WrapperPrefersAuthorForm) {
 
 TEST(TransformSyntaxPreserving, WrapperFallsBackToCanonicalWithoutAuthorSource) {
   const Transform2d target = Transform2d::Rotate(60.0 * kDeg);
-  // No author source: canonical serializer output.
+  // No author source: the canonical function, with the angle at edit precision.
+  EXPECT_EQ(std::string_view(serializeTransformForWriteback(std::nullopt, target)), "rotate(60)");
+}
+
+TEST(TransformSyntaxPreserving, WrapperWritesCanonicalTranslateAtEditPrecision) {
+  // A drag inside a rotated group, on an element with no transform of its own, writes back a
+  // canonical translate. It reads at the same six-decimal precision as an author-form update.
+  const Transform2d target = Transform2d::Translate(Vector2d(25.09652419453986, 6.99835504621448));
   EXPECT_EQ(std::string_view(serializeTransformForWriteback(std::nullopt, target)),
-            std::string_view(toSVGTransformString(target)));
+            "translate(25.096524, 6.998355)");
+}
+
+TEST(TransformSyntaxPreserving, WrapperWritesCanonicalMatrixAtEditPrecision) {
+  // A drag at a non-integer zoom produces repeating decimals in every matrix entry.
+  const Transform2d target = Transform2d::Rotate(15.0 * kDeg) *
+                             Transform2d::Translate(Vector2d(100.0 / 11.0, 120.0 / 11.0));
+  const std::string written = serializeTransformForWriteback(std::nullopt, target).str();
+  EXPECT_EQ(written, "matrix(0.965926, 0.258819, -0.258819, 0.965926, 9.090909, 10.909091)");
+  ExpectRoundTrips(written, target);
+}
+
+TEST(TransformSyntaxPreserving, WrapperRewriteOfWrittenValueIsStable) {
+  // Writing back an unchanged, already-rounded transform reproduces the same text, so a drag that
+  // starts from the written value adds no error of its own.
+  const Transform2d target = Transform2d::Rotate(15.0 * kDeg) *
+                             Transform2d::Translate(Vector2d(100.0 / 11.0, 120.0 / 11.0));
+  const std::string first = serializeTransformForWriteback(std::nullopt, target).str();
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, ParseMatrix(first)).str(), first);
+  EXPECT_EQ(serializeTransformForWriteback(RcString(first), ParseMatrix(first)).str(), first);
+}
+
+TEST(TransformSyntaxPreserving, WrapperLandsEachRepeatedDragWithinHalfAnEditUnit) {
+  // Each drag composes a delta onto the transform parsed from the previous writeback, which is
+  // what the user sees. Every writeback, canonical or author-form, lands within half an
+  // edit-precision unit of that drag's target.
+  constexpr double kHalfEditUnit = 0.5e-6 + 1e-12;
+  const Vector2d step(100.0 / 11.0, -2.0 / 7.0);
+  std::optional<RcString> written;
+  Transform2d current;
+  for (int drag = 1; drag <= 50; ++drag) {
+    const Transform2d target = current * Transform2d::Translate(step);
+    written = serializeTransformForWriteback(written, target);
+    current = ParseMatrix(*written);
+    EXPECT_THAT(std::string_view(*written), testing::StartsWith("translate("));
+    EXPECT_NEAR(current.data[4], target.data[4], kHalfEditUnit)
+        << "drag " << drag << ": " << *written;
+    EXPECT_NEAR(current.data[5], target.data[5], kHalfEditUnit)
+        << "drag " << drag << ": " << *written;
+  }
 }
 
 TEST(TransformSyntaxPreserving, WrapperFallsBackToCanonicalOnSkew) {
