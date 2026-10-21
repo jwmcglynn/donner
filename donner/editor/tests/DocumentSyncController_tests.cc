@@ -852,7 +852,8 @@ TEST_F(DocumentSyncControllerTest, SelectAllDeleteRemovesTheGroupsItEmpties) {
   svg::SVGDocument& document = app.document().document();
   EXPECT_EQ(textEditor.getText(), std::string(document.source()));
   EXPECT_THAT(textEditor.getText(), testing::Not(testing::HasSubstr("<g")));
-  EXPECT_EQ(document.svgElement().firstChild(), std::nullopt) << textEditor.getText();
+  EXPECT_THAT(document.svgElement().firstChild(), testing::Eq(std::nullopt))
+      << textEditor.getText();
   EXPECT_EQ(app.document().documentGeneration(), generationBefore)
       << "the delete must stay incremental, without a document reparse";
 
@@ -898,8 +899,8 @@ TEST_F(DocumentSyncControllerTest, DeleteKeepsGroupsWithRemainingOrLockedChildre
   controller.applyPendingWritebacks(app, tool, textEditor);
 
   EXPECT_EQ(textEditor.getText(), std::string(document.source()));
-  EXPECT_EQ(document.querySelector("#a"), std::nullopt);
-  EXPECT_EQ(document.querySelector("#free"), std::nullopt);
+  EXPECT_THAT(document.querySelector("#a"), testing::Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#free"), testing::Eq(std::nullopt));
   EXPECT_THAT(document.querySelector("#partial"), testing::Optional(testing::_))
       << "still holds #b";
   EXPECT_THAT(document.querySelector("#already-empty"), testing::Optional(testing::_))
@@ -942,7 +943,7 @@ TEST_F(DocumentSyncControllerTest, DeleteInsideAnEditedGroupKeepsTheGroup) {
   svg::SVGDocument& document = app.document().document();
   EXPECT_EQ(textEditor.getText(), std::string(document.source()));
   EXPECT_THAT(document.querySelector("#scope"), testing::Optional(testing::_));
-  EXPECT_EQ(document.querySelector("#inner"), std::nullopt);
+  EXPECT_THAT(document.querySelector("#inner"), testing::Eq(std::nullopt));
   EXPECT_THAT(app.editingScope(), testing::Optional(*scope));
   EXPECT_THAT(app.undoTimeline().nextUndoLabel(),
               testing::Optional(testing::Eq(std::string_view("Delete elements"))));
@@ -977,7 +978,7 @@ TEST_F(DocumentSyncControllerTest, DeletingAGroupWithItsOwnChildIsOneRemoval) {
   controller.applyPendingWritebacks(app, tool, textEditor);
 
   EXPECT_EQ(textEditor.getText(), std::string(document.source()));
-  EXPECT_EQ(document.querySelector("#grp"), std::nullopt);
+  EXPECT_THAT(document.querySelector("#grp"), testing::Eq(std::nullopt));
   EXPECT_THAT(document.querySelector("#other"), testing::Optional(testing::_));
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
 
