@@ -582,18 +582,18 @@ def _cited_run_cache_violations(files):
     for path in sorted(cited):
         for name, job in _jobs(files[path]).items():
             where = "%s:%s" % (path, name)
-            if (path, name) in SELF_HOSTED_JOBS:
-                continue
-            if (path, name) not in BUILDBUDDY_JOBS:
-                if UNREVIEWED_REMOTE_CACHE.search(job):
-                    violations.append("%s configures an unreviewed remote cache" % where)
-                continue
-            condition = _write_environment_condition(job) or "'false' == 'true'"
-            violations.extend(
-                "%s does not bind main's write environment on a cited %s run" % (where, event)
-                for event, ref in CITED_RUNS
-                if not _evaluate_condition(condition, event, ref, {}))
+            if (path, name) in BUILDBUDDY_JOBS and (path, name) not in SELF_HOSTED_JOBS:
+                violations.extend(_cited_environment_violations(where, job))
+            elif (path, name) not in BUILDBUDDY_JOBS and UNREVIEWED_REMOTE_CACHE.search(job):
+                violations.append("%s configures an unreviewed remote cache" % where)
     return violations
+
+
+def _cited_environment_violations(where, job):
+    """Cited runs on which a hosted BuildBuddy lane would not bind main's write environment."""
+    condition = _write_environment_condition(job) or "'false' == 'true'"
+    return ["%s does not bind main's write environment on a cited %s run" % (where, event)
+            for event, ref in CITED_RUNS if not _evaluate_condition(condition, event, ref, {})]
 
 
 # Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
