@@ -115,6 +115,8 @@ struct EditorShellOptions {
   /// recordings made before the editor did this turn it off, so their screen coordinates still
   /// land where they were recorded.
   bool fitLargeDocumentsOnOpen = true;
+  /// Preserve canvas Cmd/Ctrl+0 as Actual Size when replaying recordings made before Zoom to Fit.
+  bool useLegacyCanvasZoomShortcuts = false;
 
   /// Embedded "<version>\n<commit>\n" build metadata displayed in the About
   /// dialog. May be empty when the build did not embed it.

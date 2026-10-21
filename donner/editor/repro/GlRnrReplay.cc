@@ -561,6 +561,8 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
           .editorNoticeText = "",
           .fitLargeDocumentsOnOpen =
               repro->metadata.formatVersion >= kFirstReproVersionWithFittedOpen,
+          .useLegacyCanvasZoomShortcuts =
+              repro->metadata.formatVersion < kFirstReproVersionWithFittedOpen,
       });
   if (!shell.valid()) {
     return SetError(error, "failed to initialize editor shell");

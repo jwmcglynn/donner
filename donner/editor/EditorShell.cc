@@ -3301,8 +3301,8 @@ void EditorShell::handleGlobalShortcuts() {
     } else {
       zoomActions.zoomIn = increase;
       zoomActions.zoomOut = decrease;
-      zoomActions.zoomToFit = pressedZero;
-      zoomActions.actualSize = pressedOne;
+      zoomActions.zoomToFit = pressedZero && !options_.useLegacyCanvasZoomShortcuts;
+      zoomActions.actualSize = options_.useLegacyCanvasZoomShortcuts ? pressedZero : pressedOne;
     }
     applyZoomActions(zoomActions);
   }
