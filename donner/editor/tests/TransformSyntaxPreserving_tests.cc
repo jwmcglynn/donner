@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -197,6 +198,18 @@ TEST(TransformSyntaxPreserving, WrapperWritesCanonicalTranslateAtEditPrecision) 
       Transform2d::Translate(Vector2d(25.09652419453986, 6.99835504621448));
   EXPECT_EQ(serializeTransformForWriteback(std::nullopt, parentFromElement).str(),
             "translate(25.096524, 6.998355)");
+}
+
+TEST(TransformSyntaxPreserving, WrapperKeepsVeryLargeFiniteTransformsParseable) {
+  const double large = std::numeric_limits<double>::max() / 16.0;
+  for (const Transform2d& target : {Transform2d::Translate(Vector2d(large, -large)),
+                                   Transform2d::Scale(large, large)}) {
+    const RcString written = serializeTransformForWriteback(std::nullopt, target);
+    SCOPED_TRACE(written);
+    const auto parsed = svg::parser::TransformParser::Parse(written);
+    ASSERT_FALSE(parsed.hasError()) << parsed.error();
+    EXPECT_THAT(parsed.result().data, testing::ElementsAreArray(target.data));
+  }
 }
 
 TEST(TransformSyntaxPreserving, WrapperClearsAttributeWhenRoundedCanonicalIsIdentity) {
