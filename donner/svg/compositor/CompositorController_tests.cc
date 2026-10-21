@@ -460,6 +460,32 @@ TEST_F(CompositorControllerTest, PromoteSameEntityWithInteractionGateDisabledSta
   EXPECT_EQ(compositor.layerCount(), 1u);
 }
 
+TEST_F(CompositorControllerTest, PromoteRootAfterSourceElementBecomesTextUsesCurrentTree) {
+  SVGDocument document = makeDocument(R"svg(
+  <rect id="first" width="10" height="10"/>
+  <ellipse id="last" cx="20" cy="20" rx="5" ry="5"/>
+)svg");
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(RenderViewport{Vector2i(100, 100)});
+  const std::string source(document.source());
+  const std::size_t offset = source.find("  <ellipse");
+  ASSERT_THAT(offset, testing::Ne(std::string::npos));
+  const auto edit = document.applySourceEdit(xml::XMLEditIntent{
+      .range =
+          SourceRange{FileOffset::Offset(offset), FileOffset::Offset(source.find("\n", offset))},
+      .replacement = "x",
+      .sourceVersion = document.sourceVersion()});
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+  ASSERT_THAT(edit.diagnostic, testing::Eq(std::nullopt));
+  ASSERT_THAT(document.querySelector("#last"), testing::Eq(std::nullopt));
+  const Entity root = document.svgElement().unsafeEntityHandle().entity();
+  EXPECT_THAT(compositor.promoteEntity(root).owningTilesRequired(), testing::IsTrue());
+  compositor.renderFrame(RenderViewport{Vector2i(100, 100)});
+  EXPECT_THAT(compositor.promoteEntity(root).promotedLayer(), testing::IsTrue());
+  compositor.renderFrame(RenderViewport{Vector2i(100, 100)});
+  EXPECT_THAT(document.querySelector("#first"), testing::Optional(testing::_));
+}
+
 TEST_F(CompositorControllerTest, PromoteInvalidEntityFails) {
   SVGDocument document = makeDocument(R"svg(
     <rect width="10" height="10" fill="red" />
