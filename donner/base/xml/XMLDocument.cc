@@ -2435,24 +2435,74 @@ ApplySourceEditResult ApplyOpeningTagRename(XMLDocument& document, const XMLEdit
   return result;
 }
 
-/// Whether \p node's subtree has the same names, attributes and values as \p parsedNode's.
-bool SubtreeMatchesParsed(const XMLNode& node, const XMLNode& parsedNode) {
+bool MayBeOmittedByInitialParse(const XMLNode& node) {
+  return node.type() == XMLNode::Type::Comment ||
+         node.type() == XMLNode::Type::ProcessingInstruction;
+}
+
+/// Whether a parsed-only comment or instruction occurs before the next live node.
+bool CanSkipFilteredParsedNode(const XMLNode& parsed, const std::optional<XMLNode>& live,
+                               std::size_t sourceOffsetBase) {
+  if (!MayBeOmittedByInitialParse(parsed)) {
+    return false;
+  }
+  const auto parsedSpan = NodeSpanInCurrentCoords(parsed);
+  if (!parsedSpan.has_value()) {
+    return false;
+  }
+  if (!live.has_value()) {
+    return true;
+  }
+  const auto liveSpan = NodeSpanInCurrentCoords(*live);
+  return liveSpan.has_value() && liveSpan->start >= sourceOffsetBase &&
+         parsedSpan->end <= liveSpan->start - sourceOffsetBase;
+}
+
+/// Retained comments and instructions must correspond to the same source span, even if duplicated.
+bool RetainedFilteredNodeMatchesSource(const XMLNode& live, const XMLNode& parsed,
+                                       std::size_t sourceOffsetBase) {
+  if (!MayBeOmittedByInitialParse(live)) {
+    return true;
+  }
+  const auto liveSpan = NodeSpanInCurrentCoords(live);
+  const auto parsedSpan = NodeSpanInCurrentCoords(parsed);
+  return liveSpan.has_value() && parsedSpan.has_value() && liveSpan->start >= sourceOffsetBase &&
+         liveSpan->start - sourceOffsetBase == parsedSpan->start &&
+         liveSpan->end - sourceOffsetBase == parsedSpan->end;
+}
+
+bool QueueComparableChildren(const XMLNode& live, const XMLNode& parsed,
+                             std::size_t sourceOffsetBase,
+                             std::vector<std::pair<XMLNode, XMLNode>>& pending) {
+  std::optional<XMLNode> liveChild = live.firstChild();
+  std::optional<XMLNode> parsedChild = parsed.firstChild();
+  while (liveChild || parsedChild) {
+    if (parsedChild && CanSkipFilteredParsedNode(*parsedChild, liveChild, sourceOffsetBase)) {
+      parsedChild = parsedChild->nextSibling();
+      continue;
+    }
+    if (!liveChild || !parsedChild) {
+      return false;
+    }
+    pending.emplace_back(*liveChild, *parsedChild);
+    liveChild = liveChild->nextSibling();
+    parsedChild = parsedChild->nextSibling();
+  }
+  return true;
+}
+
+/// Whether the live subtree matches the parsed source, allowing initially filtered nodes.
+bool SubtreeMatchesParsed(const XMLNode& node, const XMLNode& parsedNode,
+                          std::size_t sourceOffsetBase) {
   std::vector<std::pair<XMLNode, XMLNode>> pending{{node, parsedNode}};
   while (!pending.empty()) {
     const auto [current, parsed] = pending.back();
     pending.pop_back();
     if (!HasCompatibleNodeIdentity(current, parsed) ||
         BuildAttributeMap(current) != BuildAttributeMap(parsed) ||
-        current.value() != parsed.value()) {
-      return false;
-    }
-    std::optional<XMLNode> currentChild = current.firstChild();
-    std::optional<XMLNode> parsedChild = parsed.firstChild();
-    for (; currentChild && parsedChild;
-         currentChild = currentChild->nextSibling(), parsedChild = parsedChild->nextSibling()) {
-      pending.emplace_back(*currentChild, *parsedChild);
-    }
-    if (currentChild || parsedChild) {
+        current.value() != parsed.value() ||
+        !RetainedFilteredNodeMatchesSource(current, parsed, sourceOffsetBase) ||
+        !QueueComparableChildren(current, parsed, sourceOffsetBase, pending)) {
       return false;
     }
   }
@@ -2499,7 +2549,7 @@ void ClearSpansReconciledByRename(XMLDocument& document, const ApplySourceEditRe
     }
     std::optional<XMLNode> parsedNode = parsed.result().root().firstChild();
     if (!parsedNode.has_value() || parsedNode->nextSibling().has_value() ||
-        !SubtreeMatchesParsed(*ancestor, *parsedNode)) {
+        !SubtreeMatchesParsed(*ancestor, *parsedNode, span->start)) {
       return;
     }
     spans.erase(pendingIt);
