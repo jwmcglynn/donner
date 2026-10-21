@@ -137,6 +137,66 @@ std::optional<Transform2d> SizeChange(const std::optional<Box2d>& box, double va
          Transform2d::Translate(box->topLeft);
 }
 
+struct PaintedSizeSearch {
+  double lower = 1e-8;
+  double upper = 1.0;
+  double lowerExtent = 0.0;
+  double upperExtent = 0.0;
+  double factor = 1.0;
+  std::optional<Box2d> bounds;
+};
+
+using BoundsAtScale = std::function<std::optional<Box2d>(double)>;
+using BoundsExtent = std::function<double(const Box2d&)>;
+
+bool BracketPaintedSize(PaintedSizeSearch& search, double value, const BoundsAtScale& scaledBounds,
+                        const BoundsExtent& extent) {
+  const auto minimum = scaledBounds(search.lower);
+  if (!minimum.has_value() || !std::isfinite(extent(*minimum)) || extent(*minimum) > value) {
+    return false;
+  }
+  search.bounds = scaledBounds(search.upper);
+  for (int i = 0; i < 32 && search.bounds.has_value() && extent(*search.bounds) < value; ++i) {
+    search.upper *= 2.0;
+    search.bounds = scaledBounds(search.upper);
+  }
+  if (!search.bounds.has_value() || !std::isfinite(extent(*search.bounds)) ||
+      extent(*search.bounds) < value) {
+    return false;
+  }
+  search.lowerExtent = extent(*minimum);
+  search.upperExtent = extent(*search.bounds);
+  search.factor = search.upper;
+  return true;
+}
+
+bool RefinePaintedSize(PaintedSizeSearch& search, double value, const BoundsAtScale& scaledBounds,
+                       const BoundsExtent& extent) {
+  const double tolerance = 1e-10 * std::max(1.0, value);
+  for (int i = 0; i < 64 && std::abs(extent(*search.bounds) - value) > tolerance; ++i) {
+    // Interpolation solves fixed-padding rectangular bounds directly. Safeguard curved or
+    // changing joins against a stalled endpoint, retaining a bounded shrinking interval.
+    const double fraction =
+        (value - search.lowerExtent) / (search.upperExtent - search.lowerExtent);
+    search.factor = search.lower + (search.upper - search.lower) * fraction;
+    if (!(search.factor > search.lower && search.factor < search.upper)) {
+      search.factor = (search.lower + search.upper) * 0.5;
+    }
+    search.bounds = scaledBounds(search.factor);
+    if (!search.bounds.has_value() || !std::isfinite(extent(*search.bounds))) {
+      return false;
+    }
+    if (extent(*search.bounds) < value) {
+      search.lower = search.factor;
+      search.lowerExtent = extent(*search.bounds);
+    } else {
+      search.upper = search.factor;
+      search.upperExtent = extent(*search.bounds);
+    }
+  }
+  return true;
+}
+
 /// Solve against immutable painted geometry, then move the painted origin back to its baseline.
 std::optional<Transform2d> PaintedSizeChange(
     const Box2d& start, double value, bool horizontal,
@@ -146,59 +206,25 @@ std::optional<Transform2d> PaintedSizeChange(
     return std::nullopt;
   }
   *evaluationCount = 0;
-  const auto scaledBounds = [&](double factor) {
+  const BoundsAtScale scaledBounds = [&](double factor) {
     ++*evaluationCount;
     return evaluate(Transform2d::Scale(horizontal ? factor : 1.0, horizontal ? 1.0 : factor));
   };
-  const auto extent = [&](const Box2d& bounds) {
+  const BoundsExtent extent = [&](const Box2d& bounds) {
     return horizontal ? bounds.width() : bounds.height();
   };
-  constexpr double kSmallestScale = 1e-8;
-  double lower = kSmallestScale;
-  double upper = 1.0;
-  const auto minimum = scaledBounds(lower);
-  if (!minimum.has_value() || !std::isfinite(extent(*minimum)) || extent(*minimum) > value) {
+  PaintedSizeSearch search;
+  if (!BracketPaintedSize(search, value, scaledBounds, extent) ||
+      !RefinePaintedSize(search, value, scaledBounds, extent)) {
     return std::nullopt;
   }
-  auto bounds = scaledBounds(upper);
-  for (int i = 0; i < 32 && bounds.has_value() && extent(*bounds) < value; ++i) {
-    upper *= 2.0;
-    bounds = scaledBounds(upper);
-  }
-  if (!bounds.has_value() || !std::isfinite(extent(*bounds)) || extent(*bounds) < value) {
+  // Join topology can change during a scale. Accept only an actually attained extent;
+  // a failed solve never changes the live transform.
+  if (std::abs(extent(*search.bounds) - value) > 1e-7 * std::max(1.0, value)) {
     return std::nullopt;
   }
-  const double tolerance = 1e-10 * std::max(1.0, value);
-  double lowerExtent = extent(*minimum);
-  double upperExtent = extent(*bounds);
-  double factor = upper;
-  for (int i = 0; i < 64 && std::abs(extent(*bounds) - value) > tolerance; ++i) {
-    // Interpolation solves fixed-padding rectangular bounds directly. Safeguard curved or
-    // changing joins against a stalled endpoint, retaining a bounded shrinking interval.
-    const double fraction = (value - lowerExtent) / (upperExtent - lowerExtent);
-    factor = lower + (upper - lower) * fraction;
-    if (!(factor > lower && factor < upper)) {
-      factor = (lower + upper) * 0.5;
-    }
-    bounds = scaledBounds(factor);
-    if (!bounds.has_value() || !std::isfinite(extent(*bounds))) {
-      return std::nullopt;
-    }
-    if (extent(*bounds) < value) {
-      lower = factor;
-      lowerExtent = extent(*bounds);
-    } else {
-      upper = factor;
-      upperExtent = extent(*bounds);
-    }
-  }
-  // Join topology can change during a scale. Accept only an actually attained extent,
-  // including after a discontinuity; a failed solve never changes the live transform.
-  if (!bounds.has_value() || std::abs(extent(*bounds) - value) > 1e-7 * std::max(1.0, value)) {
-    return std::nullopt;
-  }
-  return Transform2d::Scale(horizontal ? factor : 1.0, horizontal ? 1.0 : factor) *
-         Transform2d::Translate(start.topLeft - bounds->topLeft);
+  return Transform2d::Scale(horizontal ? search.factor : 1.0, horizontal ? 1.0 : search.factor) *
+         Transform2d::Translate(start.topLeft - search.bounds->topLeft);
 }
 
 bool IsAncestorOrSelf(const donner::svg::SVGElement& ancestor,
