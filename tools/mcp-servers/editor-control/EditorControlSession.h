@@ -17,6 +17,7 @@
 #include "donner/editor/PenTool.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SidebarPresenter.h"
+#include "donner/editor/SourceEditIntent.h"
 #include "donner/editor/TextTool.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -154,6 +155,12 @@ private:
 
   ToolCallResult loadSvgSource(std::string_view source, const LoadOptions& options,
                                std::string_view sourcePath);
+  /// Why `edit_svg_source` cannot use `dispatch: source_pane` for this request, if it cannot.
+  [[nodiscard]] std::optional<std::string> sourcePaneDispatchError(bool replaceSource,
+                                                                   bool edits) const;
+  /// Apply `edit_svg_source` edits one at a time through the source pane's incremental dispatch.
+  ToolCallResult dispatchSourcePaneEdits(const std::vector<SourceEditIntent>& intents,
+                                         const LoadOptions& options);
   [[nodiscard]] bool loadCurrentSourceText(const LoadOptions& options, std::string_view sourcePath,
                                            bool resetRenderVersion, nlohmann::json* loadInfo,
                                            std::string* error);

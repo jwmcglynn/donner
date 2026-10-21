@@ -13,6 +13,8 @@
 
 #include "donner/base/Box.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/SourceEditIntent.h"
+#include "donner/editor/SourceSync.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGDocument.h"
@@ -25,6 +27,84 @@ namespace donner::editor::mcp {
 namespace {
 
 using nlohmann::json;
+
+/// Whether \p arguments has \p key with a non-null value.
+bool HasNonNull(const json& arguments, std::string_view key) {
+  const auto it = arguments.find(key);
+  return it != arguments.end() && !it->is_null();
+}
+
+/// Parse `edit_svg_source`'s `dispatch` argument.
+bool ParseSourceEditDispatch(std::string_view dispatch, bool* sourcePane, std::string* error) {
+  *sourcePane = dispatch == "source_pane";
+  if (!*sourcePane && dispatch != "reload") {
+    *error = "dispatch must be 'reload' or 'source_pane'";
+    return false;
+  }
+  return true;
+}
+
+/// Source-pane intent kind for an edit that removes \p deleteCount bytes and inserts \p insert.
+SourceEditIntentKind IntentKindFor(std::size_t deleteCount, std::string_view insert) {
+  if (deleteCount == 0) {
+    return SourceEditIntentKind::Insert;
+  }
+  return insert.empty() ? SourceEditIntentKind::Delete : SourceEditIntentKind::Replace;
+}
+
+/// Read one `edit_svg_source` edit and check it against \p source.
+bool ReadDraftEdit(const json& edit, std::string_view source, SourceEditIntent* intent,
+                   std::string* error) {
+  int requestedOffset = 0;
+  int requestedDeleteCount = 0;
+  std::string insert;
+  if (!edit.is_object() || !edit.contains("offset")) {
+    *error = "each edit must be an object with an offset";
+    return false;
+  }
+  if (!ReadNonNegativeIntMember(edit, "offset", &requestedOffset, error) ||
+      !ReadNonNegativeIntMember(edit, "delete_count", &requestedDeleteCount, error) ||
+      !ReadOptionalString(edit, "insert", "", &insert, error)) {
+    return false;
+  }
+
+  const std::size_t offset = static_cast<std::size_t>(requestedOffset);
+  const std::size_t deleteCount = static_cast<std::size_t>(requestedDeleteCount);
+  if (offset > source.size()) {
+    *error = "offset is past the end of the SVG source";
+    return false;
+  }
+  if (deleteCount > source.size() - offset) {
+    *error = "delete_count extends past the end of the SVG source";
+    return false;
+  }
+  *intent = SourceEditIntent{.offset = offset,
+                             .removedLength = deleteCount,
+                             .replacement = insert,
+                             .kind = IntentKindFor(deleteCount, insert)};
+  return true;
+}
+
+/// Apply `edit_svg_source` edits in order to \p source, recording each as a source edit intent.
+bool ApplyDraftEdits(const json& edits, std::string* source, std::vector<SourceEditIntent>* intents,
+                     std::string* error) {
+  if (!edits.is_array()) {
+    *error = "argument must be an array: edits";
+    return false;
+  }
+  std::size_t editIndex = 0;
+  for (const json& edit : edits) {
+    SourceEditIntent intent;
+    if (!ReadDraftEdit(edit, *source, &intent, error)) {
+      *error = "edit " + std::to_string(editIndex) + ": " + *error;
+      return false;
+    }
+    source->replace(intent.offset, intent.removedLength, intent.replacement);
+    intents->push_back(std::move(intent));
+    ++editIndex;
+  }
+  return true;
+}
 
 }  // namespace
 
@@ -213,6 +293,89 @@ ToolCallResult EditorControlSession::getSvgSource(const json& arguments) {
   return out;
 }
 
+std::optional<std::string> EditorControlSession::sourcePaneDispatchError(bool replaceSource,
+                                                                         bool edits) const {
+  if (replaceSource) {
+    return "dispatch 'source_pane' applies edits; replace_source is not supported";
+  }
+  if (!edits) {
+    return "dispatch 'source_pane' requires edits";
+  }
+  if (!app_.hasDocument() || loadedSourceRevision_ != sourceRevision_) {
+    return "dispatch 'source_pane' requires a parsed document matching the draft";
+  }
+  return std::nullopt;
+}
+
+ToolCallResult EditorControlSession::dispatchSourcePaneEdits(
+    const std::vector<SourceEditIntent>& intents, const LoadOptions& options) {
+  std::string error;
+  if (intents.empty()) {
+    return MakeErrorResult("dispatch 'source_pane' requires at least one edit");
+  }
+  if (!waitUntilIdle(&error)) {
+    return MakeErrorResult(error);
+  }
+
+  // Each edit is one source-pane keystroke: dispatch it through the same incremental path the
+  // text editor uses, then flush it the way the next editor frame would.
+  std::string previousSourceText = currentSourceText_;
+  std::optional<std::string> lastWritebackSourceText;
+  json dispatched = json::array();
+  for (const SourceEditIntent& intent : intents) {
+    std::string editedSource = previousSourceText;
+    editedSource.replace(intent.offset, intent.removedLength, intent.replacement);
+    const DispatchSourceTextChangeResult result = DispatchSourceEditIntents(
+        app_, {intent}, editedSource, &previousSourceText, &lastWritebackSourceText);
+    // Incremental edits apply immediately; a queued command here is a whole-document reparse.
+    const bool documentReplaceQueued = !app_.document().queue().empty();
+    (void)app_.flushFrame();
+    dispatched.push_back(json{{"offset", intent.offset},
+                              {"delete_count", intent.removedLength},
+                              {"insert", intent.replacement},
+                              {"dispatched_mutation", result.dispatchedMutation},
+                              {"document_replace_queued", documentReplaceQueued}});
+  }
+
+  currentSourceText_ = std::move(previousSourceText);
+  ++sourceRevision_;
+
+  svg::SVGDocument& document = app_.document().document();
+  const bool documentMatchesDraft =
+      document.hasSourceStore() && document.source() == currentSourceText_;
+  const std::optional<ParseDiagnostic> sourceDiagnostic = document.xmlDocument().sourceDiagnostic();
+  const std::optional<ParseDiagnostic> parseDiagnostic = app_.document().lastParseError();
+  if (documentMatchesDraft) {
+    loadedSourceRevision_ = sourceRevision_;
+    lastParseError_.reset();
+  } else if (parseDiagnostic.has_value()) {
+    lastParseError_ = std::string(parseDiagnostic->reason.str());
+  }
+  ToolCallResult out;
+  out.body = json{
+      {"ok", true},
+      {"dispatch", "source_pane"},
+      {"edits", std::move(dispatched)},
+      {"document_matches_draft", documentMatchesDraft},
+      {"source_diagnostic",
+       sourceDiagnostic.has_value() ? json(std::string(sourceDiagnostic->reason.str())) : json()},
+      {"parse_diagnostic",
+       parseDiagnostic.has_value() ? json(std::string(parseDiagnostic->reason.str())) : json()},
+      {"source", sourceStateJson()},
+  };
+
+  if (options.renderAfterLoad) {
+    std::vector<CapturedRenderResult> renderResults;
+    if (!renderCurrentFrame(&renderResults, &error)) {
+      return MakeErrorResult(error);
+    }
+    out.body["render_stages"] = RenderResultsJson(renderResults, &out, options.captureOptions,
+                                                  "edit_svg_source/source_pane");
+  }
+  out.body["attached_image_count"] = out.images.size();
+  return out;
+}
+
 ToolCallResult EditorControlSession::editSvgSource(const json& arguments) {
   if (rnrRecording_.active) {
     return MakeErrorResult("editing SVG source while an .rnr recording is active is not supported");
@@ -225,7 +388,9 @@ ToolCallResult EditorControlSession::editSvgSource(const json& arguments) {
   bool renderAfterEdit = true;
   std::uint64_t expectedSourceRevision = sourceRevision_;
   std::string sourcePath;
-  if (!ReadOptionalBool(arguments, "allow_parse_failure", true, &allowParseFailure, &error) ||
+  std::string dispatch;
+  if (!ReadOptionalString(arguments, "dispatch", "reload", &dispatch, &error) ||
+      !ReadOptionalBool(arguments, "allow_parse_failure", true, &allowParseFailure, &error) ||
       !ReadOptionalBool(arguments, "render_after_edit", true, &renderAfterEdit, &error) ||
       !ReadOptionalUint64(arguments, "expected_source_revision", sourceRevision_,
                           &expectedSourceRevision, &error) ||
@@ -234,6 +399,10 @@ ToolCallResult EditorControlSession::editSvgSource(const json& arguments) {
   }
   if (expectedSourceRevision != sourceRevision_) {
     return MakeErrorResult("expected_source_revision does not match the current SVG source");
+  }
+  bool sourcePaneDispatch = false;
+  if (!ParseSourceEditDispatch(dispatch, &sourcePaneDispatch, &error)) {
+    return MakeErrorResult(error);
   }
 
   LoadOptions options;
@@ -253,54 +422,34 @@ ToolCallResult EditorControlSession::editSvgSource(const json& arguments) {
 
   const auto replaceIt = arguments.find("replace_source");
   const auto editsIt = arguments.find("edits");
-  if ((replaceIt == arguments.end() || replaceIt->is_null()) &&
-      (editsIt == arguments.end() || editsIt->is_null()) && currentSourceText_.empty()) {
+  const bool hasReplaceSource = HasNonNull(arguments, "replace_source");
+  const bool hasEdits = HasNonNull(arguments, "edits");
+  if (!hasReplaceSource && !hasEdits && currentSourceText_.empty()) {
     return MakeErrorResult("edit_svg_source requires replace_source or edits for an empty session");
   }
 
+  if (sourcePaneDispatch) {
+    if (std::optional<std::string> sourcePaneError =
+            sourcePaneDispatchError(hasReplaceSource, hasEdits)) {
+      return MakeErrorResult(*sourcePaneError);
+    }
+  }
+
   std::string nextSource = currentSourceText_;
-  if (replaceIt != arguments.end() && !replaceIt->is_null()) {
+  std::vector<SourceEditIntent> intents;
+  if (hasReplaceSource) {
     if (!replaceIt->is_string()) {
       return MakeErrorResult("argument must be a string: replace_source");
     }
     nextSource = replaceIt->get<std::string>();
   }
 
-  if (editsIt != arguments.end() && !editsIt->is_null()) {
-    if (!editsIt->is_array()) {
-      return MakeErrorResult("argument must be an array: edits");
-    }
-    int editIndex = 0;
-    for (const json& edit : *editsIt) {
-      if (!edit.is_object()) {
-        return MakeErrorResult("each edit must be an object");
-      }
-      if (!edit.contains("offset")) {
-        return MakeErrorResult("each edit requires offset");
-      }
+  if (hasEdits && !ApplyDraftEdits(*editsIt, &nextSource, &intents, &error)) {
+    return MakeErrorResult(error);
+  }
 
-      int requestedOffset = 0;
-      int requestedDeleteCount = 0;
-      std::string insert;
-      if (!ReadNonNegativeIntMember(edit, "offset", &requestedOffset, &error) ||
-          !ReadNonNegativeIntMember(edit, "delete_count", &requestedDeleteCount, &error) ||
-          !ReadOptionalString(edit, "insert", "", &insert, &error)) {
-        return MakeErrorResult("edit " + std::to_string(editIndex) + ": " + error);
-      }
-
-      const std::size_t offset = static_cast<std::size_t>(requestedOffset);
-      const std::size_t deleteCount = static_cast<std::size_t>(requestedDeleteCount);
-      if (offset > nextSource.size()) {
-        return MakeErrorResult("edit " + std::to_string(editIndex) +
-                               ": offset is past the end of the SVG source");
-      }
-      if (deleteCount > nextSource.size() - offset) {
-        return MakeErrorResult("edit " + std::to_string(editIndex) +
-                               ": delete_count extends past the end of the SVG source");
-      }
-      nextSource.replace(offset, deleteCount, insert);
-      ++editIndex;
-    }
+  if (sourcePaneDispatch) {
+    return dispatchSourcePaneEdits(intents, options);
   }
 
   const std::string previousSourcePath = currentSourcePath_;

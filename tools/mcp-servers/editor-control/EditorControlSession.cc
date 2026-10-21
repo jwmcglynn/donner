@@ -166,6 +166,13 @@ json EditorControlSession::toolList() {
                              {"insert", {{"type", "string"}, {"default", ""}}},
                          }},
                         {"required", json::array({"offset"})}}}}},
+                    {"dispatch",
+                     {{"type", "string"},
+                      {"enum", json::array({"reload", "source_pane"})},
+                      {"default", "reload"},
+                      {"description",
+                       "'reload' parses the whole draft. 'source_pane' applies each edit as one "
+                       "source-pane keystroke through the editor's incremental source sync."}}},
                     {"allow_parse_failure", {{"type", "boolean"}, {"default", true}}},
                     {"render_after_edit", {{"type", "boolean"}, {"default", true}}},
                     {"canvas_width", {{"type", "integer"}, {"minimum", 1}}},

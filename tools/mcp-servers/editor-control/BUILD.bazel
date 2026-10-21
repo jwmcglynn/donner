@@ -38,6 +38,8 @@ cc_library(
         "//donner/editor:selection_aabb",
         "//donner/editor:selection_transform_handles",
         "//donner/editor:sidebar_presenter",
+        "//donner/editor:source_edit_intent",
+        "//donner/editor:source_sync",
         "//donner/editor:text_tool",
         "//donner/editor:transform_syntax_preserving",
         "//donner/editor:viewport_state",

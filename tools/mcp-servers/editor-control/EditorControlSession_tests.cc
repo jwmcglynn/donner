@@ -380,6 +380,10 @@ TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
   ASSERT_NE(replayTool, nullptr);
   EXPECT_TRUE((*replayTool)["inputSchema"]["properties"].contains("gl_drive_document_input"));
   EXPECT_TRUE((*replayTool)["inputSchema"]["properties"].contains("gl_source_pane_visible"));
+  const auto editTool = std::ranges::find_if(
+      tools, [](const json& tool) { return tool.value("name", "") == "edit_svg_source"; });
+  ASSERT_NE(editTool, tools.end());
+  EXPECT_TRUE((*editTool)["inputSchema"]["properties"].contains("dispatch"));
 }
 
 TEST(EditorControlSessionTest, CatalogFontFamilyMutationChangesRenderedGlyphs) {
@@ -813,6 +817,56 @@ TEST(EditorControlSessionTest, EditsSvgSourceRangeAndRendersPreview) {
   ToolCallResult editedSource = session.handleToolCall("get_svg_source", json::object());
   ASSERT_TRUE(editedSource.body.value("ok", false)) << editedSource.body.dump(2);
   EXPECT_NE(editedSource.body.value("text", "").find("fill=\"blue\""), std::string::npos);
+}
+
+// `dispatch: source_pane` applies each edit as a source-pane keystroke through the editor's
+// incremental source sync, so the edited element keeps its identity instead of being reparsed.
+TEST(EditorControlSessionTest, SourcePaneDispatchEditsDocumentIncrementally) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
+  <rect id="target" width="40" height="20" fill="red"/>
+</svg>)svg";
+
+  EditorControlSession session;
+  const ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                              {"canvas_width", 40},
+                                              {"canvas_height", 20},
+                                              {"render_after_load", false}});
+  ASSERT_FALSE(load.isError) << load.body.dump(2);
+  const auto selectTarget = [&session]() {
+    return session.handleToolCall("select_by_selector",
+                                  json{{"selector", "#target"}, {"render", false}});
+  };
+  const ToolCallResult before = selectTarget();
+  ASSERT_FALSE(before.isError) << before.body.dump(2);
+
+  const std::string text =
+      session.handleToolCall("get_svg_source", json::object()).body.value("text", "");
+  const std::size_t fillOffset = text.find("red");
+  ASSERT_NE(fillOffset, std::string::npos);
+  const ToolCallResult edit = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits",
+            json::array({json{{"offset", fillOffset}, {"delete_count", 3}, {"insert", "blue"}}})},
+           {"render_after_edit", true}});
+  ASSERT_FALSE(edit.isError) << edit.body.dump(2);
+  EXPECT_TRUE(edit.body.value("document_matches_draft", false)) << edit.body.dump(2);
+  EXPECT_TRUE(edit.body["source_diagnostic"].is_null()) << edit.body.dump(2);
+  EXPECT_FALSE(edit.body["source"].value("preview_stale", true)) << edit.body.dump(2);
+
+  const ToolCallResult after = selectTarget();
+  ASSERT_FALSE(after.isError) << after.body.dump(2);
+  EXPECT_EQ(after.body["selection"]["entity"], before.body["selection"]["entity"])
+      << "an attribute keystroke must edit the element in place";
+  EXPECT_THAT(session.handleToolCall("get_svg_source", json::object()).body.value("text", ""),
+              testing::HasSubstr(R"(fill="blue")"));
+
+  EXPECT_TRUE(session
+                  .handleToolCall("edit_svg_source",
+                                  json{{"dispatch", "source_pane"}, {"replace_source", "<svg/>"}})
+                  .isError);
 }
 
 TEST(EditorControlSessionTest, InvalidSvgSourceEditKeepsDraftAndStalePreview) {
