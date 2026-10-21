@@ -568,7 +568,7 @@ RcString CanonicalTransformAtEditPrecision(const Transform2d& parentFromElement)
       toSVGTransformString(SnapForCanonicalForm(parentFromElement, columnDecimals));
   std::optional<std::vector<Fn>> fns = ParseFunctionList(std::string_view(canonical));
   if (!fns.has_value()) {
-    return canonical;
+    return toSVGTransformString(parentFromElement);
   }
   FormatCanonicalArgs(*fns, columnDecimals);
 
