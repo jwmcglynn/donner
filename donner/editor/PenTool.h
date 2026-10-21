@@ -44,10 +44,11 @@ enum class PenHoverIntent : std::uint8_t {
 ///
 /// Supports polyline creation, click-drag smooth Bezier anchors with
 /// Alt/Option corner-break, shift-constrained points (45-degree increments),
-/// continuing a selected open `<path>`, closing an active path by clicking
-/// near its first point, and committing an open path with Enter /
-/// double-click. Every finalized pen session records exactly one undoable
-/// command.
+/// resuming a selected open `<path>` from its open endpoint, closing an active
+/// path by clicking near its first point, and committing an open path with
+/// Enter / double-click. After a commit, a click anywhere other than the
+/// selected path's points or segments starts a new path. Every finalized pen
+/// session records exactly one undoable command.
 ///
 /// The visible path-point chrome is directly editable: anchors and control
 /// points of the active draft - or of a selected, already-committed `<path>`
@@ -212,9 +213,6 @@ private:
                                    const MouseModifiers& modifiers) const;
   [[nodiscard]] std::string serializePathData() const;
   void startNewPath(EditorApp& editor, const Vector2d& documentPoint);
-  void continueSelectedPath(EditorApp& editor, const svg::SVGPathElement& path,
-                            const SelectedPathState& state, const Vector2d& documentPoint,
-                            const MouseModifiers& modifiers);
   void rebuildActivePathData();
   void beginDragLastAnchor();
   [[nodiscard]] bool updateDraggedAnchor(const Vector2d& documentPoint, bool breakSymmetry,
