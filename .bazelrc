@@ -498,18 +498,26 @@ build:asan-fuzzer --test_env=UBSAN_OPTIONS=print_stacktrace=1
 # Nightly fuzz lanes, one per phase of the Fuzz workflow (.github/workflows/fuzz.yml). Each runs
 # the long-budget soaks under the ASan fuzzer build; reproduce a phase locally with
 # `bazel test --config=<lane> //...` (or the soak target for fuzz-lane-production-soak).
+#
+# A soak is time-bounded exploration whose result depends on what this run's mutation finds, so
+# its result must never come from a cache. Bazel 8 treats `--nocache_test_results` as "execute
+# unconditionally": it skips the local action cache and marks the test spawn `no-cache`, which
+# also skips the disk cache and remote cache lookups and sets `skip_cache_lookup` for remote
+# execution. Build actions stay cached. The lanes' deterministic corpus replays also re-run,
+# which keeps "every result in a phase executed" a check with no exceptions. Every lane below
+# inherits this from fuzz-lane-base; //tools:security_workflow_policy_tests rejects a fuzz lane
+# that does not.
 test:fuzz-lane-base --config=asan-fuzzer
 test:fuzz-lane-base --config=fuzz-soak
 test:fuzz-lane-base --test_output=errors
+test:fuzz-lane-base --nocache_test_results
 # Default-build fuzzers.
 test:fuzz-lane --config=fuzz-lane-base
 test:fuzz-lane --test_tag_filters=fuzz_target
 test:fuzz-lane --build_tag_filters=fuzz_target
 # Text-full fuzzers.
-test:fuzz-lane-text-full --config=asan-fuzzer
-test:fuzz-lane-text-full --config=fuzz-soak
+test:fuzz-lane-text-full --config=fuzz-lane-base
 test:fuzz-lane-text-full --config=text-full
-test:fuzz-lane-text-full --test_output=errors
 test:fuzz-lane-text-full --test_tag_filters=fuzz_text_full
 test:fuzz-lane-text-full --build_tag_filters=fuzz_text_full
 # Geode render fuzzers (Linux).
