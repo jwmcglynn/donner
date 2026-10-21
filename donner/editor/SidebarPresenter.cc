@@ -1558,7 +1558,8 @@ void SidebarPresenter::startStrokeScalarEdit(EditorApp& app, StrokeScalarField f
       .owner = strokeEditOwner(&app),
       .field = field,
       .selection = app.selectedElements(),
-      .beforeSource = beforeSource.value_or(std::string(app.document().document().source())),
+      .beforeSource = beforeSource.has_value() ? std::move(*beforeSource)
+                                               : std::string(app.document().document().source()),
   };
 }
 
