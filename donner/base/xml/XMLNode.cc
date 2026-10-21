@@ -50,6 +50,7 @@ struct SourceOffsetComponent {
 
 struct ProjectionRecordBudget {
   std::size_t liveRecords = 0;
+  std::size_t liveBytes = 0;
 };
 
 /// Owns an existing source span after its projected XML node can be collected.
@@ -72,6 +73,7 @@ struct ProjectedTextRecord {
         type(nodeType),
         value(std::move(text)) {
     ++budget->liveRecords;
+    budget->liveBytes += value.size();
   }
   ProjectedTextRecord(const ProjectedTextRecord&) = delete;
   ProjectedTextRecord& operator=(const ProjectedTextRecord&) = delete;
@@ -92,6 +94,7 @@ struct ProjectedTextRecord {
     }
     if (budget) {
       --budget->liveRecords;
+      budget->liveBytes -= value.size();
     }
   }
 };
@@ -384,12 +387,16 @@ void CaptureProjectedText(EntityHandle child, EntityHandle parent) {
   if (budget->liveRecords >= context.maximumSourceEditTreeNodes) {
     return;
   }
+  const RcString& value = child.get<components::XMLValueComponent>().value;
+  const std::size_t maximumBytes = store->resourceLimits().maximumSourceSize;
+  if (budget->liveBytes > maximumBytes || value.size() > maximumBytes - budget->liveBytes) {
+    return;
+  }
   // Transfer the existing anchors. Clearing the child retires its other source anchors;
   // parent destruction or record invalidation retires this pair exactly once.
   const SourceAnchorSpan anchors = *std::exchange(source->anchorSpan, std::nullopt);
   records.records.emplace_back(store, budget, anchors, child.entity(),
-                               child.get<XMLNodeTypeComponent>().type(),
-                               child.get<components::XMLValueComponent>().value);
+                               child.get<XMLNodeTypeComponent>().type(), value);
 }
 
 }  // namespace
