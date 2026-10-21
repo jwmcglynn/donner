@@ -2,6 +2,8 @@
 
 import json
 import os
+import shlex
+import textwrap
 from pathlib import Path
 import subprocess
 import sys
@@ -64,7 +66,7 @@ class GatekeeperTest(unittest.TestCase):
         _git(self.repo, "config", "user.email", "fixture@example.com")
         self.root = _commit(self.repo, ["README.md"], "root")
 
-    def _run(self, decision, gh_stdout="0\n", gh_status=0, args=(), cwd=None, **context):
+    def _run(self, decision, gh_stdout="0\n", gh_status=0, args=(), cwd=None, workflow_step=None, **context):
         output = self.work / "github_output"
         output.write_text("", encoding="utf-8")
         capture = self.work / "gh_calls.jsonl"
@@ -75,7 +77,22 @@ class GatekeeperTest(unittest.TestCase):
                    GH_STATUS=str(gh_status), GITHUB_REPOSITORY="owner/repo",
                    GITHUB_REF="refs/heads/feature", GITHUB_REF_NAME="feature", **_GIT_ENV)
         env.update(context)
-        result = subprocess.run([sys.executable, self.script, decision, *args],
+        command = [sys.executable, self.script, decision, *args]
+        if workflow_step:
+            workflow = Path(runfiles.Create().Rlocation(
+                "donner/.github/workflows/main.yml")).read_text(encoding="utf-8")
+            section = workflow.split(f"      - id: {workflow_step}\n", 1)[1]
+            section = section.split("\n      - ", 1)[0]
+            body = textwrap.dedent(section.split("        run: |\n", 1)[1])
+            for field, variable in (("event_name", "GITHUB_EVENT_NAME"),
+                                    ("ref", "GITHUB_REF"), ("ref_name", "GITHUB_REF_NAME"),
+                                    ("repository", "GITHUB_REPOSITORY")):
+                body = body.replace("${{ github." + field + " }}", env[variable])
+            body = body.replace("python3 tools/ci/gatekeeper.py",
+                                shlex.join([sys.executable, self.script]))
+            self.assertNotRegex(body, r"\$\{\{", "Unmodelled workflow expression")
+            command = ["bash", "-e", "-o", "pipefail", "-c", body]
+        result = subprocess.run(command,
                                 cwd=cwd or self.repo, env=env,
                                 capture_output=True, text=True, check=False,
                                 timeout=test_timing.STALL_GUARD_SECONDS)
@@ -99,6 +116,17 @@ class GatekeeperTest(unittest.TestCase):
         self.assertEqual(calls, [["pr", "list", "--repo", "owner/repo", "--state", "open",
                                   "--head", "feature", "--json", "number", "-q", "length"]])
         self.assertIn("open PR already covers branch 'feature'", result.stdout)
+
+    def test_main_workflow_treats_branch_shell_syntax_as_data(self):
+        branch = "topic/$(touch${IFS}INJECTED)"
+        result, output, calls = self._run("duplicate-push", gh_stdout="1\n",
+                                          workflow_step="dup_push", GITHUB_EVENT_NAME="push",
+                                          GITHUB_REF_NAME=branch, GITHUB_REF="refs/heads/" + branch)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.repo / "INJECTED").exists(), "Branch name executed as shell code")
+        self.assertEqual(output, "is_duplicate_push=true\n")
+        self.assertEqual(calls, [["pr", "list", "--repo", "owner/repo", "--state", "open",
+                                  "--head", branch, "--json", "number", "-q", "length"]])
 
     def test_push_without_open_pull_request_runs(self):
         result, output, calls = self._run("duplicate-push", gh_stdout="0\n",

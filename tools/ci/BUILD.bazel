@@ -253,7 +253,10 @@ py_test(
     name = "gatekeeper_tests",
     size = "small",
     srcs = ["gatekeeper_tests.py"],
-    data = ["gatekeeper.py"],
+    data = [
+        "gatekeeper.py",
+        "//:.github/workflows/main.yml",
+    ],
     deps = [
         "//tools:test_executable_fixtures",
         "//tools:test_timing",
