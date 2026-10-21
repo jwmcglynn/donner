@@ -1815,6 +1815,30 @@ TEST_F(XMLDocumentTests, RenameUsesOnlyCurrentParentTextProjectionProvenance) {
   }
 }
 
+TEST_F(XMLDocumentTests, RenameDoesNotReuseProjectionForANewRetainedTextNode) {
+  for (const bool cdata : {false, true}) {
+    SCOPED_TRACE(cdata ? "CDATA" : "text");
+    const std::string text = cdata ? "<![CDATA[first]]>" : "first";
+    XMLDocument doc = ParseDocument("<svg>" + text + "<peer/><g><rect/></g></svg>",
+                                    XMLParser::Options::ParseAll());
+    XMLNode svg = doc.root().firstChild().value();
+    XMLNode projected = svg.firstChild().value();
+    const SourceRange span = *projected.getNodeLocation();
+    projected.removeForProjection();
+    XMLNode retained =
+        cdata ? XMLNode::CreateCDataNode(doc, "first") : XMLNode::CreateDataNode(doc, "first");
+    retained.setSourceStartOffset(span.start);
+    retained.setSourceEndOffset(span.end);
+    svg.insertBefore(retained, svg.firstChild());
+    retained.remove();
+
+    const auto opening = CompleteClosingFirstGroupRename(doc);
+    EXPECT_THAT(opening.applied, testing::IsTrue());
+    EXPECT_THAT(doc.sourceDiagnostic(), Optional(testing::_));
+    EXPECT_THAT(svg.projectedTextChildren(), testing::IsEmpty());
+  }
+}
+
 TEST_F(XMLDocumentTests, RenameDoesNotIgnoreRemovedRetainedText) {
   for (const bool cdata : {false, true}) {
     SCOPED_TRACE(cdata ? "CDATA" : "text");
