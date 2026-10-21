@@ -860,8 +860,8 @@ TEST_F(DocumentSyncControllerTest, SelectAllDeleteRemovesTheGroupsItEmpties) {
   ASSERT_TRUE(app.flushFrame());
   controller.applyPendingWritebacks(app, tool, textEditor);
   EXPECT_EQ(textEditor.getText(), std::string(kGroupedSvg));
-  EXPECT_TRUE(app.document().document().querySelector("#nested").has_value());
-  EXPECT_TRUE(app.document().document().querySelector("#pr").has_value());
+  EXPECT_THAT(app.document().document().querySelector("#nested"), testing::Optional(testing::_));
+  EXPECT_THAT(app.document().document().querySelector("#pr"), testing::Optional(testing::_));
 }
 
 TEST_F(DocumentSyncControllerTest, DeleteKeepsGroupsWithRemainingOrLockedChildren) {
@@ -889,22 +889,24 @@ TEST_F(DocumentSyncControllerTest, DeleteKeepsGroupsWithRemainingOrLockedChildre
   std::optional<svg::SVGElement> a = document.querySelector("#a");
   std::optional<svg::SVGElement> locked = document.querySelector("#locked");
   std::optional<svg::SVGElement> free = document.querySelector("#free");
-  ASSERT_TRUE(a.has_value());
-  ASSERT_TRUE(locked.has_value());
-  ASSERT_TRUE(free.has_value());
+  ASSERT_THAT(a, testing::Optional(testing::_));
+  ASSERT_THAT(locked, testing::Optional(testing::_));
+  ASSERT_THAT(free, testing::Optional(testing::_));
   app.setSelection(std::vector<svg::SVGElement>{*a, *locked, *free});
   ASSERT_TRUE(app.deleteSelectionWithUndo(textEditor.getText()));
   ASSERT_TRUE(app.flushFrame());
   controller.applyPendingWritebacks(app, tool, textEditor);
 
   EXPECT_EQ(textEditor.getText(), std::string(document.source()));
-  EXPECT_FALSE(document.querySelector("#a").has_value());
-  EXPECT_FALSE(document.querySelector("#free").has_value());
-  EXPECT_TRUE(document.querySelector("#partial").has_value()) << "still holds #b";
-  EXPECT_TRUE(document.querySelector("#already-empty").has_value())
+  EXPECT_EQ(document.querySelector("#a"), std::nullopt);
+  EXPECT_EQ(document.querySelector("#free"), std::nullopt);
+  EXPECT_THAT(document.querySelector("#partial"), testing::Optional(testing::_))
+      << "still holds #b";
+  EXPECT_THAT(document.querySelector("#already-empty"), testing::Optional(testing::_))
       << "a group the delete did not empty is not the delete's to remove";
-  EXPECT_TRUE(document.querySelector("#guarded").has_value()) << "still holds the locked rect";
-  EXPECT_TRUE(document.querySelector("#locked").has_value());
+  EXPECT_THAT(document.querySelector("#guarded"), testing::Optional(testing::_))
+      << "still holds the locked rect";
+  EXPECT_THAT(document.querySelector("#locked"), testing::Optional(testing::_));
 }
 
 TEST_F(DocumentSyncControllerTest, DeleteInsideAnEditedGroupKeepsTheGroup) {
@@ -929,7 +931,7 @@ TEST_F(DocumentSyncControllerTest, DeleteInsideAnEditedGroupKeepsTheGroup) {
   textEditor.resetTextChanged();
 
   std::optional<svg::SVGElement> scope = app.document().document().querySelector("#scope");
-  ASSERT_TRUE(scope.has_value());
+  ASSERT_THAT(scope, testing::Optional(testing::_));
   ASSERT_TRUE(app.enterGroupEdit(*scope));
   app.setSelection(app.selectableElements());
   ASSERT_THAT(app.selectedElements(), testing::SizeIs(2));
@@ -939,8 +941,8 @@ TEST_F(DocumentSyncControllerTest, DeleteInsideAnEditedGroupKeepsTheGroup) {
 
   svg::SVGDocument& document = app.document().document();
   EXPECT_EQ(textEditor.getText(), std::string(document.source()));
-  EXPECT_TRUE(document.querySelector("#scope").has_value());
-  EXPECT_FALSE(document.querySelector("#inner").has_value());
+  EXPECT_THAT(document.querySelector("#scope"), testing::Optional(testing::_));
+  EXPECT_EQ(document.querySelector("#inner"), std::nullopt);
   EXPECT_THAT(app.editingScope(), testing::Optional(*scope));
   EXPECT_THAT(app.undoTimeline().nextUndoLabel(),
               testing::Optional(testing::Eq(std::string_view("Delete elements"))));
@@ -967,16 +969,16 @@ TEST_F(DocumentSyncControllerTest, DeletingAGroupWithItsOwnChildIsOneRemoval) {
   svg::SVGDocument& document = app.document().document();
   std::optional<svg::SVGElement> group = document.querySelector("#grp");
   std::optional<svg::SVGElement> child = document.querySelector("#a");
-  ASSERT_TRUE(group.has_value());
-  ASSERT_TRUE(child.has_value());
+  ASSERT_THAT(group, testing::Optional(testing::_));
+  ASSERT_THAT(child, testing::Optional(testing::_));
   app.setSelection(std::vector<svg::SVGElement>{*group, *child});
   ASSERT_TRUE(app.deleteSelectionWithUndo(textEditor.getText()));
   ASSERT_TRUE(app.flushFrame());
   controller.applyPendingWritebacks(app, tool, textEditor);
 
   EXPECT_EQ(textEditor.getText(), std::string(document.source()));
-  EXPECT_FALSE(document.querySelector("#grp").has_value());
-  EXPECT_TRUE(document.querySelector("#other").has_value());
+  EXPECT_EQ(document.querySelector("#grp"), std::nullopt);
+  EXPECT_THAT(document.querySelector("#other"), testing::Optional(testing::_));
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
 
   app.undo();
