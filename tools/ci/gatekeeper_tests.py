@@ -94,6 +94,7 @@ class GatekeeperTest(unittest.TestCase):
         workflow = Path(runfiles.Create().Rlocation(
             "donner/.github/workflows/main.yml")).read_text(encoding="utf-8")
         section = workflow.split(f"      - id: {step}\n", 1)[1].split("\n      - ", 1)[0]
+        section = section.split("\n  determine-targets:\n", 1)[0]
         run = section.split("        run: ", 1)[1]
         return textwrap.dedent(run[2:]) if run.startswith("|\n") else run.strip()
 
@@ -103,8 +104,9 @@ class GatekeeperTest(unittest.TestCase):
                                 ("ref", "GITHUB_REF"), ("ref_name", "GITHUB_REF_NAME"),
                                 ("repository", "GITHUB_REPOSITORY")):
             body = body.replace("${{ github." + field + " }}", env[variable])
-        body = body.replace("python3 tools/ci/gatekeeper.py",
-                            shlex.join([sys.executable, self.script]))
+        for command in ('python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py"',
+                        "python3 tools/ci/gatekeeper.py"):
+            body = body.replace(command, shlex.join([sys.executable, self.script]))
         self.assertNotRegex(body, r"\$\{\{", "Unmodelled workflow expression")
         return ["env", "-u", "BASH_ENV", "bash", "--noprofile", "--norc",
                 "-e", "-o", "pipefail", "-c", body]

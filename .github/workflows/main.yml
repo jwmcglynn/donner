@@ -62,14 +62,32 @@ jobs:
       trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
       renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
     steps:
-      - uses: actions/checkout@v7
+      - id: admission_source
+        name: Checkout trusted admission code
+        uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+          sparse-checkout: |
+            tools/ci/gatekeeper.py
+            .github/actions/pr-trust
+          sparse-checkout-cone-mode: false
+
+      - id: comparison_source
+        name: Checkout PR files for comparison
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+        with:
+          path: pr-input
           fetch-depth: 0
           persist-credentials: false
+          submodules: false
+          lfs: false
 
-      # Run admission (tools/ci/gatekeeper.py, shared with the other workflows): a push that an
-      # open pull request already covers skips cleanly, and a docs-only pull request runs no
-      # build. Both read the run context from the runner's environment, not from expressions.
+      # Admission and trust execute only base-pinned code; PR files are comparison data.
       - id: dup_push
         name: Detect duplicate push (PR already open for this branch)
         env:
@@ -78,7 +96,8 @@ jobs:
 
       - id: docs_only
         name: Detect docs-only PR
-        run: python3 tools/ci/gatekeeper.py docs-only
+        working-directory: ${{ github.event_name == 'pull_request' && 'pr-input' || '.' }}
+        run: python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only
 
       - id: pr_trust
         name: Classify pull request trust
