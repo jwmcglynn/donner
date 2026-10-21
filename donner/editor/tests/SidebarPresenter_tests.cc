@@ -546,6 +546,36 @@ TEST(SidebarTransformEditTest, EditsUnderTransformedParentApplyInDocumentSpace) 
   EXPECT_THAT(resized.height(), testing::DoubleNear(moved.height(), 1e-6));
 }
 
+// The Rotation field shows the rotation of the element's own transform, so an
+// edit must produce exactly the typed local angle even under a reflected or
+// non-uniformly scaled ancestor, keeping the transform decomposable.
+TEST(SidebarTransformEditTest, RotationUnderNonUniformOrMirroredParentKeepsTypedLocalAngle) {
+  for (const std::string_view parentTransform : {"scale(-1 1)", "scale(2 1)"}) {
+    SCOPED_TRACE(parentTransform);
+    const std::string svg =
+        std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">)") +
+        R"(<g transform="translate(200 100) )" + std::string(parentTransform) + R"(">)" +
+        R"(<rect id="target" x="10" y="20" width="40" height="30"/></g></svg>)";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, svg));
+    const Box2d start = *presenter.inspectorBoundsForTesting();
+
+    ASSERT_NO_FATAL_FAILURE(
+        EditTransformField(app, presenter, SidebarPresenter::TransformField::Rotation, 45.0));
+    const std::optional<DecomposedTransform> decomposed =
+        DecomposeTransform(*presenter.inspectorTransformForTesting());
+    ASSERT_TRUE(decomposed.has_value()) << "rotation must not skew the local transform";
+    EXPECT_THAT(decomposed->rotationRadians * MathConstants<double>::kRadToDeg,
+                testing::DoubleNear(45.0, 1e-6));
+    const Box2d rotated = *presenter.inspectorBoundsForTesting();
+    const Vector2d startCenter = (start.topLeft + start.bottomRight) * 0.5;
+    const Vector2d rotatedCenter = (rotated.topLeft + rotated.bottomRight) * 0.5;
+    EXPECT_THAT(rotatedCenter.x, testing::DoubleNear(startCenter.x, 1e-6));
+    EXPECT_THAT(rotatedCenter.y, testing::DoubleNear(startCenter.y, 1e-6));
+  }
+}
+
 TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kInspectorSvg));
