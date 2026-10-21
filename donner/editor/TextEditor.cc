@@ -4610,10 +4610,9 @@ const TextEditor::NavigationAction* TextEditor::findNavigationAction(ShortcutId 
       {ShortcutId::SelectBottom, [](TextEditor& e, bool s) { e.moveBottom(s); }, true,
        Gate::EditorFocusedWithoutAutocomplete},
   });
-  const auto* found =
-      std::find_if(kNavigationActions.begin(), kNavigationActions.end(),
-                   [id](const NavigationAction& action) { return action.id == id; });
-  return found != kNavigationActions.end() ? found : nullptr;
+  const auto found = std::find_if(kNavigationActions.begin(), kNavigationActions.end(),
+                                  [id](const NavigationAction& action) { return action.id == id; });
+  return found != kNavigationActions.end() ? &*found : nullptr;
 }
 
 bool TextEditor::navigationAllowed(NavigationGate gate, bool editorFocused) const {

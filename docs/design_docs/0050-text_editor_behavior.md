@@ -123,7 +123,7 @@ These form the foundation of any text editor and must work reliably.
   - [x] Test: Option+Left moves cursor to start of the current or previous word.
   - [x] Test: Option+Right moves cursor to end of the current or next word.
   - [x] Test: Option+Shift+Left/Right extend the selection by word.
-  - Word boundaries are alphanumeric runs, not syntax color transitions.
+  - Words are runs of ASCII letters, digits, `_` and non-ASCII bytes, not syntax color transitions.
 
 - [ ] **Word Deletion**
   - [ ] Test: Ctrl+Backspace deletes word to the left of cursor.
