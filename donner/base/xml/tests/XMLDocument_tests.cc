@@ -1763,6 +1763,27 @@ TEST_F(XMLDocumentTests, RenameDoesNotIgnoreChangedRetainedCommentsOrInstruction
   }
 }
 
+TEST_F(XMLDocumentTests, RenameDoesNotIgnoreChangedRetainedText) {
+  for (const bool cdata : {false, true}) {
+    SCOPED_TRACE(cdata ? "CDATA" : "text");
+    const std::string first = cdata ? "<![CDATA[first]]>" : "first";
+    const std::string second = cdata ? "<![CDATA[second]]>" : "second";
+    XMLDocument doc = ParseDocument("<svg>" + first + "<peer/>" + second + "<g><rect/></g></svg>",
+                                    XMLParser::Options::ParseAll());
+    XMLNode svg = doc.root().firstChild().value();
+    XMLNode removed = svg.firstChild().value();
+    XMLNode retained = removed.nextSibling()->nextSibling().value();
+    ASSERT_THAT(retained.value(), Optional(Eq("second")));
+    removed.remove();
+    retained.setValue("changed");
+
+    const auto opening = CompleteClosingFirstGroupRename(doc);
+    EXPECT_THAT(opening.applied, testing::IsTrue());
+    EXPECT_THAT(doc.sourceDiagnostic(), Optional(testing::_));
+    EXPECT_THAT(retained.value(), Optional(Eq("changed")));
+  }
+}
+
 // The incremental reparse keeps comments that the initial parse dropped, so a renamed element's
 // children can differ in shape from its reparse. Children with matching ids still keep their nodes.
 TEST_F(XMLDocumentTests, ApplySourceEditRenameKeepsIdentifiedChildrenWhenReparseAddsComment) {

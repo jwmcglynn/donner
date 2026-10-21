@@ -1561,10 +1561,14 @@ TEST(EditorSyncTest, OpeningTagRenameAndUndoEditTheDocumentIncrementally) {
 // stays incremental: the whole-text path must not fall back to a document reparse.
 TEST(EditorSyncTest, RenamingBothTagsOfAGroupStaysIncremental) {
   constexpr std::string_view kSvg =
-      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\">"
-      "<!--before--><rect id=\"r\" width=\"4\" height=\"4\"/><g id=\"grp\"><rect id=\"inner\" "
-      "x=\"8\" "
-      "width=\"4\" height=\"4\"/></g><?after value?></svg>";
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="12">
+  <!--before-->
+  <rect id="r" width="4" height="4"/>
+  <g id="grp">
+    <rect id="inner" x="8" width="4" height="4"/>
+  </g>
+  <?after value?>
+</svg>)svg";
   for (const bool preciseIntent : {true, false}) {
     SCOPED_TRACE(preciseIntent ? "source edit intents" : "whole-text diff");
     EditorApp app;
