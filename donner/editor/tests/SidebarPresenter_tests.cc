@@ -2938,6 +2938,34 @@ TEST_F(SidebarPresenterImGuiTest, StrokeWidthEscapeWhileBusyRestoresWhenTheDocum
   EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
 }
 
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthBusyReactivationKeepsPendingCancellation) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char kWindow[] = "##stroke_width_busy_reactivation";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "9"));
+  (void)app.flushFrame();
+  ASSERT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 9"))));
+  const auto field = presenter.strokeWidthRectForTesting();
+  ASSERT_THAT(field, testing::Optional(testing::_));
+
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiKey_Escape, true);
+  RenderInspectorFrame(presenter, nullptr, kWindow);
+  io.AddKeyEvent(ImGuiKey_Escape, false);
+  RenderInspectorFrame(presenter, nullptr, kWindow);
+  RenderInspectorFrame(presenter, nullptr, kWindow, RectCenter(*field), true);
+  RenderInspectorFrame(presenter, nullptr, kWindow, RectCenter(*field), false);
+  RenderInspectorFrame(presenter, &app, kWindow);
+  (void)app.flushFrame();
+
+  EXPECT_THAT(target->getAttribute("style"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
 TEST_F(SidebarPresenterImGuiTest, StrokeWidthAcceptsATypedUnitAndKeepsIt) {
   EditorApp app;
   SidebarPresenter presenter;
