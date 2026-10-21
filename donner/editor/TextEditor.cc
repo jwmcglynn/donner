@@ -4640,7 +4640,7 @@ void TextEditor::movePage(int direction, bool select) {
   const int lastRow = static_cast<int>(visualLines_.size()) - 1;
   const int fromRow = visualLineIndexForCoordinates(cursor);
   int toRow = std::clamp(fromRow + direction * rows, 0, lastRow);
-  // A focus-view placeholder stands for hidden lines; land on the next visible row instead.
+  // A focus-view placeholder stands for hidden lines; step back toward the starting row.
   while (toRow != fromRow && visualLines_[toRow].focusHiddenPlaceholder) {
     toRow -= direction;
   }
@@ -4648,12 +4648,13 @@ void TextEditor::movePage(int direction, bool select) {
   const VisualLine& from = visualLines_[fromRow];
   const VisualLine& to = visualLines_[toRow];
   const int rowOffset = std::max(0, cursor.column - from.startColumn);
-  // A continuation row's first column is also the previous row's last, so keep the caret past it to
-  // stay on the target row.
-  const int firstColumn = std::min(to.startColumn + (to.continuation ? 1 : 0), to.endColumn);
-  core_.moveCursorTo(
-      Coordinates(to.lineNo, std::clamp(to.startColumn + rowOffset, firstColumn, to.endColumn)),
-      select);
+  int column = std::clamp(to.startColumn + rowOffset, to.startColumn, to.endColumn);
+  // A row broken inside a word starts at the previous row's last column, which maps to that row.
+  if (column < to.endColumn &&
+      visualLineIndexForCoordinates(Coordinates(to.lineNo, column)) != toRow) {
+    ++column;
+  }
+  core_.moveCursorTo(Coordinates(to.lineNo, column), select);
 }
 
 int TextEditor::pageMoveLines() const {

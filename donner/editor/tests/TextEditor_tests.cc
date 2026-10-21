@@ -4964,11 +4964,25 @@ TEST_F(TextEditorTests, PageKeysMoveByVisualRowsWhenWrapped) {
   EXPECT_THAT(afterDown.column, ::testing::AllOf(::testing::Gt(0), ::testing::Lt(2000)));
 
   PressKey(ImGuiKey_PageUp, /*command=*/false, /*shift=*/true);
-  const Coordinates afterUp = editor.getCursorPosition();
-  EXPECT_EQ(afterUp.line, 0);
-  EXPECT_THAT(afterUp.column, ::testing::Lt(afterDown.column));
-  EXPECT_EQ(editor.getSelectedText(),
-            longLine.substr(afterUp.column, afterDown.column - afterUp.column));
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 0));
+  EXPECT_EQ(editor.getSelectedText(), longLine.substr(0, afterDown.column));
+}
+
+// A line with no spaces wraps inside the word, where a row starts at the previous row's last
+// column; Page Down must still land on the new row.
+TEST_F(TextEditorTests, PageKeysMoveByVisualRowsWhenWrappedInsideAWord) {
+  const std::string longWord(2000, 'x');
+  editor.setWordWrapEnabled(true);
+  editor.setText(longWord + "\nlast");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  PressKey(ImGuiKey_PageDown);
+  const Coordinates afterDown = editor.getCursorPosition();
+  EXPECT_EQ(afterDown.line, 0);
+  EXPECT_THAT(afterDown.column, ::testing::AllOf(::testing::Gt(0), ::testing::Lt(2000)));
+
+  PressKey(ImGuiKey_PageDown);
+  EXPECT_THAT(editor.getCursorPosition().column, ::testing::Gt(afterDown.column));
 }
 
 // The reported sequence: each navigation key is followed by a typed digit, which must land where
