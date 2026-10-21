@@ -2044,7 +2044,7 @@ void AppendAttributeMutations(XMLNode& node, const AttributeMap& currentAttribut
 
 SourceEditClassification ClassifySourceEdit(const XMLDocument& document, SourceEditRange range) {
   SourceEditClassification classification;
-  const auto& context = document.registry().ctx().get<XMLDocumentContext>();
+  const auto& context = document.sharedRegistry()->ctx().get<XMLDocumentContext>();
   if (!XMLParser::SourceOptions(document).has_value() || context.declaredDoctypeInternalSubset ||
       context.sourceRequiresDocumentEntityParser) {
     return classification;
