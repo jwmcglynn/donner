@@ -867,6 +867,21 @@ TEST(EditorControlSessionTest, SourcePaneDispatchEditsDocumentIncrementally) {
                   .handleToolCall("edit_svg_source",
                                   json{{"dispatch", "source_pane"}, {"replace_source", "<svg/>"}})
                   .isError);
+  const std::uint64_t revisionBefore = session.handleToolCall("get_svg_source", json::object())
+                                           .body["source"]
+                                           .value("source_revision", static_cast<std::uint64_t>(0));
+  EXPECT_TRUE(
+      session
+          .handleToolCall("edit_svg_source",
+                          json{{"dispatch", "source_pane"},
+                               {"allow_parse_failure", false},
+                               {"edits", json::array({json{{"offset", 0}, {"insert", "x"}}})}})
+          .isError)
+      << "source_pane keeps malformed keystrokes, so it refuses allow_parse_failure: false";
+  EXPECT_EQ(session.handleToolCall("get_svg_source", json::object())
+                .body["source"]
+                .value("source_revision", static_cast<std::uint64_t>(0)),
+            revisionBefore);
 }
 
 // The reported source-pane sequence: type into `<ellipse`, then undo the keystroke. The ellipse
