@@ -854,6 +854,24 @@ void ConfigureNumericContext(Registry& registry, Entity target, std::string_view
   }
 }
 
+/// Share readers for repeated property types across the expanded registry tuple.
+template <typename PropertyType>
+[[gnu::noinline]] void ReadStyleProperty(const PropertyType& property,
+                                         const AnimationValueContext& context,
+                                         AnimationResourceBudget& budget,
+                                         std::optional<std::string>& result) {
+  if (const auto* value = property.getStoredValue()) {
+    result = SerializeValue(*value, context, &budget);
+  } else if (const auto value = property.get()) {
+    result = SerializeValue(*value, context, &budget);
+  } else {
+    using Value = std::remove_cvref_t<decltype(*property.getStoredValue())>;
+    if constexpr (std::is_same_v<Value, StrokeDasharray> || std::is_same_v<Value, Reference>) {
+      result = "none";
+    }
+  }
+}
+
 std::optional<std::string> StyleValue(const PropertyRegistry& properties,
                                       std::string_view attribute,
                                       const AnimationValueContext& context,
@@ -865,16 +883,7 @@ std::optional<std::string> StyleValue(const PropertyRegistry& properties,
     if (property.name != attribute) {
       return;
     }
-    if (const auto* value = property.getStoredValue()) {
-      result = SerializeValue(*value, context, &budget);
-    } else if (const auto value = property.get()) {
-      result = SerializeValue(*value, context, &budget);
-    } else {
-      using Value = std::remove_cvref_t<decltype(*property.getStoredValue())>;
-      if constexpr (std::is_same_v<Value, StrokeDasharray> || std::is_same_v<Value, Reference>) {
-        result = "none";
-      }
-    }
+    ReadStyleProperty(property, context, budget, result);
   });
   return result;
 }
