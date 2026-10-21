@@ -90,6 +90,10 @@ pane. UI-driven selection still scrolls the source pane to the selected element.
 Wrap-aware scrolling uses visual rows, so selecting an element on a wrapped line
 scrolls to the visible row containing the selected source.
 
+When a document edit moves the selected element's source lines without changing
+the selection, such as Bring to Front, Send Backward, or an edit to a sibling, the
+focus view follows the element to its new lines and highlights it.
+
 Typing inside the current source-focus range preserves the existing editor
 selection and source caret while the structured edit is applied. Cursor
 navigation outside that focus range can still select the element at the source

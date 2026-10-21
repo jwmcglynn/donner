@@ -2548,6 +2548,8 @@ void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalS
   lastTreeSelection_.reset();
   textEditor_.clearFocusPartition();
   deferredSourceFocusScroll_.reset();
+  sourceFocusSourceVersion_ = 0;
+  sourceFocusSelectionLine_.reset();
   lastPostedScreenPoint_.reset();
   preserveSourceEditFocusCursor_ = false;
   sourceSelectionOriginatedInText_ = false;
@@ -7630,6 +7632,10 @@ bool EditorShell::highlightSelectionSourceIfNeeded() {
     return true;
   }
 
+  if (refreshSourceFocusAfterDocumentEdit(preserveSourceEditCursor)) {
+    return true;
+  }
+
   if (preserveSourceEditFocusCursor_ &&
       (!sourceFocusMode_ || !textEditor_.isCursorInsideFocusRange())) {
     preserveSourceEditFocusCursor_ = false;
@@ -7666,6 +7672,44 @@ bool EditorShell::applyDeferredSourceFocusIfReady() {
 
   updateSourceFocusView(*deferredSourceFocusScroll_);
   return true;
+}
+
+bool EditorShell::refreshSourceFocusAfterDocumentEdit(bool preserveSourceEditCursor) {
+  if (!app_.hasDocument() || sourceFocusOriginatedInStyle_ ||
+      app_.document().document().sourceVersion() == sourceFocusSourceVersion_ ||
+      sourcePaneTextAheadOfDocument() ||
+      textEditor_.getText() != CanonicalizeForTextEditor(app_.document().document().source())) {
+    return false;
+  }
+
+  if (app_.selectedElements().empty()) {
+    sourceFocusSourceVersion_ = app_.document().document().sourceVersion();
+    return false;
+  }
+
+  // Follow the selection to its new lines when the edit moved it. Typing inside the focus range, or
+  // an edit that leaves the selection in place, keeps the user's caret and scroll position.
+  const bool selectionMoved = selectedElementSourceLine() != sourceFocusSelectionLine_;
+  updateSourceFocusView(/*scrollToSelection=*/selectionMoved && !preserveSourceEditCursor);
+  return true;
+}
+
+bool EditorShell::sourcePaneTextAheadOfDocument() const {
+  return textEditor_.isTextChanged() || documentSyncController_.hasPendingSourceTextSync() ||
+         sourcePaneAwaitsDocumentEdits();
+}
+
+std::optional<int> EditorShell::selectedElementSourceLine() const {
+  const std::optional<svg::SVGElement> selected = app_.selectedElement();
+  if (!selected.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<SourceByteRange> range =
+      ElementSourceByteRange(*selected, textEditor_.getText());
+  if (!range.has_value()) {
+    return std::nullopt;
+  }
+  return textEditor_.getCoordinatesAtByteOffset(range->start).line;
 }
 
 std::optional<StyleFocus> EditorShell::styleFocusAtSourceOffset(std::size_t sourceOffset) const {
@@ -8640,6 +8684,8 @@ void EditorShell::updateSourceFocusView(bool scrollToSelection) {
   }
 
   const svg::SVGElement selected = *app_.selectedElement();
+  sourceFocusSourceVersion_ = app_.document().document().sourceVersion();
+  sourceFocusSelectionLine_ = selectedElementSourceLine();
   applySourcePartition(ComputeFocusPartition(app_.document().document(), app_.selectedElements()));
   if (scrollToSelection) {
     std::ignore = HighlightElementSource(textEditor_, selected);
