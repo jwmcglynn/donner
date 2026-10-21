@@ -534,16 +534,6 @@ json EditorControlSession::toolList() {
   });
 }
 
-namespace {
-
-/// Adapts a tool member function to the dispatch table's common handler signature.
-template <auto Method>
-ToolCallResult InvokeTool(EditorControlSession& session, const json& arguments) {
-  return (session.*Method)(arguments);
-}
-
-}  // namespace
-
 ToolCallResult EditorControlSession::handleToolCall(std::string_view name, const json& arguments) {
   if (!arguments.is_object()) {
     return MakeErrorResult("tool arguments must be a JSON object");
