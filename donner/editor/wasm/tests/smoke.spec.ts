@@ -196,6 +196,11 @@ declare global {
     __donnerBootstrapStartedAtMs?: number;
     __donnerRuntimeInitializedAtMs?: number;
     __donnerHeadlessDeviceCreations?: number;
+    __donnerRenderWorkerStartup?: {
+      beforeUiSetup: boolean;
+      beforeExplicitStart: boolean;
+      afterExplicitStart: boolean;
+    };
     __donnerSampleThumbnailStats?: {
       carouselFrame: number;
       firstRequestFrame: number;
@@ -5186,6 +5191,11 @@ test(
   async ({ page, browserName }, testInfo) => {
     const { fatalMessages } = await openAnimatedPreview(page, browserName, testInfo);
     expect(fatalMessages).toEqual([]);
+    expect(await page.evaluate(() => window.__donnerRenderWorkerStartup ?? null)).toEqual({
+      beforeUiSetup: false,
+      beforeExplicitStart: false,
+      afterExplicitStart: true,
+    });
   },
 );
 
