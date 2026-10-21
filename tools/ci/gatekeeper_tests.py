@@ -3,9 +3,11 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 from python.runfiles import runfiles
@@ -64,7 +66,9 @@ class GatekeeperTest(unittest.TestCase):
         _git(self.repo, "config", "user.email", "fixture@example.com")
         self.root = _commit(self.repo, ["README.md"], "root")
 
-    def _run(self, decision, gh_stdout="0\n", gh_status=0, args=(), cwd=None, **context):
+    def _run(self, decision, gh_stdout="0\n", gh_status=0, args=(), cwd=None, main_step=None,
+             **context):
+        """Runs one decision, directly or (`main_step`) through main.yml's step of that id."""
         output = self.work / "github_output"
         output.write_text("", encoding="utf-8")
         capture = self.work / "gh_calls.jsonl"
@@ -75,12 +79,30 @@ class GatekeeperTest(unittest.TestCase):
                    GH_STATUS=str(gh_status), GITHUB_REPOSITORY="owner/repo",
                    GITHUB_REF="refs/heads/feature", GITHUB_REF_NAME="feature", **_GIT_ENV)
         env.update(context)
-        result = subprocess.run([sys.executable, self.script, decision, *args],
-                                cwd=cwd or self.repo, env=env,
+        command = ([sys.executable, self.script, decision, *args] if main_step is None
+                   else self._main_workflow_step(main_step, decision))
+        result = subprocess.run(command, cwd=cwd or self.repo, env=env,
                                 capture_output=True, text=True, check=False,
                                 timeout=test_timing.STALL_GUARD_SECONDS)
         calls = [json.loads(line) for line in capture.read_text().splitlines()]
         return result, output.read_text(encoding="utf-8"), calls
+
+    def _main_workflow_step(self, step_id, decision):
+        """main.yml's gatekeeper step `step_id`, run by bash as the runner's default shell is.
+
+        Its script is exactly the decision's command and holds no `${{ }}` expression, so the
+        run context, branch names included, reaches it only through the environment.
+        """
+        workflow = Path(runfiles.Create().Rlocation(
+            "donner/.github/workflows/main.yml")).read_text(encoding="utf-8")
+        step = workflow.split("      - id: %s\n" % step_id, 1)[1].split("\n      - ", 1)[0]
+        script = step.split("        run: ", 1)[1]
+        script = textwrap.dedent(script[2:]) if script.startswith("|\n") else script.strip()
+        self.assertNotIn("${{", script)
+        self.assertEqual(script, "python3 tools/ci/gatekeeper.py %s" % decision)
+        return ["env", "-u", "BASH_ENV", "bash", "--noprofile", "--norc", "-e", "-c",
+                script.replace("python3 tools/ci/gatekeeper.py",
+                               shlex.join([sys.executable, self.script]))]
 
     def _pull_request(self, base, head):
         event = self.work / "event.json"
@@ -99,6 +121,26 @@ class GatekeeperTest(unittest.TestCase):
         self.assertEqual(calls, [["pr", "list", "--repo", "owner/repo", "--state", "open",
                                   "--head", "feature", "--json", "number", "-q", "length"]])
         self.assertIn("open PR already covers branch 'feature'", result.stdout)
+
+    def test_main_workflow_step_passes_a_shell_syntax_branch_name_as_data(self):
+        # A branch name is attacker-chosen text. main.yml's step must hand it to gh as one
+        # argument, never run it as shell.
+        branch = "topic/$(touch${IFS}INJECTED)`touch${IFS}INJECTED2`"
+        result, output, calls = self._run(
+            "duplicate-push", gh_stdout="1\n", main_step="dup_push", GITHUB_EVENT_NAME="push",
+            GITHUB_REF="refs/heads/" + branch, GITHUB_REF_NAME=branch)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([], sorted(path.name for path in self.repo.glob("INJECTED*")))
+        self.assertEqual(output, "is_duplicate_push=true\n")
+        self.assertEqual(calls, [["pr", "list", "--repo", "owner/repo", "--state", "open",
+                                  "--head", branch, "--json", "number", "-q", "length"]])
+
+    def test_main_workflow_docs_only_step_runs_the_shared_decision(self):
+        head = _commit(self.repo, ["docs/guide.md"], "docs")
+        result, output, _ = self._run("docs-only", main_step="docs_only",
+                                      **self._pull_request(self.root, head))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "docs_only=true\n")
 
     def test_push_without_open_pull_request_runs(self):
         result, output, calls = self._run("duplicate-push", gh_stdout="0\n",
