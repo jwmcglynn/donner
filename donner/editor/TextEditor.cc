@@ -2775,10 +2775,25 @@ void TextEditor::setSelection(const Coordinates& start, const Coordinates& end,
   core_.setSelection(start, end, mode);
 }
 
+void TextEditor::resetReferenceRopesForPartition(const FocusPartition& partition) {
+  if (partition.referenceLinks.size() > kMaximumFocusReferenceLayoutsPerFrame ||
+      focusPartition_.referenceLinks.size() > kMaximumFocusReferenceLayoutsPerFrame ||
+      focusPartition_.referenceLinks != partition.referenceLinks) {
+    focusReferenceRopes_.clear();
+    return;
+  }
+  // Source mirroring can refresh focus ranges without changing any reference identity.
+  // Carry only already-remapped visual geometry; animation and hover start afresh.
+  for (auto& [link, state] : focusReferenceRopes_) {
+    auto visualAnchor = std::move(state.visualAnchor);
+    state = FocusReferenceRopeState{.visualAnchor = std::move(visualAnchor)};
+  }
+}
+
 void TextEditor::setFocusPartition(const FocusPartition& partition) {
   if (!FocusPartitionsEqual(focusPartition_, partition)) {
     expandedFocusHiddenRanges_.clear();
-    focusReferenceRopes_.clear();
+    resetReferenceRopesForPartition(partition);
   }
 
   focusPartition_ = partition;

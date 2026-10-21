@@ -1477,6 +1477,7 @@ private:
       const FocusReferenceSourceUnderline& underline);
   static void rememberReferenceChipVisualAnchor(FocusReferenceRopeState& state,
                                                 const FocusReferenceConnectorLayout& layout);
+  void resetReferenceRopesForPartition(const FocusPartition& partition);
   static void remapReferenceChipVisualAnchor(std::optional<ReferenceChipVisualAnchor>& anchor,
                                              const SourceEditIntent& intent,
                                              std::size_t bufferSize);
