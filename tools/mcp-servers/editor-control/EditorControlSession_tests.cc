@@ -805,7 +805,6 @@ TEST(EditorControlSessionTest, SelectBySelectorReportsTextFormatBarState) {
       << text.body.dump(2);
 }
 
-
 TEST(EditorControlSessionTest, InvalidToolCallReturnsErrorResult) {
   EditorControlSession session;
 
