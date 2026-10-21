@@ -29,50 +29,53 @@ namespace donner::editor {
 
 namespace internal {
 
-/// Whether a decoded family word can round-trip as an unescaped CSS identifier.
-bool IsEditableFamilyIdentifier(std::string_view word) {
-  const auto startsIdentifier = [](unsigned char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c >= 0x80;
-  };
-  if (word.empty() || (!startsIdentifier(word.front()) && word.front() != '-')) {
-    return false;
-  }
-  if (word.front() == '-' && (word.size() == 1 || (!startsIdentifier(word[1]) && word[1] != '-'))) {
-    return false;
-  }
-  for (const unsigned char c : word) {
-    if (!startsIdentifier(c) && !(c >= '0' && c <= '9') && c != '-') {
-      return false;
-    }
-  }
+/// CSS name-start code points, including non-ASCII UTF-8 bytes.
+bool IsFamilyIdentifierStart(unsigned char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c >= 0x80;
+}
+
+/// Code points allowed after the first character of an unescaped CSS identifier.
+bool IsFamilyIdentifierContinuation(unsigned char c) {
+  return IsFamilyIdentifierStart(c) || (c >= '0' && c <= '9') || c == '-';
+}
+
+/// CSS-wide and reserved keywords cannot be unquoted family words.
+bool IsReservedFamilyWord(std::string_view word) {
   for (const std::string_view reserved :
        {"inherit", "initial", "unset", "revert", "revert-layer", "default"}) {
     if (StringUtils::EqualsLowercase(word, reserved)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// A leading hyphen requires another hyphen or a name-start code point.
+bool HasFamilyIdentifierStart(std::string_view word) {
+  if (word.empty()) {
+    return false;
+  }
+  if (word.front() == '-') {
+    return word.size() > 1 && (word[1] == '-' || IsFamilyIdentifierStart(word[1]));
+  }
+  return IsFamilyIdentifierStart(word.front());
+}
+
+/// Whether a decoded family word can round-trip as an unescaped CSS identifier.
+bool IsEditableFamilyIdentifier(std::string_view word) {
+  if (!HasFamilyIdentifierStart(word) || IsReservedFamilyWord(word)) {
+    return false;
+  }
+  for (const unsigned char c : word) {
+    if (!IsFamilyIdentifierContinuation(c)) {
       return false;
     }
   }
   return true;
 }
 
-/// Preserve simple family display names and quote names that require CSS string syntax.
-std::string EditableFontFamily(std::string_view family) {
-  bool quote = false;
-  std::size_t offset = 0;
-  do {
-    const std::size_t space = family.find(' ', offset);
-    const std::size_t end = space == std::string_view::npos ? family.size() : space;
-    if (!IsEditableFamilyIdentifier(family.substr(offset, end - offset))) {
-      quote = true;
-      break;
-    }
-    if (space == std::string_view::npos) {
-      break;
-    }
-    offset = space + 1;
-  } while (offset <= family.size());
-  if (!quote) {
-    return std::string(family);
-  }
+/// Serialize a family as a CSS string, escaping quotes, backslashes and control bytes.
+std::string QuotedFontFamily(std::string_view family) {
   std::string result = "\"";
   constexpr std::string_view kHex = "0123456789abcdef";
   for (const unsigned char c : family) {
@@ -90,6 +93,23 @@ std::string EditableFontFamily(std::string_view family) {
   }
   result += '"';
   return result;
+}
+
+/// Preserve simple family display names and quote names that require CSS string syntax.
+std::string EditableFontFamily(std::string_view family) {
+  std::size_t offset = 0;
+  do {
+    const std::size_t space = family.find(' ', offset);
+    const std::size_t end = space == std::string_view::npos ? family.size() : space;
+    if (!IsEditableFamilyIdentifier(family.substr(offset, end - offset))) {
+      return QuotedFontFamily(family);
+    }
+    if (space == std::string_view::npos) {
+      break;
+    }
+    offset = space + 1;
+  } while (offset <= family.size());
+  return std::string(family);
 }
 
 /// Copies `value` into a fixed-size, null-terminated buffer.
