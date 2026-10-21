@@ -3006,6 +3006,7 @@ TEST_F(SidebarPresenterImGuiTest, TransformRollbackHandoffRetainsPaintedSizeAndP
         presenter, app, kWindow, SidebarPresenter::TransformField::Width, false, flush));
     const std::string desired = std::to_string(initial.width() * 2.0);
     ReplaceFocusedInput(presenter, &app, kWindow, desired, ImVec2(-1.0f, -1.0f), 280.0f);
+    RenderInspectorFrame(presenter, &app, kWindow);
     flush();
     EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, initial.topLeft.x, initial.topLeft.y,
                                                   initial.width() * 2.0, initial.height()));
@@ -3020,6 +3021,76 @@ TEST_F(SidebarPresenterImGuiTest, TransformRollbackHandoffRetainsPaintedSizeAndP
     EXPECT_NO_FATAL_FAILURE(ExpectInspectorBounds(presenter, initial.topLeft.x, initial.topLeft.y,
                                                   initial.width(), initial.height()));
     EXPECT_THAT(text.getText(), testing::Eq(source));
+  }
+}
+
+TEST_F(SidebarPresenterImGuiTest, RotationHandoffShowsTheSettledUntouchedSizeWithoutHistory) {
+  struct Scenario {
+    bool reject;
+    const char* window;
+    Box2d expected;
+    const char* shownWidth;
+    std::size_t entries;
+  };
+  for (const Scenario scenario :
+       {Scenario{true, "##rotation_reject_size", Box2d::FromXYWH(25.5, 20, 100, 50), "100.00", 0},
+        Scenario{false, "##rotation_pending_size", Box2d::FromXYWH(50.5, -5, 50, 100), "50.00",
+                 1}}) {
+    SCOPED_TRACE(scenario.window);
+    constexpr std::string_view source =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect id="target" x="10" y="20" width="100" height="50" transform="translate(15.5, 0)"/></svg>)svg";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+    DocumentSyncController sync{std::string(source)};
+    SelectTool select;
+    TextEditor text;
+    text.setText(source);
+    const auto flush = [&] {
+      (void)app.flushFrame();
+      sync.applyPendingWritebacks(app, select, text);
+      presenter.refreshSnapshot(app);
+    };
+    ASSERT_NO_FATAL_FAILURE(BeginTransformFieldText(
+        presenter, app, scenario.window, SidebarPresenter::TransformField::Rotation, "30"));
+    flush();
+    if (scenario.reject) {
+      ImGui::GetIO().AddInputCharactersUTF8("furlongs");
+      RenderInspectorFrame(presenter, &app, scenario.window);
+    } else {
+      ReplaceFocusedInput(presenter, nullptr, scenario.window, "90", ImVec2(-1.0f, -1.0f), 280.0f);
+      RenderInspectorFrame(presenter, nullptr, scenario.window);
+    }
+    ASSERT_NO_FATAL_FAILURE(MoveTransformFocus(presenter, app, scenario.window,
+                                               SidebarPresenter::TransformField::Width,
+                                               !scenario.reject, flush));
+    RenderInspectorFrame(presenter, &app, scenario.window);
+    flush();
+    const ImGuiInputTextState* input = ImGui::GetInputTextState(ImGui::GetActiveID());
+    ASSERT_THAT(input, testing::NotNull());
+    EXPECT_THAT(std::string_view(input->TextA.Data, static_cast<std::size_t>(input->CurLenA)),
+                testing::Eq(scenario.shownWidth));
+    const std::string settledSource = text.getText();
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Tab, true);
+    RenderInspectorFrame(presenter, &app, scenario.window);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Tab, false);
+    RenderInspectorFrame(presenter, &app, scenario.window);
+    flush();
+    EXPECT_NO_FATAL_FAILURE(
+        ExpectInspectorBounds(presenter, scenario.expected.topLeft.x, scenario.expected.topLeft.y,
+                              scenario.expected.width(), scenario.expected.height()));
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(scenario.entries));
+    EXPECT_THAT(text.getText(), testing::Eq(settledSource));
+    if (!scenario.reject) {
+      app.undo();
+      flush();
+      EXPECT_THAT(text.getText(), testing::Eq(source));
+      app.redo();
+      flush();
+      EXPECT_THAT(text.getText(), testing::Eq(settledSource));
+    } else {
+      EXPECT_THAT(text.getText(), testing::Eq(source));
+    }
   }
 }
 
