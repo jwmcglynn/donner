@@ -1397,7 +1397,14 @@ private:
     }
   };
 
+  struct ReferenceChipVisualAnchor {
+    SourceByteRange targetHeader;
+    SourceByteRange sourceToken;
+    ImVec2 labelSizeInFontUnits;
+  };
+
   struct FocusReferenceRopeState {
+    std::optional<ReferenceChipVisualAnchor> visualAnchor;
     RopeSimulation rope;
     Path path;
     Vector2d arrowDirection = Vector2d::XAxis();
@@ -1408,6 +1415,7 @@ private:
   };
 
   struct FocusReferenceSourceUnderline {
+    SourceByteRange sourceToken;
     ImVec2 start;
     ImVec2 end;
   };
@@ -1416,9 +1424,12 @@ private:
     ImVec2 min;
     ImVec2 max;
     SourceStyleChipKind kind = SourceStyleChipKind::SelectorMatchCount;
+    SourceByteRange anchorRange;
+    ImVec2 labelSizeInFontUnits;
   };
 
   struct FocusReferenceConnectorLayout {
+    std::optional<ReferenceChipVisualAnchor> visualAnchor;
     ImVec2 start;
     ImVec2 tip;
     FocusReferenceSourceUnderline sourceUnderline;
@@ -1442,6 +1453,21 @@ private:
   bool tryNavigateToFocusReferenceRopeAt(const ImVec2& mousePos);
   void navigateToFocusReferenceLink(const FocusReferenceLink& link);
   void remapFocusMetadataForSourceEdit(const SourceEditIntent& intent);
+  [[nodiscard]] std::optional<SourceStyleChipBounds> retainedReferenceChipBounds(
+      const FocusReferenceLink& link) const;
+  [[nodiscard]] static std::optional<ReferenceChipVisualAnchor> referenceChipVisualAnchorFor(
+      const std::optional<SourceStyleChipBounds>& liveChip,
+      const FocusReferenceSourceUnderline& underline);
+  static void rememberReferenceChipVisualAnchor(FocusReferenceRopeState& state,
+                                                const FocusReferenceConnectorLayout& layout);
+  static void remapReferenceChipVisualAnchor(std::optional<ReferenceChipVisualAnchor>& anchor,
+                                             const SourceEditIntent& intent,
+                                             std::size_t bufferSize);
+  [[nodiscard]] int referenceAttributeQuoteIndex(int lineIndex, int tokenStartIndex) const;
+  [[nodiscard]] SourceByteRange referenceAttributeValueRange(int lineIndex, int tokenStartIndex,
+                                                             int tokenEndIndex) const;
+  [[nodiscard]] std::optional<SourceStyleChipBounds> referenceChipVisualBounds(
+      const ReferenceChipVisualAnchor& anchor) const;
   [[nodiscard]] std::optional<SourceStyleChipBounds> sourceStyleChipBoundsForDecoration(
       const SourceStyleDecoration& decoration) const;
   [[nodiscard]] std::optional<SourceStyleChipBounds> sourceStyleChipBoundsForReferenceTarget(

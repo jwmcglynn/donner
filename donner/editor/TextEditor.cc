@@ -1885,8 +1885,9 @@ std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusRefere
   layout.start = coordinatesToScreenPos(Coordinates(link.from.line, link.from.column));
   layout.start.x += charAdvance_.x * 0.5f;
   layout.start.y += baselineY;
-  if (std::optional<SourceStyleChipBounds> targetChip =
-          sourceStyleChipBoundsForReferenceTarget(link.to)) {
+  const auto liveTargetChip = sourceStyleChipBoundsForReferenceTarget(link.to);
+  const auto targetChip = liveTargetChip ? liveTargetChip : retainedReferenceChipBounds(link);
+  if (targetChip) {
     layout.tip = ChipConnectorPoint(targetChip->min, targetChip->max, layout.start, uiScale_);
 
     if (targetChip->kind == SourceStyleChipKind::SelectorMatchCount) {
@@ -1908,6 +1909,7 @@ std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusRefere
             focusReferenceSourceUnderline(link.from)) {
       layout.sourceUnderline = *sourceUnderline;
       layout.hasSourceUnderline = true;
+      layout.visualAnchor = referenceChipVisualAnchorFor(liveTargetChip, *sourceUnderline);
       layout.start = ImVec2((sourceUnderline->start.x + sourceUnderline->end.x) * 0.5f,
                             sourceUnderline->start.y);
     } else {
@@ -1971,6 +1973,8 @@ std::optional<TextEditor::FocusReferenceSourceUnderline> TextEditor::focusRefere
   const ImVec2 endPos = coordinatesToScreenPos(Coordinates(position.line, endColumn));
   const float underlineY = startPos.y + TextBaselineOffsetY() + std::max(1.5f * uiScale_, 1.5f);
   return FocusReferenceSourceUnderline{
+      .sourceToken =
+          referenceAttributeValueRange(position.line, underlineStartIndex, underlineEndIndex),
       .start = ImVec2(startPos.x, underlineY),
       .end = ImVec2(endPos.x, underlineY),
   };
@@ -2094,6 +2098,7 @@ void TextEditor::remapFocusMetadataForSourceEdit(const SourceEditIntent& intent)
 
     auto node = focusReferenceRopes_.extract(oldLink);
     if (!node.empty()) {
+      remapReferenceChipVisualAnchor(node.mapped().visualAnchor, intent, bufferSize);
       node.key() = link;
       remappedRopes.insert(std::move(node));
     }
@@ -2119,6 +2124,121 @@ bool TextEditor::tryNavigateToFocusReferenceRopeAt(const ImVec2& mousePos) {
   return false;
 }
 
+std::optional<TextEditor::SourceStyleChipBounds> TextEditor::retainedReferenceChipBounds(
+    const FocusReferenceLink& link) const {
+  const auto state = focusReferenceRopes_.find(link);
+  if (state == focusReferenceRopes_.end() || !state->second.visualAnchor) {
+    return std::nullopt;
+  }
+  return referenceChipVisualBounds(*state->second.visualAnchor);
+}
+
+std::optional<TextEditor::ReferenceChipVisualAnchor> TextEditor::referenceChipVisualAnchorFor(
+    const std::optional<SourceStyleChipBounds>& liveChip,
+    const FocusReferenceSourceUnderline& underline) {
+  if (!liveChip || liveChip->kind != SourceStyleChipKind::ReferenceCount ||
+      underline.sourceToken.end <= underline.sourceToken.start) {
+    return std::nullopt;
+  }
+  return ReferenceChipVisualAnchor{.targetHeader = liveChip->anchorRange,
+                                   .sourceToken = underline.sourceToken,
+                                   .labelSizeInFontUnits = liveChip->labelSizeInFontUnits};
+}
+
+void TextEditor::rememberReferenceChipVisualAnchor(FocusReferenceRopeState& state,
+                                                   const FocusReferenceConnectorLayout& layout) {
+  if (layout.visualAnchor) {
+    state.visualAnchor = layout.visualAnchor;
+  }
+}
+
+void TextEditor::remapReferenceChipVisualAnchor(std::optional<ReferenceChipVisualAnchor>& anchor,
+                                                const SourceEditIntent& intent,
+                                                std::size_t bufferSize) {
+  if (!anchor) {
+    return;
+  }
+  // Insertions at either boundary can change the referenced token/header too.
+  const auto touches = [&intent](const SourceByteRange& range) {
+    return intent.offset <= range.end &&
+           (intent.offset >= range.start || intent.removedLength >= range.start - intent.offset);
+  };
+  if (touches(anchor->targetHeader) || touches(anchor->sourceToken)) {
+    anchor.reset();
+    return;
+  }
+  anchor->targetHeader = MapSourceByteRangeForEdit(anchor->targetHeader, intent, bufferSize);
+  anchor->sourceToken = MapSourceByteRangeForEdit(anchor->sourceToken, intent, bufferSize);
+}
+
+int TextEditor::referenceAttributeQuoteIndex(int lineIndex, int tokenStartIndex) const {
+  const Line& line = text_.getLineGlyphs(lineIndex);
+  const auto boundary = [](char ch) { return ch == '\'' || ch == '"' || ch == '<'; };
+  int quoteIndex = tokenStartIndex - 1;
+  while (quoteIndex >= 0 && !boundary(line[quoteIndex].character)) {
+    --quoteIndex;
+  }
+  if (quoteIndex < 0 || line[quoteIndex].character == '<') {
+    return -1;
+  }
+  int assignmentIndex = quoteIndex - 1;
+  while (assignmentIndex >= 0 &&
+         std::isspace(static_cast<unsigned char>(line[assignmentIndex].character))) {
+    --assignmentIndex;
+  }
+  return assignmentIndex >= 0 && line[assignmentIndex].character == '=' ? quoteIndex : -1;
+}
+
+SourceByteRange TextEditor::referenceAttributeValueRange(int lineIndex, int tokenStartIndex,
+                                                         int tokenEndIndex) const {
+  // Retain geometry only when the complete quoted attribute value is known.
+  // A bare identifier cannot prove that surrounding URL syntax stayed unchanged.
+  const Line& line = text_.getLineGlyphs(lineIndex);
+  const int quoteIndex = referenceAttributeQuoteIndex(lineIndex, tokenStartIndex);
+  if (quoteIndex < 0) {
+    return {};
+  }
+  const char quote = line[quoteIndex].character;
+  int quoteEnd = tokenEndIndex;
+  while (quoteEnd < static_cast<int>(line.size()) && line[quoteEnd].character != quote) {
+    ++quoteEnd;
+  }
+  if (quoteEnd == static_cast<int>(line.size())) {
+    return {};
+  }
+  return SourceByteRange{
+      .start = getByteOffsetAtCoordinates(
+          Coordinates(lineIndex, text_.getCharacterColumn(lineIndex, quoteIndex + 1))),
+      .end = getByteOffsetAtCoordinates(
+          Coordinates(lineIndex, text_.getCharacterColumn(lineIndex, quoteEnd))),
+  };
+}
+
+std::optional<TextEditor::SourceStyleChipBounds> TextEditor::referenceChipVisualBounds(
+    const ReferenceChipVisualAnchor& visualAnchor) const {
+  const SourceByteRange anchorRange = visualAnchor.targetHeader;
+  const Coordinates anchor = getCoordinatesAtByteOffset(anchorRange.end);
+  if (isLineHiddenByFocus(anchor.line)) {
+    return std::nullopt;
+  }
+  const float paddingX = std::max(3.0f * uiScale_, 3.0f);
+  const float paddingY = std::max(1.0f * uiScale_, 1.0f);
+  const float gap = std::max(4.0f * uiScale_, 4.0f);
+  const ImVec2 textSize(visualAnchor.labelSizeInFontUnits.x * ImGui::GetFontSize(),
+                        visualAnchor.labelSizeInFontUnits.y * ImGui::GetFontSize());
+  const ImVec2 chipSize(textSize.x + paddingX * 2.0f, textSize.y + paddingY * 2.0f);
+  ImVec2 min = coordinatesToScreenPos(anchor);
+  min.x += gap;
+  min.y += std::max(0.0f, (charAdvance_.y - chipSize.y) * 0.5f);
+  return SourceStyleChipBounds{
+      .min = min,
+      .max = ImVec2(min.x + chipSize.x, min.y + chipSize.y),
+      .kind = SourceStyleChipKind::ReferenceCount,
+      .anchorRange = anchorRange,
+      .labelSizeInFontUnits = visualAnchor.labelSizeInFontUnits,
+  };
+}
+
 std::optional<TextEditor::SourceStyleChipBounds> TextEditor::sourceStyleChipBoundsForDecoration(
     const SourceStyleDecoration& decoration) const {
   if (!decoration.showChip) {
@@ -2128,26 +2248,18 @@ std::optional<TextEditor::SourceStyleChipBounds> TextEditor::sourceStyleChipBoun
   const SourceByteRange anchorRange = decoration.chipRange.end > decoration.chipRange.start
                                           ? decoration.chipRange
                                           : decoration.range;
-  const Coordinates anchor = getCoordinatesAtByteOffset(anchorRange.end);
-  if (isLineHiddenByFocus(anchor.line)) {
-    return std::nullopt;
-  }
-
-  const float paddingX = std::max(3.0f * uiScale_, 3.0f);
-  const float paddingY = std::max(1.0f * uiScale_, 1.0f);
-  const float gap = std::max(4.0f * uiScale_, 4.0f);
   const std::string label = std::to_string(decoration.chipCount);
   const ImVec2 textSize =
       ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f, label.c_str());
-  const ImVec2 chipSize(textSize.x + paddingX * 2.0f, textSize.y + paddingY * 2.0f);
-  ImVec2 min = coordinatesToScreenPos(anchor);
-  min.x += gap;
-  min.y += std::max(0.0f, (charAdvance_.y - chipSize.y) * 0.5f);
-  return SourceStyleChipBounds{
-      .min = min,
-      .max = ImVec2(min.x + chipSize.x, min.y + chipSize.y),
-      .kind = decoration.chipKind,
-  };
+  auto bounds = referenceChipVisualBounds(ReferenceChipVisualAnchor{
+      .targetHeader = anchorRange,
+      .labelSizeInFontUnits =
+          ImVec2(textSize.x / ImGui::GetFontSize(), textSize.y / ImGui::GetFontSize()),
+  });
+  if (bounds) {
+    bounds->kind = decoration.chipKind;
+  }
+  return bounds;
 }
 
 std::optional<TextEditor::SourceStyleChipBounds>
@@ -2301,6 +2413,7 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     const double chordLength = start.distance(tip);
     const std::uint32_t ropeSeed = MixReferenceSeed(link, visibleLinkIndex);
     FocusReferenceRopeState& ropeState = focusReferenceRopes_[link];
+    rememberReferenceChipVisualAnchor(ropeState, *layout);
     const bool lengthChanged =
         ropeState.initialized && std::abs(ropeState.chordLength - chordLength) >
                                      static_cast<double>(std::max(28.0f * uiScale_, 8.0f));
@@ -4149,6 +4262,9 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
 }
 
 void TextEditor::setText(std::string_view text, bool preserveScroll) {
+  for (auto& [link, state] : focusReferenceRopes_) {
+    state.visualAnchor.reset();
+  }
   core_.setText(text, preserveScroll);
 }
 
