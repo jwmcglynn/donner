@@ -5,8 +5,10 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <regex>
 #include <span>
@@ -109,97 +111,87 @@ TextEditor::TextEditor()
 
 TextEditor::~TextEditor() = default;
 
-std::vector<Shortcut> TextEditor::getDefaultShortcuts() {
-  std::vector<Shortcut> shortcuts;
-  shortcuts.resize(static_cast<int>(ShortcutId::Count));
+std::vector<TextEditor::ShortcutBindings> TextEditor::getDefaultShortcuts() {
+  std::vector<ShortcutBindings> shortcuts(static_cast<std::size_t>(ShortcutId::Count));
+  const auto bind = [&shortcuts](ShortcutId id, std::initializer_list<Shortcut> bindings) {
+    shortcuts[static_cast<std::size_t>(id)] = bindings;
+  };
+  constexpr ShortcutModifier kShift = ShortcutModifier::Shift;
+  constexpr ShortcutModifier kCtrl = ShortcutModifier::Ctrl;
+  constexpr ShortcutModifier kAlt = ShortcutModifier::Alt;
 
-  // Basic navigation
-  shortcuts[static_cast<int>(ShortcutId::MoveUp)] = Shortcut(ImGuiKey_UpArrow);
-  shortcuts[static_cast<int>(ShortcutId::SelectUp)] =
-      Shortcut(ImGuiKey_UpArrow, ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::MoveDown)] = Shortcut(ImGuiKey_DownArrow);
-  shortcuts[static_cast<int>(ShortcutId::SelectDown)] =
-      Shortcut(ImGuiKey_DownArrow, ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::MoveLeft)] = Shortcut(ImGuiKey_LeftArrow);
-  shortcuts[static_cast<int>(ShortcutId::SelectLeft)] =
-      Shortcut(ImGuiKey_LeftArrow, ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::MoveWordLeft)] =
-      Shortcut(ImGuiKey_LeftArrow, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::SelectWordLeft)] =
-      Shortcut(ImGuiKey_LeftArrow, ShortcutModifier::Ctrl | ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::MoveRight)] = Shortcut(ImGuiKey_RightArrow);
-  shortcuts[static_cast<int>(ShortcutId::SelectRight)] =
-      Shortcut(ImGuiKey_RightArrow, ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::MoveWordRight)] =
-      Shortcut(ImGuiKey_RightArrow, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::SelectWordRight)] =
-      Shortcut(ImGuiKey_RightArrow, ShortcutModifier::Ctrl | ShortcutModifier::Shift);
+  // Character and line navigation
+  bind(ShortcutId::MoveUp, {Shortcut(ImGuiKey_UpArrow)});
+  bind(ShortcutId::SelectUp, {Shortcut(ImGuiKey_UpArrow, kShift)});
+  bind(ShortcutId::MoveDown, {Shortcut(ImGuiKey_DownArrow)});
+  bind(ShortcutId::SelectDown, {Shortcut(ImGuiKey_DownArrow, kShift)});
+  bind(ShortcutId::MoveLeft, {Shortcut(ImGuiKey_LeftArrow)});
+  bind(ShortcutId::SelectLeft, {Shortcut(ImGuiKey_LeftArrow, kShift)});
+  bind(ShortcutId::MoveRight, {Shortcut(ImGuiKey_RightArrow)});
+  bind(ShortcutId::SelectRight, {Shortcut(ImGuiKey_RightArrow, kShift)});
 
-  // Block navigation
-  shortcuts[static_cast<int>(ShortcutId::MoveUpBlock)] = Shortcut(ImGuiKey_PageUp);
-  shortcuts[static_cast<int>(ShortcutId::SelectUpBlock)] =
-      Shortcut(ImGuiKey_PageUp, ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::MoveDownBlock)] = Shortcut(ImGuiKey_PageDown);
-  shortcuts[static_cast<int>(ShortcutId::SelectDownBlock)] =
-      Shortcut(ImGuiKey_PageDown, ShortcutModifier::Shift);
+  // Word navigation (Option+Arrow on macOS)
+  bind(ShortcutId::MoveWordLeft, {Shortcut(ImGuiKey_LeftArrow, kAlt)});
+  bind(ShortcutId::SelectWordLeft, {Shortcut(ImGuiKey_LeftArrow, kAlt | kShift)});
+  bind(ShortcutId::MoveWordRight, {Shortcut(ImGuiKey_RightArrow, kAlt)});
+  bind(ShortcutId::SelectWordRight, {Shortcut(ImGuiKey_RightArrow, kAlt | kShift)});
 
-  // Document navigation
-  shortcuts[static_cast<int>(ShortcutId::MoveTop)] =
-      Shortcut(ImGuiKey_Home, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::SelectTop)] =
-      Shortcut(ImGuiKey_Home, ShortcutModifier::Ctrl | ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::MoveBottom)] =
-      Shortcut(ImGuiKey_End, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::SelectBottom)] =
-      Shortcut(ImGuiKey_End, ShortcutModifier::Ctrl | ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::MoveStartLine)] = Shortcut(ImGuiKey_Home);
-  shortcuts[static_cast<int>(ShortcutId::SelectStartLine)] =
-      Shortcut(ImGuiKey_Home, ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::MoveEndLine)] = Shortcut(ImGuiKey_End);
-  shortcuts[static_cast<int>(ShortcutId::SelectEndLine)] =
-      Shortcut(ImGuiKey_End, ShortcutModifier::Shift);
+  // Line start and end (Home/End, and Command+Arrow on macOS)
+  bind(ShortcutId::MoveStartLine, {Shortcut(ImGuiKey_Home), Shortcut(ImGuiKey_LeftArrow, kCtrl)});
+  bind(ShortcutId::SelectStartLine,
+       {Shortcut(ImGuiKey_Home, kShift), Shortcut(ImGuiKey_LeftArrow, kCtrl | kShift)});
+  bind(ShortcutId::MoveEndLine, {Shortcut(ImGuiKey_End), Shortcut(ImGuiKey_RightArrow, kCtrl)});
+  bind(ShortcutId::SelectEndLine,
+       {Shortcut(ImGuiKey_End, kShift), Shortcut(ImGuiKey_RightArrow, kCtrl | kShift)});
+
+  // Page navigation
+  bind(ShortcutId::MoveUpBlock, {Shortcut(ImGuiKey_PageUp)});
+  bind(ShortcutId::SelectUpBlock, {Shortcut(ImGuiKey_PageUp, kShift)});
+  bind(ShortcutId::MoveDownBlock, {Shortcut(ImGuiKey_PageDown)});
+  bind(ShortcutId::SelectDownBlock, {Shortcut(ImGuiKey_PageDown, kShift)});
+
+  // Document start and end (Command+Up/Down on macOS)
+  bind(ShortcutId::MoveTop, {Shortcut(ImGuiKey_Home, kCtrl), Shortcut(ImGuiKey_UpArrow, kCtrl)});
+  bind(ShortcutId::SelectTop,
+       {Shortcut(ImGuiKey_Home, kCtrl | kShift), Shortcut(ImGuiKey_UpArrow, kCtrl | kShift)});
+  bind(ShortcutId::MoveBottom,
+       {Shortcut(ImGuiKey_End, kCtrl), Shortcut(ImGuiKey_DownArrow, kCtrl)});
+  bind(ShortcutId::SelectBottom,
+       {Shortcut(ImGuiKey_End, kCtrl | kShift), Shortcut(ImGuiKey_DownArrow, kCtrl | kShift)});
 
   // Editing operations
-  shortcuts[static_cast<int>(ShortcutId::Undo)] = Shortcut(ImGuiKey_Z, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::Redo)] = Shortcut(ImGuiKey_Y, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::DeleteRight)] =
-      Shortcut(ImGuiKey_Delete, ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::ForwardDelete)] = Shortcut(ImGuiKey_Delete);
-  shortcuts[static_cast<int>(ShortcutId::ForwardDeleteWord)] =
-      Shortcut(ImGuiKey_Delete, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::BackwardDelete)] = Shortcut(ImGuiKey_Backspace);
-  shortcuts[static_cast<int>(ShortcutId::BackwardDeleteWord)] =
-      Shortcut(ImGuiKey_Backspace, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::DeleteLeft)] =
-      Shortcut(ImGuiKey_Backspace, ShortcutModifier::Shift);
+  bind(ShortcutId::Undo, {Shortcut(ImGuiKey_Z, kCtrl)});
+  bind(ShortcutId::Redo, {Shortcut(ImGuiKey_Y, kCtrl)});
+  bind(ShortcutId::DeleteRight, {Shortcut(ImGuiKey_Delete, kShift)});
+  bind(ShortcutId::ForwardDelete, {Shortcut(ImGuiKey_Delete)});
+  bind(ShortcutId::ForwardDeleteWord, {Shortcut(ImGuiKey_Delete, kCtrl)});
+  bind(ShortcutId::BackwardDelete, {Shortcut(ImGuiKey_Backspace)});
+  bind(ShortcutId::BackwardDeleteWord, {Shortcut(ImGuiKey_Backspace, kCtrl)});
+  bind(ShortcutId::DeleteLeft, {Shortcut(ImGuiKey_Backspace, kShift)});
 
   // Special operations
-  shortcuts[static_cast<int>(ShortcutId::NewLine)] = Shortcut(ImGuiKey_Enter);
-  shortcuts[static_cast<int>(ShortcutId::Copy)] = Shortcut(ImGuiKey_C, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::Paste)] = Shortcut(ImGuiKey_V, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::Cut)] = Shortcut(ImGuiKey_X, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::SelectAll)] = Shortcut(ImGuiKey_A, ShortcutModifier::Ctrl);
+  bind(ShortcutId::NewLine, {Shortcut(ImGuiKey_Enter)});
+  bind(ShortcutId::Copy, {Shortcut(ImGuiKey_C, kCtrl)});
+  bind(ShortcutId::Paste, {Shortcut(ImGuiKey_V, kCtrl)});
+  bind(ShortcutId::Cut, {Shortcut(ImGuiKey_X, kCtrl)});
+  bind(ShortcutId::SelectAll, {Shortcut(ImGuiKey_A, kCtrl)});
 
   // Code editing
-  shortcuts[static_cast<int>(ShortcutId::Indent)] = Shortcut(ImGuiKey_Tab);
-  shortcuts[static_cast<int>(ShortcutId::DuplicateLine)] =
-      Shortcut(ImGuiKey_D, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::CommentLines)] =
-      Shortcut(ImGuiKey_K, ShortcutModifier::Ctrl | ShortcutModifier::Shift);
-  shortcuts[static_cast<int>(ShortcutId::UncommentLines)] =
-      Shortcut(ImGuiKey_U, ShortcutModifier::Ctrl | ShortcutModifier::Shift);
+  bind(ShortcutId::Indent, {Shortcut(ImGuiKey_Tab)});
+  bind(ShortcutId::DuplicateLine, {Shortcut(ImGuiKey_D, kCtrl)});
+  bind(ShortcutId::CommentLines, {Shortcut(ImGuiKey_K, kCtrl | kShift)});
+  bind(ShortcutId::UncommentLines, {Shortcut(ImGuiKey_U, kCtrl | kShift)});
 
   // Search and replace
-  shortcuts[static_cast<int>(ShortcutId::Find)] = Shortcut(ImGuiKey_F, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::Replace)] = Shortcut(ImGuiKey_H, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::FindNext)] = Shortcut(ImGuiKey_G, ShortcutModifier::Ctrl);
+  bind(ShortcutId::Find, {Shortcut(ImGuiKey_F, kCtrl)});
+  bind(ShortcutId::Replace, {Shortcut(ImGuiKey_H, kCtrl)});
+  bind(ShortcutId::FindNext, {Shortcut(ImGuiKey_G, kCtrl)});
 
   // Autocomplete
-  shortcuts[static_cast<int>(ShortcutId::AutocompleteOpen)] =
-      Shortcut(ImGuiKey_I, ShortcutModifier::Ctrl);
-  shortcuts[static_cast<int>(ShortcutId::AutocompleteSelectActive)] = Shortcut(ImGuiKey_Enter);
-  shortcuts[static_cast<int>(ShortcutId::AutocompleteUp)] = Shortcut(ImGuiKey_UpArrow);
-  shortcuts[static_cast<int>(ShortcutId::AutocompleteDown)] = Shortcut(ImGuiKey_DownArrow);
+  bind(ShortcutId::AutocompleteOpen, {Shortcut(ImGuiKey_I, kCtrl)});
+  bind(ShortcutId::AutocompleteSelectActive, {Shortcut(ImGuiKey_Enter)});
+  bind(ShortcutId::AutocompleteUp, {Shortcut(ImGuiKey_UpArrow)});
+  bind(ShortcutId::AutocompleteDown, {Shortcut(ImGuiKey_DownArrow)});
 
   return shortcuts;
 }
@@ -546,6 +538,36 @@ void TextEditor::executeAction(TextEditor::ShortcutId actionId, bool& keepAutoco
       break;
     case TextEditor::ShortcutId::SelectUp: moveUp(1, /*select*/ true); break;
     case TextEditor::ShortcutId::SelectDown: moveDown(1, /*select*/ true); break;
+    case TextEditor::ShortcutId::SelectLeft:
+      moveLeft(1, /*select*/ true, /*wordMode*/ false);
+      break;
+    case TextEditor::ShortcutId::SelectRight:
+      moveRight(1, /*select*/ true, /*wordMode*/ false);
+      break;
+    case TextEditor::ShortcutId::MoveWordLeft:
+      moveLeft(1, /*select*/ false, /*wordMode*/ true);
+      break;
+    case TextEditor::ShortcutId::SelectWordLeft:
+      moveLeft(1, /*select*/ true, /*wordMode*/ true);
+      break;
+    case TextEditor::ShortcutId::MoveWordRight:
+      moveRight(1, /*select*/ false, /*wordMode*/ true);
+      break;
+    case TextEditor::ShortcutId::SelectWordRight:
+      moveRight(1, /*select*/ true, /*wordMode*/ true);
+      break;
+    case TextEditor::ShortcutId::MoveStartLine: moveHome(/*select*/ false); break;
+    case TextEditor::ShortcutId::SelectStartLine: moveHome(/*select*/ true); break;
+    case TextEditor::ShortcutId::MoveEndLine: moveEnd(/*select*/ false); break;
+    case TextEditor::ShortcutId::SelectEndLine: moveEnd(/*select*/ true); break;
+    case TextEditor::ShortcutId::MoveUpBlock: moveUp(pageMoveLines(), /*select*/ false); break;
+    case TextEditor::ShortcutId::SelectUpBlock: moveUp(pageMoveLines(), /*select*/ true); break;
+    case TextEditor::ShortcutId::MoveDownBlock: moveDown(pageMoveLines(), /*select*/ false); break;
+    case TextEditor::ShortcutId::SelectDownBlock: moveDown(pageMoveLines(), /*select*/ true); break;
+    case TextEditor::ShortcutId::MoveTop: moveTop(/*select*/ false); break;
+    case TextEditor::ShortcutId::SelectTop: moveTop(/*select*/ true); break;
+    case TextEditor::ShortcutId::MoveBottom: moveBottom(/*select*/ false); break;
+    case TextEditor::ShortcutId::SelectBottom: moveBottom(/*select*/ true); break;
     case TextEditor::ShortcutId::DeleteRight:
     case TextEditor::ShortcutId::ForwardDelete: delete_(); break;
     case TextEditor::ShortcutId::DeleteLeft:
@@ -591,12 +613,11 @@ void TextEditor::handleKeyboardInputs() {
 
   // Handle shortcuts
   ShortcutId actionId = ShortcutId::Count;
-  for (int i = 0; i < shortcuts_.size(); i++) {
-    const auto& shortcut = shortcuts_[i];
+  for (std::size_t i = 0; i < shortcuts_.size(); i++) {
     ShortcutId currentAction = ShortcutId::Count;
     bool additionalChecks = true;
 
-    if (shortcut.matches(io, shortcutRepeats(static_cast<ShortcutId>(i)))) {
+    if (shortcutMatches(static_cast<ShortcutId>(i), io)) {
       currentAction = static_cast<ShortcutId>(i);
 
       switch (currentAction) {
@@ -618,6 +639,25 @@ void TextEditor::handleKeyboardInputs() {
         case ShortcutId::SelectDown:
           additionalChecks = !autocompleteOpened_ && editorFocused;
           break;
+
+        case ShortcutId::SelectLeft:
+        case ShortcutId::SelectRight:
+        case ShortcutId::MoveWordLeft:
+        case ShortcutId::SelectWordLeft:
+        case ShortcutId::MoveWordRight:
+        case ShortcutId::SelectWordRight:
+        case ShortcutId::MoveStartLine:
+        case ShortcutId::SelectStartLine:
+        case ShortcutId::MoveEndLine:
+        case ShortcutId::SelectEndLine:
+        case ShortcutId::MoveUpBlock:
+        case ShortcutId::SelectUpBlock:
+        case ShortcutId::MoveDownBlock:
+        case ShortcutId::SelectDownBlock:
+        case ShortcutId::MoveTop:
+        case ShortcutId::SelectTop:
+        case ShortcutId::MoveBottom:
+        case ShortcutId::SelectBottom: additionalChecks = editorFocused; break;
 
         case ShortcutId::AutocompleteUp:
         case ShortcutId::AutocompleteDown:
@@ -4088,8 +4128,7 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
                       ImVec2(calculateUISize(220), height), true, ImGuiWindowFlags_NoScrollbar);
 
     // Process find next shortcut
-    findNext_ = shortcuts_[static_cast<int>(ShortcutId::FindNext)].matches(
-        ImGui::GetIO(), shortcutRepeats(ShortcutId::FindNext));
+    findNext_ = shortcutMatches(ShortcutId::FindNext, ImGui::GetIO());
 
     if (findJustOpened_) {
       findWord_ = getSelectedText();
@@ -4367,7 +4406,15 @@ bool TextEditor::hasSelection() const {
 }
 
 void TextEditor::setShortcut(ShortcutId id, Shortcut shortcut) {
-  shortcuts_[static_cast<int>(id)] = shortcut;
+  shortcuts_[static_cast<std::size_t>(id)] = {shortcut};
+}
+
+bool TextEditor::shortcutMatches(ShortcutId id, const ImGuiIO& io) const {
+  const bool repeat = shortcutRepeats(id);
+  const ShortcutBindings& bindings = shortcuts_[static_cast<std::size_t>(id)];
+  return std::any_of(bindings.begin(), bindings.end(), [&io, repeat](const Shortcut& shortcut) {
+    return shortcut.matches(io, repeat);
+  });
 }
 
 bool TextEditor::shortcutRepeats(ShortcutId id) {
@@ -4565,6 +4612,15 @@ void TextEditor::ensureCursorVisible() {
 int TextEditor::getPageSize() const {
   const float height = ImGui::GetWindowHeight() - 20.0f;
   return static_cast<int>(std::floor(height / charAdvance_.y));
+}
+
+int TextEditor::pageMoveLines() const {
+  // The page height comes from the editor window, which exists only while render() runs.
+  if (ImGui::GetCurrentContext() == nullptr || ImGui::GetCurrentWindowRead() == nullptr ||
+      charAdvance_.y <= 0.0f) {
+    return 1;
+  }
+  return std::max(1, getPageSize() - 1);
 }
 
 // `UndoRecord::UndoRecord`, `UndoRecord::undo`, and `UndoRecord::redo`

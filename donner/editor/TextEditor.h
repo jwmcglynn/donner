@@ -191,6 +191,9 @@ public:
     Count
   };
 
+  /// Key bindings for one action; any of them triggers it.
+  using ShortcutBindings = std::vector<Shortcut>;
+
   // Type aliases re-exporting the canonical definitions from
   // `TextEditorCore`. These keep the existing `TextEditor::Palette`,
   // `TextEditor::LanguageDefinition`, etc. names working so call sites do
@@ -507,20 +510,20 @@ public:
    */
   void moveDown(int amount = 1, bool select = false);
 
-  /// Move the cursor left by character steps.
-  /// @param amount Number of character steps.
+  /// Move the cursor left by characters or words.
+  /// @param amount Number of steps.
   /// @param select Whether to extend the selection.
-  /// @param wordMode Reserved by the core; movement is currently characterwise.
+  /// @param wordMode Whether each step moves to the start of the current or previous word.
   void moveLeft(int amount = 1, bool select = false, bool wordMode = false);
-  /// Move the cursor right by character steps.
-  /// @param amount Number of character steps.
+  /// Move the cursor right by characters or words.
+  /// @param amount Number of steps.
   /// @param select Whether to extend the selection.
-  /// @param wordMode Reserved by the core; movement is currently characterwise.
+  /// @param wordMode Whether each step moves to the end of the current or next word.
   void moveRight(int amount = 1, bool select = false, bool wordMode = false);
   /// Move the cursor to the start of the first line.
   /// @param select Whether to extend the selection.
   void moveTop(bool select = false);
-  /// Move the cursor to the start of the final line.
+  /// Move the cursor to the end of the final line.
   /// @param select Whether to extend the selection.
   void moveBottom(bool select = false);
   /// Move the cursor to the start of its current line.
@@ -828,7 +831,7 @@ public:
   void setEditorFontSize(float size) { editorFontSize_ = size; }
 
   /**
-   * Bind a keyboard shortcut to an editor action.
+   * Bind a keyboard shortcut to an editor action, replacing every existing binding for it.
    *
    * @param id The action to bind
    * @param shortcut The keyboard shortcut to bind to the action
@@ -936,9 +939,15 @@ public:
    * and search) to specific key combinations. The returned shortcuts
    * can be further customized at runtime.
    *
-   * @return A vector of Shortcut objects representing the default shortcuts.
+   * Navigation follows macOS text editing: Home/End and Ctrl+Left/Right move to the line start and
+   * end, Alt+Left/Right move by word, Ctrl+Up/Down and Ctrl+Home/End move to the document start and
+   * end, and Shift extends the selection. `Ctrl` is ImGui's primary shortcut modifier, which ImGui
+   * reports for the Command key on macOS.
+   *
+   * @return The bindings for each action, indexed by \ref ShortcutId. Any binding triggers its
+   * action.
    */
-  static std::vector<Shortcut> getDefaultShortcuts();
+  static std::vector<ShortcutBindings> getDefaultShortcuts();
   /// Return the static default dark syntax palette.
   static const Palette& getDarkPalette();
 
@@ -993,6 +1002,18 @@ private:
    * @param id The action to query.
    */
   static bool shortcutRepeats(ShortcutId id);
+
+  /**
+   * Report whether any binding for \p id matches the current key state, honoring
+   * \ref shortcutRepeats.
+   *
+   * @param id The action to query.
+   * @param io ImGui input state for the current frame.
+   */
+  bool shortcutMatches(ShortcutId id, const ImGuiIO& io) const;
+
+  /// Number of lines Page Up and Page Down move: the visible height less one line of context.
+  int pageMoveLines() const;
 
   using RegexList = std::vector<std::pair<std::regex, ColorIndex>>;
   using UndoBuffer = TextEditorCore::UndoBuffer;
@@ -1262,7 +1283,7 @@ private:
   std::size_t autocompleteReplacementEndOffset_ = 0;    //!< Provider replacement end
 
   // Keyboard shortcuts
-  std::vector<Shortcut> shortcuts_;  //!< Configured shortcuts
+  std::vector<ShortcutBindings> shortcuts_;  //!< Configured bindings, indexed by ShortcutId
 
   // Visual markers. The `scrollbarMarkers_` flag + `changedLines_` diff
   // set are owned by `core_` so insert/delete bookkeeping stays in one

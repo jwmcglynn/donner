@@ -623,6 +623,14 @@ WordClass ClassifyChar(char c) {
   return WordClass::Punctuation;
 }
 
+/// True for bytes that keyboard word movement treats as part of a word: ASCII letters, digits and
+/// underscore, and every byte of a multi-byte UTF-8 sequence, so a word step never stops inside a
+/// character.
+bool IsWordMovementByte(char c) {
+  const auto byte = static_cast<unsigned char>(c);
+  return byte >= 0x80 || std::isalnum(byte) || c == '_';
+}
+
 }  // namespace
 
 Coordinates TextEditorCore::findWordStart(const Coordinates& from) const {
@@ -1272,11 +1280,13 @@ void TextEditorCore::moveDown(int amount, bool select) {
   }
 }
 
-void TextEditorCore::moveLeft(int amount, bool select, bool /*wordMode*/) {
+void TextEditorCore::moveLeft(int amount, bool select, bool wordMode) {
   auto oldPos = state_.cursorPosition;
 
   while (amount-- > 0) {
-    if (state_.cursorPosition.column > 0) {
+    if (wordMode) {
+      state_.cursorPosition = previousWordStart(state_.cursorPosition);
+    } else if (state_.cursorPosition.column > 0) {
       // Move left within line
       state_.cursorPosition.column--;
     } else {
@@ -1313,12 +1323,14 @@ void TextEditorCore::moveLeft(int amount, bool select, bool /*wordMode*/) {
   scrollToCursor_ = true;
 }
 
-void TextEditorCore::moveRight(int amount, bool select, bool /*wordMode*/) {
+void TextEditorCore::moveRight(int amount, bool select, bool wordMode) {
   auto oldPos = state_.cursorPosition;
 
   while (amount-- > 0) {
     int maxCol = text_.getLineMaxColumn(state_.cursorPosition.line);
-    if (state_.cursorPosition.column < maxCol) {
+    if (wordMode) {
+      state_.cursorPosition = nextWordEnd(state_.cursorPosition);
+    } else if (state_.cursorPosition.column < maxCol) {
       // Move right within line
       state_.cursorPosition.column++;
     } else {
@@ -1354,74 +1366,101 @@ void TextEditorCore::moveRight(int amount, bool select, bool /*wordMode*/) {
 }
 
 void TextEditorCore::moveTop(bool select) {
-  const auto oldPos = state_.cursorPosition;
-  setCursorPosition(Coordinates(0, 0));
-
-  if (state_.cursorPosition != oldPos) {
-    if (select) {
-      interactiveEnd_ = oldPos;
-      interactiveStart_ = state_.cursorPosition;
-    } else {
-      interactiveStart_ = interactiveEnd_ = state_.cursorPosition;
-    }
-    setSelection(interactiveStart_, interactiveEnd_);
-  }
+  moveCursorTo(Coordinates(0, 0), select);
 }
 
 void TextEditorCore::moveBottom(bool select) {
-  const auto oldPos = getCursorPosition();
-  const auto newPos = Coordinates(text_.getTotalLines() - 1, 0);
-  setCursorPosition(newPos);
+  const int lastLine = std::max(0, text_.getTotalLines() - 1);
+  moveCursorTo(Coordinates(lastLine, text_.getLineMaxColumn(lastLine)), select);
+}
+
+void TextEditorCore::moveHome(bool select) {
+  moveCursorTo(Coordinates(state_.cursorPosition.line, 0), select);
+}
+
+void TextEditorCore::moveEnd(bool select) {
+  const int line = state_.cursorPosition.line;
+  moveCursorTo(Coordinates(line, text_.getLineMaxColumn(line)), select);
+}
+
+void TextEditorCore::moveCursorTo(const Coordinates& position, bool select) {
+  const Coordinates oldPos = state_.cursorPosition;
+  setCursorPosition(position);
+  if (state_.cursorPosition == oldPos) {
+    return;
+  }
 
   if (select) {
-    interactiveStart_ = oldPos;
-    interactiveEnd_ = newPos;
+    if (oldPos == interactiveEnd_) {
+      interactiveEnd_ = state_.cursorPosition;
+    } else if (oldPos == interactiveStart_) {
+      interactiveStart_ = state_.cursorPosition;
+    } else {
+      interactiveStart_ = oldPos;
+      interactiveEnd_ = state_.cursorPosition;
+    }
   } else {
-    interactiveStart_ = interactiveEnd_ = newPos;
+    interactiveStart_ = interactiveEnd_ = state_.cursorPosition;
   }
   setSelection(interactiveStart_, interactiveEnd_);
 }
 
-void TextEditorCore::moveHome(bool select) {
-  const auto oldPos = state_.cursorPosition;
-  setCursorPosition(Coordinates(state_.cursorPosition.line, 0));
-
-  if (state_.cursorPosition != oldPos) {
-    if (select) {
-      if (oldPos == interactiveStart_) {
-        interactiveStart_ = state_.cursorPosition;
-      } else if (oldPos == interactiveEnd_) {
-        interactiveEnd_ = state_.cursorPosition;
-      } else {
-        interactiveStart_ = state_.cursorPosition;
-        interactiveEnd_ = oldPos;
-      }
-    } else {
-      interactiveStart_ = interactiveEnd_ = state_.cursorPosition;
-    }
-    setSelection(interactiveStart_, interactiveEnd_);
+Coordinates TextEditorCore::previousWordStart(const Coordinates& from) const {
+  if (text_.getTotalLines() == 0) {
+    return from;
   }
+
+  int line = std::clamp(from.line, 0, text_.getTotalLines() - 1);
+  int index = text_.getCharacterIndex(Coordinates(line, from.column));
+  // Skip the separators before the position, continuing onto earlier lines.
+  while (true) {
+    const Line& glyphs = text_.getLineGlyphs(line);
+    index = std::min(index, static_cast<int>(glyphs.size()));
+    while (index > 0 && !IsWordMovementByte(glyphs[index - 1].character)) {
+      --index;
+    }
+    if (index > 0 || line == 0) {
+      break;
+    }
+    --line;
+    index = static_cast<int>(text_.getLineGlyphs(line).size());
+  }
+
+  const Line& glyphs = text_.getLineGlyphs(line);
+  while (index > 0 && IsWordMovementByte(glyphs[index - 1].character)) {
+    --index;
+  }
+  return Coordinates(line, text_.getCharacterColumn(line, index));
 }
 
-void TextEditorCore::moveEnd(bool select) {
-  const auto oldPos = state_.cursorPosition;
-  setCursorPosition(Coordinates(state_.cursorPosition.line, text_.getLineMaxColumn(oldPos.line)));
-
-  if (state_.cursorPosition != oldPos) {
-    if (select) {
-      if (oldPos == interactiveEnd_) {
-        interactiveEnd_ = state_.cursorPosition;
-      } else if (oldPos == interactiveStart_) {
-        interactiveStart_ = state_.cursorPosition;
-      } else {
-        interactiveStart_ = oldPos;
-        interactiveEnd_ = state_.cursorPosition;
-      }
-    } else {
-      interactiveStart_ = interactiveEnd_ = state_.cursorPosition;
-    }
-    setSelection(interactiveStart_, interactiveEnd_);
+Coordinates TextEditorCore::nextWordEnd(const Coordinates& from) const {
+  if (text_.getTotalLines() == 0) {
+    return from;
   }
+
+  const int lastLine = text_.getTotalLines() - 1;
+  int line = std::clamp(from.line, 0, lastLine);
+  int index = text_.getCharacterIndex(Coordinates(line, from.column));
+  // Skip the separators after the position, continuing onto later lines.
+  while (true) {
+    const Line& glyphs = text_.getLineGlyphs(line);
+    const int size = static_cast<int>(glyphs.size());
+    while (index < size && !IsWordMovementByte(glyphs[index].character)) {
+      ++index;
+    }
+    if (index < size || line == lastLine) {
+      break;
+    }
+    ++line;
+    index = 0;
+  }
+
+  const Line& glyphs = text_.getLineGlyphs(line);
+  const int size = static_cast<int>(glyphs.size());
+  while (index < size && IsWordMovementByte(glyphs[index].character)) {
+    ++index;
+  }
+  return Coordinates(line, text_.getCharacterColumn(line, index));
 }
 
 // ---------------------------------------------------------------------------

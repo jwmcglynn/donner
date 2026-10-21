@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <optional>
 #include <ostream>
 #include <span>
@@ -1007,8 +1008,9 @@ protected:
 
   [[nodiscard]] const std::vector<int>& ChangedLinesDirect() const { return editor.changedLines_; }
 
-  [[nodiscard]] const Shortcut& ShortcutForDirect(TextEditor::ShortcutId id) const {
-    return editor.shortcuts_[static_cast<int>(id)];
+  [[nodiscard]] const TextEditor::ShortcutBindings& ShortcutForDirect(
+      TextEditor::ShortcutId id) const {
+    return editor.shortcuts_[static_cast<std::size_t>(id)];
   }
 
   void DetectIndentationStyleDirect() { editor.detectIndentationStyle(); }
@@ -1898,9 +1900,9 @@ TEST_F(TextEditorTests, EditingForwardersDelegateToCore) {
   EXPECT_THAT(ChangedLinesDirect(), ElementsAre(1));
 
   editor.setShortcut(TextEditor::ShortcutId::MoveUp, Shortcut(ImGuiKey_W, ShortcutModifier::Ctrl));
-  const Shortcut& moveUpShortcut = ShortcutForDirect(TextEditor::ShortcutId::MoveUp);
-  EXPECT_EQ(moveUpShortcut.key1, ImGuiKey_W);
-  EXPECT_EQ(moveUpShortcut.modifiers, ShortcutModifier::Ctrl);
+  EXPECT_THAT(ShortcutForDirect(TextEditor::ShortcutId::MoveUp),
+              ElementsAre(AllOf(Field("key1", &Shortcut::key1, ImGuiKey_W),
+                                Field("modifiers", &Shortcut::modifiers, ShortcutModifier::Ctrl))));
 
   editor.setColorizerEnabled(false);
   editor.colorize(0, -1);
@@ -2349,14 +2351,6 @@ TEST_F(TextEditorTests, ExecuteActionDirectCoversAliasesClipboardAndDefaultCases
   EXPECT_EQ(editor.getText(), "copy paste");
 
   const TextEditor::ShortcutId defaultOnlyActions[] = {
-      TextEditor::ShortcutId::MoveWordLeft,      TextEditor::ShortcutId::SelectWordLeft,
-      TextEditor::ShortcutId::MoveWordRight,     TextEditor::ShortcutId::SelectWordRight,
-      TextEditor::ShortcutId::MoveUpBlock,       TextEditor::ShortcutId::SelectUpBlock,
-      TextEditor::ShortcutId::MoveDownBlock,     TextEditor::ShortcutId::SelectDownBlock,
-      TextEditor::ShortcutId::MoveTop,           TextEditor::ShortcutId::SelectTop,
-      TextEditor::ShortcutId::MoveBottom,        TextEditor::ShortcutId::SelectBottom,
-      TextEditor::ShortcutId::MoveStartLine,     TextEditor::ShortcutId::SelectStartLine,
-      TextEditor::ShortcutId::MoveEndLine,       TextEditor::ShortcutId::SelectEndLine,
       TextEditor::ShortcutId::ForwardDeleteWord, TextEditor::ShortcutId::BackwardDeleteWord,
       TextEditor::ShortcutId::Unindent,          TextEditor::ShortcutId::Find,
       TextEditor::ShortcutId::Replace,           TextEditor::ShortcutId::FindNext,
@@ -2540,9 +2534,9 @@ TEST_F(TextEditorTests, PublicEditingWrappersForwardToCore) {
   EXPECT_EQ(editor.getText(), "tart\n\tbeta gamma");
 
   editor.setShortcut(TextEditor::ShortcutId::MoveUp, Shortcut(ImGuiKey_W, ShortcutModifier::Ctrl));
-  const Shortcut& moveUpShortcut = ShortcutForDirect(TextEditor::ShortcutId::MoveUp);
-  EXPECT_EQ(moveUpShortcut.key1, ImGuiKey_W);
-  EXPECT_EQ(moveUpShortcut.modifiers, ShortcutModifier::Ctrl);
+  EXPECT_THAT(ShortcutForDirect(TextEditor::ShortcutId::MoveUp),
+              ElementsAre(AllOf(Field("key1", &Shortcut::key1, ImGuiKey_W),
+                                Field("modifiers", &Shortcut::modifiers, ShortcutModifier::Ctrl))));
 }
 
 // ============================================================================
@@ -4911,8 +4905,7 @@ TEST_F(TextEditorTests, NavigationKeysMoveAndExtendFromInsideAWord) {
        "lipse id=\"e\"/>"},
       {"Command+Up", ImGuiKey_UpArrow, true, false, false, Coordinates(0, 0), ""},
       {"Command+Down", ImGuiKey_DownArrow, true, false, false, Coordinates(2, 6), ""},
-      {"Command+Shift+Up", ImGuiKey_UpArrow, true, true, false, Coordinates(0, 0),
-       "<svg>\n  <el"},
+      {"Command+Shift+Up", ImGuiKey_UpArrow, true, true, false, Coordinates(0, 0), "<svg>\n  <el"},
       {"Command+Shift+Down", ImGuiKey_DownArrow, true, true, false, Coordinates(2, 6),
        "lipse id=\"e\"/>\n</svg>"},
       {"Command+Home", ImGuiKey_Home, true, false, false, Coordinates(0, 0), ""},
