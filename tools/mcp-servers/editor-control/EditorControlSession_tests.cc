@@ -973,6 +973,43 @@ TEST(EditorControlSessionTest, SourcePaneMalformedEditKeepsPreviewStale) {
   EXPECT_FALSE(repaired.body["source"].value("preview_stale", true)) << repaired.body.dump(2);
 }
 
+TEST(EditorControlSessionTest, SourcePaneSvgProjectionFailureKeepsPreviewStale) {
+  constexpr std::string_view kScene =
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 20'><g/></svg>";
+  constexpr std::string_view kInvalidStyle = "<style><rect/></style>";
+  EditorControlSession session;
+  const ToolCallResult loaded = session.handleToolCall(
+      "load_svg", json{{"svg_source", std::string(kScene)}, {"render_after_load", false}});
+  ASSERT_FALSE(loaded.isError) << loaded.body.dump(2);
+  const std::size_t offset = kScene.find("<g/>");
+  ASSERT_NE(offset, std::string_view::npos);
+  const auto edit = [&session, offset](std::size_t count, std::string_view replacement) {
+    return session.handleToolCall(
+        "edit_svg_source",
+        json{{"dispatch", "source_pane"},
+             {"edits", json::array({json{
+                           {"offset", offset}, {"delete_count", count}, {"insert", replacement}}})},
+             {"render_after_edit", false}});
+  };
+
+  const ToolCallResult broken = edit(4, kInvalidStyle);
+  ASSERT_FALSE(broken.isError) << broken.body.dump(2);
+  EXPECT_TRUE(broken.body["source_diagnostic"].is_null()) << broken.body.dump(2);
+  ASSERT_TRUE(broken.body["parse_diagnostic"].is_string()) << broken.body.dump(2);
+  EXPECT_TRUE(broken.body["source"].value("preview_stale", false)) << broken.body.dump(2);
+  EXPECT_EQ(broken.body["source"]["last_parse_error"], broken.body["parse_diagnostic"]);
+  EXPECT_EQ(broken.body["source"]["loaded_source_revision"],
+            loaded.body["source"]["loaded_source_revision"]);
+
+  const ToolCallResult repaired = edit(kInvalidStyle.size(), "<g/>");
+  ASSERT_FALSE(repaired.isError) << repaired.body.dump(2);
+  EXPECT_TRUE(repaired.body["parse_diagnostic"].is_null()) << repaired.body.dump(2);
+  EXPECT_FALSE(repaired.body["source"].value("preview_stale", true)) << repaired.body.dump(2);
+  EXPECT_TRUE(repaired.body["source"]["last_parse_error"].is_null());
+  EXPECT_EQ(repaired.body["source"]["loaded_source_revision"],
+            repaired.body["source"]["source_revision"]);
+}
+
 // Source-pane dispatch honors canvas overrides the same way the reload dispatch does.
 TEST(EditorControlSessionTest, SourcePaneDispatchAppliesCanvasOverrides) {
   constexpr std::string_view kScene =
