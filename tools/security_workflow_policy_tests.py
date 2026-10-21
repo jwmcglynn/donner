@@ -3415,32 +3415,36 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 if mode is None:
                     self.assertIsNone(fragment)
                     continue
-                key = write if mode == "write" else read
-                self.assertNotIn(key, fragment)
-                self.assertNotIn("remote_header", fragment)
-                self.assertEqual({"headers": {"x-buildbuddy-api-key": [key]}},
-                                 json.loads(credential))
-                lines = fragment.splitlines()
-                self.assertIn("build --remote_cache=grpcs://remote.buildbuddy.io", lines)
                 # Trusted pull requests write `pr-` partitions; main runs and the Renovate
                 # reader use main's.
-                prefix = "pr-" if arguments.get("trusted") == "true" and mode == "write" else "main-"
-                self.assertEqual(["build --remote_instance_name=%subuntu24-20261005.1-X64" % prefix],
-                                 [line for line in lines if "remote_instance_name" in line])
-                self.assertIn("instance=%subuntu24-20261005.1-X64 " % prefix, output)
-                self.assertIn("build --remote_download_outputs=minimal", lines)
-                self.assertIn(r"build --remote_download_regex=.*/rules_playwright[+][^/]*/browsers/.*",
-                              lines)
-                self.assertFalse(any("remote_executor" in line or "bes_" in line
-                                     for line in lines))
-                upload = ("build --remote_upload_local_results" if mode == "write"
-                          else "build --noremote_upload_local_results")
-                self.assertIn(upload, lines)
-                self.assertEqual(1, sum("upload_local_results" in line for line in lines))
-                self.assertIn("build --credential_helper=remote.buildbuddy.io="
-                              "%s/runner-temp/buildbuddy/helper" % directory, lines)
-                self.assertFalse(any(line.startswith("import") for line in lines))
-                self.assertEqual(sorted(BUILDBUDDY_FALLBACK), _fallback_lines(fragment))
+                trusted_writer = arguments.get("trusted") == "true" and mode == "write"
+                self._assert_buildbuddy_fragment(
+                    fragment, credential, output, Path(directory),
+                    key=write if mode == "write" else read, upload=mode == "write",
+                    instance=("pr-" if trusted_writer else "main-") + "ubuntu24-20261005.1-X64")
+
+    def _assert_buildbuddy_fragment(self, fragment, credential, output, directory, *, key, upload,
+                                    instance):
+        """The action's fragment and credential helper for one configured run."""
+        self.assertNotIn(key, fragment)
+        self.assertNotIn("remote_header", fragment)
+        self.assertEqual({"headers": {"x-buildbuddy-api-key": [key]}}, json.loads(credential))
+        lines = fragment.splitlines()
+        self.assertIn("build --remote_cache=grpcs://remote.buildbuddy.io", lines)
+        self.assertEqual(["build --remote_instance_name=%s" % instance],
+                         [line for line in lines if "remote_instance_name" in line])
+        self.assertIn("instance=%s " % instance, output)
+        self.assertIn("build --remote_download_outputs=minimal", lines)
+        self.assertIn(r"build --remote_download_regex=.*/rules_playwright[+][^/]*/browsers/.*",
+                      lines)
+        self.assertFalse(any("remote_executor" in line or "bes_" in line for line in lines))
+        self.assertIn("build --remote_upload_local_results" if upload
+                      else "build --noremote_upload_local_results", lines)
+        self.assertEqual(1, sum("upload_local_results" in line for line in lines))
+        self.assertIn("build --credential_helper=remote.buildbuddy.io="
+                      "%s/runner-temp/buildbuddy/helper" % directory, lines)
+        self.assertFalse(any(line.startswith("import") for line in lines))
+        self.assertEqual(sorted(BUILDBUDDY_FALLBACK), _fallback_lines(fragment))
 
     def test_main_runs_use_only_main_instances_and_pull_requests_never_write_them(self):
         """Exhaustively: every run the action configures on main uses a `main-` instance, and no
