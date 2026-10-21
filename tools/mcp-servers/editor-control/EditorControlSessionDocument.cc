@@ -44,6 +44,11 @@ bool ParseSourceEditDispatch(std::string_view dispatch, bool* sourcePane, std::s
   return true;
 }
 
+/// The reason of \p diagnostic as JSON, or null.
+json DiagnosticReasonJson(const std::optional<ParseDiagnostic>& diagnostic) {
+  return diagnostic.has_value() ? json(std::string(diagnostic->reason.str())) : json();
+}
+
 /// Source-pane intent kind for an edit that removes \p deleteCount bytes and inserts \p insert.
 SourceEditIntentKind IntentKindFor(std::size_t deleteCount, std::string_view insert) {
   if (deleteCount == 0) {
@@ -301,10 +306,29 @@ std::optional<std::string> EditorControlSession::sourcePaneDispatchError(bool re
   if (!edits) {
     return "dispatch 'source_pane' requires edits";
   }
-  if (!app_.hasDocument() || loadedSourceRevision_ != sourceRevision_) {
-    return "dispatch 'source_pane' requires a parsed document matching the draft";
+  // Keystrokes continue from the document's source bytes, which a failed keystroke still updates.
+  if (!app_.hasDocument() || !app_.document().document().hasSourceStore() ||
+      app_.document().document().source() != currentSourceText_) {
+    return "dispatch 'source_pane' requires a document whose source matches the draft";
   }
   return std::nullopt;
+}
+
+void EditorControlSession::recordSourcePanePreviewState(
+    bool documentMatchesDraft, const std::optional<ParseDiagnostic>& sourceDiagnostic,
+    const std::optional<ParseDiagnostic>& parseDiagnostic) {
+  // A failed incremental edit still commits its bytes but keeps the last valid DOM, so the preview
+  // is current only when the bytes match and no source diagnostic is pending.
+  if (documentMatchesDraft && !sourceDiagnostic.has_value()) {
+    loadedSourceRevision_ = sourceRevision_;
+    lastParseError_.reset();
+    return;
+  }
+  const std::optional<ParseDiagnostic>& pending =
+      sourceDiagnostic.has_value() ? sourceDiagnostic : parseDiagnostic;
+  if (pending.has_value()) {
+    lastParseError_ = std::string(pending->reason.str());
+  }
 }
 
 ToolCallResult EditorControlSession::dispatchSourcePaneEdits(
@@ -345,22 +369,15 @@ ToolCallResult EditorControlSession::dispatchSourcePaneEdits(
       document.hasSourceStore() && document.source() == currentSourceText_;
   const std::optional<ParseDiagnostic> sourceDiagnostic = document.xmlDocument().sourceDiagnostic();
   const std::optional<ParseDiagnostic> parseDiagnostic = app_.document().lastParseError();
-  if (documentMatchesDraft) {
-    loadedSourceRevision_ = sourceRevision_;
-    lastParseError_.reset();
-  } else if (parseDiagnostic.has_value()) {
-    lastParseError_ = std::string(parseDiagnostic->reason.str());
-  }
+  recordSourcePanePreviewState(documentMatchesDraft, sourceDiagnostic, parseDiagnostic);
   ToolCallResult out;
   out.body = json{
       {"ok", true},
       {"dispatch", "source_pane"},
       {"edits", std::move(dispatched)},
       {"document_matches_draft", documentMatchesDraft},
-      {"source_diagnostic",
-       sourceDiagnostic.has_value() ? json(std::string(sourceDiagnostic->reason.str())) : json()},
-      {"parse_diagnostic",
-       parseDiagnostic.has_value() ? json(std::string(parseDiagnostic->reason.str())) : json()},
+      {"source_diagnostic", DiagnosticReasonJson(sourceDiagnostic)},
+      {"parse_diagnostic", DiagnosticReasonJson(parseDiagnostic)},
       {"source", sourceStateJson()},
   };
 

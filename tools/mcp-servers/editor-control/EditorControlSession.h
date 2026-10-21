@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/EditorApp.h"
@@ -158,6 +159,10 @@ private:
   /// Why `edit_svg_source` cannot use `dispatch: source_pane` for this request, if it cannot.
   [[nodiscard]] std::optional<std::string> sourcePaneDispatchError(bool replaceSource,
                                                                    bool edits) const;
+  /// Mark the preview current after source-pane edits, or keep it stale with the pending reason.
+  void recordSourcePanePreviewState(bool documentMatchesDraft,
+                                    const std::optional<ParseDiagnostic>& sourceDiagnostic,
+                                    const std::optional<ParseDiagnostic>& parseDiagnostic);
   /// Apply `edit_svg_source` edits one at a time through the source pane's incremental dispatch.
   ToolCallResult dispatchSourcePaneEdits(const std::vector<SourceEditIntent>& intents,
                                          const LoadOptions& options);

@@ -2146,18 +2146,19 @@ ParseResult<StructuralReparse> ParseStructuralSubtree(XMLDocument& document, con
 
 /// Tree limits for replacing \p node with \p parsedNode under a renamed tag. The replaced
 /// element stays live once detached, so nothing it holds is credited back. The new element adds
-/// one node and its own attributes; children shaped like the parsed ones move into it unchanged,
-/// and otherwise every parsed child subtree is cloned.
-std::optional<ParseDiagnostic> ValidateOpeningTagRenameLimits(XMLDocument& document,
-                                                              const XMLNode& parent,
-                                                              const XMLNode& parsedNode,
-                                                              bool reuseChildren,
-                                                              SourceRange diagnosticRange) {
+/// one node and its own attributes. Children shaped like the parsed ones move into it unchanged;
+/// otherwise children are reconciled like a subtree edit, which reuses children with matching ids
+/// and clones the rest (children without an id lose their nodes, as in a subtree edit), and the
+/// parsed children's attributes are all counted.
+std::optional<ParseDiagnostic> ValidateOpeningTagRenameLimits(
+    XMLDocument& document, const XMLNode& parent, const XMLNode& node, const XMLNode& parsedNode,
+    bool reuseChildren, SourceRange diagnosticRange) {
   const auto& context = document.registry().ctx().get<XMLDocumentContext>();
-  const std::optional<std::uint64_t> subtreeNodes =
-      reuseChildren ? std::optional<std::uint64_t>(1) : CountSubtreeNodes(parsedNode);
+  std::optional<std::uint64_t> subtreeNodes =
+      reuseChildren ? std::optional<std::uint64_t>(0) : CountNewNodesRequired(node, parsedNode);
   const std::uint64_t liveNodes = CountLiveXmlNodes(document);
-  if (!subtreeNodes || liveNodes > context.maximumSourceEditTreeNodes ||
+  if (!subtreeNodes || !CheckedAccumulate(*subtreeNodes, 1) ||
+      liveNodes > context.maximumSourceEditTreeNodes ||
       *subtreeNodes > context.maximumSourceEditTreeNodes - liveNodes) {
     return MakeEditDiagnostic("Structural edit exceeds the document tree-node limit",
                               diagnosticRange);
@@ -2266,7 +2267,7 @@ std::optional<ParseDiagnostic> PreflightOpeningTagRename(XMLDocument& document,
       parsedNode->nextSibling().has_value()) {
     return std::nullopt;
   }
-  return ValidateOpeningTagRenameLimits(document, *parent, *parsedNode,
+  return ValidateOpeningTagRenameLimits(document, *parent, edit.node, *parsedNode,
                                         ChildrenMatchByPosition(edit.node, *parsedNode),
                                         intent.range);
 }
@@ -2385,7 +2386,7 @@ ApplySourceEditResult ApplyOpeningTagRename(XMLDocument& document, const XMLEdit
   const XMLNode& parsedNode = parsed.result().node;
   const bool reuseChildren = ChildrenMatchByPosition(oldNode, parsedNode);
   if (std::optional<ParseDiagnostic> diagnostic = ValidateOpeningTagRenameLimits(
-          document, parent, parsedNode, reuseChildren, intent.range)) {
+          document, parent, oldNode, parsedNode, reuseChildren, intent.range)) {
     result.diagnostic = std::move(diagnostic);
     return result;
   }
@@ -2406,10 +2407,12 @@ ApplySourceEditResult ApplyOpeningTagRename(XMLDocument& document, const XMLEdit
       parsedChild = parsedChild->nextSibling();
     }
   } else {
-    for (std::optional<XMLNode> parsedChild = parsedNode.firstChild(); parsedChild.has_value();
-         parsedChild = parsedChild->nextSibling()) {
-      renamed.appendChild(CloneParsedNodeInto(document, *parsedChild, nodeSpan->start));
+    // Children differ in shape, for example when the reparse keeps a comment the initial parse
+    // dropped: reconcile them like a subtree edit, so children with matching ids keep their nodes.
+    while (std::optional<XMLNode> child = oldNode.firstChild()) {
+      renamed.appendChild(*child);
     }
+    ReplaceChildrenFromParsedNode(document, renamed, parsedNode, nodeSpan->start);
   }
   SyncValueFromParsed(renamed, parsedNode);
   SetSourceOffsetsFromParsed(renamed, parsedNode, nodeSpan->start);
