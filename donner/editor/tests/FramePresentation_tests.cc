@@ -382,6 +382,64 @@ TEST(FramePresentationTest, SolidPenReplacementCarriesMatchingPaintAndChrome) {
   EXPECT_THAT(artworkOnly->selectionBounds(), SizeIs(1));
 }
 
+TEST(FramePresentationTest, CssOwnedPenGeometryKeepsComputedPresentationUntilStyleRemoval) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <path id="path" d="M10 10 L30 10 L30 30 Z" fill="red"
+            style="d: 'M40 40 L60 40 L60 60 Z'"/>
+    </svg>)svg"),
+              IsTrue());
+  auto path = app.document().document().querySelector("#path");
+  ASSERT_THAT(path, Ne(std::nullopt));
+  app.setSelection(*path);
+  SelectTool tool;
+  const Entity entity = path->unsafeEntityHandle().entity();
+  const std::array independent{entity};
+  const auto capture = CapturedPresentation::Capture(app.document().document(), Identity(app, 1),
+                                                     app.selectedElements(), {}, independent,
+                                                     app.selectedElements());
+  const auto resources = FramePresentationTestAccess::resources(capture, {RectTile(entity, 40, 0)});
+  const Path latest =
+      PathBuilder().moveTo({10, 10}).lineTo({80, 10}).lineTo({80, 30}).closePath().build();
+  auto input = Input(app, tool, 1);
+  input.detail = SelectionChromeDetail::PathOutlinesOnly;
+  input.penPathGeometryLocal = std::make_shared<const Path>(latest);
+  input.pendingDocumentMutations = true;
+  input.livePathReplacement = CapturedPresentation::Capture(
+      app.document().document(), Identity(app, 2), app.selectedElements(), {}, independent, {},
+      std::nullopt, *path);
+  const auto cssFrame = FramePresentation::Build(resources, input).frame;
+  ASSERT_THAT(cssFrame, Ne(nullptr));
+  EXPECT_THAT(cssFrame->replacementPaint(), Eq(std::nullopt));
+  ASSERT_THAT(cssFrame->chrome().paths, SizeIs(1));
+  EXPECT_THAT(cssFrame->chrome().paths.front().pathDoc.bounds(),
+              Eq(Box2d::FromXYWH(40, 40, 20, 20)));
+
+  path->setStyle("");
+  ++input.frameId;
+  input.livePathReplacement = CapturedPresentation::Capture(
+      app.document().document(), Identity(app, 3), app.selectedElements(), {}, independent, {},
+      std::nullopt, *path);
+  const auto attributeFrame = FramePresentation::Build(resources, input).frame;
+  ASSERT_THAT(attributeFrame, Ne(nullptr));
+  ASSERT_THAT(attributeFrame->replacementPaint(), Ne(std::nullopt));
+  EXPECT_THAT(attributeFrame->replacementPaint()->livePathPreview->pathDoc, Eq(latest));
+  EXPECT_THAT(path->getAttribute("d"), testing::Optional(RcString("M10 10 L30 10 L30 30 Z")));
+
+  path->setStyle("d: 'M40 40 L60 40 L60 60 Z'");
+  ++input.frameId;
+  input.livePathReplacement = CapturedPresentation::Capture(
+      app.document().document(), Identity(app, 4), app.selectedElements(), {}, independent, {},
+      std::nullopt, *path);
+  const auto restoredCssFrame = FramePresentation::Build(resources, input).frame;
+  ASSERT_THAT(restoredCssFrame, Ne(nullptr));
+  EXPECT_THAT(restoredCssFrame->replacementPaint(), Eq(std::nullopt));
+  ASSERT_THAT(restoredCssFrame->chrome().paths, SizeIs(1));
+  EXPECT_THAT(restoredCssFrame->chrome().paths.front().pathDoc.bounds(),
+              Eq(Box2d::FromXYWH(40, 40, 20, 20)));
+}
+
 TEST(FramePresentationTest, LatestPenGeometryUsesOwningPaintAndFullCapturedTransform) {
   EditorApp app;
   ASSERT_TRUE(

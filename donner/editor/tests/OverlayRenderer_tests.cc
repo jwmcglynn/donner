@@ -848,6 +848,51 @@ TEST(OverlayRendererTest, CaptureLivePathPreviewAcceptsSolidPaintedPath) {
   EXPECT_DOUBLE_EQ(snapshot.livePathPreview->strokeOpacity, 0.75);
 }
 
+TEST(OverlayRendererTest, CaptureLivePathPreviewRejectsCssOwnedGeometry) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <style>#rule { d: 'M40 40 L60 40 L60 60 Z'; }
+             #none { d: none; } #empty { d: ''; }</style>
+      <path id="rule" d="M10 10 L30 10 L30 30 Z"/>
+      <path id="inline" d="M10 10 L30 10 L30 30 Z"
+            style="d: 'M40 40 L60 40 L60 60 Z'"/>
+      <path id="equal" d="M10 10 L30 10 L30 30 Z"
+            style="d: 'M10 10 L30 10 L30 30 Z'"/>
+      <path id="none" d="M10 10 L30 10 L30 30 Z"/>
+      <path id="empty" d="M10 10 L30 10 L30 30 Z"/>
+    </svg>)svg"),
+              testing::IsTrue());
+
+  for (const std::string_view selector : {"#rule", "#inline", "#equal", "#none", "#empty"}) {
+    SCOPED_TRACE(selector);
+    const auto path = app.document().document().querySelector(selector);
+    ASSERT_THAT(path, testing::Ne(std::nullopt));
+    EXPECT_THAT(CaptureLivePathPreview(*path).livePathPreview, testing::Eq(std::nullopt));
+  }
+}
+
+TEST(OverlayRendererTest, RemovingCssGeometryRestoresAttributePreviewEligibility) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="path" d="M10 10 L30 10 L30 30 Z"
+            style="d: 'M40 40 L60 40 L60 60 Z'"/>
+    </svg>)svg"),
+              testing::IsTrue());
+  auto path = app.document().document().querySelector("#path");
+  ASSERT_THAT(path, testing::Ne(std::nullopt));
+  EXPECT_THAT(CaptureLivePathPreview(*path).livePathPreview, testing::Eq(std::nullopt));
+
+  path->setStyle("");
+  const auto restored = CaptureLivePathPreview(*path);
+  ASSERT_THAT(restored.livePathPreview, testing::Ne(std::nullopt));
+  EXPECT_THAT(restored.livePathPreview->pathDoc.bounds(),
+              testing::Eq(Box2d::FromXYWH(10, 10, 20, 20)));
+  path->setStyle("d: 'M40 40 L60 40 L60 60 Z'");
+  EXPECT_THAT(CaptureLivePathPreview(*path).livePathPreview, testing::Eq(std::nullopt));
+}
+
 TEST(OverlayRendererTest, CaptureLivePathPreviewRejectsUnsupportedInputs) {
   constexpr std::string_view kSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
