@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -22,6 +23,8 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/xml/XMLDocument.h"
+#include "donner/base/xml/XMLParser.h"
+#include "donner/base/xml/XMLSourceStore.h"
 #include "donner/editor/CommandQueue.h"
 #include "donner/svg/SVGDocument.h"
 
@@ -65,6 +68,12 @@ public:
   /// Replace the inner document. Clears any pending commands - they would
   /// reference now-invalid entities. Bumps the frame version.
   void setDocument(svg::SVGDocument document);
+
+  /// Whether this document was loaded or fully reparsed with the editor's established policy.
+  [[nodiscard]] bool usesEditorParserForSourceRecovery() const;
+
+  /// Current source-pane recovery identity, available only while the original policy is intact.
+  [[nodiscard]] std::optional<EditorCommand::SourceRecoveryState> sourceRecoveryState() const;
 
   /// Outcome of `setDocumentMaybeStructural`. `FullReplace` means the new
   /// doc differs structurally from the current one (or there was no
@@ -266,6 +275,16 @@ private:
                                std::optional<ParseDiagnostic> fatalError);
 
   std::optional<svg::SVGDocument> document_;
+  struct SourceRecoveryPolicy {
+    xml::XMLParser::Options parserOptions;
+    xml::XMLSourceStore::ResourceLimits sourceLimits;
+    std::weak_ptr<const xml::XMLSourceStore> sourceStore;
+    svg::SVGDocument::ResourcePolicySnapshot resources;
+    bool matchesSource(const xml::XMLDocument& document) const;
+  };
+  /// Capture only after an editor-owned parse; foreign installations clear this binding.
+  void captureSourceRecoveryPolicy();
+  std::optional<SourceRecoveryPolicy> sourceRecoveryPolicy_;
   CommandQueue queue_;
   std::atomic<std::uint64_t> frameVersion_{0};
   std::atomic<std::uint64_t> documentGeneration_{0};

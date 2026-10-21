@@ -106,6 +106,27 @@ inline std::ostream& operator<<(std::ostream& os, FontResourcePreflight::Status 
 class SVGDocument {
 public:
   struct Settings;
+
+  /// Opaque, equality-comparable identity of the current resource-loading and parsing policy.
+  class ResourcePolicySnapshot {
+  public:
+    bool operator==(const ResourcePolicySnapshot&) const = default;
+
+  private:
+    friend class SVGDocument;
+    ResourcePolicySnapshot(std::uint64_t generation, std::shared_ptr<const void> familyIdentity,
+                           std::size_t maximumPayloadBytes)
+        : generation_(generation),
+          familyIdentity_(std::move(familyIdentity)),
+          maximumPayloadBytes_(maximumPayloadBytes) {}
+
+    std::uint64_t generation_;
+    std::shared_ptr<const void> familyIdentity_;
+    std::size_t maximumPayloadBytes_;
+  };
+
+  /// Capture policy identity, or nullopt when the current resource policy is inconsistent.
+  std::optional<ResourcePolicySnapshot> resourcePolicySnapshot() const;
   /// Callback used to parse external SVG content referenced from within a document.
   using SvgParseCallback = std::function<std::optional<SVGDocumentHandle>(
       const std::vector<uint8_t>& svgContent, ParseWarningSink& warningSink)>;

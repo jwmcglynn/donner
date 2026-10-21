@@ -84,7 +84,7 @@ public:
     }
   }
 
-  /// Identity of the current resource loader and processing policy for derived caches.
+  /// Identity of the resource loader, processing mode and SVG parse callback for derived caches.
   uint64_t cacheGeneration() const { return cacheGeneration_; }
 
   /// Current processing policy, shared with non-resource document systems.
@@ -99,6 +99,7 @@ public:
    */
   void setSvgParseCallback(SubDocumentCache::ParseCallback callback) {
     svgParseCallback_ = std::move(callback);
+    cacheGeneration_ = NextCacheGeneration();
   }
 
   /**

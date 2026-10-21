@@ -709,6 +709,21 @@ SVGDocument::SVGDocument(SVGDocumentHandle documentState, Settings settings,
   registry.ctx().emplace<xml::components::XMLNamespaceContext>(registry);
 }
 
+std::optional<SVGDocument::ResourcePolicySnapshot> SVGDocument::resourcePolicySnapshot() const {
+  return withReadAccess([&](DocumentReadAccess&) -> std::optional<ResourcePolicySnapshot> {
+    const auto& contexts = registry().ctx();
+    const auto* resources = contexts.find<components::ResourceManagerContext>();
+    const auto* family = contexts.find<components::DocumentResourceFamilyContext>();
+    const auto* payload = contexts.find<components::ParsedPayloadResourceBudget>();
+    if (!resources || !family || !family->budget || !payload ||
+        payload->familyBudget() != family->budget) {
+      return std::nullopt;
+    }
+    return ResourcePolicySnapshot{resources->cacheGeneration(), family->budget,
+                                  payload->maximumRetainedBytes()};
+  });
+}
+
 SVGDocument::SVGDocument() : SVGDocument(Settings()) {}
 
 SVGDocument::SVGDocument(Settings settings)

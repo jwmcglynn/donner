@@ -1,3 +1,4 @@
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -6,6 +7,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/base/xml/XMLParser.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
@@ -18,13 +20,16 @@
 #include "donner/editor/ViewportSvgExport.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
+#include "donner/svg/tests/SourceRecoveryPolicyTestUtils.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::xml::internal {
+std::uint64_t PublicParseInvocationCountForTesting();
 std::uint64_t ProjectedTextSpanResolutionCountForTesting(const XMLNode& parent);
 }  // namespace donner::xml::internal
 
@@ -1501,6 +1506,406 @@ TEST(EditorSyncTest, SourceInsertedImageBuildsWithoutReparse) {
             keptEntity);
   tests::CompareBitmapToBitmap(RenderDocument(app.document().document()), expected,
                                "source_inserted_image", tests::PixelmatchIdentityParams());
+}
+
+TEST(EditorSyncTest, TagRenameKeepsCustomEntityPaintOnTheActualSvgDocument) {
+  constexpr std::string_view kSvg =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red"><!ENTITY label "Hi">]><svg xmlns="http://www.w3.org/2000/svg" width="16" height="12"><rect id="shape" width="10" height="10" cx="5" cy="5" r="4" fill="&paint;"/><text id="label" x="12" y="11">&label;</text></svg>)";
+  for (const bool preciseIntent : {true, false}) {
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(kSvg));
+    const auto label = GetElementByIdOrDie(app.document().document(), "#label");
+    app.setSelection(label);
+    const auto priorBefore = captureAttributeSnapshot(label, "data-prior", std::nullopt);
+    ASSERT_TRUE(app.setAttributeOnSelection("data-prior", "kept"));
+    ASSERT_TRUE(app.flushFrame());
+    app.undoTimeline().record("Earlier edit", priorBefore,
+                              captureAttributeSnapshot(label, "data-prior", "kept"));
+    const auto historyBefore = app.undoTimeline().entryCount();
+    const std::string before(app.document().document().source());
+    app.recordDocumentSourceUndoOnNextFlush("Rename", label, before, true);
+    const std::size_t offset = before.find("<rect") + 1;
+    std::string source(before);
+    source.replace(offset, 4, "circle");
+    std::string previous(before);
+    const SourceEditIntent edit{.offset = offset, .removedLength = 4, .replacement = "circle"};
+    const auto parseBefore = xml::internal::PublicParseInvocationCountForTesting();
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, edit, source, &previous).dispatchedMutation);
+    EXPECT_FALSE(app.document().queue().empty())
+        << "Entity documents use established full recovery";
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
+                testing::Optional(testing::Eq("red")));
+    ASSERT_TRUE(app.flushFrame());
+    EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting() - parseBefore,
+                testing::Eq(1u));
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(historyBefore + 1));
+    EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Eq(std::nullopt));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
+                testing::Optional(testing::Eq("red")));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#label")
+                    .cast<svg::SVGTextElement>()
+                    .textContent(),
+                testing::Eq("Hi"));
+    EXPECT_THAT(app.selectedElements(),
+                testing::ElementsAre(GetElementByIdOrDie(app.document().document(), "#label")));
+    EXPECT_THAT(svg::test::PixelAt(RenderDocument(app.document().document()), 5, 5),
+                testing::ElementsAre(255, 0, 0, 255));
+    app.undo();
+    ASSERT_TRUE(app.flushFrame());
+    EXPECT_THAT(app.document().document().source(), testing::Eq(before));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").type(),
+                testing::Eq(svg::ElementType::Rect));
+    app.redo();
+    ASSERT_TRUE(app.flushFrame());
+    EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").type(),
+                testing::Eq(svg::ElementType::Circle));
+  }
+}
+
+TEST(EditorSyncTest,
+     RestrictiveEntityPolicyLeavesDraftAndLastValidProjectionWithoutDefaultRecovery) {
+  constexpr std::string_view kSvg =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" fill="&paint;"/></svg>)";
+  for (const bool preciseIntent : {true, false}) {
+    xml::XMLParser::Options policy;
+    policy.parseCustomEntities = true;
+    policy.maxEntitySubstitutions = 1;
+    auto xmlResult = xml::XMLParser::Parse(kSvg, policy);
+    ASSERT_TRUE(xmlResult.hasResult());
+    ParseWarningSink sink;
+    auto svgResult = svg::parser::SVGParser::ParseXMLDocument(std::move(xmlResult.result()), sink);
+    ASSERT_TRUE(svgResult.hasResult());
+    EditorApp app;
+    app.document().setDocument(std::move(svgResult.result()));
+    const auto original = app.document().document();
+    const auto generation = app.document().documentGeneration();
+    const std::size_t offset = kSvg.find("<rect") + 1;
+    std::string source(kSvg);
+    source.replace(offset, 4, "circle stroke='&paint;'");
+    std::string previous(kSvg);
+    const SourceEditIntent edit{
+        .offset = offset, .removedLength = 4, .replacement = "circle stroke='&paint;'"};
+    const auto count = xml::internal::PublicParseInvocationCountForTesting();
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, edit, source, &previous).dispatchedMutation);
+    EXPECT_TRUE(app.document().queue().empty());
+    (void)app.flushFrame();
+    EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting(), testing::Eq(count));
+    EXPECT_THAT(app.document().document(), testing::Eq(original));
+    EXPECT_THAT(app.document().documentGeneration(), testing::Eq(generation));
+    EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Ne(std::nullopt));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
+                testing::Optional(testing::Eq("red")));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").type(),
+                testing::Eq(svg::ElementType::Rect));
+    const auto options = xml::XMLParser::SourceOptions(app.document().document().xmlDocument());
+    ASSERT_THAT(options, testing::Ne(std::nullopt));
+    EXPECT_THAT(options->maxEntitySubstitutions, testing::Eq(1u));
+  }
+}
+
+TEST(EditorSyncTest, EntityIntentBatchQueuesAtMostOneOriginalPolicyRecovery) {
+  constexpr std::string_view kSvg =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" fill="&paint;"/></svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  std::vector<SourceEditIntent> intents;
+  std::string source(kSvg);
+  for (int i = 0; i < 100; ++i) {
+    const std::size_t position = source.find("/>");
+    intents.push_back(SourceEditIntent{.offset = position, .removedLength = 0, .replacement = " "});
+    source.insert(position, " ");
+  }
+  std::string previous(kSvg);
+  std::optional<std::string> writeback;
+  const auto before = xml::internal::PublicParseInvocationCountForTesting();
+  const auto began = std::chrono::steady_clock::now();
+  EXPECT_TRUE(
+      DispatchSourceEditIntents(app, intents, source, &previous, &writeback).dispatchedMutation);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting() - before, testing::Eq(1u));
+  RecordProperty("entity_batch_input_bytes", std::to_string(source.size()));
+  RecordProperty("entity_batch_parse_calls", "1");
+  RecordProperty("entity_batch_recovery_us",
+                 std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - began)
+                                    .count()));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+  EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+              testing::Eq(std::nullopt));
+}
+
+TEST(EditorSyncTest, ChangedRecoveryPolicyRefusesAtQueueAndFlushWithoutReplacementEffects) {
+  constexpr std::string_view kSvg =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" fill="&paint;"/></svg>)";
+  for (int mode = 0; mode < 6; ++mode) {
+    for (const bool afterQueue : {false, true}) {
+      SCOPED_TRACE(testing::Message() << "mode=" << mode << " afterQueue=" << afterQueue);
+      EditorApp app;
+      ASSERT_TRUE(app.loadFromString(kSvg));
+      const auto shape = GetElementByIdOrDie(app.document().document(), "#shape");
+      app.setSelection(shape);
+      const auto priorBefore = captureAttributeSnapshot(shape, "data-prior", std::nullopt);
+      ASSERT_TRUE(app.setAttributeOnSelection("data-prior", "kept"));
+      ASSERT_TRUE(app.flushFrame());
+      app.undoTimeline().record("Earlier edit", priorBefore,
+                                captureAttributeSnapshot(shape, "data-prior", "kept"));
+      const std::string before(app.document().document().source());
+      const auto generation = app.document().documentGeneration();
+      const auto history = app.undoTimeline().entryCount();
+      int callbacks = 0;
+      if (!afterQueue) {
+        svg::test::ChangeSourceRecoveryPolicy(app.document().document(), mode, callbacks);
+      }
+      std::string source(before);
+      const auto offset = source.find("<rect") + 1;
+      source.replace(offset, 4, "circle");
+      std::string previous(before);
+      const auto parses = xml::internal::PublicParseInvocationCountForTesting();
+      app.recordDocumentSourceUndoOnNextFlush("Rename", shape, before, true);
+      EXPECT_TRUE(
+          DispatchSourceEdit(
+              app, true,
+              SourceEditIntent{.offset = offset, .removedLength = 4, .replacement = "circle"},
+              source, &previous)
+              .dispatchedMutation);
+      if (afterQueue) {
+        svg::test::ChangeSourceRecoveryPolicy(app.document().document(), mode, callbacks);
+      }
+      EXPECT_FALSE(app.flushFrame());
+      EXPECT_FALSE(app.document().lastFlushResult().replacedDocument);
+      EXPECT_FALSE(app.document().lastFlushResult().appliedCommands);
+      EXPECT_THAT(app.document().documentGeneration(), testing::Eq(generation));
+      // The user's changed raw draft remains one undoable source edit; recovery adds no reset.
+      EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(history + 1));
+      EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting(), testing::Eq(parses));
+      EXPECT_THAT(callbacks, testing::Eq(0));
+      EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+      EXPECT_THAT(app.selectedElements(), testing::ElementsAre(shape));
+      EXPECT_THAT(shape.getAttribute("fill"), testing::Optional(testing::Eq("red")));
+      EXPECT_THAT(shape.type(), testing::Eq(svg::ElementType::Rect));
+      EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                  testing::Ne(std::nullopt));
+    }
+  }
+}
+
+TEST(EditorSyncTest, RefusedRecoveryKeepsEarlierValidCommandsBeforeCoalescing) {
+  const std::string before =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" fill="&paint;"/></svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(before));
+  const auto shape = GetElementByIdOrDie(app.document().document(), "#shape");
+  app.applyMutation(
+      EditorCommand::SetTransformCommand(shape, Transform2d::Translate(Vector2d(7, 9))));
+  const auto offset = before.find("<rect") + 1;
+  std::string source(before);
+  source.replace(offset, 4, "circle");
+  std::string previous(before);
+  EXPECT_TRUE(DispatchSourceEdit(
+                  app, true,
+                  SourceEditIntent{.offset = offset, .removedLength = 4, .replacement = "circle"},
+                  source, &previous)
+                  .dispatchedMutation);
+  int callbacks = 0;
+  svg::test::ChangeSourceRecoveryPolicy(app.document().document(), 1, callbacks);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.document().lastFlushResult().replacedDocument);
+  EXPECT_TRUE(app.document().lastFlushResult().onlyTransformCommands);
+  EXPECT_THAT(shape.cast<svg::SVGGraphicsElement>().transform(),
+              testing::Eq(Transform2d::Translate(Vector2d(7, 9))));
+  EXPECT_THAT(shape.type(), testing::Eq(svg::ElementType::Rect));
+}
+
+TEST(EditorSyncTest, NewerRawDraftInvalidatesQueuedRecoveryWithoutParsing) {
+  const std::string before =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" fill="&paint;"/></svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(before));
+  const auto offset = before.find("<rect") + 1;
+  std::string source(before);
+  source.replace(offset, 4, "circle");
+  std::string previous(before);
+  EXPECT_TRUE(DispatchSourceEdit(
+                  app, true,
+                  SourceEditIntent{.offset = offset, .removedLength = 4, .replacement = "circle"},
+                  source, &previous)
+                  .dispatchedMutation);
+  auto document = app.document().document().xmlDocument();
+  const auto end = document.source().size();
+  ASSERT_TRUE(document
+                  .applySourceEdit(xml::XMLEditIntent{
+                      .range = SourceRange{FileOffset::Offset(end), FileOffset::Offset(end)},
+                      .replacement = " ",
+                      .sourceVersion = document.sourceVersion()})
+                  .applied);
+  const auto parses = xml::internal::PublicParseInvocationCountForTesting();
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting(), testing::Eq(parses));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source + " "));
+  EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").type(),
+              testing::Eq(svg::ElementType::Rect));
+}
+
+TEST(EditorSyncTest, LatestValidRecoveryCoalescesToOneParse) {
+  const std::string before =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" fill="&paint;"/></svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(before));
+  const auto offset = before.find("<rect") + 1;
+  std::string previous(before);
+  std::string source(before);
+  const auto parses = xml::internal::PublicParseInvocationCountForTesting();
+  for (const std::string name : {"circle", "ellipse"}) {
+    const auto oldLength = source.find(' ', offset) - offset;
+    source.replace(offset, oldLength, name);
+    EXPECT_TRUE(
+        DispatchSourceEdit(
+            app, true,
+            SourceEditIntent{.offset = offset, .removedLength = oldLength, .replacement = name},
+            source, &previous)
+            .dispatchedMutation);
+  }
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting() - parses, testing::Eq(1u));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+  EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").type(),
+              testing::Eq(svg::ElementType::Ellipse));
+}
+
+TEST(EditorSyncTest, UnacceptedNewPrologKeepsLaterFragmentsDiagnosticAndDecodedValues) {
+  const std::string before =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" fill="red"/></svg>)";
+  const std::string invalidProlog = R"(<!DOCTYPE svg [<!ENTITY paint "blue">)";
+  for (const bool flushInitial : {false, true}) {
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(before));
+    std::string source = invalidProlog + before;
+    std::string previous(before);
+    EXPECT_TRUE(DispatchSourceEdit(
+                    app, true,
+                    SourceEditIntent{.offset = 0, .removedLength = 0, .replacement = invalidProlog},
+                    source, &previous)
+                    .dispatchedMutation);
+    if (flushInitial) {
+      (void)app.flushFrame();
+    }
+    const auto offset = source.find("red");
+    source.replace(offset, 3, "&paint;");
+    EXPECT_TRUE(
+        DispatchSourceEdit(
+            app, true,
+            SourceEditIntent{.offset = offset, .removedLength = 3, .replacement = "&paint;"},
+            source, &previous)
+            .dispatchedMutation);
+    (void)app.flushFrame();
+    EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
+                testing::Optional(testing::Eq("red")));
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Ne(std::nullopt));
+  }
+}
+
+TEST(EditorSyncTest, FreshDoctypeSourceRecoveryPreservesUndoTimeline) {
+  const std::string initial = R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="shape"/></svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(initial));
+  const auto shape = GetElementByIdOrDie(app.document().document(), "#shape");
+  app.setSelection(shape);
+  const auto priorBefore = captureAttributeSnapshot(shape, "data-prior", std::nullopt);
+  ASSERT_TRUE(app.setAttributeOnSelection("data-prior", "kept"));
+  ASSERT_TRUE(app.flushFrame());
+  app.undoTimeline().record("Earlier edit", priorBefore,
+                            captureAttributeSnapshot(shape, "data-prior", "kept"));
+  const std::string before(app.document().document().source());
+  const auto history = app.undoTimeline().entryCount();
+  const std::string dtd = R"(<!DOCTYPE svg [<!ENTITY paint "red">]>)";
+  const std::string source = dtd + before;
+  std::string previous(before);
+  app.recordDocumentSourceUndoOnNextFlush("Add doctype", shape, before, true);
+  EXPECT_TRUE(DispatchSourceEdit(
+                  app, true, SourceEditIntent{.offset = 0, .removedLength = 0, .replacement = dtd},
+                  source, &previous)
+                  .dispatchedMutation);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(history + 1));
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(app.document().document().source(), testing::Eq(before));
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+}
+
+TEST(EditorSyncTest, LargeEntityTypingBatchUsesOneBoundedRecoveryParse) {
+  std::string before =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg">)";
+  for (int i = 0; i < 8000; ++i) {
+    before += i < 900 ? R"(<rect fill="&paint;" width="1" height="1"/>)"
+                      : R"(<rect fill="red" width="1" height="1"/>)";
+  }
+  before += "</svg>";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(before));
+  std::string source(before);
+  std::vector<SourceEditIntent> intents;
+  for (int i = 0; i < 100; ++i) {
+    const auto offset = source.rfind("/>");
+    source.insert(offset, " ");
+    intents.push_back(SourceEditIntent{.offset = offset, .removedLength = 0, .replacement = " "});
+  }
+  std::string previous(before);
+  std::optional<std::string> writeback;
+  const auto parses = xml::internal::PublicParseInvocationCountForTesting();
+  const auto began = std::chrono::steady_clock::now();
+  EXPECT_TRUE(
+      DispatchSourceEditIntents(app, intents, source, &previous, &writeback).dispatchedMutation);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting() - parses, testing::Eq(1u));
+  RecordProperty("entity_large_input_bytes", std::to_string(source.size()));
+  RecordProperty("entity_large_element_count", "8001");
+  RecordProperty("entity_large_custom_references", "900");
+  RecordProperty("entity_large_parse_calls", "1");
+  RecordProperty("entity_large_recovery_us",
+                 std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - began)
+                                    .count()));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+}
+
+TEST(EditorSyncTest, ReplacedSourceStoreWithoutPolicyDoesNotAuthorizeDefaultRecovery) {
+  constexpr std::string_view kSvg =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" fill="&paint;"/></svg>)";
+  for (const bool preciseIntent : {true, false}) {
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(kSvg));
+    auto xmlDocument = app.document().document().xmlDocument();
+    xmlDocument.setSource(std::string(kSvg));
+    ASSERT_THAT(xml::XMLParser::SourceOptions(xmlDocument), testing::Eq(std::nullopt));
+    const auto generation = app.document().documentGeneration();
+    const auto offset = kSvg.find("<rect") + 1;
+    std::string source(kSvg);
+    source.replace(offset, 4, "circle");
+    std::string previous(kSvg);
+    const auto count = xml::internal::PublicParseInvocationCountForTesting();
+    EXPECT_TRUE(DispatchSourceEdit(
+                    app, preciseIntent,
+                    SourceEditIntent{.offset = offset, .removedLength = 4, .replacement = "circle"},
+                    source, &previous)
+                    .dispatchedMutation);
+    EXPECT_TRUE(app.document().queue().empty());
+    (void)app.flushFrame();
+    EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting(), testing::Eq(count));
+    EXPECT_THAT(app.document().documentGeneration(), testing::Eq(generation));
+    EXPECT_THAT(xmlDocument.sourceDiagnostic(), testing::Ne(std::nullopt));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
+                testing::Optional(testing::Eq("red")));
+  }
 }
 
 // The reported source-pane sequence: typing into `<ellipse` turns it into an unknown element, and

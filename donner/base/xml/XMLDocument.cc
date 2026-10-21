@@ -2044,6 +2044,11 @@ void AppendAttributeMutations(XMLNode& node, const AttributeMap& currentAttribut
 
 SourceEditClassification ClassifySourceEdit(const XMLDocument& document, SourceEditRange range) {
   SourceEditClassification classification;
+  const auto& context = document.sharedRegistry()->ctx().get<XMLDocumentContext>();
+  if (!XMLParser::SourceOptions(document).has_value() || context.declaredDoctypeInternalSubset ||
+      context.sourceRequiresDocumentEntityParser || context.sourceRequiresDocumentReparse) {
+    return classification;
+  }
   classification.attribute = GetAttributeValueEdit(document, range);
   if (classification.attribute.has_value()) {
     classification.scope = ReparseScope::AttributeValue;
@@ -2895,6 +2900,20 @@ ApplySourceEditResult ApplyClassifiedSourceEdit(XMLDocument& document, const XML
                                          std::move(result));
   }
 
+  const auto& context = document.registry().ctx().get<XMLDocumentContext>();
+  if (!XMLParser::SourceOptions(document).has_value()) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Original source parser policy is unavailable; a full document reparse is required",
+        intent.range);
+    return result;
+  }
+  if (context.declaredDoctypeInternalSubset || context.sourceRequiresDocumentEntityParser ||
+      context.sourceRequiresDocumentReparse) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Source edits with unreparsed document or entity context require a full document reparse",
+        intent.range);
+    return result;
+  }
   result.diagnostic = MakeEditDiagnostic(
       "Only attribute-value, opening-tag, text-node, and element-subtree source edits are "
       "implemented",
@@ -3117,6 +3136,10 @@ const XMLSourceStore* XMLDocument::sourceStore() const {
   return registry_->ctx().get<XMLDocumentContext>().sourceStoreHolder->store.get();
 }
 
+std::shared_ptr<const XMLSourceStore> XMLDocument::sharedSourceStore() const {
+  return registry_->ctx().get<XMLDocumentContext>().sourceStoreHolder->store;
+}
+
 void XMLDocument::setSourceEditTreeLimits(std::size_t maximumTreeNodes,
                                           std::size_t maximumTreeDepth) {
   auto& context = registry_->ctx().get<XMLDocumentContext>();
@@ -3189,6 +3212,27 @@ std::optional<XMLAttributeAtSourceOffset> XMLDocument::attributeAtSourceOffset(
   return std::nullopt;
 }
 
+namespace {
+
+/// Prolog edits can change declarations used by every later fragment.
+bool SourceEditNeedsDocumentContext(const XMLDocument& document,
+                                    const SourceEditClassification& classification,
+                                    SourceEditRange range) {
+  if (classification.scope != ReparseScope::Document) {
+    return false;
+  }
+  for (auto child = document.root().firstChild(); child; child = child->nextSibling()) {
+    if (child->type() != XMLNode::Type::Element) {
+      continue;
+    }
+    const auto start = child->sourceStartOffset();
+    return !start || !start->offset || range.start <= *start->offset;
+  }
+  return true;
+}
+
+}  // namespace
+
 ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) {
   ApplySourceEditResult result;
   result.scope = ReparseScope::Document;
@@ -3220,6 +3264,8 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
 
   // Capture the validated fragment span before the replacement; node locations resolve
   // against current bytes, so capturing after would silently shift the span.
+  const bool requiresDocumentContext =
+      SourceEditNeedsDocumentContext(*this, classification, *range);
   const ClassificationTarget classified = ClassifiedEditTarget(*this, classification, *range);
   const SourceEditRange fragmentSpan = classified.span;
   const XMLNode mutationNode = classified.node;
@@ -3250,6 +3296,8 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
   result = ApplyClassifiedSourceEdit(*this, intent, classification, std::move(result));
   if (result.diagnostic.has_value()) {
     if (!isNoOp) {
+      registry_->ctx().get<XMLDocumentContext>().sourceRequiresDocumentReparse |=
+          requiresDocumentContext;
       AddUnreparsedSpan(*this, validatedSpan.start, validatedSpan.end, *result.diagnostic);
     }
   } else {
@@ -3940,6 +3988,9 @@ void XMLDocument::setSource(std::string source, std::size_t maximumSourceSize) {
   context.sourceStoreHolder->store = std::move(nextStore);
   context.unreparsedSpans.clear();
   context.declaredDoctypeInternalSubset = false;
+  context.sourceRequiresDocumentEntityParser = false;
+  context.sourceRequiresDocumentReparse = false;
+  context.sourceParserOptions.reset();
 }
 
 }  // namespace donner::xml

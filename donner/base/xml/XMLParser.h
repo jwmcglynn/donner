@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "donner/base/ParseResult.h"
@@ -37,6 +38,9 @@ public:
     static constexpr int kDefaultMaximumNestingDepth = 256;
     /// Default options.
     constexpr Options() {}
+
+    /// Compare parser behavior and all resource limits.
+    bool operator==(const Options&) const = default;
 
     /// Maximum encoded XML input bytes accepted before parsing.
     size_t maximumInputSize = 16 * 1024 * 1024;
@@ -152,6 +156,11 @@ public:
    * @return ParseResult containing the parsed XMLDocument, or an error if parsing failed.
    */
   static ParseResult<XMLDocument> Parse(std::string_view str, const Options& options = Options());
+
+  /// Original source parser policy with any subsequently tightened document ceilings.
+  /// Returns nullopt after source replacement or when the original policy is unavailable.
+  /// @param document Source-backed document whose owner may need a full reparse.
+  static std::optional<Options> SourceOptions(const XMLDocument& document);
 
   /**
    * Parse the XML attributes and get the source location of a specific attribute.

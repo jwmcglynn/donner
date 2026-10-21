@@ -17,6 +17,7 @@ namespace donner::xml {
 class XMLDocument;
 class XMLNode;
 class XMLSourceStore;
+struct XMLSourceParseOptions;
 
 }  // namespace donner::xml
 
@@ -84,6 +85,13 @@ public:
   /// XML parser while it consumes the DOCTYPE, and cleared only when whole new source is
   /// installed, since incremental fragment reparses never see the prolog.
   bool declaredDoctypeInternalSubset = false;
+
+  /// Entity policy or expansion limits require document-wide parsing, not isolated fragments.
+  bool sourceRequiresDocumentEntityParser = false;
+  /// A Document-scope failed source edit invalidated global context until a full parse.
+  bool sourceRequiresDocumentReparse = false;
+  /// Immutable original parser policy, weakly bound to the source store it built.
+  std::shared_ptr<const XMLSourceParseOptions> sourceParserOptions;
 
   /// One source span the live tree does not reflect, with the failure that reported it.
   struct UnreparsedSpan {

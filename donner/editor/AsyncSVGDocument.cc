@@ -238,8 +238,56 @@ void AsyncSVGDocument::publishParseDiagnostics(std::vector<ParseDiagnostic> warn
   ++parseDiagnosticsRevision_;
 }
 
+void AsyncSVGDocument::captureSourceRecoveryPolicy() {
+  document_->withReadAccess([&](svg::DocumentReadAccess&) {
+    const auto store = document_->xmlDocument().sharedSourceStore();
+    const auto resources = document_->resourcePolicySnapshot();
+    if (!store || !resources) {
+      sourceRecoveryPolicy_.reset();
+      return;
+    }
+    sourceRecoveryPolicy_ = SourceRecoveryPolicy{
+        .parserOptions = *xml::XMLParser::SourceOptions(document_->xmlDocument()),
+        .sourceLimits = store->resourceLimits(),
+        .sourceStore = store,
+        .resources = *resources,
+    };
+  });
+}
+
+bool AsyncSVGDocument::SourceRecoveryPolicy::matchesSource(const xml::XMLDocument& document) const {
+  const auto* store = document.sourceStore();
+  if (!store || sourceStore.lock().get() != store) {
+    return false;
+  }
+  const auto& limits = store->resourceLimits();
+  return xml::XMLParser::SourceOptions(document) == parserOptions &&
+         limits.maximumSourceSize == sourceLimits.maximumSourceSize &&
+         limits.maximumLiveAnchorCount == sourceLimits.maximumLiveAnchorCount &&
+         limits.maximumAnchorUpdateWorkPerEdit == sourceLimits.maximumAnchorUpdateWorkPerEdit;
+}
+
+bool AsyncSVGDocument::usesEditorParserForSourceRecovery() const {
+  return sourceRecoveryState().has_value();
+}
+
+std::optional<EditorCommand::SourceRecoveryState> AsyncSVGDocument::sourceRecoveryState() const {
+  if (!document_ || !sourceRecoveryPolicy_) {
+    return std::nullopt;
+  }
+  return document_->withReadAccess(
+      [&](svg::DocumentReadAccess&) -> std::optional<EditorCommand::SourceRecoveryState> {
+        if (!sourceRecoveryPolicy_->matchesSource(document_->xmlDocument()) ||
+            document_->resourcePolicySnapshot() != sourceRecoveryPolicy_->resources) {
+          return std::nullopt;
+        }
+        return EditorCommand::SourceRecoveryState{documentGeneration(), document_->sourceVersion()};
+      });
+}
+
 void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
   document_ = std::move(document);
+  sourceRecoveryPolicy_.reset();
   queue_.clear();
   unmirroredSourceDeltas_.clear();
   unmirroredSourceDeltasOverflowed_ = false;
@@ -252,6 +300,7 @@ void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
 
 AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
     svg::SVGDocument newDocument) {
+  sourceRecoveryPolicy_.reset();
   // If there's no current document, a structural remap isn't meaningful -
   // just install the new one like a regular `setDocument`.
   if (!document_.has_value()) {
@@ -316,6 +365,7 @@ bool AsyncSVGDocument::flushFrame() {
     return false;
   }
 
+  queue_.discardStaleSourceRecoveries(sourceRecoveryState());
   auto queueFlush = queue_.flush();
   if (queueFlush.effectiveCommands.empty()) {
     return false;
@@ -501,6 +551,7 @@ bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
     return false;
   }
   setDocument(std::move(result.result()));
+  captureSourceRecoveryPolicy();
   publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
   return true;
 }
@@ -533,6 +584,7 @@ void AsyncSVGDocument::applyReplacementBatch(const EditorCommand& command) {
       return;
     }
     (void)setDocumentMaybeStructural(std::move(rollbackParsed).result());
+    captureSourceRecoveryPolicy();
     lastFlushResult_.sourceDeltas.clear();
     recordAppliedCommand(command);
     lastFlushResult_.replacedDocument = true;
@@ -606,6 +658,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
         return;
       }
       (void)setDocumentMaybeStructural(std::move(result).result());
+      captureSourceRecoveryPolicy();
       publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
       break;
     }
@@ -694,6 +747,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
         return;
       }
       (void)setDocumentMaybeStructural(std::move(result).result());
+      captureSourceRecoveryPolicy();
       publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
       break;
     }

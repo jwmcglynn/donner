@@ -438,6 +438,7 @@ donner_cc_library(
         ":editor_parse_options",
         ":lock_state",
         "//donner/base",
+        "//donner/base/xml",
         "//donner/svg",
         "//donner/svg/compositor",
         "//donner/svg/parser",
@@ -1348,8 +1349,10 @@ donner_cc_library(
     hdrs = ["SourceSync.h"],
     deps = [
         ":editor_app",
+        ":editor_parse_options",
         ":source_edit_intent",
         "//donner/base",
+        "//donner/base/xml",
         "//donner/svg",
         "//donner/svg/parser",
     ],

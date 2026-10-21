@@ -1,5 +1,6 @@
 #include "donner/editor/CommandQueue.h"
 
+#include <algorithm>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -43,6 +44,13 @@ std::optional<std::string> CommandQueue::pendingStyleAttribute(
     }
   }
   return std::nullopt;
+}
+
+void CommandQueue::discardStaleSourceRecoveries(
+    std::optional<EditorCommand::SourceRecoveryState> current) {
+  std::erase_if(pending_, [&](const EditorCommand& command) {
+    return command.sourceRecoveryState && command.sourceRecoveryState != current;
+  });
 }
 
 CommandQueue::FlushResult CommandQueue::flush() {
