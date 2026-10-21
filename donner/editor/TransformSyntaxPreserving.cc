@@ -1,6 +1,7 @@
 #include "donner/editor/TransformSyntaxPreserving.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <string>
@@ -458,13 +459,12 @@ std::optional<RcString> TryRotateOnly(const Fn& rf, const Transform2d& target) {
   return std::nullopt;
 }
 
-/// Decimal places for the linear (unitless) entries of @p target: six while its largest linear
-/// entry is at least 0.1, and six significant digits of that entry below 0.1, so a small scale
-/// keeps its precision. Returns `std::nullopt` when the linear part is too small or not finite to
-/// round safely.
-std::optional<int> LinearEntryDecimals(const Transform2d& target) {
-  const double largest = std::max({std::abs(target.data[0]), std::abs(target.data[1]),
-                                   std::abs(target.data[2]), std::abs(target.data[3])});
+/// Decimal places for one column of a transform's linear (unitless) part, whose entries are
+/// @p first and @p second: six while the column's largest entry is at least 0.1, and six
+/// significant digits of that entry below 0.1, so a small axis keeps its precision even next to a
+/// large one. Returns `std::nullopt` when the column is too small or not finite to round safely.
+std::optional<int> LinearColumnDecimals(double first, double second) {
+  const double largest = std::max(std::abs(first), std::abs(second));
   if (!std::isfinite(largest) || largest <= 0.0) {
     return std::nullopt;
   }
@@ -478,29 +478,41 @@ std::optional<int> LinearEntryDecimals(const Transform2d& target) {
   return decimals;
 }
 
-/// The canonical \ref donner::toSVGTransformString form of @p target at edit precision, so a
-/// writeback with no author form reads like one that updates an author form. Translations and
-/// angles are written at six decimals; linear entries at \ref LinearEntryDecimals. When rounding
-/// clears the off-diagonal entries, the function form is chosen from the rounded matrix, so
-/// sub-precision residue selects the simplest function (`translate(5)` rather than a matrix).
-/// Otherwise it is chosen from the exact linear part, which keeps rotations recognizable. An empty
+/// Round linear entry @p value to @p decimals places, or keep it exact when the column has none.
+double RoundLinearEntry(double value, std::optional<int> decimals) {
+  return decimals.has_value() ? RoundToDecimals(value, *decimals) : value;
+}
+
+/// Determinant of the linear part of @p transform.
+double LinearDeterminant(const Transform2d& transform) {
+  return transform.data[0] * transform.data[3] - transform.data[1] * transform.data[2];
+}
+
+/// The canonical \ref donner::toSVGTransformString form of @p parentFromElement at edit precision,
+/// so a writeback with no author form reads like one that updates an author form. Translations and
+/// angles are written at six decimals and each linear column at \ref LinearColumnDecimals. When
+/// rounding clears the off-diagonal entries, the function form is chosen from the rounded matrix,
+/// so sub-precision residue selects the simplest function (`translate(5)` rather than a matrix).
+/// Otherwise it is chosen from the exact linear part, which keeps rotations recognizable. A
+/// rounding that would make a nonsingular transform singular falls back to full precision. An empty
 /// result means the transform is the identity at that precision.
-RcString CanonicalTransformAtEditPrecision(const Transform2d& target) {
-  const std::optional<int> linearDecimals = LinearEntryDecimals(target);
-  Transform2d snapped = target;
-  snapped.data[4] = RoundToEditPrecision(target.data[4]);
-  snapped.data[5] = RoundToEditPrecision(target.data[5]);
-  if (linearDecimals.has_value()) {
-    Transform2d rounded = snapped;
-    for (int k = 0; k < 4; ++k) {
-      rounded.data[k] = RoundToDecimals(target.data[k], *linearDecimals);
-    }
-    if (rounded.data[1] == 0.0 && rounded.data[2] == 0.0) {
-      snapped = rounded;
-    }
+RcString CanonicalTransformAtEditPrecision(const Transform2d& parentFromElement) {
+  const std::array<std::optional<int>, 2> columnDecimals = {
+      LinearColumnDecimals(parentFromElement.data[0], parentFromElement.data[1]),
+      LinearColumnDecimals(parentFromElement.data[2], parentFromElement.data[3])};
+  Transform2d parentFromElementSnapped = parentFromElement;
+  parentFromElementSnapped.data[4] = RoundToEditPrecision(parentFromElement.data[4]);
+  parentFromElementSnapped.data[5] = RoundToEditPrecision(parentFromElement.data[5]);
+  Transform2d parentFromElementRounded = parentFromElementSnapped;
+  for (int k = 0; k < 4; ++k) {
+    parentFromElementRounded.data[k] =
+        RoundLinearEntry(parentFromElement.data[k], columnDecimals[k / 2]);
+  }
+  if (parentFromElementRounded.data[1] == 0.0 && parentFromElementRounded.data[2] == 0.0) {
+    parentFromElementSnapped = parentFromElementRounded;
   }
 
-  const RcString canonical = toSVGTransformString(snapped);
+  const RcString canonical = toSVGTransformString(parentFromElementSnapped);
   std::optional<std::vector<Fn>> fns = ParseFunctionList(std::string_view(canonical));
   if (!fns.has_value()) {
     return canonical;
@@ -508,19 +520,21 @@ RcString CanonicalTransformAtEditPrecision(const Transform2d& target) {
   for (Fn& fn : *fns) {
     for (std::size_t k = 0; k < fn.args.size(); ++k) {
       Arg& arg = fn.args[k];
-      const bool linearEntry = fn.name == "scale" || (fn.name == "matrix" && k < 4);
-      if (!linearEntry) {
+      if (fn.name == "scale") {
+        arg.text = detail::FormatNumberForSVG(RoundLinearEntry(arg.value, columnDecimals[k]));
+      } else if (fn.name == "matrix" && k < 4) {
+        arg.text = detail::FormatNumberForSVG(RoundLinearEntry(arg.value, columnDecimals[k / 2]));
+      } else {
         arg.text = FormatEditedNumber(arg.value);
-      } else if (linearDecimals.has_value()) {
-        arg.text = detail::FormatNumberForSVG(RoundToDecimals(arg.value, *linearDecimals));
       }
     }
   }
 
   const std::string candidate = RenderList(*fns);
   auto parsed = svg::parser::TransformParser::Parse(candidate);
-  if (parsed.hasError() || !TransformsClose(parsed.result(), target)) {
-    return toSVGTransformString(target);
+  if (parsed.hasError() || !TransformsClose(parsed.result(), parentFromElement) ||
+      (LinearDeterminant(parsed.result()) == 0.0 && LinearDeterminant(parentFromElement) != 0.0)) {
+    return toSVGTransformString(parentFromElement);
   }
   if (parsed.result().isIdentity()) {
     return RcString();

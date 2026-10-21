@@ -261,6 +261,18 @@ TEST(TransformSyntaxPreserving, WrapperDropsLinearResidueFromTheCanonicalFunctio
               testing::IsEmpty());
 }
 
+TEST(TransformSyntaxPreserving, WrapperKeepsTheSmallAxisOfAnAnisotropicScale) {
+  // Each axis is rounded at its own precision, so a tiny axis next to a unit one is kept rather
+  // than rounded to a singular scale(1, 0).
+  EXPECT_EQ(
+      serializeTransformForWriteback(std::nullopt, Transform2d::Scale(Vector2d(1.0, 1.0e-7))).str(),
+      "scale(1, 1e-07)");
+  EXPECT_EQ(
+      serializeTransformForWriteback(std::nullopt, Transform2d::Scale(Vector2d(1000.0, 1.23456e-4)))
+          .str(),
+      "scale(1000, 0.000123456)");
+}
+
 TEST(TransformSyntaxPreserving, WrapperWritesCanonicalMatrixAtEditPrecision) {
   // A drag at a non-integer zoom produces repeating decimals in every matrix entry.
   const Transform2d parentFromElement =
