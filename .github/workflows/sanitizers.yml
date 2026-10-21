@@ -65,7 +65,9 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan
+          # v2: older snapshots may hold remote cache hits from the partition that trusted pull
+          # requests also wrote, before main got a partition of its own.
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan-v2
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
@@ -120,7 +122,9 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ runner.os }}-ubsan
+          # v2: older snapshots may hold remote cache hits from the partition that trusted pull
+          # requests also wrote, before main got a partition of its own.
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-ubsan-v2
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}

@@ -355,6 +355,7 @@ py_test(
     ],
     deps = [
         ":bcr_preflight",
+        ":release_candidate",
         ":test_timing",
         "@rules_python//python/runfiles",
     ],

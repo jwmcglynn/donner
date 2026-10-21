@@ -1368,13 +1368,20 @@ test("renderer thread startup waits for cursor setup and wake wiring", () => {
   );
   assert.ok(startup, "expected explicit renderer-worker startup");
   assert.match(startup[1], /thread_ = std::thread/);
-  // the single-canvas architecture: one raster std::thread on every platform. The browser build
-  // used to create its own pthread with a transferred document canvas and defer
-  // that creation until the main-thread WebGPU device existed; there is no
-  // worker-owned canvas to transfer any more, so there is no deferred-start
-  // opt-in either.
+  // One raster std::thread owns C++ state; delaying its start protects owner-side UI GPU setup,
+  // independently of the single-canvas ownership contract.
   assert.doesNotMatch(workerRendererSource, /pthread_create/);
-  assert.doesNotMatch(renderCoordinatorSource, /AsyncRendererStartMode::Deferred/);
+  const startMode = renderCoordinatorSource.match(
+    /constexpr AsyncRendererStartMode EditorRenderWorkerStartMode\(\) \{\s*#ifdef __EMSCRIPTEN__([\s\S]*?)#else([\s\S]*?)#endif\s*}/,
+  );
+  assert.ok(startMode, "expected the coordinator's platform-specific worker startup mode");
+  assert.match(startMode[1], /return AsyncRendererStartMode::Deferred;/);
+  assert.match(startMode[2], /return AsyncRendererStartMode::Immediate;/);
+  assert.match(
+    renderCoordinatorSource,
+    /RenderWorkerBundle::RenderWorkerBundle\([\s\S]*?asyncRenderer\(EditorRenderWorkerStartMode\(\)\)/,
+    "the actual worker bundle must use the platform startup mode",
+  );
 
   const shellConstructor = editorShellSource.match(
     /EditorShell::EditorShell\([\s\S]*?\)\s*\n\s*:[\s\S]*?\{([\s\S]*?)\n}/,

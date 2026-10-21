@@ -154,6 +154,11 @@ SelectTool::ActiveDragPreview DragPreview(Entity entity, std::uint64_t generatio
 // Free-function presentation policies (pure, no editor state).
 // ---------------------------------------------------------------------------
 
+TEST(RenderCoordinatorPolicyTest, NativeWorkerStartsDuringCoordinatorConstruction) {
+  RenderCoordinator coordinator;
+  EXPECT_THAT(coordinator.asyncRenderer().workerStartedForTesting(), testing::IsTrue());
+}
+
 TEST(RenderCoordinatorPolicyTest, NothingToPresentRetryPacesTheFailedRequestThenHoldsIt) {
   NothingToPresentRetry retry;
   const RenderAttemptIdentity failing{.documentGeneration = 1, .version = 2};

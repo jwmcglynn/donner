@@ -1611,12 +1611,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       layerThumbnailRenderer_(UiGeodeDevice(window)),
       fontCatalog_(),
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
-      // The raster thread owns its own headless device: tiles cross the
-      // thread boundary as CPU bitmaps by design (WebGPU has no cross-thread
-      // texture sharing in the browser), and a shared browser device makes
-      // the raster thread's snapshot readback wait on cross-thread event
-      // delivery it cannot drive (measured: 1.9 s per first-sample snapshot
-      // against the shared device, ~30 ms against its own).
+      // C++ renderer state stays on its worker; browser GPU primitives dispatch to the app owner.
+      // Retained tiles remain GPU resident and share resource identities through that owner.
       renderCoordinator_(nullptr),
 #else
       renderCoordinator_(window.geodeDevice()),
@@ -1629,6 +1625,10 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
                             {.allowFileSystemActions = options_.allowFileSystemActions,
                              .fixedOutputPath = options_.diagnosticTelemetryOutputPath}),
       dialogPresenter_(options_.editorNoticeText, options_.editorBuildInfo) {
+#ifdef __EMSCRIPTEN__
+  const bool workerStartedBeforeUiSetup =
+      renderCoordinator_.asyncRenderer().workerStartedForTesting();
+#endif
 #ifdef DONNER_EDITOR_WGPU
   window_.clearLastFullyPresentedDocumentFrame();
 #endif
@@ -1726,10 +1726,25 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     nativeMenu_.reset();
   }
 #endif
-  // Safari cannot safely resume a second WebGPU device's Promise completion while the main
-  // pthread is suspended in the Asyncify readbacks used to rasterize custom cursors. Start the
-  // renderer pthread only after all synchronous UI GPU setup and its wake callback are complete.
+  // UI GPU setup may suspend this owner in browser calls. Admit the raster thread only after
+  // that setup and its wake callback are ready, so the worker's device requests can progress.
+#ifdef __EMSCRIPTEN__
+  const bool workerStartedBeforeExplicitStart =
+      renderCoordinator_.asyncRenderer().workerStartedForTesting();
+#endif
   renderCoordinator_.asyncRenderer().start();
+#ifdef __EMSCRIPTEN__
+  // clang-format off: this startup receipt records actual constructor and explicit-start state.
+  MAIN_THREAD_ASYNC_EM_ASM({
+    window['__donnerRenderWorkerStartup'] = ({
+      'beforeUiSetup': Boolean($0),
+      'beforeExplicitStart': Boolean($1),
+      'afterExplicitStart': Boolean($2),
+    });
+  }, workerStartedBeforeUiSetup, workerStartedBeforeExplicitStart,
+     renderCoordinator_.asyncRenderer().workerStartedForTesting());
+  // clang-format on
+#endif
   // Background work runs one family at a time only when the foreground renderer is idle.
   queueBackgroundFontPreviews();
 }

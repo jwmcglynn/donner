@@ -2,6 +2,7 @@
 
 from collections import Counter
 import dataclasses
+import itertools
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import unittest
 
 from python.runfiles import runfiles
 from tools import bcr_preflight
+from tools import release_candidate
 from tools import test_timing
 
 
@@ -517,6 +519,81 @@ def _buildbuddy_path_filter_violations(files, lanes):
             for path in sorted({path for path, _ in lanes})
             for trigger, entries in sorted(_trigger_paths(files[path]).items())
             if BUILDBUDDY_ACTION_FILES not in entries]
+
+
+# Every input of the BuildBuddy action that decides which key and instance a run gets:
+# run, key, pull request trust and runner.
+ACTION_ISOLATION_AXES = (
+    {"main push": dict(event="push"), "main schedule": dict(event="schedule"),
+     "main dispatch": dict(event="workflow_dispatch"),
+     "branch push": dict(event="push", ref="refs/heads/topic"),
+     "pull request": dict(event="pull_request", ref="refs/pull/1/merge"),
+     "pull request against main ref": dict(event="pull_request"),
+     "pull_request_target": dict(event="pull_request_target")},
+    {"write": dict(write="write-key-fixture"), "read": dict(read="read-key-fixture")},
+    {"untrusted": {}, "trusted": dict(trusted="true"), "Renovate": dict(renovate="true"),
+     "trusted and Renovate": dict(trusted="true", renovate="true")},
+    {"hosted": {}, "self-hosted macOS": dict(
+        RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="macOS",
+        CACHE_PARTITION="macos-ARM64-xcode-27.1-27A9275")},
+)
+_MAIN_RUNS = ("main push", "main schedule", "main dispatch")
+_PULL_REQUESTS = ("pull request", "pull request against main ref")
+REVIEWED_ACTION_CONFIGURATIONS = (
+    {(run, "write", trust, "hosted") for run in _MAIN_RUNS for trust in ACTION_ISOLATION_AXES[2]} |
+    {(run, "write", "trusted", runner) for run in _PULL_REQUESTS
+     for runner in ACTION_ISOLATION_AXES[3]} |
+    {(run, "read", trust, "hosted") for run in _PULL_REQUESTS
+     for trust in ("Renovate", "trusted and Renovate")})
+
+
+def _instance_problems(run, fragment):
+    """Why a configured fragment could mix main's and pull requests' entries."""
+    lines = fragment.splitlines()
+    instances = [line.split("=", 1)[1] for line in lines
+                 if line.startswith("build --remote_instance_name=")]
+    if len(instances) != 1:
+        return ["%d instance names" % len(instances)]
+    if run in _MAIN_RUNS:
+        return [] if instances[0].startswith("main-") else ["main run on %s" % instances[0]]
+    if "build --remote_upload_local_results" in lines and not instances[0].startswith("pr-"):
+        return ["pull request uploads to %s" % instances[0]]
+    return []
+
+
+# The runs tools/release_candidate.py accepts as the source of an artifact or evidence.
+CITED_RUNS = tuple((event, "refs/heads/main") for event in ("push", "workflow_dispatch",
+                                                           "schedule"))
+UNREVIEWED_REMOTE_CACHE = re.compile(r"--remote_(?:cache|executor)\b|--bes_backend\b|"
+                                     r"remote_instance_name|buildbuddy-cache")
+
+
+def _cited_run_cache_violations(files):
+    """Ways a run a release-candidate record can cite could build from another cache.
+
+    Release artifacts and qualification evidence come only from runs that release_candidate
+    accepts: a main push, schedule or dispatch. On such a run every hosted remote cache lane binds
+    main's write environment, so the action configures it as a main writer, which always uses a
+    `main-` instance. A lane outside the reviewed BuildBuddy set configures no remote cache at
+    all. Self-hosted jobs run only for trusted pull requests (policy-tested separately)."""
+    cited = (set(release_candidate.ARTIFACT_WORKFLOWS.values()) |
+             set(release_candidate.EVIDENCE_WORKFLOWS.values()))
+    violations = []
+    for path in sorted(cited):
+        for name, job in _jobs(files[path]).items():
+            where = "%s:%s" % (path, name)
+            if (path, name) in BUILDBUDDY_JOBS and (path, name) not in SELF_HOSTED_JOBS:
+                violations.extend(_cited_environment_violations(where, job))
+            elif (path, name) not in BUILDBUDDY_JOBS and UNREVIEWED_REMOTE_CACHE.search(job):
+                violations.append("%s configures an unreviewed remote cache" % where)
+    return violations
+
+
+def _cited_environment_violations(where, job):
+    """Cited runs on which a hosted BuildBuddy lane would not bind main's write environment."""
+    condition = _write_environment_condition(job) or "'false' == 'true'"
+    return ["%s does not bind main's write environment on a cited %s run" % (where, event)
+            for event, ref in CITED_RUNS if not _evaluate_condition(condition, event, ref, {})]
 
 
 # Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
@@ -2003,7 +2080,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                   if _step_action(step, 6) in ("actions/cache", "actions/cache/save")]
         self.assertEqual(1, len(savers))
         self.assertIn("steps.bound.outputs.save == 'true'", _step_key(savers[0], "if", 6))
-        self.assertIn("key: bazel-actions-v2-", savers[0])
+        self.assertIn("key: bazel-actions-v3-", savers[0])
 
     def test_action_cache_save_is_the_last_step_of_every_restoring_job(self):
         # Eviction must see every Bazel command's cache use, and a job that restores without
@@ -3092,6 +3169,30 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                     self.assertEqual(expected,
                                      bool(_evaluate_condition(condition, event, ref, values)))
 
+    def test_release_and_evidence_runs_use_main_instances(self):
+        self.assertEqual([], _cited_run_cache_violations(self.supply_chain_files))
+        lanes = {(path, name) for path, name in BUILDBUDDY_JOBS
+                 if path in set(release_candidate.ARTIFACT_WORKFLOWS.values()) |
+                 set(release_candidate.EVIDENCE_WORKFLOWS.values())}
+        self.assertLessEqual({
+            (release_candidate.ARTIFACT_WORKFLOWS["editor"], "build"),
+            (release_candidate.EVIDENCE_WORKFLOWS["ci"], "linux"),
+            (release_candidate.EVIDENCE_WORKFLOWS["ci"], "macos"),
+            (release_candidate.EVIDENCE_WORKFLOWS["sanitizers"], "asan"),
+            (release_candidate.EVIDENCE_WORKFLOWS["sanitizers"], "ubsan"),
+        }, lanes)
+        files = self.supply_chain_files
+        wasm = release_candidate.ARTIFACT_WORKFLOWS["editor"]
+        preflight = release_candidate.ARTIFACT_WORKFLOWS["cli-linux"]
+        self._assert_rejected(lambda files, path: _cited_run_cache_violations(files), {
+            "release producer without main's environment": (wasm, files[wasm].replace(
+                "(github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || ",
+                "", 1), "does not bind main's write environment on a cited push run"),
+            "release CLI on a remote cache": (preflight, files[preflight].replace(
+                "    steps:\n", "    steps:\n      - run: echo --remote_cache grpcs://x\n", 1),
+                "configures an unreviewed remote cache"),
+        })
+
     def test_write_environment_policy_rejects_widened_bindings(self):
         files = self.supply_chain_files
         main = ".github/workflows/main.yml"
@@ -3380,27 +3481,61 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 if mode is None:
                     self.assertIsNone(fragment)
                     continue
-                key = write if mode == "write" else read
-                self.assertNotIn(key, fragment)
-                self.assertNotIn("remote_header", fragment)
-                self.assertEqual({"headers": {"x-buildbuddy-api-key": [key]}},
-                                 json.loads(credential))
-                lines = fragment.splitlines()
-                self.assertIn("build --remote_cache=grpcs://remote.buildbuddy.io", lines)
-                self.assertIn("build --remote_instance_name=ubuntu24-20261005.1-X64", lines)
-                self.assertIn("build --remote_download_outputs=minimal", lines)
-                self.assertIn(r"build --remote_download_regex=.*/rules_playwright[+][^/]*/browsers/.*",
-                              lines)
-                self.assertFalse(any("remote_executor" in line or "bes_" in line
-                                     for line in lines))
-                upload = ("build --remote_upload_local_results" if mode == "write"
-                          else "build --noremote_upload_local_results")
-                self.assertIn(upload, lines)
-                self.assertEqual(1, sum("upload_local_results" in line for line in lines))
-                self.assertIn("build --credential_helper=remote.buildbuddy.io="
-                              "%s/runner-temp/buildbuddy/helper" % directory, lines)
-                self.assertFalse(any(line.startswith("import") for line in lines))
-                self.assertEqual(sorted(BUILDBUDDY_FALLBACK), _fallback_lines(fragment))
+                # Trusted pull requests write `pr-` partitions; main runs and the Renovate
+                # reader use main's.
+                trusted_writer = arguments.get("trusted") == "true" and mode == "write"
+                self._assert_buildbuddy_fragment(
+                    fragment, credential, output, Path(directory),
+                    key=write if mode == "write" else read, upload=mode == "write",
+                    instance=("pr-" if trusted_writer else "main-") + "ubuntu24-20261005.1-X64")
+
+    def _assert_buildbuddy_fragment(self, fragment, credential, output, directory, *, key, upload,
+                                    instance):
+        """The action's fragment and credential helper for one configured run."""
+        self.assertNotIn(key, fragment)
+        self.assertNotIn("remote_header", fragment)
+        self.assertEqual({"headers": {"x-buildbuddy-api-key": [key]}}, json.loads(credential))
+        lines = fragment.splitlines()
+        self.assertIn("build --remote_cache=grpcs://remote.buildbuddy.io", lines)
+        self.assertEqual(["build --remote_instance_name=%s" % instance],
+                         [line for line in lines if "remote_instance_name" in line])
+        self.assertIn("instance=%s " % instance, output)
+        self.assertIn("build --remote_download_outputs=minimal", lines)
+        self.assertIn(r"build --remote_download_regex=.*/rules_playwright[+][^/]*/browsers/.*",
+                      lines)
+        self.assertFalse(any("remote_executor" in line or "bes_" in line for line in lines))
+        self.assertIn("build --remote_upload_local_results" if upload
+                      else "build --noremote_upload_local_results", lines)
+        self.assertEqual(1, sum("upload_local_results" in line for line in lines))
+        self.assertIn("build --credential_helper=remote.buildbuddy.io="
+                      "%s/runner-temp/buildbuddy/helper" % directory, lines)
+        self.assertFalse(any(line.startswith("import") for line in lines))
+        self.assertEqual(sorted(BUILDBUDDY_FALLBACK), _fallback_lines(fragment))
+
+    def test_main_runs_use_only_main_instances_and_pull_requests_never_write_them(self):
+        """Exhaustively: every run the action configures on main uses a `main-` instance, and no
+        pull request run uploads to one. One key serves both, so this keeps release and evidence
+        builds from reusing a pull request's entries by accident; it is not a security boundary,
+        which is that only the maintainer can open a trusted pull request."""
+        configured = set()
+        with tempfile.TemporaryDirectory() as directory:
+            for index, combination in enumerate(itertools.product(*(
+                    sorted(axis.items()) for axis in ACTION_ISOLATION_AXES))):
+                names = tuple(name for name, _ in combination)
+                with self.subTest(case=names):
+                    arguments = {}
+                    for _, values in combination:
+                        arguments.update(values)
+                    root = Path(directory) / str(index)
+                    root.mkdir()
+                    code, fragment, _, output = self._run_buildbuddy_action(root, **arguments)
+                    if fragment is None:
+                        continue
+                    self.assertEqual(0, code, output)
+                    configured.add(names)
+                    self.assertEqual([], _instance_problems(names[0], fragment))
+        # The configurations that remain are exactly the reviewed ones.
+        self.assertEqual(REVIEWED_ACTION_CONFIGURATIONS, configured)
 
     def test_buildbuddy_execution_config_preserves_local_test_runtime(self):
         # The cloud config changes only where actions run. Its exact contents are pinned, so a
@@ -3516,7 +3651,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 Path(directory), event="push", write=write, CACHE_PARTITION=partition,
                 ImageVersion="")
             self.assertEqual(0, code, output)
-            self.assertIn("build --remote_instance_name=%s" % partition, fragment.splitlines())
+            self.assertIn("build --remote_instance_name=main-%s" % partition,
+                          fragment.splitlines())
         for name, overrides in {
             "self-hosted runner": dict(RUNNER_ENVIRONMENT="self-hosted"),
             "flag injection": dict(CACHE_PARTITION="macos-ARM64 --remote_executor=grpc://x"),

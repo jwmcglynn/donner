@@ -298,7 +298,11 @@ svg::Renderer CreateRenderer(std::shared_ptr<::donner::geode::GeodeDevice> geode
 }
 
 constexpr AsyncRendererStartMode EditorRenderWorkerStartMode() {
+#ifdef __EMSCRIPTEN__
+  return AsyncRendererStartMode::Deferred;
+#else
   return AsyncRendererStartMode::Immediate;
+#endif
 }
 
 bool ShouldCommitCanvas(const Vector2i& pending, bool wouldChange, bool deferForActiveDrag,

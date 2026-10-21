@@ -51,15 +51,17 @@ runs:
     # A new revision can extend an older snapshot even when BUILD files have not changed.
     # Each platform/family has one writer; PR code only restores default-branch snapshots.
     # v2: v1 snapshots were saved without a bound and must never be restored again.
+    # v3: v2 snapshots may hold remote cache hits from the partition that trusted pull
+    # requests also wrote, before main got a partition of its own.
     - name: Restore main action cache
       id: restore
       if: inputs.mode == 'restore'
       uses: actions/cache/restore@v6
       with:
         path: ~/.cache/bazel-disk
-        key: bazel-actions-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-${{ github.sha }}
+        key: bazel-actions-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-${{ github.sha }}
         restore-keys: |
-          bazel-actions-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-
+          bazel-actions-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-
 
     # Bazel sets an entry's mtime whenever it stores or retrieves it, and the restore keeps the
     # snapshot's mtimes, so entries newer than this marker are this job's working set. An exact
@@ -116,4 +118,4 @@ runs:
       uses: actions/cache/save@v6
       with:
         path: ~/.cache/bazel-disk
-        key: bazel-actions-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-${{ github.sha }}
+        key: bazel-actions-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-${{ github.sha }}
