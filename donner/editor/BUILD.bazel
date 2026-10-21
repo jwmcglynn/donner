@@ -917,6 +917,19 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "inspector_numeric_input",
+    srcs = ["InspectorNumericInput.cc"],
+    hdrs = ["InspectorNumericInput.h"],
+    deps = [
+        ":editor_theme",
+        ":imgui_headers",
+        "//donner/base",
+        "//donner/base/parser",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
     name = "stroke_marker_prefabs",
     srcs = ["StrokeMarkerPrefabs.cc"],
     hdrs = ["StrokeMarkerPrefabs.h"],
@@ -934,6 +947,7 @@ donner_cc_library(
     hdrs = ["SidebarPresenter.h"],
     deps = [
         ":attached_numeric_stepper",
+        ":inspector_numeric_input",
         ":attribute_writeback",
         ":command_queue",
         ":disclosure_chevron",

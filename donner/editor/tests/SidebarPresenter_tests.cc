@@ -1308,14 +1308,17 @@ protected:
 
   /// Click the stroke Width field and type \p text, leaving the field focused.
   static void TypeIntoStrokeWidth(SidebarPresenter& presenter, EditorApp& app,
-                                  const char* windowName, std::string_view text) {
-    (void)RenderInspectorFrame(presenter, &app, windowName);
+                                  const char* windowName, std::string_view text,
+                                  float windowHeight = 280.0f) {
+    const ImVec2 away(-1.0f, -1.0f);
+    (void)RenderInspectorFrame(presenter, &app, windowName, away, false, windowHeight);
     const auto field = presenter.strokeWidthRectForTesting();
     ASSERT_TRUE(field.has_value());
-    (void)RenderInspectorFrame(presenter, &app, windowName, RectCenter(*field), true);
-    (void)RenderInspectorFrame(presenter, &app, windowName, RectCenter(*field), false);
+    (void)RenderInspectorFrame(presenter, &app, windowName, RectCenter(*field), true, windowHeight);
+    (void)RenderInspectorFrame(presenter, &app, windowName, RectCenter(*field), false,
+                               windowHeight);
     ImGui::GetIO().AddInputCharactersUTF8(std::string(text).c_str());
-    (void)RenderInspectorFrame(presenter, &app, windowName);
+    (void)RenderInspectorFrame(presenter, &app, windowName, away, false, windowHeight);
   }
 
   static std::vector<ImDrawVert> TextureVertices(ImTextureID texture) {
@@ -2016,6 +2019,40 @@ TEST_F(SidebarPresenterImGuiTest, DashOffsetEditPreservesEmUnit) {
   const Lengthd computedOffset = target->getComputedStyle().strokeDashoffset.get().value();
   EXPECT_EQ(computedOffset.unit, LengthUnit::Em);
   EXPECT_EQ(computedOffset.value, 3.0);
+}
+
+TEST_F(SidebarPresenterImGuiTest, DashOffsetStepsAndTypingKeepOrReplaceTheUnit) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><path id="target" d="M10 40 L110 40" stroke="black" stroke-dasharray="4 2" stroke-dashoffset="2em"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char kWindow[] = "##dash_offset_units";
+  constexpr float kHeight = 600.0f;
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1.0f, -1.0f), false, kHeight);
+  const auto increment = presenter.strokeDashOffsetIncrementRectForTesting();
+  ASSERT_THAT(increment, testing::Optional(testing::_));
+  RenderInspectorFrame(presenter, &app, kWindow, RectCenter(*increment), true, kHeight);
+  EXPECT_THAT(
+      RenderInspectorFrame(presenter, &app, kWindow, RectCenter(*increment), false, kHeight),
+      testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-dashoffset: 2.1em"))));
+
+  presenter.refreshSnapshot(app);
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1.0f, -1.0f), false, kHeight);
+  const auto field = presenter.strokeDashOffsetRectForTesting();
+  ASSERT_THAT(field, testing::Optional(testing::_));
+  RenderInspectorFrame(presenter, &app, kWindow, RectCenter(*field), true, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, RectCenter(*field), false, kHeight);
+  ImGui::GetIO().AddInputCharactersUTF8("3mm");
+  RenderInspectorFrame(presenter, &app, kWindow, RectCenter(*field), false, kHeight);
+  (void)app.flushFrame();
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-dashoffset: 3mm"))));
 }
 
 TEST_F(SidebarPresenterImGuiTest, SegmentedStrokeChoicesAlignAndApplyCss) {
@@ -2719,6 +2756,185 @@ TEST_F(SidebarPresenterImGuiTest, TransformRotationRejectsNonDegreeUnits) {
   ASSERT_TRUE(target.has_value());
   EXPECT_THAT(target->getAttribute("transform"), testing::Eq(std::nullopt))
       << "1rad must not be read as 1 degree";
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformFieldEnteredAndLeftWithoutTypingKeepsItsValue) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="target" x="10.125" y="20" width="100" height="50"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  constexpr char kWindow[] = "##transform_untouched";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoTransformField(
+      presenter, app, kWindow, SidebarPresenter::TransformField::PositionX, "", ImGuiKey_Enter));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const auto bounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_THAT(bounds->topLeft.x, testing::DoubleEq(10.125))
+      << "not rounded to the displayed precision";
+  EXPECT_THAT(target->getAttribute("transform"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformTabAfterRejectedTextRestoresTheValue) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  constexpr char kWindow[] = "##transform_tab_rejected";
+  (void)RenderInspectorFrame(presenter, &app, kWindow);
+  const auto field =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::Width);
+  ASSERT_TRUE(field.has_value());
+  const ImVec2 center = RectCenter(*field);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, true);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  ASSERT_NE(ImGui::GetCurrentContext()->TempInputId, 0u);
+  // Typed one keystroke at a time, the valid prefix "5" is applied before the text is rejected.
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddInputCharactersUTF8("5");
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  (void)app.flushFrame();
+  io.AddInputCharactersUTF8("0furlongs");
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  io.AddKeyEvent(ImGuiKey_Tab, true);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  io.AddKeyEvent(ImGuiKey_Tab, false);
+  for (int frame = 0; frame < 3; ++frame) {
+    (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+    (void)app.flushFrame();
+  }
+
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(target->cast<svg::SVGGeometryElement>().worldBounds(),
+              testing::Optional(BoxSizeIs(100.0, 50.0)));
+  EXPECT_THAT(target->getAttribute("transform"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformEscapeAfterALiveValueRestoresTheOriginal) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  constexpr char kWindow[] = "##transform_escape_live";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoTransformField(
+      presenter, app, kWindow, SidebarPresenter::TransformField::PositionX, "55", ImGuiKey_Escape));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const auto bounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_THAT(bounds->topLeft.x, testing::DoubleEq(10.0));
+  EXPECT_THAT(target->getAttribute("transform"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformPercentAndEmConvertAgainstTheDocumentAndFont) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 200 100"><rect id="target" x="10" y="20" width="100" height="50" font-size="10"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  constexpr char kWindow[] = "##transform_relative_units";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoTransformField(
+      presenter, app, kWindow, SidebarPresenter::TransformField::Width, "25%", ImGuiKey_Enter));
+  presenter.refreshSnapshot(app);
+  ASSERT_NO_FATAL_FAILURE(TypeIntoTransformField(
+      presenter, app, kWindow, SidebarPresenter::TransformField::Height, "2em", ImGuiKey_Enter));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(target->cast<svg::SVGGeometryElement>().worldBounds(),
+              testing::Optional(BoxSizeIs(50.0, 20.0)))
+      << "25% of the 200-unit viewBox width; 2em of a 10-unit font";
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthEscapeRestoresEachSelectedStyleWithoutUndo) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="target" width="40" height="30" stroke="black" style="stroke-width: 3"/><rect id="peer" x="50" width="40" height="30" stroke="black"/></svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  const auto target = app.document().document().querySelector("#target");
+  const auto peer = app.document().document().querySelector("#peer");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(peer.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*target, *peer});
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindow[] = "##stroke_width_escape_mixed";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "9"));
+  (void)app.flushFrame();
+  ASSERT_THAT(peer->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 9"))));
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiKey_Escape, true);
+  RenderInspectorFrame(presenter, &app, kWindow);
+  io.AddKeyEvent(ImGuiKey_Escape, false);
+  RenderInspectorFrame(presenter, &app, kWindow);
+  (void)app.flushFrame();
+
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 3"))));
+  EXPECT_THAT(peer->getAttribute("style"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthRejectedTextLeftForAnEarlierFieldRestoresTheStyle) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char kWindow[] = "##stroke_width_rejected_earlier_field";
+  // Tall enough for the width presets to open below the field.
+  constexpr float kHeight = 600.0f;
+  const ImVec2 away(-1.0f, -1.0f);
+  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "5", kHeight));
+  (void)app.flushFrame();
+  ASSERT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 5"))));
+  ImGui::GetIO().AddInputCharactersUTF8("furlongs");
+  RenderInspectorFrame(presenter, &app, kWindow, away, false, kHeight);
+
+  // Shift+Tab moves typing to the Rotation field, which renders first and takes over ImGui's
+  // text state before the Width field sees that it lost focus.
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiMod_Shift, true);
+  io.AddKeyEvent(ImGuiKey_Tab, true);
+  RenderInspectorFrame(presenter, &app, kWindow, away, false, kHeight);
+  io.AddKeyEvent(ImGuiKey_Tab, false);
+  io.AddKeyEvent(ImGuiMod_Shift, false);
+  RenderInspectorFrame(presenter, &app, kWindow, away, false, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, away, false, kHeight);
+  ASSERT_NE(ImGui::GetCurrentContext()->TempInputId, 0u) << "an earlier field should be typing";
+  (void)app.flushFrame();
+
+  EXPECT_THAT(target->getAttribute("style"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthEscapeWhileBusyRestoresWhenTheDocumentReturns) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char kWindow[] = "##stroke_width_escape_busy";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "9"));
+  (void)app.flushFrame();
+  ASSERT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 9"))));
+
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiKey_Escape, true);
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindow));
+  io.AddKeyEvent(ImGuiKey_Escape, false);
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindow));
+  RenderInspectorFrame(presenter, &app, kWindow);
+  (void)app.flushFrame();
+
+  EXPECT_THAT(target->getAttribute("style"), testing::Eq(std::nullopt));
   EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
 }
 
