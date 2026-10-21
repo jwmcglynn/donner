@@ -355,7 +355,7 @@ public:
       PromotedLayer,
       /// The request is valid but cannot be extracted from its owning compositor tiles.
       OwningTilesRequired,
-      /// The requested entity is not valid in the document registry.
+      /// The requested entity is not a live SVG element in the document.
       InvalidEntity,
       /// The compositor cannot add another layer without exceeding the layer limit.
       LayerLimit,
@@ -368,9 +368,10 @@ public:
     static constexpr Code PromotedLayer = Code::PromotedLayer;  ///< Entity owns a promoted layer.
     static constexpr Code OwningTilesRequired =
         Code::OwningTilesRequired;  ///< Valid request that must remain in owning tiles.
-    static constexpr Code InvalidEntity = Code::InvalidEntity;  ///< Entity is not in the registry.
-    static constexpr Code LayerLimit = Code::LayerLimit;        ///< Layer count limit was reached.
-    static constexpr Code MemoryLimit = Code::MemoryLimit;      ///< Memory limit was reached.
+    static constexpr Code InvalidEntity =
+        Code::InvalidEntity;                                ///< Entity is not a live SVG element.
+    static constexpr Code LayerLimit = Code::LayerLimit;    ///< Layer count limit was reached.
+    static constexpr Code MemoryLimit = Code::MemoryLimit;  ///< Memory limit was reached.
     static constexpr Code DescendantPromoted =
         Code::DescendantPromoted;  ///< A descendant already owns a promoted layer.
 
@@ -438,7 +439,9 @@ public:
    *   user drag. Defaults to `ActiveDrag` for callers that only use this API during drag.
    * @return Promotion result. Valid renderable descendants under a compositing ancestor return
    *   \ref PromoteResult::OwningTilesRequired so callers keep them inside the compositor's
-   *   existing paint-order tiles instead of treating the request as a hard failure.
+   *   existing paint-order tiles instead of treating the request as a hard failure. The same result
+   *   defers promotion while a full render-tree or style rebuild is pending; call renderFrame() and
+   *   retry after preparation completes.
    */
   PromoteResult promoteEntity(Entity entity,
                               InteractionHint interactionKind = InteractionHint::ActiveDrag);
@@ -1431,6 +1434,8 @@ private:
   void resolveLayerAssignments(Registry& registry, ResolveOptions options = {});
   PromoteResult refusePromotion(Entity entity, PromoteRefusalReason reason);
   void clearTransientInteractionOwner(Entity entity);
+  /// Refuse invalid targets and defer cached-range access until required preparation completes.
+  std::optional<PromoteResult> validatePromotionTarget(Registry& registry, Entity entity);
   void prepareColdFilterOnlyPromotion(Registry& registry);
   std::optional<PromoteResult> classifyPromotionContext(Registry& registry, Entity entity,
                                                         bool* suspendBucketAncestors);

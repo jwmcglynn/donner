@@ -287,6 +287,19 @@ void CompositorController::clearTransientInteractionOwner(Entity entity) {
   }
 }
 
+std::optional<CompositorController::PromoteResult> CompositorController::validatePromotionTarget(
+    Registry& registry, Entity entity) {
+  if (!registry.valid(entity) || !registry.all_of<components::ElementTypeComponent>(entity)) {
+    return refusePromotion(entity, PromoteRefusalReason::InvalidEntity);
+  }
+  const auto* state = registry.ctx().find<components::RenderTreeState>();
+  // Structural and selector edits can invalidate cached subtree ranges and style handles.
+  if (state && state->hasBeenBuilt && (state->needsFullRebuild || state->needsFullStyleRecompute)) {
+    return refusePromotion(entity, PromoteRefusalReason::None);
+  }
+  return std::nullopt;
+}
+
 void CompositorController::prepareColdFilterOnlyPromotion(Registry& registry) {
   if (documentPrepared_ || config_.mandatoryHintScope != MandatoryHintScope::FilterOnly) {
     return;
@@ -546,8 +559,8 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
     Entity entity, InteractionHint interactionKind) {
   Registry& registry = document().registry();
   noteActiveDragPromote(entity, interactionKind);
-  if (!registry.valid(entity)) {
-    return refusePromotion(entity, PromoteRefusalReason::InvalidEntity);
+  if (const auto refusal = validatePromotionTarget(registry, entity)) {
+    return *refusal;
   }
   if (failedExclusiveInteractionRoot_ != entt::null) {
     const Vector2i currentCanvas =

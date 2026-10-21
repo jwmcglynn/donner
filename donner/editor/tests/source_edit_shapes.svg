@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180" viewBox="0 0 260 180">
+  <rect id="bg" width="260" height="180" fill="#f7f8fa"/>
+  <rect id="r" x="10" y="10" width="70" height="50" fill="#2f6fed"/>
+  <circle id="c" cx="130" cy="35" r="25" fill="#f0b429"/>
+  <ellipse id="e" cx="210" cy="35" rx="35" ry="22" fill="#35a16b"/>
+  <polygon id="p" points="50,100 85,130 50,165 15,130" fill="#e76f51"/>
+  <text id="t" x="100" y="150" font-size="24" fill="#17202a">Hi</text>
+  <g id="grp" transform="translate(170 95) rotate(15)">
+    <rect id="gr" width="50" height="40" fill="#8a4fff"/>
+  </g>
+</svg>

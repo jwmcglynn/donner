@@ -1300,6 +1300,8 @@ donner_cc_test(
         "filter_post_drag_jump.rnr",
         "geode_drag_zoom_o_pop.rnr",
         "geode_splash_click.rnr",
+        "source_edit_shapes.svg",
+        "source_opening_line_to_text.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
         "//:geode_splash.svg",
