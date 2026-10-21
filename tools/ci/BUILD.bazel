@@ -255,6 +255,7 @@ py_test(
     srcs = ["gatekeeper_tests.py"],
     data = [
         "gatekeeper.py",
+        "//:.github/actions/pr-trust/action.yml",
         "//:.github/workflows/main.yml",
     ],
     deps = [

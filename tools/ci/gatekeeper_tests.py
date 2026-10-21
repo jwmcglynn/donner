@@ -54,6 +54,7 @@ class GatekeeperTest(unittest.TestCase):
             encoding="utf-8",
         )
         cls.executables.write_python_entry("gh", fake_gh)
+        cls.executables.write_python3()
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="gatekeeper ")
@@ -89,12 +90,15 @@ class GatekeeperTest(unittest.TestCase):
         calls = [json.loads(line) for line in capture.read_text().splitlines()]
         return result, output.read_text(encoding="utf-8"), calls
 
-    def _workflow_command(self, step, env):
+    def _workflow_body(self, step):
         workflow = Path(runfiles.Create().Rlocation(
             "donner/.github/workflows/main.yml")).read_text(encoding="utf-8")
         section = workflow.split(f"      - id: {step}\n", 1)[1].split("\n      - ", 1)[0]
         run = section.split("        run: ", 1)[1]
-        body = textwrap.dedent(run[2:]) if run.startswith("|\n") else run.strip()
+        return textwrap.dedent(run[2:]) if run.startswith("|\n") else run.strip()
+
+    def _workflow_command(self, step, env):
+        body = self._workflow_body(step)
         for field, variable in (("event_name", "GITHUB_EVENT_NAME"),
                                 ("ref", "GITHUB_REF"), ("ref_name", "GITHUB_REF_NAME"),
                                 ("repository", "GITHUB_REPOSITORY")):
@@ -135,6 +139,50 @@ class GatekeeperTest(unittest.TestCase):
         self.assertEqual(output, "is_duplicate_push=true\n")
         self.assertEqual(calls, [["pr", "list", "--repo", "owner/repo", "--state", "open",
                                   "--head", branch, "--json", "number", "-q", "length"]])
+
+    def test_comparison_checkout_cannot_replace_admission_or_trust_code(self):
+        trusted = self.work / "trusted"
+        helper = trusted / "tools/ci/gatekeeper.py"
+        action = trusted / ".github/actions/pr-trust/action.yml"
+        helper.parent.mkdir(parents=True)
+        action.parent.mkdir(parents=True)
+        helper.write_bytes(Path(self.script).read_bytes())
+        action.write_bytes(Path(runfiles.Create().Rlocation(
+            "donner/.github/actions/pr-trust/action.yml")).read_bytes())
+        originals = (helper.read_bytes(), action.read_bytes())
+        self.repo.rename(trusted / "pr-input")
+        self.repo = trusted / "pr-input"
+        payload = ("import os\nfrom pathlib import Path\nPath('INJECTED').touch()\n"
+                   "target = Path(os.environ['GITHUB_WORKSPACE']) / "
+                   "'.github/actions/pr-trust/action.yml'\n"
+                   "target.write_text('forged trust action')\n")
+        _commit(self.repo, ["tools/ci/gatekeeper.py"], payload)
+        head = _commit(self.repo, [".github/actions/pr-trust/action.yml"], "forged action")
+        context = self._pull_request(self.root, head)
+        output = self.work / "admission-output"
+        env = dict(os.environ, **context, **_GIT_ENV, GITHUB_WORKSPACE=str(trusted),
+                   GITHUB_OUTPUT=str(output), EVENT_NAME="pull_request", ACTOR="contributor",
+                   TRIGGERING_ACTOR="contributor", REPOSITORY="jwmcglynn/donner",
+                   PATH=f"{self.executables.path}{os.pathsep}{os.environ.get('PATH', '')}")
+        self._run_fixture_shell(self._workflow_body("docs_only"), env, self.repo)
+        self.assertFalse((self.repo / "INJECTED").exists(), "PR helper executed before trust")
+        self.assertEqual(originals, (helper.read_bytes(), action.read_bytes()))
+        self.assertEqual("docs_only=false\n", output.read_text())
+        trust_body = textwrap.dedent(action.read_text().split("      run: |\n", 1)[1])
+        self._run_fixture_shell(trust_body, env, trusted)
+        self.assertIn("trusted_pr=false\n", output.read_text())
+        env.update(TRUSTED_PR="false", SELFHOSTED_LINUX_RUNNER="true",
+                   SELFHOSTED_MACOS_RUNNER="true")
+        self._run_fixture_shell(self._workflow_body("runner_gate"), env, trusted)
+        self.assertIn("use_self_hosted_linux=false\n", output.read_text())
+        self.assertIn("use_self_hosted_macos=false\n", output.read_text())
+
+    def _run_fixture_shell(self, body, env, cwd):
+        result = subprocess.run(
+            ["env", "-u", "BASH_ENV", "bash", "--noprofile", "--norc", "-e", "-o", "pipefail",
+             "-c", body], env=env, cwd=cwd, capture_output=True, text=True, check=False,
+            timeout=test_timing.STALL_GUARD_SECONDS)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_push_without_open_pull_request_runs(self):
         result, output, calls = self._run("duplicate-push", gh_stdout="0\n",
