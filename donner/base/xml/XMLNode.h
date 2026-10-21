@@ -488,6 +488,15 @@ public:
    */
   void remove();
 
+  /// Internal projection removal after a consumer captures a non-element child. Text nodes retain
+  /// source provenance for incremental reconciliation; ordinary tree edits use remove().
+  void removeForProjection();
+
+  /// Return detached text children explicitly removed by projection, ordered by current source.
+  /// Reattachment, value mutation and ordinary removal invalidate this provenance. Returned nodes
+  /// remain bound to this document, as other XMLNode handles do.
+  [[nodiscard]] std::vector<XMLNode> projectedTextChildren() const;
+
   /**
    * Get the source offset of where this node starts in the XML document source (if this node was
    * instantiated by \ref XMLParser).

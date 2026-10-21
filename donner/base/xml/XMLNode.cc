@@ -1,5 +1,6 @@
 #include "donner/base/xml/XMLNode.h"
 
+#include <algorithm>
 #include <string>
 
 #include "donner/base/FileOffset.h"
@@ -42,7 +43,15 @@ struct SourceOffsetComponent {
   std::optional<SourceAnchorSpan> closingTagSpan;
   std::optional<SourceAnchorSpan> valueSpan;
   std::uint64_t anchorSourceVersion = 0;
+  /// Parent whose projection deliberately removed this text node, while its source stays intact.
+  std::optional<Entity> projectionParent;
 };
+
+void ClearTextProjectionProvenance(EntityHandle handle) {
+  if (auto* offset = handle.try_get<SourceOffsetComponent>()) {
+    offset->projectionParent.reset();
+  }
+}
 
 /// Serialize an XMLQualifiedNameRef to XML syntax (ns:name or just name).
 void AppendQualifiedName(std::string& out, const XMLQualifiedNameRef& qname) {
@@ -324,6 +333,7 @@ std::optional<RcString> XMLNode::value() const {
 }
 
 void XMLNode::setValue(const RcStringOrRef& value) {
+  ClearTextProjectionProvenance(handle_);
   handle_.registry()->ctx().get<donner::components::TreeMutationContext>().setValue(handle_, value);
 }
 
@@ -598,29 +608,69 @@ std::optional<XMLNode> XMLNode::nextSibling() const {
 // SVG-specific callbacks). We can therefore call through the context unconditionally instead of
 // gating on `find<TreeMutationContext>()` + falling back to a direct TreeComponent path.
 void XMLNode::insertBefore(const XMLNode& newNode, std::optional<XMLNode> referenceNode) {
+  ClearTextProjectionProvenance(newNode.handle_);
   auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
   mutations.insertBefore(handle_, newNode.handle_,
                          referenceNode ? referenceNode->handle_ : EntityHandle());
 }
 
 void XMLNode::appendChild(const XMLNode& child) {
+  ClearTextProjectionProvenance(child.handle_);
   auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
   mutations.appendChild(handle_, child.handle_);
 }
 
 void XMLNode::replaceChild(const XMLNode& newChild, const XMLNode& oldChild) {
+  ClearTextProjectionProvenance(newChild.handle_);
+  ClearTextProjectionProvenance(oldChild.handle_);
   auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
   mutations.replaceChild(handle_, newChild.handle_, oldChild.handle_);
 }
 
 void XMLNode::removeChild(const XMLNode& child) {
+  ClearTextProjectionProvenance(child.handle_);
   auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
   mutations.removeChild(handle_, child.handle_);
 }
 
 void XMLNode::remove() {
+  ClearTextProjectionProvenance(handle_);
   auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
   mutations.remove(handle_);
+}
+
+void XMLNode::removeForProjection() {
+  const bool isText = type() == Type::Data || type() == Type::CData;
+  const auto parent = parentElement();
+  remove();
+  if (isText && parent.has_value()) {
+    if (auto* offset = handle_.try_get<SourceOffsetComponent>()) {
+      offset->projectionParent = parent->handle_.entity();
+    }
+  }
+}
+
+std::vector<XMLNode> XMLNode::projectedTextChildren() const {
+  std::vector<XMLNode> result;
+  for (const auto entity : registry().view<SourceOffsetComponent>()) {
+    const auto& offset = registry().get<SourceOffsetComponent>(entity);
+    if (offset.projectionParent != handle_.entity()) {
+      continue;
+    }
+    const auto node = TryCast(toHandle(entity));
+    if (!node.has_value() || node->parentElement().has_value()) {
+      continue;
+    }
+    const auto span = node->getNodeLocation();
+    if (span.has_value() && span->start.offset.has_value() && span->end.offset.has_value() &&
+        *span->start.offset < *span->end.offset) {
+      result.push_back(*node);
+    }
+  }
+  std::sort(result.begin(), result.end(), [](const XMLNode& left, const XMLNode& right) {
+    return *left.getNodeLocation()->start.offset < *right.getNodeLocation()->start.offset;
+  });
+  return result;
 }
 
 std::optional<FileOffset> XMLNode::sourceStartOffset() const {

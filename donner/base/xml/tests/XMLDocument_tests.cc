@@ -1783,6 +1783,38 @@ TEST_F(XMLDocumentTests, RenameDoesNotIgnoreChangedRetainedText) {
     EXPECT_THAT(retained.value(), Optional(Eq("changed")));
   }
 }
+TEST_F(XMLDocumentTests, RenameUsesOnlyCurrentParentTextProjectionProvenance) {
+  for (const bool cdata : {false, true}) {
+    for (const std::string_view action : {"projected", "removed", "reattached", "changed"}) {
+      SCOPED_TRACE(action);
+      SCOPED_TRACE(cdata ? "CDATA" : "text");
+      const std::string text = cdata ? "<![CDATA[first]]>" : "first";
+      XMLDocument doc = ParseDocument("<svg>" + text + "<peer/><g><rect/></g></svg>",
+                                      XMLParser::Options::ParseAll());
+      XMLNode svg = doc.root().firstChild().value();
+      XMLNode omitted = svg.firstChild().value();
+      omitted.removeForProjection();
+      ASSERT_THAT(svg.projectedTextChildren(), ElementsAre(omitted));
+      if (action == "removed") {
+        omitted.remove();
+      } else if (action == "reattached") {
+        svg.insertBefore(omitted, svg.firstChild());
+        omitted.remove();
+      } else if (action == "changed") {
+        omitted.setValue("changed");
+      }
+      const auto opening = CompleteClosingFirstGroupRename(doc);
+      EXPECT_THAT(opening.applied, testing::IsTrue());
+      if (action == "projected") {
+        EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+      } else {
+        EXPECT_THAT(doc.sourceDiagnostic(), Optional(testing::_));
+        EXPECT_THAT(svg.projectedTextChildren(), testing::IsEmpty());
+      }
+    }
+  }
+}
+
 TEST_F(XMLDocumentTests, RenameDoesNotIgnoreRemovedRetainedText) {
   for (const bool cdata : {false, true}) {
     SCOPED_TRACE(cdata ? "CDATA" : "text");
