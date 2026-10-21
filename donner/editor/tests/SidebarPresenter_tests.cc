@@ -549,6 +549,31 @@ TEST(SidebarTransformEditTest, EditsUnderTransformedParentApplyInDocumentSpace) 
 // The Rotation field shows the rotation of the element's own transform, so an
 // edit must produce exactly the typed local angle even under a reflected or
 // non-uniformly scaled ancestor, keeping the transform decomposable.
+TEST(SidebarTransformEditTest, GroupSizeEditsPreserveNonScalingStrokeAndPaintedOrigin) {
+  constexpr std::string_view kSvg =
+      R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400">
+        <g id="target"><rect x="20" y="30" width="100" height="50" fill="red"
+          stroke="black" stroke-width="10" vector-effect="non-scaling-stroke"/></g>
+      </svg>)SVG";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kSvg));
+  ASSERT_THAT(presenter.inspectorBoundsForTesting(), testing::Ne(std::nullopt));
+  const Box2d start = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(start.width(), testing::DoubleNear(110.0, 1e-6));
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::Width, 220.0));
+  const Box2d wide = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(wide.width(), testing::DoubleNear(220.0, 1e-6));
+  EXPECT_THAT(wide.topLeft, testing::Eq(start.topLeft));
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::Height, 120.0));
+  const Box2d tall = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(tall.height(), testing::DoubleNear(120.0, 1e-6));
+  EXPECT_THAT(tall.width(), testing::DoubleNear(220.0, 1e-6));
+  EXPECT_THAT(tall.topLeft, testing::Eq(start.topLeft));
+}
+
 TEST(SidebarTransformEditTest, RotationUnderNonUniformOrMirroredParentKeepsTypedLocalAngle) {
   for (const std::string_view parentTransform : {"scale(-1 1)", "scale(2 1)"}) {
     SCOPED_TRACE(parentTransform);
