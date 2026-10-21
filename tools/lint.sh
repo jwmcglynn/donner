@@ -115,9 +115,15 @@ fi
 if [[ -z "${complexity_base_ref}" ]]; then
   complexity_base_ref="origin/main"
 fi
-if ! git rev-parse --verify --quiet "${complexity_base_ref}^{commit}" >/dev/null; then
+if ! complexity_target_commit=$(git rev-parse --verify --quiet "${complexity_base_ref}^{commit}"); then
   echo "lint.sh: cannot resolve complexity baseline '${complexity_base_ref}'" >&2
   echo "lint.sh: fetch the target branch or set DONNER_LINT_BASE_REF to its local ref" >&2
+  exit 1
+fi
+# File selection and grandfathered complexity must use the same immutable ancestor. The target
+# may advance independently after a pull-request merge checkout was created.
+if ! complexity_base_ref=$(git merge-base "${complexity_target_commit}" HEAD); then
+  echo "lint.sh: complexity target has no common ancestor with HEAD" >&2
   exit 1
 fi
 
