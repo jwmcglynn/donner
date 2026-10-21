@@ -3307,7 +3307,7 @@ void EditorShell::handleGlobalShortcuts() {
     } else {
       zoomActions.zoomIn = increase;
       zoomActions.zoomOut = decrease;
-      SetCanvasZoomShortcuts(zoomActions, options_.useLegacyCanvasZoomShortcuts, pressedZero,
+      SetCanvasZoomShortcuts(zoomActions, options_.useLegacyCanvasZoomControls, pressedZero,
                              pressedOne);
     }
     applyZoomActions(zoomActions);
@@ -6455,6 +6455,16 @@ bool EditorShell::renderCanvasZoomMenu(const Box2d& controlRect) {
   return true;
 }
 
+void EditorShell::activateCanvasZoomControl() {
+  if (options_.useLegacyCanvasZoomControls) {
+    MenuBarActions actions;
+    actions.actualSize = true;
+    applyZoomActions(actions);
+  } else {
+    ImGui::OpenPopup(kCanvasZoomMenuId);
+  }
+}
+
 void EditorShell::renderCanvasZoomControl() {
   const Box2d rect = canvasZoomControlScreenRect();
   const ImVec2 min(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y));
@@ -6463,11 +6473,12 @@ void EditorShell::renderCanvasZoomControl() {
   ImGui::InvisibleButton("##canvas_zoom_control", max - min);
   const bool hovered = ImGui::IsItemHovered();
   if (ImGui::IsItemClicked() && !ImGui::IsPopupOpen(kCanvasZoomMenuId)) {
-    ImGui::OpenPopup(kCanvasZoomMenuId);
+    activateCanvasZoomControl();
   }
   const bool menuOpen = renderCanvasZoomMenu(rect);
   if (hovered && !menuOpen) {
-    ImGui::SetTooltip("Zoom options");
+    ImGui::SetTooltip(options_.useLegacyCanvasZoomControls ? "Reset to actual size"
+                                                           : "Zoom options");
   }
 
   const EditorTheme& theme = EditorTheme::Active();

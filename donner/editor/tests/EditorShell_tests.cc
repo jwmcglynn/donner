@@ -8127,7 +8127,7 @@ TEST(EditorShellTest, CanvasZoomControlClickPreservesLegacyReplayBehavior) {
     gui::EditorWindow window = MakeQaSizedWindow();
     ASSERT_TRUE(window.valid());
     EditorShellOptions options = OptionsWithSource(kSmallArtboardSvg);
-    options.useLegacyCanvasZoomShortcuts = legacy;
+    options.useLegacyCanvasZoomControls = legacy;
     EditorShell shell(window, options);
     ASSERT_TRUE(OpenAndLatchInitialView(window, shell));
     PressCommandShortcutInFrames(window, shell, ImGuiKey_Equal);

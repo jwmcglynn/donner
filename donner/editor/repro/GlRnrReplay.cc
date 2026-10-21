@@ -561,7 +561,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
           .editorNoticeText = "",
           .fitLargeDocumentsOnOpen =
               repro->metadata.formatVersion >= kFirstReproVersionWithFittedOpen,
-          .useLegacyCanvasZoomShortcuts =
+          .useLegacyCanvasZoomControls =
               repro->metadata.formatVersion < kFirstReproVersionWithFittedOpen,
       });
   if (!shell.valid()) {

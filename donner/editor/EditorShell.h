@@ -115,8 +115,9 @@ struct EditorShellOptions {
   /// recordings made before the editor did this turn it off, so their screen coordinates still
   /// land where they were recorded.
   bool fitLargeDocumentsOnOpen = true;
-  /// Preserve canvas Cmd/Ctrl+0 as Actual Size when replaying recordings made before Zoom to Fit.
-  bool useLegacyCanvasZoomShortcuts = false;
+  /// Preserve canvas shortcuts and percentage-control clicks from recordings made before Zoom to
+  /// Fit.
+  bool useLegacyCanvasZoomControls = false;
 
   /// Embedded "<version>\n<commit>\n" build metadata displayed in the About
   /// dialog. May be empty when the build did not embed it.
@@ -584,6 +585,7 @@ private:
   [[nodiscard]] Box2d canvasZoomControlScreenRect() const;
   void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderEditingScopeBreadcrumb();
+  void activateCanvasZoomControl();
   void renderCanvasZoomControl();
   /// Explain on the canvas why an opened document did not load, with a button that shows the
   /// problem in the source pane.
