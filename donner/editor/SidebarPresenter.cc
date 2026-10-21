@@ -2125,26 +2125,31 @@ std::optional<Transform2d> SidebarPresenter::DocumentFieldChange(const Transform
     case TransformField::PositionY: return PositionChange(state.startBounds, value, false);
     case TransformField::Width: return SizeChange(state.startBounds, value, true);
     case TransformField::Height: return SizeChange(state.startBounds, value, false);
-    case TransformField::Rotation: {
-      // The field shows the local rotation; its delta is applied as a
-      // document-space rotation about the bounds center, which matches the
-      // local delta under any similarity parent (rotate, translate, uniform
-      // scale).
-      if (!state.startDecomposed.has_value()) {
-        return std::nullopt;
-      }
-      const double deltaRadians =
-          value * MathConstants<double>::kDegToRad - state.startDecomposed->rotationRadians;
-      const Vector2d center =
-          state.startBounds.has_value()
-              ? (state.startBounds->topLeft + state.startBounds->bottomRight) * 0.5
-              : state.documentFromParent.transformPosition(state.startTransform.translation());
-      return Transform2d::Translate(-center) * Transform2d::Rotate(deltaRadians) *
-             Transform2d::Translate(center);
-    }
+    case TransformField::Rotation:
     case TransformField::Matrix: return std::nullopt;
   }
   return std::nullopt;
+}
+
+std::optional<Transform2d> SidebarPresenter::RotatedParentFromEntity(
+    const TransformEditState& state, double value) {
+  if (!state.startDecomposed.has_value() || !state.parentFromDocument.has_value()) {
+    return std::nullopt;
+  }
+  // The field shows the rotation of the element's own (parent-relative)
+  // transform, so rotate in the parent frame: the displayed angle then becomes
+  // exactly the typed value, even under a reflected or non-uniformly scaled
+  // ancestor. The pivot is the document-space bounds center mapped into the
+  // parent frame, or the element origin when there are no bounds.
+  const double deltaRadians =
+      value * MathConstants<double>::kDegToRad - state.startDecomposed->rotationRadians;
+  const Vector2d pivotInParent =
+      state.startBounds.has_value()
+          ? state.parentFromDocument->transformPosition(
+                (state.startBounds->topLeft + state.startBounds->bottomRight) * 0.5)
+          : state.startTransform.translation();
+  return state.startTransform * Transform2d::Translate(-pivotInParent) *
+         Transform2d::Rotate(deltaRadians) * Transform2d::Translate(pivotInParent);
 }
 
 Transform2d SidebarPresenter::composeFieldTransform(const TransformEditState& state,
@@ -2156,8 +2161,14 @@ Transform2d SidebarPresenter::composeFieldTransform(const TransformEditState& st
     }
     return parentFromEntity;
   }
+  if (state.field == TransformField::Rotation) {
+    const std::optional<Transform2d> parentFromEntity = RotatedParentFromEntity(state, value);
+    return parentFromEntity.has_value() && IsFiniteTransform(*parentFromEntity)
+               ? *parentFromEntity
+               : state.currentTransform;
+  }
 
-  // The Position, Size and Rotation fields are document-space quantities, the
+  // The Position and Size fields are document-space quantities, the
   // same space as the bounds they show. Conjugate the document-space change
   // through the parent's transform before applying it after the element's own
   // transform (Donner transforms apply left to right), matching SelectTool:

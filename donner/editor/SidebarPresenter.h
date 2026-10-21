@@ -521,10 +521,16 @@ private:
   /// @param state Baseline and field being edited.
   static double InitialTransformFieldValue(const TransformEditState& state);
 
-  /// Document-space change that the Position, Size or Rotation field at @p value
-  /// applies to the edit baseline, or nullopt when it cannot apply one.
+  /// Document-space change that the Position or Size field at @p value applies
+  /// to the edit baseline, or nullopt when it cannot apply one.
   static std::optional<Transform2d> DocumentFieldChange(const TransformEditState& state,
                                                         double value);
+
+  /// New parent-from-entity transform for a Rotation edit to @p value degrees,
+  /// rotating in the parent frame about the bounds center (or the element
+  /// origin when there are no bounds).
+  static std::optional<Transform2d> RotatedParentFromEntity(const TransformEditState& state,
+                                                            double value);
 
   /// Compose the new local transform for the in-progress edit at @p value.
   [[nodiscard]] Transform2d composeFieldTransform(const TransformEditState& state,
