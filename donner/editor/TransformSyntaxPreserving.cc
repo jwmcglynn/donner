@@ -140,15 +140,17 @@ std::optional<std::vector<Fn>> ParseFunctionList(std::string_view s) {
   return fns;
 }
 
+/// Round @p value to edit precision: the nearest multiple of 1e-6, with -0 normalized to 0.
+double RoundToEditPrecision(double value) {
+  const double rounded = std::round(value * 1e6) / 1e6;
+  return rounded == 0.0 ? 0.0 : rounded;
+}
+
 std::string FormatEditedNumber(double value) {
   // Kill floating-point noise beyond six decimals (edits never need finer than
   // that) so a computed 60.000000000000004 serializes as "60" rather than a
   // long decimal, while keeping the value well within the verify tolerance.
-  double rounded = std::round(value * 1e6) / 1e6;
-  if (rounded == 0.0) {
-    rounded = 0.0;  // normalize away -0.0
-  }
-  return detail::FormatNumberForSVG(rounded);
+  return detail::FormatNumberForSVG(RoundToEditPrecision(value));
 }
 
 /// Assign @p value to argument @p index, keeping the author's verbatim token
@@ -449,25 +451,43 @@ std::optional<RcString> TryRotateOnly(const Fn& rf, const Transform2d& target) {
   return std::nullopt;
 }
 
-/// The canonical \ref donner::toSVGTransformString form of @p target with every number at edit
-/// precision, so a writeback with no author form reads like one that updates an author form. An
-/// empty result means the rounded transform is the identity.
+/// Format a linear (unitless scale or matrix) entry at edit precision only when rounding changes it
+/// by at most one part in a million, so a tiny scale keeps its precision instead of collapsing
+/// toward zero.
+std::string FormatEditedLinearEntry(double value) {
+  const double rounded = RoundToEditPrecision(value);
+  return std::abs(rounded - value) <= 1e-6 * std::abs(value) ? detail::FormatNumberForSVG(rounded)
+                                                             : detail::FormatNumberForSVG(value);
+}
+
+/// The canonical \ref donner::toSVGTransformString form of @p target at edit precision, so a
+/// writeback with no author form reads like one that updates an author form. The translation is
+/// snapped to six decimals before the function form is chosen, so sub-precision residue selects the
+/// simplest function. Translations and angles are written at six decimals and linear entries per
+/// \ref FormatEditedLinearEntry. An empty result means the transform is the identity at that
+/// precision.
 RcString CanonicalTransformAtEditPrecision(const Transform2d& target) {
-  const RcString canonical = toSVGTransformString(target);
+  Transform2d snapped = target;
+  snapped.data[4] = RoundToEditPrecision(target.data[4]);
+  snapped.data[5] = RoundToEditPrecision(target.data[5]);
+
+  const RcString canonical = toSVGTransformString(snapped);
   std::optional<std::vector<Fn>> fns = ParseFunctionList(std::string_view(canonical));
   if (!fns.has_value()) {
     return canonical;
   }
   for (Fn& fn : *fns) {
-    for (Arg& arg : fn.args) {
-      arg.text = FormatEditedNumber(arg.value);
+    for (std::size_t k = 0; k < fn.args.size(); ++k) {
+      const bool linearEntry = fn.name == "scale" || (fn.name == "matrix" && k < 4);
+      fn.args[k].text = linearEntry ? FormatEditedLinearEntry(fn.args[k].value)
+                                    : FormatEditedNumber(fn.args[k].value);
     }
   }
 
   const std::string candidate = RenderList(*fns);
   auto parsed = svg::parser::TransformParser::Parse(candidate);
   if (parsed.hasError() || !TransformsClose(parsed.result(), target)) {
-    return canonical;
+    return toSVGTransformString(target);
   }
   if (parsed.result().isIdentity()) {
     return RcString();

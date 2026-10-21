@@ -936,9 +936,12 @@ TEST(EditorControlSessionTest, DocumentDragMovesWorldBoundsByTheRequestedDelta) 
 
     const json& initial = before.body["selection_bounds_doc"]["center"];
     const json& final = after.body["selection_bounds_doc"]["center"];
-    EXPECT_NEAR(final["x"].get<double>() - initial["x"].get<double>(), 50.0, 1e-6)
+    // The drag writes its transform back at six decimals; a scaled ancestor can magnify that
+    // rounding to about 1e-6 in world space.
+    constexpr double kWritebackTolerance = 1e-5;
+    EXPECT_NEAR(final["x"].get<double>() - initial["x"].get<double>(), 50.0, kWritebackTolerance)
         << before.body.dump(2) << after.body.dump(2);
-    EXPECT_NEAR(final["y"].get<double>() - initial["y"].get<double>(), 30.0, 1e-6)
+    EXPECT_NEAR(final["y"].get<double>() - initial["y"].get<double>(), 30.0, kWritebackTolerance)
         << before.body.dump(2) << after.body.dump(2);
   }
 }
@@ -949,7 +952,8 @@ TEST(EditorControlSessionTest, DragWritebackSerializesTransformLikeTheEditor) {
   // form instead of collapsing to matrix().
   constexpr std::string_view kScene =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
-<rect id="target" width="20" height="20" fill="red" transform="translate(10 10) rotate(30)"/></svg>)svg";
+<rect id="target" width="20" height="20" fill="red"
+      transform="translate(10 10) rotate(30)"/></svg>)svg";
 
   EditorControlSession session;
   const ToolCallResult load =
