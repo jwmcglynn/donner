@@ -383,6 +383,9 @@ private:
   /// Snapshot identity used to avoid repeating the O(N) model/style walk while
   /// an incremental thumbnail batch drains one row per host frame.
   bool snapshotPrepared_ = false;
+  /// Whether the app had a document at the last snapshot refresh, which tells an empty document's
+  /// Layers panel apart from no document at all.
+  bool snapshotHasDocument_ = false;
   bool modelRefreshRequested_ = true;
   std::uint64_t snapshotDocumentGeneration_ = 0;
   std::uint64_t snapshotDocumentFrameVersion_ = 0;

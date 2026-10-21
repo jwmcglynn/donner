@@ -253,6 +253,7 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
   };
 
   const bool hasDocument = app.hasDocument();
+  snapshotHasDocument_ = hasDocument;
   const std::uint64_t documentGeneration = app.document().documentGeneration();
   const std::uint64_t documentFrameVersion = app.document().currentFrameVersion();
   std::vector<std::uint64_t> selectionStableIds;
@@ -576,7 +577,7 @@ std::string_view LayersPanel::emptyStateMessage() const {
   if (!model_.rows().empty()) {
     return {};
   }
-  return "(no document)";
+  return snapshotHasDocument_ ? "(empty document)" : "(no document)";
 }
 
 void LayersPanel::beginRename(std::uint64_t stableId) {
