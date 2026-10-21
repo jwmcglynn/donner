@@ -972,6 +972,7 @@ std::optional<Box2d> SidebarPresenter::cachedInspectorBounds(const EditorApp& ap
 
 void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
   discardForeignTransformEdit(app);
+  discardForeignStrokeEdits(app);
   if (!app.hasDocument()) {
     treeSnapshot_.reset();
     inspectorSnapshot_ = InspectorSnapshot{};
@@ -996,6 +997,8 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
 
   // Inspector snapshot.
   InspectorSnapshot inspector;
+  inspector.document = app.document().document().handle();
+  inspector.documentGeneration = app.document().documentGeneration();
   captureStrokeSnapshot(app, selectionList, inspector);
   inspector.pathOperationAvailability.reserve(kPathOperationButtons.size());
   for (const PathOperationButton& button : kPathOperationButtons) {
@@ -1384,6 +1387,9 @@ void SidebarPresenter::noteStrokeLengthText(StrokeScalarField field,
 }
 
 bool SidebarPresenter::settlePendingStrokeEdit(EditorApp* liveApp) {
+  if (liveApp != nullptr) {
+    discardForeignStrokeEdits(*liveApp);
+  }
   const bool restored = finishPendingStrokeCancel(liveApp);
   if (liveApp != nullptr && strokeScalarEdit_.has_value() && strokeScalarEdit_->pendingCommit) {
     finishStrokeScalarEdit(*liveApp, strokeScalarEdit_->field);
@@ -1413,7 +1419,11 @@ void SidebarPresenter::beginStrokeLengthEdit(const StrokeRenderContext& context,
   if (strokeCancellationPending()) {
     return;
   }
-  StrokeLengthEditStart start{.field = field, .unit = unit, .styles = {}, .activeWidth = {}};
+  StrokeLengthEditStart start{.owner = strokeEditOwner(context.app),
+                              .field = field,
+                              .unit = unit,
+                              .styles = {},
+                              .activeWidth = {}};
   if (context.app != nullptr) {
     start.activeWidth = context.app->activePaintStyle().strokeWidth;
     for (const svg::SVGElement& element : context.app->selectedElements()) {
@@ -2002,7 +2012,39 @@ bool SidebarPresenter::applyStrokeStyle(EditorApp& liveApp, std::string_view pro
   return queued;
 }
 
+SidebarPresenter::StrokeEditOwner SidebarPresenter::strokeEditOwner(const EditorApp* app) const {
+  if (app != nullptr && app->hasDocument()) {
+    return {.document = app->document().document().handle(),
+            .documentGeneration = app->document().documentGeneration(),
+            .itemId = ImGui::GetItemID()};
+  }
+  return {.document = inspectorSnapshot_.document,
+          .documentGeneration = inspectorSnapshot_.documentGeneration,
+          .itemId = ImGui::GetItemID()};
+}
+
+void SidebarPresenter::discardForeignStrokeEdits(const EditorApp& app) {
+  const auto discard = [&app](auto& edit) {
+    if (!edit.has_value()) {
+      return;
+    }
+    const bool sameDocument = app.hasDocument() &&
+                              edit->owner.document == app.document().document().handle() &&
+                              edit->owner.documentGeneration == app.document().documentGeneration();
+    if (!sameDocument) {
+      if (ImGui::GetCurrentContext() != nullptr && edit->owner.itemId != 0 &&
+          ImGui::GetActiveID() == edit->owner.itemId) {
+        ImGui::ClearActiveID();
+      }
+      edit.reset();
+    }
+  };
+  discard(strokeLengthEditStart_);
+  discard(strokeScalarEdit_);
+}
+
 void SidebarPresenter::beginStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field) {
+  discardForeignStrokeEdits(liveApp);
   if (strokeScalarEdit_.has_value() && strokeScalarEdit_->field == field) {
     return;
   }
@@ -2010,6 +2052,7 @@ void SidebarPresenter::beginStrokeScalarEdit(EditorApp& liveApp, StrokeScalarFie
     finishStrokeScalarEdit(liveApp, strokeScalarEdit_->field);
   }
   strokeScalarEdit_ = StrokeScalarEdit{
+      .owner = strokeEditOwner(&liveApp),
       .field = field,
       .beforeSource = std::string(liveApp.document().document().source()),
   };
@@ -2031,6 +2074,7 @@ void SidebarPresenter::trackStrokeScalarItem(const StrokeRenderContext& context,
 }
 
 void SidebarPresenter::finishStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field) {
+  discardForeignStrokeEdits(liveApp);
   if (!strokeScalarEdit_.has_value() || strokeScalarEdit_->field != field) {
     return;
   }

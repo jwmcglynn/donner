@@ -375,6 +375,8 @@ private:
   };
 
   struct InspectorSnapshot {
+    svg::SVGDocumentHandle document;       ///< Document whose values the snapshot contains.
+    std::uint64_t documentGeneration = 0;  ///< Owning document generation.
     bool hasSelection = false;
     bool transformEditable = false;
     bool strokeEditable = false;
@@ -514,8 +516,18 @@ private:
   /// @return Whether a mutation was queued.
   bool restoreStrokeLengthOnCancel(const StrokeRenderContext& context, StrokeScalarField field,
                                    const Lengthd& shown, const InspectorLengthEdit& edit);
+  /// Document and input widget owning a deferred stroke edit.
+  struct StrokeEditOwner {
+    svg::SVGDocumentHandle document;
+    std::uint64_t documentGeneration = 0;
+    ImGuiID itemId = 0;
+  };
+  StrokeEditOwner strokeEditOwner(const EditorApp* app) const;
+  void discardForeignStrokeEdits(const EditorApp& app);
+
   /// Value of a stroke length field when its typing began.
   struct StrokeLengthEditStart {
+    StrokeEditOwner owner;    ///< Original document and input widget.
     StrokeScalarField field;  ///< Field being typed into.
     LengthUnit unit;          ///< Unit shown before typing, kept by typed bare numbers.
     /// Each selected element's `style` attribute before typing, restored on cancel.
@@ -671,6 +683,7 @@ private:
   std::string strokeDashError_;
   std::string strokeMiterError_;
   struct StrokeScalarEdit {
+    StrokeEditOwner owner;
     StrokeScalarField field;
     std::string beforeSource;
     bool changed = false;
