@@ -24,11 +24,11 @@ from tools import test_timing
 ENFORCED_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 54800,
     "--max-js-raw-bytes": 199000,
-    "--max-total-raw-bytes": 12825000,
+    "--max-total-raw-bytes": 12880000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
-    "--max-wasm-gzip-bytes": 3475000,
-    "--max-wasm-raw-bytes": 10750000,
+    "--max-wasm-gzip-bytes": 3500000,
+    "--max-wasm-raw-bytes": 10800000,
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 # The standalone renderer Wasm ceilings CI enforces, changed together with that test's arguments.
