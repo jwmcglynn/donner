@@ -7249,12 +7249,16 @@ TEST(RenderCoordinatorTest, CoveredBoundedResultPresentsAndZoomOutWaitsForOvervi
   coordinator.maybeRequestRender(app, selectTool, viewport);
   ASSERT_THAT(coordinator.asyncRenderer().isBusy(), testing::IsTrue());
   ASSERT_THAT(waitForCoordinator(), testing::IsTrue());
-  ASSERT_THAT(textures.tiles().empty(), testing::IsFalse());
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
   EXPECT_THAT(textures.overviewTiles().empty(), testing::IsTrue());
   EXPECT_THAT(coordinator.displayedDocVersion(),
               testing::Eq(app.document().currentFrameVersion()));
 
   const Box2d pane(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize);
+  const auto coverage = textures.coverageDiagnostics();
+  ASSERT_THAT(coverage.activeTilesViewportBounded, testing::IsTrue());
+  ASSERT_THAT(FramePresentation::ActiveRasterCoversPane(coverage, viewport, pane),
+              testing::IsTrue());
   const auto shown = coordinator.buildFramePresentation(app, selectTool, viewport, pane,
                                                          SelectionChromeDetail::Full);
   ASSERT_THAT(shown, testing::NotNull());
@@ -7263,6 +7267,9 @@ TEST(RenderCoordinatorTest, CoveredBoundedResultPresentsAndZoomOutWaitsForOvervi
   // Complete active coverage can present now; a later camera expansion still needs repair.
   viewport.zoomAround(1.0 / 32.0, viewport.paneCenter());
   ASSERT_THAT(viewport.rasterViewport().viewportBounded, testing::IsFalse());
+  ASSERT_THAT(FramePresentation::ActiveRasterCoversPane(coverage, viewport, pane),
+              testing::IsFalse());
+  EXPECT_THAT(shown->viewport().zoom, testing::Not(testing::DoubleEq(viewport.zoom)));
   const auto held = coordinator.buildFramePresentation(app, selectTool, viewport, pane,
                                                         SelectionChromeDetail::Full);
   EXPECT_THAT(held, testing::Eq(shown));
@@ -7277,6 +7284,7 @@ TEST(RenderCoordinatorTest, CoveredBoundedResultPresentsAndZoomOutWaitsForOvervi
   const auto recovered = coordinator.buildFramePresentation(app, selectTool, viewport, pane,
                                                              SelectionChromeDetail::Full);
   ASSERT_THAT(recovered, testing::NotNull());
+  EXPECT_THAT(recovered, testing::Ne(shown));
   EXPECT_THAT(recovered->viewport().zoom, testing::DoubleEq(viewport.zoom));
   EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
 
