@@ -244,4 +244,30 @@ void ViewportState::resetTo100Percent() {
   panScreenPoint = paneCenter();
 }
 
+void ViewportState::zoomToFit(const Box2d& fitScreenRect) {
+  const Vector2d docSize = documentViewBox.size();
+  const Vector2d fitSize = fitScreenRect.size();
+  if (!(docSize.x > 0.0) || !(docSize.y > 0.0) || !(fitSize.x > 0.0) || !(fitSize.y > 0.0)) {
+    resetTo100Percent();
+    return;
+  }
+  zoom = std::clamp(std::min(fitSize.x / docSize.x, fitSize.y / docSize.y), kMinZoom, kMaxZoom);
+  panDocPoint = documentViewBoxCenter();
+  panScreenPoint = (fitScreenRect.topLeft + fitScreenRect.bottomRight) * 0.5;
+}
+
+bool ViewportState::documentFitsAtActualSize(const Box2d& fitScreenRect) const {
+  const Vector2d docSize = documentViewBox.size();
+  const Vector2d fitSize = fitScreenRect.size();
+  return docSize.x <= fitSize.x && docSize.y <= fitSize.y;
+}
+
+void ViewportState::resetToInitialView(const Box2d& fitScreenRect) {
+  if (documentFitsAtActualSize(fitScreenRect)) {
+    resetTo100Percent();
+  } else {
+    zoomToFit(fitScreenRect);
+  }
+}
+
 }  // namespace donner::editor

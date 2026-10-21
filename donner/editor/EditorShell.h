@@ -111,6 +111,10 @@ struct EditorShellOptions {
   /// Show the in-workspace welcome and sample picker on the first frame.
   bool showWelcome = false;
   std::string editorNoticeText;  //!< Host-provided notice displayed in the editor.
+  /// Open a document larger than the canvas fitted to it, rather than at 100%. Replays of
+  /// recordings made before the editor did this turn it off, so their screen coordinates still
+  /// land where they were recorded.
+  bool fitLargeDocumentsOnOpen = true;
 
   /// Embedded "<version>\n<commit>\n" build metadata displayed in the About
   /// dialog. May be empty when the build did not embed it.
@@ -477,6 +481,9 @@ private:
   /// Apply canvas zoom and source font size commands from menus or keyboard shortcuts.
   /// @param actions Commands to apply.
   void applyZoomActions(const MenuBarActions& actions);
+  /// Apply source editor font size commands from menus or keyboard shortcuts.
+  /// @param actions Commands to apply.
+  void applySourceFontSizeActions(const MenuBarActions& actions);
   void applyMenuHistoryActions(const MenuBarActions& menuActions, bool sourcePaneFocused);
   [[nodiscard]] MenuBarState buildMenuBarState(bool compactUi);
   [[gnu::noinline]] void applyOverlayStateChanges(bool compositorTileOverlayBefore,
@@ -566,6 +573,12 @@ private:
   void installFramePresentation(std::shared_ptr<const FramePresentation> frame);
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;
+  /// Latch a newly opened document's initial view, then apply a requested Zoom to Fit, using the
+  /// render pane's laid-out content region.
+  /// @param renderPaneSizeStable Whether the pane geometry has settled for the initial view.
+  void applyInitialAndPendingViewport(bool renderPaneSizeStable);
+  /// Unobstructed canvas area that Zoom to Fit and newly opened documents fit into.
+  [[nodiscard]] Box2d canvasFitScreenRect() const;
   [[nodiscard]] Box2d canvasZoomControlScreenRect() const;
   void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderEditingScopeBreadcrumb();
@@ -578,6 +591,10 @@ private:
   void renderDocumentLoadFailureNoticeContents(const internal::DocumentLoadFailureNotice& notice);
   /// Open the source pane with the first parse error selected and flashed.
   void revealLoadFailureInSource();
+  /// Draw the zoom control's menu while it is open and apply the chosen zoom.
+  /// @param controlRect Screen rectangle of the zoom control the menu opens from.
+  /// @return True while the menu is open.
+  bool renderCanvasZoomMenu(const Box2d& controlRect);
   [[nodiscard]] std::optional<Entity> toolbarPaintSelectionIdentity(
       bool rendererBusy, const svg::SVGDocumentHandle& currentPaintDocument);
   void renderFillStrokeToolbarWidget();
@@ -1051,6 +1068,8 @@ private:
   bool viewportInitialized_ = false;
   /// Screen rectangle of the load-failure notice's Show in Source button, while it is shown.
   std::optional<Box2d> loadFailureRevealButtonRect_;
+  /// Zoom to Fit was requested and is applied once the render pane has laid out this frame.
+  bool zoomToFitPending_ = false;
   /// Window framebuffer size the last full UI frame laid out against.
   Vector2i lastFullFrameWindowSize_ = Vector2i(-1, -1);
   /// Previous frame's canvas (render pane) content-region size. The fallback half of

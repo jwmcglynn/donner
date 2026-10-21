@@ -191,6 +191,25 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
   std::filesystem::remove(path, ec);
 }
 
+// The format version decides how a replay opens the document, so it survives a rewrite: a
+// recording made before large documents opened fitted keeps replaying at 100%.
+TEST(ReproFileTest, FormatVersionSurvivesReadAndWrite) {
+  const auto older = ParseReproFile(StyleReplayWithEncodedValue("serif"));
+  ASSERT_TRUE(older.has_value());
+  EXPECT_EQ(older->metadata.formatVersion, 4);
+  EXPECT_LT(older->metadata.formatVersion, kFirstReproVersionWithFittedOpen);
+
+  const auto path = TempFile("format_version");
+  ASSERT_TRUE(WriteReproFile(path, *older));
+  const auto reloaded = ReadReproFile(path);
+  ASSERT_TRUE(reloaded.has_value());
+  EXPECT_EQ(reloaded->metadata.formatVersion, 4);
+
+  EXPECT_EQ(MakeFileWithOneFrame().metadata.formatVersion, kReproFileVersion);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
 TEST(ReproFileTest, RejectsUnsafeNumericConversions) {
   const std::vector<std::string> inputs = {
       R"({"v":1e300,"wnd":[100,100],"scale":1,"exp":0})"

@@ -128,6 +128,8 @@ struct MenuBarActions {
   bool zoomIn = false;
   /// Request decreasing the viewport zoom.
   bool zoomOut = false;
+  /// Request fitting the whole document into the canvas.
+  bool zoomToFit = false;
   /// Request a one-to-one viewport zoom.
   bool actualSize = false;
   /// Request increasing the source editor font size.
@@ -186,6 +188,7 @@ enum class MenuBarCommand {
   DeselectAll,
   ZoomIn,
   ZoomOut,
+  ZoomToFit,
   ActualSize,
   IncreaseSourceFontSize,
   DecreaseSourceFontSize,

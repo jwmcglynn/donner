@@ -241,6 +241,8 @@ TEST(EditorControlSessionTest, InspectorTextInputReplay) {
   replay.metadata.windowWidth = 1100;
   replay.metadata.windowHeight = 720;
   replay.metadata.displayScale = 1.0;
+  // The pointer coordinates below were authored against the document opening at 100%.
+  replay.metadata.formatVersion = repro::kFirstReproVersionWithFittedOpen - 1;
   const bool nativeMacMenu = ImGuiIO{}.ConfigMacOSXBehaviors;
   const int selectAllModifiers = nativeMacMenu ? (1 << 3) : (1 << 0);
   // The non-macOS ImGui menu occupies space above the Inspector's Position X input.

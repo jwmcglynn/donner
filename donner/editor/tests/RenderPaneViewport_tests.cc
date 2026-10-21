@@ -234,6 +234,61 @@ TEST(ViewportStateTest, ResetReturnsTo100PercentRegardlessOfHistory) {
 }
 
 // ---------------------------------------------------------------------------
+// Zoom to Fit and the initial view
+// ---------------------------------------------------------------------------
+
+TEST(ViewportStateTest, ZoomToFitFillsTheLimitingAxisCenteredInTheFitRect) {
+  ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(1000.0, 800.0),
+                                   Box2d::FromXYWH(0.0, 0.0, 1536.0, 1024.0));
+  const Box2d fitRect = Box2d::FromXYWH(40.0, 100.0, 920.0, 660.0);
+  v.zoomToFit(fitRect);
+  // Width limits: 920 / 1536. The height is centered in the 660-pixel band.
+  EXPECT_DOUBLE_EQ(v.zoom, 920.0 / 1536.0);
+  const Box2d image = v.imageScreenRect();
+  EXPECT_NEAR_VEC(image.topLeft, Vector2d(40.0, 100.0 + (660.0 - 1024.0 * v.zoom) * 0.5), 1e-9);
+  EXPECT_NEAR_VEC(image.bottomRight, Vector2d(960.0, 760.0 - (660.0 - 1024.0 * v.zoom) * 0.5),
+                  1e-9);
+}
+
+TEST(ViewportStateTest, ZoomToFitEnlargesASmallDocument) {
+  ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(1000.0, 800.0),
+                                   Box2d::FromXYWH(10.0, 20.0, 100.0, 50.0));
+  v.zoomToFit(Box2d::FromXYWH(0.0, 0.0, 1000.0, 800.0));
+  EXPECT_DOUBLE_EQ(v.zoom, 10.0);
+  EXPECT_NEAR_VEC(v.documentToScreen(Vector2d(60.0, 45.0)), Vector2d(500.0, 400.0), 1e-9);
+}
+
+TEST(ViewportStateTest, ZoomToFitClampsAndFallsBackForEmptyGeometry) {
+  ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(1000.0, 800.0),
+                                   Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0));
+  v.zoomToFit(Box2d::FromXYWH(0.0, 0.0, 1000.0, 800.0));
+  EXPECT_DOUBLE_EQ(v.zoom, ViewportState::kMaxZoom);
+
+  v.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 0.0, 100.0);
+  v.zoomToFit(Box2d::FromXYWH(0.0, 0.0, 1000.0, 800.0));
+  EXPECT_DOUBLE_EQ(v.zoom, 1.0);
+
+  v.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 100.0);
+  v.zoomToFit(Box2d::FromXYWH(10.0, 10.0, 0.0, 0.0));
+  EXPECT_DOUBLE_EQ(v.zoom, 1.0);
+}
+
+TEST(ViewportStateTest, InitialViewIsActualSizeOnlyWhenTheDocumentFits) {
+  const Box2d fitRect = Box2d::FromXYWH(40.0, 100.0, 920.0, 660.0);
+  ViewportState fits = MakeFreshState(Vector2d::Zero(), Vector2d(1000.0, 800.0),
+                                      Box2d::FromXYWH(0.0, 0.0, 920.0, 660.0));
+  fits.zoom = 3.0;
+  fits.resetToInitialView(fitRect);
+  EXPECT_DOUBLE_EQ(fits.zoom, 1.0);
+  EXPECT_NEAR_VEC(fits.documentToScreen(Vector2d(460.0, 330.0)), fits.paneCenter(), 1e-9);
+
+  ViewportState tooTall = MakeFreshState(Vector2d::Zero(), Vector2d(1000.0, 800.0),
+                                         Box2d::FromXYWH(0.0, 0.0, 400.0, 661.0));
+  tooTall.resetToInitialView(fitRect);
+  EXPECT_DOUBLE_EQ(tooTall.zoom, 660.0 / 661.0);
+}
+
+// ---------------------------------------------------------------------------
 // imageScreenRect
 // ---------------------------------------------------------------------------
 

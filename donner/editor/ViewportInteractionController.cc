@@ -183,6 +183,18 @@ bool ViewportInteractionController::resetToActualSize() {
   return ViewportMappingChanged(before, viewport_);
 }
 
+bool ViewportInteractionController::zoomToFit(const Box2d& fitScreenRect) {
+  const ViewportState before = viewport_;
+  viewport_.zoomToFit(fitScreenRect);
+  return ViewportMappingChanged(before, viewport_);
+}
+
+bool ViewportInteractionController::resetToInitialView(const Box2d& fitScreenRect) {
+  const ViewportState before = viewport_;
+  viewport_.resetToInitialView(fitScreenRect);
+  return ViewportMappingChanged(before, viewport_);
+}
+
 bool ViewportInteractionController::applyZoom(double factor, const Vector2d& focalScreen) {
   const ViewportState before = viewport_;
   viewport_.zoomAround(viewport_.zoom * factor, focalScreen);

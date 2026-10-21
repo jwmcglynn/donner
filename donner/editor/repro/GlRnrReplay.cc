@@ -559,6 +559,8 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
           .allowHostClipboardAccess = kUntrustedReproReplaySecurityPolicy.allowHostClipboardAccess,
           .showWelcome = options.showWelcome,
           .editorNoticeText = "",
+          .fitLargeDocumentsOnOpen =
+              repro->metadata.formatVersion >= kFirstReproVersionWithFittedOpen,
       });
   if (!shell.valid()) {
     return SetError(error, "failed to initialize editor shell");

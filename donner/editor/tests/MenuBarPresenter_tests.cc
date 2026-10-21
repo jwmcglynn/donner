@@ -77,7 +77,7 @@ TEST(EditorMenuModelTest, SourceFontShortcutsFollowFocusOnBothMenuSurfaces) {
   const std::pair<MenuBarCommand, MenuBarCommand> commands[] = {
       {MenuBarCommand::ZoomIn, MenuBarCommand::IncreaseSourceFontSize},
       {MenuBarCommand::ZoomOut, MenuBarCommand::DecreaseSourceFontSize},
-      {MenuBarCommand::ActualSize, MenuBarCommand::ResetSourceFontSize},
+      {MenuBarCommand::ZoomToFit, MenuBarCommand::ResetSourceFontSize},
   };
   for (const auto& [canvasCommand, sourceCommand] : commands) {
     const EditorMenuNode* canvas = FindCommand(canvasCommand);
@@ -122,7 +122,25 @@ TEST(EditorMenuModelTest, SourceFontCommandsProduceOnlyTheirRequestedAction) {
   EXPECT_TRUE(actions.resetSourceFontSize);
   EXPECT_FALSE(actions.increaseSourceFontSize);
   EXPECT_FALSE(actions.decreaseSourceFontSize);
+  EXPECT_FALSE(actions.zoomToFit);
   EXPECT_FALSE(actions.actualSize);
+}
+
+// View menu zoom commands follow Illustrator: Cmd+0 fits the artboard and Cmd+1 shows it at
+// 100%, and neither steals a source-pane shortcut while the source pane has focus.
+TEST(EditorMenuModelTest, ZoomToFitAndActualSizeUseIllustratorShortcuts) {
+  const EditorMenuNode* fit = FindCommand(MenuBarCommand::ZoomToFit);
+  const EditorMenuNode* actual = FindCommand(MenuBarCommand::ActualSize);
+  ASSERT_NE(fit, nullptr);
+  ASSERT_NE(actual, nullptr);
+  EXPECT_EQ(fit->label, "Zoom to Fit");
+  EXPECT_EQ(fit->shortcut, "Cmd+0");
+  EXPECT_EQ(actual->label, "Actual Size");
+  EXPECT_EQ(actual->shortcut, "Cmd+1");
+  MenuBarState state;
+  state.sourcePaneFocused = true;
+  EXPECT_FALSE(PresentEditorMenuItem(*actual, state).shortcutEnabled);
+  EXPECT_TRUE(PresentEditorMenuItem(*actual, state).enabled);
 }
 
 TEST(EditorMenuModelTest, EnabledAndCheckStateFollowFocusAndViewState) {
@@ -526,8 +544,14 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   EXPECT_TRUE(actions.zoomOut);
 
   actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::ZoomToFit, state, &actions);
+  EXPECT_TRUE(actions.zoomToFit);
+  EXPECT_FALSE(actions.actualSize);
+
+  actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::ActualSize, state, &actions);
   EXPECT_TRUE(actions.actualSize);
+  EXPECT_FALSE(actions.zoomToFit);
 
   actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::ToggleSourceFocusMode, state, &actions);

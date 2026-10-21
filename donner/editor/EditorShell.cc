@@ -729,6 +729,12 @@ constexpr float kToolPaletteTopInset = 12.0f;
 constexpr float kCanvasZoomPaddingX = 8.0f;
 constexpr float kCanvasZoomPaddingY = 4.0f;
 constexpr float kCanvasZoomInset = 12.0f;
+/// Space kept between a fitted document and the canvas edges, in logical pixels.
+constexpr double kCanvasFitMarginPx = 40.0;
+/// Space kept between a fitted document and the floating tool palette, in logical pixels.
+constexpr double kCanvasFitToolPaletteGapPx = 16.0;
+/// ImGui popup identifier for the canvas zoom control's menu.
+constexpr const char* kCanvasZoomMenuId = "##canvas_zoom_menu";
 constexpr std::string_view kRenderPaneContextMenuName = "Render Context Menu";
 
 // Non-ASCII chrome glyphs, from `kEditorSymbolCodepoints` so the atlas can
@@ -3214,11 +3220,22 @@ void EditorShell::applyZoomActions(const MenuBarActions& actions) {
       requestRenderAtEndOfFrame_ = true;
     }
   }
+  if (actions.zoomToFit) {
+    // Fitting needs the render pane's content region, which is only known once the pane lays out;
+    // the geometry seeded before shortcuts run still includes the pane's window padding.
+    zoomToFitPending_ = true;
+    requestRenderAtEndOfFrame_ = true;
+    window_.wakeEventLoop();
+  }
   if (actions.actualSize) {
     if (interactionController_.resetToActualSize()) {
       requestRenderAtEndOfFrame_ = true;
     }
   }
+  applySourceFontSizeActions(actions);
+}
+
+void EditorShell::applySourceFontSizeActions(const MenuBarActions& actions) {
   if (actions.increaseSourceFontSize) {
     sourceFontSizePercent_ = std::min(sourceFontSizePercent_ + 10, 300);
   }
@@ -3273,15 +3290,19 @@ void EditorShell::handleGlobalShortcuts() {
                           ImGui::IsKeyPressed(ImGuiKey_KeypadAdd, /*repeat=*/false);
     const bool decrease = ImGui::IsKeyPressed(ImGuiKey_Minus, /*repeat=*/false) ||
                           ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract, /*repeat=*/false);
-    const bool reset = ImGui::IsKeyPressed(ImGuiKey_0, /*repeat=*/false);
+    // Cmd+0 fits and Cmd+1 shows actual size, as in Illustrator. In the source pane Cmd+0 resets
+    // the font size instead.
+    const bool pressedZero = ImGui::IsKeyPressed(ImGuiKey_0, /*repeat=*/false);
+    const bool pressedOne = ImGui::IsKeyPressed(ImGuiKey_1, /*repeat=*/false);
     if (sourcePaneFocused) {
       zoomActions.increaseSourceFontSize = increase;
       zoomActions.decreaseSourceFontSize = decrease;
-      zoomActions.resetSourceFontSize = reset;
+      zoomActions.resetSourceFontSize = pressedZero;
     } else {
       zoomActions.zoomIn = increase;
       zoomActions.zoomOut = decrease;
-      zoomActions.actualSize = reset;
+      zoomActions.zoomToFit = pressedZero;
+      zoomActions.actualSize = pressedOne;
     }
     applyZoomActions(zoomActions);
   }
@@ -3932,6 +3953,28 @@ std::optional<Box2d> EditorShell::compactPanelScreenRect() const {
   }
   return Box2d::FromXYWH(adaptiveUiLayout_.panelX, adaptiveUiLayout_.panelY,
                          adaptiveUiLayout_.panelWidth, adaptiveUiLayout_.panelHeight);
+}
+
+Box2d EditorShell::canvasFitScreenRect() const {
+  const ViewportState& viewport = interactionController_.viewport();
+  const Box2d pane(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize);
+  const Box2d palette = toolPaletteScreenRect(
+      ImVec2(static_cast<float>(viewport.paneOrigin.x), static_cast<float>(viewport.paneOrigin.y)),
+      ImVec2(static_cast<float>(viewport.paneSize.x), static_cast<float>(viewport.paneSize.y)));
+  // Keep the fitted artboard clear of the palette floating over the top of the canvas.
+  const double top = std::max(pane.topLeft.y + kCanvasFitMarginPx,
+                              palette.bottomRight.y + kCanvasFitToolPaletteGapPx);
+  Vector2d bottomRight = pane.bottomRight - Vector2d(kCanvasFitMarginPx, kCanvasFitMarginPx);
+  // The compact touch layout's floating panel covers the right or bottom edge of the canvas.
+  if (const std::optional<Box2d> panel = compactPanelScreenRect()) {
+    if (adaptiveUiLayout_.panelPlacement == CompactPanelPlacement::Right) {
+      bottomRight.x = std::min(bottomRight.x, panel->topLeft.x - kCanvasFitMarginPx);
+    } else {
+      bottomRight.y = std::min(bottomRight.y, panel->topLeft.y - kCanvasFitMarginPx);
+    }
+  }
+  const Box2d fit(Vector2d(pane.topLeft.x + kCanvasFitMarginPx, top), bottomRight);
+  return fit.width() > 0.0 && fit.height() > 0.0 ? fit : pane;
 }
 
 Box2d EditorShell::canvasZoomControlScreenRect() const {
@@ -5114,6 +5157,25 @@ void EditorShell::updateRenderPaneTextChrome(bool textToolActive) {
   }
 }
 
+void EditorShell::applyInitialAndPendingViewport(bool renderPaneSizeStable) {
+  if (!viewportInitialized_ && interactionController_.viewport().paneSize.x > 0.0 &&
+      interactionController_.viewport().paneSize.y > 0.0 && app_.hasDocument()) {
+    std::ignore = options_.fitLargeDocumentsOnOpen
+                      ? interactionController_.resetToInitialView(canvasFitScreenRect())
+                      : interactionController_.resetToActualSize();
+    if (renderPaneSizeStable) {
+      viewportInitialized_ = true;
+    } else {
+      window_.wakeEventLoop();
+    }
+  }
+  if (std::exchange(zoomToFitPending_, false) && app_.hasDocument()) {
+    if (interactionController_.zoomToFit(canvasFitScreenRect())) {
+      requestRenderAtEndOfFrame_ = true;
+    }
+  }
+}
+
 void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   // The render pane is docked into the DockSpace central node (see
   // renderDockSpaceHost); the DockSpace owns its position and size, so we no
@@ -5173,15 +5235,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       .sidebarColumnIncluded = !adaptiveUiLayout_.compactTouch(),
   });
   lastRenderPaneContentSize_ = Vector2d(contentRegion.x, contentRegion.y);
-  if (!viewportInitialized_ && interactionController_.viewport().paneSize.x > 0.0 &&
-      interactionController_.viewport().paneSize.y > 0.0 && app_.hasDocument()) {
-    std::ignore = interactionController_.resetToActualSize();
-    if (renderPaneSizeStable) {
-      viewportInitialized_ = true;
-    } else {
-      window_.wakeEventLoop();
-    }
-  }
+  applyInitialAndPendingViewport(renderPaneSizeStable);
 
   refreshReferenceHighlightSummaryIfNeeded();
   const std::string referenceChipLabel = ReferenceHighlightChipLabel(referenceHighlightSummary_);
@@ -6372,28 +6426,51 @@ void EditorShell::renderEditingScopeBreadcrumb() {
   ImGui::PopStyleVar(2);
 }
 
+bool EditorShell::renderCanvasZoomMenu(const Box2d& controlRect) {
+  // Open upward from the control, which sits in the canvas's bottom-left corner.
+  ImGui::SetNextWindowPos(ImVec2(static_cast<float>(controlRect.topLeft.x),
+                                 static_cast<float>(controlRect.topLeft.y) - 4.0f),
+                          ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+  if (!ImGui::BeginPopup(kCanvasZoomMenuId)) {
+    return false;
+  }
+  MenuBarActions actions;
+  actions.zoomIn = ImGui::MenuItem("Zoom In", "Cmd+=");
+  actions.zoomOut = ImGui::MenuItem("Zoom Out", "Cmd+-");
+  ImGui::Separator();
+  actions.zoomToFit = ImGui::MenuItem("Zoom to Fit", "Cmd+0");
+  actions.actualSize = ImGui::MenuItem("Actual Size", "Cmd+1");
+  ImGui::EndPopup();
+  if (actions.zoomIn || actions.zoomOut || actions.zoomToFit || actions.actualSize) {
+    applyZoomActions(actions);
+    // The chosen item closes the menu on the next frame; an idle event-driven loop must run it.
+    window_.wakeEventLoop();
+  }
+  return true;
+}
+
 void EditorShell::renderCanvasZoomControl() {
   const Box2d rect = canvasZoomControlScreenRect();
   const ImVec2 min(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y));
   const ImVec2 max(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y));
   ImGui::SetCursorScreenPos(min);
-  ImGui::InvisibleButton("##canvas_zoom_actual_size", max - min);
+  ImGui::InvisibleButton("##canvas_zoom_control", max - min);
   const bool hovered = ImGui::IsItemHovered();
-  if (ImGui::IsItemClicked()) {
-    if (interactionController_.resetToActualSize()) {
-      requestRenderAtEndOfFrame_ = true;
-    }
+  if (ImGui::IsItemClicked() && !ImGui::IsPopupOpen(kCanvasZoomMenuId)) {
+    ImGui::OpenPopup(kCanvasZoomMenuId);
   }
-  if (hovered) {
-    ImGui::SetTooltip("Reset zoom to 100%%");
+  const bool menuOpen = renderCanvasZoomMenu(rect);
+  if (hovered && !menuOpen) {
+    ImGui::SetTooltip("Zoom options");
   }
 
   const EditorTheme& theme = EditorTheme::Active();
   ImDrawList* drawList = ImGui::GetWindowDrawList();
+  const bool highlighted = hovered || menuOpen;
   drawList->AddRectFilled(min, max,
-                          WithAlpha(hovered ? theme.surfaceHover : theme.surfaceOverlay, 238),
+                          WithAlpha(highlighted ? theme.surfaceHover : theme.surfaceOverlay, 238),
                           theme.radiusControl);
-  drawList->AddRect(min, max, hovered ? theme.accentDefault : theme.borderStrong,
+  drawList->AddRect(min, max, highlighted ? theme.accentDefault : theme.borderStrong,
                     theme.radiusControl, 0, 1.0f);
   char label[16];
   std::snprintf(label, sizeof(label), "%.0f%%", interactionController_.viewport().zoom * 100.0);

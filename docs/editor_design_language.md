@@ -68,8 +68,8 @@ occupy disabled slots. Acute pointer artwork uses concentric silhouettes so the 
 leak through the white halo during downsampling.
 
 The Inspector contains document and selection controls only. Viewport implementation telemetry does
-not occupy the Inspector. Zoom state lives on the canvas in a compact control that resets to 100
-percent when clicked.
+not occupy the Inspector. Zoom state lives on the canvas in a compact control whose menu offers Zoom
+In, Zoom Out, Zoom to Fit (Cmd+0) and Actual Size (Cmd+1).
 
 ### Adaptive Touch Profile
 
