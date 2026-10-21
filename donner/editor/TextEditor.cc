@@ -520,6 +520,11 @@ void TextEditor::handleSnippetInsertion(ImWchar character) {
 
 void TextEditor::executeAction(TextEditor::ShortcutId actionId, bool& keepAutocompleteOpen,
                                bool shift, bool ctrl) {
+  if (const NavigationAction* navigation = findNavigationAction(actionId)) {
+    navigation->move(*this, navigation->select);
+    return;
+  }
+
   switch (actionId) {
     case ShortcutId::Indent:
       if (hasSelection()) {
@@ -530,44 +535,6 @@ void TextEditor::executeAction(TextEditor::ShortcutId actionId, bool& keepAutoco
       break;
     case TextEditor::ShortcutId::Undo: undo(); break;
     case TextEditor::ShortcutId::Redo: redo(); break;
-    case TextEditor::ShortcutId::MoveUp: moveUp(1, /*select*/ false); break;
-    case TextEditor::ShortcutId::MoveDown: moveDown(1, /*select*/ false); break;
-    case TextEditor::ShortcutId::MoveLeft: moveLeft(1, /*select*/ false, /*wordMode*/ false); break;
-    case TextEditor::ShortcutId::MoveRight:
-      moveRight(1, /*select*/ false, /*wordMode*/ false);
-      break;
-    case TextEditor::ShortcutId::SelectUp: moveUp(1, /*select*/ true); break;
-    case TextEditor::ShortcutId::SelectDown: moveDown(1, /*select*/ true); break;
-    case TextEditor::ShortcutId::SelectLeft:
-      moveLeft(1, /*select*/ true, /*wordMode*/ false);
-      break;
-    case TextEditor::ShortcutId::SelectRight:
-      moveRight(1, /*select*/ true, /*wordMode*/ false);
-      break;
-    case TextEditor::ShortcutId::MoveWordLeft:
-      moveLeft(1, /*select*/ false, /*wordMode*/ true);
-      break;
-    case TextEditor::ShortcutId::SelectWordLeft:
-      moveLeft(1, /*select*/ true, /*wordMode*/ true);
-      break;
-    case TextEditor::ShortcutId::MoveWordRight:
-      moveRight(1, /*select*/ false, /*wordMode*/ true);
-      break;
-    case TextEditor::ShortcutId::SelectWordRight:
-      moveRight(1, /*select*/ true, /*wordMode*/ true);
-      break;
-    case TextEditor::ShortcutId::MoveStartLine: moveHome(/*select*/ false); break;
-    case TextEditor::ShortcutId::SelectStartLine: moveHome(/*select*/ true); break;
-    case TextEditor::ShortcutId::MoveEndLine: moveEnd(/*select*/ false); break;
-    case TextEditor::ShortcutId::SelectEndLine: moveEnd(/*select*/ true); break;
-    case TextEditor::ShortcutId::MoveUpBlock: moveUp(pageMoveLines(), /*select*/ false); break;
-    case TextEditor::ShortcutId::SelectUpBlock: moveUp(pageMoveLines(), /*select*/ true); break;
-    case TextEditor::ShortcutId::MoveDownBlock: moveDown(pageMoveLines(), /*select*/ false); break;
-    case TextEditor::ShortcutId::SelectDownBlock: moveDown(pageMoveLines(), /*select*/ true); break;
-    case TextEditor::ShortcutId::MoveTop: moveTop(/*select*/ false); break;
-    case TextEditor::ShortcutId::SelectTop: moveTop(/*select*/ true); break;
-    case TextEditor::ShortcutId::MoveBottom: moveBottom(/*select*/ false); break;
-    case TextEditor::ShortcutId::SelectBottom: moveBottom(/*select*/ true); break;
     case TextEditor::ShortcutId::DeleteRight:
     case TextEditor::ShortcutId::ForwardDelete: delete_(); break;
     case TextEditor::ShortcutId::DeleteLeft:
@@ -619,6 +586,9 @@ void TextEditor::handleKeyboardInputs() {
 
     if (shortcutMatches(static_cast<ShortcutId>(i), io)) {
       currentAction = static_cast<ShortcutId>(i);
+      if (const NavigationAction* navigation = findNavigationAction(currentAction)) {
+        additionalChecks = navigationAllowed(navigation->gate, editorFocused);
+      }
 
       switch (currentAction) {
         case ShortcutId::Paste:
@@ -632,32 +602,6 @@ void TextEditor::handleKeyboardInputs() {
         case ShortcutId::ForwardDeleteWord:
         case ShortcutId::BackwardDeleteWord:
         case ShortcutId::SelectAll: additionalChecks = editorFocused; break;
-
-        case ShortcutId::MoveUp:
-        case ShortcutId::MoveDown:
-        case ShortcutId::SelectUp:
-        case ShortcutId::SelectDown:
-        case ShortcutId::MoveUpBlock:
-        case ShortcutId::SelectUpBlock:
-        case ShortcutId::MoveDownBlock:
-        case ShortcutId::SelectDownBlock:
-        case ShortcutId::MoveTop:
-        case ShortcutId::SelectTop:
-        case ShortcutId::MoveBottom:
-        case ShortcutId::SelectBottom:
-          additionalChecks = !autocompleteOpened_ && editorFocused;
-          break;
-
-        case ShortcutId::SelectLeft:
-        case ShortcutId::SelectRight:
-        case ShortcutId::MoveWordLeft:
-        case ShortcutId::SelectWordLeft:
-        case ShortcutId::MoveWordRight:
-        case ShortcutId::SelectWordRight:
-        case ShortcutId::MoveStartLine:
-        case ShortcutId::SelectStartLine:
-        case ShortcutId::MoveEndLine:
-        case ShortcutId::SelectEndLine: additionalChecks = editorFocused; break;
 
         case ShortcutId::AutocompleteUp:
         case ShortcutId::AutocompleteDown:
@@ -4612,6 +4556,74 @@ void TextEditor::ensureCursorVisible() {
 int TextEditor::getPageSize() const {
   const float height = ImGui::GetWindowHeight() - 20.0f;
   return static_cast<int>(std::floor(height / charAdvance_.y));
+}
+
+const TextEditor::NavigationAction* TextEditor::findNavigationAction(ShortcutId id) {
+  using Gate = NavigationGate;
+  static constexpr auto kNavigationActions = std::to_array<NavigationAction>({
+      {ShortcutId::MoveLeft, [](TextEditor& e, bool s) { e.moveLeft(1, s, false); }, false,
+       Gate::Always},
+      {ShortcutId::MoveRight, [](TextEditor& e, bool s) { e.moveRight(1, s, false); }, false,
+       Gate::Always},
+      {ShortcutId::SelectLeft, [](TextEditor& e, bool s) { e.moveLeft(1, s, false); }, true,
+       Gate::EditorFocused},
+      {ShortcutId::SelectRight, [](TextEditor& e, bool s) { e.moveRight(1, s, false); }, true,
+       Gate::EditorFocused},
+      {ShortcutId::MoveWordLeft, [](TextEditor& e, bool s) { e.moveLeft(1, s, true); }, false,
+       Gate::EditorFocused},
+      {ShortcutId::SelectWordLeft, [](TextEditor& e, bool s) { e.moveLeft(1, s, true); }, true,
+       Gate::EditorFocused},
+      {ShortcutId::MoveWordRight, [](TextEditor& e, bool s) { e.moveRight(1, s, true); }, false,
+       Gate::EditorFocused},
+      {ShortcutId::SelectWordRight, [](TextEditor& e, bool s) { e.moveRight(1, s, true); }, true,
+       Gate::EditorFocused},
+      {ShortcutId::MoveStartLine, [](TextEditor& e, bool s) { e.moveHome(s); }, false,
+       Gate::EditorFocused},
+      {ShortcutId::SelectStartLine, [](TextEditor& e, bool s) { e.moveHome(s); }, true,
+       Gate::EditorFocused},
+      {ShortcutId::MoveEndLine, [](TextEditor& e, bool s) { e.moveEnd(s); }, false,
+       Gate::EditorFocused},
+      {ShortcutId::SelectEndLine, [](TextEditor& e, bool s) { e.moveEnd(s); }, true,
+       Gate::EditorFocused},
+      {ShortcutId::MoveUp, [](TextEditor& e, bool s) { e.moveUp(1, s); }, false,
+       Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::SelectUp, [](TextEditor& e, bool s) { e.moveUp(1, s); }, true,
+       Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::MoveDown, [](TextEditor& e, bool s) { e.moveDown(1, s); }, false,
+       Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::SelectDown, [](TextEditor& e, bool s) { e.moveDown(1, s); }, true,
+       Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::MoveUpBlock, [](TextEditor& e, bool s) { e.moveUp(e.pageMoveLines(), s); },
+       false, Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::SelectUpBlock, [](TextEditor& e, bool s) { e.moveUp(e.pageMoveLines(), s); },
+       true, Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::MoveDownBlock, [](TextEditor& e, bool s) { e.moveDown(e.pageMoveLines(), s); },
+       false, Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::SelectDownBlock, [](TextEditor& e, bool s) { e.moveDown(e.pageMoveLines(), s); },
+       true, Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::MoveTop, [](TextEditor& e, bool s) { e.moveTop(s); }, false,
+       Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::SelectTop, [](TextEditor& e, bool s) { e.moveTop(s); }, true,
+       Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::MoveBottom, [](TextEditor& e, bool s) { e.moveBottom(s); }, false,
+       Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::SelectBottom, [](TextEditor& e, bool s) { e.moveBottom(s); }, true,
+       Gate::EditorFocusedWithoutAutocomplete},
+  });
+  const auto* found =
+      std::find_if(kNavigationActions.begin(), kNavigationActions.end(),
+                   [id](const NavigationAction& action) { return action.id == id; });
+  return found != kNavigationActions.end() ? found : nullptr;
+}
+
+bool TextEditor::navigationAllowed(NavigationGate gate, bool editorFocused) const {
+  switch (gate) {
+    case NavigationGate::Always: return true;
+    case NavigationGate::EditorFocused: return editorFocused;
+    case NavigationGate::EditorFocusedWithoutAutocomplete:
+      return editorFocused && !autocompleteOpened_;
+  }
+  return false;
 }
 
 int TextEditor::pageMoveLines() const {

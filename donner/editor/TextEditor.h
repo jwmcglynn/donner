@@ -3,6 +3,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
@@ -1015,6 +1016,38 @@ private:
 
   /// Number of lines Page Up and Page Down move: the visible height less one line of context.
   int pageMoveLines() const;
+
+  /// Input state a caret navigation action waits for.
+  enum class NavigationGate : std::uint8_t {
+    Always,                            ///< Runs whenever its key matches.
+    EditorFocused,                     ///< Runs while the text, not find or replace, has focus.
+    EditorFocusedWithoutAutocomplete,  ///< Also held back while the autocomplete list is open.
+  };
+
+  /// A caret navigation action, dispatched from a table rather than per-action branches.
+  struct NavigationAction {
+    ShortcutId id;                                  ///< Action this entry dispatches.
+    void (*move)(TextEditor& editor, bool select);  ///< Moves the caret.
+    bool select;                                    ///< Whether the move extends the selection.
+    NavigationGate gate;                            ///< Input state the action waits for.
+  };
+
+  /**
+   * Return the navigation entry for \p id.
+   *
+   * @param id The action to look up.
+   * @return The entry, or nullptr when \p id is not a caret navigation action.
+   */
+  static const NavigationAction* findNavigationAction(ShortcutId id);
+
+  /**
+   * Report whether a navigation action with \p gate may run this frame.
+   *
+   * @param gate Input state the action waits for.
+   * @param editorFocused Whether the text, rather than the find or replace field, has focus.
+   * @return True if the action may run.
+   */
+  bool navigationAllowed(NavigationGate gate, bool editorFocused) const;
 
   using RegexList = std::vector<std::pair<std::regex, ColorIndex>>;
   using UndoBuffer = TextEditorCore::UndoBuffer;
