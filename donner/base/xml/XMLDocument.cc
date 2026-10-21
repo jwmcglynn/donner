@@ -2148,8 +2148,8 @@ ParseResult<StructuralReparse> ParseStructuralSubtree(XMLDocument& document, con
 /// element stays live once detached, so nothing it holds is credited back. The new element adds
 /// one node and its own attributes. Children shaped like the parsed ones move into it unchanged;
 /// otherwise children are reconciled like a subtree edit, which reuses children with matching ids
-/// and clones the rest (children without an id lose their nodes, as in a subtree edit), and the
-/// parsed children's attributes are all counted.
+/// and clones the rest (children without an id lose their nodes, as in a subtree edit), and their
+/// attributes are counted the way that reconciliation changes them.
 std::optional<ParseDiagnostic> ValidateOpeningTagRenameLimits(
     XMLDocument& document, const XMLNode& parent, const XMLNode& node, const XMLNode& parsedNode,
     bool reuseChildren, SourceRange diagnosticRange) {
@@ -2176,11 +2176,10 @@ std::optional<ParseDiagnostic> ValidateOpeningTagRenameLimits(
   }
 
   std::optional<std::uint64_t> attributes = CountLiveXmlAttributes(document);
-  const std::optional<std::uint64_t> addedAttributes =
-      reuseChildren ? std::optional<std::uint64_t>(AttributeCount(parsedNode))
-                    : CountSubtreeAttributes(parsedNode);
-  if (!attributes || !addedAttributes || !CheckedAccumulate(*attributes, *addedAttributes) ||
-      *attributes > context.maximumSourceEditTotalAttributes) {
+  const bool attributesValid =
+      attributes && CheckedAccumulate(*attributes, AttributeCount(parsedNode)) &&
+      (reuseChildren || ApplyReplacedChildrenAttributeCount(*attributes, node, parsedNode));
+  if (!attributesValid || *attributes > context.maximumSourceEditTotalAttributes) {
     return MakeEditDiagnostic("Structural edit exceeds the document total-attribute limit",
                               diagnosticRange);
   }
