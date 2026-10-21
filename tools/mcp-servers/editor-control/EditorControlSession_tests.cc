@@ -363,6 +363,7 @@ TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
 
   EXPECT_TRUE(hasTool("select_by_selector"));
   EXPECT_TRUE(hasTool("click_layer_button"));
+  EXPECT_TRUE(hasTool("history"));
   EXPECT_TRUE(hasTool("drag_selector"));
   EXPECT_TRUE(hasTool("transform_selector"));
   EXPECT_TRUE(hasTool("pointer_gesture"));
@@ -609,6 +610,113 @@ TEST(EditorControlSessionTest, DraggingSplashBackgroundDropsGhostPixelsFromPrese
       << "After #Background moves right during an active drag, the presented frame should expose "
          "transparent canvas at the old left edge instead of keeping stale background pixels.";
   EXPECT_GT(afterAlpha.value("transparent_pixels", 0u), 0u) << afterBitmap.dump(2);
+}
+
+// `history` drives the same EditorApp undo/redo the Edit menu uses, so an MCP client can check
+// which edit a Cmd+Z actually reverses.
+TEST(EditorControlSessionTest, HistoryUndoesAndRedoesDragThroughEditorTimeline) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60">
+  <rect id="target" x="10" y="10" width="20" height="20" fill="red"/>
+</svg>)svg";
+
+  EditorControlSession session;
+  const ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                              {"canvas_width", 100},
+                                              {"canvas_height", 60},
+                                              {"render_after_load", false}});
+  ASSERT_FALSE(load.isError) << load.body.dump(2);
+  const auto sourceText = [&session]() {
+    return session.handleToolCall("get_svg_source", json::object()).body.value("text", "");
+  };
+
+  const ToolCallResult nothingToUndo =
+      session.handleToolCall("history", json{{"action", "undo"}, {"render_after", false}});
+  ASSERT_FALSE(nothingToUndo.isError) << nothingToUndo.body.dump(2);
+  EXPECT_FALSE(nothingToUndo.body.value("applied", true)) << nothingToUndo.body.dump(2);
+
+  const ToolCallResult drag =
+      session.handleToolCall("drag_selector", json{{"selector", "#target"},
+                                                   {"delta_x", 20.0},
+                                                   {"delta_y", 0.0},
+                                                   {"frames", 2},
+                                                   {"render_mouse_down", false},
+                                                   {"include_final_frame", false}});
+  ASSERT_FALSE(drag.isError) << drag.body.dump(2);
+  // A completed drag reaches the source when the next mutating tool drains its writeback.
+  ASSERT_FALSE(
+      session.handleToolCall("select_by_selector", json{{"selector", "#target"}, {"render", false}})
+          .isError);
+  const std::string dragged = sourceText();
+  ASSERT_THAT(dragged, testing::HasSubstr("transform="));
+
+  const ToolCallResult undo =
+      session.handleToolCall("history", json{{"action", "undo"}, {"render_after", true}});
+  ASSERT_FALSE(undo.isError) << undo.body.dump(2);
+  EXPECT_TRUE(undo.body.value("applied", false)) << undo.body.dump(2);
+  EXPECT_TRUE(undo.body.value("can_redo", false)) << undo.body.dump(2);
+  EXPECT_THAT(sourceText(), testing::Not(testing::HasSubstr("transform=")));
+
+  const ToolCallResult redo =
+      session.handleToolCall("history", json{{"action", "redo"}, {"render_after", false}});
+  ASSERT_FALSE(redo.isError) << redo.body.dump(2);
+  EXPECT_TRUE(redo.body.value("applied", false)) << redo.body.dump(2);
+  EXPECT_EQ(sourceText(), dragged);
+
+  EXPECT_TRUE(session.handleToolCall("history", json{{"action", "sideways"}}).isError);
+}
+
+// The reported sequence: drag one shape, hide another from the Layers panel, then Cmd+Z. The
+// undo must restore the hidden layer and leave the drag applied.
+TEST(EditorControlSessionTest, UndoAfterLayerVisibilityClickRestoresOnlyTheToggle) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180">
+  <rect id="r" x="10" y="10" width="70" height="50" fill="#2f6fed"/>
+  <circle id="c" cx="130" cy="35" r="25" fill="#f0b429"/>
+</svg>)svg";
+
+  EditorControlSession session;
+  const ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                              {"canvas_width", 260},
+                                              {"canvas_height", 180},
+                                              {"render_after_load", false}});
+  ASSERT_FALSE(load.isError) << load.body.dump(2);
+  const auto sourceText = [&session]() {
+    return session.handleToolCall("get_svg_source", json::object()).body.value("text", "");
+  };
+
+  const ToolCallResult drag =
+      session.handleToolCall("drag_selector", json{{"selector", "#r"},
+                                                   {"delta_x", 20.0},
+                                                   {"delta_y", 10.0},
+                                                   {"frames", 2},
+                                                   {"render_mouse_down", false},
+                                                   {"include_final_frame", false}});
+  ASSERT_FALSE(drag.isError) << drag.body.dump(2);
+  const ToolCallResult hide =
+      session.handleToolCall("click_layer_button", json{{"selector", "#c"},
+                                                        {"button", "visibility"},
+                                                        {"render_after_click", false},
+                                                        {"include_display_before_render", false},
+                                                        {"include_final_frame", false}});
+  ASSERT_FALSE(hide.isError) << hide.body.dump(2);
+  const std::string hidden = sourceText();
+  ASSERT_THAT(hidden, testing::HasSubstr(R"(display="none")"));
+  ASSERT_THAT(hidden, testing::HasSubstr("transform="));
+
+  const ToolCallResult undo =
+      session.handleToolCall("history", json{{"action", "undo"}, {"render_after", false}});
+  ASSERT_FALSE(undo.isError) << undo.body.dump(2);
+  EXPECT_TRUE(undo.body.value("applied", false)) << undo.body.dump(2);
+  const std::string undone = sourceText();
+  EXPECT_THAT(undone, testing::Not(testing::HasSubstr(R"(display="none")")))
+      << "undo must restore the hidden layer:\n"
+      << undone;
+  EXPECT_THAT(undone, testing::HasSubstr("transform="))
+      << "undo must leave the earlier drag applied:\n"
+      << undone;
 }
 
 TEST(EditorControlSessionTest, InvalidToolCallReturnsErrorResult) {

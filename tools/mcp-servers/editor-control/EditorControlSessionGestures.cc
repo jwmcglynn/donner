@@ -354,6 +354,80 @@ ToolCallResult EditorControlSession::clickLayerButton(const json& arguments) {
   return out;
 }
 
+namespace {
+
+json OptionalLabelJson(std::optional<std::string_view> label) {
+  return label.has_value() ? json(std::string(*label)) : json();
+}
+
+}  // namespace
+
+bool EditorControlSession::applyHistoryAction(bool undo) {
+  if (!(undo ? app_.canUndo() : app_.canRedo())) {
+    return false;
+  }
+  if (undo) {
+    app_.undo();
+  } else {
+    app_.redo();
+  }
+  (void)app_.flushFrame();
+  (void)drainPendingWritebacks();
+  syncSourceTextFromDocumentIfChanged();
+  return true;
+}
+
+ToolCallResult EditorControlSession::historyAction(const json& arguments) {
+  std::string error;
+  if (!ensureDocumentLoaded(&error)) {
+    return MakeErrorResult(error);
+  }
+  if (rnrRecording_.active) {
+    return MakeErrorResult("undo/redo while an .rnr recording is active is not supported");
+  }
+  (void)drainPendingWritebacks();
+
+  std::string action;
+  bool renderAfter = true;
+  CaptureOptions capture;
+  if (!ReadRequiredString(arguments, "action", &action, &error) ||
+      !ReadOptionalBool(arguments, "render_after", true, &renderAfter, &error) ||
+      !ReadCaptureOptions(arguments, false, &capture, &error)) {
+    return MakeErrorResult(error);
+  }
+  if (action != "undo" && action != "redo") {
+    return MakeErrorResult("action must be 'undo' or 'redo'");
+  }
+  // The shell defers history actions while a render is in flight; apply only once idle.
+  if (!waitUntilIdle(&error)) {
+    return MakeErrorResult(error);
+  }
+
+  const json undoLabelBefore = OptionalLabelJson(app_.undoTimeline().nextUndoLabel());
+  const bool applied = applyHistoryAction(action == "undo");
+  ToolCallResult out;
+  out.body = json{
+      {"ok", true},
+      {"action", action},
+      {"applied", applied},
+      {"undo_label_before", undoLabelBefore},
+      {"next_undo_label", OptionalLabelJson(app_.undoTimeline().nextUndoLabel())},
+      {"can_undo", app_.canUndo()},
+      {"can_redo", app_.canRedo()},
+      {"source", sourceStateJson()},
+  };
+
+  if (renderAfter) {
+    std::vector<CapturedRenderResult> renderResults;
+    if (!renderCurrentFrame(&renderResults, &error)) {
+      return MakeErrorResult(error);
+    }
+    out.body["render_stages"] = RenderResultsJson(renderResults, &out, capture, "history");
+  }
+  out.body["attached_image_count"] = out.images.size();
+  return out;
+}
+
 ToolCallResult EditorControlSession::setActiveTool(const json& arguments) {
   std::string error;
   if (!ensureDocumentLoaded(&error)) {

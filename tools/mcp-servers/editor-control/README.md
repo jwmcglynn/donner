@@ -45,6 +45,10 @@ build before the first proxied request after startup.
   visibility or lock button through the same shared handler used by the UI.
   Returns the immediate presented display before the settled render, plus the
   optional settled frame.
+- `history`: Undo or redo one entry of the editor's undo timeline through the
+  same `EditorApp` path as Edit > Undo / Redo. Returns whether an entry was
+  applied, the undo label before and after, and the updated source revision,
+  so a client can check which edit a Cmd+Z actually reverses.
 - `drag_selector`: Find an element by CSS selector, synthesize click/drag frames
   through `SelectTool`, and return per-frame compositor and presentation tile
   metadata.

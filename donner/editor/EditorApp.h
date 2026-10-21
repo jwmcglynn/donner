@@ -212,9 +212,10 @@ public:
   /// visible value, observable through the computed-style visibility check).
   /// Routes through `applyMutation` so the Layers panel eye button and
   /// context menu share one code path. Visibility toggles are intentionally
-  /// NOT lock-gated.
-  /// Taken by value: this erases from `hiddenElementAuthorDisplay_` and then reuses the
-  /// element, so a caller passing a reference into that map would be reading a vacated entry.
+  /// NOT lock-gated. Each toggle records one undo entry that restores the
+  /// previous `display` value.
+  /// Taken by value: this updates `hiddenElementAuthorDisplay_` and then reuses the
+  /// element, so a caller passing a reference into that map could read a moved entry.
   void setElementVisible(svg::SVGElement element, bool visible);
 
   /// Number of cached hidden-element author-display entries. Test observable for the
@@ -224,10 +225,13 @@ public:
   }
 
   /// Lock or unlock @p element by toggling the `data-donner-locked` marker
-  /// attribute (`"true"` to lock, `"false"` to unlock). Routes through
-  /// `applyMutation`. The lock toggle itself is NOT lock-gated, so a locked
-  /// layer can always be unlocked.
+  /// attribute (`"true"` to lock; unlocking removes it). Routes through
+  /// `applyMutation` and records one undo entry. The lock toggle itself is NOT
+  /// lock-gated, so a locked layer can always be unlocked.
   void setElementLocked(const svg::SVGElement& element, bool locked);
+
+  /// Remove @p element and its descendants from the selection, as locking a layer does.
+  void deselectElementAndDescendants(svg::SVGElement element);
 
   /// Restore these selection targets after the next source-backed document replacement.
   void restoreSelectionAfterNextDocumentReplace(std::vector<AttributeWritebackTarget> targets);
@@ -698,6 +702,19 @@ private:
   /// `flushFrame()`, including no-op flushes with nothing queued.
   void consumePendingDocumentSourceUndo();
 
+  /**
+   * Record one undo entry for a Layers-panel attribute toggle, restoring the attribute's current
+   * value on undo and \p valueAfter on redo. Records nothing when the value would not change.
+   *
+   * @param label Undo label, such as "Hide layer".
+   * @param element Element whose attribute the toggle writes.
+   * @param attributeName Attribute the toggle writes.
+   * @param valueAfter Value the toggle writes, or `std::nullopt` when it removes the attribute.
+   */
+  void recordAttributeToggleUndo(std::string_view label, const svg::SVGElement& element,
+                                 std::string_view attributeName,
+                                 std::optional<std::string> valueAfter);
+
   /// Drop cached hidden-element display entries whose element is no longer
   /// attached to the live document: deleted (with or without an ancestor) via
   /// the command queue or a structured source edit, or left behind by a
@@ -739,9 +756,9 @@ private:
   /// immediately before `setElementVisible` hid it, so the matching Show
   /// restores that value instead of clobbering it with `display="inline"`.
   /// `std::nullopt` for the captured value means the element had no author
-  /// `display` attribute at all. Cleared for an element once its Show
-  /// consumes the entry. Because each entry owns an `SVGElement` handle, a
-  /// frame that detaches or replaces its element prunes the entry (see
+  /// `display` attribute at all. The entry is kept after Show, so a Show
+  /// after an undone Show restores the same value. Because each entry owns an `SVGElement` handle,
+  /// a frame that detaches or replaces its element prunes the entry (see
   /// \ref pruneHiddenElementDisplayCache), so a stale handle cannot retain
   /// the removed subtree's document state.
   std::vector<std::pair<svg::SVGElement, std::optional<std::string>>> hiddenElementAuthorDisplay_;

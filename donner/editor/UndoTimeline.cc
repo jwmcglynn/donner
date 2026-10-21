@@ -1,5 +1,7 @@
 #include "donner/editor/UndoTimeline.h"
 
+#include <utility>
+
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/svg/SVGGraphicsElement.h"
 
@@ -25,6 +27,18 @@ UndoSnapshot captureDocumentSourceSnapshot(const svg::SVGElement& anchorElement,
       .kind = UndoSnapshot::Kind::DocumentSource,
       .element = anchorElement,
       .documentSource = std::string(source),
+  };
+}
+
+UndoSnapshot captureAttributeSnapshot(const svg::SVGElement& element,
+                                      std::string_view attributeName,
+                                      std::optional<std::string> attributeValue) {
+  return UndoSnapshot{
+      .kind = UndoSnapshot::Kind::Attribute,
+      .element = element,
+      .writebackTarget = captureAttributeWritebackTarget(element),
+      .attributeName = std::string(attributeName),
+      .attributeValue = std::move(attributeValue),
   };
 }
 

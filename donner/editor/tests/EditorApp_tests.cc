@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/tests/BaseTestUtils.h"
@@ -603,7 +604,7 @@ TEST(EditorAppTest, DeleteSelectionWithUndoKeepsLockedElementsSelected) {
   EXPECT_FALSE(app.document().document().querySelector("#r2").has_value());
   ASSERT_EQ(app.selectedElements().size(), 1u);
   EXPECT_EQ(app.selectedElements().front().id(), "r1");
-  ASSERT_EQ(app.undoTimeline().entryCount(), 1u);
+  ASSERT_EQ(app.undoTimeline().entryCount(), 2u) << "the lock and the delete are one entry each";
   ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
   EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Delete element");
 }
@@ -2366,6 +2367,210 @@ TEST(EditorAppReorderTest, ReflectsTheMoveIntoTheSourceText) {
   ASSERT_NE(r3, std::string::npos) << source;
   EXPECT_LT(r2, r3) << source;
   EXPECT_LT(r3, r1) << source;
+}
+
+std::optional<std::string> AttributeOf(EditorApp& app, std::string_view id,
+                                       std::string_view attributeName) {
+  const std::optional<svg::SVGElement> element =
+      app.document().document().querySelector("#" + std::string(id));
+  if (!element.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<RcString> value = element->getAttribute(attributeName);
+  return value.has_value() ? std::optional<std::string>(std::string(value->str())) : std::nullopt;
+}
+
+Entity EntityOf(EditorApp& app, std::string_view id) {
+  const std::optional<svg::SVGElement> element =
+      app.document().document().querySelector("#" + std::string(id));
+  return element.has_value() ? element->unsafeEntityHandle().entity() : Entity(entt::null);
+}
+
+// Hiding a layer is its own undo step: Cmd+Z restores visibility and nothing else, and the
+// earlier edit stays applied. Before the fix the toggle recorded no entry, so undo reversed the
+// reorder instead and the layer stayed hidden.
+TEST(EditorAppLayerToggleUndoTest, HideIsOneUndoStepThatLeavesEarlierEditsApplied) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r1");
+  ASSERT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(ChildIds(app), ::testing::ElementsAre("r2", "r3", "r1"));
+  const Entity r2Entity = EntityOf(app, "r2");
+
+  app.setElementVisible(app.document().document().querySelector("#r2").value(), false);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(AttributeOf(app, "r2", "display"),
+              ::testing::Optional(::testing::Eq(std::string("none"))));
+  EXPECT_THAT(app.undoTimeline().nextUndoLabel(), ::testing::Optional(::testing::Eq("Hide layer")));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r2", "display"), ::testing::Eq(std::nullopt));
+  EXPECT_THAT(std::string(app.document().document().source()),
+              ::testing::Not(::testing::HasSubstr("display=")));
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r2", "r3", "r1"))
+      << "undoing the hide must not also undo the earlier reorder";
+  EXPECT_EQ(EntityOf(app, "r2"), r2Entity) << "the undo must edit the element in place";
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r2", "display"),
+              ::testing::Optional(::testing::Eq(std::string("none"))));
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r2", "r3", "r1"));
+}
+
+TEST(EditorAppLayerToggleUndoTest, ShowIsOneUndoStepThatRestoresHiddenState) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  app.setElementVisible(app.document().document().querySelector("#r1").value(), false);
+  ASSERT_TRUE(app.flushFrame());
+  app.setElementVisible(app.document().document().querySelector("#r1").value(), true);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(AttributeOf(app, "r1", "display"),
+              ::testing::Optional(::testing::Eq(std::string("inline"))));
+  EXPECT_THAT(app.undoTimeline().nextUndoLabel(), ::testing::Optional(::testing::Eq("Show layer")));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r1", "display"),
+              ::testing::Optional(::testing::Eq(std::string("none"))));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r1", "display"), ::testing::Eq(std::nullopt));
+  EXPECT_FALSE(app.canUndo()) << "hide and show are one entry each";
+}
+
+TEST(EditorAppLayerToggleUndoTest, UndoHideRestoresAuthoredDisplayValue) {
+  constexpr std::string_view kBlockDisplay =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <rect id="r1" x="10" y="10" width="20" height="20" display="block"/>
+         </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kBlockDisplay)));
+  app.setElementVisible(app.document().document().querySelector("#r1").value(), false);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(AttributeOf(app, "r1", "display"),
+              ::testing::Optional(::testing::Eq(std::string("none"))));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r1", "display"),
+              ::testing::Optional(::testing::Eq(std::string("block"))));
+}
+
+// Show restores an authored `display` value; undoing that Show and showing again must restore the
+// same value rather than falling back to `display="inline"`.
+TEST(EditorAppLayerToggleUndoTest, ShowAfterUndoneShowRestoresAuthoredDisplayValue) {
+  constexpr std::string_view kBlockDisplay =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <rect id="r1" x="10" y="10" width="20" height="20" display="block"/>
+         </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kBlockDisplay)));
+  app.setElementVisible(app.document().document().querySelector("#r1").value(), false);
+  ASSERT_TRUE(app.flushFrame());
+  app.setElementVisible(app.document().document().querySelector("#r1").value(), true);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(AttributeOf(app, "r1", "display"),
+              ::testing::Optional(::testing::Eq(std::string("block"))));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(AttributeOf(app, "r1", "display"),
+              ::testing::Optional(::testing::Eq(std::string("none"))));
+
+  app.setElementVisible(app.document().document().querySelector("#r1").value(), true);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r1", "display"),
+              ::testing::Optional(::testing::Eq(std::string("block"))));
+}
+
+// Redoing a lock deselects the layer, as locking it did, so a locked element is never left
+// selected.
+TEST(EditorAppLayerToggleUndoTest, RedoLockDeselectsTheLayer) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  app.setElementLocked(app.document().document().querySelector("#r1").value(), true);
+  ASSERT_TRUE(app.flushFrame());
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  SelectById(app, "r1");
+  ASSERT_THAT(app.selectedElements(), ::testing::SizeIs(1));
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r1", kLockedAttributeName),
+              ::testing::Optional(::testing::Eq(std::string(kLockedAttributeValue))));
+  EXPECT_THAT(app.selectedElements(), ::testing::IsEmpty());
+}
+
+// A hide recorded before a document reparse still undoes against the reparsed element.
+TEST(EditorAppLayerToggleUndoTest, HideUndoResolvesElementAfterDocumentReparse) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  app.setElementVisible(app.document().document().querySelector("#r2").value(), false);
+  ASSERT_TRUE(app.flushFrame());
+  SelectById(app, "r3");
+  ASSERT_TRUE(app.deleteSelectionWithUndo(std::string(app.document().document().source())));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r2"));
+
+  app.undo();  // Restores the deleted element by reparsing the captured source.
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r2", "r3"));
+  ASSERT_THAT(AttributeOf(app, "r2", "display"),
+              ::testing::Optional(::testing::Eq(std::string("none"))));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r2", "display"), ::testing::Eq(std::nullopt));
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r2", "r3"));
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r2", "display"),
+              ::testing::Optional(::testing::Eq(std::string("none"))));
+}
+
+// Lock and unlock are each one undo step, so Cmd+Z after locking unlocks the layer instead of
+// reverting the edit made before it.
+TEST(EditorAppLayerToggleUndoTest, LockAndUnlockAreEachOneUndoStep) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r3");
+  ASSERT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::SendToBack));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(ChildIds(app), ::testing::ElementsAre("r3", "r1", "r2"));
+
+  app.setElementLocked(app.document().document().querySelector("#r1").value(), true);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(AttributeOf(app, "r1", kLockedAttributeName),
+              ::testing::Optional(::testing::Eq(std::string(kLockedAttributeValue))));
+  EXPECT_THAT(app.undoTimeline().nextUndoLabel(), ::testing::Optional(::testing::Eq("Lock layer")));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r1", kLockedAttributeName), ::testing::Eq(std::nullopt));
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r3", "r1", "r2"))
+      << "undoing the lock must not also undo the earlier reorder";
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r1", kLockedAttributeName),
+              ::testing::Optional(::testing::Eq(std::string(kLockedAttributeValue))));
+
+  app.setElementLocked(app.document().document().querySelector("#r1").value(), false);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_THAT(AttributeOf(app, "r1", kLockedAttributeName), ::testing::Eq(std::nullopt));
+  EXPECT_THAT(app.undoTimeline().nextUndoLabel(),
+              ::testing::Optional(::testing::Eq("Unlock layer")));
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(AttributeOf(app, "r1", kLockedAttributeName),
+              ::testing::Optional(::testing::Eq(std::string(kLockedAttributeValue))));
 }
 
 TEST(EditorAppGroupTest, GroupsAdjacentElementsAndUndoRestoresExactSource) {

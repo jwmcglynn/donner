@@ -24,6 +24,10 @@ struct UndoSnapshot {
 
     /// The full SVG source text for structural edits such as element deletion.
     DocumentSource,
+
+    /// One attribute's value on one element, such as the Layers-panel `display` and lock
+    /// markers. Restored as a DOM attribute edit, so undo stays incremental.
+    Attribute,
   };
 
   /// Snapshot payload kind.
@@ -53,6 +57,12 @@ struct UndoSnapshot {
   /// Full SVG source text for `Kind::DocumentSource` snapshots.
   std::string documentSource;
 
+  /// Attribute restored by a `Kind::Attribute` snapshot.
+  std::string attributeName;
+
+  /// Value of `attributeName` for a `Kind::Attribute` snapshot; `std::nullopt` removes it.
+  std::optional<std::string> attributeValue;
+
   /// Selection targets to restore after a `Kind::DocumentSource` snapshot reparses the document.
   std::vector<AttributeWritebackTarget> selectionTargets;
 
@@ -69,6 +79,17 @@ UndoSnapshot captureTransformSnapshot(const svg::SVGElement& element);
 /// Capture the full SVG source text for a structural undo snapshot.
 UndoSnapshot captureDocumentSourceSnapshot(const svg::SVGElement& anchorElement,
                                            std::string_view source);
+
+/**
+ * Capture one attribute's value on an element for an attribute undo snapshot.
+ *
+ * @param element Element that owns the attribute.
+ * @param attributeName Attribute to restore.
+ * @param attributeValue Value to restore, or `std::nullopt` to remove the attribute.
+ */
+UndoSnapshot captureAttributeSnapshot(const svg::SVGElement& element,
+                                      std::string_view attributeName,
+                                      std::optional<std::string> attributeValue);
 
 /// Apply a previously captured snapshot, including grouped extra element snapshots.
 void applySnapshot(const UndoSnapshot& snapshot);
