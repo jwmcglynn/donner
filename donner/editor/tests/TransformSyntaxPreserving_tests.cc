@@ -227,6 +227,40 @@ TEST(TransformSyntaxPreserving, WrapperKeepsTinyScaleExact) {
             "scale(0.000123456)");
 }
 
+TEST(TransformSyntaxPreserving, WrapperRoundsSmallMatrixEntriesToEditPrecision) {
+  // Entries below one round to the same six decimals: sin(10 degrees) is 0.173648, not 17 digits.
+  const Transform2d parentFromElement =
+      Transform2d::Rotate(10.0 * kDeg) *
+      Transform2d::Translate(Vector2d(100.0 / 11.0, 120.0 / 11.0));
+  const std::string written = serializeTransformForWriteback(std::nullopt, parentFromElement).str();
+  EXPECT_EQ(written, "matrix(0.984808, 0.173648, -0.173648, 0.984808, 9.090909, 10.909091)");
+  ExpectRoundTrips(written, parentFromElement);
+}
+
+TEST(TransformSyntaxPreserving, WrapperDropsLinearResidueFromTheCanonicalFunction) {
+  // Off-diagonal residue far below edit precision does not force a matrix.
+  Transform2d parentFromElement;
+  parentFromElement.data[1] = 1.0e-13;
+  parentFromElement.data[2] = -1.0e-13;
+  parentFromElement.data[4] = 5.0;
+  parentFromElement.data[5] = 7.0;
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, parentFromElement).str(),
+            "translate(5, 7)");
+
+  // Dragging back to the start with residue in both the linear part and the translation clears the
+  // attribute.
+  Transform2d parentFromReturned;
+  parentFromReturned.data[0] = 1.0 + 1.0e-13;
+  parentFromReturned.data[1] = 1.0e-13;
+  parentFromReturned.data[2] = -1.0e-13;
+  parentFromReturned.data[3] = 1.0 - 1.0e-13;
+  parentFromReturned.data[4] = 2.0e-7;
+  parentFromReturned.data[5] = -1.0e-7;
+  ASSERT_FALSE(parentFromReturned.isIdentity());
+  EXPECT_THAT(serializeTransformForWriteback(std::nullopt, parentFromReturned).str(),
+              testing::IsEmpty());
+}
+
 TEST(TransformSyntaxPreserving, WrapperWritesCanonicalMatrixAtEditPrecision) {
   // A drag at a non-integer zoom produces repeating decimals in every matrix entry.
   const Transform2d parentFromElement =

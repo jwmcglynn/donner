@@ -1,5 +1,6 @@
 #include "donner/editor/TransformSyntaxPreserving.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <string>
@@ -140,10 +141,16 @@ std::optional<std::vector<Fn>> ParseFunctionList(std::string_view s) {
   return fns;
 }
 
-/// Round @p value to edit precision: the nearest multiple of 1e-6, with -0 normalized to 0.
-double RoundToEditPrecision(double value) {
-  const double rounded = std::round(value * 1e6) / 1e6;
+/// Round @p value to @p decimals places, with -0 normalized to 0.
+double RoundToDecimals(double value, int decimals) {
+  const double scale = std::pow(10.0, decimals);
+  const double rounded = std::round(value * scale) / scale;
   return rounded == 0.0 ? 0.0 : rounded;
+}
+
+/// Round @p value to edit precision: six decimals, with -0 normalized to 0.
+double RoundToEditPrecision(double value) {
+  return RoundToDecimals(value, 6);
 }
 
 std::string FormatEditedNumber(double value) {
@@ -451,25 +458,47 @@ std::optional<RcString> TryRotateOnly(const Fn& rf, const Transform2d& target) {
   return std::nullopt;
 }
 
-/// Format a linear (unitless scale or matrix) entry at edit precision only when rounding changes it
-/// by at most one part in a million, so a tiny scale keeps its precision instead of collapsing
-/// toward zero.
-std::string FormatEditedLinearEntry(double value) {
-  const double rounded = RoundToEditPrecision(value);
-  return std::abs(rounded - value) <= 1e-6 * std::abs(value) ? detail::FormatNumberForSVG(rounded)
-                                                             : detail::FormatNumberForSVG(value);
+/// Decimal places for the linear (unitless) entries of @p target: six while its largest linear
+/// entry is at least 0.1, and six significant digits of that entry below 0.1, so a small scale
+/// keeps its precision. Returns `std::nullopt` when the linear part is too small or not finite to
+/// round safely.
+std::optional<int> LinearEntryDecimals(const Transform2d& target) {
+  const double largest = std::max({std::abs(target.data[0]), std::abs(target.data[1]),
+                                   std::abs(target.data[2]), std::abs(target.data[3])});
+  if (!std::isfinite(largest) || largest <= 0.0) {
+    return std::nullopt;
+  }
+  constexpr int kEditDecimals = 6;
+  constexpr int kMaximumDecimals = 15;
+  const int decimals = std::max(
+      kEditDecimals, kEditDecimals - 1 - static_cast<int>(std::floor(std::log10(largest))));
+  if (decimals > kMaximumDecimals) {
+    return std::nullopt;
+  }
+  return decimals;
 }
 
 /// The canonical \ref donner::toSVGTransformString form of @p target at edit precision, so a
-/// writeback with no author form reads like one that updates an author form. The translation is
-/// snapped to six decimals before the function form is chosen, so sub-precision residue selects the
-/// simplest function. Translations and angles are written at six decimals and linear entries per
-/// \ref FormatEditedLinearEntry. An empty result means the transform is the identity at that
-/// precision.
+/// writeback with no author form reads like one that updates an author form. Translations and
+/// angles are written at six decimals; linear entries at \ref LinearEntryDecimals. When rounding
+/// clears the off-diagonal entries, the function form is chosen from the rounded matrix, so
+/// sub-precision residue selects the simplest function (`translate(5)` rather than a matrix).
+/// Otherwise it is chosen from the exact linear part, which keeps rotations recognizable. An empty
+/// result means the transform is the identity at that precision.
 RcString CanonicalTransformAtEditPrecision(const Transform2d& target) {
+  const std::optional<int> linearDecimals = LinearEntryDecimals(target);
   Transform2d snapped = target;
   snapped.data[4] = RoundToEditPrecision(target.data[4]);
   snapped.data[5] = RoundToEditPrecision(target.data[5]);
+  if (linearDecimals.has_value()) {
+    Transform2d rounded = snapped;
+    for (int k = 0; k < 4; ++k) {
+      rounded.data[k] = RoundToDecimals(target.data[k], *linearDecimals);
+    }
+    if (rounded.data[1] == 0.0 && rounded.data[2] == 0.0) {
+      snapped = rounded;
+    }
+  }
 
   const RcString canonical = toSVGTransformString(snapped);
   std::optional<std::vector<Fn>> fns = ParseFunctionList(std::string_view(canonical));
@@ -478,9 +507,13 @@ RcString CanonicalTransformAtEditPrecision(const Transform2d& target) {
   }
   for (Fn& fn : *fns) {
     for (std::size_t k = 0; k < fn.args.size(); ++k) {
+      Arg& arg = fn.args[k];
       const bool linearEntry = fn.name == "scale" || (fn.name == "matrix" && k < 4);
-      fn.args[k].text = linearEntry ? FormatEditedLinearEntry(fn.args[k].value)
-                                    : FormatEditedNumber(fn.args[k].value);
+      if (!linearEntry) {
+        arg.text = FormatEditedNumber(arg.value);
+      } else if (linearDecimals.has_value()) {
+        arg.text = detail::FormatNumberForSVG(RoundToDecimals(arg.value, *linearDecimals));
+      }
     }
   }
 
