@@ -50,7 +50,7 @@ enum class ShortcutModifier : uint8_t {
 };
 
 /// Combine two ShortcutModifier flags using bitwise OR.
-inline ShortcutModifier operator|(ShortcutModifier lhs, ShortcutModifier rhs) {
+constexpr ShortcutModifier operator|(ShortcutModifier lhs, ShortcutModifier rhs) {
   return static_cast<ShortcutModifier>(static_cast<uint8_t>(lhs) | static_cast<uint8_t>(rhs));
 }
 
@@ -69,14 +69,14 @@ struct Shortcut {
   ShortcutModifier modifiers = ShortcutModifier::None;  ///< Combined modifiers
 
   /// Default constructor
-  Shortcut() = default;
+  constexpr Shortcut() = default;
 
   /**
    * Constructs a shortcut with a single key and optional modifiers.
    * @param k Primary key.
    * @param m Modifier flags combined using bitwise OR.
    */
-  Shortcut(ImGuiKey k, ShortcutModifier m = ShortcutModifier::None)
+  constexpr Shortcut(ImGuiKey k, ShortcutModifier m = ShortcutModifier::None)
       : key1(k), key2(ImGuiKey_None), modifiers(m) {}
 
   /**
@@ -85,7 +85,7 @@ struct Shortcut {
    * @param k2 Secondary key.
    * @param m Modifier flags combined using bitwise OR.
    */
-  Shortcut(ImGuiKey k1, ImGuiKey k2, ShortcutModifier m = ShortcutModifier::None)
+  constexpr Shortcut(ImGuiKey k1, ImGuiKey k2, ShortcutModifier m = ShortcutModifier::None)
       : key1(k1), key2(k2), modifiers(m) {}
 
   /**
@@ -1034,13 +1034,28 @@ private:
     EditorFocusedWithoutAutocomplete,  ///< Also held back while the autocomplete list is open.
   };
 
+  /// How a caret navigation action moves the caret.
+  enum class CaretMove : std::uint8_t {
+    Horizontal,  ///< Left or right by a character or a word.
+    Vertical,    ///< Up or down one line.
+    LineEdge,    ///< To the start or end of the line.
+    Page,        ///< Up or down one page.
+    Document,    ///< To the start or end of the document.
+  };
+
   /// A caret navigation action, dispatched from a table rather than per-action branches.
   struct NavigationAction {
-    ShortcutId id;                                  ///< Action this entry dispatches.
-    void (*move)(TextEditor& editor, bool select);  ///< Moves the caret.
-    bool select;                                    ///< Whether the move extends the selection.
-    NavigationGate gate;                            ///< Input state the action waits for.
+    ShortcutId id;        ///< Action this entry dispatches.
+    CaretMove move;       ///< How the caret moves.
+    bool backward;        ///< Whether it moves left or up rather than right or down.
+    bool word;            ///< Whether a horizontal move steps by word.
+    bool select;          ///< Whether the move extends the selection.
+    NavigationGate gate;  ///< Input state the action waits for.
   };
+
+  /// Move the caret as \p action describes.
+  /// @param action The navigation entry to run.
+  void runNavigation(const NavigationAction& action);
 
   /**
    * Return the navigation entry for \p id.
