@@ -200,6 +200,7 @@ ToolCallResult EditorControlSession::selectBySelector(const json& arguments) {
       {"ok", true},
       {"selector", selector},
       {"selection", selectedElementJson()},
+      {"text_format", textFormatJson()},
   };
 
   if (auto bounds = elementWorldBounds(*element); bounds.has_value()) {

@@ -9,18 +9,108 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/Box.h"
 #include "donner/base/FormatNumber.h"
+#include "donner/base/Length.h"
 #include "donner/base/RcString.h"
-#include "donner/base/parser/NumberParser.h"
+#include "donner/base/RelativeLengthMetrics.h"
+#include "donner/base/SmallVector.h"
+#include "donner/base/StringUtils.h"
 #include "donner/editor/AttachedNumericStepper.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/core/FontStyle.h"
+#include "donner/svg/core/TextDecoration.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
 
 namespace internal {
+
+/// CSS name-start code points, including non-ASCII UTF-8 bytes.
+bool IsFamilyIdentifierStart(unsigned char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c >= 0x80;
+}
+
+/// Code points allowed after the first character of an unescaped CSS identifier.
+bool IsFamilyIdentifierContinuation(unsigned char c) {
+  return IsFamilyIdentifierStart(c) || (c >= '0' && c <= '9') || c == '-';
+}
+
+/// CSS-wide and reserved keywords cannot be unquoted family words.
+bool IsReservedFamilyWord(std::string_view word) {
+  for (const std::string_view reserved :
+       {"inherit", "initial", "unset", "revert", "revert-layer", "default"}) {
+    if (StringUtils::EqualsLowercase(word, reserved)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// A leading hyphen requires another hyphen or a name-start code point.
+bool HasFamilyIdentifierStart(std::string_view word) {
+  if (word.empty()) {
+    return false;
+  }
+  if (word.front() == '-') {
+    return word.size() > 1 && (word[1] == '-' || IsFamilyIdentifierStart(word[1]));
+  }
+  return IsFamilyIdentifierStart(word.front());
+}
+
+/// Whether a decoded family word can round-trip as an unescaped CSS identifier.
+bool IsEditableFamilyIdentifier(std::string_view word) {
+  if (!HasFamilyIdentifierStart(word) || IsReservedFamilyWord(word)) {
+    return false;
+  }
+  for (const unsigned char c : word) {
+    if (!IsFamilyIdentifierContinuation(c)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Serialize a family as a CSS string, escaping quotes, backslashes and control bytes.
+std::string QuotedFontFamily(std::string_view family) {
+  std::string result = "\"";
+  constexpr std::string_view kHex = "0123456789abcdef";
+  for (const unsigned char c : family) {
+    if (c < 0x20 || c == 0x7f) {
+      result += '\\';
+      result += kHex[c >> 4];
+      result += kHex[c & 0xf];
+      result += ' ';
+    } else {
+      if (c == '"' || c == '\\') {
+        result += '\\';
+      }
+      result += static_cast<char>(c);
+    }
+  }
+  result += '"';
+  return result;
+}
+
+/// Preserve simple family display names and quote names that require CSS string syntax.
+std::string EditableFontFamily(std::string_view family) {
+  std::size_t offset = 0;
+  do {
+    const std::size_t space = family.find(' ', offset);
+    const std::size_t end = space == std::string_view::npos ? family.size() : space;
+    if (!IsEditableFamilyIdentifier(family.substr(offset, end - offset))) {
+      return QuotedFontFamily(family);
+    }
+    if (space == std::string_view::npos) {
+      break;
+    }
+    offset = space + 1;
+  } while (offset <= family.size());
+  return std::string(family);
+}
 
 /// Copies `value` into a fixed-size, null-terminated buffer.
 template <std::size_t N>
@@ -40,16 +130,6 @@ bool ContainsCaseInsensitive(std::string_view haystack, std::string_view needle)
   auto it = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(),
                         [&](char a, char b) { return lower(a) == lower(b); });
   return it != haystack.end();
-}
-
-/// Parse a leading number from an attribute value (e.g. "16", "16px"). Returns
-/// nullopt when no number is present.
-std::optional<double> ParseLeadingNumber(std::string_view value) {
-  const auto result = ::donner::parser::NumberParser::Parse(value);
-  if (result.hasError()) {
-    return std::nullopt;
-  }
-  return result.result().number;
 }
 
 /// Draws the loaded preview or its pending/failure label inside the current font row.
@@ -122,7 +202,6 @@ bool RenderFontFamilyRow(const FormatBarFontFamily& family, bool selected,
 
 using internal::AssignBuffer;
 using internal::ContainsCaseInsensitive;
-using internal::ParseLeadingNumber;
 
 bool FormatBarShouldShow(bool hasSingleTextSelection, bool textEditingActive) {
   return hasSingleTextSelection || textEditingActive;
@@ -132,34 +211,38 @@ void ReadTextFormatState(const svg::SVGElement& text, FormatBarState* state) {
   if (state == nullptr) {
     return;
   }
-  // §concurrent-dom: reading attributes (raw ECS access) from the UI thread
-  // needs a scoped read access while the live editor keeps the document in
-  // ThreadingMode::ConcurrentDom, mirroring TextInspectorPanel.
-  text.withReadAccess([&](svg::DocumentReadAccess&, EntityHandle) {
-    if (auto family = text.getAttribute("font-family")) {
-      state->fontFamily = std::string(std::string_view(*family));
-    } else {
-      state->fontFamily.clear();
-    }
-
-    state->hasFontSize = false;
-    state->fontSize = 0.0f;
-    if (auto size = text.getAttribute("font-size")) {
-      if (auto parsed = ParseLeadingNumber(std::string_view(*size))) {
-        state->fontSize = static_cast<float>(*parsed);
-        state->hasFontSize = true;
-      }
-    }
-
-    const auto weight = text.getAttribute("font-weight");
-    state->bold = weight.has_value() && std::string_view(*weight) == "bold";
-
-    const auto style = text.getAttribute("font-style");
-    state->italic = style.has_value() && std::string_view(*style) == "italic";
-
-    const auto decoration = text.getAttribute("text-decoration");
-    state->underline = decoration.has_value() && std::string_view(*decoration) == "underline";
+  // Hold write access while reading: the returned style lives in the document
+  // registry, which a concurrent restyle may otherwise replace mid-read.
+  text.withWriteAccess([&](svg::DocumentWriteAccess&, EntityHandle) {
+    ReadTextFormatState(text.getComputedStyle(), state);
   });
+}
+
+void ReadTextFormatState(const svg::PropertyRegistry& style, FormatBarState* state) {
+  if (state == nullptr) {
+    return;
+  }
+
+  // `get()` returns the value by copy; keep it alive for the loop.
+  const SmallVector<RcString, 1> families = style.fontFamily.get().value();
+  state->fontFamily.clear();
+  for (const RcString& family : families) {
+    if (!state->fontFamily.empty()) {
+      state->fontFamily += ", ";
+    }
+    state->fontFamily += internal::EditableFontFamily(std::string_view(family));
+  }
+
+  const double fontSize =
+      style.fontSize.get().value().toPixels(Box2d(), FontMetrics(), Lengthd::Extent::Mixed);
+  state->hasFontSize = std::isfinite(fontSize);
+  state->fontSize = state->hasFontSize ? static_cast<float>(fontSize) : 0.0f;
+
+  // 700 is the `bold` keyword; lighter weights do not light up the Bold toggle.
+  state->bold = style.fontWeight.get().value() >= 700;
+  state->italic = style.fontStyle.get().value() == svg::FontStyle::Italic;
+  state->underline =
+      svg::hasFlag(style.textDecoration.get().value(), svg::TextDecoration::Underline);
 }
 
 bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const FormatBarState& state,
@@ -252,6 +335,7 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
   // an in-progress edit here is not clobbered mid-keystroke.
   if (!trackedFamily_ || lastSyncedFamily_ != state.fontFamily) {
     AssignBuffer(fontFamilyBuffer_, state.fontFamily);
+    fontFamilySeedTruncated_ = state.fontFamily.size() >= fontFamilyBuffer_.size();
     lastSyncedFamily_ = state.fontFamily;
     trackedFamily_ = true;
   }
@@ -284,73 +368,13 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNavFocus;
   if (ImGui::BeginChild("##text_format_bar", size, kChildFlags, kWindowFlags)) {
     // --- Font family: free-text input plus a searchable preview dropdown. ---
-    ImGui::SetNextItemWidth(180.0f);
-    ImGui::InputTextWithHint("##format_bar_font_family", "Font family", fontFamilyBuffer_.data(),
-                             fontFamilyBuffer_.size());
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-      actions.setFontFamily = true;
-      actions.fontFamily = std::string(fontFamilyBuffer_.data());
-      lastSyncedFamily_ = actions.fontFamily;
-    }
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::SetNextItemWidth(ImGui::GetFrameHeight());
-    if (ImGui::BeginCombo("##format_bar_font_family_menu", "", ImGuiComboFlags_NoPreview)) {
-      ImGui::SetNextItemWidth(200.0f);
-      ImGui::InputTextWithHint("##format_bar_font_search", "Search fonts",
-                               familySearchBuffer_.data(), familySearchBuffer_.size());
-      const std::string_view filter(familySearchBuffer_.data());
-      std::optional<svg::FontSource> shownGroup;
-      for (const FormatBarFontFamily& family : state.families) {
-        if (!ContainsCaseInsensitive(family.name, filter)) {
-          continue;
-        }
-        // Header at each Bundled/System boundary. Because `state.families` is
-        // grouped (Bundled then System), the source changes at most once among
-        // the filtered rows, so this prints one header per non-empty group.
-        if (!shownGroup.has_value() || *shownGroup != family.source) {
-          ImGui::TextDisabled(family.source == svg::FontSource::Bundled ? "Bundled" : "System");
-          shownGroup = family.source;
-        }
-        const bool chosen =
-            internal::RenderFontFamilyRow(family, family.name == state.fontFamily, actions);
-        if (chosen) {
-          actions.setFontFamily = true;
-          actions.fontFamily = family.name;
-          AssignBuffer(fontFamilyBuffer_, family.name);
-          lastSyncedFamily_ = family.name;
-        }
-      }
-      ImGui::EndCombo();
-    }
+    renderFontFamilyInput(actions);
+    renderFontFamilyMenu(state, actions);
+    ImVec2 sizeFieldMin;
+    ImVec2 sizeFieldMax;
+    bool sizeFieldActivated = false;
+    renderFontSizeInput(state, actions, sizeFieldMin, sizeFieldMax, sizeFieldActivated);
 
-    // --- Font size: one-click text edit, attached steps, and focused presets. ---
-    ImGui::SameLine();
-    if (!sizeControlActive_) {
-      sizeEditValue_ = state.hasFontSize ? state.fontSize : 0.0f;
-    }
-    ImGui::SetNextItemWidth(128.0f);
-    ImGui::InputFloat("##format_bar_font_size", &sizeEditValue_, 0.0f, 0.0f, "%.0f",
-                      ImGuiInputTextFlags_AutoSelectAll);
-    sizeControlActive_ = ImGui::IsItemActive();
-    const bool sizeFieldActivated = ImGui::IsItemActivated();
-    const bool sizeEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
-    const ImVec2 sizeFieldMin = ImGui::GetItemRectMin();
-    const ImVec2 sizeFieldMax = ImGui::GetItemRectMax();
-    const AttachedNumericStepperResult sizeSteps = RenderAttachedNumericStepper(
-        "format_bar_font_size_steps", sizeFieldMin, sizeFieldMax, theme);
-    if (sizeEditCommitted) {
-      sizeEditValue_ =
-          std::isfinite(sizeEditValue_) ? std::clamp(sizeEditValue_, 1.0f, 512.0f) : 16.0f;
-      actions.setFontSize = true;
-      actions.fontSize = sizeEditValue_;
-    }
-    if (sizeSteps.increment || sizeSteps.decrement) {
-      const float currentSize =
-          std::isfinite(sizeEditValue_) && sizeEditValue_ >= 1.0f ? sizeEditValue_ : 16.0f;
-      sizeEditValue_ = std::clamp(currentSize + (sizeSteps.increment ? 1.0f : -1.0f), 1.0f, 512.0f);
-      actions.setFontSize = true;
-      actions.fontSize = sizeEditValue_;
-    }
     // --- Bold / Italic / Underline toggles. ---
     const float toggleWidth = ImGui::GetFrameHeight();
     ImGui::SameLine();
@@ -374,6 +398,91 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
   ImGui::SetCursorPos(savedCursorPos);
 
   return actions;
+}
+
+void TextFormatBarPresenter::renderFontFamilyInput(FormatBarActions& actions) {
+  ImGui::SetNextItemWidth(180.0f);
+  ImGui::InputTextWithHint("##format_bar_font_family", "Font family", fontFamilyBuffer_.data(),
+                           fontFamilyBuffer_.size(),
+                           fontFamilySeedTruncated_ ? ImGuiInputTextFlags_ReadOnly : 0);
+  if (fontFamilySeedTruncated_ && ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "This font list is too long for inline editing. Choose a font or edit it in source.");
+  }
+  if (!fontFamilySeedTruncated_ && ImGui::IsItemDeactivatedAfterEdit()) {
+    actions.setFontFamily = true;
+    actions.fontFamily = std::string(fontFamilyBuffer_.data());
+    lastSyncedFamily_ = actions.fontFamily;
+  }
+  ImGui::SameLine(0.0f, 0.0f);
+  ImGui::SetNextItemWidth(ImGui::GetFrameHeight());
+}
+
+void TextFormatBarPresenter::renderFontFamilyMenu(const FormatBarState& state,
+                                                  FormatBarActions& actions) {
+  if (ImGui::BeginCombo("##format_bar_font_family_menu", "", ImGuiComboFlags_NoPreview)) {
+    ImGui::SetNextItemWidth(200.0f);
+    ImGui::InputTextWithHint("##format_bar_font_search", "Search fonts", familySearchBuffer_.data(),
+                             familySearchBuffer_.size());
+    const std::string_view filter(familySearchBuffer_.data());
+    std::optional<svg::FontSource> shownGroup;
+    for (const FormatBarFontFamily& family : state.families) {
+      if (!ContainsCaseInsensitive(family.name, filter)) {
+        continue;
+      }
+      // Header at each Bundled/System boundary. Because `state.families` is
+      // grouped (Bundled then System), the source changes at most once among
+      // the filtered rows, so this prints one header per non-empty group.
+      if (!shownGroup.has_value() || *shownGroup != family.source) {
+        ImGui::TextDisabled(family.source == svg::FontSource::Bundled ? "Bundled" : "System");
+        shownGroup = family.source;
+      }
+      const std::string familyCss = internal::EditableFontFamily(family.name);
+      const bool chosen =
+          internal::RenderFontFamilyRow(family, familyCss == state.fontFamily, actions);
+      if (chosen) {
+        actions.setFontFamily = true;
+        actions.fontFamily = familyCss;
+        AssignBuffer(fontFamilyBuffer_, familyCss);
+        fontFamilySeedTruncated_ = familyCss.size() >= fontFamilyBuffer_.size();
+        lastSyncedFamily_ = familyCss;
+      }
+    }
+    ImGui::EndCombo();
+  }
+}
+
+void TextFormatBarPresenter::renderFontSizeInput(const FormatBarState& state,
+                                                 FormatBarActions& actions, ImVec2& sizeFieldMin,
+                                                 ImVec2& sizeFieldMax, bool& sizeFieldActivated) {
+  const EditorTheme& theme = EditorTheme::Active();
+  ImGui::SameLine();
+  if (!sizeControlActive_) {
+    sizeEditValue_ = state.hasFontSize ? state.fontSize : 0.0f;
+  }
+  ImGui::SetNextItemWidth(128.0f);
+  ImGui::InputFloat("##format_bar_font_size", &sizeEditValue_, 0.0f, 0.0f, "%.0f",
+                    ImGuiInputTextFlags_AutoSelectAll);
+  sizeControlActive_ = ImGui::IsItemActive();
+  sizeFieldActivated = ImGui::IsItemActivated();
+  const bool sizeEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+  sizeFieldMin = ImGui::GetItemRectMin();
+  sizeFieldMax = ImGui::GetItemRectMax();
+  const AttachedNumericStepperResult sizeSteps =
+      RenderAttachedNumericStepper("format_bar_font_size_steps", sizeFieldMin, sizeFieldMax, theme);
+  if (sizeEditCommitted) {
+    sizeEditValue_ =
+        std::isfinite(sizeEditValue_) ? std::clamp(sizeEditValue_, 1.0f, 512.0f) : 16.0f;
+    actions.setFontSize = true;
+    actions.fontSize = sizeEditValue_;
+  }
+  if (sizeSteps.increment || sizeSteps.decrement) {
+    const float currentSize =
+        std::isfinite(sizeEditValue_) && sizeEditValue_ >= 1.0f ? sizeEditValue_ : 16.0f;
+    sizeEditValue_ = std::clamp(currentSize + (sizeSteps.increment ? 1.0f : -1.0f), 1.0f, 512.0f);
+    actions.setFontSize = true;
+    actions.fontSize = sizeEditValue_;
+  }
 }
 
 void TextFormatBarPresenter::renderFontSizePresetPopup(const FormatBarState& state,

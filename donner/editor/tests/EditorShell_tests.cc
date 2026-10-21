@@ -6638,6 +6638,35 @@ TEST(EditorShellTest, FormatBarSnapshotDoesNotWaitForDocumentWriter) {
   EXPECT_EQ(state.bold, before.bold);
 }
 
+// An edit from the format bar drops the text's computed style until the next
+// render. The bar keeps drawing its snapshot meanwhile, so it must also keep
+// reserving its input region; otherwise a quick second click falls through to
+// the canvas.
+TEST(EditorShellTest, FormatBarKeepsItsInputRegionWhileAnEditAwaitsRestyle) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(
+                                R"(<svg xmlns="http://www.w3.org/2000/svg"><g font-size="20">
+      <text id="label">Hello</text></g></svg>)"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  auto text = app.document().document().querySelector("#label");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+  ASSERT_THAT(EditorShellTestAccess::ComputeFormatBarState(shell).visible, testing::IsTrue());
+
+  ASSERT_THAT(app.setAttributeOnSelection("font-size", "30"), testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  ASSERT_THAT(text->computedStyleIfPresent(), testing::IsNull())
+      << "precondition: the edit leaves the text without a computed style until restyled";
+
+  const FormatBarState state = EditorShellTestAccess::ComputeFormatBarState(shell);
+  EXPECT_THAT(state.visible, testing::IsTrue());
+  EXPECT_THAT(EditorShellTestAccess::FormatBarShouldShow(shell), testing::Eq(state.visible));
+}
+
 TEST(EditorShellTest, AnimationPreviewDefersSidebarWorkUntilEditIsRestored) {
   gui::EditorWindow window = MakeHiddenWindow();
   ASSERT_TRUE(window.valid());

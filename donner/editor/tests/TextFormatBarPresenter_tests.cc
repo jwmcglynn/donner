@@ -1,5 +1,6 @@
 #include "donner/editor/TextFormatBarPresenter.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -10,6 +11,7 @@
 
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
 
 namespace donner::editor {
@@ -26,6 +28,17 @@ std::optional<std::string> TextAttribute(EditorApp& app, std::string_view name) 
     return std::nullopt;
   }
   return std::string(std::string_view(*value));
+}
+
+/// Matches every font field the format bar shows, naming the mismatched field.
+auto FormatStateIs(std::string_view family, float size, bool bold, bool italic, bool underline) {
+  return testing::AllOf(
+      testing::Field("fontFamily", &FormatBarState::fontFamily, testing::StrEq(family)),
+      testing::Field("hasFontSize", &FormatBarState::hasFontSize, testing::IsTrue()),
+      testing::Field("fontSize", &FormatBarState::fontSize, testing::FloatEq(size)),
+      testing::Field("bold", &FormatBarState::bold, testing::Eq(bold)),
+      testing::Field("italic", &FormatBarState::italic, testing::Eq(italic)),
+      testing::Field("underline", &FormatBarState::underline, testing::Eq(underline)));
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +77,99 @@ TEST(TextFormatBarPresenterActionsTest, ReadsFamilySizeAndStyleFlags) {
   EXPECT_TRUE(state.underline);
 }
 
+TEST(TextFormatBarPresenterActionsTest, ComputedFamilyTextRoundTripsEditableCssNames) {
+  for (const std::string_view family :
+       {R"("Example, Sans", serif)", R"("A\"Quote\\Family", sans-serif)",
+        R"("123 Font", system-ui)", R"("inherit", serif)", R"("A  B", "A\a B", fantasy)",
+        "serif, sans-serif, monospace, system-ui"}) {
+    SCOPED_TRACE(family);
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(
+        R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">Hi</text></svg>)"));
+    auto text = app.document().document().querySelector("#t");
+    ASSERT_THAT(text, testing::Ne(std::nullopt));
+    text->setAttribute("font-family", family);
+    app.setSelection(*text);
+    const auto computedFamilies = [&]() {
+      return text->withWriteAccess([&](svg::DocumentWriteAccess&, EntityHandle) {
+        return text->getComputedStyle().fontFamily.get().value();
+      });
+    };
+    const auto before = computedFamilies();
+    FormatBarState state;
+    ReadTextFormatState(*text, &state);
+    ASSERT_TRUE(app.setAttributeOnSelection("font-family", "temporary"));
+    ASSERT_TRUE(app.flushFrame());
+    FormatBarActions actions;
+    actions.setFontFamily = true;
+    actions.fontFamily = state.fontFamily;
+    ASSERT_TRUE(ApplyFormatBarActionsToSelection(actions, state, false, app));
+    ASSERT_TRUE(app.flushFrame());
+    EXPECT_THAT(computedFamilies(), testing::ElementsAreArray(before));
+    FormatBarState roundTripped;
+    ReadTextFormatState(*text, &roundTripped);
+    EXPECT_THAT(roundTripped.fontFamily, testing::Eq(state.fontFamily));
+  }
+}
+
+// Text commonly inherits its font from a parent group or sets it through CSS.
+// The format bar must show the values the text actually renders with, not
+// only attributes written on the <text> element itself.
+TEST(TextFormatBarPresenterActionsTest, ReadsInheritedAndCssFontValues) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <style>#css { font-family: Fira Code; font-size: 18px; text-decoration: underline; }</style>
+           <g font-family="sans-serif" font-size="20" font-weight="bold" font-style="italic">
+             <text id="inherited">Hover and hold</text>
+             <text id="relative" font-size="1.5em">Bigger</text>
+           </g>
+           <text id="css">Styled</text>
+         </svg>)"));
+
+  const auto read = [&](std::string_view id) {
+    const std::optional<svg::SVGElement> text =
+        app.document().document().querySelector("#" + std::string(id));
+    EXPECT_TRUE(text.has_value()) << id;
+    FormatBarState state;
+    if (text.has_value()) {
+      ReadTextFormatState(*text, &state);
+    }
+    return state;
+  };
+
+  EXPECT_THAT(read("inherited"), FormatStateIs("sans-serif", 20.0f, /*bold=*/true,
+                                               /*italic=*/true, /*underline=*/false));
+  EXPECT_THAT(read("relative"), FormatStateIs("sans-serif", 30.0f, /*bold=*/true,
+                                              /*italic=*/true, /*underline=*/false))
+      << "1.5em of the inherited 20px";
+  EXPECT_THAT(read("css"), FormatStateIs("Fira Code", 18.0f, /*bold=*/false, /*italic=*/false,
+                                         /*underline=*/true));
+}
+
+// The Bold toggle flips what the bar shows. For bold inherited from a group it
+// must write `normal` on the text, not re-assert `bold`.
+TEST(TextFormatBarPresenterActionsTest, ToggleBoldOnInheritedBoldWritesNormal) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <g font-weight="bold"><text id="t">Hi</text></g>
+         </svg>)"));
+  const std::optional<svg::SVGElement> text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+
+  FormatBarState state;
+  ReadTextFormatState(*text, &state);
+  FormatBarActions actions;
+  actions.toggleBold = true;
+  EXPECT_THAT(ApplyFormatBarActionsToSelection(actions, state,
+                                               /*routeTogglesToSelection=*/true, app),
+              testing::IsTrue());
+  EXPECT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(TextAttribute(app, "font-weight"), testing::Optional(testing::StrEq("normal")));
+}
+
 TEST(TextFormatBarPresenterActionsTest, ReadsDefaultsWhenStyleAttributesAbsent) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(
@@ -76,14 +182,13 @@ TEST(TextFormatBarPresenterActionsTest, ReadsDefaultsWhenStyleAttributesAbsent) 
   FormatBarState state;
   ReadTextFormatState(*text, &state);
 
-  EXPECT_TRUE(state.fontFamily.empty());
-  EXPECT_FALSE(state.hasFontSize);
-  EXPECT_FALSE(state.bold);
-  EXPECT_FALSE(state.italic);
-  EXPECT_FALSE(state.underline);
+  // With nothing specified the bar shows the initial values the text renders
+  // with: the `serif` family and the 12px `medium` size.
+  EXPECT_THAT(state, FormatStateIs("serif", 12.0f, /*bold=*/false, /*italic=*/false,
+                                   /*underline=*/false));
 }
 
-TEST(TextFormatBarPresenterActionsTest, ReadsUnparseableFontSizeAsAbsent) {
+TEST(TextFormatBarPresenterActionsTest, ReadsKeywordFontSizeAsComputedPixels) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -95,9 +200,9 @@ TEST(TextFormatBarPresenterActionsTest, ReadsUnparseableFontSizeAsAbsent) {
   FormatBarState state;
   ReadTextFormatState(*text, &state);
 
-  // "large" has no leading number, so the size control shows no resolved size.
-  EXPECT_FALSE(state.hasFontSize);
-  EXPECT_FLOAT_EQ(state.fontSize, 0.0f);
+  // The `large` keyword resolves to 1.2 times the 12px `medium` size.
+  EXPECT_THAT(state, FormatStateIs("serif", 14.4f, /*bold=*/false, /*italic=*/false,
+                                   /*underline=*/false));
 }
 
 TEST(TextFormatBarPresenterActionsTest, ReadsNonMatchingStyleValuesAsUnset) {
@@ -760,6 +865,78 @@ TEST_F(TextFormatBarPresenterInputTest, FreeTextFamilyCommitEmitsSetFontFamily) 
   const FormatBarActions actions = Click(state, ImVec2(900.0f, 400.0f));
   EXPECT_TRUE(actions.setFontFamily);
   EXPECT_EQ(actions.fontFamily, "Fira");
+}
+
+TEST_F(TextFormatBarPresenterInputTest, EscapedFamilySeedRemainsWholeWhenEdited) {
+  FormatBarState state = MakeState();
+  state.fontFamily = "\"";
+  for (int i = 0; i < 180; ++i) {
+    state.fontFamily += "\\\\";
+  }
+  state.fontFamily += "\"";
+  Frame(state);
+  const ImVec2 field(FamilyInputLeft() + kFamilyInputWidth * 0.5f, RowCenterY());
+  Click(state, field);
+  ImGui::GetIO().AddInputCharacter('X');
+  Frame(state, field);
+  const auto actions = Click(state, ImVec2(900, 400));
+  ASSERT_TRUE(actions.setFontFamily);
+  std::string edited = actions.fontFamily;
+  const auto inserted = edited.find('X');
+  ASSERT_NE(inserted, std::string::npos);
+  edited.erase(inserted, 1);
+  EXPECT_THAT(edited, testing::Eq(state.fontFamily));
+}
+
+TEST_F(TextFormatBarPresenterInputTest, OversizedFamilySeedCannotCommitTruncatedText) {
+  FormatBarState state = MakeState();
+  state.fontFamily = "\"" + std::string(2000, 'a') + "\"";
+  Frame(state);
+  const ImVec2 field(FamilyInputLeft() + kFamilyInputWidth * 0.5f, RowCenterY());
+  Click(state, field);
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiKey_Backspace, true);
+  Frame(state, field);
+  io.AddKeyEvent(ImGuiKey_Backspace, false);
+  Frame(state, field);
+  const auto actions = Click(state, ImVec2(900, 400));
+  EXPECT_FALSE(actions.setFontFamily);
+}
+
+TEST_F(TextFormatBarPresenterInputTest, DropdownReplacesOversizedSeedAndRestoresEditing) {
+  FormatBarState state = MakeState();
+  state.fontFamily = "\"" + std::string(2000, 'a') + "\"";
+  Frame(state);
+  OpenComboPopup(state, ImVec2(FamilyArrowLeft() + frameHeight_ * 0.5f, RowCenterY()));
+  const auto picked = ClickFirstActionRowInPopup(
+      state, FamilyArrowLeft(),
+      [](const FormatBarActions& action) { return action.setFontFamily; });
+  ASSERT_TRUE(picked.setFontFamily);
+  state.fontFamily = picked.fontFamily;
+  Frame(state);
+  const ImVec2 field(FamilyInputLeft() + kFamilyInputWidth * 0.5f, RowCenterY());
+  Click(state, field);
+  ImGui::GetIO().AddInputCharacter('X');
+  Frame(state, field);
+  const auto edited = Click(state, ImVec2(900, 400));
+  ASSERT_TRUE(edited.setFontFamily);
+  std::string restored = edited.fontFamily;
+  const auto inserted = restored.find('X');
+  ASSERT_NE(inserted, std::string::npos);
+  restored.erase(inserted, 1);
+  EXPECT_THAT(restored, testing::Eq(picked.fontFamily));
+}
+
+TEST_F(TextFormatBarPresenterInputTest, DropdownFamilyWithCommaEmitsOneQuotedFamily) {
+  FormatBarState state = MakeState();
+  state.families.front().name = "Example, Sans";
+  Frame(state);
+  OpenComboPopup(state, ImVec2(FamilyArrowLeft() + frameHeight_ * 0.5f, RowCenterY()));
+  const auto picked = ClickFirstActionRowInPopup(
+      state, FamilyArrowLeft(),
+      [](const FormatBarActions& action) { return action.setFontFamily; });
+  ASSERT_TRUE(picked.setFontFamily);
+  EXPECT_THAT(picked.fontFamily, testing::Eq(R"("Example, Sans")"));
 }
 
 TEST_F(TextFormatBarPresenterInputTest, ExternalFamilyChangeReseedsFreeTextBuffer) {

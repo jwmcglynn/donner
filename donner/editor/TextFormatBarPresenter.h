@@ -31,6 +31,10 @@
 struct ImFont;
 struct ImVec2;
 
+namespace donner::svg {
+class PropertyRegistry;
+}  // namespace donner::svg
+
 namespace donner::editor {
 
 class EditorApp;
@@ -148,12 +152,17 @@ inline constexpr std::array<int, 12> kFormatBarFontSizePresets = {8,  9,  10, 11
 /// @param textEditingActive True when an in-canvas text session owns the caret.
 [[nodiscard]] bool FormatBarShouldShow(bool hasSingleTextSelection, bool textEditingActive);
 
-/// Populate the attribute-derived fields (`fontFamily`, `fontSize`,
-/// `hasFontSize`, `bold`, `italic`, `underline`) of @p state from a single
-/// selected/edited `<text>` element. Reads under a scoped read access so it is
-/// safe while the live editor keeps the document in ConcurrentDom. Leaves
-/// `visible`, `families`, and `boldToggleFont` untouched (owned by the shell).
+/// Populate the font fields (`fontFamily`, `fontSize`, `hasFontSize`, `bold`,
+/// `italic`, `underline`) of @p state from the computed style of a single
+/// selected/edited `<text>` element, so inherited, CSS and relative values show
+/// what the text renders with. Computing the style can need document write
+/// access, so the caller must not hold a document read scope. Leaves `visible`,
+/// `families`, and `boldToggleFont` untouched (owned by the shell).
 void ReadTextFormatState(const svg::SVGElement& text, FormatBarState* state);
+
+/// Populate the same fields from an already computed @p style, for callers that
+/// hold only a document read scope (see `svg::SVGElement::computedStyleIfPresent`).
+void ReadTextFormatState(const svg::PropertyRegistry& style, FormatBarState* state);
 
 /// Route the attribute-write half of the bar's actions onto the app's current
 /// selection (the `TextInspectorPanel` seam): font family, font size, and -
@@ -197,11 +206,20 @@ public:
   }
 
 private:
+  /// Render the bounded free-text family field, preserving oversized seeds without committing them.
+  void renderFontFamilyInput(FormatBarActions& actions);
+  /// Render searchable family rows and emit CSS-safe picker values.
+  void renderFontFamilyMenu(const FormatBarState& state, FormatBarActions& actions);
+  /// Render the size field and steps, retaining its geometry for the later preset popup.
+  void renderFontSizeInput(const FormatBarState& state, FormatBarActions& actions, ImVec2& fieldMin,
+                           ImVec2& fieldMax, bool& fieldActivated);
   void renderFontSizePresetPopup(const FormatBarState& state, const ImVec2& fieldMin,
                                  const ImVec2& fieldMax, bool fieldActivated,
                                  FormatBarActions* actions);
   /// Free-text font-family buffer, re-seeded when the underlying value changes.
-  std::array<char, 256> fontFamilyBuffer_{};
+  // Fourfold CSS escaping plus quotes must fit for names accepted by the former 256-byte field.
+  std::array<char, 1024> fontFamilyBuffer_{};
+  bool fontFamilySeedTruncated_ = false;
   /// Family the buffer was last seeded from, to detect external changes.
   std::string lastSyncedFamily_;
   bool trackedFamily_ = false;

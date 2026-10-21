@@ -833,7 +833,6 @@ donner_cc_library(
         ":editor_theme",
         ":imgui_headers",
         "//donner/base",
-        "//donner/base/parser",
         "//donner/svg",
         "//donner/svg/resources:font_catalog_types",
         "@imgui",

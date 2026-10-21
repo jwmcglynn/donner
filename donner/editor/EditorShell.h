@@ -499,6 +499,9 @@ private:
   /// current family/size/B/I/U values read from that element, and the embedded
   /// font faces offered in the family picker.
   [[nodiscard]] FormatBarState computeFormatBarState();
+  /// Re-read the format bar's font fields for @p singleSelection when the
+  /// document is readable this frame; otherwise keep the last snapshot.
+  void refreshFormatBarSnapshot(const std::optional<svg::SVGElement>& singleSelection);
 
   /// Refresh per-frame font resource state without retaining GPU handles in the DOM snapshot.
   void updateFormatBarFamilyAvailability(FormatBarState& state);

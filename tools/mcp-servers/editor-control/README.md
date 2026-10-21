@@ -46,7 +46,8 @@ build before the first proxied request after startup.
 - `select_by_selector`: Select the first element matching a CSS selector, in
   document order starting with the root `<svg>` (so `:root` selects the root),
   and optionally prewarm the compositor. Every selector-based tool resolves
-  selectors this way.
+  selectors this way. For a `<text>` selection, `text_format` reports the font
+  family, size and bold/italic/underline state the text format bar shows.
 - `pointer_gesture`: Dispatch a click, double-click, or drag through the active
   canvas tool. A plain select-tool press first tries the editor shell's
   selected-bounds re-drag (inside the single selected element's bounds, off its
