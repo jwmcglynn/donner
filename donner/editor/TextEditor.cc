@@ -4593,14 +4593,14 @@ const TextEditor::NavigationAction* TextEditor::findNavigationAction(ShortcutId 
        Gate::EditorFocusedWithoutAutocomplete},
       {ShortcutId::SelectDown, [](TextEditor& e, bool s) { e.moveDown(1, s); }, true,
        Gate::EditorFocusedWithoutAutocomplete},
-      {ShortcutId::MoveUpBlock, [](TextEditor& e, bool s) { e.moveUp(e.pageMoveLines(), s); },
-       false, Gate::EditorFocusedWithoutAutocomplete},
-      {ShortcutId::SelectUpBlock, [](TextEditor& e, bool s) { e.moveUp(e.pageMoveLines(), s); },
-       true, Gate::EditorFocusedWithoutAutocomplete},
-      {ShortcutId::MoveDownBlock, [](TextEditor& e, bool s) { e.moveDown(e.pageMoveLines(), s); },
-       false, Gate::EditorFocusedWithoutAutocomplete},
-      {ShortcutId::SelectDownBlock, [](TextEditor& e, bool s) { e.moveDown(e.pageMoveLines(), s); },
-       true, Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::MoveUpBlock, [](TextEditor& e, bool s) { e.movePage(-1, s); }, false,
+       Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::SelectUpBlock, [](TextEditor& e, bool s) { e.movePage(-1, s); }, true,
+       Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::MoveDownBlock, [](TextEditor& e, bool s) { e.movePage(1, s); }, false,
+       Gate::EditorFocusedWithoutAutocomplete},
+      {ShortcutId::SelectDownBlock, [](TextEditor& e, bool s) { e.movePage(1, s); }, true,
+       Gate::EditorFocusedWithoutAutocomplete},
       {ShortcutId::MoveTop, [](TextEditor& e, bool s) { e.moveTop(s); }, false,
        Gate::EditorFocusedWithoutAutocomplete},
       {ShortcutId::SelectTop, [](TextEditor& e, bool s) { e.moveTop(s); }, true,
@@ -4623,6 +4623,37 @@ bool TextEditor::navigationAllowed(NavigationGate gate, bool editorFocused) cons
       return editorFocused && !autocompleteOpened_;
   }
   return false;
+}
+
+void TextEditor::movePage(int direction, bool select) {
+  const int rows = pageMoveLines();
+  if ((!wordWrapEnabled_ && !focusPartitionActive_) || visualLines_.empty()) {
+    if (direction < 0) {
+      moveUp(rows, select);
+    } else {
+      moveDown(rows, select);
+    }
+    return;
+  }
+
+  const Coordinates cursor = getCursorPosition();
+  const int lastRow = static_cast<int>(visualLines_.size()) - 1;
+  const int fromRow = visualLineIndexForCoordinates(cursor);
+  int toRow = std::clamp(fromRow + direction * rows, 0, lastRow);
+  // A focus-view placeholder stands for hidden lines; land on the next visible row instead.
+  while (toRow != fromRow && visualLines_[toRow].focusHiddenPlaceholder) {
+    toRow -= direction;
+  }
+
+  const VisualLine& from = visualLines_[fromRow];
+  const VisualLine& to = visualLines_[toRow];
+  const int rowOffset = std::max(0, cursor.column - from.startColumn);
+  // A continuation row's first column is also the previous row's last, so keep the caret past it to
+  // stay on the target row.
+  const int firstColumn = std::min(to.startColumn + (to.continuation ? 1 : 0), to.endColumn);
+  core_.moveCursorTo(
+      Coordinates(to.lineNo, std::clamp(to.startColumn + rowOffset, firstColumn, to.endColumn)),
+      select);
 }
 
 int TextEditor::pageMoveLines() const {

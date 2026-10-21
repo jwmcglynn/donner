@@ -1014,8 +1014,17 @@ private:
    */
   bool shortcutMatches(ShortcutId id, const ImGuiIO& io) const;
 
-  /// Number of lines Page Up and Page Down move: the visible height less one line of context.
+  /// Number of rows Page Up and Page Down move: the visible height less one row of context.
   int pageMoveLines() const;
+
+  /**
+   * Move the caret by one page of visible rows. With soft wrapping or a focus view the rows are
+   * visual rows, so a wrapped source line counts once per row it occupies.
+   *
+   * @param direction -1 to move up, +1 to move down.
+   * @param select Whether to extend the selection.
+   */
+  void movePage(int direction, bool select);
 
   /// Input state a caret navigation action waits for.
   enum class NavigationGate : std::uint8_t {

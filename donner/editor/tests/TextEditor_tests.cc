@@ -4947,6 +4947,30 @@ TEST_F(TextEditorTests, PageKeysMoveByTheVisiblePage) {
   EXPECT_EQ(editor.getCursorPosition().line, std::min(2 * pageLine, 60) - pageLine);
 }
 
+// With soft wrapping, a page is a page of visual rows: Page Down moves within a long wrapped line
+// instead of skipping whole source lines.
+TEST_F(TextEditorTests, PageKeysMoveByVisualRowsWhenWrapped) {
+  std::string longLine;
+  for (int word = 0; word < 400; ++word) {
+    longLine += "word ";
+  }
+  editor.setWordWrapEnabled(true);
+  editor.setText(longLine + "\nlast");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  PressKey(ImGuiKey_PageDown);
+  const Coordinates afterDown = editor.getCursorPosition();
+  EXPECT_EQ(afterDown.line, 0);
+  EXPECT_THAT(afterDown.column, ::testing::AllOf(::testing::Gt(0), ::testing::Lt(2000)));
+
+  PressKey(ImGuiKey_PageUp, /*command=*/false, /*shift=*/true);
+  const Coordinates afterUp = editor.getCursorPosition();
+  EXPECT_EQ(afterUp.line, 0);
+  EXPECT_THAT(afterUp.column, ::testing::Lt(afterDown.column));
+  EXPECT_EQ(editor.getSelectedText(),
+            longLine.substr(afterUp.column, afterDown.column - afterUp.column));
+}
+
 // The reported sequence: each navigation key is followed by a typed digit, which must land where
 // the key moved the caret.
 TEST_F(TextEditorTests, TypingAfterNavigationKeysLandsAtTheNewCaret) {

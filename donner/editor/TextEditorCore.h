@@ -321,6 +321,12 @@ public:
   /// Move the cursor to the end of the final line.
   /// @param select Whether to extend the selection.
   void moveBottom(bool select = false);
+  /// Move the cursor to \p position. With \p select the selection extends from its anchor, the
+  /// end the cursor did not occupy; otherwise it collapses to the cursor.
+  /// @param position New cursor position.
+  /// @param select Whether to extend the selection.
+  void moveCursorTo(const Coordinates& position, bool select);
+
   /// Move the cursor to the start of its current line.
   /// @param select Whether to extend the selection.
   void moveHome(bool select = false);
@@ -711,12 +717,6 @@ private:
 
   Coordinates interactiveStart_;
   Coordinates interactiveEnd_;
-
-  /// Move the cursor to \p position. With \p select the selection extends from its anchor, the
-  /// end the cursor did not occupy; otherwise it collapses to the cursor.
-  /// @param position New cursor position.
-  /// @param select Whether to extend the selection.
-  void moveCursorTo(const Coordinates& position, bool select);
 
   /// Return the start of the word before \p from: separators before it are skipped, onto earlier
   /// lines if needed, and then the word characters.
