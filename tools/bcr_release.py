@@ -297,6 +297,78 @@ def verify_generated_entry(registry: Path, source: Path, version: str, sha256: s
     verify_metadata_history(registry, metadata_file, versions, yanked, template, version)
 
 
+# The identity of the proposed registry commit. Hooks and signing stay off so runner
+# configuration cannot change the committed bytes.
+SUBMISSION_COMMIT_CONFIG = ("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                            "-c", "user.name=Donner release",
+                            "-c", "user.email=donner-release@users.noreply.github.com")
+
+
+def submission_branch(tag: str, version: str) -> str:
+    """Return the registry branch `donner-<tag>` of a stable tag that names `version`."""
+    match = STABLE_TAG.fullmatch(tag)
+    if not match or match.group(1) != version:
+        raise ValueError("submission branch needs the stable release tag of the version")
+    return f"donner-{tag}"
+
+
+def _registry_git(registry: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(registry), *args], check=True)
+
+
+def _registry_value(registry: Path, *args: str) -> str:
+    return subprocess.check_output(["git", "-C", str(registry), *args], text=True).strip()
+
+
+def bundle_entry(registry: Path, source: Path, tag: str, version: str, approved_sha256: str,
+                 validated: Path, bundle: Path) -> dict[str, str]:
+    """Verify the staged entry, commit it on the submission branch and bundle that one commit.
+
+    Runs without a fork token. The staged change must pass `verify_generated_entry` before
+    anything is committed. The bundle holds only the submission branch's commit on top of the
+    registry HEAD it was staged on; the returned base, commit, tree and bundle digest let later
+    jobs check they received exactly this commit.
+    """
+    branch = submission_branch(tag, version)
+    verify_generated_entry(registry, source, version, approved_sha256, validated)
+    tree = _registry_value(registry, "write-tree")
+    base = _registry_value(registry, "rev-parse", "HEAD")
+    _registry_git(registry, "checkout", "-b", branch)
+    _registry_git(registry, *SUBMISSION_COMMIT_CONFIG, "commit", "-m", f"Publish donner@{version}")
+    commit = _registry_value(registry, "rev-parse", "HEAD")
+    if _registry_value(registry, "rev-parse", "HEAD^{tree}") != tree:
+        raise ValueError("proposed registry commit does not hold the verified tree")
+    _registry_git(registry, "bundle", "create", str(bundle), f"refs/heads/{branch}", f"^{base}")
+    _registry_git(registry, "bundle", "verify", str(bundle))
+    return {"base": base, "commit": commit, "tree": tree,
+            "bundle_sha256": bcr_source.digest(bundle)}
+
+
+def verify_bundle(registry: Path, source: Path, tag: str, version: str, approved_sha256: str,
+                  validated: Path, bundle: Path, bundle_sha256: str, base: str, commit: str,
+                  tree: str) -> None:
+    """Check a downloaded entry bundle is the promoted commit before any fork token is used.
+
+    `registry` is a checkout of the promoted base. The bundle must have the promotion job's
+    digest, and its submission branch must be exactly `commit`, whose parent is `base` and
+    whose tree is `tree`. That commit must then pass `verify_generated_entry` again.
+    """
+    branch = submission_branch(tag, version)
+    if bcr_source.digest(bundle) != bundle_sha256:
+        raise ValueError("proposed entry bundle differs from the bundle the promotion retained")
+    print(f"{bundle}: OK")
+    if _registry_value(registry, "rev-parse", "HEAD") != base:
+        raise ValueError("registry checkout is not the promoted base")
+    _registry_git(registry, "bundle", "verify", str(bundle))
+    _registry_git(registry, "fetch", "--no-tags", str(bundle), f"refs/heads/{branch}")
+    for revision, expected, label in (("FETCH_HEAD", commit, "commit"),
+                                      ("FETCH_HEAD^", base, "base"),
+                                      ("FETCH_HEAD^{tree}", tree, "tree")):
+        if _registry_value(registry, "rev-parse", revision) != expected:
+            raise ValueError(f"proposed entry bundle has another {label} than the promotion")
+    verify_generated_entry(registry, source, version, approved_sha256, validated, commit)
+
+
 def published_record(tag: str, version: str, record_sha256: str, release: dict,
                      directory: Path) -> tuple[Path, dict]:
     """Download the release's `donner-X.Y.Z.candidate.json` asset; it must be the approved record."""
@@ -423,7 +495,16 @@ def stage_entry(entry: Path, registry: Path, source: Path, version: str) -> None
                    check=True)
 
 
-def main() -> None:
+def _entry_check_arguments(command: argparse.ArgumentParser) -> None:
+    """The arguments of every command that checks a proposed entry with `verify_generated_entry`."""
+    command.add_argument("--registry", type=Path, required=True)
+    command.add_argument("--source", type=Path, required=True)
+    command.add_argument("--version", required=True)
+    command.add_argument("--approved-sha256", required=True)
+    command.add_argument("--validated-entry", type=Path, required=True)
+
+
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     select = commands.add_parser("select-record")
@@ -447,31 +528,66 @@ def main() -> None:
     stage.add_argument("--source", type=Path, required=True)
     stage.add_argument("--version", required=True)
     generated = commands.add_parser("verify-generated")
-    generated.add_argument("--registry", type=Path, required=True)
-    generated.add_argument("--source", type=Path, required=True)
-    generated.add_argument("--version", required=True)
-    generated.add_argument("--approved-sha256", required=True)
-    generated.add_argument("--validated-entry", type=Path, required=True)
+    _entry_check_arguments(generated)
     generated.add_argument("--proposed-commit")
-    args = parser.parse_args()
-    if args.command == "select-record":
-        run_id, attempt, record_sha256 = candidate_ref(
-            args.release_body_file.read_text(encoding="utf-8"))
-        result = select_record(args.commit, args.tag, run_id, attempt, record_sha256)
-    elif args.command == "plan-submission":
-        result = plan_submission(args.release_run_id, args.record_sha256, args.work)
-    elif args.command == "fetch-entry":
-        print(f"Verified the admission-validated registry entry in "
-              f"{fetch_entry(args.tag, args.record_sha256, args.source, args.work)}")
-        return
-    elif args.command == "stage-entry":
-        stage_entry(args.entry, args.registry, args.source, args.version)
-        return
-    else:
-        verify_generated_entry(args.registry, args.source, args.version, args.approved_sha256,
-                               args.validated_entry, args.proposed_commit)
-        return
-    bcr_source.outputs(result, args.github_output)
+    bundled = commands.add_parser(
+        "bundle-entry", help="check, commit and bundle the staged entry without a fork token")
+    _entry_check_arguments(bundled)
+    bundled.add_argument("--tag", required=True)
+    bundled.add_argument("--bundle", type=Path, required=True)
+    bundled.add_argument("--github-output")
+    rechecked = commands.add_parser(
+        "verify-bundle", help="check a downloaded entry bundle is the promoted commit")
+    _entry_check_arguments(rechecked)
+    rechecked.add_argument("--tag", required=True)
+    rechecked.add_argument("--bundle", type=Path, required=True)
+    rechecked.add_argument("--bundle-sha256", required=True)
+    rechecked.add_argument("--base", required=True)
+    rechecked.add_argument("--tree", required=True)
+    rechecked.add_argument("--proposed-commit", required=True)
+    return parser
+
+
+def _select_record_command(args: argparse.Namespace) -> dict[str, object]:
+    run_id, attempt, record_sha256 = candidate_ref(
+        args.release_body_file.read_text(encoding="utf-8"))
+    return select_record(args.commit, args.tag, run_id, attempt, record_sha256)
+
+
+def _fetch_entry_command(args: argparse.Namespace) -> None:
+    print(f"Verified the admission-validated registry entry in "
+          f"{fetch_entry(args.tag, args.record_sha256, args.source, args.work)}")
+
+
+def _verify_bundle_command(args: argparse.Namespace) -> None:
+    verify_bundle(args.registry, args.source, args.tag, args.version, args.approved_sha256,
+                  args.validated_entry, args.bundle, args.bundle_sha256, args.base,
+                  args.proposed_commit, args.tree)
+
+
+# Each command returns its workflow outputs, or None when it has none.
+COMMANDS = {
+    "select-record": _select_record_command,
+    "plan-submission": lambda args: plan_submission(args.release_run_id, args.record_sha256,
+                                                    args.work),
+    "fetch-entry": _fetch_entry_command,
+    "stage-entry": lambda args: stage_entry(args.entry, args.registry, args.source,
+                                            args.version),
+    "verify-generated": lambda args: verify_generated_entry(
+        args.registry, args.source, args.version, args.approved_sha256, args.validated_entry,
+        args.proposed_commit),
+    "bundle-entry": lambda args: bundle_entry(args.registry, args.source, args.tag, args.version,
+                                              args.approved_sha256, args.validated_entry,
+                                              args.bundle),
+    "verify-bundle": _verify_bundle_command,
+}
+
+
+def main() -> None:
+    args = _parser().parse_args()
+    result = COMMANDS[args.command](args)
+    if result is not None:
+        bcr_source.outputs(result, args.github_output)
 
 
 if __name__ == "__main__":

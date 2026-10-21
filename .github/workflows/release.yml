@@ -69,6 +69,8 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.release.tag_name }}
 
+      # Runs before any repository code: the code this job runs with a write token must be the
+      # published release commit, so the check stays here instead of in that code.
       - name: Reverify release source
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -110,12 +112,8 @@ jobs:
           SOURCE_RUN_ID: ${{ steps.candidate.outputs.preflight_run_id }}
           SOURCE_ATTEMPT: ${{ steps.candidate.outputs.preflight_attempt }}
         run: |
-          python3 -B -m tools.release_cli verify --artifacts "$RUNNER_TEMP/release/cli-linux" \
-            --platform linux-x86-64 --commit "$GITHUB_SHA" \
-            --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
-          python3 -B -m tools.release_cli verify --artifacts "$RUNNER_TEMP/release/cli-macos" \
-            --platform darwin-arm64 --commit "$GITHUB_SHA" \
-            --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
+          python3 -B -m tools.release_cli verify-release --release "$RUNNER_TEMP/release" \
+            --commit "$GITHUB_SHA" --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
 
       - name: Verify preflight build attestations
         env:

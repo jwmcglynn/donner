@@ -17,7 +17,9 @@ PROBE_COMPILER = "Ubuntu Clang 18.1.3 (1ubuntu1)"
 RUNNER_CXX = "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
 
 
-class ReleaseCliTest(unittest.TestCase):
+class ReleaseCliFixture:
+    """A committed source checkout, a CLI binary, its notice and a compiler probe."""
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -83,6 +85,8 @@ class ReleaseCliTest(unittest.TestCase):
             commit=self.commit, run_id="123", attempt="2",
         )
 
+
+class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
     def test_exact_bytes_and_source_inputs_round_trip_on_both_platforms(self) -> None:
         for platform in release_cli.PLATFORMS:
             with self.subTest(platform=platform):
@@ -352,6 +356,80 @@ class ReleaseCliTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "license notice"):
                 self._package()
         self.assertFalse((self.artifacts / "donner-svg_linux_x86_64.provenance").exists())
+
+
+class VerifyReleaseTest(ReleaseCliFixture, unittest.TestCase):
+    """`verify-release` checks the staged CLI files exactly as two `verify` commands did."""
+
+    def _stage(self) -> Path:
+        release = Path(self.temporary.name) / "release"
+        for directory, platform in release_cli.STAGED_PLATFORMS.items():
+            self.artifacts = release / directory
+            self._package(platform)
+        return release
+
+    def _main(self, *arguments: str) -> None:
+        with mock.patch.object(sys, "argv", ["release_cli", *arguments]):
+            release_cli.main()
+
+    def test_one_command_makes_the_calls_of_the_two_platform_commands_in_order(self) -> None:
+        release = Path(self.temporary.name) / "release"
+        run = ("--commit", self.commit, "--run-id", "123", "--attempt", "2")
+        # The release workflow's former commands, one per platform.
+        before = [
+            ("verify", "--artifacts", str(release / "cli-linux"), "--platform", "linux-x86-64",
+             *run),
+            ("verify", "--artifacts", str(release / "cli-macos"), "--platform", "darwin-arm64",
+             *run),
+        ]
+        with mock.patch.object(release_cli, "verify") as verify:
+            for command in before:
+                self._main(*command)
+            expected = verify.call_args_list
+            verify.reset_mock()
+            with mock.patch("builtins.print"):
+                self._main("verify-release", "--release", str(release), *run)
+            self.assertEqual(verify.call_args_list, expected)
+        self.assertEqual([call.kwargs["platform"] for call in expected],
+                         ["linux-x86-64", "darwin-arm64"])
+        self.assertEqual({call.kwargs["root"] for call in expected}, {Path.cwd()})
+
+    def test_staged_files_of_both_platforms_verify(self) -> None:
+        release = self._stage()
+        with mock.patch("builtins.print") as printed:
+            release_cli.verify_release(root=self.root, release=release, commit=self.commit,
+                                       run_id="123", attempt="2")
+        self.assertEqual(
+            [call.args[0] for call in printed.call_args_list],
+            ["Verified the linux-x86-64 release CLI files in %s" % (release / "cli-linux"),
+             "Verified the darwin-arm64 release CLI files in %s" % (release / "cli-macos")])
+
+    def test_a_tampered_or_missing_second_platform_fails_closed(self) -> None:
+        release = self._stage()
+        binary = release / "cli-macos" / release_cli.PLATFORMS["darwin-arm64"]
+        binary.write_bytes(b"different bytes")
+        with mock.patch("builtins.print") as printed:
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                release_cli.verify_release(root=self.root, release=release, commit=self.commit,
+                                           run_id="123", attempt="2")
+        self.assertEqual(len(printed.call_args_list), 1)
+        for path in (release / "cli-macos").iterdir():
+            path.unlink()
+        (release / "cli-macos").rmdir()
+        with mock.patch("builtins.print"):
+            with self.assertRaises(FileNotFoundError):
+                release_cli.verify_release(root=self.root, release=release, commit=self.commit,
+                                           run_id="123", attempt="2")
+
+    def test_another_run_or_commit_fails_the_first_platform(self) -> None:
+        release = self._stage()
+        for commit, run_id in ((self.commit, "124"), ("a" * 40, "123")):
+            with self.subTest(commit=commit, run_id=run_id):
+                with mock.patch("builtins.print") as printed:
+                    with self.assertRaises(ValueError):
+                        release_cli.verify_release(root=self.root, release=release,
+                                                   commit=commit, run_id=run_id, attempt="2")
+                printed.assert_not_called()
 
 
 if __name__ == "__main__":

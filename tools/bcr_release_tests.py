@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -644,7 +645,9 @@ class SubmissionMetadataTest(unittest.TestCase):
             release.stage_entry(self.entry, self.registry, self.source, "1.0.0")
 
 
-class GeneratedEntryTest(unittest.TestCase):
+class GeneratedEntryFixture:
+    """A registry checkout with the entry staged on an empty base, and its validated copy."""
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -692,6 +695,8 @@ class GeneratedEntryTest(unittest.TestCase):
         for path in release.bcr_source.entry_paths("1.0.0"):
             (self.validated / "registry" / path).write_bytes((self.registry / path).read_bytes())
 
+
+class GeneratedEntryTest(GeneratedEntryFixture, unittest.TestCase):
     def test_proposed_entry_must_be_the_admission_validated_bytes(self):
         source_json = self.validated / "registry/modules/donner/1.0.0/source.json"
         original = source_json.read_bytes()
@@ -753,6 +758,200 @@ class GeneratedEntryTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.registry), "add", "--", "modules/donner"], check=True)
         with self.assertRaisesRegex(ValueError, "unexpected staged files"):
             self.verify()
+
+
+SUBMISSION_BRANCH = "donner-v1.0.0"
+
+
+class EntryBundleTest(GeneratedEntryFixture, unittest.TestCase):
+    """`bundle-entry` and `verify-bundle` run the git sequences the BCR workflow ran inline."""
+
+    def setUp(self):
+        super().setUp()
+        self.bundle = Path(self.temp.name) / "bcr-entry.bundle"
+        self.output = Path(self.temp.name) / "github-output"
+
+    def git(self, repository, *args):
+        return subprocess.check_output(["git", "-C", str(repository), *args], text=True).strip()
+
+    def main(self, *arguments):
+        with mock.patch.object(sys, "argv", ["bcr_release", *arguments]), \
+                mock.patch("builtins.print"):
+            release.main()
+
+    def entry_arguments(self, tag="v1.0.0", sha256="c" * 64):
+        return ("--registry", str(self.registry), "--source", str(self.source), "--tag", tag,
+                "--version", "1.0.0", "--approved-sha256", sha256,
+                "--validated-entry", str(self.validated))
+
+    def bundle_entry(self, **arguments):
+        self.main("bundle-entry", *self.entry_arguments(**arguments), "--bundle", str(self.bundle),
+                  "--github-output", str(self.output))
+        lines = self.output.read_text(encoding="utf-8").splitlines()
+        return dict(line.split("=", 1) for line in lines)
+
+    def base_checkout(self, base, name="base-checkout"):
+        """A fresh checkout of only the promoted base, as the fork preparation job has."""
+        checkout = Path(self.temp.name) / name
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+        subprocess.run(["git", "-C", str(checkout), "fetch", "-q", "--no-tags",
+                        str(self.registry), base], check=True)
+        subprocess.run(["git", "-C", str(checkout), "checkout", "-q", "--detach", base],
+                       check=True)
+        return checkout
+
+    def verify_bundle(self, checkout, outputs, bundle=None, **overrides):
+        values = {"bundle-sha256": outputs["bundle_sha256"], "base": outputs["base"],
+                  "tree": outputs["tree"], "proposed-commit": outputs["commit"], **overrides}
+        arguments = list(self.entry_arguments(sha256=values.pop("sha256", "c" * 64)))
+        arguments[arguments.index("--registry") + 1] = str(checkout)
+        for name, value in values.items():
+            arguments += ["--" + name, value]
+        self.main("verify-bundle", *arguments, "--bundle", str(bundle or self.bundle))
+
+    def recorded(self, function, *args):
+        """Run `function` and return the git commands and entry checks it ran, in order.
+
+        This patches the shared `subprocess` module only for the duration of the call; the tests
+        run single-threaded.
+        """
+        calls = []
+        run = subprocess.run
+
+        def record_run(command, **kwargs):
+            calls.append(command)
+            return run(command, **kwargs)
+
+        def record_output(command, **kwargs):
+            # Not the real check_output: it calls the patched run, which would record it twice.
+            calls.append(command)
+            return run(command, stdout=subprocess.PIPE, check=True, **kwargs).stdout
+
+        def record_check(*args):
+            calls.append(("verify-generated", *args))
+
+        with mock.patch.object(release.subprocess, "run", side_effect=record_run), \
+                mock.patch.object(release.subprocess, "check_output", side_effect=record_output), \
+                mock.patch.object(release, "verify_generated_entry", side_effect=record_check), \
+                mock.patch("builtins.print"):
+            result = function(*args)
+        return calls, result
+
+    def test_bundle_entry_runs_the_former_workflow_commands_in_order(self):
+        base = self.git(self.registry, "rev-parse", "HEAD")
+        calls, outputs = self.recorded(
+            release.bundle_entry, self.registry, self.source, "v1.0.0", "1.0.0", "c" * 64,
+            self.validated, self.bundle)
+        registry = ["git", "-C", str(self.registry)]
+        # The commands of the former inline step, after shell quoting, in its order.
+        self.assertEqual(calls, [
+            ("verify-generated", self.registry, self.source, "1.0.0", "c" * 64, self.validated),
+            registry + ["write-tree"],
+            registry + ["rev-parse", "HEAD"],
+            registry + ["checkout", "-b", SUBMISSION_BRANCH],
+            registry + ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                        "-c", "user.name=Donner release",
+                        "-c", "user.email=donner-release@users.noreply.github.com",
+                        "commit", "-m", "Publish donner@1.0.0"],
+            registry + ["rev-parse", "HEAD"],
+            registry + ["rev-parse", "HEAD^{tree}"],
+            registry + ["bundle", "create", str(self.bundle), "refs/heads/" + SUBMISSION_BRANCH,
+                        "^" + base],
+            registry + ["bundle", "verify", str(self.bundle)],
+        ])
+        self.assertEqual(list(outputs), ["base", "commit", "tree", "bundle_sha256"])
+        self.assertEqual(outputs["base"], base)
+
+    def test_bundle_entry_outputs_the_one_proposed_commit(self):
+        base = self.git(self.registry, "rev-parse", "HEAD")
+        tree = self.git(self.registry, "write-tree")
+        outputs = self.bundle_entry()
+        commit = self.git(self.registry, "rev-parse", "refs/heads/" + SUBMISSION_BRANCH)
+        self.assertEqual(outputs, {
+            "base": base, "commit": commit, "tree": tree,
+            "bundle_sha256": hashlib.sha256(self.bundle.read_bytes()).hexdigest()})
+        self.assertEqual(self.git(self.registry, "rev-parse", commit + "^"), base)
+        self.assertEqual(self.git(self.registry, "rev-parse", commit + "^{tree}"), tree)
+        self.assertEqual(
+            self.git(self.registry, "log", "-1", "--format=%an <%ae>|%cn <%ce>|%B", commit),
+            "Donner release <donner-release@users.noreply.github.com>|"
+            "Donner release <donner-release@users.noreply.github.com>|Publish donner@1.0.0")
+        self.assertEqual(self.git(self.registry, "bundle", "list-heads", str(self.bundle)),
+                         "%s refs/heads/%s" % (commit, SUBMISSION_BRANCH))
+
+    def test_bundle_entry_commits_nothing_for_an_unverified_entry_or_another_tag(self):
+        base = self.git(self.registry, "rev-parse", "HEAD")
+        for arguments, message in (({"sha256": "d" * 64}, "approved source archive"),
+                                   ({"tag": "v1.0.1"}, "stable release tag of the version"),
+                                   ({"tag": "1.0.0"}, "stable release tag of the version")):
+            with self.subTest(arguments=arguments):
+                with self.assertRaisesRegex(ValueError, message):
+                    self.bundle_entry(**arguments)
+                self.assertEqual(self.git(self.registry, "rev-parse", "HEAD"), base)
+                self.assertEqual(self.git(self.registry, "branch", "--list", SUBMISSION_BRANCH),
+                                 "")
+                self.assertFalse(self.bundle.exists())
+                self.assertFalse(self.output.exists())
+
+    def test_verify_bundle_runs_the_former_workflow_commands_in_order(self):
+        outputs = self.bundle_entry()
+        checkout = self.base_checkout(outputs["base"])
+        calls, _ = self.recorded(
+            release.verify_bundle, checkout, self.source, "v1.0.0", "1.0.0", "c" * 64,
+            self.validated, self.bundle, outputs["bundle_sha256"], outputs["base"],
+            outputs["commit"], outputs["tree"])
+        registry = ["git", "-C", str(checkout)]
+        self.assertEqual(calls, [
+            registry + ["rev-parse", "HEAD"],
+            registry + ["bundle", "verify", str(self.bundle)],
+            registry + ["fetch", "--no-tags", str(self.bundle), "refs/heads/" + SUBMISSION_BRANCH],
+            registry + ["rev-parse", "FETCH_HEAD"],
+            registry + ["rev-parse", "FETCH_HEAD^"],
+            registry + ["rev-parse", "FETCH_HEAD^{tree}"],
+            ("verify-generated", checkout, self.source, "1.0.0", "c" * 64, self.validated,
+             outputs["commit"]),
+        ])
+
+    def test_verify_bundle_accepts_the_promoted_commit_in_a_base_checkout(self):
+        outputs = self.bundle_entry()
+        checkout = self.base_checkout(outputs["base"])
+        self.verify_bundle(checkout, outputs)
+        self.assertEqual(self.git(checkout, "rev-parse", "FETCH_HEAD"), outputs["commit"])
+        self.assertEqual(self.git(checkout, "rev-parse", "HEAD"), outputs["base"])
+
+    def test_verify_bundle_rejects_another_bundle_base_commit_or_tree(self):
+        outputs = self.bundle_entry()
+        other = "f" * 40
+        cases = {
+            "digest": ({"bundle-sha256": "0" * 64}, "differs from the bundle"),
+            "commit": ({"proposed-commit": other}, "another commit"),
+            "base": ({"base": other}, "not the promoted base"),
+            "tree": ({"tree": other}, "another tree"),
+            # argparse keeps the last --version, so this pairs v1.0.0 with version 1.0.1.
+            "tag": ({"version": "1.0.1"}, "stable release tag of the version"),
+            "entry": ({"sha256": "d" * 64}, "approved source archive"),
+        }
+        for name, (overrides, message) in cases.items():
+            with self.subTest(name=name):
+                checkout = self.base_checkout(outputs["base"], "base-" + name)
+                with self.assertRaisesRegex(ValueError, message):
+                    self.verify_bundle(checkout, outputs, **overrides)
+
+    def test_verify_bundle_rejects_a_bundle_with_another_commit(self):
+        outputs = self.bundle_entry()
+        # A rebuilt bundle with an extra commit: its own digest, but not the promoted commit.
+        subprocess.run(["git", "-C", str(self.registry), "-c", "user.name=Test",
+                        "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false",
+                        "commit", "--allow-empty", "-qm", "extra"], check=True)
+        rebuilt = Path(self.temp.name) / "rebuilt.bundle"
+        subprocess.run(["git", "-C", str(self.registry), "bundle", "create", str(rebuilt),
+                        "refs/heads/" + SUBMISSION_BRANCH, "^" + outputs["base"]], check=True)
+        checkout = self.base_checkout(outputs["base"])
+        with self.assertRaisesRegex(ValueError, "another commit"):
+            self.verify_bundle(checkout, outputs, bundle=rebuilt, **{
+                "bundle-sha256": hashlib.sha256(rebuilt.read_bytes()).hexdigest()})
+        with self.assertRaisesRegex(ValueError, "differs from the bundle"):
+            self.verify_bundle(checkout, outputs, bundle=rebuilt)
 
 
 if __name__ == "__main__":

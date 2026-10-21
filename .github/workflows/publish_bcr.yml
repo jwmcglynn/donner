@@ -114,6 +114,8 @@ jobs:
           PYTHONPATH=trusted python3 -B -m tools.bcr_release stage-entry \
             --entry "$RUNNER_TEMP/validated-entry/entry" --registry registry --source this \
             --version "$VERSION"
+      # Checks the staged change as verify-generated does, then commits it on the submission
+      # branch and bundles that one commit. Outputs its base, commit, tree and bundle digest.
       - name: Verify and bundle the proposed entry without a fork token
         id: commit
         env:
@@ -121,27 +123,11 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
           APPROVED_SOURCE_SHA256: ${{ needs.validate.outputs.source_sha256 }}
         run: |
-          set -euo pipefail
-          PYTHONPATH=trusted python3 -B -m tools.bcr_release verify-generated \
-            --registry registry --source this --version "$VERSION" \
+          PYTHONPATH=trusted python3 -B -m tools.bcr_release bundle-entry \
+            --registry registry --source this --tag "$TAG" --version "$VERSION" \
             --approved-sha256 "$APPROVED_SOURCE_SHA256" \
-            --validated-entry "$RUNNER_TEMP/validated-entry/entry"
-          TREE=$(git -C registry write-tree)
-          BASE=$(git -C registry rev-parse HEAD)
-          git -C registry checkout -b "donner-${TAG}"
-          git -C registry -c core.hooksPath=/dev/null -c commit.gpgsign=false \
-            -c user.name='Donner release' \
-            -c user.email='donner-release@users.noreply.github.com' \
-            commit -m "Publish donner@${VERSION}"
-          COMMIT=$(git -C registry rev-parse HEAD)
-          test "$(git -C registry rev-parse 'HEAD^{tree}')" = "$TREE"
-          git -C registry bundle create "$GITHUB_WORKSPACE/bcr-entry.bundle" \
-            "refs/heads/donner-${TAG}" "^$BASE"
-          git -C registry bundle verify "$GITHUB_WORKSPACE/bcr-entry.bundle"
-          echo "base=$BASE" >> "$GITHUB_OUTPUT"
-          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
-          echo "tree=$TREE" >> "$GITHUB_OUTPUT"
-          echo "bundle_sha256=$(sha256sum bcr-entry.bundle | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+            --validated-entry "$RUNNER_TEMP/validated-entry/entry" \
+            --bundle "$GITHUB_WORKSPACE/bcr-entry.bundle" --github-output "$GITHUB_OUTPUT"
       - name: Retain the exact proposed entry
         uses: actions/upload-artifact@v7
         with:
@@ -189,6 +175,8 @@ jobs:
           PYTHONPATH=trusted python3 -B -m tools.bcr_release fetch-entry \
             --tag "$TAG" --record-sha256 "$RECORD_SHA256" --source this \
             --work "$RUNNER_TEMP/validated-entry"
+      # Checks the bundle digest, the base checkout and the bundled commit, parent and tree, then
+      # checks that commit as verify-generated does.
       - name: Verify the exact proposed commit without a fork token
         env:
           TAG: ${{ needs.validate.outputs.tag }}
@@ -199,18 +187,11 @@ jobs:
           PREPARED_TREE: ${{ needs.promote-entry.outputs.tree }}
           BUNDLE_SHA256: ${{ needs.promote-entry.outputs.bundle_sha256 }}
         run: |
-          set -euo pipefail
-          printf '%s  %s\n' "$BUNDLE_SHA256" prepared/bcr-entry.bundle | sha256sum -c -
-          test "$(git -C registry rev-parse HEAD)" = "$PREPARED_BASE"
-          git -C registry bundle verify "$GITHUB_WORKSPACE/prepared/bcr-entry.bundle"
-          git -C registry fetch --no-tags "$GITHUB_WORKSPACE/prepared/bcr-entry.bundle" \
-            "refs/heads/donner-${TAG}"
-          test "$(git -C registry rev-parse FETCH_HEAD)" = "$PREPARED_COMMIT"
-          test "$(git -C registry rev-parse 'FETCH_HEAD^')" = "$PREPARED_BASE"
-          test "$(git -C registry rev-parse 'FETCH_HEAD^{tree}')" = "$PREPARED_TREE"
-          PYTHONPATH=trusted python3 -B -m tools.bcr_release verify-generated \
-            --registry registry --source this --version "$VERSION" \
+          PYTHONPATH=trusted python3 -B -m tools.bcr_release verify-bundle \
+            --registry registry --source this --tag "$TAG" --version "$VERSION" \
             --approved-sha256 "$APPROVED_SOURCE_SHA256" \
+            --bundle "$GITHUB_WORKSPACE/prepared/bcr-entry.bundle" \
+            --bundle-sha256 "$BUNDLE_SHA256" --base "$PREPARED_BASE" --tree "$PREPARED_TREE" \
             --validated-entry "$RUNNER_TEMP/validated-entry/entry" \
             --proposed-commit "$PREPARED_COMMIT"
 

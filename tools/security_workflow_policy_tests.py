@@ -1432,6 +1432,17 @@ RELEASE_FORBIDDEN = ("actions/upload-artifact@", "actions/download-artifact@",
 RELEASE_RECORD_ARGUMENTS = ('--record-run-id "$RECORD_RUN_ID"', '--record-attempt "$RECORD_ATTEMPT"',
                             '--record-artifact-id "$RECORD_ARTIFACT_ID"',
                             '--record-sha256 "$RECORD_SHA256"')
+# The release source check runs in YAML before any repository code: that code cannot vouch for
+# itself, so the check must stay out of it.
+RELEASE_SOURCE_STEP = "Reverify release source"
+RELEASE_SOURCE_CHECKS = ('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+                         'test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"')
+RELEASE_CLI_STEP = "Verify immutable artifacts"
+RELEASE_CLI_VERIFY = ("python3 -B -m tools.release_cli verify-release",
+                      '--release "$RUNNER_TEMP/release"', '--commit "$GITHUB_SHA"',
+                      '--run-id "$SOURCE_RUN_ID"', '--attempt "$SOURCE_ATTEMPT"',
+                      "SOURCE_RUN_ID: ${{ steps.candidate.outputs.preflight_run_id }}",
+                      "SOURCE_ATTEMPT: ${{ steps.candidate.outputs.preflight_attempt }}")
 
 
 def _release_asset_paths(assets):
@@ -1461,6 +1472,9 @@ def _release_step_violations(jobs):
     stage = _named_step(publication, RELEASE_STEPS[0])
     reverified = "python3 -B -m tools.release_candidate release" in stage and all(
         argument in stage for argument in RELEASE_RECORD_ARGUMENTS)
+    first_run = next((step for step in _steps(publication) if "run:" in step), "")
+    first_steps = _steps(publication)[:2]
+    cli = _named_step(publication, RELEASE_CLI_STEP)
     return _failed([
         (jobs["resolve-candidate"].count("python3 -B -m tools.bcr_release select-record") == 1,
          "release does not select the record named by the release body"),
@@ -1469,6 +1483,15 @@ def _release_step_violations(jobs):
          names[-1:] == [RELEASE_STEPS[-1]],
          "release does not verify the record before its final upload step"),
         (reverified, "release does not re-verify the named record"),
+        # Only the checkout may run before the source check: no action or script from the tag.
+        (_step_identity_value(first_run, "name") == RELEASE_SOURCE_STEP and
+         all(check in first_run for check in RELEASE_SOURCE_CHECKS) and
+         len(first_steps) == 2 and "uses: actions/checkout@" in first_steps[0] and
+         first_steps[1] == first_run,
+         "release runs code before checking the checkout is the release commit"),
+        # With the upload as the final step (checked above), any earlier step precedes it.
+        (all(argument in cli for argument in RELEASE_CLI_VERIFY) and RELEASE_CLI_STEP in names[:-1],
+         "release does not verify the staged CLI files before upload"),
     ])
 
 
@@ -1576,6 +1599,19 @@ BCR_RECHECK_STEP = "Verify the exact proposed commit without a fork token"
 BCR_FETCH_ENTRY = "python3 -B -m tools.bcr_release fetch-entry"
 BCR_VALIDATED_ENTRY = '--validated-entry "$RUNNER_TEMP/validated-entry/entry"'
 BCR_RECORD_DIGEST = "APPROVED_SOURCE_SHA256: ${{ needs.validate.outputs.source_sha256 }}"
+# `bundle-entry` checks the staged change as `verify-generated` does before it commits and bundles
+# it; `verify-bundle` checks the downloaded bundle is that commit, then checks the commit again.
+# Both run main's publication checks from the `trusted` checkout, never the release source's.
+BCR_BUNDLE_ENTRY = "PYTHONPATH=trusted python3 -B -m tools.bcr_release bundle-entry"
+BCR_VERIFY_BUNDLE = "PYTHONPATH=trusted python3 -B -m tools.bcr_release verify-bundle"
+BCR_PROMOTED = (("BUNDLE_SHA256: ${{ needs.promote-entry.outputs.bundle_sha256 }}",
+                 '--bundle-sha256 "$BUNDLE_SHA256"'),
+                ("PREPARED_BASE: ${{ needs.promote-entry.outputs.base }}",
+                 '--base "$PREPARED_BASE"'),
+                ("PREPARED_TREE: ${{ needs.promote-entry.outputs.tree }}",
+                 '--tree "$PREPARED_TREE"'),
+                ("PREPARED_COMMIT: ${{ needs.promote-entry.outputs.commit }}",
+                 '--proposed-commit "$PREPARED_COMMIT"'))
 
 
 def _bcr_validation_violations(validate):
@@ -1600,10 +1636,12 @@ def _bcr_promotion_violations(promote, prepare):
         (BCR_FETCH_ENTRY in _named_step(promote, BCR_PROMOTE_STEPS[0]) and
          "tools.bcr_release stage-entry" in _named_step(promote, BCR_PROMOTE_STEPS[1]),
          "promotion does not submit the admission-validated entry"),
-        (BCR_VALIDATED_ENTRY in bundle and BCR_RECORD_DIGEST in bundle,
+        (BCR_BUNDLE_ENTRY in bundle and BCR_VALIDATED_ENTRY in bundle and
+         BCR_RECORD_DIGEST in bundle,
          "promotion does not compare the proposed entry with the validated entry"),
-        (BCR_FETCH_ENTRY in prepare and BCR_VALIDATED_ENTRY in recheck and
-         BCR_RECORD_DIGEST in recheck and "--proposed-commit" in recheck,
+        (BCR_FETCH_ENTRY in prepare and BCR_VERIFY_BUNDLE in recheck and
+         BCR_VALIDATED_ENTRY in recheck and BCR_RECORD_DIGEST in recheck and
+         all(binding in recheck and argument in recheck for binding, argument in BCR_PROMOTED),
          "fork preparation does not recheck the commit against the validated entry"),
     ])
 
@@ -2157,6 +2195,28 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "upload before verification": (path, release.replace(
                 "      - name: Verify preflight build attestations\n",
                 "      - name: Check preflight build attestations\n", 1), "before its final upload"),
+            "unchecked release source": (path, release.replace(
+                "          " + RELEASE_SOURCE_CHECKS[0] + "\n", "", 1), "release commit"),
+            "release source check removed": (path, release.replace(
+                "      - name: %s\n%s" % (RELEASE_SOURCE_STEP,
+                                         _step_body(release, RELEASE_SOURCE_STEP)), "", 1),
+                "release commit"),
+            "unverified staged CLI": (path, release.replace(
+                "tools.release_cli verify-release", "tools.release_cli check-lockfile", 1),
+                "staged CLI files"),
+            "action before the source check": (path, release.replace(
+                "      - name: " + RELEASE_SOURCE_STEP + "\n",
+                "      - uses: ./.github/actions/setup\n\n      - name: " + RELEASE_SOURCE_STEP +
+                "\n", 1), "release commit"),
+            "staged CLI of another run": (path, release.replace(
+                '--run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"\n\n'
+                "      - name: Verify preflight",
+                '--run-id "$RECORD_RUN_ID" --attempt "$SOURCE_ATTEMPT"\n\n'
+                "      - name: Verify preflight", 1), "staged CLI files"),
+            "staged CLI of another commit": (path, release.replace(
+                '--release "$RUNNER_TEMP/release" \\\n            --commit "$GITHUB_SHA"',
+                '--release "$RUNNER_TEMP/release" \\\n            --commit "$SOURCE_COMMIT"', 1),
+                "staged CLI files"),
         })
 
     def test_candidate_assembly_is_manual_minimal_and_retained(self):
@@ -2538,14 +2598,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("actions/download-artifact@v8", prepare)
         self.assertEqual(workflow.count("actions/checkout@v7"), 7)
         self.assertNotRegex(workflow, r"uses: [^\n]+@[0-9a-f]{40}(?:\s|$)")
-        self.assertIn("tools.bcr_release verify-generated", generate)
-        self.assertIn("git -C registry bundle create", generate)
+        self.assertIn("tools.bcr_release bundle-entry", generate)
+        self.assertIn('--bundle "$GITHUB_WORKSPACE/bcr-entry.bundle"', generate)
+        self.assertIn("path: bcr-entry.bundle", generate)
         self.assertIn("actions/upload-artifact@", generate)
         self.assertIn("fetch-depth: 0", _step_body(generate, "Checkout BCR for the proposed entry"))
         self.assertIn("needs.validate.outputs.prepare == 'true'", prepare)
         self.assertIn("needs: [validate, promote-entry]", prepare)
         self.assertNotIn("secrets.", prepare)
-        self.assertIn("tools.bcr_release verify-generated", prepare)
+        self.assertIn("tools.bcr_release verify-bundle", prepare)
+        self.assertIn('--bundle "$GITHUB_WORKSPACE/prepared/bcr-entry.bundle"', prepare)
         self.assertIn("actions/download-artifact@", prepare)
         self.assertIn("fetch-depth: 0", _step_body(prepare, "Checkout the exact BCR base"))
         self.assertIn("needs: [validate, promote-entry, prepare-fork]", publish)
@@ -2597,8 +2659,36 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "tools.bcr_release stage-entry", "tools.bcr_release verify-generated", 1),
                 "submit the admission-validated entry"),
             "uncompared bundle": (path, workflow.replace(
-                ' \\\n            --validated-entry "$RUNNER_TEMP/validated-entry/entry"\n          TREE=',
-                "\n          TREE=", 1), "compare the proposed entry"),
+                '            --validated-entry "$RUNNER_TEMP/validated-entry/entry" \\\n'
+                '            --bundle "$GITHUB_WORKSPACE/bcr-entry.bundle"',
+                '            --bundle "$GITHUB_WORKSPACE/bcr-entry.bundle"', 1),
+                "compare the proposed entry"),
+            "unverified bundle": (path, workflow.replace(
+                "tools.bcr_release bundle-entry", "tools.bcr_release stage-entry", 1),
+                "compare the proposed entry"),
+            "inline recheck": (path, workflow.replace(
+                "tools.bcr_release verify-bundle", "tools.bcr_release verify-generated", 1),
+                "recheck the commit"),
+            "untrusted bundle code": (path, workflow.replace(
+                "PYTHONPATH=trusted python3 -B -m tools.bcr_release bundle-entry",
+                "PYTHONPATH=this python3 -B -m tools.bcr_release bundle-entry", 1),
+                "compare the proposed entry"),
+            "untrusted recheck code": (path, workflow.replace(
+                "PYTHONPATH=trusted python3 -B -m tools.bcr_release verify-bundle",
+                "PYTHONPATH=this python3 -B -m tools.bcr_release verify-bundle", 1),
+                "recheck the commit"),
+            "unpinned tree": (path, workflow.replace(
+                ' --tree "$PREPARED_TREE"', "", 1), "recheck the commit"),
+            "unpinned commit": (path, workflow.replace(
+                "PREPARED_COMMIT: ${{ needs.promote-entry.outputs.commit }}",
+                "PREPARED_COMMIT: ${{ needs.validate.outputs.source_commit }}", 1),
+                "recheck the commit"),
+            "unpinned bundle digest": (path, workflow.replace(
+                '--bundle-sha256 "$BUNDLE_SHA256" ', "", 1), "recheck the commit"),
+            "unpinned base": (path, workflow.replace(
+                "PREPARED_BASE: ${{ needs.promote-entry.outputs.base }}\n          PREPARED_COMMIT",
+                "PREPARED_BASE: ${{ needs.validate.outputs.tag }}\n          PREPARED_COMMIT", 1),
+                "recheck the commit"),
             "unchecked fork commit": (path, workflow.replace(
                 '            --validated-entry "$RUNNER_TEMP/validated-entry/entry" \\\n'
                 '            --proposed-commit', '            --proposed-commit', 1),
