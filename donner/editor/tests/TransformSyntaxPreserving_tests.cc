@@ -200,6 +200,15 @@ TEST(TransformSyntaxPreserving, WrapperWritesCanonicalTranslateAtEditPrecision) 
             "translate(25.096524, 6.998355)");
 }
 
+TEST(TransformSyntaxPreserving, WrapperKeepsLargeIntegralTranslationsExact) {
+  const Transform2d parentFromElement = Transform2d::Translate(Vector2d(1e17, -1e17));
+  const RcString written = serializeTransformForWriteback(std::nullopt, parentFromElement);
+  const Transform2d parentFromWritten = ParseMatrix(written);
+  EXPECT_THAT(parentFromWritten.data, testing::ElementsAreArray(parentFromElement.data));
+  EXPECT_THAT(parentFromWritten.transformPosition(Vector2d(-1e17, 1e17)),
+              testing::Eq(Vector2d::Zero()));
+}
+
 TEST(TransformSyntaxPreserving, WrapperKeepsVeryLargeFiniteTransformsParseable) {
   const double large = std::numeric_limits<double>::max() / 16.0;
   for (const Transform2d& parentFromElement :
