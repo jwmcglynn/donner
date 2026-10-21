@@ -47,7 +47,8 @@ build before the first proxied request after startup.
   canvas tool. A plain select-tool press first tries the editor shell's
   selected-bounds re-drag (inside the single selected element's bounds, off its
   transform handles and outside later-painted bounds) before hit testing, as
-  the editor does.
+  the editor does. The shell's drag-intent retry for a press held over
+  later-painted bounds is not modeled.
 - `click_layer_button`: Find a Layers-panel row by CSS selector and click its
   visibility or lock button through the same shared handler used by the UI.
   Returns the immediate presented display before the settled render, plus the

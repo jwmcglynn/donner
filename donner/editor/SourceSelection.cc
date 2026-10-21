@@ -75,6 +75,10 @@ bool RangeEndsAt(std::string_view source, const std::optional<SourceRange>& rang
   return end.has_value() && *end == offset;
 }
 
+/// True when \p element's parsed source range ends at or before \p offset.
+/// @param element Element whose node location to check.
+/// @param source Source text the location resolves against.
+/// @param offset Byte offset in \p source.
 bool ElementEndsAtOrBefore(const svg::SVGElement& element, std::string_view source,
                            std::size_t offset) {
   const std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.entityHandle());

@@ -134,7 +134,8 @@ public:
   /// Returns true if a drag was started; false if the caller must fall
   /// back to the full `onMouseDown` path (multi-select, shift-click,
   /// click outside the selection's snapshotted bounds, click inside
-  /// later-painted cached bounds, empty bounds span, etc.).
+  /// later-painted cached bounds, empty bounds span, the selection is the
+  /// document root, etc.).
   ///
   /// `onMouseDown` itself calls this first to avoid duplicating logic
   /// - so plain clicks on the selection always take the no-hit-test

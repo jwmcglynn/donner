@@ -211,9 +211,10 @@ private:
   [[nodiscard]] bool applyReproAction(const repro::ReproAction& action, std::string* error);
   void replayMouseDown(const Vector2d& documentPoint, MouseModifiers modifiers);
   /**
-   * Start a select-tool press the way EditorShell dispatches it before hit testing: a plain press
-   * inside the single selected element's bounds, off its transform handles and outside the bounds
-   * of elements painted after it, re-drags the selection.
+   * Start a plain select-tool press the way EditorShell first dispatches it, before hit testing: a
+   * press inside the single selected element's bounds, off its transform handles and outside the
+   * bounds of elements painted after it, re-drags the selection. The shell's later drag-intent
+   * retry for a press over later-painted bounds is not modeled.
    *
    * @param documentPoint Press position in document coordinates.
    * @param modifiers Press modifiers.
