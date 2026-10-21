@@ -21,6 +21,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <limits>
 #include <memory>
@@ -9912,5 +9913,65 @@ TEST(EditorShellTest, SourceFocusRevealsPastedShape) {
   ASSERT_THAT(app.selectedElements(), testing::SizeIs(1));
   EXPECT_EQ(std::string(app.selectedElements().front().id()), "filler-3_pasted");
   ExpectFocusShowsSelectedElement(shell, "id=\"filler-3_pasted\"", "/>");
+}
+
+TEST(EditorShellTest, SourceFocusFollowsSelectedElementMovedByDocumentEdit) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  // Each edit moves the selected element's source lines without changing the selection.
+  struct SourceMovingEdit {
+    const char* name;
+    std::function<void(EditorShell&)> apply;
+  };
+  const std::vector<SourceMovingEdit> edits = {
+      {"Bring to Front shortcut",
+       [](EditorShell& shell) {
+         DriveGlobalShortcut(shell, {ImGuiKey_RightBracket}, /*ctrl=*/true, /*shift=*/true);
+       }},
+      {"Send Backward shortcut",
+       [](EditorShell& shell) {
+         DriveGlobalShortcut(shell, {ImGuiKey_LeftBracket}, /*ctrl=*/true);
+       }},
+      {"sibling above deleted",
+       [](EditorShell& shell) {
+         EditorApp& app = EditorShellTestAccess::App(shell);
+         std::optional<svg::SVGElement> sibling =
+             app.document().document().querySelector("#filler-1");
+         ASSERT_TRUE(sibling.has_value());
+         app.applyMutation(EditorCommand::DeleteElementCommand(*sibling));
+       }},
+  };
+
+  for (const SourceMovingEdit& edit : edits) {
+    SCOPED_TRACE(edit.name);
+    EditorShell shell(window, OptionsWithSource(SourceFocusInsertionSvg(), "focus-move.svg"));
+    ASSERT_TRUE(shell.valid());
+    SettleShellFrames(window, shell);
+
+    EditorApp& app = EditorShellTestAccess::App(shell);
+    std::optional<svg::SVGElement> target = app.document().document().querySelector("#filler-3");
+    ASSERT_TRUE(target.has_value());
+    app.setSelection(*target);
+    SettleShellFrames(window, shell);
+    {
+      SCOPED_TRACE("before the edit");
+      ExpectFocusShowsSelectedElement(shell, "id=\"filler-3\"", "/>");
+    }
+
+    const std::string sourceBefore(app.document().document().source());
+    edit.apply(shell);
+    SettleShellFrames(window, shell);
+
+    ASSERT_NE(std::string(app.document().document().source()), sourceBefore);
+    ASSERT_THAT(app.selectedElements(), testing::ElementsAre(*target));
+    ExpectFocusShowsSelectedElement(shell, "id=\"filler-3\"", "/>");
+    EXPECT_THAT(
+        EditorShellTestAccess::Source(shell).getSelectedText(),
+        testing::AllOf(testing::StartsWith("<rect id=\"filler-3\""), testing::EndsWith("/>")))
+        << "the source selection highlight should cover the moved element";
+  }
 }
 }  // namespace donner::editor
