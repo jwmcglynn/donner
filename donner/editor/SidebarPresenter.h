@@ -544,7 +544,7 @@ private:
                              LengthUnit unit);
   void captureStrokeLengthBaseline(const StrokeRenderContext& context, StrokeScalarField field);
   bool strokeEditSettlementPending() const;
-  bool strokeSelectionChanged(const EditorApp& app) const;
+  bool strokeSelectionChanged(const EditorApp* app) const;
   bool settleStrokeSelectionChange(EditorApp& app);
   bool settleStrokeLengthEdit(EditorApp& app);
   std::optional<StrokeScalarField> activeStrokeField() const;
