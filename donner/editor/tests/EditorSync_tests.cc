@@ -1811,11 +1811,18 @@ TEST(EditorSyncTest, UnacceptedNewPrologKeepsLaterFragmentsDiagnosticAndDecodedV
 }
 
 TEST(EditorSyncTest, FreshDoctypeSourceRecoveryPreservesUndoTimeline) {
-  const std::string before = R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="shape"/></svg>)";
+  const std::string initial = R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="shape"/></svg>)";
   EditorApp app;
-  ASSERT_TRUE(app.loadFromString(before));
+  ASSERT_TRUE(app.loadFromString(initial));
   const auto shape = GetElementByIdOrDie(app.document().document(), "#shape");
   app.setSelection(shape);
+  const auto priorBefore = captureAttributeSnapshot(shape, "data-prior", std::nullopt);
+  ASSERT_TRUE(app.setAttributeOnSelection("data-prior", "kept"));
+  ASSERT_TRUE(app.flushFrame());
+  app.undoTimeline().record("Earlier edit", priorBefore,
+                            captureAttributeSnapshot(shape, "data-prior", "kept"));
+  const std::string before(app.document().document().source());
+  const auto history = app.undoTimeline().entryCount();
   const std::string dtd = R"(<!DOCTYPE svg [<!ENTITY paint "red">]>)";
   const std::string source = dtd + before;
   std::string previous(before);
@@ -1825,7 +1832,7 @@ TEST(EditorSyncTest, FreshDoctypeSourceRecoveryPreservesUndoTimeline) {
                   source, &previous)
                   .dispatchedMutation);
   ASSERT_TRUE(app.flushFrame());
-  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  EXPECT_EQ(app.undoTimeline().entryCount(), history + 1);
   app.undo();
   ASSERT_TRUE(app.flushFrame());
   EXPECT_EQ(app.document().document().source(), before);
@@ -1838,7 +1845,8 @@ TEST(EditorSyncTest, LargeEntityTypingBatchUsesOneBoundedRecoveryParse) {
   std::string before =
       R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg">)";
   for (int i = 0; i < 8000; ++i) {
-    before += R"(<rect fill="&paint;" width="1" height="1"/>)";
+    before += i < 900 ? R"(<rect fill="&paint;" width="1" height="1"/>)"
+                      : R"(<rect fill="red" width="1" height="1"/>)";
   }
   before += "</svg>";
   EditorApp app;
@@ -1860,6 +1868,7 @@ TEST(EditorSyncTest, LargeEntityTypingBatchUsesOneBoundedRecoveryParse) {
   EXPECT_EQ(xml::internal::PublicParseInvocationCountForTesting() - parses, 1u);
   RecordProperty("entity_large_input_bytes", std::to_string(source.size()));
   RecordProperty("entity_large_element_count", "8001");
+  RecordProperty("entity_large_custom_references", "900");
   RecordProperty("entity_large_parse_calls", "1");
   RecordProperty("entity_large_recovery_us",
                  std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
