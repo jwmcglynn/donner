@@ -29,6 +29,7 @@
 #include "donner/editor/LockState.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/StrokeMarkerPrefabs.h"
+#include "donner/editor/TransformSyntaxPreserving.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -2654,19 +2655,22 @@ SidebarPresenter::captureAdjustedTransformBounds(const svg::SVGElement& element,
   if (!evaluate) {
     return {};
   }
-  const Transform2d actual =
+  const Transform2d documentFromElementActual =
       element.cast<svg::SVGGraphicsElement>().transform() * state.documentFromParent;
-  const Transform2d desired = state.startTransform * state.documentFromParent;
-  if (actual == desired) {
+  const Transform2d documentFromElementDesired = state.startTransform * state.documentFromParent;
+  if (documentFromElementActual == documentFromElementDesired) {
     return evaluate;
   }
-  const double determinant = actual.determinant();
+  const double determinant = documentFromElementActual.determinant();
   if (!std::isfinite(determinant) || determinant == 0.0) {
     return {};
   }
-  const Transform2d correction = actual.inverse() * desired;
-  return [evaluate = std::move(evaluate), correction](const Transform2d& change) {
-    return evaluate(correction * change);
+  const Transform2d desiredDocumentFromActualDocument =
+      documentFromElementActual.inverse() * documentFromElementDesired;
+  return [evaluate = std::move(evaluate),
+          desiredDocumentFromActualDocument](const Transform2d& targetDocumentFromDesiredDocument) {
+    // Donner applies left to right: observed document -> settled baseline -> requested document.
+    return evaluate(desiredDocumentFromActualDocument * targetDocumentFromDesiredDocument);
   };
 }
 

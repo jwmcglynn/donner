@@ -959,6 +959,7 @@ donner_cc_library(
         ":lock_state",
         ":selection_aabb",
         ":stroke_marker_prefabs",
+        ":transform_syntax_preserving",
         ":undo_timeline",
         ":viewport_state",
         "//donner/base",
