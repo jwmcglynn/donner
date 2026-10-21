@@ -8936,17 +8936,22 @@ void EditorShell::updateSourceFocusView(bool scrollToSelection) {
   }
 }
 
-void EditorShell::updateSourceStyleDecorations() {
-  const auto clearDecorations = [this]() {
-    styleSourceContributions_.clear();
-    styleSourceDecorationsValid_ = false;
-    styleSourceDecorationDocumentGeneration_ = 0;
-    styleSourceDecorationSourceVersion_ = 0;
+void EditorShell::clearSourceStyleDecorations(bool pending) {
+  styleSourceContributions_.clear();
+  styleSourceDecorationsValid_ = false;
+  styleSourceDecorationDocumentGeneration_ = 0;
+  styleSourceDecorationSourceVersion_ = 0;
+  if (pending && app_.hasDocument() && !textEditor_.isTextChanged()) {
+    textEditor_.beginSourceStyleDecorationRefresh(app_.document().documentGeneration(),
+                                                  app_.document().nonTransformRevision());
+  } else {
     std::ignore = textEditor_.clearSourceStyleDecorations();
-  };
+  }
+}
 
+void EditorShell::updateSourceStyleDecorations() {
   if (!app_.hasDocument() || textEditor_.isTextChanged() || app_.document().hasPendingMutations()) {
-    clearDecorations();
+    clearSourceStyleDecorations(true);
     return;
   }
 
@@ -8960,13 +8965,13 @@ void EditorShell::updateSourceStyleDecorations() {
 
   const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
   if (documentSource.empty() || textEditor_.getText() != documentSource) {
-    clearDecorations();
+    clearSourceStyleDecorations(false);
     return;
   }
 
   // Never leave ranges and clickable chips from an older source revision in
   // the editor while its replacement annotations are being computed.
-  clearDecorations();
+  clearSourceStyleDecorations(true);
 
   if (!styleSourceAnnotationsFuture_.valid()) {
     styleSourceAnnotationPendingDocumentGeneration_ = documentGeneration;
@@ -8988,6 +8993,7 @@ void EditorShell::updateSourceStyleDecorations() {
   DetachedStyleSourceAnnotations detached = styleSourceAnnotationsFuture_.get();
   if (styleSourceAnnotationPendingDocumentGeneration_ != documentGeneration ||
       styleSourceAnnotationPendingSourceVersion_ != sourceVersion) {
+    clearSourceStyleDecorations(true);
     window_.wakeEventLoop();
     return;
   }

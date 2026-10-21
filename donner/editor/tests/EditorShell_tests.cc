@@ -1381,6 +1381,17 @@ public:
     shell.revealSourceRange(byteRange);
   }
 
+  static void StageReadyStyleAnnotationsForCurrentSource(EditorShell& shell) {
+    std::promise<DetachedStyleSourceAnnotations> promise;
+    promise.set_value(DetachedStyleSourceAnnotations{.valid = true});
+    shell.styleSourceAnnotationsFuture_ = promise.get_future();
+    shell.styleSourceAnnotationPendingDocumentGeneration_ =
+        shell.app_.document().documentGeneration();
+    shell.styleSourceAnnotationPendingSourceVersion_ =
+        shell.app_.document().document().sourceVersion();
+    shell.styleSourceDecorationsValid_ = false;
+  }
+
   static void UpdateSourceStyleDecorations(EditorShell& shell) {
     shell.updateSourceStyleDecorations();
   }
@@ -4437,6 +4448,40 @@ TEST(EditorShellTest, SourceFocusAndStyleDecorationsTrackSelectionAndDirtySource
   EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
   EXPECT_FALSE(EditorShellTestAccess::StyleSourceDecorationsValid(shell));
   EXPECT_TRUE(source.sourceStyleDecorations().empty());
+}
+
+TEST(EditorShellTest, StaleTransformAnnotationResultKeepsRefreshPending) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+  EditorShell shell(window, OptionsWithSource(kStyledSvg, "styled.svg"));
+  ASSERT_THAT(shell.valid(), testing::IsTrue());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const std::uint64_t revision = app.document().nonTransformRevision();
+  EditorShellTestAccess::StageReadyStyleAnnotationsForCurrentSource(shell);
+  const std::uint64_t sourceVersion = app.document().document().sourceVersion();
+  app.applyMutation(
+      EditorCommand::SetTransformCommand(*target, Transform2d::Translate(Vector2d(1, 0))));
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  // The typed mutation advances the rendered model; authored source follows at writeback.
+  EXPECT_THAT(app.document().nonTransformRevision(), testing::Eq(revision));
+  const auto writeback =
+      app.document().document().setElementAttribute(*target, "transform", "translate(1)");
+  ASSERT_THAT(writeback.applied, testing::IsTrue());
+  EXPECT_THAT(app.document().document().sourceVersion(), testing::Gt(sourceVersion));
+  EXPECT_THAT(app.document().nonTransformRevision(), testing::Eq(revision));
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.setText(internal::CanonicalizeForTextEditor(app.document().document().source()));
+  source.resetTextChanged();
+  source.beginSourceStyleDecorationRefresh(app.document().documentGeneration(), revision);
+  EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
+  EXPECT_THAT(source.setSourceStyleDecorations({}), testing::IsTrue())
+      << "Discarding only an obsolete transform-source result must keep the refresh pending";
+
+  app.applyMutation(EditorCommand::SetAttributeCommand(*target, "id", "changed-target"));
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(app.document().nonTransformRevision(), testing::Gt(revision));
 }
 
 TEST(EditorShellTest, SourceStyleDecorationsDiscardReplacedDocumentResult) {

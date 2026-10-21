@@ -728,6 +728,12 @@ public:
   [[nodiscard]] const std::vector<SourceStyleDecoration>& sourceStyleDecorations() const {
     return sourceStyleDecorations_;
   }
+  /// Suspend annotation interactions while the current source annotations are refreshed.
+  /// @param documentGeneration Identity of the current source document.
+  /// @param referenceRevision Revision advanced by changes beyond typed transform mutations.
+  void beginSourceStyleDecorationRefresh(std::uint64_t documentGeneration,
+                                         std::uint64_t referenceRevision);
+
   /// Return and clear the last clicked source style decoration chip id.
   [[nodiscard]] std::optional<std::size_t> takeClickedSourceStyleChipId();
 
@@ -1369,6 +1375,10 @@ private:
   };
   std::vector<SourceStyleChipHitRect> sourceStyleChipHitRects_;
   std::optional<std::size_t> clickedSourceStyleChipId_;
+  bool sourceStyleDecorationRefreshPending_ = false;
+  std::uint64_t sourceStyleDecorationRefreshGeneration_ = 0;
+  std::uint64_t sourceStyleDecorationRefreshReferenceRevision_ = 0;
+  void clearReferenceChipPresentation();
 
   struct VisualLine {
     int lineNo = 0;
@@ -1418,6 +1428,7 @@ private:
     SourceByteRange targetHeader;
     SourceByteRange sourceToken;
     ImVec2 labelSizeInFontUnits;
+    std::optional<int> presentedCount;
   };
 
   struct FocusReferenceRopeState {
@@ -1443,6 +1454,7 @@ private:
     SourceStyleChipKind kind = SourceStyleChipKind::SelectorMatchCount;
     SourceByteRange anchorRange;
     ImVec2 labelSizeInFontUnits;
+    int presentedCount = 0;
   };
 
   struct FocusReferenceConnectorLayout {
@@ -1478,6 +1490,8 @@ private:
   static void rememberReferenceChipVisualAnchor(FocusReferenceRopeState& state,
                                                 const FocusReferenceConnectorLayout& layout);
   void resetReferenceRopesForPartition(const FocusPartition& partition);
+  void remapFocusReferenceLinksForSourceEdit(const SourceEditIntent& intent,
+                                             std::size_t bufferSize);
   static void remapReferenceChipVisualAnchor(std::optional<ReferenceChipVisualAnchor>& anchor,
                                              const SourceEditIntent& intent,
                                              std::size_t bufferSize);
@@ -1505,6 +1519,11 @@ private:
                                                  ImDrawList* drawList);
   void renderFocusReferenceStyleSourceChip(ImDrawList* drawList,
                                            const SourceStyleChipBounds& bounds, ImU32 color) const;
+  void renderSourceStyleChipLabel(ImDrawList* drawList, const SourceStyleChipBounds& bounds,
+                                  std::string_view label) const;
+  void renderPendingReferenceChipSnapshots(ImDrawList* drawList);
+  void renderUniqueReferenceChipSnapshots(
+      ImDrawList* drawList, std::span<const ReferenceChipVisualAnchor> snapshots) const;
   void renderSourceStyleDecorationChips(ImDrawList* drawList);
   void hitTestSourceStyleDecorationChips();
   void renderSourceStyleDecorationTooltip();

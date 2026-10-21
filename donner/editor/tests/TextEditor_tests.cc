@@ -875,6 +875,23 @@ protected:
     return TextEditor::ReferenceAttributeScanBudget::kMaximumPrecedingLines;
   }
 
+  int ChipGlyphCount(ImVec2 min, ImVec2 max, ImWchar character) const {
+    const ImFontGlyph* glyph = ImGui::GetFont()->FindGlyph(character);
+    if (glyph == nullptr) {
+      return 0;
+    }
+    int count = 0;
+    for (const ImDrawList* list : ImGui::GetDrawData()->CmdLists) {
+      for (const ImDrawVert& vertex : list->VtxBuffer) {
+        if (vertex.uv.x == glyph->U0 && vertex.uv.y == glyph->V0 && vertex.pos.x >= min.x &&
+            vertex.pos.x <= max.x && vertex.pos.y >= min.y && vertex.pos.y <= max.y) {
+          ++count;
+        }
+      }
+    }
+    return count;
+  }
+
   [[nodiscard]] std::size_t SourceStyleChipHitRectCount() const {
     return editor.sourceStyleChipHitRects_.size();
   }
@@ -3972,6 +3989,90 @@ TEST_F(TextEditorTests, ReferenceRopeRetainsVisualAnchorAcrossRangeOnlyFocusRefr
   const auto changedIdentity = FocusReferenceLayout(link, 0);
   ASSERT_THAT(changedIdentity, testing::Optional(testing::_));
   EXPECT_THAT(changedIdentity->tip.x, testing::Not(testing::FloatEq(before->tip.x)));
+}
+
+TEST_F(TextEditorTests, PendingReferenceChipRetainsPaintWithoutRetainingInteractions) {
+  const std::string header = "<linearGradient id=\"paint\"/>";
+  const std::string reference = "<rect fill=\"url(#paint)\" stroke=\"url(#paint)\"/>";
+  editor.setText(header + "\n" + reference + "\n");
+  const FocusReferenceLink first{
+      .from = SourcePoint{.line = 1, .column = static_cast<int>(reference.find("#paint") + 1)},
+      .to = SourcePoint{.line = 0, .column = static_cast<int>(header.size())},
+  };
+  FocusReferenceLink second = first;
+  second.from.column = static_cast<int>(reference.rfind("#paint") + 1);
+  const TextEditor::SourceStyleDecoration decoration{
+      .id = 94,
+      .range = SourceByteRange{.start = 0, .end = header.size()},
+      .chipRange = SourceByteRange{.start = 0, .end = header.size()},
+      .showChip = true,
+      .chipCount = 2,
+      .chipKind = TextEditor::SourceStyleChipKind::ReferenceCount,
+      .chipTooltip = "Referenced 2 times",
+  };
+  editor.beginSourceStyleDecorationRefresh(1, 0);
+  editor.setSourceStyleDecorations({decoration});
+  editor.setFocusPartition(FocusPartition{.fullColor = {LineRange{.startLine = 0, .endLine = 3}},
+                                          .referenceLinks = {first, second}});
+  RenderEditorFrame(ImVec2(640, 200));
+  ASSERT_THAT(SourceStyleChipHitRectCount(), testing::Eq(1u));
+  const ImVec2 min = SourceStyleChipHitRectMin(0);
+  const ImVec2 max = SourceStyleChipHitRectMax(0);
+  ASSERT_THAT(ChipGlyphCount(min, max, '2'), testing::Eq(1));
+
+  editor.beginSourceStyleDecorationRefresh(1, 0);
+  RenderEditorFrame(ImVec2(640, 200));
+  EXPECT_THAT(ChipGlyphCount(min, max, '2'), testing::Eq(1));
+  EXPECT_THAT(SourceStyleChipHitRectCount(), testing::Eq(0u));
+  const ImVec2 center((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+  RenderEditorFrameWithMouse(center, true, ImVec2(640, 200));
+  EXPECT_THAT(editor.takeClickedSourceStyleChipId(), testing::Eq(std::nullopt));
+  RenderEditorFrameWithMouse(center, false, ImVec2(640, 200));
+  editor.setSourceStyleDecorations({});
+  RenderEditorFrame(ImVec2(640, 200));
+  EXPECT_THAT(ChipGlyphCount(min, max, '2'), testing::Eq(0));
+  editor.beginSourceStyleDecorationRefresh(1, 0);
+  RenderEditorFrame(ImVec2(640, 200));
+  EXPECT_THAT(ChipGlyphCount(min, max, '2'), testing::Eq(0));
+
+  editor.setSourceStyleDecorations({decoration});
+  RenderEditorFrame(ImVec2(640, 200));
+  editor.beginSourceStyleDecorationRefresh(1, 1);
+  RenderEditorFrame(ImVec2(640, 200));
+  EXPECT_THAT(ChipGlyphCount(min, max, '2'), testing::Eq(0));
+  editor.setSourceStyleDecorations({decoration});
+  RenderEditorFrame(ImVec2(640, 200));
+  editor.beginSourceStyleDecorationRefresh(2, 1);
+  RenderEditorFrame(ImVec2(640, 200));
+  EXPECT_THAT(ChipGlyphCount(min, max, '2'), testing::Eq(0));
+  TextEditor::SourceStyleDecoration zero = decoration;
+  zero.chipCount = 0;
+  editor.setSourceStyleDecorations({zero});
+  RenderEditorFrame(ImVec2(640, 200));
+  EXPECT_THAT(ChipGlyphCount(min, max, '0'), testing::Eq(1));
+  editor.beginSourceStyleDecorationRefresh(2, 1);
+  RenderEditorFrame(ImVec2(640, 200));
+  EXPECT_THAT(ChipGlyphCount(min, max, '0'), testing::Eq(1));
+  editor.clearSourceStyleDecorations();
+  RenderEditorFrame(ImVec2(640, 200));
+  EXPECT_THAT(ChipGlyphCount(min, max, '0'), testing::Eq(0));
+
+  editor.setSourceStyleDecorations({decoration});
+  RenderEditorFrame(ImVec2(640, 200));
+  editor.beginSourceStyleDecorationRefresh(2, 1);
+  editor.applyExternalSourceEdit(header.find("paint"), 5, "other");
+  RenderEditorFrame(ImVec2(640, 200));
+  EXPECT_THAT(ChipGlyphCount(min, max, '2'), testing::Eq(0));
+
+  editor.setText(header + "\n" + reference + "\n");
+  editor.setSourceStyleDecorations({decoration});
+  editor.setFocusPartition(FocusPartition{.fullColor = {LineRange{.startLine = 0, .endLine = 3}},
+                                          .referenceLinks = {first, second}});
+  RenderEditorFrame(ImVec2(640, 200));
+  editor.beginSourceStyleDecorationRefresh(2, 1);
+  editor.applyExternalSourceEdit(header.size() + 1 + reference.find("#paint"), 6, "#other");
+  RenderEditorFrame(ImVec2(640, 200));
+  EXPECT_THAT(ChipGlyphCount(min, max, '2'), testing::Eq(0));
 }
 
 TEST_F(TextEditorTests, FocusReferenceConnectorTargetsSelectorChipByRangeStart) {
