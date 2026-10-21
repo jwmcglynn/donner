@@ -533,9 +533,10 @@ private:
   [[nodiscard]] LengthUnit strokeLengthBareUnit(StrokeScalarField field, LengthUnit shown) const;
   /// Remember whether \p field's text was rejected on a frame that still had it.
   void noteStrokeLengthText(StrokeScalarField field, const InspectorLengthEdit& edit);
+  /// Whether a cancelled stroke edit still needs its original styles restored.
+  bool strokeCancellationPending() const;
   /// Restore the selection for a cancelled typed stroke edit once a live app is available.
   /// @return Whether mutations were queued.
-  bool strokeCancellationPending() const;
   bool finishPendingStrokeCancel(EditorApp* liveApp);
   /// Finish typed stroke edits left pending by a busy frame: a deferred cancel, then a deferred
   /// commit. Returns whether mutations were queued.
