@@ -210,6 +210,17 @@ private:
                                                  std::string_view propertyValue);
   [[nodiscard]] bool applyReproAction(const repro::ReproAction& action, std::string* error);
   void replayMouseDown(const Vector2d& documentPoint, MouseModifiers modifiers);
+  /**
+   * Start a select-tool press the way EditorShell dispatches it before hit testing: a plain press
+   * inside the single selected element's bounds, off its transform handles and outside the bounds
+   * of elements painted after it, re-drags the selection.
+   *
+   * @param documentPoint Press position in document coordinates.
+   * @param modifiers Press modifiers.
+   * @return True if the press started a re-drag of the selection.
+   */
+  [[nodiscard]] bool tryStartSelectedBoundsRedrag(const Vector2d& documentPoint,
+                                                  MouseModifiers modifiers);
   void replayMouseMove(const Vector2d& documentPoint, bool buttonHeld, MouseModifiers modifiers);
   void replayMouseUp(const Vector2d& documentPoint);
   [[nodiscard]] std::optional<svg::SVGElement> querySelector(std::string_view selector);

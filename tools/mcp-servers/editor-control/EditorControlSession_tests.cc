@@ -1541,6 +1541,54 @@ TEST(EditorControlSessionTest, PointerGestureSelectsAndEditsPointerEventsNoneTex
   }
 }
 
+constexpr std::string_view kShapesScene =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180" viewBox="0 0 260 180">
+  <rect id="bg" width="260" height="180" fill="#f7f8fa"/>
+  <circle id="c" cx="130" cy="35" r="25" fill="#f0b429"/>
+  <rect id="r" x="10" y="10" width="70" height="50" fill="#2f6fed"/>
+</svg>)svg";
+
+void LoadShapesScene(EditorControlSession& session) {
+  const ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", std::string(kShapesScene)},
+                                              {"canvas_width", 260},
+                                              {"canvas_height", 180},
+                                              {"render_after_load", false}});
+  ASSERT_THAT(load.body.value("ok", false), testing::IsTrue()) << load.body.dump(2);
+}
+
+json SelectBySelector(EditorControlSession& session, std::string_view selector) {
+  const ToolCallResult select = session.handleToolCall(
+      "select_by_selector", json{{"selector", std::string(selector)}, {"render", false}});
+  EXPECT_THAT(select.body.value("ok", false), testing::IsTrue()) << select.body.dump(2);
+  return select.body["selection"];
+}
+
+TEST(EditorControlSessionTest, SelectBySelectorMatchesTheDocumentRootFirst) {
+  EditorControlSession session;
+  LoadShapesScene(session);
+
+  EXPECT_THAT(SelectBySelector(session, ":root").value("tag", ""), testing::Eq("svg"));
+  EXPECT_THAT(SelectBySelector(session, "svg").value("tag", ""), testing::Eq("svg"));
+  EXPECT_THAT(SelectBySelector(session, "rect").value("id", ""), testing::Eq("bg"));
+  EXPECT_THAT(SelectBySelector(session, "#c").value("id", ""), testing::Eq("c"));
+}
+
+// The editor shell re-drags the selection for a plain press inside its bounds before hit testing,
+// so a press in the selected circle's bounding-box corner keeps the circle rather than selecting
+// the background painted beneath it.
+TEST(EditorControlSessionTest, PointerGesturePressInsideSelectedBoundsKeepsSelection) {
+  EditorControlSession session;
+  LoadShapesScene(session);
+  ASSERT_THAT(SelectBySelector(session, "#c").value("id", ""), testing::Eq("c"));
+
+  const ToolCallResult gesture =
+      session.handleToolCall("pointer_gesture", json{{"start_x", 110.0}, {"start_y", 15.0}});
+
+  ASSERT_THAT(gesture.body.value("ok", false), testing::IsTrue()) << gesture.body.dump(2);
+  EXPECT_THAT(gesture.body["selection"].value("id", ""), testing::Eq("c")) << gesture.body.dump(2);
+}
+
 TEST(EditorControlSessionTest, RecordsTextToolPointerGestureWithIdleTail) {
   constexpr std::string_view kScene =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">

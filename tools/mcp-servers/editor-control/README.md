@@ -39,8 +39,15 @@ build before the first proxied request after startup.
   parse and optionally render the result. Invalid intermediate XML is kept as
   the editable draft while the visual preview remains on the last successfully
   parsed revision.
-- `select_by_selector`: Select an element by CSS selector and optionally prewarm
-  the compositor.
+- `select_by_selector`: Select the first element matching a CSS selector, in
+  document order starting with the root `<svg>` (so `:root` selects the root),
+  and optionally prewarm the compositor. Every selector-based tool resolves
+  selectors this way.
+- `pointer_gesture`: Dispatch a click, double-click, or drag through the active
+  canvas tool. A plain select-tool press first tries the editor shell's
+  selected-bounds re-drag (inside the single selected element's bounds, off its
+  transform handles and outside later-painted bounds) before hit testing, as
+  the editor does.
 - `click_layer_button`: Find a Layers-panel row by CSS selector and click its
   visibility or lock button through the same shared handler used by the UI.
   Returns the immediate presented display before the settled render, plus the
