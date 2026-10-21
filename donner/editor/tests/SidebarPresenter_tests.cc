@@ -22,8 +22,10 @@
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
@@ -434,6 +436,64 @@ TEST(SidebarTransformEditTest, UndoRestoresPreEditTransform) {
   ASSERT_TRUE(bounds.has_value());
   EXPECT_NEAR(bounds->topLeft.x, startBounds.topLeft.x, 1e-6);
   EXPECT_NEAR(bounds->topLeft.y, startBounds.topLeft.y, 1e-6);
+}
+
+constexpr std::string_view kTextAndGroupSvg =
+    R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180" viewBox="0 0 260 180">
+         <text id="t" x="100" y="150" font-size="24" fill="#17202a">Hi</text>
+         <g id="grp" transform="translate(170 95) rotate(15)">
+           <rect id="gr" width="50" height="40" fill="#8a4fff"/>
+         </g>
+       </svg>)SVG";
+
+// The Inspector's Position and Size fields come from the snapshot bounds. A
+// `<text>` has no path geometry, so the snapshot used to carry no bounds and
+// the fields showed 0.00 while the canvas drew a selection box around the
+// glyphs. The Inspector must report the same laid-out frame the selection
+// chrome uses.
+TEST(SidebarTransformEditTest, TextSelectionReportsItsLaidOutFrameAndMovesByPosition) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_TRUE(app.loadFromString(kTextAndGroupSvg));
+  app.setCleanSourceText(kTextAndGroupSvg);
+  const std::optional<svg::SVGElement> text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+  presenter.refreshSnapshot(app);
+
+  const std::optional<Box2d> frame = TextWorldFrameBounds(text->cast<svg::SVGTextElement>());
+  ASSERT_TRUE(frame.has_value()) << "the text must lay out to a non-empty frame";
+  ASSERT_THAT(frame->width(), testing::Gt(0.0));
+  ASSERT_THAT(frame->height(), testing::Gt(0.0));
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(), testing::Optional(testing::Eq(*frame)));
+
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::PositionX, 120.0));
+  const std::optional<Box2d>& moved = presenter.inspectorBoundsForTesting();
+  ASSERT_TRUE(moved.has_value());
+  EXPECT_THAT(moved->topLeft.x, testing::DoubleNear(120.0, 1e-6));
+  EXPECT_THAT(moved->topLeft.y, testing::DoubleNear(frame->topLeft.y, 1e-6));
+  EXPECT_THAT(moved->width(), testing::DoubleNear(frame->width(), 1e-6));
+  EXPECT_THAT(moved->height(), testing::DoubleNear(frame->height(), 1e-6));
+}
+
+// A group has no geometry of its own either; its Inspector bounds are the
+// union of its rendered children, matching its selection box.
+TEST(SidebarTransformEditTest, GroupSelectionReportsTheBoundsOfItsChildren) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_TRUE(app.loadFromString(kTextAndGroupSvg));
+  app.setCleanSourceText(kTextAndGroupSvg);
+  const std::optional<svg::SVGElement> group = app.document().document().querySelector("#grp");
+  const std::optional<svg::SVGElement> child = app.document().document().querySelector("#gr");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(child.has_value());
+  app.setSelection(*group);
+  presenter.refreshSnapshot(app);
+
+  const std::optional<Box2d> childBounds = child->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(childBounds.has_value());
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(), testing::Optional(testing::Eq(*childBounds)));
 }
 
 TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle) {

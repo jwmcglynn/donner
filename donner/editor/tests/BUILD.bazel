@@ -1029,6 +1029,7 @@ donner_cc_test(
         "//donner/editor:editor_app",
         "//donner/editor:embedded_svg_icon",
         "//donner/editor:imgui_headers",
+        "//donner/editor:selection_aabb",
         "//donner/editor:sidebar_presenter",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
