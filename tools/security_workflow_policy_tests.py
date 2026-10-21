@@ -610,8 +610,9 @@ SCRIPT_SAFE_EVENT_FIELDS = {"github.event.pull_request.base.sha",
                             "github.event.pull_request.head.sha",
                             "github.event.pull_request.number"}
 
-UNTRUSTED_CONTEXT = re.compile(r"github\.event\b(?:\.[A-Za-z0-9_.*-]+)?|github\.head_ref\b|"
-                              r"\binputs\b(?:\.[A-Za-z0-9_.*-]+)?")
+UNTRUSTED_CONTEXT = re.compile(r"github\.event\b(?:\.[A-Za-z0-9_.*-]+)?|"
+                              r"github\.(?:head_ref|ref_name|ref)\b|"
+                              r"\b(?:inputs|env)\b(?:\.[A-Za-z0-9_.*-]+)?")
 UPLOADED_EVENT_LOG = re.compile(r"(?i)(?:^|/)[^/]*bep[^/]*\.json$|exec(?:ution)?[._]log")
 WORKSPACE_ROOTS = {".", "./", "${{ github.workspace }}", "${{ github.workspace }}/"}
 # Private-network addresses, private DNS names and personal home directories have no place in
@@ -900,6 +901,48 @@ def _run_bodies(workflow):
     return bodies
 
 
+def _gatekeeper_source_violations(workflow):
+    steps = _steps(_jobs(workflow)["gatekeeper"])
+    if len(steps) != 6:
+        return ["admission must have exactly the reviewed six steps"]
+    source, comparison, duplicate, docs, trust, route = steps
+    return _failed([
+        ([_step_key(step, "id", 8) for step in steps] ==
+         ["admission_source", "comparison_source", "dup_push", "docs_only", "pr_trust",
+          "runner_gate"], "admission step order changed"),
+        (_step_key(source, "uses", 8) == "actions/checkout@v7" and
+         _with_key(source, "ref", 8) == "${{ github.event.pull_request.base.sha || github.sha }}"
+         and _with_key(source, "path", 8) is None and
+         _with_key(source, "repository", 8) is None, "admission source is not the immutable base"),
+        (_step_values(source, "sparse-checkout") ==
+         ["tools/ci/gatekeeper.py", ".github/actions/pr-trust"],
+         "admission checkout includes unexpected code"),
+        (_step_key(comparison, "uses", 8) == "actions/checkout@v7" and
+         _step_key(comparison, "if", 8) == "github.event_name == 'pull_request'" and
+         _with_key(comparison, "path", 8) == "pr-input" and
+         _with_key(comparison, "fetch-depth", 8) == "0" and
+         _with_key(comparison, "ref", 8) is None and
+         _with_key(comparison, "repository", 8) is None, "comparison checkout escaped its path"),
+        (all(_with_key(step, key, 8) == "false" for step in (source, comparison)
+             for key in ("persist-credentials", "submodules", "lfs")),
+         "admission checkout enables credentials, submodules or LFS"),
+        (_step_key(duplicate, "run", 8) == "python3 tools/ci/gatekeeper.py duplicate-push" and
+         _step_key(docs, "run", 8) ==
+         'python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only' and
+         _step_key(docs, "working-directory", 8) ==
+         "${{ github.event_name == 'pull_request' && 'pr-input' || '.' }}",
+         "admission executes the comparison checkout"),
+        (_step_key(trust, "uses", 8) == "./.github/actions/pr-trust",
+         "trust action is not from the pinned root"),
+    ])
+
+
+def _script_injection_violations(files):
+    """Report untrusted script context through the shared expression and script readers."""
+    return ["%s: %s" % (path, context) for path, text in files.items()
+            for context in _untrusted_script_contexts(text)]
+
+
 def _workflows(files):
     return {path: text for path, text in files.items() if path.startswith(".github/workflows/")}
 
@@ -1044,12 +1087,13 @@ def _script_bodies(text):
     lines = text.splitlines()
     bodies = []
     for index, line in enumerate(lines):
-        match = re.match(r"^(\s*)(?:-\s+)?(?:run|script|command):[ \t]*(.*)$", line)
+        match = re.match(r"^(\s*)((?:-\s+)?)(?:run|script|command):[ \t]*(.*)$", line)
         if not match:
             continue
-        value = match.group(2).strip()
-        if value in ("|", "|-", ">", ">-"):
-            value = "\n".join(_indented_block(lines[index + 1:], len(match.group(1))))
+        value = match.group(3).strip()
+        if re.fullmatch(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*(?:#.*)?", value):
+            indentation = len(match.group(1)) + len(match.group(2))
+            value = "\n".join(_indented_block(lines[index + 1:], indentation))
         bodies.append(value)
     return bodies
 
@@ -4508,6 +4552,65 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 changed = files[path].replace("${{ runner.temp }}/bazel-test-artifacts", upload)
                 self.assertNotEqual(changed, files[path])
                 self.assertTrue(_artifact_upload_violations({**files, path: changed}))
+
+    def test_gatekeeper_uses_immutable_admission_code(self):
+        workflow = self.supply_chain_files[".github/workflows/main.yml"]
+        self.assertEqual([], _gatekeeper_source_violations(workflow))
+        for old, new in (
+            ("github.event.pull_request.base.sha || github.sha", "github.sha"),
+            ("path: pr-input", "path: ."),
+            ('python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only',
+             "python3 tools/ci/gatekeeper.py docs-only"),
+            ("uses: ./.github/actions/pr-trust", "uses: ./pr-input/.github/actions/pr-trust"),
+            ("persist-credentials: false", "persist-credentials: true"),
+        ):
+            with self.subTest(mutation=new):
+                changed = workflow.replace(old, new, 1)
+                self.assertNotEqual(workflow, changed)
+                self.assertTrue(_gatekeeper_source_violations(changed))
+
+    def test_script_context_guard_reads_scalar_modifiers_and_stops_at_env(self):
+        for scalar in ("|", "|-", "|+", "|2", "|2-", "|+2", ">", ">-", ">2+"):
+            for key in ("run", "script", "command"):
+                with self.subTest(scalar=scalar, key=key):
+                    fixture = ("steps:\n  - %s: %s\n" % (key, scalar)
+                               + "      echo ${{ github [ 'ref' ] }}\n"
+                               + "    env:\n      VALUE: ${{ github.head_ref }}\n")
+                    self.assertEqual(["github.ref"], _untrusted_script_contexts(fixture))
+
+    def test_scripts_read_untrusted_context_only_from_env(self):
+        self.assertEqual([], _script_injection_violations(self.supply_chain_files))
+        # Each mutation pastes an untrusted value into a script and must be caught.
+        files = self.supply_chain_files
+        path = ".github/workflows/main.yml"
+        anchor = "run: python3 tools/ci/gatekeeper.py duplicate-push"
+        self.assertIn(anchor, files[path])
+        for expression in ("github.ref", "github['ref']", "github [ 'ref' ]",
+                           "github.event.inputs.sha", "github.event.client_payload.action",
+                           "github.head_ref", "github.ref_name", "github['head_ref']",
+                           "github.event.pull_request.title",
+                           "github.event['pull_request']['title']",
+                           "github.event.pull_request.head.ref",
+                           "github.event.head_commit.message", "toJSON(github.event)",
+                           "format('{0}', github.event.comment.body)", "env.BRANCH",
+                           "inputs.selection"):
+            for script in ("%s --head \"${{ %s }}\"" % (anchor, expression),
+                           "run: |\n          echo \"${{ %s }}\"" % expression):
+                with self.subTest(expression=expression, script=script.split("\n")[0]):
+                    changed = files[path].replace(anchor, script, 1)
+                    self.assertTrue(_script_injection_violations({path: changed}))
+        # A number or hash from the event is not attacker text.
+        for expression in ("github.event.pull_request.number",
+                           "github.event.pull_request.head.sha"):
+            self.assertEqual([], _untrusted_script_contexts(
+                "run: echo ${{ " + expression + " }}"), expression)
+        # The same values are fine in `env:` and in an `if:` condition.
+        safe = files[path].replace(
+            "        env:\n          GH_TOKEN: ${{ github.token }}\n",
+            "        env:\n          GH_TOKEN: ${{ github.token }}\n"
+            "          BRANCH: ${{ github.head_ref }}\n", 1)
+        self.assertNotEqual(safe, files[path])
+        self.assertEqual([], _script_injection_violations({path: safe}))
 
 
 if __name__ == "__main__":

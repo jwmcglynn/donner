@@ -7,13 +7,9 @@ env:
 
 # Validate PRs targeting main or a dependency branch in a stack.
 #
-# Editing a PR's title or description does not run this workflow: an `edited`
-# trigger here would cancel the run in progress through the PR concurrency group
-# and restart CI with no code change. A base-branch change (an `edited` event
-# with `changes.base`) still needs full CI against the new base, so
-# pr_base_change.yml calls this workflow for those events (`workflow_call`).
-# After a base change, later edits of the same head also rerun that call (see
-# pr_base_change.yml). The PR body check runs in pr_metadata.yml.
+# Title and description edits do not run CI. A base-branch change calls this workflow through
+# pr_base_change.yml; later edits of that head retain the base-change validation requirement.
+# The PR body check runs separately in pr_metadata.yml.
 on:
   push:
     branches: ["*"]
@@ -28,12 +24,10 @@ on:
       BUILDBUDDY_API_KEY_READONLY:
         required: false
 
-# A base-change run (called from pr_base_change.yml, where the event action is
-# `edited`) has its own PR group: it supersedes an earlier base-change run, but
-# neither cancels nor is cancelled by the push-triggered run of this workflow.
+# A run owns its group so later pushes and base changes preserve both running and queued jobs.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}{2}', github.workflow, github.event.pull_request.number, github.event.action == 'edited' && '-base-change' || '') || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  group: ${{ format('ci-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -62,101 +56,42 @@ jobs:
       trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
       renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
     steps:
-      - uses: actions/checkout@v7
+      - id: admission_source
+        name: Checkout trusted admission code
+        uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+          sparse-checkout: |
+            tools/ci/gatekeeper.py
+            .github/actions/pr-trust
+          sparse-checkout-cone-mode: false
+
+      - id: comparison_source
+        name: Checkout PR files for comparison
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+        with:
+          path: pr-input
           fetch-depth: 0
           persist-credentials: false
+          submodules: false
+          lfs: false
 
+      # Admission and trust execute only base-pinned code; PR files are comparison data.
       - id: dup_push
         name: Detect duplicate push (PR already open for this branch)
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          # When a `git push` lands on a branch that already has an open PR,
-          # GitHub fires both a `push` and a `pull_request` (synchronize) event,
-          # creating two parallel CI runs at the same SHA. We let the PR run do
-          # the work and skip the push run cleanly so it shows green-skipped
-          # instead of red-cancelled. Pushes to main, or to feature branches
-          # without an open PR, are NOT skipped.
-          if [[ "${{ github.event_name }}" != "push" ]]; then
-            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          open_prs="$(gh pr list --repo "${{ github.repository }}" \
-            --state open --head "${{ github.ref_name }}" \
-            --json number -q 'length')"
-          if [[ "${open_prs}" -gt 0 ]]; then
-            echo "Skipping push CI: open PR already covers branch '${{ github.ref_name }}'"
-            echo "is_duplicate_push=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 tools/ci/gatekeeper.py duplicate-push
 
       - id: docs_only
         name: Detect docs-only PR
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          is_docs_only_path() {
-            local path="$1"
-            # Build-impacting files (.bazelignore changes Bazel package
-            # discovery, .gitmodules changes vendored deps) are intentionally
-            # NOT in this allowlist — see Codex review on PR #570.
-            case "$path" in
-              docs/*|CHANGELOG*|.editorconfig|.gitattributes|.gitignore)
-                return 0
-                ;;
-            esac
-
-            if [[ "$path" != */* && "$path" == *.md ]]; then
-              return 0
-            fi
-
-            return 1
-          }
-
-          base_sha="${{ github.event.pull_request.base.sha }}"
-          head_sha="${{ github.event.pull_request.head.sha }}"
-          # Diff from the merge-base, not the base tip: base.sha is the base
-          # branch's CURRENT tip, so a two-dot diff attributes post-fork drift
-          # on main to the PR and can wrongly clear docs_only for a genuine
-          # docs-only branch. Fail closed: if merge-base cannot be computed,
-          # keep the base-tip diff (drift can only flip docs_only to false,
-          # which runs MORE CI, never less).
-          if diff_base="$(git merge-base "$base_sha" "$head_sha")"; then
-            echo "Using merge-base $diff_base as diff basis."
-          else
-            echo "git merge-base failed; using base tip $base_sha as diff basis."
-            diff_base="$base_sha"
-          fi
-          changed_files="$(git diff --name-only --diff-filter=ACMR \
-            "$diff_base" "$head_sha")"
-
-          if [[ -z "$changed_files" ]]; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          docs_only=true
-          while IFS= read -r path; do
-            [[ -z "$path" ]] && continue
-            if ! is_docs_only_path "$path"; then
-              echo "Non-doc change: $path"
-              docs_only=false
-              break
-            fi
-          done <<< "$changed_files"
-
-          echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
+        working-directory: ${{ github.event_name == 'pull_request' && 'pr-input' || '.' }}
+        run: python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only
 
       - id: pr_trust
         name: Classify pull request trust
@@ -274,7 +209,7 @@ jobs:
           base_sha=""
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base_sha="$(python3 -c 'import json, os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")).get("pull_request", {}).get("base", {}).get("sha", ""))')"
-          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
             # Pre-warm the cache for future PRs whose base is this main commit.
             base_sha="${{ github.sha }}"
           fi
@@ -305,7 +240,7 @@ jobs:
             echo "affected=" >> "$GITHUB_OUTPUT"
             echo "full_test=false" >> "$GITHUB_OUTPUT"
 
-            if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
               cached="$HOME/.cache/bazel-diff-base-hashes/${{ github.sha }}.json"
               if [[ ! -f "$cached" ]]; then
                 echo "Pre-warming bazel-diff hash cache for ${{ github.sha }}."
