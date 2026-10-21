@@ -2271,6 +2271,25 @@ TEST_F(XMLDocumentTests, SourceReplacementCannotReusePriorOrGuessedEntityPolicy)
   }
 }
 
+TEST_F(XMLDocumentTests, UnacceptedPrologPreventsLaterContextFreeFragmentTranslation) {
+  XMLDocument doc = ParseDocument(R"(<svg><rect fill="red"/></svg>)");
+  const auto rect = ElementChild(ElementChild(doc.root(), 0), 0);
+  ASSERT_TRUE(
+      doc.applySourceEdit(
+             XMLEditIntent{.range = SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)},
+                           .replacement = R"(<!DOCTYPE svg [<!ENTITY paint "blue">)",
+                           .sourceVersion = doc.sourceVersion()})
+          .applied);
+  const auto offset = doc.source().find("red");
+  const auto edited = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + 3)},
+      .replacement = "&paint;",
+      .sourceVersion = doc.sourceVersion()});
+  EXPECT_EQ(edited.scope, ReparseScope::Document);
+  EXPECT_THAT(edited, DiagnosticReasonContains("entity context"));
+  EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("red")));
+}
+
 TEST_F(XMLDocumentTests, SameStoreDoctypeEditNeverReusesOldDeclarationsForFragmentSync) {
   XMLDocument doc =
       ParseDocument(R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg><rect fill="&paint;"/></svg>)",

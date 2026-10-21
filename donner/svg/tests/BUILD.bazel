@@ -143,3 +143,18 @@ donner_cc_library(
         "@com_google_gtest//:gtest",
     ],
 )
+
+
+donner_cc_library(
+    name = "source_recovery_policy_test_utils",
+    testonly = True,
+    srcs = ["SourceRecoveryPolicyTestUtils.cc"],
+    hdrs = ["SourceRecoveryPolicyTestUtils.h"],
+    visibility = ["//donner/editor/tests:__pkg__"],
+    deps = [
+        "//donner/svg",
+        "//donner/svg/components:components_core",
+        "//donner/svg/components/resources:resource_manager_context",
+        "@com_google_gtest//:gtest",
+    ],
+)

@@ -21,11 +21,10 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGTextElement.h"
-#include "donner/svg/components/ParsedPayloadResourceBudget.h"
-#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
+#include "donner/svg/tests/SourceRecoveryPolicyTestUtils.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -1639,61 +1638,6 @@ TEST(EditorSyncTest, EntityIntentBatchQueuesAtMostOneOriginalPolicyRecovery) {
               testing::Eq(std::nullopt));
 }
 
-class CountingRecoveryLoader final : public svg::ResourceLoaderInterface {
-public:
-  explicit CountingRecoveryLoader(int& calls) : calls_(calls) {}
-  std::variant<std::vector<uint8_t>, svg::ResourceLoaderError> fetchExternalResource(
-      std::string_view) override {
-    ++calls_;
-    return svg::ResourceLoaderError::NotFound;
-  }
-
-private:
-  int& calls_;
-};
-
-void ChangeRecoveryPolicy(EditorApp& app, int mode, int& callbacks) {
-  app.document().document().withWriteAccess([&](svg::DocumentWriteAccess& access) {
-    auto& registry = access.registry();
-    auto& resources = registry.ctx().get<svg::components::ResourceManagerContext>();
-    switch (mode) {
-      case 0:
-        resources.setResourceLoader(std::make_unique<CountingRecoveryLoader>(callbacks));
-        break;
-      case 1: resources.setProcessingMode(svg::ProcessingMode::SecureStatic); break;
-      case 2:
-        resources.setSvgParseCallback(
-            [&](const std::vector<uint8_t>&,
-                ParseWarningSink&) -> std::optional<svg::SVGDocumentHandle> {
-              ++callbacks;
-              return std::nullopt;
-            });
-        break;
-      case 3: {
-        auto* store = app.document().document().xmlDocument().sourceStore();
-        auto limits = store->resourceLimits();
-        limits.maximumSourceSize = store->source().size() + 1024;
-        ASSERT_TRUE(store->setResourceLimits(limits));
-        break;
-      }
-      case 4: {
-        auto budget = registry.ctx().get<svg::components::DocumentResourceFamilyContext>().budget;
-        registry.ctx().erase<svg::components::ParsedPayloadResourceBudget>();
-        registry.ctx().emplace<svg::components::ParsedPayloadResourceBudget>(
-            svg::components::ParsedPayloadResourceBudget::Limits{.maximumRetainedBytes = 1},
-            budget);
-        break;
-      }
-      case 5:
-        registry.ctx().get<svg::components::DocumentResourceFamilyContext>().budget =
-            std::make_shared<svg::components::DocumentResourceFamilyBudget>(
-                svg::components::DocumentResourceFamilyBudget::Limits{.maximumTotalRetainedBytes =
-                                                                          1});
-        break;
-    }
-  });
-}
-
 TEST(EditorSyncTest, ChangedRecoveryPolicyRefusesAtQueueAndFlushWithoutReplacementEffects) {
   constexpr std::string_view kSvg =
       R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" fill="&paint;"/></svg>)";
@@ -1704,18 +1648,24 @@ TEST(EditorSyncTest, ChangedRecoveryPolicyRefusesAtQueueAndFlushWithoutReplaceme
       ASSERT_TRUE(app.loadFromString(kSvg));
       const auto shape = GetElementByIdOrDie(app.document().document(), "#shape");
       app.setSelection(shape);
+      const auto priorBefore = captureAttributeSnapshot(shape, "data-prior", std::nullopt);
+      ASSERT_TRUE(app.setAttributeOnSelection("data-prior", "kept"));
+      ASSERT_TRUE(app.flushFrame());
+      app.undoTimeline().record("Earlier edit", priorBefore,
+                                captureAttributeSnapshot(shape, "data-prior", "kept"));
+      const std::string before(app.document().document().source());
       const auto generation = app.document().documentGeneration();
       const auto history = app.undoTimeline().entryCount();
       int callbacks = 0;
       if (!afterQueue) {
-        ChangeRecoveryPolicy(app, mode, callbacks);
+        svg::test::ChangeSourceRecoveryPolicy(app.document().document(), mode, callbacks);
       }
-      std::string source(kSvg);
+      std::string source(before);
       const auto offset = source.find("<rect") + 1;
       source.replace(offset, 4, "circle");
-      std::string previous(kSvg);
+      std::string previous(before);
       const auto parses = xml::internal::PublicParseInvocationCountForTesting();
-      app.recordDocumentSourceUndoOnNextFlush("Rename", shape, std::string(kSvg), true);
+      app.recordDocumentSourceUndoOnNextFlush("Rename", shape, before, true);
       EXPECT_TRUE(
           DispatchSourceEdit(
               app, true,
@@ -1723,13 +1673,14 @@ TEST(EditorSyncTest, ChangedRecoveryPolicyRefusesAtQueueAndFlushWithoutReplaceme
               source, &previous)
               .dispatchedMutation);
       if (afterQueue) {
-        ChangeRecoveryPolicy(app, mode, callbacks);
+        svg::test::ChangeSourceRecoveryPolicy(app.document().document(), mode, callbacks);
       }
       EXPECT_FALSE(app.flushFrame());
       EXPECT_FALSE(app.document().lastFlushResult().replacedDocument);
       EXPECT_FALSE(app.document().lastFlushResult().appliedCommands);
       EXPECT_EQ(app.document().documentGeneration(), generation);
-      EXPECT_EQ(app.undoTimeline().entryCount(), history);
+      // The user's changed raw draft remains one undoable source edit; recovery adds no reset.
+      EXPECT_EQ(app.undoTimeline().entryCount(), history + 1);
       EXPECT_EQ(xml::internal::PublicParseInvocationCountForTesting(), parses);
       EXPECT_EQ(callbacks, 0);
       EXPECT_EQ(app.document().document().source(), source);
@@ -1760,7 +1711,7 @@ TEST(EditorSyncTest, RefusedRecoveryKeepsEarlierValidCommandsBeforeCoalescing) {
                   source, &previous)
                   .dispatchedMutation);
   int callbacks = 0;
-  ChangeRecoveryPolicy(app, 1, callbacks);
+  svg::test::ChangeSourceRecoveryPolicy(app.document().document(), 1, callbacks);
   ASSERT_TRUE(app.flushFrame());
   EXPECT_FALSE(app.document().lastFlushResult().replacedDocument);
   EXPECT_TRUE(app.document().lastFlushResult().onlyTransformCommands);
@@ -1823,6 +1774,40 @@ TEST(EditorSyncTest, LatestValidRecoveryCoalescesToOneParse) {
   EXPECT_EQ(app.document().document().source(), source);
   EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#shape").type(),
             svg::ElementType::Ellipse);
+}
+
+TEST(EditorSyncTest, UnacceptedNewPrologKeepsLaterFragmentsDiagnosticAndDecodedValues) {
+  const std::string before =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" fill="red"/></svg>)";
+  const std::string invalidProlog = R"(<!DOCTYPE svg [<!ENTITY paint "blue">)";
+  for (const bool flushInitial : {false, true}) {
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(before));
+    std::string source = invalidProlog + before;
+    std::string previous(before);
+    EXPECT_TRUE(DispatchSourceEdit(
+                    app, true,
+                    SourceEditIntent{.offset = 0, .removedLength = 0, .replacement = invalidProlog},
+                    source, &previous)
+                    .dispatchedMutation);
+    if (flushInitial) {
+      (void)app.flushFrame();
+    }
+    const auto offset = source.find("red");
+    source.replace(offset, 3, "&paint;");
+    EXPECT_TRUE(
+        DispatchSourceEdit(
+            app, true,
+            SourceEditIntent{.offset = offset, .removedLength = 3, .replacement = "&paint;"},
+            source, &previous)
+            .dispatchedMutation);
+    (void)app.flushFrame();
+    EXPECT_EQ(app.document().document().source(), source);
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
+                testing::Optional(testing::Eq("red")));
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Ne(std::nullopt));
+  }
 }
 
 TEST(EditorSyncTest, FreshDoctypeSourceRecoveryPreservesUndoTimeline) {
