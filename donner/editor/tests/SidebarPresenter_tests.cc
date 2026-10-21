@@ -2996,14 +2996,6 @@ TEST_F(SidebarPresenterImGuiTest, TransformRollbackHandoffRetainsPaintedSizeAndP
       presenter.refreshSnapshot(app);
     };
     const Box2d initial = *presenter.inspectorBoundsForTesting();
-    constexpr char kWindow[] = "##painted_transform_handoff";
-    ASSERT_NO_FATAL_FAILURE(BeginTransformFieldText(
-        presenter, app, kWindow, SidebarPresenter::TransformField::PositionX, "5"));
-    flush();
-    ImGui::GetIO().AddInputCharactersUTF8("furlongs");
-    RenderInspectorFrame(presenter, &app, kWindow);
-    ASSERT_NO_FATAL_FAILURE(MoveTransformFocus(
-        presenter, app, kWindow, SidebarPresenter::TransformField::Width, false, flush));
     const std::string desired = std::to_string(initial.width() * 2.0);
     // A host-space stroke can change the other painted extent as its join geometry changes.
     // Compare with the same resize begun directly from the restored document.
@@ -3016,7 +3008,12 @@ TEST_F(SidebarPresenterImGuiTest, TransformRollbackHandoffRetainsPaintedSizeAndP
     (void)directApp.flushFrame();
     directPresenter.refreshSnapshot(directApp);
     const Box2d expected = *directPresenter.inspectorBoundsForTesting();
-    // Return focus to the handoff field before replacing its contents.
+    constexpr char kWindow[] = "##painted_transform_handoff";
+    ASSERT_NO_FATAL_FAILURE(BeginTransformFieldText(
+        presenter, app, kWindow, SidebarPresenter::TransformField::PositionX, "5"));
+    flush();
+    ImGui::GetIO().AddInputCharactersUTF8("furlongs");
+    RenderInspectorFrame(presenter, &app, kWindow);
     ASSERT_NO_FATAL_FAILURE(MoveTransformFocus(
         presenter, app, kWindow, SidebarPresenter::TransformField::Width, false, flush));
     ReplaceFocusedInput(presenter, &app, kWindow, desired, ImVec2(-1.0f, -1.0f), 280.0f);
