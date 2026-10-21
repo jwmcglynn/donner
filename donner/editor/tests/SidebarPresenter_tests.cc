@@ -2945,7 +2945,11 @@ TEST_F(SidebarPresenterImGuiTest, StrokeWidthBusyReactivationKeepsPendingCancell
   const auto target = app.selectedElement();
   ASSERT_THAT(target, testing::Optional(testing::_));
   constexpr char kWindow[] = "##stroke_width_busy_reactivation";
-  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "9"));
+  constexpr float kHeight = 600.0f;
+  const ImVec2 away(-1.0f, -1.0f);
+  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "9", kHeight));
+  const ImGuiID fieldId = ImGui::GetActiveID();
+  ASSERT_NE(fieldId, 0u);
   (void)app.flushFrame();
   ASSERT_THAT(target->getAttribute("style"),
               testing::Optional(testing::Eq(RcString("stroke-width: 9"))));
@@ -2954,12 +2958,14 @@ TEST_F(SidebarPresenterImGuiTest, StrokeWidthBusyReactivationKeepsPendingCancell
 
   ImGuiIO& io = ImGui::GetIO();
   io.AddKeyEvent(ImGuiKey_Escape, true);
-  RenderInspectorFrame(presenter, nullptr, kWindow);
+  RenderInspectorFrame(presenter, nullptr, kWindow, away, false, kHeight);
   io.AddKeyEvent(ImGuiKey_Escape, false);
-  RenderInspectorFrame(presenter, nullptr, kWindow);
-  RenderInspectorFrame(presenter, nullptr, kWindow, RectCenter(*field), true);
-  RenderInspectorFrame(presenter, nullptr, kWindow, RectCenter(*field), false);
-  RenderInspectorFrame(presenter, &app, kWindow);
+  RenderInspectorFrame(presenter, nullptr, kWindow, away, false, kHeight);
+  ASSERT_NE(ImGui::GetActiveID(), fieldId);
+  RenderInspectorFrame(presenter, nullptr, kWindow, RectCenter(*field), true, kHeight);
+  RenderInspectorFrame(presenter, nullptr, kWindow, RectCenter(*field), false, kHeight);
+  ASSERT_EQ(ImGui::GetActiveID(), fieldId);
+  RenderInspectorFrame(presenter, &app, kWindow, away, false, kHeight);
   (void)app.flushFrame();
 
   EXPECT_THAT(target->getAttribute("style"), testing::Eq(std::nullopt));
