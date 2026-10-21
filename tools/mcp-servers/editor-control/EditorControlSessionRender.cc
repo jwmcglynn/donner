@@ -268,7 +268,7 @@ ToolCallResult EditorControlSession::inspectorState(const json&) {
   // The editor refreshes the sidebar only while the async renderer is idle; mirror that.
   inspector_.refreshSnapshot(app_);
   const std::optional<Box2d>& bounds = inspector_.inspectorBoundsForTesting();
-  const std::optional<Transform2d>& transform = inspector_.inspectorTransformForTesting();
+  const std::optional<Transform2d>& parentFromEntity = inspector_.inspectorTransformForTesting();
 
   ToolCallResult out;
   out.body = json{
@@ -277,7 +277,8 @@ ToolCallResult EditorControlSession::inspectorState(const json&) {
       {"has_selection", inspector_.inspectorHasSelectionForTesting()},
       {"title", std::string(inspector_.inspectorTitleForTesting())},
       {"bounds_doc", bounds.has_value() ? BoxToJson(*bounds) : json(nullptr)},
-      {"transform", transform.has_value() ? TransformToJson(*transform) : json(nullptr)},
+      {"transform",
+       parentFromEntity.has_value() ? TransformToJson(*parentFromEntity) : json(nullptr)},
   };
   return out;
 }

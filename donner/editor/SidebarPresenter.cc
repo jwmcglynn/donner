@@ -93,6 +93,50 @@ std::optional<Box2d> InspectorBounds(const svg::SVGElement& element) {
   return std::nullopt;
 }
 
+/// Below this document-space span (in user units), a bounds axis is treated
+/// as degenerate and the matching Width / Height field is disabled - a scale
+/// factor against a ~zero span would explode.
+constexpr double kMinimumSpanForScale = 1e-6;
+
+bool IsFiniteTransform(const Transform2d& parentFromEntity) {
+  return std::ranges::all_of(parentFromEntity.data, [](double v) { return std::isfinite(v); });
+}
+
+/// Maps the selected element's parent coordinates to document coordinates.
+Transform2d DocumentFromParentTransform(const svg::SVGElement& element) {
+  const std::optional<svg::SVGElement> parent = element.parentElement();
+  if (!parent.has_value() || !parent->isa<svg::SVGGraphicsElement>()) {
+    return Transform2d();
+  }
+  return parent->cast<svg::SVGGraphicsElement>().elementFromWorld();
+}
+
+/// Document-space translation that moves @p box's top-left edge on one axis to @p value.
+std::optional<Transform2d> PositionChange(const std::optional<Box2d>& box, double value,
+                                          bool horizontal) {
+  if (!box.has_value()) {
+    return std::nullopt;
+  }
+  return horizontal ? Transform2d::Translate(value - box->topLeft.x, 0.0)
+                    : Transform2d::Translate(0.0, value - box->topLeft.y);
+}
+
+/// Document-space scale about @p box's top-left corner that gives it @p value extent on one axis.
+std::optional<Transform2d> SizeChange(const std::optional<Box2d>& box, double value,
+                                      bool horizontal) {
+  if (!box.has_value()) {
+    return std::nullopt;
+  }
+  const double span = horizontal ? box->width() : box->height();
+  if (!(span > kMinimumSpanForScale) || !(value > kMinimumSpanForScale)) {
+    return std::nullopt;
+  }
+  const double factor = value / span;
+  return Transform2d::Translate(-box->topLeft) *
+         Transform2d::Scale(horizontal ? factor : 1.0, horizontal ? 1.0 : factor) *
+         Transform2d::Translate(box->topLeft);
+}
+
 bool IsAncestorOrSelf(const donner::svg::SVGElement& ancestor,
                       const donner::svg::SVGElement& node) {
   for (std::optional<donner::svg::SVGElement> current = node; current.has_value();
@@ -626,11 +670,6 @@ Lengthd FirstSelectedStrokeWidth(const EditorApp& app) {
 
   return selection.front().getComputedStyle().strokeWidth.get().value();
 }
-
-/// Below this document-space span (in user units), a bounds axis is treated
-/// as degenerate and the matching Width / Height field is disabled - a scale
-/// factor against a ~zero span would explode.
-constexpr double kMinimumSpanForScale = 1e-6;
 
 }  // namespace
 
@@ -2039,6 +2078,11 @@ void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField fie
   // scope would deadlock on field activation.
   state.startTransform = element.cast<svg::SVGGraphicsElement>().transform();
   state.startBounds = InspectorBounds(element);
+  state.documentFromParent = DocumentFromParentTransform(element);
+  if (const double determinant = state.documentFromParent.determinant();
+      std::isfinite(determinant) && determinant != 0.0) {
+    state.parentFromDocument = state.documentFromParent.inverse();
+  }
   // Verbatim attribute bytes so undo restores the user's original source
   // text instead of the canonical serializer output.
   state.sourceTransformAttributeValue = element.getAttribute("transform");
@@ -2074,71 +2118,65 @@ double SidebarPresenter::InitialTransformFieldValue(const TransformEditState& st
   UTILS_UNREACHABLE();
 }
 
-Transform2d SidebarPresenter::composeFieldTransform(const TransformEditState& state,
-                                                    double value) const {
-  // Deltas compose in document space and post-multiply onto the transform
-  // captured at activation, matching SelectTool's move/resize/rotate math
-  // (Donner transforms apply left-to-right, so `start * delta` applies the
-  // element's own transform first).
+std::optional<Transform2d> SidebarPresenter::DocumentFieldChange(const TransformEditState& state,
+                                                                 double value) {
   switch (state.field) {
-    case TransformField::PositionX: {
-      if (!state.startBounds.has_value()) {
-        return state.currentTransform;
-      }
-      return state.startTransform *
-             Transform2d::Translate(value - state.startBounds->topLeft.x, 0.0);
-    }
-    case TransformField::PositionY: {
-      if (!state.startBounds.has_value()) {
-        return state.currentTransform;
-      }
-      return state.startTransform *
-             Transform2d::Translate(0.0, value - state.startBounds->topLeft.y);
-    }
-    case TransformField::Width: {
-      if (!state.startBounds.has_value() ||
-          !(static_cast<double>(state.startBounds->width()) > kMinimumSpanForScale) ||
-          !(value > kMinimumSpanForScale)) {
-        return state.currentTransform;
-      }
-      const Box2d& box = *state.startBounds;
-      const double factor = value / box.width();
-      return state.startTransform * Transform2d::Translate(-box.topLeft) *
-             Transform2d::Scale(factor, 1.0) * Transform2d::Translate(box.topLeft);
-    }
-    case TransformField::Height: {
-      if (!state.startBounds.has_value() ||
-          !(static_cast<double>(state.startBounds->height()) > kMinimumSpanForScale) ||
-          !(value > kMinimumSpanForScale)) {
-        return state.currentTransform;
-      }
-      const Box2d& box = *state.startBounds;
-      const double factor = value / box.height();
-      return state.startTransform * Transform2d::Translate(-box.topLeft) *
-             Transform2d::Scale(1.0, factor) * Transform2d::Translate(box.topLeft);
-    }
+    case TransformField::PositionX: return PositionChange(state.startBounds, value, true);
+    case TransformField::PositionY: return PositionChange(state.startBounds, value, false);
+    case TransformField::Width: return SizeChange(state.startBounds, value, true);
+    case TransformField::Height: return SizeChange(state.startBounds, value, false);
     case TransformField::Rotation: {
+      // The field shows the local rotation; its delta is applied as a
+      // document-space rotation about the bounds center, which matches the
+      // local delta under any similarity parent (rotate, translate, uniform
+      // scale).
       if (!state.startDecomposed.has_value()) {
-        return state.currentTransform;
+        return std::nullopt;
       }
       const double deltaRadians =
           value * MathConstants<double>::kDegToRad - state.startDecomposed->rotationRadians;
       const Vector2d center =
           state.startBounds.has_value()
               ? (state.startBounds->topLeft + state.startBounds->bottomRight) * 0.5
-              : state.startTransform.translation();
-      return state.startTransform * Transform2d::Translate(-center) *
-             Transform2d::Rotate(deltaRadians) * Transform2d::Translate(center);
+              : state.documentFromParent.transformPosition(state.startTransform.translation());
+      return Transform2d::Translate(-center) * Transform2d::Rotate(deltaRadians) *
+             Transform2d::Translate(center);
     }
-    case TransformField::Matrix: {
-      Transform2d result(Transform2d::uninitialized);
-      for (int i = 0; i < 6; ++i) {
-        result.data[i] = state.matrixValues[static_cast<std::size_t>(i)];
-      }
-      return result;
-    }
+    case TransformField::Matrix: return std::nullopt;
   }
-  return state.currentTransform;
+  return std::nullopt;
+}
+
+Transform2d SidebarPresenter::composeFieldTransform(const TransformEditState& state,
+                                                    double value) const {
+  if (state.field == TransformField::Matrix) {
+    Transform2d parentFromEntity(Transform2d::uninitialized);
+    for (int i = 0; i < 6; ++i) {
+      parentFromEntity.data[i] = state.matrixValues[static_cast<std::size_t>(i)];
+    }
+    return parentFromEntity;
+  }
+
+  // The Position, Size and Rotation fields are document-space quantities, the
+  // same space as the bounds they show. Conjugate the document-space change
+  // through the parent's transform before applying it after the element's own
+  // transform (Donner transforms apply left to right), matching SelectTool:
+  // parentFromEntity' = parentFromEntity * documentFromParent * change *
+  // parentFromDocument.
+  const std::optional<Transform2d> documentFromStartDocument = DocumentFieldChange(state, value);
+  if (!documentFromStartDocument.has_value() || !state.parentFromDocument.has_value()) {
+    return state.currentTransform;
+  }
+  // A pure translation maps through the parent's linear part directly, so a
+  // Position edit writes an exact translate instead of a conjugated matrix
+  // carrying rounding noise in its linear terms.
+  const Transform2d parentFromEntity =
+      documentFromStartDocument->isTranslation()
+          ? state.startTransform * Transform2d::Translate(state.parentFromDocument->transformVector(
+                                       documentFromStartDocument->translation()))
+          : state.startTransform * state.documentFromParent * *documentFromStartDocument *
+                *state.parentFromDocument;
+  return IsFiniteTransform(parentFromEntity) ? parentFromEntity : state.currentTransform;
 }
 
 bool SidebarPresenter::applyTransformEdit(EditorApp& liveApp, double value) {

@@ -402,6 +402,10 @@ private:
     Transform2d currentTransform;          ///< Last transform queued via SetTransformCommand.
     std::optional<Box2d> startBounds;      ///< Document-space bounds at activation, if any.
     std::optional<DecomposedTransform> startDecomposed;  ///< Decomposition of `startTransform`.
+    /// Parent coordinates to document coordinates at activation.
+    Transform2d documentFromParent;
+    /// Inverse of `documentFromParent`, or nullopt when the parent is degenerate.
+    std::optional<Transform2d> parentFromDocument;
 
     /// Stable locator so undo / source writeback survive document identity changes.
     std::optional<AttributeWritebackTarget> writebackTarget;
@@ -516,6 +520,11 @@ private:
   /// Read the initial numeric value from the captured edit baseline.
   /// @param state Baseline and field being edited.
   static double InitialTransformFieldValue(const TransformEditState& state);
+
+  /// Document-space change that the Position, Size or Rotation field at @p value
+  /// applies to the edit baseline, or nullopt when it cannot apply one.
+  static std::optional<Transform2d> DocumentFieldChange(const TransformEditState& state,
+                                                        double value);
 
   /// Compose the new local transform for the in-progress edit at @p value.
   [[nodiscard]] Transform2d composeFieldTransform(const TransformEditState& state,
