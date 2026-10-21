@@ -3749,6 +3749,50 @@ TEST(EditorShellTest, ConstructsFromSvgPathAndKeepsInvalidSourceEditable) {
   EXPECT_EQ(EditorShellTestAccess::Source(invalidShell).getText(), "<svg><rect></svg>");
 }
 
+/// SVG source with more tree nodes than the parser accepts.
+std::string SvgOverTheElementLimit() {
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+  for (int i = 0; i < 8'300; ++i) {
+    source += R"(<rect width="1" height="1"/>)";
+  }
+  return source + "</svg>";
+}
+
+// A document that cannot be loaded must explain itself on the canvas, where the user is looking,
+// rather than only in the Problems list of the source pane, which is closed by default.
+TEST(EditorShellTest, DocumentThatFailsToLoadShowsANoticeOnTheCanvas) {
+  struct Case {
+    const char* name;
+    std::string source;
+  };
+  for (const Case& item : {Case{"over-element-limit", SvgOverTheElementLimit()},
+                           Case{"malformed", "<svg><rect></svg>"}}) {
+    SCOPED_TRACE(item.name);
+    gui::EditorWindow window(TestWindowOptions(
+        {.title = "Load failure", .initialWidth = 1280, .initialHeight = 700}, 1.0));
+    ASSERT_TRUE(window.valid());
+    EditorShell shell(window, OptionsWithSource(item.source, "broken.svg"));
+    ASSERT_FALSE(EditorShellTestAccess::App(shell).hasDocument());
+    ASSERT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+
+    const ImGuiWindow* notice = nullptr;
+    for (const tests::HangGuard guard; notice == nullptr && guard.active();) {
+      RunShellFrame(window, shell);
+      notice = ImGui::FindWindowByName("###canvas_load_failure");
+      if (notice != nullptr && !notice->WasActive) {
+        notice = nullptr;
+      }
+    }
+    ASSERT_NE(notice, nullptr) << "the canvas is blank with no explanation";
+    const ViewportState& viewport = shell.viewportForReadback();
+    const Box2d pane(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize);
+    const Box2d noticeRect =
+        Box2d::FromXYWH(notice->Pos.x, notice->Pos.y, notice->Size.x, notice->Size.y);
+    EXPECT_TRUE(pane.contains(noticeRect.topLeft) && pane.contains(noticeRect.bottomRight))
+        << "notice " << noticeRect << " is not inside the canvas " << pane;
+  }
+}
+
 TEST(EditorShellTest, OpenSaveAndRevertUpdateDocumentAndSourceState) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
