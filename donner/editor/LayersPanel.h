@@ -22,6 +22,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -225,6 +226,10 @@ public:
   /// Number of currently-visible rows (rows in the flat list).
   [[nodiscard]] std::size_t visibleRowCount() const { return model_.rows().size(); }
 
+  /// The muted message the panel shows in place of rows, or an empty string when the snapshot has
+  /// rows to show.
+  [[nodiscard]] std::string_view emptyStateMessage() const;
+
   /// Apply the selection logic for a click on the visible row at @p rowIndex.
   /// This is the exact logic the ImGui click path uses, factored out so it is
   /// unit-testable without an ImGui context.
@@ -378,6 +383,9 @@ private:
   /// Snapshot identity used to avoid repeating the O(N) model/style walk while
   /// an incremental thumbnail batch drains one row per host frame.
   bool snapshotPrepared_ = false;
+  /// Whether the app had a document at the last snapshot refresh, which tells an empty document's
+  /// Layers panel apart from no document at all.
+  bool snapshotHasDocument_ = false;
   bool modelRefreshRequested_ = true;
   std::uint64_t snapshotDocumentGeneration_ = 0;
   std::uint64_t snapshotDocumentFrameVersion_ = 0;

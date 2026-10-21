@@ -253,6 +253,7 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
   };
 
   const bool hasDocument = app.hasDocument();
+  snapshotHasDocument_ = hasDocument;
   const std::uint64_t documentGeneration = app.document().documentGeneration();
   const std::uint64_t documentFrameVersion = app.document().currentFrameVersion();
   std::vector<std::uint64_t> selectionStableIds;
@@ -572,6 +573,13 @@ bool LayersPanel::handleRowZOrder(EditorApp& app, std::size_t rowIndex,
   return reordered;
 }
 
+std::string_view LayersPanel::emptyStateMessage() const {
+  if (!model_.rows().empty()) {
+    return {};
+  }
+  return snapshotHasDocument_ ? "(empty document)" : "(no document)";
+}
+
 void LayersPanel::beginRename(std::uint64_t stableId) {
   if (const auto rowIndex = rowIndexForStableId(stableId); rowIndex.has_value()) {
     renamingStableId_ = stableId;
@@ -586,7 +594,8 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
                          const ThumbnailTextureSnapshotProvider& textureSnapshotProvider) {
   const std::vector<LayerTreeRow>& rows = model_.rows();
   if (rows.empty()) {
-    ImGui::TextDisabled("(no document)");
+    const std::string_view emptyMessage = emptyStateMessage();
+    ImGui::TextDisabled("%.*s", static_cast<int>(emptyMessage.size()), emptyMessage.data());
     return;
   }
 

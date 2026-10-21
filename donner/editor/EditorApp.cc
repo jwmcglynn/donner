@@ -5,8 +5,11 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/FormatNumber.h"
 #include "donner/base/PathOps.h"
 #include "donner/css/CSS.h"
@@ -1072,6 +1075,100 @@ DeletionPartition PartitionSelectionForDeletion(std::span<const svg::SVGElement>
   return partition;
 }
 
+/// The entity behind \p element, for membership sets.
+Entity EntityOf(const svg::SVGElement& element) {
+  return element.unsafeEntityHandle().entity();
+}
+
+/// Number of ancestors between \p element and the document root.
+int ElementDepth(const svg::SVGElement& element) {
+  int depth = 0;
+  for (std::optional<svg::SVGElement> parent = element.parentElement(); parent.has_value();
+       parent = parent->parentElement()) {
+    ++depth;
+  }
+  return depth;
+}
+
+/// The ancestors of \p elements below \p scopeRoot, each once, deepest first.
+std::vector<svg::SVGElement> AncestorsDeepestFirst(std::span<const svg::SVGElement> elements,
+                                                   const svg::SVGElement& scopeRoot) {
+  std::unordered_set<Entity> visited;
+  std::vector<std::pair<int, svg::SVGElement>> ancestors;
+  for (const svg::SVGElement& element : elements) {
+    for (std::optional<svg::SVGElement> parent = element.parentElement();
+         parent.has_value() && *parent != scopeRoot; parent = parent->parentElement()) {
+      if (!visited.insert(EntityOf(*parent)).second) {
+        break;  // The rest of this chain was already collected.
+      }
+      ancestors.emplace_back(ElementDepth(*parent), *parent);
+    }
+  }
+  std::stable_sort(ancestors.begin(), ancestors.end(),
+                   [](const auto& lhs, const auto& rhs) { return lhs.first > rhs.first; });
+
+  std::vector<svg::SVGElement> result;
+  result.reserve(ancestors.size());
+  for (const auto& [depth, ancestor] : ancestors) {
+    result.push_back(ancestor);
+  }
+  return result;
+}
+
+/// True when \p group is an unlocked `<g>` that has child elements, all of them in \p deleted.
+bool IsEmptiedGroup(const svg::SVGElement& group, const std::unordered_set<Entity>& deleted) {
+  if (group.tryType() != svg::ElementType::G || IsLocked(group) ||
+      !group.firstChild().has_value()) {
+    return false;
+  }
+  for (std::optional<svg::SVGElement> child = group.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (!deleted.contains(EntityOf(*child))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// True when an ancestor of \p element is in \p deleted.
+bool HasDeletedAncestor(const svg::SVGElement& element, const std::unordered_set<Entity>& deleted) {
+  for (std::optional<svg::SVGElement> parent = element.parentElement(); parent.has_value();
+       parent = parent->parentElement()) {
+    if (deleted.contains(EntityOf(*parent))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Extend \p deletable with the `<g>` groups that deleting it leaves with no child elements, below
+ * \p scopeRoot, so a delete never leaves an empty wrapper behind. A group that keeps any child,
+ * including a locked one, or that was already empty, stays. The result drops every element whose
+ * ancestor is also deleted: removing the ancestor removes it, and its own source removal would
+ * overlap the ancestor's.
+ */
+std::vector<svg::SVGElement> WithEmptiedGroups(std::vector<svg::SVGElement> deletable,
+                                               const svg::SVGElement& scopeRoot) {
+  std::unordered_set<Entity> deleted;
+  for (const svg::SVGElement& element : deletable) {
+    deleted.insert(EntityOf(element));
+  }
+
+  // Deepest first, so a nested group is decided before its parent.
+  for (const svg::SVGElement& group : AncestorsDeepestFirst(deletable, scopeRoot)) {
+    if (!deleted.contains(EntityOf(group)) && IsEmptiedGroup(group, deleted)) {
+      deleted.insert(EntityOf(group));
+      deletable.push_back(group);
+    }
+  }
+
+  std::erase_if(deletable, [&deleted](const svg::SVGElement& element) {
+    return HasDeletedAncestor(element, deleted);
+  });
+  return deletable;
+}
+
 }  // namespace
 
 EditorApp::EditorApp() = default;
@@ -1297,11 +1394,13 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
   // out of the source text.
   DeletionPartition partition =
       PartitionSelectionForDeletion(selection_, document_.document().svgElement());
-  std::vector<svg::SVGElement> selected = std::move(partition.deletable);
   std::vector<svg::SVGElement> lockedSelection = std::move(partition.kept);
-  if (selected.empty()) {
+  if (partition.deletable.empty()) {
     return false;
   }
+  const std::size_t deletedObjectCount = partition.deletable.size();
+  std::vector<svg::SVGElement> selected = WithEmptiedGroups(
+      std::move(partition.deletable), editingScope_.value_or(document_.document().svgElement()));
   std::vector<std::optional<AttributeWritebackTarget>> writebackTargets;
   writebackTargets.reserve(selected.size());
 
@@ -1322,7 +1421,7 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
   const ApplyPatchesResult patchResult = applyPatches(sourceAfterDelete, removePatches);
   if (!removePatches.empty() && patchResult.applied == removePatches.size() &&
       patchResult.rejectedBounds == 0 && sourceAfterDelete != currentSourceText) {
-    const char* label = selected.size() == 1u ? "Delete element" : "Delete elements";
+    const char* label = deletedObjectCount == 1u ? "Delete element" : "Delete elements";
     undoTimeline_.record(label, captureDocumentSourceSnapshot(selected.front(), currentSourceText),
                          captureDocumentSourceSnapshot(selected.front(), sourceAfterDelete));
   }
