@@ -1050,6 +1050,8 @@ donner_cc_test(
         "//donner/editor:viewport_svg_export",
         "//donner/svg",
         "//donner/svg/parser",
+        "//donner/svg/components",
+        "//donner/svg/components/resources:components",
         "//donner/svg/renderer",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "@com_google_gtest//:gtest_main",
