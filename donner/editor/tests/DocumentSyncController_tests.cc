@@ -5,9 +5,12 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Transform.h"
@@ -813,6 +816,92 @@ TEST_F(DocumentSyncControllerTest, DeleteSelectionSkipsLockedElementsInSourceToo
   EXPECT_NE(textEditor.getText().find("id=\"locked\""), std::string::npos);
   ASSERT_EQ(app.selectedElements().size(), 1u);
   EXPECT_TRUE(IsLocked(app.selectedElements().front()));
+}
+
+TEST_F(DocumentSyncControllerTest, SelectAllDeleteRemovesTheGroupsItEmpties) {
+  // Select All selects shapes, not groups. Deleting it must not leave the groups behind as empty
+  // wrappers, including a nested group and a pasted-copy wrapper.
+  constexpr std::string_view kGroupedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180">
+  <rect id="bg" width="260" height="180" fill="#f7f8fa"/>
+  <g id="grp" transform="translate(170 95) rotate(15)">
+    <rect id="gr" width="50" height="40" fill="#8a4fff"/>
+    <g id="nested"><circle id="nc" r="5"/></g>
+  </g>
+  <g id="pasted"><rect id="pr" width="5" height="5"/></g>
+</svg>)svg";
+
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kGroupedSvg)};
+  ASSERT_TRUE(app.loadFromString(kGroupedSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kGroupedSvg);
+  textEditor.setText(kGroupedSvg);
+  textEditor.resetTextChanged();
+  const std::uint64_t generationBefore = app.document().documentGeneration();
+
+  app.setSelection(app.selectableElements());
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(4));
+  ASSERT_TRUE(app.deleteSelectionWithUndo(textEditor.getText()));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.document().lastFlushResult().replacedDocument);
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  svg::SVGDocument& document = app.document().document();
+  EXPECT_EQ(textEditor.getText(), std::string(document.source()));
+  EXPECT_THAT(textEditor.getText(), testing::Not(testing::HasSubstr("<g")));
+  EXPECT_EQ(document.svgElement().firstChild(), std::nullopt) << textEditor.getText();
+  EXPECT_EQ(app.document().documentGeneration(), generationBefore)
+      << "the delete must stay incremental, without a document reparse";
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+  EXPECT_EQ(textEditor.getText(), std::string(kGroupedSvg));
+  EXPECT_TRUE(app.document().document().querySelector("#nested").has_value());
+  EXPECT_TRUE(app.document().document().querySelector("#pr").has_value());
+}
+
+TEST_F(DocumentSyncControllerTest, DeleteKeepsGroupsWithRemainingOrLockedChildren) {
+  constexpr std::string_view kGroupedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <g id="partial"><rect id="a" width="5" height="5"/><rect id="b" width="5" height="5"/></g>
+  <g id="already-empty"></g>
+  <g id="guarded"><rect id="locked" data-donner-locked="true" width="5" height="5"/><rect id="free" width="5" height="5"/></g>
+</svg>)svg";
+
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kGroupedSvg)};
+  ASSERT_TRUE(app.loadFromString(kGroupedSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kGroupedSvg);
+  textEditor.setText(kGroupedSvg);
+  textEditor.resetTextChanged();
+
+  svg::SVGDocument& document = app.document().document();
+  std::optional<svg::SVGElement> a = document.querySelector("#a");
+  std::optional<svg::SVGElement> locked = document.querySelector("#locked");
+  std::optional<svg::SVGElement> free = document.querySelector("#free");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(locked.has_value());
+  ASSERT_TRUE(free.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*a, *locked, *free});
+  ASSERT_TRUE(app.deleteSelectionWithUndo(textEditor.getText()));
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_EQ(textEditor.getText(), std::string(document.source()));
+  EXPECT_FALSE(document.querySelector("#a").has_value());
+  EXPECT_FALSE(document.querySelector("#free").has_value());
+  EXPECT_TRUE(document.querySelector("#partial").has_value()) << "still holds #b";
+  EXPECT_TRUE(document.querySelector("#already-empty").has_value())
+      << "a group the delete did not empty is not the delete's to remove";
+  EXPECT_TRUE(document.querySelector("#guarded").has_value()) << "still holds the locked rect";
+  EXPECT_TRUE(document.querySelector("#locked").has_value());
 }
 
 TEST_F(DocumentSyncControllerTest, SetTextContentMirrorsIntoSourceText) {

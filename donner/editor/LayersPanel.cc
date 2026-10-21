@@ -572,6 +572,13 @@ bool LayersPanel::handleRowZOrder(EditorApp& app, std::size_t rowIndex,
   return reordered;
 }
 
+std::string_view LayersPanel::emptyStateMessage() const {
+  if (!model_.rows().empty()) {
+    return {};
+  }
+  return "(no document)";
+}
+
 void LayersPanel::beginRename(std::uint64_t stableId) {
   if (const auto rowIndex = rowIndexForStableId(stableId); rowIndex.has_value()) {
     renamingStableId_ = stableId;
@@ -586,7 +593,8 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
                          const ThumbnailTextureSnapshotProvider& textureSnapshotProvider) {
   const std::vector<LayerTreeRow>& rows = model_.rows();
   if (rows.empty()) {
-    ImGui::TextDisabled("(no document)");
+    const std::string emptyMessage(emptyStateMessage());
+    ImGui::TextDisabled("%s", emptyMessage.c_str());
     return;
   }
 

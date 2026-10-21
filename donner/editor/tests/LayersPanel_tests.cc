@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -228,6 +229,29 @@ TEST(LayersPanelTest, RefreshSnapshotWithoutDocumentClearsRowsAndThumbnailState)
   EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, 0u);
   EXPECT_EQ(panel.thumbnailRefreshStats().skippedForCanvasInvalidationCount, 0u);
   EXPECT_FALSE(panel.hasThumbnailOrSwatch(1u));
+}
+
+TEST(LayersPanelTest, EmptyStateDistinguishesAnEmptyDocumentFromNoDocument) {
+  const auto emptyStateFor = [](const EditorApp& app) {
+    LayersPanel panel;
+    panel.refreshSnapshot(app);
+    return std::string(panel.emptyStateMessage());
+  };
+  const auto loaded = [](std::string_view svg) {
+    auto app = std::make_unique<EditorApp>();
+    EXPECT_TRUE(app->loadFromString(svg)) << svg;
+    return app;
+  };
+
+  EXPECT_EQ(emptyStateFor(EditorApp()), "(no document)");
+  // Open documents with nothing drawable, for example after Select All and Delete.
+  EXPECT_EQ(emptyStateFor(*loaded(
+                R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"></svg>)")),
+            "(empty document)");
+  EXPECT_EQ(
+      emptyStateFor(*loaded(R"(<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"/>)")),
+      "(empty document)");
+  EXPECT_EQ(emptyStateFor(*loaded(kSvg)), "");
 }
 
 TEST(LayersPanelTest, BeginRenameFindsVisibleRowsAndIgnoresMissingRows) {
