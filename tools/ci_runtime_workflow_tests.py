@@ -192,10 +192,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("--nohome_rc --nosystem_rc", step)
         self.assertIn("--local_test_jobs=1 --test_tag_filters=", step)
         self.assertIn(
-            "--test_timeout=60 //donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic",
+            "--test_timeout=60 //tools/ci:chromium_context_diagnostic",
             step,
         )
-        self.assertIn("//donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic", step)
+        suite = _rule_text(_repository_text("tools/ci/BUILD.bazel"),
+                           "chromium_context_diagnostic")
+        self.assertIn('tags = ["manual"]', suite)
+        self.assertIn(
+            'tests = ["//donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic"]',
+            suite,
+        )
         self.assertLess(job.index("name: Test (Geode editor lane)"),
                         job.index("name: Diagnose Chromium context lifecycle"))
 

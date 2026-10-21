@@ -14,6 +14,12 @@ exports_files([
 
 # Manual suites select existing tests without adding new wildcard configurations.
 test_suite(
+    name = "chromium_context_diagnostic",
+    tags = ["manual"],
+    tests = ["//donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic"],
+)
+
+test_suite(
     name = "linux_wgpu_resvg_reference",
     tags = ["manual"],
     tests = [

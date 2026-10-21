@@ -2270,7 +2270,7 @@ jobs:
             --local_test_jobs=1 --test_tag_filters= \
             --build_event_json_file="$RUNNER_TEMP/browser-context-diagnostic.bep.json" \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            --test_timeout=60 //donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic
+            --test_timeout=60 //tools/ci:chromium_context_diagnostic
 
       - name: Upload Bazel test failure artifacts
         if: failure() && (steps.metal_compiler.outcome == 'failure' || steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure' || steps.browser_context_diagnostic.outcome == 'failure')
