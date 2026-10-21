@@ -2,6 +2,7 @@
 /// @file
 
 #include <optional>
+#include <ostream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -221,6 +222,13 @@ struct DocumentLoadFailureNotice {
   /// Compare all members for value equality.
   /// @param other Value to compare.
   bool operator==(const DocumentLoadFailureNotice& other) const = default;
+
+  /// Print both fields so a failed comparison shows which one changed.
+  /// @param os Output stream.
+  /// @param notice Notice to print.
+  friend std::ostream& operator<<(std::ostream& os, const DocumentLoadFailureNotice& notice) {
+    return os << "{title: \"" << notice.title << "\", detail: \"" << notice.detail << "\"}";
+  }
 };
 
 /// Explain a fatal parse diagnostic for the canvas notice.
