@@ -867,6 +867,42 @@ TEST_F(TextFormatBarPresenterInputTest, FreeTextFamilyCommitEmitsSetFontFamily) 
   EXPECT_EQ(actions.fontFamily, "Fira");
 }
 
+TEST_F(TextFormatBarPresenterInputTest, EscapedFamilySeedRemainsWholeWhenEdited) {
+  FormatBarState state = MakeState();
+  state.fontFamily = "\"";
+  for (int i = 0; i < 180; ++i) {
+    state.fontFamily += "\\\\";
+  }
+  state.fontFamily += "\"";
+  Frame(state);
+  const ImVec2 field(FamilyInputLeft() + kFamilyInputWidth * 0.5f, RowCenterY());
+  Click(state, field);
+  ImGui::GetIO().AddInputCharacter('X');
+  Frame(state, field);
+  const auto actions = Click(state, ImVec2(900, 400));
+  ASSERT_TRUE(actions.setFontFamily);
+  std::string edited = actions.fontFamily;
+  const auto inserted = edited.find('X');
+  ASSERT_NE(inserted, std::string::npos);
+  edited.erase(inserted, 1);
+  EXPECT_THAT(edited, testing::Eq(state.fontFamily));
+}
+
+TEST_F(TextFormatBarPresenterInputTest, OversizedFamilySeedCannotCommitTruncatedText) {
+  FormatBarState state = MakeState();
+  state.fontFamily = "\"" + std::string(2000, 'a') + "\"";
+  Frame(state);
+  const ImVec2 field(FamilyInputLeft() + kFamilyInputWidth * 0.5f, RowCenterY());
+  Click(state, field);
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiKey_Backspace, true);
+  Frame(state, field);
+  io.AddKeyEvent(ImGuiKey_Backspace, false);
+  Frame(state, field);
+  const auto actions = Click(state, ImVec2(900, 400));
+  EXPECT_FALSE(actions.setFontFamily);
+}
+
 TEST_F(TextFormatBarPresenterInputTest, ExternalFamilyChangeReseedsFreeTextBuffer) {
   FormatBarState state = MakeState();
   state.fontFamily = "Alpha";
