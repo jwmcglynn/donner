@@ -256,13 +256,17 @@ no pull request may write an entry that such a run reads. Two keys enforce this:
 - Trusted maintainer pull requests use `BUILDBUDDY_PR_API_KEY` from the `buildbuddy-pr`
   environment. That key belongs to a separate BuildBuddy organization, so it can neither read
   nor write main's entries. Pull requests still reuse each other's results, including between
-  the hosted and self-hosted macOS lanes.
+  the hosted and self-hosted macOS lanes. Those results are only as trustworthy as the least
+  trusted run that can bind `buildbuddy-pr`, which is fine for pull request feedback and is never
+  release or qualification evidence.
 
 The action also gives each writer class its own `--remote_instance_name` prefix: `main-` for main
 runs and Renovate's read-only key, `pr-` for pull requests. Instance names are chosen by the
 client, so they are not a boundary against code that holds a key; the separate keys are. The
-prefixes keep the two classes apart in logs, and `main-` moved main away from the partitions that
-pull requests wrote before the split. Pull requests read main's results in the safe direction
+prefixes keep the two classes apart in logs and take main off the partitions that pull requests
+wrote with the shared key. Anyone who held that key can still have written any instance name,
+so after the split main's key is rotated and main's organization cache is purged, or main moves
+to a fresh organization (see Activation). Pull requests read main's results in the safe direction
 through the disk-cache snapshots that only `main` saves (below), never the reverse.
 
 **How it works.** Before its first Bazel command each covered job runs the
@@ -317,8 +321,8 @@ for a `main` push, schedule or dispatch run, `buildbuddy-pr` only for a trusted 
 request, and no environment otherwise. A lane that serves both passes both secrets to one step,
 and the bound environment delivers only one of them; the action fails the job if main's key
 reaches any run but main's, or the pull request key any run but a trusted pull request's. Lanes
-that never run on `main` (the self-hosted macOS lanes and the Geode ASan pull-request lane) do
-not reference main's key at all. Renovate and untrusted runs bind neither environment.
+that never run on `main` (the self-hosted macOS lanes, the hosted macOS browser subset and the
+Geode ASan pull-request lane) do not reference main's key at all. Renovate and untrusted runs bind neither environment.
 `deployment: false` uses the environment's secrets without creating deployment records. In
 `main.yml` the trust outputs come from the `gatekeeper` job; the Editor WASM and Geode ASan
 workflows run a small `trust` job first, because an environment is chosen before a job's steps run.
@@ -388,19 +392,22 @@ saved. Other runs print what eviction would keep without deleting anything.
 2. Create two API keys. The read-write key needs cache write access (BuildBuddy's "Read+Write"
    key type). The read-only key must have no cache write access ("Read-only"). Neither needs
    organization-admin rights. Linux builds also need Remote Execution enabled for the organization
-   and the read-write key. Where BuildBuddy controls execution access per key, leave it off the
-   read-only key, which is treated as public.
+   and the read-write key. The read-only key must not be able to start remote execution: it is
+   treated as public, and executor-written results land in main's organization under whatever
+   instance name the client names.
 3. Create the GitHub Environment `buildbuddy-write` (Settings -> Environments) with no
    reviewers, and add the read-write key to it as the environment secret `BUILDBUDDY_API_KEY`.
    Do not add a repository secret with that name. Restrict its deployment branches to `main`:
    only main runs bind it, so the policy blocks nothing they need, and GitHub then refuses the
-   key to any run from another ref even if a pull request edits a workflow to bind it.
+   key to any run from another ref even if a pull request edits a workflow to bind it. Until this
+   policy is set, the workflow expressions are the only control. Confirm it by checking that a run
+   from another ref that binds the environment is refused.
 4. For pull request writers, create a second BuildBuddy organization with its own read-write key
    (with Remote Execution enabled, for the Linux lane). Create the GitHub Environment
    `buildbuddy-pr` with no reviewers and add that key as its secret `BUILDBUDDY_PR_API_KEY`.
    Never reuse main's key or any key of main's organization here: a key of main's organization can
    write main's entries under any instance name. Without this secret, trusted pull requests build
-   without the remote cache.
+   without the remote cache, and the PR-to-main coverage contract fails their cloud-build check.
 5. Add the read-only key as the repository secret `BUILDBUDDY_API_KEY_READONLY` (Settings ->
    Secrets and variables -> Actions). No code change is needed; the next hosted run picks them up.
 

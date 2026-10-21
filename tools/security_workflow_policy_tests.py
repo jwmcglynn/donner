@@ -61,7 +61,7 @@ SECRET_USES = {
     (".github/workflows/main.yml", "macos", "Configure BuildBuddy read-only cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy remote cache", None,
-     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY", "BUILDBUDDY_PR_API_KEY"},
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_PR_API_KEY"},
     (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy read-only cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-self-hosted", "Configure BuildBuddy remote cache", None,
@@ -655,8 +655,8 @@ CITED_RUNS = tuple((event, "refs/heads/main") for event in ("push", "workflow_di
 PULL_REQUEST_RUNS = (("pull_request", "refs/pull/1/merge"), ("pull_request", "refs/heads/main"))
 TRUST_OUTPUT_VALUES = tuple({"trusted_pr": trusted, "renovate_pr": renovate}
                             for trusted in ("true", "false") for renovate in ("true", "false"))
-UNREVIEWED_REMOTE_CACHE = re.compile(r"--remote_(?:cache|executor)=\S|remote_instance_name|"
-                                     r"buildbuddy-cache")
+UNREVIEWED_REMOTE_CACHE = re.compile(r"--remote_(?:cache|executor)\b|--bes_backend\b|"
+                                     r"remote_instance_name|buildbuddy-cache")
 
 
 def _cited_binding_violations(where, workflow, job):
@@ -3621,9 +3621,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_pull_requests_never_write_or_reach_main_buildbuddy_entries(self):
         """Exhaustively: every run the action configures for a pull request uses the pull request
-        key under a `pr-` instance, or only reads; every main run writes only `main-`. So no main
-        build can accept an entry a pull request wrote, while pull requests still reuse their own.
-        """
+        key under a `pr-` instance, or only reads; every main run writes only `main-`.
+
+        This pins the action's choice of key and instance name. The boundary itself is that the
+        pull request key belongs to a separate BuildBuddy organization, which no test here can
+        check; docs/building.md makes it an activation requirement."""
         configured = set()
         with tempfile.TemporaryDirectory() as directory:
             for index, combination in enumerate(itertools.product(*(
@@ -4233,7 +4235,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         readers = {_step_key(step, "name", 8): _secret_reads(step) for step in _steps(job)
                    if _secret_reads(step)}
         self.assertEqual(readers, {
-            "Configure BuildBuddy remote cache": {"BUILDBUDDY_API_KEY", "BUILDBUDDY_PR_API_KEY"},
+            "Configure BuildBuddy remote cache": {"BUILDBUDDY_PR_API_KEY"},
             "Configure BuildBuddy read-only cache": {"BUILDBUDDY_API_KEY_READONLY"},
         })
         self.assertEqual(_secret_reads(job.split("    steps:\n", 1)[0]), set())
