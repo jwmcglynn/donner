@@ -1523,6 +1523,10 @@ public:
     return shell.selectionSizeChipScreenRect(label, anchor);
   }
 
+  static ImFont* SelectionChipFont(EditorShell& shell) {
+    return shell.uiFontBold_ != nullptr ? shell.uiFontBold_ : ImGui::GetFont();
+  }
+
   static std::optional<Box2d> ReferenceHighlightChipScreenRect(EditorShell& shell,
                                                                std::string_view label) {
     return shell.referenceHighlightChipScreenRect(label);
@@ -6182,6 +6186,100 @@ TEST(EditorShellTest, DocumentSpaceReplayInputRoutesPenPressReleaseAndHover) {
   EXPECT_TRUE(EditorShellTestAccess::PenToolIsDrafting(shell));
 }
 
+TEST(EditorShellTest, PenPreviewTracksLatestPointerBeforeBusyRendererPublishes) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(
+      window,
+      OptionsWithSource(
+          R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="render-demand" x="-100" width="1" height="1"/></svg>)"));
+  ASSERT_TRUE(shell.valid());
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  const auto input = [&](Vector2d point, bool down, bool press, bool release) {
+    shell.queueDocumentSpaceReplayInputForTesting(
+        EditorShellDocumentReplayInput{.documentPoint = point,
+                                       .leftMouseDown = down,
+                                       .leftMousePressed = press,
+                                       .leftMouseReleased = release});
+    EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  };
+  input({10, 20}, true, true, false);
+  input({10, 20}, false, false, true);
+  input({50, 20}, true, true, false);
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  for (const tests::HangGuard guard; guard.active();) {
+    RunShellFrame(window, shell);
+    if (!EditorShellTestAccess::RendererBusy(shell) && !app.document().hasPendingMutations() &&
+        EditorShellTestAccess::DisplayedDocVersion(shell) == app.document().currentFrameVersion()) {
+      break;
+    }
+  }
+  const auto oldFrame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  ASSERT_NE(oldFrame, nullptr);
+  ASSERT_TRUE(oldFrame->replacementPaint().has_value());
+  using Barrier = AsyncRenderer::CompletionBarrier;
+  struct ReleaseBarrier {
+    ~ReleaseBarrier() { (void)AsyncRenderer::releaseCompletionBarrierForTesting(); }
+  } releaseBarrier;
+  EXPECT_EQ(AsyncRenderer::requestCompletionBarrierForTesting(), Barrier::Off);
+  AsyncRenderer::armRequestedCompletionBarrierForTesting();
+  // Change an off-canvas sibling, preserving the selected path's captured paint and geometry.
+  app.applyMutation(EditorCommand::SetAttributeCommand(
+      *app.document().document().querySelector("#render-demand"), "x", "-101"));
+  ASSERT_TRUE(app.flushFrame());
+  AsyncRenderer& renderer =
+      EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(0));
+  for (const tests::HangGuard guard;
+       AsyncRenderer::completionBarrierForTesting() != Barrier::Holding && guard.active();) {
+    std::this_thread::sleep_for(tests::kPollInterval);
+  }
+  ASSERT_EQ(AsyncRenderer::completionBarrierForTesting(), Barrier::Holding);
+  ASSERT_TRUE(renderer.isBusy());
+  const auto began = std::chrono::steady_clock::now();
+  input({60, 40}, true, false, false);
+  input({80, 60}, true, false, false);
+  RunShellFrame(window, shell);
+  RecordProperty("latest_pointer_frame_us", std::chrono::duration_cast<std::chrono::microseconds>(
+                                                std::chrono::steady_clock::now() - began)
+                                                .count());
+  ASSERT_TRUE(renderer.isBusy()) << "Latest pointer must be presented before the worker publishes";
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  ASSERT_NE(frame, nullptr);
+  ASSERT_TRUE(frame->replacementPaint().has_value());
+  const Path latest = PathBuilder().moveTo({10, 20}).curveTo({10, 20}, {20, -20}, {50, 20}).build();
+  EXPECT_EQ(frame->replacementPaint()->livePathPreview->pathDoc, latest);
+  EXPECT_NE(frame->replacementPaint()->livePathPreview->pathDoc,
+            oldFrame->replacementPaint()->livePathPreview->pathDoc);
+  window.beginFrame();
+  shell.runFrame();
+  const auto screenshot = window.endFrameAndReadPixels();
+  ASSERT_FALSE(screenshot.empty());
+  if (const char* output = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const auto file = std::filesystem::path(output) / "pen_latest_pointer_while_busy.png";
+    EXPECT_TRUE(svg::RendererImageIO::writeRgbaPixelsToPngFile(
+        file.string().c_str(), screenshot.pixels, screenshot.dimensions.x, screenshot.dimensions.y,
+        screenshot.rowBytes / 4u));
+  }
+  input({90, 60}, false, false, true);
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  EXPECT_EQ(AsyncRenderer::releaseCompletionBarrierForTesting(), Barrier::Holding);
+  ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                           std::chrono::seconds(2)));
+  for (const tests::HangGuard guard; guard.active();) {
+    RunShellFrame(window, shell);
+    if (!EditorShellTestAccess::RendererBusy(shell) && !app.document().hasPendingMutations() &&
+        !EditorShellTestAccess::PenToolIsDraggingAnchor(shell) &&
+        EditorShellTestAccess::DisplayedDocVersion(shell) == app.document().currentFrameVersion()) {
+      break;
+    }
+  }
+  EXPECT_FALSE(EditorShellTestAccess::PenToolIsDraggingAnchor(shell));
+  EXPECT_THAT(
+      std::string(app.document().document().querySelector("path")->getAttribute("d")->str()),
+      testing::HasSubstr("10 -20 50 20"));
+}
+
 TEST(EditorShellTest, SourcePaneVisibilityRevealAndHoverRangesUseCurrentDocumentSource) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -7505,6 +7603,132 @@ TEST(EditorShellTest, ReferenceHighlightChipRendersHoverAndClickStates) {
                                     /*mouseDown=*/false);
   EXPECT_FALSE(EditorShellTestAccess::ReferenceHighlightChipHovered(shell));
   EXPECT_TRUE(EditorShellTestAccess::ReferenceHighlightActive(shell));
+}
+
+namespace {
+
+bool DrawDataContainsPositionChip(EditorShell& shell, const Box2d& documentBounds,
+                                  const ViewportState& viewport) {
+  const std::string label = internal::SelectionPositionChipLabel(documentBounds);
+  const auto rect = EditorShellTestAccess::SelectionSizeChipScreenRect(
+      shell, label, viewport.documentToScreen(documentBounds.topLeft));
+  if (!rect.has_value() || ImGui::GetDrawData() == nullptr) {
+    return false;
+  }
+  ImFont* font = EditorShellTestAccess::SelectionChipFont(shell);
+  ImDrawList expected(ImGui::GetDrawListSharedData());
+  expected._ResetForNewFrame();
+  expected.PushClipRectFullScreen();
+  expected.PushTextureID(font->ContainerAtlas->TexID);
+  expected.AddText(font, std::max(13.0f, ImGui::GetFontSize() - 2.0f),
+                   ImVec2(static_cast<float>(rect->topLeft.x) + 6.0f,
+                          static_cast<float>(rect->topLeft.y) + 3.0f),
+                   IM_COL32_WHITE, label.c_str());
+  expected.PopTextureID();
+  expected.PopClipRect();
+  if (expected.VtxBuffer.empty()) {
+    return false;
+  }
+  const auto sameGlyphVertex = [](const ImDrawVert& actual, const ImDrawVert& reference) {
+    return actual.pos.x == reference.pos.x && actual.pos.y == reference.pos.y &&
+           actual.uv.x == reference.uv.x && actual.uv.y == reference.uv.y;
+  };
+  const ImDrawData& actual = *ImGui::GetDrawData();
+  for (int index = 0; index < actual.CmdListsCount; ++index) {
+    const auto& vertices = actual.CmdLists[index]->VtxBuffer;
+    if (std::search(vertices.begin(), vertices.end(), expected.VtxBuffer.begin(),
+                    expected.VtxBuffer.end(), sameGlyphVertex) != vertices.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST(EditorShellTest, TextMovePositionChipTracksPresentedBoundsWhileWorkerIsHeld) {
+  gui::EditorWindow window(TestWindowOptions({
+      .title = "Text move coordinate chip",
+      .initialWidth = 960,
+      .initialHeight = 720,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  }));
+  ASSERT_THAT(window.valid(), testing::Eq(true));
+  EditorShell shell(window, OptionsWithSource(
+                                R"(<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320">
+        <rect width="480" height="320" fill="white"/>
+        <text id="target" x="90" y="130" font-size="30">Move this text</text>
+      </svg>)"));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+  RunFramesUntilDisplayedSelectionBounds(window, shell);
+  auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  ASSERT_NE(frame, nullptr);
+  ASSERT_THAT(frame->selectionBounds(), testing::Not(testing::IsEmpty()));
+  const Box2d originalBounds = CombinedSelectionBounds(frame->selectionBounds());
+  const Vector2d start = (originalBounds.topLeft + originalBounds.bottomRight) * 0.5;
+  const auto capture = [&](const Vector2d& point, bool pressed, std::string_view name) {
+    shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+        .documentPoint = point, .leftMouseDown = true, .leftMousePressed = pressed});
+    window.beginFrame();
+    shell.runFrame();
+    const svg::RendererBitmap bitmap = window.endFrameAndReadPixels();
+    const char* directory = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+    if (directory != nullptr && !name.empty()) {
+      const auto path = std::filesystem::path(directory) / name;
+      EXPECT_THAT(svg::RendererImageIO::writeRgbaPixelsToPngFile(
+                      path.string().c_str(), bitmap.pixels, bitmap.dimensions.x,
+                      bitmap.dimensions.y, bitmap.rowBytes / 4u),
+                  testing::Eq(true));
+    }
+  };
+  EditorShellTestAccess::HoldRenderResultsForPolls(shell, 64);
+  capture(start, true, {});
+  bool sawRetainedRaster = false;
+  for (const Vector2d delta : {Vector2d(20.0, 12.0), Vector2d(40.0, 24.0), Vector2d(60.0, 36.0)}) {
+    capture(start + delta, false, "text-drag-held.png");
+    frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+    ASSERT_NE(frame, nullptr);
+    ASSERT_THAT(frame->selectionBounds(), testing::Not(testing::IsEmpty()));
+    ASSERT_THAT(shell.layerInspectorStatusForReadback().activeDragPreview,
+                testing::Optional(testing::_));
+    sawRetainedRaster |= !frame->followsPointer();
+    const Box2d bounds = CombinedSelectionBounds(frame->selectionBounds());
+    EXPECT_THAT(DrawDataContainsPositionChip(shell, bounds, frame->viewport()), testing::Eq(true))
+        << "The actual chip glyphs must show " << internal::SelectionPositionChipLabel(bounds)
+        << " at the same bounds as the presented text; followsPointer=" << frame->followsPointer();
+  }
+  EXPECT_THAT(sawRetainedRaster, testing::Eq(true))
+      << "The regression must exercise held text pixels, rather than only an affine tile preview";
+  EXPECT_GT(shell.asyncRendererForReplay().replayResultHoldPollCountForTesting(), 0u)
+      << "A real worker result must be held during the observed motion frames";
+  shell.asyncRendererForReplay().releaseReplayResultHoldForTesting();
+  bool advanced = false;
+  for (const tests::HangGuard guard; guard.active();) {
+    capture(start + Vector2d(60.0, 36.0), false, {});
+    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline())) {
+      break;
+    }
+    frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+    if (frame != nullptr && !frame->selectionBounds().empty()) {
+      const Box2d bounds = CombinedSelectionBounds(frame->selectionBounds());
+      if (bounds.topLeft.x > originalBounds.topLeft.x + 50.0) {
+        capture(start + Vector2d(60.0, 36.0), false, "text-drag-accepted.png");
+        frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+        const Box2d acceptedBounds = CombinedSelectionBounds(frame->selectionBounds());
+        EXPECT_THAT(DrawDataContainsPositionChip(shell, acceptedBounds, frame->viewport()),
+                    testing::Eq(true));
+        advanced = true;
+        break;
+      }
+    }
+  }
+  EXPECT_THAT(advanced, testing::Eq(true))
+      << "Accepted text pixels must advance the chip coordinates";
 }
 
 TEST(EditorShellTest, SelectionChipBoundsUseActiveGesturePreviews) {
