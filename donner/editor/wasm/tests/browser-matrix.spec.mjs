@@ -1940,3 +1940,23 @@ test("Playwright evidence upload retries only transport while retaining terminal
     assert.equal(failed, scenario.failed, JSON.stringify(scenario));
   }
 });
+
+test("Chromium context diagnostics stay bounded, manual, and independent of the editor", () => {
+  const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const diagnostic = buildFile.match(
+    /js_test\(\n    name = "chromium_context_lifecycle_diagnostic",([\s\S]*?)\n\)/,
+  );
+  assert.ok(diagnostic, "expected the explicit browser-only diagnostic target");
+  assert.match(diagnostic[1], /timeout = "short"/);
+  assert.match(diagnostic[1], /args = \["--contexts=40"\]/);
+  assert.match(diagnostic[1], /tags = \["manual", "launches-browser", "no-sandbox"\]/);
+  assert.doesNotMatch(diagnostic[1], /requires_desktop_session|wasm_web_package/);
+  for (const input of ["playwright.config.js", "test-timing.cjs", "prepare-browser-archives.js"]) {
+    assert.ok(diagnostic[1].includes(`"${input}"`), `${input} must be a declared runfile`);
+  }
+  const source = readFileSync(path.join(testDirectory, "chromium-context-lifecycle-diagnostic.cjs"), "utf8");
+  assert.match(source, /channel: baseConfig\.use\.channel/);
+  assert.match(source, /headless: baseConfig\.use\.headless/);
+  assert.match(source, /\.\.\.baseConfig\.use\.launchOptions/);
+  assert.doesNotMatch(source, /DONNER_WASM_PACKAGE|error\.stack|error\.message|process\.getuid/);
+});

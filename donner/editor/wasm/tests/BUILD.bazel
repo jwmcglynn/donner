@@ -1226,3 +1226,32 @@ js_test(
     entry_point = "chromium-launch-env.spec.mjs",
     node_options = ["--test"],
 )
+
+# Explicit browser-only lifecycle diagnostics; no editor package is loaded.
+js_test(
+    name = "chromium_context_lifecycle_diagnostic",
+    size = "medium",
+    timeout = "short",
+    args = ["--contexts=40"],
+    copy_data_to_bin = False,
+    entry_point = "chromium-context-lifecycle-diagnostic.cjs",
+    data = [
+        "chromium-launch-env.cjs",
+        "playwright.config.js",
+        "prepare-browser-archives.js",
+        "test-timing.cjs",
+        ":node_modules/@playwright/test",
+        "@playwright-firefox-mac14-arm64//file",
+        "@playwright_chromium_mac_arm64//file",
+    ],
+    env = {
+        "NODE_OPTIONS": "",
+        "DONNER_CHROMIUM_ARCHIVE": "$(rootpath @playwright_chromium_mac_arm64//file)",
+        "DONNER_FIREFOX_ARCHIVE": "$(rootpath @playwright-firefox-mac14-arm64//file)",
+    },
+    tags = ["manual", "launches-browser", "no-sandbox"],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)

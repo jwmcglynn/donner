@@ -175,6 +175,26 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 bazelrc_configs.commands(job, self.configs, self._variables(job))
                 if command == "test"]
 
+    def test_context_diagnostic_is_fixed_trusted_pr_opt_in_after_ordinary_tests(self):
+        job = self._job_body("macos-self-hosted")
+        step = self._step_body(job, "Diagnose Chromium context lifecycle")
+        condition = next(line for line in step.splitlines() if "if:" in line)
+        for guard in (
+            "!cancelled()",
+            "github.event_name == 'pull_request'",
+            "needs.gatekeeper.outputs.trusted_pr == 'true'",
+            "contains(github.event.pull_request.labels.*.name, 'ci:browser-context-probe')",
+        ):
+            self.assertIn(guard, condition)
+        self.assertNotIn("||", condition)
+        self.assertNotIn("continue-on-error", step)
+        self.assertIn("--nocache_test_results", step)
+        self.assertIn("--nohome_rc --nosystem_rc", step)
+        self.assertIn("--local_test_jobs=1 --test_tag_filters=", step)
+        self.assertIn("//donner/editor/wasm/tests:chromium_context_lifecycle_diagnostic", step)
+        self.assertLess(job.index("name: Test (Geode editor lane)"),
+                        job.index("name: Diagnose Chromium context lifecycle"))
+
     def test_early_macos_bazel_failures_keep_their_artifacts(self):
         for lane in ("macos", "macos-browser", "macos-self-hosted"):
             with self.subTest(lane=lane):
