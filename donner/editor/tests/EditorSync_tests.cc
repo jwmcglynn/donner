@@ -1507,9 +1507,6 @@ TEST(EditorSyncTest, SourceInsertedImageBuildsWithoutReparse) {
                                "source_inserted_image", tests::PixelmatchIdentityParams());
 }
 
-// The reported source-pane sequence: typing into `<ellipse` turns it into an unknown element, and
-// undoing the keystroke must bring the ellipse back. Both edits stay incremental, so the untouched
-// sibling keeps its entity and no document reparse is queued.
 TEST(EditorSyncTest, TagRenameKeepsCustomEntityPaintOnTheActualSvgDocument) {
   constexpr std::string_view kSvg =
       R"(<!DOCTYPE svg [<!ENTITY paint "red"><!ENTITY label "Hi">]><svg xmlns="http://www.w3.org/2000/svg" width="16" height="12"><rect id="shape" width="10" height="10" cx="5" cy="5" r="4" fill="&paint;"/><text id="label" x="12" y="11">&label;</text></svg>)";
@@ -1646,7 +1643,7 @@ TEST(EditorSyncTest, ReplacedSourceStoreWithoutPolicyDoesNotAuthorizeDefaultReco
   for (const bool preciseIntent : {true, false}) {
     EditorApp app;
     ASSERT_TRUE(app.loadFromString(kSvg));
-    auto& xmlDocument = app.document().document().xmlDocument();
+    auto xmlDocument = app.document().document().xmlDocument();
     xmlDocument.setSource(std::string(kSvg));
     ASSERT_THAT(xml::XMLParser::SourceOptions(xmlDocument), testing::Eq(std::nullopt));
     const auto generation = app.document().documentGeneration();
@@ -1670,6 +1667,9 @@ TEST(EditorSyncTest, ReplacedSourceStoreWithoutPolicyDoesNotAuthorizeDefaultReco
   }
 }
 
+// The reported source-pane sequence: typing into `<ellipse` turns it into an unknown element, and
+// undoing the keystroke must bring the ellipse back. Both edits stay incremental, so the untouched
+// sibling keeps its entity and no document reparse is queued.
 TEST(EditorSyncTest, OpeningTagRenameAndUndoEditTheDocumentIncrementally) {
   constexpr std::string_view kSvg =
       "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\">"
