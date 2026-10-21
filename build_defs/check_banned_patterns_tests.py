@@ -457,7 +457,13 @@ class CheckBannedPatternsTests(unittest.TestCase):
         self.assertEqual(1, descriptions.count("complex method (11 decision points; limit 10)"))
 
     def _run_lint_in_git_repo(
-        self, *, current_decision_points: int, provide_origin_main: bool, diverged_target: bool = False, unrelated_target: bool = False
+        self,
+        *,
+        current_decision_points: int,
+        provide_origin_main: bool,
+        diverged_target: bool = False,
+        unrelated_target: bool = False,
+        python_growth: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
@@ -561,6 +567,13 @@ class CheckBannedPatternsTests(unittest.TestCase):
                     source.write("void Example::unrelated() {}\n")
                 with (repo / "example.py").open("a") as source:
                     source.write("\ndef unrelated():\n    return 1\n")
+            if python_growth:
+                python_source = repo / "example.py"
+                python_source.write_text(
+                    python_source.read_text().replace(
+                        "    return value\n", "    if value == 999:\n        value += 999\n    return value\n"
+                    ), encoding="utf-8",
+                )
             subprocess.run(["git", "add", "."], cwd=repo, check=True)
             subprocess.run(
                 ["git", "commit", "--allow-empty", "-m", "candidate"],
@@ -605,6 +618,14 @@ class CheckBannedPatternsTests(unittest.TestCase):
         )
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("complex method (12 decision points; limit 10)", completed.stdout)
+
+    def test_lint_rejects_python_growth_from_diverged_common_ancestor(self):
+        completed = self._run_lint_in_git_repo(
+            current_decision_points=11, provide_origin_main=True,
+            diverged_target=True, python_growth=True,
+        )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("PY-COMPLEXITY", completed.stdout)
 
     def test_lint_fails_closed_without_common_ancestor(self):
         completed = self._run_lint_in_git_repo(
