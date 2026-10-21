@@ -27,14 +27,17 @@ namespace donner::editor {
 /// `std::nullopt` when it is not (a decomposed rotation change against a skew
 /// matrix, a move on a rotate-only element, etc.). The returned string always
 /// re-parses to @p target within a tight tolerance; callers that receive
-/// `std::nullopt` should emit `toSVGTransformString(target)`.
+/// `std::nullopt` should use \ref serializeTransformForWriteback, which falls back to the
+/// canonical form.
 [[nodiscard]] std::optional<RcString> reserializeTransformPreservingSyntax(
     std::string_view authorSource, const Transform2d& target);
 
 /// Serialize @p target for a `transform=` writeback, preserving the author's
 /// syntax from @p authorSource where possible and otherwise emitting the
-/// canonical \ref donner::toSVGTransformString form. An empty result means the
-/// attribute should be removed (the transform is the identity).
+/// canonical \ref donner::toSVGTransformString form. Edited numbers are written at
+/// six-decimal edit precision in both forms, in their shortest round-trip decimal
+/// representation. An empty result means the attribute should be removed (the
+/// transform is the identity at that precision).
 [[nodiscard]] RcString serializeTransformForWriteback(const std::optional<RcString>& authorSource,
                                                       const Transform2d& target);
 

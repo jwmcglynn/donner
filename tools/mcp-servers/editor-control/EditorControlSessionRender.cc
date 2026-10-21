@@ -20,6 +20,7 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/PresentationRenderScheduler.h"
 #include "donner/editor/PresentedFrameComposer.h"
+#include "donner/editor/TransformSyntaxPreserving.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/compositor/CompositorController.h"
@@ -378,11 +379,13 @@ bool EditorControlSession::drainPendingWritebacks() {
     transformWritebacks.push_back(EditorApp::CompletedTransformWriteback{
         .target = std::move(completed->target),
         .transform = completed->transform,
+        .sourceTransformAttributeValue = std::move(completed->sourceTransformAttributeValue),
     });
     for (auto& extra : completed->extras) {
       transformWritebacks.push_back(EditorApp::CompletedTransformWriteback{
           .target = std::move(extra.target),
           .transform = extra.transform,
+          .sourceTransformAttributeValue = std::move(extra.sourceTransformAttributeValue),
       });
     }
   }
@@ -408,7 +411,8 @@ bool EditorControlSession::drainPendingWritebacks() {
           (void)document.removeElementAttribute(*element, "transform");
         }
       } else {
-        const RcString serialized = toSVGTransformString(writeback.transform);
+        const RcString serialized = serializeTransformForWriteback(
+            writeback.sourceTransformAttributeValue, writeback.transform);
         if (std::string_view(serialized).empty()) {
           (void)document.removeElementAttribute(*element, "transform");
         } else {

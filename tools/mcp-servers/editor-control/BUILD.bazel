@@ -39,6 +39,7 @@ cc_library(
         "//donner/editor:selection_transform_handles",
         "//donner/editor:sidebar_presenter",
         "//donner/editor:text_tool",
+        "//donner/editor:transform_syntax_preserving",
         "//donner/editor:viewport_state",
         "//donner/editor/repro:gl_rnr_replay",
         "//donner/editor/repro:repro_file",

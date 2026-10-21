@@ -1,7 +1,10 @@
 #include "donner/editor/TransformSyntaxPreserving.h"
 
+#include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -140,15 +143,28 @@ std::optional<std::vector<Fn>> ParseFunctionList(std::string_view s) {
   return fns;
 }
 
+/// Round @p value to @p decimals places, with -0 normalized to 0.
+double RoundToDecimals(double value, int decimals) {
+  const double scale = std::pow(10.0, decimals);
+  // Scaling beyond exact integer precision can move coordinates that already have no finer digits.
+  const double precisionLimit = 1.0 / (scale * std::numeric_limits<double>::epsilon());
+  if (std::abs(value) >= precisionLimit) {
+    return value;
+  }
+  const double rounded = std::round(value * scale) / scale;
+  return rounded == 0.0 ? 0.0 : rounded;
+}
+
+/// Round @p value to edit precision: six decimals, with -0 normalized to 0.
+double RoundToEditPrecision(double value) {
+  return RoundToDecimals(value, 6);
+}
+
 std::string FormatEditedNumber(double value) {
   // Kill floating-point noise beyond six decimals (edits never need finer than
   // that) so a computed 60.000000000000004 serializes as "60" rather than a
   // long decimal, while keeping the value well within the verify tolerance.
-  double rounded = std::round(value * 1e6) / 1e6;
-  if (rounded == 0.0) {
-    rounded = 0.0;  // normalize away -0.0
-  }
-  return detail::FormatNumberForSVG(rounded);
+  return detail::FormatNumberForSVG(RoundToEditPrecision(value));
 }
 
 /// Assign @p value to argument @p index, keeping the author's verbatim token
@@ -449,6 +465,128 @@ std::optional<RcString> TryRotateOnly(const Fn& rf, const Transform2d& target) {
   return std::nullopt;
 }
 
+/// Decimal places for one column of a transform's linear (unitless) part, whose entries are
+/// @p first and @p second: six while the column's largest entry is at least 0.1, and six
+/// significant digits of that entry below 0.1, so a small axis keeps its precision even next to a
+/// large one. Returns `std::nullopt` when the column is too small or not finite to round safely.
+std::optional<int> LinearColumnDecimals(double first, double second) {
+  const double largest = std::max(std::abs(first), std::abs(second));
+  if (!std::isfinite(largest) || largest <= 0.0) {
+    return std::nullopt;
+  }
+  constexpr int kEditDecimals = 6;
+  constexpr int kMaximumDecimals = 15;
+  const int decimals = std::max(
+      kEditDecimals, kEditDecimals - 1 - static_cast<int>(std::floor(std::log10(largest))));
+  if (decimals > kMaximumDecimals) {
+    return std::nullopt;
+  }
+  return decimals;
+}
+
+/// Round linear entry @p value to @p decimals places, or keep it exact when the column has none.
+double RoundLinearEntry(double value, std::optional<int> decimals) {
+  return decimals.has_value() ? RoundToDecimals(value, *decimals) : value;
+}
+
+/// Determinant of the linear part of @p parentFromElement.
+double LinearDeterminant(const Transform2d& parentFromElement) {
+  return parentFromElement.data[0] * parentFromElement.data[3] -
+         parentFromElement.data[1] * parentFromElement.data[2];
+}
+
+/// Precision for each column of a transform's linear part.
+using ColumnDecimals = std::array<std::optional<int>, 2>;
+
+/// @p parentFromElement with its translation at edit precision. When rounding its linear part
+/// clears the off-diagonal entries, the rounded linear part is used too, so sub-precision residue
+/// selects the simplest canonical function (`translate(5)` rather than a matrix); otherwise the
+/// exact linear part is kept, which keeps rotations recognizable.
+Transform2d SnapForCanonicalForm(const Transform2d& parentFromElement,
+                                 const ColumnDecimals& columnDecimals) {
+  Transform2d parentFromElementSnapped = parentFromElement;
+  parentFromElementSnapped.data[4] = RoundToEditPrecision(parentFromElement.data[4]);
+  parentFromElementSnapped.data[5] = RoundToEditPrecision(parentFromElement.data[5]);
+  Transform2d parentFromElementRounded = parentFromElementSnapped;
+  for (int k = 0; k < 4; ++k) {
+    parentFromElementRounded.data[k] =
+        RoundLinearEntry(parentFromElement.data[k], columnDecimals[k / 2]);
+  }
+  const bool offDiagonalCleared =
+      parentFromElementRounded.data[1] == 0.0 && parentFromElementRounded.data[2] == 0.0;
+  return offDiagonalCleared ? parentFromElementRounded : parentFromElementSnapped;
+}
+
+/// The linear-part column of argument @p index of canonical function @p fn, or `std::nullopt` for
+/// a translation or angle argument.
+std::optional<std::size_t> LinearColumnOfArg(const Fn& fn, std::size_t index) {
+  if (fn.name == "scale") {
+    return index;
+  }
+  if (fn.name == "matrix" && index < 4) {
+    return index / 2;
+  }
+  return std::nullopt;
+}
+
+/// Write every argument of @p fns at edit precision: translations and angles at six decimals, and
+/// linear entries at their column's precision.
+void FormatCanonicalArgs(std::vector<Fn>& fns, const ColumnDecimals& columnDecimals) {
+  for (Fn& fn : fns) {
+    for (std::size_t k = 0; k < fn.args.size(); ++k) {
+      Arg& arg = fn.args[k];
+      const std::optional<std::size_t> column = LinearColumnOfArg(fn, k);
+      arg.text =
+          column.has_value()
+              ? detail::FormatNumberForSVG(RoundLinearEntry(arg.value, columnDecimals[*column]))
+              : FormatEditedNumber(arg.value);
+    }
+  }
+}
+
+/// Whether @p parentFromWritten, the re-parsed rounded text, may stand in for
+/// @p parentFromElement: close to it, and, when @p parentFromElement is invertible, with an inverse
+/// close to its inverse. The inverse check rejects a rounding that visibly reshapes a thin axis of
+/// a nearly singular transform even when the rounded entries are close. Singular transforms retain
+/// full precision because even determinant-preserving rounding can change the collapsed direction.
+bool IsFaithfulRounding(const Transform2d& parentFromWritten,
+                        const Transform2d& parentFromElement) {
+  if (!TransformsClose(parentFromWritten, parentFromElement)) {
+    return false;
+  }
+  if (LinearDeterminant(parentFromElement) == 0.0) {
+    return false;
+  }
+  return LinearDeterminant(parentFromWritten) != 0.0 &&
+         TransformsClose(parentFromWritten.inverse(), parentFromElement.inverse());
+}
+
+/// The canonical \ref donner::toSVGTransformString form of @p parentFromElement at edit precision,
+/// so a writeback with no author form reads like one that updates an author form. Translations and
+/// angles are written at six decimals and each linear column at \ref LinearColumnDecimals. A
+/// rounding that is not faithful falls back to full precision. An empty result means the transform
+/// is the identity at that precision.
+RcString CanonicalTransformAtEditPrecision(const Transform2d& parentFromElement) {
+  const ColumnDecimals columnDecimals = {
+      LinearColumnDecimals(parentFromElement.data[0], parentFromElement.data[1]),
+      LinearColumnDecimals(parentFromElement.data[2], parentFromElement.data[3])};
+  const RcString canonical =
+      toSVGTransformString(SnapForCanonicalForm(parentFromElement, columnDecimals));
+  std::optional<std::vector<Fn>> fns = ParseFunctionList(std::string_view(canonical));
+  if (!fns.has_value()) {
+    return std::string_view(canonical).empty() ? canonical
+                                               : toSVGTransformString(parentFromElement);
+  }
+  FormatCanonicalArgs(*fns, columnDecimals);
+
+  const std::string candidate = RenderList(*fns);
+  auto parsed = svg::parser::TransformParser::Parse(candidate);
+  if (parsed.hasError() || !IsFaithfulRounding(parsed.result(), parentFromElement)) {
+    return toSVGTransformString(parentFromElement);
+  }
+  return parsed.result().isIdentity() ? RcString() : RcString(candidate);
+}
+
 }  // namespace
 
 std::optional<RcString> reserializeTransformPreservingSyntax(std::string_view authorSource,
@@ -503,7 +641,7 @@ RcString serializeTransformForWriteback(const std::optional<RcString>& authorSou
       return *preserved;
     }
   }
-  return toSVGTransformString(target);
+  return CanonicalTransformAtEditPrecision(target);
 }
 
 }  // namespace donner::editor

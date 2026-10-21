@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -184,10 +186,198 @@ TEST(TransformSyntaxPreserving, WrapperPrefersAuthorForm) {
 }
 
 TEST(TransformSyntaxPreserving, WrapperFallsBackToCanonicalWithoutAuthorSource) {
-  const Transform2d target = Transform2d::Rotate(60.0 * kDeg);
-  // No author source: canonical serializer output.
-  EXPECT_EQ(std::string_view(serializeTransformForWriteback(std::nullopt, target)),
-            std::string_view(toSVGTransformString(target)));
+  const Transform2d parentFromElement = Transform2d::Rotate(60.0 * kDeg);
+  // No author source: the canonical function, with the angle at edit precision.
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, parentFromElement).str(), "rotate(60)");
+}
+
+TEST(TransformSyntaxPreserving, WrapperWritesCanonicalTranslateAtEditPrecision) {
+  // A drag inside a rotated group, on an element with no transform of its own, writes back a
+  // canonical translate. It reads at the same six-decimal precision as an author-form update.
+  const Transform2d parentFromElement =
+      Transform2d::Translate(Vector2d(25.09652419453986, 6.99835504621448));
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, parentFromElement).str(),
+            "translate(25.096524, 6.998355)");
+}
+
+TEST(TransformSyntaxPreserving, WrapperKeepsLargeIntegralTranslationsExact) {
+  const Transform2d parentFromElement = Transform2d::Translate(Vector2d(1e17, -1e17));
+  const RcString written = serializeTransformForWriteback(std::nullopt, parentFromElement);
+  const Transform2d parentFromWritten = ParseMatrix(written);
+  EXPECT_THAT(parentFromWritten.data, testing::ElementsAreArray(parentFromElement.data));
+  EXPECT_THAT(parentFromWritten.transformPosition(Vector2d(-1e17, 1e17)),
+              testing::Eq(Vector2d::Zero()));
+}
+
+TEST(TransformSyntaxPreserving, WrapperKeepsLargeIntegralScalesExact) {
+  const Transform2d parentFromElement = Transform2d::Scale(1e17, -1e17);
+  const Transform2d parentFromWritten =
+      ParseMatrix(serializeTransformForWriteback(std::nullopt, parentFromElement));
+  EXPECT_THAT(parentFromWritten.data, testing::ElementsAreArray(parentFromElement.data));
+}
+
+TEST(TransformSyntaxPreserving, WrapperKeepsVeryLargeFiniteTransformsParseable) {
+  const double large = std::numeric_limits<double>::max() / 16.0;
+  for (const Transform2d& parentFromElement :
+       {Transform2d::Translate(Vector2d(large, -large)), Transform2d::Scale(large, large)}) {
+    const RcString written = serializeTransformForWriteback(std::nullopt, parentFromElement);
+    SCOPED_TRACE(written);
+    const auto parsed = svg::parser::TransformParser::Parse(written);
+    ASSERT_FALSE(parsed.hasError()) << parsed.error();
+    EXPECT_THAT(parsed.result().data,
+                testing::Pointwise(testing::DoubleEq(), parentFromElement.data));
+  }
+}
+
+TEST(TransformSyntaxPreserving, WrapperClearsAttributeWhenRoundedCanonicalIsIdentity) {
+  // Dragging back to the start leaves floating-point residue below edit precision: the attribute
+  // is removed, as for an exact identity, rather than written as translate(0).
+  const Transform2d parentFromElement = Transform2d::Translate(Vector2d(3.0e-7, -2.0e-7));
+  ASSERT_FALSE(parentFromElement.isIdentity());
+  EXPECT_THAT(serializeTransformForWriteback(std::nullopt, parentFromElement).str(),
+              testing::IsEmpty());
+}
+
+TEST(TransformSyntaxPreserving, WrapperDropsSubPrecisionResidueFromTheCanonicalFunction) {
+  // Residue below edit precision does not select a longer function form.
+  EXPECT_EQ(
+      serializeTransformForWriteback(std::nullopt, Transform2d::Translate(Vector2d(5.0, 1.0e-9)))
+          .str(),
+      "translate(5)");
+  const Transform2d parentFromRotated =
+      Transform2d::Rotate(30.0 * kDeg) * Transform2d::Translate(Vector2d(1.0e-9, -1.0e-9));
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, parentFromRotated).str(), "rotate(30)");
+}
+
+TEST(TransformSyntaxPreserving, WrapperKeepsTinyScaleExact) {
+  // Six decimals would turn this scale into 0.000123 (a 0.4% error); a linear entry is rounded only
+  // when that changes it by at most one part in a million.
+  const Transform2d parentFromElement = Transform2d::Scale(1.23456e-4);
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, parentFromElement).str(),
+            "scale(0.000123456)");
+}
+
+TEST(TransformSyntaxPreserving, WrapperRoundsSmallMatrixEntriesToEditPrecision) {
+  // Entries below one round to the same six decimals: sin(10 degrees) is 0.173648, not 17 digits.
+  const Transform2d parentFromElement =
+      Transform2d::Rotate(10.0 * kDeg) *
+      Transform2d::Translate(Vector2d(100.0 / 11.0, 120.0 / 11.0));
+  const std::string written = serializeTransformForWriteback(std::nullopt, parentFromElement).str();
+  EXPECT_EQ(written, "matrix(0.984808, 0.173648, -0.173648, 0.984808, 9.090909, 10.909091)");
+  ExpectRoundTrips(written, parentFromElement);
+}
+
+TEST(TransformSyntaxPreserving, WrapperDropsLinearResidueFromTheCanonicalFunction) {
+  // Off-diagonal residue far below edit precision does not force a matrix.
+  Transform2d parentFromElement;
+  parentFromElement.data[1] = 1.0e-13;
+  parentFromElement.data[2] = -1.0e-13;
+  parentFromElement.data[4] = 5.0;
+  parentFromElement.data[5] = 7.0;
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, parentFromElement).str(),
+            "translate(5, 7)");
+
+  // Dragging back to the start with residue in both the linear part and the translation clears the
+  // attribute.
+  Transform2d parentFromReturned;
+  parentFromReturned.data[0] = 1.0 + 1.0e-13;
+  parentFromReturned.data[1] = 1.0e-13;
+  parentFromReturned.data[2] = -1.0e-13;
+  parentFromReturned.data[3] = 1.0 - 1.0e-13;
+  parentFromReturned.data[4] = 2.0e-7;
+  parentFromReturned.data[5] = -1.0e-7;
+  ASSERT_FALSE(parentFromReturned.isIdentity());
+  EXPECT_THAT(serializeTransformForWriteback(std::nullopt, parentFromReturned).str(),
+              testing::IsEmpty());
+}
+
+TEST(TransformSyntaxPreserving, WrapperKeepsTheSmallAxisOfAnAnisotropicScale) {
+  // Each axis is rounded at its own precision, so a tiny axis next to a unit one is kept rather
+  // than rounded to a singular scale(1, 0).
+  EXPECT_EQ(
+      serializeTransformForWriteback(std::nullopt, Transform2d::Scale(Vector2d(1.0, 1.0e-7))).str(),
+      "scale(1, 1e-07)");
+  EXPECT_EQ(
+      serializeTransformForWriteback(std::nullopt, Transform2d::Scale(Vector2d(1000.0, 1.23456e-4)))
+          .str(),
+      "scale(1000, 0.000123456)");
+}
+
+TEST(TransformSyntaxPreserving, WrapperKeepsFullPrecisionForANearlySingularMatrix) {
+  // Nearly parallel columns: rounding each entry to six decimals would move the point
+  // (-1e8, 1e8) from about (49, 51) to (0, 100), so the writeback keeps full precision.
+  Transform2d parentFromElement;
+  parentFromElement.data[0] = 1.0;
+  parentFromElement.data[1] = 1.0;
+  parentFromElement.data[2] = 1.00000049;
+  parentFromElement.data[3] = 1.00000051;
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, parentFromElement).str(),
+            toSVGTransformString(parentFromElement).str());
+}
+
+TEST(TransformSyntaxPreserving, WrapperPreservesAnExactlySingularMatrix) {
+  const Transform2d parentFromElement = ParseMatrix("matrix(1, 0.1234564, 2, 0.2469128, 0, 0)");
+  const std::string written = serializeTransformForWriteback(std::nullopt, parentFromElement).str();
+  const Transform2d parentFromWritten = ParseMatrix(written);
+
+  EXPECT_EQ(written, toSVGTransformString(parentFromElement).str());
+  EXPECT_DOUBLE_EQ(parentFromWritten.data[0] * parentFromWritten.data[3] -
+                       parentFromWritten.data[1] * parentFromWritten.data[2],
+                   0.0);
+  const Vector2d point(-2000000.0, 1000000.0);
+  EXPECT_THAT(parentFromWritten.transformPosition(point),
+              testing::Eq(parentFromElement.transformPosition(point)));
+}
+
+TEST(TransformSyntaxPreserving, WrapperPreservesTheNullspaceOfASingularMatrix) {
+  const Transform2d parentFromElement = ParseMatrix("matrix(1.1234564, 0, 2.2469128, 0, 0, 0)");
+  const std::string written = serializeTransformForWriteback(std::nullopt, parentFromElement).str();
+  const Transform2d parentFromWritten = ParseMatrix(written);
+  const Vector2d point(-2000000.0, 1000000.0);
+  EXPECT_EQ(written, toSVGTransformString(parentFromElement).str());
+  EXPECT_THAT(parentFromWritten.transformPosition(point),
+              testing::Eq(parentFromElement.transformPosition(point)));
+}
+
+TEST(TransformSyntaxPreserving, WrapperWritesCanonicalMatrixAtEditPrecision) {
+  // A drag at a non-integer zoom produces repeating decimals in every matrix entry.
+  const Transform2d parentFromElement =
+      Transform2d::Rotate(15.0 * kDeg) *
+      Transform2d::Translate(Vector2d(100.0 / 11.0, 120.0 / 11.0));
+  const std::string written = serializeTransformForWriteback(std::nullopt, parentFromElement).str();
+  EXPECT_EQ(written, "matrix(0.965926, 0.258819, -0.258819, 0.965926, 9.090909, 10.909091)");
+  ExpectRoundTrips(written, parentFromElement);
+}
+
+TEST(TransformSyntaxPreserving, WrapperRewriteOfWrittenValueIsStable) {
+  // Writing back an unchanged, already-rounded transform reproduces the same text, so a drag that
+  // starts from the written value adds no error of its own.
+  const Transform2d parentFromElement =
+      Transform2d::Rotate(15.0 * kDeg) *
+      Transform2d::Translate(Vector2d(100.0 / 11.0, 120.0 / 11.0));
+  const std::string first = serializeTransformForWriteback(std::nullopt, parentFromElement).str();
+  EXPECT_EQ(serializeTransformForWriteback(std::nullopt, ParseMatrix(first)).str(), first);
+  EXPECT_EQ(serializeTransformForWriteback(RcString(first), ParseMatrix(first)).str(), first);
+}
+
+TEST(TransformSyntaxPreserving, WrapperLandsEachRepeatedDragWithinHalfAnEditUnit) {
+  // Each drag composes a delta onto the transform parsed from the previous writeback, which is
+  // what the user sees. Every writeback, canonical or author-form, lands within half an
+  // edit-precision unit of that drag's target.
+  constexpr double kHalfEditUnit = 0.5e-6 + 1e-12;
+  const Vector2d step(100.0 / 11.0, -2.0 / 7.0);
+  std::optional<RcString> written;
+  Transform2d parentFromWritten;
+  for (int drag = 1; drag <= 50; ++drag) {
+    const Transform2d parentFromDragged = parentFromWritten * Transform2d::Translate(step);
+    written = serializeTransformForWriteback(written, parentFromDragged);
+    parentFromWritten = ParseMatrix(*written);
+    EXPECT_THAT(std::string_view(*written), testing::StartsWith("translate("));
+    EXPECT_NEAR(parentFromWritten.data[4], parentFromDragged.data[4], kHalfEditUnit)
+        << "drag " << drag << ": " << *written;
+    EXPECT_NEAR(parentFromWritten.data[5], parentFromDragged.data[5], kHalfEditUnit)
+        << "drag " << drag << ": " << *written;
+  }
 }
 
 TEST(TransformSyntaxPreserving, WrapperFallsBackToCanonicalOnSkew) {
