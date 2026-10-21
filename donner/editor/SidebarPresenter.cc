@@ -197,6 +197,10 @@ bool RefinePaintedSize(PaintedSizeSearch& search, double value, const BoundsAtSc
   return true;
 }
 
+Transform2d AxisScale(double factor, bool horizontal) {
+  return Transform2d::Scale(horizontal ? factor : 1.0, horizontal ? 1.0 : factor);
+}
+
 /// Solve against immutable painted geometry, then move the painted origin back to its baseline.
 std::optional<Transform2d> PaintedSizeChange(
     const Box2d& start, double value, bool horizontal,
@@ -208,7 +212,7 @@ std::optional<Transform2d> PaintedSizeChange(
   *evaluationCount = 0;
   const BoundsAtScale scaledBounds = [&](double factor) {
     ++*evaluationCount;
-    return evaluate(Transform2d::Scale(horizontal ? factor : 1.0, horizontal ? 1.0 : factor));
+    return evaluate(AxisScale(factor, horizontal));
   };
   const BoundsExtent extent = [&](const Box2d& bounds) {
     return horizontal ? bounds.width() : bounds.height();
@@ -223,7 +227,7 @@ std::optional<Transform2d> PaintedSizeChange(
   if (std::abs(extent(*search.bounds) - value) > 1e-7 * std::max(1.0, value)) {
     return std::nullopt;
   }
-  return Transform2d::Scale(horizontal ? search.factor : 1.0, horizontal ? 1.0 : search.factor) *
+  return AxisScale(search.factor, horizontal) *
          Transform2d::Translate(start.topLeft - search.bounds->topLeft);
 }
 
