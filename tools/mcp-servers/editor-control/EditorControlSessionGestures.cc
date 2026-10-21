@@ -1047,6 +1047,7 @@ ToolCallResult EditorControlSession::pointerGesture(const json& arguments) {
   }
 
   (void)app_.flushFrame();
+  (void)drainPendingWritebacks();
   syncSourceTextFromDocumentIfChanged();
 
   std::string activeTool;

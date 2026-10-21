@@ -178,7 +178,9 @@ ToolCallResult EditorControlSession::loadSvgSource(std::string_view source,
   return out;
 }
 
-ToolCallResult EditorControlSession::getSvgSource(const json& arguments) const {
+ToolCallResult EditorControlSession::getSvgSource(const json& arguments) {
+  (void)drainPendingWritebacks();
+
   std::string error;
   int requestedOffset = 0;
   if (!ReadNonNegativeIntMember(arguments, "offset", &requestedOffset, &error)) {

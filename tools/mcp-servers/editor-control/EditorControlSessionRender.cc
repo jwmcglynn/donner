@@ -256,7 +256,9 @@ ToolCallResult EditorControlSession::renderFrameTool(const json& arguments) {
   return out;
 }
 
-ToolCallResult EditorControlSession::sessionState(const json&) const {
+ToolCallResult EditorControlSession::sessionState(const json&) {
+  (void)drainPendingWritebacks();
+
   ToolCallResult out;
   out.body = json{
       {"ok", true},
