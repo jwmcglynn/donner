@@ -137,6 +137,12 @@ void SetIsolatedReplayClipboard(ImGuiContext*, const char* text) {
   gIsolatedReplayClipboard = text != nullptr ? text : "";
 }
 
+void SetCanvasZoomShortcuts(MenuBarActions& actions, bool legacy, bool pressedZero,
+                            bool pressedOne) {
+  actions.zoomToFit = pressedZero && !legacy;
+  actions.actualSize = legacy ? pressedZero : pressedOne;
+}
+
 bool ShouldRequestFileAction(bool allowed, bool requested) {
   return allowed && requested;
 }
@@ -3301,8 +3307,8 @@ void EditorShell::handleGlobalShortcuts() {
     } else {
       zoomActions.zoomIn = increase;
       zoomActions.zoomOut = decrease;
-      zoomActions.zoomToFit = pressedZero && !options_.useLegacyCanvasZoomShortcuts;
-      zoomActions.actualSize = options_.useLegacyCanvasZoomShortcuts ? pressedZero : pressedOne;
+      SetCanvasZoomShortcuts(zoomActions, options_.useLegacyCanvasZoomShortcuts, pressedZero,
+                             pressedOne);
     }
     applyZoomActions(zoomActions);
   }
