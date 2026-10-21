@@ -1307,18 +1307,23 @@ protected:
   }
 
   /// Click the stroke Width field and type \p text, leaving the field focused.
-  static void TypeIntoStrokeWidth(SidebarPresenter& presenter, EditorApp& app,
+  static void TypeIntoStrokeWidth(SidebarPresenter& presenter, EditorApp* app,
                                   const char* windowName, std::string_view text,
                                   float windowHeight = 280.0f) {
     const ImVec2 away(-1.0f, -1.0f);
-    (void)RenderInspectorFrame(presenter, &app, windowName, away, false, windowHeight);
+    (void)RenderInspectorFrame(presenter, app, windowName, away, false, windowHeight);
     const auto field = presenter.strokeWidthRectForTesting();
     ASSERT_TRUE(field.has_value());
-    (void)RenderInspectorFrame(presenter, &app, windowName, RectCenter(*field), true, windowHeight);
-    (void)RenderInspectorFrame(presenter, &app, windowName, RectCenter(*field), false,
-                               windowHeight);
+    (void)RenderInspectorFrame(presenter, app, windowName, RectCenter(*field), true, windowHeight);
+    (void)RenderInspectorFrame(presenter, app, windowName, RectCenter(*field), false, windowHeight);
     ImGui::GetIO().AddInputCharactersUTF8(std::string(text).c_str());
-    (void)RenderInspectorFrame(presenter, &app, windowName, away, false, windowHeight);
+    (void)RenderInspectorFrame(presenter, app, windowName, away, false, windowHeight);
+  }
+
+  static void TypeIntoStrokeWidth(SidebarPresenter& presenter, EditorApp& app,
+                                  const char* windowName, std::string_view text,
+                                  float windowHeight = 280.0f) {
+    TypeIntoStrokeWidth(presenter, &app, windowName, text, windowHeight);
   }
 
   static std::vector<ImDrawVert> TextureVertices(ImTextureID texture) {
@@ -3067,6 +3072,33 @@ TEST_F(SidebarPresenterImGuiTest, StrokeWidthBusyReactivationKeepsPendingCancell
   (void)app.flushFrame();
   EXPECT_THAT(target->getAttribute("style"),
               testing::Optional(testing::Eq(RcString("stroke-width: 7"))));
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthStartedWhileBusyCannotMoveToAnotherOwner) {
+  for (const bool replaceDocument : {false, true}) {
+    SCOPED_TRACE(replaceDocument ? "document replacement" : "selection replacement");
+    constexpr std::string_view source =
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="target" width="40" height="30" stroke="black"/><rect id="peer" x="50" width="40" height="30" stroke="black"/></svg>)";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+    constexpr char kWindow[] = "##stroke_width_busy_changed_owner";
+    constexpr float kHeight = 600.0f;
+    ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, nullptr, kWindow, "9", kHeight));
+    if (replaceDocument) {
+      ASSERT_TRUE(app.loadFromString(source));
+    }
+    const auto peer = app.document().document().querySelector("#peer");
+    ASSERT_THAT(peer, testing::Optional(testing::_));
+    app.setSelection(*peer);
+    presenter.refreshSnapshot(app);
+    const std::string before(app.document().document().source());
+    RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1.0f, -1.0f), false, kHeight);
+    (void)app.flushFrame();
+    EXPECT_THAT(peer->getAttribute("style"), testing::Eq(std::nullopt));
+    EXPECT_THAT(app.document().document().source(), testing::Eq(before));
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+  }
 }
 
 TEST_F(SidebarPresenterImGuiTest, PendingStrokeEditsCannotCrossDocumentReplacement) {
