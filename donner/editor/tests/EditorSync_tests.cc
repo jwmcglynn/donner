@@ -203,6 +203,16 @@ SourceEditIntent ReplaceFirstOrFail(std::string* source, std::string_view needle
       .offset = pos, .removedLength = needle.size(), .replacement = std::string(replacement)};
 }
 
+/// Replace the one character at \p offset with \p replacement, as a keystroke over a selection
+/// does.
+SourceEditIntent RetypeCharacter(std::string* source, std::size_t offset,
+                                 std::string_view replacement) {
+  EXPECT_LT(offset, source->size());
+  source->replace(offset, 1, replacement);
+  return SourceEditIntent{
+      .offset = offset, .removedLength = 1, .replacement = std::string(replacement)};
+}
+
 /// Dispatch \p editedSource from the source pane, through precise intents or a whole-text diff.
 DispatchSourceTextChangeResult DispatchSourceEdit(EditorApp& app, bool preciseIntent,
                                                   const SourceEditIntent& intent,
@@ -1544,6 +1554,41 @@ TEST(EditorSyncTest, OpeningTagRenameAndUndoEditTheDocumentIncrementally) {
         RenderDocument(app.document().document()), expected,
         preciseIntent ? "tag_rename_undo_through_intents" : "tag_rename_undo_through_text_diff",
         tests::PixelmatchIdentityParams());
+  }
+}
+
+// Renaming a group's closing tag and then its opening tag, as a person retyping both tags does,
+// stays incremental: the whole-text path must not fall back to a document reparse.
+TEST(EditorSyncTest, RenamingBothTagsOfAGroupStaysIncremental) {
+  constexpr std::string_view kSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\">"
+      "<rect id=\"r\" width=\"4\" height=\"4\"/><g id=\"grp\"><rect id=\"inner\" x=\"8\" "
+      "width=\"4\" height=\"4\"/></g></svg>";
+  for (const bool preciseIntent : {true, false}) {
+    SCOPED_TRACE(preciseIntent ? "source edit intents" : "whole-text diff");
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(kSvg));
+    const auto rectEntity =
+        GetElementByIdOrDie(app.document().document(), "#r").entityHandle().entity();
+
+    std::string previousSourceText(kSvg);
+    std::string source(kSvg);
+    const SourceEditIntent closing = RetypeCharacter(&source, source.find("g></svg>"), "a");
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, closing, source, &previousSourceText)
+                    .dispatchedMutation);
+    (void)app.flushFrame();
+    const SourceEditIntent opening = RetypeCharacter(&source, source.find("g id="), "a");
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, opening, source, &previousSourceText)
+                    .dispatchedMutation);
+    EXPECT_TRUE(app.document().queue().empty()) << "no document reparse";
+    (void)app.flushFrame();
+
+    EXPECT_EQ(app.document().document().source(), source);
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Eq(std::nullopt));
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#grp").tagName().toString(), "a");
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#r").entityHandle().entity(),
+              rectEntity);
   }
 }
 

@@ -1649,6 +1649,50 @@ TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameRoundTrips) {
   EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
 }
 
+// Renaming the closing tag first records a failure over the enclosing element. Completing the
+// rename at the opening tag replaces the element, keeps its child, and clears that failure, so the
+// document is in sync and later edits land on the right bytes.
+TEST_F(XMLDocumentTests, ApplySourceEditRenamingClosingTagFirstReconcilesDiagnostic) {
+  XMLDocument doc = ParseDocument(R"(<svg><g id="group"><rect id="child" x="1"/></g></svg>)");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode child = svg.firstChild()->firstChild().value();
+  const std::size_t closeOffset = doc.source().find("</g>") + 2;
+
+  ApplySourceEditResult closing = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(closeOffset), FileOffset::Offset(closeOffset + 1)},
+      .replacement = "a",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(closing.applied);
+  ASSERT_TRUE(doc.sourceDiagnostic().has_value()) << "<g ...></a> is malformed";
+
+  const std::size_t openOffset = doc.source().find("<g") + 1;
+  ApplySourceEditResult opening = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(openOffset), FileOffset::Offset(openOffset + 1)},
+      .replacement = "a",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(opening.applied);
+  EXPECT_THAT(opening.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+  std::optional<XMLNode> renamed = svg.firstChild();
+  ASSERT_TRUE(renamed.has_value());
+  EXPECT_EQ(renamed->tagName(), XMLQualifiedNameRef("a"));
+  EXPECT_EQ(renamed->firstChild(), std::optional<XMLNode>(child)) << "the child keeps its node";
+
+  const std::size_t valueOffset = doc.source().find(R"(x="1")") + 3;
+  ApplySourceEditResult attribute = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 1)},
+      .replacement = "7",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  EXPECT_THAT(attribute.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(attribute.scope, ReparseScope::AttributeValue);
+  EXPECT_THAT(child.getAttribute("x"), Optional(Eq("7")));
+  EXPECT_EQ(doc.source(), R"(<svg><a id="group"><rect id="child" x="7"/></a></svg>)");
+}
+
 // A rename adds an element while the replaced one stays live, so it is refused before any bytes
 // change when the document is at its node or attribute limit.
 TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameRespectsTreeLimits) {
