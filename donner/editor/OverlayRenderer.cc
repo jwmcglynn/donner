@@ -712,9 +712,18 @@ std::optional<std::optional<css::RGBA>> SolidPreviewColor(const svg::PaintServer
   return std::nullopt;
 }
 
+/// CSS geometry and compositing effects require the normal computed/raster representation.
+bool LivePathStyleRequiresRaster(const svg::PropertyRegistry& style) {
+  const auto filters = style.filter.get();
+  return style.unparsedProperties.contains("d") || style.clipPath.get().has_value() ||
+         style.mask.get().has_value() || (filters.has_value() && !filters->empty()) ||
+         style.markerStart.get().has_value() || style.markerMid.get().has_value() ||
+         style.markerEnd.get().has_value();
+}
+
 /// Capture the Pen tool's live-geometry preview for `element`: its post-flush
 /// document-space path plus resolved solid paint. Returns nullopt when the
-/// element is not plain solid-painted geometry (gradient/pattern paint,
+/// element is not plain solid-painted attribute geometry (CSS `d`, gradient/pattern paint,
 /// currentColor, non-absolute stroke-width, or a filter/clip-path/mask/marker
 /// that the preview could not reproduce) - the presenter then falls back to
 /// the composited raster.
@@ -733,10 +742,7 @@ std::optional<SelectionChromeSnapshot::LivePathPreview> CaptureLivePathPreview(
     }
 
     const svg::PropertyRegistry& style = element.getComputedStyle();
-    const auto filterValue = style.filter.get();
-    if (style.clipPath.get().has_value() || style.mask.get().has_value() ||
-        (filterValue.has_value() && !filterValue->empty()) || style.markerStart.get().has_value() ||
-        style.markerMid.get().has_value() || style.markerEnd.get().has_value()) {
+    if (LivePathStyleRequiresRaster(style)) {
       return std::nullopt;
     }
 
