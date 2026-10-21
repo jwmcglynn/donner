@@ -243,6 +243,10 @@ void restoreAnimationBaseBackup(Registry& registry, Entity entity, AnimationBase
   RestoreAnimatedComponent(registry, entity, backup, backup.ellipse);
   RestoreAnimatedComponent(registry, entity, backup, backup.rect);
   RestoreAnimatedComponent(registry, entity, backup, backup.sized);
+  if (backup.sized) {
+    // Sized-element lengths feed cached layout, such as a `<use>` instance's translation.
+    LayoutSystem().invalidate(EntityHandle(registry, entity));
+  }
   RestoreAnimatedLine(registry, entity, backup);
   RestoreAnimatedPath(registry, entity, backup);
   RestoreAnimatedPoly(registry, entity, backup);
