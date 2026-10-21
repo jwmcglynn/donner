@@ -533,8 +533,9 @@ SCRIPT_SAFE_EVENT_FIELDS = {"github.event.pull_request.base.sha",
                             "github.event.pull_request.head.sha",
                             "github.event.pull_request.number"}
 
-UNTRUSTED_CONTEXT = re.compile(r"github\.event\b(?:\.[A-Za-z0-9_.*-]+)?|github\.head_ref\b|"
-                              r"\binputs\b(?:\.[A-Za-z0-9_.*-]+)?")
+UNTRUSTED_CONTEXT = re.compile(r"github\.event\b(?:\.[A-Za-z0-9_.*-]+)?|"
+                              r"github\.(?:head_ref|ref_name|ref)\b|"
+                              r"\b(?:inputs|env)\b(?:\.[A-Za-z0-9_.*-]+)?")
 UPLOADED_EVENT_LOG = re.compile(r"(?i)(?:^|/)[^/]*bep[^/]*\.json$|exec(?:ution)?[._]log")
 WORKSPACE_ROOTS = {".", "./", "${{ github.workspace }}", "${{ github.workspace }}/"}
 # Private-network addresses, private DNS names and personal home directories have no place in
@@ -823,56 +824,10 @@ def _run_bodies(workflow):
     return bodies
 
 
-# Run-context values a pull request author, a branch or tag creator, or a commit author chooses.
-# Interpolated into a script, `${{ }}` pastes them in as code: a branch named `$(cmd)` runs
-# `cmd`. A script must read such a value from `env:` instead, where the shell treats it as data.
-# Any `github.event` value counts unless its last field is a number, hash, id or time, and so do
-# `env.` values (the place untrusted values are moved to) and workflow inputs.
-_UNTRUSTED_CONTEXT = re.compile(
-    r"\bgithub\.(?:head_ref|ref_name)\b|\b(?:env|inputs)\.|\bgithub\.event\b")
-_SAFE_EVENT_FIELD = re.compile(
-    r"\bgithub\.event(?:\.\w+)*\.(?:number|sha|id|run_id|run_attempt|run_number|action|"
-    r"\w+_at|before|after|size|draft|merged|forced|deleted|created)\b(?![.\[])")
-_INDEX = re.compile(r"\[\s*['\"]([\w-]+)['\"]\s*\]")
-_EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
-_BLOCK_SCALAR = re.compile(r"[|>][1-9]?[+-]?[1-9]?\s*(?:#.*)?")
-
-
-def _untrusted(expression):
-    """Whether an expression reads a value a pull request, branch or commit author chooses."""
-    expression = _INDEX.sub(r".\1", expression)
-    return bool(_UNTRUSTED_CONTEXT.search(_SAFE_EVENT_FIELD.sub("", expression)))
-
-
-def _script_texts(text):
-    """(line number, script) for each `run:` and github-script `script:` value in a file."""
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        match = re.match(r"^(\s*)((?:-\s+)?)(run|script):\s*(.*?)\s*$", line)
-        if not match or (match.group(3) == "script" and "github-script" not in text):
-            continue
-        if not _BLOCK_SCALAR.fullmatch(match.group(4)):
-            yield index + 1, match.group(4)
-            continue
-        # The key's own column: in `- run: |` the body is indented past the key, not the dash.
-        indentation = len(match.group(1)) + len(match.group(2))
-        body = []
-        for following in lines[index + 1:]:
-            if following.strip() and len(following) - len(following.lstrip()) <= indentation:
-                break
-            body.append(following)
-        yield index + 1, "\n".join(body)
-
-
 def _script_injection_violations(files):
-    """`path:line: expression` for each untrusted context a script interpolates."""
-    violations = []
-    for path, text in files.items():
-        for line, script in _script_texts(text):
-            for expression in _EXPRESSION.findall(script):
-                if _untrusted(expression):
-                    violations.append("%s:%d: ${{%s}}" % (path, line, expression))
-    return violations
+    """Report untrusted script context through the shared expression and script readers."""
+    return ["%s: %s" % (path, context) for path, text in files.items()
+            for context in _untrusted_script_contexts(text)]
 
 
 def _workflows(files):
@@ -1019,12 +974,13 @@ def _script_bodies(text):
     lines = text.splitlines()
     bodies = []
     for index, line in enumerate(lines):
-        match = re.match(r"^(\s*)(?:-\s+)?(?:run|script|command):[ \t]*(.*)$", line)
+        match = re.match(r"^(\s*)((?:-\s+)?)(?:run|script|command):[ \t]*(.*)$", line)
         if not match:
             continue
-        value = match.group(2).strip()
-        if value in ("|", "|-", ">", ">-"):
-            value = "\n".join(_indented_block(lines[index + 1:], len(match.group(1))))
+        value = match.group(3).strip()
+        if re.fullmatch(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*(?:#.*)?", value):
+            indentation = len(match.group(1)) + len(match.group(2))
+            value = "\n".join(_indented_block(lines[index + 1:], indentation))
         bodies.append(value)
     return bodies
 
@@ -4425,6 +4381,15 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertNotEqual(changed, files[path])
                 self.assertTrue(_artifact_upload_violations({**files, path: changed}))
 
+    def test_script_context_guard_reads_scalar_modifiers_and_stops_at_env(self):
+        for scalar in ("|", "|-", "|+", "|2", "|2-", "|+2", ">", ">-", ">2+"):
+            for key in ("run", "script", "command"):
+                with self.subTest(scalar=scalar, key=key):
+                    fixture = ("steps:\n  - %s: %s\n" % (key, scalar)
+                               + "      echo ${{ github [ 'ref' ] }}\n"
+                               + "    env:\n      VALUE: ${{ github.head_ref }}\n")
+                    self.assertEqual(["github.ref"], _untrusted_script_contexts(fixture))
+
     def test_scripts_read_untrusted_context_only_from_env(self):
         self.assertEqual([], _script_injection_violations(self.supply_chain_files))
         # Each mutation pastes an untrusted value into a script and must be caught.
@@ -4449,7 +4414,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         # A number or hash from the event is not attacker text.
         for expression in ("github.event.pull_request.number",
                            "github.event.pull_request.head.sha"):
-            self.assertFalse(_untrusted(expression), expression)
+            self.assertEqual([], _untrusted_script_contexts(
+                "run: echo ${{ " + expression + " }}"), expression)
         # The same values are fine in `env:` and in an `if:` condition.
         safe = files[path].replace(
             "        env:\n          GH_TOKEN: ${{ github.token }}\n",
