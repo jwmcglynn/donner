@@ -284,6 +284,7 @@ donner_cc_test(
         "//donner/editor:sample_picker_presenter",
         "//donner/editor/gui:editor_window",
         "//donner/svg/renderer:renderer_image_io",
+        "@com_google_gtest//:gtest",
         "@com_google_gtest//:gtest_main",
         "@imgui",
     ],

@@ -189,6 +189,9 @@ HOSTED_PARITY_TESTS = {
     ("donner/editor/tests/BUILD.bazel", "editor_window_tests"):
         "Window content scale and readback cases whose result depended on the host display "
         "(#1779).",
+    ("donner/editor/tests/BUILD.bazel", "sample_picker_presenter_tests"):
+        "Real offscreen gallery framebuffer captures depend on the GPU backend and window "
+        "content scale, so trusted PRs retain the hosted configuration's coverage.",
     ("tools/BUILD.bazel", "macos_cache_key_parity_tests"):
         "Runs the Xcode selection probe against host tools (#1895).",
 }

@@ -1,5 +1,6 @@
 #include "donner/editor/SamplePickerPresenter.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -236,7 +237,7 @@ TEST(SamplePickerPresenterCapture, CapturesNarrowAndWideGallery) {
       bitmap = window.endFrameAndReadPixels();
     }
     ASSERT_FALSE(bitmap.empty());
-    ASSERT_EQ(bitmap.dimensions, Vector2i(width, 900));
+    ASSERT_THAT(bitmap.dimensions, testing::Eq(Vector2i(width, 900)));
     const auto path =
         std::filesystem::path(outputDirectory) / ("gallery-" + std::to_string(width) + ".png");
     EXPECT_TRUE(svg::RendererImageIO::writeRgbaPixelsToPngFile(
