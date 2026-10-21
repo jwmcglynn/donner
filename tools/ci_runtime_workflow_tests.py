@@ -1601,7 +1601,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                       self._size_check_phase())
         self.assertIn('local budget_mode="${PAYLOAD_BUDGET_MODE:-enforce}"',
                       self._size_check_phase())
-        self.assertIn('enforce | report) ;;', self._size_check_phase())
+        self.assertIn('local budget_test_output="errors"', self._size_check_phase())
+        self.assertIn('enforce) ;;', self._size_check_phase())
+        self.assertIn('report) budget_test_output=all ;;', self._size_check_phase())
+        self.assertEqual(2, self._size_check_phase().count(
+            '--test_output="${budget_test_output}"'))
         self.assertIn('*) echo "PAYLOAD_BUDGET_MODE must be enforce or report" >&2; return 2 ;;',
                       self._size_check_phase())
 

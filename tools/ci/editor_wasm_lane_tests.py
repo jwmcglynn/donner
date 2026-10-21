@@ -140,6 +140,13 @@ class EditorWasmLaneTest(unittest.TestCase):
     def test_main_report_mode_only_changes_the_two_numeric_budget_commands(self):
         result, calls = self._run("build", budget_mode="report")
         self.assertEqual(result.returncode, 0, result.stderr)
+        expected = self._expected("build")
+        for call in expected:
+            if "--test_arg=--payload-budget-mode=enforce" in call:
+                call[call.index("--test_arg=--payload-budget-mode=enforce")] = (
+                    "--test_arg=--payload-budget-mode=report")
+                call[call.index("--test_output=errors")] = "--test_output=all"
+        self.assertEqual(calls, expected)
         budget_calls = [call for call in calls if "--test_arg=--payload-budget-mode=report" in call]
         self.assertEqual(len(budget_calls), 2)
         self.assertTrue(any("//donner/svg/renderer/wasm:wasm_size_tests" in call

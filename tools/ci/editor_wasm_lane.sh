@@ -49,8 +49,10 @@ prefetch() {
 
 build() {
   local budget_mode="${PAYLOAD_BUDGET_MODE:-enforce}"
+  local budget_test_output="errors"
   case "${budget_mode}" in
-    enforce | report) ;;
+    enforce) ;;
+    report) budget_test_output=all ;;
     *) echo "PAYLOAD_BUDGET_MODE must be enforce or report" >&2; return 2 ;;
   esac
   local budget_args=("--test_arg=--payload-budget-mode=${budget_mode}")
@@ -63,10 +65,10 @@ build() {
   lane_phase "Renderer Wasm pixel test (wasm-size)" \
     bazelisk test --config=wasm-size --test_output=errors //donner/svg/renderer/wasm:render_test
   lane_phase "Renderer Wasm size tests (wasm-size)" \
-    bazelisk test --config=wasm-size --test_output=errors "${budget_args[@]}" \
+    bazelisk test --config=wasm-size --test_output="${budget_test_output}" "${budget_args[@]}" \
     //donner/svg/renderer/wasm:wasm_size_tests
   lane_phase "Editor Wasm package size tests (editor-wasm)" \
-    bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \
+    bazelisk test --config=editor-wasm --test_output="${budget_test_output}" --remote_download_outputs=all \
     "${budget_args[@]}" //tools/ci:editor_wasm_size_tests
 }
 
