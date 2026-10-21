@@ -61,7 +61,7 @@ SECRET_USES = {
     (".github/workflows/main.yml", "macos", "Configure BuildBuddy read-only cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy remote cache", None,
-     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_PR_API_KEY"},
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY", "BUILDBUDDY_PR_API_KEY"},
     (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy read-only cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-self-hosted", "Configure BuildBuddy remote cache", None,
@@ -4235,7 +4235,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         readers = {_step_key(step, "name", 8): _secret_reads(step) for step in _steps(job)
                    if _secret_reads(step)}
         self.assertEqual(readers, {
-            "Configure BuildBuddy remote cache": {"BUILDBUDDY_PR_API_KEY"},
+            "Configure BuildBuddy remote cache": {"BUILDBUDDY_API_KEY", "BUILDBUDDY_PR_API_KEY"},
             "Configure BuildBuddy read-only cache": {"BUILDBUDDY_API_KEY_READONLY"},
         })
         self.assertEqual(_secret_reads(job.split("    steps:\n", 1)[0]), set())

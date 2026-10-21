@@ -1717,10 +1717,10 @@ jobs:
     runs-on: xcode-27
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.browser_affected == 'true') }}
-    # This job runs only for trusted pull requests, so it binds only buildbuddy-pr, whose key
-    # writes the pull request cache, and never holds main's key.
+    # Main's BuildBuddy key is a secret of the buildbuddy-write environment, bound only for main
+    # runs. Trusted pull requests bind buildbuddy-pr, whose key writes a separate cache.
     environment:
-      name: ${{ needs.gatekeeper.outputs.trusted_pr == 'true' && 'buildbuddy-pr' || '' }}
+      name: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'buildbuddy-write' || (needs.gatekeeper.outputs.trusted_pr == 'true' && 'buildbuddy-pr' || '') }}
       deployment: false
     # Keep this environment identical to the `macos` job's; ci_lane_parity_tests
     # compares the browser step's Bazel invocation between the two.
@@ -1772,15 +1772,16 @@ jobs:
         with:
           namespace: native
 
-      # BuildBuddy remote cache (docs/building.md). Trusted maintainer pull requests
-      # write the pull request cache; Renovate pull requests only read main's;
-      # every other run configures no remote cache. The
+      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
+      # runs write main's cache, trusted maintainer pull requests a separate one; Renovate
+      # pull requests only read main's; every other run configures no remote cache. The
       # read-only repository secret still reaches every same-repository run of
       # this job, so it is treated as public: it can only read the cache.
       - name: Configure BuildBuddy remote cache
-        if: needs.gatekeeper.outputs.trusted_pr == 'true'
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
         uses: ./.github/actions/buildbuddy-cache
         with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           pr-api-key: ${{ secrets.BUILDBUDDY_PR_API_KEY }}
           trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
