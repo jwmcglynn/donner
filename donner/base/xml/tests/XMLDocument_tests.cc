@@ -1876,31 +1876,41 @@ TEST_F(XMLDocumentTests, ProjectedTextRecordsRespectTreeLimitAndSourceReset) {
 }
 
 TEST_F(XMLDocumentTests, ProjectedTextAggregateBytesAreBoundedAndReleasedAcrossParents) {
-  XMLDocument doc = ParseDocument("<svg><g>first</g><g>second</g><g>third</g></svg>",
-                                  XMLParser::Options::ParseAll());
-  XMLNode firstGroup = doc.root().firstChild()->firstChild().value();
-  XMLNode secondGroup = firstGroup.nextSibling().value();
-  XMLNode thirdGroup = secondGroup.nextSibling().value();
-  XMLNode first = firstGroup.firstChild().value();
-  XMLNode second = secondGroup.firstChild().value();
-  XMLNode third = thirdGroup.firstChild().value();
-  auto limits = doc.sourceStore()->resourceLimits();
-  limits.maximumSourceSize = doc.source().size();
-  ASSERT_THAT(doc.sourceStore()->setResourceLimits(limits), testing::IsTrue());
-  const RcString payload(std::string(limits.maximumSourceSize / 2 + 1, 'x'));
-  first.setValue(payload);
-  second.setValue(payload);
-  third.setValue(payload);
-  const auto created = doc.sourceStore()->resourceStats().totalCreatedAnchors;
-  first.removeForProjection();
-  second.removeForProjection();
-  EXPECT_THAT(firstGroup.projectedTextChildren(), testing::SizeIs(1));
-  EXPECT_THAT(secondGroup.projectedTextChildren(), testing::IsEmpty());
-  first.remove();
-  EXPECT_THAT(firstGroup.projectedTextChildren(), testing::IsEmpty());
-  third.removeForProjection();
-  EXPECT_THAT(thirdGroup.projectedTextChildren(), testing::SizeIs(1));
-  EXPECT_EQ(doc.sourceStore()->resourceStats().totalCreatedAnchors, created);
+  for (const std::string_view release : {"remove", "destroy", "reset"}) {
+    SCOPED_TRACE(release);
+    const std::string source = std::string("<!DOCTYPE svg [<!ENTITY e \"") + std::string(128, 'x') +
+                               "\">]><svg><g>&e;</g><g>&e;</g><g>&e;</g></svg>";
+    XMLDocument doc = ParseDocument(source, XMLParser::Options::ParseAll());
+    XMLNode firstGroup = doc.root().firstChild()->nextSibling()->firstChild().value();
+    XMLNode secondGroup = firstGroup.nextSibling().value();
+    XMLNode thirdGroup = secondGroup.nextSibling().value();
+    XMLNode first = firstGroup.firstChild().value();
+    XMLNode second = secondGroup.firstChild().value();
+    XMLNode third = thirdGroup.firstChild().value();
+    const SourceRange thirdSpan = *third.getNodeLocation();
+    ASSERT_THAT(first.value(), Optional(testing::SizeIs(128)));
+    auto limits = doc.sourceStore()->resourceLimits();
+    limits.maximumSourceSize = source.size();
+    ASSERT_THAT(doc.sourceStore()->setResourceLimits(limits), testing::IsTrue());
+    const auto created = doc.sourceStore()->resourceStats().totalCreatedAnchors;
+    first.removeForProjection();
+    second.removeForProjection();
+    EXPECT_THAT(firstGroup.projectedTextChildren(), testing::SizeIs(1));
+    EXPECT_THAT(secondGroup.projectedTextChildren(), testing::IsEmpty());
+    EXPECT_EQ(doc.sourceStore()->resourceStats().totalCreatedAnchors, created);
+    if (release == "remove") {
+      first.remove();
+    } else if (release == "destroy") {
+      firstGroup.remove();
+      doc.registry().destroy(firstGroup.entityHandle().entity());
+    } else {
+      doc.setSource(source, source.size());
+      third.setSourceStartOffset(thirdSpan.start);
+      third.setSourceEndOffset(thirdSpan.end);
+    }
+    third.removeForProjection();
+    EXPECT_THAT(thirdGroup.projectedTextChildren(), testing::SizeIs(1));
+  }
 }
 
 TEST_F(XMLDocumentTests, ProjectedTextRecordsRetireAnchorsWhenParentIsDestroyed) {
