@@ -3,6 +3,11 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:licenses.bzl", "donner_closure_notice_file")
 
+exports_files(
+    ["check_python_quality.py"],
+    visibility = ["//build_defs:__pkg__"],
+)
+
 exports_files([
     "lint.sh",
     "run-browser-ci.sh",
