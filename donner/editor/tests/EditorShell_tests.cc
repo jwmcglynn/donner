@@ -1898,6 +1898,9 @@ public:
   }
 
   static bool SourcePaneVisible(const EditorShell& shell) { return shell.sourcePaneVisible_; }
+  static std::optional<Box2d> LoadFailureRevealButtonRect(const EditorShell& shell) {
+    return shell.loadFailureRevealButtonRect_;
+  }
   static float SourcePaneWidth(const EditorShell& shell) { return shell.sourcePaneWidth_; }
   static void SetSourcePaneWidth(EditorShell& shell, float value) {
     shell.sourcePaneWidth_ = value;
@@ -3748,6 +3751,105 @@ TEST(EditorShellTest, ConstructsFromSvgPathAndKeepsInvalidSourceEditable) {
   EXPECT_TRUE(invalidShell.valid());
   EXPECT_FALSE(EditorShellTestAccess::App(invalidShell).hasDocument());
   EXPECT_EQ(EditorShellTestAccess::Source(invalidShell).getText(), "<svg><rect></svg>");
+}
+
+/// SVG source with more tree nodes than the parser accepts, one element per line when
+/// \p prettyPrinted, so whitespace text nodes count toward the limit too.
+std::string SvgOverTheElementLimit(bool prettyPrinted = false) {
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+  for (int i = 0; i < 8'300; ++i) {
+    source += prettyPrinted ? "\n  " : "";
+    source += R"(<rect width="1" height="1"/>)";
+  }
+  return source + "</svg>";
+}
+
+// A document that cannot be loaded must explain itself on the canvas, where the user is looking,
+// rather than only in the Problems list of the source pane, which is closed by default.
+TEST(EditorShellTest, DocumentThatFailsToLoadShowsANoticeOnTheCanvas) {
+  struct Case {
+    const char* name;
+    std::string source;
+  };
+  for (const Case& item : {Case{"over-element-limit", SvgOverTheElementLimit()},
+                           Case{"pretty-printed-over-limit", SvgOverTheElementLimit(true)},
+                           Case{"malformed", "<svg><rect></svg>"}}) {
+    SCOPED_TRACE(item.name);
+    gui::EditorWindow window(TestWindowOptions(
+        {.title = "Load failure", .initialWidth = 1280, .initialHeight = 700}, 1.0));
+    ASSERT_TRUE(window.valid());
+    EditorShell shell(window, OptionsWithSource(item.source, "broken.svg"));
+    ASSERT_FALSE(EditorShellTestAccess::App(shell).hasDocument());
+    ASSERT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
+
+    const ImGuiWindow* notice = nullptr;
+    for (const tests::HangGuard guard; notice == nullptr && guard.active();) {
+      RunShellFrame(window, shell);
+      notice = ImGui::FindWindowByName("###canvas_load_failure");
+      if (notice != nullptr && !notice->WasActive) {
+        notice = nullptr;
+      }
+    }
+    ASSERT_NE(notice, nullptr) << "the canvas is blank with no explanation";
+    const ViewportState& viewport = shell.viewportForReadback();
+    const Box2d pane(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize);
+    const Box2d noticeRect =
+        Box2d::FromXYWH(notice->Pos.x, notice->Pos.y, notice->Size.x, notice->Size.y);
+    EXPECT_TRUE(pane.contains(noticeRect.topLeft) && pane.contains(noticeRect.bottomRight))
+        << "notice " << noticeRect << " is not inside the canvas " << pane;
+  }
+}
+
+// Show in Source opens the closed source pane with the parse error selected, so the user lands on
+// the problem the notice describes.
+TEST(EditorShellTest, LoadFailureNoticeShowsTheProblemInTheSourcePane) {
+  gui::EditorWindow window(TestWindowOptions(
+      {.title = "Load failure", .initialWidth = 1280, .initialHeight = 700}, 1.0));
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource("<svg>\n  <rect>\n</svg>", "broken.svg"));
+  // An auto-sized notice measures itself on its first frame, then settles; aim once it is stable.
+  std::optional<Box2d> button;
+  std::optional<Box2d> previousButton;
+  for (const tests::HangGuard guard;
+       (!button.has_value() || button != previousButton) && guard.active();) {
+    previousButton = button;
+    RunShellFrame(window, shell);
+    button = EditorShellTestAccess::LoadFailureRevealButtonRect(shell);
+  }
+  ASSERT_THAT(button, testing::Ne(std::nullopt));
+  ASSERT_EQ(button, previousButton) << "the notice never settled";
+  const Vector2d center = (button->topLeft + button->bottomRight) * 0.5;
+  for (const bool down : {false, true, false}) {
+    ImGui::GetIO().AddMousePosEvent(static_cast<float>(center.x), static_cast<float>(center.y));
+    ImGui::GetIO().AddMouseButtonEvent(0, down);
+    RunShellFrame(window, shell);
+  }
+  EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
+  const TextEditor& source = EditorShellTestAccess::Source(shell);
+  const auto& diagnostics = source.sourceDiagnostics();
+  const auto error =
+      std::ranges::find(diagnostics, DiagnosticSeverity::Error, &SourceDiagnostic::severity);
+  ASSERT_NE(error, diagnostics.end());
+  EXPECT_THAT(source.getSelectedText(),
+              testing::Eq(std::string_view("<svg>\n  <rect>\n</svg>")
+                              .substr(error->range.start, error->range.end - error->range.start)));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).hasDocument());
+}
+
+TEST(EditorShellTest, LoadFailureNoticeNamesTheElementLimitOrTheParseError) {
+  EXPECT_EQ(internal::DocumentLoadFailureNoticeFor("Maximum element count exceeded", 4097),
+            (internal::DocumentLoadFailureNotice{
+                .title = "This document is too large to open",
+                .detail = "The editor loads up to 8,192 elements, text runs and comments, and this "
+                          "file passes that limit at line 4,097."}));
+  EXPECT_EQ(
+      internal::DocumentLoadFailureNoticeFor("Maximum element count exceeded", std::nullopt).detail,
+      "The editor loads up to 8,192 elements, text runs and comments.");
+  EXPECT_EQ(internal::DocumentLoadFailureNoticeFor("Mismatched closing tag", 3),
+            (internal::DocumentLoadFailureNotice{.title = "This document could not be opened",
+                                                 .detail = "Mismatched closing tag on line 3."}));
+  EXPECT_EQ(internal::DocumentLoadFailureNoticeFor("", std::nullopt).detail,
+            "The SVG could not be parsed.");
 }
 
 TEST(EditorShellTest, OpenSaveAndRevertUpdateDocumentAndSourceState) {
