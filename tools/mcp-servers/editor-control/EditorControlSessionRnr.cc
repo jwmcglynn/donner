@@ -1540,9 +1540,8 @@ bool EditorControlSession::tryStartSelectedBoundsRedrag(const Vector2d& document
   if (selectionBoundsDoc.empty()) {
     return false;
   }
-  const SelectionTransformHandleIntent handleIntent =
-      HitTestSelectionTransformHandles(selectionBoundsDoc, documentPoint,
-                                       modifiers.pixelsPerDocUnit, /*includeRotate=*/true);
+  const SelectionTransformHandleIntent handleIntent = HitTestSelectionTransformHandles(
+      selectionBoundsDoc, documentPoint, modifiers.pixelsPerDocUnit, /*includeRotate=*/true);
   if (handleIntent.kind != SelectionTransformHandleKind::None) {
     return false;
   }
