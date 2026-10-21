@@ -315,6 +315,7 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
   // an in-progress edit here is not clobbered mid-keystroke.
   if (!trackedFamily_ || lastSyncedFamily_ != state.fontFamily) {
     AssignBuffer(fontFamilyBuffer_, state.fontFamily);
+    fontFamilySeedTruncated_ = state.fontFamily.size() >= fontFamilyBuffer_.size();
     lastSyncedFamily_ = state.fontFamily;
     trackedFamily_ = true;
   }
@@ -349,8 +350,13 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
     // --- Font family: free-text input plus a searchable preview dropdown. ---
     ImGui::SetNextItemWidth(180.0f);
     ImGui::InputTextWithHint("##format_bar_font_family", "Font family", fontFamilyBuffer_.data(),
-                             fontFamilyBuffer_.size());
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
+                             fontFamilyBuffer_.size(),
+                             fontFamilySeedTruncated_ ? ImGuiInputTextFlags_ReadOnly : 0);
+    if (fontFamilySeedTruncated_ && ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "This font list is too long for inline editing. Choose a font or edit it in source.");
+    }
+    if (!fontFamilySeedTruncated_ && ImGui::IsItemDeactivatedAfterEdit()) {
       actions.setFontFamily = true;
       actions.fontFamily = std::string(fontFamilyBuffer_.data());
       lastSyncedFamily_ = actions.fontFamily;
@@ -380,6 +386,7 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
           actions.setFontFamily = true;
           actions.fontFamily = family.name;
           AssignBuffer(fontFamilyBuffer_, family.name);
+          fontFamilySeedTruncated_ = family.name.size() >= fontFamilyBuffer_.size();
           lastSyncedFamily_ = family.name;
         }
       }

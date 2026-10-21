@@ -210,7 +210,9 @@ private:
                                  const ImVec2& fieldMax, bool fieldActivated,
                                  FormatBarActions* actions);
   /// Free-text font-family buffer, re-seeded when the underlying value changes.
-  std::array<char, 256> fontFamilyBuffer_{};
+  // Fourfold CSS escaping plus quotes must fit for names accepted by the former 256-byte field.
+  std::array<char, 1024> fontFamilyBuffer_{};
+  bool fontFamilySeedTruncated_ = false;
   /// Family the buffer was last seeded from, to detect external changes.
   std::string lastSyncedFamily_;
   bool trackedFamily_ = false;

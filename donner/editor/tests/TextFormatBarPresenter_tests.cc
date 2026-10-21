@@ -903,6 +903,30 @@ TEST_F(TextFormatBarPresenterInputTest, OversizedFamilySeedCannotCommitTruncated
   EXPECT_FALSE(actions.setFontFamily);
 }
 
+TEST_F(TextFormatBarPresenterInputTest, DropdownReplacesOversizedSeedAndRestoresEditing) {
+  FormatBarState state = MakeState();
+  state.fontFamily = "\"" + std::string(2000, 'a') + "\"";
+  Frame(state);
+  OpenComboPopup(state, ImVec2(FamilyArrowLeft() + frameHeight_ * 0.5f, RowCenterY()));
+  const auto picked = ClickFirstActionRowInPopup(
+      state, FamilyArrowLeft(),
+      [](const FormatBarActions& action) { return action.setFontFamily; });
+  ASSERT_TRUE(picked.setFontFamily);
+  state.fontFamily = picked.fontFamily;
+  Frame(state);
+  const ImVec2 field(FamilyInputLeft() + kFamilyInputWidth * 0.5f, RowCenterY());
+  Click(state, field);
+  ImGui::GetIO().AddInputCharacter('X');
+  Frame(state, field);
+  const auto edited = Click(state, ImVec2(900, 400));
+  ASSERT_TRUE(edited.setFontFamily);
+  std::string restored = edited.fontFamily;
+  const auto inserted = restored.find('X');
+  ASSERT_NE(inserted, std::string::npos);
+  restored.erase(inserted, 1);
+  EXPECT_THAT(restored, testing::Eq(picked.fontFamily));
+}
+
 TEST_F(TextFormatBarPresenterInputTest, ExternalFamilyChangeReseedsFreeTextBuffer) {
   FormatBarState state = MakeState();
   state.fontFamily = "Alpha";
