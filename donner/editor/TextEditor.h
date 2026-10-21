@@ -192,8 +192,9 @@ public:
     Count
   };
 
-  /// Key bindings for one action; any of them triggers it.
-  using ShortcutBindings = std::vector<Shortcut>;
+  /// Up to two key bindings for one action; any set binding triggers it, and an unset binding
+  /// (`key1` is `ImGuiKey_None`) never matches.
+  using ShortcutBindings = std::array<Shortcut, 2>;
 
   // Type aliases re-exporting the canonical definitions from
   // `TextEditorCore`. These keep the existing `TextEditor::Palette`,

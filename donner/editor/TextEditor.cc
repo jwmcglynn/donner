@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <initializer_list>
 #include <limits>
 #include <regex>
 #include <span>
@@ -113,85 +112,84 @@ TextEditor::~TextEditor() = default;
 
 std::vector<TextEditor::ShortcutBindings> TextEditor::getDefaultShortcuts() {
   std::vector<ShortcutBindings> shortcuts(static_cast<std::size_t>(ShortcutId::Count));
-  const auto bind = [&shortcuts](ShortcutId id, std::initializer_list<Shortcut> bindings) {
-    shortcuts[static_cast<std::size_t>(id)] = bindings;
+  const auto bind = [&shortcuts](ShortcutId id, Shortcut primary, Shortcut alternate = Shortcut()) {
+    shortcuts[static_cast<std::size_t>(id)] = {primary, alternate};
   };
   constexpr ShortcutModifier kShift = ShortcutModifier::Shift;
   constexpr ShortcutModifier kCtrl = ShortcutModifier::Ctrl;
   constexpr ShortcutModifier kAlt = ShortcutModifier::Alt;
 
   // Character and line navigation
-  bind(ShortcutId::MoveUp, {Shortcut(ImGuiKey_UpArrow)});
-  bind(ShortcutId::SelectUp, {Shortcut(ImGuiKey_UpArrow, kShift)});
-  bind(ShortcutId::MoveDown, {Shortcut(ImGuiKey_DownArrow)});
-  bind(ShortcutId::SelectDown, {Shortcut(ImGuiKey_DownArrow, kShift)});
-  bind(ShortcutId::MoveLeft, {Shortcut(ImGuiKey_LeftArrow)});
-  bind(ShortcutId::SelectLeft, {Shortcut(ImGuiKey_LeftArrow, kShift)});
-  bind(ShortcutId::MoveRight, {Shortcut(ImGuiKey_RightArrow)});
-  bind(ShortcutId::SelectRight, {Shortcut(ImGuiKey_RightArrow, kShift)});
+  bind(ShortcutId::MoveUp, Shortcut(ImGuiKey_UpArrow));
+  bind(ShortcutId::SelectUp, Shortcut(ImGuiKey_UpArrow, kShift));
+  bind(ShortcutId::MoveDown, Shortcut(ImGuiKey_DownArrow));
+  bind(ShortcutId::SelectDown, Shortcut(ImGuiKey_DownArrow, kShift));
+  bind(ShortcutId::MoveLeft, Shortcut(ImGuiKey_LeftArrow));
+  bind(ShortcutId::SelectLeft, Shortcut(ImGuiKey_LeftArrow, kShift));
+  bind(ShortcutId::MoveRight, Shortcut(ImGuiKey_RightArrow));
+  bind(ShortcutId::SelectRight, Shortcut(ImGuiKey_RightArrow, kShift));
 
   // Word navigation (Option+Arrow on macOS)
-  bind(ShortcutId::MoveWordLeft, {Shortcut(ImGuiKey_LeftArrow, kAlt)});
-  bind(ShortcutId::SelectWordLeft, {Shortcut(ImGuiKey_LeftArrow, kAlt | kShift)});
-  bind(ShortcutId::MoveWordRight, {Shortcut(ImGuiKey_RightArrow, kAlt)});
-  bind(ShortcutId::SelectWordRight, {Shortcut(ImGuiKey_RightArrow, kAlt | kShift)});
+  bind(ShortcutId::MoveWordLeft, Shortcut(ImGuiKey_LeftArrow, kAlt));
+  bind(ShortcutId::SelectWordLeft, Shortcut(ImGuiKey_LeftArrow, kAlt | kShift));
+  bind(ShortcutId::MoveWordRight, Shortcut(ImGuiKey_RightArrow, kAlt));
+  bind(ShortcutId::SelectWordRight, Shortcut(ImGuiKey_RightArrow, kAlt | kShift));
 
   // Line start and end (Home/End, and Command+Arrow on macOS)
-  bind(ShortcutId::MoveStartLine, {Shortcut(ImGuiKey_Home), Shortcut(ImGuiKey_LeftArrow, kCtrl)});
-  bind(ShortcutId::SelectStartLine,
-       {Shortcut(ImGuiKey_Home, kShift), Shortcut(ImGuiKey_LeftArrow, kCtrl | kShift)});
-  bind(ShortcutId::MoveEndLine, {Shortcut(ImGuiKey_End), Shortcut(ImGuiKey_RightArrow, kCtrl)});
-  bind(ShortcutId::SelectEndLine,
-       {Shortcut(ImGuiKey_End, kShift), Shortcut(ImGuiKey_RightArrow, kCtrl | kShift)});
+  bind(ShortcutId::MoveStartLine, Shortcut(ImGuiKey_Home), Shortcut(ImGuiKey_LeftArrow, kCtrl));
+  bind(ShortcutId::SelectStartLine, Shortcut(ImGuiKey_Home, kShift),
+       Shortcut(ImGuiKey_LeftArrow, kCtrl | kShift));
+  bind(ShortcutId::MoveEndLine, Shortcut(ImGuiKey_End), Shortcut(ImGuiKey_RightArrow, kCtrl));
+  bind(ShortcutId::SelectEndLine, Shortcut(ImGuiKey_End, kShift),
+       Shortcut(ImGuiKey_RightArrow, kCtrl | kShift));
 
   // Page navigation
-  bind(ShortcutId::MoveUpBlock, {Shortcut(ImGuiKey_PageUp)});
-  bind(ShortcutId::SelectUpBlock, {Shortcut(ImGuiKey_PageUp, kShift)});
-  bind(ShortcutId::MoveDownBlock, {Shortcut(ImGuiKey_PageDown)});
-  bind(ShortcutId::SelectDownBlock, {Shortcut(ImGuiKey_PageDown, kShift)});
+  bind(ShortcutId::MoveUpBlock, Shortcut(ImGuiKey_PageUp));
+  bind(ShortcutId::SelectUpBlock, Shortcut(ImGuiKey_PageUp, kShift));
+  bind(ShortcutId::MoveDownBlock, Shortcut(ImGuiKey_PageDown));
+  bind(ShortcutId::SelectDownBlock, Shortcut(ImGuiKey_PageDown, kShift));
 
   // Document start and end (Command+Up/Down on macOS)
-  bind(ShortcutId::MoveTop, {Shortcut(ImGuiKey_Home, kCtrl), Shortcut(ImGuiKey_UpArrow, kCtrl)});
-  bind(ShortcutId::SelectTop,
-       {Shortcut(ImGuiKey_Home, kCtrl | kShift), Shortcut(ImGuiKey_UpArrow, kCtrl | kShift)});
-  bind(ShortcutId::MoveBottom,
-       {Shortcut(ImGuiKey_End, kCtrl), Shortcut(ImGuiKey_DownArrow, kCtrl)});
-  bind(ShortcutId::SelectBottom,
-       {Shortcut(ImGuiKey_End, kCtrl | kShift), Shortcut(ImGuiKey_DownArrow, kCtrl | kShift)});
+  bind(ShortcutId::MoveTop, Shortcut(ImGuiKey_Home, kCtrl), Shortcut(ImGuiKey_UpArrow, kCtrl));
+  bind(ShortcutId::SelectTop, Shortcut(ImGuiKey_Home, kCtrl | kShift),
+       Shortcut(ImGuiKey_UpArrow, kCtrl | kShift));
+  bind(ShortcutId::MoveBottom, Shortcut(ImGuiKey_End, kCtrl), Shortcut(ImGuiKey_DownArrow, kCtrl));
+  bind(ShortcutId::SelectBottom, Shortcut(ImGuiKey_End, kCtrl | kShift),
+       Shortcut(ImGuiKey_DownArrow, kCtrl | kShift));
 
   // Editing operations
-  bind(ShortcutId::Undo, {Shortcut(ImGuiKey_Z, kCtrl)});
-  bind(ShortcutId::Redo, {Shortcut(ImGuiKey_Y, kCtrl)});
-  bind(ShortcutId::DeleteRight, {Shortcut(ImGuiKey_Delete, kShift)});
-  bind(ShortcutId::ForwardDelete, {Shortcut(ImGuiKey_Delete)});
-  bind(ShortcutId::ForwardDeleteWord, {Shortcut(ImGuiKey_Delete, kCtrl)});
-  bind(ShortcutId::BackwardDelete, {Shortcut(ImGuiKey_Backspace)});
-  bind(ShortcutId::BackwardDeleteWord, {Shortcut(ImGuiKey_Backspace, kCtrl)});
-  bind(ShortcutId::DeleteLeft, {Shortcut(ImGuiKey_Backspace, kShift)});
+  bind(ShortcutId::Undo, Shortcut(ImGuiKey_Z, kCtrl));
+  bind(ShortcutId::Redo, Shortcut(ImGuiKey_Y, kCtrl));
+  bind(ShortcutId::DeleteRight, Shortcut(ImGuiKey_Delete, kShift));
+  bind(ShortcutId::ForwardDelete, Shortcut(ImGuiKey_Delete));
+  bind(ShortcutId::ForwardDeleteWord, Shortcut(ImGuiKey_Delete, kCtrl));
+  bind(ShortcutId::BackwardDelete, Shortcut(ImGuiKey_Backspace));
+  bind(ShortcutId::BackwardDeleteWord, Shortcut(ImGuiKey_Backspace, kCtrl));
+  bind(ShortcutId::DeleteLeft, Shortcut(ImGuiKey_Backspace, kShift));
 
   // Special operations
-  bind(ShortcutId::NewLine, {Shortcut(ImGuiKey_Enter)});
-  bind(ShortcutId::Copy, {Shortcut(ImGuiKey_C, kCtrl)});
-  bind(ShortcutId::Paste, {Shortcut(ImGuiKey_V, kCtrl)});
-  bind(ShortcutId::Cut, {Shortcut(ImGuiKey_X, kCtrl)});
-  bind(ShortcutId::SelectAll, {Shortcut(ImGuiKey_A, kCtrl)});
+  bind(ShortcutId::NewLine, Shortcut(ImGuiKey_Enter));
+  bind(ShortcutId::Copy, Shortcut(ImGuiKey_C, kCtrl));
+  bind(ShortcutId::Paste, Shortcut(ImGuiKey_V, kCtrl));
+  bind(ShortcutId::Cut, Shortcut(ImGuiKey_X, kCtrl));
+  bind(ShortcutId::SelectAll, Shortcut(ImGuiKey_A, kCtrl));
 
   // Code editing
-  bind(ShortcutId::Indent, {Shortcut(ImGuiKey_Tab)});
-  bind(ShortcutId::DuplicateLine, {Shortcut(ImGuiKey_D, kCtrl)});
-  bind(ShortcutId::CommentLines, {Shortcut(ImGuiKey_K, kCtrl | kShift)});
-  bind(ShortcutId::UncommentLines, {Shortcut(ImGuiKey_U, kCtrl | kShift)});
+  bind(ShortcutId::Indent, Shortcut(ImGuiKey_Tab));
+  bind(ShortcutId::DuplicateLine, Shortcut(ImGuiKey_D, kCtrl));
+  bind(ShortcutId::CommentLines, Shortcut(ImGuiKey_K, kCtrl | kShift));
+  bind(ShortcutId::UncommentLines, Shortcut(ImGuiKey_U, kCtrl | kShift));
 
   // Search and replace
-  bind(ShortcutId::Find, {Shortcut(ImGuiKey_F, kCtrl)});
-  bind(ShortcutId::Replace, {Shortcut(ImGuiKey_H, kCtrl)});
-  bind(ShortcutId::FindNext, {Shortcut(ImGuiKey_G, kCtrl)});
+  bind(ShortcutId::Find, Shortcut(ImGuiKey_F, kCtrl));
+  bind(ShortcutId::Replace, Shortcut(ImGuiKey_H, kCtrl));
+  bind(ShortcutId::FindNext, Shortcut(ImGuiKey_G, kCtrl));
 
   // Autocomplete
-  bind(ShortcutId::AutocompleteOpen, {Shortcut(ImGuiKey_I, kCtrl)});
-  bind(ShortcutId::AutocompleteSelectActive, {Shortcut(ImGuiKey_Enter)});
-  bind(ShortcutId::AutocompleteUp, {Shortcut(ImGuiKey_UpArrow)});
-  bind(ShortcutId::AutocompleteDown, {Shortcut(ImGuiKey_DownArrow)});
+  bind(ShortcutId::AutocompleteOpen, Shortcut(ImGuiKey_I, kCtrl));
+  bind(ShortcutId::AutocompleteSelectActive, Shortcut(ImGuiKey_Enter));
+  bind(ShortcutId::AutocompleteUp, Shortcut(ImGuiKey_UpArrow));
+  bind(ShortcutId::AutocompleteDown, Shortcut(ImGuiKey_DownArrow));
 
   return shortcuts;
 }
@@ -4350,7 +4348,7 @@ bool TextEditor::hasSelection() const {
 }
 
 void TextEditor::setShortcut(ShortcutId id, Shortcut shortcut) {
-  shortcuts_[static_cast<std::size_t>(id)] = {shortcut};
+  shortcuts_[static_cast<std::size_t>(id)] = {shortcut, Shortcut()};
 }
 
 bool TextEditor::shortcutMatches(ShortcutId id, const ImGuiIO& io) const {

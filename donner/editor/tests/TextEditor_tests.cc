@@ -1902,7 +1902,8 @@ TEST_F(TextEditorTests, EditingForwardersDelegateToCore) {
   editor.setShortcut(TextEditor::ShortcutId::MoveUp, Shortcut(ImGuiKey_W, ShortcutModifier::Ctrl));
   EXPECT_THAT(ShortcutForDirect(TextEditor::ShortcutId::MoveUp),
               ElementsAre(AllOf(Field("key1", &Shortcut::key1, ImGuiKey_W),
-                                Field("modifiers", &Shortcut::modifiers, ShortcutModifier::Ctrl))));
+                                Field("modifiers", &Shortcut::modifiers, ShortcutModifier::Ctrl)),
+                          Field("key1", &Shortcut::key1, ImGuiKey_None)));
 
   editor.setColorizerEnabled(false);
   editor.colorize(0, -1);
@@ -2536,7 +2537,8 @@ TEST_F(TextEditorTests, PublicEditingWrappersForwardToCore) {
   editor.setShortcut(TextEditor::ShortcutId::MoveUp, Shortcut(ImGuiKey_W, ShortcutModifier::Ctrl));
   EXPECT_THAT(ShortcutForDirect(TextEditor::ShortcutId::MoveUp),
               ElementsAre(AllOf(Field("key1", &Shortcut::key1, ImGuiKey_W),
-                                Field("modifiers", &Shortcut::modifiers, ShortcutModifier::Ctrl))));
+                                Field("modifiers", &Shortcut::modifiers, ShortcutModifier::Ctrl)),
+                          Field("key1", &Shortcut::key1, ImGuiKey_None)));
 }
 
 // ============================================================================
