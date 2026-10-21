@@ -1014,7 +1014,6 @@ TEST(EditorControlSessionTest, SourcePaneSvgProjectionFailureKeepsPreviewStale) 
             repaired.body["source"]["source_revision"]);
 }
 
-// Source-pane dispatch honors canvas overrides the same way the reload dispatch does.
 TEST(EditorControlSessionTest, SourcePaneDispatchRejectsPathChangesBeforeEditingTheDraft) {
   constexpr std::string_view kScene =
       R"(<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"/></svg>)";
@@ -1043,8 +1042,8 @@ TEST(EditorControlSessionTest, SourcePaneDispatchRejectsPathChangesBeforeEditing
                                                        {"render_after_edit", false}});
     EXPECT_TRUE(rejected.isError) << rejected.body.dump(2);
     const auto unchanged = session.handleToolCall("get_svg_source", json::object());
-    EXPECT_EQ(unchanged.body, before.body);
-    EXPECT_EQ(app.selectedElements(), selected);
+    EXPECT_THAT(unchanged.body, testing::Eq(before.body));
+    EXPECT_THAT(app.selectedElements(), testing::ElementsAreArray(selected));
     EXPECT_EQ(app.isDirty(), wasDirty);
     EXPECT_THAT(app.currentFilePath(), testing::Eq(filePath));
     const auto accepted =
@@ -1069,6 +1068,7 @@ TEST(EditorControlSessionTest, SourcePaneDispatchRejectsPathChangesBeforeEditing
   }
 }
 
+// Source-pane dispatch honors canvas overrides the same way the reload dispatch does.
 TEST(EditorControlSessionTest, SourcePaneDispatchAppliesCanvasOverrides) {
   constexpr std::string_view kScene =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><rect width="40" height="20" fill="red"/></svg>)svg";
