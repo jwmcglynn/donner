@@ -26,6 +26,11 @@ env:
 # macOS uses the LLVM 21 toolchain (--config=asan-fuzzer activates
 # --config=latest_llvm) because Apple Clang lacks libclang_rt.fuzzer_osx.a.
 # Linux fuzzers also run here so scheduled mutation covers both supported host toolchains.
+#
+# Each phase is `tools/ci/fuzz_lane.py <lane> <patterns>`: `bazelisk test --config=<lane>`, which
+# reproduces it locally, then a check of the phase's build events. A soak result replayed from a
+# cache did no fuzzing, so the fuzz lane configs disable test result caching and the check fails
+# a phase that reports any cached test result, or none at all.
 
 on:
   schedule:
@@ -69,16 +74,16 @@ jobs:
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
-        run: bazelisk test --config=fuzz-lane //...
+        run: python3 tools/ci/fuzz_lane.py fuzz-lane //...
 
       - name: Test text-full fuzzers
-        run: bazelisk test --config=fuzz-lane-text-full //...
+        run: python3 tools/ci/fuzz_lane.py fuzz-lane-text-full //...
 
       - name: Soak image loader at production decode budget
-        run: bazelisk test --config=fuzz-lane-production-soak //tools/ci:image_loader_production_soak
+        run: python3 tools/ci/fuzz_lane.py fuzz-lane-production-soak //tools/ci:image_loader_production_soak
 
       - name: Test Geode render fuzzers
-        run: bazelisk test --config=fuzz-lane-geode //...
+        run: python3 tools/ci/fuzz_lane.py fuzz-lane-geode //...
 
       - name: Retain failed test evidence
         if: failure()
@@ -111,13 +116,13 @@ jobs:
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
-        run: bazelisk test --config=fuzz-lane //...
+        run: python3 tools/ci/fuzz_lane.py fuzz-lane //...
 
       - name: Test text-full fuzzers
-        run: bazelisk test --config=fuzz-lane-text-full //...
+        run: python3 tools/ci/fuzz_lane.py fuzz-lane-text-full //...
 
       - name: Soak image loader at production decode budget
-        run: bazelisk test --config=fuzz-lane-production-soak //tools/ci:image_loader_production_soak
+        run: python3 tools/ci/fuzz_lane.py fuzz-lane-production-soak //tools/ci:image_loader_production_soak
 
       - name: Retain failed test evidence
         if: failure()

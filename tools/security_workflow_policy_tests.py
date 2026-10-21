@@ -636,15 +636,15 @@ def _privileged_trigger_check(files, path):
     return _privileged_trigger_violations(path, files[path])
 
 
-def _lane_config_flags(name):
+def _lane_config_flags(name, bazelrc=None):
     """The flags of a CI lane config in .bazelrc, with nested lane configs expanded.
 
     A lane config is one defined only on `test:` lines (fuzz-lane*, asan-lane*, ubsan-lane,
     ubsan-corpus*, asan-geode-pr). Build configs it names (asan, ubsan, asan-fuzzer, fuzz-soak,
-    geode, text-full) stay as `--config=<name>`.
+    geode, text-full) stay as `--config=<name>`. `bazelrc` replaces the file's text.
     """
     lines = {}
-    for line in _read(".bazelrc").splitlines():
+    for line in (_read(".bazelrc") if bazelrc is None else bazelrc).splitlines():
         match = re.match(r"^(build|test|common):(\S+)\s+(.*)$", line)
         if match:
             lines.setdefault(match.group(2), []).append((match.group(1), match.group(3)))
@@ -664,6 +664,71 @@ def _lane_config_flags(name):
         return flags
 
     return expand(name)
+
+
+# The Fuzz workflow runs each phase through this script, which checks that no result was cached.
+FUZZ_LANE_SCRIPT = "tools/ci/fuzz_lane.py"
+# tools/ci/fuzz_lane_coverage.py reads phases the same way (LANE_STEP).
+_FUZZ_LANE_STEP = re.compile(r"(?m)^\s*run: python3 tools/ci/fuzz_lane\.py (\S+) ")
+
+
+def _all_config_flags(name, bazelrc):
+    """Every flag a `--config` applies to `bazel test`, with every nested config expanded.
+
+    Unlike `_lane_config_flags`, this also expands build and common configs, because a flag set
+    in one of them (`build:text-full ...`) applies to the lane too.
+    """
+    lines = {}
+    for line in bazelrc.splitlines():
+        match = re.match(r"^(?:build|test|common):(\S+)\s+(.*)$", line)
+        if match:
+            lines.setdefault(match.group(1), []).extend(shlex.split(match.group(2), comments=True))
+    flags = []
+    for flag in lines.get(name, []):
+        nested = re.fullmatch(r"--config=(\S+)", flag)
+        flags.extend(_all_config_flags(nested.group(1), bazelrc) if nested else [flag])
+    return flags
+
+
+def _cache_test_results(flags):
+    """The `--cache_test_results` value that the last of these flags leaves in effect."""
+    value = "auto"
+    for flag in flags:
+        if flag in ("--cache_test_results", "--nocache_test_results"):
+            value = "yes" if flag == "--cache_test_results" else "no"
+        elif flag.startswith("--cache_test_results="):
+            value = flag.split("=", 1)[1]
+    return value
+
+
+def _fuzz_cache_violations(bazelrc, fuzz):
+    """Fuzz lanes, or Fuzz workflow steps, that can report a soak result from a cache.
+
+    A soak's result covers only the mutation that run did, so every Fuzz workflow phase and every
+    fuzz or soak lane config must leave test result caching off. A phase must also run through
+    the lane script, which fails on any cached result that slips through.
+    """
+    violations = ["fuzz.yml runs Bazel outside %s: %s" % (FUZZ_LANE_SCRIPT, line.strip())
+                  for line in fuzz.splitlines()
+                  if re.search(r"\bbazel(?:isk)?\s+(?:\S+\s+)*?(?:test|coverage|run)\b", line)
+                  and not line.lstrip().startswith("#")]
+    lanes = set(_FUZZ_LANE_STEP.findall(fuzz))
+    if not lanes:
+        violations.append("fuzz.yml runs no phase through %s" % FUZZ_LANE_SCRIPT)
+    configs = {}
+    for line in bazelrc.splitlines():
+        match = re.match(r"^(build|test|common):(\S+)\s", line)
+        if match:
+            configs.setdefault(match.group(2), set()).add(match.group(1))
+    for config, commands in configs.items():
+        if commands == {"test"} and ("fuzz" in config or "soak" in config or
+                                     "--config=fuzz-soak" in _lane_config_flags(config, bazelrc)):
+            lanes.add(config)
+    for lane in sorted(lanes):
+        value = _cache_test_results(_all_config_flags(lane, bazelrc))
+        if value not in ("no", "false", "0"):
+            violations.append("%s leaves --cache_test_results=%s" % (lane, value))
+    return violations
 
 
 def _read(path):
@@ -2963,11 +3028,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn('"//build_defs:asan_fuzzer_enabled": [', rules)
         # Every nightly soak runs under the ASan fuzzer config, so it gets the sanitizer timeout.
         # The Fuzz workflow runs only its `fuzz-lane*` configs, each of which carries both.
-        commands = [line for line in self.fuzz.splitlines() if "bazelisk test" in line]
+        commands = [line for line in self.fuzz.splitlines()
+                    if FUZZ_LANE_SCRIPT in line and not line.lstrip().startswith("#")]
         self.assertEqual(len(commands), 7)
         for line in commands:
             # Exactly one lane config and the lane's targets: nothing can override the lane.
-            lane = re.fullmatch(r"\s*run: bazelisk test --config=(fuzz-lane[a-z-]*) "
+            lane = re.fullmatch(r"\s*run: python3 tools/ci/fuzz_lane\.py (fuzz-lane[a-z-]*) "
                                 r"(?://\.\.\.|//tools/ci:image_loader_production_soak)", line)
             self.assertIsNotNone(lane, line)
             flags = _lane_config_flags(lane.group(1))
@@ -3540,7 +3606,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         }
         for step, (lane, tag) in expected.items():
             body = _step_body(self.fuzz, step)
-            self.assertIn("--config=%s //...\n" % lane, body)
+            self.assertIn("%s %s //...\n" % (FUZZ_LANE_SCRIPT, lane), body)
             flags = _lane_config_flags(lane)
             self.assertIn("--test_tag_filters=%s" % tag, flags)
             self.assertIn("--build_tag_filters=%s" % tag, flags)
@@ -3556,10 +3622,52 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             section = self.fuzz.split("\n  %s:\n" % job, 1)[1]
             if job == "linux":
                 section = section.split("\n  macos:\n", 1)[0]
-            self.assertIn("--config=fuzz-lane-production-soak " + target, section)
+            self.assertIn("%s fuzz-lane-production-soak %s" % (FUZZ_LANE_SCRIPT, target),
+                          section)
         flags = _lane_config_flags("fuzz-lane-production-soak")
         self.assertIn("--config=asan-fuzzer", flags)
         self.assertIn("--config=fuzz-soak", flags)
+
+    def test_fuzz_lanes_never_accept_cached_test_results(self):
+        bazelrc = _read(".bazelrc")
+        self.assertEqual([], _fuzz_cache_violations(bazelrc, self.fuzz))
+        base = "test:fuzz-lane-base --nocache_test_results\n"
+        self.assertIn(base, bazelrc)
+        # Each mutation must turn the policy red, naming the lane or step it breaks.
+        mutations = {
+            "base drops the flag": (bazelrc.replace(base, ""), self.fuzz,
+                                    "fuzz-lane leaves --cache_test_results=auto"),
+            "a lane re-enables caching": (
+                bazelrc + "test:fuzz-lane-geode --cache_test_results=yes\n", self.fuzz,
+                "fuzz-lane-geode leaves --cache_test_results=yes"),
+            "a lane stops inheriting the base": (
+                bazelrc.replace("test:fuzz-lane-text-full --config=fuzz-lane-base\n",
+                                "test:fuzz-lane-text-full --config=asan-fuzzer\n"
+                                "test:fuzz-lane-text-full --config=fuzz-soak\n"), self.fuzz,
+                "fuzz-lane-text-full leaves --cache_test_results=auto"),
+            "a build config the lane applies re-enables caching": (
+                bazelrc + "build:text-full --cache_test_results=yes\n", self.fuzz,
+                "fuzz-lane-text-full leaves --cache_test_results=yes"),
+            "a new soak lane": (
+                bazelrc + "test:nightly-soak --config=asan-fuzzer\n"
+                "test:nightly-soak --config=fuzz-soak\n", self.fuzz,
+                "nightly-soak leaves --cache_test_results=auto"),
+            "a step runs Bazel directly": (
+                bazelrc, self.fuzz.replace(
+                    "run: python3 tools/ci/fuzz_lane.py fuzz-lane-geode //...",
+                    "run: bazelisk test --config=fuzz-lane-geode //...", 1),
+                "fuzz.yml runs Bazel outside tools/ci/fuzz_lane.py"),
+            "a step names a lane outside the fuzz configs": (
+                bazelrc, self.fuzz.replace("fuzz_lane.py fuzz-lane-geode //...",
+                                           "fuzz_lane.py asan-lane //...", 1),
+                "asan-lane leaves --cache_test_results=auto"),
+        }
+        for name, (mutated_rc, mutated_fuzz, expected) in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual((mutated_rc, mutated_fuzz), (bazelrc, self.fuzz))
+                violations = _fuzz_cache_violations(mutated_rc, mutated_fuzz)
+                self.assertTrue(any(expected in violation for violation in violations),
+                                violations)
 
     def test_ubsan_corpora_are_selected_by_bazel_tags(self):
         body = _step_body(self.sanitizers, "Replay untrusted-input fuzzer corpora with UBSan")

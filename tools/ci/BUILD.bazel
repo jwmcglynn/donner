@@ -293,6 +293,40 @@ py_test(
     ],
 )
 
+# The Fuzz workflow's phase runner, which fails a phase that reports a cached or missing soak
+# result.
+py_test(
+    name = "fuzz_lane_tests",
+    size = "small",
+    srcs = [
+        "fuzz_lane.py",
+        "fuzz_lane_tests.py",
+    ],
+    main = "fuzz_lane_tests.py",
+    deps = [
+        "//tools:test_executable_fixtures",
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# The rules of the Lint lane's check that a Fuzz workflow phase soaks every fuzzer, applied to the
+# real .bazelrc and Fuzz workflow.
+py_test(
+    name = "fuzz_lane_coverage_tests",
+    size = "small",
+    srcs = [
+        "fuzz_lane_coverage.py",
+        "fuzz_lane_coverage_tests.py",
+    ],
+    data = [
+        "//:.bazelrc",
+        "//:.github/workflows/fuzz.yml",
+    ],
+    main = "fuzz_lane_coverage_tests.py",
+    deps = ["@rules_python//python/runfiles"],
+)
+
 # The Coverage workflow's measurement lane and hosted-runner disk cleanup.
 py_test(
     name = "coverage_lane_tests",
