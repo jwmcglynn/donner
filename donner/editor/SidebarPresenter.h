@@ -540,8 +540,21 @@ private:
     bool pendingCancel = false;     ///< Cancelled while the document was busy; restore later.
   };
   /// Capture \p field's unit on activation, and its styles before the first live mutation.
-  void beginStrokeLengthEdit(const StrokeRenderContext& context, StrokeScalarField field,
+  bool beginStrokeLengthEdit(const StrokeRenderContext& context, StrokeScalarField field,
                              LengthUnit unit);
+  void captureStrokeLengthBaseline(const StrokeRenderContext& context, StrokeScalarField field);
+  bool strokeEditSettlementPending() const;
+  bool strokeSelectionChanged(const EditorApp& app) const;
+  bool settleStrokeSelectionChange(EditorApp& app);
+  bool settleStrokeLengthEdit(EditorApp& app);
+  std::optional<StrokeScalarField> activeStrokeField() const;
+  bool prepareStrokeScalarEdit(EditorApp* app, StrokeScalarField field,
+                               StrokeLengthEditStart* nextLength);
+  bool deferStrokeFieldTransition();
+  std::optional<std::string> restoreStrokeLengthForTransition(EditorApp& app,
+                                                              StrokeLengthEditStart* nextLength);
+  void startStrokeScalarEdit(EditorApp& app, StrokeScalarField field,
+                             std::optional<std::string> beforeSource = std::nullopt);
   /// Put back the selection's styles from before typing; returns whether mutations were queued.
   bool restoreStrokeStyles(EditorApp& liveApp, const StrokeLengthEditStart& start);
   /// Unit for a bare number typed into \p field: the unit before typing began, else \p shown.
@@ -688,6 +701,7 @@ private:
   struct StrokeScalarEdit {
     StrokeEditOwner owner;
     StrokeScalarField field;
+    std::vector<svg::SVGElement> selection;
     std::string beforeSource;
     bool changed = false;
     bool pendingCommit = false;

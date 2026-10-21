@@ -1286,7 +1286,7 @@ bool SidebarPresenter::renderStrokeControlsPanel(EditorApp* liveApp,
   const bool canMutate =
       liveApp != nullptr && liveApp->hasSelection() && inspectorSnapshot_.strokeEditable;
   const bool restoredCancelledEdit = settlePendingStrokeEdit(liveApp);
-  ImGui::BeginDisabled(!inspectorSnapshot_.strokeEditable || strokeCancellationPending());
+  ImGui::BeginDisabled(!inspectorSnapshot_.strokeEditable || strokeEditSettlementPending());
   const StrokeRenderContext context{liveApp, theme, ImGui::GetCursorPosX(), canMutate,
                                     iconTextureProvider};
   bool queuedMutation = renderStrokeWidthRow(context) || restoredCancelledEdit;
@@ -1333,11 +1333,10 @@ bool SidebarPresenter::renderStrokeWidthField(const StrokeRenderContext& context
     const ImVec2 max = ImGui::GetItemRectMax();
     strokeWidthRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
   }
-  beginStrokeLengthEdit(context, StrokeScalarField::Width, widthLength.unit);
-  bool queuedMutation = false;
+  bool queuedMutation = beginStrokeLengthEdit(context, StrokeScalarField::Width, widthLength.unit);
   if (edit.typed.has_value() && context.canMutate) {
     *width = static_cast<float>(edit.typed->value);
-    queuedMutation = applyStrokeWidth(*context.app, *edit.typed);
+    queuedMutation = applyStrokeWidth(*context.app, *edit.typed) || queuedMutation;
   }
   queuedMutation =
       restoreStrokeLengthOnCancel(context, StrokeScalarField::Width, edit) || queuedMutation;
@@ -1385,10 +1384,12 @@ void SidebarPresenter::noteStrokeLengthText(StrokeScalarField field,
 }
 
 bool SidebarPresenter::settlePendingStrokeEdit(EditorApp* liveApp) {
+  bool restored = false;
   if (liveApp != nullptr) {
     discardForeignStrokeEdits(*liveApp);
+    restored = settleStrokeSelectionChange(*liveApp);
   }
-  const bool restored = finishPendingStrokeCancel(liveApp);
+  restored = finishPendingStrokeCancel(liveApp) || restored;
   if (liveApp != nullptr && strokeScalarEdit_.has_value() && strokeScalarEdit_->pendingCommit) {
     finishStrokeScalarEdit(*liveApp, strokeScalarEdit_->field);
   }
@@ -1412,19 +1413,32 @@ bool SidebarPresenter::finishPendingStrokeCancel(EditorApp* liveApp) {
   return restoreStrokeStyles(*liveApp, start);
 }
 
-void SidebarPresenter::beginStrokeLengthEdit(const StrokeRenderContext& context,
+bool SidebarPresenter::beginStrokeLengthEdit(const StrokeRenderContext& context,
                                              StrokeScalarField field, LengthUnit unit) {
-  if (strokeCancellationPending()) {
-    return;
+  if (strokeEditSettlementPending()) {
+    return false;
   }
+  bool restored = false;
   if (ImGui::IsItemActivated()) {
-    strokeLengthEditStart_ = StrokeLengthEditStart{.owner = strokeEditOwner(context.app),
-                                                   .field = field,
-                                                   .selection = inspectorSnapshot_.selection,
-                                                   .unit = unit,
-                                                   .styles = {},
-                                                   .activeWidth = {}};
+    StrokeLengthEditStart next{.owner = strokeEditOwner(context.app),
+                               .field = field,
+                               .selection = inspectorSnapshot_.selection,
+                               .unit = unit,
+                               .styles = {},
+                               .activeWidth = {}};
+    if (!prepareStrokeScalarEdit(context.app, field, &next)) {
+      ImGui::ClearActiveID();
+      return false;
+    }
+    restored = !next.styles.empty();
+    strokeLengthEditStart_ = std::move(next);
   }
+  captureStrokeLengthBaseline(context, field);
+  return restored;
+}
+
+void SidebarPresenter::captureStrokeLengthBaseline(const StrokeRenderContext& context,
+                                                   StrokeScalarField field) {
   if (context.canMutate && strokeLengthEditStart_.has_value() &&
       strokeLengthEditStart_->field == field && strokeLengthEditStart_->styles.empty()) {
     StrokeLengthEditStart& start = *strokeLengthEditStart_;
@@ -1433,6 +1447,115 @@ void SidebarPresenter::beginStrokeLengthEdit(const StrokeRenderContext& context,
       start.styles.emplace_back(element, element.getAttribute("style"));
     }
   }
+}
+
+bool SidebarPresenter::strokeEditSettlementPending() const {
+  return strokeCancellationPending() ||
+         (strokeScalarEdit_.has_value() && strokeScalarEdit_->pendingCommit);
+}
+
+bool SidebarPresenter::strokeSelectionChanged(const EditorApp& app) const {
+  return (strokeLengthEditStart_.has_value() &&
+          strokeLengthEditStart_->selection != app.selectedElements()) ||
+         (strokeScalarEdit_.has_value() && strokeScalarEdit_->selection != app.selectedElements());
+}
+
+bool SidebarPresenter::settleStrokeSelectionChange(EditorApp& app) {
+  if (!strokeSelectionChanged(app)) {
+    return false;
+  }
+  const ImGuiID itemId = strokeLengthEditStart_.has_value() ? strokeLengthEditStart_->owner.itemId
+                                                            : strokeScalarEdit_->owner.itemId;
+  const bool restored = settleStrokeLengthEdit(app);
+  if (strokeScalarEdit_.has_value()) {
+    finishStrokeScalarEdit(app, strokeScalarEdit_->field);
+  }
+  if (ImGui::GetActiveID() == itemId) {
+    ImGui::ClearActiveID();
+  }
+  return restored;
+}
+
+bool SidebarPresenter::settleStrokeLengthEdit(EditorApp& app) {
+  if (!strokeLengthEditStart_.has_value()) {
+    return false;
+  }
+  if (strokeLengthEditStart_->lastTextRejected || strokeLengthEditStart_->pendingCancel) {
+    strokeLengthEditStart_->pendingCancel = true;
+    return finishPendingStrokeCancel(&app);
+  }
+  strokeLengthEditStart_.reset();
+  return false;
+}
+
+std::optional<SidebarPresenter::StrokeScalarField> SidebarPresenter::activeStrokeField() const {
+  if (strokeLengthEditStart_.has_value()) {
+    return strokeLengthEditStart_->field;
+  }
+  if (strokeScalarEdit_.has_value()) {
+    return strokeScalarEdit_->field;
+  }
+  return std::nullopt;
+}
+
+bool SidebarPresenter::prepareStrokeScalarEdit(EditorApp* app, StrokeScalarField field,
+                                               StrokeLengthEditStart* nextLength) {
+  const std::optional<StrokeScalarField> previous = activeStrokeField();
+  if (previous.has_value() && *previous != field) {
+    if (app == nullptr) {
+      return deferStrokeFieldTransition();
+    }
+    std::optional<std::string> restoredSource = restoreStrokeLengthForTransition(*app, nextLength);
+    if (strokeScalarEdit_.has_value()) {
+      finishStrokeScalarEdit(*app, strokeScalarEdit_->field);
+    }
+    startStrokeScalarEdit(*app, field, std::move(restoredSource));
+  } else if (app != nullptr && !strokeScalarEdit_.has_value()) {
+    startStrokeScalarEdit(*app, field);
+  }
+  return true;
+}
+
+bool SidebarPresenter::deferStrokeFieldTransition() {
+  if (strokeLengthEditStart_.has_value()) {
+    if (strokeLengthEditStart_->lastTextRejected || strokeLengthEditStart_->pendingCancel) {
+      strokeLengthEditStart_->pendingCancel = true;
+    } else {
+      strokeLengthEditStart_.reset();
+    }
+  }
+  if (strokeScalarEdit_.has_value()) {
+    strokeScalarEdit_->pendingCommit = true;
+  }
+  return !strokeEditSettlementPending();
+}
+
+std::optional<std::string> SidebarPresenter::restoreStrokeLengthForTransition(
+    EditorApp& app, StrokeLengthEditStart* nextLength) {
+  if (!strokeLengthEditStart_.has_value()) {
+    return std::nullopt;
+  }
+  const StrokeLengthEditStart previous = *strokeLengthEditStart_;
+  if (!settleStrokeLengthEdit(app)) {
+    return std::nullopt;
+  }
+  // Rollback is queued until the frame flush. The next edit starts from the restored state,
+  // not the still-visible intermediate DOM/source, so its own cancellation and undo stay separate.
+  if (nextLength != nullptr) {
+    nextLength->styles = previous.styles;
+    nextLength->activeWidth = previous.activeWidth;
+  }
+  return strokeScalarEdit_->beforeSource;
+}
+
+void SidebarPresenter::startStrokeScalarEdit(EditorApp& app, StrokeScalarField field,
+                                             std::optional<std::string> beforeSource) {
+  strokeScalarEdit_ = StrokeScalarEdit{
+      .owner = strokeEditOwner(&app),
+      .field = field,
+      .selection = app.selectedElements(),
+      .beforeSource = beforeSource.value_or(std::string(app.document().document().source())),
+  };
 }
 
 bool SidebarPresenter::restoreStrokeStyles(EditorApp& liveApp, const StrokeLengthEditStart& start) {
@@ -1853,10 +1976,10 @@ bool SidebarPresenter::renderDashOffsetRow(const StrokeRenderContext& context) {
   const ImVec2 min = ImGui::GetItemRectMin();
   const ImVec2 max = ImGui::GetItemRectMax();
   strokeDashOffsetRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
-  beginStrokeLengthEdit(context, StrokeScalarField::DashOffset, offsetLength.unit);
-  bool queuedMutation = false;
+  bool queuedMutation =
+      beginStrokeLengthEdit(context, StrokeScalarField::DashOffset, offsetLength.unit);
   if (edit.typed.has_value() && context.canMutate) {
-    queuedMutation = applyStrokeDashOffset(*context.app, *edit.typed);
+    queuedMutation = applyStrokeDashOffset(*context.app, *edit.typed) || queuedMutation;
   }
   queuedMutation =
       restoreStrokeLengthOnCancel(context, StrokeScalarField::DashOffset, edit) || queuedMutation;
@@ -2060,17 +2183,7 @@ void SidebarPresenter::discardUnstartedStrokeEditForSelection(const EditorApp& a
 
 void SidebarPresenter::beginStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field) {
   discardForeignStrokeEdits(liveApp);
-  if (strokeScalarEdit_.has_value() && strokeScalarEdit_->field == field) {
-    return;
-  }
-  if (strokeScalarEdit_.has_value()) {
-    finishStrokeScalarEdit(liveApp, strokeScalarEdit_->field);
-  }
-  strokeScalarEdit_ = StrokeScalarEdit{
-      .owner = strokeEditOwner(&liveApp),
-      .field = field,
-      .beforeSource = std::string(liveApp.document().document().source()),
-  };
+  (void)prepareStrokeScalarEdit(&liveApp, field, nullptr);
 }
 
 void SidebarPresenter::trackStrokeScalarItem(const StrokeRenderContext& context,
