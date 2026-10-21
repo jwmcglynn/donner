@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdlib>
+#include <filesystem>
 #include <limits>
 #include <span>
 #include <string>
@@ -13,7 +15,10 @@
 #include <vector>
 
 #include "donner/editor/EditorSampleCatalog.h"
+#include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/gui/EditorWindow.h"
+#include "donner/svg/renderer/RendererImageIO.h"
 
 namespace donner::editor {
 namespace {
@@ -176,6 +181,7 @@ protected:
     ImGui::Begin("##sample_picker_host", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    ImGui::SetWindowFontScale(fontScale_);
     const SamplePickerActions actions = presenter_.render(state, provider);
     ImGui::End();
     ImGui::Render();
@@ -196,10 +202,48 @@ protected:
 
   SamplePickerPresenter presenter_;
   int lastVertexCount_ = 0;
+  float fontScale_ = 1.0f;
 
 private:
   ImGuiContext* context_ = nullptr;
 };
+
+TEST(SamplePickerPresenterCapture, CapturesNarrowAndWideGallery) {
+  const char* outputDirectory = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  ASSERT_NE(outputDirectory, nullptr);
+  for (const int width : {360, 720, 1024}) {
+    SCOPED_TRACE(width);
+    gui::EditorWindowOptions options;
+    options.initialWidth = width;
+    options.initialHeight = 900;
+    options.visible = false;
+    options.offscreen = true;
+    options.forceOffscreenRenderTarget = true;
+    options.enableFramebufferReadback = true;
+    options.offscreenContentScale = 1.0;
+    gui::EditorWindow window(options);
+    ASSERT_TRUE(window.valid()) << "Gallery capture requires the real offscreen UI backend";
+    svg::RendererBitmap bitmap;
+    for (int frame = 0; frame < 2; ++frame) {
+      window.beginFrame();
+      ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+      ImGui::SetNextWindowSize(ImVec2(static_cast<float>(width), 900.0f), ImGuiCond_Always);
+      ImGui::Begin("Gallery", nullptr,
+                   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+      (void)SamplePickerPresenter{}.render(SamplePickerState{});
+      ImGui::End();
+      bitmap = window.endFrameAndReadPixels();
+    }
+    ASSERT_FALSE(bitmap.empty());
+    ASSERT_EQ(bitmap.dimensions, Vector2i(width, 900));
+    const auto path =
+        std::filesystem::path(outputDirectory) / ("gallery-" + std::to_string(width) + ".png");
+    EXPECT_TRUE(svg::RendererImageIO::writeRgbaPixelsToPngFile(
+        path.string().c_str(), bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
+        bitmap.rowBytes / 4u));
+  }
+}
 
 TEST_F(SamplePickerPresenterImGuiTest, HiddenPickerEmitsNothingAndSkipsDrawing) {
   SamplePickerState hidden;
@@ -250,6 +294,48 @@ TEST_F(SamplePickerPresenterImGuiTest,
   constexpr int kVerticesPerImageQuad = 4;
   EXPECT_EQ(lastVertexCount_ + static_cast<int>(visibleCount) * kVerticesPerImageQuad,
             thumbnailVertexCount);
+}
+
+TEST_F(SamplePickerPresenterImGuiTest, EveryCardRetainsAllTitleAndDescriptionGlyphs) {
+  for (const auto [hostWidth, fontScale] : {std::pair{360.0f, 1.0f}, std::pair{720.0f, 1.0f},
+                                            std::pair{1024.0f, 1.0f}, std::pair{720.0f, 2.0f}}) {
+    SCOPED_TRACE(hostWidth);
+    SCOPED_TRACE(fontScale);
+    fontScale_ = fontScale;
+    std::vector<int> cardVertexStarts;
+    ImDrawList* drawList = nullptr;
+    const SamplePickerThumbnailProvider provider = [&](const EditorSample&, std::size_t) {
+      drawList = ImGui::GetWindowDrawList();
+      cardVertexStarts.push_back(drawList->VtxBuffer.Size);
+      return SamplePickerThumbnail{};
+    };
+    Frame(SamplePickerState{}, provider, hostWidth);
+    cardVertexStarts.clear();
+    Frame(SamplePickerState{}, provider, hostWidth);
+    ASSERT_NE(drawList, nullptr);
+    cardVertexStarts.push_back(drawList->VtxBuffer.Size);
+    const auto samples = GetEditorSampleCatalog();
+    ASSERT_EQ(cardVertexStarts.size(), samples.size() + 1u);
+    const EditorTheme& theme = EditorTheme::Active();
+    for (std::size_t index = 0; index < samples.size(); ++index) {
+      SCOPED_TRACE(samples[index].id);
+      int expectedGlyphs = 0;
+      for (const std::string_view text :
+           {samples[index].title, SamplePickerDescription(samples[index].id)}) {
+        for (const unsigned char character : text) {
+          const ImFontGlyph* glyph = ImGui::GetFont()->FindGlyph(character);
+          expectedGlyphs += glyph != nullptr && glyph->Visible ? 1 : 0;
+        }
+      }
+      int textVertices = 0;
+      for (int vertex = cardVertexStarts[index]; vertex < cardVertexStarts[index + 1u]; ++vertex) {
+        const ImU32 color = drawList->VtxBuffer[vertex].col;
+        textVertices += color == theme.textPrimary || color == theme.textMuted ? 1 : 0;
+      }
+      EXPECT_EQ(textVertices, expectedGlyphs * 4)
+          << "Every title and description glyph must survive the card clip rectangle";
+    }
+  }
 }
 
 TEST_F(SamplePickerPresenterImGuiTest, ReportsOnlyCardsIntersectingTheCurrentClipRegion) {

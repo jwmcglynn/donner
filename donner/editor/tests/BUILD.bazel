@@ -274,10 +274,16 @@ donner_cc_test(
 donner_cc_test(
     name = "sample_picker_presenter_tests",
     srcs = ["SamplePickerPresenter_tests.cc"],
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+    tags = ["hosted_parity"],
     deps = [
         "//donner/editor:editor_sample_catalog",
+        "//donner/editor:editor_theme",
         "//donner/editor:imgui_headers",
         "//donner/editor:sample_picker_presenter",
+        "//donner/editor/gui:editor_window",
+        "//donner/svg/renderer:renderer_image_io",
         "@com_google_gtest//:gtest_main",
         "@imgui",
     ],
