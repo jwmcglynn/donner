@@ -601,14 +601,31 @@ async function captureSplashDragFrame(
   );
 }
 
-test("editor page capture leaves retries to the outer poll and keeps drags one-shot", async ({ page }) => {
-  await page.setViewportSize({ width: 64, height: 64 });
-  await page.setContent(
-    `<body style="margin:0;background:rgb(44,47,56)"><div style="width:8px;height:8px;background:rgb(45,110,230)"></div></body>`,
-  );
-  const visible = await page.screenshot();
-  await page.setContent(`<body style="margin:0;background:rgb(12,15,20)"></body>`);
-  const black = await page.screenshot();
+/**
+ * A `size` x `size` opaque PNG of `background`, with an optional `square` x `square` block of
+ * `fill` at the origin.
+ */
+function syntheticCapturePng(
+  size: number,
+  background: [number, number, number],
+  square = 0,
+  fill: [number, number, number] = background,
+): Buffer {
+  const image = new PNG({ width: size, height: size });
+  for (let y = 0; y < size; ++y) {
+    for (let x = 0; x < size; ++x) {
+      const color = x < square && y < square ? fill : background;
+      image.data.set([...color, 255], (y * size + x) * 4);
+    }
+  }
+  return PNG.sync.write(image);
+}
+
+// Fixtures are built offline: the fake pages test only the helpers' retry policy, and a live
+// capture can fail on its own, for example when the GPU process is lost mid-capture.
+test("editor page capture leaves retries to the outer poll and keeps drags one-shot", async () => {
+  const visible = syntheticCapturePng(64, [44, 47, 56], 8, [45, 110, 230]);
+  const black = syntheticCapturePng(64, [12, 15, 20]);
 
   // The baseline poll owns the retry schedule: black, timeout, then visible.
   let shots = 0;
