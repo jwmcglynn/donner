@@ -2443,7 +2443,7 @@ bool MayBeOmittedFromLiveTree(const XMLNode& node) {
 }
 
 bool MatchesProjectedText(const XMLNode& parsed, std::size_t sourceOffsetBase,
-                          const std::vector<XMLNode>& projectedText) {
+                          const std::vector<XMLNode::ProjectedTextChild>& projectedText) {
   const auto parsedSpan = NodeSpanInCurrentCoords(parsed);
   if (!parsedSpan.has_value() ||
       parsedSpan->start > std::numeric_limits<std::size_t>::max() - sourceOffsetBase) {
@@ -2451,22 +2451,20 @@ bool MatchesProjectedText(const XMLNode& parsed, std::size_t sourceOffsetBase,
   }
   const std::size_t start = sourceOffsetBase + parsedSpan->start;
   const auto found = std::lower_bound(projectedText.begin(), projectedText.end(), start,
-                                      [](const XMLNode& node, std::size_t offset) {
-                                        return NodeSpanInCurrentCoords(node)->start < offset;
-                                      });
-  if (found == projectedText.end() || found->type() != parsed.type() ||
-      found->value() != parsed.value()) {
+                                      [](const XMLNode::ProjectedTextChild& node,
+                                         std::size_t offset) { return node.start < offset; });
+  if (found == projectedText.end() || found->type != parsed.type() ||
+      std::optional<RcString>(found->value) != parsed.value()) {
     return false;
   }
-  const auto span = NodeSpanInCurrentCoords(*found);
-  return span->start == start && span->end >= sourceOffsetBase &&
-         span->end - sourceOffsetBase == parsedSpan->end;
+  return found->start == start && found->end >= sourceOffsetBase &&
+         found->end - sourceOffsetBase == parsedSpan->end;
 }
 
 /// Whether a parsed-only filtered node occurs before the next live node.
 bool CanSkipFilteredParsedNode(const XMLNode& parsed, const std::optional<XMLNode>& live,
                                std::size_t sourceOffsetBase,
-                               const std::vector<XMLNode>& projectedText) {
+                               const std::vector<XMLNode::ProjectedTextChild>& projectedText) {
   if (!MayBeOmittedFromLiveTree(parsed)) {
     return false;
   }
@@ -2502,7 +2500,7 @@ bool RetainedFilteredNodeMatchesSource(const XMLNode& live, const XMLNode& parse
 bool QueueComparableChildren(const XMLNode& live, const XMLNode& parsed,
                              std::size_t sourceOffsetBase,
                              std::vector<std::pair<XMLNode, XMLNode>>& pending) {
-  const std::vector<XMLNode> projectedText = live.projectedTextChildren();
+  const std::vector<XMLNode::ProjectedTextChild> projectedText = live.projectedTextChildren();
   std::optional<XMLNode> liveChild = live.firstChild();
   std::optional<XMLNode> parsedChild = parsed.firstChild();
   while (liveChild || parsedChild) {

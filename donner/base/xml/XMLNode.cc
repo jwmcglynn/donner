@@ -1,7 +1,10 @@
 #include "donner/base/xml/XMLNode.h"
 
 #include <algorithm>
+#include <memory>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLDocument.h"
@@ -45,11 +48,83 @@ struct SourceOffsetComponent {
   std::uint64_t anchorSourceVersion = 0;
 };
 
+struct ProjectionRecordBudget {
+  std::size_t liveRecords = 0;
+};
+
+/// Owns an existing source span after its projected XML node can be collected.
+struct ProjectedTextRecord {
+  std::shared_ptr<XMLSourceStore> store;
+  std::shared_ptr<ProjectionRecordBudget> budget;
+  SourceAnchorSpan span;
+  Entity originalNode;
+  XMLNode::Type type;
+  RcString value;
+
+  ProjectedTextRecord(std::shared_ptr<XMLSourceStore> sourceStore,
+                      std::shared_ptr<ProjectionRecordBudget> recordBudget,
+                      SourceAnchorSpan sourceSpan, Entity node, XMLNode::Type nodeType,
+                      RcString text)
+      : store(std::move(sourceStore)),
+        budget(std::move(recordBudget)),
+        span(sourceSpan),
+        originalNode(node),
+        type(nodeType),
+        value(std::move(text)) {
+    ++budget->liveRecords;
+  }
+  ProjectedTextRecord(const ProjectedTextRecord&) = delete;
+  ProjectedTextRecord& operator=(const ProjectedTextRecord&) = delete;
+  ProjectedTextRecord(ProjectedTextRecord&&) noexcept = default;
+  ProjectedTextRecord& operator=(ProjectedTextRecord&& other) noexcept {
+    std::swap(store, other.store);
+    std::swap(budget, other.budget);
+    std::swap(span, other.span);
+    std::swap(originalNode, other.originalNode);
+    std::swap(type, other.type);
+    std::swap(value, other.value);
+    return *this;
+  }
+  ~ProjectedTextRecord() {
+    if (store) {
+      store->invalidateAnchor(span.start);
+      store->invalidateAnchor(span.end);
+    }
+    if (budget) {
+      --budget->liveRecords;
+    }
+  }
+};
+static_assert(!std::is_copy_constructible_v<ProjectedTextRecord>);
+static_assert(std::is_nothrow_move_constructible_v<ProjectedTextRecord>);
+static_assert(std::is_nothrow_move_assignable_v<ProjectedTextRecord>);
+
+struct ProjectedTextRecordsComponent {
+  ProjectedTextRecordsComponent() = default;
+  ProjectedTextRecordsComponent(const ProjectedTextRecordsComponent&) = delete;
+  ProjectedTextRecordsComponent& operator=(const ProjectedTextRecordsComponent&) = delete;
+  ProjectedTextRecordsComponent(ProjectedTextRecordsComponent&&) noexcept = default;
+  ProjectedTextRecordsComponent& operator=(ProjectedTextRecordsComponent&&) noexcept = default;
+  std::vector<ProjectedTextRecord> records;
+};
+static_assert(!std::is_copy_constructible_v<ProjectedTextRecordsComponent>);
+static_assert(std::is_nothrow_move_constructible_v<ProjectedTextRecordsComponent>);
+static_assert(std::is_nothrow_move_assignable_v<ProjectedTextRecordsComponent>);
+
+/// Only a surviving raw XML handle needs this link to invalidate its parent-owned record.
 struct ProjectedTextParentComponent {
   Entity parent;
 };
 
 void ClearTextProjectionProvenance(EntityHandle handle) {
+  if (const auto* link = handle.try_get<ProjectedTextParentComponent>();
+      link && handle.registry()->valid(link->parent)) {
+    if (auto* records = handle.registry()->try_get<ProjectedTextRecordsComponent>(link->parent)) {
+      const Entity original = handle.entity();
+      std::erase_if(records->records,
+                    [original](const auto& record) { return record.originalNode == original; });
+    }
+  }
   handle.remove<ProjectedTextParentComponent>();
 }
 
@@ -251,29 +326,70 @@ bool SourceSpansOverlap(const std::optional<ResolvedSourceSpan>& first,
   return first.has_value() && first->start < second.end && second.start < first->end;
 }
 
+void PruneProjectedTextRecords(ProjectedTextRecordsComponent& component, XMLSourceStore* store) {
+  std::erase_if(component.records, [store](const auto& record) {
+    if (record.store.get() != store) {
+      return true;
+    }
+    const auto span = store->resolveSpan(record.span);
+    return !span.has_value() || span->start >= span->end;
+  });
+}
+
 /// A retained incarnation supersedes any older projected text overlapping its source span.
 void ClearOverlappingTextProjection(EntityHandle child, Entity parent) {
-  if (parent == entt::null || !child.all_of<XMLNodeTypeComponent>()) {
+  if (parent == entt::null || !child.registry()->valid(parent) ||
+      !child.all_of<XMLNodeTypeComponent>()) {
     return;
   }
   const XMLNode::Type type = child.get<XMLNodeTypeComponent>().type();
   if (type != XMLNode::Type::Data && type != XMLNode::Type::CData) {
     return;
   }
-  const auto span = ResolvedNodeSpan(child);
-  if (!span.has_value()) {
+  auto* records = child.registry()->try_get<ProjectedTextRecordsComponent>(parent);
+  if (records == nullptr) {
     return;
   }
-  std::vector<Entity> stale;
-  for (Entity entity : child.registry()->view<ProjectedTextParentComponent>()) {
-    if (child.registry()->get<ProjectedTextParentComponent>(entity).parent == parent &&
-        SourceSpansOverlap(ResolvedNodeSpan(EntityHandle(*child.registry(), entity)), *span)) {
-      stale.push_back(entity);
-    }
+  XMLSourceStore* store = GetSourceStore(child);
+  PruneProjectedTextRecords(*records, store);
+  if (const auto span = ResolvedNodeSpan(child); span.has_value()) {
+    std::erase_if(records->records, [&](const auto& record) {
+      return SourceSpansOverlap(store->resolveSpan(record.span), *span);
+    });
   }
-  for (Entity entity : stale) {
-    child.registry()->remove<ProjectedTextParentComponent>(entity);
+}
+
+std::shared_ptr<ProjectionRecordBudget> GetProjectionRecordBudget(Registry& registry) {
+  using Budget = std::shared_ptr<ProjectionRecordBudget>;
+  if (!registry.ctx().contains<Budget>()) {
+    registry.ctx().emplace<Budget>(std::make_shared<ProjectionRecordBudget>());
   }
+  return registry.ctx().get<Budget>();
+}
+
+void CaptureProjectedText(EntityHandle child, EntityHandle parent) {
+  auto& context = child.registry()->ctx().get<XMLDocumentContext>();
+  const auto store = context.sourceStoreHolder->store;
+  auto* source = child.try_get<SourceOffsetComponent>();
+  if (!store || !source || !source->anchorSpan) {
+    return;
+  }
+  const auto span = store->resolveSpan(*source->anchorSpan);
+  if (!span || span->start >= span->end) {
+    return;
+  }
+  auto& records = parent.get_or_emplace<ProjectedTextRecordsComponent>();
+  PruneProjectedTextRecords(records, store.get());
+  const auto budget = GetProjectionRecordBudget(*child.registry());
+  if (budget->liveRecords >= context.maximumSourceEditTreeNodes) {
+    return;
+  }
+  // Transfer the existing anchors. Clearing the child retires its other source anchors;
+  // parent destruction or record invalidation retires this pair exactly once.
+  const SourceAnchorSpan anchors = *std::exchange(source->anchorSpan, std::nullopt);
+  records.records.emplace_back(store, budget, anchors, child.entity(),
+                               child.get<XMLNodeTypeComponent>().type(),
+                               child.get<components::XMLValueComponent>().value);
 }
 
 }  // namespace
@@ -696,33 +812,35 @@ void XMLNode::remove() {
 void XMLNode::removeForProjection() {
   const bool isText = type() == Type::Data || type() == Type::CData;
   const auto parent = parentElement();
-  remove();
+  ClearTextProjectionProvenance(handle_);
+  ClearOverlappingTextProjection(handle_, handle_.get<TreeComponent>().parent());
   if (isText && parent.has_value()) {
-    if (handle_.all_of<SourceOffsetComponent>()) {
-      handle_.emplace_or_replace<ProjectedTextParentComponent>(parent->handle_.entity());
-    }
+    CaptureProjectedText(handle_, parent->handle_);
   }
+  // The SVG mutation callback can collect this node synchronously. Do not access it afterward.
+  clearSourceLocation();
+  if (isText && parent.has_value()) {
+    handle_.emplace_or_replace<ProjectedTextParentComponent>(parent->handle_.entity());
+  }
+  auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
+  mutations.remove(handle_);
 }
 
-std::vector<XMLNode> XMLNode::projectedTextChildren() const {
-  std::vector<XMLNode> result;
-  for (const auto entity : registry().view<ProjectedTextParentComponent, SourceOffsetComponent>()) {
-    if (registry().get<ProjectedTextParentComponent>(entity).parent != handle_.entity()) {
-      continue;
-    }
-    const auto node = TryCast(toHandle(entity));
-    if (!node.has_value() || node->parentElement().has_value()) {
-      continue;
-    }
-    const auto span = node->getNodeLocation();
-    if (span.has_value() && span->start.offset.has_value() && span->end.offset.has_value() &&
-        *span->start.offset < *span->end.offset) {
-      result.push_back(*node);
-    }
+std::vector<XMLNode::ProjectedTextChild> XMLNode::projectedTextChildren() const {
+  std::vector<ProjectedTextChild> result;
+  auto* records = handle_.try_get<ProjectedTextRecordsComponent>();
+  if (records == nullptr) {
+    return result;
   }
-  std::sort(result.begin(), result.end(), [](const XMLNode& left, const XMLNode& right) {
-    return *left.getNodeLocation()->start.offset < *right.getNodeLocation()->start.offset;
-  });
+  XMLSourceStore* store = GetSourceStore(handle_);
+  PruneProjectedTextRecords(*records, store);
+  result.reserve(records->records.size());
+  for (const auto& record : records->records) {
+    const auto span = store->resolveSpan(record.span);
+    result.push_back(ProjectedTextChild{record.type, record.value, span->start, span->end});
+  }
+  std::sort(result.begin(), result.end(),
+            [](const auto& left, const auto& right) { return left.start < right.start; });
   return result;
 }
 
@@ -806,6 +924,7 @@ void XMLNode::clearValueLocation() {
 
 void XMLNode::clearSourceLocation() {
   ClearTextProjectionProvenance(handle_);
+  handle_.remove<ProjectedTextRecordsComponent>();
   if (auto* attributes = handle_.try_get<AttributesComponent>()) {
     SmallVector<XMLQualifiedNameRef, 10> names = attributes->attributes();
     for (const XMLQualifiedNameRef& name : names) {

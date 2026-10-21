@@ -1794,7 +1794,8 @@ TEST_F(XMLDocumentTests, RenameUsesOnlyCurrentParentTextProjectionProvenance) {
       XMLNode svg = doc.root().firstChild().value();
       XMLNode omitted = svg.firstChild().value();
       omitted.removeForProjection();
-      ASSERT_THAT(svg.projectedTextChildren(), testing::ElementsAre(omitted));
+      ASSERT_THAT(svg.projectedTextChildren(), testing::SizeIs(1));
+      EXPECT_THAT(svg.projectedTextChildren().front().value, Eq("first"));
       if (action == "removed") {
         omitted.remove();
       } else if (action == "reattached") {
@@ -1837,6 +1838,53 @@ TEST_F(XMLDocumentTests, RenameDoesNotReuseProjectionForANewRetainedTextNode) {
     EXPECT_THAT(doc.sourceDiagnostic(), Optional(testing::_));
     EXPECT_THAT(svg.projectedTextChildren(), testing::IsEmpty());
   }
+}
+
+TEST_F(XMLDocumentTests, ProjectedTextReusesAnchorsAndReleasesThemOnInvalidation) {
+  XMLDocument doc =
+      ParseDocument("<svg>first<peer/><g><rect/></g></svg>", XMLParser::Options::ParseAll());
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode text = svg.firstChild().value();
+  const auto before = doc.sourceStore()->resourceStats();
+  text.removeForProjection();
+  EXPECT_THAT(svg.projectedTextChildren(), testing::SizeIs(1));
+  const auto captured = doc.sourceStore()->resourceStats();
+  EXPECT_EQ(captured.totalCreatedAnchors, before.totalCreatedAnchors);
+  EXPECT_LT(captured.liveAnchorCount, before.liveAnchorCount);
+  text.remove();
+  EXPECT_THAT(svg.projectedTextChildren(), testing::IsEmpty());
+  EXPECT_EQ(doc.sourceStore()->resourceStats().liveAnchorCount + 2, captured.liveAnchorCount);
+}
+
+TEST_F(XMLDocumentTests, ProjectedTextRecordsRespectTreeLimitAndSourceReset) {
+  XMLDocument doc =
+      ParseDocument("<svg>first<peer/>second<g><rect/></g></svg>", XMLParser::Options::ParseAll());
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode first = svg.firstChild().value();
+  XMLNode second = first.nextSibling()->nextSibling().value();
+  doc.setSourceEditTreeLimits(1, 256);
+  const auto store =
+      doc.registry().ctx().get<components::XMLDocumentContext>().sourceStoreHolder->store;
+  const auto created = store->resourceStats().totalCreatedAnchors;
+  first.removeForProjection();
+  second.removeForProjection();
+  EXPECT_THAT(svg.projectedTextChildren(), testing::SizeIs(1));
+  EXPECT_EQ(store->resourceStats().totalCreatedAnchors, created);
+  doc.setSource("<svg/>");
+  EXPECT_THAT(svg.projectedTextChildren(), testing::IsEmpty());
+  EXPECT_EQ(store->resourceStats().liveAnchorCount, 0u);
+}
+
+TEST_F(XMLDocumentTests, ProjectedTextRecordsRetireAnchorsWhenParentIsDestroyed) {
+  XMLDocument doc = ParseDocument("<svg><g>first</g></svg>", XMLParser::Options::ParseAll());
+  XMLNode group = doc.root().firstChild()->firstChild().value();
+  XMLNode text = group.firstChild().value();
+  text.removeForProjection();
+  ASSERT_THAT(group.projectedTextChildren(), testing::SizeIs(1));
+  group.remove();
+  const auto count = doc.sourceStore()->resourceStats().liveAnchorCount;
+  doc.registry().destroy(group.entityHandle().entity());
+  EXPECT_EQ(doc.sourceStore()->resourceStats().liveAnchorCount + 2, count);
 }
 
 TEST_F(XMLDocumentTests, RenameDoesNotIgnoreRemovedRetainedText) {
