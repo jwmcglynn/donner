@@ -329,8 +329,8 @@ void EditorControlSession::recordSourcePanePreviewState(
     bool documentMatchesDraft, const std::optional<ParseDiagnostic>& sourceDiagnostic,
     const std::optional<ParseDiagnostic>& parseDiagnostic) {
   // A failed incremental edit still commits its bytes but keeps the last valid DOM, so the preview
-  // is current only when the bytes match and no source diagnostic is pending.
-  if (documentMatchesDraft && !sourceDiagnostic.has_value()) {
+  // is current only when the bytes match and neither XML nor SVG projection has a diagnostic.
+  if (documentMatchesDraft && !sourceDiagnostic.has_value() && !parseDiagnostic.has_value()) {
     loadedSourceRevision_ = sourceRevision_;
     lastParseError_.reset();
     return;
