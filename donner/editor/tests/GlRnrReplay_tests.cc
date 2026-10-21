@@ -314,6 +314,7 @@ TEST(GlRnrReplayTest, RecordedZeroShortcutRespectsTheRecordingVersion) {
     repro::GlRnrReplayOptions options;
     options.rnrPath = recording;
     options.outputDir = outputDir;
+    options.captureFrames = {7};
     options.pace = false;
     options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
     repro::GlRnrReplayResult result;
