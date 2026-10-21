@@ -1738,6 +1738,34 @@ TEST_F(XMLDocumentTests, ApplySourceEditRenameKeepsIdentifiedChildrenWhenReparse
   EXPECT_EQ(doc.source(), R"(<svg><a><!--note--><rect id="kept"/></a></svg>)");
 }
 
+// A child kept across the rename is counted once, so a document at its attribute limit can still
+// complete a two-step rename whose reparse adds a comment.
+TEST_F(XMLDocumentTests, ApplySourceEditRenameCountsReusedChildAttributesOnce) {
+  XMLParser::Options options;
+  options.maxTotalAttributes = 1;
+  XMLDocument doc = ParseDocument(R"(<svg><g><!--note--><rect id="child"/></g></svg>)", options);
+  const std::size_t closeOffset = doc.source().find("</g>") + 2;
+  ASSERT_TRUE(doc.applySourceEdit(XMLEditIntent{
+                                      .range = SourceRange{FileOffset::Offset(closeOffset),
+                                                           FileOffset::Offset(closeOffset + 1)},
+                                      .replacement = "a",
+                                      .sourceVersion = doc.sourceVersion(),
+                                  })
+                  .applied);
+  const std::size_t openOffset = doc.source().find("<g") + 1;
+
+  ApplySourceEditResult opening = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(openOffset), FileOffset::Offset(openOffset + 1)},
+      .replacement = "a",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(opening.applied);
+  EXPECT_THAT(opening.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(doc.root().firstChild()->firstChild()->tagName(), XMLQualifiedNameRef("a"));
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+}
+
 // A rename adds an element while the replaced one stays live, so it is refused before any bytes
 // change when the document is at its node or attribute limit.
 TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameRespectsTreeLimits) {
