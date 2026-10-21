@@ -91,6 +91,86 @@ protected:
   PenTool tool;
 };
 
+class PenClickReleaseTest : public PenToolTest, public ::testing::WithParamInterface<bool> {
+protected:
+  void Release(const Vector2d& point) {
+    if (GetParam()) {
+      tool.deferMouseUp(app, point);
+      tool.flushPendingDrag(app);
+    } else {
+      tool.onMouseUp(app, point);
+    }
+  }
+
+  void MakeSmoothDraft() {
+    tool.onMouseDown(app, Vector2d(10, 10), MouseModifiers{});
+    tool.onMouseUp(app, Vector2d(10, 10));
+    ASSERT_THAT(app.flushFrame(), ::testing::IsTrue());
+    tool.onMouseDown(app, Vector2d(50, 10), MouseModifiers{});
+    tool.onMouseMove(app, Vector2d(50, 30), true);
+    tool.onMouseUp(app, Vector2d(50, 30));
+    ASSERT_THAT(app.flushFrame(), ::testing::IsTrue());
+  }
+};
+
+TEST_P(PenClickReleaseTest, NearEndpointClickResumesWithoutMovingOrRecordingUndo) {
+  ASSERT_THAT(app.loadFromString(kOpenPathSvg), ::testing::IsTrue());
+  const auto selected = app.document().document().querySelector("#p");
+  ASSERT_THAT(selected, ::testing::Optional(::testing::_));
+  app.setSelection(*selected);
+  const auto history = app.undoTimeline().entryCount();
+  tool.onMouseDown(app, Vector2d(11, 1), MouseModifiers{});
+  Release(Vector2d(11, 1));
+  EXPECT_THAT(app.flushFrame(), ::testing::IsFalse());
+  EXPECT_THAT(path().d(), ::testing::Eq("M 0 0 L 10 0"));
+  EXPECT_THAT(tool.isDrafting(), ::testing::IsTrue());
+  EXPECT_THAT(app.undoTimeline().entryCount(), ::testing::Eq(history));
+}
+
+TEST_P(PenClickReleaseTest, NearAnchorOptionClickConvertsWithoutMoving) {
+  MakeSmoothDraft();
+  MouseModifiers option;
+  option.option = true;
+  tool.onMouseDown(app, Vector2d(51, 11), option);
+  Release(Vector2d(51, 11));
+  ASSERT_THAT(app.flushFrame(), ::testing::IsTrue());
+  EXPECT_THAT(path().d(), ::testing::Eq("M 10 10 L 50 10"));
+  EXPECT_THAT(tool.isDrafting(), ::testing::IsTrue());
+}
+
+TEST_P(PenClickReleaseTest, NearLastAnchorClickRetractsWithoutMoving) {
+  MakeSmoothDraft();
+  tool.onMouseDown(app, Vector2d(51, 11), MouseModifiers{});
+  Release(Vector2d(51, 11));
+  ASSERT_THAT(app.flushFrame(), ::testing::IsTrue());
+  EXPECT_THAT(path().d(), ::testing::Eq("M 10 10 C 10 10 50 -10 50 10"));
+  tool.onMouseDown(app, Vector2d(90, 10), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(90, 10));
+  ASSERT_THAT(app.flushFrame(), ::testing::IsTrue());
+  EXPECT_THAT(path().d(), ::testing::Eq("M 10 10 C 10 10 50 -10 50 10 L 90 10"));
+}
+
+TEST_P(PenClickReleaseTest, ReleaseOnlyMovementStillMovesAndHasOneUndoEntry) {
+  ASSERT_THAT(app.loadFromString(kOpenPathSvg), ::testing::IsTrue());
+  const auto selected = app.document().document().querySelector("#p");
+  ASSERT_THAT(selected, ::testing::Optional(::testing::_));
+  app.setSelection(*selected);
+  const auto history = app.undoTimeline().entryCount();
+  tool.onMouseDown(app, Vector2d(11, 1), MouseModifiers{});
+  Release(Vector2d(20, 5));
+  ASSERT_THAT(app.flushFrame(), ::testing::IsTrue());
+  EXPECT_THAT(path().d(), ::testing::Eq("M 0 0 L 20 5"));
+  EXPECT_THAT(app.undoTimeline().entryCount(), ::testing::Eq(history + 1));
+  app.undo();
+  (void)app.flushFrame();
+  EXPECT_THAT(path().d(), ::testing::Eq("M 0 0 L 10 0"));
+  app.redo();
+  (void)app.flushFrame();
+  EXPECT_THAT(path().d(), ::testing::Eq("M 0 0 L 20 5"));
+}
+
+INSTANTIATE_TEST_SUITE_P(DirectAndDeferred, PenClickReleaseTest, ::testing::Bool());
+
 TEST_F(PenToolTest, BusyDragKeepsOnlyLatestGeometryUntilIdleCommitAndRelease) {
   tool.onMouseDown(app, Vector2d(10, 20), MouseModifiers{});
   ASSERT_TRUE(app.flushFrame());
