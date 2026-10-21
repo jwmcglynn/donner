@@ -2948,6 +2948,126 @@ TEST_F(SidebarPresenterImGuiTest, StrokeWidthStartedWhileBusyRestoresItsFirstLiv
   }
 }
 
+TEST_F(SidebarPresenterImGuiTest, StartedStrokeWidthStaysWithItsOriginalSelectionAndHistory) {
+  struct Scenario {
+    bool reject;
+    bool busy;
+    const char* window;
+  };
+  for (const Scenario scenario : {Scenario{false, false, "##width_owner_commit"},
+                                  Scenario{true, false, "##width_owner_cancel"},
+                                  Scenario{false, true, "##width_owner_busy_commit"},
+                                  Scenario{true, true, "##width_owner_busy_cancel"}}) {
+    SCOPED_TRACE(scenario.window);
+    constexpr std::string_view source =
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="target" width="40" height="30" stroke="black"/><rect id="peer" x="50" width="40" height="30" stroke="black"/></svg>)";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+    const auto target = app.selectedElement();
+    const auto peer = app.document().document().querySelector("#peer");
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    ASSERT_THAT(peer, testing::Optional(testing::_));
+    constexpr float kHeight = 600.0f;
+    const ImVec2 away(-1.0f, -1.0f);
+    ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, scenario.window, "9", kHeight));
+    (void)app.flushFrame();
+    ASSERT_THAT(target->getAttribute("style"),
+                testing::Optional(testing::Eq(RcString("stroke-width: 9"))));
+    if (scenario.reject) {
+      ReplaceFocusedInput(presenter, &app, scenario.window, "furlongs", away, kHeight);
+    }
+    if (scenario.busy) {
+      RenderInspectorFrame(presenter, nullptr, scenario.window, away, false, kHeight);
+    }
+    // Layers changes the selection before the Inspector renders in the same desktop frame.
+    app.setSelection(*peer);
+    presenter.refreshSnapshot(app);
+    RenderInspectorFrame(presenter, &app, scenario.window, away, false, kHeight);
+    (void)app.flushFrame();
+    EXPECT_THAT(peer->getAttribute("style"), testing::Eq(std::nullopt));
+    EXPECT_THAT(app.selectedElement(), testing::Optional(testing::Property(
+                                           "id", &svg::SVGElement::id, testing::Eq("peer"))));
+    if (scenario.reject) {
+      EXPECT_THAT(target->getAttribute("style"), testing::Eq(std::nullopt));
+      EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+    } else {
+      EXPECT_THAT(target->getAttribute("style"),
+                  testing::Optional(testing::Eq(RcString("stroke-width: 9"))));
+      EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+      app.undo();
+      (void)app.flushFrame();
+      const auto restored = app.document().document().querySelector("#target");
+      ASSERT_THAT(restored, testing::Optional(testing::_));
+      EXPECT_THAT(restored->getAttribute("style"), testing::Eq(std::nullopt));
+    }
+  }
+}
+
+TEST_F(SidebarPresenterImGuiTest, EarlierWidthActivationCancelsRejectedDashOffsetBeforeItsOwnEdit) {
+  for (const bool busy : {false, true}) {
+    constexpr std::string_view source =
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><path id="target" d="M10 40 L110 40" stroke="black" stroke-dasharray="4 2" stroke-dashoffset="2"/></svg>)";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+    const auto target = app.selectedElement();
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    const char* window = busy ? "##offset_to_width_busy" : "##offset_to_width";
+    SCOPED_TRACE(window);
+    constexpr float kHeight = 600.0f;
+    const ImVec2 away(-1.0f, -1.0f);
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    const auto offset = presenter.strokeDashOffsetRectForTesting();
+    const auto width = presenter.strokeWidthRectForTesting();
+    ASSERT_THAT(offset, testing::Optional(testing::_));
+    ASSERT_THAT(width, testing::Optional(testing::_));
+    RenderInspectorFrame(presenter, &app, window, RectCenter(*offset), true, kHeight);
+    RenderInspectorFrame(presenter, &app, window, RectCenter(*offset), false, kHeight);
+    ImGui::GetIO().AddInputCharactersUTF8("5");
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    (void)app.flushFrame();
+    ASSERT_THAT(target->getAttribute("style"),
+                testing::Optional(testing::Eq(RcString("stroke-dashoffset: 5"))));
+    EditorApp* available = busy ? nullptr : &app;
+    ImGui::GetIO().AddInputCharactersUTF8("furlongs");
+    RenderInspectorFrame(presenter, available, window, away, false, kHeight);
+    RenderInspectorFrame(presenter, available, window, RectCenter(*width), true, kHeight);
+    RenderInspectorFrame(presenter, available, window, RectCenter(*width), false, kHeight);
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    (void)app.flushFrame();
+    EXPECT_THAT(target->getAttribute("style"), testing::Eq(std::nullopt));
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+
+    presenter.refreshSnapshot(app);
+    ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, window, "", kHeight));
+    ReplaceFocusedInput(presenter, &app, window, "7", away, kHeight);
+    (void)app.flushFrame();
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    (void)app.flushFrame();
+    EXPECT_THAT(target->getAttribute("style"), testing::Eq(std::nullopt));
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+
+    ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, window, "8", kHeight));
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
+    RenderInspectorFrame(presenter, &app, window, away, false, kHeight);
+    (void)app.flushFrame();
+    EXPECT_THAT(target->getAttribute("style"),
+                testing::Optional(testing::Eq(RcString("stroke-width: 8"))));
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+    app.undo();
+    (void)app.flushFrame();
+    const auto restored = app.document().document().querySelector("#target");
+    ASSERT_THAT(restored, testing::Optional(testing::_));
+    EXPECT_THAT(restored->getAttribute("style"), testing::Eq(std::nullopt));
+  }
+}
+
 TEST_F(SidebarPresenterImGuiTest, StrokeWidthEscapeRestoresEachSelectedStyleWithoutUndo) {
   constexpr std::string_view source =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="target" width="40" height="30" stroke="black" style="stroke-width: 3"/><rect id="peer" x="50" width="40" height="30" stroke="black"/></svg>)";
