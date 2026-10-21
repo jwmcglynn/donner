@@ -2029,7 +2029,56 @@ TEST(RenderCoordinatorTest, UnpairedBoundedResultCannotReplaceCompleteCommittedS
       RenderRequest::DragPreview{.entity = QuerySelector(app, "#r1").unsafeEntityHandle().entity(),
                                  .interactionKind = svg::compositor::InteractionHint::ActiveDrag};
   EXPECT_FALSE(RenderCoordinatorTestAccess::canPresentWithOverview(
-      coordinator, result, result.rasterViewport, app, textures));
+      coordinator, result, result.rasterViewport, result.viewport, app, textures));
+}
+
+TEST(RenderCoordinatorTest, CompleteActiveCoverageAdmitsMovedSceneWithoutMatchingOverview) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  const auto old = AcceptCapturedScene(coordinator, app);
+  const auto oldTiles = coordinator.compositedPresentation().resources()->tiles();
+  app.document().applyMutation(
+      EditorCommand::SetTransformCommand(QuerySelector(app, "#r1"), Transform2d::Translate(2, 0)));
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  const auto current = AcceptCapturedScene(coordinator, app);
+  ASSERT_THAT(current->identity().sameScene(old->identity()), testing::IsFalse());
+  GlTextureCache textures;
+  FramePresentationTestAccess::installResources(
+      textures, FramePresentationTestAccess::resources(current, oldTiles, {}, old, oldTiles));
+  RenderResult result;
+  result.version = app.document().currentFrameVersion();
+  result.capturedPresentation = current;
+  result.viewport = MakeViewport(app);
+  result.viewport.zoom = 8.0;
+  result.rasterViewport = result.viewport.rasterViewport();
+  const EditorRasterViewport visibleRaster = result.rasterViewport;
+  ASSERT_THAT(visibleRaster.viewportBounded, testing::IsTrue());
+  result.compositedPreview = RenderResult::CompositedPreview{};
+  RenderResult::CompositedTile tile;
+  tile.id = "current-active";
+  tile.kind = RenderResult::CompositedTile::Kind::Segment;
+  tile.canvasOffsetDoc = result.rasterViewport.documentRect.topLeft;
+  tile.bitmapDimsDoc = result.rasterViewport.documentRect.size();
+  tile.rasterCanvasSize = result.rasterViewport.outputSizePx;
+  tile.bitmap.dimensions = result.rasterViewport.outputSizePx;
+  tile.bitmap.rowBytes = static_cast<std::size_t>(tile.bitmap.dimensions.x) * 4;
+  tile.bitmap.pixels.resize(tile.bitmap.rowBytes * tile.bitmap.dimensions.y);
+  result.compositedPreview->tiles.push_back(tile);
+  ASSERT_THAT(result.compositedPreview->valid(), testing::IsTrue());
+  EXPECT_THAT(RenderCoordinatorTestAccess::canPresentWithOverview(
+                  coordinator, result, visibleRaster, result.viewport, app, textures),
+              testing::IsTrue());
+  result.rasterViewport.documentRect = Box2d::FromXYWH(0, 0, 25, 25);
+  EXPECT_THAT(RenderCoordinatorTestAccess::canPresentWithOverview(
+                  coordinator, result, visibleRaster, result.viewport, app, textures),
+              testing::IsFalse());
+  result.rasterViewport = visibleRaster;
+  result.compositedPreview->tiles.clear();
+  EXPECT_THAT(RenderCoordinatorTestAccess::canPresentWithOverview(
+                  coordinator, result, visibleRaster, result.viewport, app, textures),
+              testing::IsFalse());
 }
 
 TEST(RenderCoordinatorTest, PendingOverviewRequiresExactSceneBeyondFrameVersion) {
