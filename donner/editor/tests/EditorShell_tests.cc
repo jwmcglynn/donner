@@ -7610,6 +7610,27 @@ TEST(EditorShellTest, RenderPaneDeferredEmptyClickStartsMarqueeAfterHold) {
   window.endFrame();
 }
 
+// With the root `<svg>` selected, the buffered canvas click must not take the selected-bounds
+// re-drag: the root's bounds cover the whole canvas, which kept every click on the root.
+TEST(EditorShellTest, RenderPaneClickSelectsChildWhileRootIsSelected) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  app.setSelection(app.document().document().svgElement());
+
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(30.0, 24.0));
+  RenderPaneMouseFrame(window, shell, Vector2d(30.0, 24.0), /*mouseDown=*/false);
+
+  ASSERT_TRUE(app.selectedElement().has_value());
+  EXPECT_EQ(app.selectedElement()->id(), "target");
+}
+
 TEST(EditorShellTest, RenderPaneTextToolPlainClickCreatesNothing) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {

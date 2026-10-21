@@ -248,6 +248,39 @@ TEST(SourceSelectionTest, RootSvgStillResolvesAtSourceOffsetForExplicitSelection
   EXPECT_EQ(*root, app.document().document().svgElement());
 }
 
+// Clicking below the last source line puts the caret after `</svg>`. That is outside the root
+// element, so it must not select the root.
+TEST(SourceSelectionTest, CaretAfterRootClosingTagSelectsNothing) {
+  for (const std::string_view trailing : {"", "\n", "\n<!-- note -->\n"}) {
+    SCOPED_TRACE(testing::Message() << "trailing=\"" << trailing << "\"");
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(std::string(kSvg) + std::string(trailing)));
+    const std::string source(app.document().document().source());
+    const std::size_t rootEnd = source.rfind("</svg>") + std::string_view("</svg>").size();
+
+    TextEditor textEditor;
+    textEditor.setText(source);
+    textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(rootEnd));
+
+    EXPECT_EQ(FindElementAtSourceCursor(app.document().document(), textEditor), std::nullopt);
+    EXPECT_EQ(FindElementNearSourceOffset(app.document().document(), source, rootEnd),
+              std::nullopt);
+    EXPECT_EQ(FindElementNearSourceOffset(app.document().document(), source, source.size()),
+              std::nullopt);
+  }
+}
+
+TEST(SourceSelectionTest, CaretInsideRootClosingTagStillSelectsRoot) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  const std::string source(app.document().document().source());
+  const std::size_t closingTag = source.rfind("</svg>");
+  ASSERT_NE(closingTag, std::string::npos);
+
+  EXPECT_EQ(FindElementNearSourceOffset(app.document().document(), source, closingTag + 2),
+            app.document().document().svgElement());
+}
+
 TEST(SourceSelectionTest, SourceOffsetFindersRejectDocumentEndAndEmptySource) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSvg));

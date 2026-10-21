@@ -1589,6 +1589,20 @@ TEST(EditorControlSessionTest, PointerGesturePressInsideSelectedBoundsKeepsSelec
   EXPECT_THAT(gesture.body["selection"].value("id", ""), testing::Eq("c")) << gesture.body.dump(2);
 }
 
+// Selecting the root and then clicking a shape must select the shape: the root's bounds cover the
+// whole canvas, so the shell's selected-bounds re-drag would otherwise keep the root selected.
+TEST(EditorControlSessionTest, ClickOnShapeWhileRootIsSelectedSelectsTheShape) {
+  EditorControlSession session;
+  LoadShapesScene(session);
+  ASSERT_THAT(SelectBySelector(session, ":root").value("tag", ""), testing::Eq("svg"));
+
+  const ToolCallResult gesture =
+      session.handleToolCall("pointer_gesture", json{{"start_x", 130.0}, {"start_y", 35.0}});
+
+  ASSERT_THAT(gesture.body.value("ok", false), testing::IsTrue()) << gesture.body.dump(2);
+  EXPECT_THAT(gesture.body["selection"].value("id", ""), testing::Eq("c")) << gesture.body.dump(2);
+}
+
 TEST(EditorControlSessionTest, RecordsTextToolPointerGestureWithIdleTail) {
   constexpr std::string_view kScene =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
