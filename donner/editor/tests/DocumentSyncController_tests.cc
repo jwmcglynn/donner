@@ -869,7 +869,10 @@ TEST_F(DocumentSyncControllerTest, DeleteKeepsGroupsWithRemainingOrLockedChildre
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
   <g id="partial"><rect id="a" width="5" height="5"/><rect id="b" width="5" height="5"/></g>
   <g id="already-empty"></g>
-  <g id="guarded"><rect id="locked" data-donner-locked="true" width="5" height="5"/><rect id="free" width="5" height="5"/></g>
+  <g id="guarded">
+    <rect id="locked" data-donner-locked="true" width="5" height="5"/>
+    <rect id="free" width="5" height="5"/>
+  </g>
 </svg>)svg";
 
   EditorApp app;
@@ -902,6 +905,84 @@ TEST_F(DocumentSyncControllerTest, DeleteKeepsGroupsWithRemainingOrLockedChildre
       << "a group the delete did not empty is not the delete's to remove";
   EXPECT_TRUE(document.querySelector("#guarded").has_value()) << "still holds the locked rect";
   EXPECT_TRUE(document.querySelector("#locked").has_value());
+}
+
+TEST_F(DocumentSyncControllerTest, DeleteInsideAnEditedGroupKeepsTheGroup) {
+  // Inside an isolated group, Select All and Delete empties the group being edited. That group is
+  // the editing scope, so it stays; an emptied group nested inside it does not.
+  constexpr std::string_view kGroupedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <g id="scope">
+    <rect id="a" width="5" height="5"/>
+    <g id="inner"><rect id="b" width="5" height="5"/></g>
+  </g>
+</svg>)svg";
+
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kGroupedSvg)};
+  ASSERT_TRUE(app.loadFromString(kGroupedSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kGroupedSvg);
+  textEditor.setText(kGroupedSvg);
+  textEditor.resetTextChanged();
+
+  std::optional<svg::SVGElement> scope = app.document().document().querySelector("#scope");
+  ASSERT_TRUE(scope.has_value());
+  ASSERT_TRUE(app.enterGroupEdit(*scope));
+  app.setSelection(app.selectableElements());
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(2));
+  ASSERT_TRUE(app.deleteSelectionWithUndo(textEditor.getText()));
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  svg::SVGDocument& document = app.document().document();
+  EXPECT_EQ(textEditor.getText(), std::string(document.source()));
+  EXPECT_TRUE(document.querySelector("#scope").has_value());
+  EXPECT_FALSE(document.querySelector("#inner").has_value());
+  EXPECT_THAT(app.editingScope(), testing::Optional(*scope));
+  EXPECT_THAT(app.undoTimeline().nextUndoLabel(),
+              testing::Optional(testing::Eq(std::string_view("Delete elements"))));
+}
+
+TEST_F(DocumentSyncControllerTest, DeletingAGroupWithItsOwnChildIsOneRemoval) {
+  // A group selected together with one of its children is removed once, with one undo entry.
+  constexpr std::string_view kGroupedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <g id="grp"><rect id="a" width="5" height="5"/><rect id="b" width="5" height="5"/></g>
+  <rect id="other" width="5" height="5"/>
+</svg>)svg";
+
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kGroupedSvg)};
+  ASSERT_TRUE(app.loadFromString(kGroupedSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kGroupedSvg);
+  textEditor.setText(kGroupedSvg);
+  textEditor.resetTextChanged();
+
+  svg::SVGDocument& document = app.document().document();
+  std::optional<svg::SVGElement> group = document.querySelector("#grp");
+  std::optional<svg::SVGElement> child = document.querySelector("#a");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(child.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*group, *child});
+  ASSERT_TRUE(app.deleteSelectionWithUndo(textEditor.getText()));
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_EQ(textEditor.getText(), std::string(document.source()));
+  EXPECT_FALSE(document.querySelector("#grp").has_value());
+  EXPECT_TRUE(document.querySelector("#other").has_value());
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+  EXPECT_EQ(textEditor.getText(), std::string(kGroupedSvg));
 }
 
 TEST_F(DocumentSyncControllerTest, SetTextContentMirrorsIntoSourceText) {

@@ -594,8 +594,8 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
                          const ThumbnailTextureSnapshotProvider& textureSnapshotProvider) {
   const std::vector<LayerTreeRow>& rows = model_.rows();
   if (rows.empty()) {
-    const std::string emptyMessage(emptyStateMessage());
-    ImGui::TextDisabled("%s", emptyMessage.c_str());
+    const std::string_view emptyMessage = emptyStateMessage();
+    ImGui::TextDisabled("%.*s", static_cast<int>(emptyMessage.size()), emptyMessage.data());
     return;
   }
 

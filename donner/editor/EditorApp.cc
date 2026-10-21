@@ -1057,6 +1057,7 @@ DeletionPartition PartitionSelectionForDeletion(std::span<const svg::SVGElement>
   return partition;
 }
 
+/// The entity behind \p element, for membership sets.
 Entity EntityOf(const svg::SVGElement& element) {
   return element.unsafeEntityHandle().entity();
 }
@@ -1360,6 +1361,7 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
   if (partition.deletable.empty()) {
     return false;
   }
+  const std::size_t deletedObjectCount = partition.deletable.size();
   std::vector<svg::SVGElement> selected = WithEmptiedGroups(
       std::move(partition.deletable), editingScope_.value_or(document_.document().svgElement()));
   std::vector<std::optional<AttributeWritebackTarget>> writebackTargets;
@@ -1382,7 +1384,7 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
   const ApplyPatchesResult patchResult = applyPatches(sourceAfterDelete, removePatches);
   if (!removePatches.empty() && patchResult.applied == removePatches.size() &&
       patchResult.rejectedBounds == 0 && sourceAfterDelete != currentSourceText) {
-    const char* label = selected.size() == 1u ? "Delete element" : "Delete elements";
+    const char* label = deletedObjectCount == 1u ? "Delete element" : "Delete elements";
     undoTimeline_.record(label, captureDocumentSourceSnapshot(selected.front(), currentSourceText),
                          captureDocumentSourceSnapshot(selected.front(), sourceAfterDelete));
   }
