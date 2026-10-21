@@ -2079,6 +2079,103 @@ TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameRespectsTreeLimits) {
 
 // The document element is not replaced by a source edit: renaming it is reported, and undoing the
 // keystroke clears the report.
+TEST_F(XMLDocumentTests, OpeningTagRenamePreservesDocumentCustomEntityAttributes) {
+  const std::string source =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg><rect fill="&paint;"/></svg>)";
+  XMLDocument doc = ParseDocument(source, XMLParser::Options::ParseAll());
+  const XMLNode svg = ElementChild(doc.root(), 0);
+  EXPECT_THAT(ElementChild(svg, 0).getAttribute("fill"), Optional(Eq("red")));
+  const std::size_t offset = source.find("<rect") + 1;
+  const auto result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + 4)},
+      .replacement = "circle",
+      .sourceVersion = doc.sourceVersion()});
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(ElementChild(svg, 0).getAttribute("fill"), Optional(Eq("red")));
+  EXPECT_EQ(ElementChild(svg, 0).tagName(), XMLQualifiedNameRef("circle"));
+  EXPECT_THAT(doc.source(), testing::HasSubstr("fill=\"&paint;\""));
+}
+
+TEST_F(XMLDocumentTests, ContainerRenamePreservesCustomEntitiesInKeptAndReconciledChildren) {
+  for (const bool keepComments : {false, true}) {
+    auto options = XMLParser::Options::ParseAll();
+    options.parseComments = keepComments;
+    XMLDocument doc = ParseDocument(
+        R"(<!DOCTYPE svg [<!ENTITY paint "red"><!ENTITY label "Hi">]><svg><g fill="&paint;"><!--note--><rect id="child" fill="&paint;"/><text id="label">&label;</text></g></svg>)",
+        options);
+    XMLNode svg = ElementChild(doc.root(), 0);
+    const XMLNode child = ElementChild(ElementChild(svg, 0), 0);
+    const XMLNode label = ElementChild(ElementChild(svg, 0), 1);
+    const std::size_t close = doc.source().find("</g>") + 2;
+    ASSERT_TRUE(
+        doc.applySourceEdit(XMLEditIntent{.range = SourceRange{FileOffset::Offset(close),
+                                                               FileOffset::Offset(close + 1)},
+                                          .replacement = "a",
+                                          .sourceVersion = doc.sourceVersion()})
+            .applied);
+    const std::size_t open = doc.source().find("<g") + 1;
+    const auto renamed = doc.applySourceEdit(
+        XMLEditIntent{.range = SourceRange{FileOffset::Offset(open), FileOffset::Offset(open + 1)},
+                      .replacement = "a",
+                      .sourceVersion = doc.sourceVersion()});
+    EXPECT_THAT(renamed.diagnostic, Eq(std::nullopt));
+    EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+    EXPECT_THAT(ElementChild(svg, 0).getAttribute("fill"), Optional(Eq("red")));
+    EXPECT_EQ(ElementChild(ElementChild(svg, 0), 0), child);
+    EXPECT_EQ(ElementChild(ElementChild(svg, 0), 1), label);
+    EXPECT_THAT(child.getAttribute("fill"), Optional(Eq("red")));
+    ASSERT_THAT(label.firstChild(), testing::Ne(std::nullopt));
+    EXPECT_THAT(label.firstChild()->value(), Optional(Eq("Hi")));
+  }
+}
+
+TEST_F(XMLDocumentTests, RenameKeepsOriginalEntityTranslationAndDepthPolicy) {
+  for (int policy = 0; policy < 3; ++policy) {
+    auto options = XMLParser::Options::ParseAll();
+    if (policy == 0) {
+      options.parseCustomEntities = false;
+    }
+    if (policy == 1) {
+      options.disableEntityTranslation = true;
+    }
+    if (policy == 2) {
+      options.maxEntityDepth = 0;
+    }
+    XMLDocument doc = ParseDocument(
+        R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg><rect fill="&paint;" title="&amp;"/></svg>)",
+        options);
+    const XMLNode svg = ElementChild(doc.root(), 0);
+    const auto fill = ElementChild(svg, 0).getAttribute("fill");
+    const auto title = ElementChild(svg, 0).getAttribute("title");
+    const std::size_t offset = doc.source().find("<rect") + 1;
+    const auto renamed = doc.applySourceEdit(XMLEditIntent{
+        .range = SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + 4)},
+        .replacement = "circle",
+        .sourceVersion = doc.sourceVersion()});
+    EXPECT_THAT(renamed.diagnostic, Eq(std::nullopt));
+    EXPECT_THAT(ElementChild(svg, 0).getAttribute("fill"), Eq(fill));
+    EXPECT_THAT(ElementChild(svg, 0).getAttribute("title"), Eq(title));
+  }
+}
+
+TEST_F(XMLDocumentTests, RenameCannotExceedTheOriginalEntitySubstitutionLimit) {
+  auto options = XMLParser::Options::ParseAll();
+  options.maxEntitySubstitutions = 1;
+  const std::string source =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg><rect fill="&paint;"/></svg>)";
+  XMLDocument doc = ParseDocument(source, options);
+  const auto version = doc.sourceVersion();
+  const std::size_t offset = source.find("<rect") + 1;
+  const auto rejected = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + 4)},
+      .replacement = "circle stroke='&paint;'",
+      .sourceVersion = version});
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("entity"));
+  EXPECT_EQ(doc.source(), source);
+  EXPECT_EQ(doc.sourceVersion(), version);
+}
+
 TEST_F(XMLDocumentTests, ApplySourceEditDocumentElementRenameIsReportedAndUndoable) {
   XMLDocument doc = ParseDocument(R"(<svg><rect/></svg>)");
   XMLNode svg = doc.root().firstChild().value();

@@ -1506,6 +1506,31 @@ TEST(EditorSyncTest, SourceInsertedImageBuildsWithoutReparse) {
 // The reported source-pane sequence: typing into `<ellipse` turns it into an unknown element, and
 // undoing the keystroke must bring the ellipse back. Both edits stay incremental, so the untouched
 // sibling keeps its entity and no document reparse is queued.
+TEST(EditorSyncTest, TagRenameKeepsCustomEntityPaintOnTheActualSvgDocument) {
+  constexpr std::string_view kSvg =
+      R"(<!DOCTYPE svg [<!ENTITY paint "red">]><svg xmlns="http://www.w3.org/2000/svg" width="16" height="12"><rect id="shape" width="10" height="10" cx="5" cy="5" r="4" fill="&paint;"/></svg>)";
+  for (const bool preciseIntent : {true, false}) {
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(kSvg));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
+                testing::Optional(testing::Eq("red")));
+    const std::size_t offset = kSvg.find("<rect") + 1;
+    std::string source(kSvg);
+    source.replace(offset, 4, "circle");
+    std::string previous(kSvg);
+    const SourceEditIntent edit{.offset = offset, .removedLength = 4, .replacement = "circle"};
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, edit, source, &previous).dispatchedMutation);
+    EXPECT_TRUE(app.document().queue().empty());
+    (void)app.flushFrame();
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Eq(std::nullopt));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
+                testing::Optional(testing::Eq("red")));
+    EXPECT_THAT(svg::test::PixelAt(RenderDocument(app.document().document()), 5, 5),
+                testing::ElementsAre(255, 0, 0, 255));
+  }
+}
+
 TEST(EditorSyncTest, OpeningTagRenameAndUndoEditTheDocumentIncrementally) {
   constexpr std::string_view kSvg =
       "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\">"
