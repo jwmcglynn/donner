@@ -1403,6 +1403,10 @@ public:
     shell.referenceHighlightActive_ = active;
   }
 
+  static Box2d CanvasZoomControlRect(const EditorShell& shell) {
+    return shell.canvasZoomControlScreenRect();
+  }
+
   static void ConfigureViewport(EditorShell& shell, const Box2d& documentViewBox) {
     shell.interactionController_.updatePaneLayout(Vector2d(20.0, 30.0), Vector2d(400.0, 260.0),
                                                   documentViewBox);
@@ -8115,6 +8119,33 @@ TEST(EditorShellTest, ZoomToFitAndActualSizeShortcuts) {
   DriveGlobalShortcut(shell, {ImGuiKey_1}, /*ctrl=*/true);
   EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
   EXPECT_DOUBLE_EQ(shell.viewportForReadback().zoom, 1.0);
+}
+
+TEST(EditorShellTest, CanvasZoomControlClickPreservesLegacyReplayBehavior) {
+  for (const bool legacy : {true, false}) {
+    SCOPED_TRACE(legacy ? "legacy recording" : "current editor");
+    gui::EditorWindow window = MakeQaSizedWindow();
+    ASSERT_TRUE(window.valid());
+    EditorShellOptions options = OptionsWithSource(kSmallArtboardSvg);
+    options.useLegacyCanvasZoomShortcuts = legacy;
+    EditorShell shell(window, options);
+    ASSERT_TRUE(OpenAndLatchInitialView(window, shell));
+    PressCommandShortcutInFrames(window, shell, ImGuiKey_Equal);
+    const double zoomed = shell.viewportForReadback().zoom;
+    ASSERT_THAT(zoomed, testing::Gt(1.0));
+    const Box2d control = EditorShellTestAccess::CanvasZoomControlRect(shell);
+    const Vector2d center = (control.topLeft + control.bottomRight) * 0.5;
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(static_cast<float>(center.x), static_cast<float>(center.y));
+    RunShellFrame(window, shell);
+    io.AddMouseButtonEvent(0, true);
+    RunShellFrame(window, shell);
+    io.AddMouseButtonEvent(0, false);
+    RunShellFrame(window, shell);
+
+    EXPECT_DOUBLE_EQ(shell.viewportForReadback().zoom, legacy ? 1.0 : zoomed);
+    EXPECT_EQ(!ImGui::GetCurrentContext()->OpenPopupStack.empty(), !legacy);
+  }
 }
 
 TEST(EditorShellTest, GlobalShortcutsSwitchToolsZoomAndSourceFocus) {
