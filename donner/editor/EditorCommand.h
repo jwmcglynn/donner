@@ -148,6 +148,8 @@ struct EditorCommand {
   struct SourceRecoveryState {
     std::uint64_t documentGeneration = 0;  ///< Document incarnation admitted at queue time.
     std::uint64_t sourceVersion = 0;       ///< Raw draft revision admitted at queue time.
+
+    /// Whether both states admit recovery for the same document incarnation and source revision.
     bool operator==(const SourceRecoveryState&) const = default;
   };
 

@@ -70,7 +70,7 @@ struct NumericPresetPopupPlacement {
 /// with ImGui::EndPopup(). Single-click activation keeps the field editable while expanding the
 /// preset choices. Its width matches the numeric field plus attached stepper. It opens below the
 /// field when the list fits there, otherwise above, and never covers the field (see
-/// \ref PlaceNumericPresetPopup).
+/// \ref donner::editor::PlaceNumericPresetPopup).
 ///
 /// @param popupId Stable ImGui popup ID in the caller's current ID scope.
 /// @param fieldMin Minimum screen-space corner of the numeric input.

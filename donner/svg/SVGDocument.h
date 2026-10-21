@@ -110,6 +110,7 @@ public:
   /// Opaque, equality-comparable identity of the current resource-loading and parsing policy.
   class ResourcePolicySnapshot {
   public:
+    /// Whether both snapshots identify the same resource-loading and parsing policy.
     bool operator==(const ResourcePolicySnapshot&) const = default;
 
   private:

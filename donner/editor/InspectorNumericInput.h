@@ -98,9 +98,9 @@ struct InspectorLengthEdit {
 /**
  * Text field for a CSS length, displayed with one decimal place and its unit, e.g. `2.0mm`.
  *
- * Typed text is interpreted by \ref ParseInspectorLength with \p bareNumberUnit as the default,
- * so a bare number keeps the authored unit and a typed unit replaces it. Rejected text outlines the
- * field like \ref DragInspectorNumber.
+ * Typed text is interpreted by \ref donner::editor::ParseInspectorLength with \p bareNumberUnit as
+ * the default, so a bare number keeps the authored unit and a typed unit replaces it. Rejected text
+ * outlines the field like \ref donner::editor::DragInspectorNumber.
  *
  * @param label ImGui label and ID of the field.
  * @param current Value displayed while the field is not being edited.
