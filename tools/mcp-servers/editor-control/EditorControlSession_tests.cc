@@ -973,6 +973,34 @@ TEST(EditorControlSessionTest, SourcePaneMalformedEditKeepsPreviewStale) {
   EXPECT_FALSE(repaired.body["source"].value("preview_stale", true)) << repaired.body.dump(2);
 }
 
+// Source-pane dispatch honors canvas overrides the same way the reload dispatch does.
+TEST(EditorControlSessionTest, SourcePaneDispatchAppliesCanvasOverrides) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><rect width="40" height="20" fill="red"/></svg>)svg";
+  EditorControlSession session;
+  ASSERT_FALSE(session
+                   .handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                    {"canvas_width", 40},
+                                                    {"canvas_height", 20},
+                                                    {"render_after_load", false}})
+                   .isError);
+  const std::size_t fillOffset = std::string_view(kScene).find("red");
+
+  const ToolCallResult edit = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits",
+            json::array({json{{"offset", fillOffset}, {"delete_count", 3}, {"insert", "blue"}}})},
+           {"canvas_width", 80},
+           {"canvas_height", 40},
+           {"render_after_edit", false}});
+  ASSERT_FALSE(edit.isError) << edit.body.dump(2);
+
+  const ToolCallResult state = session.handleToolCall("session_state", json::object());
+  ASSERT_FALSE(state.isError) << state.body.dump(2);
+  EXPECT_EQ(state.body["canvas"], (json{{"width", 80}, {"height", 40}})) << state.body.dump(2);
+}
+
 TEST(EditorControlSessionTest, InvalidSvgSourceEditKeepsDraftAndStalePreview) {
   constexpr std::string_view kScene =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
