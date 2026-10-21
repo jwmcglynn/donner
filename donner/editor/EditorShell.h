@@ -746,6 +746,17 @@ private:
   /// Apply a deferred selection focus once the source pane mirrors pending document edits.
   /// @return True when the focus partition was recomputed.
   bool applyDeferredSourceFocusIfReady();
+  /// Recompute selection focus when a document edit rewrote the source under an unchanged
+  /// selection (a z-order move, or an edit to a sibling), once the source pane matches the document
+  /// source.
+  /// @param preserveSourceEditCursor True while the edit came from typing inside the focus range;
+  /// the source caret and scroll position are then left alone.
+  /// @return True when the focus partition was recomputed.
+  bool refreshSourceFocusAfterDocumentEdit(bool preserveSourceEditCursor);
+  /// True while text typed in the source pane has not reached the document source yet.
+  [[nodiscard]] bool sourcePaneTextAheadOfDocument() const;
+  /// First source-pane line of the primary selected element, if it has a source location.
+  [[nodiscard]] std::optional<int> selectedElementSourceLine() const;
   [[nodiscard]] std::vector<svg::SVGElement> sourceHoverElements() const;
   [[nodiscard]] std::vector<SourceByteRange> sourceHoverRangesForElements(
       const std::vector<svg::SVGElement>& elements) const;
@@ -1120,6 +1131,12 @@ private:
   /// document edits. Focus line ranges are document-source lines: applied to a lagging source pane
   /// they fold the wrong lines, and mirroring the edits afterwards shifts them again.
   std::optional<bool> deferredSourceFocusScroll_;
+  /// Document source version the selection focus was last computed against. The source pane remaps
+  /// focus line ranges through each edit, which cannot follow an element that moved: a structural
+  /// move is a delete plus an insert, so the remapped ranges keep the element's old lines.
+  std::uint64_t sourceFocusSourceVersion_ = 0;
+  /// \ref selectedElementSourceLine when the selection focus was last computed.
+  std::optional<int> sourceFocusSelectionLine_;
   /// Set when a fast-path click consumed the
   /// pending click without going through the `!isBusy()`-gated post-
   /// onMouseDown cache refresh. The follow-up fires on the next idle

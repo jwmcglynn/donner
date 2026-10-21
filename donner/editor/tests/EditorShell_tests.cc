@@ -9974,4 +9974,48 @@ TEST(EditorShellTest, SourceFocusFollowsSelectedElementMovedByDocumentEdit) {
         << "the source selection highlight should cover the moved element";
   }
 }
+
+TEST(EditorShellTest, SourceFocusFollowsZOrderAfterTypingThatChangedNothing) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(SourceFocusInsertionSvg(), "focus-retype.svg"));
+  ASSERT_TRUE(shell.valid());
+  SettleShellFrames(window, shell);
+
+  // Retype a character in the source pane: the pane reports typed text, but the document source
+  // does not change, so the typed edit must not suppress a later document edit's focus scroll.
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  const std::size_t retypedOffset = source.getText().find("<rect id=\"filler-1\"");
+  ASSERT_NE(retypedOffset, std::string::npos);
+  source.setSelection(source.getCoordinatesAtByteOffset(retypedOffset),
+                      source.getCoordinatesAtByteOffset(retypedOffset + 1u));
+  source.resetTextChanged();
+  source.insertText("<");
+  ASSERT_TRUE(source.isTextChanged());
+  window.beginFrame();
+  ImGuiIO& io = ImGui::GetIO();
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  EditorShellTestAccess::RenderSourcePane(shell, /*paneOriginY=*/0.0f, /*paneHeight=*/180.0f,
+                                          /*paneWidth=*/260.0f, io.Fonts->Fonts[0]);
+  window.endFrame();
+  SettleShellFrames(window, shell);
+
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#filler-3");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SettleShellFrames(window, shell);
+  DriveGlobalShortcut(shell, {ImGuiKey_RightBracket}, /*ctrl=*/true, /*shift=*/true);
+  SettleShellFrames(window, shell);
+
+  ExpectFocusShowsSelectedElement(shell, "id=\"filler-3\"", "/>");
+  EXPECT_THAT(source.getSelectedText(),
+              testing::AllOf(testing::StartsWith("<rect id=\"filler-3\""), testing::EndsWith("/>")))
+      << "the source selection highlight should follow the moved element";
+}
 }  // namespace donner::editor

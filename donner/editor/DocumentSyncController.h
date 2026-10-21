@@ -76,7 +76,13 @@ public:
   /// user input.
   [[nodiscard]] bool hasPendingWritebacks() const {
     return !pendingTransformWritebacks_.empty() || !pendingElementRemoveWritebacks_.empty() ||
-           !pendingSourceEditIntents_.empty() || textChangePending_;
+           hasPendingSourceTextSync();
+  }
+
+  /// True while text typed in the source pane is held back by the typing throttle and has not
+  /// been dispatched to the document yet.
+  [[nodiscard]] bool hasPendingSourceTextSync() const {
+    return !pendingSourceEditIntents_.empty() || textChangePending_;
   }
 
 private:
