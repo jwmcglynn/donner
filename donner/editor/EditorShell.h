@@ -111,6 +111,7 @@ struct EditorShellOptions {
   /// Show the in-workspace welcome and sample picker on the first frame.
   bool showWelcome = false;
   std::string editorNoticeText;  //!< Host-provided notice displayed in the editor.
+
   /// Open a document larger than the canvas fitted to it, rather than at 100%. Replays of
   /// recordings made before the editor did this turn it off, so their screen coordinates still
   /// land where they were recorded.

@@ -27,8 +27,8 @@ namespace donner::editor {
 /// `std::nullopt` when it is not (a decomposed rotation change against a skew
 /// matrix, a move on a rotate-only element, etc.). The returned string always
 /// re-parses to @p target within a tight tolerance; callers that receive
-/// `std::nullopt` should use \ref serializeTransformForWriteback, which falls back to the
-/// canonical form.
+/// `std::nullopt` should use \ref donner::editor::serializeTransformForWriteback, which falls back
+/// to the canonical form.
 [[nodiscard]] std::optional<RcString> reserializeTransformPreservingSyntax(
     std::string_view authorSource, const Transform2d& target);
 
