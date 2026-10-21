@@ -7627,8 +7627,9 @@ TEST(EditorShellTest, RenderPaneClickSelectsChildWhileRootIsSelected) {
   EditorShellTestAccess::BufferPendingClick(shell, Vector2d(30.0, 24.0));
   RenderPaneMouseFrame(window, shell, Vector2d(30.0, 24.0), /*mouseDown=*/false);
 
-  ASSERT_TRUE(app.selectedElement().has_value());
-  EXPECT_EQ(app.selectedElement()->id(), "target");
+  EXPECT_THAT(app.selectedElement(),
+              testing::Optional(
+                  testing::Property("id", &svg::SVGElement::id, testing::Eq(RcString("target")))));
 }
 
 TEST(EditorShellTest, RenderPaneTextToolPlainClickCreatesNothing) {

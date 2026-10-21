@@ -1393,7 +1393,7 @@ TEST_F(SelectToolTest, PressOnEmptyCanvasWithRootSelectedClearsTheSelection) {
   tool.onMouseDown(app, Vector2d(60.0, 60.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(60.0, 60.0));
 
-  EXPECT_FALSE(app.selectedElement().has_value());
+  EXPECT_THAT(app.selectedElement(), testing::Eq(std::nullopt));
 }
 
 TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseWhenNothingSelected) {
