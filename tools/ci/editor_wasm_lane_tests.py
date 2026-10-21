@@ -137,7 +137,7 @@ class EditorWasmLaneTest(unittest.TestCase):
                 self.assertEqual(result.stdout.count("::endgroup::"), count)
                 self.assertEqual(self.summary.read_text().count("| passed |"), count)
 
-    def test_main_report_mode_only_changes_the_two_download_budget_commands(self):
+    def test_main_report_mode_only_changes_the_two_numeric_budget_commands(self):
         result, calls = self._run("build", budget_mode="report")
         self.assertEqual(result.returncode, 0, result.stderr)
         budget_calls = [call for call in calls if "--test_arg=--payload-budget-mode=report" in call]

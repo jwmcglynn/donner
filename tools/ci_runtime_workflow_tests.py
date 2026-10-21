@@ -1589,7 +1589,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         return self._lane_function("build")
 
     def test_editor_wasm_payload_ceilings_are_enforced(self):
-        """The size test declares each enforced ceiling once, and CI cannot relax it."""
+        """The size test declares each ceiling once under the explicit CI mode policy."""
         self.assertEqual(
             _declared_payload_ceilings(self.wasm_size_test_arguments),
             ENFORCED_PAYLOAD_CEILINGS,
@@ -1623,7 +1623,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(1, self.renderer_wasm_build.count(marker))
         return self.renderer_wasm_build.split(marker, 1)[1].split("\n)", 1)[0]
 
-    def test_download_size_enforcement_is_retained_for_pr_nightly_and_manual_runs(self):
+    def test_numeric_size_enforcement_is_retained_for_pr_nightly_and_manual_runs(self):
         step = self._step_body(self.editor_wasm, "Build and size-check Geode editor Wasm package")
         self.assertIn(
             "PAYLOAD_BUDGET_MODE: ${{ github.event_name == 'push' && "
@@ -1633,7 +1633,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("  workflow_dispatch:", self.editor_wasm)
 
     def test_renderer_wasm_payload_ceilings_are_enforced(self):
-        """The renderer module's size test declares each ceiling once, as CI enforces it."""
+        """The renderer module declares each ceiling enforced by PR/nightly/manual runs."""
         self.assertEqual(
             _declared_payload_ceilings(
                 self._renderer_size_test_definition(), RENDERER_PAYLOAD_CEILINGS
@@ -1643,7 +1643,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
 
     def test_renderer_wasm_size_test_runs_in_the_size_check_step(self):
-        """The Editor Wasm size-check step runs the suite that contains the renderer gate."""
+        """The step runs renderer size and pixel targets separately; prefetch retains their suite."""
         step = self._size_check_phase()
         self.assertIn("--config=wasm-size", step)
         self.assertIn(RENDERER_SIZE_TEST, step)

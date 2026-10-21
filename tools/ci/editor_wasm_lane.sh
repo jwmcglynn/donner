@@ -9,7 +9,8 @@
 #       so a download failure is retried but a build or test failure never is.
 #   tools/ci/editor_wasm_lane.sh build
 #       Run the audits, renderer pixel check and both Wasm payload inspections.
-#       Download-size budgets enforce by default; PAYLOAD_BUDGET_MODE=report only reports bytes.
+#       Numeric payload and module-complexity ceilings enforce by default.
+#       PAYLOAD_BUDGET_MODE=report reports every metric without enforcing numeric ceilings.
 #   tools/ci/editor_wasm_lane.sh prove-lockfile SNAPSHOT
 #       Build the package with the generated MODULE.bazel.lock in update and then error mode,
 #       check that lockfile, and copy it to SNAPSHOT for the deployment candidate.
