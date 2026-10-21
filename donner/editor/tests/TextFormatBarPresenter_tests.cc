@@ -86,7 +86,7 @@ TEST(TextFormatBarPresenterActionsTest, ComputedFamilyTextRoundTripsEditableCssN
     EditorApp app;
     ASSERT_TRUE(app.loadFromString(
         R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">Hi</text></svg>)"));
-    const auto text = app.document().document().querySelector("#t");
+    auto text = app.document().document().querySelector("#t");
     ASSERT_THAT(text, testing::Ne(std::nullopt));
     text->setAttribute("font-family", family);
     app.setSelection(*text);
