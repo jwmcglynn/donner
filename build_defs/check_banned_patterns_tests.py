@@ -457,7 +457,7 @@ class CheckBannedPatternsTests(unittest.TestCase):
         self.assertEqual(1, descriptions.count("complex method (11 decision points; limit 10)"))
 
     def _run_lint_in_git_repo(
-        self, *, current_decision_points: int, provide_origin_main: bool
+        self, *, current_decision_points: int, provide_origin_main: bool, diverged_target: bool = False
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)
@@ -506,7 +506,35 @@ class CheckBannedPatternsTests(unittest.TestCase):
                     cwd=repo,
                     check=True,
                 )
+            if diverged_target:
+                # The feature retains inherited debt while the target independently reduces it.
+                write_source(11)
+                subprocess.run(["git", "add", "."], cwd=repo, check=True)
+                subprocess.run(
+                    ["git", "commit", "-m", "inherited debt"],
+                    cwd=repo, check=True, capture_output=True,
+                )
+                baseline = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+                ).strip()
+                write_source(1)
+                subprocess.run(["git", "add", "."], cwd=repo, check=True)
+                subprocess.run(
+                    ["git", "commit", "-m", "target reduction"],
+                    cwd=repo, check=True, capture_output=True,
+                )
+                subprocess.run(
+                    ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+                    cwd=repo, check=True,
+                )
+                subprocess.run(
+                    ["git", "checkout", "--detach", baseline],
+                    cwd=repo, check=True, capture_output=True,
+                )
             write_source(current_decision_points)
+            if diverged_target:
+                with (repo / "donner" / "base" / "Example.cc").open("a") as source:
+                    source.write("void Example::unrelated() {}\n")
             subprocess.run(["git", "add", "."], cwd=repo, check=True)
             subprocess.run(
                 ["git", "commit", "--allow-empty", "-m", "candidate"],
@@ -538,6 +566,19 @@ class CheckBannedPatternsTests(unittest.TestCase):
 
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("complex method (11 decision points; limit 10)", completed.stdout)
+
+    def test_lint_preserves_debt_from_diverged_common_ancestor(self):
+        completed = self._run_lint_in_git_repo(
+            current_decision_points=11, provide_origin_main=True, diverged_target=True
+        )
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
+    def test_lint_rejects_growth_from_diverged_common_ancestor(self):
+        completed = self._run_lint_in_git_repo(
+            current_decision_points=12, provide_origin_main=True, diverged_target=True
+        )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("complex method (12 decision points; limit 10)", completed.stdout)
 
     def test_lint_fails_closed_without_target_baseline(self):
         completed = self._run_lint_in_git_repo(
