@@ -31,7 +31,10 @@ py_test(
         "check_banned_patterns.py",
         "check_banned_patterns_tests.py",
     ],
-    data = ["//tools:lint.sh"],
+    data = [
+        "//tools:check_python_quality.py",
+        "//tools:lint.sh",
+    ],
     deps = ["//tools:test_executable_fixtures"],
 )
 
