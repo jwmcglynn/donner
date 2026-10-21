@@ -4,6 +4,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -145,6 +146,11 @@ std::optional<std::vector<Fn>> ParseFunctionList(std::string_view s) {
 /// Round @p value to @p decimals places, with -0 normalized to 0.
 double RoundToDecimals(double value, int decimals) {
   const double scale = std::pow(10.0, decimals);
+  // Scaling beyond exact integer precision can move coordinates that already have no finer digits.
+  const double precisionLimit = 1.0 / (scale * std::numeric_limits<double>::epsilon());
+  if (std::abs(value) >= precisionLimit) {
+    return value;
+  }
   const double rounded = std::round(value * scale) / scale;
   return rounded == 0.0 ? 0.0 : rounded;
 }
