@@ -83,6 +83,8 @@ struct FramePresentationInput {
 
   /// Complete vector paint and geometry replacing one independently owned raster layer.
   std::shared_ptr<const CapturedPresentation> livePathReplacement;
+  /// Latest owning element-space pen geometry, paired with the replacement capture identity.
+  std::shared_ptr<const Path> penPathGeometryLocal;
 };
 
 /// Immutable, validated pixel/geometry binding used by every draw pass for a presented frame.
@@ -211,6 +213,9 @@ private:
   void resolveSelectionBounds(const FramePresentationInput& input);
   void resolveTiles(const FramePresentationInput& input);
   void finishChrome(const FramePresentationInput& input, const FramePresentation* previous);
+  bool canUseLivePathReplacement(const FramePresentationInput& input) const;
+  std::optional<SelectionChromeSnapshot> livePathReplacementChrome(
+      const FramePresentationInput& input) const;
   void applyLivePathReplacement(const FramePresentationInput& input);
   bool textMatchesFrame(const CapturedPresentation::TextEditing& text,
                         std::span<const Entity> selection) const;

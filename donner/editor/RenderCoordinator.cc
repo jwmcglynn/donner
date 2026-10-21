@@ -1314,6 +1314,12 @@ void RenderCoordinator::refreshLivePathCapture(EditorApp& app, FramePresentation
     }
   }
   input.livePathReplacement = livePathCapture_;
+  if (penLivePreviewElement_.has_value() && livePathCapture_ != nullptr &&
+      livePathCapture_->selection() == input.selection &&
+      livePathCapture_->identity().documentGeneration ==
+          input.documentIdentity.documentGeneration) {
+    input.penPathGeometryLocal = penLivePreviewGeometry_;
+  }
 }
 
 void RenderCoordinator::recordFramePresentationCost(const FramePresentationInput& input,

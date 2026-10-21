@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "donner/base/FormatNumber.h"
@@ -56,6 +57,10 @@ Vector2d ConstrainTo45Degrees(const Vector2d& origin, const Vector2d& documentPo
   return origin + direction * (delta.dot(direction) / direction.dot(direction));
 }
 
+bool PreviewPointFinite(const Vector2d& point) {
+  return std::isfinite(point.x) && std::isfinite(point.y);
+}
+
 std::string FormatPoint(const Vector2d& point) {
   return donner::detail::FormatNumberForSVG(point.x) + " " +
          donner::detail::FormatNumberForSVG(point.y);
@@ -94,6 +99,8 @@ void PenTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
     return;
   }
 
+  flushPendingDrag(editor);
+  dragPressDocumentPoint_ = documentPoint;
   const double toleranceDoc =
       kPointHitScreenTolerance / std::max(modifiers.pixelsPerDocUnit, 0.000001);
 
@@ -210,31 +217,152 @@ void PenTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool
   onMouseMove(editor, documentPoint, buttonHeld, MouseModifiers{});
 }
 
+bool PenTool::shouldSampleDragAt(const Vector2d& documentPoint) const {
+  return dragMode_ == DragMode::NewAnchorHandles || draggedAnchorChanged_ ||
+         !SamePoint(documentPoint, dragPressDocumentPoint_);
+}
+
 void PenTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
-                          MouseModifiers modifiers) {
-  if (!buttonHeld || dragMode_ == DragMode::None) {
+                          MouseModifiers modifiers, bool deferCommit) {
+  if (!buttonHeld || dragMode_ == DragMode::None || !shouldSampleDragAt(documentPoint)) {
     return;
   }
 
+  if (pendingDragRelease_.has_value()) {
+    return;
+  }
+  lastDragModifiers_ = modifiers;
   const bool changed = dragMode_ == DragMode::NewAnchorHandles
                            ? updateDraggedAnchor(documentPoint, /*breakSymmetry=*/modifiers.option,
                                                  /*constrainAngle=*/modifiers.shift)
                            : updatePointDrag(documentPoint, modifiers);
   if (changed) {
+    if (!pendingDragCommit_) {
+      pendingDragSelection_ = editor.selectedElement();
+      pendingDragGeneration_ = editor.document().documentGeneration();
+    }
+    pendingDragCommit_ = true;
+  }
+  if (!deferCommit) {
+    flushPendingDrag(editor);
+  }
+}
+
+void PenTool::flushPendingDrag(EditorApp& editor) {
+  if (!pendingDragCommit_ && !pendingDragRelease_.has_value()) {
+    return;
+  }
+  if (pendingDragGeneration_ != editor.document().documentGeneration() ||
+      pendingDragSelection_ != editor.selectedElement()) {
+    cancel();
+    return;
+  }
+  if (pendingDragCommit_) {
+    pendingDragCommit_ = false;
     commitActivePathData(editor);
     if (dragMode_ == DragMode::NewAnchorHandles) {
       draggedAnchorChanged_ = false;
     }
   }
+  if (const auto release = std::exchange(pendingDragRelease_, std::nullopt)) {
+    onMouseUp(editor, *release);
+  }
+}
+
+void PenTool::deferMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
+  if (pendingDragRelease_.has_value()) {
+    return;
+  }
+  onMouseMove(editor, documentPoint, true, lastDragModifiers_, true);
+  if (!pendingDragCommit_) {
+    pendingDragSelection_ = editor.selectedElement();
+    pendingDragGeneration_ = editor.document().documentGeneration();
+  }
+  pendingDragRelease_ = documentPoint;
+}
+
+std::shared_ptr<const Path> PenTool::previewPathForSelection(const EditorApp& editor) const {
+  if (!editor.hasDocument() || !activePath_.has_value() ||
+      std::optional<svg::SVGElement>(*activePath_) != editor.selectedElement() ||
+      ((pendingDragCommit_ || pendingDragRelease_.has_value()) &&
+       (pendingDragGeneration_ != editor.document().documentGeneration() ||
+        pendingDragSelection_ != editor.selectedElement()))) {
+    return nullptr;
+  }
+  return previewPath();
+}
+
+void PenTool::appendPreviewSegment(PathBuilder& builder, const Anchor& previous,
+                                   const Anchor& current) const {
+  if (!PreviewPointFinite(current.point) ||
+      !PreviewPointFinite(previous.outHandle.value_or(previous.point)) ||
+      !PreviewPointFinite(current.inHandle.value_or(current.point))) {
+    builder.rejectRemainingCommands();
+    return;
+  }
+  if (HasMeaningfulHandle(previous.point, previous.outHandle) ||
+      HasMeaningfulHandle(current.point, current.inHandle)) {
+    builder.curveTo(previous.outHandle.value_or(previous.point),
+                    current.inHandle.value_or(current.point), current.point);
+  } else {
+    builder.lineTo(current.point);
+  }
+}
+
+void PenTool::appendPreviewClosingSegment(PathBuilder& builder) const {
+  if (anchors_.size() > 1 &&
+      (HasMeaningfulHandle(anchors_.back().point, anchors_.back().outHandle) ||
+       HasMeaningfulHandle(anchors_.front().point, anchors_.front().inHandle))) {
+    ++previewWork_;
+    appendPreviewSegment(builder, anchors_.back(), anchors_.front());
+  }
+  builder.closePath();
+}
+
+std::shared_ptr<const Path> PenTool::previewPath() const {
+  if (!activePath_.has_value()) {
+    return nullptr;
+  }
+  if (!previewDirty_) {
+    return previewGeometry_;
+  }
+  previewDirty_ = false;
+  previewGeometry_.reset();
+  if (anchors_.empty() || anchors_.size() > kMaximumPreviewPoints) {
+    return nullptr;
+  }
+  PathBuilder builder(kMaximumPreviewPoints);
+  ++previewWork_;
+  if (!PreviewPointFinite(anchors_.front().point)) {
+    return nullptr;
+  }
+  builder.moveTo(anchors_.front().point);
+  for (std::size_t i = 1; i < anchors_.size(); ++i) {
+    ++previewWork_;
+    appendPreviewSegment(builder, anchors_[i - 1], anchors_[i]);
+    if (builder.exceededMaximumPoints()) {
+      return nullptr;
+    }
+  }
+  if (closed_) {
+    appendPreviewClosingSegment(builder);
+  }
+  if (!builder.exceededMaximumPoints()) {
+    previewGeometry_ = std::make_shared<const Path>(builder.build());
+  }
+  return previewGeometry_;
 }
 
 void PenTool::onMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
+  onMouseMove(editor, documentPoint, true, lastDragModifiers_, true);
+  flushPendingDrag(editor);
   switch (dragMode_) {
     case DragMode::None: return;
 
     case DragMode::NewAnchorHandles: {
-      const bool changed = updateDraggedAnchor(documentPoint, /*breakSymmetry=*/false,
-                                               /*constrainAngle=*/false);
+      const bool changed =
+          updateDraggedAnchor(documentPoint, /*breakSymmetry=*/lastDragModifiers_.option,
+                              /*constrainAngle=*/lastDragModifiers_.shift);
       dragMode_ = DragMode::None;
       if (changed || draggedAnchorChanged_) {
         commitActivePathData(editor);
@@ -322,6 +450,14 @@ void PenTool::cancel() {
   startPoint_ = Vector2d::Zero();
   currentPoint_ = Vector2d::Zero();
   activePathData_.clear();
+  pathDataDirty_ = false;
+  previewDirty_ = true;
+  previewGeometry_.reset();
+  lastDragModifiers_ = {};
+  pendingDragCommit_ = false;
+  pendingDragRelease_.reset();
+  pendingDragSelection_.reset();
+  pendingDragGeneration_ = 0;
   closed_ = false;
   dragMode_ = DragMode::None;
   draggedAnchorChanged_ = false;
@@ -521,7 +657,7 @@ void PenTool::startNewPath(EditorApp& editor, const Vector2d& documentPoint) {
   anchors_.push_back(Anchor{.point = documentPoint});
   closed_ = false;
   rebuildActivePathData();
-  path.setAttribute("d", activePathData_);
+  path.setAttribute("d", activePathData());
   const ActivePaintStyle& paintStyle = editor.activePaintStyle();
   // Emit paint as a single inline `style` attribute (style="fill: ...; stroke: ...;
   // stroke-width: ...") rather than individual presentation attributes, so new
@@ -543,11 +679,22 @@ void PenTool::startNewPath(EditorApp& editor, const Vector2d& documentPoint) {
   editor.setSelection(path);
 }
 
+const std::string& PenTool::activePathData() const {
+  if (pathDataDirty_) {
+    activePathData_ = serializePathData();
+    pathDataDirty_ = false;
+    ++serializationCount_;
+  }
+  return activePathData_;
+}
+
 void PenTool::rebuildActivePathData() {
-  activePathData_ = serializePathData();
+  pathDataDirty_ = true;
+  previewDirty_ = true;
 }
 
 void PenTool::beginDragLastAnchor() {
+  lastDragModifiers_ = {};
   dragMode_ = anchors_.empty() ? DragMode::None : DragMode::NewAnchorHandles;
   draggedAnchorChanged_ = false;
   dragIndex_ = anchors_.empty() ? 0u : anchors_.size() - 1u;
@@ -641,6 +788,7 @@ std::optional<PenTool::PointHit> PenTool::HitTestPoints(const std::vector<Anchor
 }
 
 void PenTool::beginPointDrag(const PointHit& hit) {
+  lastDragModifiers_ = {};
   dragMode_ = hit.mode;
   dragIndex_ = hit.index;
   dragStartAnchor_ = anchors_[hit.index];
@@ -767,7 +915,7 @@ void PenTool::commitActivePathData(EditorApp& editor) {
     }
   }
 
-  editor.applyMutation(EditorCommand::SetAttributeCommand(*activePath_, "d", activePathData_));
+  editor.applyMutation(EditorCommand::SetAttributeCommand(*activePath_, "d", activePathData()));
   editor.setSelection(*activePath_);
 }
 
@@ -947,28 +1095,38 @@ std::optional<Path> PenTool::previewSegmentPath(const Vector2d& documentPoint,
   return builder.build();
 }
 
+PenHoverIntent PenTool::draftHoverIntent(const Vector2d& documentPoint,
+                                         const MouseModifiers& modifiers,
+                                         double toleranceDoc) const {
+  if (!modifiers.command && shouldCloseAt(documentPoint, modifiers)) {
+    return PenHoverIntent::ClosePath;
+  }
+  if (HitTestPoints(anchors_, documentPoint, toleranceDoc)) {
+    return PenHoverIntent::DragAnchor;
+  }
+  // Cmd/Ctrl restricts the gesture to point editing, so a miss does nothing;
+  // the plain nib is the honest cursor for "this click will not land".
+  if (!modifiers.command && HitTestSegments(anchors_, closed_, documentPoint, toleranceDoc)) {
+    return PenHoverIntent::InsertAnchor;
+  }
+  return PenHoverIntent::PlaceAnchor;
+}
+
 PenHoverIntent PenTool::hoverIntentAt(const EditorApp& editor, const Vector2d& documentPoint,
                                       const MouseModifiers& modifiers) const {
   if (!editor.document().hasDocument()) {
     return PenHoverIntent::PlaceAnchor;
   }
 
+  if (isDraggingAnchor()) {
+    return PenHoverIntent::DragAnchor;
+  }
+
   const double toleranceDoc =
       kPointHitScreenTolerance / std::max(modifiers.pixelsPerDocUnit, 0.000001);
 
   if (activePath_.has_value()) {
-    if (!modifiers.command && shouldCloseAt(documentPoint, modifiers)) {
-      return PenHoverIntent::ClosePath;
-    }
-    if (HitTestPoints(anchors_, documentPoint, toleranceDoc)) {
-      return PenHoverIntent::DragAnchor;
-    }
-    // Cmd/Ctrl restricts the gesture to point editing, so a miss does nothing;
-    // the plain nib is the honest cursor for "this click will not land".
-    if (!modifiers.command && HitTestSegments(anchors_, closed_, documentPoint, toleranceDoc)) {
-      return PenHoverIntent::InsertAnchor;
-    }
-    return PenHoverIntent::PlaceAnchor;
+    return draftHoverIntent(documentPoint, modifiers, toleranceDoc);
   }
 
   const std::optional<SelectedPathState> state = stateForSelectedPath(editor);
