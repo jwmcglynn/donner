@@ -1,3 +1,5 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
+// TextEditor enables these operators; keep the definition before any ImGui include.
 #include "donner/editor/SidebarPresenter.h"
 
 #include <gmock/gmock.h>
@@ -2906,7 +2908,7 @@ TEST_F(SidebarPresenterImGuiTest, TransformFieldHandoffKeepsRollbackAndAcceptedU
                                   Scenario{false, true, "##transform_handoff_busy_accept"}}) {
     SCOPED_TRACE(scenario.window);
     constexpr std::string_view source =
-        R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect id="target" x="10" y="20" width="100" height="50" transform="translate(15.5, 0)"/></svg>)";
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect id="target" x="10" y="20" width="100" height="50" transform="translate(15.5, 0)"/></svg>)svg";
     EditorApp app;
     SidebarPresenter presenter;
     ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
