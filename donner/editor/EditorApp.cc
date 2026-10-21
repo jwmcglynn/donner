@@ -671,6 +671,24 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
     return;
   }
 
+  if (snapshot.kind == UndoSnapshot::Kind::Attribute) {
+    if (snapshot.attributeName == kLockedAttributeName && snapshot.attributeValue.has_value()) {
+      // Locking deselects the layer, whether by the toggle or by replaying it.
+      app.deselectElementAndDescendants(*liveElement);
+    }
+    if (snapshot.attributeValue.has_value()) {
+      app.applyMutation(EditorCommand::SetAttributeCommand(*liveElement, snapshot.attributeName,
+                                                           *snapshot.attributeValue));
+    } else {
+      app.applyMutation(
+          EditorCommand::RemoveAttributeCommand(*liveElement, snapshot.attributeName));
+    }
+    for (const UndoSnapshot& extra : snapshot.extras) {
+      ApplyTimelineSnapshot(app, document, extra);
+    }
+    return;
+  }
+
   // Route the restored transform through the command queue so every
   // DOM write - tool drags, text-pane re-parse, and undo - goes through
   // the same mutation seam. The queue coalesces with any pending
@@ -1744,6 +1762,22 @@ bool IsLockGatedCommand(const EditorCommand& command) {
   }
 }
 
+void EditorApp::recordAttributeToggleUndo(std::string_view label, const svg::SVGElement& element,
+                                          std::string_view attributeName,
+                                          std::optional<std::string> valueAfter) {
+  // The live attribute is current: toggles come from UI clicks, and each frame flushes its queue.
+  std::optional<std::string> valueBefore;
+  if (const std::optional<RcString> current = element.getAttribute(attributeName);
+      current.has_value()) {
+    valueBefore = std::string(current->str());
+  }
+  if (valueBefore == valueAfter) {
+    return;
+  }
+  undoTimeline_.record(label, captureAttributeSnapshot(element, attributeName, valueBefore),
+                       captureAttributeSnapshot(element, attributeName, std::move(valueAfter)));
+}
+
 void EditorApp::setElementVisible(svg::SVGElement element, bool visible) {
   const auto entryIt =
       std::find_if(hiddenElementAuthorDisplay_.begin(), hiddenElementAuthorDisplay_.end(),
@@ -1763,6 +1797,7 @@ void EditorApp::setElementVisible(svg::SVGElement element, bool visible) {
     } else {
       hiddenElementAuthorDisplay_.emplace_back(element, std::move(capturedValue));
     }
+    recordAttributeToggleUndo("Hide layer", element, "display", "none");
     applyMutation(EditorCommand::SetAttributeCommand(element, "display", "none"));
     return;
   }
@@ -1773,18 +1808,29 @@ void EditorApp::setElementVisible(svg::SVGElement element, bool visible) {
   // captured entry (this element was never hidden through this toggle this
   // session) or the captured value was itself absent/`"none"` (restoring it
   // literally would leave the element hidden, defeating the Show action),
-  // fall back to writing a definitively-visible `display="inline"`.
+  // fall back to writing a definitively-visible `display="inline"`. The entry is kept: Show is
+  // undoable, and the Show after an undone Show must restore the same author value.
   if (entryIt != hiddenElementAuthorDisplay_.end()) {
-    std::optional<std::string> authorDisplay = std::move(entryIt->second);
-    hiddenElementAuthorDisplay_.erase(entryIt);
+    const std::optional<std::string> authorDisplay = entryIt->second;
     if (authorDisplay.has_value() && *authorDisplay != "none") {
-      applyMutation(
-          EditorCommand::SetAttributeCommand(element, "display", std::move(*authorDisplay)));
+      recordAttributeToggleUndo("Show layer", element, "display", *authorDisplay);
+      applyMutation(EditorCommand::SetAttributeCommand(element, "display", *authorDisplay));
       return;
     }
   }
 
+  recordAttributeToggleUndo("Show layer", element, "display", "inline");
   applyMutation(EditorCommand::SetAttributeCommand(element, "display", "inline"));
+}
+
+void EditorApp::deselectElementAndDescendants(svg::SVGElement element) {
+  const std::size_t previousSelectionSize = selection_.size();
+  std::erase_if(selection_, [&element](const svg::SVGElement& selected) {
+    return IsElementOrDescendant(element, selected);
+  });
+  if (selection_.size() != previousSelectionSize) {
+    refreshFirstSelectionCache();
+  }
 }
 
 void EditorApp::setElementLocked(const svg::SVGElement& element, bool locked) {
@@ -1797,17 +1843,13 @@ void EditorApp::setElementLocked(const svg::SVGElement& element, bool locked) {
   // Copy first: `element` may alias the selection storage that the erase below mutates.
   const svg::SVGElement target = element;
   if (locked) {
-    const std::size_t previousSelectionSize = selection_.size();
-    std::erase_if(selection_, [&target](const svg::SVGElement& selected) {
-      return IsElementOrDescendant(target, selected);
-    });
-    if (selection_.size() != previousSelectionSize) {
-      refreshFirstSelectionCache();
-    }
-
+    deselectElementAndDescendants(target);
+    recordAttributeToggleUndo("Lock layer", target, kLockedAttributeName,
+                              std::string(kLockedAttributeValue));
     applyMutation(EditorCommand::SetAttributeCommand(target, std::string(kLockedAttributeName),
                                                      std::string(kLockedAttributeValue)));
   } else {
+    recordAttributeToggleUndo("Unlock layer", target, kLockedAttributeName, std::nullopt);
     applyMutation(EditorCommand::RemoveAttributeCommand(target, std::string(kLockedAttributeName)));
   }
 }
