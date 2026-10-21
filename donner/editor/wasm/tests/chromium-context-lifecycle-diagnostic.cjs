@@ -42,7 +42,7 @@ async function main() {
   }
   console.log(JSON.stringify({ event: "completed", contexts: completed }));
 }
-main().catch((error) => {
-  console.error(JSON.stringify({ event: "failure", name: error.name }));
+main().catch(() => {
+  console.error(JSON.stringify({ event: "failure" }));
   process.exitCode = 1;
 });
