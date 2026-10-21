@@ -208,7 +208,8 @@ TEST(TransformSyntaxPreserving, WrapperKeepsVeryLargeFiniteTransformsParseable) 
     SCOPED_TRACE(written);
     const auto parsed = svg::parser::TransformParser::Parse(written);
     ASSERT_FALSE(parsed.hasError()) << parsed.error();
-    EXPECT_THAT(parsed.result().data, testing::Pointwise(testing::DoubleEq(), parentFromElement.data));
+    EXPECT_THAT(parsed.result().data,
+                testing::Pointwise(testing::DoubleEq(), parentFromElement.data));
   }
 }
 
