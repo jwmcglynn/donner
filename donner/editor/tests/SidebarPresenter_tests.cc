@@ -634,6 +634,29 @@ TEST(SidebarTransformEditTest, GroupResizePredictsLocallyExpandedNonScalingStrok
   EXPECT_THAT(resized.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
 }
 
+TEST(SidebarTransformEditTest, SelectedTextSizePreservesNonScalingStrokeAndPaintedOrigin) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400">
+        <text id="target" x="40" y="80" font-size="24" stroke="black" stroke-width="10"
+          vector-effect="non-scaling-stroke">Wide Label</text></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kSvg));
+  const Box2d start = *presenter.inspectorBoundsForTesting();
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(app, presenter, SidebarPresenter::TransformField::Width,
+                                             start.width() * 2.0));
+  const Box2d wide = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(wide.width(), testing::DoubleNear(start.width() * 2.0, 1e-6));
+  EXPECT_THAT(wide.topLeft.x, testing::DoubleNear(start.topLeft.x, 1e-6));
+  EXPECT_THAT(wide.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
+  ASSERT_NO_FATAL_FAILURE(EditTransformField(app, presenter, SidebarPresenter::TransformField::Height,
+                                             wide.height() * 1.5));
+  const Box2d tall = *presenter.inspectorBoundsForTesting();
+  EXPECT_THAT(tall.height(), testing::DoubleNear(wide.height() * 1.5, 1e-6));
+  EXPECT_THAT(tall.topLeft.x, testing::DoubleNear(start.topLeft.x, 1e-6));
+  EXPECT_THAT(tall.topLeft.y, testing::DoubleNear(start.topLeft.y, 1e-6));
+}
+
 TEST(SidebarTransformEditTest, ManyLeafGroupResizePreservesPaintedBounds) {
   std::string source =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000"><g id="target">)";
