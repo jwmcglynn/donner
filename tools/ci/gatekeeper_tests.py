@@ -123,7 +123,8 @@ class GatekeeperTest(unittest.TestCase):
         self.assertIn("open PR already covers branch 'feature'", result.stdout)
 
     def test_main_workflow_treats_branch_shell_syntax_as_data(self):
-        branch = "topic/$(touch${IFS}INJECTED)"
+        branch = "topic-$(touch${IFS}INJECTED)"
+        _git(self.repo, "check-ref-format", "--branch", branch)
         result, output, calls = self._run("duplicate-push", gh_stdout="1\n",
                                           workflow_step="dup_push", GITHUB_EVENT_NAME="push",
                                           GITHUB_REF_NAME=branch, GITHUB_REF="refs/heads/" + branch)
