@@ -1,9 +1,12 @@
 #include "donner/base/xml/XMLParser.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cassert>  // For assert
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>  // For std::size_t
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -25,10 +28,18 @@
 
 namespace donner::xml {
 
+/// Source policy owns no document or source store, so it cannot retain an obsolete registry.
+struct XMLSourceParseOptions {
+  XMLParser::Options options;
+  std::weak_ptr<const XMLSourceStore> sourceStore;
+};
+
 using donner::ParseDiagnostic;
 using donner::ParseResult;
 
 namespace {
+
+std::atomic<std::uint64_t> gPublicParseInvocations{0};
 
 /// The maximum length for a string's entity resolution, to prevent "fork bomb" style attacks like
 /// "Billion Laughs".
@@ -326,6 +337,14 @@ public:
     documentContext.maximumSourceEditTreeNodes = options.maxElements;
     documentContext.maximumSourceEditTreeDepth = options.maxNestingDepth;
     documentContext.maximumSourceEditTotalAttributes = options.maxTotalAttributes;
+    const XMLParser::Options defaults;
+    documentContext.sourceRequiresDocumentEntityParser =
+        options.disableEntityTranslation || options.maxEntityDepth != defaults.maxEntityDepth ||
+        options.maxEntitySubstitutions != defaults.maxEntitySubstitutions ||
+        options.maxEntityDeclarations != defaults.maxEntityDeclarations ||
+        options.maxEntityDeclarationBytes != defaults.maxEntityDeclarationBytes;
+    documentContext.sourceParserOptions = std::make_shared<const XMLSourceParseOptions>(
+        XMLSourceParseOptions{options, documentContext.sourceStoreHolder->store});
   }
 
   bool isWhitespace(char ch) const {
@@ -1861,6 +1880,7 @@ private:
 }  // namespace
 
 ParseResult<XMLDocument> XMLParser::Parse(std::string_view str, const Options& options) {
+  gPublicParseInvocations.fetch_add(1, std::memory_order_relaxed);
   if (str.size() > options.maximumInputSize) {
     return ParseDiagnostic::Error("XML source exceeds maximum input size", FileOffset::Offset(0));
   }
@@ -1871,6 +1891,29 @@ ParseResult<XMLDocument> XMLParser::Parse(std::string_view str, const Options& o
 
   XMLParserImpl parser(str, options);
   return parser.parse();
+}
+
+namespace internal {
+std::uint64_t PublicParseInvocationCountForTesting() {
+  return gPublicParseInvocations.load(std::memory_order_relaxed);
+}
+}  // namespace internal
+
+std::optional<XMLParser::Options> XMLParser::SourceOptions(const XMLDocument& document) {
+  const auto& context = document.registry().ctx().get<components::XMLDocumentContext>();
+  const auto& captured = context.sourceParserOptions;
+  const XMLSourceStore* store = document.sourceStore();
+  if (!store || !captured || captured->sourceStore.lock().get() != store) {
+    return std::nullopt;
+  }
+  Options options = captured->options;
+  options.maximumInputSize =
+      std::min(options.maximumInputSize, store->resourceLimits().maximumSourceSize);
+  options.maxElements = std::min(options.maxElements, context.maximumSourceEditTreeNodes);
+  options.maxNestingDepth = std::min(options.maxNestingDepth, context.maximumSourceEditTreeDepth);
+  options.maxTotalAttributes =
+      std::min(options.maxTotalAttributes, context.maximumSourceEditTotalAttributes);
+  return options;
 }
 
 std::optional<SourceRange> XMLParser::GetAttributeLocation(

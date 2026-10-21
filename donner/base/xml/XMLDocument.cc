@@ -2044,6 +2044,11 @@ void AppendAttributeMutations(XMLNode& node, const AttributeMap& currentAttribut
 
 SourceEditClassification ClassifySourceEdit(const XMLDocument& document, SourceEditRange range) {
   SourceEditClassification classification;
+  const auto& context = document.registry().ctx().get<XMLDocumentContext>();
+  if (!XMLParser::SourceOptions(document).has_value() || context.declaredDoctypeInternalSubset ||
+      context.sourceRequiresDocumentEntityParser) {
+    return classification;
+  }
   classification.attribute = GetAttributeValueEdit(document, range);
   if (classification.attribute.has_value()) {
     classification.scope = ReparseScope::AttributeValue;
@@ -2895,6 +2900,18 @@ ApplySourceEditResult ApplyClassifiedSourceEdit(XMLDocument& document, const XML
                                          std::move(result));
   }
 
+  const auto& context = document.registry().ctx().get<XMLDocumentContext>();
+  if (!XMLParser::SourceOptions(document).has_value()) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Original source parser policy is unavailable; a full document reparse is required",
+        intent.range);
+    return result;
+  }
+  if (context.declaredDoctypeInternalSubset || context.sourceRequiresDocumentEntityParser) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Source edits with document entity context require a full document reparse", intent.range);
+    return result;
+  }
   result.diagnostic = MakeEditDiagnostic(
       "Only attribute-value, opening-tag, text-node, and element-subtree source edits are "
       "implemented",
@@ -3940,6 +3957,8 @@ void XMLDocument::setSource(std::string source, std::size_t maximumSourceSize) {
   context.sourceStoreHolder->store = std::move(nextStore);
   context.unreparsedSpans.clear();
   context.declaredDoctypeInternalSubset = false;
+  context.sourceRequiresDocumentEntityParser = false;
+  context.sourceParserOptions.reset();
 }
 
 }  // namespace donner::xml

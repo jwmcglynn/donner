@@ -1,6 +1,7 @@
 #include "donner/editor/SourceSync.h"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -9,8 +10,10 @@
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseResult.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/xml/XMLParser.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/EditorParseOptions.h"
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::editor {
@@ -26,6 +29,8 @@ struct SourceTextEdit {
 struct StructuredApplyResult {
   bool applied = false;
   bool needsDocumentReplace = false;
+  bool recoveryBlocked = false;
+  bool preserveUndoOnRecovery = false;
 };
 
 struct SelectionRemapTarget {
@@ -166,6 +171,50 @@ std::optional<std::string> ApplySourceTextEdit(std::string_view source,
   return result;
 }
 
+/// Default editor recovery must not broaden a source document's recorded parser policy or limits.
+bool CanRecoverWithEditorParser(const std::optional<xml::XMLParser::Options>& sourceOptions) {
+  const auto editorOptions = EditorParseOptions();
+  xml::XMLParser::Options expected;
+  expected.parseCustomEntities = true;
+  expected.maximumInputSize = editorOptions.maximumInputSize;
+  expected.maxElements = editorOptions.maximumTreeNodes;
+  expected.maxNestingDepth = static_cast<int>(std::min(
+      editorOptions.maximumTreeDepth, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+  return sourceOptions == expected;
+}
+
+/// Record document recovery only when the editor can preserve the admitted source policy.
+StructuredApplyResult SourceEditRecoveryResult(svg::SVGDocument& document,
+                                               xml::ReparseScope scope) {
+  if (scope != xml::ReparseScope::Document) {
+    return StructuredApplyResult{.applied = true};
+  }
+  return document.withReadAccess([&](svg::DocumentReadAccess&) {
+    const auto sourceOptions = xml::XMLParser::SourceOptions(document.xmlDocument());
+    const bool entityContext = document.xmlDocument().declaresDoctypeInternalSubset() ||
+                               (sourceOptions && sourceOptions->disableEntityTranslation);
+    return StructuredApplyResult{.applied = true,
+                                 .needsDocumentReplace = true,
+                                 .recoveryBlocked = !CanRecoverWithEditorParser(sourceOptions),
+                                 .preserveUndoOnRecovery = entityContext};
+  });
+}
+
+/// Keep the last valid projection when a default editor parse would broaden the original policy.
+bool QueueEditorSourceRecovery(EditorApp& app, std::string_view source, bool preserveUndo = false) {
+  if (app.hasDocument() && !app.document().usesEditorParserForSourceRecovery()) {
+    return false;
+  }
+  if (app.hasDocument() && !app.document().document().withReadAccess([&](svg::DocumentReadAccess&) {
+        return CanRecoverWithEditorParser(
+            xml::XMLParser::SourceOptions(app.document().document().xmlDocument()));
+      })) {
+    return false;
+  }
+  app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(source), preserveUndo));
+  return true;
+}
+
 StructuredApplyResult TryApplyStructuredSourceEdit(EditorApp& app, std::string_view previousSource,
                                                    const SourceTextEdit& edit) {
   if (!app.structuredEditingEnabled() || !app.hasDocument()) {
@@ -194,10 +243,7 @@ StructuredApplyResult TryApplyStructuredSourceEdit(EditorApp& app, std::string_v
     RemapSelectionAfterStructuredSourceEdit(app, selectionTargets);
   }
 
-  return StructuredApplyResult{
-      .applied = true,
-      .needsDocumentReplace = result.scope == xml::ReparseScope::Document,
-  };
+  return SourceEditRecoveryResult(document, result.scope);
 }
 
 /// Append a structural fingerprint of \p element to \p out: a pre-order
@@ -227,6 +273,33 @@ std::string StructuralFingerprint(const svg::SVGElement& root) {
   return fingerprint;
 }
 
+/// Validate ambiguous whole-text changes only under the admitted editor parser policy.
+/// Well-formed bytes may still leave stale tree shape or an unreconciled source span.
+void ReconcileWholeTextSource(EditorApp& app, std::string_view newSource) {
+  if (!app.document().usesEditorParserForSourceRecovery()) {
+    return;
+  }
+  if (!app.document().document().withReadAccess([&](svg::DocumentReadAccess&) {
+        return CanRecoverWithEditorParser(
+            xml::XMLParser::SourceOptions(app.document().document().xmlDocument()));
+      })) {
+    return;
+  }
+  ParseWarningSink warningSink;
+  ParseResult<svg::SVGDocument> freshParse =
+      svg::parser::SVGParser::ParseSVG(newSource, warningSink, EditorParseOptions());
+  if (freshParse.hasResult()) {
+    const bool treeStale = app.document().document().xmlDocument().sourceDiagnostic().has_value() ||
+                           StructuralFingerprint(app.document().document().svgElement()) !=
+                               StructuralFingerprint(freshParse.result().svgElement());
+    if (treeStale) {
+      // A remount here is reconciliation for an ordinary keystroke, not a document load, so it
+      // keeps the undo timeline the same way the writeback reparse below does.
+      (void)QueueEditorSourceRecovery(app, newSource, /*preserveUndo=*/true);
+    }
+  }
+}
+
 bool TryApplyStructuredSourceChange(EditorApp& app, std::string_view previousSource,
                                     std::string_view newSource) {
   std::optional<SourceTextEdit> edit = BuildSingleSourceTextEdit(previousSource, newSource);
@@ -239,40 +312,16 @@ bool TryApplyStructuredSourceChange(EditorApp& app, std::string_view previousSou
     return false;
   }
 
+  if (result.recoveryBlocked ||
+      (result.needsDocumentReplace && !app.document().usesEditorParserForSourceRecovery())) {
+    return true;
+  }
   if (result.needsDocumentReplace || app.document().document().source() != newSource) {
-    app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+    (void)QueueEditorSourceRecovery(app, newSource, result.preserveUndoOnRecovery);
     return true;
   }
 
-  // Guard against a lossy incremental apply and against a tree left stale. The fresh parse is
-  // the arbiter for both: when the new source does not parse, the editor is mid-error and keeps
-  // the last-good DOM; when it does parse, the live DOM must match it and no unreparsed span may
-  // remain.
-  //
-  // `BuildSingleSourceTextEdit` produces a minimal whole-text diff, which is ambiguous:
-  // inserting an element textually similar to a sibling can collapse into what looks like a
-  // single-character attribute edit, so the structured apply renames the existing sibling and
-  // never materializes the new element even though the source bytes are correct.
-  //
-  // A per-edit diagnostic does not mean the source is broken: an incremental apply commits its
-  // bytes and can then fail to reparse a fragment (an emptied element subtree, say) while the
-  // whole document is valid. Skipping the check there left valid source with a stale DOM and a
-  // pending span that no later edit had to cover, and the editor stayed stuck until reload.
-  ParseWarningSink warningSink;
-  ParseResult<svg::SVGDocument> freshParse =
-      svg::parser::SVGParser::ParseSVG(newSource, warningSink);
-  if (freshParse.hasResult()) {
-    const bool treeStale = app.document().document().xmlDocument().sourceDiagnostic().has_value() ||
-                           StructuralFingerprint(app.document().document().svgElement()) !=
-                               StructuralFingerprint(freshParse.result().svgElement());
-    if (treeStale) {
-      // A remount here is reconciliation for an ordinary keystroke, not a document load, so it
-      // keeps the undo timeline the same way the writeback reparse below does.
-      app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource),
-                                                              /*preserveUndoOnReparse=*/true));
-    }
-  }
-
+  ReconcileWholeTextSource(app, newSource);
   return true;
 }
 
@@ -308,7 +357,7 @@ DispatchSourceTextChangeResult DispatchSourceTextChange(
   handled = TryApplyStructuredSourceChange(app, *previousSourceText, newSource);
 
   if (!handled) {
-    app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+    (void)QueueEditorSourceRecovery(app, newSource);
   }
 
   *previousSourceText = std::string(newSource);
@@ -317,6 +366,44 @@ DispatchSourceTextChangeResult DispatchSourceTextChange(
       .dispatchedMutation = true,
       .skippedSelfWriteback = false,
   };
+}
+
+/// Each source batch requests at most one full recovery; a blocked policy keeps its raw edits.
+void ApplySourceIntentBatch(EditorApp& app, const std::vector<SourceEditIntent>& intents,
+                            std::string_view newSource, std::string* workingSource) {
+  for (const SourceEditIntent& intent : intents) {
+    std::optional<std::string> nextSource = ApplySourceTextEdit(*workingSource, intent);
+    if (!nextSource.has_value()) {
+      (void)QueueEditorSourceRecovery(app, newSource);
+      *workingSource = std::string(newSource);
+      return;
+    }
+
+    const SourceTextEdit edit{
+        .offset = intent.offset,
+        .removedLength = intent.removedLength,
+        .replacement = intent.replacement,
+    };
+    const StructuredApplyResult result = TryApplyStructuredSourceEdit(app, *workingSource, edit);
+    if (result.recoveryBlocked ||
+        (result.needsDocumentReplace && !app.document().usesEditorParserForSourceRecovery())) {
+      *workingSource = std::move(*nextSource);
+      continue;
+    }
+    if (!result.applied || result.needsDocumentReplace) {
+      (void)QueueEditorSourceRecovery(app, newSource, result.preserveUndoOnRecovery);
+      *workingSource = std::string(newSource);
+      return;
+    }
+
+    if (app.document().document().source() != *nextSource) {
+      (void)QueueEditorSourceRecovery(app, newSource);
+      *workingSource = std::string(newSource);
+      return;
+    }
+
+    *workingSource = std::move(*nextSource);
+  }
 }
 
 DispatchSourceTextChangeResult DispatchSourceEditIntents(
@@ -340,49 +427,10 @@ DispatchSourceTextChangeResult DispatchSourceEditIntents(
   }
 
   std::string workingSource = *previousSourceText;
-  for (const SourceEditIntent& intent : intents) {
-    std::optional<std::string> nextSource = ApplySourceTextEdit(workingSource, intent);
-    if (!nextSource.has_value()) {
-      app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
-      *previousSourceText = std::string(newSource);
-      lastWritebackSourceText->reset();
-      return DispatchSourceTextChangeResult{
-          .dispatchedMutation = true,
-          .skippedSelfWriteback = false,
-      };
-    }
-
-    const SourceTextEdit edit{
-        .offset = intent.offset,
-        .removedLength = intent.removedLength,
-        .replacement = intent.replacement,
-    };
-    const StructuredApplyResult result = TryApplyStructuredSourceEdit(app, workingSource, edit);
-    if (!result.applied || result.needsDocumentReplace) {
-      app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
-      *previousSourceText = std::string(newSource);
-      lastWritebackSourceText->reset();
-      return DispatchSourceTextChangeResult{
-          .dispatchedMutation = true,
-          .skippedSelfWriteback = false,
-      };
-    }
-
-    if (app.document().document().source() != *nextSource) {
-      app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
-      *previousSourceText = std::string(newSource);
-      lastWritebackSourceText->reset();
-      return DispatchSourceTextChangeResult{
-          .dispatchedMutation = true,
-          .skippedSelfWriteback = false,
-      };
-    }
-
-    workingSource = std::move(*nextSource);
-  }
+  ApplySourceIntentBatch(app, intents, newSource, &workingSource);
 
   if (workingSource != newSource) {
-    app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+    (void)QueueEditorSourceRecovery(app, newSource);
   }
 
   *previousSourceText = std::string(newSource);

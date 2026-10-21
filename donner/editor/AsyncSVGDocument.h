@@ -66,6 +66,11 @@ public:
   /// reference now-invalid entities. Bumps the frame version.
   void setDocument(svg::SVGDocument document);
 
+  /// Whether this document was loaded or fully reparsed with the editor's established policy.
+  [[nodiscard]] bool usesEditorParserForSourceRecovery() const {
+    return sourceRecoveryUsesEditorParser_;
+  }
+
   /// Outcome of `setDocumentMaybeStructural`. `FullReplace` means the new
   /// doc differs structurally from the current one (or there was no
   /// current one) and every consumer of the old entity space must treat
@@ -266,6 +271,7 @@ private:
                                std::optional<ParseDiagnostic> fatalError);
 
   std::optional<svg::SVGDocument> document_;
+  bool sourceRecoveryUsesEditorParser_ = false;
   CommandQueue queue_;
   std::atomic<std::uint64_t> frameVersion_{0};
   std::atomic<std::uint64_t> documentGeneration_{0};

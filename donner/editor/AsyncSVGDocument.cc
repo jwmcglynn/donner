@@ -240,6 +240,7 @@ void AsyncSVGDocument::publishParseDiagnostics(std::vector<ParseDiagnostic> warn
 
 void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
   document_ = std::move(document);
+  sourceRecoveryUsesEditorParser_ = false;
   queue_.clear();
   unmirroredSourceDeltas_.clear();
   unmirroredSourceDeltasOverflowed_ = false;
@@ -252,6 +253,7 @@ void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
 
 AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
     svg::SVGDocument newDocument) {
+  sourceRecoveryUsesEditorParser_ = false;
   // If there's no current document, a structural remap isn't meaningful -
   // just install the new one like a regular `setDocument`.
   if (!document_.has_value()) {
@@ -501,6 +503,7 @@ bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
     return false;
   }
   setDocument(std::move(result.result()));
+  sourceRecoveryUsesEditorParser_ = true;
   publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
   return true;
 }
@@ -533,6 +536,7 @@ void AsyncSVGDocument::applyReplacementBatch(const EditorCommand& command) {
       return;
     }
     (void)setDocumentMaybeStructural(std::move(rollbackParsed).result());
+    sourceRecoveryUsesEditorParser_ = true;
     lastFlushResult_.sourceDeltas.clear();
     recordAppliedCommand(command);
     lastFlushResult_.replacedDocument = true;
@@ -606,6 +610,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
         return;
       }
       (void)setDocumentMaybeStructural(std::move(result).result());
+      sourceRecoveryUsesEditorParser_ = true;
       publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
       break;
     }
@@ -694,6 +699,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
         return;
       }
       (void)setDocumentMaybeStructural(std::move(result).result());
+      sourceRecoveryUsesEditorParser_ = true;
       publishParseDiagnostics(CopyWarnings(sink), std::nullopt);
       break;
     }

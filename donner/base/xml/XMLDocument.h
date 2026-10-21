@@ -229,7 +229,10 @@ public:
    *
    * Implemented local scopes keep source bytes current and either update the live tree or return a
    * scoped diagnostic so callers can preserve the last valid semantic projection while the edited
-   * XML is temporarily malformed.
+   * XML is temporarily malformed. Documents parsed with an internal DTD subset or disabled entity
+   * translation require Document-scope recovery: draft bytes change, but decoded live values stay
+   * untouched. A caller must reparse with the original XMLParser::SourceOptions policy, or keep the
+   * diagnostic and last valid tree rather than reinterpret it with broader defaults.
    *
    * @param intent Source edit request.
    */
