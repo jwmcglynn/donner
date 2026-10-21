@@ -318,6 +318,13 @@ std::optional<std::string> EditorControlSession::sourcePaneDispatchError(
   return std::nullopt;
 }
 
+void EditorControlSession::applyCanvasOptions(const LoadOptions& options) {
+  canvasWidth_ = options.canvasWidth > 0 ? options.canvasWidth : canvasWidth_;
+  canvasHeight_ = options.canvasHeight > 0 ? options.canvasHeight : canvasHeight_;
+  devicePixelRatio_ = options.devicePixelRatio > 0.0 ? options.devicePixelRatio : 1.0;
+  app_.document().document().setCanvasSize(canvasWidth_, canvasHeight_);
+}
+
 void EditorControlSession::recordSourcePanePreviewState(
     bool documentMatchesDraft, const std::optional<ParseDiagnostic>& sourceDiagnostic,
     const std::optional<ParseDiagnostic>& parseDiagnostic) {
@@ -367,6 +374,7 @@ ToolCallResult EditorControlSession::dispatchSourcePaneEdits(
 
   currentSourceText_ = std::move(previousSourceText);
   ++sourceRevision_;
+  applyCanvasOptions(options);
 
   svg::SVGDocument& document = app_.document().document();
   const bool documentMatchesDraft =

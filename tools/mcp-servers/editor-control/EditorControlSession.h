@@ -159,6 +159,8 @@ private:
   /// Why `edit_svg_source` cannot use `dispatch: source_pane` for this request, if it cannot.
   [[nodiscard]] std::optional<std::string> sourcePaneDispatchError(bool replaceSource, bool edits,
                                                                    bool allowParseFailure) const;
+  /// Apply the requested canvas size and device pixel ratio to the loaded document.
+  void applyCanvasOptions(const LoadOptions& options);
   /// Mark the preview current after source-pane edits, or keep it stale with the pending reason.
   void recordSourcePanePreviewState(bool documentMatchesDraft,
                                     const std::optional<ParseDiagnostic>& sourceDiagnostic,
