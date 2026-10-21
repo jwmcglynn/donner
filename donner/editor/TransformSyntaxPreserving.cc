@@ -541,15 +541,15 @@ void FormatCanonicalArgs(std::vector<Fn>& fns, const ColumnDecimals& columnDecim
 /// Whether @p parentFromWritten, the re-parsed rounded text, may stand in for
 /// @p parentFromElement: close to it, and, when @p parentFromElement is invertible, with an inverse
 /// close to its inverse. The inverse check rejects a rounding that visibly reshapes a thin axis of
-/// a nearly singular transform even when the rounded entries are close. Exactly singular transforms
-/// must remain singular so collapsed geometry does not gain visible extent.
+/// a nearly singular transform even when the rounded entries are close. Singular transforms retain
+/// full precision because even determinant-preserving rounding can change the collapsed direction.
 bool IsFaithfulRounding(const Transform2d& parentFromWritten,
                         const Transform2d& parentFromElement) {
   if (!TransformsClose(parentFromWritten, parentFromElement)) {
     return false;
   }
   if (LinearDeterminant(parentFromElement) == 0.0) {
-    return LinearDeterminant(parentFromWritten) == 0.0;
+    return false;
   }
   return LinearDeterminant(parentFromWritten) != 0.0 &&
          TransformsClose(parentFromWritten.inverse(), parentFromElement.inverse());
