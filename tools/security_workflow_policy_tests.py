@@ -693,9 +693,11 @@ def _cited_run_cache_violations(files):
     for path in sorted(cited):
         for name, job in _jobs(files[path]).items():
             where = "%s:%s" % (path, name)
+            if (path, name) in SELF_HOSTED_JOBS:
+                continue
             if (path, name) in BUILDBUDDY_JOBS:
                 violations.extend(_cited_binding_violations(where, files[path], job))
-            elif (path, name) not in SELF_HOSTED_JOBS and UNREVIEWED_REMOTE_CACHE.search(job):
+            elif UNREVIEWED_REMOTE_CACHE.search(job):
                 violations.append("%s configures an unreviewed remote cache" % where)
     return violations
 
