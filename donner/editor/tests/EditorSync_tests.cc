@@ -1536,9 +1536,10 @@ TEST(EditorSyncTest, TagRenameKeepsCustomEntityPaintOnTheActualSvgDocument) {
     EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
                 testing::Optional(testing::Eq("red")));
     ASSERT_TRUE(app.flushFrame());
-    EXPECT_EQ(xml::internal::PublicParseInvocationCountForTesting() - parseBefore, 1u);
-    EXPECT_EQ(app.undoTimeline().entryCount(), historyBefore + 1);
-    EXPECT_EQ(app.document().document().source(), source);
+    EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting() - parseBefore,
+                testing::Eq(1u));
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(historyBefore + 1));
+    EXPECT_THAT(app.document().document().source(), testing::Eq(source));
     EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
                 testing::Eq(std::nullopt));
     EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
@@ -1553,14 +1554,14 @@ TEST(EditorSyncTest, TagRenameKeepsCustomEntityPaintOnTheActualSvgDocument) {
                 testing::ElementsAre(255, 0, 0, 255));
     app.undo();
     ASSERT_TRUE(app.flushFrame());
-    EXPECT_EQ(app.document().document().source(), before);
-    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#shape").type(),
-              svg::ElementType::Rect);
+    EXPECT_THAT(app.document().document().source(), testing::Eq(before));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").type(),
+                testing::Eq(svg::ElementType::Rect));
     app.redo();
     ASSERT_TRUE(app.flushFrame());
-    EXPECT_EQ(app.document().document().source(), source);
-    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#shape").type(),
-              svg::ElementType::Circle);
+    EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").type(),
+                testing::Eq(svg::ElementType::Circle));
   }
 }
 
@@ -1591,19 +1592,19 @@ TEST(EditorSyncTest,
     EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, edit, source, &previous).dispatchedMutation);
     EXPECT_TRUE(app.document().queue().empty());
     (void)app.flushFrame();
-    EXPECT_EQ(xml::internal::PublicParseInvocationCountForTesting(), count);
-    EXPECT_EQ(app.document().document(), original);
-    EXPECT_EQ(app.document().documentGeneration(), generation);
-    EXPECT_EQ(app.document().document().source(), source);
+    EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting(), testing::Eq(count));
+    EXPECT_THAT(app.document().document(), testing::Eq(original));
+    EXPECT_THAT(app.document().documentGeneration(), testing::Eq(generation));
+    EXPECT_THAT(app.document().document().source(), testing::Eq(source));
     EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
                 testing::Ne(std::nullopt));
     EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
                 testing::Optional(testing::Eq("red")));
-    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#shape").type(),
-              svg::ElementType::Rect);
+    EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").type(),
+                testing::Eq(svg::ElementType::Rect));
     const auto options = xml::XMLParser::SourceOptions(app.document().document().xmlDocument());
     ASSERT_THAT(options, testing::Ne(std::nullopt));
-    EXPECT_EQ(options->maxEntitySubstitutions, 1u);
+    EXPECT_THAT(options->maxEntitySubstitutions, testing::Eq(1u));
   }
 }
 
@@ -1626,14 +1627,14 @@ TEST(EditorSyncTest, EntityIntentBatchQueuesAtMostOneOriginalPolicyRecovery) {
   EXPECT_TRUE(
       DispatchSourceEditIntents(app, intents, source, &previous, &writeback).dispatchedMutation);
   ASSERT_TRUE(app.flushFrame());
-  EXPECT_EQ(xml::internal::PublicParseInvocationCountForTesting() - before, 1u);
+  EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting() - before, testing::Eq(1u));
   RecordProperty("entity_batch_input_bytes", std::to_string(source.size()));
   RecordProperty("entity_batch_parse_calls", "1");
   RecordProperty("entity_batch_recovery_us",
                  std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
                                     std::chrono::steady_clock::now() - began)
                                     .count()));
-  EXPECT_EQ(app.document().document().source(), source);
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
   EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
               testing::Eq(std::nullopt));
 }
@@ -1678,15 +1679,15 @@ TEST(EditorSyncTest, ChangedRecoveryPolicyRefusesAtQueueAndFlushWithoutReplaceme
       EXPECT_FALSE(app.flushFrame());
       EXPECT_FALSE(app.document().lastFlushResult().replacedDocument);
       EXPECT_FALSE(app.document().lastFlushResult().appliedCommands);
-      EXPECT_EQ(app.document().documentGeneration(), generation);
+      EXPECT_THAT(app.document().documentGeneration(), testing::Eq(generation));
       // The user's changed raw draft remains one undoable source edit; recovery adds no reset.
-      EXPECT_EQ(app.undoTimeline().entryCount(), history + 1);
-      EXPECT_EQ(xml::internal::PublicParseInvocationCountForTesting(), parses);
-      EXPECT_EQ(callbacks, 0);
-      EXPECT_EQ(app.document().document().source(), source);
+      EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(history + 1));
+      EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting(), testing::Eq(parses));
+      EXPECT_THAT(callbacks, testing::Eq(0));
+      EXPECT_THAT(app.document().document().source(), testing::Eq(source));
       EXPECT_THAT(app.selectedElements(), testing::ElementsAre(shape));
       EXPECT_THAT(shape.getAttribute("fill"), testing::Optional(testing::Eq("red")));
-      EXPECT_EQ(shape.type(), svg::ElementType::Rect);
+      EXPECT_THAT(shape.type(), testing::Eq(svg::ElementType::Rect));
       EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
                   testing::Ne(std::nullopt));
     }
@@ -1717,7 +1718,7 @@ TEST(EditorSyncTest, RefusedRecoveryKeepsEarlierValidCommandsBeforeCoalescing) {
   EXPECT_TRUE(app.document().lastFlushResult().onlyTransformCommands);
   EXPECT_THAT(shape.cast<svg::SVGGraphicsElement>().transform(),
               testing::Eq(Transform2d::Translate(Vector2d(7, 9))));
-  EXPECT_EQ(shape.type(), svg::ElementType::Rect);
+  EXPECT_THAT(shape.type(), testing::Eq(svg::ElementType::Rect));
 }
 
 TEST(EditorSyncTest, NewerRawDraftInvalidatesQueuedRecoveryWithoutParsing) {
@@ -1744,10 +1745,10 @@ TEST(EditorSyncTest, NewerRawDraftInvalidatesQueuedRecoveryWithoutParsing) {
                   .applied);
   const auto parses = xml::internal::PublicParseInvocationCountForTesting();
   EXPECT_FALSE(app.flushFrame());
-  EXPECT_EQ(xml::internal::PublicParseInvocationCountForTesting(), parses);
-  EXPECT_EQ(app.document().document().source(), source + " ");
-  EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#shape").type(),
-            svg::ElementType::Rect);
+  EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting(), testing::Eq(parses));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source + " "));
+  EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").type(),
+              testing::Eq(svg::ElementType::Rect));
 }
 
 TEST(EditorSyncTest, LatestValidRecoveryCoalescesToOneParse) {
@@ -1770,10 +1771,10 @@ TEST(EditorSyncTest, LatestValidRecoveryCoalescesToOneParse) {
             .dispatchedMutation);
   }
   ASSERT_TRUE(app.flushFrame());
-  EXPECT_EQ(xml::internal::PublicParseInvocationCountForTesting() - parses, 1u);
-  EXPECT_EQ(app.document().document().source(), source);
-  EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#shape").type(),
-            svg::ElementType::Ellipse);
+  EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting() - parses, testing::Eq(1u));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+  EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").type(),
+              testing::Eq(svg::ElementType::Ellipse));
 }
 
 TEST(EditorSyncTest, UnacceptedNewPrologKeepsLaterFragmentsDiagnosticAndDecodedValues) {
@@ -1802,7 +1803,7 @@ TEST(EditorSyncTest, UnacceptedNewPrologKeepsLaterFragmentsDiagnosticAndDecodedV
             source, &previous)
             .dispatchedMutation);
     (void)app.flushFrame();
-    EXPECT_EQ(app.document().document().source(), source);
+    EXPECT_THAT(app.document().document().source(), testing::Eq(source));
     EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
                 testing::Optional(testing::Eq("red")));
     EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
@@ -1832,13 +1833,13 @@ TEST(EditorSyncTest, FreshDoctypeSourceRecoveryPreservesUndoTimeline) {
                   source, &previous)
                   .dispatchedMutation);
   ASSERT_TRUE(app.flushFrame());
-  EXPECT_EQ(app.undoTimeline().entryCount(), history + 1);
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(history + 1));
   app.undo();
   ASSERT_TRUE(app.flushFrame());
-  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_THAT(app.document().document().source(), testing::Eq(before));
   app.redo();
   ASSERT_TRUE(app.flushFrame());
-  EXPECT_EQ(app.document().document().source(), source);
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
 }
 
 TEST(EditorSyncTest, LargeEntityTypingBatchUsesOneBoundedRecoveryParse) {
@@ -1865,7 +1866,7 @@ TEST(EditorSyncTest, LargeEntityTypingBatchUsesOneBoundedRecoveryParse) {
   EXPECT_TRUE(
       DispatchSourceEditIntents(app, intents, source, &previous, &writeback).dispatchedMutation);
   ASSERT_TRUE(app.flushFrame());
-  EXPECT_EQ(xml::internal::PublicParseInvocationCountForTesting() - parses, 1u);
+  EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting() - parses, testing::Eq(1u));
   RecordProperty("entity_large_input_bytes", std::to_string(source.size()));
   RecordProperty("entity_large_element_count", "8001");
   RecordProperty("entity_large_custom_references", "900");
@@ -1874,7 +1875,7 @@ TEST(EditorSyncTest, LargeEntityTypingBatchUsesOneBoundedRecoveryParse) {
                  std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
                                     std::chrono::steady_clock::now() - began)
                                     .count()));
-  EXPECT_EQ(app.document().document().source(), source);
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
 }
 
 TEST(EditorSyncTest, ReplacedSourceStoreWithoutPolicyDoesNotAuthorizeDefaultRecovery) {
@@ -1899,8 +1900,8 @@ TEST(EditorSyncTest, ReplacedSourceStoreWithoutPolicyDoesNotAuthorizeDefaultReco
                     .dispatchedMutation);
     EXPECT_TRUE(app.document().queue().empty());
     (void)app.flushFrame();
-    EXPECT_EQ(xml::internal::PublicParseInvocationCountForTesting(), count);
-    EXPECT_EQ(app.document().documentGeneration(), generation);
+    EXPECT_THAT(xml::internal::PublicParseInvocationCountForTesting(), testing::Eq(count));
+    EXPECT_THAT(app.document().documentGeneration(), testing::Eq(generation));
     EXPECT_THAT(xmlDocument.sourceDiagnostic(), testing::Ne(std::nullopt));
     EXPECT_THAT(GetElementByIdOrDie(app.document().document(), "#shape").getAttribute("fill"),
                 testing::Optional(testing::Eq("red")));

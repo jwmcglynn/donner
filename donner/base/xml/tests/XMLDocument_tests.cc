@@ -2091,17 +2091,17 @@ TEST_F(XMLDocumentTests, EntityRenameKeepsDraftAndDecodedTreeUntilOriginalParser
       .replacement = "circle",
       .sourceVersion = doc.sourceVersion()});
   EXPECT_TRUE(edited.applied);
-  EXPECT_EQ(edited.scope, ReparseScope::Document);
+  EXPECT_THAT(edited.scope, Eq(ReparseScope::Document));
   EXPECT_THAT(edited, DiagnosticReasonContains("entity context"));
-  EXPECT_EQ(ElementChild(svg, 0), rect);
-  EXPECT_EQ(rect.tagName(), XMLQualifiedNameRef("rect"));
+  EXPECT_THAT(ElementChild(svg, 0), Eq(rect));
+  EXPECT_THAT(rect.tagName(), Eq(XMLQualifiedNameRef("rect")));
   EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("red")));
   EXPECT_THAT(doc.source(), testing::HasSubstr("<circle fill=\"&paint;\""));
   const auto policy = XMLParser::SourceOptions(doc);
   ASSERT_THAT(policy, testing::Ne(std::nullopt));
   XMLDocument recovered = ParseDocument(doc.source(), *policy);
-  EXPECT_EQ(ElementChild(ElementChild(recovered.root(), 0), 0).tagName(),
-            XMLQualifiedNameRef("circle"));
+  EXPECT_THAT(ElementChild(ElementChild(recovered.root(), 0), 0).tagName(),
+              Eq(XMLQualifiedNameRef("circle")));
   EXPECT_THAT(ElementChild(ElementChild(recovered.root(), 0), 0).getAttribute("fill"),
               Optional(Eq("red")));
 }
@@ -2129,18 +2129,18 @@ TEST_F(XMLDocumentTests, EntityContainerRenameDoesNotPartiallyOverwriteDescendan
         XMLEditIntent{.range = SourceRange{FileOffset::Offset(open), FileOffset::Offset(open + 1)},
                       .replacement = "a",
                       .sourceVersion = doc.sourceVersion()});
-    EXPECT_EQ(renamed.scope, ReparseScope::Document);
+    EXPECT_THAT(renamed.scope, Eq(ReparseScope::Document));
     EXPECT_THAT(renamed, DiagnosticReasonContains("entity context"));
-    EXPECT_EQ(ElementChild(svg, 0), group);
-    EXPECT_EQ(ElementChild(group, 0), child);
-    EXPECT_EQ(ElementChild(group, 1), label);
+    EXPECT_THAT(ElementChild(svg, 0), Eq(group));
+    EXPECT_THAT(ElementChild(group, 0), Eq(child));
+    EXPECT_THAT(ElementChild(group, 1), Eq(label));
     EXPECT_THAT(child.getAttribute("fill"), Optional(Eq("red")));
     EXPECT_THAT(label.firstChild()->value(), Optional(Eq("Hi")));
     const auto policy = XMLParser::SourceOptions(doc);
     ASSERT_THAT(policy, testing::Ne(std::nullopt));
     XMLDocument recovered = ParseDocument(doc.source(), *policy);
     const XMLNode recoveredGroup = ElementChild(ElementChild(recovered.root(), 0), 0);
-    EXPECT_EQ(recoveredGroup.tagName(), XMLQualifiedNameRef("a"));
+    EXPECT_THAT(recoveredGroup.tagName(), Eq(XMLQualifiedNameRef("a")));
     EXPECT_THAT(ElementChild(recoveredGroup, 0).getAttribute("fill"), Optional(Eq("red")));
     EXPECT_THAT(ElementChild(recoveredGroup, 1).firstChild()->value(), Optional(Eq("Hi")));
   }
@@ -2169,7 +2169,7 @@ TEST_F(XMLDocumentTests, EntityRecoveryRetainsDisabledTranslationAndRestrictiveP
         .range = SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + 4)},
         .replacement = "circle",
         .sourceVersion = doc.sourceVersion()});
-    EXPECT_EQ(edited.scope, ReparseScope::Document);
+    EXPECT_THAT(edited.scope, Eq(ReparseScope::Document));
     EXPECT_THAT(edited, DiagnosticReasonContains("entity context"));
     EXPECT_THAT(ElementChild(svg, 0).getAttribute("fill"), Eq(fill));
     const auto policy = XMLParser::SourceOptions(doc);
@@ -2192,7 +2192,7 @@ TEST_F(XMLDocumentTests, EntityBudgetRemainsGlobalAtOriginalPolicyRecovery) {
       .range = SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + 4)},
       .replacement = "circle stroke='&paint;'",
       .sourceVersion = doc.sourceVersion()});
-  EXPECT_EQ(edited.scope, ReparseScope::Document);
+  EXPECT_THAT(edited.scope, Eq(ReparseScope::Document));
   EXPECT_THAT(edited, DiagnosticReasonContains("entity context"));
   EXPECT_THAT(oldRect.getAttribute("fill"), Optional(Eq("red")));
   EXPECT_THAT(oldRect.getAttribute("stroke"), Eq(std::nullopt));
@@ -2222,9 +2222,9 @@ TEST_F(XMLDocumentTests, SourceParserPolicyTracksStoreIdentityAndTightenedCeilin
   ASSERT_TRUE(doc.sourceStore()->setResourceLimits(limits));
   const auto policy = XMLParser::SourceOptions(doc);
   ASSERT_THAT(policy, testing::Ne(std::nullopt));
-  EXPECT_EQ(policy->maxElements, 5);
-  EXPECT_EQ(policy->maxNestingDepth, 4);
-  EXPECT_EQ(policy->maximumInputSize, doc.source().size());
+  EXPECT_THAT(policy->maxElements, Eq(5));
+  EXPECT_THAT(policy->maxNestingDepth, Eq(4));
+  EXPECT_THAT(policy->maximumInputSize, Eq(doc.source().size()));
   doc.setSource("<svg/>");
   EXPECT_THAT(XMLParser::SourceOptions(doc), Eq(std::nullopt));
 }
@@ -2239,7 +2239,7 @@ TEST_F(XMLDocumentTests, OriginalEntityRecoveryKeepsUnknownAndExternalReferences
       .range = SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + 4)},
       .replacement = "circle",
       .sourceVersion = doc.sourceVersion()});
-  EXPECT_EQ(edited.scope, ReparseScope::Document);
+  EXPECT_THAT(edited.scope, Eq(ReparseScope::Document));
   EXPECT_THAT(edited, DiagnosticReasonContains("entity context"));
   const auto policy = XMLParser::SourceOptions(doc);
   ASSERT_THAT(policy, testing::Ne(std::nullopt));
@@ -2263,11 +2263,11 @@ TEST_F(XMLDocumentTests, SourceReplacementCannotReusePriorOrGuessedEntityPolicy)
         .range = SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + 4)},
         .replacement = "circle",
         .sourceVersion = doc.sourceVersion()});
-    EXPECT_EQ(edited.scope, ReparseScope::Document);
+    EXPECT_THAT(edited.scope, Eq(ReparseScope::Document));
     EXPECT_THAT(edited, DiagnosticReasonContains("parser policy is unavailable"));
     EXPECT_THAT(XMLParser::SourceOptions(doc), Eq(std::nullopt));
     EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("&amp;")));
-    EXPECT_EQ(rect.tagName(), XMLQualifiedNameRef("rect"));
+    EXPECT_THAT(rect.tagName(), Eq(XMLQualifiedNameRef("rect")));
   }
 }
 
@@ -2285,7 +2285,7 @@ TEST_F(XMLDocumentTests, UnacceptedPrologPreventsLaterContextFreeFragmentTransla
       .range = SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + 3)},
       .replacement = "&paint;",
       .sourceVersion = doc.sourceVersion()});
-  EXPECT_EQ(edited.scope, ReparseScope::Document);
+  EXPECT_THAT(edited.scope, Eq(ReparseScope::Document));
   EXPECT_THAT(edited, DiagnosticReasonContains("entity context"));
   EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("red")));
 }
@@ -2302,7 +2302,7 @@ TEST_F(XMLDocumentTests, SameStoreDoctypeEditNeverReusesOldDeclarationsForFragme
                                                 .replacement = "blue",
                                                 .sourceVersion = doc.sourceVersion()})
                   .applied);
-  EXPECT_EQ(doc.sourceStore(), store);
+  EXPECT_THAT(doc.sourceStore(), Eq(store));
   const auto tag = doc.source().find("<rect") + 1;
   const auto renamed = doc.applySourceEdit(
       XMLEditIntent{.range = SourceRange{FileOffset::Offset(tag), FileOffset::Offset(tag + 4)},
