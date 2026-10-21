@@ -9940,7 +9940,7 @@ TEST(EditorShellTest, SourceFocusFollowsSelectedElementMovedByDocumentEdit) {
          EditorApp& app = EditorShellTestAccess::App(shell);
          std::optional<svg::SVGElement> sibling =
              app.document().document().querySelector("#filler-1");
-         ASSERT_TRUE(sibling.has_value());
+         ASSERT_THAT(sibling, testing::Optional(testing::_));
          app.applyMutation(EditorCommand::DeleteElementCommand(*sibling));
        }},
   };
@@ -9953,7 +9953,7 @@ TEST(EditorShellTest, SourceFocusFollowsSelectedElementMovedByDocumentEdit) {
 
     EditorApp& app = EditorShellTestAccess::App(shell);
     std::optional<svg::SVGElement> target = app.document().document().querySelector("#filler-3");
-    ASSERT_TRUE(target.has_value());
+    ASSERT_THAT(target, testing::Optional(testing::_));
     app.setSelection(*target);
     SettleShellFrames(window, shell);
     {
@@ -10007,7 +10007,7 @@ TEST(EditorShellTest, SourceFocusFollowsZOrderAfterTypingThatChangedNothing) {
 
   EditorApp& app = EditorShellTestAccess::App(shell);
   std::optional<svg::SVGElement> target = app.document().document().querySelector("#filler-3");
-  ASSERT_TRUE(target.has_value());
+  ASSERT_THAT(target, testing::Optional(testing::_));
   app.setSelection(*target);
   SettleShellFrames(window, shell);
   DriveGlobalShortcut(shell, {ImGuiKey_RightBracket}, /*ctrl=*/true, /*shift=*/true);
