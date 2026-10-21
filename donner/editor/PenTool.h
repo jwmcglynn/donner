@@ -280,6 +280,8 @@ private:
   /// each neighbor).
   void convertAnchorSmoothness(std::size_t index);
   /// Apply pointer movement to the active MoveAnchor/Move*Handle drag.
+  /// Preserve click-only actions until the pointer actually leaves its press position.
+  [[nodiscard]] bool shouldSampleDragAt(const Vector2d& documentPoint) const;
   [[nodiscard]] bool updatePointDrag(const Vector2d& documentPoint,
                                      const MouseModifiers& modifiers);
 
@@ -324,6 +326,8 @@ private:
   std::size_t dragIndex_ = 0;
   bool draggedAnchorChanged_ = false;
   Anchor dragStartAnchor_;
+  /// Actual pointer press, which can differ from an anchor or handle inside its hit tolerance.
+  Vector2d dragPressDocumentPoint_ = Vector2d::Zero();
   /// Whether the dragged anchor's handles were collinear (smooth) at
   /// mouse-down; decides aligned-vs-corner coupling for handle drags.
   bool dragStartAnchorSmooth_ = false;

@@ -100,6 +100,7 @@ void PenTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   }
 
   flushPendingDrag(editor);
+  dragPressDocumentPoint_ = documentPoint;
   const double toleranceDoc =
       kPointHitScreenTolerance / std::max(modifiers.pixelsPerDocUnit, 0.000001);
 
@@ -216,9 +217,14 @@ void PenTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool
   onMouseMove(editor, documentPoint, buttonHeld, MouseModifiers{});
 }
 
+bool PenTool::shouldSampleDragAt(const Vector2d& documentPoint) const {
+  return dragMode_ == DragMode::NewAnchorHandles || draggedAnchorChanged_ ||
+         !SamePoint(documentPoint, dragPressDocumentPoint_);
+}
+
 void PenTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
                           MouseModifiers modifiers, bool deferCommit) {
-  if (!buttonHeld || dragMode_ == DragMode::None) {
+  if (!buttonHeld || dragMode_ == DragMode::None || !shouldSampleDragAt(documentPoint)) {
     return;
   }
 
