@@ -311,6 +311,7 @@ py_test(
     ],
     imports = ["."],
     deps = [
+        ":bazelrc_configs",
         ":test_timing",
         "@rules_python//python/runfiles",
     ],
@@ -394,6 +395,21 @@ py_library(
         "//tools/ci:__pkg__",
         "//tools/format:__pkg__",
     ],
+)
+
+# Expands `--config=<name>` from the repository's .bazelrc the way Bazel does, for the CI policy
+# tests that read Bazel command lines.
+py_library(
+    name = "bazelrc_configs",
+    testonly = 1,
+    srcs = ["bazelrc_configs.py"],
+)
+
+py_test(
+    name = "bazelrc_configs_tests",
+    size = "small",
+    srcs = ["bazelrc_configs_tests.py"],
+    deps = [":bazelrc_configs"],
 )
 
 py_library(
@@ -740,7 +756,10 @@ py_test(
         "//tools/ci:coverage_contract.json",
     ],
     main = "ci_lane_parity_tests.py",
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":bazelrc_configs",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(

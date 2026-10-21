@@ -20,7 +20,27 @@ import shlex
 import unittest
 
 from python.runfiles import runfiles
+from tools import bazelrc_configs
 from tools import ci_coverage_contract as coverage_contract
+
+
+_CONFIGS = []
+
+
+def _repository_configs():
+    """Every config in the repository's .bazelrc. A lane's command line is compared with each
+    config replaced by its flags, so a lane cannot change what it runs through a config out of
+    sight."""
+    if not _CONFIGS:
+        _CONFIGS.append(bazelrc_configs.parse(Path(runfiles.Create().Rlocation(
+            "donner/.bazelrc")).read_text(encoding="utf-8")))
+    return _CONFIGS[0]
+
+
+def _config_flags(name, command="test"):
+    """The flags a repository config applies to `command`. An allowlist entry that accepts a
+    whole config, such as a main-only executor config, accepts each of its flags."""
+    return bazelrc_configs.expand(command, ["--config=" + name], _repository_configs())
 
 
 # The shared target selection: `//...` on a fallback, otherwise the affected labels. Steps that use
@@ -148,8 +168,8 @@ PARITY_ALLOWLIST = {
        for step in ("Test", "Test (Geode editor lane)") for kind, value in TEXTURE_USAGE_SPLIT},
     _PARITY + ("Test", "tag-filter-main-only", "-requires_shader_validation"):
         HOSTED_SKIPS_SHADER_VALIDATION_TESTS,
-    _PARITY + ("Test", "flag-main-only", "--config=hosted-macos-unvalidated"):
-        HOSTED_UNVALIDATED_CONFIG,
+    **{_PARITY + ("Test", "flag-main-only", flag): HOSTED_UNVALIDATED_CONFIG
+       for flag in _config_flags("hosted-macos-unvalidated")},
 }
 
 # Tests that main's hosted jobs run and whose result can depend on the runner's CPU count
@@ -253,8 +273,8 @@ INVOCATION_ALLOWLIST = {
        for kind, value in TEXTURE_USAGE_SPLIT},
     ("main.yml", "macos", "macos-self-hosted", "Test", "tag-filter-main-only",
      "-requires_shader_validation"): HOSTED_SKIPS_SHADER_VALIDATION_TESTS,
-    ("main.yml", "macos", "macos-self-hosted", "Test", "flag-main-only",
-     "--config=hosted-macos-unvalidated"): HOSTED_UNVALIDATED_CONFIG,
+    **{("main.yml", "macos", "macos-self-hosted", "Test", "flag-main-only", flag):
+       HOSTED_UNVALIDATED_CONFIG for flag in _config_flags("hosted-macos-unvalidated")},
     # A changed non-Bazel step is keyed by a digest of both rendered definitions, so any edit to
     # what the step runs (its action, inputs, script, shell, its own env and the variables it
     # names) changes the digest and needs a new review. Overrides of the Xcode selection's test
@@ -282,11 +302,12 @@ INVOCATION_ALLOWLIST = {
 # Differences in how a job that runs on both main and a pull request runs Bazel in each, keyed
 # by (workflow, job, scenario, step, kind, value).
 SHARED_JOB_ALLOWLIST = {
-    ("main.yml", "linux", scenario, step, "flag-main-only", "--config=buildbuddy-re"):
+    ("main.yml", "linux", scenario, step, "flag-main-only", flag):
         "Cloud execution requires the trusted writer key, so other PRs run the same build and "
         "test commands, with the same declared LLVM toolchain, on the hosted runner itself. "
         "Trusted PRs exercise the cloud compile probe before merge."
     for scenario in ("untrusted-pr", "renovate-pr") for step in ("Build", "Test")
+    for flag in _config_flags("buildbuddy-re", step.lower())
 }
 
 # (action, input) pairs whose value differs between main and pull requests by policy, pinned by
@@ -370,7 +391,7 @@ def _counterpart_entries(main_job, counterpart, entries, reason):
 
 COUNTERPART_ALLOWLIST = {
     **_counterpart_entries("linux", "linux-self-hosted", [
-        ("*", "flag-main-only", "--config=buildbuddy-re"),
+        *[("*", "flag-main-only", flag) for flag in _config_flags("buildbuddy-re")],
     ], "Where actions run, not what they build: both lanes use the declared LLVM toolchain, and "
        "hosted Linux runs its compiles on the cloud executor while the self-hosted lane has its "
        "own executor. Tests remain on the hosted runner for its display dependencies."),
@@ -867,49 +888,6 @@ def _expand_word(word, environment, variables):
     return [_expand(word, environment)]
 
 
-# Repository configs (.bazelrc) that hold a CI lane's test selection or constraints. The
-# comparison sees their flags in place of `--config=<name>`, so a lane cannot change what it runs
-# through a config out of sight. Other configs are compared by name.
-EXPANDED_CONFIGS = ("hosted-macos", "hosted-macos-quarantine", "hosted-parity-runtime",
-                    "hosted-parity", "hosted-parity-subset")
-_RC_LINE = re.compile(r"^(build|test|common):([A-Za-z0-9_-]+)\s+(.*)$")
-
-
-def bazelrc_configs(text):
-    """{config: [(command, flags)]} for each EXPANDED_CONFIGS entry in a bazelrc."""
-    configs = {}
-    for line in text.splitlines():
-        match = _RC_LINE.match(line)
-        if match and match.group(2) in EXPANDED_CONFIGS:
-            configs.setdefault(match.group(2), []).append(
-                (match.group(1), shlex.split(match.group(3))))
-    return configs
-
-
-_CONFIGS = []
-
-
-def _repository_configs():
-    if not _CONFIGS:
-        _CONFIGS.append(bazelrc_configs(Path(runfiles.Create().Rlocation(
-            "donner/.bazelrc")).read_text(encoding="utf-8")))
-    return _CONFIGS[0]
-
-
-def expand_configs(command, options, configs):
-    """Options with each expanded `--config=<name>` replaced by its flags, in place."""
-    expanded = []
-    for option in options:
-        name = option.split("=", 1)[1] if option.startswith("--config=") else None
-        if name not in configs:
-            expanded.append(option)
-            continue
-        for kind, flags in configs[name]:
-            if kind != "test" or command == "test":
-                expanded.extend(expand_configs(command, flags, configs))
-    return expanded
-
-
 def _invocation(line, environment, variables):
     """One `bazelisk build` or `bazelisk test` command line as option sets, or None."""
     match = re.search(r"(?:^|\s)(bazelisk|bazel)\s(.*)$", line)
@@ -923,8 +901,9 @@ def _invocation(line, environment, variables):
     if not words or words[0] not in BAZEL_COMMANDS:
         return None
     command = words.pop(0)
-    options = expand_configs(command, [word for word in words if word.startswith("--")],
-                             _repository_configs())
+    # The whole command line, so the spaced `--config name` form expands too.
+    words = bazelrc_configs.expand(command, words, _repository_configs())
+    options = [word for word in words if word.startswith("--")]
     return {
         "command": command,
         "wrapped": "tools/ci_bazel_test.sh" in line[: match.start(1)],
@@ -1688,9 +1667,11 @@ def _build_event_flag_problems(flags):
     if not any(_BUILD_EVENT_FILE.match(flag) for flag in flags):
         return []
     problems = [flag for flag in flags if _PATH_CONVERSION_ON.match(flag)]
-    # `ci` is not in EXPANDED_CONFIGS, so `--config=ci` is still in the flags here.
-    if "--config=ci" not in flags:
-        problems.append("writes a build event file without --config=ci")
+    # `--config=ci` turns path conversion off for every format; its flags are expanded here.
+    for kind in BUILD_EVENT_FILE_FORMATS:
+        if any(flag.startswith("--build_event_%s_file=" % kind) for flag in flags) and (
+                "--nobuild_event_%s_file_path_conversion" % kind not in flags):
+            problems.append("writes a %s build event file with path conversion on" % kind)
     return problems
 
 
@@ -1881,7 +1862,7 @@ class CiLaneParityTest(unittest.TestCase):
         command = "bazelisk test --config=ci --config=geode"
         self.assertIn(command, text)
         for replacement, problem in (
-                ("bazelisk test --config=geode", "without --config=ci"),
+                ("bazelisk test --config=geode", "json build event file with path conversion on"),
                 (command + " --build_event_json_file_path_conversion",
                  "--build_event_json_file_path_conversion"),
                 (command + " --experimental_build_event_json_file_path_conversion=True",
@@ -2368,16 +2349,28 @@ class CiLaneParityTest(unittest.TestCase):
         # The parity lane's selection and constraints live in .bazelrc configs, which the
         # comparison expands, so widening a config fails like widening the workflow.
         configs = _repository_configs()
-        self.assertEqual(set(EXPANDED_CONFIGS), set(configs))
+        # Every config a workflow or action names is a repository config, so each one is
+        # compared by its flags. A config only a runner's rc defines would be compared by name.
+        actions = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml")).parent
+        actions = sorted((actions.parent / "actions").glob("*/action.y*ml"))
+        self.assertTrue(actions)
+        for path in list(_workflow_paths()) + actions:
+            text = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
+                             if not line.lstrip().startswith("#"))
+            for name in set(re.findall(r"--config[= ]([a-z][A-Za-z0-9_.+-]*)", text)):
+                with self.subTest(file=path.name, config=name):
+                    self.assertIn(name, configs)
         self.assertEqual(
-            expand_configs("test", ["--config=hosted-parity-subset", "--config=other"], configs),
+            bazelrc_configs.expand(
+                "test", ["--config=hosted-parity-subset", "--config=other"], configs),
             [*HOSTED_MACOS_RESOURCE_FLAGS, "--run_under=//tools/ci:hosted_parity_throttle",
              "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1", "--build_tests_only",
              "--test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,"
              "-ci-remote-gpu,-launches-browser,-fuzz_soak", "--config=other"])
         # `test:` lines do not apply to a build.
-        self.assertEqual(expand_configs("build", ["--config=hosted-parity-subset"], configs), [])
-        self.assertEqual(expand_configs("build", ["--config=hosted-macos"], configs),
+        self.assertEqual(
+            bazelrc_configs.expand("build", ["--config=hosted-parity-subset"], configs), [])
+        self.assertEqual(bazelrc_configs.expand("build", ["--config=hosted-macos"], configs),
                          list(HOSTED_MACOS_RESOURCE_FLAGS))
         (name, job_name, _), (parity, steps) = next(iter(PARITY_SUBSETS.items()))
         widened = copy.deepcopy(configs)

@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 from python.runfiles import runfiles
 from test_executable_fixtures import ExecutableFixtureDirectory, write_python_stand_in
+from tools import bazelrc_configs
 from tools import test_timing
 
 
@@ -105,6 +106,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.executables.write_python3()
         cls.executables.write("bash", '#!/bin/sh\nexec /bin/bash "$@"\n')
         cls.bazelrc = _repository_text(".bazelrc")
+        cls.configs = bazelrc_configs.parse(cls.bazelrc)
         cls.main = _repository_text(".github/workflows/main.yml")
         cls.cmake = _repository_text(".github/workflows/cmake.yml")
         cls.coverage = _repository_text(".github/workflows/coverage.yml")
@@ -144,6 +146,34 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         rest = job.split(marker, 1)[1]
         end = re.search(r"^      - name: ", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
+
+    @staticmethod
+    def _variables(job):
+        """The job's and its steps' literal `env:` values (`NAME: "value"` or `NAME: value`).
+        A value computed at run time (`${{ }}`) or a block scalar is left out, so its variable
+        stays a word."""
+        return {name: value.strip('"') for name, value in re.findall(
+            r"(?m)^ +([A-Z][A-Z0-9_]*): (\"[^\"\n]*\"|[^\s\"${>|][^\n]*)$", job)}
+
+    def _test_options(self, step, job):
+        """The options of a step's one `bazel test` command, with the job's literal env values
+        substituted and each repository `--config` replaced by its flags, so a lane's filters
+        can move into a .bazelrc config or a flags variable."""
+        tests = [options for command, options, _ in
+                 bazelrc_configs.commands(step, self.configs, self._variables(job))
+                 if command == "test"]
+        self.assertEqual(1, len(tests), step)
+        return tests[0]
+
+    def _tag_filters(self, step, job):
+        return bazelrc_configs.last_value(self._test_options(step, job), "test_tag_filters")
+
+    def _job_tag_filters(self, job):
+        """The effective tag filters of every `bazel test` command in a job."""
+        return [bazelrc_configs.last_value(options, "test_tag_filters")
+                for command, options, _ in
+                bazelrc_configs.commands(job, self.configs, self._variables(job))
+                if command == "test"]
 
     def test_early_macos_bazel_failures_keep_their_artifacts(self):
         for lane in ("macos", "macos-browser", "macos-self-hosted"):
@@ -250,10 +280,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         # suite, one at a time, and nowhere else in that job.
         hosted = self._job_body("macos")
         main_test = self._step_body(hosted, "Test")
-        self.assertIn(
-            "--test_tag_filters=-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,"
-            "-ci-remote-gpu,-launches-browser,-fuzz_soak ",
-            main_test,
+        self.assertEqual(
+            "-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,"
+            "-ci-remote-gpu,-launches-browser,-fuzz_soak",
+            self._tag_filters(main_test, hosted),
         )
         browser = self._step_body(hosted, "Test (browser targets)")
         self.assertLess(hosted.index("      - name: Test\n"),
@@ -266,11 +296,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "steps.test.outcome == 'failure') }}",
             browser,
         )
-        self.assertIn("--local_test_jobs=1", browser)
-        self.assertIn(
-            "--test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,"
-            "-ci-remote-gpu,-fuzz_soak ",
-            browser,
+        self.assertIn("--local_test_jobs=1", self._test_options(browser, hosted))
+        self.assertEqual(
+            "launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak",
+            self._tag_filters(browser, hosted),
         )
         self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS", browser)
         # Every step that reacts to a failed test step also reacts to the browser phase.
@@ -286,9 +315,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def test_self_hosted_browser_tests_run_alone_after_the_suite(self):
         job = self._job_body("macos-self-hosted")
         main_test = self._step_body(job, "Test")
-        self.assertIn(
-            "--test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser,-fuzz_soak ",
-            main_test)
+        self.assertEqual("-manual,-perf,-ci-remote-gpu,-launches-browser,-fuzz_soak",
+                         self._tag_filters(main_test, job))
         browser = self._step_body(job, "Test (browser targets)")
         self.assertLess(job.index("      - name: Test\n"),
                         job.index("      - name: Test (browser targets)\n"))
@@ -298,11 +326,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn(
             "if: ${{ !cancelled() && (steps.test.outcome == 'success' || "
             "steps.test.outcome == 'failure') }}", browser)
-        self.assertIn("--local_test_jobs=1", browser)
-        self.assertIn(
-            "--test_tag_filters=launches-browser,-manual,-perf,-requires_desktop_session,"
-            "-ci-remote-gpu,-fuzz_soak ",
-            browser)
+        self.assertIn("--local_test_jobs=1", self._test_options(browser, job))
+        self.assertEqual(
+            "launches-browser,-manual,-perf,-requires_desktop_session,-ci-remote-gpu,-fuzz_soak",
+            self._tag_filters(browser, job))
         self.assertIn("bazelisk --nohome_rc --nosystem_rc test --config=ci", browser)
         for phase in (main_test, browser):
             self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS", phase)
@@ -562,10 +589,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def test_headed_browser_tests_keep_required_hosted_coverage(self):
         for job_name in ("macos", "macos-browser", "macos-self-hosted"):
             with self.subTest(job=job_name):
-                body = self._step_body(self._job_body(job_name), "Test (browser targets)")
-                match = re.search(r"--test_tag_filters=([^\s]+)", body)
-                self.assertIsNotNone(match)
-                tags = match.group(1).split(",")
+                job = self._job_body(job_name)
+                body = self._step_body(job, "Test (browser targets)")
+                filters = self._tag_filters(body, job)
+                self.assertTrue(filters)
+                tags = filters.split(",")
                 self.assertIn("launches-browser", tags)
                 self.assertEqual("-requires_desktop_session" in tags,
                                  job_name == "macos-self-hosted")
@@ -721,8 +749,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
         step = self._step_body(local, "Test local Xvfb targets")
         self.assertIn("tools/ci_bazel_test.sh bazelisk test", step)
-        self.assertIn("--test_tag_filters=requires_xvfb", step)
-        self.assertIn("--strategy=TestRunner=local", step)
+        self.assertEqual("requires_xvfb,-fuzz_soak", self._tag_filters(step, local))
+        self.assertIn("--strategy=TestRunner=local", self._test_options(step, local))
         script_template = textwrap.dedent(step.split("run: |\n", 1)[1])
         native_target = "//donner/editor/tests:editor_window_vulkan_surface_tests"
         for fallback, affected, expected_target, no_tests in (
@@ -949,12 +977,27 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     self.assertEqual(expected, output.read_text())
 
     def test_pr_test_lanes_exclude_manual_targets_at_the_command_line(self):
-        """Runner bazelrcs cannot re-enable opt-in tests during full fallbacks."""
+        """Runner bazelrcs cannot re-enable opt-in tests during full fallbacks.
+
+        This one reads the literal command line on purpose: a runner's rc can add lines to any
+        config, including `ci` or a lane config, and a later rc file wins within a config. The
+        exclusion is therefore an explicit command-line flag, not only a config's.
+        """
         self.assertIn("test:ci --test_tag_filters=-manual,-perf", self.bazelrc)
         for job_name in ("linux", "linux-self-hosted", "macos", "macos-self-hosted"):
             with self.subTest(job=job_name):
                 job = self._job_body(job_name)
                 self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
+
+    def test_run_time_flag_configs_do_not_select_tests(self):
+        # BUILDBUDDY_FLAGS is a step output, so the policy tests cannot expand the config it
+        # names where a lane uses it. That config may change where actions run, never which
+        # tests run or how.
+        self.assertIn("buildbuddy-re", self.configs)
+        for kind, flags in self.configs["buildbuddy-re"]:
+            self.assertNotIn(kind, ("test", "coverage"))
+            for flag in flags:
+                self.assertFalse(flag.startswith(("--test_", "--config")), flag)
 
     def test_pr_test_lanes_exclude_fuzz_soaks(self):
         """Mutation soaks run in the Fuzz workflow; PR CI keeps only the corpus replay."""
@@ -964,7 +1007,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         selected_suites = set()
         for job_name in ("linux", "linux-self-hosted", "macos", "macos-self-hosted"):
             job = self._job_body(job_name)
-            filters = re.findall(r"--test_tag_filters=(\S*)", job)
+            filters = self._job_tag_filters(job)
             self.assertTrue(filters, job_name)
             for value in filters:
                 # An empty filter accompanies an explicit //tools/ci suite, checked below.
