@@ -15,6 +15,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
+#include "donner/base/StringUtils.h"
 #include "donner/editor/AttachedNumericStepper.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorTheme.h"
@@ -27,6 +28,69 @@
 namespace donner::editor {
 
 namespace internal {
+
+/// Whether a decoded family word can round-trip as an unescaped CSS identifier.
+bool IsEditableFamilyIdentifier(std::string_view word) {
+  const auto startsIdentifier = [](unsigned char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c >= 0x80;
+  };
+  if (word.empty() || (!startsIdentifier(word.front()) && word.front() != '-')) {
+    return false;
+  }
+  if (word.front() == '-' && (word.size() == 1 || (!startsIdentifier(word[1]) && word[1] != '-'))) {
+    return false;
+  }
+  for (const unsigned char c : word) {
+    if (!startsIdentifier(c) && !(c >= '0' && c <= '9') && c != '-') {
+      return false;
+    }
+  }
+  for (const std::string_view reserved :
+       {"inherit", "initial", "unset", "revert", "revert-layer", "default"}) {
+    if (StringUtils::EqualsLowercase(word, reserved)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Preserve simple family display names and quote names that require CSS string syntax.
+std::string EditableFontFamily(std::string_view family) {
+  bool quote = false;
+  std::size_t offset = 0;
+  do {
+    const std::size_t space = family.find(' ', offset);
+    const std::size_t end = space == std::string_view::npos ? family.size() : space;
+    if (!IsEditableFamilyIdentifier(family.substr(offset, end - offset))) {
+      quote = true;
+      break;
+    }
+    if (space == std::string_view::npos) {
+      break;
+    }
+    offset = space + 1;
+  } while (offset <= family.size());
+  if (!quote) {
+    return std::string(family);
+  }
+  std::string result = "\"";
+  constexpr std::string_view kHex = "0123456789abcdef";
+  for (const unsigned char c : family) {
+    if (c < 0x20 || c == 0x7f) {
+      result += '\\';
+      result += kHex[c >> 4];
+      result += kHex[c & 0xf];
+      result += ' ';
+    } else {
+      if (c == '"' || c == '\\') {
+        result += '\\';
+      }
+      result += static_cast<char>(c);
+    }
+  }
+  result += '"';
+  return result;
+}
 
 /// Copies `value` into a fixed-size, null-terminated buffer.
 template <std::size_t N>
@@ -146,7 +210,7 @@ void ReadTextFormatState(const svg::PropertyRegistry& style, FormatBarState* sta
     if (!state->fontFamily.empty()) {
       state->fontFamily += ", ";
     }
-    state->fontFamily += std::string_view(family);
+    state->fontFamily += internal::EditableFontFamily(std::string_view(family));
   }
 
   const double fontSize =
