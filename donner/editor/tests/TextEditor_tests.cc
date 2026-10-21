@@ -871,6 +871,9 @@ protected:
   [[nodiscard]] static constexpr std::size_t ReferenceAttributeScanLimit() {
     return TextEditor::ReferenceAttributeScanBudget::kMaximumExamined;
   }
+  [[nodiscard]] static constexpr std::size_t ReferenceAttributeLineLimit() {
+    return TextEditor::ReferenceAttributeScanBudget::kMaximumPrecedingLines;
+  }
 
   [[nodiscard]] std::size_t SourceStyleChipHitRectCount() const {
     return editor.sourceStyleChipHitRects_.size();
@@ -3869,6 +3872,54 @@ TEST_F(TextEditorTests, ReferenceRopeAttributeScanSharesBoundedWorkBudget) {
       EXPECT_THAT(after->tip.y, testing::FloatEq(before->tip.y));
     } else {
       EXPECT_THAT(after->tip.x, testing::Not(testing::FloatEq(before->tip.x)));
+    }
+  }
+}
+
+TEST_F(TextEditorTests, ReferenceRopeAttributeRangesAvoidLongVisualColumnPrefixes) {
+  const std::string leadingLine = "<!-- heading -->\n";
+  std::string line = "<rect data-padding=\"" + std::string(64 * 1024, ' ') + "\t\xc3\xa9\"";
+  std::vector<std::pair<std::size_t, std::size_t>> values;
+  for (int index = 0; index < 256; ++index) {
+    line += " data-ref-" + std::to_string(index) + "=\"";
+    const std::size_t start = line.size();
+    line += "url(#paint)";
+    values.emplace_back(start, line.size());
+    line += '"';
+  }
+  line += "/>";
+  editor.setText(leadingLine + line + "\n");
+  std::size_t totalExamined = 0;
+  for (const auto [start, end] : values) {
+    SCOPED_TRACE(start);
+    const auto scan =
+        ReferenceAttributeScan(1, static_cast<int>(start + 4), static_cast<int>(end - 1));
+    EXPECT_THAT(scan.range.start, testing::Eq(leadingLine.size() + start));
+    EXPECT_THAT(scan.range.end, testing::Eq(leadingLine.size() + end));
+    EXPECT_THAT(scan.examined, testing::Le(ReferenceAttributeScanLimit()));
+    totalExamined += scan.examined;
+  }
+  EXPECT_THAT(totalExamined, testing::Le(values.size() * ReferenceAttributeScanLimit()));
+}
+
+TEST_F(TextEditorTests, ReferenceRopeAttributeRangesBoundPrecedingLineWork) {
+  const std::string line = "<rect fill=\"url(#paint)\"/>";
+  const int tokenStart = static_cast<int>(line.find("#paint"));
+  const std::size_t limit = ReferenceAttributeLineLimit();
+  for (const std::size_t precedingLines : {limit, limit + 1}) {
+    SCOPED_TRACE(precedingLines);
+    editor.setText(std::string(precedingLines, '\n') + line);
+    const auto scan =
+        ReferenceAttributeScan(static_cast<int>(precedingLines), tokenStart, tokenStart + 6);
+    if (precedingLines == limit) {
+      EXPECT_THAT(scan.range.start, testing::Eq(precedingLines + line.find("url(#paint)")));
+      EXPECT_THAT(scan.range.end,
+                  testing::Eq(precedingLines + line.find('"', line.find("url(#paint)"))));
+      EXPECT_THAT(scan.examined, testing::Gt(0u));
+    } else {
+      EXPECT_THAT(scan.range.start, testing::Eq(0u));
+      EXPECT_THAT(scan.range.end, testing::Eq(0u));
+      EXPECT_THAT(scan.examined, testing::Eq(0u));
     }
   }
 }

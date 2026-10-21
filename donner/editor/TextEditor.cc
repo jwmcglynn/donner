@@ -2221,17 +2221,21 @@ TextEditor::ReferenceAttributeValueScan TextEditor::scanReferenceAttributeValue(
   // All three scans share one bounded budget; exhaustion leaves no retained anchor.
   ReferenceAttributeScanBudget budget;
   ReferenceAttributeValueScan result;
+  if (lineIndex < 0 || lineIndex >= text_.getTotalLines() ||
+      static_cast<std::size_t>(lineIndex) > ReferenceAttributeScanBudget::kMaximumPrecedingLines) {
+    return result;
+  }
   const int quoteIndex = referenceAttributeBoundaryIndex(lineIndex, tokenStartIndex, budget);
   if (quoteIndex >= 0 && text_.getLineGlyphs(lineIndex)[quoteIndex].character != '<' &&
       referenceAttributeHasAssignment(lineIndex, quoteIndex, budget)) {
     const char quote = text_.getLineGlyphs(lineIndex)[quoteIndex].character;
     const int quoteEnd = referenceAttributeEndIndex(lineIndex, tokenEndIndex, quote, budget);
     if (quoteEnd >= 0) {
+      // Glyph indices are UTF-8 byte offsets; visual-column conversion would rescan the line.
+      const std::size_t lineStart = text_.getByteOffset(Coordinates(lineIndex, 0));
       result.range = SourceByteRange{
-          .start = getByteOffsetAtCoordinates(
-              Coordinates(lineIndex, text_.getCharacterColumn(lineIndex, quoteIndex + 1))),
-          .end = getByteOffsetAtCoordinates(
-              Coordinates(lineIndex, text_.getCharacterColumn(lineIndex, quoteEnd))),
+          .start = lineStart + static_cast<std::size_t>(quoteIndex + 1),
+          .end = lineStart + static_cast<std::size_t>(quoteEnd),
       };
     }
   }

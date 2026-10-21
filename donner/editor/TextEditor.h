@@ -1399,6 +1399,7 @@ private:
 
   struct ReferenceAttributeScanBudget {
     static constexpr std::size_t kMaximumExamined = 256;
+    static constexpr std::size_t kMaximumPrecedingLines = 4096;
     std::size_t remaining = kMaximumExamined;
     bool consume() {
       if (remaining == 0) {
