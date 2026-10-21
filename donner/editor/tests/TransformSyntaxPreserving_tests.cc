@@ -202,13 +202,13 @@ TEST(TransformSyntaxPreserving, WrapperWritesCanonicalTranslateAtEditPrecision) 
 
 TEST(TransformSyntaxPreserving, WrapperKeepsVeryLargeFiniteTransformsParseable) {
   const double large = std::numeric_limits<double>::max() / 16.0;
-  for (const Transform2d& target : {Transform2d::Translate(Vector2d(large, -large)),
-                                   Transform2d::Scale(large, large)}) {
-    const RcString written = serializeTransformForWriteback(std::nullopt, target);
+  for (const Transform2d& parentFromElement :
+       {Transform2d::Translate(Vector2d(large, -large)), Transform2d::Scale(large, large)}) {
+    const RcString written = serializeTransformForWriteback(std::nullopt, parentFromElement);
     SCOPED_TRACE(written);
     const auto parsed = svg::parser::TransformParser::Parse(written);
     ASSERT_FALSE(parsed.hasError()) << parsed.error();
-    EXPECT_THAT(parsed.result().data, testing::ElementsAreArray(target.data));
+    EXPECT_THAT(parsed.result().data, testing::Pointwise(testing::DoubleEq(), parentFromElement.data));
   }
 }
 
