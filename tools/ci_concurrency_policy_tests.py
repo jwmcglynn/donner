@@ -21,18 +21,10 @@ import unittest
 from python.runfiles import runfiles
 
 # Workflows that still cancel a running run, by file name.
-CANCELLING_WORKFLOWS = {
-    "main.yml":
-        "Pull request and non-main branch runs are superseded by the next push; its concurrency "
-        "block changes with the main CI workflow's own refactor.",
-}
+CANCELLING_WORKFLOWS = {}
 
 # Concurrency groups shared between runs, keyed by (file name, group expression).
 SHARED_GROUPS = {
-    # "*": any group in that workflow, so other changes to its block do not churn this entry.
-    ("main.yml", "*"):
-        "Pull request and non-main branch runs share groups; changes with the main CI "
-        "workflow's own refactor, as above.",
     ("deploy_docs.yaml", "pages-publish"):
         "Serializes manually dispatched promotions of the one Pages site; the latest dispatch "
         "supersedes a queued older one.",
