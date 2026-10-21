@@ -11,12 +11,14 @@
 #include <unordered_map>
 #include <vector>
 
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/PenTool.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SidebarPresenter.h"
+#include "donner/editor/SourceEditIntent.h"
 #include "donner/editor/TextTool.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -131,6 +133,7 @@ public:
   };
 
 private:
+  friend struct EditorControlSessionTestAccess;
   ToolCallResult loadDocument(const nlohmann::json& arguments);
   ToolCallResult loadSvg(const nlohmann::json& arguments);
   ToolCallResult getSvgSource(const nlohmann::json& arguments);
@@ -154,6 +157,18 @@ private:
 
   ToolCallResult loadSvgSource(std::string_view source, const LoadOptions& options,
                                std::string_view sourcePath);
+  /// Why `edit_svg_source` cannot use `dispatch: source_pane` for this request, if it cannot.
+  [[nodiscard]] std::optional<std::string> sourcePaneDispatchError(
+      bool replaceSource, bool edits, bool allowParseFailure, std::string_view sourcePath) const;
+  /// Apply the requested canvas size and device pixel ratio to the loaded document.
+  void applyCanvasOptions(const LoadOptions& options);
+  /// Mark the preview current after source-pane edits, or keep it stale with the pending reason.
+  void recordSourcePanePreviewState(bool documentMatchesDraft,
+                                    const std::optional<ParseDiagnostic>& sourceDiagnostic,
+                                    const std::optional<ParseDiagnostic>& parseDiagnostic);
+  /// Apply `edit_svg_source` edits one at a time through the source pane's incremental dispatch.
+  ToolCallResult dispatchSourcePaneEdits(const std::vector<SourceEditIntent>& intents,
+                                         const LoadOptions& options);
   [[nodiscard]] bool loadCurrentSourceText(const LoadOptions& options, std::string_view sourcePath,
                                            bool resetRenderVersion, nlohmann::json* loadInfo,
                                            std::string* error);

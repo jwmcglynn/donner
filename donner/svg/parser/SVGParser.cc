@@ -821,7 +821,7 @@ public:
         // Remove the unknown element from the tree.
         XMLNode nodeToRemove = child.value();
         child = child->nextSibling();
-        nodeToRemove.remove();
+        nodeToRemove.removeForProjection();
         continue;
       }
 

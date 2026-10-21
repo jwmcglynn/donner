@@ -2144,6 +2144,133 @@ ParseResult<StructuralReparse> ParseStructuralSubtree(XMLDocument& document, con
   return StructuralReparse{std::move(parsed.result()), *parsedNode, syncByPosition};
 }
 
+/// Tree limits for replacing \p node with \p parsedNode under a renamed tag. The replaced
+/// element stays live once detached, so nothing it holds is credited back. The new element adds
+/// one node and its own attributes. Children shaped like the parsed ones move into it unchanged;
+/// otherwise children are reconciled like a subtree edit, which reuses children with matching ids
+/// and clones the rest (children without an id lose their nodes, as in a subtree edit), and their
+/// attributes are counted the way that reconciliation changes them.
+std::optional<ParseDiagnostic> ValidateOpeningTagRenameLimits(
+    XMLDocument& document, const XMLNode& parent, const XMLNode& node, const XMLNode& parsedNode,
+    bool reuseChildren, SourceRange diagnosticRange) {
+  const auto& context = document.registry().ctx().get<XMLDocumentContext>();
+  std::optional<std::uint64_t> subtreeNodes =
+      reuseChildren ? std::optional<std::uint64_t>(0) : CountNewNodesRequired(node, parsedNode);
+  const std::uint64_t liveNodes = CountLiveXmlNodes(document);
+  if (!subtreeNodes || !CheckedAccumulate(*subtreeNodes, 1) ||
+      liveNodes > context.maximumSourceEditTreeNodes ||
+      *subtreeNodes > context.maximumSourceEditTreeNodes - liveNodes) {
+    return MakeEditDiagnostic("Structural edit exceeds the document tree-node limit",
+                              diagnosticRange);
+  }
+
+  if (!reuseChildren) {
+    const std::size_t parentDepth = ElementDepth(parent);
+    const std::size_t subtreeDepth = MaximumElementDepth(parsedNode, 1);
+    if (context.maximumSourceEditTreeDepth < 0 ||
+        subtreeDepth > std::numeric_limits<std::size_t>::max() - parentDepth ||
+        parentDepth + subtreeDepth > static_cast<std::size_t>(context.maximumSourceEditTreeDepth)) {
+      return MakeEditDiagnostic("Structural edit exceeds the document tree-depth limit",
+                                diagnosticRange);
+    }
+  }
+
+  std::optional<std::uint64_t> attributes = CountLiveXmlAttributes(document);
+  const bool attributesValid =
+      attributes && CheckedAccumulate(*attributes, AttributeCount(parsedNode)) &&
+      (reuseChildren || ApplyReplacedChildrenAttributeCount(*attributes, node, parsedNode));
+  if (!attributesValid || *attributes > context.maximumSourceEditTotalAttributes) {
+    return MakeEditDiagnostic("Structural edit exceeds the document total-attribute limit",
+                              diagnosticRange);
+  }
+  return std::nullopt;
+}
+
+/// Whether every child of \p node matches the parsed child at the same position, so a renamed
+/// element can keep its existing children.
+bool ChildrenMatchByPosition(const XMLNode& node, const XMLNode& parsedNode) {
+  std::optional<XMLNode> child = node.firstChild();
+  std::optional<XMLNode> parsedChild = parsedNode.firstChild();
+  for (; child && parsedChild;
+       child = child->nextSibling(), parsedChild = parsedChild->nextSibling()) {
+    if (!HasCompatibleSubtreeShape(*child, *parsedChild)) {
+      return false;
+    }
+  }
+  return !child && !parsedChild;
+}
+
+/// Whole-element parse of an element whose opening tag was renamed.
+struct RenamedElementParse {
+  XMLDocument document;
+  XMLNode node;  //!< Handle owned by document.
+};
+
+/// Parse the whole element whose opening tag was renamed, or report why it no longer parses as a
+/// single element, such as a closing tag that no longer matches.
+ParseResult<RenamedElementParse> ParseRenamedElement(XMLDocument& document,
+                                                     std::string_view fragment,
+                                                     std::size_t fragmentStart,
+                                                     SourceRange diagnosticRange) {
+  ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseElement(
+      fragment, IncrementalReparseOptions(document, fragment.size()));
+  if (parsed.hasError()) {
+    return RebaseDiagnosticToDirtyRange(
+        std::move(parsed).error(),
+        SourceEditRange{.start = fragmentStart, .end = fragmentStart + fragment.size()});
+  }
+  std::optional<XMLNode> parsedNode = parsed.result().root().firstChild();
+  if (!parsedNode.has_value() || parsedNode->type() != XMLNode::Type::Element ||
+      parsedNode->nextSibling().has_value()) {
+    return MakeEditDiagnostic("Opening tag rename did not produce one element", diagnosticRange);
+  }
+  return RenamedElementParse{std::move(parsed.result()), *parsedNode};
+}
+
+/// The parent that a renamed element is replaced within, or nullopt for the document element,
+/// which a source edit does not replace.
+std::optional<XMLNode> RenameParent(const XMLNode& node) {
+  std::optional<XMLNode> parent = node.parentElement();
+  if (!parent.has_value() || parent->type() != XMLNode::Type::Element) {
+    return std::nullopt;
+  }
+  return parent;
+}
+
+/// Limits for an opening-tag edit that renames its element, checked against the prospective whole
+/// element before any bytes change. Malformed results are reported once the edit applies.
+std::optional<ParseDiagnostic> PreflightOpeningTagRename(XMLDocument& document,
+                                                         XMLSourceStore& store,
+                                                         const OpeningTagEdit& edit,
+                                                         SourceEditRange range,
+                                                         const XMLEditIntent& intent) {
+  const std::optional<SourceEditRange> nodeSpan = NodeSpanInCurrentCoords(edit.node);
+  const std::optional<XMLNode> parent = RenameParent(edit.node);
+  if (!nodeSpan.has_value() || !parent.has_value() || nodeSpan->start > range.start ||
+      range.end > nodeSpan->end) {
+    return std::nullopt;
+  }
+  std::optional<std::string> prospective =
+      BuildProspectiveFragment(document.source(), range, nodeSpan->start, nodeSpan->end,
+                               intent.replacement, store.resourceLimits().maximumSourceSize);
+  if (!prospective.has_value()) {
+    return std::nullopt;
+  }
+  ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseElement(
+      *prospective, IncrementalReparseOptions(document, prospective->size()));
+  if (parsed.hasError()) {
+    return IncrementalLimitParseDiagnostic(parsed.error(), intent.range);
+  }
+  std::optional<XMLNode> parsedNode = parsed.result().root().firstChild();
+  if (!parsedNode.has_value() || parsedNode->type() != XMLNode::Type::Element ||
+      parsedNode->nextSibling().has_value()) {
+    return std::nullopt;
+  }
+  return ValidateOpeningTagRenameLimits(document, *parent, edit.node, *parsedNode,
+                                        ChildrenMatchByPosition(edit.node, *parsedNode),
+                                        intent.range);
+}
+
 std::optional<ParseDiagnostic> PreflightOpeningTagEdit(XMLDocument& document, XMLSourceStore& store,
                                                        const OpeningTagEdit& edit,
                                                        SourceEditRange range,
@@ -2163,7 +2290,7 @@ std::optional<ParseDiagnostic> PreflightOpeningTagEdit(XMLDocument& document, XM
 
   std::optional<XMLNode> parsedNode = SingleMatchingElement(parsed.result(), edit.node.tagName());
   if (!parsedNode.has_value()) {
-    return std::nullopt;
+    return PreflightOpeningTagRename(document, store, edit, range, intent);
   }
   return ValidateOpeningTagAttributeLimit(document, edit.node, *parsedNode, intent.range);
 }
@@ -2224,6 +2351,239 @@ std::optional<ParseDiagnostic> PreflightSourceEdit(XMLDocument& document, XMLSou
   return std::nullopt;
 }
 
+/**
+ * Apply an opening-tag edit that renamed its element by replacing the element, in place among its
+ * siblings, with a new element of the parsed name, the way a parse of the edited source would
+ * build it. The whole element is parsed again so a closing tag that no longer matches is reported
+ * instead of applied. Children unchanged by the edit move into the new element and keep their
+ * identity.
+ */
+ApplySourceEditResult ApplyOpeningTagRename(XMLDocument& document, const XMLEditIntent& intent,
+                                            const OpeningTagEdit& edit,
+                                            ApplySourceEditResult result) {
+  XMLNode oldNode = edit.node;
+  const std::optional<XMLNode> maybeParent = RenameParent(oldNode);
+  if (!maybeParent.has_value()) {
+    result.diagnostic = MakeEditDiagnostic("The document element cannot be renamed", intent.range);
+    return result;
+  }
+  XMLNode parent = *maybeParent;
+  const std::optional<SourceEditRange> nodeSpan = NodeSpanInCurrentCoords(oldNode);
+  if (!nodeSpan.has_value()) {
+    result.diagnostic =
+        MakeEditDiagnostic("Opening tag edit left the node source range unavailable", intent.range);
+    return result;
+  }
+
+  ParseResult<RenamedElementParse> parsed = ParseRenamedElement(
+      document, document.source().substr(nodeSpan->start, nodeSpan->end - nodeSpan->start),
+      nodeSpan->start, intent.range);
+  if (parsed.hasError()) {
+    result.diagnostic = std::move(parsed).error();
+    return result;
+  }
+  const XMLNode& parsedNode = parsed.result().node;
+  const bool reuseChildren = ChildrenMatchByPosition(oldNode, parsedNode);
+  if (std::optional<ParseDiagnostic> diagnostic = ValidateOpeningTagRenameLimits(
+          document, parent, oldNode, parsedNode, reuseChildren, intent.range)) {
+    result.diagnostic = std::move(diagnostic);
+    return result;
+  }
+
+  XMLNode renamed = XMLNode::CreateElementNode(document, parsedNode.tagName());
+  SyncAttributesFromParsed(renamed, parsedNode);
+  SyncAttributeSourceLocationsFromParsed(renamed, parsedNode, nodeSpan->start);
+  if (reuseChildren) {
+    std::vector<XMLNode> children;
+    for (std::optional<XMLNode> child = oldNode.firstChild(); child.has_value();
+         child = child->nextSibling()) {
+      children.push_back(*child);
+    }
+    std::optional<XMLNode> parsedChild = parsedNode.firstChild();
+    for (XMLNode& child : children) {
+      renamed.appendChild(child);
+      (void)SyncSourceLocationsFromParsedByPosition(child, *parsedChild, nodeSpan->start);
+      parsedChild = parsedChild->nextSibling();
+    }
+  } else {
+    // Children differ in shape, for example when the reparse keeps a comment the initial parse
+    // dropped: reconcile them like a subtree edit, so children with matching ids keep their nodes.
+    while (std::optional<XMLNode> child = oldNode.firstChild()) {
+      renamed.appendChild(*child);
+    }
+    ReplaceChildrenFromParsedNode(document, renamed, parsedNode, nodeSpan->start);
+  }
+  SyncValueFromParsed(renamed, parsedNode);
+  SetSourceOffsetsFromParsed(renamed, parsedNode, nodeSpan->start);
+
+  parent.replaceChild(renamed, oldNode);
+  ClearSourceLocationsRecursive(oldNode);
+  result.mutations.push_back(XMLMutation{
+      .kind = XMLMutation::Kind::NodeInserted,
+      .node = renamed,
+      .attributeName = XMLQualifiedName(""),
+      .value = std::nullopt,
+      .scope = ReparseScope::OpeningTag,
+  });
+  result.mutations.push_back(XMLMutation{
+      .kind = XMLMutation::Kind::NodeRemoved,
+      .node = oldNode,
+      .attributeName = XMLQualifiedName(""),
+      .value = std::nullopt,
+      .scope = ReparseScope::OpeningTag,
+  });
+  return result;
+}
+
+bool MayBeOmittedFromLiveTree(const XMLNode& node) {
+  // XML options omit comments/instructions; SVG projection also removes text nodes after capture.
+  return node.type() == XMLNode::Type::Comment ||
+         node.type() == XMLNode::Type::ProcessingInstruction ||
+         node.type() == XMLNode::Type::Data || node.type() == XMLNode::Type::CData;
+}
+
+bool MatchesProjectedText(const XMLNode& parsed, std::size_t sourceOffsetBase,
+                          const std::vector<XMLNode::ProjectedTextChild>& projectedText) {
+  const auto parsedSpan = NodeSpanInCurrentCoords(parsed);
+  if (!parsedSpan.has_value() ||
+      parsedSpan->start > std::numeric_limits<std::size_t>::max() - sourceOffsetBase) {
+    return false;
+  }
+  const std::size_t start = sourceOffsetBase + parsedSpan->start;
+  const auto found = std::lower_bound(projectedText.begin(), projectedText.end(), start,
+                                      [](const XMLNode::ProjectedTextChild& node,
+                                         std::size_t offset) { return node.start < offset; });
+  if (found == projectedText.end() || found->type != parsed.type() ||
+      std::optional<RcString>(found->value) != parsed.value()) {
+    return false;
+  }
+  return found->start == start && found->end >= sourceOffsetBase &&
+         found->end - sourceOffsetBase == parsedSpan->end;
+}
+
+/// Whether a parsed-only filtered node occurs before the next live node.
+bool CanSkipFilteredParsedNode(const XMLNode& parsed, const std::optional<XMLNode>& live,
+                               std::size_t sourceOffsetBase,
+                               const std::vector<XMLNode::ProjectedTextChild>& projectedText) {
+  if (!MayBeOmittedFromLiveTree(parsed)) {
+    return false;
+  }
+  if ((parsed.type() == XMLNode::Type::Data || parsed.type() == XMLNode::Type::CData) &&
+      !MatchesProjectedText(parsed, sourceOffsetBase, projectedText)) {
+    return false;
+  }
+  const auto parsedSpan = NodeSpanInCurrentCoords(parsed);
+  if (!parsedSpan.has_value()) {
+    return false;
+  }
+  if (!live.has_value()) {
+    return true;
+  }
+  const auto liveSpan = NodeSpanInCurrentCoords(*live);
+  return liveSpan.has_value() && liveSpan->start >= sourceOffsetBase &&
+         parsedSpan->end <= liveSpan->start - sourceOffsetBase;
+}
+
+/// Retained filtered-node types must correspond to the same source span, even if duplicated.
+bool RetainedFilteredNodeMatchesSource(const XMLNode& live, const XMLNode& parsed,
+                                       std::size_t sourceOffsetBase) {
+  if (!MayBeOmittedFromLiveTree(live)) {
+    return true;
+  }
+  const auto liveSpan = NodeSpanInCurrentCoords(live);
+  const auto parsedSpan = NodeSpanInCurrentCoords(parsed);
+  return liveSpan.has_value() && parsedSpan.has_value() && liveSpan->start >= sourceOffsetBase &&
+         liveSpan->start - sourceOffsetBase == parsedSpan->start &&
+         liveSpan->end - sourceOffsetBase == parsedSpan->end;
+}
+
+bool QueueComparableChildren(const XMLNode& live, const XMLNode& parsed,
+                             std::size_t sourceOffsetBase,
+                             std::vector<std::pair<XMLNode, XMLNode>>& pending) {
+  const std::vector<XMLNode::ProjectedTextChild> projectedText = live.projectedTextChildren();
+  std::optional<XMLNode> liveChild = live.firstChild();
+  std::optional<XMLNode> parsedChild = parsed.firstChild();
+  while (liveChild || parsedChild) {
+    if (parsedChild &&
+        CanSkipFilteredParsedNode(*parsedChild, liveChild, sourceOffsetBase, projectedText)) {
+      parsedChild = parsedChild->nextSibling();
+      continue;
+    }
+    if (!liveChild || !parsedChild) {
+      return false;
+    }
+    pending.emplace_back(*liveChild, *parsedChild);
+    liveChild = liveChild->nextSibling();
+    parsedChild = parsedChild->nextSibling();
+  }
+  return true;
+}
+
+/// Whether the live subtree matches the parsed source, allowing initially filtered nodes.
+bool SubtreeMatchesParsed(const XMLNode& node, const XMLNode& parsedNode,
+                          std::size_t sourceOffsetBase) {
+  std::vector<std::pair<XMLNode, XMLNode>> pending{{node, parsedNode}};
+  while (!pending.empty()) {
+    const auto [current, parsed] = pending.back();
+    pending.pop_back();
+    if (!HasCompatibleNodeIdentity(current, parsed) ||
+        BuildAttributeMap(current) != BuildAttributeMap(parsed) ||
+        current.value() != parsed.value() ||
+        !RetainedFilteredNodeMatchesSource(current, parsed, sourceOffsetBase) ||
+        !QueueComparableChildren(current, parsed, sourceOffsetBase, pending)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * After a rename, clear pending spans of the enclosing elements whose source the tree now matches.
+ *
+ * Renaming the closing tag first records a failure over the enclosing element, and the opening
+ * tag edit that completes the rename only revalidates the renamed element. Each enclosing element
+ * that owns a pending span is parsed from its current source and its span is cleared when the tree
+ * already matches; the tree itself is not changed.
+ */
+void ClearSpansReconciledByRename(XMLDocument& document, const ApplySourceEditResult& result) {
+  auto& spans = document.registry().ctx().get<XMLDocumentContext>().unreparsedSpans;
+  std::optional<XMLNode> renamed;
+  for (const XMLMutation& mutation : result.mutations) {
+    if (mutation.kind == XMLMutation::Kind::NodeInserted) {
+      renamed = mutation.node;
+    }
+  }
+  if (spans.empty() || !renamed.has_value()) {
+    return;
+  }
+
+  for (std::optional<XMLNode> ancestor = renamed->parentElement();
+       ancestor.has_value() && ancestor->type() == XMLNode::Type::Element;
+       ancestor = ancestor->parentElement()) {
+    const std::optional<SourceEditRange> span = NodeSpanInCurrentCoords(*ancestor);
+    const auto pendingIt = std::find_if(
+        spans.begin(), spans.end(), [&span](const XMLDocumentContext::UnreparsedSpan& pending) {
+          return span.has_value() && pending.start == span->start && pending.end == span->end;
+        });
+    if (pendingIt == spans.end()) {
+      continue;
+    }
+    const std::string_view fragment =
+        document.source().substr(span->start, span->end - span->start);
+    ParseResult<XMLDocument> parsed = XMLIncrementalParser::ParseElement(
+        fragment, IncrementalReparseOptions(document, fragment.size()));
+    if (parsed.hasError()) {
+      return;
+    }
+    std::optional<XMLNode> parsedNode = parsed.result().root().firstChild();
+    if (!parsedNode.has_value() || parsedNode->nextSibling().has_value() ||
+        !SubtreeMatchesParsed(*ancestor, *parsedNode, span->start)) {
+      return;
+    }
+    spans.erase(pendingIt);
+  }
+}
+
 ApplySourceEditResult ApplyOpeningTagSourceEdit(XMLDocument& document, const XMLEditIntent& intent,
                                                 const OpeningTagEdit& edit,
                                                 ApplySourceEditResult result) {
@@ -2263,9 +2623,7 @@ ApplySourceEditResult ApplyOpeningTagSourceEdit(XMLDocument& document, const XML
     return result;
   }
   if (parsedNode->tagName() != edit.node.tagName()) {
-    result.diagnostic =
-        MakeEditDiagnostic("Opening tag element rename is not implemented", intent.range);
-    return result;
+    return ApplyOpeningTagRename(document, intent, edit, std::move(result));
   }
 
   const AttributeMap currentAttributes = BuildAttributeMap(edit.node);
@@ -2896,6 +3254,9 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
     }
   } else {
     RemoveSpansCoveredByAny(*this, {validatedSpan});
+    if (classification.openingTag.has_value()) {
+      ClearSpansReconciledByRename(*this, result);
+    }
   }
   EmitSpansChangedIfNeeded(*this, result, mutationNode, diagnosticBefore);
   return result;

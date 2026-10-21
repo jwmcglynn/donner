@@ -28,6 +28,10 @@
 
 namespace donner::editor::mcp {
 
+struct EditorControlSessionTestAccess {
+  static EditorApp& app(EditorControlSession& session) { return session.app_; }
+};
+
 TEST(EditorControlSessionTest, MetadataOnlyTileKeepsMovableLayerOwnership) {
   EditorControlSession::HeadlessTextureCache cache;
   RenderResult::CompositedPreview preview;
@@ -380,6 +384,10 @@ TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
   ASSERT_NE(replayTool, nullptr);
   EXPECT_TRUE((*replayTool)["inputSchema"]["properties"].contains("gl_drive_document_input"));
   EXPECT_TRUE((*replayTool)["inputSchema"]["properties"].contains("gl_source_pane_visible"));
+  const auto editTool = std::ranges::find_if(
+      tools, [](const json& tool) { return tool.value("name", "") == "edit_svg_source"; });
+  ASSERT_NE(editTool, tools.end());
+  EXPECT_TRUE((*editTool)["inputSchema"]["properties"].contains("dispatch"));
 }
 
 TEST(EditorControlSessionTest, CatalogFontFamilyMutationChangesRenderedGlyphs) {
@@ -813,6 +821,279 @@ TEST(EditorControlSessionTest, EditsSvgSourceRangeAndRendersPreview) {
   ToolCallResult editedSource = session.handleToolCall("get_svg_source", json::object());
   ASSERT_TRUE(editedSource.body.value("ok", false)) << editedSource.body.dump(2);
   EXPECT_NE(editedSource.body.value("text", "").find("fill=\"blue\""), std::string::npos);
+}
+
+// `dispatch: source_pane` applies each edit as a source-pane keystroke through the editor's
+// incremental source sync, so the edited element keeps its identity instead of being reparsed.
+TEST(EditorControlSessionTest, SourcePaneDispatchEditsDocumentIncrementally) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
+  <rect id="target" width="40" height="20" fill="red"/>
+</svg>)svg";
+
+  EditorControlSession session;
+  const ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                              {"canvas_width", 40},
+                                              {"canvas_height", 20},
+                                              {"render_after_load", false}});
+  ASSERT_FALSE(load.isError) << load.body.dump(2);
+  const auto selectTarget = [&session]() {
+    return session.handleToolCall("select_by_selector",
+                                  json{{"selector", "#target"}, {"render", false}});
+  };
+  const ToolCallResult before = selectTarget();
+  ASSERT_FALSE(before.isError) << before.body.dump(2);
+
+  const std::string text =
+      session.handleToolCall("get_svg_source", json::object()).body.value("text", "");
+  const std::size_t fillOffset = text.find("red");
+  ASSERT_NE(fillOffset, std::string::npos);
+  const ToolCallResult edit = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits",
+            json::array({json{{"offset", fillOffset}, {"delete_count", 3}, {"insert", "blue"}}})},
+           {"render_after_edit", true}});
+  ASSERT_FALSE(edit.isError) << edit.body.dump(2);
+  EXPECT_TRUE(edit.body.value("document_matches_draft", false)) << edit.body.dump(2);
+  EXPECT_TRUE(edit.body["source_diagnostic"].is_null()) << edit.body.dump(2);
+  EXPECT_FALSE(edit.body["source"].value("preview_stale", true)) << edit.body.dump(2);
+
+  const ToolCallResult after = selectTarget();
+  ASSERT_FALSE(after.isError) << after.body.dump(2);
+  EXPECT_EQ(after.body["selection"]["entity"], before.body["selection"]["entity"])
+      << "an attribute keystroke must edit the element in place";
+  EXPECT_THAT(session.handleToolCall("get_svg_source", json::object()).body.value("text", ""),
+              testing::HasSubstr(R"(fill="blue")"));
+
+  EXPECT_TRUE(session
+                  .handleToolCall("edit_svg_source",
+                                  json{{"dispatch", "source_pane"}, {"replace_source", "<svg/>"}})
+                  .isError);
+  const std::uint64_t revisionBefore = session.handleToolCall("get_svg_source", json::object())
+                                           .body["source"]
+                                           .value("source_revision", static_cast<std::uint64_t>(0));
+  EXPECT_TRUE(
+      session
+          .handleToolCall("edit_svg_source",
+                          json{{"dispatch", "source_pane"},
+                               {"allow_parse_failure", false},
+                               {"edits", json::array({json{{"offset", 0}, {"insert", "x"}}})}})
+          .isError)
+      << "source_pane keeps malformed keystrokes, so it refuses allow_parse_failure: false";
+  EXPECT_EQ(session.handleToolCall("get_svg_source", json::object())
+                .body["source"]
+                .value("source_revision", static_cast<std::uint64_t>(0)),
+            revisionBefore);
+}
+
+// The reported source-pane sequence: type into `<ellipse`, then undo the keystroke. The ellipse
+// must come back, with no stale diagnostic, and the sibling must keep its identity.
+TEST(EditorControlSessionTest, SourcePaneTagRenameUndoRestoresElement) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180">
+  <rect id="r" x="10" y="10" width="70" height="50" fill="#2f6fed"/>
+  <ellipse id="e" cx="210" cy="35" rx="35" ry="22" fill="#35a16b"/>
+</svg>)svg";
+
+  EditorControlSession session;
+  const ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                              {"canvas_width", 260},
+                                              {"canvas_height", 180},
+                                              {"render_after_load", false}});
+  ASSERT_FALSE(load.isError) << load.body.dump(2);
+  const auto select = [&session](std::string_view selector) {
+    return session.handleToolCall("select_by_selector",
+                                  json{{"selector", selector}, {"render", false}});
+  };
+  const ToolCallResult rectBefore = select("#r");
+  ASSERT_FALSE(rectBefore.isError) << rectBefore.body.dump(2);
+
+  const std::size_t insertOffset = std::string_view(kScene).find("lipse");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+  const ToolCallResult typed = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits", json::array({json{{"offset", insertOffset}, {"insert", "X"}}})},
+           {"render_after_edit", false}});
+  ASSERT_FALSE(typed.isError) << typed.body.dump(2);
+  EXPECT_TRUE(typed.body["source_diagnostic"].is_null()) << typed.body.dump(2);
+
+  const ToolCallResult undone = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits", json::array({json{{"offset", insertOffset}, {"delete_count", 1}}})},
+           {"render_after_edit", true}});
+  ASSERT_FALSE(undone.isError) << undone.body.dump(2);
+  EXPECT_TRUE(undone.body.value("document_matches_draft", false)) << undone.body.dump(2);
+  EXPECT_TRUE(undone.body["source_diagnostic"].is_null()) << undone.body.dump(2);
+  for (const ToolCallResult* keystroke : {&typed, &undone}) {
+    EXPECT_FALSE(keystroke->body["edits"][0].value("document_replace_queued", true))
+        << keystroke->body.dump(2);
+  }
+
+  const ToolCallResult ellipse = select("#e");
+  ASSERT_FALSE(ellipse.isError) << ellipse.body.dump(2);
+  EXPECT_EQ(ellipse.body["selection"].value("tag", ""), "ellipse") << ellipse.body.dump(2);
+  EXPECT_TRUE(ellipse.body["selection_bounds_doc"].is_object()) << ellipse.body.dump(2);
+  const ToolCallResult rectAfter = select("#r");
+  ASSERT_FALSE(rectAfter.isError) << rectAfter.body.dump(2);
+  EXPECT_EQ(rectAfter.body["selection"]["entity"], rectBefore.body["selection"]["entity"])
+      << "the edits must not reparse the document";
+}
+
+// A source-pane keystroke that leaves the source malformed keeps the last valid DOM, so the
+// session must report its preview as stale until a later keystroke repairs the source.
+TEST(EditorControlSessionTest, SourcePaneMalformedEditKeepsPreviewStale) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><g id="group"><rect width="40" height="20"/></g></svg>)svg";
+  EditorControlSession session;
+  ASSERT_FALSE(session
+                   .handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                    {"render_after_load", false}})
+                   .isError);
+  const std::size_t tagOffset = std::string_view(kScene).find("<g id") + 1;
+
+  const ToolCallResult broken = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits",
+            json::array({json{{"offset", tagOffset}, {"delete_count", 1}, {"insert", "a"}}})},
+           {"render_after_edit", false}});
+  ASSERT_FALSE(broken.isError) << broken.body.dump(2);
+  EXPECT_FALSE(broken.body["source_diagnostic"].is_null()) << broken.body.dump(2);
+  EXPECT_TRUE(broken.body["source"].value("preview_stale", false)) << broken.body.dump(2);
+
+  const ToolCallResult repaired = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits",
+            json::array({json{{"offset", tagOffset}, {"delete_count", 1}, {"insert", "g"}}})},
+           {"render_after_edit", false}});
+  ASSERT_FALSE(repaired.isError) << repaired.body.dump(2);
+  EXPECT_TRUE(repaired.body["source_diagnostic"].is_null()) << repaired.body.dump(2);
+  EXPECT_FALSE(repaired.body["source"].value("preview_stale", true)) << repaired.body.dump(2);
+}
+
+TEST(EditorControlSessionTest, SourcePaneSvgProjectionFailureKeepsPreviewStale) {
+  constexpr std::string_view kScene =
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 20'><g/></svg>";
+  constexpr std::string_view kInvalidStyle = "<style><rect/></style>";
+  EditorControlSession session;
+  const ToolCallResult loaded = session.handleToolCall(
+      "load_svg", json{{"svg_source", std::string(kScene)}, {"render_after_load", false}});
+  ASSERT_FALSE(loaded.isError) << loaded.body.dump(2);
+  const std::size_t offset = kScene.find("<g/>");
+  ASSERT_NE(offset, std::string_view::npos);
+  const auto edit = [&session, offset](std::size_t count, std::string_view replacement) {
+    return session.handleToolCall(
+        "edit_svg_source",
+        json{{"dispatch", "source_pane"},
+             {"edits", json::array({json{
+                           {"offset", offset}, {"delete_count", count}, {"insert", replacement}}})},
+             {"render_after_edit", false}});
+  };
+
+  const ToolCallResult broken = edit(4, kInvalidStyle);
+  ASSERT_FALSE(broken.isError) << broken.body.dump(2);
+  EXPECT_TRUE(broken.body["source_diagnostic"].is_null()) << broken.body.dump(2);
+  ASSERT_TRUE(broken.body["parse_diagnostic"].is_string()) << broken.body.dump(2);
+  EXPECT_TRUE(broken.body["source"].value("preview_stale", false)) << broken.body.dump(2);
+  EXPECT_EQ(broken.body["source"]["last_parse_error"], broken.body["parse_diagnostic"]);
+  EXPECT_EQ(broken.body["source"]["loaded_source_revision"],
+            loaded.body["source"]["loaded_source_revision"]);
+
+  const ToolCallResult repaired = edit(kInvalidStyle.size(), "<g/>");
+  ASSERT_FALSE(repaired.isError) << repaired.body.dump(2);
+  EXPECT_TRUE(repaired.body["parse_diagnostic"].is_null()) << repaired.body.dump(2);
+  EXPECT_FALSE(repaired.body["source"].value("preview_stale", true)) << repaired.body.dump(2);
+  EXPECT_TRUE(repaired.body["source"]["last_parse_error"].is_null());
+  EXPECT_EQ(repaired.body["source"]["loaded_source_revision"],
+            repaired.body["source"]["source_revision"]);
+}
+
+TEST(EditorControlSessionTest, SourcePaneDispatchRejectsPathChangesBeforeEditingTheDraft) {
+  constexpr std::string_view kScene =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"/></svg>)";
+  for (const std::string replacementPath : {std::string("renamed.svg"), std::string()}) {
+    EditorControlSession session;
+    ASSERT_FALSE(session
+                     .handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                      {"source_path", "original.svg"},
+                                                      {"render_after_load", false}})
+                     .isError);
+    ASSERT_FALSE(
+        session.handleToolCall("select_by_selector", json{{"selector", "rect"}, {"render", false}})
+            .isError);
+    EditorApp& app = EditorControlSessionTestAccess::app(session);
+    const auto selected = app.selectedElements();
+    const bool wasDirty = app.isDirty();
+    const auto filePath = app.currentFilePath();
+    const auto before = session.handleToolCall("get_svg_source", json::object());
+    ASSERT_FALSE(before.isError);
+    const json edits = json::array(
+        {json{{"offset", kScene.find("red")}, {"delete_count", 3}, {"insert", "blue"}}});
+    const auto rejected =
+        session.handleToolCall("edit_svg_source", json{{"dispatch", "source_pane"},
+                                                       {"source_path", replacementPath},
+                                                       {"edits", edits},
+                                                       {"render_after_edit", false}});
+    EXPECT_TRUE(rejected.isError) << rejected.body.dump(2);
+    const auto unchanged = session.handleToolCall("get_svg_source", json::object());
+    EXPECT_THAT(unchanged.body, testing::Eq(before.body));
+    EXPECT_THAT(app.selectedElements(), testing::ElementsAreArray(selected));
+    EXPECT_EQ(app.isDirty(), wasDirty);
+    EXPECT_THAT(app.currentFilePath(), testing::Eq(filePath));
+    const auto accepted =
+        session.handleToolCall("edit_svg_source", json{{"dispatch", "source_pane"},
+                                                       {"source_path", "original.svg"},
+                                                       {"edits", edits},
+                                                       {"render_after_edit", false}});
+    ASSERT_FALSE(accepted.isError) << accepted.body.dump(2);
+    EXPECT_EQ(accepted.body["source"]["source_path"], "original.svg");
+    EXPECT_GT(accepted.body["source"]["source_revision"], before.body["source"]["source_revision"]);
+    EXPECT_THAT(session.handleToolCall("get_svg_source", json::object()).body.value("text", ""),
+                testing::HasSubstr("blue"));
+    const auto omitted = session.handleToolCall(
+        "edit_svg_source",
+        json{{"dispatch", "source_pane"},
+             {"edits",
+              json::array(
+                  {json{{"offset", kScene.find("red")}, {"delete_count", 4}, {"insert", "red"}}})},
+             {"render_after_edit", false}});
+    ASSERT_FALSE(omitted.isError) << omitted.body.dump(2);
+    EXPECT_EQ(omitted.body["source"]["source_path"], "original.svg");
+  }
+}
+
+// Source-pane dispatch honors canvas overrides the same way the reload dispatch does.
+TEST(EditorControlSessionTest, SourcePaneDispatchAppliesCanvasOverrides) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><rect width="40" height="20" fill="red"/></svg>)svg";
+  EditorControlSession session;
+  ASSERT_FALSE(session
+                   .handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                    {"canvas_width", 40},
+                                                    {"canvas_height", 20},
+                                                    {"render_after_load", false}})
+                   .isError);
+  const std::size_t fillOffset = std::string_view(kScene).find("red");
+
+  const ToolCallResult edit = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits",
+            json::array({json{{"offset", fillOffset}, {"delete_count", 3}, {"insert", "blue"}}})},
+           {"canvas_width", 80},
+           {"canvas_height", 40},
+           {"render_after_edit", false}});
+  ASSERT_FALSE(edit.isError) << edit.body.dump(2);
+
+  const ToolCallResult state = session.handleToolCall("session_state", json::object());
+  ASSERT_FALSE(state.isError) << state.body.dump(2);
+  EXPECT_EQ(state.body["canvas"], (json{{"width", 80}, {"height", 40}})) << state.body.dump(2);
 }
 
 TEST(EditorControlSessionTest, InvalidSvgSourceEditKeepsDraftAndStalePreview) {

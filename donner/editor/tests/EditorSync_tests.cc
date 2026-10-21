@@ -24,6 +24,10 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+namespace donner::xml::internal {
+std::uint64_t ProjectedTextSpanResolutionCountForTesting(const XMLNode& parent);
+}  // namespace donner::xml::internal
+
 namespace donner::editor {
 namespace {
 
@@ -201,6 +205,16 @@ SourceEditIntent ReplaceFirstOrFail(std::string* source, std::string_view needle
   source->replace(pos, needle.size(), replacement);
   return SourceEditIntent{
       .offset = pos, .removedLength = needle.size(), .replacement = std::string(replacement)};
+}
+
+/// Replace the one character at \p offset with \p replacement, as a keystroke over a selection
+/// does.
+SourceEditIntent RetypeCharacter(std::string* source, std::size_t offset,
+                                 std::string_view replacement) {
+  EXPECT_LT(offset, source->size());
+  source->replace(offset, 1, replacement);
+  return SourceEditIntent{
+      .offset = offset, .removedLength = 1, .replacement = std::string(replacement)};
 }
 
 /// Dispatch \p editedSource from the source pane, through precise intents or a whole-text diff.
@@ -1487,6 +1501,142 @@ TEST(EditorSyncTest, SourceInsertedImageBuildsWithoutReparse) {
             keptEntity);
   tests::CompareBitmapToBitmap(RenderDocument(app.document().document()), expected,
                                "source_inserted_image", tests::PixelmatchIdentityParams());
+}
+
+// The reported source-pane sequence: typing into `<ellipse` turns it into an unknown element, and
+// undoing the keystroke must bring the ellipse back. Both edits stay incremental, so the untouched
+// sibling keeps its entity and no document reparse is queued.
+TEST(EditorSyncTest, OpeningTagRenameAndUndoEditTheDocumentIncrementally) {
+  constexpr std::string_view kSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\">"
+      "<rect id=\"r\" width=\"4\" height=\"4\" fill=\"blue\"/>"
+      "<ellipse id=\"e\" cx=\"10\" cy=\"6\" rx=\"4\" ry=\"3\" fill=\"green\"/></svg>";
+  svg::SVGDocument expectedDocument = ParseOrDie(kSvg);
+  const svg::RendererBitmap expected = RenderDocument(expectedDocument);
+  ASSERT_THAT(svg::test::PixelAt(expected, 10, 6), testing::ElementsAre(0, 128, 0, 255));
+
+  for (const bool preciseIntent : {true, false}) {
+    SCOPED_TRACE(preciseIntent ? "source edit intents" : "whole-text diff");
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(kSvg));
+    const auto rectEntity =
+        GetElementByIdOrDie(app.document().document(), "#r").entityHandle().entity();
+
+    // The keystrokes the source pane reports: type "X" inside the tag name, then undo it.
+    const std::size_t keyOffset = std::string_view(kSvg).find("<ellipse") + 3;
+    std::string previousSourceText(kSvg);
+    std::string typedSource(kSvg);
+    typedSource.insert(keyOffset, "X");
+    const SourceEditIntent typed{.offset = keyOffset, .removedLength = 0, .replacement = "X"};
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, typed, typedSource, &previousSourceText)
+                    .dispatchedMutation);
+    // Incremental: a document reparse would queue a ReplaceDocumentCommand.
+    EXPECT_TRUE(app.document().queue().empty());
+    (void)app.flushFrame();
+    EXPECT_EQ(app.document().document().source(), typedSource);
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Eq(std::nullopt));
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#e").type(),
+              svg::ElementType::Unknown);
+
+    std::string undoneSource(typedSource);
+    undoneSource.erase(keyOffset, 1);
+    const SourceEditIntent undo{.offset = keyOffset, .removedLength = 1, .replacement = ""};
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, undo, undoneSource, &previousSourceText)
+                    .dispatchedMutation);
+    EXPECT_TRUE(app.document().queue().empty());
+    (void)app.flushFrame();
+
+    EXPECT_EQ(app.document().document().source(), kSvg);
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Eq(std::nullopt));
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#e").type(),
+              svg::ElementType::Ellipse);
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#r").entityHandle().entity(),
+              rectEntity);
+    tests::CompareBitmapToBitmap(
+        RenderDocument(app.document().document()), expected,
+        preciseIntent ? "tag_rename_undo_through_intents" : "tag_rename_undo_through_text_diff",
+        tests::PixelmatchIdentityParams());
+  }
+}
+
+// Renaming a group's closing tag and then its opening tag, as a person retyping both tags does,
+// stays incremental: the whole-text path must not fall back to a document reparse.
+TEST(EditorSyncTest, LoadingFormattedSiblingsHasLinearProjectionSpanWork) {
+  constexpr std::size_t kSiblingCount = 4000;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+  for (std::size_t i = 0; i < kSiblingCount; ++i) {
+    source += "\n  <rect width=\"1\" height=\"1\"/>";
+  }
+  source += "\n</svg>";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto root = app.document().document().xmlDocument().root().firstChild();
+  ASSERT_THAT(root, testing::Optional(testing::_));
+  const auto work = xml::internal::ProjectedTextSpanResolutionCountForTesting(*root);
+  RecordProperty("initial_projection_span_resolutions", std::to_string(work));
+  EXPECT_THAT(work, testing::Le(6 * (kSiblingCount + 1)));
+  EXPECT_THAT(root->projectedTextChildren(), testing::SizeIs(kSiblingCount + 1));
+  std::string previousSource(source);
+  const std::size_t lastWidth = source.rfind("width=\"1\"");
+  ASSERT_THAT(lastWidth, testing::Ne(std::string::npos));
+  const auto edit = RetypeCharacter(&source, lastWidth + 7, "2");
+  ASSERT_THAT(DispatchSourceEdit(app, true, edit, source, &previousSource).dispatchedMutation,
+              testing::IsTrue());
+  app.flushFrame();
+  const auto beforeRefresh = xml::internal::ProjectedTextSpanResolutionCountForTesting(*root);
+  EXPECT_THAT(root->projectedTextChildren(), testing::SizeIs(kSiblingCount + 1));
+  const auto afterRefresh = xml::internal::ProjectedTextSpanResolutionCountForTesting(*root);
+  RecordProperty("late_edit_projection_span_resolutions",
+                 std::to_string(afterRefresh - beforeRefresh));
+  EXPECT_THAT(afterRefresh - beforeRefresh, testing::Le(2 * (kSiblingCount + 1)));
+  EXPECT_THAT(root->projectedTextChildren(), testing::SizeIs(kSiblingCount + 1));
+  EXPECT_EQ(xml::internal::ProjectedTextSpanResolutionCountForTesting(*root), afterRefresh);
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto reloaded = app.document().document().xmlDocument().root().firstChild();
+  ASSERT_THAT(reloaded, testing::Optional(testing::_));
+  const auto reloadWork = xml::internal::ProjectedTextSpanResolutionCountForTesting(*reloaded);
+  RecordProperty("reload_projection_span_resolutions", std::to_string(reloadWork));
+  EXPECT_THAT(reloadWork, testing::Le(6 * (kSiblingCount + 1)));
+}
+
+TEST(EditorSyncTest, RenamingBothTagsOfAGroupStaysIncremental) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="12">
+  <!--before-->
+  <rect id="r" width="4" height="4"/>
+  <g id="grp">
+    <rect id="inner" x="8" width="4" height="4"/>
+  </g>
+  <?after value?>
+</svg>)svg";
+  for (const bool preciseIntent : {true, false}) {
+    SCOPED_TRACE(preciseIntent ? "source edit intents" : "whole-text diff");
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(kSvg));
+    const auto rectEntity =
+        GetElementByIdOrDie(app.document().document(), "#r").entityHandle().entity();
+
+    std::string previousSourceText(kSvg);
+    std::string source(kSvg);
+    const SourceEditIntent closing = RetypeCharacter(&source, source.find("</g>") + 2, "a");
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, closing, source, &previousSourceText)
+                    .dispatchedMutation);
+    (void)app.flushFrame();
+    const SourceEditIntent opening = RetypeCharacter(&source, source.find("g id="), "a");
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, opening, source, &previousSourceText)
+                    .dispatchedMutation);
+    EXPECT_TRUE(app.document().queue().empty()) << "no document reparse";
+    (void)app.flushFrame();
+
+    EXPECT_EQ(app.document().document().source(), source);
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Eq(std::nullopt));
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#grp").tagName().toString(), "a");
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#r").entityHandle().entity(),
+              rectEntity);
+  }
 }
 
 }  // namespace

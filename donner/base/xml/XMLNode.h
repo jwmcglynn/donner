@@ -1,7 +1,9 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/FileOffset.h"
@@ -487,6 +489,22 @@ public:
    * Remove this node from its parent, if it has one. Has no effect if this has no parent.
    */
   void remove();
+
+  /// Internal projection removal after a consumer captures a non-element child. Text nodes retain
+  /// source provenance for incremental reconciliation; ordinary tree edits use remove().
+  void removeForProjection();
+
+  /// Owning value and current source span for one deliberately projected-out text child.
+  struct ProjectedTextChild {
+    Type type;          ///< Data or CDATA.
+    RcString value;     ///< Captured decoded text.
+    std::size_t start;  ///< Inclusive current source offset.
+    std::size_t end;    ///< Exclusive current source offset.
+  };
+
+  /// Return current projected-out text snapshots, ordered by source. They remain valid even
+  /// after the original node is collected. Tree/value mutations invalidate matching provenance.
+  [[nodiscard]] std::vector<ProjectedTextChild> projectedTextChildren() const;
 
   /**
    * Get the source offset of where this node starts in the XML document source (if this node was
