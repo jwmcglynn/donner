@@ -42,10 +42,10 @@ jobs:
     name: asan-geode
     runs-on: ubuntu-24.04
     needs: trust
-    # Trusted pull requests bind buildbuddy-pr, whose key writes the pull request cache. This
-    # pull-request-only workflow never receives main's key.
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
     environment:
-      name: ${{ needs.trust.outputs.trusted_pr == 'true' && 'buildbuddy-pr' || '' }}
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
       deployment: false
     timeout-minutes: 30
     steps:
@@ -71,16 +71,16 @@ jobs:
           external-cache: true
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
-      # BuildBuddy remote cache (docs/building.md). Trusted maintainer pull requests
-      # write the pull request cache; Renovate pull requests only read main's;
-      # every other run configures no remote cache. The
+      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
+      # runs and trusted maintainer pull requests read and write; Renovate pull
+      # requests only read; every other run configures no remote cache. The
       # read-only repository secret still reaches every same-repository run of
       # this job, so it is treated as public: it can only read the cache.
       - name: Configure BuildBuddy remote cache
-        if: needs.trust.outputs.trusted_pr == 'true'
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true'
         uses: ./.github/actions/buildbuddy-cache
         with:
-          pr-api-key: ${{ secrets.BUILDBUDDY_PR_API_KEY }}
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           trusted-pr: ${{ needs.trust.outputs.trusted_pr }}
           renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
           download-outputs: minimal

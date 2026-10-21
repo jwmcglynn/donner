@@ -52,7 +52,7 @@ runs:
     # Each platform/family has one writer; PR code only restores default-branch snapshots.
     # v2: v1 snapshots were saved without a bound and must never be restored again.
     # v3: v2 snapshots may hold remote cache hits from the partition that trusted pull
-    # requests also wrote, before main got a cache of its own.
+    # requests also wrote, before main got a partition of its own.
     - name: Restore main action cache
       id: restore
       if: inputs.mode == 'restore'

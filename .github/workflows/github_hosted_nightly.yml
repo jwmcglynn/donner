@@ -103,7 +103,7 @@ jobs:
         with:
           bazelisk-cache: true
           # v2: older snapshots may hold remote cache hits from the partition that trusted pull
-          # requests also wrote, before main got a cache of its own.
+          # requests also wrote, before main got a partition of its own.
           disk-cache: ${{ github.workflow }}-${{ runner.os }}-${{ matrix.linker }}-v2
           repository-cache: true
           external-cache: true

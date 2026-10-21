@@ -5,10 +5,9 @@ description: >-
   execution is opt-in for trusted GitHub-hosted Linux writers. No build-event upload. The workflow
   passes at most one key, chosen by the event and the shared pull request
   trust rule (.github/actions/pr-trust); this action re-checks that choice and
-  fails closed. Main runs and pull requests write separate caches: main's
-  key is never given to a pull request, and each writer class has its own
-  `--remote_instance_name` prefix, so no entry a pull request wrote can reach
-  a main build. With no key it writes nothing, and the try-import in .bazelrc
+  fails closed. Main runs and pull requests use separate instance-name
+  prefixes, so a main build does not pick up a pull request's entries by
+  accident. With no key it writes nothing, and the try-import in .bazelrc
   leaves the build exactly as it is without a remote cache.
 
 outputs:
@@ -23,20 +22,10 @@ inputs:
     default: "false"
   api-key:
     description: >-
-      Main's read-write key. Pass `secrets.BUILDBUDDY_API_KEY`, a secret of the
-      buildbuddy-write environment, which a job binds only for main push,
-      schedule and dispatch runs. The action rejects it on any other run.
-    required: false
-    default: ""
-  pr-api-key:
-    description: >-
-      The pull request writers' key. Pass `secrets.BUILDBUDDY_PR_API_KEY`, a
-      secret of the buildbuddy-pr environment, which a job binds only for a
-      trusted maintainer pull request. It must belong to a BuildBuddy
-      organization separate from main's key, so it can neither read nor write
-      main's entries; instance names alone are chosen by the client and are no
-      boundary against code that holds a key. The action rejects it on any
-      other run.
+      Read-write key. Pass `secrets.BUILDBUDDY_API_KEY`, a secret of the
+      buildbuddy-write environment, only from a job that binds that
+      environment and a step limited to main push, schedule and dispatch runs
+      or to a trusted maintainer pull request.
     required: false
     default: ""
   read-only-api-key:
@@ -84,7 +73,6 @@ runs:
         # an environment value and the presence checks below are shell tests.
         REMOTE_EXECUTION: ${{ inputs.remote-execution }}
         WRITE_KEY: ${{ inputs.api-key }}
-        PR_KEY: ${{ inputs.pr-api-key }}
         READ_KEY: ${{ inputs.read-only-api-key }}
         TRUSTED_PR: ${{ inputs.trusted-pr }}
         RENOVATE_PR: ${{ inputs.renovate-pr }}
@@ -99,11 +87,18 @@ runs:
         rm -f "${fragment}"
         echo "bazel-flags=" >> "${GITHUB_OUTPUT}"
 
+        if [[ -z "${WRITE_KEY}" && -z "${READ_KEY}" ]]; then
+          echo "No BuildBuddy key for this run; remote cache disabled."
+          exit 0
+        fi
         # Never let a key surface in logs, even if a later step prints flags.
         if [[ -n "${WRITE_KEY}" ]]; then echo "::add-mask::${WRITE_KEY}"; fi
-        if [[ -n "${PR_KEY}" ]]; then echo "::add-mask::${PR_KEY}"; fi
         if [[ -n "${READ_KEY}" ]]; then echo "::add-mask::${READ_KEY}"; fi
 
+        # The checks below back up the workflow's own step conditions: a key
+        # that reaches the wrong run is an error, never a silent downgrade.
+        fail() { echo "::error::BuildBuddy: $1"; exit 1; }
+        [[ -z "${WRITE_KEY}" || -z "${READ_KEY}" ]] || fail "pass one key, not both."
         main_writer=false
         if [[ "${REF}" == "refs/heads/main" ]]; then
           case "${EVENT_NAME}" in
@@ -115,64 +110,38 @@ runs:
               "${RENOVATE_PR}" != "true" ]]; then
           trusted_writer=true
         fi
-        # Each writer class has its own instance-name prefix. Main writes and
-        # reads only `main-`, so it can never accept an entry from the
-        # partitions pull requests wrote before this split (they had no
-        # prefix). Renovate's read-only key reads main's entries.
-        writer_class=none
-        prefix=""
+        # Main runs read and write `main-` partitions and pull requests `pr-`
+        # ones, so release and evidence builds on main reuse only entries main
+        # wrote, and a pull request's experiments never reach them by accident.
+        # This is hygiene, not a security boundary: the key can name any
+        # instance. Renovate's read-only key reads main's entries.
         if [[ "${main_writer}" == "true" ]]; then
-          writer_class=main
           prefix=main-
         elif [[ "${trusted_writer}" == "true" ]]; then
-          writer_class=pull-request
           prefix=pr-
-        elif [[ "${EVENT_NAME}" == "pull_request" && "${RENOVATE_PR}" == "true" ]]; then
-          writer_class=renovate-reader
+        else
           prefix=main-
         fi
-
-        if [[ -z "${WRITE_KEY}" && -z "${PR_KEY}" && -z "${READ_KEY}" ]]; then
-          echo "No BuildBuddy key for this run; remote cache disabled." \
-            "writer_class=${writer_class} instance_prefix=${prefix:-none}"
-          exit 0
-        fi
-
-        # The checks below back up the workflow's own step conditions: a key
-        # that reaches the wrong run is an error, never a silent downgrade.
-        fail() { echo "::error::BuildBuddy: $1"; exit 1; }
-        keys=0
-        for value in "${WRITE_KEY}" "${PR_KEY}" "${READ_KEY}"; do
-          if [[ -n "${value}" ]]; then keys=$((keys + 1)); fi
-        done
-        [[ "${keys}" == 1 ]] || fail "pass one key, not several."
         # The one self-hosted exception: the macOS runner, for trusted maintainer
-        # pull requests with the pull request key. It never holds main's key, so
-        # a persistent runner cannot write anything a main build reads. Every
-        # other run is GitHub-hosted.
+        # pull requests with the read-write key. Every other run is GitHub-hosted.
         case "${RUNNER_ENVIRONMENT:-}" in
           github-hosted) ;;
           self-hosted)
             [[ "${RUNNER_OS:-}" == "macOS" && "${trusted_writer}" == "true" &&
-               -n "${PR_KEY}" ]] ||
-              fail "a self-hosted runner gets only the pull request key, only on macOS for a trusted maintainer pull request."
+               -n "${WRITE_KEY}" ]] ||
+              fail "a self-hosted runner gets a key only on macOS for a trusted maintainer pull request."
             ;;
           *) fail "unknown runner environment." ;;
         esac
         if [[ -n "${WRITE_KEY}" ]]; then
           mode=read-write
           upload=true
-          [[ "${writer_class}" == "main" ]] ||
-            fail "main's read-write key is only for main push, schedule and dispatch runs."
-        elif [[ -n "${PR_KEY}" ]]; then
-          mode=read-write
-          upload=true
-          [[ "${writer_class}" == "pull-request" ]] ||
-            fail "the pull request key is only for trusted maintainer pull requests."
+          [[ "${main_writer}" == "true" || "${trusted_writer}" == "true" ]] ||
+            fail "the read-write key is only for main and trusted maintainer pull requests."
         else
           mode=read-only
           upload=false
-          [[ "${writer_class}" == "renovate-reader" ]] ||
+          [[ "${EVENT_NAME}" == "pull_request" && "${RENOVATE_PR}" == "true" ]] ||
             fail "the read-only key is only for Renovate pull requests."
         fi
         case "${REMOTE_EXECUTION}" in
@@ -229,7 +198,7 @@ runs:
         # paths can carry them, and Bazel caches the helper's answer only in
         # memory. A GitHub-hosted runner is discarded when the job ends; the
         # self-hosted job removes both files in its last step.
-        key="${WRITE_KEY}${PR_KEY}${READ_KEY}"
+        if [[ "${mode}" == "read-write" ]]; then key="${WRITE_KEY}"; else key="${READ_KEY}"; fi
         # The helper prints the key inside JSON, so allow only key characters.
         [[ "${key}" =~ ^[A-Za-z0-9_-]+$ ]] || fail "the key has unexpected characters."
         credentials="${RUNNER_TEMP}/buildbuddy"
@@ -277,8 +246,7 @@ runs:
         } > "${fragment}"
 
         echo "BuildBuddy remote cache enabled: mode=${mode} event=${EVENT_NAME}" \
-          "writer_class=${writer_class} instance=${prefix}${image}" \
-          "download_outputs=${DOWNLOAD_OUTPUTS} upload=${upload}"
+          "instance=${prefix}${image} download_outputs=${DOWNLOAD_OUTPUTS} upload=${upload}"
 
         if [[ "${REMOTE_EXECUTION}" == "true" ]]; then
           echo "bazel-flags=--config=buildbuddy-re" >> "${GITHUB_OUTPUT}"

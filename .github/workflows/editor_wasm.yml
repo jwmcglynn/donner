@@ -78,10 +78,10 @@ jobs:
     env:
       # Free space, in GiB, required after the caches are restored.
       MIN_FREE_DISK_GIB: "45"
-    # Main's BuildBuddy key is a secret of the buildbuddy-write environment, bound only for main
-    # runs. Trusted pull requests bind buildbuddy-pr, whose key writes a separate cache.
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
     environment:
-      name: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'buildbuddy-write' || (needs.trust.outputs.trusted_pr == 'true' && 'buildbuddy-pr' || '') }}
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
       deployment: false
     steps:
       - uses: actions/checkout@v7
@@ -111,8 +111,8 @@ jobs:
           namespace: editor-wasm
 
       # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
-      # runs write main's cache, trusted maintainer pull requests a separate one; Renovate
-      # pull requests only read main's; every other run configures no remote cache. The
+      # runs and trusted maintainer pull requests read and write; Renovate pull
+      # requests only read; every other run configures no remote cache. The
       # read-only repository secret still reaches every same-repository run of
       # this job, so it is treated as public: it can only read the cache.
       - name: Configure BuildBuddy remote cache
@@ -120,7 +120,6 @@ jobs:
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          pr-api-key: ${{ secrets.BUILDBUDDY_PR_API_KEY }}
           trusted-pr: ${{ needs.trust.outputs.trusted_pr }}
           renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
           download-outputs: toplevel
