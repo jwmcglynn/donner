@@ -128,7 +128,7 @@ TEST_P(PenClickReleaseTest, NearEndpointClickResumesWithoutMovingOrRecordingUndo
 }
 
 TEST_P(PenClickReleaseTest, NearAnchorOptionClickConvertsWithoutMoving) {
-  MakeSmoothDraft();
+  ASSERT_NO_FATAL_FAILURE(MakeSmoothDraft());
   MouseModifiers option;
   option.option = true;
   tool.onMouseDown(app, Vector2d(51, 11), option);
@@ -139,7 +139,7 @@ TEST_P(PenClickReleaseTest, NearAnchorOptionClickConvertsWithoutMoving) {
 }
 
 TEST_P(PenClickReleaseTest, NearLastAnchorClickRetractsWithoutMoving) {
-  MakeSmoothDraft();
+  ASSERT_NO_FATAL_FAILURE(MakeSmoothDraft());
   tool.onMouseDown(app, Vector2d(51, 11), MouseModifiers{});
   Release(Vector2d(51, 11));
   ASSERT_THAT(app.flushFrame(), ::testing::IsTrue());
@@ -167,6 +167,27 @@ TEST_P(PenClickReleaseTest, ReleaseOnlyMovementStillMovesAndHasOneUndoEntry) {
   app.redo();
   (void)app.flushFrame();
   EXPECT_THAT(path().d(), ::testing::Eq("M 0 0 L 20 5"));
+}
+
+TEST_P(PenClickReleaseTest, StationaryHeldSampleDoesNotMoveButReturningDragStillCommits) {
+  ASSERT_THAT(app.loadFromString(kOpenPathSvg), ::testing::IsTrue());
+  const auto selected = app.document().document().querySelector("#p");
+  ASSERT_THAT(selected, ::testing::Optional(::testing::_));
+  app.setSelection(*selected);
+  const auto history = app.undoTimeline().entryCount();
+  tool.onMouseDown(app, Vector2d(11, 1), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(11, 1), true);
+  EXPECT_THAT(tool.activePathData(), ::testing::Eq("M 0 0 L 10 0"));
+  tool.onMouseMove(app, Vector2d(20, 5), true);
+  tool.onMouseMove(app, Vector2d(11, 1), true);
+  Release(Vector2d(11, 1));
+  ASSERT_THAT(app.flushFrame(), ::testing::IsTrue());
+  EXPECT_THAT(path().d(), ::testing::Eq("M 0 0 L 11 1"));
+  EXPECT_THAT(tool.isDrafting(), ::testing::IsFalse());
+  EXPECT_THAT(app.undoTimeline().entryCount(), ::testing::Eq(history + 1));
+  app.undo();
+  (void)app.flushFrame();
+  EXPECT_THAT(path().d(), ::testing::Eq("M 0 0 L 10 0"));
 }
 
 INSTANTIATE_TEST_SUITE_P(DirectAndDeferred, PenClickReleaseTest, ::testing::Bool());
