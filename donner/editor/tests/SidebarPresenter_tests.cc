@@ -2976,6 +2976,48 @@ TEST_F(SidebarPresenterImGuiTest, StrokeWidthBusyReactivationKeepsPendingCancell
               testing::Optional(testing::Eq(RcString("stroke-width: 7"))));
 }
 
+TEST_F(SidebarPresenterImGuiTest, PendingStrokeEditsCannotCrossDocumentReplacement) {
+  for (const bool cancel : {true, false}) {
+    SCOPED_TRACE(cancel ? "pending cancellation" : "pending commit");
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+    constexpr char kWindow[] = "##stroke_edit_replaced_document";
+    constexpr float kHeight = 600.0f;
+    const ImVec2 away(-1.0f, -1.0f);
+    ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "9", kHeight));
+    (void)app.flushFrame();
+    if (cancel) {
+      ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+      RenderInspectorFrame(presenter, nullptr, kWindow, away, false, kHeight);
+      ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+      RenderInspectorFrame(presenter, nullptr, kWindow, away, false, kHeight);
+    } else {
+      const ImVec2 outside(20.0f, 20.0f);
+      RenderInspectorFrame(presenter, nullptr, kWindow, outside, true, kHeight);
+      RenderInspectorFrame(presenter, nullptr, kWindow, outside, false, kHeight);
+    }
+    constexpr std::string_view kReplacement =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='30'>"
+        "<rect id='replacement' width='10' height='10'/></svg>";
+    ASSERT_TRUE(app.loadFromString(kReplacement));
+    const auto replacement = app.document().document().querySelector("#replacement");
+    ASSERT_THAT(replacement, testing::Optional(testing::_));
+    app.setSelection(*replacement);
+    app.setCleanSourceText(kReplacement);
+    app.setActiveStrokeWidth(17.0);
+    presenter.refreshSnapshot(app);
+    RenderInspectorFrame(presenter, &app, kWindow, away, false, kHeight);
+
+    EXPECT_TRUE(app.document().queue().empty());
+    EXPECT_FALSE(app.isDirty());
+    EXPECT_THAT(app.activePaintStyle().strokeWidth, testing::Eq(Lengthd(17.0)));
+    (void)app.flushFrame();
+    EXPECT_FALSE(app.canUndo());
+    EXPECT_EQ(app.document().document().source(), kReplacement);
+  }
+}
+
 TEST_F(SidebarPresenterImGuiTest, StrokeWidthAcceptsATypedUnitAndKeepsIt) {
   EditorApp app;
   SidebarPresenter presenter;
