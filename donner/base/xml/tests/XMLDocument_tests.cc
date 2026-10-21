@@ -1584,9 +1584,13 @@ TEST_F(XMLDocumentTests, SubtreeProcessingInstructionGrowthRespectsDocumentNodeL
   EXPECT_THAT(group.firstChild(), Eq(std::nullopt));
 }
 
-TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameReportsDiagnostic) {
-  XMLDocument doc = ParseDocument(R"(<svg><rect fill="red"/></svg>)");
-  XMLNode rect = doc.root().firstChild()->firstChild().value();
+// Renaming a self-closing element's opening tag replaces it with an element of the new name at the
+// opening-tag scope, keeping its attributes and its siblings.
+TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameReplacesElement) {
+  XMLDocument doc = ParseDocument(R"(<svg><rect fill="red"/><g id="sibling"/></svg>)");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode rect = svg.firstChild().value();
+  XMLNode sibling = rect.nextSibling().value();
   const std::size_t tagOffset = doc.source().find("rect");
   ASSERT_NE(tagOffset, std::string_view::npos);
 
@@ -1598,8 +1602,88 @@ TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameReportsDiagnostic) {
 
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
-  EXPECT_THAT(result, DiagnosticReasonContains("rename is not implemented"));
-  EXPECT_EQ(rect.tagName(), XMLQualifiedNameRef("rect"));
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeInserted,
+                                                          XMLMutation::Kind::NodeRemoved));
+  EXPECT_EQ(doc.source(), R"(<svg><circle fill="red"/><g id="sibling"/></svg>)");
+  std::optional<XMLNode> renamed = svg.firstChild();
+  ASSERT_TRUE(renamed.has_value());
+  EXPECT_EQ(renamed->tagName(), XMLQualifiedNameRef("circle"));
+  EXPECT_THAT(renamed->getAttribute("fill"), Optional(Eq("red")));
+  EXPECT_EQ(renamed->nextSibling(), std::optional<XMLNode>(sibling));
+  EXPECT_THAT(rect.parentElement(), Eq(std::nullopt)) << "the old element is detached";
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+}
+
+// Typing into a tag name and then undoing the keystroke round-trips through the incremental path.
+TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameRoundTrips) {
+  XMLDocument doc = ParseDocument(R"(<svg><ellipse id="e" rx="3"/></svg>)");
+  XMLNode svg = doc.root().firstChild().value();
+  const std::size_t insertOffset = doc.source().find("lipse");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+
+  ApplySourceEditResult typed = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset)},
+      .replacement = "X",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(typed.applied);
+  ASSERT_THAT(typed.diagnostic, Eq(std::nullopt));
+  ASSERT_EQ(svg.firstChild()->tagName(), XMLQualifiedNameRef("elXlipse"));
+
+  ApplySourceEditResult undone = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset + 1)},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(undone.applied);
+  EXPECT_THAT(undone.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(doc.source(), R"(<svg><ellipse id="e" rx="3"/></svg>)");
+  std::optional<XMLNode> restored = svg.firstChild();
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->tagName(), XMLQualifiedNameRef("ellipse"));
+  EXPECT_THAT(restored->getAttribute("id"), Optional(Eq("e")));
+  EXPECT_THAT(restored->getAttribute("rx"), Optional(Eq("3")));
+  EXPECT_THAT(restored->nextSibling(), Eq(std::nullopt));
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+}
+
+// An element with content needs both tags renamed. The opening-tag edit alone leaves mismatched
+// tags, which is reported; renaming the closing tag to match then replaces the element with its
+// content intact.
+TEST_F(XMLDocumentTests, ApplySourceEditRenamingBothTagsReplacesElementWithContent) {
+  XMLDocument doc = ParseDocument(R"(<svg><g id="group"><rect id="child"/></g></svg>)");
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  const std::size_t openOffset = doc.source().find("<g") + 1;
+
+  ApplySourceEditResult opening = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(openOffset), FileOffset::Offset(openOffset + 1)},
+      .replacement = "a",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  EXPECT_TRUE(opening.applied);
+  EXPECT_TRUE(opening.diagnostic.has_value()) << "<a ...></g> is malformed";
+  EXPECT_EQ(svg.firstChild(), std::optional<XMLNode>(group)) << "the tree keeps the last valid DOM";
+
+  const std::size_t closeOffset = doc.source().find("</g>") + 2;
+  ApplySourceEditResult closing = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(closeOffset), FileOffset::Offset(closeOffset + 1)},
+      .replacement = "a",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(closing.applied);
+  EXPECT_THAT(closing.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(doc.source(), R"(<svg><a id="group"><rect id="child"/></a></svg>)");
+  std::optional<XMLNode> renamed = svg.firstChild();
+  ASSERT_TRUE(renamed.has_value());
+  EXPECT_EQ(renamed->tagName(), XMLQualifiedNameRef("a"));
+  ASSERT_TRUE(renamed->firstChild().has_value());
+  EXPECT_EQ(renamed->firstChild()->tagName(), XMLQualifiedNameRef("rect"));
+  EXPECT_THAT(renamed->firstChild()->getAttribute("id"), Optional(Eq("child")));
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
 }
 
 TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagMalformedAttributeReportsDiagnostic) {

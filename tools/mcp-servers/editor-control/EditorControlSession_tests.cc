@@ -869,6 +869,62 @@ TEST(EditorControlSessionTest, SourcePaneDispatchEditsDocumentIncrementally) {
                   .isError);
 }
 
+// The reported source-pane sequence: type into `<ellipse`, then undo the keystroke. The ellipse
+// must come back, with no stale diagnostic, and the sibling must keep its identity.
+TEST(EditorControlSessionTest, SourcePaneTagRenameUndoRestoresElement) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180">
+  <rect id="r" x="10" y="10" width="70" height="50" fill="#2f6fed"/>
+  <ellipse id="e" cx="210" cy="35" rx="35" ry="22" fill="#35a16b"/>
+</svg>)svg";
+
+  EditorControlSession session;
+  const ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                              {"canvas_width", 260},
+                                              {"canvas_height", 180},
+                                              {"render_after_load", false}});
+  ASSERT_FALSE(load.isError) << load.body.dump(2);
+  const auto select = [&session](std::string_view selector) {
+    return session.handleToolCall("select_by_selector",
+                                  json{{"selector", selector}, {"render", false}});
+  };
+  const ToolCallResult rectBefore = select("#r");
+  ASSERT_FALSE(rectBefore.isError) << rectBefore.body.dump(2);
+
+  const std::size_t insertOffset = std::string_view(kScene).find("lipse");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+  const ToolCallResult typed = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits", json::array({json{{"offset", insertOffset}, {"insert", "X"}}})},
+           {"render_after_edit", false}});
+  ASSERT_FALSE(typed.isError) << typed.body.dump(2);
+  EXPECT_TRUE(typed.body["source_diagnostic"].is_null()) << typed.body.dump(2);
+
+  const ToolCallResult undone = session.handleToolCall(
+      "edit_svg_source",
+      json{{"dispatch", "source_pane"},
+           {"edits", json::array({json{{"offset", insertOffset}, {"delete_count", 1}}})},
+           {"render_after_edit", true}});
+  ASSERT_FALSE(undone.isError) << undone.body.dump(2);
+  EXPECT_TRUE(undone.body.value("document_matches_draft", false)) << undone.body.dump(2);
+  EXPECT_TRUE(undone.body["source_diagnostic"].is_null()) << undone.body.dump(2);
+  for (const ToolCallResult* keystroke : {&typed, &undone}) {
+    EXPECT_FALSE(keystroke->body["edits"][0].value("document_replace_queued", true))
+        << keystroke->body.dump(2);
+  }
+
+  const ToolCallResult ellipse = select("#e");
+  ASSERT_FALSE(ellipse.isError) << ellipse.body.dump(2);
+  EXPECT_EQ(ellipse.body["selection"].value("tag", ""), "ellipse") << ellipse.body.dump(2);
+  EXPECT_TRUE(ellipse.body["selection_bounds_doc"].is_object()) << ellipse.body.dump(2);
+  const ToolCallResult rectAfter = select("#r");
+  ASSERT_FALSE(rectAfter.isError) << rectAfter.body.dump(2);
+  EXPECT_EQ(rectAfter.body["selection"]["entity"], rectBefore.body["selection"]["entity"])
+      << "the edits must not reparse the document";
+}
+
 TEST(EditorControlSessionTest, InvalidSvgSourceEditKeepsDraftAndStalePreview) {
   constexpr std::string_view kScene =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">

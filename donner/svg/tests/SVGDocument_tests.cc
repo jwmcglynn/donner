@@ -970,10 +970,14 @@ TEST(SVGDocument, ApplySourceEditProjectsSubtreeElementFamilies) {
   EXPECT_EQ(document.querySelector("#polyline")->type(), ElementType::Polyline);
 }
 
-TEST(SVGDocument, ApplySourceEditReportsOpeningTagRenameUnsupported) {
-  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><custom id="shape"/></svg>)");
-  SVGElement element = document.querySelector("#shape").value();
-  ASSERT_EQ(element.type(), ElementType::Unknown);
+// Renaming an element's opening tag in source builds the element type the new name names, as the
+// parser would, without a document reparse.
+TEST(SVGDocument, ApplySourceEditOpeningTagRenameBuildsTypedElement) {
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><custom id="shape" width="4" height="2"/>)"
+      R"(<rect id="sibling"/></svg>)");
+  ASSERT_EQ(document.querySelector("#shape")->type(), ElementType::Unknown);
+  const Entity sibling = document.querySelector("#sibling")->entityHandle().entity();
   const std::size_t openNameOffset = document.source().find("custom");
   ASSERT_NE(openNameOffset, std::string_view::npos);
 
@@ -985,11 +989,43 @@ TEST(SVGDocument, ApplySourceEditReportsOpeningTagRenameUnsupported) {
   });
 
   EXPECT_TRUE(result.applied);
-  ASSERT_TRUE(result.diagnostic.has_value());
-  EXPECT_THAT(result.diagnostic->reason,
-              testing::HasSubstr("Opening tag element rename is not implemented"));
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(result.scope, xml::ReparseScope::OpeningTag);
   ASSERT_THAT(document.querySelector("#shape"), Optional(ElementIdEq("shape")));
-  EXPECT_EQ(document.querySelector("#shape")->type(), ElementType::Unknown);
+  ASSERT_EQ(document.querySelector("#shape")->type(), ElementType::Rect);
+  EXPECT_EQ(document.querySelector("#shape")->cast<SVGRectElement>().width(), Lengthd(4));
+  EXPECT_EQ(document.querySelector("#sibling")->entityHandle().entity(), sibling);
+}
+
+// The reported sequence: typing into `<ellipse` makes it an unknown element, and undoing the
+// keystroke must bring the ellipse back.
+TEST(SVGDocument, ApplySourceEditOpeningTagRenameRoundTripRestoresElementType) {
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><ellipse id="e" cx="10" cy="5" rx="4" ry="2"/>)"
+      R"(</svg>)");
+  ASSERT_EQ(document.querySelector("#e")->type(), ElementType::Ellipse);
+  const std::size_t insertOffset = document.source().find("lipse");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult typed = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset)},
+      .replacement = "X",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_THAT(typed.diagnostic, Eq(std::nullopt));
+  ASSERT_EQ(document.querySelector("#e")->type(), ElementType::Unknown);
+
+  xml::ApplySourceEditResult undone = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset + 1)},
+      .replacement = "",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(undone.applied);
+  EXPECT_THAT(undone.diagnostic, Eq(std::nullopt));
+  ASSERT_THAT(document.querySelector("#e"), Optional(ElementIdEq("e")));
+  ASSERT_EQ(document.querySelector("#e")->type(), ElementType::Ellipse);
+  EXPECT_THAT(document.querySelector("#e")->cast<SVGEllipseElement>().rx(), Optional(Lengthd(4)));
 }
 
 // A namespace edit that moves elements into the SVG namespace builds them in place, as the parser

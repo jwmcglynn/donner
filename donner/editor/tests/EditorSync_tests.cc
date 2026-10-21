@@ -1489,5 +1489,63 @@ TEST(EditorSyncTest, SourceInsertedImageBuildsWithoutReparse) {
                                "source_inserted_image", tests::PixelmatchIdentityParams());
 }
 
+// The reported source-pane sequence: typing into `<ellipse` turns it into an unknown element, and
+// undoing the keystroke must bring the ellipse back. Both edits stay incremental, so the untouched
+// sibling keeps its entity and no document reparse is queued.
+TEST(EditorSyncTest, OpeningTagRenameAndUndoEditTheDocumentIncrementally) {
+  constexpr std::string_view kSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\">"
+      "<rect id=\"r\" width=\"4\" height=\"4\" fill=\"blue\"/>"
+      "<ellipse id=\"e\" cx=\"10\" cy=\"6\" rx=\"4\" ry=\"3\" fill=\"green\"/></svg>";
+  svg::SVGDocument expectedDocument = ParseOrDie(kSvg);
+  const svg::RendererBitmap expected = RenderDocument(expectedDocument);
+  ASSERT_THAT(svg::test::PixelAt(expected, 10, 6), testing::ElementsAre(0, 128, 0, 255));
+
+  for (const bool preciseIntent : {true, false}) {
+    SCOPED_TRACE(preciseIntent ? "source edit intents" : "whole-text diff");
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(kSvg));
+    const auto rectEntity =
+        GetElementByIdOrDie(app.document().document(), "#r").entityHandle().entity();
+
+    // The keystrokes the source pane reports: type "X" inside the tag name, then undo it.
+    const std::size_t keyOffset = std::string_view(kSvg).find("<ellipse") + 3;
+    std::string previousSourceText(kSvg);
+    std::string typedSource(kSvg);
+    typedSource.insert(keyOffset, "X");
+    const SourceEditIntent typed{.offset = keyOffset, .removedLength = 0, .replacement = "X"};
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, typed, typedSource, &previousSourceText)
+                    .dispatchedMutation);
+    // Incremental: a document reparse would queue a ReplaceDocumentCommand.
+    EXPECT_TRUE(app.document().queue().empty());
+    (void)app.flushFrame();
+    EXPECT_EQ(app.document().document().source(), typedSource);
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Eq(std::nullopt));
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#e").type(),
+              svg::ElementType::Unknown);
+
+    std::string undoneSource(typedSource);
+    undoneSource.erase(keyOffset, 1);
+    const SourceEditIntent undo{.offset = keyOffset, .removedLength = 1, .replacement = ""};
+    EXPECT_TRUE(DispatchSourceEdit(app, preciseIntent, undo, undoneSource, &previousSourceText)
+                    .dispatchedMutation);
+    EXPECT_TRUE(app.document().queue().empty());
+    (void)app.flushFrame();
+
+    EXPECT_EQ(app.document().document().source(), kSvg);
+    EXPECT_THAT(app.document().document().xmlDocument().sourceDiagnostic(),
+                testing::Eq(std::nullopt));
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#e").type(),
+              svg::ElementType::Ellipse);
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#r").entityHandle().entity(),
+              rectEntity);
+    tests::CompareBitmapToBitmap(
+        RenderDocument(app.document().document()), expected,
+        preciseIntent ? "tag_rename_undo_through_intents" : "tag_rename_undo_through_text_diff",
+        tests::PixelmatchIdentityParams());
+  }
+}
+
 }  // namespace
 }  // namespace donner::editor
