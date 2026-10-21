@@ -137,6 +137,56 @@ std::optional<Transform2d> SizeChange(const std::optional<Box2d>& box, double va
          Transform2d::Translate(box->topLeft);
 }
 
+/// Solve against immutable painted geometry, then move the painted origin back to its baseline.
+std::optional<Transform2d> PaintedSizeChange(
+    const Box2d& start, double value, bool horizontal,
+    const std::function<std::optional<Box2d>(const Transform2d&)>& evaluate) {
+  if (!(value > kMinimumSpanForScale) || !std::isfinite(value)) {
+    return std::nullopt;
+  }
+  const auto scaledBounds = [&](double factor) {
+    return evaluate(Transform2d::Scale(horizontal ? factor : 1.0, horizontal ? 1.0 : factor));
+  };
+  const auto extent = [&](const Box2d& bounds) {
+    return horizontal ? bounds.width() : bounds.height();
+  };
+  constexpr double kSmallestScale = 1e-8;
+  double lower = kSmallestScale;
+  double upper = 1.0;
+  const auto minimum = scaledBounds(lower);
+  if (!minimum.has_value() || !std::isfinite(extent(*minimum)) || extent(*minimum) > value) {
+    return std::nullopt;
+  }
+  auto bounds = scaledBounds(upper);
+  for (int i = 0; i < 32 && bounds.has_value() && extent(*bounds) < value; ++i) {
+    upper *= 2.0;
+    bounds = scaledBounds(upper);
+  }
+  if (!bounds.has_value() || !std::isfinite(extent(*bounds)) || extent(*bounds) < value) {
+    return std::nullopt;
+  }
+  for (int i = 0; i < 64; ++i) {
+    const double middle = (lower + upper) * 0.5;
+    bounds = scaledBounds(middle);
+    if (!bounds.has_value() || !std::isfinite(extent(*bounds))) {
+      return std::nullopt;
+    }
+    if (extent(*bounds) < value) {
+      lower = middle;
+    } else {
+      upper = middle;
+    }
+  }
+  bounds = scaledBounds(upper);
+  // Join topology can change during a scale. Accept only an actually attained extent,
+  // including after a discontinuity; a failed solve never changes the live transform.
+  if (!bounds.has_value() || std::abs(extent(*bounds) - value) > 1e-7 * std::max(1.0, value)) {
+    return std::nullopt;
+  }
+  return Transform2d::Scale(horizontal ? upper : 1.0, horizontal ? 1.0 : upper) *
+         Transform2d::Translate(start.topLeft - bounds->topLeft);
+}
+
 bool IsAncestorOrSelf(const donner::svg::SVGElement& ancestor,
                       const donner::svg::SVGElement& node) {
   for (std::optional<donner::svg::SVGElement> current = node; current.has_value();
@@ -2078,6 +2128,10 @@ void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField fie
   // scope would deadlock on field activation.
   state.startTransform = element.cast<svg::SVGGraphicsElement>().transform();
   state.startBounds = InspectorBounds(element);
+  if (element.isa<svg::SVGGElement>() &&
+      (field == TransformField::Width || field == TransformField::Height)) {
+    state.boundsAfterAxisScale = CaptureSelectionBoundsAfterAxisScale(element);
+  }
   state.documentFromParent = DocumentFromParentTransform(element);
   if (const double determinant = state.documentFromParent.determinant();
       std::isfinite(determinant) && determinant != 0.0) {
@@ -2123,8 +2177,13 @@ std::optional<Transform2d> SidebarPresenter::DocumentFieldChange(const Transform
   switch (state.field) {
     case TransformField::PositionX: return PositionChange(state.startBounds, value, true);
     case TransformField::PositionY: return PositionChange(state.startBounds, value, false);
-    case TransformField::Width: return SizeChange(state.startBounds, value, true);
-    case TransformField::Height: return SizeChange(state.startBounds, value, false);
+    case TransformField::Width:
+    case TransformField::Height:
+      if (state.boundsAfterAxisScale && state.startBounds.has_value()) {
+        return PaintedSizeChange(*state.startBounds, value, state.field == TransformField::Width,
+                                 state.boundsAfterAxisScale);
+      }
+      return SizeChange(state.startBounds, value, state.field == TransformField::Width);
     case TransformField::Rotation:
     case TransformField::Matrix: return std::nullopt;
   }

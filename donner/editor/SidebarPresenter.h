@@ -400,7 +400,8 @@ private:
     const char* undoLabel = "";            ///< Undo timeline label for the completed edit.
     Transform2d startTransform;            ///< Local transform at activation.
     Transform2d currentTransform;          ///< Last transform queued via SetTransformCommand.
-    std::optional<Box2d> startBounds;      ///< Document-space bounds at activation, if any.
+    std::function<std::optional<Box2d>(const Transform2d&)> boundsAfterAxisScale;
+    std::optional<Box2d> startBounds;  ///< Document-space bounds at activation, if any.
     std::optional<DecomposedTransform> startDecomposed;  ///< Decomposition of `startTransform`.
     /// Parent coordinates to document coordinates at activation.
     Transform2d documentFromParent;

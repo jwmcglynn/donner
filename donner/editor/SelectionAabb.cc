@@ -451,6 +451,120 @@ std::vector<Box2d> SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>
   return bounds;
 }
 
+std::function<std::optional<Box2d>(const Transform2d&)> CaptureSelectionBoundsAfterAxisScale(
+    const svg::SVGElement& root) {
+  struct HostStroke {
+    Path centerlineInDocument;
+    Path centerlineLocal;
+    Transform2d documentFromGeometry;
+    bool mustStayLocal;
+    StrokeStyle style;
+  };
+  struct TextStroke {
+    Box2d frameLocal;
+    Box2d inkLocal;
+    Transform2d documentFromText;
+    double width;
+    svg::StrokeLinecap cap;
+    svg::StrokeLinejoin join;
+    double miterLimit;
+  };
+  struct Leaf {
+    Box2d bounds;
+    std::optional<HostStroke> hostStroke;
+    std::optional<TextStroke> textStroke;
+  };
+  std::vector<Leaf> leaves;
+  root.withWriteAccess([&](svg::DocumentWriteAccess&, EntityHandle) {
+    for (const auto& geometry : CollectRenderableGeometry(root)) {
+      const auto bounds = GeometryWorldFrameBounds(geometry);
+      if (!bounds.has_value()) {
+        continue;
+      }
+      Leaf leaf{*bounds, std::nullopt, std::nullopt};
+      const auto style = geometry.getComputedStyle();
+      const Transform2d documentFromGeometry = geometry.elementFromWorld();
+      if (!style.stroke.get().value().is<svg::PaintServer::None>() &&
+          style.vectorEffect.get().value() == svg::VectorEffect::NonScalingStroke) {
+        const auto spline = geometry.computedSpline();
+        if (spline.has_value() && !spline->empty()) {
+          StrokeStyle strokeStyle;
+          strokeStyle.width = style.strokeWidth.get().value().value;
+          strokeStyle.cap = ToLineCap(style.strokeLinecap.get().value());
+          strokeStyle.join = ToLineJoin(style.strokeLinejoin.get().value());
+          strokeStyle.miterLimit = style.strokeMiterlimit.get().value();
+          leaf.hostStroke =
+              HostStroke{spline->transformed(documentFromGeometry), *spline, documentFromGeometry,
+                         StrokeIsPatternPainted(style, geometry), strokeStyle};
+        }
+      }
+      leaves.push_back(std::move(leaf));
+    }
+    for (const auto& text : CollectRenderableTextRoots(root)) {
+      if (const auto bounds = TextWorldFrameBounds(text); bounds.has_value()) {
+        Leaf leaf{*bounds, std::nullopt, std::nullopt};
+        const auto style = text.getComputedStyle();
+        if (!style.stroke.get().value().is<svg::PaintServer::None>() &&
+            style.vectorEffect.get().value() == svg::VectorEffect::NonScalingStroke) {
+          leaf.textStroke =
+              TextStroke{AuthoredTextBoxLocal(text).value_or(text.objectBoundingBox()),
+                         text.inkBoundingBox(),
+                         text.elementFromWorld(),
+                         style.strokeWidth.get().value().value,
+                         style.strokeLinecap.get().value(),
+                         style.strokeLinejoin.get().value(),
+                         style.strokeMiterlimit.get().value()};
+        }
+        leaves.push_back(std::move(leaf));
+      }
+    }
+  });
+  return [leaves = std::move(leaves)](const Transform2d& documentFromStartDocument) {
+    std::optional<Box2d> merged;
+    for (const Leaf& leaf : leaves) {
+      Box2d bounds = documentFromStartDocument.transformBox(leaf.bounds);
+      if (leaf.hostStroke.has_value()) {
+        const HostStroke& stroke = *leaf.hostStroke;
+        const Transform2d documentFromGeometry =
+            stroke.documentFromGeometry * documentFromStartDocument;
+        const Path centerline = stroke.centerlineInDocument.transformed(documentFromStartDocument);
+        bounds = centerline.bounds();
+        StrokeStyle style = stroke.style;
+        style.width =
+            svg::EffectiveStrokeWidth(style.width,
+                                      stroke.mustStayLocal ? svg::NonScalingStrokeMode::ScaledLocal
+                                                           : svg::NonScalingStrokeMode::HostSpace,
+                                      documentFromGeometry);
+        const Path outline = (stroke.mustStayLocal ? stroke.centerlineLocal : centerline)
+                                 .strokeToFill(style, Path::kLocalFlattenTolerance);
+        if (!outline.empty()) {
+          bounds.addBox(stroke.mustStayLocal ? outline.transformedBounds(documentFromGeometry)
+                                             : outline.bounds());
+        }
+      }
+      if (leaf.textStroke.has_value()) {
+        const TextStroke& stroke = *leaf.textStroke;
+        const Transform2d documentFromText = stroke.documentFromText * documentFromStartDocument;
+        Box2d frame = stroke.frameLocal;
+        const double width = svg::EffectiveStrokeWidth(
+            stroke.width, svg::NonScalingStrokeMode::ScaledLocal, documentFromText);
+        const double padding =
+            svg::StrokeCullHalfExtent(width, stroke.cap, stroke.join, stroke.miterLimit);
+        if (!stroke.inkLocal.isEmpty() && width > 0.0 && std::isfinite(padding)) {
+          frame.addBox(stroke.inkLocal.inflatedBy(padding));
+        }
+        bounds = documentFromText.transformBox(frame);
+      }
+      if (merged.has_value()) {
+        merged->addBox(bounds);
+      } else {
+        merged = bounds;
+      }
+    }
+    return merged;
+  };
+}
+
 std::vector<Box2d> SnapshotSelectionOccludingWorldBounds(
     std::span<const svg::SVGElement> selection) {
   if (selection.size() != 1u) {

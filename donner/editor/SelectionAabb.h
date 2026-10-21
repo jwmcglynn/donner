@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <span>
@@ -68,6 +69,14 @@ namespace donner::editor {
 ///   element that has geometry).
 [[nodiscard]] std::vector<Box2d> SnapshotSelectionWorldBounds(
     std::span<const svg::SVGElement> selection);
+
+/// Capture owning geometry for predicting a group's painted bounds under a positive,
+/// document-axis scale and translation, without mutating the document. Host-space strokes
+/// are expanded after the proposed transform; other painted bounds scale with the geometry.
+/// @param root Group whose current renderable descendants form the baseline.
+/// @return An evaluator independent of later DOM mutations.
+[[nodiscard]] std::function<std::optional<Box2d>(const Transform2d&)>
+CaptureSelectionBoundsAfterAxisScale(const svg::SVGElement& root);
 
 /// Snapshot world-space bounds for renderable content (geometry and text)
 /// painted after a single selected element. This is a conservative occlusion hint for the
