@@ -541,7 +541,7 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
 
 /// Parse each of \p node's attributes onto \p element, skipping attributes in an unsupported
 /// namespace.
-std::optional<ParseDiagnostic> ParseAttributeList(SVGParserContext& context, SVGElement& element,
+std::optional<ParseDiagnostic> ParseAttributeList(SVGParserContext& context, SVGElement element,
                                                   const XMLNode& node) {
   for (const XMLQualifiedNameRef& attributeName : node.attributes()) {
     const RcString value = node.getAttribute(attributeName).value();
