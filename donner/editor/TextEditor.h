@@ -1009,6 +1009,7 @@ private:
    *
    * @param id The action to query.
    * @param io ImGui input state for the current frame.
+   * @return True if a binding for \p id fires this frame.
    */
   bool shortcutMatches(ShortcutId id, const ImGuiIO& io) const;
 

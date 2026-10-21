@@ -4928,6 +4928,25 @@ TEST_F(TextEditorTests, NavigationKeysMoveAndExtendFromInsideAWord) {
   }
 }
 
+// Page Down and Page Up move by the visible page, not a single line.
+TEST_F(TextEditorTests, PageKeysMoveByTheVisiblePage) {
+  std::string text;
+  for (int line = 0; line < 60; ++line) {
+    text += "line\n";
+  }
+  editor.setText(text);
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  PressKey(ImGuiKey_PageDown);
+  const int pageLine = editor.getCursorPosition().line;
+  EXPECT_THAT(pageLine, ::testing::AllOf(::testing::Gt(1), ::testing::Lt(60)));
+
+  PressKey(ImGuiKey_PageDown, /*command=*/false, /*shift=*/true);
+  EXPECT_EQ(editor.getCursorPosition().line, std::min(2 * pageLine, 60));
+  PressKey(ImGuiKey_PageUp);
+  EXPECT_EQ(editor.getCursorPosition().line, std::min(2 * pageLine, 60) - pageLine);
+}
+
 // The reported sequence: each navigation key is followed by a typed digit, which must land where
 // the key moved the caret.
 TEST_F(TextEditorTests, TypingAfterNavigationKeysLandsAtTheNewCaret) {

@@ -626,6 +626,7 @@ WordClass ClassifyChar(char c) {
 /// True for bytes that keyboard word movement treats as part of a word: ASCII letters, digits and
 /// underscore, and every byte of a multi-byte UTF-8 sequence, so a word step never stops inside a
 /// character.
+/// @param c Byte to classify.
 bool IsWordMovementByte(char c) {
   const auto byte = static_cast<unsigned char>(c);
   return byte >= 0x80 || std::isalnum(byte) || c == '_';

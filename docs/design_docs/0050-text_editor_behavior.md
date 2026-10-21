@@ -53,7 +53,7 @@ VS Code / TextMate / Xcode set user expectations for:
 ### Known Deviations
 
 From code inspection (`TextEditor.cc` lines 2962–3100):
-- **Word movement shortcuts declared but unused** (lines 70, 73, 77, 80): `MoveWordLeft`, `SelectWordLeft`, `MoveWordRight`, `SelectWordRight` are in `ShortcutId` enum and wired in `getDefaultShortcuts()` to Ctrl+Left/Right, but the implementation of `moveLeft()` and `moveRight()` (lines 2962, 2995) **ignore the `wordMode` parameter** (comment `/*wordMode*/` at line 2962).
+- **Word movement** (resolved, #1971): navigation follows macOS text editing. Option+Left/Right move by word (`moveLeft`/`moveRight` with `wordMode`), Home/End and Command+Left/Right move to the line start and end, Command+Up/Down move to the document start and end, and Shift extends the selection.
 - **Ctrl+Delete / Ctrl+Backspace not implemented**: shortcuts exist (lines 113, 116) but `executeAction()` (lines 830–874) has no handlers for `ForwardDeleteWord` or `BackwardDeleteWord`.
 - **Unindent (Shift+Tab) not fully wired**: shortcut exists (line 194) but `executeAction()` doesn't handle it (lines 830–874).
 - **Word boundary detection**: uses syntax-highlighting color changes as word boundaries (lines 423–436, 441–479), which is different from alphanumeric boundaries in VS Code.
@@ -119,12 +119,11 @@ These form the foundation of any text editor and must work reliably.
 
 ### Milestone 2: P1 Behaviors (Expected Features)
 
-- [ ] **Word Movement (Ctrl+Arrow)**
-  - [ ] Test: Ctrl+Left moves cursor to start of previous word.
-  - [ ] Test: Ctrl+Right moves cursor to start of next word.
-  - [ ] Test: Ctrl+Shift+Left selects to start of previous word.
-  - [ ] Test: Ctrl+Shift+Right selects to end of current / start of next word.
-  - [ ] Test: Word boundary respects syntax color transitions (lines 423–436, 461–479).
+- [x] **Word Movement (Option+Arrow, macOS conventions)**
+  - [x] Test: Option+Left moves cursor to start of the current or previous word.
+  - [x] Test: Option+Right moves cursor to end of the current or next word.
+  - [x] Test: Option+Shift+Left/Right extend the selection by word.
+  - Word boundaries are alphanumeric runs, not syntax color transitions.
 
 - [ ] **Word Deletion**
   - [ ] Test: Ctrl+Backspace deletes word to the left of cursor.
@@ -215,7 +214,7 @@ These form the foundation of any text editor and must work reliably.
 
 | Issue | File:Line | Observed | Expected | Severity |
 |-------|-----------|----------|----------|----------|
-| **wordMode parameter unused in moveLeft/moveRight** | TextEditor.cc:2962, 2995 | Ctrl+Left/Right don't move by word; they move by character | Ctrl+Left/Right should skip by word boundary (alphanumeric or color boundary) | P0 |
+| **wordMode parameter unused in moveLeft/moveRight** (fixed, #1971) | TextEditorCore.cc | Word keys moved by character | Option+Left/Right move by word | P0 |
 | **Unindent (Shift+Tab) not handled** | executeAction() lines 830–874 | Shift+Tab does nothing in editor (no case for ShortcutId::Unindent) | Should reduce indentation or shift selection left | P0 |
 | **Ctrl+Delete / Ctrl+Backspace not implemented** | executeAction() lines 830–874, backspace()/delete_() | Ctrl+Delete and Ctrl+Backspace are wired as shortcuts but do nothing | Should delete word to right/left | P0 |
 

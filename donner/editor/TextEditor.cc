@@ -637,6 +637,14 @@ void TextEditor::handleKeyboardInputs() {
         case ShortcutId::MoveDown:
         case ShortcutId::SelectUp:
         case ShortcutId::SelectDown:
+        case ShortcutId::MoveUpBlock:
+        case ShortcutId::SelectUpBlock:
+        case ShortcutId::MoveDownBlock:
+        case ShortcutId::SelectDownBlock:
+        case ShortcutId::MoveTop:
+        case ShortcutId::SelectTop:
+        case ShortcutId::MoveBottom:
+        case ShortcutId::SelectBottom:
           additionalChecks = !autocompleteOpened_ && editorFocused;
           break;
 
@@ -649,15 +657,7 @@ void TextEditor::handleKeyboardInputs() {
         case ShortcutId::MoveStartLine:
         case ShortcutId::SelectStartLine:
         case ShortcutId::MoveEndLine:
-        case ShortcutId::SelectEndLine:
-        case ShortcutId::MoveUpBlock:
-        case ShortcutId::SelectUpBlock:
-        case ShortcutId::MoveDownBlock:
-        case ShortcutId::SelectDownBlock:
-        case ShortcutId::MoveTop:
-        case ShortcutId::SelectTop:
-        case ShortcutId::MoveBottom:
-        case ShortcutId::SelectBottom: additionalChecks = editorFocused; break;
+        case ShortcutId::SelectEndLine: additionalChecks = editorFocused; break;
 
         case ShortcutId::AutocompleteUp:
         case ShortcutId::AutocompleteDown:
