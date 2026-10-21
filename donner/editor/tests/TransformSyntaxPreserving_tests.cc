@@ -294,8 +294,9 @@ TEST(TransformSyntaxPreserving, WrapperPreservesAnExactlySingularMatrix) {
   EXPECT_DOUBLE_EQ(parentFromWritten.data[0] * parentFromWritten.data[3] -
                        parentFromWritten.data[1] * parentFromWritten.data[2],
                    0.0);
-  EXPECT_THAT(parentFromWritten.transformPosition(Vector2d(-2000000.0, 1000000.0)),
-              testing::Eq(Vector2d(0.0, 0.0)));
+  const Vector2d point(-2000000.0, 1000000.0);
+  EXPECT_THAT(parentFromWritten.transformPosition(point),
+              testing::Eq(parentFromElement.transformPosition(point)));
 }
 
 TEST(TransformSyntaxPreserving, WrapperWritesCanonicalMatrixAtEditPrecision) {
