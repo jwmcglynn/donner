@@ -2964,7 +2964,7 @@ TEST_F(SidebarPresenterImGuiTest, StrokeWidthBusyReactivationKeepsPendingCancell
   ASSERT_NE(ImGui::GetActiveID(), fieldId);
   RenderInspectorFrame(presenter, nullptr, kWindow, RectCenter(*field), true, kHeight);
   RenderInspectorFrame(presenter, nullptr, kWindow, RectCenter(*field), false, kHeight);
-  ASSERT_EQ(ImGui::GetActiveID(), fieldId);
+  EXPECT_NE(ImGui::GetActiveID(), fieldId) << "cancel must finish before another stroke edit";
   RenderInspectorFrame(presenter, &app, kWindow, away, false, kHeight);
   (void)app.flushFrame();
 
