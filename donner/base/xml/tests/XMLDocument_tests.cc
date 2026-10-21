@@ -1840,6 +1840,29 @@ TEST_F(XMLDocumentTests, RenameDoesNotReuseProjectionForANewRetainedTextNode) {
   }
 }
 
+TEST_F(XMLDocumentTests, ProjectedTextIndexHandlesReverseCaptureAndMiddleReplacement) {
+  XMLDocument doc =
+      ParseDocument("<svg>first<peer/>second<g><rect/></g></svg>", XMLParser::Options::ParseAll());
+  XMLNode svg = doc.root().firstChild().value();
+  XMLNode first = svg.firstChild().value();
+  XMLNode second = first.nextSibling()->nextSibling().value();
+  const SourceRange firstSpan = *first.getNodeLocation();
+  second.removeForProjection();
+  first.removeForProjection();
+  const auto snapshots = svg.projectedTextChildren();
+  ASSERT_THAT(snapshots, testing::SizeIs(2));
+  EXPECT_THAT(snapshots[0].value, Eq("first"));
+  EXPECT_THAT(snapshots[1].value, Eq("second"));
+  XMLNode replacement = XMLNode::CreateDataNode(doc, "first");
+  replacement.setSourceStartOffset(firstSpan.start);
+  replacement.setSourceEndOffset(firstSpan.end);
+  svg.insertBefore(replacement, svg.firstChild());
+  replacement.remove();
+  const auto remaining = svg.projectedTextChildren();
+  ASSERT_THAT(remaining, testing::SizeIs(1));
+  EXPECT_THAT(remaining.front().value, Eq("second"));
+}
+
 TEST_F(XMLDocumentTests, ProjectedTextReusesAnchorsAndReleasesThemOnInvalidation) {
   XMLDocument doc =
       ParseDocument("<svg>first<peer/><g><rect/></g></svg>", XMLParser::Options::ParseAll());

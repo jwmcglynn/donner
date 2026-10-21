@@ -1588,7 +1588,8 @@ TEST(EditorSyncTest, LoadingFormattedSiblingsHasLinearProjectionSpanWork) {
   const auto beforeRefresh = xml::internal::ProjectedTextSpanResolutionCountForTesting(*root);
   EXPECT_THAT(root->projectedTextChildren(), testing::SizeIs(kSiblingCount + 1));
   const auto afterRefresh = xml::internal::ProjectedTextSpanResolutionCountForTesting(*root);
-  RecordProperty("late_edit_projection_span_resolutions", std::to_string(afterRefresh - beforeRefresh));
+  RecordProperty("late_edit_projection_span_resolutions",
+                 std::to_string(afterRefresh - beforeRefresh));
   EXPECT_THAT(afterRefresh - beforeRefresh, testing::Le(2 * (kSiblingCount + 1)));
   EXPECT_THAT(root->projectedTextChildren(), testing::SizeIs(kSiblingCount + 1));
   EXPECT_EQ(xml::internal::ProjectedTextSpanResolutionCountForTesting(*root), afterRefresh);

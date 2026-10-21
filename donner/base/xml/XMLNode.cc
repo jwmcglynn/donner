@@ -58,17 +58,20 @@ struct ProjectedTextRecord {
   std::shared_ptr<XMLSourceStore> store;
   std::shared_ptr<ProjectionRecordBudget> budget;
   SourceAnchorSpan span;
+  ResolvedSourceSpan range;
+  std::size_t prefixEnd = 0;
   Entity originalNode;
   XMLNode::Type type;
   RcString value;
 
   ProjectedTextRecord(std::shared_ptr<XMLSourceStore> sourceStore,
                       std::shared_ptr<ProjectionRecordBudget> recordBudget,
-                      SourceAnchorSpan sourceSpan, Entity node, XMLNode::Type nodeType,
-                      RcString text)
+                      SourceAnchorSpan sourceSpan, ResolvedSourceSpan sourceRange, Entity node,
+                      XMLNode::Type nodeType, RcString text)
       : store(std::move(sourceStore)),
         budget(std::move(recordBudget)),
         span(sourceSpan),
+        range(sourceRange),
         originalNode(node),
         type(nodeType),
         value(std::move(text)) {
@@ -82,6 +85,8 @@ struct ProjectedTextRecord {
     std::swap(store, other.store);
     std::swap(budget, other.budget);
     std::swap(span, other.span);
+    std::swap(range, other.range);
+    std::swap(prefixEnd, other.prefixEnd);
     std::swap(originalNode, other.originalNode);
     std::swap(type, other.type);
     std::swap(value, other.value);
@@ -110,10 +115,21 @@ struct ProjectedTextRecordsComponent {
   ProjectedTextRecordsComponent& operator=(ProjectedTextRecordsComponent&&) noexcept = default;
   std::vector<ProjectedTextRecord> records;
   std::uint64_t spanResolutions = 0;
+  XMLSourceStore* indexedStore = nullptr;
+  std::optional<std::uint64_t> indexedVersion;
 };
 static_assert(!std::is_copy_constructible_v<ProjectedTextRecordsComponent>);
 static_assert(std::is_nothrow_move_constructible_v<ProjectedTextRecordsComponent>);
 static_assert(std::is_nothrow_move_assignable_v<ProjectedTextRecordsComponent>);
+
+/// Maintain the interval index after insertion or erasure; chronological capture appends once.
+void UpdateProjectionPrefix(ProjectedTextRecordsComponent& component, std::size_t start) {
+  std::size_t end = start == 0 ? 0 : component.records[start - 1].prefixEnd;
+  for (std::size_t i = start; i < component.records.size(); ++i) {
+    end = std::max(end, component.records[i].range.end);
+    component.records[i].prefixEnd = end;
+  }
+}
 
 /// Only a surviving raw XML handle needs this link to invalidate its parent-owned record.
 struct ProjectedTextParentComponent {
@@ -335,20 +351,47 @@ std::optional<ResolvedSourceSpan> ResolvedNodeSpan(EntityHandle node) {
   return ResolvedSourceSpan{*start->offset, *end->offset};
 }
 
-bool SourceSpansOverlap(const std::optional<ResolvedSourceSpan>& first,
-                        const ResolvedSourceSpan& second) {
-  return first.has_value() && first->start < second.end && second.start < first->end;
-}
-
 void PruneProjectedTextRecords(ProjectedTextRecordsComponent& component, XMLSourceStore* store) {
-  std::erase_if(component.records, [store, &component](const auto& record) {
+  const std::uint64_t version = store ? store->sourceVersion() : 0;
+  if (component.indexedStore == store && component.indexedVersion == version) {
+    return;
+  }
+  std::erase_if(component.records, [store, &component](auto& record) {
     if (record.store.get() != store) {
       return true;
     }
     ++component.spanResolutions;
     const auto span = store->resolveSpan(record.span);
-    return !span.has_value() || span->start >= span->end;
+    if (!span.has_value() || span->start >= span->end) {
+      return true;
+    }
+    record.range = *span;
+    return false;
   });
+  std::sort(
+      component.records.begin(), component.records.end(),
+      [](const auto& left, const auto& right) { return left.range.start < right.range.start; });
+  UpdateProjectionPrefix(component, 0);
+  component.indexedStore = store;
+  component.indexedVersion = version;
+}
+
+void EraseOverlappingProjections(ProjectedTextRecordsComponent& component,
+                                 const ResolvedSourceSpan& span) {
+  const auto first = std::lower_bound(
+      component.records.begin(), component.records.end(), span.start,
+      [](const auto& record, std::size_t start) { return record.prefixEnd <= start; });
+  const auto last = std::lower_bound(
+      first, component.records.end(), span.end,
+      [](const auto& record, std::size_t end) { return record.range.start < end; });
+  const std::size_t index = std::distance(component.records.begin(), first);
+  const auto retainedEnd = std::remove_if(first, last, [&](const auto& record) {
+    return record.range.start < span.end && span.start < record.range.end;
+  });
+  if (retainedEnd != last) {
+    component.records.erase(retainedEnd, last);
+    UpdateProjectionPrefix(component, index);
+  }
 }
 
 /// A retained incarnation supersedes any older projected text overlapping its source span.
@@ -368,10 +411,7 @@ void ClearOverlappingTextProjection(EntityHandle child, Entity parent) {
   XMLSourceStore* store = GetSourceStore(child);
   PruneProjectedTextRecords(*records, store);
   if (const auto span = ResolvedNodeSpan(child); span.has_value()) {
-    std::erase_if(records->records, [&](const auto& record) {
-      ++records->spanResolutions;
-      return SourceSpansOverlap(store->resolveSpan(record.span), *span);
-    });
+    EraseOverlappingProjections(*records, *span);
   }
 }
 
@@ -409,8 +449,13 @@ void CaptureProjectedText(EntityHandle child, EntityHandle parent) {
   // Transfer the existing anchors. Clearing the child retires its other source anchors;
   // parent destruction or record invalidation retires this pair exactly once.
   const SourceAnchorSpan anchors = *std::exchange(source->anchorSpan, std::nullopt);
-  records.records.emplace_back(store, budget, anchors, child.entity(),
-                               child.get<XMLNodeTypeComponent>().type(), value);
+  const auto position = std::lower_bound(
+      records.records.begin(), records.records.end(), span->start,
+      [](const auto& record, std::size_t start) { return record.range.start < start; });
+  const std::size_t index = std::distance(records.records.begin(), position);
+  records.records.emplace(position, store, budget, anchors, *span, child.entity(),
+                          child.get<XMLNodeTypeComponent>().type(), value);
+  UpdateProjectionPrefix(records, index);
 }
 
 }  // namespace
@@ -857,12 +902,9 @@ std::vector<XMLNode::ProjectedTextChild> XMLNode::projectedTextChildren() const 
   PruneProjectedTextRecords(*records, store);
   result.reserve(records->records.size());
   for (const auto& record : records->records) {
-    ++records->spanResolutions;
-    const auto span = store->resolveSpan(record.span);
-    result.push_back(ProjectedTextChild{record.type, record.value, span->start, span->end});
+    result.push_back(
+        ProjectedTextChild{record.type, record.value, record.range.start, record.range.end});
   }
-  std::sort(result.begin(), result.end(),
-            [](const auto& left, const auto& right) { return left.start < right.start; });
   return result;
 }
 
