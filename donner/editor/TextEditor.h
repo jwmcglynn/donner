@@ -1047,7 +1047,7 @@ private:
   struct NavigationAction {
     ShortcutId id;        ///< Action this entry dispatches.
     CaretMove move;       ///< How the caret moves.
-    bool backward;        ///< Whether it moves left or up rather than right or down.
+    bool backward;        ///< Whether it moves toward the start: left, up, line or document start.
     bool word;            ///< Whether a horizontal move steps by word.
     bool select;          ///< Whether the move extends the selection.
     NavigationGate gate;  ///< Input state the action waits for.
