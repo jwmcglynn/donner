@@ -429,6 +429,8 @@ private:
   /// Populate stroke values and marker choices for the current selection.
   void captureStrokeSnapshot(const EditorApp& app, std::span<const svg::SVGElement> selection,
                              InspectorSnapshot& inspector);
+  /// Inspector bounds for @p element, recomputed only when the element or the document changed.
+  std::optional<Box2d> cachedInspectorBounds(const EditorApp& app, const svg::SVGElement& element);
   /// Re-scan marker IDs only when the source or root changed.
   void refreshMarkerCache(const EditorApp& app);
   void renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node, TreeViewState& state,
@@ -528,6 +530,17 @@ private:
 
   std::optional<TreeNodeSnapshot> treeSnapshot_;
   InspectorSnapshot inspectorSnapshot_;
+
+  /// Inspector bounds of one element at one document frame version. Text and group bounds walk
+  /// laid-out glyphs or every rendered descendant, so the per-frame snapshot reuses them until
+  /// the selection or the document changes.
+  struct InspectorBoundsCache {
+    svg::SVGElement element;               ///< Element the bounds belong to.
+    std::uint64_t documentGeneration = 0;  ///< Document generation they were computed in.
+    std::uint64_t frameVersion = 0;        ///< Document frame version they were computed at.
+    std::optional<Box2d> bounds;           ///< Cached Inspector bounds.
+  };
+  std::optional<InspectorBoundsCache> inspectorBoundsCache_;
   std::optional<TransformEditState> transformEdit_;
   std::array<std::optional<Box2d>, 5> transformFieldRects_;
   std::array<std::optional<Box2d>, 6> matrixFieldRects_;

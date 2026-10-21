@@ -75,16 +75,17 @@ namespace {
 /// Document-space bounds behind the Inspector's Position and Size fields. Path
 /// geometry reports its fill bounds. `<text>` and `<g>` have no path geometry of
 /// their own, so they report the box their selection chrome draws: the text's
-/// laid-out frame, or the union of the group's rendered children. Other elements
-/// have no bounds, and their Position and Size fields stay disabled.
+/// laid-out frame, or the union of the group's rendered children. Those boxes
+/// include visible stroke, so a group around a stroked shape reports a larger
+/// box than the shape selected alone. Other elements have no bounds, and their
+/// Position and Size fields stay disabled.
 std::optional<Box2d> InspectorBounds(const svg::SVGElement& element) {
   if (element.isa<svg::SVGGeometryElement>()) {
     return element.cast<svg::SVGGeometryElement>().worldBounds();
   }
   if (element.isa<svg::SVGTextElement>() || element.isa<svg::SVGGElement>()) {
-    const std::array<svg::SVGElement, 1> selection{element};
     const std::vector<Box2d> bounds =
-        SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+        SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(&element, 1));
     if (!bounds.empty()) {
       return bounds.front();
     }
@@ -811,11 +812,27 @@ void SidebarPresenter::captureStrokeSnapshot(const EditorApp& app,
   inspector.markerListTruncated = markerCacheTruncated_;
 }
 
+std::optional<Box2d> SidebarPresenter::cachedInspectorBounds(const EditorApp& app,
+                                                             const svg::SVGElement& element) {
+  const std::uint64_t documentGeneration = app.document().documentGeneration();
+  const std::uint64_t frameVersion = app.document().currentFrameVersion();
+  if (!inspectorBoundsCache_.has_value() || inspectorBoundsCache_->element != element ||
+      inspectorBoundsCache_->documentGeneration != documentGeneration ||
+      inspectorBoundsCache_->frameVersion != frameVersion) {
+    inspectorBoundsCache_ = InspectorBoundsCache{.element = element,
+                                                 .documentGeneration = documentGeneration,
+                                                 .frameVersion = frameVersion,
+                                                 .bounds = InspectorBounds(element)};
+  }
+  return inspectorBoundsCache_->bounds;
+}
+
 void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
   discardForeignTransformEdit(app);
   if (!app.hasDocument()) {
     treeSnapshot_.reset();
     inspectorSnapshot_ = InspectorSnapshot{};
+    inspectorBoundsCache_.reset();
     // The document is gone; the edit's element handle and baseline are
     // meaningless now, so drop the in-progress edit instead of committing.
     transformEdit_.reset();
@@ -861,7 +878,7 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
       inspector.titleText += ">";
     }
 
-    inspector.bounds = InspectorBounds(selected);
+    inspector.bounds = cachedInspectorBounds(app, selected);
     if (selected.isa<donner::svg::SVGGraphicsElement>()) {
       inspector.transform = selected.cast<donner::svg::SVGGraphicsElement>().transform();
     }

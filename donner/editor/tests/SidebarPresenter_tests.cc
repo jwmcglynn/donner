@@ -443,6 +443,7 @@ constexpr std::string_view kTextAndGroupSvg =
          <text id="t" x="100" y="150" font-size="24" fill="#17202a">Hi</text>
          <g id="grp" transform="translate(170 95) rotate(15)">
            <rect id="gr" width="50" height="40" fill="#8a4fff"/>
+           <text id="gt" x="10" y="70" font-size="12">Label</text>
          </g>
        </svg>)SVG";
 
@@ -478,22 +479,37 @@ TEST(SidebarTransformEditTest, TextSelectionReportsItsLaidOutFrameAndMovesByPosi
 }
 
 // A group has no geometry of its own either; its Inspector bounds are the
-// union of its rendered children, matching its selection box.
-TEST(SidebarTransformEditTest, GroupSelectionReportsTheBoundsOfItsChildren) {
+// union of its rendered children, matching its selection box, and Position
+// edits move the whole group.
+TEST(SidebarTransformEditTest, GroupSelectionReportsTheUnionOfItsChildrenAndMovesByPosition) {
   EditorApp app;
   SidebarPresenter presenter;
   ASSERT_TRUE(app.loadFromString(kTextAndGroupSvg));
   app.setCleanSourceText(kTextAndGroupSvg);
   const std::optional<svg::SVGElement> group = app.document().document().querySelector("#grp");
-  const std::optional<svg::SVGElement> child = app.document().document().querySelector("#gr");
+  const std::optional<svg::SVGElement> rect = app.document().document().querySelector("#gr");
+  const std::optional<svg::SVGElement> label = app.document().document().querySelector("#gt");
   ASSERT_TRUE(group.has_value());
-  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(rect.has_value());
+  ASSERT_TRUE(label.has_value());
   app.setSelection(*group);
   presenter.refreshSnapshot(app);
 
-  const std::optional<Box2d> childBounds = child->cast<svg::SVGGeometryElement>().worldBounds();
-  ASSERT_TRUE(childBounds.has_value());
-  EXPECT_THAT(presenter.inspectorBoundsForTesting(), testing::Optional(testing::Eq(*childBounds)));
+  std::optional<Box2d> expected = rect->cast<svg::SVGGeometryElement>().worldBounds();
+  const std::optional<Box2d> labelFrame = TextWorldFrameBounds(label->cast<svg::SVGTextElement>());
+  ASSERT_TRUE(expected.has_value());
+  ASSERT_TRUE(labelFrame.has_value());
+  expected->addBox(*labelFrame);
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(), testing::Optional(testing::Eq(*expected)));
+
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::PositionY, 20.0));
+  const std::optional<Box2d>& moved = presenter.inspectorBoundsForTesting();
+  ASSERT_TRUE(moved.has_value());
+  EXPECT_THAT(moved->topLeft.x, testing::DoubleNear(expected->topLeft.x, 1e-6));
+  EXPECT_THAT(moved->topLeft.y, testing::DoubleNear(20.0, 1e-6));
+  EXPECT_THAT(moved->width(), testing::DoubleNear(expected->width(), 1e-6));
+  EXPECT_THAT(moved->height(), testing::DoubleNear(expected->height(), 1e-6));
 }
 
 TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle) {
