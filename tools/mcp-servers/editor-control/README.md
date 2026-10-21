@@ -43,7 +43,7 @@ build before the first proxied request after startup.
   reparsing the draft; the response reports whether the document source matches
   the draft and any incremental-edit diagnostic. This mode preserves `source_path`; use
   `dispatch: "reload"` to change it.
-  Documents with internal DTD subsets or nondefault entity parsing require full-document recovery,
+  Documents with internal DTD subsets, unresolved document-scope edits, or nondefault entity parsing require full-document recovery,
   not isolated fragment synchronization. Editor-loaded documents recover under the same parser
   policy; foreign or restrictive parser policies keep the draft and last valid preview stale until
   their owner reparses with the original policy.

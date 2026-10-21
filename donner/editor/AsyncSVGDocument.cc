@@ -7,14 +7,11 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
-#include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/editor/EditorParseOptions.h"
 #include "donner/editor/LockState.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGTextContentElement.h"
-#include "donner/svg/components/ParsedPayloadResourceBudget.h"
-#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -243,23 +240,17 @@ void AsyncSVGDocument::publishParseDiagnostics(std::vector<ParseDiagnostic> warn
 
 void AsyncSVGDocument::captureSourceRecoveryPolicy() {
   document_->withReadAccess([&](svg::DocumentReadAccess&) {
-    auto& registry = document_->registry();
-    const auto& store = document_->xmlDocument()
-                            .registry()
-                            .ctx()
-                            .get<xml::components::XMLDocumentContext>()
-                            .sourceStoreHolder->store;
+    const auto store = document_->xmlDocument().sharedSourceStore();
+    const auto resources = document_->resourcePolicySnapshot();
+    if (!store || !resources) {
+      sourceRecoveryPolicy_.reset();
+      return;
+    }
     sourceRecoveryPolicy_ = SourceRecoveryPolicy{
         .parserOptions = *xml::XMLParser::SourceOptions(document_->xmlDocument()),
         .sourceLimits = store->resourceLimits(),
         .sourceStore = store,
-        .resourceBudget =
-            registry.ctx().get<svg::components::DocumentResourceFamilyContext>().budget,
-        .resourcePolicyGeneration =
-            registry.ctx().get<svg::components::ResourceManagerContext>().cacheGeneration(),
-        .maximumPayloadBytes = registry.ctx()
-                                   .get<svg::components::ParsedPayloadResourceBudget>()
-                                   .maximumRetainedBytes(),
+        .resources = *resources,
     };
   });
 }
@@ -276,17 +267,6 @@ bool AsyncSVGDocument::SourceRecoveryPolicy::matchesSource(const xml::XMLDocumen
          limits.maximumAnchorUpdateWorkPerEdit == sourceLimits.maximumAnchorUpdateWorkPerEdit;
 }
 
-bool AsyncSVGDocument::SourceRecoveryPolicy::matchesResources(const Registry& registry) const {
-  const auto* resources = registry.ctx().find<svg::components::ResourceManagerContext>();
-  const auto* family = registry.ctx().find<svg::components::DocumentResourceFamilyContext>();
-  const auto* payload = registry.ctx().find<svg::components::ParsedPayloadResourceBudget>();
-  const auto budget = resourceBudget.lock();
-  return resources && family && payload && budget &&
-         resources->cacheGeneration() == resourcePolicyGeneration && family->budget == budget &&
-         payload->familyBudget() == budget &&
-         payload->maximumRetainedBytes() == maximumPayloadBytes;
-}
-
 bool AsyncSVGDocument::usesEditorParserForSourceRecovery() const {
   return sourceRecoveryState().has_value();
 }
@@ -298,7 +278,7 @@ std::optional<EditorCommand::SourceRecoveryState> AsyncSVGDocument::sourceRecove
   return document_->withReadAccess(
       [&](svg::DocumentReadAccess&) -> std::optional<EditorCommand::SourceRecoveryState> {
         if (!sourceRecoveryPolicy_->matchesSource(document_->xmlDocument()) ||
-            !sourceRecoveryPolicy_->matchesResources(document_->registry())) {
+            document_->resourcePolicySnapshot() != sourceRecoveryPolicy_->resources) {
           return std::nullopt;
         }
         return EditorCommand::SourceRecoveryState{documentGeneration(), document_->sourceVersion()};

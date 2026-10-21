@@ -27,7 +27,6 @@
 #include "donner/base/xml/XMLSourceStore.h"
 #include "donner/editor/CommandQueue.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 
 namespace donner::editor {
 
@@ -280,11 +279,8 @@ private:
     xml::XMLParser::Options parserOptions;
     xml::XMLSourceStore::ResourceLimits sourceLimits;
     std::weak_ptr<const xml::XMLSourceStore> sourceStore;
-    std::weak_ptr<svg::components::DocumentResourceFamilyBudget> resourceBudget;
-    std::uint64_t resourcePolicyGeneration = 0;
-    std::size_t maximumPayloadBytes = 0;
+    svg::SVGDocument::ResourcePolicySnapshot resources;
     bool matchesSource(const xml::XMLDocument& document) const;
-    bool matchesResources(const Registry& registry) const;
   };
   /// Capture only after an editor-owned parse; foreign installations clear this binding.
   void captureSourceRecoveryPolicy();

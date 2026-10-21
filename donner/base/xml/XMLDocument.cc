@@ -2046,7 +2046,7 @@ SourceEditClassification ClassifySourceEdit(const XMLDocument& document, SourceE
   SourceEditClassification classification;
   const auto& context = document.sharedRegistry()->ctx().get<XMLDocumentContext>();
   if (!XMLParser::SourceOptions(document).has_value() || context.declaredDoctypeInternalSubset ||
-      context.sourceRequiresDocumentEntityParser) {
+      context.sourceRequiresDocumentEntityParser || context.sourceRequiresDocumentReparse) {
     return classification;
   }
   classification.attribute = GetAttributeValueEdit(document, range);
@@ -2907,9 +2907,11 @@ ApplySourceEditResult ApplyClassifiedSourceEdit(XMLDocument& document, const XML
         intent.range);
     return result;
   }
-  if (context.declaredDoctypeInternalSubset || context.sourceRequiresDocumentEntityParser) {
+  if (context.declaredDoctypeInternalSubset || context.sourceRequiresDocumentEntityParser ||
+      context.sourceRequiresDocumentReparse) {
     result.diagnostic = MakeEditDiagnostic(
-        "Source edits with document entity context require a full document reparse", intent.range);
+        "Source edits with unreparsed document or entity context require a full document reparse",
+        intent.range);
     return result;
   }
   result.diagnostic = MakeEditDiagnostic(
@@ -3134,6 +3136,10 @@ const XMLSourceStore* XMLDocument::sourceStore() const {
   return registry_->ctx().get<XMLDocumentContext>().sourceStoreHolder->store.get();
 }
 
+std::shared_ptr<const XMLSourceStore> XMLDocument::sharedSourceStore() const {
+  return registry_->ctx().get<XMLDocumentContext>().sourceStoreHolder->store;
+}
+
 void XMLDocument::setSourceEditTreeLimits(std::size_t maximumTreeNodes,
                                           std::size_t maximumTreeDepth) {
   auto& context = registry_->ctx().get<XMLDocumentContext>();
@@ -3267,6 +3273,8 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
   result = ApplyClassifiedSourceEdit(*this, intent, classification, std::move(result));
   if (result.diagnostic.has_value()) {
     if (!isNoOp) {
+      registry_->ctx().get<XMLDocumentContext>().sourceRequiresDocumentReparse |=
+          classification.scope == ReparseScope::Document;
       AddUnreparsedSpan(*this, validatedSpan.start, validatedSpan.end, *result.diagnostic);
     }
   } else {
@@ -3958,6 +3966,7 @@ void XMLDocument::setSource(std::string source, std::size_t maximumSourceSize) {
   context.unreparsedSpans.clear();
   context.declaredDoctypeInternalSubset = false;
   context.sourceRequiresDocumentEntityParser = false;
+  context.sourceRequiresDocumentReparse = false;
   context.sourceParserOptions.reset();
 }
 

@@ -88,6 +88,8 @@ public:
 
   /// Entity policy or expansion limits require document-wide parsing, not isolated fragments.
   bool sourceRequiresDocumentEntityParser = false;
+  /// A Document-scope failed source edit invalidated global context until a full parse.
+  bool sourceRequiresDocumentReparse = false;
   /// Immutable original parser policy, weakly bound to the source store it built.
   std::shared_ptr<const XMLSourceParseOptions> sourceParserOptions;
 

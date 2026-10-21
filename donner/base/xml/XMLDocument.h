@@ -198,6 +198,9 @@ public:
   /// Get the immutable source store, or `nullptr` if this document does not own source text.
   const XMLSourceStore* sourceStore() const;
 
+  /// Owning read-only handle to the current source store, for identity-bound recovery.
+  std::shared_ptr<const XMLSourceStore> sharedSourceStore() const;
+
   /**
    * Return the deepest parsed XML node whose current source range contains \p offset.
    *
