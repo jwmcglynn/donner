@@ -143,8 +143,9 @@ struct RenderCoordinatorTestAccess {
 
   static bool canPresentWithOverview(const RenderCoordinator& coordinator,
                                      const RenderResult& result, const EditorRasterViewport& raster,
-                                     EditorApp& app, const GlTextureCache& cache) {
-    return coordinator.canPresentWithOverview(result, raster, app, cache);
+                                     const ViewportState& viewport, EditorApp& app,
+                                     const GlTextureCache& cache) {
+    return coordinator.canPresentWithOverview(result, raster, viewport, app, cache);
   }
 
   static bool matchingPendingOverview(RenderCoordinator& coordinator,

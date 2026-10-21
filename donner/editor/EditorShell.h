@@ -901,6 +901,7 @@ private:
   /// True while document edits have not reached the source pane: queued mutations or flushed source
   /// deltas that the source writeback has not mirrored yet.
   [[nodiscard]] bool sourcePaneAwaitsDocumentEdits() const;
+  void clearSourceStyleDecorations(bool pending);
   void updateSourceStyleDecorations();
   void applySourceStyleDecorationChipClick();
   void setSourceFocusMode(bool enabled);

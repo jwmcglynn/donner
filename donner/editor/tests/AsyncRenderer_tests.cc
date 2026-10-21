@@ -7215,7 +7215,7 @@ TEST(RenderCoordinatorTest, UnsupportedTextSelectionDoesNotRepeatIdlePrewarm) {
   }
 }
 
-TEST(RenderCoordinatorTest, ViewportBoundedResultWithoutOverviewIsDiscarded) {
+TEST(RenderCoordinatorTest, CoveredBoundedResultPresentsAndZoomOutWaitsForOverview) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -7246,25 +7246,46 @@ TEST(RenderCoordinatorTest, ViewportBoundedResultWithoutOverviewIsDiscarded) {
     return DrainCoordinator(coordinator, app, viewport, textures);
   };
 
-  const std::uint64_t previousDisplayedVersion = coordinator.displayedDocVersion();
   coordinator.maybeRequestRender(app, selectTool, viewport);
-  ASSERT_TRUE(coordinator.asyncRenderer().isBusy())
-      << "This simulates a stale selected prewarm that was already in flight before the cache "
-         "noticed it lacked overview infill.";
-  ASSERT_TRUE(waitForCoordinator());
-  EXPECT_TRUE(textures.tiles().empty())
-      << "A bounded result without overview infill must not become the only visible content, "
-         "because zooming out would reveal checkerboard for missing tile coverage.";
-  EXPECT_TRUE(textures.overviewTiles().empty());
-  EXPECT_EQ(coordinator.displayedDocVersion(), previousDisplayedVersion);
+  ASSERT_THAT(coordinator.asyncRenderer().isBusy(), testing::IsTrue());
+  ASSERT_THAT(waitForCoordinator(), testing::IsTrue());
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(textures.overviewTiles().empty(), testing::IsTrue());
+  EXPECT_THAT(coordinator.displayedDocVersion(), testing::Eq(app.document().currentFrameVersion()));
 
-  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
-  ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
-  ASSERT_TRUE(waitForCoordinator());
-  EXPECT_TRUE(textures.tiles().empty());
-  EXPECT_FALSE(textures.overviewTiles().empty())
-      << "After discarding the unsafe bounded result, the next request should build the overview "
-         "fallback first.";
+  const Box2d pane(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize);
+  const auto coverage = textures.coverageDiagnostics();
+  ASSERT_THAT(coverage.activeTilesViewportBounded, testing::IsTrue());
+  ASSERT_THAT(FramePresentation::ActiveRasterCoversPane(coverage, viewport, pane),
+              testing::IsTrue());
+  const auto shown = coordinator.buildFramePresentation(app, selectTool, viewport, pane,
+                                                        SelectionChromeDetail::Full);
+  ASSERT_THAT(shown, testing::NotNull());
+  EXPECT_THAT(shown->usesOverviewRaster(), testing::IsFalse());
+
+  // Complete active coverage can present now; a later camera expansion still needs repair.
+  viewport.zoomAround(1.0 / 32.0, viewport.paneCenter());
+  ASSERT_THAT(viewport.rasterViewport().viewportBounded, testing::IsFalse());
+  ASSERT_THAT(FramePresentation::ActiveRasterCoversPane(coverage, viewport, pane),
+              testing::IsFalse());
+  EXPECT_THAT(shown->viewport().zoom, testing::Not(testing::DoubleEq(viewport.zoom)));
+  const auto held = coordinator.buildFramePresentation(app, selectTool, viewport, pane,
+                                                       SelectionChromeDetail::Full);
+  EXPECT_THAT(held, testing::Eq(shown));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsTrue());
+  EXPECT_THAT(textures.overviewTiles().empty(), testing::IsTrue());
+  EXPECT_THAT(shown->usesOverviewRaster(), testing::IsFalse());
+
+  ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, &textures),
+              testing::IsTrue());
+  ASSERT_THAT(waitForCoordinator(), testing::IsTrue());
+  EXPECT_THAT(textures.overviewTiles().empty(), testing::IsFalse());
+  const auto recovered = coordinator.buildFramePresentation(app, selectTool, viewport, pane,
+                                                            SelectionChromeDetail::Full);
+  ASSERT_THAT(recovered, testing::NotNull());
+  EXPECT_THAT(recovered, testing::Ne(shown));
+  EXPECT_THAT(recovered->viewport().zoom, testing::DoubleEq(viewport.zoom));
+  EXPECT_THAT(coordinator.frameRepairPending(), testing::IsFalse());
 }
 
 TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPreReparseCachedLayer) {

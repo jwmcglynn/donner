@@ -9,6 +9,13 @@
 namespace donner::editor {
 namespace {
 
+bool ValidPresentationViewport(const ViewportState& viewport) {
+  return std::isfinite(viewport.zoom) && viewport.zoom > 0.0 &&
+         std::isfinite(viewport.devicePixelRatio) && viewport.devicePixelRatio > 0.0 &&
+         FinitePresentationTransform(
+             PresentedFramebufferFromDocumentTransform(viewport, Vector2d(1.0, 1.0)));
+}
+
 bool HasObjectTile(std::span<const GlTextureCache::TileView> tiles, Entity entity) {
   return std::ranges::any_of(tiles, [&](const auto& tile) {
     return tile.kind == RenderResult::CompositedTile::Kind::Layer && tile.layerEntity == entity &&
@@ -80,21 +87,6 @@ void PlaceTiles(std::vector<GlTextureCache::TileView>& tiles, const CapturedPres
     }
     tile.dragTranslationDoc = tile.documentFromCachedDocument.translation();
   }
-}
-
-bool CoversPane(const PresentationCoverageDiagnostics& coverage,
-                const FramePresentationInput& input) {
-  if (!coverage.activeTilesViewportBounded) {
-    return true;
-  }
-  const auto visibleClip =
-      PresentedImageClipRect(input.paneClipRect, input.viewport.imageScreenRect());
-  if (!visibleClip.has_value()) {
-    return true;
-  }
-  const Box2d visible = input.viewport.screenToDocument(*visibleClip);
-  return coverage.activeRasterDocumentRect.contains(visible.topLeft) &&
-         coverage.activeRasterDocumentRect.contains(visible.bottomRight);
 }
 
 std::optional<Box2d> IntersectFrameBoxes(const Box2d& a, const Box2d& b) {
@@ -299,6 +291,24 @@ bool CandidatePreservesPose(const CapturedPresentation& capture,
 }
 }  // namespace
 
+bool FramePresentation::ActiveRasterCoversPane(const PresentationCoverageDiagnostics& coverage,
+                                               const ViewportState& viewport,
+                                               const Box2d& paneClipRect) {
+  if (!ValidPresentationViewport(viewport)) {
+    return false;
+  }
+  if (!coverage.activeTilesViewportBounded) {
+    return true;
+  }
+  const auto visibleClip = PresentedImageClipRect(paneClipRect, viewport.imageScreenRect());
+  if (!visibleClip.has_value()) {
+    return true;
+  }
+  const Box2d visible = viewport.screenToDocument(*visibleClip);
+  return coverage.activeRasterDocumentRect.contains(visible.topLeft) &&
+         coverage.activeRasterDocumentRect.contains(visible.bottomRight);
+}
+
 bool FramePresentation::CanAdopt(const CapturedPresentation& capture,
                                  std::span<const RenderResult::CompositedTile> tiles,
                                  const FramePresentation* previous, bool latestCommittedScene) {
@@ -322,10 +332,7 @@ bool FramePresentation::CanAdopt(const CapturedPresentation& capture,
 
 namespace {
 bool ValidFrameInput(const FramePresentationInput& input) {
-  return input.frameId != 0 && std::isfinite(input.viewport.zoom) && input.viewport.zoom > 0.0 &&
-         std::isfinite(input.viewport.devicePixelRatio) && input.viewport.devicePixelRatio > 0.0 &&
-         FinitePresentationTransform(
-             PresentedFramebufferFromDocumentTransform(input.viewport, Vector2d(1.0, 1.0)));
+  return input.frameId != 0 && ValidPresentationViewport(input.viewport);
 }
 
 bool CompatibleOverview(const GlTextureCache::PresentationResources& resources) {
@@ -343,7 +350,8 @@ std::optional<bool> ChooseOverview(
     const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
     const FramePresentationInput& input) {
   const bool needsOverview =
-      resources->tiles().empty() || !CoversPane(resources->coverage(), input);
+      resources->tiles().empty() || !FramePresentation::ActiveRasterCoversPane(
+                                        resources->coverage(), input.viewport, input.paneClipRect);
   const bool compatibleOverview = CompatibleOverview(*resources);
   if (needsOverview && !compatibleOverview &&
       (!resources->tiles().empty() || !resources->overviewTiles().empty())) {

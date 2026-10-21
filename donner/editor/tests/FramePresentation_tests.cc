@@ -269,6 +269,54 @@ TEST(FramePresentationTest, ZoomOutRequiresCompatibleCompleteOverview) {
   EXPECT_EQ(FramePresentation::Build(torn, input).frame, nullptr);
 }
 
+TEST(FramePresentationTest, CompleteActiveRasterNeverSamplesStaleOverviewAfterPanOrZoomOut) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kRect), IsTrue());
+  const auto rect = app.document().document().querySelector("#rect");
+  ASSERT_THAT(rect, testing::Optional(testing::_));
+  app.setSelection(*rect);
+  SelectTool tool;
+  const auto old = Capture(app, 1);
+  app.document().applyMutation(
+      EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(2, 0)));
+  ASSERT_THAT(app.flushFrame(), IsTrue());
+  const auto current = Capture(app, 2);
+  ASSERT_THAT(current->identity().sameScene(old->identity()), testing::IsFalse());
+  const Entity entity = current->selection().front();
+  const PresentationCoverageDiagnostics coverage{
+      .activeTilesViewportBounded = true,
+      .overviewInfillAvailable = true,
+      .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 50, 50),
+      .overviewRasterDocumentRect = Box2d::FromXYWH(0, 0, 100, 100),
+  };
+  const auto resources = FramePresentationTestAccess::resources(
+      current, {RectTile(entity, 12, 0)}, coverage, old, {RectTile(entity, 10, 0)});
+  auto input = Input(app, tool, 1);
+  input.viewport.zoom = 1.0;
+  input.viewport.paneSize = Vector2d(50, 50);
+  input.viewport.panDocPoint = Vector2d(25, 25);
+  input.viewport.panScreenPoint = Vector2d(25, 25);
+  input.paneClipRect = Box2d::FromXYWH(0, 0, 50, 50);
+  const auto shown = FramePresentation::Build(resources, input).frame;
+  ASSERT_THAT(shown, testing::NotNull());
+  EXPECT_THAT(shown->usesOverviewRaster(), testing::IsFalse());
+  EXPECT_THAT(shown->identity().sameScene(current->identity()), IsTrue());
+
+  const auto expectRefusal = [&] {
+    EXPECT_THAT(FramePresentation::CaptureForFrame(resources, input), testing::IsNull());
+    const auto outcome = FramePresentation::Build(resources, input, nullptr, shown);
+    EXPECT_THAT(outcome.frame, testing::IsNull());
+    EXPECT_THAT(outcome.failure, testing::Eq(FramePresentationFailure::MissingOverview));
+    EXPECT_THAT(shown->usesOverviewRaster(), testing::IsFalse());
+    EXPECT_THAT(shown->identity().sameScene(current->identity()), IsTrue());
+  };
+  input.viewport.panDocPoint = Vector2d(60, 25);
+  expectRefusal();
+  input.viewport.panDocPoint = Vector2d(25, 25);
+  input.viewport.zoom = 0.5;
+  expectRefusal();
+}
+
 TEST(FramePresentationTest, IncompatibleOverviewCannotPublishAnEmptyPrimaryFrame) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kRect));
