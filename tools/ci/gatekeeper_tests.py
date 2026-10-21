@@ -66,7 +66,8 @@ class GatekeeperTest(unittest.TestCase):
         _git(self.repo, "config", "user.email", "fixture@example.com")
         self.root = _commit(self.repo, ["README.md"], "root")
 
-    def _run(self, decision, gh_stdout="0\n", gh_status=0, args=(), cwd=None, workflow_step=None, **context):
+    def _run(self, decision, gh_stdout="0\n", gh_status=0, args=(), cwd=None,
+             workflow_step=None, **context):
         output = self.work / "github_output"
         output.write_text("", encoding="utf-8")
         capture = self.work / "gh_calls.jsonl"
@@ -77,27 +78,31 @@ class GatekeeperTest(unittest.TestCase):
                    GH_STATUS=str(gh_status), GITHUB_REPOSITORY="owner/repo",
                    GITHUB_REF="refs/heads/feature", GITHUB_REF_NAME="feature", **_GIT_ENV)
         env.update(context)
-        command = [sys.executable, self.script, decision, *args]
-        if workflow_step:
-            workflow = Path(runfiles.Create().Rlocation(
-                "donner/.github/workflows/main.yml")).read_text(encoding="utf-8")
-            section = workflow.split(f"      - id: {workflow_step}\n", 1)[1]
-            section = section.split("\n      - ", 1)[0]
-            body = textwrap.dedent(section.split("        run: |\n", 1)[1])
-            for field, variable in (("event_name", "GITHUB_EVENT_NAME"),
-                                    ("ref", "GITHUB_REF"), ("ref_name", "GITHUB_REF_NAME"),
-                                    ("repository", "GITHUB_REPOSITORY")):
-                body = body.replace("${{ github." + field + " }}", env[variable])
-            body = body.replace("python3 tools/ci/gatekeeper.py",
-                                shlex.join([sys.executable, self.script]))
-            self.assertNotRegex(body, r"\$\{\{", "Unmodelled workflow expression")
-            command = ["bash", "-e", "-o", "pipefail", "-c", body]
+        workflow_step = workflow_step or {"duplicate-push": "dup_push",
+                                           "docs-only": "docs_only"}.get(decision)
+        command = (self._workflow_command(workflow_step, env) if workflow_step else
+                   [sys.executable, self.script, decision, *args])
         result = subprocess.run(command,
                                 cwd=cwd or self.repo, env=env,
                                 capture_output=True, text=True, check=False,
                                 timeout=test_timing.STALL_GUARD_SECONDS)
         calls = [json.loads(line) for line in capture.read_text().splitlines()]
         return result, output.read_text(encoding="utf-8"), calls
+
+    def _workflow_command(self, step, env):
+        workflow = Path(runfiles.Create().Rlocation(
+            "donner/.github/workflows/main.yml")).read_text(encoding="utf-8")
+        section = workflow.split(f"      - id: {step}\n", 1)[1].split("\n      - ", 1)[0]
+        run = section.split("        run: ", 1)[1]
+        body = textwrap.dedent(run[2:]) if run.startswith("|\n") else run.strip()
+        for field, variable in (("event_name", "GITHUB_EVENT_NAME"),
+                                ("ref", "GITHUB_REF"), ("ref_name", "GITHUB_REF_NAME"),
+                                ("repository", "GITHUB_REPOSITORY")):
+            body = body.replace("${{ github." + field + " }}", env[variable])
+        body = body.replace("python3 tools/ci/gatekeeper.py",
+                            shlex.join([sys.executable, self.script]))
+        self.assertNotRegex(body, r"\$\{\{", "Unmodelled workflow expression")
+        return ["bash", "-e", "-o", "pipefail", "-c", body]
 
     def _pull_request(self, base, head):
         event = self.work / "event.json"

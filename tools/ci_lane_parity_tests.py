@@ -334,10 +334,6 @@ _SHARED_STEP_DIGESTS = {
      "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "7b1d2d8e4295993a"),
     ("main.yml", "determine-targets",
      "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "711b402065f09c27"),
-    ("main.yml", "gatekeeper",
-     "Detect docs-only PR"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "253f9952f6b681bf"),
-    ("main.yml", "gatekeeper",
-     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "4f805664ba9b5916"),
 }
 
 SHARED_STEP_ALLOWLIST = {
