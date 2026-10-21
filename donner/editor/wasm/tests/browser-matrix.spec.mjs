@@ -334,7 +334,7 @@ function assertAnimationLane({ lane, tags, specFiles }, grep) {
   );
   assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
   assert.match(lane, /"NODE_OPTIONS": ""/);
-  assert.ok(lane.includes('"chromium-launch-env.cjs"'));
+  assert.ok(lane.includes("\"chromium-launch-env.cjs\""));
   for (const name of ["DONNER_CHROMIUM_ARCHIVE", "DONNER_FIREFOX_ARCHIVE"]) {
     assert.ok(lane.includes(`"${name}":`));
   }
@@ -704,9 +704,19 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   assert.match(workflow, /\n {8}run: tools\/ci\/editor_wasm_lane\.sh build\n/);
   const lane = readFileSync(path.join(repositoryRoot, "tools/ci/editor_wasm_lane.sh"), "utf8");
   const normalizedLane = lane.replace(/\\\s*\n\s*/g, " ").replace(/\s+/g, " ");
+  assert.ok(
+    workflow.includes(
+      "PAYLOAD_BUDGET_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'report' || 'enforce' }}",
+    ),
+    "only a main-branch push may report rather than enforce numeric size ceilings",
+  );
+  assert.ok(lane.includes("local budget_mode=\"${PAYLOAD_BUDGET_MODE:-enforce}\""));
+  assert.ok(lane.includes("local budget_test_output=\"errors\""));
+  assert.ok(lane.includes("report) budget_test_output=all ;;"));
+  assert.equal((lane.match(/--test_output="\$\{budget_test_output\}"/g) ?? []).length, 2);
   assert.match(
     normalizedLane,
-    /bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \/\/tools\/ci:editor_wasm_size_tests/,
+    /bazelisk test --config=editor-wasm --test_output="\$\{budget_test_output\}" --remote_download_outputs=all "\$\{budget_args\[@\]\}" \/\/tools\/ci:editor_wasm_size_tests/,
   );
   assert.match(
     normalizedLane,
@@ -1320,7 +1330,7 @@ test("each animation preview browser boots in its own case before the timed case
   const buildFile = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
   const lane = buildFile
     .split("playwright_bin.playwright_test(\n")
-    .find((body) => body.startsWith('    name = "animation_preview_browser_test",'))
+    .find((body) => body.startsWith("    name = \"animation_preview_browser_test\","))
     ?.split("\n)\n")[0];
   assert.ok(lane, "the animation lane is declared");
   const grep = /"--grep=([^"]+)"/.exec(lane)?.[1];
@@ -1954,7 +1964,10 @@ test("Chromium context diagnostics stay bounded, manual, and independent of the 
   for (const input of ["playwright.config.js", "test-timing.cjs", "prepare-browser-archives.js"]) {
     assert.ok(diagnostic[1].includes(`"${input}"`), `${input} must be a declared runfile`);
   }
-  const source = readFileSync(path.join(testDirectory, "chromium-context-lifecycle-diagnostic.cjs"), "utf8");
+  const source = readFileSync(
+    path.join(testDirectory, "chromium-context-lifecycle-diagnostic.cjs"),
+    "utf8",
+  );
   assert.match(source, /channel: baseConfig\.use\.channel/);
   assert.match(source, /headless: baseConfig\.use\.headless/);
   assert.match(source, /\.\.\.baseConfig\.use\.launchOptions/);

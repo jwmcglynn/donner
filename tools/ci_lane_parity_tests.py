@@ -344,6 +344,14 @@ SHARED_STEP_ALLOWLIST = {
     for (workflow, job, step), digests in _SHARED_STEP_DIGESTS.items()
     for scenario, digest in digests.items()
 }
+SHARED_STEP_ALLOWLIST.update({
+    ("editor_wasm.yml", "build", "Build and size-check Geode editor Wasm package", scenario,
+     "217a681bde53c3dd"):
+        "Only PAYLOAD_BUDGET_MODE differs: main pushes report numeric size metrics, while "
+        "every pull request enforces them. The same script and functional checks run on both; "
+        "this digest pins the complete rendered step and its environment in each scenario."
+    for scenario in PULL_REQUEST_SCENARIOS
+})
 
 # Steps of one job that run on a main push but not on one kind of pull request.
 _TRUSTED_LINUX_REASON = (
@@ -2033,6 +2041,43 @@ class CiLaneParityTest(unittest.TestCase):
             {(name, job, step, scenario, digest)
              for name, job, scenario, step, _, digest in changed}, SHARED_STEP_ALLOWLIST,
             "a shared job runs a non-Bazel check differently on pull requests")
+
+    def test_wasm_size_step_differs_only_in_its_reviewed_numeric_budget_mode(self):
+        workflow = self.workflows["editor_wasm.yml"]
+        job = _jobs(workflow)["build"]
+        step = next(step for step in job["steps"]
+                    if _step_name(step) == "Build and size-check Geode editor Wasm package")
+        main = _other_step_view(workflow, job, step, "main-push")
+        self.assertEqual(main[-1], [("PAYLOAD_BUDGET_MODE", "report")])
+        for scenario in PULL_REQUEST_SCENARIOS:
+            with self.subTest(scenario=scenario):
+                pull_request = _other_step_view(workflow, job, step, scenario)
+                self.assertEqual(pull_request[-1], [("PAYLOAD_BUDGET_MODE", "enforce")])
+                self.assertEqual(main[:-1], pull_request[:-1])
+
+    def test_wasm_size_parity_exception_rejects_mode_script_and_environment_drift(self):
+        name = "editor_wasm.yml"
+        step_name = "Build and size-check Geode editor Wasm package"
+        approved = {key for key in SHARED_STEP_ALLOWLIST if key[:3] == (name, "build", step_name)}
+
+        def observed(workflow):
+            return {(file, job, step, scenario, digest)
+                    for file, job, scenario, step, kind, digest in
+                    shared_job_differences({name: workflow}, [name]) if kind == "step-changed"}
+
+        self.assertEqual(observed(self.workflows[name]), approved)
+        for mutation in ("all-report", "all-enforce", "extra-environment", "script"):
+            with self.subTest(mutation=mutation):
+                changed = copy.deepcopy(self.workflows[name])
+                step = next(step for step in _jobs(changed)["build"]["steps"]
+                            if _step_name(step) == step_name)
+                if mutation in ("all-report", "all-enforce"):
+                    step["env"]["PAYLOAD_BUDGET_MODE"] = mutation.removeprefix("all-")
+                elif mutation == "extra-environment":
+                    step["env"]["UNREVIEWED_FLAG"] = "1"
+                else:
+                    step["run"] += " --unexpected"
+                self.assertNotEqual(observed(changed), approved)
 
     def test_event_dependent_expressions_are_compared(self):
         workflow = parse_workflow(
