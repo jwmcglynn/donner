@@ -209,6 +209,13 @@ TEST(TransformSyntaxPreserving, WrapperKeepsLargeIntegralTranslationsExact) {
               testing::Eq(Vector2d::Zero()));
 }
 
+TEST(TransformSyntaxPreserving, WrapperKeepsLargeIntegralScalesExact) {
+  const Transform2d parentFromElement = Transform2d::Scale(1e17, -1e17);
+  const Transform2d parentFromWritten =
+      ParseMatrix(serializeTransformForWriteback(std::nullopt, parentFromElement));
+  EXPECT_THAT(parentFromWritten.data, testing::ElementsAreArray(parentFromElement.data));
+}
+
 TEST(TransformSyntaxPreserving, WrapperKeepsVeryLargeFiniteTransformsParseable) {
   const double large = std::numeric_limits<double>::max() / 16.0;
   for (const Transform2d& parentFromElement :
