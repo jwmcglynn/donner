@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVGDocument.h"
@@ -436,7 +437,7 @@ TEST(SVGElementLifetimeTests, CollectorKeepsDocumentRootMovedIntoDetachedSubtree
   components::NodeLifetimeCollector::Collect(document.registry());
 
   EXPECT_TRUE(document.registry().valid(rootEntity));
-  EXPECT_EQ(document.canvasSize(), sizeBefore);
+  EXPECT_THAT(document.canvasSize(), Vector2Eq(sizeBefore.x, sizeBefore.y));
 }
 
 TEST(SVGElementLifetimeTests, CollectorKeepsDocumentRootRemovedThroughXmlDocument) {
@@ -459,7 +460,7 @@ TEST(SVGElementLifetimeTests, CollectorKeepsDocumentRootRemovedThroughXmlDocumen
   components::NodeLifetimeCollector::Collect(document.registry());
 
   EXPECT_TRUE(document.registry().valid(rootEntity));
-  EXPECT_EQ(document.canvasSize(), Vector2i(10, 20));
+  EXPECT_THAT(document.canvasSize(), Vector2Eq(10, 20));
 }
 
 TEST(SVGElementLifetimeTests, RepeatedCreateRemoveReinsertCyclesCollectDetachedNodes) {

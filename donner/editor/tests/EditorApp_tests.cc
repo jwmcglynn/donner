@@ -9,6 +9,7 @@
 
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/SourceSync.h"
@@ -639,7 +640,7 @@ TEST(EditorAppTest, DeleteSelectionWithUndoRefusesDocumentRoot) {
   EXPECT_EQ(app.document().document().source(), sourceBefore);
   EXPECT_THAT(RootChildIds(app), ::testing::ElementsAre("r1", "r2"));
   EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
-  EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
+  EXPECT_THAT(app.document().document().canvasSize(), Vector2Eq(100, 100));
 }
 
 TEST(EditorAppTest, DeleteSelectionWithUndoKeepsDocumentRootAndDeletesTheRest) {
@@ -662,7 +663,7 @@ TEST(EditorAppTest, DeleteSelectionWithUndoKeepsDocumentRootAndDeletesTheRest) {
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
   EXPECT_THAT(std::string(app.document().document().source()),
               ::testing::HasSubstr(R"(<svg xmlns="http://www.w3.org/2000/svg" id="root")"));
-  EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
+  EXPECT_THAT(app.document().document().canvasSize(), Vector2Eq(100, 100));
 }
 
 TEST(EditorAppTest, GeometryMutationQueuesWithoutWaitingForDocumentWriter) {

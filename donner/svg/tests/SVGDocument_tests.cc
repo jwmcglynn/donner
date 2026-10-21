@@ -15,6 +15,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
@@ -2415,7 +2416,7 @@ TEST(SVGDocument, SourceBackedRemoveRootElementIsRefused) {
   EXPECT_EQ(document.source(), sourceBefore);
   EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
   // Sizing the document reads the root's sized-element properties.
-  EXPECT_EQ(document.canvasSize(), Vector2i(10, 20));
+  EXPECT_THAT(document.canvasSize(), Vector2Eq(10, 20));
 }
 
 TEST(SVGDocument, SourceBackedRemoveOfRootThroughElementIsRefused) {
@@ -2427,7 +2428,7 @@ TEST(SVGDocument, SourceBackedRemoveOfRootThroughElementIsRefused) {
 
   EXPECT_EQ(document.source(), sourceBefore);
   EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
-  EXPECT_EQ(document.canvasSize(), Vector2i(10, 20));
+  EXPECT_THAT(document.canvasSize(), Vector2Eq(10, 20));
 }
 
 TEST(SVGDocument, ProgrammaticRemoveRootElementIsRefused) {
@@ -2445,7 +2446,7 @@ TEST(SVGDocument, ProgrammaticRemoveRootElementIsRefused) {
               Optional(testing::Field("reason", &ParseDiagnostic::reason,
                                       testing::HasSubstr("document root element"))));
   EXPECT_THAT(document.querySelector("#child"), Optional(ElementIdEq("child")));
-  EXPECT_EQ(document.canvasSize(), sizeBefore);
+  EXPECT_THAT(document.canvasSize(), Vector2Eq(sizeBefore.x, sizeBefore.y));
 }
 
 TEST(SVGDocument, TypedMutationHelperWrapsDomOperations) {
