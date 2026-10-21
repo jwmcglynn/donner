@@ -1283,9 +1283,12 @@ bool SidebarPresenter::renderStrokeControlsPanel(EditorApp* liveApp,
   const EditorTheme& theme = EditorTheme::Active();
   ImGui::Separator();
   ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "STROKE");
-  const bool canMutate =
-      liveApp != nullptr && liveApp->hasSelection() && inspectorSnapshot_.strokeEditable;
+  // A deactivated input can still return its previous text after ClearActiveID(). Settle its
+  // original transaction first, then keep that retiring frame from mutating the new selection.
+  const bool changingEditSelection = liveApp != nullptr && strokeSelectionChanged(*liveApp);
   const bool restoredCancelledEdit = settlePendingStrokeEdit(liveApp);
+  const bool canMutate = liveApp != nullptr && liveApp->hasSelection() &&
+                         inspectorSnapshot_.strokeEditable && !changingEditSelection;
   ImGui::BeginDisabled(!inspectorSnapshot_.strokeEditable || strokeEditSettlementPending());
   const StrokeRenderContext context{liveApp, theme, ImGui::GetCursorPosX(), canMutate,
                                     iconTextureProvider};
