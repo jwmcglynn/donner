@@ -63,6 +63,14 @@ std::optional<Box2d> OpenPopupWindowRect() {
   return std::nullopt;
 }
 
+/// Matches a box with the given width and height.
+MATCHER_P2(BoxSizeIs, width, height,
+           "has size " + ::testing::PrintToString(width) + " x " +
+               ::testing::PrintToString(height)) {
+  *result_listener << "whose size is " << arg.width() << " x " << arg.height();
+  return std::abs(arg.width() - width) < 1e-9 && std::abs(arg.height() - height) < 1e-9;
+}
+
 ImVec2 RectCenter(const Box2d& rect) {
   return ImVec2(static_cast<float>((rect.topLeft.x + rect.bottomRight.x) * 0.5),
                 static_cast<float>((rect.topLeft.y + rect.bottomRight.y) * 0.5));
@@ -1271,6 +1279,43 @@ protected:
     RenderInspectorFrame(presenter, app, windowName, mouse, false, height);
     io.AddInputCharactersUTF8(std::string(text).c_str());
     return RenderInspectorFrame(presenter, app, windowName, mouse, false, height, {}, capture);
+  }
+
+  /// Click a transform field into text entry, replace its text, then press \p finishKey.
+  static void TypeIntoTransformField(SidebarPresenter& presenter, EditorApp& app,
+                                     const char* windowName, SidebarPresenter::TransformField field,
+                                     std::string_view text, ImGuiKey finishKey) {
+    (void)RenderInspectorFrame(presenter, &app, windowName);
+    const auto bounds = presenter.transformFieldRectForTesting(field);
+    ASSERT_TRUE(bounds.has_value());
+    const ImVec2 center = RectCenter(*bounds);
+    (void)RenderInspectorFrame(presenter, &app, windowName, center, false);
+    (void)RenderInspectorFrame(presenter, &app, windowName, center, true);
+    (void)RenderInspectorFrame(presenter, &app, windowName, center, false);
+    ASSERT_NE(ImGui::GetCurrentContext()->TempInputId, 0u) << "field should accept typing";
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddInputCharactersUTF8(std::string(text).c_str());
+    (void)RenderInspectorFrame(presenter, &app, windowName, center, false);
+    (void)app.flushFrame();
+    io.AddKeyEvent(finishKey, true);
+    (void)RenderInspectorFrame(presenter, &app, windowName, center, false);
+    io.AddKeyEvent(finishKey, false);
+    (void)RenderInspectorFrame(presenter, &app, windowName, center, false);
+    (void)app.flushFrame();
+    (void)RenderInspectorFrame(presenter, &app, windowName, center, false);
+    (void)app.flushFrame();
+  }
+
+  /// Click the stroke Width field and type \p text, leaving the field focused.
+  static void TypeIntoStrokeWidth(SidebarPresenter& presenter, EditorApp& app,
+                                  const char* windowName, std::string_view text) {
+    (void)RenderInspectorFrame(presenter, &app, windowName);
+    const auto field = presenter.strokeWidthRectForTesting();
+    ASSERT_TRUE(field.has_value());
+    (void)RenderInspectorFrame(presenter, &app, windowName, RectCenter(*field), true);
+    (void)RenderInspectorFrame(presenter, &app, windowName, RectCenter(*field), false);
+    ImGui::GetIO().AddInputCharactersUTF8(std::string(text).c_str());
+    (void)RenderInspectorFrame(presenter, &app, windowName);
   }
 
   static std::vector<ImDrawVert> TextureVertices(ImTextureID texture) {
@@ -2618,6 +2663,122 @@ TEST_F(SidebarPresenterImGuiTest, NumericInputRetainsDigitsAndCommitWhileDocumen
   EXPECT_FALSE(presenter.hasTransformEditForTesting());
   EXPECT_TRUE(app.canUndo());
 }
+TEST_F(SidebarPresenterImGuiTest, TransformWidthTypedInInchesConvertsToUserUnits) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  constexpr char kWindow[] = "##transform_width_inches";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoTransformField(
+      presenter, app, kWindow, SidebarPresenter::TransformField::Width, "1in", ImGuiKey_Enter));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(target->cast<svg::SVGGeometryElement>().worldBounds(),
+              testing::Optional(BoxSizeIs(96.0, 50.0)))
+      << "1in is 96 user units";
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformPositionTypedInMillimetersConvertsToUserUnits) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  constexpr char kWindow[] = "##transform_x_millimeters";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoTransformField(presenter, app, kWindow,
+                                                 SidebarPresenter::TransformField::PositionX,
+                                                 "25.4mm", ImGuiKey_Enter));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const auto bounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_THAT(bounds->topLeft.x, testing::DoubleNear(96.0, 1e-9)) << "25.4mm is one inch";
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformRejectsUnknownSuffixAndKeepsThePreviousValue) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  constexpr char kWindow[] = "##transform_width_rejected";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoTransformField(presenter, app, kWindow,
+                                                 SidebarPresenter::TransformField::Width,
+                                                 "50furlongs", ImGuiKey_Enter));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(target->cast<svg::SVGGeometryElement>().worldBounds(),
+              testing::Optional(BoxSizeIs(100.0, 50.0)));
+  EXPECT_THAT(target->getAttribute("transform"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
+TEST_F(SidebarPresenterImGuiTest, TransformRotationRejectsNonDegreeUnits) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  constexpr char kWindow[] = "##transform_rotation_units";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoTransformField(
+      presenter, app, kWindow, SidebarPresenter::TransformField::Rotation, "1rad", ImGuiKey_Enter));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(target->getAttribute("transform"), testing::Eq(std::nullopt))
+      << "1rad must not be read as 1 degree";
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthAcceptsATypedUnitAndKeepsIt) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char kWindow[] = "##stroke_width_typed_unit";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "2mm"));
+  const ImVec2 outside(20.0f, 20.0f);
+  RenderInspectorFrame(presenter, &app, kWindow, outside, true);
+  RenderInspectorFrame(presenter, &app, kWindow, outside, false);
+  (void)app.flushFrame();
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 2mm"))));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+
+  // The typed unit is now the field's unit: a bare number keeps it.
+  presenter.refreshSnapshot(app);
+  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "3"));
+  (void)app.flushFrame();
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 3mm"))));
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthBareNumberKeepsTheAuthoredUnit) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="target" width="40" height="30" stroke="black" stroke-width="1in"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char kWindow[] = "##stroke_width_authored_unit";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "3"));
+  (void)app.flushFrame();
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 3in"))));
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthEscapeRestoresTheValueBeforeTyping) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  constexpr char kWindow[] = "##stroke_width_escape_restores";
+  ASSERT_NO_FATAL_FAILURE(TypeIntoStrokeWidth(presenter, app, kWindow, "9"));
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiKey_Escape, true);
+  RenderInspectorFrame(presenter, &app, kWindow);
+  io.AddKeyEvent(ImGuiKey_Escape, false);
+  RenderInspectorFrame(presenter, &app, kWindow);
+  (void)app.flushFrame();
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(target->getComputedStyle().strokeWidth.get().value(),
+              testing::Eq(Lengthd(1, LengthUnit::None)));
+}
+
 TEST_F(SidebarPresenterImGuiTest, PendingNumericInputCannotCrossDocumentReplacement) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kInspectorSvg));
