@@ -11,6 +11,7 @@
 
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
 
 namespace donner::editor {
@@ -74,6 +75,41 @@ TEST(TextFormatBarPresenterActionsTest, ReadsFamilySizeAndStyleFlags) {
   EXPECT_TRUE(state.bold);
   EXPECT_TRUE(state.italic);
   EXPECT_TRUE(state.underline);
+}
+
+TEST(TextFormatBarPresenterActionsTest, ComputedFamilyTextRoundTripsEditableCssNames) {
+  for (const std::string_view family :
+       {R"("Example, Sans", serif)", R"("A\"Quote\\Family", sans-serif)",
+        R"("123 Font", system-ui)", R"("inherit", serif)", R"("A  B", "A\a B", fantasy)",
+        "serif, sans-serif, monospace, system-ui"}) {
+    SCOPED_TRACE(family);
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(
+        R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">Hi</text></svg>)"));
+    const auto text = app.document().document().querySelector("#t");
+    ASSERT_THAT(text, testing::Ne(std::nullopt));
+    text->setAttribute("font-family", family);
+    app.setSelection(*text);
+    const auto computedFamilies = [&]() {
+      return text->withWriteAccess([&](svg::DocumentWriteAccess&, EntityHandle) {
+        return text->getComputedStyle().fontFamily.get().value();
+      });
+    };
+    const auto before = computedFamilies();
+    FormatBarState state;
+    ReadTextFormatState(*text, &state);
+    ASSERT_TRUE(app.setAttributeOnSelection("font-family", "temporary"));
+    ASSERT_TRUE(app.flushFrame());
+    FormatBarActions actions;
+    actions.setFontFamily = true;
+    actions.fontFamily = state.fontFamily;
+    ASSERT_TRUE(ApplyFormatBarActionsToSelection(actions, state, false, app));
+    ASSERT_TRUE(app.flushFrame());
+    EXPECT_THAT(computedFamilies(), testing::ElementsAreArray(before));
+    FormatBarState roundTripped;
+    ReadTextFormatState(*text, &roundTripped);
+    EXPECT_THAT(roundTripped.fontFamily, testing::Eq(state.fontFamily));
+  }
 }
 
 // Text commonly inherits its font from a parent group or sets it through CSS.
