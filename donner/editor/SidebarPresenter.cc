@@ -175,9 +175,11 @@ std::optional<Transform2d> PaintedSizeChange(
   for (int i = 0; i < 64 && std::abs(extent(*bounds) - value) > tolerance; ++i) {
     // Interpolation solves fixed-padding rectangular bounds directly. Safeguard curved or
     // changing joins against a stalled endpoint, retaining a bounded shrinking interval.
-    const double fraction =
-        std::clamp((value - lowerExtent) / (upperExtent - lowerExtent), 0.05, 0.95);
+    const double fraction = (value - lowerExtent) / (upperExtent - lowerExtent);
     factor = lower + (upper - lower) * fraction;
+    if (!(factor > lower && factor < upper)) {
+      factor = (lower + upper) * 0.5;
+    }
     bounds = scaledBounds(factor);
     if (!bounds.has_value() || !std::isfinite(extent(*bounds))) {
       return std::nullopt;
