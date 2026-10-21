@@ -25,9 +25,11 @@
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
+#include "donner/editor/InspectorNumericInput.h"
 #include "donner/editor/LockState.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/StrokeMarkerPrefabs.h"
+#include "donner/editor/TransformSyntaxPreserving.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -95,6 +97,26 @@ std::optional<Box2d> InspectorBounds(const svg::SVGElement& element) {
     }
   }
   return std::nullopt;
+}
+
+std::function<std::optional<Box2d>(const Transform2d&)> CaptureInspectorFillBounds(
+    const svg::SVGElement& element) {
+  if (!element.isa<svg::SVGGeometryElement>()) {
+    return {};
+  }
+  const auto geometry = element.cast<svg::SVGGeometryElement>();
+  if (!geometry.worldBounds().has_value()) {
+    return {};
+  }
+  auto spline = geometry.computedSpline();
+  if (!spline.has_value()) {
+    return {};
+  }
+  const Transform2d documentFromGeometry = geometry.elementFromWorld();
+  return [spline = std::move(*spline), documentFromGeometry](
+             const Transform2d& targetDocumentFromStartDocument) -> std::optional<Box2d> {
+    return spline.transformedBounds(documentFromGeometry * targetDocumentFromStartDocument);
+  };
 }
 
 /// Below this document-space span (in user units), a bounds axis is treated
@@ -971,6 +993,7 @@ std::optional<Box2d> SidebarPresenter::cachedInspectorBounds(const EditorApp& ap
 
 void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
   discardForeignTransformEdit(app);
+  discardForeignStrokeEdits(app);
   if (!app.hasDocument()) {
     treeSnapshot_.reset();
     inspectorSnapshot_ = InspectorSnapshot{};
@@ -995,6 +1018,9 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
 
   // Inspector snapshot.
   InspectorSnapshot inspector;
+  inspector.document = app.document().document().handle();
+  inspector.documentGeneration = app.document().documentGeneration();
+  inspector.selection = selectionList;
   captureStrokeSnapshot(app, selectionList, inspector);
   inspector.pathOperationAvailability.reserve(kPathOperationButtons.size());
   for (const PathOperationButton& button : kPathOperationButtons) {
@@ -1168,6 +1194,54 @@ void SidebarPresenter::renderTreeView(EditorApp* liveApp, TreeViewState& state,
   renderTreeNode(liveApp, *treeSnapshot_, state, iconTextureProvider);
 }
 
+namespace {
+
+/// Whether \p unit resolves against the document's user coordinate system.
+bool IsDocumentSizeRelative(LengthUnit unit) {
+  return unit == LengthUnit::Percent || unit == LengthUnit::Vw || unit == LengthUnit::Vh ||
+         unit == LengthUnit::Vmin || unit == LengthUnit::Vmax;
+}
+
+/// Tooltip for a transform field whose typed text is rejected.
+const char* TransformFieldHint(SidebarPresenter::TransformField field, int matrixIndex) {
+  if (field == SidebarPresenter::TransformField::Rotation) {
+    return kInspectorDegreesHint;
+  }
+  return field == SidebarPresenter::TransformField::Matrix && matrixIndex < 4
+             ? kInspectorNumberHint
+             : kInspectorLengthHint;
+}
+
+/// The document's user coordinate system, the reference for typed percentages: its viewBox, or
+/// the root's absolute width and height. Empty when neither is known.
+Box2d PercentReference(svg::SVGDocument& document) {
+  const svg::DocumentReadAccess access = document.readAccess();
+  const svg::SVGSVGElement root = document.svgElement();
+  if (const std::optional<Box2d> viewBox = root.viewBox()) {
+    return *viewBox;
+  }
+  const std::optional<Lengthd> width = root.width();
+  const std::optional<Lengthd> height = root.height();
+  if (!width.has_value() || !height.has_value() || !width->isAbsoluteSize() ||
+      !height->isAbsoluteSize()) {
+    return Box2d();
+  }
+  return Box2d::FromXYWH(0.0, 0.0, width->toPixels(Box2d(), FontMetrics()),
+                         height->toPixels(Box2d(), FontMetrics()));
+}
+
+/// Font sizes for em, ex and rem typed into a transform field of \p element.
+FontMetrics TypedUnitFontMetrics(const svg::SVGSVGElement& root, const svg::SVGElement& element) {
+  FontMetrics metrics;
+  metrics.fontSize = element.getComputedStyle().fontSize.get().value().toPixels(
+      Box2d(), FontMetrics(), Lengthd::Extent::Mixed);
+  metrics.rootFontSize = root.getComputedStyle().fontSize.get().value().toPixels(
+      Box2d(), FontMetrics(), Lengthd::Extent::Mixed);
+  return metrics;
+}
+
+}  // namespace
+
 bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
                                        const IconTextureProvider& iconTextureProvider) {
   bool queuedMutation = false;
@@ -1230,15 +1304,16 @@ bool SidebarPresenter::renderStrokeControlsPanel(EditorApp* liveApp,
   const EditorTheme& theme = EditorTheme::Active();
   ImGui::Separator();
   ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "STROKE");
-  const bool canMutate =
-      liveApp != nullptr && liveApp->hasSelection() && inspectorSnapshot_.strokeEditable;
-  if (liveApp != nullptr && strokeScalarEdit_.has_value() && strokeScalarEdit_->pendingCommit) {
-    finishStrokeScalarEdit(*liveApp, strokeScalarEdit_->field);
-  }
-  ImGui::BeginDisabled(!inspectorSnapshot_.strokeEditable);
+  // A deactivated input can still return its previous text after ClearActiveID(). Settle its
+  // original transaction first, then keep that retiring frame from mutating the new selection.
+  const bool changingEditSelection = strokeSelectionChanged(liveApp);
+  const bool restoredCancelledEdit = settlePendingStrokeEdit(liveApp);
+  const bool canMutate = liveApp != nullptr && liveApp->hasSelection() &&
+                         inspectorSnapshot_.strokeEditable && !changingEditSelection;
+  ImGui::BeginDisabled(!inspectorSnapshot_.strokeEditable || strokeEditSettlementPending());
   const StrokeRenderContext context{liveApp, theme, ImGui::GetCursorPosX(), canMutate,
                                     iconTextureProvider};
-  bool queuedMutation = renderStrokeWidthRow(context);
+  bool queuedMutation = renderStrokeWidthRow(context) || restoredCancelledEdit;
   queuedMutation = renderStrokeCapRow(context) || queuedMutation;
   queuedMutation = renderStrokeJoinRow(context) || queuedMutation;
   queuedMutation = renderStrokeMiterRow(context) || queuedMutation;
@@ -1272,37 +1347,267 @@ bool SidebarPresenter::renderStrokeWidthRow(const StrokeRenderContext& context) 
 
 bool SidebarPresenter::renderStrokeWidthField(const StrokeRenderContext& context,
                                               const Lengthd& widthLength, float* width) {
-  EditorApp* liveApp = context.app;
-  const bool canMutate = context.canMutate;
-  std::ostringstream widthUnit;
-  widthUnit << widthLength.unit;
-  const std::string widthFormat = "%.1f" + widthUnit.str();
   ImGui::SetNextItemWidth(96.0f);
-  const bool widthChanged = ImGui::InputFloat(
-      "##stroke_width", width, 0.0f, 0.0f, widthFormat.c_str(), ImGuiInputTextFlags_AutoSelectAll);
+  const InspectorLengthEdit edit =
+      InputInspectorLength("##stroke_width", widthLength,
+                           strokeLengthBareUnit(StrokeScalarField::Width, widthLength.unit),
+                           /*allowNegative=*/false, context.theme);
   {
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
     strokeWidthRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
   }
-  bool queuedMutation = false;
-  if (widthChanged && canMutate) {
-    *width = std::isfinite(*width) ? std::clamp(*width, 0.0f, 200.0f) : 0.0f;
-    beginStrokeScalarEdit(*liveApp, StrokeScalarField::Width);
-    if (widthLength.unit == LengthUnit::None || widthLength.unit == LengthUnit::Px) {
-      liveApp->setActiveStrokeWidth(*width);
-    }
-    const RcString cssWidth = Lengthd(*width, widthLength.unit).toRcString();
-    const bool changed = liveApp->setStylePropertyOnSelection("stroke-width", cssWidth);
-    strokeScalarEdit_->changed |= changed;
-    queuedMutation = changed;
+  bool queuedMutation = beginStrokeLengthEdit(context, StrokeScalarField::Width, widthLength.unit);
+  if (edit.typed.has_value() && context.canMutate) {
+    *width = static_cast<float>(edit.typed->value);
+    queuedMutation = applyStrokeWidth(*context.app, *edit.typed) || queuedMutation;
   }
+  queuedMutation =
+      restoreStrokeLengthOnCancel(context, StrokeScalarField::Width, edit) || queuedMutation;
   trackStrokeScalarItem(context, StrokeScalarField::Width);
-  if (ImGui::IsItemHovered()) {
+  if (!edit.rejected && ImGui::IsItemHovered()) {
     ImGui::SetTooltip(widthLength.unit == LengthUnit::None ? "Stroke width in user units"
                                                            : "Stroke width retains its SVG unit");
   }
   return queuedMutation;
+}
+
+bool SidebarPresenter::applyStrokeWidth(EditorApp& liveApp, Lengthd width) {
+  beginStrokeScalarEdit(liveApp, StrokeScalarField::Width);
+  if (width.unit == LengthUnit::None || width.unit == LengthUnit::Px) {
+    width.value = std::min(width.value, 200.0);
+    liveApp.setActiveStrokeWidth(static_cast<float>(width.value));
+  }
+  const bool changed = liveApp.setStylePropertyOnSelection("stroke-width", width.toRcString());
+  strokeScalarEdit_->changed |= changed;
+  return changed;
+}
+
+bool SidebarPresenter::restoreStrokeLengthOnCancel(const StrokeRenderContext& context,
+                                                   StrokeScalarField field,
+                                                   const InspectorLengthEdit& edit) {
+  noteStrokeLengthText(field, edit);
+  if (!ImGui::IsItemDeactivated() || !strokeLengthEditStart_.has_value() ||
+      strokeLengthEditStart_->field != field) {
+    return false;
+  }
+  if (!strokeLengthEditStart_->lastTextRejected && !ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    strokeLengthEditStart_.reset();
+    return false;
+  }
+  strokeLengthEditStart_->pendingCancel = true;
+  return finishPendingStrokeCancel(context.app);
+}
+
+void SidebarPresenter::noteStrokeLengthText(StrokeScalarField field,
+                                            const InspectorLengthEdit& edit) {
+  // Another input activating first replaces ImGui's text state, so keep the last verdict.
+  if (edit.typing && strokeLengthEditStart_.has_value() && strokeLengthEditStart_->field == field) {
+    strokeLengthEditStart_->lastTextRejected = edit.rejected;
+  }
+}
+
+bool SidebarPresenter::settlePendingStrokeEdit(EditorApp* liveApp) {
+  bool restored = false;
+  if (liveApp != nullptr) {
+    discardForeignStrokeEdits(*liveApp);
+    restored = settleStrokeSelectionChange(*liveApp);
+  }
+  restored = finishPendingStrokeCancel(liveApp) || restored;
+  if (liveApp != nullptr && strokeScalarEdit_.has_value() && strokeScalarEdit_->pendingCommit) {
+    finishStrokeScalarEdit(*liveApp, strokeScalarEdit_->field);
+  }
+  return restored;
+}
+
+bool SidebarPresenter::strokeCancellationPending() const {
+  return strokeLengthEditStart_.has_value() && strokeLengthEditStart_->pendingCancel;
+}
+
+bool SidebarPresenter::finishPendingStrokeCancel(EditorApp* liveApp) {
+  if (liveApp == nullptr || !strokeCancellationPending()) {
+    return false;
+  }
+  const StrokeLengthEditStart start = std::move(*strokeLengthEditStart_);
+  strokeLengthEditStart_.reset();
+  if (!strokeScalarEdit_.has_value() || strokeScalarEdit_->field != start.field ||
+      !strokeScalarEdit_->changed) {
+    return false;
+  }
+  return restoreStrokeStyles(*liveApp, start);
+}
+
+bool SidebarPresenter::beginStrokeLengthEdit(const StrokeRenderContext& context,
+                                             StrokeScalarField field, LengthUnit unit) {
+  if (strokeEditSettlementPending()) {
+    return false;
+  }
+  bool restored = false;
+  if (ImGui::IsItemActivated()) {
+    StrokeLengthEditStart next{.owner = strokeEditOwner(context.app),
+                               .field = field,
+                               .selection = inspectorSnapshot_.selection,
+                               .unit = unit,
+                               .styles = {},
+                               .activeWidth = {}};
+    if (!prepareStrokeScalarEdit(context.app, field, &next)) {
+      ImGui::ClearActiveID();
+      return false;
+    }
+    restored = !next.styles.empty();
+    strokeLengthEditStart_ = std::move(next);
+  }
+  captureStrokeLengthBaseline(context, field);
+  return restored;
+}
+
+void SidebarPresenter::captureStrokeLengthBaseline(const StrokeRenderContext& context,
+                                                   StrokeScalarField field) {
+  if (context.canMutate && strokeLengthEditStart_.has_value() &&
+      strokeLengthEditStart_->field == field && strokeLengthEditStart_->styles.empty()) {
+    StrokeLengthEditStart& start = *strokeLengthEditStart_;
+    start.activeWidth = context.app->activePaintStyle().strokeWidth;
+    for (const svg::SVGElement& element : context.app->selectedElements()) {
+      start.styles.emplace_back(element, element.getAttribute("style"));
+    }
+  }
+}
+
+bool SidebarPresenter::strokeEditSettlementPending() const {
+  return strokeCancellationPending() ||
+         (strokeScalarEdit_.has_value() && strokeScalarEdit_->pendingCommit);
+}
+
+bool SidebarPresenter::strokeSelectionChanged(const EditorApp* app) const {
+  return app != nullptr && ((strokeLengthEditStart_.has_value() &&
+                             strokeLengthEditStart_->selection != app->selectedElements()) ||
+                            (strokeScalarEdit_.has_value() &&
+                             strokeScalarEdit_->selection != app->selectedElements()));
+}
+
+bool SidebarPresenter::settleStrokeSelectionChange(EditorApp& app) {
+  if (!strokeSelectionChanged(&app)) {
+    return false;
+  }
+  const ImGuiID itemId = strokeLengthEditStart_.has_value() ? strokeLengthEditStart_->owner.itemId
+                                                            : strokeScalarEdit_->owner.itemId;
+  const bool restored = settleStrokeLengthEdit(app);
+  if (strokeScalarEdit_.has_value()) {
+    finishStrokeScalarEdit(app, strokeScalarEdit_->field);
+  }
+  if (ImGui::GetActiveID() == itemId) {
+    ImGui::ClearActiveID();
+  }
+  return restored;
+}
+
+bool SidebarPresenter::settleStrokeLengthEdit(EditorApp& app) {
+  if (!strokeLengthEditStart_.has_value()) {
+    return false;
+  }
+  if (strokeLengthEditStart_->lastTextRejected || strokeLengthEditStart_->pendingCancel) {
+    strokeLengthEditStart_->pendingCancel = true;
+    return finishPendingStrokeCancel(&app);
+  }
+  strokeLengthEditStart_.reset();
+  return false;
+}
+
+std::optional<SidebarPresenter::StrokeScalarField> SidebarPresenter::activeStrokeField() const {
+  if (strokeLengthEditStart_.has_value()) {
+    return strokeLengthEditStart_->field;
+  }
+  if (strokeScalarEdit_.has_value()) {
+    return strokeScalarEdit_->field;
+  }
+  return std::nullopt;
+}
+
+bool SidebarPresenter::prepareStrokeScalarEdit(EditorApp* app, StrokeScalarField field,
+                                               StrokeLengthEditStart* nextLength) {
+  const std::optional<StrokeScalarField> previous = activeStrokeField();
+  if (previous.has_value() && *previous != field) {
+    if (app == nullptr) {
+      return deferStrokeFieldTransition();
+    }
+    std::optional<std::string> restoredSource = restoreStrokeLengthForTransition(*app, nextLength);
+    if (strokeScalarEdit_.has_value()) {
+      finishStrokeScalarEdit(*app, strokeScalarEdit_->field);
+    }
+    startStrokeScalarEdit(*app, field, std::move(restoredSource));
+  } else if (app != nullptr && !strokeScalarEdit_.has_value()) {
+    startStrokeScalarEdit(*app, field);
+  }
+  return true;
+}
+
+bool SidebarPresenter::deferStrokeFieldTransition() {
+  if (strokeLengthEditStart_.has_value()) {
+    if (strokeLengthEditStart_->lastTextRejected || strokeLengthEditStart_->pendingCancel) {
+      strokeLengthEditStart_->pendingCancel = true;
+    } else {
+      strokeLengthEditStart_.reset();
+    }
+  }
+  if (strokeScalarEdit_.has_value()) {
+    strokeScalarEdit_->pendingCommit = true;
+  }
+  return !strokeEditSettlementPending();
+}
+
+std::optional<std::string> SidebarPresenter::restoreStrokeLengthForTransition(
+    EditorApp& app, StrokeLengthEditStart* nextLength) {
+  if (!strokeLengthEditStart_.has_value()) {
+    return std::nullopt;
+  }
+  const StrokeLengthEditStart previous = *strokeLengthEditStart_;
+  if (!settleStrokeLengthEdit(app)) {
+    return std::nullopt;
+  }
+  // Rollback is queued until the frame flush. The next edit starts from the restored state,
+  // not the still-visible intermediate DOM/source, so its own cancellation and undo stay separate.
+  if (nextLength != nullptr) {
+    nextLength->styles = previous.styles;
+    nextLength->activeWidth = previous.activeWidth;
+  }
+  return strokeScalarEdit_->beforeSource;
+}
+
+void SidebarPresenter::startStrokeScalarEdit(EditorApp& app, StrokeScalarField field,
+                                             std::optional<std::string> beforeSource) {
+  strokeScalarEdit_ = StrokeScalarEdit{
+      .owner = strokeEditOwner(&app),
+      .field = field,
+      .selection = app.selectedElements(),
+      .beforeSource = beforeSource.has_value() ? std::move(*beforeSource)
+                                               : std::string(app.document().document().source()),
+  };
+}
+
+bool SidebarPresenter::restoreStrokeStyles(EditorApp& liveApp, const StrokeLengthEditStart& start) {
+  for (const auto& [element, style] : start.styles) {
+    liveApp.applyMutation(
+        style.has_value()
+            ? EditorCommand::SetAttributeCommand(element, "style", std::string(*style))
+            : EditorCommand::RemoveAttributeCommand(element, "style"));
+  }
+  if (start.styles.empty()) {
+    return false;
+  }
+  // Typing set the width for new shapes as a plain number, so only such a width can be restored.
+  const LengthUnit activeUnit = start.activeWidth.unit;
+  if (activeUnit == LengthUnit::None || activeUnit == LengthUnit::Px) {
+    liveApp.setActiveStrokeWidth(start.activeWidth.value);
+  }
+  // The selection is back to its state before typing, so the edit records no undo entry.
+  strokeScalarEdit_->changed = false;
+  return true;
+}
+
+LengthUnit SidebarPresenter::strokeLengthBareUnit(StrokeScalarField field, LengthUnit shown) const {
+  return strokeLengthEditStart_.has_value() && strokeLengthEditStart_->field == field
+             ? strokeLengthEditStart_->unit
+             : shown;
 }
 
 bool SidebarPresenter::renderStrokeWidthStepper(const StrokeRenderContext& context,
@@ -1689,24 +1994,41 @@ bool SidebarPresenter::renderDashOffsetRow(const StrokeRenderContext& context) {
   }
   StrokeRowLabel("Offset", context.rowStartX, context.theme);
   const Lengthd offsetLength = inspectorSnapshot_.strokeDashoffset;
-  float dashoffset = static_cast<float>(offsetLength.value);
-  std::ostringstream offsetUnit;
-  offsetUnit << offsetLength.unit;
-  const std::string offsetFormat = "%.1f" + offsetUnit.str();
-  ImGui::SetNextItemWidth(90.0f);
-  const bool offsetChanged =
-      ImGui::InputFloat("##stroke_dash_offset", &dashoffset, 0.1f, 1.0f, offsetFormat.c_str());
+  ImGui::SetNextItemWidth(96.0f);
+  const InspectorLengthEdit edit =
+      InputInspectorLength("##stroke_dash_offset", offsetLength,
+                           strokeLengthBareUnit(StrokeScalarField::DashOffset, offsetLength.unit),
+                           /*allowNegative=*/true, context.theme);
   const ImVec2 min = ImGui::GetItemRectMin();
   const ImVec2 max = ImGui::GetItemRectMax();
   strokeDashOffsetRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
-  bool queuedMutation = false;
-  if (offsetChanged && context.canMutate && std::isfinite(dashoffset)) {
-    beginStrokeScalarEdit(*context.app, StrokeScalarField::DashOffset);
-    queuedMutation = setStrokeDashOffset(*context.app, dashoffset);
-    strokeScalarEdit_->changed |= queuedMutation;
+  bool queuedMutation =
+      beginStrokeLengthEdit(context, StrokeScalarField::DashOffset, offsetLength.unit);
+  if (edit.typed.has_value() && context.canMutate) {
+    queuedMutation = applyStrokeDashOffset(*context.app, *edit.typed) || queuedMutation;
   }
+  queuedMutation =
+      restoreStrokeLengthOnCancel(context, StrokeScalarField::DashOffset, edit) || queuedMutation;
   trackStrokeScalarItem(context, StrokeScalarField::DashOffset);
-  return queuedMutation;
+  return renderDashOffsetStepper(context, offsetLength, min, max) || queuedMutation;
+}
+
+bool SidebarPresenter::renderDashOffsetStepper(const StrokeRenderContext& context,
+                                               const Lengthd& offsetLength, const ImVec2& fieldMin,
+                                               const ImVec2& fieldMax) {
+  const AttachedNumericStepperResult steps =
+      RenderAttachedNumericStepper("stroke_dash_offset_steps", fieldMin, fieldMax, context.theme);
+  strokeDashOffsetIncrementRect_ = steps.incrementRect;
+  if (!context.canMutate || (!steps.increment && !steps.decrement)) {
+    return false;
+  }
+  // ImGui's numeric step sizes: 0.1 per click, 1 with Ctrl held.
+  const double step = (ImGui::GetIO().KeyCtrl ? 1.0 : 0.1) * (steps.increment ? 1.0 : -1.0);
+  // Drop the binary floating-point residue that repeated 0.1 steps leave in the written value.
+  const double sum = offsetLength.value + step;
+  const double stepped = std::abs(sum) < 1e6 ? std::round(sum * 1e9) / 1e9 : sum;
+  return applyStrokeStyle(*context.app, "stroke-dashoffset",
+                          Lengthd(stepped, offsetLength.unit).toRcString(), "Change dash offset");
 }
 
 bool SidebarPresenter::renderStrokeMarkers(const StrokeRenderContext& context) {
@@ -1818,6 +2140,14 @@ bool SidebarPresenter::setStrokeDashOffset(EditorApp& liveApp, double value) {
   return liveApp.setStylePropertyOnSelection("stroke-dashoffset", cssOffset);
 }
 
+bool SidebarPresenter::applyStrokeDashOffset(EditorApp& liveApp, const Lengthd& offset) {
+  beginStrokeScalarEdit(liveApp, StrokeScalarField::DashOffset);
+  const bool changed =
+      liveApp.setStylePropertyOnSelection("stroke-dashoffset", offset.toRcString());
+  strokeScalarEdit_->changed |= changed;
+  return changed;
+}
+
 bool SidebarPresenter::applyStrokeStyle(EditorApp& liveApp, std::string_view property,
                                         std::string_view value, std::string_view undoLabel) {
   if (!liveApp.hasSelection() || !liveApp.document().hasDocument()) {
@@ -1833,17 +2163,53 @@ bool SidebarPresenter::applyStrokeStyle(EditorApp& liveApp, std::string_view pro
   return queued;
 }
 
-void SidebarPresenter::beginStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field) {
-  if (strokeScalarEdit_.has_value() && strokeScalarEdit_->field == field) {
+SidebarPresenter::StrokeEditOwner SidebarPresenter::strokeEditOwner(const EditorApp* app) const {
+  if (app != nullptr && app->hasDocument()) {
+    return {.document = app->document().document().handle(),
+            .documentGeneration = app->document().documentGeneration(),
+            .itemId = ImGui::GetItemID()};
+  }
+  return {.document = inspectorSnapshot_.document,
+          .documentGeneration = inspectorSnapshot_.documentGeneration,
+          .itemId = ImGui::GetItemID()};
+}
+
+void SidebarPresenter::discardForeignStrokeEdits(const EditorApp& app) {
+  const auto discard = [&app](auto& edit) {
+    if (!edit.has_value()) {
+      return;
+    }
+    const bool sameDocument = app.hasDocument() &&
+                              edit->owner.document == app.document().document().handle() &&
+                              edit->owner.documentGeneration == app.document().documentGeneration();
+    if (!sameDocument) {
+      if (ImGui::GetCurrentContext() != nullptr && edit->owner.itemId != 0 &&
+          ImGui::GetActiveID() == edit->owner.itemId) {
+        ImGui::ClearActiveID();
+      }
+      edit.reset();
+    }
+  };
+  discard(strokeLengthEditStart_);
+  discard(strokeScalarEdit_);
+  discardUnstartedStrokeEditForSelection(app);
+}
+
+void SidebarPresenter::discardUnstartedStrokeEditForSelection(const EditorApp& app) {
+  if (!strokeLengthEditStart_.has_value() || !strokeLengthEditStart_->styles.empty() ||
+      strokeLengthEditStart_->selection == app.selectedElements()) {
     return;
   }
-  if (strokeScalarEdit_.has_value()) {
-    finishStrokeScalarEdit(liveApp, strokeScalarEdit_->field);
+  if (ImGui::GetCurrentContext() != nullptr &&
+      ImGui::GetActiveID() == strokeLengthEditStart_->owner.itemId) {
+    ImGui::ClearActiveID();
   }
-  strokeScalarEdit_ = StrokeScalarEdit{
-      .field = field,
-      .beforeSource = std::string(liveApp.document().document().source()),
-  };
+  strokeLengthEditStart_.reset();
+}
+
+void SidebarPresenter::beginStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field) {
+  discardForeignStrokeEdits(liveApp);
+  (void)prepareStrokeScalarEdit(&liveApp, field, nullptr);
 }
 
 void SidebarPresenter::trackStrokeScalarItem(const StrokeRenderContext& context,
@@ -1862,6 +2228,7 @@ void SidebarPresenter::trackStrokeScalarItem(const StrokeRenderContext& context,
 }
 
 void SidebarPresenter::finishStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field) {
+  discardForeignStrokeEdits(liveApp);
   if (!strokeScalarEdit_.has_value() || strokeScalarEdit_->field != field) {
     return;
   }
@@ -1879,6 +2246,7 @@ void SidebarPresenter::finishStrokeScalarEdit(EditorApp& liveApp, StrokeScalarFi
 }
 
 bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
+  completedTransformBaseline_.reset();
   if (!inspectorSnapshot_.transform.has_value()) {
     return false;
   }
@@ -1932,14 +2300,12 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
       canEditPosition && static_cast<double>(bounds->height()) > kMinimumSpanForScale;
   const bool canEditRotation = visuallyEditable && decomposable;
 
-  const float xValue = bounds.has_value() ? static_cast<float>(bounds->topLeft.x) : 0.0f;
-  const float yValue = bounds.has_value() ? static_cast<float>(bounds->topLeft.y) : 0.0f;
-  const float widthValue = bounds.has_value() ? static_cast<float>(bounds->width()) : 0.0f;
-  const float heightValue = bounds.has_value() ? static_cast<float>(bounds->height()) : 0.0f;
-  const float rotationValue = decomposable
-                                  ? static_cast<float>(snapshotDecomposed->rotationRadians *
-                                                       MathConstants<double>::kRadToDeg)
-                                  : 0.0f;
+  const double xValue = bounds.has_value() ? bounds->topLeft.x : 0.0;
+  const double yValue = bounds.has_value() ? bounds->topLeft.y : 0.0;
+  const double widthValue = bounds.has_value() ? bounds->width() : 0.0;
+  const double heightValue = bounds.has_value() ? bounds->height() : 0.0;
+  const double rotationValue =
+      decomposable ? snapshotDecomposed->rotationRadians * MathConstants<double>::kRadToDeg : 0.0;
 
   const EditorTheme& theme = EditorTheme::Active();
   constexpr ImGuiTableFlags kTransformTableFlags = ImGuiTableFlags_SizingStretchProp |
@@ -1959,7 +2325,7 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
       ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "%s", label);
     };
     const auto renderField = [&](int axisColumn, int valueColumn, const char* axisLabel,
-                                 TransformField field, const char* id, float value, bool canEdit,
+                                 TransformField field, const char* id, double value, bool canEdit,
                                  const char* undoLabel, float speed, const char* format) {
       ImGui::TableSetColumnIndex(axisColumn);
       if (axisLabel[0] != '\0') {
@@ -2038,8 +2404,10 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
         if (!canEditCell) {
           ImGui::BeginDisabled();
         }
-        const bool changed = ImGui::DragScalar(kMatrixLabels[i], ImGuiDataType_Double, &value,
-                                               0.01f, nullptr, nullptr, "%.6g");
+        const TransformTextTarget cellTarget{this, TransformField::Matrix, i};
+        const InspectorNumericEdit cell = DragInspectorNumber(
+            kMatrixLabels[i], &value, 0.01f, "%.6g", {&ParseTransformFieldText, &cellTarget},
+            TransformFieldHint(TransformField::Matrix, i), theme);
         if (!canEditCell) {
           ImGui::EndDisabled();
         }
@@ -2050,13 +2418,12 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
             Box2d(Vector2d(cellMin.x, cellMin.y), Vector2d(cellMax.x, cellMax.y));
 
         if (liveApp != nullptr && liveEditable && ImGui::IsItemActivated()) {
-          beginTransformEdit(*liveApp, TransformField::Matrix, i, "Edit transform");
+          beginTransformWidgetEdit(*liveApp, TransformField::Matrix, i, "Edit transform", &value,
+                                   "%.6g", cell.changed);
         }
         if (transformEdit_.has_value() && transformEdit_->field == TransformField::Matrix &&
             transformEdit_->matrixIndex == i && !transformEdit_->pendingCommit) {
-          queuedMutation =
-              updateTransformFieldValue(liveApp, value, changed, ImGui::IsItemDeactivated()) ||
-              queuedMutation;
+          queuedMutation = queueTransformFieldValue(liveApp, cell, value) || queuedMutation;
         }
       }
       ImGui::EndTable();
@@ -2075,14 +2442,17 @@ bool SidebarPresenter::renderTransformFieldDrag(EditorApp* liveApp, TransformFie
                                 !transformEdit_->pendingCommit;
   const float disabledAlpha = canEdit ? 1.0f : ImGui::GetStyle().DisabledAlpha;
   canEdit = canEdit && (liveApp != nullptr || editingThisField);
-  float value = editingThisField ? static_cast<float>(transformEdit_->fieldValue) : displayValue;
+  double value = editingThisField ? transformEdit_->fieldValue : static_cast<double>(displayValue);
+  const TransformTextTarget textTarget{this, field, 0};
 
   ImGui::SetNextItemWidth(-FLT_MIN);
   ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, disabledAlpha);
   if (!canEdit) {
     ImGui::BeginDisabled();
   }
-  const bool changed = ImGui::DragFloat(label, &value, dragSpeed, 0.0f, 0.0f, format);
+  const InspectorNumericEdit edit =
+      DragInspectorNumber(label, &value, dragSpeed, format, {&ParseTransformFieldText, &textTarget},
+                          TransformFieldHint(field, 0), EditorTheme::Active());
   if (!canEdit) {
     ImGui::EndDisabled();
   }
@@ -2090,17 +2460,92 @@ bool SidebarPresenter::renderTransformFieldDrag(EditorApp* liveApp, TransformFie
 
   bool queuedMutation = false;
   if (liveApp != nullptr && canEdit && ImGui::IsItemActivated()) {
-    beginTransformEdit(*liveApp, field, /*matrixIndex=*/0, undoLabel);
+    beginTransformWidgetEdit(*liveApp, field, /*matrixIndex=*/0, undoLabel, &value, format,
+                             edit.changed);
   }
   if (transformEdit_.has_value() && transformEdit_->field == field &&
       !transformEdit_->pendingCommit) {
-    queuedMutation = updateTransformFieldValue(liveApp, static_cast<double>(value), changed,
-                                               ImGui::IsItemDeactivated());
+    queuedMutation = queueTransformFieldValue(liveApp, edit, value);
   }
   return queuedMutation;
 }
 
+std::optional<double> SidebarPresenter::ParseTransformFieldText(const void* context,
+                                                                std::string_view text) {
+  const auto* target = static_cast<const TransformTextTarget*>(context);
+  return target->presenter->parseTransformFieldText(target->field, target->matrixIndex, text);
+}
+
+std::optional<double> SidebarPresenter::parseTransformFieldText(TransformField field,
+                                                                int matrixIndex,
+                                                                std::string_view text) const {
+  if (field == TransformField::Rotation) {
+    return ParseInspectorDegrees(text);
+  }
+  if (field == TransformField::Matrix && matrixIndex < 4) {
+    return ParseInspectorNumber(text);
+  }
+  const bool horizontal = field == TransformField::PositionX || field == TransformField::Width ||
+                          (field == TransformField::Matrix && matrixIndex == 4);
+  return transformLengthToUserUnits(text, horizontal ? Lengthd::Extent::X : Lengthd::Extent::Y);
+}
+
+std::optional<double> SidebarPresenter::transformLengthToUserUnits(std::string_view text,
+                                                                   Lengthd::Extent extent) const {
+  const std::optional<Lengthd> length = ParseInspectorLength(text, LengthUnit::None);
+  if (!length.has_value()) {
+    return std::nullopt;
+  }
+  const Box2d viewBox = transformEdit_.has_value() ? transformEdit_->unitViewBox : Box2d();
+  const FontMetrics fontMetrics =
+      transformEdit_.has_value() ? transformEdit_->unitFontMetrics : FontMetrics();
+  if (IsDocumentSizeRelative(length->unit) && !(viewBox.width() > 0.0 && viewBox.height() > 0.0)) {
+    return std::nullopt;
+  }
+  const double userUnits = length->toPixels(viewBox, fontMetrics, extent);
+  return std::isfinite(userUnits) ? std::optional<double>(userUnits) : std::nullopt;
+}
+
+bool SidebarPresenter::queueTransformFieldValue(EditorApp* liveApp,
+                                                const InspectorNumericEdit& edit, double value) {
+  if (edit.typing) {
+    transformEdit_->lastTextRejected = edit.rejected;
+  }
+  double restored = value;
+  restoreTransformFieldOnCancel(edit, &restored);
+  return updateTransformFieldValue(liveApp, restored, edit.changed || restored != value,
+                                   ImGui::IsItemDeactivated());
+}
+
+void SidebarPresenter::restoreTransformFieldOnCancel(const InspectorNumericEdit& edit,
+                                                     double* value) {
+  // Tab or a click on an earlier field deactivates on a frame without the typed text, so the
+  // rejection seen on the last typing frame decides.
+  if (!transformEdit_.has_value() || !ImGui::IsItemDeactivated() ||
+      !(edit.rejected || transformEdit_->lastTextRejected ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
+    return;
+  }
+  TransformEditState& state = *transformEdit_;
+  state.restoringStart = true;
+  *value = state.field == TransformField::Matrix
+               ? state.startTransform.data[static_cast<std::size_t>(state.matrixIndex)]
+               : InitialTransformFieldValue(state);
+}
+
+void SidebarPresenter::discardCompletedTransformBaseline(const EditorApp& app) {
+  if (completedTransformBaseline_.has_value() &&
+      (!app.hasDocument() ||
+       completedTransformBaseline_->state.document != app.document().document().handle() ||
+       completedTransformBaseline_->state.documentGeneration !=
+           app.document().documentGeneration() ||
+       completedTransformBaseline_->frameVersion != app.document().currentFrameVersion())) {
+    completedTransformBaseline_.reset();
+  }
+}
+
 void SidebarPresenter::discardForeignTransformEdit(const EditorApp& app) {
+  discardCompletedTransformBaseline(app);
   if (!transformEdit_.has_value()) {
     return;
   }
@@ -2148,8 +2593,6 @@ bool SidebarPresenter::updateTransformFieldValue(EditorApp* liveApp, double valu
 
 void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField field, int matrixIndex,
                                           const char* undoLabel) {
-  // A previous edit still holding state (e.g. its commit was deferred) must
-  // land its undo entry before the slot is reused.
   if (transformEdit_.has_value()) {
     commitTransformEdit(liveApp);
   }
@@ -2157,49 +2600,152 @@ void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField fie
     return;
   }
   const svg::SVGElement element = liveApp.selectedElements().front();
-
   if (!element.isa<svg::SVGGraphicsElement>()) {
     return;
   }
+  auto completed = takeCompletedTransformBaseline(liveApp, element);
+  TransformEditState state = completed.has_value() && completed->restored
+                                 ? std::move(completed->state)
+                                 : captureTransformBaseline(liveApp, element, field);
+  if (completed.has_value() && !completed->restored) {
+    carryCommittedTransformBaseline(element, completed->state, state);
+  }
+  prepareTransformBoundsEvaluator(element, field, state);
+  initializeTransformField(state, field, matrixIndex, undoLabel);
+  transformEdit_ = std::move(state);
+}
 
-  TransformEditState state{
-      .element = element,
-      .document = liveApp.document().document().handle(),
-      .documentGeneration = liveApp.document().documentGeneration(),
-      .itemId = ImGui::GetCurrentContext() != nullptr ? ImGui::GetActiveID() : 0,
-      .field = field,
-      .matrixIndex = matrixIndex,
-      .undoLabel = undoLabel};
-  // `transform()` and the Inspector bounds may materialize lazy layout state and
-  // therefore acquire document write access. Do not wrap these DOM getters in
-  // a read scope: ConcurrentDom uses a non-recursive lock, so upgrading that
-  // scope would deadlock on field activation.
+std::optional<SidebarPresenter::CompletedTransformBaseline>
+SidebarPresenter::takeCompletedTransformBaseline(EditorApp& app, const svg::SVGElement& element) {
+  auto result = std::move(completedTransformBaseline_);
+  completedTransformBaseline_.reset();
+  if (!result.has_value() || result->frameVersion != app.document().currentFrameVersion() ||
+      result->state.document != app.document().document().handle() ||
+      result->state.documentGeneration != app.document().documentGeneration() ||
+      result->state.element != element) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+SidebarPresenter::TransformEditState SidebarPresenter::captureTransformBaseline(
+    EditorApp& app, const svg::SVGElement& element, TransformField field) {
+  TransformEditState state{.element = element,
+                           .document = app.document().document().handle(),
+                           .documentGeneration = app.document().documentGeneration(),
+                           .field = field};
+  // These getters can materialize layout state and acquire document write access. Do not hold
+  // a read scope while capturing the baseline: ConcurrentDom uses a non-recursive lock.
   state.startTransform = element.cast<svg::SVGGraphicsElement>().transform();
   state.startBounds = InspectorBounds(element);
-  if (HasPaintedInspectorBounds(element) &&
-      (field == TransformField::Width || field == TransformField::Height)) {
-    state.boundsAfterAxisScale = CaptureSelectionBoundsAfterAxisScale(element);
-  }
   state.documentFromParent = DocumentFromParentTransform(element);
-  if (const double determinant = state.documentFromParent.determinant();
-      std::isfinite(determinant) && determinant != 0.0) {
+  const double determinant = state.documentFromParent.determinant();
+  if (std::isfinite(determinant) && determinant != 0.0) {
     state.parentFromDocument = state.documentFromParent.inverse();
   }
-  // Verbatim attribute bytes so undo restores the user's original source
-  // text instead of the canonical serializer output.
   state.sourceTransformAttributeValue = element.getAttribute("transform");
+  state.unitViewBox = PercentReference(app.document().document());
+  state.unitFontMetrics = TypedUnitFontMetrics(app.document().document().svgElement(), element);
+  state.writebackTarget = captureAttributeWritebackTarget(element);
+  return state;
+}
+
+void SidebarPresenter::carryCommittedTransformBaseline(const svg::SVGElement& element,
+                                                       const TransformEditState& completed,
+                                                       TransformEditState& next) {
+  const RcString serialized = serializeTransformForWriteback(
+      completed.sourceTransformAttributeValue, completed.currentTransform);
+  next.sourceTransformAttributeValue =
+      std::string_view(serialized).empty() ? std::nullopt : std::optional<RcString>(serialized);
+  next.writebackTarget = completed.writebackTarget;
+  const bool pendingGeometry = next.startTransform != completed.currentTransform;
+  next.startTransform = completed.currentTransform;
+  if (pendingGeometry) {
+    next.boundsAfterAxisScale = captureAdjustedTransformBounds(element, next, true);
+    next.startBounds =
+        next.boundsAfterAxisScale ? next.boundsAfterAxisScale(Transform2d()) : std::nullopt;
+  }
+}
+
+std::function<std::optional<Box2d>(const Transform2d&)>
+SidebarPresenter::captureAdjustedTransformBounds(const svg::SVGElement& element,
+                                                 const TransformEditState& state,
+                                                 bool includeOrdinaryBounds) {
+  auto evaluate = includeOrdinaryBounds && !HasPaintedInspectorBounds(element)
+                      ? CaptureInspectorFillBounds(element)
+                      : CaptureSelectionBoundsAfterAxisScale(element, includeOrdinaryBounds);
+  if (!evaluate) {
+    return {};
+  }
+  const Transform2d documentFromElementActual =
+      element.cast<svg::SVGGraphicsElement>().transform() * state.documentFromParent;
+  const Transform2d documentFromElementDesired = state.startTransform * state.documentFromParent;
+  if (documentFromElementActual == documentFromElementDesired) {
+    return evaluate;
+  }
+  const double determinant = documentFromElementActual.determinant();
+  if (!std::isfinite(determinant) || determinant == 0.0) {
+    return {};
+  }
+  const Transform2d desiredDocumentFromActualDocument =
+      documentFromElementActual.inverse() * documentFromElementDesired;
+  return [evaluate = std::move(evaluate),
+          desiredDocumentFromActualDocument](const Transform2d& targetDocumentFromDesiredDocument) {
+    // Donner applies left to right: observed document -> settled baseline -> requested document.
+    return evaluate(desiredDocumentFromActualDocument * targetDocumentFromDesiredDocument);
+  };
+}
+
+void SidebarPresenter::prepareTransformBoundsEvaluator(const svg::SVGElement& element,
+                                                       TransformField field,
+                                                       TransformEditState& state) {
+  if ((field == TransformField::Width || field == TransformField::Height) &&
+      HasPaintedInspectorBounds(element) && !state.boundsAfterAxisScale) {
+    state.boundsAfterAxisScale = captureAdjustedTransformBounds(element, state, false);
+  }
+}
+
+void SidebarPresenter::initializeTransformField(TransformEditState& state, TransformField field,
+                                                int matrixIndex, const char* undoLabel) {
+  state.itemId = ImGui::GetCurrentContext() != nullptr ? ImGui::GetActiveID() : 0;
+  state.field = field;
+  state.matrixIndex = matrixIndex;
+  state.undoLabel = undoLabel;
   state.currentTransform = state.startTransform;
   state.startDecomposed = DecomposeTransform(state.startTransform);
-  // Captured now, while the source is still in sync with the DOM, so undo
-  // and the source writeback resolve the element after document changes.
-  state.writebackTarget = captureAttributeWritebackTarget(element);
+  state.boundsEvaluationCount = 0;
+  state.changed = false;
+  state.pendingCommit = false;
+  state.pendingValue = false;
+  state.lastTextRejected = false;
+  state.restoringStart = false;
   for (int i = 0; i < 6; ++i) {
     state.matrixValues[static_cast<std::size_t>(i)] = state.startTransform.data[i];
   }
-
   state.fieldValue = InitialTransformFieldValue(state);
+}
 
-  transformEdit_ = std::move(state);
+void SidebarPresenter::beginTransformWidgetEdit(EditorApp& app, TransformField field,
+                                                int matrixIndex, const char* undoLabel,
+                                                double* value, const char* format, bool changed) {
+  beginTransformEdit(app, field, matrixIndex, undoLabel);
+  if (transformEdit_.has_value() && !changed && *value != transformEdit_->fieldValue) {
+    *value = transformEdit_->fieldValue;
+    refreshTransformInputBaseline(*value, format);
+  }
+}
+
+void SidebarPresenter::refreshTransformInputBaseline(double value, const char* format) {
+  ImGuiInputTextState* input = ImGui::GetInputTextState(ImGui::GetItemID());
+  if (input == nullptr || input->Edited) {
+    return;
+  }
+  std::array<char, 64> buffer{};
+  const int size = ImGui::DataTypeFormatString(buffer.data(), buffer.size(), ImGuiDataType_Double,
+                                               &value, format);
+  input->InitialTextA.resize(size + 1);
+  std::copy_n(buffer.data(), size + 1, input->InitialTextA.Data);
+  input->ReloadUserBufAndSelectAll();
 }
 
 double SidebarPresenter::InitialTransformFieldValue(const TransformEditState& state) {
@@ -2302,7 +2848,10 @@ bool SidebarPresenter::applyTransformEdit(EditorApp& liveApp, double value) {
   if (!transformEdit_.has_value() || !std::isfinite(value)) {
     return false;
   }
-  const Transform2d newTransform = composeFieldTransform(*transformEdit_, value);
+  // Recomposing the start value can differ from the start transform by rounding.
+  const Transform2d newTransform = transformEdit_->restoringStart
+                                       ? transformEdit_->startTransform
+                                       : composeFieldTransform(*transformEdit_, value);
   // Degenerate inputs (e.g. a typed-in zero width) compose to the unchanged
   // current transform; skip the write so a no-op edit doesn't queue commands
   // or record an undo entry claiming a change.
@@ -2322,9 +2871,31 @@ void SidebarPresenter::commitTransformEdit(EditorApp& liveApp) {
     return;
   }
   (void)flushPendingTransformValue(&liveApp);
+  // Leaving the field by any route while its text is rejected keeps the value from before typing.
+  if (transformEdit_->lastTextRejected && !transformEdit_->restoringStart) {
+    transformEdit_->restoringStart = true;
+    (void)applyTransformEdit(liveApp, transformEdit_->fieldValue);
+  }
   TransformEditState state = std::move(*transformEdit_);
   transformEdit_.reset();
   if (!state.changed) {
+    return;
+  }
+
+  // A cancelled or rejected entry returns to the starting transform: put the author's original
+  // attribute back and leave history untouched.
+  if (std::equal(std::begin(state.currentTransform.data), std::end(state.currentTransform.data),
+                 std::begin(state.startTransform.data))) {
+    if (state.writebackTarget.has_value()) {
+      liveApp.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+          .target = *state.writebackTarget,
+          .transform = state.startTransform,
+          .sourceTransformAttributeValue = state.sourceTransformAttributeValue,
+          .restoreSourceTransformAttributeValue = true,
+      });
+    }
+    completedTransformBaseline_ = CompletedTransformBaseline{
+        std::move(state), liveApp.document().currentFrameVersion(), true};
     return;
   }
 
@@ -2356,6 +2927,8 @@ void SidebarPresenter::commitTransformEdit(EditorApp& liveApp) {
         .sourceTransformAttributeValue = state.sourceTransformAttributeValue,
     });
   }
+  completedTransformBaseline_ =
+      CompletedTransformBaseline{std::move(state), liveApp.document().currentFrameVersion(), false};
 }
 
 }  // namespace donner::editor

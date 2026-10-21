@@ -15,12 +15,14 @@
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
+#include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/InspectorNumericInput.h"
 #include "donner/editor/StrokeMarkerPrefabs.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -273,6 +275,10 @@ public:
   [[nodiscard]] std::optional<Box2d> strokeMiterDecrementRectForTesting() const {
     return strokeMiterDecrementRect_;
   }
+  /// Last rendered dash offset increment button.
+  [[nodiscard]] std::optional<Box2d> strokeDashOffsetIncrementRectForTesting() const {
+    return strokeDashOffsetIncrementRect_;
+  }
   /// Last rendered dash-offset field when its advanced row is visible.
   [[nodiscard]] std::optional<Box2d> strokeDashOffsetRectForTesting() const {
     return strokeDashOffsetRect_;
@@ -369,7 +375,10 @@ private:
   };
 
   struct InspectorSnapshot {
+    svg::SVGDocumentHandle document;       ///< Document whose values the snapshot contains.
+    std::uint64_t documentGeneration = 0;  ///< Owning document generation.
     bool hasSelection = false;
+    std::vector<svg::SVGElement> selection;  ///< Identities behind the cached inspector values.
     bool transformEditable = false;
     bool strokeEditable = false;
     Lengthd strokeWidth = Lengthd(1.0);
@@ -414,6 +423,10 @@ private:
     Transform2d documentFromParent;
     /// Inverse of `documentFromParent`, or nullopt when the parent is degenerate.
     std::optional<Transform2d> parentFromDocument;
+    Box2d unitViewBox;              ///< Document user space, the reference for typed percentages.
+    FontMetrics unitFontMetrics;    ///< Element font sizes for typed em and ex lengths.
+    bool lastTextRejected = false;  ///< The field's text was rejected on its last typing frame.
+    bool restoringStart = false;    ///< The edit was cancelled; apply `startTransform` exactly.
 
     /// Stable locator so undo / source writeback survive document identity changes.
     std::optional<AttributeWritebackTarget> writebackTarget;
@@ -432,6 +445,30 @@ private:
     bool pendingValue = false;
   };
 
+  struct CompletedTransformBaseline {
+    TransformEditState state;
+    std::uint64_t frameVersion;
+    bool restored;
+  };
+  std::optional<CompletedTransformBaseline> takeCompletedTransformBaseline(
+      EditorApp& app, const svg::SVGElement& element);
+  TransformEditState captureTransformBaseline(EditorApp& app, const svg::SVGElement& element,
+                                              TransformField field);
+  void carryCommittedTransformBaseline(const svg::SVGElement& element,
+                                       const TransformEditState& completed,
+                                       TransformEditState& next);
+  void prepareTransformBoundsEvaluator(const svg::SVGElement& element, TransformField field,
+                                       TransformEditState& state);
+  static std::function<std::optional<Box2d>(const Transform2d&)> captureAdjustedTransformBounds(
+      const svg::SVGElement& element, const TransformEditState& state, bool includeOrdinaryBounds);
+  static void initializeTransformField(TransformEditState& state, TransformField field,
+                                       int matrixIndex, const char* undoLabel);
+  void beginTransformWidgetEdit(EditorApp& app, TransformField field, int matrixIndex,
+                                const char* undoLabel, double* value, const char* format,
+                                bool changed);
+  static void refreshTransformInputBaseline(double value, const char* format);
+
+  void discardCompletedTransformBaseline(const EditorApp& app);
   void discardForeignTransformEdit(const EditorApp& app);
   bool flushPendingTransformValue(EditorApp* liveApp);
   bool updateTransformFieldValue(EditorApp* liveApp, double value, bool changed, bool deactivated);
@@ -491,6 +528,74 @@ private:
                             std::string_view pattern);
   bool renderDashCustomEditor(const StrokeRenderContext& context, std::string_view pattern);
   bool renderDashOffsetRow(const StrokeRenderContext& context);
+  /// Set stroke-width on the selection as part of the current typed width edit.
+  bool applyStrokeWidth(EditorApp& liveApp, Lengthd width);
+  /// Set stroke-dashoffset on the selection as part of the current typed offset edit.
+  bool applyStrokeDashOffset(EditorApp& liveApp, const Lengthd& offset);
+  /// Remember a stroke length field's value when typing begins, and put it back when the field
+  /// is left with rejected text or Escape after typed values were applied.
+  /// @param context Stroke panel rendering context.
+  /// @param field Field rendered as the last item.
+  /// @param edit Outcome of the field's frame.
+  /// @return Whether a mutation was queued.
+  bool restoreStrokeLengthOnCancel(const StrokeRenderContext& context, StrokeScalarField field,
+                                   const InspectorLengthEdit& edit);
+  /// Document and input widget owning a deferred stroke edit.
+  struct StrokeEditOwner {
+    svg::SVGDocumentHandle document;
+    std::uint64_t documentGeneration = 0;
+    ImGuiID itemId = 0;
+  };
+  StrokeEditOwner strokeEditOwner(const EditorApp* app) const;
+  void discardForeignStrokeEdits(const EditorApp& app);
+  /// Drop a busy-started edit if its cached selection changed before baseline capture.
+  void discardUnstartedStrokeEditForSelection(const EditorApp& app);
+
+  /// Value of a stroke length field when its typing began.
+  struct StrokeLengthEditStart {
+    StrokeEditOwner owner;                   ///< Original document and input widget.
+    StrokeScalarField field;                 ///< Field being typed into.
+    std::vector<svg::SVGElement> selection;  ///< Selection that activated the field.
+    LengthUnit unit;  ///< Unit shown before typing, kept by typed bare numbers.
+    /// Each selected element's `style` attribute before typing, restored on cancel.
+    std::vector<std::pair<svg::SVGElement, std::optional<RcString>>> styles;
+    Lengthd activeWidth;            ///< Stroke width for new shapes before typing.
+    bool lastTextRejected = false;  ///< The text was rejected on the last frame that had it.
+    bool pendingCancel = false;     ///< Cancelled while the document was busy; restore later.
+  };
+  /// Capture \p field's unit on activation, and its styles before the first live mutation.
+  bool beginStrokeLengthEdit(const StrokeRenderContext& context, StrokeScalarField field,
+                             LengthUnit unit);
+  void captureStrokeLengthBaseline(const StrokeRenderContext& context, StrokeScalarField field);
+  bool strokeEditSettlementPending() const;
+  bool strokeSelectionChanged(const EditorApp* app) const;
+  bool settleStrokeSelectionChange(EditorApp& app);
+  bool settleStrokeLengthEdit(EditorApp& app);
+  std::optional<StrokeScalarField> activeStrokeField() const;
+  bool prepareStrokeScalarEdit(EditorApp* app, StrokeScalarField field,
+                               StrokeLengthEditStart* nextLength);
+  bool deferStrokeFieldTransition();
+  std::optional<std::string> restoreStrokeLengthForTransition(EditorApp& app,
+                                                              StrokeLengthEditStart* nextLength);
+  void startStrokeScalarEdit(EditorApp& app, StrokeScalarField field,
+                             std::optional<std::string> beforeSource = std::nullopt);
+  /// Put back the selection's styles from before typing; returns whether mutations were queued.
+  bool restoreStrokeStyles(EditorApp& liveApp, const StrokeLengthEditStart& start);
+  /// Unit for a bare number typed into \p field: the unit before typing began, else \p shown.
+  [[nodiscard]] LengthUnit strokeLengthBareUnit(StrokeScalarField field, LengthUnit shown) const;
+  /// Remember whether \p field's text was rejected on a frame that still had it.
+  void noteStrokeLengthText(StrokeScalarField field, const InspectorLengthEdit& edit);
+  /// Whether a cancelled stroke edit still needs its original styles restored.
+  bool strokeCancellationPending() const;
+  /// Restore the selection for a cancelled typed stroke edit once a live app is available.
+  /// @return Whether mutations were queued.
+  bool finishPendingStrokeCancel(EditorApp* liveApp);
+  /// Finish typed stroke edits left pending by a busy frame: a deferred cancel, then a deferred
+  /// commit. Returns whether mutations were queued.
+  bool settlePendingStrokeEdit(EditorApp* liveApp);
+  /// Render the step buttons attached to the dash offset field.
+  bool renderDashOffsetStepper(const StrokeRenderContext& context, const Lengthd& offsetLength,
+                               const ImVec2& fieldMin, const ImVec2& fieldMax);
   bool renderStrokeMarkers(const StrokeRenderContext& context);
   bool renderStrokeMarkerPicker(const StrokeRenderContext& context, const char* label,
                                 const char* property, const std::string& current);
@@ -520,6 +625,34 @@ private:
   bool renderTransformFieldDrag(EditorApp* liveApp, TransformField field, const char* label,
                                 float displayValue, bool canEdit, const char* undoLabel,
                                 float dragSpeed, const char* format);
+
+  /// Interpret text typed into a transform field. Lengths are converted to user units, using
+  /// the active edit's document viewBox for percentages and the element's font for em and ex.
+  /// @param field Field being edited.
+  /// @param matrixIndex Matrix component index for `TransformField::Matrix`.
+  /// @param text Typed text.
+  [[nodiscard]] std::optional<double> parseTransformFieldText(TransformField field, int matrixIndex,
+                                                              std::string_view text) const;
+  /// The field whose typed text \ref ParseTransformFieldText interprets.
+  struct TransformTextTarget {
+    const SidebarPresenter* presenter;  ///< Presenter owning the active edit.
+    TransformField field;               ///< Field being typed into.
+    int matrixIndex;                    ///< Matrix component index for `TransformField::Matrix`.
+  };
+  /// \ref InspectorTextParser function for a \ref TransformTextTarget context.
+  static std::optional<double> ParseTransformFieldText(const void* context, std::string_view text);
+  /// Parse a typed length and convert it to user units along \p extent.
+  [[nodiscard]] std::optional<double> transformLengthToUserUnits(std::string_view text,
+                                                                 Lengthd::Extent extent) const;
+  /// Apply one frame of a transform field's edit, restoring its starting value on cancel.
+  /// @return Whether a mutation was queued.
+  bool queueTransformFieldValue(EditorApp* liveApp, const InspectorNumericEdit& edit, double value);
+
+  /// Restore the value a transform field had when its edit began, when its typed text was
+  /// rejected or cancelled with Escape on the frame it deactivated.
+  /// @param edit Outcome of the field's last frame.
+  /// @param value Field value to restore in place.
+  void restoreTransformFieldOnCancel(const InspectorNumericEdit& edit, double* value);
 
   /// Capture the edit baseline for @p field from the live element.
   void beginTransformEdit(EditorApp& liveApp, TransformField field, int matrixIndex,
@@ -566,6 +699,8 @@ private:
   };
   std::optional<InspectorBoundsCache> inspectorBoundsCache_;
   std::optional<TransformEditState> transformEdit_;
+  /// Completed baseline available only before its queued mutation flush or the next panel render.
+  std::optional<CompletedTransformBaseline> completedTransformBaseline_;
   std::array<std::optional<Box2d>, 5> transformFieldRects_;
   std::array<std::optional<Box2d>, 6> matrixFieldRects_;
   std::optional<Box2d> strokeIncrementRect_;
@@ -582,6 +717,7 @@ private:
   std::optional<Box2d> strokeMiterIncrementRect_;
   std::optional<Box2d> strokeMiterDecrementRect_;
   std::optional<Box2d> strokeDashOffsetRect_;
+  std::optional<Box2d> strokeDashOffsetIncrementRect_;
   std::array<char, 128> strokeDasharrayBuffer_{};
   bool strokeDasharrayEditing_ = false;
   bool strokeDashDetailsOpen_ = false;
@@ -589,12 +725,15 @@ private:
   std::string strokeDashError_;
   std::string strokeMiterError_;
   struct StrokeScalarEdit {
+    StrokeEditOwner owner;
     StrokeScalarField field;
+    std::vector<svg::SVGElement> selection;
     std::string beforeSource;
     bool changed = false;
     bool pendingCommit = false;
   };
   std::optional<StrokeScalarEdit> strokeScalarEdit_;
+  std::optional<StrokeLengthEditStart> strokeLengthEditStart_;
   std::optional<svg::SVGElement> markerCacheRoot_;
   std::uint64_t markerCacheSourceVersion_ = 0;
   std::string markerCacheSourceText_;
