@@ -144,6 +144,16 @@ struct EditorCommand {
   /// document baseline.
   bool preserveUndoOnReparse = false;
 
+  /// Source-pane recovery admission, rechecked before queue coalescing.
+  struct SourceRecoveryState {
+    std::uint64_t documentGeneration = 0;  ///< Document incarnation admitted at queue time.
+    std::uint64_t sourceVersion = 0;       ///< Raw draft revision admitted at queue time.
+    bool operator==(const SourceRecoveryState&) const = default;
+  };
+
+  /// Present only for a source-pane recovery tied to the current draft and parser policy.
+  std::optional<SourceRecoveryState> sourceRecoveryState;
+
   /// Recheck layer locks at flush because the app could not read them while queueing geometry.
   bool deferLayerLockCheck = false;
 

@@ -61,6 +61,11 @@ public:
   [[nodiscard]] std::optional<std::string> pendingStyleAttribute(
       const svg::SVGElement& element) const;
 
+  /// Drop source-pane recoveries that no longer match the admitted document and draft.
+  /// Runs before replacement coalescing so a refused recovery cannot discard earlier commands.
+  /// @param current Current admitted state, or nullopt when recovery policy is unavailable.
+  void discardStaleSourceRecoveries(std::optional<EditorCommand::SourceRecoveryState> current);
+
   /// Drain and coalesce the pending commands. Returns the effective set of
   /// commands to apply, in the order the application should issue them.
   /// After `flush()` returns, the queue is empty.

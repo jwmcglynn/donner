@@ -191,17 +191,15 @@ StructuredApplyResult SourceEditRecoveryResult(svg::SVGDocument& document,
   }
   return document.withReadAccess([&](svg::DocumentReadAccess&) {
     const auto sourceOptions = xml::XMLParser::SourceOptions(document.xmlDocument());
-    const bool entityContext = document.xmlDocument().declaresDoctypeInternalSubset() ||
-                               (sourceOptions && sourceOptions->disableEntityTranslation);
     return StructuredApplyResult{.applied = true,
                                  .needsDocumentReplace = true,
                                  .recoveryBlocked = !CanRecoverWithEditorParser(sourceOptions),
-                                 .preserveUndoOnRecovery = entityContext};
+                                 .preserveUndoOnRecovery = true};
   });
 }
 
 /// Keep the last valid projection when a default editor parse would broaden the original policy.
-bool QueueEditorSourceRecovery(EditorApp& app, std::string_view source, bool preserveUndo = false) {
+bool QueueEditorSourceRecovery(EditorApp& app, std::string_view source, bool preserveUndo = true) {
   if (app.hasDocument() && !app.document().usesEditorParserForSourceRecovery()) {
     return false;
   }
@@ -211,7 +209,14 @@ bool QueueEditorSourceRecovery(EditorApp& app, std::string_view source, bool pre
       })) {
     return false;
   }
-  app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(source), preserveUndo));
+  auto command = EditorCommand::ReplaceDocumentCommand(std::string(source), preserveUndo);
+  if (app.hasDocument()) {
+    command.sourceRecoveryState = app.document().sourceRecoveryState();
+    if (!command.sourceRecoveryState) {
+      return false;
+    }
+  }
+  app.applyMutation(std::move(command));
   return true;
 }
 

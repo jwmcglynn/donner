@@ -438,8 +438,12 @@ donner_cc_library(
         ":editor_parse_options",
         ":lock_state",
         "//donner/base",
+        "//donner/base/xml",
+        "//donner/base/xml/components",
         "//donner/svg",
         "//donner/svg/compositor",
+        "//donner/svg/components",
+        "//donner/svg/components/resources:components",
         "//donner/svg/parser",
     ],
 )

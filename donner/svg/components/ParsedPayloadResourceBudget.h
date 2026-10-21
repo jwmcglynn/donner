@@ -40,6 +40,12 @@ public:
   };
 
   ParsedPayloadResourceBudget() = default;
+  /// Current local retained-byte ceiling for recovery-policy checks.
+  std::size_t maximumRetainedBytes() const { return limits_.maximumRetainedBytes; }
+
+  /// Owning identity of the shared family envelope used by this local budget.
+  std::shared_ptr<DocumentResourceFamilyBudget> familyBudget() const { return family_; }
+
   /// Create a payload budget with a local ceiling and optional shared family budget.
   /// @param limits Local retained-byte limit.
   /// @param family Shared document resource budget, or null for local accounting only.
