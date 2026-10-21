@@ -650,7 +650,7 @@ TEST(EditorAppTest, DeleteSelectionWithUndoKeepsDocumentRootAndDeletesTheRest) {
            <rect id="r2" x="50" width="20" height="20"/>
          </svg>)"));
   auto r2 = app.document().document().querySelector("#r2");
-  ASSERT_TRUE(r2.has_value());
+  ASSERT_THAT(r2, ::testing::Optional(::testing::Property("id", &svg::SVGElement::id, "r2")));
 
   app.setSelection(std::vector<svg::SVGElement>{app.document().document().svgElement(), *r2});
   const std::string sourceBefore(app.document().document().source());
