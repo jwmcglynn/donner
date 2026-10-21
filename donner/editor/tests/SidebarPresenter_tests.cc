@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -38,6 +39,26 @@ constexpr std::string_view kInspectorSvg =
          <rect x="10" y="20" width="100" height="50" fill="red" id="target"/>
          <rect id="peer" x="0" y="0" width="10" height="10"/>
        </svg>)";
+
+/// Matches a box that shares no area with \p other.
+MATCHER_P(DoesNotOverlap, other, "shares no area with " + ::testing::PrintToString(other)) {
+  const bool overlaps = arg.topLeft.x < other.bottomRight.x &&
+                        other.topLeft.x < arg.bottomRight.x &&
+                        arg.topLeft.y < other.bottomRight.y && other.topLeft.y < arg.bottomRight.y;
+  return !overlaps;
+}
+
+/// Screen-space bounds of the open popup drawn in the last frame, if any.
+std::optional<Box2d> OpenPopupWindowRect() {
+  for (const ImGuiPopupData& popup : ImGui::GetCurrentContext()->OpenPopupStack) {
+    if (popup.Window != nullptr && popup.Window->Active && !popup.Window->Hidden) {
+      return Box2d(Vector2d(popup.Window->Pos.x, popup.Window->Pos.y),
+                   Vector2d(popup.Window->Pos.x + popup.Window->Size.x,
+                            popup.Window->Pos.y + popup.Window->Size.y));
+    }
+  }
+  return std::nullopt;
+}
 
 ImVec2 RectCenter(const Box2d& rect) {
   return ImVec2(static_cast<float>((rect.topLeft.x + rect.bottomRight.x) * 0.5),
@@ -1288,6 +1309,127 @@ TEST_F(SidebarPresenterImGuiTest, WidthFieldFocusOpensEditableTrueScalePresetPop
                                    /*mouseDown=*/false, /*windowHeight=*/600.0f));
   ASSERT_TRUE(app.flushFrame());
   EXPECT_EQ(target->getAttribute("style"), "stroke-width: 8");
+}
+
+TEST_F(SidebarPresenterImGuiTest, WidthPresetPopupNeverCoversItsFieldInShortWindows) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_short_width_presets_test";
+  RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false,
+                       /*windowHeight=*/600.0f);
+  const auto tallField = presenter.strokeWidthRectForTesting();
+  ASSERT_TRUE(tallField.has_value());
+
+  // Too little room below the field for the whole preset list, as in a short editor window.
+  const float shortHeight = std::ceil(static_cast<float>(tallField->bottomRight.y)) + 12.0f;
+  RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false,
+                       shortHeight);
+  const auto field = presenter.strokeWidthRectForTesting();
+  const auto stepper = presenter.strokeDecrementRectForTesting();
+  ASSERT_TRUE(field.has_value());
+  ASSERT_TRUE(stepper.has_value());
+  const Box2d control(field->topLeft, Vector2d(stepper->bottomRight.x, field->bottomRight.y));
+  const float displayHeight = ImGui::GetIO().DisplaySize.y;
+
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/true,
+                       shortHeight);
+  for (int frame = 0; frame < 3; ++frame) {
+    RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/false,
+                         shortHeight);
+  }
+  const std::optional<Box2d> popup = OpenPopupWindowRect();
+  ASSERT_TRUE(popup.has_value()) << "focusing the width field should open its presets";
+  EXPECT_THAT(*popup, DoesNotOverlap(control));
+  EXPECT_THAT(popup->topLeft.y, testing::Ge(0.0));
+  EXPECT_THAT(popup->bottomRight.y, testing::Le(static_cast<double>(displayHeight)));
+
+  // A second click on the field places the caret instead of choosing a preset under the pointer.
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/true,
+                       shortHeight);
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field),
+                                    /*mouseDown=*/false, shortHeight));
+  EXPECT_FALSE(app.flushFrame()) << "clicking the field should not apply a preset";
+  EXPECT_THAT(target->getAttribute("style"), testing::Eq(std::nullopt));
+  EXPECT_TRUE(ImGui::GetIO().WantTextInput) << "the width field should keep keyboard focus";
+}
+
+TEST_F(SidebarPresenterImGuiTest, WidthEnterCommitsTypedValueAndClosesPresets) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_width_enter_test";
+  constexpr float kHeight = 600.0f;
+  RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false,
+                       kHeight);
+  const auto field = presenter.strokeWidthRectForTesting();
+  ASSERT_TRUE(field.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/true,
+                       kHeight);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/false,
+                       kHeight);
+  ReplaceFocusedInput(presenter, &app, kWindowName, "6", RectCenter(*field), kHeight);
+  ASSERT_TRUE(OpenPopupWindowRect().has_value()) << "presets stay open while typing";
+
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiKey_Enter, true);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/false,
+                       kHeight);
+  io.AddKeyEvent(ImGuiKey_Enter, false);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/false,
+                       kHeight);
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(target->getAttribute("style"), testing::Optional(testing::Eq("stroke-width: 6")));
+  EXPECT_THAT(OpenPopupWindowRect(), testing::Eq(std::nullopt)) << "Enter should close presets";
+  EXPECT_THAT(presenter.strokeWidthPresetRectForTesting(0), testing::Eq(std::nullopt));
+  EXPECT_FALSE(io.WantTextInput) << "Enter should end width typing";
+}
+
+TEST_F(SidebarPresenterImGuiTest, WidthEscapeClosesPresets) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_width_escape_test";
+  constexpr float kHeight = 600.0f;
+  RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), /*mouseDown=*/false,
+                       kHeight);
+  const auto field = presenter.strokeWidthRectForTesting();
+  ASSERT_TRUE(field.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/true,
+                       kHeight);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/false,
+                       kHeight);
+  ReplaceFocusedInput(presenter, &app, kWindowName, "9", RectCenter(*field), kHeight);
+  ASSERT_TRUE(OpenPopupWindowRect().has_value()) << "presets stay open while typing";
+
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiKey_Escape, true);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/false,
+                       kHeight);
+  io.AddKeyEvent(ImGuiKey_Escape, false);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/false,
+                       kHeight);
+  (void)app.flushFrame();
+
+  EXPECT_THAT(OpenPopupWindowRect(), testing::Eq(std::nullopt)) << "Escape should close presets";
+  EXPECT_THAT(presenter.strokeWidthPresetRectForTesting(0), testing::Eq(std::nullopt));
+  EXPECT_FALSE(io.WantTextInput) << "Escape should end width typing";
 }
 
 TEST_F(SidebarPresenterImGuiTest, MiterLimitStepsMatchFieldHeightAndUpdateStyle) {
