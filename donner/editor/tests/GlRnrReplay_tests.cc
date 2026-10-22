@@ -4309,8 +4309,8 @@ TEST(GlRnrReplayTest, SourceTagUndoRestoresCanvasAndLayers) {
   }
   const auto before = LoadCaptureBitmap(results[0], 44);
   ASSERT_THAT(before, testing::Optional(testing::_));
-  // The restored document can use different tile-edge antialiasing. Check the ellipse's solid
-  // interior with exact pixel identity, independently of those edges and selection chrome.
+  // Check visible ellipse presence using exact pixel identity in its solid interior.
+  // The source, Layers row, and presented document version are checked independently below.
   const PixelCrop ellipseInterior{static_cast<int>(before->dimensions.x * 195.0 / 260.0),
                                   static_cast<int>(before->dimensions.y * 25.0 / 180.0),
                                   static_cast<int>(before->dimensions.x * 30.0 / 260.0),
