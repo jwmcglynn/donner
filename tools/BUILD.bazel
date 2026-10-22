@@ -657,6 +657,20 @@ py_library(
     deps = [":bcr_source", ":release_cli"],
 )
 
+py_library(
+    name = "macos_editor_test_bundle",
+    testonly = True,
+    srcs = ["macos_editor_test_bundle.py"],
+    deps = [":release_macos_editor"],
+)
+
+py_test(
+    name = "macos_editor_test_bundle_tests",
+    size = "small",
+    srcs = ["macos_editor_test_bundle_tests.py"],
+    deps = [":macos_editor_test_bundle"],
+)
+
 # Manual artifact qualification copies, compresses and signature-checks a complete app; it is
 # separate from ordinary unit-test latency checks and runs in full BCR Preflight.
 py_test(
@@ -665,26 +679,30 @@ py_test(
     srcs = ["release_macos_editor_native_tests.py"],
     data = [
         "ci_macos_xcode.txt",
-        "//build_defs:editor_build_info.bzl",
-        "//build_defs:BUILD.bazel",
-        "//donner/editor:write_build_info.sh",
-        "//donner/editor:editor_build_info_txt",
         "//:.bazelrc",
         "//:.bazelversion",
         "//:LICENSE",
         "//:MODULE.bazel",
-        "//third_party:bazel/non_bcr_deps.bzl",
+        "//build_defs:BUILD.bazel",
+        "//build_defs:editor_build_info.bzl",
         "//donner/editor:art/Info.plist",
-        "//donner/editor:editor_macos_app",
+        "//donner/editor:editor_build_info_txt",
+        "//donner/editor:editor_macos_app_test_archive",
+        "//donner/editor:write_build_info.sh",
+        "//third_party:bazel/non_bcr_deps.bzl",
         "//third_party/licenses:notice_release_editor_txt",
         "//tools/ci:release_compiler_identity",
     ],
-    deps = [":release_macos_editor", "@rules_python//python/runfiles"],
     tags = ["manual"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+    deps = [
+        ":macos_editor_test_bundle",
+        ":release_macos_editor",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(

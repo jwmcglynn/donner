@@ -53,7 +53,7 @@ RELEASE_PATHS = (
     "third_party/BUILD*", "third_party/*.BUILD", "third_party/*.bzl",
     "third_party/patches/*", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
     "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/notice*",
-    "tools/render_notice*", "tools/default_notice*", "tools/ci/BUILD.bazel",
+    "tools/render_notice*", "tools/default_notice*", "tools/macos_editor_test_bundle*", "tools/ci/BUILD.bazel",
     "tools/ci/release_*", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl",
     "build_defs/editor_build_info.bzl", "build_defs/BUILD.bazel",
     "donner/editor/write_build_info.sh", "tools/editor_build_info_tests.py", "donner/editor/BUILD.bazel",

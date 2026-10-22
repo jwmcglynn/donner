@@ -9,19 +9,7 @@ import unittest
 
 from python.runfiles import runfiles
 from tools import release_macos_editor as native
-
-
-def _producer_app(resolver):
-    name = "_main/donner/editor/Donner.app"
-    environment = resolver.EnvVars()
-    manifest = environment.get("RUNFILES_MANIFEST_FILE")
-    if not manifest and environment.get("RUNFILES_DIR"):
-        manifest = str(Path(environment["RUNFILES_DIR"]) / "MANIFEST")
-    if manifest and Path(manifest).is_file():
-        mapped = runfiles.CreateManifestBased(manifest).Rlocation(name)
-        if mapped and Path(mapped).is_dir():
-            return Path(mapped)
-    return Path(resolver.Rlocation(name))
+from tools import macos_editor_test_bundle as bundle
 
 
 def _fixture_role(app, member):
@@ -66,66 +54,28 @@ def _verify_fixture_bundle(app, stage):
 
 
 class NativeEditorArtifactTest(unittest.TestCase):
-    def test_leaf_symlink_runfiles_are_not_silently_dereferenced(self):
+    def test_archive_preserves_genuine_producer_links_for_rejection(self):
+        import tarfile
         resolver = runfiles.Create()
-        original = Path(resolver.Rlocation("_main/donner/editor/Donner.app")).resolve()
-        with tempfile.TemporaryDirectory(prefix="editor-linked-runfiles-") as temporary:
-            linked = Path(temporary) / "linked.app"
-            for parent, directories, files in os.walk(original, followlinks=False):
-                destination = linked / Path(parent).relative_to(original)
-                destination.mkdir(parents=True, exist_ok=True)
-                for name in files:
-                    (destination / name).symlink_to((Path(parent) / name).resolve())
-            copied = Path(temporary) / "copied.app"
-            shutil.copytree(linked, copied, symlinks=True)
-            try:
-                _verify_fixture_bundle(copied, "simulated-leaf-symlink-copy")
-            except ValueError as error:
-                print(str(error), flush=True)
-            license_path = Path(temporary) / "LICENSE"
-            license_path.write_text("fixture license")
-            notice = Path(temporary) / "NOTICE.txt"
-            notice.write_text("fixture notice")
-            with self.assertRaisesRegex(ValueError, "linked|symlink"):
-                native._bundle_files(copied, license_path, notice)
-
-    def test_manifest_tree_mapping_preserves_producer_bytes_and_genuine_links(self):
-        resolver = runfiles.Create()
-        with tempfile.TemporaryDirectory(prefix="editor-tree-mapping-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="editor-linked-archive-") as temporary:
             base = Path(temporary)
+            archive = base / "producer.tar"
+            shutil.copy2(resolver.Rlocation("_main/donner/editor/Donner.app.test-data.tar"), archive)
             producer = base / "producer.app"
-            shutil.copytree(_producer_app(resolver).resolve(), producer, symlinks=True)
-            virtual = base / "runfiles"
-            transport = virtual / "_main/donner/editor/Donner.app"
-            for parent, directories, files in os.walk(producer, followlinks=False):
-                destination = transport / Path(parent).relative_to(producer)
-                destination.mkdir(parents=True, exist_ok=True)
-                for name in files:
-                    (destination / name).symlink_to((Path(parent) / name).resolve())
-            (virtual / "MANIFEST").write_text("_main/donner/editor/Donner.app " + str(producer) + "\n")
-            directory_resolver = runfiles.CreateDirectoryBased(str(virtual))
-            self.assertTrue((transport / "Contents/MacOS/Donner").is_symlink())
-            selected = _producer_app(directory_resolver)
-            self.assertEqual(selected, producer)
-            copied = base / "copied.app"
-            shutil.copytree(selected, copied, symlinks=True)
-            for name in ("Contents/MacOS/Donner", "Contents/Info.plist",
-                         "Contents/_CodeSignature/CodeResources", "Contents/Resources/Donner.icns"):
-                self.assertFalse((copied / name).is_symlink())
-                self.assertEqual(native.release_cli.digest(copied / name),
-                                 native.release_cli.digest(producer / name))
-            native.validate_native(copied)
-            genuine = producer / "Contents/Resources/genuine-link"
-            genuine.symlink_to(producer / "Contents/Resources/Donner.icns")
-            linked_copy = base / "genuine-link.app"
-            shutil.copytree(_producer_app(directory_resolver), linked_copy, symlinks=True)
-            self.assertTrue((linked_copy / "Contents/Resources/genuine-link").is_symlink())
-            license_path = base / "LICENSE"
-            license_path.write_text("fixture license")
-            notice = base / "NOTICE.txt"
-            notice.write_text("fixture notice")
-            with self.assertRaisesRegex(ValueError, "linked|symlink"):
-                native._bundle_files(linked_copy, license_path, notice)
+            bundle.extract_bundle(archive, producer)
+            (producer / "Contents/Resources/genuine-link").symlink_to(
+                producer / "Contents/Resources/Donner.icns")
+            def normalized(member):
+                member.uid = member.gid = 0
+                member.uname, member.gname = "root", "wheel"
+                return member
+            linked_archive = base / "linked.tar"
+            with tarfile.open(linked_archive, "w", format=tarfile.USTAR_FORMAT) as output:
+                output.add(producer / "Contents", arcname="Contents", filter=normalized)
+            rejected = base / "rejected.app"
+            with self.assertRaisesRegex(ValueError, "regular USTAR"):
+                bundle.extract_bundle(linked_archive, rejected)
+            self.assertFalse(rejected.exists())
 
     def test_actual_signed_app_survives_zip_and_reaches_the_entrypoint(self):
         resolver = runfiles.Create()
@@ -134,10 +84,6 @@ class NativeEditorArtifactTest(unittest.TestCase):
             self.assertIsNotNone(path, name)
             self.assertTrue(Path(path).exists(), name)
             original = Path(path)
-            if name == "donner/editor/Donner.app":
-                _verify_fixture_bundle(original.resolve(), "transport-runfile")
-                original = _producer_app(resolver)
-                _verify_fixture_bundle(original.resolve(), "source-producer")
             linked = Path(temporary) / "linked-runfiles" / name
             linked.parent.mkdir(parents=True, exist_ok=True)
             if not linked.is_symlink():
@@ -146,14 +92,9 @@ class NativeEditorArtifactTest(unittest.TestCase):
             destination = Path(temporary) / "materialized-runfiles" / name
             if not destination.exists():
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                if linked.is_dir():
-                    shutil.copytree(linked.resolve(), destination, symlinks=True)
-                else:
-                    shutil.copy2(linked, destination)
+                shutil.copy2(linked, destination)
             self.assertFalse(destination.is_symlink(), name)
             self.assertEqual(destination.stat().st_mode & 0o777, original.stat().st_mode & 0o777)
-            if name == "donner/editor/Donner.app":
-                _verify_fixture_bundle(destination, "materialized-runfile")
             return destination
         commit = os.environ.get("DONNER_RELEASE_SOURCE_COMMIT")
         self.assertIsNotNone(commit, "the caller must independently select the source commit")
@@ -168,8 +109,9 @@ class NativeEditorArtifactTest(unittest.TestCase):
             shutil.copyfile(source("donner/editor/editor_build_info.txt"), build_info)
             identity = native.check_build_info(root, build_info, commit)
             app = Path(temporary) / "Donner.app"
-            shutil.copytree(source("donner/editor/Donner.app").resolve(), app, symlinks=True)
-            _verify_fixture_bundle(app, "copied-app")
+            archive_input = source("donner/editor/Donner.app.test-data.tar")
+            bundle.extract_bundle(archive_input, app)
+            _verify_fixture_bundle(app, "extracted-producer")
             output = Path(os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR", temporary)) / "package"
             output.mkdir()
             archive = output / native.ARCHIVE

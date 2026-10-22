@@ -36,6 +36,7 @@ on:
       - tools/editor_build_info_tests.py
       - tools/release_cli*.py
       - tools/release_macos_editor*.py
+      - tools/macos_editor_test_bundle*.py
       - tools/release_artifact_publisher*.py
   # The full matrix qualifies a release candidate: run it nightly and on
   # request. Pushes to main run the slim check (see the prepare job).

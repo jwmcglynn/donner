@@ -177,7 +177,8 @@ class BcrPreflightTest(unittest.TestCase):
     def test_native_packaging_inputs_select_the_full_matrix(self):
         for path in ("LICENSE", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
                      "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
-                     "tools/release_macos_editor.py", "tools/release_candidate.py"):
+                     "tools/release_macos_editor.py", "tools/release_candidate.py",
+                     "tools/macos_editor_test_bundle.py", "tools/macos_editor_test_bundle_tests.py"):
             with self.subTest(path=path):
                 self.assertTrue(bcr_preflight.is_release_path(path))
 

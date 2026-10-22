@@ -1703,6 +1703,13 @@ donner_macos_app_bundle(
     }),
 )
 
+filegroup(
+    name = "editor_macos_app_test_archive",
+    testonly = True,
+    srcs = [":editor_macos_app"],
+    output_group = "native_test_archive",
+)
+
 alias(
     name = "editor",
     actual = select({
