@@ -91,11 +91,12 @@ class NativeTestBundleTest(unittest.TestCase):
         self.archive.write_bytes(contents)
         with self.assertRaises(ValueError):
             bundle.extract_bundle(self.archive, self.destination)
-        members = self.members()
-        members[-1][0].mode = 0o4755
-        self.write(members)
-        with self.assertRaises(ValueError):
-            bundle.extract_bundle(self.archive, self.destination)
+        for mode in (0o4755, 0o555):
+            members = self.members()
+            members[-1][0].mode = mode
+            self.write(members)
+            with self.assertRaises(ValueError):
+                bundle.extract_bundle(self.archive, self.destination)
         self.assertFalse(self.destination.exists())
 
     def test_extended_headers_truncated_payload_and_nonfresh_destination_are_refused(self):

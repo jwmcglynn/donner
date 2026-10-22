@@ -27,6 +27,7 @@ def _macos_app_bundle_impl(ctx):
         outputs = [app, test_archive],
         arguments = arguments,
         command = """set -eu
+umask 022
 app="$1"; binary="$2"; plist="$3"; icon="$4"; test_archive="$5"
 shift 5
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
@@ -35,6 +36,7 @@ chmod u+w "$app/Contents/MacOS/Donner"
 chmod 755 "$app/Contents/MacOS/Donner"
 cp "$plist" "$app/Contents/Info.plist"
 cp "$icon" "$app/Contents/Resources/Donner.icns"
+chmod 644 "$app/Contents/Info.plist" "$app/Contents/Resources/Donner.icns"
 while [ "$#" -gt 0 ]; do
   cp "$1" "$app/Contents/Frameworks/$2"
   chmod u+w "$app/Contents/Frameworks/$2"
