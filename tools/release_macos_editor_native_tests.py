@@ -11,6 +11,19 @@ from python.runfiles import runfiles
 from tools import release_macos_editor as native
 
 
+def _producer_app(resolver):
+    name = "_main/donner/editor/Donner.app"
+    environment = resolver.EnvVars()
+    manifest = environment.get("RUNFILES_MANIFEST_FILE")
+    if not manifest and environment.get("RUNFILES_DIR"):
+        manifest = str(Path(environment["RUNFILES_DIR"]) / "MANIFEST")
+    if manifest and Path(manifest).is_file():
+        mapped = runfiles.CreateManifestBased(manifest).Rlocation(name)
+        if mapped and Path(mapped).is_dir():
+            return Path(mapped)
+    return Path(resolver.Rlocation(name))
+
+
 def _fixture_role(app, member):
     relative = member.relative_to(app).as_posix()
     roles = {"Contents/MacOS/Donner": "main-executable", "Contents/Info.plist": "plist"}
@@ -76,6 +89,44 @@ class NativeEditorArtifactTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "linked|symlink"):
                 native._bundle_files(copied, license_path, notice)
 
+    def test_manifest_tree_mapping_preserves_producer_bytes_and_genuine_links(self):
+        resolver = runfiles.Create()
+        with tempfile.TemporaryDirectory(prefix="editor-tree-mapping-") as temporary:
+            base = Path(temporary)
+            producer = base / "producer.app"
+            shutil.copytree(_producer_app(resolver).resolve(), producer, symlinks=True)
+            virtual = base / "runfiles"
+            transport = virtual / "_main/donner/editor/Donner.app"
+            for parent, directories, files in os.walk(producer, followlinks=False):
+                destination = transport / Path(parent).relative_to(producer)
+                destination.mkdir(parents=True, exist_ok=True)
+                for name in files:
+                    (destination / name).symlink_to((Path(parent) / name).resolve())
+            (virtual / "MANIFEST").write_text("_main/donner/editor/Donner.app " + str(producer) + "\n")
+            directory_resolver = runfiles.CreateDirectoryBased(str(virtual))
+            self.assertTrue((transport / "Contents/MacOS/Donner").is_symlink())
+            selected = _producer_app(directory_resolver)
+            self.assertEqual(selected, producer)
+            copied = base / "copied.app"
+            shutil.copytree(selected, copied, symlinks=True)
+            for name in ("Contents/MacOS/Donner", "Contents/Info.plist",
+                         "Contents/_CodeSignature/CodeResources", "Contents/Resources/Donner.icns"):
+                self.assertFalse((copied / name).is_symlink())
+                self.assertEqual(native.release_cli.digest(copied / name),
+                                 native.release_cli.digest(producer / name))
+            native.validate_native(copied)
+            genuine = producer / "Contents/Resources/genuine-link"
+            genuine.symlink_to(producer / "Contents/Resources/Donner.icns")
+            linked_copy = base / "genuine-link.app"
+            shutil.copytree(_producer_app(directory_resolver), linked_copy, symlinks=True)
+            self.assertTrue((linked_copy / "Contents/Resources/genuine-link").is_symlink())
+            license_path = base / "LICENSE"
+            license_path.write_text("fixture license")
+            notice = base / "NOTICE.txt"
+            notice.write_text("fixture notice")
+            with self.assertRaisesRegex(ValueError, "linked|symlink"):
+                native._bundle_files(linked_copy, license_path, notice)
+
     def test_actual_signed_app_survives_zip_and_reaches_the_entrypoint(self):
         resolver = runfiles.Create()
         def source(name):
@@ -84,7 +135,9 @@ class NativeEditorArtifactTest(unittest.TestCase):
             self.assertTrue(Path(path).exists(), name)
             original = Path(path)
             if name == "donner/editor/Donner.app":
-                _verify_fixture_bundle(original.resolve(), "source-runfile")
+                _verify_fixture_bundle(original.resolve(), "transport-runfile")
+                original = _producer_app(resolver)
+                _verify_fixture_bundle(original.resolve(), "source-producer")
             linked = Path(temporary) / "linked-runfiles" / name
             linked.parent.mkdir(parents=True, exist_ok=True)
             if not linked.is_symlink():
