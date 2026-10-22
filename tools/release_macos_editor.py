@@ -184,24 +184,26 @@ def _rpaths(image: Path, app: Path) -> list[Path]:
     return paths
 
 
-def _check_dependency(dependency: str, image: Path, app: Path, paths: list[Path]) -> None:
+def _check_dependency(dependency: str, image: Path, app: Path, paths: list[Path],
+                      validated: set[Path]) -> None:
     if dependency.startswith(("/System/Library/", "/usr/lib/")):
         if ".." in PurePosixPath(dependency).parts:
             raise ValueError("native editor system dependency has a noncanonical path")
         return
     if dependency.startswith("@rpath/"):
         matches = [_expanded_path(str(base / dependency[7:]), image, app) for base in paths]
-        if not any(path.is_file() and path.is_relative_to(app.resolve()) for path in matches):
-            raise ValueError("native editor has an unresolved bundled dependency")
-    elif not _expanded_path(dependency, image, app).is_file():
-        raise ValueError("native editor has an unresolved bundled dependency")
+    else:
+        matches = [_expanded_path(dependency, image, app)]
+    if not any(path in validated and path.is_file() for path in matches):
+        raise ValueError("native editor dependency is outside the validated image inventory")
 
 
-def _check_dependencies(image: Path, app: Path, main_rpaths: list[Path]) -> None:
+def _check_dependencies(image: Path, app: Path, main_rpaths: list[Path],
+                        validated: set[Path]) -> None:
     paths = _rpaths(image, app) + main_rpaths
     for line in _tool("/usr/bin/otool", "-L", str(image)).splitlines()[1:]:
         dependency = line.strip().split(" (compatibility version ")[0]
-        _check_dependency(dependency, image, app, paths)
+        _check_dependency(dependency, image, app, paths, validated)
 
 
 def validate_native(app: Path) -> None:
@@ -213,10 +215,11 @@ def validate_native(app: Path) -> None:
         raise ValueError("native editor signing identity differs from the ad-hoc contract")
     images = [executable, *sorted((app / "Contents/Frameworks").glob("*.dylib"))]
     main_rpaths = _rpaths(executable, app)
+    validated = {image.resolve() for image in images}
     for image in images:
         if _tool("/usr/bin/lipo", "-archs", str(image)).strip() != "arm64":
             raise ValueError("native editor image is not arm64")
-        _check_dependencies(image, app, main_rpaths)
+        _check_dependencies(image, app, main_rpaths, validated)
 
 
 def _regular_size(path: Path) -> int:

@@ -187,7 +187,7 @@ class MacosEditorPackageTest(unittest.TestCase):
                 return "cmd LC_RPATH\npath @executable_path/../Frameworks (offset 12)\n"
             return str(image) + ":\n\t@rpath/libfixture.dylib (compatibility version 1.0.0)\n"
         with mock.patch.object(self.native, "_tool", side_effect=output):
-            self.native._check_dependencies(image, self.app, [])
+            self.native._check_dependencies(image, self.app, [], {image.resolve(), library.resolve()})
         evil = self.app / "Contents/Resources/evil.dylib"
         evil.write_bytes(b"not admitted code")
         for dependency in ("/opt/fixture/lib.dylib", "@loader_path/../../../escape.dylib",
@@ -197,7 +197,27 @@ class MacosEditorPackageTest(unittest.TestCase):
             with self.subTest(dependency=dependency), mock.patch.object(
                     self.native, "_tool", return_value=str(image) + ":\n\t" + dependency):
                 with self.assertRaises(ValueError):
-                    self.native._check_dependencies(image, self.app, [library.parent])
+                    self.native._check_dependencies(image, self.app, [library.parent],
+                                                    {image.resolve(), library.resolve()})
+
+    def test_existing_unvalidated_code_files_cannot_join_the_dependency_closure(self):
+        image = self.app / "Contents/MacOS/Donner"
+        frameworks = self.app / "Contents/Frameworks"
+        known = frameworks / "known.dylib"
+        known.parent.mkdir()
+        known.write_bytes(b"validated fixture")
+        validated = {image.resolve(), known.resolve()}
+        self.native._check_dependency("@rpath/known.dylib", image, self.app,
+                                      [frameworks], validated)
+        for relative in ("Contents/MacOS/helper.dylib", "Contents/Frameworks/sub/helper.dylib",
+                         "Contents/Frameworks/helper.so"):
+            with self.subTest(relative=relative):
+                target = self.app / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"unvalidated fixture")
+                dependency = "@executable_path/../" + relative.removeprefix("Contents/")
+                with self.assertRaisesRegex(ValueError, "validated image inventory"):
+                    self.native._check_dependency(dependency, image, self.app, [frameworks], validated)
 
     def test_entrypoint_probe_clears_library_and_checkout_borrowing(self):
         import os
