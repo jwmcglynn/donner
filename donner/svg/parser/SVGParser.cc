@@ -573,8 +573,19 @@ std::optional<ParseDiagnostic> ParseAttributeList(SVGParserContext& context, SVG
   return std::nullopt;
 }
 
-template <typename T>
-ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, const XMLNode& node) {
+using NodeContentsCallback = std::optional<ParseDiagnostic> (*)(SVGParserContext&, const void*,
+                                                                const XMLNode&);
+
+/// Parse attributes before invoking the original element type's contents parser.
+/// @param context Parser context and resource limits.
+/// @param element Base handle to the element being parsed.
+/// @param node XML node supplying attributes and contents.
+/// @param typedElement Original typed element, borrowed only until this function returns.
+/// @param parseContents Synchronous typed contents callback; never stored.
+/// @return The parsed element or the first diagnostic.
+ParseResult<SVGElement> ParseAttributesAndContents(SVGParserContext& context, SVGElement element,
+                                                   const XMLNode& node, const void* typedElement,
+                                                   NodeContentsCallback parseContents) {
   if (!ReserveAttributePayload(context, element.entityHandle(), node)) {
     return std::move(element);
   }
@@ -582,11 +593,20 @@ ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, co
     return std::move(error.value());
   }
 
-  if (auto error = ParseNodeContents(context, element, node)) {
+  if (auto error = parseContents(context, typedElement, node)) {
     return std::move(error.value());
   }
 
   return std::move(element);
+}
+
+template <typename T>
+ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, const XMLNode& node) {
+  return ParseAttributesAndContents(
+      context, element, node, &element,
+      [](SVGParserContext& parserContext, const void* typedElement, const XMLNode& sourceNode) {
+        return ParseNodeContents(parserContext, *static_cast<const T*>(typedElement), sourceNode);
+      });
 }
 
 /**
