@@ -218,8 +218,8 @@ TEST(GlRnrReplayTest, SourceOpeningLineReplacementKeepsPresentedDocumentCurrent)
   options.rnrPath = RunfilePath("donner/editor/tests/source_opening_line_to_text.rnr");
   options.svgPathOverride = RunfilePath("donner/editor/tests/source_edit_shapes.svg");
   options.outputDir = DiagnosticOutputDir() / "source_opening_line_replacement";
-  options.captureFrames = {45};
-  options.maxFrame = 50;
+  options.captureFrames = {121};
+  options.maxFrame = 126;
   options.sourcePaneVisible = true;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.contentOnlyCapture = true;
