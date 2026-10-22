@@ -919,6 +919,67 @@ TEST(SVGParser, DescriptiveElementsCaptureTextContent) {
   EXPECT_EQ(descriptiveText.text, "Hello World");
 }
 
+TEST(SVGParser, AttributeDiagnosticsPrecedeContentBudgetDiagnostics) {
+  ParseWarningSink warnings;
+  SVGParser::Options options;
+  options.maximumContentProjectionChunks = 1;
+  auto result = SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'>"
+      "<text stroke-width='invalid'>one<![CDATA[two]]></text></svg>",
+      warnings, options);
+  ASSERT_THAT(result, NoParseError());
+  EXPECT_THAT(warnings.warnings(),
+              ElementsAre(testing::Field(&ParseDiagnostic::reason,
+                                         testing::Eq("Invalid length or percentage")),
+                          testing::Field(&ParseDiagnostic::reason,
+                                         testing::HasSubstr("content-projection budget"))));
+  const auto text = result.result().querySelector("text");
+  ASSERT_THAT(text, testing::Ne(std::nullopt));
+  EXPECT_THAT(text->getAttribute("stroke-width"), testing::Optional(RcString("invalid")));
+  EXPECT_THAT(text->cast<SVGTextElement>().textContent(), testing::IsEmpty());
+}
+
+TEST(SVGParser, NestedElementsConsumeTextChunksButNotDescriptiveChunks) {
+  for (const std::string_view tag : {"text", "title", "desc", "metadata"}) {
+    SCOPED_TRACE(tag);
+    const std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><" + std::string(tag) +
+                               " id='parent'>one<g/><!-- ignored --><![CDATA[two]]></" +
+                               std::string(tag) + "></svg>";
+    for (const std::size_t limit : {2u, 3u}) {
+      SCOPED_TRACE(limit);
+      SVGParser::Options options;
+      options.maximumContentProjectionChunks = limit;
+      ParseWarningSink warnings;
+      auto result = SVGParser::ParseSVG(source, warnings, options);
+      ASSERT_THAT(result, NoParseError());
+      const auto parent = result.result().querySelector("#parent");
+      ASSERT_THAT(parent, testing::Ne(std::nullopt));
+      const bool rejected = tag == "text" && limit == 2;
+      if (tag == "text") {
+        EXPECT_THAT(parent->cast<SVGTextElement>().textContent(),
+                    testing::Eq(rejected ? "" : "onetwo"));
+      } else {
+        EXPECT_THAT(parent->entityHandle().get<components::DescriptiveTextComponent>().text,
+                    testing::Eq("onetwo"));
+      }
+      EXPECT_THAT(result.result()
+                      .registry()
+                      .ctx()
+                      .get<components::ParsedPayloadResourceBudget>()
+                      .securityStats()
+                      .rejected,
+                  testing::Eq(rejected));
+      if (rejected) {
+        EXPECT_THAT(warnings.warnings(),
+                    ElementsAre(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("content-projection budget"))));
+      } else {
+        EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
+      }
+    }
+  }
+}
+
 TEST(SVGParser, TextContentSkipsCommentsAndCollectsCData) {
   const std::string_view source(
       R"(<svg xmlns="http://www.w3.org/2000/svg">
