@@ -3,6 +3,7 @@
 import contextlib
 from datetime import datetime, timedelta, timezone
 import hashlib
+import gzip
 import json
 from pathlib import Path
 import stat
@@ -532,9 +533,11 @@ class SourceAndEditorTest(unittest.TestCase):
         lock.write_bytes(b"lock")
         module_lock = b'{"registryFileHashes": {"https://bcr.bazel.build/x": "0"}}\n'
         (directory / "MODULE.bazel.lock").write_bytes(module_lock)
-        files = {"site/index.html": b"site", "site/editor.wasm": b"wasm",
+        (self.root / "MODULE.bazel").write_text('module(name="donner", version="0.8.0", compatibility_level=0)\n')
+        wasm = b"\0asm\1\0\0\0" + b"0.8.0\n" + COMMIT.encode() + b"\n"
+        files = {"site/index.html": b"site", "site/editor.wasm": wasm,
                  "site/catalog-fonts.json": b"{}", "deploy/index.html": b"deploy",
-                 "deploy/editor.wasm.gz": b"gzip"}
+                 "deploy/editor.wasm.gz": gzip.compress(wasm, mtime=0)}
         expected = {name: digest(data) for name, data in files.items()}
         for name, data in files.items():
             target = directory / name
@@ -571,6 +574,42 @@ class SourceAndEditorTest(unittest.TestCase):
         del expected["deploy/editor.wasm.gz"]
         with self.assertRaisesRegex(ValueError, "required site or deploy"):
             candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+
+    def _rewrite_editor_bytes(self, directory, expected, raw, served):
+        for name, data in (("site/editor.wasm", raw), ("deploy/editor.wasm.gz", served)):
+            (directory / name).write_bytes(data)
+            expected[name] = digest(data)
+        checksums = "".join(f"{sha}  {name}\n" for name, sha in sorted(expected.items())
+                            if name.startswith(("site/", "deploy/")))
+        (directory / "SHA256SUMS").write_text(checksums)
+        expected["SHA256SUMS"] = digest(checksums.encode())
+
+    def test_editor_rejects_stale_embedded_identity_with_consistent_provenance(self):
+        directory, provenance, expected = self._editor_package()
+        stale = b"\0asm\1\0\0\0" + b"0.8.0\n" + b"b" * 40 + b"\n"
+        self._rewrite_editor_bytes(directory, expected, stale, gzip.compress(stale, mtime=0))
+        self._write_editor_provenance(directory, provenance, expected)
+        with self.assertRaisesRegex(ValueError, "build identity"):
+            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+
+    def test_editor_rejects_different_deployed_payload_with_matching_manifests(self):
+        directory, provenance, expected = self._editor_package()
+        raw = (directory / "site/editor.wasm").read_bytes()
+        self._rewrite_editor_bytes(directory, expected, raw, gzip.compress(b"stale served payload", mtime=0))
+        self._write_editor_provenance(directory, provenance, expected)
+        with self.assertRaisesRegex(ValueError, "deployed|gzip"):
+            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+
+    def test_editor_refuses_corrupt_truncated_oversized_or_trailing_gzip(self):
+        directory, provenance, expected = self._editor_package()
+        raw = (directory / "site/editor.wasm").read_bytes()
+        valid = gzip.compress(raw, mtime=0)
+        for served in (b"not gzip", valid[:-3], gzip.compress(raw + b"extra", mtime=0),
+                       valid + b"trailer", valid + gzip.compress(b"", mtime=0)):
+            self._rewrite_editor_bytes(directory, expected, raw, served)
+            self._write_editor_provenance(directory, provenance, expected)
+            with self.assertRaisesRegex(ValueError, "deployed|gzip"):
+                candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
 
     def test_editor_provenance_binds_its_generated_module_lock(self):
         directory, provenance, expected = self._editor_package()
