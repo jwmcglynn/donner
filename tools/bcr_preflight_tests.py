@@ -175,7 +175,7 @@ class BcrPreflightTest(unittest.TestCase):
         self.assertEqual(calls, self._consumer_commands()[:1])
 
     def test_native_packaging_inputs_select_the_full_matrix(self):
-        for path in ("LICENSE", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
+        for path in ("LICENSE", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
                      "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
                      "tools/release_macos_editor.py", "tools/release_candidate.py"):
             with self.subTest(path=path):

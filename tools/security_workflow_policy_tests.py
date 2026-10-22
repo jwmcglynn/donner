@@ -2637,8 +2637,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         trigger = workflow.split("permissions:", 1)[0]
         self.assertIn("      - LICENSE\n", trigger)
         self.assertIn("      - tools/release_macos_editor*.py\n", trigger)
+        self.assertIn("      - tools/ci_macos_xcode.txt\n", trigger)
         self.assertTrue(bcr_preflight.is_release_path("LICENSE"))
         self.assertTrue(bcr_preflight.is_release_path("tools/release_macos_editor.py"))
+        self.assertTrue(bcr_preflight.is_release_path("tools/ci_macos_xcode.txt"))
 
     def test_bcr_preflight_steps_share_the_workflow_artifact_layout(self):
         # tools/bcr_preflight.py finds its inputs and writes its outputs under the runner's

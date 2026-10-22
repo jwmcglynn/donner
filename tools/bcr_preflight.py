@@ -54,7 +54,7 @@ RELEASE_PATHS = (
     "third_party/patches/*", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
     "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/notice*",
     "tools/render_notice*", "tools/default_notice*", "tools/ci/BUILD.bazel",
-    "tools/ci/release_*", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
+    "tools/ci/release_*", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
     "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
     ".github/workflows/bcr_preflight.yml",
     ".github/workflows/publish_bcr.yml", ".github/workflows/release.yml",

@@ -12,6 +12,12 @@ class NativeEditorReleaseContractTest(unittest.TestCase):
         self.assertIn("editor-macos", release_candidate.LOCK_ROLES)
         self.assertNotIn("editor-macos", release_candidate.CLI_PLATFORMS)
 
+    def test_every_native_provenance_input_selects_full_preflight(self):
+        from tools import release_macos_editor
+        for path in (*release_macos_editor.INPUTS, "LICENSE"):
+            with self.subTest(path=path):
+                self.assertTrue(bcr_preflight.is_release_path(path))
+
     def test_existing_macos_attempt_builds_and_packages_the_native_app(self):
         plan = bcr_preflight.cli_plan(bcr_preflight.Layout("/fixture"), "darwin-arm64",
                                       "a" * 40, "123", "2")
