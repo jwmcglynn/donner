@@ -2411,6 +2411,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_release_policy_rejects_builds_preflight_selection_and_extra_assets(self):
         path = ".github/workflows/release.yml"
         release = self.supply_chain_files[path]
+        publication = _jobs(release)["publish-release-artifacts"]
+        cli_step = _named_step(publication, RELEASE_CLI_STEP)
+        native_step = _named_step(publication, "Verify the retained native editor ZIP")
         stage = "          python3 -B -m tools.release_candidate release --source-root . \\\n"
         upload = '            "$RUNNER_TEMP"/release/donner-*.candidate.json\n'
         self._assert_rejected(lambda files, path: _release_publication_violations(files[path]), {
@@ -2451,10 +2454,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "      - uses: ./.github/actions/setup\n\n      - name: " + RELEASE_SOURCE_STEP +
                 "\n", 1), "release commit"),
             "staged CLI of another run": (path, release.replace(
-                '--run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"\n\n'
-                "      - name: Verify preflight",
-                '--run-id "$RECORD_RUN_ID" --attempt "$SOURCE_ATTEMPT"\n\n'
-                "      - name: Verify preflight", 1), "staged CLI files"),
+                cli_step, cli_step.replace('--run-id "$SOURCE_RUN_ID"',
+                                           '--run-id "$RECORD_RUN_ID"', 1), 1), "staged CLI files"),
+            "native editor of another run": (path, release.replace(
+                native_step, native_step.replace('--run-id "$SOURCE_RUN_ID"',
+                                                 '--run-id "$RECORD_RUN_ID"', 1), 1),
+                "retained native editor"),
             "staged CLI of another commit": (path, release.replace(
                 '--release "$RUNNER_TEMP/release" \\\n            --commit "$GITHUB_SHA"',
                 '--release "$RUNNER_TEMP/release" \\\n            --commit "$SOURCE_COMMIT"', 1),
@@ -2600,7 +2605,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                     ("bazelisk", "build", "--lockfile_mode=error", "-c", "opt", *targets),
                     ("bazelisk", "test", "--lockfile_mode=error", "-c", "opt",
                      "//tools/ci:release_svg_notice_coverage")])
-                self.assertEqual(len(commands), 4, "the package step must be the last command")
+                self.assertEqual(len(commands), 8 if platform == "darwin-arm64" else 4,
+                                 "each product packages only after its own build and checks")
                 package = " ".join(commands[3])
                 self.assertTrue(package.startswith(
                     "python3 -B -m tools.release_cli package --platform %s " % platform))
@@ -2610,13 +2616,33 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                                  "--commit %s --run-id 7 --attempt 2" % _BCR_COMMIT):
                     self.assertIn(" %s " % argument, package + " ")
                 self.assertNotIn("c++", package)
-        for with_source, count in ((True, 3), (False, 2)):
+                if platform == "darwin-arm64":
+                    native = commands[4:]
+                    self.assertEqual([item[:2] for item in native[:3]],
+                                     [("bazelisk", "build"), ("bazelisk", "build"),
+                                      ("bazelisk", "test")])
+                    for command in native[:3]:
+                        self.assertIn("--//build_defs:enable_tracy=false", command)
+                        self.assertIn("--//build_defs:release_source_commit=" + _BCR_COMMIT, command)
+                    self.assertIn("--lockfile_mode=update", native[0])
+                    self.assertIn("--lockfile_mode=error", native[1])
+                    self.assertIn("//donner/editor:editor_macos_app", native[1])
+                    self.assertIn("//tools:release_macos_editor_native_tests", native[2])
+                    self.assertIn("//tools:editor_notice_coverage_tests", native[2])
+                    self.assertEqual(native[3][:5],
+                                     ("python3", "-B", "-m", "tools.release_macos_editor", "package"))
+                    self.assertIn("--build-info", native[3])
+        for with_source, count in ((True, 4), (False, 3)):
             commands = [" ".join(command.argv) for command in bcr_preflight.verify_plan(
                 _BCR_LAYOUT, _BCR_COMMIT, "7", "2", with_source)]
             self.assertEqual(len(commands), count)
             self.assertEqual(with_source, commands[0].startswith(
                 "python3 -B -m tools.bcr_source verify --artifacts /temp/donner-bcr/source "
                 "--commit " + _BCR_COMMIT))
+            self.assertIn(
+                "python3 -B -m tools.release_macos_editor verify --artifacts "
+                "/temp/donner-bcr/editor-macos --commit %s --run-id 7 --attempt 2" % _BCR_COMMIT,
+                commands)
             for platform, short in (("linux-x86-64", "linux"), ("darwin-arm64", "macos")):
                 self.assertIn(
                     "python3 -B -m tools.release_cli verify --artifacts /temp/donner-bcr/cli-%s "
