@@ -199,6 +199,42 @@ license(
     package_url = "https://github.com/notofonts/latin-greek-cyrillic",
 )
 
+# The generated OpenGL loader and its Khronos headers retain the upstream notices.
+license(
+    name = "glad",
+    package_name = "glad",
+    license_kinds = [
+        "@rules_license//licenses/spdx:MIT",
+        "@rules_license//licenses/spdx:Apache-2.0",
+    ],
+    license_text = "glad.LICENSE.txt",
+    package_url = "https://github.com/Dav1dde/glad",
+    package_version = "0.1.36",
+)
+
+license(
+    name = "vulkan_headers",
+    package_name = "Vulkan-Headers",
+    license_kinds = [
+        "@rules_license//licenses/spdx:Apache-2.0",
+        "@rules_license//licenses/spdx:MIT",
+    ],
+    license_text = "vulkan-headers.LICENSE.txt",
+    package_url = "https://github.com/KhronosGroup/Vulkan-Headers",
+    package_version = "1.4.349",
+)
+
+# The native editor reaches exactly the Noto Sans font files in this vendored component.
+# The release closure keys components by source location rather than the renderer's font wrapper.
+license(
+    name = "resvg-test-suite",
+    package_name = "Noto Sans",
+    license_kinds = ["@rules_license//licenses/spdx:OFL-1.1"],
+    license_text = "noto-sans.LICENSE.txt",
+    package_url = "https://github.com/notofonts/latin-greek-cyrillic",
+    package_version = "2.000",
+)
+
 # Canonical per-variant license lists. These match the build-report
 # variants in `tools/generate_build_report.py` so a Python script can
 # correlate cquery results with the aggregated manifest.
@@ -239,6 +275,8 @@ ALL_KNOWN_LICENSES = [
     ":bootstrap-icons",
     ":google_fonts",
     ":generic_sans_faces",
+    ":glad",
+    ":vulkan_headers",
     "@libpng//:license",
     "@zlib//:license",
 ]
@@ -337,7 +375,7 @@ filegroup(
 
 donner_closure_notice_file(
     name = "notice_release_editor",
-    available_licenses = ALL_KNOWN_LICENSES,
+    available_licenses = ALL_KNOWN_LICENSES + [":resvg-test-suite"],
     # Each exemption is one label the closure was observed to reach; any other label of the same
     # component still needs a catalog entry.
     exempt_labels = {
@@ -359,10 +397,15 @@ donner_closure_notice_file(
             "//third_party/libc_compat:libcxx_macos_compat",
             "//third_party/libc_compat:libcxx_macos_compat.cc",
         ]
+    } | {
+        "//third_party/licenses:notice_editor": "Generated attribution text; the original components are independently covered by this closure.",
     },
     exempt_linkopts = {
         # Requested by libpng under --config=text-full.
         "-lm": "The platform C math library, dynamically linked from the system and not shipped.",
+        "-Wl,-rpath,@executable_path/../Frameworks": "A search path for the bundled libraries, not an additional linked component.",
+        "CoreFoundation": "The operating system framework is dynamically linked and not redistributed.",
+        "CoreText": "The operating system framework is dynamically linked and not redistributed.",
     },
     target = "//donner/editor:editor_binary",
     variant = "Donner native editor (configured editor binary closure)",
