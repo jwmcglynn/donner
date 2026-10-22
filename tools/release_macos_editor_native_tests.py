@@ -18,7 +18,22 @@ class NativeEditorArtifactTest(unittest.TestCase):
             path = resolver.Rlocation("_main/" + name)
             self.assertIsNotNone(path, name)
             self.assertTrue(Path(path).exists(), name)
-            return Path(path)
+            original = Path(path)
+            linked = Path(temporary) / "linked-runfiles" / name
+            linked.parent.mkdir(parents=True, exist_ok=True)
+            if not linked.is_symlink():
+                linked.symlink_to(original.resolve(), target_is_directory=original.is_dir())
+            self.assertTrue(linked.is_symlink(), name)
+            destination = Path(temporary) / "materialized-runfiles" / name
+            if not destination.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if linked.is_dir():
+                    shutil.copytree(linked.resolve(), destination, symlinks=True)
+                else:
+                    shutil.copy2(linked, destination)
+            self.assertFalse(destination.is_symlink(), name)
+            self.assertEqual(destination.stat().st_mode & 0o777, original.stat().st_mode & 0o777)
+            return destination
         commit = os.environ.get("DONNER_RELEASE_SOURCE_COMMIT")
         self.assertIsNotNone(commit, "the caller must independently select the source commit")
         with tempfile.TemporaryDirectory(prefix="editor-artifact-") as temporary:
