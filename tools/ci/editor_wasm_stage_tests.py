@@ -21,7 +21,8 @@ PACKAGE_TARGET = "//fixture:package"
 # The bazelisk commands the handoff step runs, in order.
 PACKAGE_QUERIES = [
     ["query", "--output=label", "labels(actual, //tools/ci:editor_wasm_package)"],
-    ["cquery", "--config=editor-wasm", "--output=files", "//tools/ci:editor_wasm_package"],
+    ["cquery", "--config=editor-wasm", "--//build_defs:release_source_commit=" + SHA,
+     "--output=files", "//tools/ci:editor_wasm_package"],
 ]
 FAMILIES = ("Bebas Neue", "Bitter", "Inter", "JetBrains Mono", "Lato", "Lora", "Montserrat",
             "Open Sans", "Oswald", "Pacifico", "Playfair Display", "Roboto Mono")
@@ -135,7 +136,9 @@ class EditorWasmStageTest(unittest.TestCase):
         package.mkdir()
         result = self._run("package", PACKAGE_PATH=str(package), GITHUB_SHA=None)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self._bazel_calls(), PACKAGE_QUERIES)
+        local = [[word for word in call if not word.startswith("--//build_defs:release_source_commit=")]
+                 for call in PACKAGE_QUERIES]
+        self.assertEqual(self._bazel_calls(), local)
 
     def test_handoff_invalid_source_revision_fails_before_bazel(self):
         package = self.root / "package"

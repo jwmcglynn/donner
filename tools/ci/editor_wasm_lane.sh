@@ -34,6 +34,15 @@ usage() {
 # shellcheck source=tools/ci/lane.sh
 source "tools/ci/lane.sh"
 
+source_args=()
+if [[ "${GITHUB_SHA+x}" == x ]]; then
+  if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "GITHUB_SHA must be a full lowercase source commit" >&2
+    exit 2
+  fi
+  source_args=("--//build_defs:release_source_commit=${GITHUB_SHA}")
+fi
+
 prefetch() {
   lane_begin "Editor WASM dependency prefetch"
   lane_phase "Fetch editor Wasm audits" \
@@ -41,7 +50,7 @@ prefetch() {
   lane_phase "Fetch renderer Wasm size tests (wasm-size)" \
     bazelisk fetch --config=wasm-size //tools/ci:wasm_size_tests
   lane_phase "Fetch editor Wasm size tests (editor-wasm)" \
-    bazelisk fetch --config=editor-wasm //tools/ci:editor_wasm_size_tests
+    bazelisk fetch --config=editor-wasm ${source_args[@]+"${source_args[@]}"} //tools/ci:editor_wasm_size_tests
   lane_phase "Fetch browser GPU bridge (wasm-geode)" \
     bazelisk fetch --config=wasm-geode \
     //tools/ci:browser_bridge_link_probes //tools/ci:geode_wasm_browser_module
@@ -60,7 +69,7 @@ build() {
   lane_phase "Editor Wasm audits" \
     bazelisk test --test_output=errors //tools/ci:editor_wasm_audits
   lane_phase "Shipped browser dependency audit (editor-wasm)" \
-    bazelisk test --config=editor-wasm --test_output=errors \
+    bazelisk test --config=editor-wasm ${source_args[@]+"${source_args[@]}"} --test_output=errors \
     //tools/ci:editor_wasm_shipped_browser_audit
   lane_phase "Renderer Wasm pixel test (wasm-size)" \
     bazelisk test --config=wasm-size --test_output=errors //donner/svg/renderer/wasm:render_test
@@ -68,7 +77,7 @@ build() {
     bazelisk test --config=wasm-size --test_output="${budget_test_output}" "${budget_args[@]}" \
     //donner/svg/renderer/wasm:wasm_size_tests
   lane_phase "Editor Wasm package size tests (editor-wasm)" \
-    bazelisk test --config=editor-wasm --test_output="${budget_test_output}" --remote_download_outputs=all \
+    bazelisk test --config=editor-wasm ${source_args[@]+"${source_args[@]}"} --test_output="${budget_test_output}" --remote_download_outputs=all \
     "${budget_args[@]}" //tools/ci:editor_wasm_size_tests
 }
 
@@ -80,9 +89,9 @@ prove_lockfile() {
   local snapshot="$1"
   lane_begin "Prove the package's resolved module graph"
   lane_phase "Build package (lockfile update mode)" \
-    bazelisk build --config=editor-wasm --lockfile_mode=update //tools/ci:editor_wasm_package
+    bazelisk build --config=editor-wasm ${source_args[@]+"${source_args[@]}"} --lockfile_mode=update //tools/ci:editor_wasm_package
   lane_phase "Build package (lockfile error mode)" \
-    bazelisk build --config=editor-wasm --lockfile_mode=error //tools/ci:editor_wasm_package
+    bazelisk build --config=editor-wasm ${source_args[@]+"${source_args[@]}"} --lockfile_mode=error //tools/ci:editor_wasm_package
   lane_phase "Check generated lockfile" \
     python3 -B -m tools.release_cli check-lockfile --lockfile MODULE.bazel.lock
   lane_phase "Snapshot proved lockfile" cp MODULE.bazel.lock "${snapshot}"

@@ -584,6 +584,23 @@ class SourceAndEditorTest(unittest.TestCase):
         (directory / "SHA256SUMS").write_text(checksums)
         expected["SHA256SUMS"] = digest(checksums.encode())
 
+    def test_editor_identity_spans_a_decompressed_chunk_boundary(self):
+        directory, provenance, expected = self._editor_package()
+        identity = b"0.8.0\n" + COMMIT.encode() + b"\n"
+        raw = b"\0asm\1\0\0\0" + b"x" * (1024 * 1024 - 8 - 12) + identity + b"y" * (1024 * 1024)
+        self._rewrite_editor_bytes(directory, expected, raw, gzip.compress(raw, mtime=0))
+        self._write_editor_provenance(directory, provenance, expected)
+        self.assertEqual(candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2"),
+                         expected["MODULE.bazel.lock"])
+
+    def test_editor_rejects_wrong_embedded_version_with_the_selected_commit(self):
+        directory, provenance, expected = self._editor_package()
+        wrong = b"\0asm\1\0\0\0" + b"0.7.0\n" + COMMIT.encode() + b"\n"
+        self._rewrite_editor_bytes(directory, expected, wrong, gzip.compress(wrong, mtime=0))
+        self._write_editor_provenance(directory, provenance, expected)
+        with self.assertRaisesRegex(ValueError, "build identity"):
+            candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+
     def test_editor_rejects_stale_embedded_identity_with_consistent_provenance(self):
         directory, provenance, expected = self._editor_package()
         stale = b"\0asm\1\0\0\0" + b"0.8.0\n" + b"b" * 40 + b"\n"
@@ -604,11 +621,24 @@ class SourceAndEditorTest(unittest.TestCase):
         directory, provenance, expected = self._editor_package()
         raw = (directory / "site/editor.wasm").read_bytes()
         valid = gzip.compress(raw, mtime=0)
-        for served in (b"not gzip", valid[:-3], gzip.compress(raw + b"extra", mtime=0),
+        corrupt_crc = bytearray(valid)
+        corrupt_crc[-8] ^= 1
+        for served in (b"not gzip", bytes(corrupt_crc), valid[:-3],
+                       gzip.compress(raw[:-1], mtime=0), gzip.compress(raw + b"extra", mtime=0),
                        valid + b"trailer", valid + gzip.compress(b"", mtime=0)):
             self._rewrite_editor_bytes(directory, expected, raw, served)
             self._write_editor_provenance(directory, provenance, expected)
             with self.assertRaisesRegex(ValueError, "deployed|gzip"):
+                candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+
+    def test_editor_compressed_input_uses_the_existing_artifact_size_bound(self):
+        directory, provenance, expected = self._editor_package()
+        raw = (directory / "site/editor.wasm").read_bytes()
+        served = gzip.compress(raw, mtime=0) + b"x" * len(raw)
+        self._rewrite_editor_bytes(directory, expected, raw, served)
+        self._write_editor_provenance(directory, provenance, expected)
+        with mock.patch.object(candidate, "MAX_UNPACKED_BYTES", len(raw)):
+            with self.assertRaisesRegex(ValueError, "artifact size limit"):
                 candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
 
     def test_editor_provenance_binds_its_generated_module_lock(self):

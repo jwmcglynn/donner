@@ -48,6 +48,15 @@ and in the release body; the record cannot contain its own hash.
 - `reviews`: SHA-256 digests of the `security.md` and `supply-chain.md` reports. The record
   contains their digests; the record artifact retains the reports beside it.
 
+The Editor WASM producer passes the event's full source commit through
+`--//build_defs:release_source_commit` when building, testing and selecting the package output.
+Its source checkout uses the event commit, including the synthetic merge commit on a pull request.
+Local development without a GitHub source context retains the ordinary Git metadata fallback.
+The verifier requires the embedded version and full source commit in the consumed Wasm bytes.
+It compares the gzip-decoded deployment payload with the retained raw payload in bounded chunks,
+rejecting corrupt, truncated, oversized or trailing gzip data. Provenance alone does not establish
+the binary's embedded identity.
+
 ## Registry entry {#ReleaseCandidateRegistryEntry}
 
 The `bcr-entry` role is `donner-bcr-entry-<attempt>` from the qualifying BCR Preflight attempt:

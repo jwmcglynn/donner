@@ -126,10 +126,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
         cls.ci_bazel_test = _repository_text("tools/ci_bazel_test.sh")
 
-    def _job_body(self, job):
+    def _job_body(self, job, workflow=None):
+        workflow = self.main if workflow is None else workflow
         marker = "\n  %s:\n" % job
-        self.assertIn(marker, self.main, "job %s not found" % job)
-        rest = self.main.split(marker, 1)[1]
+        self.assertIn(marker, workflow, "job %s not found" % job)
+        rest = workflow.split(marker, 1)[1]
         end = re.search(r"^  [A-Za-z0-9_-]+:\s*$", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
 
@@ -1444,6 +1445,20 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             found.append((name.group(1) if name else None,
                           re.findall(r"^        run: (.*)$", step, re.MULTILINE)))
         return found
+
+    def _assert_editor_wasm_source_checkout(self, workflow):
+        build = self._job_body("build", workflow)
+        self.assertIn("    steps:\n      - uses: actions/checkout@v7\n        with:\n"
+                      "          persist-credentials: false\n\n      - name: Select pinned Xcode", build)
+        self.assertEqual(build.count("uses: actions/checkout@"), 1)
+
+    def test_editor_wasm_uses_the_event_commit_for_its_source_checkout(self):
+        self._assert_editor_wasm_source_checkout(self.editor_wasm)
+        checkout = "      - uses: actions/checkout@v7\n        with:\n"
+        for override in ("          ref: another-branch\n", "          repository: other/project\n"):
+            changed = self.editor_wasm.replace(checkout, checkout + override)
+            with self.assertRaises(AssertionError):
+                self._assert_editor_wasm_source_checkout(changed)
 
     def test_editor_wasm_steps_each_run_one_tested_script_call(self):
         """Each Bazel or staging step is one call of a tested script, in the original order."""

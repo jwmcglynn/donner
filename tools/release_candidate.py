@@ -15,6 +15,7 @@ import stat
 import subprocess
 import tempfile
 import zipfile
+import zlib
 
 from tools import bcr_source, pages_artifact, release_cli, release_macos_editor
 
@@ -421,6 +422,57 @@ def _extract_verified(zip_path: Path, expected: dict[str, str], output: Path) ->
         raise ValueError("candidate artifact ZIP is missing retained files")
 
 
+def _inflate_editor_chunk(decoder, block: bytes, remaining: int) -> bytes:
+    try:
+        data = decoder.decompress(block, min(remaining + 1, 1024 * 1024))
+    except zlib.error:
+        raise ValueError("editor deployed gzip is corrupt") from None
+    if len(data) > remaining:
+        raise ValueError("editor deployed gzip exceeds the retained raw payload size")
+    return data
+
+
+def _require_editor_gzip_eof(decoder, stream) -> None:
+    if decoder.unused_data or decoder.unconsumed_tail or stream.read(1):
+        raise ValueError("editor deployed gzip contains trailing data")
+
+
+def _deployed_editor_chunks(stream, maximum: int):
+    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    remaining = maximum
+    for block in iter(lambda: stream.read(64 * 1024), b""):
+        while block:
+            data = _inflate_editor_chunk(decoder, block, remaining)
+            remaining -= len(data)
+            yield data
+            if decoder.eof:
+                _require_editor_gzip_eof(decoder, stream)
+                return
+            tail = decoder.unconsumed_tail
+            if not data and tail == block:
+                raise ValueError("editor deployed gzip makes no progress")
+            block = tail
+    raise ValueError("editor deployed gzip is truncated")
+
+
+def _verify_editor_wasm(raw: Path, served: Path, identity: bytes) -> None:
+    size = raw.stat().st_size
+    if size > MAX_UNPACKED_BYTES or served.stat().st_size > MAX_UNPACKED_BYTES:
+        raise ValueError("editor deployed or raw payload exceeds the artifact size limit")
+    tail, found = b"", False
+    with raw.open("rb") as original, served.open("rb") as compressed:
+        for data in _deployed_editor_chunks(compressed, size):
+            if original.read(len(data)) != data:
+                raise ValueError("editor deployed payload differs from the retained raw payload")
+            window = tail + data
+            found = found or identity in window
+            tail = window[-len(identity):]
+        if original.read(1):
+            raise ValueError("editor deployed payload is shorter than the retained raw payload")
+    if not found:
+        raise ValueError("editor package does not contain the selected build identity")
+
+
 def _verify_editor(directory: Path, commit: str, root: Path, expected: dict[str, str],
                    run_id: str, attempt: str) -> str:
     """Check the editor package; return the digest of the module lock its build generated.
@@ -458,6 +510,8 @@ def _verify_editor(directory: Path, commit: str, root: Path, expected: dict[str,
         checksums[name] = _digest(digest, "editor file digest")
     if checksums != {name: sha for name, sha in expected.items() if name.startswith(("site/", "deploy/"))}:
         raise ValueError("editor package checksum manifest differs from retained files")
+    _verify_editor_wasm(directory / "site/editor.wasm", directory / "deploy/editor.wasm.gz",
+                        release_macos_editor._expected_build_info(root, commit))
     return generated_lock
 
 
