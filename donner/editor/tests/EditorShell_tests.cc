@@ -5530,9 +5530,9 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
   }
 }
 
-svg::RendererBitmap RunRetinaDragFrame(gui::EditorWindow& window, EditorShell& shell,
-                                       const Vector2d& documentPoint, bool mouseDown,
-                                       bool capture) {
+svg::RendererBitmap DrawRetinaDragFrame(gui::EditorWindow& window, EditorShell& shell,
+                                        const Vector2d& documentPoint, bool mouseDown,
+                                        bool capture) {
   const Vector2d screen = shell.viewportForReadback().documentToScreen(documentPoint);
   ImGuiIO& io = ImGui::GetIO();
   io.AddMousePosEvent(static_cast<float>(screen.x), static_cast<float>(screen.y));
@@ -5547,6 +5547,30 @@ svg::RendererBitmap RunRetinaDragFrame(gui::EditorWindow& window, EditorShell& s
   }
   window.endFrame();
   return svg::RendererBitmap{};
+}
+
+gui::EditorWindow::PresentationProgress WaitForDeferredRetinaPresentation(
+    gui::EditorWindow& window) {
+  auto progress = window.pollDeferredPresentation();
+  for (const tests::HangGuard guard;
+       progress == gui::EditorWindow::PresentationProgress::Pending && guard.active();) {
+    window.waitEventsTimeout(0.001);
+    progress = window.pollDeferredPresentation();
+  }
+  return progress;
+}
+
+svg::RendererBitmap RunRetinaDragFrame(gui::EditorWindow& window, EditorShell& shell,
+                                       const Vector2d& documentPoint, bool mouseDown,
+                                       bool capture) {
+  svg::RendererBitmap bitmap =
+      DrawRetinaDragFrame(window, shell, documentPoint, mouseDown, capture);
+  if (capture && bitmap.empty() &&
+      WaitForDeferredRetinaPresentation(window) == gui::EditorWindow::PresentationProgress::Ready) {
+    // A deferred submission ended its UI frame without capturing; readiness requires a new frame.
+    return DrawRetinaDragFrame(window, shell, documentPoint, mouseDown, true);
+  }
+  return bitmap;
 }
 
 void DeferRetinaCapture(gui::EditorWindow& window, EditorShell& shell,
