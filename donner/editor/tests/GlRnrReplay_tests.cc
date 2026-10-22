@@ -4243,7 +4243,7 @@ repro::ReproFile SourceTagUndoRecording() {
   file.metadata.windowWidth = 1280;
   file.metadata.windowHeight = 700;
   file.metadata.displayScale = 1.0;
-  file.frames.resize(101);
+  file.frames.resize(150);
   for (std::size_t index = 0; index < file.frames.size(); ++index) {
     auto& frame = file.frames[index];
     frame.index = index;
@@ -4264,19 +4264,28 @@ repro::ReproFile SourceTagUndoRecording() {
       file.frames[index].modifiers = modifiers;
     }
   };
-  keyTap(21, ImGuiKey_Home, 0);
-  for (std::size_t index = 0; index < 5; ++index) {
-    keyTap(25 + index * 3, ImGuiKey_RightArrow, 0);
-  }
-  file.frames[46].events = {{.kind = repro::ReproEvent::Kind::Char, .codepoint = 'X'}};
 #ifdef __APPLE__
   constexpr int kPrimaryModifier = 8;
 #else
   constexpr int kPrimaryModifier = 1;
 #endif
-  keyTap(60, ImGuiKey_Z, kPrimaryModifier);
-  keyTap(74, ImGuiKey_Z, kPrimaryModifier | 2);
-  keyTap(88, ImGuiKey_Z, kPrimaryModifier);
+  // The click establishes focus only; keyboard navigation selects the same logical source row
+  // independently of platform font metrics and visual wrapping.
+  // Eleven up-arrow presses clamp this eleven-line fixture to its first logical line.
+  for (std::size_t index = 0; index < 11; ++index) {
+    keyTap(21 + index * 3, ImGuiKey_UpArrow, 0);
+  }
+  keyTap(56, ImGuiKey_Home, 0);
+  for (std::size_t index = 0; index < 4; ++index) {
+    keyTap(60 + index * 3, ImGuiKey_DownArrow, 0);
+  }
+  for (std::size_t index = 0; index < 5; ++index) {
+    keyTap(74 + index * 3, ImGuiKey_RightArrow, 0);
+  }
+  file.frames[95].events = {{.kind = repro::ReproEvent::Kind::Char, .codepoint = 'X'}};
+  keyTap(109, ImGuiKey_Z, kPrimaryModifier);
+  keyTap(123, ImGuiKey_Z, kPrimaryModifier | 2);
+  keyTap(137, ImGuiKey_Z, kPrimaryModifier);
   return file;
 }
 
@@ -4290,7 +4299,7 @@ TEST(GlRnrReplayTest, SourceTagUndoRestoresCanvasAndLayers) {
   std::vector<repro::GlRnrReplayResult> results;
   // A content-only frame suppresses source-pane focus and selection chrome. Replay each prefix
   // separately and capture only its last frame, after all input has been processed normally.
-  for (const std::uint64_t frameIndex : {44u, 54u, 70u, 84u, 98u}) {
+  for (const std::uint64_t frameIndex : {93u, 103u, 119u, 133u, 147u}) {
     repro::GlRnrReplayOptions options;
     options.rnrPath = replayPath;
     options.outputDir = outputDir;
@@ -4307,7 +4316,7 @@ TEST(GlRnrReplayTest, SourceTagUndoRestoresCanvasAndLayers) {
     ASSERT_THAT(result.captures, testing::SizeIs(1));
     results.push_back(std::move(result));
   }
-  const auto before = LoadCaptureBitmap(results[0], 44);
+  const auto before = LoadCaptureBitmap(results[0], 93);
   ASSERT_THAT(before, testing::Optional(testing::_));
   // Check visible ellipse presence using exact pixel identity in its solid interior.
   // The source, Layers row, and presented document version are checked independently below.
@@ -4321,7 +4330,7 @@ TEST(GlRnrReplayTest, SourceTagUndoRestoresCanvasAndLayers) {
   using Row = repro::GlRnrReplayFrameDiagnostics::RowThumbnail;
   const auto ellipseRow =
       testing::Contains(testing::Field("displayName", &Row::displayName, testing::Eq("e")));
-  const auto* original = FindFrameDiagnostics(results[0], 43);
+  const auto* original = FindFrameDiagnostics(results[0], 92);
   ASSERT_THAT(original, testing::NotNull());
   EXPECT_THAT(original->rowThumbnails, ellipseRow);
   for (const std::size_t index : {1u, 3u}) {
