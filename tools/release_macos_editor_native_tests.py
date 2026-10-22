@@ -46,7 +46,10 @@ def _verify_fixture_bundle(app, stage):
     try:
         native._tool("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app))
     except ValueError as error:
-        raise ValueError(stage + ": " + str(error)) from None
+        print(json.dumps({"signature_stage": stage, "status": "invalid",
+                          "reason": str(error)}), flush=True)
+    else:
+        print(json.dumps({"signature_stage": stage, "status": "valid"}), flush=True)
 
 
 class NativeEditorArtifactTest(unittest.TestCase):
