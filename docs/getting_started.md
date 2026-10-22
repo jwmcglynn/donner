@@ -11,12 +11,12 @@ against a checked-out source tree. The checked-in
 exercises the latter path and is also
 used by BCR preflight against the release candidate.
 
-For the current v0.8 prerelease source tree, put this in your `MODULE.bazel`:
+For the current v0.8 source tree, put this in your `MODULE.bazel`:
 
 ```py
 module(name = "my_svg_app")
 
-bazel_dep(name = "donner", version = "0.8.0-pre")
+bazel_dep(name = "donner", version = "0.8.0")
 # On macOS, register the Apple toolchain before rules_cc selects a host toolchain.
 bazel_dep(name = "apple_support", version = "2.10.1")
 bazel_dep(name = "rules_cc", version = "0.2.26")
@@ -48,7 +48,7 @@ checkout):
 bazel build --override_module=donner=/path/to/donner //:my_app
 ```
 
-For a published BCR version, replace `0.8.0-pre` with the version listed in the registry and
+Once a BCR version is published, set the dependency to the version listed in the registry and
 run `bazel build //:my_app` without the override. Donner is built and tested against the Bazel
 version pinned in its `.bazelversion` (currently 8.8.1).
 
