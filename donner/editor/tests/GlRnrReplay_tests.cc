@@ -29,6 +29,7 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "gmock/gmock.h"
+#include "gtest/gtest-spi.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -4221,6 +4222,143 @@ TEST(GlRnrReplayTest, RecordedSaveShortcutCannotOverwriteEmbeddedSourceDisplayPa
   EXPECT_EQ(victimAfter, kVictimContents);
 
   RemoveDiagnosticOutputOnSuccess(outputDir);
+}
+
+repro::ReproFile SourceTagUndoRecording() {
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_source_tag_undo.svg";
+  file.metadata.svgBasename = "source_tag_undo.svg";
+  file.metadata.svgSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180" viewBox="0 0 260 180">
+  <rect id="bg" width="260" height="180" fill="#f7f8fa"/>
+  <rect id="r" x="10" y="10" width="70" height="50" fill="#2f6fed"/>
+  <circle id="c" cx="130" cy="35" r="25" fill="#f0b429"/>
+  <ellipse id="e" cx="210" cy="35" rx="35" ry="22" fill="#35a16b"/>
+  <polygon id="p" points="50,100 85,130 50,165 15,130" fill="#e76f51"/>
+  <text id="t" x="100" y="150" font-size="24" fill="#17202a">Hi</text>
+  <g id="grp" transform="translate(170 95) rotate(15)">
+    <rect id="gr" width="50" height="40" fill="#8a4fff"/>
+  </g>
+</svg>)svg";
+  file.metadata.windowWidth = 1280;
+  file.metadata.windowHeight = 700;
+  file.metadata.displayScale = 1.0;
+  file.frames.resize(101);
+  for (std::size_t index = 0; index < file.frames.size(); ++index) {
+    auto& frame = file.frames[index];
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = 100.0;
+    frame.mouseY = 85.0;
+  }
+  file.frames[15].mouseButtonMask = 1;
+  file.frames[15].events = {{.kind = repro::ReproEvent::Kind::MouseDown, .mouseButton = 0}};
+  file.frames[16].events = {{.kind = repro::ReproEvent::Kind::MouseUp, .mouseButton = 0}};
+  const auto keyTap = [&](std::size_t frame, int key, int modifiers) {
+    file.frames[frame].events = {
+        {.kind = repro::ReproEvent::Kind::KeyDown, .key = key, .modifiers = modifiers}};
+    file.frames[frame + 1].events = {
+        {.kind = repro::ReproEvent::Kind::KeyUp, .key = key, .modifiers = modifiers}};
+    for (std::size_t index = frame - 1; index <= frame + 2; ++index) {
+      file.frames[index].modifiers = modifiers;
+    }
+  };
+  keyTap(21, ImGuiKey_Home, 0);
+  for (std::size_t index = 0; index < 5; ++index) {
+    keyTap(25 + index * 3, ImGuiKey_RightArrow, 0);
+  }
+  file.frames[46].events = {{.kind = repro::ReproEvent::Kind::Char, .codepoint = 'X'}};
+#ifdef __APPLE__
+  constexpr int kPrimaryModifier = 8;
+#else
+  constexpr int kPrimaryModifier = 1;
+#endif
+  keyTap(60, ImGuiKey_Z, kPrimaryModifier);
+  keyTap(74, ImGuiKey_Z, kPrimaryModifier | 2);
+  keyTap(88, ImGuiKey_Z, kPrimaryModifier);
+  return file;
+}
+
+TEST(GlRnrReplayTest, SourceTagUndoRestoresCanvasAndLayers) {
+  const auto outputDir = DiagnosticOutputDir() / "source_tag_undo";
+  std::error_code directoryError;
+  std::filesystem::create_directories(outputDir, directoryError);
+  ASSERT_THAT(directoryError, testing::Eq(std::error_code()));
+  const auto replayPath = outputDir / "source_tag_undo.rnr";
+  ASSERT_THAT(repro::WriteReproFile(replayPath, SourceTagUndoRecording()), testing::IsTrue());
+  std::vector<repro::GlRnrReplayResult> results;
+  // A content-only frame suppresses source-pane focus and selection chrome. Replay each prefix
+  // separately and capture only its last frame, after all input has been processed normally.
+  for (const std::uint64_t frameIndex : {44u, 54u, 70u, 84u, 98u}) {
+    repro::GlRnrReplayOptions options;
+    options.rnrPath = replayPath;
+    options.outputDir = outputDir;
+    options.captureFrames = {frameIndex};
+    options.maxFrame = frameIndex;
+    options.sourcePaneVisible = true;
+    options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+    options.contentOnlyCapture = true;
+    options.pace = false;
+    options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+    repro::GlRnrReplayResult result;
+    std::string error;
+    ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+    ASSERT_THAT(result.captures, testing::SizeIs(1));
+    results.push_back(std::move(result));
+  }
+  const auto before = LoadCaptureBitmap(results[0], 44);
+  ASSERT_THAT(before, testing::Optional(testing::_));
+  // The restored document can use different tile-edge antialiasing. Check the ellipse's solid
+  // interior with exact pixel identity, independently of those edges and selection chrome.
+  const PixelCrop ellipseInterior{static_cast<int>(before->dimensions.x * 195.0 / 260.0),
+                                  static_cast<int>(before->dimensions.y * 25.0 / 180.0),
+                                  static_cast<int>(before->dimensions.x * 30.0 / 260.0),
+                                  static_cast<int>(before->dimensions.y * 20.0 / 180.0)};
+  const auto expectedPixels = CropBitmap(*before, ellipseInterior);
+  ASSERT_THAT(expectedPixels.dimensions.x, testing::Gt(0));
+  ASSERT_THAT(expectedPixels.dimensions.y, testing::Gt(0));
+  using Row = repro::GlRnrReplayFrameDiagnostics::RowThumbnail;
+  const auto ellipseRow =
+      testing::Contains(testing::Field("displayName", &Row::displayName, testing::Eq("e")));
+  const auto* original = FindFrameDiagnostics(results[0], 43);
+  ASSERT_THAT(original, testing::NotNull());
+  EXPECT_THAT(original->rowThumbnails, ellipseRow);
+  for (const std::size_t index : {1u, 3u}) {
+    const auto& result = results[index];
+    const auto frameIndex = result.captures.front().frameIndex;
+    const auto* frame = FindFrameDiagnostics(result, frameIndex - 1);
+    ASSERT_THAT(frame, testing::NotNull());
+    EXPECT_THAT(result.finalDocumentSource, testing::Optional(testing::HasSubstr("<elXlipse")));
+    EXPECT_THAT(frame->documentFrameVersion, testing::Gt(original->documentFrameVersion));
+    EXPECT_THAT(frame->rowThumbnails, testing::Not(ellipseRow));
+    const auto removed = LoadCaptureBitmap(result, frameIndex);
+    ASSERT_THAT(removed, testing::Optional(testing::_));
+    EXPECT_THAT(removed->dimensions, testing::Eq(before->dimensions));
+    int mismatchedPixels = -1;
+    EXPECT_NONFATAL_FAILURE(
+        tests::CompareBitmapToBitmap(CropBitmap(*removed, ellipseInterior), expectedPixels,
+                                     "source_tag_removed_" + std::to_string(frameIndex),
+                                     tests::PixelmatchIdentityParams(), &mismatchedPixels),
+        "pixels differ");
+    EXPECT_THAT(mismatchedPixels, testing::Gt(0));
+  }
+  for (const std::size_t index : {2u, 4u}) {
+    const auto& result = results[index];
+    const auto frameIndex = result.captures.front().frameIndex;
+    const auto* frame = FindFrameDiagnostics(result, frameIndex - 1);
+    ASSERT_THAT(frame, testing::NotNull());
+    EXPECT_THAT(result.finalDocumentSource,
+                testing::Optional(testing::AllOf(testing::HasSubstr("<ellipse id=\"e\""),
+                                                 testing::Not(testing::HasSubstr("elXlipse")))));
+    EXPECT_THAT(frame->rowThumbnails, ellipseRow);
+    EXPECT_THAT(frame->displayedDocVersion, testing::Eq(frame->documentFrameVersion));
+    const auto restored = LoadCaptureBitmap(result, frameIndex);
+    ASSERT_THAT(restored, testing::Optional(testing::_));
+    tests::CompareBitmapToBitmap(CropBitmap(*restored, ellipseInterior), expectedPixels,
+                                 "source_tag_undo_" + std::to_string(frameIndex),
+                                 tests::PixelmatchIdentityParams());
+  }
 }
 
 }  // namespace
