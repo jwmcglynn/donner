@@ -190,7 +190,7 @@ def _check_dependency(dependency: str, image: Path, app: Path, paths: list[Path]
             raise ValueError("native editor system dependency has a noncanonical path")
         return
     if dependency.startswith("@rpath/"):
-        matches = [(base / dependency[7:]).resolve() for base in paths]
+        matches = [_expanded_path(str(base / dependency[7:]), image, app) for base in paths]
         if not any(path.is_file() and path.is_relative_to(app.resolve()) for path in matches):
             raise ValueError("native editor has an unresolved bundled dependency")
     elif not _expanded_path(dependency, image, app).is_file():

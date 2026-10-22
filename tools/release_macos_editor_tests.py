@@ -185,12 +185,13 @@ class MacosEditorPackageTest(unittest.TestCase):
         evil = self.app / "Contents/Resources/evil.dylib"
         evil.write_bytes(b"not admitted code")
         for dependency in ("/opt/fixture/lib.dylib", "@loader_path/../../../escape.dylib",
-                           "@rpath/missing.dylib", "@executable_path/../Resources/evil.dylib",
+                           "@rpath/missing.dylib", "@rpath/../Resources/evil.dylib",
+                           "@executable_path/../Resources/evil.dylib",
                            "/usr/lib/../../opt/fixture/lib.dylib"):
             with self.subTest(dependency=dependency), mock.patch.object(
                     self.native, "_tool", return_value=str(image) + ":\n\t" + dependency):
                 with self.assertRaises(ValueError):
-                    self.native._check_dependencies(image, self.app, [])
+                    self.native._check_dependencies(image, self.app, [library.parent])
 
     def test_entrypoint_probe_clears_library_and_checkout_borrowing(self):
         import os
