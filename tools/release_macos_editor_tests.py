@@ -300,6 +300,18 @@ class MacosEditorPackageTest(unittest.TestCase):
              mock.patch.object(self.native.subprocess, "run", side_effect=execute):
             self.native._check_entrypoint(self.app)
 
+    def test_platform_failure_reports_only_bounded_named_diagnostics(self):
+        import subprocess
+        from unittest import mock
+        def fail(command, **options):
+            options["stdout"].write(b"/private/fixture/secret.app: a sealed resource is missing or invalid")
+            raise subprocess.CalledProcessError(1, command)
+        with mock.patch.object(self.native.subprocess, "run", side_effect=fail):
+            with self.assertRaisesRegex(ValueError, "codesign: sealed-resource-invalid") as error:
+                self.native._tool("/usr/bin/codesign", "--verify", "/private/fixture/secret.app")
+            self.assertNotIn("/private/", str(error.exception))
+            self.assertNotIn("secret.app", str(error.exception))
+
     def test_old_or_unknown_generated_identity_cannot_be_packaged(self):
         for commit in ("a" * 40, "unknown"):
             with self.subTest(commit=commit):

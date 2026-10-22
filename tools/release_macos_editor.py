@@ -151,12 +151,32 @@ def _check_app_metadata(root: Path, files: dict) -> None:
         raise ValueError("native editor Info.plist differs from the committed source")
 
 
+def _tool_failure(args: tuple[str, ...], output, failure) -> str:
+    output.seek(0)
+    diagnostic = output.read(MAX_CONTROL_BYTES).lower()
+    reasons = {
+        b"a sealed resource is missing or invalid": "sealed-resource-invalid",
+        b"code object is not signed at all": "unsigned-code",
+        b"invalid signature": "invalid-signature",
+        b"unsealed contents present": "unsealed-content",
+        b"operation not permitted": "operation-not-permitted",
+        b"permission denied": "permission-denied",
+        b"resource fork, finder information": "unsupported-file-metadata",
+        b"bundle format unrecognized": "unrecognized-bundle",
+    }
+    reason = next((label for text, label in reasons.items() if text in diagnostic), "unclassified")
+    program = {"/usr/bin/codesign": "codesign", "/usr/bin/otool": "otool",
+               "/usr/bin/lipo": "lipo"}.get(args[0], "platform-tool")
+    status = str(failure.returncode) if isinstance(failure, subprocess.CalledProcessError) else "unavailable"
+    return "native editor platform validation failed: " + program + ": " + reason + ": exit=" + status
+
+
 def _tool(*args: str) -> str:
     with tempfile.TemporaryFile() as output:
         try:
             subprocess.run(args, check=True, stdout=output, stderr=subprocess.STDOUT, timeout=60)
-        except (OSError, subprocess.SubprocessError):
-            raise ValueError("native editor platform validation failed") from None
+        except (OSError, subprocess.SubprocessError) as failure:
+            raise ValueError(_tool_failure(args, output, failure)) from None
         if output.tell() > MAX_CONTROL_BYTES:
             raise ValueError("native editor platform validation output is too large")
         output.seek(0)
