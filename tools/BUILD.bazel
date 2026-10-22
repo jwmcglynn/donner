@@ -643,10 +643,18 @@ py_library(
     srcs = ["release_cli.py"],
 )
 
+py_test(
+    name = "editor_build_info_tests",
+    size = "small",
+    srcs = ["editor_build_info_tests.py"],
+    data = ["//donner/editor:write_build_info.sh"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
 py_library(
     name = "release_macos_editor",
     srcs = ["release_macos_editor.py"],
-    deps = [":release_cli"],
+    deps = [":bcr_source", ":release_cli"],
 )
 
 # Manual artifact qualification copies, compresses and signature-checks a complete app; it is
@@ -657,6 +665,10 @@ py_test(
     srcs = ["release_macos_editor_native_tests.py"],
     data = [
         "ci_macos_xcode.txt",
+        "//build_defs:editor_build_info.bzl",
+        "//build_defs:BUILD.bazel",
+        "//donner/editor:write_build_info.sh",
+        "//donner/editor:editor_build_info_txt",
         "//:.bazelrc",
         "//:.bazelversion",
         "//:LICENSE",
@@ -679,6 +691,7 @@ py_test(
     name = "release_macos_editor_tests",
     size = "small",
     srcs = ["release_macos_editor_tests.py"],
+    data = ["BUILD.bazel"],
     deps = [":release_macos_editor", ":release_candidate", ":bcr_preflight"],
 )
 
@@ -692,6 +705,9 @@ py_test(
         "--require=imgui",
         "--require=glad",
         "--require=resvg-test-suite",
+        "--exact-component-file=resvg-test-suite=fonts/NotoSans-Bold.ttf",
+        "--exact-component-file=resvg-test-suite=fonts/NotoSans-Italic.ttf",
+        "--exact-component-file=resvg-test-suite=fonts/NotoSans-Regular.ttf",
         "--require=vulkan_headers",
         "--require=public-sans",
         "--require=stb",

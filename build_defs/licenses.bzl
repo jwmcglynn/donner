@@ -327,6 +327,7 @@ def _donner_closure_notice_file_impl(ctx):
                 target = str(target.label),
                 variant = ctx.attr.variant,
                 components = sorted(components.keys()),
+                component_labels = {key: sorted(value) for key, value in components.items()},
                 covered = {key: sorted(value) for key, value in covered.items()},
                 exempt = exempt,
                 uncovered = uncovered,

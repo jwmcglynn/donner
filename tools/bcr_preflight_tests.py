@@ -203,18 +203,23 @@ class BcrPreflightTest(unittest.TestCase):
                 ]
                 if platform == "darwin-arm64":
                     flags = ["-c", "opt", "--config=geode", "--config=text-full",
-                             "--//build_defs:enable_tracy=false"]
+                             "--//build_defs:enable_tracy=false",
+                             f"--//build_defs:release_source_commit={COMMIT}"]
                     targets = ["//donner/editor:editor_macos_app",
                                "//third_party/licenses:notice_release_editor_txt",
-                               "//tools/ci:release_compiler_identity"]
+                               "//tools/ci:release_compiler_identity",
+                               "//donner/editor:editor_build_info_txt"]
                     expected.extend([
                         ["bazelisk", "build", "--lockfile_mode=update", *flags, *targets, workspace],
                         ["bazelisk", "build", "--lockfile_mode=error", *flags, *targets, workspace],
                         ["bazelisk", "test", "--lockfile_mode=error", *flags,
+                         f"--test_env=DONNER_RELEASE_SOURCE_COMMIT={COMMIT}",
                          "//tools:editor_notice_coverage_tests",
-                         "//tools:release_macos_editor_native_tests", workspace],
+                         "//tools:release_macos_editor_native_tests",
+                         "//tools:editor_build_info_tests", workspace],
                         ["python3", "-B", "-m", "tools.release_macos_editor", "package",
                          "--app", "bazel-bin/donner/editor/Donner.app",
+                         "--build-info", "bazel-bin/donner/editor/editor_build_info.txt",
                          "--notice", "bazel-bin/third_party/licenses/notice_release_editor.txt",
                          "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
                          "--output", f"{self.temp}/donner-editor-macos", "--commit", COMMIT,

@@ -83,6 +83,25 @@ class NoticeCoverageTest(unittest.TestCase):
         self.assertIn("the NOTICE covers no third-party component",
                       notice_coverage_tests.check(coverage, manifest, notice, []))
 
+    def test_font_alias_is_limited_to_the_exact_three_reviewed_files(self):
+        files = {"fonts/NotoSans-Bold.ttf", "fonts/NotoSans-Italic.ttf", "fonts/NotoSans-Regular.ttf"}
+        requirements = ["resvg-test-suite=" + path for path in sorted(files)]
+        for prefix in ("@@//third_party/resvg-test-suite:", "//third_party/resvg-test-suite:",
+                       "@@resvg-test-suite+//:", "@@+deps+resvg-test-suite//:"):
+            coverage = {"component_labels": {"resvg-test-suite": [prefix + path for path in files]}}
+            self.assertEqual(notice_coverage_tests._exact_component_files(coverage, requirements), [])
+            coverage["component_labels"]["resvg-test-suite"].append(prefix + "tests/non-font.svg")
+            self.assertTrue(notice_coverage_tests._exact_component_files(coverage, requirements))
+
+    def test_missing_file_receipt_and_foreign_repository_fail_closed(self):
+        requirements = ["resvg-test-suite=fonts/NotoSans-Regular.ttf"]
+        for labels in ([], ["@@another-repo+//:fonts/NotoSans-Regular.ttf"],
+                       ["@@//third_party/other:fonts/NotoSans-Regular.ttf"]):
+            with self.subTest(labels=labels):
+                coverage = {"component_labels": {"resvg-test-suite": labels}}
+                self.assertTrue(notice_coverage_tests._exact_component_files(coverage, requirements))
+
+
 
 if __name__ == "__main__":
     unittest.main()

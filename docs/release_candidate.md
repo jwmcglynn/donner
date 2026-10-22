@@ -255,7 +255,8 @@ The `editor-macos` role is required by candidate schema 4 and is separate from t
 Wasm role. The existing full BCR Preflight macOS job builds `//donner/editor:editor_macos_app`
 optimized with Geode, full text and Tracy disabled, first resolving and then building under
 `--lockfile_mode=error`. A strict configured-closure NOTICE test covers the editor's linked code,
-bundled libraries and resources. Its compiler probe is built with the same configuration.
+bundled libraries and resources. Its Noto alias is limited to exactly the three reviewed font
+file labels; adding another payload to that component fails coverage until explicitly reviewed. Its compiler probe is built with the same configuration.
 Main pushes retain the existing slim preflight policy; full preflight runs on schedule, manual
 dispatch and changes to release or packaging inputs.
 
@@ -264,6 +265,12 @@ Bazel lockfile and third-party NOTICE. The ZIP contains `Donner SVG Editor.app`,
 `NOTICE.txt`; adding the licenses does not alter or resign the application. Provenance binds all
 file bytes and executable modes, source commit/tree, producer run/attempt, compiler, pinned Xcode,
 SDK, lockfile and license digests. The current app metadata remains version `0.8`, build `1`.
+The producer passes the full selected commit through `--//build_defs:release_source_commit`.
+That explicit value is part of the metadata action key and does not read Git. Packaging requires
+`--build-info` to match the source module version and full commit, records its SHA-256 and checks
+that the archived executable contains those exact identity bytes. Verification derives the
+expected identity from the candidate source again; stale or unknown build metadata cannot be
+hidden by fresh provenance. Empty-flag developer builds retain their local Git fallback.
 The producer checks arm64 architecture, bundled/system-only library resolution and strict code
 signatures before and after a fresh ZIP extraction, then checks the extracted executable's
 invalid-option exit before window creation. Archive validation rejects traversal, linked or

@@ -18,6 +18,14 @@ class NativeEditorReleaseContractTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(bcr_preflight.is_release_path(path))
 
+    def test_native_notice_registration_requires_the_exact_font_files(self):
+        from pathlib import Path
+        source = Path(__file__).with_name("BUILD.bazel").read_text()
+        target = source.split('name = "editor_notice_coverage_tests"', 1)[1].split("\n)\n", 1)[0]
+        for name in ("Bold", "Italic", "Regular"):
+            self.assertIn("--exact-component-file=resvg-test-suite=fonts/NotoSans-" + name + ".ttf",
+                          target)
+
     def test_existing_macos_attempt_builds_and_packages_the_native_app(self):
         plan = bcr_preflight.cli_plan(bcr_preflight.Layout("/fixture"), "darwin-arm64",
                                       "a" * 40, "123", "2")
@@ -42,6 +50,13 @@ class MacosEditorPackageTest(unittest.TestCase):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("8.8.1\n" if name == ".bazelversion" else "fixture\n")
+        (self.root / "MODULE.bazel").write_text(
+            'module(\n    name = "donner",\n    version = "0.8.0",\n)\n')
+        for name in ("build_defs/editor_build_info.bzl", "build_defs/BUILD.bazel",
+                     "donner/editor/write_build_info.sh"):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture metadata source\n")
         (self.root / "LICENSE").write_text("Donner license fixture\n")
         pin = self.root / "tools/ci_macos_xcode.txt"
         pin.parent.mkdir(parents=True)
@@ -70,6 +85,10 @@ class MacosEditorPackageTest(unittest.TestCase):
                         "commit", "-qm", "fixture"], cwd=self.root, check=True)
         self.commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.root,
                                               text=True).strip()
+        self.build_info = self.base / "editor_build_info.txt"
+        self.build_info.write_bytes(native._expected_build_info(self.root, self.commit))
+        executable = self.app / "Contents/MacOS/Donner"
+        executable.write_bytes(executable.read_bytes() + self.build_info.read_bytes())
         self.output = self.base / "artifacts"
 
     def package(self):
@@ -81,7 +100,7 @@ class MacosEditorPackageTest(unittest.TestCase):
              mock.patch.object(self.native.release_cli, "compiler_version",
                                return_value="Apple clang 17"):
             result = self.native.package(root=self.root, app=self.app, notice=self.notice,
-                                         compiler_probe=self.base / "probe", output=self.output,
+                                         compiler_probe=self.base / "probe", build_info=self.build_info, output=self.output,
                                          commit=self.commit, run_id="123", attempt="2")
             self.assertEqual(validate.call_count, 2)
             return result
@@ -237,6 +256,19 @@ class MacosEditorPackageTest(unittest.TestCase):
         with mock.patch.dict(os.environ, poisoned), \
              mock.patch.object(self.native.subprocess, "run", side_effect=execute):
             self.native._check_entrypoint(self.app)
+
+    def test_old_or_unknown_generated_identity_cannot_be_packaged(self):
+        for commit in ("a" * 40, "unknown"):
+            with self.subTest(commit=commit):
+                self.build_info.write_text("0.8.0\n" + commit + "\n")
+                with self.assertRaisesRegex(ValueError, "build identity"):
+                    self.package()
+
+    def test_old_embedded_identity_cannot_be_hidden_by_current_metadata(self):
+        executable = self.app / "Contents/MacOS/Donner"
+        executable.write_bytes(b"old binary without the selected build marker")
+        with self.assertRaisesRegex(ValueError, "does not contain"):
+            self.package()
 
     def test_xcode_drift_or_missing_native_role_is_refused(self):
         self.package()

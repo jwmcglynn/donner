@@ -53,10 +53,46 @@ def _notice_mismatches(coverage: dict, manifest: dict, notice: str) -> list[str]
     return problems
 
 
-def check(coverage: dict, manifest: dict, notice: str, required: list[str]) -> list[str]:
+def _component_file(label: str, component: str) -> str:
+    repository, separator, path = label.partition("//")
+    if not separator:
+        raise ValueError("component label has no repository boundary")
+    if repository in ("", "@", "@@"):
+        prefix = "third_party/" + component + ":"
+        if not path.startswith(prefix):
+            raise ValueError("component label is outside its vendored package")
+        return path[len(prefix):]
+    canonical = [part for part in repository.lstrip("@").split("+") if part]
+    if not canonical or canonical[-1] != component or not path.startswith(":"):
+        raise ValueError("component label is outside its external repository")
+    return path[1:]
+
+
+def _exact_component_files(coverage: dict, requirements) -> list[str]:
+    expected = {}
+    for entry in requirements:
+        component, separator, path = entry.partition("=")
+        if not separator or not component or not path:
+            raise ValueError("exact component files require COMPONENT=PATH")
+        expected.setdefault(component, set()).add(path)
+    problems = []
+    for component, files in expected.items():
+        try:
+            actual = {_component_file(label, component)
+                      for label in coverage.get("component_labels", {}).get(component, [])}
+        except ValueError:
+            actual = set()
+        if actual != files:
+            problems.append("the reviewed file set changed for component " + component)
+    return problems
+
+
+def check(coverage: dict, manifest: dict, notice: str, required: list[str],
+          exact_files=()) -> list[str]:
     """Returns one message per problem; an empty list means the NOTICE covers the closure."""
     return (_uncovered(coverage) + _missing_required(coverage, required) +
-            _notice_mismatches(coverage, manifest, notice))
+            _notice_mismatches(coverage, manifest, notice) +
+            _exact_component_files(coverage, exact_files))
 
 
 def _expected_failures(problems: list[str], expected: list[str]) -> int:
@@ -80,6 +116,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--outputs", type=Path, nargs="+", required=True,
                         help="the NOTICE text, manifest and coverage report of one product")
     parser.add_argument("--require", action="append", default=[])
+    parser.add_argument("--exact-component-file", action="append", default=[],
+                        help="require the complete reviewed label set, as COMPONENT=PATH")
     parser.add_argument("--expect-failure", action="append", default=[],
                         help="pass only if a reported problem contains each of these texts")
     args = parser.parse_args(argv)
@@ -89,7 +127,7 @@ def main(argv: list[str]) -> int:
     coverage = json.loads(outputs["coverage"].read_text(encoding="utf-8"))
     manifest = json.loads(outputs["manifest"].read_text(encoding="utf-8"))
     notice = outputs["notice"].read_text(encoding="utf-8")
-    problems = check(coverage, manifest, notice, args.require)
+    problems = check(coverage, manifest, notice, args.require, args.exact_component_file)
     if args.expect_failure:
         return _expected_failures(problems, args.expect_failure)
     for problem in problems:

@@ -33,6 +33,7 @@ on:
       - tools/render_notice.py
       - "tools/ci/**"
       - tools/ci_macos_xcode.txt
+      - tools/editor_build_info_tests.py
       - tools/release_cli*.py
       - tools/release_macos_editor*.py
       - tools/release_artifact_publisher*.py

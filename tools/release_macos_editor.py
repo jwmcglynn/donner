@@ -16,11 +16,13 @@ import subprocess
 import tempfile
 import zipfile
 
-from tools import release_cli
+from tools import bcr_source, release_cli
 
 
 SCHEMA = 1
-INPUTS = (*release_cli.INPUTS, "donner/editor/art/Info.plist", "tools/ci_macos_xcode.txt")
+INPUTS = (*release_cli.INPUTS, "donner/editor/art/Info.plist", "tools/ci_macos_xcode.txt",
+          "build_defs/editor_build_info.bzl", "build_defs/BUILD.bazel",
+          "donner/editor/write_build_info.sh")
 ARCHIVE = "donner-editor_darwin_arm64.zip"
 NAMES = (ARCHIVE, ARCHIVE + ".sha256", ARCHIVE + ".provenance",
          ARCHIVE + ".bazel.lock", ARCHIVE + ".NOTICE.txt")
@@ -263,6 +265,47 @@ def _write_zip(app: Path, license_path: Path, notice: Path, output: Path) -> Non
                 shutil.copyfileobj(reader, writer, length=1024 * 1024)
 
 
+def _expected_build_info(root: Path, commit: str) -> bytes:
+    if not isinstance(commit, str) or not release_cli.COMMIT.fullmatch(commit):
+        raise ValueError("native editor build identity requires a full source commit")
+    version = bcr_source.module_values((root / "MODULE.bazel").read_text())["version"]
+    return f"{version}\n{commit}\n".encode("ascii")
+
+
+def check_build_info(root: Path, build_info: Path, commit: str) -> str:
+    """Require generated build identity to equal the selected source version and full commit."""
+    expected = _expected_build_info(root, commit)
+    if (build_info.is_symlink() or not build_info.is_file() or build_info.stat().st_size > 1024
+            or build_info.read_bytes() != expected):
+        raise ValueError("native editor build identity differs from the selected source")
+    return hashlib.sha256(expected).hexdigest()
+
+
+def _check_embedded_build_info(archive: Path, expected: bytes) -> None:
+    tail = b""
+    with zipfile.ZipFile(archive) as package:
+        with package.open(BUNDLE + "/Contents/MacOS/Donner") as executable:
+            for chunk in iter(lambda: executable.read(1024 * 1024), b""):
+                data = tail + chunk
+                if expected in data:
+                    return
+                tail = data[-len(expected):]
+    raise ValueError("native editor executable does not contain the selected build identity")
+
+
+def create_validated_archive(root: Path, app: Path, notice: Path, output: Path,
+                             commit: str) -> dict:
+    """Validate actual app bytes, preserve signatures through ZIP rename, and check source identity."""
+    release_cli._check_notice(notice)
+    validate_native(app)
+    _write_zip(app, root / "LICENSE", notice, output)
+    files = inspect_archive(output)
+    _check_app_metadata(root, files)
+    _check_embedded_build_info(output, _expected_build_info(root, commit))
+    _roundtrip(output, files)
+    return files
+
+
 def _roundtrip(path: Path, files: dict) -> None:
     with tempfile.TemporaryDirectory(prefix="donner-editor-verify-") as temporary:
         root = Path(temporary)
@@ -321,7 +364,7 @@ def _check_toolchain(root: Path, value: object) -> None:
         raise ValueError("native editor toolchain provenance differs from the source pin")
 
 
-def package(*, root: Path, app: Path, notice: Path, compiler_probe: Path, output: Path,
+def package(*, root: Path, app: Path, notice: Path, compiler_probe: Path, build_info: Path, output: Path,
             commit: str, run_id: str, attempt: str) -> dict:
     """Package existing signed bytes once; native checks run before and after ZIP roundtrip."""
     release_cli._run_identity(run_id, attempt)
@@ -331,17 +374,14 @@ def package(*, root: Path, app: Path, notice: Path, compiler_probe: Path, output
     release_cli.check_public_lockfile(lock)
     compiler = release_cli.compiler_version(compiler_probe)
     toolchain = _native_toolchain(root)
-    validate_native(app)
+    build_info_digest = check_build_info(root, build_info, commit)
     if output.is_symlink():
         raise ValueError("native editor output directory must not be linked")
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         raise ValueError("native editor output directory must be empty")
     archive = output / ARCHIVE
-    _write_zip(app, root / "LICENSE", notice, archive)
-    files = inspect_archive(archive)
-    _check_app_metadata(root, files)
-    _roundtrip(archive, files)
+    files = create_validated_archive(root, app, notice, archive, commit)
     shutil.copyfile(lock, output / NAMES[3])
     shutil.copyfile(notice, output / NAMES[4])
     checksum = release_cli.digest(archive)
@@ -354,7 +394,8 @@ def package(*, root: Path, app: Path, notice: Path, compiler_probe: Path, output
                   "archive_sha256": checksum, "archive_size": archive.stat().st_size,
                   "notice_sha256": release_cli.digest(output / NAMES[4]),
                   "license_sha256": release_cli.digest(root / "LICENSE"),
-                  "native_validation": NATIVE_CHECKS, "files": files, "toolchain": toolchain}
+                  "native_validation": NATIVE_CHECKS, "files": files, "toolchain": toolchain,
+                  "build_info_sha256": build_info_digest}
     (output / NAMES[2]).write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n")
     return provenance
 
@@ -370,6 +411,7 @@ def verify(*, root: Path, artifacts: Path, commit: str, run_id: str, attempt: st
     archive = artifacts / ARCHIVE
     files = inspect_archive(archive)
     _check_app_metadata(root, files)
+    _check_embedded_build_info(archive, _expected_build_info(root, commit))
     release_cli._check_notice(artifacts / NAMES[4])
     lock_digest = release_cli.check_public_lockfile(artifacts / NAMES[3])
     checksum = release_cli.digest(archive)
@@ -389,7 +431,8 @@ def verify(*, root: Path, artifacts: Path, commit: str, run_id: str, attempt: st
                 "notice_sha256": release_cli.digest(artifacts / NAMES[4]),
                 "license_sha256": release_cli.digest(root / "LICENSE"),
                 "native_validation": NATIVE_CHECKS, "files": files,
-                "toolchain": provenance["toolchain"]}
+                "toolchain": provenance["toolchain"],
+                "build_info_sha256": hashlib.sha256(_expected_build_info(root, commit)).hexdigest()}
     result = release_cli._check_provenance(provenance, expected)
     for name, digest in (("LICENSE", expected["license_sha256"]),
                          ("NOTICE.txt", expected["notice_sha256"])):
@@ -407,7 +450,7 @@ def main() -> None:
             command.add_argument("--" + flag, required=True)
         command.add_argument("--root", type=Path, default=Path.cwd())
         if name == "package":
-            for flag in ("app", "notice", "compiler-probe", "output"):
+            for flag in ("app", "notice", "compiler-probe", "build-info", "output"):
                 command.add_argument("--" + flag, type=Path, required=True)
         else:
             command.add_argument("--artifacts", type=Path, required=True)

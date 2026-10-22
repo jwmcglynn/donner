@@ -54,7 +54,9 @@ RELEASE_PATHS = (
     "third_party/patches/*", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
     "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/notice*",
     "tools/render_notice*", "tools/default_notice*", "tools/ci/BUILD.bazel",
-    "tools/ci/release_*", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
+    "tools/ci/release_*", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl",
+    "build_defs/editor_build_info.bzl", "build_defs/BUILD.bazel",
+    "donner/editor/write_build_info.sh", "tools/editor_build_info_tests.py", "donner/editor/BUILD.bazel",
     "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
     ".github/workflows/bcr_preflight.yml",
     ".github/workflows/publish_bcr.yml", ".github/workflows/release.yml",
@@ -287,9 +289,9 @@ def cli_plan(layout: Layout, platform: str, commit: str, run_id: str,
 
 def editor_macos_plan(layout: Layout, commit: str, run_id: str, attempt: str) -> list[Command]:
     targets = ("//donner/editor:editor_macos_app", "//third_party/licenses:notice_release_editor_txt",
-               "//tools/ci:release_compiler_identity")
+               "//tools/ci:release_compiler_identity", "//donner/editor:editor_build_info_txt")
     flags = ("-c", "opt", "--config=geode", "--config=text-full",
-             "--//build_defs:enable_tracy=false")
+             "--//build_defs:enable_tracy=false", f"--//build_defs:release_source_commit={commit}")
     return [
         Command("Resolve native editor dependencies",
                 ("bazelisk", "build", "--lockfile_mode=update", *flags, *targets)),
@@ -297,10 +299,13 @@ def editor_macos_plan(layout: Layout, commit: str, run_id: str, attempt: str) ->
                 ("bazelisk", "build", "--lockfile_mode=error", *flags, *targets)),
         Command("Test native editor NOTICE coverage",
                 ("bazelisk", "test", "--lockfile_mode=error", *flags,
-                 "//tools:editor_notice_coverage_tests", "//tools:release_macos_editor_native_tests")),
+                 f"--test_env=DONNER_RELEASE_SOURCE_COMMIT={commit}",
+                 "//tools:editor_notice_coverage_tests", "//tools:release_macos_editor_native_tests",
+                 "//tools:editor_build_info_tests")),
         Command("Package and validate the signed native editor",
                 ("python3", "-B", "-m", "tools.release_macos_editor", "package",
                  "--app", "bazel-bin/donner/editor/Donner.app",
+                 "--build-info", "bazel-bin/donner/editor/editor_build_info.txt",
                  "--notice", "bazel-bin/third_party/licenses/notice_release_editor.txt",
                  "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
                  "--output", f"{layout.temp}/donner-editor-macos", "--commit", commit,

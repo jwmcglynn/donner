@@ -1,10 +1,9 @@
-"""Exercise retained-ZIP packaging with the actual built app on a macOS test executor."""
+"""Check the actual signed app and ZIP on a macOS executor, without release or GUI qualification."""
 
 import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import tempfile
 import unittest
 
@@ -20,6 +19,8 @@ class NativeEditorArtifactTest(unittest.TestCase):
             self.assertIsNotNone(path, name)
             self.assertTrue(Path(path).exists(), name)
             return Path(path)
+        commit = os.environ.get("DONNER_RELEASE_SOURCE_COMMIT")
+        self.assertIsNotNone(commit, "the caller must independently select the source commit")
         with tempfile.TemporaryDirectory(prefix="editor-artifact-") as temporary:
             root = Path(temporary) / "source"
             root.mkdir()
@@ -27,28 +28,25 @@ class NativeEditorArtifactTest(unittest.TestCase):
                 destination = root / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source(name), destination)
-            subprocess.run(["git", "init", "-q", str(root)], check=True)
-            subprocess.run(["git", "add", "."], cwd=root, check=True)
-            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-                            "commit", "-qm", "artifact test inputs"], cwd=root, check=True)
-            commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root,
-                                              text=True).strip()
-            # This isolated fixture tests the producer and consumer, not release qualification.
-            (root / "MODULE.bazel.lock").write_text('{}\n')
+            build_info = source("donner/editor/editor_build_info.txt")
+            identity = native.check_build_info(root, build_info, commit)
             app = Path(temporary) / "Donner.app"
             shutil.copytree(source("donner/editor/Donner.app").resolve(), app, symlinks=True)
             output = Path(os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR", temporary)) / "package"
-            result = native.package(
-                root=root, app=app,
-                notice=source("third_party/licenses/notice_release_editor.txt"),
-                compiler_probe=source("tools/ci/release_compiler_identity"), output=output,
-                commit=commit, run_id="1", attempt="1")
-            self.assertEqual(native.verify(root=root, artifacts=output, commit=commit,
-                                           run_id="1", attempt="1"), result)
-            print(json.dumps({"archive_sha256": result["archive_sha256"],
-                              "archive_size": result["archive_size"],
-                              "native_validation": result["native_validation"],
-                              "toolchain": result["toolchain"]}, sort_keys=True))
+            output.mkdir()
+            archive = output / native.ARCHIVE
+            files = native.create_validated_archive(
+                root, app, source("third_party/licenses/notice_release_editor.txt"), archive, commit)
+            self.assertTrue(native.REQUIRED <= files.keys())
+            print(json.dumps({"source_commit": commit, "build_info_sha256": identity,
+                              "archive_sha256": native.release_cli.digest(archive),
+                              "archive_size": archive.stat().st_size,
+                              "native_validation": native.NATIVE_CHECKS,
+                              "toolchain": native._native_toolchain(root),
+                              "compiler_version": native.release_cli.compiler_version(
+                                  source("tools/ci/release_compiler_identity")),
+                              "qualification": "artifact contract, not release provenance or GUI render"},
+                             sort_keys=True))
 
 
 if __name__ == "__main__":
