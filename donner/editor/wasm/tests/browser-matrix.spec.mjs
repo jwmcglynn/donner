@@ -716,7 +716,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   assert.equal((lane.match(/--test_output="\$\{budget_test_output\}"/g) ?? []).length, 2);
   assert.match(
     normalizedLane,
-    /bazelisk test --config=editor-wasm --test_output="\$\{budget_test_output\}" --remote_download_outputs=all "\$\{budget_args\[@\]\}" \/\/tools\/ci:editor_wasm_size_tests/,
+    /bazelisk test --config=editor-wasm \$\{source_args\[@\]\+"\$\{source_args\[@\]\}"\} --test_output="\$\{budget_test_output\}" --remote_download_outputs=all "\$\{budget_args\[@\]\}" \/\/tools\/ci:editor_wasm_size_tests/,
   );
   assert.match(
     normalizedLane,

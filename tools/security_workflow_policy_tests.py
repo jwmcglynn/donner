@@ -2520,8 +2520,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         lane = _read("tools/ci/editor_wasm_lane.sh")
         prove = re.sub(r"\\\n\s*", "", lane.split("\nprove_lockfile() {\n", 1)[1].split(
             "\n}\n", 1)[0])
-        update = "bazelisk build --config=editor-wasm --lockfile_mode=update //tools/ci:editor_wasm_package"
-        error = "bazelisk build --config=editor-wasm --lockfile_mode=error //tools/ci:editor_wasm_package"
+        update = 'bazelisk build --config=editor-wasm ${source_args[@]+"${source_args[@]}"} --lockfile_mode=update //tools/ci:editor_wasm_package'
+        error = 'bazelisk build --config=editor-wasm ${source_args[@]+"${source_args[@]}"} --lockfile_mode=error //tools/ci:editor_wasm_package'
         check = "python3 -B -m tools.release_cli check-lockfile --lockfile MODULE.bazel.lock"
         snapshot = 'cp MODULE.bazel.lock "${snapshot}"'
         self.assertIn('local snapshot="$1"', prove)

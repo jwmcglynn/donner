@@ -104,12 +104,15 @@ class EditorWasmLaneTest(unittest.TestCase):
         return [[str(self.snapshot) if word == "SNAPSHOT" else word for word in call]
                 for call in _COMMANDS[command]]
 
-    def _run(self, *args, fail_call=0, fail_status=0, budget_mode=None):
+    def _run(self, *args, fail_call=0, fail_status=0, budget_mode=None, source_revision=None):
         self.capture.write_text("", encoding="utf-8")
         self.summary.write_text("", encoding="utf-8")
         env = dict(os.environ, CAPTURE=str(self.capture), FAIL_CALL=str(fail_call),
                    FAIL_STATUS=str(fail_status), GITHUB_STEP_SUMMARY=str(self.summary),
                    PATH=os.pathsep.join((str(self.executables.path / "bin"), str(self.host))))
+        env.pop("GITHUB_SHA", None)
+        if source_revision is not None:
+            env["GITHUB_SHA"] = source_revision
         env.pop("PAYLOAD_BUDGET_MODE", None)
         if budget_mode is not None:
             env["PAYLOAD_BUDGET_MODE"] = budget_mode
@@ -136,6 +139,23 @@ class EditorWasmLaneTest(unittest.TestCase):
                 self.assertEqual(result.stdout.count("::group::"), count)
                 self.assertEqual(result.stdout.count("::endgroup::"), count)
                 self.assertEqual(self.summary.read_text().count("| passed |"), count)
+
+    def test_ci_source_revision_reaches_every_editor_package_phase(self):
+        for revision in ("a" * 40, "b" * 40):
+            for command in ("prefetch", "build", "prove-lockfile"):
+                result, calls = self._run(*self._args(command), source_revision=revision)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                editor_calls = [call for call in calls if "--config=editor-wasm" in call]
+                self.assertGreater(len(editor_calls), 0, command)
+                for call in editor_calls:
+                    flags = [word for word in call if word.startswith("--//build_defs:release_source_commit=")]
+                    self.assertEqual(flags, ["--//build_defs:release_source_commit=" + revision], call)
+
+    def test_invalid_ci_source_revision_is_refused_before_running_commands(self):
+        for revision in ("", "short", "A" * 40, "a" * 39, "a" * 41):
+            result, calls = self._run("build", source_revision=revision)
+            self.assertNotEqual(result.returncode, 0, revision)
+            self.assertEqual(calls, [], revision)
 
     def test_main_report_mode_only_changes_the_two_numeric_budget_commands(self):
         result, calls = self._run("build", budget_mode="report")

@@ -155,13 +155,23 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_arguments(environ: Mapping[str, str]) -> list[str]:
+    if "GITHUB_SHA" not in environ:
+        return []
+    commit = environ["GITHUB_SHA"]
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise StageError("GITHUB_SHA must be a full lowercase source commit")
+    return ["--//build_defs:release_source_commit=" + commit]
+
+
 def stage_package(environ: Mapping[str, str], run: Callable[[list[str]], str] = _run) -> None:
+    source_args = _source_arguments(environ)
     package_target = run(["bazelisk", "query", "--output=label",
                           "labels(actual, %s)" % PACKAGE_ALIAS])
     if not LABEL.fullmatch(package_target):
         raise StageError("%s resolves to an unexpected label: %r" % (PACKAGE_ALIAS, package_target))
     _write_output(environ, "package_target", package_target)
-    package_path = run(["bazelisk", "cquery", "--config=editor-wasm", "--output=files",
+    package_path = run(["bazelisk", "cquery", "--config=editor-wasm", *source_args, "--output=files",
                         PACKAGE_ALIAS])
     if not package_path:
         raise StageError("%s has no output" % PACKAGE_ALIAS)
@@ -211,6 +221,7 @@ def stage_candidate(environ: Mapping[str, str]) -> None:
                if name not in environ]
     if missing:
         raise StageError("missing environment: %s" % " ".join(missing))
+    _source_arguments(environ)
     runner_temp = environ["RUNNER_TEMP"]
     package_dir = Path(f"{runner_temp}/editor-wasm-package-geode")
     candidate_dir = f"{runner_temp}/donner-editor-wasm-geode-{environ['GITHUB_SHA']}"

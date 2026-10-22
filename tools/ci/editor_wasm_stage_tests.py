@@ -21,7 +21,8 @@ PACKAGE_TARGET = "//fixture:package"
 # The bazelisk commands the handoff step runs, in order.
 PACKAGE_QUERIES = [
     ["query", "--output=label", "labels(actual, //tools/ci:editor_wasm_package)"],
-    ["cquery", "--config=editor-wasm", "--output=files", "//tools/ci:editor_wasm_package"],
+    ["cquery", "--config=editor-wasm", "--//build_defs:release_source_commit=" + SHA,
+     "--output=files", "//tools/ci:editor_wasm_package"],
 ]
 FAMILIES = ("Bebas Neue", "Bitter", "Inter", "JetBrains Mono", "Lato", "Lora", "Montserrat",
             "Open Sans", "Oswald", "Pacifico", "Playfair Display", "Roboto Mono")
@@ -119,6 +120,34 @@ class EditorWasmStageTest(unittest.TestCase):
         self.assertEqual(_files(handoff), {"editor.wasm": b"package fixture",
                                            "fonts/font.woff2": b"linked font"})
         self.assertFalse((handoff / "fonts/font.woff2").is_symlink())
+
+    def test_handoff_configuration_uses_the_selected_source_revision(self):
+        package = self.root / "package"
+        package.mkdir()
+        for revision in ("a" * 40, "b" * 40):
+            result = self._run("package", PACKAGE_PATH=str(package), GITHUB_SHA=revision)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            query = self._bazel_calls()[-1]
+            self.assertIn("--//build_defs:release_source_commit=" + revision, query)
+            self.capture.write_text("")
+
+    def test_handoff_without_ci_context_keeps_the_local_configuration(self):
+        package = self.root / "package"
+        package.mkdir()
+        result = self._run("package", PACKAGE_PATH=str(package), GITHUB_SHA=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        local = [[word for word in call if not word.startswith("--//build_defs:release_source_commit=")]
+                 for call in PACKAGE_QUERIES]
+        self.assertEqual(self._bazel_calls(), local)
+
+    def test_handoff_invalid_source_revision_fails_before_bazel(self):
+        package = self.root / "package"
+        package.mkdir()
+        for revision in ("", "short", "A" * 40):
+            self.capture.write_text("")
+            result = self._run("package", PACKAGE_PATH=str(package), GITHUB_SHA=revision)
+            self.assertNotEqual(result.returncode, 0, revision)
+            self.assertEqual(self._bazel_calls(), [], revision)
 
     def test_handoff_rejects_an_ambiguous_missing_or_unexpected_package(self):
         package = self.root / "package"
