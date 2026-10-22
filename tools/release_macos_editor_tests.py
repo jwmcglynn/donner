@@ -111,6 +111,49 @@ class MacosEditorPackageTest(unittest.TestCase):
         options.update(changes)
         return self.native.verify(**options)
 
+    def test_relative_producer_path_preserves_dependency_checks_and_rejects_linked_root(self):
+        import os
+        from pathlib import Path
+        from unittest import mock
+        native = self.native
+        def platform_tool(program, *arguments):
+            if program.endswith("codesign"):
+                return "Signature=adhoc" if "--display" in arguments else ""
+            if program.endswith("lipo"):
+                return "arm64"
+            if "-l" in arguments:
+                return "cmd LC_RPATH\npath @executable_path/../Frameworks (offset 12)\n"
+            return "image:\n /usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n"
+        previous = Path.cwd()
+        self.addCleanup(os.chdir, previous)
+        os.chdir(self.base)
+        with mock.patch.object(native, "_tool", side_effect=platform_tool), \
+             mock.patch.object(native, "_check_entrypoint"), \
+             mock.patch.object(native, "_native_toolchain", return_value={
+                 "xcode": "27.1 27A9275", "macos_sdk": "27.1"}), \
+             mock.patch.object(native.release_cli, "compiler_version", return_value="Apple clang 17"):
+            options = dict(root=self.root, app=Path("Donner.app"), notice=self.notice,
+                           compiler_probe=self.base / "probe", build_info=self.build_info,
+                           output=self.output, commit=self.commit, run_id="123", attempt="2")
+            native.package(**options)
+            self.assertEqual(self.verify()["native_validation"]["signature"], "ad-hoc")
+            linked = self.base / "Linked.app"
+            linked.symlink_to(self.app, target_is_directory=True)
+            options.update(app=Path("Linked.app"), output=self.base / "linked-output")
+            with self.assertRaisesRegex(ValueError, "missing or linked"):
+                native.package(**options)
+
+    def test_trusted_runfile_metadata_is_materialized_without_weakening_link_guard(self):
+        import shutil
+        linked = self.base / "runfile-identity.txt"
+        linked.symlink_to(self.build_info)
+        with self.assertRaises(ValueError):
+            self.native.check_build_info(self.root, linked, self.commit)
+        materialized = self.base / "materialized-identity.txt"
+        shutil.copyfile(linked, materialized)
+        self.assertEqual(self.native.check_build_info(self.root, materialized, self.commit),
+                         self.native.release_cli.digest(self.build_info))
+
     def test_signed_bytes_modes_licenses_and_provenance_roundtrip(self):
         import zipfile
         before = (self.app / "Contents/MacOS/Donner").read_bytes()

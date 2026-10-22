@@ -210,6 +210,7 @@ def _check_dependencies(image: Path, app: Path, main_rpaths: list[Path],
 
 def validate_native(app: Path) -> None:
     """Check the existing bundle's signatures, arm64 images and local dependency closure on macOS."""
+    app = app.resolve()
     executable = app / "Contents/MacOS/Donner"
     _tool("/usr/bin/codesign", "--verify", "--deep", "--strict", str(app))
     signature = _tool("/usr/bin/codesign", "--display", "--verbose=4", str(app))

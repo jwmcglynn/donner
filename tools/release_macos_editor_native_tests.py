@@ -28,7 +28,8 @@ class NativeEditorArtifactTest(unittest.TestCase):
                 destination = root / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source(name), destination)
-            build_info = source("donner/editor/editor_build_info.txt")
+            build_info = Path(temporary) / "editor_build_info.txt"
+            shutil.copyfile(source("donner/editor/editor_build_info.txt"), build_info)
             identity = native.check_build_info(root, build_info, commit)
             app = Path(temporary) / "Donner.app"
             shutil.copytree(source("donner/editor/Donner.app").resolve(), app, symlinks=True)

@@ -10,8 +10,10 @@ def _editor_build_info_impl(ctx):
         inputs = [ctx.file.module, ctx.file.script],
         outputs = [ctx.outputs.out],
         arguments = [ctx.file.script.path, ctx.file.module.path, ctx.outputs.out.path, commit],
-        command = 'bash "$1" "$2" "$3" "$4"',
+        command = '/bin/bash "$1" "$2" "$3" "$4"',
+        env = {"PATH": "/usr/bin:/bin"},
         mnemonic = "DonnerEditorBuildInfo",
+        progress_message = "Writing release editor build identity" if commit else "Executing genrule //donner/editor:editor_build_info_txt",
         execution_requirements = {} if commit else {"local": "1"},
     )
     return [DefaultInfo(files = depset([ctx.outputs.out]))]
