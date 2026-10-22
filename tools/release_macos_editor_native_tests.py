@@ -63,8 +63,7 @@ class NativeEditorArtifactTest(unittest.TestCase):
             shutil.copy2(resolver.Rlocation("_main/donner/editor/Donner.app.test-data.tar"), archive)
             producer = base / "producer.app"
             bundle.extract_bundle(archive, producer)
-            (producer / "Contents/Resources/genuine-link").symlink_to(
-                producer / "Contents/Resources/Donner.icns")
+            (producer / "Contents/Resources/genuine-link").symlink_to("Donner.icns")
             def normalized(member):
                 member.uid = member.gid = 0
                 member.uname, member.gname = "root", "wheel"
