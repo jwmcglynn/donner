@@ -5530,8 +5530,64 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
   }
 }
 
+svg::RendererBitmap DrawRetinaDragFrame(gui::EditorWindow& window, EditorShell& shell,
+                                        const Vector2d& documentPoint, bool mouseDown,
+                                        bool capture) {
+  const Vector2d screen = shell.viewportForReadback().documentToScreen(documentPoint);
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddMousePosEvent(static_cast<float>(screen.x), static_cast<float>(screen.y));
+  io.AddMouseButtonEvent(0, mouseDown);
+  if (capture) {
+    shell.setContentOnlyCaptureForNextFrameForReplay(true);
+  }
+  window.beginFrame();
+  shell.runFrame();
+  if (capture) {
+    return window.endFrameAndReadPixels();
+  }
+  window.endFrame();
+  return svg::RendererBitmap{};
+}
+
+gui::EditorWindow::PresentationProgress WaitForDeferredRetinaPresentation(
+    gui::EditorWindow& window) {
+  auto progress = window.pollDeferredPresentation();
+  for (const tests::HangGuard guard;
+       progress == gui::EditorWindow::PresentationProgress::Pending && guard.active();) {
+    window.waitEventsTimeout(0.001);
+    progress = window.pollDeferredPresentation();
+  }
+  return progress;
+}
+
+svg::RendererBitmap RunRetinaDragFrame(gui::EditorWindow& window, EditorShell& shell,
+                                       const Vector2d& documentPoint, bool mouseDown,
+                                       bool capture) {
+  svg::RendererBitmap bitmap =
+      DrawRetinaDragFrame(window, shell, documentPoint, mouseDown, capture);
+  if (capture && bitmap.empty() &&
+      WaitForDeferredRetinaPresentation(window) == gui::EditorWindow::PresentationProgress::Ready) {
+    // A deferred submission ended its UI frame without capturing; readiness requires a new frame.
+    return DrawRetinaDragFrame(window, shell, documentPoint, mouseDown, true);
+  }
+  return bitmap;
+}
+
+void DeferRetinaCapture(gui::EditorWindow& window, EditorShell& shell,
+                        const Vector2d& documentPoint, std::uint64_t& completionProbes) {
+  window.setPresentationCompletionProbeForTesting([] { return std::uint64_t{0}; });
+  for (int frame = 0; frame < 3; ++frame) {
+    (void)RunRetinaDragFrame(window, shell, documentPoint, false, false);
+  }
+  window.setPresentationCompletionProbeForTesting([&completionProbes] {
+    return ++completionProbes < 3 ? std::uint64_t{0} : std::numeric_limits<std::uint64_t>::max();
+  });
+}
+
 void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
-                                  bool waitForSelectedPrewarm = false) {
+                                  bool waitForSelectedPrewarm = false,
+                                  bool deferInitialCapture = false) {
+  std::uint64_t completionProbes = 0;
   gui::EditorWindow window(TestWindowOptions({
       .title = "Geode direct Retina pointer drag",
       .initialWidth = 1600,
@@ -5549,20 +5605,7 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
   ASSERT_NEAR(window.displayScale(), 2.0, 1e-6);
   EditorApp& app = EditorShellTestAccess::App(shell);
   const auto frame = [&](const Vector2d& documentPoint, bool mouseDown, bool capture) {
-    const Vector2d screen = shell.viewportForReadback().documentToScreen(documentPoint);
-    ImGuiIO& io = ImGui::GetIO();
-    io.AddMousePosEvent(static_cast<float>(screen.x), static_cast<float>(screen.y));
-    io.AddMouseButtonEvent(0, mouseDown);
-    if (capture) {
-      shell.setContentOnlyCaptureForNextFrameForReplay(true);
-    }
-    window.beginFrame();
-    shell.runFrame();
-    if (capture) {
-      return window.endFrameAndReadPixels();
-    }
-    window.endFrame();
-    return svg::RendererBitmap{};
+    return RunRetinaDragFrame(window, shell, documentPoint, mouseDown, capture);
   };
   for (const tests::HangGuard coldGuard; coldGuard.active();) {
     (void)frame(Vector2d(-100.0, -100.0), false, false);
@@ -5609,7 +5652,11 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
   const ViewportState viewport = shell.viewportForReadback();
   const Box2d crop = Box2d::FromXYWH(bounds->topLeft.x - 8.0, bounds->topLeft.y - 8.0,
                                      bounds->width() + 90.0, bounds->height() + 16.0);
+  if (deferInitialCapture) {
+    DeferRetinaCapture(window, shell, *hitPoint, completionProbes);
+  }
   const svg::RendererBitmap before = frame(*hitPoint, false, true);
+  window.setPresentationCompletionProbeForTesting({});
   ASSERT_GE(before.dimensions.x, 3000);
   ASSERT_GE(before.dimensions.y, 1600);
   const svg::RendererBitmap beforeCrop =
@@ -5826,6 +5873,11 @@ TEST(EditorShellTest, GeodeCrownColdDirectRetinaDragPresentsBeforeMouseUp) {
 
 TEST(EditorShellTest, GeodeSilhouetteColdDirectRetinaDragPresentsBeforeMouseUp) {
   RunGeodeColdDirectRetinaDrag("central-silhouette", /*selectFromLayers=*/true);
+}
+
+TEST(EditorShellTest, GeodeSilhouetteRetinaCaptureWaitsForPresentationAdmission) {
+  RunGeodeColdDirectRetinaDrag("central-silhouette", /*selectFromLayers=*/true,
+                               /*waitForSelectedPrewarm=*/false, /*deferInitialCapture=*/true);
 }
 
 TEST(EditorShellTest, GeodeSilhouetteSettledLayersSelectionStillDragsSelectedShape) {
