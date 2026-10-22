@@ -113,11 +113,14 @@ def extract_bundle(archive, destination):
     _validate_structure(records)
     if destination.exists() or destination.is_symlink():
         raise ValueError("native test bundle extraction requires a fresh destination")
-    destination.mkdir()
+    destination.mkdir(mode=0o755)
+    destination.chmod(0o755)
     directories = sorted((record for record in records if record["directory"]),
                          key=lambda record: len(PurePosixPath(record["name"]).parts))
     for record in directories:
-        (destination / record["name"]).mkdir(mode=0o755)
+        directory = destination / record["name"]
+        directory.mkdir(mode=record["mode"])
+        directory.chmod(record["mode"])
     with archive.open("rb") as stream:
         for record in records:
             if not record["directory"]:

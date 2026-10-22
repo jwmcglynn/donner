@@ -1,6 +1,7 @@
 """The producer archive is test data, not permission to extract arbitrary tar members."""
 
 import io
+import os
 from pathlib import Path
 import tarfile
 import tempfile
@@ -49,6 +50,18 @@ class NativeTestBundleTest(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777, member.mode)
             if member.isfile():
                 self.assertEqual(path.read_bytes(), data)
+
+    def test_restrictive_umask_cannot_change_validated_modes(self):
+        members = self.members()
+        self.write(members)
+        previous = os.umask(0o077)
+        try:
+            bundle.extract_bundle(self.archive, self.destination)
+        finally:
+            os.umask(previous)
+        self.assertEqual(self.destination.stat().st_mode & 0o777, 0o755)
+        for member, _ in members:
+            self.assertEqual((self.destination / member.name).stat().st_mode & 0o777, member.mode)
 
     def test_links_special_members_traversal_and_duplicates_are_refused_before_extraction(self):
         for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE, tarfile.CHRTYPE):
