@@ -460,6 +460,32 @@ TEST_F(CompositorControllerTest, PromoteSameEntityWithInteractionGateDisabledSta
   EXPECT_EQ(compositor.layerCount(), 1u);
 }
 
+TEST_F(CompositorControllerTest, PromoteRootAfterSourceElementBecomesTextUsesCurrentTree) {
+  SVGDocument document = makeDocument(R"svg(
+  <rect id="first" width="10" height="10"/>
+  <ellipse id="last" cx="20" cy="20" rx="5" ry="5"/>
+)svg");
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(RenderViewport{Vector2i(100, 100)});
+  const std::string source(document.source());
+  const std::size_t offset = source.find("  <ellipse");
+  ASSERT_THAT(offset, testing::Ne(std::string::npos));
+  const auto edit = document.applySourceEdit(xml::XMLEditIntent{
+      .range =
+          SourceRange{FileOffset::Offset(offset), FileOffset::Offset(source.find("\n", offset))},
+      .replacement = "x",
+      .sourceVersion = document.sourceVersion()});
+  ASSERT_THAT(edit.applied, testing::IsTrue());
+  ASSERT_THAT(edit.diagnostic, testing::Eq(std::nullopt));
+  ASSERT_THAT(document.querySelector("#last"), testing::Eq(std::nullopt));
+  const Entity root = document.svgElement().unsafeEntityHandle().entity();
+  EXPECT_THAT(compositor.promoteEntity(root).owningTilesRequired(), testing::IsTrue());
+  compositor.renderFrame(RenderViewport{Vector2i(100, 100)});
+  EXPECT_THAT(compositor.promoteEntity(root).promotedLayer(), testing::IsTrue());
+  compositor.renderFrame(RenderViewport{Vector2i(100, 100)});
+  EXPECT_THAT(document.querySelector("#first"), testing::Optional(testing::_));
+}
+
 TEST_F(CompositorControllerTest, PromoteInvalidEntityFails) {
   SVGDocument document = makeDocument(R"svg(
     <rect width="10" height="10" fill="red" />
@@ -481,6 +507,15 @@ TEST_F(CompositorControllerTest, PromoteInvalidEntityFails) {
   EXPECT_EQ(state.lastPromoteRefusalReason,
             CompositorController::PromoteRefusalReason::InvalidEntity);
   EXPECT_TRUE(state.lastPromoteRefusalEntity == entt::null);
+}
+
+TEST_F(CompositorControllerTest, PromoteLiveNonElementFails) {
+  SVGDocument document = makeDocument(R"svg(<rect width="10" height="10"/>)svg");
+  const Entity nonElement = document.registry().create();
+  CompositorController compositor(document, renderer_);
+  EXPECT_THAT(compositor.promoteEntity(nonElement),
+              testing::Eq(CompositorController::PromoteResult::InvalidEntity));
+  EXPECT_THAT(compositor.layerCount(), testing::Eq(0u));
 }
 
 TEST_F(CompositorControllerTest, DemoteRemovesLayer) {
@@ -1119,13 +1154,8 @@ TEST_F(CompositorControllerTest, OpacityTriggersFallback) {
             FallbackReason::None);
 }
 
-// Attribute mutation removes ComputedStyleComponent while the stale
-// RenderingInstanceComponent survives until the next prepare, and promotion
-// (plus the reconcile at the top of renderFrame) runs before that prepare.
-// Fallback detection must tolerate the absent style, and it fails closed:
-// an unknown style claims the blend bit so the layer direct-composes until
-// the post-prepare metadata refresh re-derives the truth.
-TEST_F(CompositorControllerTest, PromoteAfterAttributeMutationFailsClosedWithoutCrashing) {
+// A fresh controller must not trust stale rendering instances in an already-built document.
+TEST_F(CompositorControllerTest, PromoteAfterAttributeMutationWaitsForPreparedStyles) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" width="10" height="10" fill="red" opacity="0.5" />
   )svg");
@@ -1134,21 +1164,19 @@ TEST_F(CompositorControllerTest, PromoteAfterAttributeMutationFailsClosedWithout
   RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
 
   auto target = document.querySelector("#target");
-  ASSERT_TRUE(target.has_value());
+  ASSERT_THAT(target, testing::Optional(testing::_));
   const Entity entity = target->unsafeEntityHandle().entity();
-
-  // Removes the computed style; the rendering instance survives.
   target->setAttribute("opacity", "0.4");
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(entity));
-  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::BlendMode, FallbackReason::None);
-
-  // A rendered frame re-prepares the document and re-derives the real
-  // reasons: plain opacity is not a blend, so the conservative bit clears.
+  EXPECT_THAT(compositor.promoteEntity(entity).code,
+              testing::Eq(CompositorController::PromoteResult::OwningTilesRequired));
   RenderViewport viewport;
   viewport.size = Vector2d(20, 20);
   viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+  ASSERT_THAT(compositor.promoteEntity(entity).code,
+              testing::Eq(CompositorController::PromoteResult::PromotedLayer));
   compositor.renderFrame(viewport);
   EXPECT_EQ(compositor.fallbackReasonsOf(entity) & FallbackReason::BlendMode, FallbackReason::None);
   EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::IsolatedLayer,

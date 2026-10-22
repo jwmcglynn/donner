@@ -214,6 +214,32 @@ TEST(GlRnrReplayTest, CaptureCropScaleComesFromFramebufferAndLogicalDisplaySizes
             Vector2d(1.0, 1.0));
 }
 
+TEST(GlRnrReplayTest, SourceOpeningLineReplacementKeepsPresentedDocumentCurrent) {
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = RunfilePath("donner/editor/tests/source_opening_line_to_text.rnr");
+  options.svgPathOverride = RunfilePath("donner/editor/tests/source_edit_shapes.svg");
+  options.outputDir = DiagnosticOutputDir() / "source_opening_line_replacement";
+  options.captureFrames = {121};
+  options.maxFrame = 126;
+  options.sourcePaneVisible = true;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.contentOnlyCapture = true;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  ASSERT_THAT(result.captures, testing::SizeIs(1));
+  EXPECT_THAT(result.finalSelectedElementLabel, testing::Optional(testing::Eq("<svg>")));
+  EXPECT_THAT(result.finalDocumentSource,
+              testing::Optional(testing::AllOf(testing::HasSubstr("\nx\n"),
+                                               testing::Not(testing::HasSubstr("<ellipse")))));
+  ASSERT_THAT(result.frameDiagnostics, testing::Not(testing::IsEmpty()));
+  const auto& frame = result.frameDiagnostics.back();
+  EXPECT_THAT(frame.presentationFrameId, testing::Gt(0u));
+  EXPECT_THAT(frame.displayedDocVersion, testing::Eq(frame.documentFrameVersion));
+}
+
 TEST(GlRnrReplayTest, RunGlRnrReplayValidatesOptionsBeforeOpeningWindow) {
   repro::GlRnrReplayOptions options;
   repro::GlRnrReplayResult result;
