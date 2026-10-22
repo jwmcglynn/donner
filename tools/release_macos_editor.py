@@ -163,6 +163,7 @@ def _tool_failure(args: tuple[str, ...], output, failure) -> str:
         b"permission denied": "permission-denied",
         b"resource fork, finder information": "unsupported-file-metadata",
         b"bundle format unrecognized": "unrecognized-bundle",
+        b"too many levels of symbolic links": "symlink-resolution-failed",
     }
     reason = next((label for text, label in reasons.items() if text in diagnostic), "unclassified")
     program = {"/usr/bin/codesign": "codesign", "/usr/bin/otool": "otool",
