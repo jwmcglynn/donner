@@ -11,25 +11,29 @@ from python.runfiles import runfiles
 from tools import release_macos_editor as native
 
 
-def _fixture_member(app, member):
+def _fixture_role(app, member):
     relative = member.relative_to(app).as_posix()
-    try:
-        native._safe_name(native.BUNDLE + "/" + relative)
-    except ValueError:
-        relative = "unexpected-name"
-    kind = "link" if member.is_symlink() else "directory" if member.is_dir() else "regular"
-    return {"member": relative, "type": kind}
+    roles = {"Contents/MacOS/Donner": "main-executable", "Contents/Info.plist": "plist"}
+    if relative in roles:
+        return roles[relative]
+    prefixes = {"Contents/_CodeSignature/": "signature", "Contents/Resources/": "resources",
+                "Contents/Frameworks/": "frameworks"}
+    return next((role for prefix, role in prefixes.items() if relative.startswith(prefix)), "other")
 
 
 def _fixture_inventory(app):
-    members = []
+    counts = {}
+    visited = 0
     for parent, directories, files in os.walk(app, followlinks=False):
-        for name in sorted(directories + files):
+        for name in directories + files:
             member = Path(parent) / name
-            members.append(_fixture_member(app, member))
-            if len(members) >= native.MAX_FILES:
-                return {"members": members, "truncated": True}
-    return {"members": members, "truncated": False}
+            kind = "link" if member.is_symlink() else "directory" if member.is_dir() else "regular"
+            key = _fixture_role(app, member) + ":" + kind
+            counts[key] = counts.get(key, 0) + 1
+            visited += 1
+            if visited >= native.MAX_FILES:
+                return {"counts": counts, "truncated": True}
+    return {"counts": counts, "truncated": False}
 
 
 def _verify_fixture_bundle(app, stage):
