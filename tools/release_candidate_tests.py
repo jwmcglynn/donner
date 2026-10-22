@@ -19,8 +19,8 @@ COMMIT = "a" * 40
 TREE = "b" * 40
 LOCK_LINUX = "c" * 64
 LOCK_MACOS = "d" * 64
-LOCKS = {"cli-linux": LOCK_LINUX, "cli-macos": LOCK_MACOS, "editor": "1" * 64, "docs": "2" * 64}
-COMPILERS = {"cli-linux": "clang 21", "cli-macos": "Apple clang 17"}
+LOCKS = {"cli-linux": LOCK_LINUX, "cli-macos": LOCK_MACOS, "editor": "1" * 64, "docs": "2" * 64, "editor-macos": "3" * 64}
+COMPILERS = {"cli-linux": "clang 21", "cli-macos": "Apple clang 17", "editor-macos": "Apple clang 17"}
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
 
 
@@ -123,7 +123,7 @@ class RecordValidationTest(unittest.TestCase):
         for name in ("artifacts", "evidence", "reviews", "source"):
             (self.root / name).mkdir()
         self.record = {
-            "schema": 3,
+            "schema": 4,
             "source": {"commit": COMMIT, "tree": TREE, "version": "0.8.0",
                        "compatibility_level": 0, "bazel_version": "8.8.1",
                        "module_locks_sha256": LOCKS.copy(),
@@ -226,18 +226,26 @@ class RecordValidationTest(unittest.TestCase):
                              **options)
 
     def test_previous_schema_without_dependency_state_is_rejected(self):
-        for schema in (1, 2):
+        for schema in (1, 2, 3):
             self.record["schema"] = schema
             with self.subTest(schema=schema), self.assertRaisesRegex(ValueError, "unsupported schema"):
                 self.verify()
-        self.record["schema"] = 3
+        self.record["schema"] = 4
         self.verify()
         del self.record["artifacts"]["docs-provenance"]
         with self.assertRaisesRegex(ValueError, "every publishable artifact"):
             self.verify()
 
+    def test_native_editor_role_is_mandatory_and_distinct_from_wasm(self):
+        self.verify()
+        del self.record["artifacts"]["editor-macos"]
+        with self.assertRaisesRegex(ValueError, "every publishable artifact"):
+            self.verify()
+        self.assertIn("editor", self.record["artifacts"])
+        self.assertNotIn("editor-macos", candidate.CLI_PLATFORMS)
+
     def test_record_binds_the_admission_validated_registry_entry(self):
-        self.assertEqual(candidate.SCHEMA, 3)
+        self.assertEqual(candidate.SCHEMA, 4)
         self.assertEqual(candidate.ARTIFACT_WORKFLOWS["bcr-entry"],
                          ".github/workflows/bcr_preflight.yml")
         self.assertEqual(self.record["artifacts"]["bcr-entry"]["name"], "donner-bcr-entry-1")
@@ -438,6 +446,22 @@ class SourceAndEditorTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+
+    def test_native_editor_payload_binds_its_own_compiler_and_lock(self):
+        provenance = {"generated_lock_sha256": LOCKS["editor-macos"],
+                      "compiler_version": COMPILERS["editor-macos"]}
+        entry = {"run_id": 12, "attempt": 2}
+        record = {"source": {"commit": COMMIT, "module_locks_sha256": LOCKS.copy(),
+                             "compiler_versions": COMPILERS.copy()}}
+        with mock.patch.object(candidate.release_macos_editor, "verify", return_value=provenance):
+            candidate._verify_payload("editor-macos", self.root, entry, record, self.root)
+            record["source"]["compiler_versions"]["editor-macos"] = "another compiler"
+            with self.assertRaisesRegex(ValueError, "native editor compiler"):
+                candidate._verify_payload("editor-macos", self.root, entry, record, self.root)
+            record["source"]["compiler_versions"]["editor-macos"] = COMPILERS["editor-macos"]
+            record["source"]["module_locks_sha256"]["editor-macos"] = "f" * 64
+            with self.assertRaisesRegex(ValueError, "native editor|generated lock"):
+                candidate._verify_payload("editor-macos", self.root, entry, record, self.root)
 
     def test_source_metadata_binds_a_clean_commit_and_tree(self):
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
@@ -670,6 +694,10 @@ class AssemblyAndReleaseTest(unittest.TestCase):
             files[binary[3]] = lock
             files[binary[2]] = json.dumps({"generated_lock_sha256": digest(lock),
                                            "compiler_version": COMPILERS[role]}).encode()
+        elif role == "editor-macos":
+            files[candidate.release_macos_editor.NAMES[3]] = lock
+            files[candidate.release_macos_editor.NAMES[2]] = json.dumps({
+                "generated_lock_sha256": digest(lock), "compiler_version": COMPILERS[role]}).encode()
         elif role in ("editor", "docs-provenance"):
             files["MODULE.bazel.lock"] = lock
             files["provenance.json"] = json.dumps({"generated_lock_sha256": digest(lock)}).encode()
@@ -735,7 +763,7 @@ class AssemblyAndReleaseTest(unittest.TestCase):
                          f"{hashlib.sha256(raw).hexdigest()}  candidate.json\n")
         self.assertEqual({path.relative_to(output).as_posix() for path in output.rglob("*")
                           if path.is_file()}, candidate.RECORD_FILES)
-        self.assertEqual(record["schema"], 3)
+        self.assertEqual(record["schema"], 4)
         self.assertEqual(record["artifacts"]["bcr-entry"]["name"], "donner-bcr-entry-2")
         self.assertEqual(record["artifacts"]["bcr-entry"]["run_id"], 100)
         self.assertEqual(record["source"]["commit"], self.commit)

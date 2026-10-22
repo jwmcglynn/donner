@@ -8,7 +8,7 @@ successful verification does not publish, deploy, or open a registry pull reques
 
 `tools/release_candidate.py` checks a record against a clean checkout at its source commit, local
 copies of the retained artifact ZIPs, the current GitHub Actions API, and the review evidence. It
-recomputes each ZIP and member digest, checks that the source archive and Linux/macOS CLI packages
+recomputes each ZIP and member digest, checks that the source archive and Linux/macOS CLI packages and the native macOS editor ZIP
 pass their existing provenance verifiers, checks the registry entry that BCR Preflight
 admission-validated, checks the editor package's file manifest, and validates the Pages archive,
 its build marker and the docs build provenance. It rejects missing, expired,
@@ -20,7 +20,7 @@ docs build attempt.
 
 ## Record fields
 
-The top-level fields are `schema` (currently `3`), `source`, `artifacts`, `evidence`, and
+The top-level fields are `schema` (currently `4`), `source`, `artifacts`, `evidence`, and
 `reviews`. The JSON is serialized with sorted keys, compact separators, ASCII escapes, and one
 trailing newline. Its SHA-256 is recorded outside the record, in `candidate.json.sha256` beside it
 and in the release body; the record cannot contain its own hash.
@@ -28,10 +28,10 @@ and in the release body; the record cannot contain its own hash.
 - `source`: full commit and tree IDs; module version and compatibility level from `MODULE.bazel`
   (the version must be a stable `X.Y.Z`; a prerelease such as `0.8.0-pre` cannot be a candidate);
   `.bazelversion`; the [dependency state](#ReleaseCandidateDependencies) of every published
-  artifact as `module_locks_sha256`; and each CLI platform's compiler version. The compiler
+  artifact as `module_locks_sha256`; and each native artifact's compiler version. The compiler
   version must equal the CLI provenance's `compiler_version` (provenance schema 3), which names
   the compiler of the C++ toolchain Bazel used for that binary.
-- `artifacts`: exactly `source`, `cli-linux`, `cli-macos`, `bcr-entry`, `editor`, `docs`, and
+- `artifacts`: exactly `source`, `cli-linux`, `cli-macos`, `editor-macos`, `bcr-entry`, `editor`, `docs`, and
   `docs-provenance`. Each has a GitHub run ID and attempt, artifact ID and name, raw ZIP SHA-256,
   and a map of every ZIP member path to its uncompressed SHA-256. The artifact ID and ZIP digest
   must match GitHub's metadata. The editor package provenance also records its producer run and
@@ -52,7 +52,7 @@ and in the release body; the record cannot contain its own hash.
 
 The `bcr-entry` role is `donner-bcr-entry-<attempt>` from the qualifying BCR Preflight attempt:
 the registry entry that `publish-to-bcr` generated from the candidate source and that the upstream
-BCR validator then checked, with its `admission.json` report. Schema 3 added it. Its inventory is
+BCR validator then checked, with its `admission.json` report. Schema 4 added it. Its inventory is
 `admission.json`, `registry/bazel_registry.json`, `registry/modules/donner/metadata.json` and the
 version's `MODULE.bazel`, `presubmit.yml` and `source.json`, plus any earlier `donner` versions
 that preflight copied from the upstream registry. The verifier requires:
@@ -70,7 +70,7 @@ and never regenerates the entry. Only `metadata.json` is derived again at submis
 registry's version history can move after preflight (see
 [the consumers](#ReleaseCandidateConsumers)).
 
-Schema 3 is the only accepted schema, so a schema-2 record cannot be released or used by these
+Schema 4 is the only accepted schema, so an older-schema record cannot be released or used by these
 workflows; assemble a new record instead.
 
 ## Dependency state {#ReleaseCandidateDependencies}
@@ -84,6 +84,7 @@ the verifier recomputes each one from the retained file:
 | ----------- | --------------------------------------------------------- | ----------------------------------------------------------------- |
 | `cli-linux` | BCR Preflight, `-c opt` CLI build, update then error mode | `donner-svg_linux_x86_64.bazel.lock`; `generated_lock_sha256`     |
 | `cli-macos` | BCR Preflight, `-c opt` CLI build, update then error mode | `donner-svg_darwin_arm64.bazel.lock`; `generated_lock_sha256`     |
+| `editor-macos` | BCR Preflight, optimized Geode/full-text native app, update then error mode | `donner-editor_darwin_arm64.zip.bazel.lock`; `generated_lock_sha256` |
 | `editor`    | Editor WASM, `--config=editor-wasm` package build         | `MODULE.bazel.lock` in the package; `generated_lock_sha256`       |
 | `docs`      | Docs build, `bazel mod graph --ignore_dev_dependency`     | `MODULE.bazel.lock` in `docs-provenance`; `generated_lock_sha256` |
 
@@ -197,7 +198,7 @@ The `Release` workflow then:
    verifier again, with the 30-day publication window, against the tag checkout.
 4. Verifies the record's attestation from this workflow and the preflight attestations of the
    source archive, binaries, lockfiles and notices.
-5. Uploads exactly the files of the `source`, `cli-linux` and `cli-macos` roles that the record
+5. Uploads exactly the files of the `source`, `cli-linux`, `cli-macos` and `editor-macos` roles that the record
    names, plus the record itself as `donner-X.Y.Z.candidate.json`, through the write-once
    publisher. It builds, repackages and selects nothing else.
 
@@ -247,3 +248,33 @@ A rollback never edits a record. Deployment results, the previous builds a rollb
 reactivate, and the rollback itself are recorded in GitHub issues, as the rollback section of the
 [BCR release runbook](design_docs/0018-bcr_release.md) describes. A replacement release gets a new
 record. The schema has no slot for rollback artifacts.
+
+## Native macOS editor ZIP
+
+The `editor-macos` role is required by candidate schema 4 and is separate from the `editor`
+Wasm role. The existing full BCR Preflight macOS job builds `//donner/editor:editor_macos_app`
+optimized with Geode, full text and Tracy disabled, first resolving and then building under
+`--lockfile_mode=error`. A strict configured-closure NOTICE test covers the editor's linked code,
+bundled libraries and resources. Its compiler probe is built with the same configuration.
+Main pushes retain the existing slim preflight policy; full preflight runs on schedule, manual
+dispatch and changes to release or packaging inputs.
+
+That attempt retains `donner-editor_darwin_arm64.zip`, its checksum and provenance, the generated
+Bazel lockfile and third-party NOTICE. The ZIP contains `Donner SVG Editor.app`, the source `LICENSE` and
+`NOTICE.txt`; adding the licenses does not alter or resign the application. Provenance binds all
+file bytes and executable modes, source commit/tree, producer run/attempt, compiler, pinned Xcode,
+SDK, lockfile and license digests. The current app metadata remains version `0.8`, build `1`.
+The producer checks arm64 architecture, bundled/system-only library resolution and strict code
+signatures before and after a fresh ZIP extraction, then checks the extracted executable's
+invalid-option exit before window creation. Archive validation rejects traversal, linked or
+special files, duplicate/case-colliding names, missing required files and entries exceeding its
+file-count, per-file, archive or expanded-byte limits.
+
+The existing signature is **ad hoc**: this package is not Developer ID signed or notarized.
+Gatekeeper may prevent opening a downloaded copy. The loader check does not qualify GUI startup
+or rendering. Before approving a release, the release checklist requires a maintainer to launch
+and render from the exact retained ZIP, recording its SHA-256 in the release audit. Candidate
+verification on Linux validates the frozen bytes and producer provenance; it does not run macOS
+signature or GUI checks. Main preflight attests the ZIP, generated lock and NOTICE. Release
+verifies those exact subjects and uploads the retained ZIP and sidecars without rebuilding,
+repacking, signing or replacing published assets.

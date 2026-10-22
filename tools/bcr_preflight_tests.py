@@ -180,7 +180,7 @@ class BcrPreflightTest(unittest.TestCase):
                 result, calls = self._run("cli", "--platform", platform)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 workspace = str(self.workspace)
-                self.assertEqual(calls, [
+                expected = [
                     ["bazelisk", "build", "--lockfile_mode=update", "-c", "opt", *TARGETS,
                      workspace],
                     ["bazelisk", "build", "--lockfile_mode=error", "-c", "opt", *TARGETS,
@@ -193,7 +193,27 @@ class BcrPreflightTest(unittest.TestCase):
                      "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
                      "--output", f"{self.temp}/donner-cli-{short}", "--commit", COMMIT,
                      "--run-id", "1234", "--attempt", "2", workspace],
-                ])
+                ]
+                if platform == "darwin-arm64":
+                    flags = ["-c", "opt", "--config=geode", "--config=text-full",
+                             "--//build_defs:enable_tracy=false"]
+                    targets = ["//donner/editor:editor_macos_app",
+                               "//third_party/licenses:notice_release_editor_txt",
+                               "//tools/ci:release_compiler_identity"]
+                    expected.extend([
+                        ["bazelisk", "build", "--lockfile_mode=update", *flags, *targets, workspace],
+                        ["bazelisk", "build", "--lockfile_mode=error", *flags, *targets, workspace],
+                        ["bazelisk", "test", "--lockfile_mode=error", *flags,
+                         "//tools:editor_notice_coverage_tests",
+                         "//tools:release_macos_editor_native_tests", workspace],
+                        ["python3", "-B", "-m", "tools.release_macos_editor", "package",
+                         "--app", "bazel-bin/donner/editor/Donner.app",
+                         "--notice", "bazel-bin/third_party/licenses/notice_release_editor.txt",
+                         "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
+                         "--output", f"{self.temp}/donner-editor-macos", "--commit", COMMIT,
+                         "--run-id", "1234", "--attempt", "2", workspace],
+                    ])
+                self.assertEqual(calls, expected)
 
     def test_cli_stops_before_packaging_when_notice_coverage_fails(self):
         result, calls = self._run("cli", "--platform", "linux-x86-64", fail="bazelisk:test=3")
@@ -227,6 +247,9 @@ class BcrPreflightTest(unittest.TestCase):
                  "--artifacts", f"{temp}/donner-bcr/cli-{short}", "--platform", platform,
                  "--commit", COMMIT, "--run-id", "1234", "--attempt", "2", workspace]
                 for platform, short in (("linux-x86-64", "linux"), ("darwin-arm64", "macos"))]
+        clis.append(["python3", "-B", "-m", "tools.release_macos_editor", "verify",
+                     "--artifacts", f"{temp}/donner-bcr/editor-macos", "--commit", COMMIT,
+                     "--run-id", "1234", "--attempt", "2", workspace])
         source = ["python3", "-B", "-m", "tools.bcr_source", "verify",
                   "--artifacts", f"{temp}/donner-bcr/source", "--commit", COMMIT, workspace]
         result, calls = self._run("verify", "--with-source")

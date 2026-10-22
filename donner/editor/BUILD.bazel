@@ -1875,3 +1875,5 @@ filegroup(
     ]),
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
+
+exports_files(["art/Info.plist"], visibility = ["//tools:__pkg__"])

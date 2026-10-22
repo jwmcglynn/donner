@@ -334,3 +334,42 @@ filegroup(
     srcs = [":notice_cli"],
     output_group = "notice",
 )
+
+donner_closure_notice_file(
+    name = "notice_release_editor",
+    available_licenses = ALL_KNOWN_LICENSES,
+    # Each exemption is one label the closure was observed to reach; any other label of the same
+    # component still needs a catalog entry.
+    exempt_labels = {
+        label: _EMPTY_LINK_HOOK
+        for label in [
+            "@bazel_tools//tools/cpp:empty_lib",
+            "@bazel_tools//tools/cpp:link_extra_lib",
+            "@bazel_tools//tools/cpp:malloc",
+            "@rules_cc//:empty_lib",
+            "@rules_cc//:link_extra_lib",
+        ]
+    } | {
+        # Linked with --config=latest_llvm (and so --config=re): libc_compat on Linux and
+        # libcxx_macos_compat on macOS.
+        label: _DONNER_TOOLCHAIN_SHIM
+        for label in [
+            "//third_party/libc_compat:libc_compat",
+            "//third_party/libc_compat:libc_compat.c",
+            "//third_party/libc_compat:libcxx_macos_compat",
+            "//third_party/libc_compat:libcxx_macos_compat.cc",
+        ]
+    },
+    exempt_linkopts = {
+        # Requested by libpng under --config=text-full.
+        "-lm": "The platform C math library, dynamically linked from the system and not shipped.",
+    },
+    target = "//donner/editor:editor_binary",
+    variant = "Donner native editor (configured editor binary closure)",
+)
+
+filegroup(
+    name = "notice_release_editor_txt",
+    srcs = [":notice_release_editor"],
+    output_group = "notice",
+)

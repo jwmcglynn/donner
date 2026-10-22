@@ -54,7 +54,9 @@ RELEASE_PATHS = (
     "third_party/patches/*", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
     "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/notice*",
     "tools/render_notice*", "tools/default_notice*", "tools/ci/BUILD.bazel",
-    "tools/ci/release_*", ".github/workflows/bcr_preflight.yml",
+    "tools/ci/release_*", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
+    "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
+    ".github/workflows/bcr_preflight.yml",
     ".github/workflows/publish_bcr.yml", ".github/workflows/release.yml",
 )
 
@@ -263,7 +265,7 @@ def cli_plan(layout: Layout, platform: str, commit: str, run_id: str,
     The repository ignores MODULE.bazel.lock: resolve once, then prove the build is complete
     under that generated, retained lockfile.
     """
-    return [
+    commands = [
         Command("Resolve the module graph",
                 ("bazelisk", "build", "--lockfile_mode=update", "-c", "opt", *RELEASE_TARGETS)),
         Command("Build under the resolved lockfile",
@@ -276,6 +278,32 @@ def cli_plan(layout: Layout, platform: str, commit: str, run_id: str,
                  "--notice", "bazel-bin/third_party/licenses/notice_cli.txt",
                  "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
                  "--output", layout.cli_output(platform), "--commit", commit,
+                 "--run-id", run_id, "--attempt", attempt)),
+    ]
+    if platform == "darwin-arm64":
+        commands.extend(editor_macos_plan(layout, commit, run_id, attempt))
+    return commands
+
+
+def editor_macos_plan(layout: Layout, commit: str, run_id: str, attempt: str) -> list[Command]:
+    targets = ("//donner/editor:editor_macos_app", "//third_party/licenses:notice_release_editor_txt",
+               "//tools/ci:release_compiler_identity")
+    flags = ("-c", "opt", "--config=geode", "--config=text-full",
+             "--//build_defs:enable_tracy=false")
+    return [
+        Command("Resolve native editor dependencies",
+                ("bazelisk", "build", "--lockfile_mode=update", *flags, *targets)),
+        Command("Build native editor under the resolved lockfile",
+                ("bazelisk", "build", "--lockfile_mode=error", *flags, *targets)),
+        Command("Test native editor NOTICE coverage",
+                ("bazelisk", "test", "--lockfile_mode=error", *flags,
+                 "//tools:editor_notice_coverage_tests", "//tools:release_macos_editor_native_tests")),
+        Command("Package and validate the signed native editor",
+                ("python3", "-B", "-m", "tools.release_macos_editor", "package",
+                 "--app", "bazel-bin/donner/editor/Donner.app",
+                 "--notice", "bazel-bin/third_party/licenses/notice_release_editor.txt",
+                 "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
+                 "--output", f"{layout.temp}/donner-editor-macos", "--commit", commit,
                  "--run-id", run_id, "--attempt", attempt)),
     ]
 
@@ -293,6 +321,10 @@ def verify_plan(layout: Layout, commit: str, run_id: str, attempt: str,
                                  "--artifacts", layout.cli_download(platform),
                                  "--platform", platform, "--commit", commit,
                                  "--run-id", run_id, "--attempt", attempt)))
+    commands.append(Command("Verify the native macOS editor",
+                            ("python3", "-B", "-m", "tools.release_macos_editor", "verify",
+                             "--artifacts", f"{layout.bcr}/editor-macos", "--commit", commit,
+                             "--run-id", run_id, "--attempt", attempt)))
     return commands
 
 

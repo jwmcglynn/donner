@@ -187,3 +187,16 @@ decision, and no step builds, deletes or replaces published bytes or edits the c
       rollback selection before it is served.
 - [ ] **Compatibility check passed** for each reactivated build: digest, configuration and
       health, with results in the rollback issue.
+
+### Native macOS editor asset
+
+- [ ] Confirm the immutable candidate has an `editor-macos` role from the same full BCR Preflight
+      run and attempt as its source and CLI artifacts. Verify the retained ZIP, lockfile, NOTICE
+      and their attestations. The ZIP includes `Donner SVG Editor.app`, `LICENSE` and `NOTICE.txt`.
+- [ ] Download the exact retained `donner-editor_darwin_arm64.zip`, record its SHA-256 in the
+      release audit, extract it and manually launch and render artwork with that application.
+      The producer's invalid-option loader check is not GUI/render qualification. Record actual
+      macOS compatibility and quarantine behavior; the app is ad-hoc signed, not Developer ID
+      signed or notarized. Do not claim notarization or bypass platform security checks.
+- [ ] After publication, confirm the release's editor ZIP and sidecar bytes match the candidate.
+      Release must upload the already verified ZIP without rebuilding or repackaging it.
