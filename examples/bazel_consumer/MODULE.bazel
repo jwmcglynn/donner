@@ -1,6 +1,6 @@
 module(name = "donner_bazel_consumer")
 
-bazel_dep(name = "donner", version = "0.8.0-pre")
+bazel_dep(name = "donner", version = "0.8.0")
 
 # Register the Apple toolchain before rules_cc selects its generic host toolchain.
 bazel_dep(name = "apple_support", version = "2.10.1")

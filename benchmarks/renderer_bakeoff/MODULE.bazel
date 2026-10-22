@@ -6,7 +6,7 @@ graph. Donner itself is consumed from the enclosing checkout.
 
 module(name = "donner_renderer_bakeoff")
 
-bazel_dep(name = "donner", version = "0.8.0-pre")
+bazel_dep(name = "donner", version = "0.8.0")
 local_path_override(
     module_name = "donner",
     path = "../..",
