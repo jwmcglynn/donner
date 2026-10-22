@@ -141,7 +141,8 @@ class MacosEditorPackageTest(unittest.TestCase):
         original = path.read_bytes()
         for name in ("../escape", "/escape", "Donner SVG Editor.app/../escape", "Donner SVG Editor.app\\escape",
                      "Donner SVG Editor.app/Contents/MacOS/donner", "Donner SVG Editor.app/Contents/MacOS/Donner",
-                     "Donner SVG Editor.app/contents/Resources/extra"):
+                     "Donner SVG Editor.app/contents/Resources/extra",
+                     "Donner SVG Editor.app/Contents/Resources/arbitrary space"):
             with self.subTest(name=name):
                 path.write_bytes(original)
                 self._extra_entry(name)

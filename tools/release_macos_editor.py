@@ -39,10 +39,14 @@ NATIVE_CHECKS = {"architecture": "arm64", "signature": "ad-hoc",
 
 
 def _safe_name(name: str) -> None:
-    path = PurePosixPath(name)
-    if (not name or len(name) > 256 or not re.fullmatch(r"[A-Za-z0-9._/ -]+", name)
-            or path.is_absolute() or any(part in ("", ".", "..") or part != part.strip() for part in name.split("/"))
-            or (name not in {"LICENSE", "NOTICE.txt"} and not name.startswith(BUNDLE + "/"))):
+    if name in {"LICENSE", "NOTICE.txt"}:
+        return
+    if not name.startswith(BUNDLE + "/"):
+        raise ValueError("native editor ZIP has an unsafe or unexpected path")
+    relative = name[len(BUNDLE) + 1:]
+    path = PurePosixPath(relative)
+    if (not relative or len(name) > 256 or not re.fullmatch(r"[A-Za-z0-9._/-]+", relative)
+            or path.is_absolute() or any(part in ("", ".", "..") for part in relative.split("/"))):
         raise ValueError("native editor ZIP has an unsafe or unexpected path")
 
 
