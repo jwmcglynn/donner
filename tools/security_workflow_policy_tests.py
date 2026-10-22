@@ -1611,6 +1611,10 @@ RELEASE_CLI_ASSETS = tuple(
     for suffix in ("", ".sha256", ".provenance", ".bazel.lock", ".NOTICE.txt"))
 
 
+RELEASE_NATIVE_ASSETS = tuple("donner-editor_darwin_arm64.zip" + suffix
+                              for suffix in ("", ".sha256", ".provenance", ".bazel.lock", ".NOTICE.txt"))
+
+
 def _build_steps(workflow):
     found = [match.group(1) for body in _script_bodies(workflow)
              for match in BUILD_COMMAND.finditer(body)]
@@ -1664,8 +1668,11 @@ RELEASE_CLI_VERIFY = ("python3 -B -m tools.release_cli verify-release",
 
 
 def _release_asset_paths(assets):
-    return ['"$RUNNER_TEMP"/release/%s/%s' % ("cli-linux" if "linux" in asset else "cli-macos",
-                                              asset) for asset in assets]
+    def role(asset):
+        if asset.startswith("donner-editor_"):
+            return "editor-macos"
+        return "cli-linux" if "linux" in asset else "cli-macos"
+    return ['"$RUNNER_TEMP"/release/%s/%s' % (role(asset), asset) for asset in assets]
 
 
 def _release_shape_violations(release):
@@ -1693,7 +1700,13 @@ def _release_step_violations(jobs):
     first_run = next((step for step in _steps(publication) if "run:" in step), "")
     first_steps = _steps(publication)[:2]
     cli = _named_step(publication, RELEASE_CLI_STEP)
+    native = _named_step(publication, "Verify the retained native editor ZIP")
     return _failed([
+        ("python3 -B -m tools.release_macos_editor verify" in native and
+         '--artifacts "$RUNNER_TEMP/release/editor-macos"' in native and
+         all(argument in native for argument in RELEASE_CLI_VERIFY[2:]) and
+         "Verify the retained native editor ZIP" in names[:-1],
+         "release does not verify the retained native editor before upload"),
         (jobs["resolve-candidate"].count("python3 -B -m tools.bcr_release select-record") == 1,
          "release does not select the record named by the release body"),
         ("needs: resolve-candidate" in publication, "publication does not wait for record selection"),
@@ -1717,9 +1730,11 @@ def _release_file_violations(publication):
     attested = _continued_arguments(_named_step(publication, RELEASE_STEPS[2]), "for subject in")
     signed = [asset for asset in RELEASE_CLI_ASSETS if asset.endswith(("64", ".bazel.lock",
                                                                         ".NOTICE.txt"))]
+    signed += [asset for asset in RELEASE_NATIVE_ASSETS
+               if asset.endswith((".zip", ".bazel.lock", ".NOTICE.txt"))]
     uploaded = _continued_arguments(_named_step(publication, RELEASE_STEPS[3]),
                                     "python3 tools/release_artifact_publisher.py")
-    expected_uploaded = _release_asset_paths(RELEASE_CLI_ASSETS) + [
+    expected_uploaded = _release_asset_paths((*RELEASE_CLI_ASSETS, *RELEASE_NATIVE_ASSETS)) + [
         '"$RUNNER_TEMP"/release/source/*', '"$RUNNER_TEMP"/release/donner-*.candidate.json']
     return _failed([
         (attested == _release_asset_paths(signed) + ['"$RUNNER_TEMP"/release/source/*.tar.gz; do'],
@@ -2384,9 +2399,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn("publish-to-bcr", release)
         self.assertNotIn("svenstaro/upload-release-action", release)
 
+    def test_release_policy_requires_native_zip_attestation_verification_and_upload(self):
+        workflow = self.supply_chain_files[".github/workflows/release.yml"]
+        self.assertEqual([], _release_publication_violations(workflow))
+        for fragment in ('            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip \\\n',
+                         'python3 -B -m tools.release_macos_editor verify'):
+            changed = workflow.replace(fragment, "", 1)
+            self.assertNotEqual(changed, workflow)
+            self.assertTrue(_release_publication_violations(changed))
+
     def test_release_policy_rejects_builds_preflight_selection_and_extra_assets(self):
         path = ".github/workflows/release.yml"
         release = self.supply_chain_files[path]
+        publication = _jobs(release)["publish-release-artifacts"]
+        cli_step = _named_step(publication, RELEASE_CLI_STEP)
+        native_step = _named_step(publication, "Verify the retained native editor ZIP")
         stage = "          python3 -B -m tools.release_candidate release --source-root . \\\n"
         upload = '            "$RUNNER_TEMP"/release/donner-*.candidate.json\n'
         self._assert_rejected(lambda files, path: _release_publication_violations(files[path]), {
@@ -2427,10 +2454,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "      - uses: ./.github/actions/setup\n\n      - name: " + RELEASE_SOURCE_STEP +
                 "\n", 1), "release commit"),
             "staged CLI of another run": (path, release.replace(
-                '--run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"\n\n'
-                "      - name: Verify preflight",
-                '--run-id "$RECORD_RUN_ID" --attempt "$SOURCE_ATTEMPT"\n\n'
-                "      - name: Verify preflight", 1), "staged CLI files"),
+                cli_step, cli_step.replace('--run-id "$SOURCE_RUN_ID"',
+                                           '--run-id "$RECORD_RUN_ID"', 1), 1), "staged CLI files"),
+            "native editor of another run": (path, release.replace(
+                native_step, native_step.replace('--run-id "$SOURCE_RUN_ID"',
+                                                 '--run-id "$RECORD_RUN_ID"', 1), 1),
+                "retained native editor"),
             "staged CLI of another commit": (path, release.replace(
                 '--release "$RUNNER_TEMP/release" \\\n            --commit "$GITHUB_SHA"',
                 '--release "$RUNNER_TEMP/release" \\\n            --commit "$SOURCE_COMMIT"', 1),
@@ -2576,7 +2605,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                     ("bazelisk", "build", "--lockfile_mode=error", "-c", "opt", *targets),
                     ("bazelisk", "test", "--lockfile_mode=error", "-c", "opt",
                      "//tools/ci:release_svg_notice_coverage")])
-                self.assertEqual(len(commands), 4, "the package step must be the last command")
+                self.assertEqual(len(commands), 8 if platform == "darwin-arm64" else 4,
+                                 "each product packages only after its own build and checks")
                 package = " ".join(commands[3])
                 self.assertTrue(package.startswith(
                     "python3 -B -m tools.release_cli package --platform %s " % platform))
@@ -2586,13 +2616,17 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                                  "--commit %s --run-id 7 --attempt 2" % _BCR_COMMIT):
                     self.assertIn(" %s " % argument, package + " ")
                 self.assertNotIn("c++", package)
-        for with_source, count in ((True, 3), (False, 2)):
+        for with_source, count in ((True, 4), (False, 3)):
             commands = [" ".join(command.argv) for command in bcr_preflight.verify_plan(
                 _BCR_LAYOUT, _BCR_COMMIT, "7", "2", with_source)]
             self.assertEqual(len(commands), count)
             self.assertEqual(with_source, commands[0].startswith(
                 "python3 -B -m tools.bcr_source verify --artifacts /temp/donner-bcr/source "
                 "--commit " + _BCR_COMMIT))
+            self.assertIn(
+                "python3 -B -m tools.release_macos_editor verify --artifacts "
+                "/temp/donner-bcr/editor-macos --commit %s --run-id 7 --attempt 2" % _BCR_COMMIT,
+                commands)
             for platform, short in (("linux-x86-64", "linux"), ("darwin-arm64", "macos")):
                 self.assertIn(
                     "python3 -B -m tools.release_cli verify --artifacts /temp/donner-bcr/cli-%s "
@@ -2607,6 +2641,35 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("retention-days: 90", preflight)
         self.assertIn("donner-bcr-qualified-${{ github.run_attempt }}", preflight)
         self.assertIn("tools.bcr_source qualify", preflight)
+
+    def test_native_editor_packaging_inputs_trigger_preflight(self):
+        workflow = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        trigger = workflow.split("permissions:", 1)[0]
+        self.assertIn("      - LICENSE\n", trigger)
+        self.assertIn("      - tools/release_macos_editor*.py\n", trigger)
+        self.assertIn("      - tools/ci_macos_xcode.txt\n", trigger)
+        self.assertTrue(bcr_preflight.is_release_path("LICENSE"))
+        self.assertTrue(bcr_preflight.is_release_path("tools/release_macos_editor.py"))
+        self.assertTrue(bcr_preflight.is_release_path("tools/ci_macos_xcode.txt"))
+
+    def test_bcr_native_editor_producer_has_its_own_immutable_phases(self):
+        native = [command.argv for command in bcr_preflight.cli_plan(
+            _BCR_LAYOUT, "darwin-arm64", _BCR_COMMIT, "7", "2")][4:]
+        self.assertEqual(len(native), 4)
+        self.assertEqual([item[:2] for item in native[:3]],
+                         [("bazelisk", "build"), ("bazelisk", "build"),
+                          ("bazelisk", "test")])
+        for command in native[:3]:
+            self.assertIn("--//build_defs:enable_tracy=false", command)
+            self.assertIn("--//build_defs:release_source_commit=" + _BCR_COMMIT, command)
+        self.assertIn("--lockfile_mode=update", native[0])
+        self.assertIn("--lockfile_mode=error", native[1])
+        self.assertIn("//donner/editor:editor_macos_app", native[1])
+        self.assertIn("//tools:release_macos_editor_native_tests", native[2])
+        self.assertIn("//tools:editor_notice_coverage_tests", native[2])
+        self.assertEqual(native[3][:5],
+                         ("python3", "-B", "-m", "tools.release_macos_editor", "package"))
+        self.assertIn("--build-info", native[3])
 
     def test_bcr_preflight_steps_share_the_workflow_artifact_layout(self):
         # tools/bcr_preflight.py finds its inputs and writes its outputs under the runner's
@@ -2625,7 +2688,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "consumer": ["path: " + temp.artifacts + "\n",
                          "path: " + temp.entry_registry.rsplit("/registry", 1)[0] + "\n"],
             "cli-linux": ["path: %s/\n" % temp.cli_output("linux-x86-64")],
-            "cli-macos": ["path: %s/\n" % temp.cli_output("darwin-arm64")],
+            "cli-macos": ["path: %s/\n" % temp.cli_output("darwin-arm64"),
+                          "path: ${{ runner.temp }}/donner-editor-macos/\n"],
             "attest-artifacts": ["path: " + temp.source + "\n",
                                  temp.source + "/*.tar.gz\n"],
             "qualify": ["path: " + temp.artifacts + "\n",
@@ -2639,6 +2703,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                     expected[job].extend("%s/donner-svg_%s%s\n" % (
                         temp.cli_download(platform), name, suffix)
                         for suffix in ("", ".bazel.lock", ".NOTICE.txt"))
+        for job in ("attest-artifacts", "qualify"):
+            expected[job].append("path: ${{ runner.temp }}/donner-bcr/editor-macos\n")
+        expected["attest-artifacts"].extend(
+            "${{ runner.temp }}/donner-bcr/editor-macos/donner-editor_darwin_arm64.zip" + suffix + "\n"
+            for suffix in ("", ".bazel.lock", ".NOTICE.txt"))
         for job, fragments in expected.items():
             for fragment in fragments:
                 with self.subTest(job=job, fragment=fragment):

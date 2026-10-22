@@ -77,7 +77,7 @@ jobs:
           test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"
 
       # Downloads the named record and every artifact it binds by artifact ID, then reruns the
-      # candidate verifier with the publication retention window. Only the source and CLI files
+      # candidate verifier with the publication retention window. Only the source, CLI and native editor files
       # the record names are staged; nothing is selected by name or rebuilt.
       - name: Reverify the candidate record and stage its release files
         id: candidate
@@ -115,6 +115,14 @@ jobs:
           python3 -B -m tools.release_cli verify-release --release "$RUNNER_TEMP/release" \
             --commit "$GITHUB_SHA" --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
 
+      - name: Verify the retained native editor ZIP
+        env:
+          SOURCE_RUN_ID: ${{ steps.candidate.outputs.preflight_run_id }}
+          SOURCE_ATTEMPT: ${{ steps.candidate.outputs.preflight_attempt }}
+        run: |
+          python3 -B -m tools.release_macos_editor verify --artifacts "$RUNNER_TEMP/release/editor-macos" \
+            --commit "$GITHUB_SHA" --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
+
       - name: Verify preflight build attestations
         env:
           GH_TOKEN: ${{ github.token }}
@@ -126,6 +134,9 @@ jobs:
             "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64 \
             "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.bazel.lock \
             "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.NOTICE.txt \
+            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip \
+            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip.bazel.lock \
+            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip.NOTICE.txt \
             "$RUNNER_TEMP"/release/source/*.tar.gz; do
             gh attestation verify "$subject" \
               --repo jwmcglynn/donner \
@@ -148,5 +159,10 @@ jobs:
             "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.provenance \
             "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.bazel.lock \
             "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.NOTICE.txt \
+            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip \
+            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip.sha256 \
+            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip.provenance \
+            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip.bazel.lock \
+            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip.NOTICE.txt \
             "$RUNNER_TEMP"/release/source/* \
             "$RUNNER_TEMP"/release/donner-*.candidate.json

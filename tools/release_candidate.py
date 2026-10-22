@@ -16,17 +16,18 @@ import subprocess
 import tempfile
 import zipfile
 
-from tools import bcr_source, pages_artifact, release_cli
+from tools import bcr_source, pages_artifact, release_cli, release_macos_editor
 
 
 REPOSITORY = "jwmcglynn/donner"
 # Schema 2 added the `docs-provenance` role and the editor and docs generated lockfile digests.
-# Schema 3 added the `bcr-entry` role: the registry entry BCR Preflight admission-validated.
-SCHEMA = 3
+# Schema 3 added the admission-validated registry entry; schema 4 requires the native editor ZIP.
+SCHEMA = 4
 ARTIFACT_WORKFLOWS = {
     "source": ".github/workflows/bcr_preflight.yml",
     "cli-linux": ".github/workflows/bcr_preflight.yml",
     "cli-macos": ".github/workflows/bcr_preflight.yml",
+    "editor-macos": ".github/workflows/bcr_preflight.yml",
     # The entry preflight generated and ran through the upstream BCR validator. BCR fork
     # preparation submits exactly these bytes; it never regenerates the entry.
     "bcr-entry": ".github/workflows/bcr_preflight.yml",
@@ -37,13 +38,14 @@ ARTIFACT_WORKFLOWS = {
 }
 # Release publishes exactly these roles' files. Docs deployment and BCR preparation are separate
 # maintainer decisions with their own workflows.
-RELEASE_ROLES = ("source", "cli-linux", "cli-macos")
+RELEASE_ROLES = ("source", "cli-linux", "cli-macos", "editor-macos")
 # One BCR Preflight attempt produces all of these.
 PREFLIGHT_ROLES = (*RELEASE_ROLES, "bcr-entry")
 # Each published artifact's build records its generated MODULE.bazel.lock digest in provenance.
-LOCK_ROLES = ("cli-linux", "cli-macos", "editor", "docs")
+LOCK_ROLES = ("cli-linux", "cli-macos", "editor-macos", "editor", "docs")
 # The release stages each CLI role in a directory of its name; `release_cli` verifies them there.
 CLI_PLATFORMS = release_cli.STAGED_PLATFORMS
+COMPILER_ROLES = (*CLI_PLATFORMS, "editor-macos")
 # The manual workflow that assembles a record, and the artifact that retains its files.
 ASSEMBLY_WORKFLOW = ".github/workflows/release_candidate.yml"
 RECORD_ARTIFACT_PREFIX = "donner-release-candidate-"
@@ -169,11 +171,11 @@ def _verify_source(source: dict, root: Path) -> tuple[str, str]:
     locks = source["module_locks_sha256"]
     compilers = source["compiler_versions"]
     if (not isinstance(locks, dict) or not isinstance(compilers, dict) or
-            set(locks) != set(LOCK_ROLES) or set(compilers) != set(CLI_PLATFORMS)):
+            set(locks) != set(LOCK_ROLES) or set(compilers) != set(COMPILER_ROLES)):
         raise ValueError("candidate needs per-artifact lock and per-platform compiler records")
     for role in LOCK_ROLES:
         _digest(locks[role], "module lock digest")
-    for role in CLI_PLATFORMS:
+    for role in COMPILER_ROLES:
         if not isinstance(compilers[role], str) or not re.fullmatch(r"[A-Za-z0-9 .+()~_-]{1,256}", compilers[role]):
             raise ValueError("candidate compiler version is invalid")
     return commit, tree
@@ -238,6 +240,7 @@ def _artifact_name(role: str, commit: str, attempt: int) -> str:
         "source": f"donner-bcr-qualified-{attempt}",
         "cli-linux": f"donner-svg-linux-x86-64-{commit}-{attempt}",
         "cli-macos": f"donner-svg-darwin-arm64-{commit}-{attempt}",
+        "editor-macos": f"donner-editor-darwin-arm64-{commit}-{attempt}",
         "bcr-entry": f"donner-bcr-entry-{attempt}",
         "editor": f"donner-editor-wasm-geode-{commit}",
         "docs": pages_artifact.ARTIFACT_NAME,
@@ -263,6 +266,8 @@ def _fixed_role_files(role: str, version: str) -> set[str] | None:
     if role in ("cli-linux", "cli-macos"):
         platform = "linux-x86-64" if role == "cli-linux" else "darwin-arm64"
         return set(release_cli._names(platform))
+    if role == "editor-macos":
+        return set(release_macos_editor.NAMES)
     if role == "docs":
         return {"artifact.tar"}
     if role == "docs-provenance":
@@ -476,6 +481,14 @@ def _verify_cli_payload(role, directory, entry, record, root, commit, run_id, at
     _require_lock(role, provenance["generated_lock_sha256"], record)
 
 
+def _verify_editor_macos_payload(role, directory, entry, record, root, commit, run_id, attempt):
+    provenance = release_macos_editor.verify(root=root, artifacts=directory, commit=commit,
+                                             run_id=run_id, attempt=attempt)
+    if provenance["compiler_version"] != record["source"]["compiler_versions"][role]:
+        raise ValueError("native editor compiler differs from candidate dependency state")
+    _require_lock(role, provenance["generated_lock_sha256"], record)
+
+
 def _verify_editor_payload(role, directory, entry, record, root, commit, run_id, attempt):
     _require_lock(role, _verify_editor(directory, commit, root, entry["files"], run_id, attempt),
                   record)
@@ -508,6 +521,7 @@ PAYLOAD_VERIFIERS = {
     "source": _verify_source_payload,
     "cli-linux": _verify_cli_payload,
     "cli-macos": _verify_cli_payload,
+    "editor-macos": _verify_editor_macos_payload,
     "bcr-entry": _verify_bcr_entry_payload,
     "editor": _verify_editor_payload,
     "docs": _verify_docs_payload,
@@ -774,6 +788,10 @@ def _assembled_source(commit: str, root: Path, zips: Path) -> dict:
                                f"{role} provenance")
         locks[role] = provenance.get("generated_lock_sha256")
         compilers[role] = provenance.get("compiler_version")
+    native = _zip_json(zips / "editor-macos.zip", release_macos_editor.NAMES[2],
+                       "native editor provenance")
+    locks["editor-macos"] = native.get("generated_lock_sha256")
+    compilers["editor-macos"] = native.get("compiler_version")
     locks["editor"] = _zip_json(zips / "editor.zip", "provenance.json",
                                 "editor provenance").get("generated_lock_sha256")
     locks["docs"] = _zip_json(zips / "docs-provenance.zip", "provenance.json",

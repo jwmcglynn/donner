@@ -18,7 +18,7 @@ on:
         required: true
         type: string
       preflight_run:
-        description: BCR Preflight run ID/attempt for the source archive and CLIs (e.g. 123/1)
+        description: BCR Preflight run ID/attempt for the source archive, CLIs and native editor (e.g. 123/1)
         required: true
         type: string
       editor_run:

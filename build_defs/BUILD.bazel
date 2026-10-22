@@ -12,6 +12,7 @@ exports_files(
         "fuzzer_soak.sh",
         "check_banned_patterns.py",
         "macos_app_bundle.bzl",
+        "editor_build_info.bzl",
         "rules.bzl",
     ],
     visibility = ["//visibility:public"],
@@ -344,5 +345,11 @@ sh_test(
 sh_binary(
     name = "fuzzer_soak_runner",
     srcs = ["fuzzer_soak.sh"],
+    visibility = ["//visibility:public"],
+)
+
+string_flag(
+    name = "release_source_commit",
+    build_setting_default = "",
     visibility = ["//visibility:public"],
 )

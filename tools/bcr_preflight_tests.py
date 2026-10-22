@@ -174,13 +174,21 @@ class BcrPreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(calls, self._consumer_commands()[:1])
 
+    def test_native_packaging_inputs_select_the_full_matrix(self):
+        for path in ("LICENSE", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
+                     "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
+                     "tools/release_macos_editor.py", "tools/release_candidate.py",
+                     "tools/macos_editor_test_bundle.py", "tools/macos_editor_test_bundle_tests.py"):
+            with self.subTest(path=path):
+                self.assertTrue(bcr_preflight.is_release_path(path))
+
     def test_cli_builds_proves_tests_and_packages_each_platform(self):
         for platform, short in (("linux-x86-64", "linux"), ("darwin-arm64", "macos")):
             with self.subTest(platform=platform):
                 result, calls = self._run("cli", "--platform", platform)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 workspace = str(self.workspace)
-                self.assertEqual(calls, [
+                expected = [
                     ["bazelisk", "build", "--lockfile_mode=update", "-c", "opt", *TARGETS,
                      workspace],
                     ["bazelisk", "build", "--lockfile_mode=error", "-c", "opt", *TARGETS,
@@ -193,7 +201,32 @@ class BcrPreflightTest(unittest.TestCase):
                      "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
                      "--output", f"{self.temp}/donner-cli-{short}", "--commit", COMMIT,
                      "--run-id", "1234", "--attempt", "2", workspace],
-                ])
+                ]
+                if platform == "darwin-arm64":
+                    flags = ["-c", "opt", "--config=geode", "--config=text-full",
+                             "--//build_defs:enable_tracy=false",
+                             f"--//build_defs:release_source_commit={COMMIT}"]
+                    targets = ["//donner/editor:editor_macos_app",
+                               "//third_party/licenses:notice_release_editor_txt",
+                               "//tools/ci:release_compiler_identity",
+                               "//donner/editor:editor_build_info_txt"]
+                    expected.extend([
+                        ["bazelisk", "build", "--lockfile_mode=update", *flags, *targets, workspace],
+                        ["bazelisk", "build", "--lockfile_mode=error", *flags, *targets, workspace],
+                        ["bazelisk", "test", "--lockfile_mode=error", *flags,
+                         f"--test_env=DONNER_RELEASE_SOURCE_COMMIT={COMMIT}",
+                         "//tools:editor_notice_coverage_tests",
+                         "//tools:release_macos_editor_native_tests",
+                         "//tools:editor_build_info_tests", workspace],
+                        ["python3", "-B", "-m", "tools.release_macos_editor", "package",
+                         "--app", "bazel-bin/donner/editor/Donner.app",
+                         "--build-info", "bazel-bin/donner/editor/editor_build_info.txt",
+                         "--notice", "bazel-bin/third_party/licenses/notice_release_editor.txt",
+                         "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
+                         "--output", f"{self.temp}/donner-editor-macos", "--commit", COMMIT,
+                         "--run-id", "1234", "--attempt", "2", workspace],
+                    ])
+                self.assertEqual(calls, expected)
 
     def test_cli_stops_before_packaging_when_notice_coverage_fails(self):
         result, calls = self._run("cli", "--platform", "linux-x86-64", fail="bazelisk:test=3")
@@ -227,6 +260,9 @@ class BcrPreflightTest(unittest.TestCase):
                  "--artifacts", f"{temp}/donner-bcr/cli-{short}", "--platform", platform,
                  "--commit", COMMIT, "--run-id", "1234", "--attempt", "2", workspace]
                 for platform, short in (("linux-x86-64", "linux"), ("darwin-arm64", "macos"))]
+        clis.append(["python3", "-B", "-m", "tools.release_macos_editor", "verify",
+                     "--artifacts", f"{temp}/donner-bcr/editor-macos", "--commit", COMMIT,
+                     "--run-id", "1234", "--attempt", "2", workspace])
         source = ["python3", "-B", "-m", "tools.bcr_source", "verify",
                   "--artifacts", f"{temp}/donner-bcr/source", "--commit", COMMIT, workspace]
         result, calls = self._run("verify", "--with-source")

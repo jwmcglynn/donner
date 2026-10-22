@@ -14,6 +14,7 @@ graphs via `dev_dependency = True` in `MODULE.bazel`.
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
+load("//build_defs:editor_build_info.bzl", "donner_editor_build_info")
 load("//build_defs:macos_app_bundle.bzl", "donner_macos_app_bundle")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary", "identical_code_folding_linkopts")
 load(":editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "EDITOR_TEXT", "EDITOR_TEXT_FULL", "editor_full_text_compatible_with", "editor_full_text_guard")
@@ -1567,19 +1568,12 @@ embed_resources(
     },
 )
 
-# Bakes "<version>\n<commit>\n" into the editor binary for the About dialog.
-# The version is read from MODULE.bazel (the repo's version source of truth);
-# the commit falls back to "unknown" when git is unavailable.
-genrule(
+# Explicit release identity participates in the action key; ordinary builds use local Git.
+donner_editor_build_info(
     name = "editor_build_info_txt",
-    srcs = [
-        "//:MODULE.bazel",
-        "write_build_info.sh",
-    ],
-    outs = ["editor_build_info.txt"],
-    cmd = "bash $(location write_build_info.sh) $(execpath //:MODULE.bazel) $@",
-    # Runs on the local machine so `git` can reach the real checkout.
-    local = True,
+    module = "//:MODULE.bazel",
+    script = "write_build_info.sh",
+    out = "editor_build_info.txt",
 )
 
 embed_resources(
@@ -1707,6 +1701,13 @@ donner_macos_app_bundle(
         "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+)
+
+filegroup(
+    name = "editor_macos_app_test_archive",
+    testonly = True,
+    srcs = [":editor_macos_app"],
+    output_group = "native_test_archive",
 )
 
 alias(
@@ -1875,3 +1876,5 @@ filegroup(
     ]),
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
+
+exports_files(["art/Info.plist", "write_build_info.sh"], visibility = ["//tools:__pkg__"])
