@@ -2616,22 +2616,6 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                                  "--commit %s --run-id 7 --attempt 2" % _BCR_COMMIT):
                     self.assertIn(" %s " % argument, package + " ")
                 self.assertNotIn("c++", package)
-                if platform == "darwin-arm64":
-                    native = commands[4:]
-                    self.assertEqual([item[:2] for item in native[:3]],
-                                     [("bazelisk", "build"), ("bazelisk", "build"),
-                                      ("bazelisk", "test")])
-                    for command in native[:3]:
-                        self.assertIn("--//build_defs:enable_tracy=false", command)
-                        self.assertIn("--//build_defs:release_source_commit=" + _BCR_COMMIT, command)
-                    self.assertIn("--lockfile_mode=update", native[0])
-                    self.assertIn("--lockfile_mode=error", native[1])
-                    self.assertIn("//donner/editor:editor_macos_app", native[1])
-                    self.assertIn("//tools:release_macos_editor_native_tests", native[2])
-                    self.assertIn("//tools:editor_notice_coverage_tests", native[2])
-                    self.assertEqual(native[3][:5],
-                                     ("python3", "-B", "-m", "tools.release_macos_editor", "package"))
-                    self.assertIn("--build-info", native[3])
         for with_source, count in ((True, 4), (False, 3)):
             commands = [" ".join(command.argv) for command in bcr_preflight.verify_plan(
                 _BCR_LAYOUT, _BCR_COMMIT, "7", "2", with_source)]
@@ -2667,6 +2651,25 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertTrue(bcr_preflight.is_release_path("LICENSE"))
         self.assertTrue(bcr_preflight.is_release_path("tools/release_macos_editor.py"))
         self.assertTrue(bcr_preflight.is_release_path("tools/ci_macos_xcode.txt"))
+
+    def test_bcr_native_editor_producer_has_its_own_immutable_phases(self):
+        native = [command.argv for command in bcr_preflight.cli_plan(
+            _BCR_LAYOUT, "darwin-arm64", _BCR_COMMIT, "7", "2")][4:]
+        self.assertEqual(len(native), 4)
+        self.assertEqual([item[:2] for item in native[:3]],
+                         [("bazelisk", "build"), ("bazelisk", "build"),
+                          ("bazelisk", "test")])
+        for command in native[:3]:
+            self.assertIn("--//build_defs:enable_tracy=false", command)
+            self.assertIn("--//build_defs:release_source_commit=" + _BCR_COMMIT, command)
+        self.assertIn("--lockfile_mode=update", native[0])
+        self.assertIn("--lockfile_mode=error", native[1])
+        self.assertIn("//donner/editor:editor_macos_app", native[1])
+        self.assertIn("//tools:release_macos_editor_native_tests", native[2])
+        self.assertIn("//tools:editor_notice_coverage_tests", native[2])
+        self.assertEqual(native[3][:5],
+                         ("python3", "-B", "-m", "tools.release_macos_editor", "package"))
+        self.assertIn("--build-info", native[3])
 
     def test_bcr_preflight_steps_share_the_workflow_artifact_layout(self):
         # tools/bcr_preflight.py finds its inputs and writes its outputs under the runner's
