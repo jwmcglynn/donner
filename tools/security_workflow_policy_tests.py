@@ -2632,6 +2632,14 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("donner-bcr-qualified-${{ github.run_attempt }}", preflight)
         self.assertIn("tools.bcr_source qualify", preflight)
 
+    def test_native_editor_packaging_inputs_trigger_preflight(self):
+        workflow = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        trigger = workflow.split("permissions:", 1)[0]
+        self.assertIn("      - LICENSE\n", trigger)
+        self.assertIn("      - tools/release_macos_editor*.py\n", trigger)
+        self.assertTrue(bcr_preflight.is_release_path("LICENSE"))
+        self.assertTrue(bcr_preflight.is_release_path("tools/release_macos_editor.py"))
+
     def test_bcr_preflight_steps_share_the_workflow_artifact_layout(self):
         # tools/bcr_preflight.py finds its inputs and writes its outputs under the runner's
         # temporary directory. The workflow's own upload, download and attestation steps must

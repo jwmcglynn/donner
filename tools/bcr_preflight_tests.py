@@ -174,6 +174,13 @@ class BcrPreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(calls, self._consumer_commands()[:1])
 
+    def test_native_packaging_inputs_select_the_full_matrix(self):
+        for path in ("LICENSE", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
+                     "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
+                     "tools/release_macos_editor.py", "tools/release_candidate.py"):
+            with self.subTest(path=path):
+                self.assertTrue(bcr_preflight.is_release_path(path))
+
     def test_cli_builds_proves_tests_and_packages_each_platform(self):
         for platform, short in (("linux-x86-64", "linux"), ("darwin-arm64", "macos")):
             with self.subTest(platform=platform):

@@ -52,7 +52,7 @@ and in the release body; the record cannot contain its own hash.
 
 The `bcr-entry` role is `donner-bcr-entry-<attempt>` from the qualifying BCR Preflight attempt:
 the registry entry that `publish-to-bcr` generated from the candidate source and that the upstream
-BCR validator then checked, with its `admission.json` report. Schema 4 added it. Its inventory is
+BCR validator then checked, with its `admission.json` report. Schema 3 added it. Its inventory is
 `admission.json`, `registry/bazel_registry.json`, `registry/modules/donner/metadata.json` and the
 version's `MODULE.bazel`, `presubmit.yml` and `source.json`, plus any earlier `donner` versions
 that preflight copied from the upstream registry. The verifier requires:

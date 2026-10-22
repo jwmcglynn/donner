@@ -48,7 +48,7 @@ import sys
 # inputs, this tool and the workflows it serves. Matched as shell patterns, where `*` also
 # matches `/`.
 RELEASE_PATHS = (
-    "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion", ".bazelrc", ".bcr/*",
+    "LICENSE", "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion", ".bazelrc", ".bcr/*",
     "examples/bazel_consumer/*", "third_party/licenses/*", "third_party/bazel/*",
     "third_party/BUILD*", "third_party/*.BUILD", "third_party/*.bzl",
     "third_party/patches/*", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",

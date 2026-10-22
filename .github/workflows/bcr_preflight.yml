@@ -19,6 +19,7 @@ on:
       - .github/workflows/publish_bcr.yml
       - .github/workflows/release.yml
       - BUILD.bazel
+      - LICENSE
       - MODULE.bazel
       - MODULE.bazel.lock
       - build_defs/**
