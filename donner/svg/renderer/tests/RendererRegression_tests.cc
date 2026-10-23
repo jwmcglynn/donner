@@ -614,8 +614,9 @@ TEST_F(RendererRegressionTests, MiterClipMatchesClippedJoinPolygon) {
       <path fill="green" d="M16 33 L30.25 14 L33.75 14 L48 33
                             L40 39 L32 28.333333333333333 L24 39 Z"/>
     </svg>)svg");
+  // Geometry identity excludes edge AA; the corpus comparison retains normal antialiasing.
   const RendererBitmap expected =
-      RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend());
+      RenderDocumentWithBackendForAscii(expectedDocument, ActiveRendererBackend());
   for (const std::string_view path : {"M20 36 L32 20 L44 36", "M44 36 L32 20 L20 36"}) {
     SCOPED_TRACE(path);
     SVGDocument document =
@@ -623,7 +624,8 @@ TEST_F(RendererRegressionTests, MiterClipMatchesClippedJoinPolygon) {
           <path fill="none" stroke="green" stroke-width="10" stroke-linejoin="miter-clip"
                 stroke-miterlimit="1.2" d=")svg") +
                  std::string(path) + R"svg("/></svg>)svg");
-    const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+    const RendererBitmap actual =
+        RenderDocumentWithBackendForAscii(document, ActiveRendererBackend());
     editor::tests::CompareBitmapToBitmap(actual, expected, "miter_clip_analytic_join",
                                          editor::tests::PixelmatchIdentityParams());
   }
