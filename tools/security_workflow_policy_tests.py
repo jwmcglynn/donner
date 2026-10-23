@@ -3240,6 +3240,24 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "--noskip_incompatible_explicit_targets", "//build_defs:soak_probe_fuzzer_soak",
         ], shlex.split(scripts[0].replace("\\\n", " ")))
 
+    def test_deterministic_soak_gate_rejects_exclusion_or_skip(self):
+        path = ".github/workflows/main.yml"
+        workflow = self.supply_chain_files[path]
+        step = _step_body(workflow, "Test deterministic fuzzer soak wrapper")
+        for old, new in [("--test_tag_filters= ", "--test_tag_filters=-fuzz_soak "),
+                         ("--nocache_test_results", "--cache_test_results"),
+                         ("--noskip_incompatible_explicit_targets",
+                          "--skip_incompatible_explicit_targets"),
+                         ("        shell: bash", "        if: false\n        shell: bash")]:
+            with self.subTest(change=new):
+                changed = step.replace(old, new, 1)
+                self.assertNotEqual(step, changed)
+                case = type(self)("test_deterministic_soak_probe_has_an_unfiltered_uncached_pr_gate")
+                case.supply_chain_files = {**self.supply_chain_files,
+                                          path: workflow.replace(step, changed, 1)}
+                with self.assertRaises(AssertionError, msg=new):
+                    case.test_deterministic_soak_probe_has_an_unfiltered_uncached_pr_gate()
+
     def test_fuzz_soaks_are_tagged_for_pr_exclusion_with_a_hang_guard_timeout(self):
         rules = _read("build_defs/rules.bzl")
         self.assertIn('soak_tags = common_target_tags + ["fuzz_soak"]', rules)

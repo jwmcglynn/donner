@@ -705,6 +705,17 @@ jobs:
             --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $TARGETS
 
+      - name: Test deterministic fuzzer soak wrapper
+        id: deterministic_soak_probe
+        env:
+          BUILDBUDDY_FLAGS: ${{ steps.buildbuddy.outputs.bazel-flags }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci --config=latest_llvm ${BUILDBUDDY_FLAGS} \
+            --test_output=all --test_tag_filters= --nocache_test_results \
+            --noskip_incompatible_explicit_targets //build_defs:soak_probe_fuzzer_soak
+
       - name: Test Linux WebGPU resvg reference
         id: wgpu_resvg_reference
         if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' && needs.determine-targets.outputs.wgpu_reference == 'true' }}
