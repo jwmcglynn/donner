@@ -57,7 +57,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      # Checks the release body names the approved record, the release asset is that record and
+      # Checks the release body names the approved retained assembly record and verifies
       # its attestation, the published source digest and the record's exact preflight attempt.
       - name: Verify the release and its candidate record and plan the submission
         id: plan
@@ -72,6 +72,10 @@ jobs:
     needs: validate
     if: needs.validate.outputs.prepare == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
     outputs:
       base: ${{ steps.commit.outputs.base }}
       commit: ${{ steps.commit.outputs.commit }}
@@ -140,6 +144,10 @@ jobs:
     needs: [validate, promote-entry]
     if: needs.validate.outputs.prepare == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
     steps:
       - name: Checkout trusted publication checks
         uses: actions/checkout@v7

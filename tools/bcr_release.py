@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import timedelta
 import json
 from pathlib import Path
 import re
@@ -75,6 +76,14 @@ def select_record(commit: str, tag: str, run_id: str, attempt: str,
                   record_sha256: str) -> dict[str, object]:
     """Select the retained record of one successful assembly attempt on the release commit."""
     version = check_source(commit, tag)
+    return {**_select_record_artifact(commit, run_id, attempt, record_sha256), "version": version}
+
+
+def _select_record_artifact(commit: str, run_id: str, attempt: str,
+                            record_sha256: str) -> dict[str, object]:
+    """Select one successful retained assembly artifact without reading an ambient checkout."""
+    if not bcr_source.COMMIT.fullmatch(commit):
+        raise ValueError("release source must be a full Git commit ID")
     if not re.fullmatch(r"[0-9a-f]{64}", record_sha256):
         raise ValueError("candidate record digest must be a lowercase SHA-256")
     run = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}")
@@ -94,8 +103,7 @@ def select_record(commit: str, tag: str, run_id: str, attempt: str,
             or matching[0]["size_in_bytes"] <= 0):
         raise ValueError("candidate record artifact is missing, ambiguous, empty or expired")
     return {"run_id": str(run["id"]), "attempt": str(run["run_attempt"]),
-            "artifact_id": str(matching[0]["id"]), "record_sha256": record_sha256,
-            "version": version}
+            "artifact_id": str(matching[0]["id"]), "record_sha256": record_sha256}
 
 
 def check_release(release: dict, tag: str) -> None:
@@ -105,7 +113,7 @@ def check_release(release: dict, tag: str) -> None:
 
 
 def verify_published_source(commit: str, tag: str, release: dict, run_id: str,
-                            attempt: str) -> dict:
+                            attempt: str, record: dict) -> dict:
     """Verify the released source bytes and that they came from the named preflight attempt.
 
     `run_id` and `attempt` are the record's qualifying BCR Preflight attempt. The archive's
@@ -113,7 +121,7 @@ def verify_published_source(commit: str, tag: str, release: dict, run_id: str,
     """
     version = bcr_source.module_values(bcr_source.git("show", f"{commit}:MODULE.bazel"))["version"]
     prefix = f"donner-{version}"
-    names = {f"{prefix}.tar.gz", f"{prefix}.tar.gz.sha256", f"{prefix}.provenance.json"}
+    names = {f"{prefix}.tar.gz", f"{prefix}.tar.gz.sha256"}
     assets = {asset["name"]: asset for asset in release["assets"]}
     if not names.issubset(assets):
         raise ValueError("verified source release assets are missing")
@@ -121,10 +129,18 @@ def verify_published_source(commit: str, tag: str, release: dict, run_id: str,
         raise ValueError("source release assets have duplicate names")
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
+        retained = release_candidate.fetch_role(record, "source", Path.cwd(),
+                                                 directory / "source.zip", directory / "retained")
+        receipt = bcr_source.verify_archive(retained, commit)
+        published = directory / "published"
+        published.mkdir()
         for name in sorted(names):
             subprocess.run(["gh", "release", "download", tag, "--repo", REPOSITORY,
-                            "--pattern", name, "--dir", str(directory)], check=True)
-        receipt = bcr_source.verify_archive(directory, commit)
+                            "--pattern", name, "--dir", str(published)], check=True)
+            path = published / name
+            if path.is_symlink() or not path.is_file() or \
+                    bcr_source.digest(path) != bcr_source.digest(retained / name):
+                raise ValueError("published source bytes differ from the retained candidate")
         if assets[f"{prefix}.tar.gz"].get("digest") != "sha256:" + receipt["sha256"]:
             raise ValueError("published source digest does not match its verified bytes")
     check_preflight_attempt(receipt, commit, run_id, attempt)
@@ -370,25 +386,22 @@ def verify_bundle(registry: Path, source: Path, tag: str, version: str, approved
 
 
 def published_record(tag: str, version: str, record_sha256: str, release: dict,
-                     directory: Path) -> tuple[Path, dict]:
-    """Download the release's `donner-X.Y.Z.candidate.json` asset; it must be the approved record."""
-    name = f"donner-{version}.candidate.json"
-    matches = [asset for asset in release.get("assets", []) if asset.get("name") == name]
-    if len(matches) != 1 or matches[0].get("digest") != f"sha256:{record_sha256}":
-        raise ValueError("published release does not carry exactly the approved candidate record")
-    directory.mkdir(parents=True, exist_ok=True)
-    if any(directory.iterdir()):
-        raise ValueError("candidate record download directory must be empty")
-    subprocess.run(["gh", "release", "download", tag, "--repo", REPOSITORY,
-                    "--pattern", name, "--dir", str(directory)], check=True)
-    path = directory / name
-    if path.is_symlink() or not path.is_file() or \
-            path.stat().st_size > release_candidate.MAX_RECORD_BYTES:
-        raise ValueError("published candidate record is missing, linked or too large")
-    record = release_candidate.load_record(path.read_bytes(), record_sha256)
-    if record["source"].get("version") != version:
-        raise ValueError("candidate record names another version than the release")
-    return path, record
+                     directory: Path, commit: str) -> tuple[Path, dict]:
+    """Fetch the retained assembly record named by the published release body."""
+    if tag != f"v{version}":
+        raise ValueError("release tag does not match the module version")
+    run_id, attempt, digest = candidate_ref(release.get("body", ""))
+    if digest != record_sha256:
+        raise ValueError("release body names a different candidate record than the approved one")
+    selected = _select_record_artifact(commit, run_id, attempt, digest)
+    release_candidate._empty_directory(directory, "candidate record work")
+    _, record, record_dir = release_candidate._fetch_record(
+        int(selected["artifact_id"]), int(run_id), int(attempt), commit, digest,
+        "release body", directory, release_candidate._github_json,
+        release_candidate._download_artifact, minimum=timedelta(0))
+    if record["source"].get("version") != version or record["source"].get("commit") != commit:
+        raise ValueError("candidate record names another version or commit than the release")
+    return record_dir / "candidate.json", record
 
 
 def verify_record_attestation(path: Path, commit: str) -> None:
@@ -419,7 +432,7 @@ def plan_submission(release_run_id: str, record_sha256: str, work: Path) -> dict
     """Check a published release against its candidate record before BCR fork preparation.
 
     The maintainer approves a Release run and the record digest. The release body must name that
-    record, the release must carry it as an asset, and it must be attested by the assembly
+    record, its retained artifact must match, and it must be attested by the assembly
     workflow. The approved source digest and the preflight attempt come from the record.
     """
     if not re.fullmatch(r"[1-9][0-9]*", release_run_id):
@@ -442,10 +455,10 @@ def plan_submission(release_run_id: str, record_sha256: str, work: Path) -> dict
     body = release.get("body")
     if not isinstance(body, str) or candidate_ref(body)[2] != record_sha256:
         raise ValueError("release body names a different candidate record than the approved one")
-    path, record = published_record(tag, version, record_sha256, release, work)
+    path, record = published_record(tag, version, record_sha256, release, work, commit)
     verify_record_attestation(path, commit)
     approved_sha256, run_id, attempt = record_source(record, commit, version)
-    receipt = verify_published_source(commit, tag, release, run_id, attempt)
+    receipt = verify_published_source(commit, tag, release, run_id, attempt, record)
     if receipt.get("sha256") != approved_sha256:
         raise ValueError("published source digest differs from the candidate record")
     existing = existing_submission(tag, commit, receipt)
@@ -468,9 +481,10 @@ def fetch_entry(tag: str, record_sha256: str, source: Path, work: Path) -> Path:
     commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"],
                                      text=True).strip()
     release = gh_json("release", "view", tag, "--repo", REPOSITORY,
-                      "--json", "tagName,isDraft,isPrerelease,assets")
+                      "--json", "tagName,isDraft,isPrerelease,assets,body")
     check_release(release, tag)
-    _, record = published_record(tag, version, record_sha256, release, work / "record")
+    path, record = published_record(tag, version, record_sha256, release, work / "record", commit)
+    verify_record_attestation(path, commit)
     record_source(record, commit, version)
     return release_candidate.fetch_role(record, "bcr-entry", source, work / "bcr-entry.zip",
                                         work / "entry")

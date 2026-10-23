@@ -100,7 +100,7 @@ Source archives require root `LICENSE` and `NOTICE`. The committed `NOTICE` matc
 variant; other build variants use their own generated notices. The release dependency/license
 review checks the final shipped closure.
 
-Each released `donner-svg` binary ships with `donner-svg_<platform>.NOTICE.txt`, built as
+Each retained `donner-svg` artifact includes `donner-svg_<platform>.NOTICE.txt`, built as
 `//third_party/licenses:notice_cli` in the same invocation and configuration as the binary. That
 notice attributes exactly the third-party components in the configured closure of
 `//tools/ci:release_svg` (the dependencies, headers, sources, embedded assets, data and linker
@@ -152,9 +152,10 @@ consumer, CLI build, verification and explain-missing-cli), whose command sequen
 2. Watch `Release` resolve the named record. It downloads the record and every artifact the record
    binds by artifact ID, checks the record digest, re-runs the candidate verifier with the 30-day
    publication retention window, and verifies the record attestation and the preflight build
-   attestations. It then uploads exactly the record's source archive, both CLI binaries, their
-   generated lockfiles and license notices, and the record itself as
-   `donner-X.Y.Z.candidate.json`, without compiling or repackaging. The source URL is:
+   attestations. It then uploads exactly the record's source archive, both CLI binaries, native
+   editor ZIP and their four checksums, without compiling or repackaging. The native editor ZIP includes its licenses.
+   Candidate records, provenance, generated locks and NOTICE sidecars remain in Actions artifacts.
+   The source URL is:
    `https://github.com/jwmcglynn/donner/releases/download/vX.Y.Z/donner-X.Y.Z.tar.gz`.
 3. Require server-reported SHA-256 confirmation for every uploaded asset. An existing identical asset
    is accepted; a conflicting asset stops publication. `//tools:release_artifact_publisher_tests`
@@ -164,10 +165,11 @@ consumer, CLI build, verification and explain-missing-cli), whose command sequen
    not an upstream PR.
 5. Manually dispatch `Prepare BCR submission` on `main` with those two values. Before using the
    fork-scoped token it rechecks the Release event and tag/source identity, requires the release
-   body to name that record digest, downloads the `donner-X.Y.Z.candidate.json` release asset,
+   body to name that record digest, downloads the retained assembly record by run and attempt,
    checks its digest and its attestation by `Assemble release candidate`, and takes the approved
-   source digest and preflight attempt from the record. The published archive's provenance must
-   name exactly that attempt, a successful run on `main`. Tokenless jobs download the record's
+   source digest and preflight attempt from the record. The published source and checksum must
+   equal the verified retained source role; its provenance must name exactly that attempt,
+   a successful run on `main`. Tokenless jobs download the record's
    `bcr-entry` artifact by ID and verify it against the record (see the
    [registry entry](../release_candidate.md)). They stage its `MODULE.bazel`, `presubmit.yml` and
    `source.json` byte for byte on the current registry `main`. `metadata.json` is derived there:

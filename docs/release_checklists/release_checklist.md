@@ -136,11 +136,11 @@ concern; the tag never moves retroactively.
     line, copied from the assembly summary. The Release workflow rejects a missing, ambiguous or
     mismatched record, and a body that still names a `Release-Candidate-Preflight:` attempt.
   - Attach binary artifacts (e.g., `donner-svg_darwin_arm64`, `donner-svg_linux_x86_64`)
-    and their `.NOTICE.txt` license notices through the Release workflow, which re-verifies the
-    record and uploads exactly the retained bytes it names, plus `donner-X.Y.Z.candidate.json`.
+    and their checksums through the Release workflow, which re-verifies the
+    record and uploads only the four retained payloads and their four checksums.
 - [ ] **Verify release artifacts**. Check that the GitHub release page shows the correct tag,
-      binaries with their `.NOTICE.txt` license notices, `donner-X.Y.Z.tar.gz` with its
-      checksum/provenance and `donner-X.Y.Z.candidate.json` are attached, uploaded digests
+      binaries with their checksums, the native editor ZIP with its checksum, and
+      `donner-X.Y.Z.tar.gz` with its checksum are the only eight attached assets; uploaded digests
       match the record's, and the release body renders correctly.
 - [ ] **Docs deployed** if approved. Dispatch `Build and manually deploy documentation` with
       `selection: record`, the assembly run/attempt and the record digest, per the

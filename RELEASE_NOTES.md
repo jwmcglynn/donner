@@ -76,14 +76,13 @@ See `SECURITY.md`.
 
 - The Donner SVG Editor as a native desktop application and a WebAssembly edition.
 - `donner-editor_darwin_arm64.zip` for Apple silicon Macs, containing `Donner SVG Editor.app`,
-  `LICENSE` and `NOTICE.txt`, with checksum and build-provenance sidecars. The application is
+  `LICENSE` and `NOTICE.txt`, with a checksum sidecar. The application is
   ad-hoc signed; it is not Developer ID signed or notarized.
 - `donner-svg`, a CLI tool that renders SVG files to PNG or animated GIF and previews them in the
   terminal.
 - An embeddable C++20 API for parsing, inspecting, modifying, animating and rendering SVGs.
-- Prebuilt `donner-svg_linux_x86_64` and `donner-svg_darwin_arm64` binaries, each with a checksum,
-  build provenance and a `.NOTICE.txt` listing the third-party licenses it includes, attached by
-  release automation.
+- Prebuilt `donner-svg_linux_x86_64` and `donner-svg_darwin_arm64` binaries, each with a checksum.
+  Build provenance and third-party license notices are retained in the verified Actions artifacts.
 
 Parse an SVG, find an element by its `data-*` attribute, restyle it, and render it to a PNG with
 the default renderer:

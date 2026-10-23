@@ -207,9 +207,10 @@ The `Release` workflow then:
    verifier again, with the 30-day publication window, against the tag checkout.
 4. Verifies the record's attestation from this workflow and the preflight attestations of the
    source archive, binaries, lockfiles and notices.
-5. Uploads exactly the files of the `source`, `cli-linux`, `cli-macos` and `editor-macos` roles that the record
-   names, plus the record itself as `donner-X.Y.Z.candidate.json`, through the write-once
-   publisher. It builds, repackages and selects nothing else.
+5. Uploads only the source `.tar.gz`, Linux/macOS CLI binaries, native editor `.zip`, and their
+   four `.sha256` files through the write-once publisher. Candidate records, provenance,
+   generated locks and NOTICE sidecars stay in the retained Actions artifacts and are still
+   verified before upload. The editor ZIP includes its licenses. No artifact is rebuilt or repackaged.
 
 A missing, ambiguous, expired, mismatched or rewritten record fails the release before any upload.
 The docs site and BCR fork preparation are published by their own manually dispatched workflows;
@@ -222,10 +223,12 @@ regenerates or repackages anything, and neither edits the record.
 
 - **Prepare BCR submission** (`.github/workflows/publish_bcr.yml`) takes the successful Release
   run and the record digest from the release's `Release-Candidate-Record:` line. It requires that
-  line to name the same digest, downloads the release asset `donner-X.Y.Z.candidate.json`, checks
-  its bytes against the digest and its attestation by the assembly workflow, and takes the
+  line to name the same digest, downloads the retained assembly record by its verified run and
+  attempt, checks its bytes against the digest and its attestation by the assembly workflow, and takes the
   approved source archive digest and the preflight attempt from the record. The published
-  archive's provenance must name exactly that attempt, a successful run on `main`. It then
+  archive and checksum must equal the retained source role byte for byte. That role's provenance
+  must name exactly that attempt, a successful run on `main`. Retained artifacts must remain
+  unexpired; BCR preparation does not require a new 30-day publication window. It then
   downloads the record's `bcr-entry` artifact by ID and verifies it as above. On the current
   registry `main` it stages the entry's `MODULE.bazel`, `presubmit.yml` and `source.json` byte
   for byte. It derives `metadata.json` from that registry: its current `versions` with this

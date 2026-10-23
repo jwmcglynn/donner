@@ -1,6 +1,8 @@
 """Tests for artifact qualification and BCR publication authorization."""
 
 import base64
+from contextlib import chdir
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -148,28 +150,51 @@ class QualificationTest(unittest.TestCase):
 
 class PublishedSourceTest(unittest.TestCase):
     def setUp(self):
-        self.receipt = {"sha256": "c" * 64, "verified_run_id": "12", "verified_run_attempt": "2"}
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.retained = Path(self.temp.name) / "retained"
+        self.retained.mkdir()
         prefix = "donner-1.0.0"
-        self.assets = [{"name": name, "digest": "sha256:" + "c" * 64} for name in (
-            f"{prefix}.tar.gz", f"{prefix}.tar.gz.sha256", f"{prefix}.provenance.json")]
+        archive = f"{prefix}.tar.gz"
+        self.files = {archive: b"retained archive", f"{archive}.sha256": b"retained checksum"}
+        for name, data in self.files.items():
+            (self.retained / name).write_bytes(data)
+        self.receipt = {"sha256": hashlib.sha256(self.files[archive]).hexdigest(),
+                        "verified_run_id": "12", "verified_run_attempt": "2"}
+        self.assets = [{"name": name, "digest": "sha256:" + hashlib.sha256(data).hexdigest()}
+                       for name, data in self.files.items()]
+        self.mismatch = None
         patches = [
             mock.patch.object(release.bcr_source, "git", return_value='module(name="donner", version="1.0.0")'),
             mock.patch.object(release.bcr_source, "verify_archive", return_value=self.receipt),
-            mock.patch.object(release.subprocess, "run"),
+            mock.patch.object(release.subprocess, "run", side_effect=self.write_download),
             mock.patch.object(release, "gh_json", return_value=run_record()),
+            mock.patch.object(release.release_candidate, "fetch_role", return_value=self.retained),
         ]
-        self.git, self.verify, self.download, self.gh = [patch.start() for patch in patches]
+        self.git, self.verify, self.download, self.gh, self.fetch = [patch.start() for patch in patches]
         for patch in patches:
             self.addCleanup(patch.stop)
 
+    def write_download(self, args, check):
+        name = args[args.index("--pattern") + 1]
+        data = b"rewritten" if name == self.mismatch else self.files[name]
+        (Path(args[args.index("--dir") + 1]) / name).write_bytes(data)
+
     def check(self, assets=None, run_id="12", attempt="2"):
         return release.verify_published_source(SHA, "v1.0.0", {"assets": assets or self.assets},
-                                               run_id, attempt)
+                                               run_id, attempt, submission_record())
 
     def test_published_bytes_are_bound_to_the_successful_exact_attempt(self):
         self.assertEqual(self.check(), self.receipt)
-        self.assertEqual(self.download.call_count, 3)
+        self.assertEqual(self.download.call_count, 2)
         self.gh.assert_called_once_with("api", "repos/jwmcglynn/donner/actions/runs/12/attempts/2")
+
+    def test_published_checksum_and_archive_must_equal_retained_bytes(self):
+        for name in self.files:
+            self.mismatch = name
+            with self.subTest(name=name), self.assertRaisesRegex(
+                    ValueError, "differ from the retained candidate"):
+                self.check()
 
     def test_preflight_must_be_the_record_attempt_on_main(self):
         # The record names the qualifying attempt; the archive's provenance must name the same.
@@ -352,9 +377,9 @@ class RecordSubmissionTest(unittest.TestCase):
                                   "existing_pr": None, "source_commit": SHA,
                                   "source_sha256": "c" * 64, "record_sha256": DIGEST})
         self.mocks["published"].assert_called_once_with("v1.0.0", "1.0.0", DIGEST, self.release,
-                                                        Path("work"))
+                                                        Path("work"), SHA)
         self.mocks["attest"].assert_called_once_with(Path("record.json"), SHA)
-        self.mocks["verify"].assert_called_once_with(SHA, "v1.0.0", self.release, "30", "2")
+        self.mocks["verify"].assert_called_once_with(SHA, "v1.0.0", self.release, "30", "2", self.record)
         self.assertIn(mock.call("release", "view", "v1.0.0", "--repo", release.REPOSITORY,
                                 "--json", "tagName,isDraft,isPrerelease,assets,body"),
                       self.mocks["gh"].call_args_list)
@@ -401,7 +426,7 @@ class RecordSubmissionTest(unittest.TestCase):
 
 
 class PublishedRecordTest(unittest.TestCase):
-    """The release asset must be the approved record, byte for byte."""
+    """The retained assembly artifact must contain the approved record, byte for byte."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -411,24 +436,37 @@ class PublishedRecordTest(unittest.TestCase):
         self.digest = hashlib.sha256(self.raw).hexdigest()
         self.release = {"assets": [{"name": "donner-1.0.0.candidate.json",
                                     "digest": "sha256:" + self.digest}]}
-        self.parsed = {"source": {"version": "1.0.0"}}
-
-    def download(self, data):
-        def write(args, check):
-            (Path(args[args.index("--dir") + 1]) / "donner-1.0.0.candidate.json").write_bytes(data)
-        return mock.patch.object(release.subprocess, "run", side_effect=write)
+        self.parsed = {"source": {"version": "1.0.0", "commit": SHA}}
 
     def fetch(self, digest=None):
         return release.published_record("v1.0.0", "1.0.0", digest or self.digest, self.release,
-                                        self.directory)
+                                        self.directory, SHA)
 
-    def test_release_asset_is_loaded_as_the_approved_record(self):
-        with self.download(self.raw), mock.patch.object(
-                release.release_candidate, "load_record", return_value=self.parsed) as load:
+    def test_retained_record_does_not_require_public_metadata_assets(self):
+        self.release = {"assets": [], "body":
+                        f"Release-Candidate-Record: 40/1 sha256:{self.digest}\n"}
+        selected = {"artifact_id": "70"}
+        with chdir(self.temp.name), \
+                mock.patch.object(release.bcr_source, "git", side_effect=AssertionError("ambient Git")), \
+                mock.patch.object(release, "_select_record_artifact", return_value=selected) as select, \
+                mock.patch.object(release.release_candidate, "_fetch_record",
+                                  return_value=(self.raw, self.parsed, self.directory)) as fetch:
             path, record = self.fetch()
-        self.assertEqual(path, self.directory / "donner-1.0.0.candidate.json")
+        self.assertEqual(path, self.directory / "candidate.json")
         self.assertEqual(record, self.parsed)
-        load.assert_called_once_with(self.raw, self.digest)
+        select.assert_called_once_with(SHA, "40", "1", self.digest)
+        self.assertEqual(fetch.call_args.args[:5], (70, 40, 1, SHA, self.digest))
+        self.assertEqual(fetch.call_args.kwargs, {"minimum": timedelta(0)})
+
+    def test_postpublication_retention_accepts_ten_days_but_rejects_expiry(self):
+        now = datetime.now(timezone.utc)
+        metadata = {"expired": False, "expires_at": (now + timedelta(days=10)).isoformat()}
+        release.release_candidate._verify_retention(metadata, "candidate record", now, timedelta(0))
+        for remaining in (-1, -10):
+            metadata["expires_at"] = (now + timedelta(days=remaining)).isoformat()
+            with self.subTest(remaining=remaining), self.assertRaises(ValueError):
+                release.release_candidate._verify_retention(metadata, "candidate record", now,
+                                                            timedelta(0))
 
     def test_attestation_names_the_assembly_workflow_and_commit(self):
         with mock.patch.object(release.subprocess, "run") as execute:
@@ -439,24 +477,16 @@ class PublishedRecordTest(unittest.TestCase):
              "--source-digest", SHA, "--source-ref", "refs/heads/main"], check=True,
             stdout=subprocess.DEVNULL)
 
-    def test_missing_duplicate_or_other_asset_digest_is_rejected(self):
-        asset = self.release["assets"][0]
-        for assets in ([], [asset, asset], [dict(asset, digest="sha256:" + "f" * 64)]):
-            with self.subTest(assets=assets):
-                self.release["assets"] = assets
-                with self.assertRaisesRegex(ValueError, "exactly the approved candidate record"):
+    def test_missing_ambiguous_or_unapproved_body_stops_before_download(self):
+        for body in ("", f"Release-Candidate-Record: 40/1 sha256:{'f' * 64}\n",
+                     f"Release-Candidate-Record: 40/1 sha256:{self.digest}\n" * 2):
+            with self.subTest(body=body), mock.patch.object(
+                    release.release_candidate, "_fetch_record") as fetch:
+                self.release["body"] = body
+                with self.assertRaises(ValueError):
                     self.fetch()
+                fetch.assert_not_called()
 
-    def test_downloaded_bytes_and_version_are_checked(self):
-        with self.download(b'{"other":true}\n'), \
-                self.assertRaisesRegex(ValueError, "differs from the approved record"):
-            self.fetch()
-        self.directory = Path(self.temp.name) / "version"
-        with self.download(self.raw), mock.patch.object(
-                release.release_candidate, "load_record",
-                return_value={"source": {"version": "1.0.1"}}), \
-                self.assertRaisesRegex(ValueError, "another version"):
-            self.fetch()
 
 
 class EntryPromotionTest(unittest.TestCase):
@@ -467,18 +497,20 @@ class EntryPromotionTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
 
+    @mock.patch.object(release, "verify_record_attestation")
     @mock.patch.object(release.release_candidate, "fetch_role", return_value=Path("entry"))
     @mock.patch.object(release, "published_record")
     @mock.patch.object(release, "gh_json")
     @mock.patch.object(release.subprocess, "check_output", return_value=SHA + "\n")
     def test_fetch_entry_reads_the_record_role_for_the_source_commit(self, head, gh, published,
-                                                                     fetch):
+                                                                     fetch, attest):
         gh.return_value = {"tagName": "v1.0.0", "isDraft": False, "isPrerelease": False}
         published.return_value = (Path("record.json"), submission_record())
         work = self.base / "work"
         self.assertEqual(release.fetch_entry("v1.0.0", DIGEST, Path("this"), work), Path("entry"))
         published.assert_called_once_with("v1.0.0", "1.0.0", DIGEST, gh.return_value,
-                                          work / "record")
+                                          work / "record", SHA)
+        attest.assert_called_once_with(Path("record.json"), SHA)
         fetch.assert_called_once_with(submission_record(), "bcr-entry", Path("this"),
                                       work / "bcr-entry.zip", work / "entry")
         head.return_value = "d" * 40 + "\n"

@@ -1734,8 +1734,12 @@ def _release_file_violations(publication):
                if asset.endswith((".zip", ".bazel.lock", ".NOTICE.txt"))]
     uploaded = _continued_arguments(_named_step(publication, RELEASE_STEPS[3]),
                                     "python3 tools/release_artifact_publisher.py")
-    expected_uploaded = _release_asset_paths((*RELEASE_CLI_ASSETS, *RELEASE_NATIVE_ASSETS)) + [
-        '"$RUNNER_TEMP"/release/source/*', '"$RUNNER_TEMP"/release/donner-*.candidate.json']
+    expected_uploaded = _release_asset_paths((
+        "donner-svg_linux_x86_64", "donner-svg_linux_x86_64.sha256",
+        "donner-svg_darwin_arm64", "donner-svg_darwin_arm64.sha256",
+        "donner-editor_darwin_arm64.zip", "donner-editor_darwin_arm64.zip.sha256")) + [
+        '"$RUNNER_TEMP"/release/source/*.tar.gz',
+        '"$RUNNER_TEMP"/release/source/*.tar.gz.sha256']
     return _failed([
         (attested == _release_asset_paths(signed) + ['"$RUNNER_TEMP"/release/source/*.tar.gz; do'],
          "release attestation subjects changed: %s" % attested),
@@ -1864,6 +1868,9 @@ def _bcr_promotion_violations(promote, prepare):
     bundle = _named_step(promote, BCR_PROMOTE_STEPS[2])
     recheck = _named_step(prepare, BCR_RECHECK_STEP)
     return _failed([
+        (all(_permissions(job, 4) == {"contents": "read", "actions": "read", "attestations": "read"}
+             for job in (promote, prepare)),
+         "record-consuming jobs need read-only attestation scopes"),
         ([name for name in names if name in BCR_PROMOTE_STEPS] == list(BCR_PROMOTE_STEPS),
          "promotion does not fetch, stage and verify the validated entry in order"),
         (BCR_FETCH_ENTRY in _named_step(promote, BCR_PROMOTE_STEPS[0]) and
@@ -2415,7 +2422,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         cli_step = _named_step(publication, RELEASE_CLI_STEP)
         native_step = _named_step(publication, "Verify the retained native editor ZIP")
         stage = "          python3 -B -m tools.release_candidate release --source-root . \\\n"
-        upload = '            "$RUNNER_TEMP"/release/donner-*.candidate.json\n'
+        upload = '            "$RUNNER_TEMP"/release/source/*.tar.gz.sha256\n'
         self._assert_rejected(lambda files, path: _release_publication_violations(files[path]), {
             "build": (path, release.replace(
                 stage, "          bazelisk build -c opt //donner/svg/tool:donner-svg\n" + stage, 1),
@@ -3027,6 +3034,17 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for path in (".github/workflows/bcr_preflight.yml", ".github/workflows/publish_bcr.yml"):
             for body in _run_bodies(self.supply_chain_files[path]):
                 self.assertNotIn("${{", body, "run blocks must quote environment values")
+
+    def test_record_consumers_require_attestation_read_without_write_scopes(self):
+        workflow = self.supply_chain_files[BCR_SUBMISSION_WORKFLOW]
+        for name in ("promote-entry", "prepare-fork"):
+            job = _jobs(workflow)[name]
+            for scope in ("", "      attestations: write\n"):
+                changed = workflow.replace(job, job.replace("      attestations: read\n", scope, 1), 1)
+                with self.subTest(job=name, scope=scope):
+                    self.assertNotEqual(changed, workflow)
+                    self.assertIn("record-consuming jobs need read-only attestation scopes",
+                                  _bcr_submission_violations(changed))
 
     def test_bcr_submission_policy_rejects_regenerated_or_unbound_entries(self):
         path = BCR_SUBMISSION_WORKFLOW
