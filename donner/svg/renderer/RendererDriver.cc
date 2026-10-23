@@ -2601,7 +2601,8 @@ RangeBoundContribution BoundPathEntity(Registry& registry, Entity entity,
   if (!std::holds_alternative<PaintServer::None>(paint.stroke) &&
       paint.strokeParams.strokeWidth > 0.0) {
     double padding = paint.strokeParams.strokeWidth / 2.0;
-    if (paint.strokeParams.lineJoin == StrokeLinejoin::Miter) {
+    if (paint.strokeParams.lineJoin == StrokeLinejoin::Miter ||
+        paint.strokeParams.lineJoin == StrokeLinejoin::MiterClip) {
       padding *= paint.strokeParams.miterLimit;
     }
     local = Box2d(local.topLeft - Vector2d(padding, padding),

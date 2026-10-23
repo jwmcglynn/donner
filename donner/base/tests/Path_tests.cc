@@ -1860,7 +1860,7 @@ TEST(Path, StrokeToFillMiterClipHonorsTheBisectorLimitInBothDirections) {
 
 TEST(Path, StrokeToFillMiterClipBoundsExactAndNearReversals) {
   for (double direction : {-1.0, 1.0}) {
-    for (double offset : {-1e-11, 0.0, 1e-11}) {
+    for (double offset : {-1e-11, -1e-300, 0.0, 1e-300, 1e-11}) {
       SCOPED_TRACE(direction);
       SCOPED_TRACE(offset);
       const Path path =

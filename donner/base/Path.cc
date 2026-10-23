@@ -2155,7 +2155,7 @@ bool EmitClippedMiterPiece(const Vector2d& vertex, const Vector2d& previousOuter
                            const Vector2d& currentOuterNormal, double halfWidth, double limit,
                            PathBuilder& builder) {
   const Vector2d sum = previousOuterNormal + currentOuterNormal;
-  const double sumLength = sum.length();
+  const double sumLength = std::hypot(sum.x, sum.y);
   const double cosine = sumLength * 0.5;
   const double denominator = 1.0 - cosine * cosine;
   if (!std::isfinite(limit) || limit <= cosine || denominator <= 0.0) {
@@ -2183,7 +2183,7 @@ void EmitMiterJoinPiece(const Vector2d& vertex, const Vector2d& previousOuterNor
   const Vector2d currentOuter = vertex + currentOuterNormal * halfWidth;
   if (miter.valid && miter.lengthFromVertex / halfWidth <= style.miterLimit) {
     EmitPositiveStrokePiece({vertex, previousOuter, miter.point, currentOuter}, builder);
-  } else if (!(miter.valid && style.join == LineJoin::MiterClip &&
+  } else if (!(style.join == LineJoin::MiterClip &&
                EmitClippedMiterPiece(vertex, previousOuterNormal, currentOuterNormal, halfWidth,
                                      style.miterLimit, builder))) {
     EmitPositiveStrokePiece({vertex, previousOuter, currentOuter}, builder);
@@ -2195,8 +2195,14 @@ void EmitOutsideJoinPiece(const Vector2d& vertex, const Vector2d& previousNormal
                           PathBuilder& builder) {
   const double turn = previousNormal.x * currentNormal.y - previousNormal.y * currentNormal.x;
   if (turn == 0.0) {
-    if (style.join == LineJoin::Round && previousNormal.dot(currentNormal) < 0.0) {
-      EmitRoundCapPiece(vertex, Vector2d(previousNormal.y, -previousNormal.x), halfWidth, builder);
+    if (previousNormal.dot(currentNormal) < 0.0) {
+      if (style.join == LineJoin::Round) {
+        EmitRoundCapPiece(vertex, Vector2d(previousNormal.y, -previousNormal.x), halfWidth,
+                          builder);
+      } else if (style.join == LineJoin::MiterClip) {
+        (void)EmitClippedMiterPiece(vertex, previousNormal, currentNormal, halfWidth,
+                                    style.miterLimit, builder);
+      }
     }
     return;
   }

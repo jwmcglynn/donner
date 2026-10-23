@@ -51,6 +51,17 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     return 0;
   }
 
+  constexpr std::string_view kMiterClipReversalSeed = "MITER_CLIP_REVERSAL\n";
+  if (size == kMiterClipReversalSeed.size() &&
+      std::memcmp(data, kMiterClipReversalSeed.data(), size) == 0) {
+    const Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({0, 0}).build();
+    const Path outline =
+        path.strokeToFill({.width = 2, .join = LineJoin::MiterClip, .miterLimit = 1.2}, 0.25);
+    assert(!outline.empty());
+    assert(std::abs(outline.bounds().bottomRight.x - 11.2) < 1e-10);
+    return 0;
+  }
+
   constexpr std::string_view kExtremeRoundStrokeSeed = "EXTREME_ROUND_STROKE\n";
   if (size == kExtremeRoundStrokeSeed.size() &&
       std::memcmp(data, kExtremeRoundStrokeSeed.data(), size) == 0) {
