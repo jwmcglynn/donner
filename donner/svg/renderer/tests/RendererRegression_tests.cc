@@ -543,6 +543,30 @@ TEST_F(RendererRegressionTests, CssFilterContractShadowHalfPixelOffsetsUseRounde
                          "shadow_half_pixel_rounding_contract");
 }
 
+TEST_F(RendererRegressionTests, CssFilterContractUrlChainsMatchEquivalentPrimitiveGraphs) {
+  const auto render = [](std::string_view definitions, std::string_view filter) {
+    SVGDocument document = instantiateSubtree(
+        std::string(definitions) +
+            R"svg(<rect x="12" y="12" width="20" height="20" fill="seagreen" filter=")svg" +
+            std::string(filter) + R"svg("/>)svg",
+        {}, Vector2i(64, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  const std::string_view definitions = R"svg(
+    <filter id="flood"><feFlood flood-color="blue"/></filter>
+    <filter id="blur"><feGaussianBlur stdDeviation="1"/></filter>
+    <filter id="combined"><feFlood flood-color="blue"/><feGaussianBlur stdDeviation="1"/></filter>
+    <filter id="twice"><feGaussianBlur stdDeviation="1"/><feGaussianBlur stdDeviation="1"/></filter>
+  )svg";
+  const auto expected = render(definitions, "url(#combined)");
+  ExpectVisibleBitmap(expected, "url_chain_combined_visible");
+  ExpectBitmapsIdentical(render(definitions, "url(#flood) url(#blur)"), expected,
+                         "url_chain_implicit_previous_input");
+  ExpectBitmapsIdentical(render(definitions, "url(#blur) url(#blur)"),
+                         render(definitions, "url(#twice)"),
+                         "repeated_url_implicit_previous_input");
+}
+
 TEST_F(RendererRegressionTests, CssFilterContractMixedUrlGrayscaleUsesSrgb) {
   SVGDocument actualDocument = instantiateSubtree(R"svg(
     <filter id="identity"><feOffset/></filter>
