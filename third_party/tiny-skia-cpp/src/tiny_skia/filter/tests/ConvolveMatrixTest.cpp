@@ -128,5 +128,30 @@ TEST(ConvolveMatrixTest, ByteBiasUsesResultAlpha) {
   }
 }
 
+TEST(ConvolveMatrixTest, SubnormalDivisorAvoidsReciprocalOverflow) {
+  for (const double coefficient : {1e-310, -1e-310}) {
+    SCOPED_TRACE(coefficient);
+    const std::array<double, 1> kernel{coefficient};
+    const ConvolveParams params{
+        1, 1, kernel, coefficient, 0.0, 0, 0, ConvolveEdgeMode::Duplicate, false};
+    auto byteInput = Pixmap::fromSize(1, 1);
+    auto byteOutput = Pixmap::fromSize(1, 1);
+    auto floatInput = FloatPixmap::fromSize(1, 1);
+    auto floatOutput = FloatPixmap::fromSize(1, 1);
+    ASSERT_THAT(byteInput.has_value(), testing::IsTrue());
+    ASSERT_THAT(byteOutput.has_value(), testing::IsTrue());
+    ASSERT_THAT(floatInput.has_value(), testing::IsTrue());
+    ASSERT_THAT(floatOutput.has_value(), testing::IsTrue());
+    const std::array<std::uint8_t, 4> bytes{64, 128, 0, 255};
+    const std::array<float, 4> floats{0.25f, 0.5f, 0.0f, 1.0f};
+    std::copy(bytes.begin(), bytes.end(), byteInput->data().begin());
+    std::copy(floats.begin(), floats.end(), floatInput->data().begin());
+    convolveMatrix(*byteInput, *byteOutput, params);
+    convolveMatrix(*floatInput, *floatOutput, params);
+    EXPECT_THAT(byteOutput->data(), testing::ElementsAreArray(bytes));
+    EXPECT_THAT(floatOutput->data(), testing::Pointwise(testing::FloatNear(1e-6f), floats));
+  }
+}
+
 }  // namespace
 }  // namespace tiny_skia::filter

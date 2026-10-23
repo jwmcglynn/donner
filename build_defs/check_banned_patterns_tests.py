@@ -190,6 +190,61 @@ class CheckBannedPatternsTests(unittest.TestCase):
 
         self.assertIn("complex method (11 decision points; limit 10)", descriptions)
 
+    def test_blocks_inline_free_functions_above_the_local_complexity_limit(self):
+        branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        source = "namespace example {\ninline bool check(int value) {\n" + branches + "\n} }\n"
+        self.assertIn(
+            "complex method (11 decision points; limit 10)",
+            self._descriptions_for(source, check_method_complexity=True),
+        )
+
+    def test_free_function_baseline_preserves_unchanged_debt(self):
+        branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        baseline = "namespace example {\ninline bool check(int value) {\n" + branches + "\n} }\n"
+        path = self._write_source("#include <array>\n" + baseline)
+        self.assertEqual([], check_banned_patterns.check_file(
+            path, check_method_complexity=True,
+            method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(baseline),
+        ))
+
+    def test_free_function_baseline_rejects_growth(self):
+        branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        prefix = "namespace example {\ninline bool check(int value) {\n"
+        baseline = prefix + branches + "\n} }\n"
+        path = self._write_source(prefix + branches + "\nif (value < 0) { return false; }\n} }\n")
+        errors = check_banned_patterns.check_file(
+            path, check_method_complexity=True,
+            method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(baseline),
+        )
+        self.assertIn("complex method (12 decision points; limit 10)", [e[1] for e in errors])
+
+    def test_free_function_baseline_keeps_namespaces_distinct(self):
+        branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        body = "\ninline bool check(int value) {\n" + branches + "\n} }\n"
+        baseline = "namespace first {" + body
+        path = self._write_source(baseline + "namespace second {" + body)
+        errors = check_banned_patterns.check_file(
+            path, check_method_complexity=True,
+            method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(baseline),
+        )
+        self.assertEqual(1, len(errors))
+        self.assertIn("complex method (11 decision points; limit 10)", errors[0][1])
+
+    def test_function_like_test_macros_are_not_free_functions(self):
+        branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        source = "TEST(Example, Checks) {\n" + branches + "\n}\n"
+        self.assertEqual([], self._descriptions_for(source, check_method_complexity=True))
+
     def test_blocks_inline_methods_above_the_local_complexity_limit(self):
         branches = "\n".join(
             f"    if (value == {index}) {{ value += {index}; }}" for index in range(11)

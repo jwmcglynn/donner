@@ -4513,6 +4513,51 @@ TEST(ConvolveKernelSumTest, PreservesRealResidualsAfterLargeCancellation) {
   EXPECT_THAT(ConvolveKernelSum(exactZero), testing::Eq(0.0));
 }
 
+TEST(ConvolveKernelSumTest, DecimalFallbackPreservesRealResidualsAndBoundaries) {
+  using components::kMaximumFilterKernelValues;
+  using components::filter_primitive::ConvolveKernelDefaultDivisor;
+  using components::filter_primitive::ConvolveKernelHasDecimalZeroSum;
+  std::array decimalZero = {-0.3, 0.1, 0.2};
+  do {
+    EXPECT_THAT(ConvolveKernelDefaultDivisor(decimalZero), testing::Eq(1.0));
+  } while (std::next_permutation(decimalZero.begin(), decimalZero.end()));
+
+  const std::array nearZero = {0.1, 0.2, std::nextafter(-0.3, -1.0)};
+  EXPECT_THAT(ConvolveKernelHasDecimalZeroSum(nearZero), testing::IsFalse());
+  EXPECT_THAT(ConvolveKernelDefaultDivisor(nearZero),
+              testing::Eq(components::filter_primitive::ConvolveKernelSum(nearZero)));
+  for (const double residual :
+       {5e-11, -5e-11, 1e-310, -1e-310, std::numeric_limits<double>::denorm_min()}) {
+    SCOPED_TRACE(residual);
+    const std::array lone = {residual};
+    const std::array cancelledPair = {1e16, residual, -1e16};
+    const std::array cancelledTriple = {1e16, 1e16, residual, -2e16};
+    EXPECT_THAT(ConvolveKernelDefaultDivisor(lone), testing::Eq(residual));
+    EXPECT_THAT(ConvolveKernelDefaultDivisor(cancelledPair), testing::Eq(residual));
+    EXPECT_THAT(ConvolveKernelDefaultDivisor(cancelledTriple), testing::Eq(residual));
+  }
+  for (const std::array<double, 3>& zero :
+       {std::array{1e-310, 2e-310, -3e-310}, std::array{1.0, 2.0, -3.0},
+        std::array{1e300, 2e300, -3e300}}) {
+    EXPECT_THAT(ConvolveKernelHasDecimalZeroSum(zero), testing::IsTrue());
+  }
+  const double largest = std::numeric_limits<double>::max();
+  const std::array extremeZero = {largest, -largest};
+  EXPECT_THAT(ConvolveKernelHasDecimalZeroSum(extremeZero), testing::IsTrue());
+  const std::array nonfinite = {std::numeric_limits<double>::infinity()};
+  EXPECT_THAT(ConvolveKernelHasDecimalZeroSum(nonfinite), testing::IsFalse());
+
+  std::vector<double> maximum(kMaximumFilterKernelValues);
+  for (std::size_t index = 0; index + 2 < maximum.size(); index += 3) {
+    maximum[index] = 0.1;
+    maximum[index + 1] = 0.2;
+    maximum[index + 2] = -0.3;
+  }
+  EXPECT_THAT(ConvolveKernelDefaultDivisor(maximum), testing::Eq(1.0));
+  maximum.push_back(0.0);
+  EXPECT_THAT(ConvolveKernelHasDecimalZeroSum(maximum), testing::IsFalse());
+}
+
 TEST(RendererPublicApiTest, ReorderedZeroSumConvolveUsesFallbackDivisor) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
     GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();

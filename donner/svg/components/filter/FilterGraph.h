@@ -3,9 +3,11 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -358,6 +360,116 @@ inline double ConvolveKernelSum(std::span<const double> kernel) {
     sum = updated;
   }
   return sum + correction;
+}
+
+namespace detail {
+
+/// Parses a scientific exponent, including the optional positive sign.
+/// @param begin First exponent character. @param end One past the exponent.
+/// @param power Receives the parsed exponent. @return Whether every character was parsed.
+inline bool ParseConvolveDecimalExponent(const char* begin, const char* end, int& power) {
+  if (begin != end && *begin == '+') {
+    ++begin;
+  }
+  const auto exponent = std::from_chars(begin, end, power);
+  return exponent.ec == std::errc{} && exponent.ptr == end;
+}
+
+/// Adds signed significand digits to fixed decimal bins without rounding.
+/// @param spelling Signless significand, optionally containing a decimal point.
+/// @param power Power of the first digit. @param sign Coefficient sign, either -1 or 1.
+/// @param bins Fixed sum storage. @param lowestPower Power represented by the first bin.
+/// @return Whether all digits and powers were supported.
+inline bool AddConvolveDecimalDigits(std::span<const char> spelling, int power, int sign,
+                                     std::span<std::int32_t> bins, int lowestPower) {
+  const int highestPower = lowestPower + static_cast<int>(bins.size()) - 1;
+  for (const char digit : spelling) {
+    if (digit == '.') {
+      continue;
+    }
+    if (digit < '0' || digit > '9' || power < lowestPower || power > highestPower) {
+      return false;
+    }
+    bins[power-- - lowestPower] += sign * (digit - '0');
+  }
+  return true;
+}
+
+/// Adds the shortest round-trip decimal spelling of one finite coefficient.
+/// @param coefficient Value to accumulate. @param bins Fixed decimal sum storage.
+/// @param lowestPower Power represented by the first bin.
+/// @return Whether conversion and accumulation succeeded; false for nonfinite input.
+inline bool AddConvolveDecimalCoefficient(double coefficient, std::span<std::int32_t> bins,
+                                          int lowestPower) {
+  if (!std::isfinite(coefficient)) {
+    return false;
+  }
+  if (coefficient == 0.0) {
+    return true;
+  }
+  std::array<char, 32> spelling{};
+  const auto converted = std::to_chars(spelling.data(), spelling.data() + spelling.size(),
+                                       coefficient, std::chars_format::scientific);
+  if (converted.ec != std::errc{}) {
+    return false;
+  }
+  const char* const exponentMarker = std::find(spelling.data(), converted.ptr, 'e');
+  if (exponentMarker == converted.ptr) {
+    return false;
+  }
+  int power = 0;
+  if (!ParseConvolveDecimalExponent(exponentMarker + 1, converted.ptr, power)) {
+    return false;
+  }
+  const int sign = coefficient < 0.0 ? -1 : 1;
+  const char* firstDigit = spelling.data() + (sign < 0 ? 1 : 0);
+  return AddConvolveDecimalDigits(std::span(firstDigit, exponentMarker), power, sign, bins,
+                                  lowestPower);
+}
+
+}  // namespace detail
+
+/**
+ * Tests exact cancellation of the coefficients' shortest round-trip decimal spellings.
+ *
+ * Original lexical precision is unavailable after parsing. This decimal interpretation recognizes
+ * authored kernels such as 0.1 + 0.2 - 0.3 without discarding genuine small residual coefficients.
+ * @param kernel Finite coefficients within the admitted kernel-size limit.
+ * @return Whether their decimal sum is exactly zero; false for unsupported input.
+ */
+inline bool ConvolveKernelHasDecimalZeroSum(std::span<const double> kernel) {
+  if (kernel.size() > kMaximumFilterKernelValues) {
+    return false;
+  }
+  // Binary64 scientific spellings fit these powers, including 17 digits at exponent -324.
+  constexpr int kLowestPower =
+      std::numeric_limits<double>::min_exponent10 - 2 * std::numeric_limits<double>::max_digits10;
+  constexpr int kHighestPower = std::numeric_limits<double>::max_exponent10 + 5;
+  std::array<std::int32_t, kHighestPower - kLowestPower + 1> digits{};
+  for (const double coefficient : kernel) {
+    if (!detail::AddConvolveDecimalCoefficient(coefficient, digits, kLowestPower)) {
+      return false;
+    }
+  }
+  // Each bin is at most 9*4096 before carrying; signed carries add less than 4096.
+  for (std::size_t index = 0; index + 1 < digits.size(); ++index) {
+    if (digits[index] % 10 != 0) {
+      return false;
+    }
+    digits[index + 1] += digits[index] / 10;
+  }
+  return digits.back() == 0;
+}
+
+/**
+ * Resolves an omitted convolution divisor using decimal-zero fallback and compensated summation.
+ * @param kernel Coefficients admitted by the caller's order and resource checks.
+ * Nonfinite accumulation is preserved for the caller's existing rejection path.
+ * @return One for a recognized zero-sum kernel; otherwise the compensated binary sum.
+ */
+inline double ConvolveKernelDefaultDivisor(std::span<const double> kernel) {
+  const double sum = ConvolveKernelSum(kernel);
+  return sum == 0.0 || (std::isfinite(sum) && ConvolveKernelHasDecimalZeroSum(kernel)) ? 1.0 : sum;
 }
 
 /// Parameters for \c feMorphology.

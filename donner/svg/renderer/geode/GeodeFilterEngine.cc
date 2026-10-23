@@ -2693,10 +2693,8 @@ std::optional<gpu::shader::programs::ConvolveMatrixParams> BuildConvolveMatrixPa
   if (primitive.divisor.has_value()) {
     divisor = *primitive.divisor;
   } else {
-    divisor = svg::components::filter_primitive::ConvolveKernelSum(primitive.kernelMatrix);
-    if (divisor == 0.0) {
-      divisor = 1.0;
-    }
+    divisor =
+        svg::components::filter_primitive::ConvolveKernelDefaultDivisor(primitive.kernelMatrix);
   }
   const float divisorF32 = static_cast<float>(divisor);
   const float biasF32 = static_cast<float>(primitive.bias);
