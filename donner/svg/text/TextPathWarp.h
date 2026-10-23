@@ -124,7 +124,8 @@ public:
         glyph_(glyph),
         points_(points),
         tolerance_(tolerance),
-        remainingOutput_(points.size() * kMaximumTextPathWarpExpansion) {}
+        remainingOutput_(points.size() * kMaximumTextPathWarpExpansion),
+        remainingBoundaryStorage_(points.size() * kMaximumTextPathWarpExpansion) {}
 
   bool append(const Path::Command& command) {
     switch (command.verb) {
@@ -155,25 +156,10 @@ private:
   }
   bool lineTo(size_t index) { return appendLine(points_[index]); }
   bool quadTo(size_t index) {
-    const auto control = map(points_[index]);
-    const auto end = map(points_[index + 1]);
-    if (!control || !end) {
-      return false;
-    }
-    builder_.quadTo(*control, *end);
-    current_ = points_[index + 1];
-    return true;
+    return appendQuadratic(current_, points_[index], points_[index + 1], 0u);
   }
   bool curveTo(size_t index) {
-    const auto first = map(points_[index]);
-    const auto second = map(points_[index + 1]);
-    const auto end = map(points_[index + 2]);
-    if (!first || !second || !end) {
-      return false;
-    }
-    builder_.curveTo(*first, *second, *end);
-    current_ = points_[index + 2];
-    return true;
+    return appendCubic(current_, points_[index], points_[index + 1], points_[index + 2], 0u);
   }
   bool close() {
     if (!appendLine(subpathStart_)) {
@@ -240,10 +226,11 @@ private:
                                         mapping_.segmentEndDistances.end(), low - shift);
     const auto last = std::lower_bound(first, mapping_.segmentEndDistances.end(), high - shift);
     for (auto it = first; it != last; ++it) {
-      if (remainingWork_ == 0u) {
+      if (remainingWork_ == 0u || remainingBoundaryStorage_ == 0u) {
         return false;
       }
       --remainingWork_;
+      --remainingBoundaryStorage_;
       result.push_back(*it + shift);
     }
     return true;
@@ -255,7 +242,7 @@ private:
     constexpr double kMaxCircuit = static_cast<double>(std::numeric_limits<std::int64_t>::max());
     constexpr double kMinCircuit = static_cast<double>(std::numeric_limits<std::int64_t>::min());
     if (!std::isfinite(firstPeriod) || !std::isfinite(lastPeriod) || firstPeriod < kMinCircuit ||
-        lastPeriod > kMaxCircuit ||
+        lastPeriod >= kMaxCircuit ||
         lastPeriod - firstPeriod > static_cast<double>(remainingWork_)) {
       return false;
     }
@@ -265,6 +252,10 @@ private:
       return false;
     }
     for (std::int64_t circuit = firstCircuit;; ++circuit) {
+      if (remainingWork_ == 0u) {
+        return false;
+      }
+      --remainingWork_;
       if (!appendBoundaryRange(result, low, high, static_cast<double>(circuit) * length)) {
         return false;
       }
@@ -305,6 +296,41 @@ private:
     return appendAdaptive(start, middle, mappedStart, *mappedMiddle, depth + 1u) &&
            appendAdaptive(middle, end, *mappedMiddle, mappedEnd, depth + 1u);
   }
+  bool appendQuadratic(const Vector2d& start, const Vector2d& control, const Vector2d& end,
+                       size_t depth) {
+    if (remainingWork_ == 0u || depth > 16u) {
+      return false;
+    }
+    --remainingWork_;
+    if ((control - (start + end) * 0.5).length() <= tolerance_) {
+      return appendLine(end);
+    }
+    const Vector2d first = (start + control) * 0.5;
+    const Vector2d second = (control + end) * 0.5;
+    const Vector2d middle = (first + second) * 0.5;
+    return appendQuadratic(start, first, middle, depth + 1u) &&
+           appendQuadratic(middle, second, end, depth + 1u);
+  }
+  bool appendCubic(const Vector2d& start, const Vector2d& firstControl,
+                   const Vector2d& secondControl, const Vector2d& end, size_t depth) {
+    if (remainingWork_ == 0u || depth > 16u) {
+      return false;
+    }
+    --remainingWork_;
+    const double firstError = (firstControl - (start * 2.0 + end) / 3.0).length();
+    const double secondError = (secondControl - (start + end * 2.0) / 3.0).length();
+    if (std::max(firstError, secondError) <= tolerance_) {
+      return appendLine(end);
+    }
+    const Vector2d a = (start + firstControl) * 0.5;
+    const Vector2d b = (firstControl + secondControl) * 0.5;
+    const Vector2d c = (secondControl + end) * 0.5;
+    const Vector2d d = (a + b) * 0.5;
+    const Vector2d e = (b + c) * 0.5;
+    const Vector2d middle = (d + e) * 0.5;
+    return appendCubic(start, a, d, middle, depth + 1u) &&
+           appendCubic(middle, e, c, end, depth + 1u);
+  }
   const StretchedTextPath& mapping_;
   const TextGlyph& glyph_;
   std::span<const Vector2d> points_;
@@ -315,17 +341,13 @@ private:
   double tolerance_;
   size_t remainingWork_ = Path::kMaximumGeometryQueryWork;
   size_t remainingOutput_ = 0u;
+  size_t remainingBoundaryStorage_ = 0u;
 };
 
 inline Path GeneralOutline(const Path& outline, const StretchedTextPath& mapping,
                            const TextGlyph& glyph, double tolerance) {
-  const Path flattened = outline.flatten(tolerance);
-  if (flattened.empty() ||
-      flattened.points().size() > outline.points().size() * kMaximumTextPathWarpExpansion) {
-    return Path();
-  }
-  GeneralOutlineWarper warper(mapping, glyph, flattened.points(), tolerance);
-  for (const auto& command : flattened.commands()) {
+  GeneralOutlineWarper warper(mapping, glyph, outline.points(), tolerance);
+  for (const auto& command : outline.commands()) {
     if (!warper.append(command)) {
       return Path();
     }
