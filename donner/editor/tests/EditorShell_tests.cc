@@ -4247,6 +4247,24 @@ TEST(EditorShellTest, BrowserSaveCompletionUsesCanonicalCleanBaseline) {
             EditorShellTestAccess::Source(shell).getText());
 }
 
+TEST(EditorShellTest, BrowserSaveCompletionTracksRevertOfSameFile) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "saved.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.applyMutation(EditorCommand::SetAttributeCommand(*target, "x", "31"));
+  ASSERT_TRUE(app.flushFrame());
+  EditorShellTestAccess::StageBrowserSave(shell);
+  EditorShellTestAccess::RequestRevert(shell);
+  ASSERT_FALSE(app.isDirty());
+  EditorShellTestAccess::CompleteBrowserSave(shell);
+  EXPECT_TRUE(app.isDirty());
+  EXPECT_NE(app.cleanSourceText(), EditorShellTestAccess::Source(shell).getText());
+}
+
 TEST(EditorShellTest, BrowserSaveCompletionPreservesNewEditsAndPointerGesture) {
   gui::EditorWindow window = MakeHiddenWindow();
   ASSERT_TRUE(window.valid());
