@@ -6984,15 +6984,24 @@ TEST(EditorShellTest, SidebarRefreshWaitsForRendererWakeInsteadOfRequestingFrame
   EXPECT_TRUE(EditorShellTestAccess::SidebarSnapshotRefreshPending(shell));
   ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
 
-  // Drive the loop the way the browser does: a frame runs only for an outstanding wake. The
-  // renderer's completion wake must carry the owed refresh to an idle frame.
+  // Keep native frames wake-driven while preserving the event loop's non-drawing GPU idle
+  // progress. The renderer or completed presentation must wake the owed refresh into an idle
+  // frame; the browser's separate progress pulse is covered by browser runtime tests.
   renderer.setReplayDocumentAccessBlockedForTesting(false);
   const tests::HangGuard completionGuard;
   std::uint64_t consumedWakeSerial = blockedWakeSerial;
+  auto nextGpuIdlePoll = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
   for (int frame = 0; frame < 20 && EditorShellTestAccess::SidebarSnapshotRefreshPending(shell);
        ++frame) {
     while (window.wakeEventLoopRequestSerialForTesting() == consumedWakeSerial &&
            completionGuard.active()) {
+      // The native event loop polls pending GPU work on its 100 ms idle timer, even without an
+      // input wake. Observe completion here too; only its real wake may admit the next frame.
+      const auto now = std::chrono::steady_clock::now();
+      if (window.hasIdleGpuWork() && now >= nextGpuIdlePoll) {
+        window.pollIdleGpu();
+        nextGpuIdlePoll = now + std::chrono::milliseconds(100);
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_GT(window.wakeEventLoopRequestSerialForTesting(), consumedWakeSerial)
