@@ -2569,7 +2569,7 @@ TEST(PropertyRegistry, DropShadowRejectsUnitlessStyleLengthsWithoutPartialMutati
     PropertyRegistry registry;
     registry.parseStyle("filter: opacity(0.25)");
     const auto declaration = css::CSS::ParseStyleAttribute("filter: " + std::string(invalid)).at(0);
-    EXPECT_TRUE(registry.parseProperty(declaration, Specificity()).has_value());
+    EXPECT_TRUE(registry.parseProperty(declaration, Specificity::StyleAttribute()).has_value());
     ASSERT_TRUE(registry.filter.isSpecified());
     EXPECT_THAT(*registry.filter.getStoredValue(), testing::ElementsAre(FilterOpacityIs(0.25)));
   }
