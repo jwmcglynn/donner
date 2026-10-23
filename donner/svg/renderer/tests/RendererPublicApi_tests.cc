@@ -2394,6 +2394,28 @@ TEST(RendererPublicApiTest, ClosedTextPathAbsoluteXOutsideCircuitHasNoInk) {
   }
 }
 
+TEST(RendererPublicApiTest, ExternalUseTextFragmentUsesHostStyleAndTransparentCanvas) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <use href="external.svg#label" fill="green" font-size="24"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40"
+                 fill="red" font-size="8">
+        <text id="label" x="4" y="28">Map</text>
+      </svg>)svg");
+  const auto expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <text x="4" y="28" fill="green" font-size="24">Map</text>
+      </svg>)svg");
+  ASSERT_THAT(actual.bitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  EXPECT_THAT(PixelAt(actual.bitmap, 0, 0), IsTransparent());
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external_text_host_style",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostGradientWithoutChildId) {
   const auto actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
