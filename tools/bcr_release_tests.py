@@ -430,6 +430,20 @@ class PublishedRecordTest(unittest.TestCase):
         self.assertEqual(record, self.parsed)
         load.assert_called_once_with(self.raw, self.digest)
 
+    def test_retained_record_does_not_require_public_metadata_assets(self):
+        self.release = {"assets": [], "body":
+                        f"Release-Candidate-Record: 40/1 sha256:{self.digest}\n"}
+        selected = {"artifact_id": "70"}
+        with mock.patch.object(release.bcr_source, "git", return_value=SHA), \
+                mock.patch.object(release, "select_record", return_value=selected) as select, \
+                mock.patch.object(release.release_candidate, "_fetch_record",
+                                  return_value=(self.raw, self.parsed, self.directory)) as fetch:
+            path, record = self.fetch()
+        self.assertEqual(path, self.directory / "candidate.json")
+        self.assertEqual(record, self.parsed)
+        select.assert_called_once_with(SHA, "v1.0.0", "40", "1", self.digest)
+        self.assertEqual(fetch.call_args.args[:5], (70, 40, 1, SHA, self.digest))
+
     def test_attestation_names_the_assembly_workflow_and_commit(self):
         with mock.patch.object(release.subprocess, "run") as execute:
             release.verify_record_attestation(Path("record.json"), SHA)

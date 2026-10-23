@@ -1734,8 +1734,11 @@ def _release_file_violations(publication):
                if asset.endswith((".zip", ".bazel.lock", ".NOTICE.txt"))]
     uploaded = _continued_arguments(_named_step(publication, RELEASE_STEPS[3]),
                                     "python3 tools/release_artifact_publisher.py")
-    expected_uploaded = _release_asset_paths((*RELEASE_CLI_ASSETS, *RELEASE_NATIVE_ASSETS)) + [
-        '"$RUNNER_TEMP"/release/source/*', '"$RUNNER_TEMP"/release/donner-*.candidate.json']
+    expected_uploaded = _release_asset_paths(tuple(asset for asset in
+        (*RELEASE_CLI_ASSETS, *RELEASE_NATIVE_ASSETS)
+        if asset.endswith(("64", ".zip", ".sha256")))) + [
+        '"$RUNNER_TEMP"/release/source/*.tar.gz',
+        '"$RUNNER_TEMP"/release/source/*.tar.gz.sha256']
     return _failed([
         (attested == _release_asset_paths(signed) + ['"$RUNNER_TEMP"/release/source/*.tar.gz; do'],
          "release attestation subjects changed: %s" % attested),
@@ -2415,7 +2418,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         cli_step = _named_step(publication, RELEASE_CLI_STEP)
         native_step = _named_step(publication, "Verify the retained native editor ZIP")
         stage = "          python3 -B -m tools.release_candidate release --source-root . \\\n"
-        upload = '            "$RUNNER_TEMP"/release/donner-*.candidate.json\n'
+        upload = '            "$RUNNER_TEMP"/release/source/*.tar.gz.sha256\n'
         self._assert_rejected(lambda files, path: _release_publication_violations(files[path]), {
             "build": (path, release.replace(
                 stage, "          bazelisk build -c opt //donner/svg/tool:donner-svg\n" + stage, 1),
