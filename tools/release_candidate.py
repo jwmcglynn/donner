@@ -103,6 +103,10 @@ EDITOR_COMMON_FILES = {
 }
 
 
+# Retained candidates from older source revisions legitimately lack this script.
+EDITOR_DIALOG_FILES = {"site/browser-file-dialogs.js", "deploy/browser-file-dialogs.js"}
+
+
 def _canonical_bytes(value: dict) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
 
@@ -307,6 +311,8 @@ def _verify_role_files(role: str, names: set[str], version: str) -> None:
         required.update(f"{prefix}/{name}" for prefix in ("site", "deploy")
                         for name in EDITOR_COMMON_FILES)
         required.update(_editor_font_files(names))
+        if names & EDITOR_DIALOG_FILES:
+            required.update(EDITOR_DIALOG_FILES)
     elif role == "bcr-entry":
         required |= _previous_registry_versions(names - required, version)
     if names != required:
@@ -473,6 +479,16 @@ def _verify_editor_wasm(raw: Path, served: Path, identity: bytes) -> None:
         raise ValueError("editor package does not contain the selected build identity")
 
 
+def _verify_editor_dialog_script(root: Path, expected: dict[str, str]) -> None:
+    # The caller binds root to the candidate's clean exact-source checkout, including for rollback.
+    script = root / "donner/editor/wasm/browser-file-dialogs.js"
+    source_digest = _sha256(script) if script.exists() or script.is_symlink() else None
+    required = {} if source_digest is None else dict.fromkeys(EDITOR_DIALOG_FILES, source_digest)
+    actual = {name: expected[name] for name in EDITOR_DIALOG_FILES if name in expected}
+    if actual != required:
+        raise ValueError("editor dialog script differs from the selected source")
+
+
 def _verify_editor(directory: Path, commit: str, root: Path, expected: dict[str, str],
                    run_id: str, attempt: str) -> str:
     """Check the editor package; return the digest of the module lock its build generated.
@@ -510,6 +526,7 @@ def _verify_editor(directory: Path, commit: str, root: Path, expected: dict[str,
         checksums[name] = _digest(digest, "editor file digest")
     if checksums != {name: sha for name, sha in expected.items() if name.startswith(("site/", "deploy/"))}:
         raise ValueError("editor package checksum manifest differs from retained files")
+    _verify_editor_dialog_script(root, expected)
     _verify_editor_wasm(directory / "site/editor.wasm", directory / "deploy/editor.wasm.gz",
                         release_macos_editor._expected_build_info(root, commit))
     return generated_lock
@@ -1012,6 +1029,10 @@ def fetch_role(record: dict, role: str, root: Path | None, zip_path: Path, outpu
     This runs the same checks as the verifier for that role. It is used after a record was
     published, so the artifact only has to be retained still, not for the assembly window.
     """
+    if role == "editor":
+        if root is None:
+            raise ValueError("editor artifact needs a clean exact-source checkout")
+        _verify_source(record["source"], root)
     entry = record["artifacts"][role]
     _check_artifact_entry(role, entry, record, github_json, datetime.now(timezone.utc),
                           timedelta(0))

@@ -2,6 +2,7 @@
 
 import gzip
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -33,11 +34,23 @@ def _files(directory):
             for path in directory.rglob("*") if path.is_file()}
 
 
+class ScriptSources(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.sources = []
+
+    def handle_starttag(self, tag, attrs):
+        source = dict(attrs).get("src")
+        if tag == "script" and source:
+            self.sources.append(source)
+
+
 class EditorWasmStageTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         resolver = runfiles.Create()
         cls.script = Path(resolver.Rlocation("donner/tools/ci/editor_wasm_stage.py"))
+        cls.index = Path(resolver.Rlocation("donner/donner/editor/wasm/index.html"))
         cls.integrity = Path(resolver.Rlocation(
             "donner/donner/editor/wasm/catalog_package_integrity_test.py"))
         cls.executables = ExecutableFixtureDirectory()
@@ -184,7 +197,7 @@ class EditorWasmStageTest(unittest.TestCase):
         package = self.runner_temp / "editor-wasm-package-geode"
         (package / "fonts").mkdir(parents=True)
         for name in ("donner_icon.svg", "editor-bootstrap.js", "editor.css", "editor.js",
-                     "enable-threads.js", "index.html", "catalog-fonts.js"):
+                     "enable-threads.js", "index.html", "catalog-fonts.js", "browser-file-dialogs.js"):
             (package / name).write_text(name)
         (package / "editor.wasm").write_bytes(b"\0asm\1\0\0\0")
         (package / "CatalogFontNotices.txt").write_text("SIL OPEN FONT LICENSE Version 1.1")
@@ -235,6 +248,24 @@ class EditorWasmStageTest(unittest.TestCase):
             sorted(path.name for path in candidate.iterdir()),
             ["MODULE.bazel.lock", "SHA256SUMS", "deploy", "provenance.json", "site"])
 
+    def test_candidate_serves_every_script_referenced_by_the_editor(self):
+        package = self._candidate_fixture()
+        parser = ScriptSources()
+        parser.feed(self.index.read_text(encoding="utf-8"))
+        self.assertGreater(len(parser.sources), 0)
+        result = self._run("candidate")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        candidate = self.runner_temp / ("donner-editor-wasm-geode-" + SHA)
+        manifest = (candidate / "SHA256SUMS").read_text()
+        for source in parser.sources:
+            with self.subTest(script=source):
+                expected = (package / source).read_bytes()
+                for directory in ("site", "deploy"):
+                    relative = "%s/%s" % (directory, source)
+                    self.assertEqual((candidate / relative).read_bytes(), expected)
+                    self.assertIn("%s  %s\n" % (hashlib.sha256(expected).hexdigest(), relative),
+                                  manifest)
+
     def test_candidate_manifest_lists_every_served_file_in_byte_order(self):
         self._candidate_fixture()
         result = self._run("candidate")
@@ -266,6 +297,7 @@ class EditorWasmStageTest(unittest.TestCase):
             "extra-font": lambda package: (package / "fonts/extra.woff2").write_bytes(b"x"),
             "extra-root-file": lambda package: (package / "unexpected.txt").write_text("x"),
             "missing-broker": lambda package: (package / "catalog-fonts.js").unlink(),
+            "missing-file-dialogs": lambda package: (package / "browser-file-dialogs.js").unlink(),
             "missing-module-lock":
                 lambda package: (package.parent / "editor-wasm-module.lock").unlink(),
             "oversized-module": oversized_module,
