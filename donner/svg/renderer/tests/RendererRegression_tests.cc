@@ -333,7 +333,7 @@ TEST_F(RendererRegressionTests, ReferenceContractRadialNegativeRadiiDoNotPaint) 
   const auto expected =
       RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
   ExpectVisibleBitmap(expected, "radial_negative_sibling_visible");
-  for (std::string_view attribute : {R"(r="-0.25")", R"(fr="-0.25")"}) {
+  for (std::string_view attribute : {R"(r="-0.25")", R"(fr="-0.25")", R"(r="0" fr="-0.25")"}) {
     SCOPED_TRACE(attribute);
     ExpectBitmapsIdentical(RenderReferenceRadial(attribute), expected, "negative_radius_no_paint");
   }
