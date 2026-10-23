@@ -763,6 +763,13 @@ std::optional<tiny_skia::Shader> instantiateGradientShader(
 
   const Box2d& bounds = objectBoundingBox ? kUnitPathBounds : viewBox;
 
+  // Invalid radial radii must not reach the single-stop or near-zero solid-color shortcuts.
+  // All supported length units preserve the sign, so validate the computed lengths directly.
+  if (const auto* radial = handle.try_get<components::ComputedRadialGradientComponent>();
+      radial && (radial->r.value < 0.0 || radial->fr.value < 0.0)) {
+    return std::nullopt;
+  }
+
   if (!drawBudget.reserve({.gradientStops = computedGradient->stops.size()})) {
     return std::nullopt;
   }

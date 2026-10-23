@@ -233,6 +233,19 @@ TEST(FontSelection, ItalicRequestSelectsTheItalicFace) {
   EXPECT_THAT(fonts.select("Noto Sans", 400, 1, 5), FaceFrom("NotoSans-Italic.ttf"));
 }
 
+TEST(FontSelection, BoldItalicRequestSelectsAvailableItalicFaceBeforeUprightBold) {
+  // The vendored set has separate Bold and Italic files, but no BoldItalic file. CSS face
+  // matching prioritizes style over weight; this identifies the face, not synthetic-bold output.
+  HermeticFontSet fonts;
+  const SelectedFace expected{"NotoSans-Italic.ttf", "Noto Sans", 400, 1};
+  EXPECT_EQ(fonts.select("Noto Sans", 700, 1, 5), expected);
+  EXPECT_EQ(ResolveDocumentFace(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 60">
+      <text x="4" y="38" font="bold italic 28 Noto Sans">Ab</text>
+    </svg>)svg"),
+            expected);
+}
+
 TEST(FontSelection, UnknownFamilyFallsBackToTheEmbeddedFace) {
   HermeticFontSet fonts;
 

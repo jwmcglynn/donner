@@ -314,6 +314,138 @@ RendererBitmap RenderImageOpacityCase(bool imageOpacity, bool groupOpacity) {
 
 class RendererRegressionTests : public ImageComparisonTestFixture {};
 
+// Independent contract oracles for resvg cases whose historical labels or reference images
+// do not establish the behavior of the supported syntax.
+RendererBitmap RenderReferenceContract(std::string_view body) {
+  SVGDocument document = instantiateSubtree(body, {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+RendererBitmap RenderReferenceRadial(std::string_view attributes, bool singleStop = false) {
+  return RenderReferenceContract(
+      std::string(R"svg(<radialGradient id="g" )svg") + std::string(attributes) +
+      (singleStop ? R"svg(><stop stop-color="blue"/>)svg"
+                  : R"svg(><stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg") +
+      R"svg(</radialGradient>
+      <rect x="8" y="8" width="48" height="48" fill="url(#g)"/>
+      <rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractRadialNegativeRadiiDoNotPaint) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+  ExpectVisibleBitmap(expected, "radial_negative_sibling_visible");
+  for (std::string_view attribute :
+       {R"(r="-0.25")", R"(fr="-0.25")", R"(r="0" fr="-0.25")", R"(r="-1e-20")"}) {
+    SCOPED_TRACE(attribute);
+    ExpectBitmapsIdentical(RenderReferenceRadial(attribute), expected, "negative_radius_no_paint");
+  }
+  const auto zeroRadius = RenderReferenceRadial(R"(r="0")");
+  ExpectBitmapsDiffer(zeroRadius, expected, "zero_radius_last_stop_control");
+  EXPECT_THAT(PixelAt(zeroRadius, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractRadialSingleStopNegativeRadiiDoNotPaint) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+  for (std::string_view attribute : {R"(r="-0.25")", R"(fr="-0.25")", R"(r="-1e-20")"}) {
+    SCOPED_TRACE(attribute);
+    ExpectBitmapsIdentical(RenderReferenceRadial(attribute, true), expected,
+                           "single_stop_negative_radius_no_paint");
+  }
+  const auto valid = RenderReferenceRadial("", true);
+  ExpectBitmapsDiffer(valid, expected, "single_stop_valid_control");
+  EXPECT_THAT(PixelAt(valid, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractRadialContainingStartCircleDoesNotPaint) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+  for (std::string_view attribute : {R"(fr="0.5")", R"(fr="0.75")"}) {
+    SCOPED_TRACE(attribute);
+    ExpectBitmapsIdentical(RenderReferenceRadial(attribute), expected, "contained_circle_no_paint");
+  }
+  ExpectBitmapsDiffer(RenderReferenceRadial(R"(fr="0.25")"), expected, "nonempty_annulus_control");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractSingularRadialTransformDoesNotPaint) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+  ExpectBitmapsIdentical(RenderReferenceRadial(R"svg(gradientTransform="matrix(0 0 0 0 0 0)")svg"),
+                         expected, "singular_radial_no_paint");
+  ExpectBitmapsDiffer(RenderReferenceRadial(""), expected, "ordinary_radial_control");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractInvalidGradientUnitsUseInitialValue) {
+  const auto expected = RenderReferenceRadial(R"(gradientUnits="objectBoundingBox")");
+  ExpectVisibleBitmap(expected, "radial_default_units_visible");
+  ExpectBitmapsIdentical(RenderReferenceRadial(R"(gradientUnits="invalid")"), expected,
+                         "invalid_gradient_units_default");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractSpaceSeparatedRgbMatchesHex) {
+  const auto actual = RenderReferenceContract(
+      R"svg(<rect x="8" y="8" width="48" height="48" fill="rgb(17 133 49)"/>)svg");
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="8" y="8" width="48" height="48" fill="#118531"/>)svg");
+  ExpectVisibleBitmap(actual, "space_rgb_visible");
+  ExpectBitmapsIdentical(actual, expected, "space_rgb_hex_identity");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractObsoleteIccPaintRejectsWholeDeclaration) {
+  const auto actual = RenderReferenceContract(R"svg(
+    <linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+    </linearGradient><g fill="lime"><rect x="8" y="8" width="48" height="48"
+      style="fill: url(#g) red icc-color(profile, 0.2, 0.4, 0.1)"/></g>)svg");
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="8" y="8" width="48" height="48" fill="lime"/>)svg");
+  ExpectVisibleBitmap(actual, "obsolete_icc_inherited_visible");
+  ExpectBitmapsIdentical(actual, expected, "obsolete_icc_declaration_rejected");
+}
+
+// The font presentation shorthand is a supported Donner extension.
+TEST_F(RendererRegressionTests, ReferenceContractUnitlessFontShorthandMatchesLonghands) {
+  SVGDocument shorthand = instantiateSubtree(R"svg(
+    <text x="4" y="38" font="bold italic 28 Noto Sans">Ab</text>)svg",
+                                             {}, Vector2i(64, 64));
+  SVGDocument expanded = instantiateSubtree(R"svg(
+    <text x="4" y="38" font-style="italic" font-weight="bold" font-size="28"
+          font-family="Noto Sans">Ab</text>)svg",
+                                            {}, Vector2i(64, 64));
+  RegisterFontsFromDirectoryForTesting(shorthand, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(expanded, ResvgResourceRoot() / "fonts");
+  const auto actual = RenderDocumentWithBackend(shorthand, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "unitless_font_shorthand_visible");
+  ExpectBitmapsIdentical(actual, RenderDocumentWithBackend(expanded, ActiveRendererBackend()),
+                         "unitless_font_shorthand_longhands");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit) {
+  SVGDocument document = ParseSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect x="8" y="8" width="16" height="16" fill="lime"/></svg>)svg");
+  EXPECT_EQ(document.canvasSize(), Vector2i(512, 512));
+  document.setCanvasSize(64, 64);
+  const auto actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="8" y="8" width="16" height="16" fill="lime"/>)svg");
+  ASSERT_EQ(actual.dimensions, Vector2i(64, 64));
+  ExpectVisibleBitmap(actual, "unsized_root_visible");
+  ExpectBitmapsIdentical(actual, expected, "unsized_root_caller_canvas");
+  EXPECT_THAT(PixelAt(actual, 12, 12), testing::ElementsAre(0, 255, 0, 255));
+  EXPECT_EQ(PixelAt(actual, 32, 32)[3], 0);
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractArcsUsesDocumentedMiterFallback) {
+  const auto render = [](std::string_view join) {
+    return RenderReferenceContract(std::string(R"svg(<path d="M12 52 Q12 8 48 12 Q24 32 36 52"
+      fill="none" stroke="green" stroke-width="5" stroke-linejoin=")svg") +
+                                   std::string(join) + R"svg("/>)svg");
+  };
+  const auto actual = render("arcs");
+  ExpectVisibleBitmap(actual, "arcs_fallback_visible");
+  ExpectBitmapsIdentical(actual, render("miter"), "arcs_documented_miter_fallback");
+}
+
 TEST_F(RendererRegressionTests, UnitlessPresentationAttributeBlurUsesUserUnits) {
   const auto render = [](std::string_view filter) {
     const std::string markup =
