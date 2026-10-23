@@ -85,7 +85,9 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
 
     // Canvas size matches the resvg-test-suite reference renderings. This is a
     // base param (mode-independent), so it stays on `test.params`.
-    test.params.setCanvasSize(500, 500);
+    if (!test.params.canvasSize) {
+      test.params.setCanvasSize(500, 500);
+    }
 
     testPlan.emplace_back(std::move(test));
   }
@@ -669,16 +671,27 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     PaintServersRadialGradient, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("paint-servers/radialGradient",
-                                        {
-                                            {"fr=-1.svg", Params{}},
-                                            {"fr=0.5.svg", Params{}},
-                                            {"fr=0.7.svg", Params{}},
-                                            {"invalid-gradientTransform.svg", Params{}},
-                                            {"invalid-gradientUnits.svg", Params{}},
-                                            {"negative-r.svg", Params{}},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "paint-servers/radialGradient",
+            {
+                {"fr=-1.svg", Params::RenderOnly("Invalid negative focal radius: no paint; "
+                                                 "reference is the UB marker (#1186)")},
+                {"fr=0.5.svg", Params::RenderOnly("Coincident start/end circles: transparent per "
+                                                  "SVG 2; reference is the UB marker (#1186)")},
+                {"fr=0.7.svg", Params::RenderOnly("Containing start circle: transparent per SVG 2; "
+                                                  "reference paints a reversed gradient (#1186)")},
+                {"invalid-gradientTransform.svg",
+                 Params::RenderOnly(
+                     "Singular transform: no paint; reference is the UB marker (#1186)")},
+                {"invalid-gradientUnits.svg",
+                 Params::RenderOnly("Invalid units retain objectBoundingBox default; reference is "
+                                    "the UB marker (#1186)")},
+                {"negative-r.svg",
+                 Params::RenderOnly(
+                     "Invalid negative radius: no paint; reference is the UB marker (#1186)")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -735,15 +748,20 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingFill, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "painting/fill",
-                {
-                    {"icc-color.svg", Params::RenderOnly("UB: ICC color")},
-                    {"pattern-on-text.svg", Params::WithThreshold(kDefaultThreshold, 2100)},
-                    {"rgb-int-int-int.svg", Params{}},
-                    {"valid-FuncIRI-with-a-fallback-ICC-color.svg", Params{}},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "painting/fill",
+            {
+                {"icc-color.svg", Params::RenderOnly("UB: ICC color")},
+                {"pattern-on-text.svg", Params::WithThreshold(kDefaultThreshold, 2100)},
+                {"rgb-int-int-int.svg",
+                 Params::RenderOnly(
+                     "Valid CSS Color 4 space-separated RGB; reference is the UB marker (#1186)")},
+                {"valid-FuncIRI-with-a-fallback-ICC-color.svg",
+                 Params::RenderOnly("Unsupported SVG 1.1 icc-color paint grammar; invalid "
+                                    "declaration is rejected (#1186)")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintingFillOpacity, ImageComparisonTestFixture,
@@ -921,7 +939,9 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/stroke-linejoin",
                 {
-                    {"arcs.svg", Params::RenderOnly("UB (SVG 2), no UA supports `arcs`")},
+                    {"arcs.svg",
+                     Params::RenderOnly("SVG Strokes draft arcs is not implemented: documented "
+                                        "miter fallback; reference is the UB marker (#1186)")},
                     {"miter-clip.svg",
                      Params::RenderOnly("UB (SVG 2), no UA supports `miter-clip`")},
                 })),
@@ -1191,7 +1211,9 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::RenderOnly("UB: FuncIRI with invalid chars")},
                     {"invalid-id-attribute-1.svg", Params::RenderOnly("UB: Invalid id attribute")},
                     {"invalid-id-attribute-2.svg", Params::RenderOnly("UB: Invalid id attribute")},
-                    {"no-size.svg", Params{}},
+                    {"no-size.svg",
+                     Params::RenderOnly("Caller canvas preserves user units; reference fits "
+                                        "content bounds without authored dimensions (#1186)")},
                     {"not-UTF-8-encoding.svg",
                      Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
                                   "and update the encoding declaration")},
@@ -1360,7 +1382,7 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::Skip("Vertical hairline coverage splits 160/160 against the "
                                   "reference's 128/192, while the horizontal hairline matches; "
                                   "the text under the shorthand is pixel-exact (#1173)")},
-                    {"simple-case.svg", Params{}},
+                    {"simple-case.svg", Params{}.setCanvasSize(400, 400)},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
