@@ -172,5 +172,31 @@ TEST(PlacedTextGeometryTest, StretchDeviceScaleTightensToleranceAndCurveApproxim
   EXPECT_GT(zoomed.points().size(), ordinary.points().size());
 }
 
+TEST(PlacedTextGeometryTest, StretchCurvedOutlineUsesMappedErrorNotLocalFlatness) {
+  const Path route =
+      PathBuilder()
+          .moveTo(Vector2d(1.0, 0.0))
+          .curveTo(Vector2d(1.0, 0.5523), Vector2d(0.5523, 1.0), Vector2d(0.0, 1.0))
+          .curveTo(Vector2d(-0.5523, 1.0), Vector2d(-1.0, 0.5523), Vector2d(-1.0, 0.0))
+          .curveTo(Vector2d(-1.0, -0.5523), Vector2d(-0.5523, -1.0), Vector2d(0.0, -1.0))
+          .curveTo(Vector2d(0.5523, -1.0), Vector2d(1.0, -0.5523), Vector2d(1.0, 0.0))
+          .closePath()
+          .build();
+  StretchedTextPath mapping = MeasurePath(route);
+  mapping.closed = true;
+  const Path outline = PathBuilder()
+                           .moveTo(Vector2d(0.0, 100.0))
+                           .quadTo(Vector2d(0.05, 105.0), Vector2d(0.0, 110.0))
+                           .build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 0.0;
+
+  const Path warped = WarpGlyphOutline(outline, mapping, glyph, 0.1);
+
+  ASSERT_FALSE(warped.empty());
+  EXPECT_GT(warped.points().size(), 2u);
+  EXPECT_GT(warped.bounds().bottomRight.x - warped.bounds().topLeft.x, 1.0);
+}
+
 }  // namespace
 }  // namespace donner::svg
