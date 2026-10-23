@@ -1,5 +1,6 @@
 #include "donner/editor/gui/EditorWindow.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -3881,6 +3882,55 @@ TEST(EditorWindowTest, PresentationTimeoutPublishesItsWinningAttributionImmediat
   EXPECT_TRUE(observed.observed);
   EXPECT_EQ(observed.loss.timedOutSite, gpu::DeviceLostWaitSite::QueueIdle);
   EXPECT_EQ(observed.loss.timedOutElapsedMs, 73);
+}
+
+TEST(EditorWindowTest, DocumentAcknowledgmentWaitsForCompletedSubmission) {
+  EditorWindow window(EditorWindowOptions{.title = "Completed document ordering",
+                                          .initialWidth = 64,
+                                          .initialHeight = 64,
+                                          .visible = false});
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+  ASSERT_THAT(window.geodeFramebufferDevice(), testing::NotNull());
+  std::uint64_t completed = 0;
+  window.setPresentationCompletionProbeForTesting([&] { return completed; });
+  auto& device = window.geodeFramebufferDevice()->runtimeDevice();
+  const EditorWindow::PresentedDocumentFrameIdentity older{7, 1, 11};
+  const EditorWindow::PresentedDocumentFrameIdentity result{7, 2, 22};
+  const auto identityIs = [](EditorWindow::PresentedDocumentFrameIdentity expected) {
+    using Identity = EditorWindow::PresentedDocumentFrameIdentity;
+    return testing::Optional(testing::AllOf(
+        testing::Field("documentGeneration", &Identity::documentGeneration,
+                       testing::Eq(expected.documentGeneration)),
+        testing::Field("frameVersion", &Identity::frameVersion, testing::Eq(expected.frameVersion)),
+        testing::Field("captureId", &Identity::captureId, testing::Eq(expected.captureId))));
+  };
+  window.setPresentationFrameIdentity(1, older.captureId, older.documentGeneration,
+                                      older.frameVersion, true, 1.0);
+  window.beginFrame();
+  window.endFrame();
+  const std::uint64_t olderSerial = device.lastSubmittedSerial();
+  ASSERT_THAT(olderSerial, testing::Gt(0u));
+  const std::uint64_t wakeBefore = window.presentedDocumentWakeSerialForTesting();
+  window.requestWakeAfterPresentedDocument(result);
+  window.setPresentationFrameIdentity(2, result.captureId, result.documentGeneration,
+                                      result.frameVersion, true, 1.0);
+  window.beginFrame();
+  window.endFrame();
+  const std::uint64_t resultSerial = device.lastSubmittedSerial();
+  ASSERT_THAT(resultSerial, testing::Gt(olderSerial));
+
+  EXPECT_THAT(window.lastFullyPresentedDocumentFrame(), testing::Eq(std::nullopt));
+  EXPECT_THAT(window.presentedDocumentWakeSerialForTesting(), testing::Eq(wakeBefore));
+  completed = olderSerial;
+  window.pollIdleGpu();
+  EXPECT_THAT(window.lastFullyPresentedDocumentFrame(), identityIs(older));
+  EXPECT_THAT(window.presentedDocumentWakeSerialForTesting(), testing::Eq(wakeBefore));
+  completed = resultSerial;
+  window.pollIdleGpu();
+  EXPECT_THAT(window.lastFullyPresentedDocumentFrame(), identityIs(result));
+  EXPECT_THAT(window.presentedDocumentWakeSerialForTesting(), testing::Eq(wakeBefore + 1));
+  window.pollIdleGpu();
+  EXPECT_THAT(window.presentedDocumentWakeSerialForTesting(), testing::Eq(wakeBefore + 1));
 }
 
 TEST(EditorWindowTest, PendingGpuCompletionCoalescesUiFramesAtThree) {
