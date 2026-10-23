@@ -220,12 +220,11 @@ consumer, CLI build, verification and explain-missing-cli), whose command sequen
 
 1. Maintain the fork `jwmcglynn/bazel-central-registry`.
 2. Configure the `bcr-fork-preparation` environment with required reviewers before dispatch.
-   Store an environment secret named `PUBLISH_TOKEN`: a fine-grained token with contents-write
-   access only to the owned registry fork. The push step fails if the secret is absent; it is
-   unavailable to the entry generator, preflight and Release. Remove the old broad repository
-   `BCR_PUBLISH_TOKEN` before enabling this path. A fork ruleset that blocks force pushes is
-   useful defense in depth; the workflow's empty-expected lease never permits a rewrite or
-   update of an existing fork branch.
+   The protected final push step reuses the existing `BCR_PUBLISH_TOKEN` secret. It fails if
+   that secret is unavailable, and no earlier step receives the token. Keep token access limited
+   to the owned registry fork; the workflow does not inspect or establish its configured scopes.
+   A fork ruleset that blocks force pushes is useful defense in depth; the workflow's
+   empty-expected lease never permits a rewrite or update of an existing fork branch.
    The upstream PR is opened separately from a maintainer's GitHub session after exact approval.
 3. `.bcr/config.yml` declares the module root. `.bcr/metadata.template.json` records the maintainer's
    GitHub login and numeric ID. `.bcr/source.template.json` names the stable asset and strip prefix.

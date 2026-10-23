@@ -70,7 +70,7 @@ SECRET_USES = {
     (".github/workflows/main.yml", "macos-hosted-parity", "Configure BuildBuddy remote cache",
      None, "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/publish_bcr.yml", "publish-fork", "Create the fork branch only if absent", None,
-     "<run>"): {"PUBLISH_TOKEN"},
+     "<run>"): {"BCR_PUBLISH_TOKEN"},
     (".github/workflows/sanitizers-pr.yml", "asan-geode", "Configure BuildBuddy remote cache",
      None, "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/sanitizers-pr.yml", "asan-geode", "Configure BuildBuddy read-only cache",
@@ -3017,7 +3017,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("fetch-depth: 0", _step_body(prepare, "Checkout the exact BCR base"))
         self.assertIn("needs: [validate, promote-entry, prepare-fork]", publish)
         self.assertIn("environment: bcr-fork-preparation", publish)
-        self.assertIn("PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}", publish)
+        self.assertIn("PUBLISH_TOKEN: ${{ secrets.BCR_PUBLISH_TOKEN }}", publish)
         self.assertNotIn("uses:", publish, "the protected token job must run no external action")
         download = _step_body(publish, "Download and reverify the entry without a fork token")
         self.assertNotIn("PUBLISH_TOKEN", download)
@@ -3030,7 +3030,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn("git push --force", publish)
         self.assertNotIn("/pulls", publish)
         self.assertNotIn("secrets.BCR_FORK_PUSH_TOKEN", publish)
-        self.assertNotIn("secrets.BCR_PUBLISH_TOKEN", workflow)
+        self.assertNotIn("secrets.PUBLISH_TOKEN", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
         for path in (".github/workflows/bcr_preflight.yml", ".github/workflows/publish_bcr.yml"):
             for body in _run_bodies(self.supply_chain_files[path]):
