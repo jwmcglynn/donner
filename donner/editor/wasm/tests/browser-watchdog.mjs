@@ -1,8 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
-import { APPLICATION_HEARTBEAT_LIMIT_MS } from "./browser-heartbeat.cjs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { APPLICATION_HEARTBEAT_LIMIT_MS } from "./browser-heartbeat.cjs";
 import { kListingAttempts, listWithRetries, processRows } from "./browser-process-snapshot.cjs";
 export { processRows };
 
@@ -141,92 +141,109 @@ export async function supervise(executable, args, options = {}) {
     });
     anchor.once("exit", (code, signal) => resolve({ code, signal }));
   });
+  const sampleProcessTree = () => {
+    let rows;
+    try {
+      rows = sampleProcesses();
+    } catch (error) {
+      // A loaded host can make one process listing slow or fail. Keep the run going until the
+      // tree has gone unmeasured for longer than the heartbeat limit.
+      const atMs = Date.now() - startedAt;
+      measurementFailures.push({ atMs, error: error.message.slice(0, 200) });
+      if (measurementFailures.length > 16) measurementFailures.shift();
+      if (atMs - lastMeasuredAtMs > heartbeatLimitMs) throw error;
+      return null;
+    }
+    lastMeasuredAtMs = Date.now() - startedAt;
+    const root = rows.find((row) => row.pid === anchor.pid);
+    if (rootIdentity && root?.start !== rootIdentity) {
+      throw new Error("watchdog anchor identity changed");
+    }
+    if (root) rootIdentity ??= root.start;
+    const current = ownedGroup(rows, anchor.pid);
+    for (const row of current) owned.set(row.pid, row.start);
+    const rssBytes = rows.filter((row) => owned.get(row.pid) === row.start)
+      .reduce((total, row) => total + row.rssBytes, 0);
+    peakRssBytes = Math.max(peakRssBytes, rssBytes);
+    const atMs = Date.now() - startedAt;
+    const row = {
+      atMs,
+      rssBytes,
+      processes: current.length,
+      processRss: current.slice(0, 64).map(({ pid, ppid, pgid, rssBytes, command }) => ({
+        pid,
+        ppid,
+        pgid,
+        rssBytes,
+        command,
+      })),
+    };
+    return row;
+  };
+  const readApplicationHeartbeat = (row) => {
+    if (heartbeatFile && fs.existsSync(heartbeatFile)) {
+      row.heartbeatAgeMs = Date.now() - fs.statSync(heartbeatFile).mtimeMs;
+      const heartbeat = fs.readFileSync(heartbeatFile, "utf8");
+      if (heartbeat.length < 16384) {
+        try {
+          row.application = JSON.parse(heartbeat);
+        } catch {}
+      }
+    }
+  };
+  const validateApplicationHeartbeat = (row) => {
+    if (row.application?.phase === "active") {
+      const responseAtMs = row.application.atMs;
+      const nowMs = Date.now();
+      if (!Number.isSafeInteger(responseAtMs) || responseAtMs <= 0 || responseAtMs > nowMs) {
+        throw new Error("invalid application heartbeat timestamp");
+      }
+      row.heartbeatAgeMs = Math.max(row.heartbeatAgeMs, nowMs - responseAtMs);
+      applicationHeartbeatObserved = true;
+    } else if (row.application?.phase === "launch" || row.application?.phase === "teardown") {
+      applicationHeartbeatObserved = false;
+    } else if (applicationHeartbeatObserved) {
+      throw new Error("invalid application heartbeat evidence");
+    }
+  };
+  const trackHeartbeatSession = (row) => {
+    if (row.application?.phase === "active" && row.application.sessionId !== heartbeatSessionId) {
+      heartbeatSessionId = row.application.sessionId;
+      teardownDeadline = undefined;
+    }
+    if (row.application?.phase === "teardown") {
+      heartbeatSessionId ??= row.application.sessionId;
+      teardownDeadline ??= Date.now() + teardownLimitMs;
+    }
+  };
+  const reportSample = (row) => {
+    samples.push(row);
+    if (samples.length > 360) samples.shift();
+    if (row.rssBytes > memoryLimit) stop("memory limit exceeded");
+    else if (row.atMs > deadlineMs) stop("test deadline exceeded");
+    else if (teardownDeadline && Date.now() > teardownDeadline) {
+      stop("browser teardown deadline exceeded");
+    } else if (
+      heartbeatFile && (row.application?.phase === "active" || row.atMs > 5000)
+      && (row.heartbeatAgeMs ?? row.atMs) > heartbeatLimitMs
+    ) {
+      stop("test heartbeat stopped");
+    } else {
+      try {
+        writeReceipt();
+      } catch (error) {
+        stop(`watchdog reporting failed: ${error.message}`);
+      }
+    }
+  };
   const sample = () => {
     try {
-      let rows;
-      try {
-        rows = sampleProcesses();
-      } catch (error) {
-        // A loaded host can make one process listing slow or fail. Keep the run going until the
-        // tree has gone unmeasured for longer than the heartbeat limit.
-        const atMs = Date.now() - startedAt;
-        measurementFailures.push({ atMs, error: error.message.slice(0, 200) });
-        if (measurementFailures.length > 16) measurementFailures.shift();
-        if (atMs - lastMeasuredAtMs > heartbeatLimitMs) throw error;
-        return;
-      }
-      lastMeasuredAtMs = Date.now() - startedAt;
-      const root = rows.find((row) => row.pid === anchor.pid);
-      if (rootIdentity && root?.start !== rootIdentity) {
-        throw new Error("watchdog anchor identity changed");
-      }
-      if (root) rootIdentity ??= root.start;
-      const current = ownedGroup(rows, anchor.pid);
-      for (const row of current) owned.set(row.pid, row.start);
-      const rssBytes = rows.filter((row) => owned.get(row.pid) === row.start)
-        .reduce((total, row) => total + row.rssBytes, 0);
-      peakRssBytes = Math.max(peakRssBytes, rssBytes);
-      const atMs = Date.now() - startedAt;
-      const row = {
-        atMs,
-        rssBytes,
-        processes: current.length,
-        processRss: current.slice(0, 64).map(({ pid, ppid, pgid, rssBytes, command }) => ({
-          pid,
-          ppid,
-          pgid,
-          rssBytes,
-          command,
-        })),
-      };
-      if (heartbeatFile && fs.existsSync(heartbeatFile)) {
-        row.heartbeatAgeMs = Date.now() - fs.statSync(heartbeatFile).mtimeMs;
-        const heartbeat = fs.readFileSync(heartbeatFile, "utf8");
-        if (heartbeat.length < 16384) {
-          try {
-            row.application = JSON.parse(heartbeat);
-          } catch {}
-        }
-      }
-      if (row.application?.phase === "active") {
-        const responseAtMs = row.application.atMs;
-        const nowMs = Date.now();
-        if (!Number.isSafeInteger(responseAtMs) || responseAtMs <= 0 || responseAtMs > nowMs) {
-          throw new Error("invalid application heartbeat timestamp");
-        }
-        row.heartbeatAgeMs = Math.max(row.heartbeatAgeMs, nowMs - responseAtMs);
-        applicationHeartbeatObserved = true;
-      } else if (row.application?.phase === "launch" || row.application?.phase === "teardown") {
-        applicationHeartbeatObserved = false;
-      } else if (applicationHeartbeatObserved) {
-        throw new Error("invalid application heartbeat evidence");
-      }
-      if (row.application?.phase === "active" && row.application.sessionId !== heartbeatSessionId) {
-        heartbeatSessionId = row.application.sessionId;
-        teardownDeadline = undefined;
-      }
-      if (row.application?.phase === "teardown") {
-        heartbeatSessionId ??= row.application.sessionId;
-        teardownDeadline ??= Date.now() + teardownLimitMs;
-      }
-      samples.push(row);
-      if (samples.length > 360) samples.shift();
-      if (rssBytes > memoryLimit) stop("memory limit exceeded");
-      else if (atMs > deadlineMs) stop("test deadline exceeded");
-      else if (teardownDeadline && Date.now() > teardownDeadline) {
-        stop("browser teardown deadline exceeded");
-      } else if (
-        heartbeatFile && (row.application?.phase === "active" || atMs > 5000)
-        && (row.heartbeatAgeMs ?? atMs) > heartbeatLimitMs
-      ) {
-        stop("test heartbeat stopped");
-      } else {
-        try {
-          writeReceipt();
-        } catch (error) {
-          stop(`watchdog reporting failed: ${error.message}`);
-        }
-      }
+      const row = sampleProcessTree();
+      if (row === null) return;
+      readApplicationHeartbeat(row);
+      validateApplicationHeartbeat(row);
+      trackHeartbeatSession(row);
+      reportSample(row);
     } catch (error) {
       stop(`watchdog measurement failed: ${error.message}`);
     }
