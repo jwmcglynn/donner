@@ -388,6 +388,37 @@ TEST_F(RendererRegressionTests, ReferenceContractObsoleteIccPaintRejectsWholeDec
   ExpectBitmapsIdentical(actual, expected, "obsolete_icc_declaration_rejected");
 }
 
+TEST_F(RendererRegressionTests, ReferenceContractUnitlessFontShorthandMatchesLonghands) {
+  SVGDocument shorthand = instantiateSubtree(R"svg(
+    <text x="4" y="38" font="italic bold 28 Noto Sans">Ab</text>)svg",
+                                             {}, Vector2i(64, 64));
+  SVGDocument expanded = instantiateSubtree(R"svg(
+    <text x="4" y="38" font-style="italic" font-weight="bold" font-size="28"
+          font-family="Noto Sans">Ab</text>)svg",
+                                            {}, Vector2i(64, 64));
+  RegisterFontsFromDirectoryForTesting(shorthand, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(expanded, ResvgResourceRoot() / "fonts");
+  const auto actual = RenderDocumentWithBackend(shorthand, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "unitless_font_shorthand_visible");
+  ExpectBitmapsIdentical(actual, RenderDocumentWithBackend(expanded, ActiveRendererBackend()),
+                         "unitless_font_shorthand_longhands");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit) {
+  SVGDocument document = ParseSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect x="8" y="8" width="16" height="16" fill="lime"/></svg>)svg");
+  EXPECT_EQ(document.canvasSize(), Vector2i(512, 512));
+  document.setCanvasSize(64, 64);
+  const auto actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="8" y="8" width="16" height="16" fill="lime"/>)svg");
+  ASSERT_EQ(actual.dimensions, Vector2i(64, 64));
+  ExpectVisibleBitmap(actual, "unsized_root_visible");
+  ExpectBitmapsIdentical(actual, expected, "unsized_root_caller_canvas");
+  EXPECT_THAT(PixelAt(actual, 12, 12), testing::ElementsAre(0, 255, 0, 255));
+  EXPECT_EQ(PixelAt(actual, 32, 32)[3], 0);
+}
+
 TEST_F(RendererRegressionTests, ReferenceContractArcsUsesDocumentedMiterFallback) {
   const auto render = [](std::string_view join) {
     return RenderReferenceContract(std::string(R"svg(<path d="M12 52 Q12 8 48 12 Q24 32 36 52"
