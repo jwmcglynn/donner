@@ -1817,6 +1817,10 @@ public:
     return shell.penDragFlushedThisFrame_;
   }
 
+  static bool SelectToolIsDragging(const EditorShell& shell) {
+    return shell.selectTool_.isDragging();
+  }
+
   static bool SelectToolIsMarqueeing(const EditorShell& shell) {
     return shell.selectTool_.isMarqueeing();
   }
@@ -4108,6 +4112,38 @@ TEST(EditorShellTest, NewerFileAndRevertRequestsCancelDeferredSampleReplacement)
                   .document()
                   .querySelector("#newer-file")
                   .has_value());
+}
+
+TEST(EditorShellTest, OpeningDocumentClearsBufferedCanvasPress) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(-500, 1000));
+  const auto path = TempPathForTest("open-clears-pending-press.svg");
+  WriteTextFile(path, kInitialSvg);
+  std::string error;
+  ASSERT_TRUE(EditorShellTestAccess::TryOpenPath(shell, path.string(), &error)) << error;
+  EXPECT_FALSE(EditorShellTestAccess::HasPendingClick(shell));
+}
+
+TEST(EditorShellTest, OpeningDocumentDiscardsThePreviousDocumentDrag) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(
+      shell, Vector2d(30, 24), Box2d(Vector2d(10, 12), Vector2d(50, 36))));
+  const auto path = TempPathForTest("open-clears-drag.svg");
+  WriteTextFile(path, kInitialSvg);
+  std::string error;
+  ASSERT_TRUE(EditorShellTestAccess::TryOpenPath(shell, path.string(), &error)) << error;
+  EXPECT_FALSE(EditorShellTestAccess::SelectToolIsDragging(shell));
+  EXPECT_FALSE(app.isDirty());
 }
 
 TEST(EditorShellTest, RevertRequestIgnoresGuardStates) {
