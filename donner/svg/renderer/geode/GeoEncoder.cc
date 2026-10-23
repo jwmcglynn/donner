@@ -1496,7 +1496,7 @@ void GeoEncoder::clearClipPolygon() {
 // Clip mask pass
 // ============================================================================
 
-bool GeoEncoder::beginMaskPass(const gpu::Texture& mask) {
+bool GeoEncoder::beginMaskPass(const gpu::Texture& mask, gpu::LoadOp loadOp) {
   if (!mask.isValid()) {
     return false;
   }
@@ -1540,11 +1540,10 @@ bool GeoEncoder::beginMaskPass(const gpu::Texture& mask) {
   const gpu::TextureView& maskView =
       impl_->transientResources.retain(std::move(maskViewResult).result());
 
-  gpu::Result<gpu::RenderPassEncoder*> opened =
-      impl_->commandEncoder->beginRenderPass(gpu::RenderPassDescriptor{
-          "GeoEncoderMaskPass",
-          {gpu::RenderPassColorAttachment{
-              maskView, gpu::LoadOp::Clear, gpu::StoreOp::Store, {0.0, 0.0, 0.0, 0.0}}}});
+  gpu::Result<gpu::RenderPassEncoder*> opened = impl_->commandEncoder->beginRenderPass(
+      gpu::RenderPassDescriptor{"GeoEncoderMaskPass",
+                                {gpu::RenderPassColorAttachment{
+                                    maskView, loadOp, gpu::StoreOp::Store, {0.0, 0.0, 0.0, 0.0}}}});
   if (opened.hasError()) {
     return false;
   }

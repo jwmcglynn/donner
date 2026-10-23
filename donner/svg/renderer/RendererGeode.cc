@@ -2522,11 +2522,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// The texture is allocated per `pushClip` call and parked in
     /// `maskLayerTextures`, which keeps it alive until `popClip`.
     ///
-    /// For nested `<clipPath>` references, the pushClip code builds
-    /// one mask per clip-path layer (deepest first); each outer
-    /// layer's mask is rendered with the previous layer's mask as an
-    /// input clip mask so every outer shape is intersected with the
-    /// deeper union. The outermost layer's resolve is the one named here.
+    /// Each nested reference clips only its referencing shape. Sibling results are unioned
+    /// into the owning layer's mask; the outermost layer supplies the final coverage.
     ///
     /// The texture handle names the entry in \ref maskLayerTextures that owns the mask; the
     /// view is an alias owned by the frame's import list. Both are valid for the rest of the
@@ -2598,9 +2595,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// @param deviceFromLocal Transform of the clipped element's local space.
   /// @return False when the encoder refused the mask pass, which leaves the mask without coverage.
   [[nodiscard]] bool fillClipLayerMask(const gpu::Texture& mask, const ResolvedClip& clip,
-                                       size_t begin, size_t end,
-                                       const Transform2d& deviceFromLocal) {
-    if (!encoder->beginMaskPass(mask)) {
+                                       size_t begin, size_t end, const Transform2d& deviceFromLocal,
+                                       gpu::LoadOp loadOp) {
+    if (!encoder->beginMaskPass(mask, loadOp)) {
       return false;
     }
     for (size_t s = begin; s < end; ++s) {
@@ -5997,129 +5994,68 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     return;
   }
 
-  // Path-clip mask. When the clip has any `clipPaths`,
-  // render them into R8Unorm mask textures via the Slug mask
-  // pipeline and hand the view of the outermost layer to
-  // the encoder so subsequent fill / gradient draws multiply clip
-  // coverage into their output.
-  //
-  // `clip.clipPaths` is a flat list in traversal order with a
-  // per-shape `layer` index. Paths at the same layer are UNIONED;
-  // when the layer decreases (we cross back from a nested clipPath
-  // reference to its parent), that whole nested layer is
-  // INTERSECTED with each path at the outer layer. This matches the
-  // recursive `buildLayerMask` in `RendererTinySkia::pushClip`.
-  //
-  // The union step lives in the hardware blend (`BlendOperation::Max`
-  // on the R channel). The intersection step lives in the slug_mask
-  // fragment shader: when a deeper layer's mask is bound as the
-  // `clipMaskTexture`, each outer-layer shape samples it at its
-  // pixel center and multiplies the coverage output, so
-  // `max(shape_i ∩ nested)` = `(union of shape_i) ∩ nested`.
-  //
-  // Bottom-up traversal order: we scan the clipPaths list and
-  // partition it into contiguous runs of equal layer. Deeper layers
-  // appear AFTER outer layers in the list (the driver emits them in
-  // the order they're encountered during DFS, and references push a
-  // higher layer for the nested clip's children). So the deepest
-  // layer is at the tail; we render each layer's mask in reverse,
-  // binding the previously-rendered deeper mask as the input clip.
+  // Nested paths precede their referencing shape. Intersect each shape with its nested
+  // coverage before unioning siblings; a nested reference must not clip adjacent siblings.
   if (!clip.clipPaths.empty() && impl_->device && impl_->encoder && impl_->pixelWidth > 0 &&
       impl_->pixelHeight > 0) {
-    // Masks cover the target being drawn into, which inside a filter layer expanded for an
-    // offset is larger than the surface: the masks' coverage is addressed in that target's
-    // pixels, and the mask passes are scissored to it.
     const gpu::Extent2d maskExtent = impl_->targetExtent();
-    const auto makeMaskTexture = [&](const char* label, gpu::TextureDescriptor& outDesc) {
-      outDesc =
-          gpu::TextureDescriptor{RcString(label), maskExtent, gpu::TextureFormat::RGBA8Unorm,
-                                 gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled};
-      return impl_->acquireTexture(outDesc);
-    };
-    // Partition `clip.clipPaths` into contiguous [begin, end) ranges,
-    // one per layer, in the order they appear. Layers appear in
-    // traversal order - within a run the layer is constant, and
-    // boundaries correspond to clipPath-reference crossings. For
-    // each run we'll render one mask texture.
-    struct LayerRun {
-      size_t begin;
-      size_t end;
-      int layer;
-    };
-    std::vector<LayerRun> runs;
-    {
-      size_t i = 0;
-      while (i < clip.clipPaths.size()) {
-        const int layer = clip.clipPaths[i].layer;
-        size_t j = i + 1;
-        while (j < clip.clipPaths.size() && clip.clipPaths[j].layer == layer) {
-          ++j;
-        }
-        runs.push_back({i, j, layer});
-        i = j;
-      }
-    }
-
-    // Render runs bottom-up (deepest layer first). Each run's mask
-    // is rendered with the previously-rendered deeper mask bound as
-    // the input clip so shapes get intersected with the deeper
-    // union. Runs at the same layer don't intersect with each other
-    // - the Max blend on the R channel handles union within a run.
     const Transform2d savedDeviceFromLocalTransform = impl_->deviceFromLocalTransform;
-
-    // If any clip stack entry already carries a path mask (e.g., an
-    // ancestor `<g>` with its own `clip-path`), use the topmost one
-    // as the initial nested mask so this new clip gets intersected
-    // with it as it's being rendered. Without this seed the outer
-    // ancestor clip would be lost the moment the inner clip lands
-    // because `updateEncoderScissor` only binds the topmost entry.
-    // Aliases owned by the frame's import lists, so they stay valid for the rest of the frame.
-    const gpu::Texture* nestedMaskTextureHandle = nullptr;
-    const gpu::TextureView* nestedMaskViewHandle = nullptr;
-    for (auto rit = impl_->clipStack.rbegin(); rit != impl_->clipStack.rend(); ++rit) {
-      if (rit->maskResolveViewHandle != nullptr) {
-        nestedMaskTextureHandle = rit->maskResolveTextureHandle;
-        nestedMaskViewHandle = rit->maskResolveViewHandle;
+    const gpu::Texture* ancestorMask = nullptr;
+    for (auto it = impl_->clipStack.rbegin(); it != impl_->clipStack.rend(); ++it) {
+      if (it->maskResolveViewHandle != nullptr) {
+        ancestorMask = it->maskResolveTextureHandle;
         break;
       }
     }
 
-    for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
-      gpu::TextureDescriptor maskDesc = {};
-      gpu::Texture maskTexture = makeMaskTexture("RendererGeodeClipMask", maskDesc);
-      if (!maskTexture.isValid()) {
+    std::size_t cursor = clip.clipPaths.size();
+    const auto buildLayer = [&](auto&& self, int layer) -> const gpu::Texture* {
+      const gpu::TextureDescriptor descriptor{
+          RcString("RendererGeodeClipMask"), maskExtent, gpu::TextureFormat::RGBA8Unorm,
+          gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled};
+      gpu::Texture mask = impl_->acquireTexture(descriptor);
+      if (!mask.isValid()) {
         entry.allocationRejected = true;
-        break;
+        return nullptr;
       }
-
-      // Bind the previously-rendered nested mask (if any) so this
-      // layer's fragment shader samples it and intersects.
-      if (nestedMaskViewHandle != nullptr) {
-        impl_->encoder->setClipMask(*nestedMaskTextureHandle, *nestedMaskViewHandle);
-      } else {
-        impl_->encoder->clearClipMask();
+      // Allocate before descending so the surface budget also bounds recursion depth.
+      entry.maskLayerTextures.push_back({std::move(mask), descriptor});
+      const gpu::Texture& destination = entry.maskLayerTextures.back().texture;
+      gpu::LoadOp loadOp = gpu::LoadOp::Clear;
+      while (cursor > 0 && clip.clipPaths[cursor - 1].layer == layer) {
+        const std::size_t end = cursor;
+        std::size_t begin = --cursor;
+        const gpu::Texture* nested = ancestorMask;
+        if (cursor > 0 && clip.clipPaths[cursor - 1].layer > layer) {
+          nested = self(self, clip.clipPaths[cursor - 1].layer);
+          if (!nested) {
+            return nullptr;
+          }
+        } else {
+          // Batch adjacent shapes without nested references into one mask pass.
+          while (begin > 0 && clip.clipPaths[begin - 1].layer == layer &&
+                 (begin < 2 || clip.clipPaths[begin - 2].layer <= layer)) {
+            --begin;
+          }
+          cursor = begin;
+        }
+        if (nested) {
+          impl_->encoder->setClipMask(*nested, impl_->importTextureView(*nested));
+        } else {
+          impl_->encoder->clearClipMask();
+        }
+        if (!impl_->fillClipLayerMask(destination, clip, begin, end, savedDeviceFromLocalTransform,
+                                      loadOp)) {
+          entry.allocationRejected = true;
+          return nullptr;
+        }
+        loadOp = gpu::LoadOp::Load;
       }
-
-      // The mask is parked in the clip entry that owns it before anything names it, so the
-      // handle recorded below points at the owner rather than at a copy that outlives its scope.
-      entry.maskLayerTextures.push_back({std::move(maskTexture), maskDesc});
-      const gpu::Texture& maskTextureHandle = entry.maskLayerTextures.back().texture;
-      if (!impl_->fillClipLayerMask(maskTextureHandle, clip, it->begin, it->end,
-                                    savedDeviceFromLocalTransform)) {
-        // The mask holds no coverage, so treat it like one that could not be allocated: nothing
-        // under this clip draws.
-        entry.allocationRejected = true;
-        break;
-      }
-
-      nestedMaskTextureHandle = &maskTextureHandle;
-      nestedMaskViewHandle = &impl_->importTextureView(maskTextureHandle);
-
-      // The outermost layer (the LAST one processed by this loop,
-      // i.e. the FIRST run in `runs`) provides the mask view the
-      // main draws sample as their clip.
-      entry.maskResolveTextureHandle = nestedMaskTextureHandle;
-      entry.maskResolveViewHandle = nestedMaskViewHandle;
+      return &destination;
+    };
+    entry.maskResolveTextureHandle = buildLayer(buildLayer, clip.clipPaths.back().layer);
+    if (entry.maskResolveTextureHandle) {
+      entry.maskResolveViewHandle = &impl_->importTextureView(*entry.maskResolveTextureHandle);
     }
 
     // Clear the encoder's internal clip-mask state - the next main
