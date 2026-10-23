@@ -23,6 +23,37 @@ std::mutex dialogsMutex;
 std::unordered_map<unsigned int, PendingDialog> dialogs;
 unsigned int nextId = 1;
 constexpr std::size_t kMaximumSourceBytes = 8u * 1024u * 1024u;
+
+// Takes ownership of the copied request strings; the browser thread releases them after decoding.
+void DispatchBrowserRequest(unsigned int id, unsigned int generation, int operation,
+                            char* copiedName, char* copiedSource, bool saveAs) {
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM({
+    const id = $0; const generation = $1; const operation = $2; const saveAs = Boolean($5);
+    const name = UTF8ToString($3); const source = UTF8ToString($4);
+    _free($3); _free($4);
+    const complete = (result) => {
+      const pointers = [];
+      try {
+        for (const text of ([result.name || "", result.source || "", result.error || ""])) {
+          const bytes = new TextEncoder().encode(text);
+          const pointer = _malloc(bytes.length + 1);
+          if (!pointer) throw new Error('Not enough memory for this file.');
+          pointers.push(pointer);
+          HEAPU8.set(bytes, pointer); HEAPU8[pointer + bytes.length] = 0;
+        }
+        _donner_browser_file_result(id, generation, result.status || 0,
+                                   pointers[0], pointers[1], pointers[2]);
+      } catch (_) {
+        _donner_browser_file_result(id, generation, 2, 0, 0, 0);
+      } finally { for (const pointer of pointers) _free(pointer); }
+    };
+    const api = globalThis['__donnerFileDialogs'];
+    Promise.resolve().then(() => api.run(id, operation, name, source, saveAs))
+      .then(complete, error => complete({status: 2, error: String(error.message || error)}));
+  }, id, generation, operation, copiedName, copiedSource, saveAs);
+  // clang-format on
+}
 }  // namespace
 
 extern "C" EMSCRIPTEN_KEEPALIVE void donner_browser_file_result(unsigned int id,
@@ -105,32 +136,8 @@ bool BrowserFileDialog::request(Operation operation, std::string_view name, std:
     donner_browser_file_result(id_, generation, 2, "", "", "Not enough memory for this file.");
     return false;
   }
-  // clang-format off
-  MAIN_THREAD_ASYNC_EM_ASM({
-    const id = $0; const generation = $1; const operation = $2; const saveAs = Boolean($5);
-    const name = UTF8ToString($3); const source = UTF8ToString($4);
-    _free($3); _free($4);
-    const complete = (result) => {
-      const pointers = [];
-      try {
-        for (const text of ([result.name || "", result.source || "", result.error || ""])) {
-          const bytes = new TextEncoder().encode(text);
-          const pointer = _malloc(bytes.length + 1);
-          if (!pointer) throw new Error('Not enough memory for this file.');
-          pointers.push(pointer);
-          HEAPU8.set(bytes, pointer); HEAPU8[pointer + bytes.length] = 0;
-        }
-        _donner_browser_file_result(id, generation, result.status || 0,
-                                   pointers[0], pointers[1], pointers[2]);
-      } catch (_) {
-        _donner_browser_file_result(id, generation, 2, 0, 0, 0);
-      } finally { for (const pointer of pointers) _free(pointer); }
-    };
-    const api = globalThis['__donnerFileDialogs'];
-    Promise.resolve().then(() => api.run(id, operation, name, source, saveAs))
-      .then(complete, error => complete({status: 2, error: String(error.message || error)}));
-  }, id_, generation, static_cast<int>(operation), copiedName, copiedSource, saveAs);
-  // clang-format on
+  DispatchBrowserRequest(id_, generation, static_cast<int>(operation), copiedName, copiedSource,
+                         saveAs);
   return true;
 }
 
