@@ -2,6 +2,7 @@
 
 from collections import Counter
 import dataclasses
+import hashlib
 import itertools
 import json
 import os
@@ -3530,13 +3531,15 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         curl.write_text("#!/bin/sh\nexit %d\n" % curl_status, encoding="utf-8")
         curl.chmod(0o755)
         packages = tools / "dpkg-query"
-        packages.write_text('#!/bin/sh\nprintf "%s" "$PACKAGE_IDENTITY"\n'
+        identity_file = root / "package-identity"
+        identity_file.write_text(package_identity, encoding="utf-8")
+        packages.write_text('#!/bin/sh\ncat "$PACKAGE_IDENTITY_FILE"\n'
                             'exit "${DPKG_STATUS:-0}"\n', encoding="utf-8")
         packages.chmod(0o755)
         env = {"PATH": "%s:%s" % (tools, os.environ["PATH"]), "GITHUB_WORKSPACE": str(workspace),
                "RUNNER_TEMP": str(temp), "RUNNER_ENVIRONMENT": "github-hosted",
                "GITHUB_OUTPUT": str(root / "output"), "REMOTE_EXECUTION": "false",
-               "PACKAGE_IDENTITY": package_identity, "RUNNER_OS": "Linux",
+               "PACKAGE_IDENTITY_FILE": str(identity_file), "RUNNER_OS": "Linux",
                "ImageOS": "ubuntu24", "ImageVersion": "20261005.1", "RUNNER_ARCH": "X64",
                "WRITE_KEY": write, "READ_KEY": read, "TRUSTED_PR": trusted,
                "RENOVATE_PR": renovate, "DOWNLOAD_OUTPUTS": download, "EVENT_NAME": event,
@@ -3624,7 +3627,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self._assert_buildbuddy_fragment(
                     fragment, credential, output, Path(directory),
                     key=write if mode == "write" else read, upload=mode == "write",
-                    instance=("pr-" if trusted_writer else "main-") + "ubuntu24-20261005.1-X64")
+                    instance=("pr-" if trusted_writer else "main-") + "ubuntu24-20261005.1-X64" + (
+                        "-dpkg-" + hashlib.sha256(
+                            b"libfreetype6:amd64\t2.13-1\tamd64\tii \n").hexdigest()
+                        if arguments.get("RUNNER_OS", "Linux") == "Linux" else ""))
 
     def _assert_buildbuddy_fragment(self, fragment, credential, output, directory, *, key, upload,
                                     instance):
@@ -3797,8 +3803,35 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                         self.assertNotIn(identity.strip(), output)
                         instances.append(next(line for line in fragment.splitlines()
                                               if line.startswith("build --remote_instance_name=")))
+                        digest = hashlib.sha256(identity.encode()).hexdigest()
+                        for scope, flag in (("build", "action_env"), ("build", "host_action_env"),
+                                            ("test", "test_env")):
+                            self.assertIn("%s --%s=DONNER_LINUX_PACKAGES_SHA256=%s" %
+                                          (scope, flag, digest), fragment.splitlines())
                 self.assertNotEqual(instances[0], instances[1],
                                     "Package updates must not reuse the previous action cache")
+
+    def test_linux_package_identity_is_canonical_and_fails_closed(self):
+        rows = ["libfontconfig1:amd64\t2.15-1\tamd64\tii ",
+                "libfreetype6:amd64\t2.13-1\tamd64\tii "]
+        instances = []
+        for records in (rows, list(reversed(rows))):
+            with tempfile.TemporaryDirectory() as directory:
+                code, fragment, _, output = self._run_buildbuddy_action(
+                    Path(directory), event="push", write="fixture-key",
+                    CACHE_PARTITION="linux-fixed", package_identity="\n".join(records) + "\n")
+                self.assertEqual(0, code, output)
+                instances.append(next(line for line in fragment.splitlines()
+                                      if line.startswith("build --remote_instance_name=")))
+        self.assertEqual(instances[0], instances[1], "Package enumeration order is not identity")
+        for identity, status in (("", "0"), ("x" * 1048577, "0"), ("package", "1")):
+            with self.subTest(size=len(identity), status=status), tempfile.TemporaryDirectory() as directory:
+                code, fragment, credential, output = self._run_buildbuddy_action(
+                    Path(directory), event="push", write="fixture-key",
+                    package_identity=identity, DPKG_STATUS=status)
+                self.assertNotEqual(0, code, output)
+                self.assertIsNone(fragment)
+                self.assertIsNone(credential)
 
     def test_buildbuddy_cache_partition_replaces_only_the_image_identity(self):
         write = "write-key-fixture"
@@ -3806,7 +3839,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             code, fragment, _, output = self._run_buildbuddy_action(
                 Path(directory), event="push", write=write, CACHE_PARTITION=partition,
-                ImageVersion="")
+                RUNNER_OS="macOS", ImageVersion="")
             self.assertEqual(0, code, output)
             self.assertIn("build --remote_instance_name=main-%s" % partition,
                           fragment.splitlines())
