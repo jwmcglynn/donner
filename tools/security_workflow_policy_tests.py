@@ -3239,8 +3239,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "--test_tag_filters=", "--nocache_test_results",
             "--noskip_incompatible_explicit_targets",
             "--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json",
-            "//build_defs:soak_probe_fuzzer_soak",
+            "//tools/ci:deterministic_fuzzer_soak",
         ], shlex.split(scripts[0].replace("\\\n", " ")))
+        metadata = _read("tools/ci/BUILD.bazel")
+        self.assertIn('test_suite(\n    name = "deterministic_fuzzer_soak",\n'
+                      '    tags = ["manual"],\n'
+                      '    tests = ["//build_defs:soak_probe_fuzzer_soak"],\n)', metadata)
 
     def test_deterministic_soak_gate_rejects_exclusion_or_skip(self):
         path = ".github/workflows/main.yml"

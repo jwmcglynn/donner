@@ -714,7 +714,7 @@ jobs:
             --test_output=all --test_tag_filters= --nocache_test_results \
             --noskip_incompatible_explicit_targets \
             --build_event_json_file="$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json" \
-            //build_defs:soak_probe_fuzzer_soak
+            //tools/ci:deterministic_fuzzer_soak
 
       - name: Test Linux WebGPU resvg reference
         id: wgpu_resvg_reference
