@@ -492,6 +492,57 @@ TEST_F(RendererRegressionTests, CssFilterContractShadowColorAlphaIsAppliedOnce) 
   ExpectBitmapsIdentical(actual, expected, "shadow_color_alpha_once");
 }
 
+TEST_F(RendererRegressionTests, CssFilterContractColorAmountsMatchIndependentEndpoints) {
+  for (const auto& [function, color] : std::array<std::pair<std::string_view, std::string_view>, 7>{
+           {{"brightness", "black"},
+            {"contrast", "rgb(128 128 128)"},
+            {"grayscale", "seagreen"},
+            {"invert", "seagreen"},
+            {"opacity", "none"},
+            {"sepia", "seagreen"},
+            {"saturate", "rgb(115 115 115)"}}}) {
+    SCOPED_TRACE(function);
+    SVGDocument expectedDocument = instantiateSubtree(
+        std::string(R"svg(<rect x="12" y="12" width="20" height="20" fill=")svg") +
+            std::string(color) + R"svg("/>)svg",
+        {}, Vector2i(64, 64));
+    ExpectBitmapsIdentical(RenderCssFilterContract(std::string(function) + "(0)"),
+                           RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend()),
+                           "filter_zero_endpoint_" + std::string(function));
+  }
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractColorAmountSyntaxDefaultsAndInvalidValues) {
+  const auto plain = RenderCssFilterContract("none");
+  for (std::string_view function :
+       {"brightness", "contrast", "grayscale", "invert", "opacity", "saturate", "sepia"}) {
+    SCOPED_TRACE(function);
+    const auto render = [function](std::string_view value) {
+      return RenderCssFilterContract(std::string(function) + "(" + std::string(value) + ")");
+    };
+    ExpectBitmapsIdentical(render(""), render("1"), "filter_default_" + std::string(function));
+    ExpectBitmapsIdentical(render("50%"), render("0.5"), "filter_percent_" + std::string(function));
+    ExpectBitmapsIdentical(render("200%"), render("2"), "filter_two_" + std::string(function));
+    ExpectBitmapsIdentical(render("-1"), plain, "filter_negative_" + std::string(function));
+  }
+  for (std::string_view function : {"grayscale", "invert", "opacity", "sepia"}) {
+    ExpectBitmapsIdentical(RenderCssFilterContract(std::string(function) + "(2)"),
+                           RenderCssFilterContract(std::string(function) + "(1)"),
+                           "filter_clamp_" + std::string(function));
+  }
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels) {
+  const auto actual = RenderCssFilterContract("drop-shadow(blue 12.5px 6.5px 0)", true);
+  SVGDocument expectedDocument = instantiateSubtree(R"svg(
+    <rect x="25" y="19" width="20" height="20" fill="blue"/>
+    <rect x="12" y="12" width="20" height="20" fill="seagreen"/>)svg",
+                                                    {}, Vector2i(64, 64));
+  ExpectBitmapsIdentical(actual,
+                         RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend()),
+                         "shadow_half_pixel_rounding_contract");
+}
+
 TEST_F(RendererRegressionTests, CssFilterContractMixedUrlGrayscaleUsesSrgb) {
   SVGDocument actualDocument = instantiateSubtree(R"svg(
     <filter id="identity"><feOffset/></filter>
