@@ -2410,7 +2410,7 @@ TEST(RendererPublicApiTest, ExternalUseTextFragmentUsesHostStyleAndTransparentCa
   ASSERT_THAT(actual.bitmap.empty(), testing::IsFalse());
   ASSERT_THAT(expected.empty(), testing::IsFalse());
   EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
-  EXPECT_THAT(PixelAt(actual.bitmap, 0, 0), IsTransparent());
+  EXPECT_THAT(PixelAt(actual.bitmap, 0, 0), test::IsTransparent());
   EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
   editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external_text_host_style",
                                        editor::tests::PixelmatchIdentityParams());
