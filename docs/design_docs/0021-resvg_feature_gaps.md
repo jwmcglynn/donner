@@ -158,7 +158,7 @@ inheritance, fragment selection, the callback identifier and transparent canvas 
 
 ## CSS circle clipping
 
-`clip-path: circle()` supports length, percentage and nearest/farthest-side radii, CSS positions,
+`clip-path: circle()` supports length, percentage and `closest-side`/`farthest-side` radii, CSS positions,
 and fill/stroke/view reference boxes. Default SVG border boxes use stroke geometry. Reference
 geometry includes image occurrences and horizontal text, including hidden glyphs for stroke bounds.
 Work admission precedes path scans and glyph outline decoding. Vertical text fill/stroke reference
