@@ -16,6 +16,7 @@
 namespace donner::svg {
 
 inline constexpr size_t kMaximumTextPathWarpExpansion = 256u;
+inline constexpr double kDefaultTextPathWarpTolerance = 0.1;
 
 namespace text_path_warp_details {
 
@@ -492,7 +493,7 @@ inline std::optional<Vector2d> MapTextPathPoint(const StretchedTextPath& mapping
 /// Warp glyph outline endpoints and control points along text-path perpendiculars.
 inline Path WarpTextPathOutline(const Path& outline, const StretchedTextPath& mapping,
                                 const TextGlyph& glyph,
-                                double tolerance = Path::kLocalFlattenTolerance) {
+                                double tolerance = kDefaultTextPathWarpTolerance) {
   if (outline.empty() || !text_path_warp_details::FiniteOutline(outline) ||
       outline.verbCount() > Path::kMaximumGeometryQueryWork / kMaximumTextPathWarpExpansion ||
       outline.points().size() > Path::kMaximumGeometryQueryWork / kMaximumTextPathWarpExpansion) {

@@ -21,6 +21,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVG.h"
+#include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/SVGTextElement.h"
@@ -2908,15 +2909,17 @@ TEST(RendererPublicApiTest, CoveredPixelsOfAnEmptySnapshotFails) {
 TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyphGeometry) {
   SVGDocument word = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
+        shape-rendering="crispEdges"
         font-family="Public Sans" font-size="44" font-kerning="none">
-        <defs><path id="p" d="M12 112 C80 12 152 180 220 80 S328 32 372 120"/></defs>
+        <defs><path id="p" d="M12 112 Q192 108 372 112"/></defs>
         <rect x="4" y="4" width="6" height="6" fill="lime"/>
         <text x="8 56 104 152 200"><textPath href="#p" method="stretch">Curve</textPath></text>
       </svg>)svg");
   SVGDocument separateGlyphs = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
+        shape-rendering="crispEdges"
         font-family="Public Sans" font-size="44" font-kerning="none">
-        <defs><path id="p" d="M12 112 C80 12 152 180 220 80 S328 32 372 120"/></defs>
+        <defs><path id="p" d="M12 112 Q192 108 372 112"/></defs>
         <rect x="4" y="4" width="6" height="6" fill="lime"/>
         <text x="8"><textPath href="#p" method="stretch">C</textPath></text>
         <text x="56"><textPath href="#p" method="stretch">u</textPath></text>
@@ -2924,8 +2927,9 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyp
         <text x="152"><textPath href="#p" method="stretch">v</textPath></text>
         <text x="200"><textPath href="#p" method="stretch">e</textPath></text>
       </svg>)svg");
+  const RendererBitmap wordBitmap = RenderPublicDocument(word);
   editor::tests::CompareBitmapToBitmap(
-      RenderPublicDocument(word), RenderPublicDocument(separateGlyphs),
+      wordBitmap, RenderPublicDocument(separateGlyphs),
       "textpath-stretch-curved-word", editor::tests::PixelmatchIdentityParams());
 
   const auto text = word.querySelector("text");
@@ -2934,6 +2938,20 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyp
       word.registry().ctx().get<TextEngine>().computedGlyphPaths(text->unsafeEntityHandle());
   ASSERT_THAT(glyphs, testing::SizeIs(5));
   EXPECT_THAT(glyphs, testing::Each(testing::Property(&Path::empty, false)));
+
+  SVGDocument outlines = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
+        shape-rendering="crispEdges">
+        <rect x="4" y="4" width="6" height="6" fill="lime"/>
+      </svg>)svg");
+  for (const Path& glyph : glyphs) {
+    SVGPathElement outline = SVGPathElement::Create(outlines);
+    outline.setSpline(glyph);
+    outlines.svgElement().appendChild(outline);
+  }
+  editor::tests::CompareBitmapToBitmap(
+      wordBitmap, RenderPublicDocument(outlines), "textpath-stretch-curved-word-outlines",
+      editor::tests::PixelmatchIdentityParams());
 }
 
 /// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,
