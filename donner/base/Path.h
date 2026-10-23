@@ -38,9 +38,10 @@ inline std::ostream& operator<<(std::ostream& os, LineCap cap) {
 
 /// Line join style for stroke corners.
 enum class LineJoin : uint8_t {
-  Miter,  ///< The outer edges of the strokes are extended until they meet at a sharp point.
-  Round,  ///< The corners of the stroke are rounded using a circular arc.
-  Bevel,  ///< A triangular shape fills the area between the two stroked segments.
+  Miter,      ///< The outer edges of the strokes are extended until they meet at a sharp point.
+  Round,      ///< The corners of the stroke are rounded using a circular arc.
+  Bevel,      ///< A triangular shape fills the area between the two stroked segments.
+  MiterClip,  ///< Extend the outer edges and clip the tip at the miter-limit distance.
 };
 
 /// Ostream output operator for \ref LineJoin.
@@ -49,6 +50,7 @@ inline std::ostream& operator<<(std::ostream& os, LineJoin join) {
     case LineJoin::Miter: return os << "Miter";
     case LineJoin::Round: return os << "Round";
     case LineJoin::Bevel: return os << "Bevel";
+    case LineJoin::MiterClip: return os << "MiterClip";
   }
   return os << "Unknown";
 }

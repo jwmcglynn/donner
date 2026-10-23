@@ -1838,6 +1838,37 @@ TEST(Path, StrokeToFillMiterLimitFallbackMatchesBevelJoin) {
             path.strokeToFill(bevel, kFlattenTolerance));
 }
 
+TEST(Path, StrokeToFillMiterClipHonorsTheBisectorLimitInBothDirections) {
+  for (bool reverse : {false, true}) {
+    SCOPED_TRACE(reverse);
+    const Path path =
+        reverse ? PathBuilder().moveTo({44, 36}).lineTo({32, 20}).lineTo({20, 36}).build()
+                : PathBuilder().moveTo({20, 36}).lineTo({32, 20}).lineTo({44, 36}).build();
+    StrokeStyle style{.width = 10, .join = LineJoin::MiterClip, .miterLimit = 1.2};
+    const Path clipped = path.strokeToFill(style, kFlattenTolerance);
+    EXPECT_NEAR(clipped.bounds().topLeft.y, 14.0, 1e-10);
+    EXPECT_THAT(StrokeContains(clipped, {32, 14.5}), testing::IsTrue());
+    EXPECT_THAT(StrokeContains(clipped, {32, 13.5}), testing::IsFalse());
+    EXPECT_THAT(StrokeContains(clipped, {29, 14.5}), testing::IsFalse());
+
+    style.miterLimit = 3;
+    const Path underLimit = path.strokeToFill(style, kFlattenTolerance);
+    style.join = LineJoin::Miter;
+    EXPECT_EQ(underLimit, path.strokeToFill(style, kFlattenTolerance));
+  }
+}
+
+TEST(Path, StrokeToFillMiterClipHandlesNonExtendingAndNaNLimits) {
+  const Path path = PathBuilder().moveTo({20, 36}).lineTo({32, 20}).lineTo({44, 36}).build();
+  const Path bevel = path.strokeToFill({.width = 10, .join = LineJoin::Bevel}, kFlattenTolerance);
+  for (double limit : {-1.0, 0.0, 0.25, std::numeric_limits<double>::quiet_NaN()}) {
+    SCOPED_TRACE(limit);
+    EXPECT_EQ(path.strokeToFill({.width = 10, .join = LineJoin::MiterClip, .miterLimit = limit},
+                                kFlattenTolerance),
+              bevel);
+  }
+}
+
 TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
   // Inverted V (M 0 100 L 50 0 L 100 100) with a SHARP inside
   // corner at the apex. Before the fix, `emitJoin`'s inside-turn branch
