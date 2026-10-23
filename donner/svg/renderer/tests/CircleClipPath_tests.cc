@@ -111,5 +111,81 @@ TEST(CircleClipPath, InvalidCircleDoesNotReplaceEarlierDeclaration) {
   }
 }
 
+TEST(CircleClipPath, NoneClearsAnEarlierCircleOrReference) {
+  for (const std::string_view initial : {"circle(8px)", "url(#clip)"}) {
+    SCOPED_TRACE(initial);
+    const auto actual = RenderCircleScene(
+        "<clipPath id='clip'><circle cx='24' cy='24' r='8'/></clipPath>"
+        "<rect x='8' y='8' width='32' height='32' fill='red' style='clip-path:" +
+        std::string(initial) + ";clip-path:none'/>");
+    ExpectBitmapsIdentical(
+        actual, RenderCircleScene("<rect x='8' y='8' width='32' height='32' fill='red'/>"),
+        "circle_none_reset");
+  }
+}
+
+TEST(CircleClipPath, ImageLeafAndGroupSupplyReferenceBoxes) {
+  constexpr std::string_view kRaster =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZ"
+      "YAwAR8oH+Rq28akAAAAASUVORK5CYII=";
+  constexpr std::string_view kSvg =
+      "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%222%22%20"
+      "height=%222%22%3E%3Crect%20width=%222%22%20height=%222%22%20fill=%22red%22/%3E%3C/svg%3E";
+  const auto expected = RenderCircleScene("<circle cx='32' cy='32' r='16' fill='red'/>");
+  for (const std::string_view uri : {kRaster, kSvg}) {
+    const std::string image =
+        "<image x='16' y='16' width='32' height='32' href='" + std::string(uri);
+    ExpectBitmapsIdentical(RenderCircleScene(image + "' clip-path='circle()'/>"), expected,
+                           "circle_image_leaf");
+    ExpectBitmapsIdentical(RenderCircleScene("<g clip-path='circle()'>" + image + "'/></g>"),
+                           expected, "circle_image_group");
+  }
+}
+
+TEST(CircleClipPath, UseHostSuppliesShadowGeometry) {
+  const auto actual = RenderCircleScene(
+      "<defs><rect id='source' width='32' height='32' fill='red'/></defs>"
+      "<use href='#source' x='16' y='16' clip-path='circle()'/>");
+  ExpectBitmapsIdentical(actual, RenderCircleScene("<circle cx='32' cy='32' r='16' fill='red'/>"),
+                         "circle_use_host");
+}
+
+TEST(CircleClipPath, StyledUsesKeepOccurrenceGeometryAndFontMetrics) {
+  const auto actual = RenderCircleScene(
+      "<defs><rect id='source' width='2em' height='2em' fill='red' "
+      "clip-path='circle(0.5em)'/></defs>"
+      "<use href='#source' x='8' y='8' font-size='8'/>"
+      "<use href='#source' x='28' y='24' font-size='16'/>");
+  const auto expected = RenderCircleScene(
+      "<circle cx='16' cy='16' r='4' fill='red'/><circle cx='44' cy='40' r='8' fill='red'/>");
+  ExpectBitmapsIdentical(actual, expected, "circle_use_occurrences");
+}
+
+TEST(CircleClipPath, TextSpanSuppliesItsOwnReferenceBox) {
+  const auto actual = RenderCircleScene(
+      "<text x='8' y='32' font-size='20' fill='red'>A<tspan "
+      "clip-path='circle(1000px)'>B</tspan></text>");
+  const auto expected = RenderCircleScene("<text x='8' y='32' font-size='20' fill='red'>AB</text>");
+  ExpectBitmapsIdentical(actual, expected, "circle_text_span");
+}
+
+TEST(CircleClipPath, StrokeBoxUsesStrokeShapeInsteadOfMiterEnvelope) {
+  ExpectCircleReference(
+      "circle() stroke-box", "<circle cx='30' cy='30' r='12.82842712474619'/>",
+      "<path d='M20 20L40 40' fill='none' stroke='red' stroke-width='8' stroke-linecap='butt'/>",
+      "circle_diagonal_stroke_box");
+}
+
+TEST(CircleClipPath, NonScalingStrokeBoxUsesHostStrokeGeometry) {
+  constexpr std::string_view kShape =
+      "<rect x='8' y='8' width='16' height='16' fill='red' stroke='blue' stroke-width='8' "
+      "vector-effect='non-scaling-stroke' transform='scale(2 1)' ";
+  const auto actual = RenderCircleScene(std::string(kShape) + "clip-path='circle() stroke-box'/>");
+  const auto expected =
+      RenderCircleScene("<clipPath id='clip'><circle cx='16' cy='16' r='10'/></clipPath>" +
+                        std::string(kShape) + "clip-path='url(#clip)'/>");
+  ExpectBitmapsIdentical(actual, expected, "circle_non_scaling_stroke_box");
+}
+
 }  // namespace
 }  // namespace donner::svg
