@@ -726,6 +726,11 @@ test("the first canvas frame after a polled result must carry that result", () =
     { total: 1, backlog: 1, eligible: 0, presented: true },
     "retained older backlog is distinct from a correct first post-poll admission");
 
+  assert.equal(backlog.resultFrameCompletedAtMs, 210,
+    "same-version capture B publishes its own completion time independently of cadence A");
+  assert.equal(window.__donnerPresentedDocumentStats.lastPresentedAtMs, 200,
+    "version cadence remains deduplicated while capture completion advances");
+
   const reused = { ...backlog, resultFramePresented: undefined, framesPresentedWithoutResult: 0,
     preexistingFramesCompleted: 0, postPollFramesCompletedWithoutResult: 0 };
   window.__donnerWorkerStats = reused;
@@ -738,6 +743,17 @@ test("the first canvas frame after a polled result must carry that result", () =
   presentFrame(window, 2, 5, 1220, true, 12, 2, 22);
   assert.equal(reused.resultFramePresented, true);
   assert.equal(reused.framesPresentedWithoutResult, 2);
+
+  for (const invalidAt of [NaN, Infinity, 900]) {
+    const invalid = { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
+      captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 1,
+      presentationProducerGeneration: 1 };
+    window.__donnerWorkerStats = invalid;
+    presentFrame(window, 2, 5, invalidAt);
+    assert.equal(invalid.resultFramePresented, undefined,
+      "invalid or negative completion times cannot qualify a capture");
+    assert.equal(invalid.resultFrameCompletedAtMs, undefined);
+  }
 
   const detached = { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
     captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 1,
@@ -766,6 +782,7 @@ test("the first canvas frame after a polled result must carry that result", () =
     /void PublishWorkerGpuWaitFailure\([\s\S]*?\n\}/,
   )[0];
   assert.match(failurePublisher, /delete stats\['resultFramePresented'\]/);
+  assert.match(failurePublisher, /delete stats\['resultFrameCompletedAtMs'\]/);
   assert.match(failurePublisher, /delete stats\['framesPresentedWithoutResult'\]/);
   const completed = source.match(
     /void EditorWindow::recordCompletedDocumentFrame\([\s\S]*?\n\}/,

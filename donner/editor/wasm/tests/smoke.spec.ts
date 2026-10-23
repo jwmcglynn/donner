@@ -94,6 +94,7 @@ declare global {
       publishedAtMs: number;
       presentedAtMs?: number;
       resultFramePresented?: boolean;
+      resultFrameCompletedAtMs?: number;
       framesPresentedWithoutResult?: number;
       postPollFramesCompletedWithoutResult?: number;
       preexistingFramesCompleted?: number;
@@ -2150,9 +2151,8 @@ for (
       frames: number;
       worker: Window["__donnerWorkerStats"];
     } | undefined;
-    // Presentation is now one canvas frame: the sample is on screen once the
-    // document render lands AND the app thread has drawn a frame carrying it.
-    // `presentedMs` is read on the page clock at that observation.
+    // The exact qualifying capture must finish GPU execution. Its producer-clock
+    // completion timestamp is converted to the page clock before publication.
     const presentationReady = async () => {
       const state = await page.evaluate(() => ({
         activeSample: window.__donnerActiveSampleStats,
@@ -2180,9 +2180,9 @@ for (
         && state.worker?.resultFramePresented === true
         && state.documentPresentation?.documentGeneration === state.worker.documentGeneration
         && state.documentPresentation?.frameVersion === state.worker.frameVersion
-        && Number.isFinite(state.documentPresentation?.lastPresentedAtMs);
+        && Number.isFinite(state.worker?.resultFrameCompletedAtMs);
       if (pixelsPresented) {
-        phaseTimings.presentedMs ??= state.documentPresentation!.lastPresentedAtMs - clickStartedAt;
+        phaseTimings.presentedMs ??= state.worker!.resultFrameCompletedAtMs! - clickStartedAt;
       }
       return pixelsPresented;
     };
@@ -2295,8 +2295,20 @@ for (
       await writeFile(reportPath, JSON.stringify(report, null, 2));
       await testInfo.attach("nominal-completed-result-handoff", { path: reportPath,
         contentType: "application/json" });
-      expect(handoff.withinLimit, `nominal completed-result handoff: ${JSON.stringify(report)}`)
-        .toBe(!delayedControl);
+      for (const value of Object.values(phaseTimings)) {
+        expect(Number.isFinite(value)).toBe(true);
+        expect(value).toBeGreaterThanOrEqual(0);
+      }
+      expect(Number.isFinite(handoff.handoffMs)).toBe(true);
+      expect(handoff.handoffMs).toBeGreaterThanOrEqual(0);
+      if (delayedControl) {
+        expect(presentationFault!.requested).toBeGreaterThan(0);
+        expect(presentationFault!.flushed).toBeGreaterThan(0);
+        expect(handoff.handoffMs).toBeGreaterThan(handoff.limitMs);
+      } else {
+        expect(handoff.withinLimit, `nominal completed-result handoff: ${JSON.stringify(report)}`)
+          .toBe(true);
+      }
     }
     expect(
       completedWorkerStats?.postPollFramesCompletedWithoutResult,

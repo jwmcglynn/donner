@@ -86,6 +86,7 @@ interface Diagnostics extends Window {
   };
   __donnerWorkerStats?: {
     completedResults: number;
+    resultFrameCompletedAtMs?: number;
     publishedAtMs: number;
     presentedAtMs?: number;
     workerMs: number;
@@ -1647,7 +1648,7 @@ test("first sample click after boot", async ({ page, browser }, info) => {
       && worker?.resultFramePresented === true
       && presentation?.documentGeneration === worker.documentGeneration
       && presentation?.frameVersion === worker.frameVersion
-      && Number.isFinite(presentation?.lastPresentedAtMs);
+      && Number.isFinite(worker?.resultFrameCompletedAtMs);
   }, { timeout: 60000, message: "the clicked document must reach the canvas" }).toBe(true);
   // The breakdown needs every pre-click submission retired, which presentation implies.
   const gpu = await readGpuTimelineOnPageClock(page);
@@ -1656,7 +1657,7 @@ test("first sample click after boot", async ({ page, browser }, info) => {
   const breakdown = firstClickBreakdown(gpu!.timeline, {
     clickAt,
     completedAt,
-    presentedAt: presentation!.lastPresentedAtMs,
+    presentedAt: worker!.resultFrameCompletedAtMs!,
   });
   const report = {
     browser: info.project.name,
@@ -1669,7 +1670,7 @@ test("first sample click after boot", async ({ page, browser }, info) => {
     clickAt,
     completedAt,
     cpuFrameFinishedAt: worker!.presentedAtMs!,
-    presentedAt: presentation!.lastPresentedAtMs,
+    presentedAt: worker!.resultFrameCompletedAtMs!,
     ...breakdown,
     gpuObjects: gpu!.statistics,
   };

@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { firstClickBreakdown } from "./first-click-breakdown.mjs";
 
-test("pointer dispatch timestamps the input handler after queued evaluation work", async () => {
+test("pointer dispatch timestamps dispatch before every input handler after queued evaluation work", async () => {
   const source = readFileSync(new URL("./canvas-pointer.ts", import.meta.url), "utf8");
   const start = source.indexOf("page.evaluate(") + "page.evaluate(".length;
   const end = source.indexOf("}, { ...point, click });", start) + 1;
@@ -23,8 +23,9 @@ test("pointer dispatch timestamps the input handler after queued evaluation work
       if (handlers.get(type) === handler) handlers.delete(type);
     },
     dispatchEvent(event) {
-      now += event.type === "mousemove" ? 400 : 3;
       if (event.type === "mousedown") inputAt = now;
+      // An ancestor capture listener runs before any newly registered canvas listener.
+      now += event.type === "mousemove" ? 400 : 75;
       handlers.get(event.type)?.(event);
     },
   };
@@ -32,7 +33,7 @@ test("pointer dispatch timestamps the input handler after queued evaluation work
     `return (${callbackSource});`)(
       { querySelector: () => canvas },
       { now: () => now },
-      class { constructor(type) { this.type = type; } },
+      class { constructor(type) { this.type = type; now += 7; } },
       {},
     );
   const clickAt = dispatch({ x: 10, y: 20, click: true });
@@ -56,6 +57,6 @@ test("pointer dispatch timestamps the input handler after queued evaluation work
   });
   assert.deepEqual(
     { clickMs: split.presentedMs, backlogMs: split.queueBacklogMs, handoffMs: split.handoffMs },
-    { clickMs: 67, backlogMs: 47, handoffMs: 20 },
+    { clickMs: 56, backlogMs: 36, handoffMs: 20 },
   );
 });

@@ -1535,6 +1535,9 @@ void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64
           return;
         }
         if (matches) {
+          const completedAt = $2 - performance.timeOrigin;
+          if (!Number.isFinite(completedAt) || completedAt < 0) return;
+          stats['resultFrameCompletedAtMs'] = completedAt;
           stats['resultFramePresented'] = true;
           stats['framesPresentedWithoutResult'] = stats['framesPresentedWithoutResult'] | 0;
           stats['postPollFramesCompletedWithoutResult'] =

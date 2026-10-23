@@ -281,6 +281,7 @@ void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteNa
         delete stats['presentingFrame'];
         delete stats['presentationPublicationDelayMs'];
         delete stats['resultFramePresented'];
+        delete stats['resultFrameCompletedAtMs'];
         delete stats['framesPresentedWithoutResult'];
         delete stats['postPollFramesCompletedWithoutResult'];
         delete stats['preexistingFramesCompleted'];
