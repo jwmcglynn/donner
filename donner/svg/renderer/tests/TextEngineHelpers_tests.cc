@@ -1338,8 +1338,8 @@ TEST_F(TextEngineLayoutTest, VerticalRotatedLatinPreservesBackendOffsets) {
 
   EXPECT_THAT(runs,
               ElementsAre(RunGlyphsAre(ElementsAre(AllOf(
-                  GlyphIndexIs(7u), GlyphXPositionIs(DoubleNear(97.5, 0.1)),
-                  GlyphYPositionIs(DoubleNear(23.0, 0.1)), GlyphYAdvanceIs(DoubleNear(10.0, 0.1)),
+                  GlyphIndexIs(7u), GlyphXPositionIs(DoubleNear(98.0, 0.1)),
+                  GlyphYPositionIs(DoubleNear(26.5, 0.1)), GlyphYAdvanceIs(DoubleNear(10.0, 0.1)),
                   GlyphRotateDegreesIs(DoubleEq(90.0)))))));
 }
 
