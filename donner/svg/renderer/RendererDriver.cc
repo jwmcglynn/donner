@@ -1361,7 +1361,8 @@ std::optional<components::FilterGraph> resolveFilterGraph(
                   .stdDeviationX = lengthToPixels(e.stdDeviation, viewBox, fontMetrics),
                   .stdDeviationY = lengthToPixels(e.stdDeviation, viewBox, fontMetrics),
                   .floodColor = css::Color(resolvedRGBA),
-                  .floodOpacity = static_cast<double>(resolvedRGBA.a) / 255.0,
+                  // The color already carries its alpha; flood-opacity is an independent factor.
+                  .floodOpacity = 1.0,
               };
               node.inputs.push_back(components::FilterInput{});
               graph.nodes.push_back(std::move(node));

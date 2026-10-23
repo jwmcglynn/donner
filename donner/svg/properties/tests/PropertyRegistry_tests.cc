@@ -2135,7 +2135,8 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
 
   {
     PropertyRegistry registry;
-    registry.parseStyle("filter: drop-shadow(1 2)");
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", "drop-shadow(1 2)"),
+                ParseResultIs(true));
     const auto& shadow =
         (*registry.filter.getStoredValue()).front().get<FilterEffect::DropShadow>();
     EXPECT_EQ(shadow.offsetX, Lengthd(1, Lengthd::Unit::None));
