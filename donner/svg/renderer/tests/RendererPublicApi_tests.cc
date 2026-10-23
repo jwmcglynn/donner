@@ -2214,7 +2214,13 @@ TEST(RendererPublicApiTest, TextPathPairSplitMatchesUnsplitPixels) {
 }
 
 TEST(RendererPublicApiTest, TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank) {
-  SVGDocument invalid = ParseDocument(
+  auto loader = std::make_unique<ExternalUseResourceLoader>("unused");
+  const ExternalUseResourceLoader* observedLoader = loader.get();
+  SVGDocument::Settings settings;
+  settings.processingMode = ProcessingMode::SecureStatic;
+  settings.resourceLoader = std::move(loader);
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg"
         xmlns:xlink="http://www.w3.org/1999/xlink" width="192" height="96">
         <defs><path id="path1" d="M8 64H184"/></defs>
@@ -2222,7 +2228,10 @@ TEST(RendererPublicApiTest, TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank)
         <text font-family="Public Sans" font-size="32">
           <textPath path="q" xlink:href="path1">Must not render</textPath>
         </text>
-      </svg>)svg");
+      </svg>)svg",
+      warnings, parser::SVGParser::Options(), std::move(settings));
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument invalid = std::move(parsed.result());
   SVGDocument blank = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="192" height="96">
         <rect x="8" y="8" width="24" height="24" fill="#27ae60"/>
@@ -2231,6 +2240,9 @@ TEST(RendererPublicApiTest, TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank)
   editor::tests::CompareBitmapToBitmap(RenderPublicDocument(invalid), RenderPublicDocument(blank),
                                        "textpath-invalid-path-fragment-free-href",
                                        editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(observedLoader->requests(), testing::IsEmpty())
+      << "SecureStatic textPath resolution must not treat a fragment-free relative URL as the "
+         "in-document #path1 reference or fetch it as an admitted external SVG";
 }
 
 TEST(RendererPublicApiTest, TextPathStretchCurvedRenderingDiffersFromAlign) {
