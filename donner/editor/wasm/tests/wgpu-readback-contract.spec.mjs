@@ -81,6 +81,29 @@ const browserLibrarySource = await readFile(
   "utf8",
 );
 
+function productionPredicates(sourceText, prefix) {
+  const predicates = {};
+  const pattern = /EM_JS\(int, ([A-Za-z_][\w]*),\s*\(([\s\S]*?)\), \{([\s\S]*?)\n {6}\}\);/g;
+  for (const [, name, signature, body] of sourceText.matchAll(pattern)) {
+    if (!name.startsWith(prefix)) continue;
+    const parameters = signature.split(",").map((parameter) => parameter.trim().match(/[A-Za-z_]\w*$/)[0]);
+    predicates[name] = new Function(...parameters, body);
+  }
+  assert.ok(Object.keys(predicates).length > 0, `expected production ${prefix} predicates`);
+  return predicates;
+}
+
+const workerTimingPredicates = productionPredicates(renderCoordinatorSource, "WorkerResult");
+const workerFramePredicates = productionPredicates(workerBridgeSource, "WorkerFrame");
+
+function makeProductionPublisher(predicates, ...signatureAndBody) {
+  const body = signatureAndBody.pop();
+  return new Function(
+    ...Object.keys(predicates),
+    `return function(${signatureAndBody.join(",")}) {${body}\n};`,
+  )(...Object.values(predicates));
+}
+
 function extractAsyncFunction(sourceText, functionName) {
   const signature = `async function ${functionName}(`;
   const start = sourceText.indexOf(signature);
@@ -508,7 +531,7 @@ test("worker poll timestamps retain their producer clock across delayed proxy de
     /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
   )[0];
   const body = publisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
-  const publish = new Function(
+  const publish = makeProductionPublisher(workerTimingPredicates,
     "window",
     "$0",
     "$1",
@@ -623,7 +646,7 @@ test("the first canvas frame after a polled result must carry that result", () =
     "surfacePresented",
     statsHelper[1],
   );
-  const publish = new Function(
+  const publish = makeProductionPublisher(workerFramePredicates,
     "window",
     "performance",
     "RecordPresentedDocumentFrameStats",
@@ -828,7 +851,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
   assert.ok(timingPublisher);
   assert.ok(acceptedPublisher);
   const body = (method) => method.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
-  const publishTiming = new Function(
+  const publishTiming = makeProductionPublisher(workerTimingPredicates,
     "window",
     "$0",
     "$1",
@@ -1656,4 +1679,32 @@ test("selection chrome probe refreshes stale captures without flooding pending r
       }
     });
   }
+});
+
+
+test("production worker boundary predicates reject missing and unsafe identities", () => {
+  const known = workerTimingPredicates.WorkerResultBoundaryKnown;
+  for (const [supplied, sequence, producer, capture, expected] of [
+    [true, 0, 0, 1, true],
+    [false, 0, 0, 1, false],
+    [true, -1, 0, 1, false],
+    [true, Number.NaN, 0, 1, false],
+    [true, Number.MAX_SAFE_INTEGER + 1, 0, 1, false],
+    [true, 1, Number.POSITIVE_INFINITY, 1, false],
+    [true, 1, 0, 0, false],
+    [true, 1, 0, Number.MAX_SAFE_INTEGER + 1, false],
+  ]) {
+    assert.equal(Boolean(known(supplied, sequence, producer, capture)), expected);
+  }
+  const completion = workerFramePredicates.WorkerFrameBoundaryKnown;
+  assert.equal(Boolean(completion(true, 0, 0)), false);
+  assert.equal(Boolean(completion(true, 1, 0)), true);
+  assert.equal(Boolean(completion(true, 1, -1)), false);
+  assert.equal(Boolean(completion(true, Number.NaN, 0)), false);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameSameProducer(false, 1, 1)), false);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameSameProducer(true, 1, 2)), false);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameEligible(true, true, 2, 1)), true);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameEligible(true, true, 1, 1)), false);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameEligible(false, true, 2, 1)), false);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameIdentityMatches(1, 2, 3, 1, 2, 4)), false);
 });

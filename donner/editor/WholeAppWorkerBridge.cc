@@ -1476,6 +1476,32 @@ EM_JS(void, RecordPresentedDocumentFrameStats,
       });
 // clang-format on
 
+// Pure scalar predicates keep completion attribution separate from its accounting effects.
+// clang-format off
+EM_JS(int, WorkerFrameBoundaryKnown,
+      (int supplied, double admissionSequence, double producerGeneration), {
+        return Boolean(supplied) && Number.isSafeInteger(admissionSequence) && admissionSequence > 0 &&
+            Number.isSafeInteger(producerGeneration) && producerGeneration >= 0;
+      });
+
+EM_JS(int, WorkerFrameSameProducer,
+      (int boundaryKnown, double expectedGeneration, double completedGeneration), {
+        return Boolean(boundaryKnown) && Object.is(expectedGeneration, completedGeneration);
+      });
+
+EM_JS(int, WorkerFrameIdentityMatches,
+      (double expectedDocument, double expectedVersion, double expectedCapture,
+       double completedDocument, double completedVersion, double completedCapture), {
+        return Object.is(expectedDocument, completedDocument) &&
+            Object.is(expectedVersion, completedVersion) && Object.is(expectedCapture, completedCapture);
+      });
+
+EM_JS(int, WorkerFrameEligible,
+      (int currentProducer, int sameProducer, double admissionSequence, double boundarySequence), {
+        return Boolean(currentProducer) && Boolean(sameProducer) && admissionSequence > boundarySequence;
+      });
+// clang-format on
+
 void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
                                    bool surfacePresented, std::uint64_t admissionSequence,
                                    std::uint64_t producerGeneration, std::uint64_t captureId,
@@ -1488,13 +1514,14 @@ void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64
         if (!stats || stats['publishReason'] !== 'render-result' || stats['resultFramePresented']) {
           return;
         }
-        const boundaryKnown = stats['presentationBoundaryKnown'] === true &&
-            Number.isSafeInteger($4) && $4 > 0 && Number.isSafeInteger($5) && $5 >= 0;
-        const sameProducer = boundaryKnown &&
-            Object.is(stats['presentationProducerGeneration'], $5);
-        const eligible = Boolean($7) && sameProducer && $4 > stats['presentationAdmissionSequence'];
-        const matches = sameProducer && Object.is(stats['documentGeneration'], $0) &&
-            Object.is(stats['frameVersion'], $1) && Object.is(stats['captureId'], $6);
+        const boundaryKnown = Boolean(WorkerFrameBoundaryKnown(
+            stats['presentationBoundaryKnown'] === true, $4, $5));
+        const sameProducer = Boolean(WorkerFrameSameProducer(
+            boundaryKnown, stats['presentationProducerGeneration'], $5));
+        const eligible = Boolean(WorkerFrameEligible(
+            $7, sameProducer, $4, stats['presentationAdmissionSequence']));
+        const matches = sameProducer && Boolean(WorkerFrameIdentityMatches(
+            stats['documentGeneration'], stats['frameVersion'], stats['captureId'], $0, $1, $6));
         if (!boundaryKnown) {
           stats['presentationBoundaryUnknown'] = true;
           stats['unattributedFramesCompleted'] = (stats['unattributedFramesCompleted'] | 0) + 1;

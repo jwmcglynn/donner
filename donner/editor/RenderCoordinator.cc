@@ -55,6 +55,31 @@ const char* GpuWaitTimeoutSiteName(svg::GpuWaitTimeoutSite site) {
   return "unknown";
 }
 
+struct WorkerTilePayloadCounts {
+  int bitmap = 0;
+  int texture = 0;
+};
+
+WorkerTilePayloadCounts CountWorkerTilePayloads(const RenderResult& result) {
+  WorkerTilePayloadCounts counts;
+  if (result.compositedPreview) {
+    for (const auto& tile : result.compositedPreview->tiles) {
+      counts.bitmap += !tile.bitmap.empty();
+      counts.texture += tile.textureSnapshot != nullptr;
+    }
+  }
+  return counts;
+}
+
+// clang-format off
+EM_JS(int, WorkerResultBoundaryKnown,
+      (int supplied, double admissionSequence, double producerGeneration, double captureId), {
+        return Boolean(supplied) && Number.isSafeInteger(admissionSequence) && admissionSequence >= 0 &&
+            Number.isSafeInteger(producerGeneration) && producerGeneration >= 0 &&
+            Number.isSafeInteger(captureId) && captureId > 0;
+      });
+// clang-format on
+
 // Proxied to the browser main thread: the render pthread has no `window`.
 // Numeric values ride an owned heap buffer because EM_ASM argument substitution stops at $15.
 // Each asynchronous proxy owns its buffer until the main thread copies and frees it, so a later
@@ -67,14 +92,7 @@ void PublishWorkerTimingStats(
     std::optional<std::uint64_t> presentationProducerGeneration) {
   const auto& timing = result.workerTiming;
   constexpr std::size_t kValueCount = 45;
-  int bitmapPayloadTiles = 0;
-  int texturePayloadTiles = 0;
-  if (result.compositedPreview) {
-    for (const auto& tile : result.compositedPreview->tiles) {
-      bitmapPayloadTiles += !tile.bitmap.empty();
-      texturePayloadTiles += tile.textureSnapshot != nullptr;
-    }
-  }
+  const WorkerTilePayloadCounts payloadCounts = CountWorkerTilePayloads(result);
   const double values[kValueCount] = {
       result.workerMs,
       timing.queueWaitMs,
@@ -99,8 +117,8 @@ void PublishWorkerTimingStats(
       static_cast<double>(compositorStats.offscreenRecycleTotal),
       static_cast<double>(timing.readbackCount),
       static_cast<double>(timing.readbackPollIterations),
-      timing.usedTimedWaitAny ? 1.0 : 0.0,
-      timing.deviceLost ? 1.0 : 0.0,
+      static_cast<double>(timing.usedTimedWaitAny),
+      static_cast<double>(timing.deviceLost),
       static_cast<double>(timing.timedOutWaitMs),
       static_cast<double>(result.documentGeneration),
       static_cast<double>(result.version),
@@ -108,14 +126,14 @@ void PublishWorkerTimingStats(
       static_cast<double>(app.document().document().sourceVersion()),
       static_cast<double>(app.undoTimeline().entryCount()),
       static_cast<double>(timing.fullCanvasTextureAllocationFailureCount),
-      timing.nothingToPresent ? 1.0 : 0.0,
+      static_cast<double>(timing.nothingToPresent),
       timing.documentWriteLockMs,
       static_cast<double>(result.presentationRepairReason),
       static_cast<double>(timing.compositorReadbackCount),
       static_cast<double>(timing.tileHandoffReadbackCount),
       static_cast<double>(timing.finalSnapshotReadbackCount),
-      static_cast<double>(bitmapPayloadTiles),
-      static_cast<double>(texturePayloadTiles),
+      static_cast<double>(payloadCounts.bitmap),
+      static_cast<double>(payloadCounts.texture),
       timing.polledAtEpochMs,
       timing.idleYieldMs,
       timing.idleCallbackMs,
@@ -207,8 +225,7 @@ void PublishWorkerTimingStats(
           stats[total] = Number(previous[total] || 0) + Number(stats[count]);
         }
         stats['publicationDelayMs'] = Math.max(0, performance.now() - stats['publishedAtMs']);
-        stats['presentationBoundaryKnown'] = Boolean($3) && Number.isSafeInteger($4) && $4 >= 0 &&
-            Number.isSafeInteger($5) && $5 >= 0 && Number.isSafeInteger($6) && $6 > 0;
+        stats['presentationBoundaryKnown'] = Boolean(WorkerResultBoundaryKnown($3, $4, $5, $6));
         stats['presentationAdmissionSequence'] = $4;
         stats['presentationProducerGeneration'] = $5;
         stats['captureId'] = $6;

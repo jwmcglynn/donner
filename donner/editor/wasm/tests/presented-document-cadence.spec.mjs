@@ -21,6 +21,14 @@ function recorder() {
     window,
     performance: { timeOrigin: 1000, now: () => 1000000 },
   };
+  const predicates = /EM_JS\(int, (WorkerFrame\w+),\s*\(([\s\S]*?)\), \{([\s\S]*?)\n {6}\}\);/g;
+  let predicateCount = 0;
+  for (const [, name, signature, predicateBody] of source.matchAll(predicates)) {
+    const parameters = signature.split(",").map((parameter) => parameter.trim().match(/[A-Za-z_]\w*$/)[0]);
+    context[name] = vm.runInNewContext(`(function(${parameters.join(",")}) {${predicateBody}\n})`, context);
+    ++predicateCount;
+  }
+  assert.ok(predicateCount >= 4, "production completion predicates");
   context.RecordPresentedDocumentFrameStats = vm.runInNewContext(
     `(function(documentGeneration, frameVersion, presentedAtEpochMs, surfacePresented) {${statsBody[1]}\n})`,
     context,
