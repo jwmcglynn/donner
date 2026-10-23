@@ -1965,11 +1965,12 @@ TEST(PropertyRegistry, CircleClipStyleAndPresentationGrammarStayDistinct) {
   PropertyRegistry registry;
   registry.parseStyle("clip-path:url(#clip);clip-path:circle(4)");
   EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
-  EXPECT_EQ(registry.parsePresentationAttribute("clip-path", "circle(4)"), std::nullopt);
+  PropertyRegistry presentation;
+  EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "circle(4)"), NoParseError());
   CircleClipPath expected;
   expected.radiusType = CircleClipPath::Radius::Length;
   expected.radius = Lengthd(4);
-  EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(expected)));
+  EXPECT_THAT(presentation.clipPath.get(), Optional(ClipPath(expected)));
 }
 
 TEST(PropertyRegistry, InvalidClipDeclarationsPreserveTheEarlierValue) {
