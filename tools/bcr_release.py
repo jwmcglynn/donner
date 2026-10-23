@@ -7,6 +7,7 @@ import argparse
 import base64
 from datetime import timedelta
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -313,11 +314,27 @@ def verify_generated_entry(registry: Path, source: Path, version: str, sha256: s
     verify_metadata_history(registry, metadata_file, versions, yanked, template, version)
 
 
-# The identity of the proposed registry commit. Hooks and signing stay off so runner
-# configuration cannot change the committed bytes.
+# Keep the automation committer explicit and disable runner hooks and signing.
 SUBMISSION_COMMIT_CONFIG = ("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                             "-c", "user.name=Donner release",
                             "-c", "user.email=donner-release@users.noreply.github.com")
+
+
+def submission_author(source: Path) -> str:
+    """Return the single declared maintainer's validated Git author identity."""
+    metadata = json.loads((source / ".bcr/metadata.template.json").read_text(encoding="utf-8"))
+    maintainers = metadata.get("maintainers")
+    if not isinstance(maintainers, list) or len(maintainers) != 1 or not isinstance(maintainers[0], dict):
+        raise ValueError("registry submission needs exactly one declared maintainer author")
+    name = maintainers[0].get("name")
+    email = maintainers[0].get("email")
+    if (not isinstance(name, str) or not 0 < len(name) <= 128 or name != name.strip() or
+            not re.fullmatch(r"[^<>\x00-\x1f\x7f]+", name)):
+        raise ValueError("registry maintainer author has an invalid name")
+    if (not isinstance(email, str) or len(email) > 254 or
+            not re.fullmatch(r"[^<>\s@\x00-\x1f\x7f]+@[^<>\s@\x00-\x1f\x7f]+", email)):
+        raise ValueError("registry maintainer author has an invalid email")
+    return f"{name} <{email}>"
 
 
 def submission_branch(tag: str, version: str) -> str:
@@ -347,10 +364,14 @@ def bundle_entry(registry: Path, source: Path, tag: str, version: str, approved_
     """
     branch = submission_branch(tag, version)
     verify_generated_entry(registry, source, version, approved_sha256, validated)
+    author = submission_author(source)
     tree = _registry_value(registry, "write-tree")
     base = _registry_value(registry, "rev-parse", "HEAD")
     _registry_git(registry, "checkout", "-b", branch)
-    _registry_git(registry, *SUBMISSION_COMMIT_CONFIG, "commit", "-m", f"Publish donner@{version}")
+    subprocess.run(["git", "-C", str(registry), *SUBMISSION_COMMIT_CONFIG, "commit",
+                    f"--author={author}", "-m", f"Publish donner@{version}"], check=True,
+                   env={**os.environ, "GIT_COMMITTER_NAME": "Donner release",
+                        "GIT_COMMITTER_EMAIL": "donner-release@users.noreply.github.com"})
     commit = _registry_value(registry, "rev-parse", "HEAD")
     if _registry_value(registry, "rev-parse", "HEAD^{tree}") != tree:
         raise ValueError("proposed registry commit does not hold the verified tree")

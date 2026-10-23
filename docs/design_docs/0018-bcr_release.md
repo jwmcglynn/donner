@@ -216,6 +216,12 @@ consumer, CLI build, verification and explain-missing-cli), whose command sequen
 - Repair a registry-only error in its existing BCR PR when the released bytes are correct. Keep
   integrity and source refs intact. A source change requires the normal new-release process.
 
+The registry submission commit records the sole maintainer's name and email from the approved
+source's `.bcr/metadata.template.json` as its author, and automation as its committer. Missing,
+ambiguous or malformed author metadata stops preparation before a branch is created. Ambient Git
+author/committer identities cannot substitute for these declared identities. The author must be
+covered by the upstream CLA; successful preparation alone does not establish CLA acceptance.
+
 ### Maintainer setup
 
 1. Maintain the fork `jwmcglynn/bazel-central-registry`.

@@ -5,6 +5,7 @@ from contextlib import chdir
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -696,7 +697,8 @@ class GeneratedEntryFixture:
         (self.source / "MODULE.bazel").write_text("module(name='donner')\n", encoding="utf-8")
         (self.source / ".bcr/presubmit.yml").write_text("tasks: []\n", encoding="utf-8")
         template = {"homepage": "https://github.com/jwmcglynn/donner",
-                    "maintainers": [{"github": "jwmcglynn"}],
+                    "maintainers": [{"github": "jwmcglynn", "name": "Module Maintainer",
+                                     "email": "maintainer@example.com"}],
                     "repository": ["github:jwmcglynn/donner"],
                     "versions": [], "yanked_versions": {}}
         (self.source / ".bcr/metadata.template.json").write_text(json.dumps(template), encoding="utf-8")
@@ -884,7 +886,8 @@ class EntryBundleTest(GeneratedEntryFixture, unittest.TestCase):
             registry + ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                         "-c", "user.name=Donner release",
                         "-c", "user.email=donner-release@users.noreply.github.com",
-                        "commit", "-m", "Publish donner@1.0.0"],
+                        "commit", "--author=Module Maintainer <maintainer@example.com>",
+                        "-m", "Publish donner@1.0.0"],
             registry + ["rev-parse", "HEAD"],
             registry + ["rev-parse", "HEAD^{tree}"],
             registry + ["bundle", "create", str(self.bundle), "refs/heads/" + SUBMISSION_BRANCH,
@@ -906,10 +909,54 @@ class EntryBundleTest(GeneratedEntryFixture, unittest.TestCase):
         self.assertEqual(self.git(self.registry, "rev-parse", commit + "^{tree}"), tree)
         self.assertEqual(
             self.git(self.registry, "log", "-1", "--format=%an <%ae>|%cn <%ce>|%B", commit),
-            "Donner release <donner-release@users.noreply.github.com>|"
+            "Module Maintainer <maintainer@example.com>|"
             "Donner release <donner-release@users.noreply.github.com>|Publish donner@1.0.0")
         self.assertEqual(self.git(self.registry, "bundle", "list-heads", str(self.bundle)),
                          "%s refs/heads/%s" % (commit, SUBMISSION_BRANCH))
+
+    def test_declared_author_and_automation_committer_override_ambient_identity(self):
+        with mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "Ambient Author",
+                                         "GIT_AUTHOR_EMAIL": "ambient@example.com",
+                                         "GIT_COMMITTER_NAME": "Ambient Committer",
+                                         "GIT_COMMITTER_EMAIL": "committer@example.com"}):
+            outputs = self.bundle_entry()
+        self.assertEqual(self.git(self.registry, "log", "-1", "--format=%an <%ae>|%cn <%ce>",
+                                  outputs["commit"]),
+                         "Module Maintainer <maintainer@example.com>|"
+                         "Donner release <donner-release@users.noreply.github.com>")
+
+    def assert_author_refused_before_commit(self, maintainers):
+        path = self.source / ".bcr/metadata.template.json"
+        template = json.loads(path.read_text())
+        template["maintainers"] = maintainers
+        path.write_text(json.dumps(template))
+        (self.registry / "modules/donner/metadata.json").write_bytes(
+            release.bcr_source.derive_metadata(None, template, "1.0.0"))
+        self.stage_validated()
+        base = self.git(self.registry, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(ValueError, "maintainer author"):
+            self.bundle_entry()
+        self.assertEqual(self.git(self.registry, "rev-parse", "HEAD"), base)
+        self.assertEqual(self.git(self.registry, "branch", "--list", SUBMISSION_BRANCH), "")
+        self.assertFalse(self.bundle.exists())
+
+    def test_missing_author_is_refused_before_branch_or_commit(self):
+        self.assert_author_refused_before_commit([])
+
+    def test_ambiguous_authors_are_refused_before_branch_or_commit(self):
+        author = {"name": "Module Maintainer", "email": "maintainer@example.com"}
+        self.assert_author_refused_before_commit([author, author])
+
+    def test_control_characters_in_author_are_refused_before_commit(self):
+        self.assert_author_refused_before_commit([
+            {"name": "Module\nMaintainer", "email": "maintainer@example.com"}])
+
+    def test_malformed_email_is_refused_before_commit(self):
+        self.assert_author_refused_before_commit([{"name": "Module Maintainer", "email": "invalid"}])
+
+    def test_control_characters_in_email_are_refused_before_commit(self):
+        self.assert_author_refused_before_commit([
+            {"name": "Module Maintainer", "email": "maintainer\x00@example.com"}])
 
     def test_bundle_entry_commits_nothing_for_an_unverified_entry_or_another_tag(self):
         base = self.git(self.registry, "rev-parse", "HEAD")
