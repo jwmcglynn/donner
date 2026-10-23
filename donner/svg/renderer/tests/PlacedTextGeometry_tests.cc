@@ -288,8 +288,7 @@ TEST(PlacedTextGeometryTest, StretchSplitsUniformlyTinyQuadraticXExtremum) {
 TEST(PlacedTextGeometryTest, StretchRejectsOverflowingExtremaNormalization) {
   const Path route = PathBuilder()
                          .moveTo(Vector2d(0.0, 0.0))
-                         .curveTo(Vector2d(0.0, 10.0), Vector2d(20.0, 10.0),
-                                  Vector2d(20.0, 0.0))
+                         .curveTo(Vector2d(0.0, 10.0), Vector2d(20.0, 10.0), Vector2d(20.0, 0.0))
                          .build();
   const double maximum = std::numeric_limits<double>::max();
   const Path outline = PathBuilder()
