@@ -4197,6 +4197,35 @@ TEST_F(TextEditorTests, FocusReferenceConnectorTargetsSelectorChipByRangeStart) 
   ExpectFocusReferenceArrowMatchesTangent(link);
 }
 
+TEST_F(TextEditorTests, SelectorRopeEndpointsStayAtChipsDuringAnnotationRefresh) {
+  editor.setText(".hit { fill: red; }\n\n\n<rect class=\"hit\"/>\n");
+  editor.beginSourceStyleDecorationRefresh(1, 0);
+  editor.setSourceStyleDecorations({TextEditor::SourceStyleDecoration{
+      .id = 95,
+      .range = SourceByteRange{.start = 7, .end = 16},
+      .chipRange = SourceByteRange{.start = 0, .end = 4},
+      .showChip = true,
+      .chipCount = 1,
+  }});
+  const FocusReferenceLink link{.from = SourcePoint{.line = 3, .column = 13},
+                                 .to = SourcePoint{.line = 0, .column = 0}};
+  editor.setFocusPartition(FocusPartition{.fullColor = {LineRange{.startLine = 0, .endLine = 4}},
+                                          .referenceLinks = {link}});
+  RenderEditorFrame(ImVec2(360, 120));
+  const auto before = FocusReferenceLayout(link, 0);
+  ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(before->hasSourceStyleChip);
+  editor.beginSourceStyleDecorationRefresh(1, 0);
+  RenderEditorFrame(ImVec2(360, 120));
+  const auto pending = FocusReferenceLayout(link, 0);
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_FLOAT_EQ(pending->start.x, before->start.x);
+  EXPECT_FLOAT_EQ(pending->start.y, before->start.y);
+  EXPECT_FLOAT_EQ(pending->tip.x, before->tip.x);
+  EXPECT_FLOAT_EQ(pending->tip.y, before->tip.y);
+  EXPECT_EQ(SourceStyleChipHitRectCount(), 0u);
+}
+
 TEST_F(TextEditorTests, FocusReferenceSourceUnderlineHandlesDelimitersAndInvalidPositions) {
   editor.setText("fill=\"url(#grad)\";\n\n");
   RenderEditorFrame(ImVec2(420.0f, 120.0f));
