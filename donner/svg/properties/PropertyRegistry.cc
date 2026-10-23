@@ -1079,7 +1079,8 @@ ParseResult<std::optional<ClipPath>> ParseClipPathValue(
     const parser::PropertyParseFnParams& params) {
   using Result = std::optional<ClipPath>;
   const auto components = params.components();
-  if (const auto ident = TryGetSingleIdent(components); ident && ident->equalsLowercase("none")) {
+  if (const auto ident = parser::TryGetSingleIdent(components);
+      ident && ident->equalsLowercase("none")) {
     return Result();
   }
   if (components.empty()) {
