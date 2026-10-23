@@ -304,6 +304,7 @@ TEST(CompositorVerificationTest, LimitedCachedDiagnosticIsInconclusiveAndPreserv
 #if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
   EXPECT_EXIT(
       {
         SVGDocument document = MakeVerificationDocument();
@@ -328,6 +329,7 @@ TEST(CompositorVerificationTest, LimitedCachedReuseRemainsInconclusiveAfterBudge
 #if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
   EXPECT_EXIT(
       {
         SVGDocument document = MakeVerificationDocument();
@@ -460,6 +462,7 @@ TEST_P(CompositorVerificationCancellationTest,
 #if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
   EXPECT_EXIT(
       {
         SVGDocument document = MakeVerificationDocument();
@@ -502,6 +505,8 @@ TEST(CompositorVerificationTest, CompletePixelMismatchRemainsFatal) {
 #if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
+  // Re-exec before touching Metal instead of inheriting an initialized device across fork.
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
   EXPECT_DEATH(
       {
         SVGDocument document = MakeVerificationDocument();
