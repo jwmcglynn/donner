@@ -336,7 +336,7 @@ TEST_F(RendererRegressionTests, ReferenceContractRadialNegativeRadiiDoNotPaint) 
       RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
   ExpectVisibleBitmap(expected, "radial_negative_sibling_visible");
   for (std::string_view attribute :
-       {R"(r="-0.25")", R"(fr="-0.25")", R"(r="0" fr="-0.25")", R"(r="-1e-12")"}) {
+       {R"(r="-0.25")", R"(fr="-0.25")", R"(r="0" fr="-0.25")", R"(r="-1e-20")"}) {
     SCOPED_TRACE(attribute);
     ExpectBitmapsIdentical(RenderReferenceRadial(attribute), expected, "negative_radius_no_paint");
   }
@@ -348,7 +348,7 @@ TEST_F(RendererRegressionTests, ReferenceContractRadialNegativeRadiiDoNotPaint) 
 TEST_F(RendererRegressionTests, ReferenceContractRadialSingleStopNegativeRadiiDoNotPaint) {
   const auto expected =
       RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
-  for (std::string_view attribute : {R"(r="-0.25")", R"(fr="-0.25")", R"(r="-1e-12")"}) {
+  for (std::string_view attribute : {R"(r="-0.25")", R"(fr="-0.25")", R"(r="-1e-20")"}) {
     SCOPED_TRACE(attribute);
     ExpectBitmapsIdentical(RenderReferenceRadial(attribute, true), expected,
                            "single_stop_negative_radius_no_paint");
