@@ -978,6 +978,7 @@ void TextEditor::rebuildVisualLines(const ImVec2& contentSize) {
     return;
   }
 
+  ++visualLayoutBuildCount_;
   visualLayoutMaxColumns_ = maxColumns;
   visualLines_.clear();
   for (int lineNo = 0; lineNo < text_.getTotalLines(); ++lineNo) {

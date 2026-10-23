@@ -1391,6 +1391,7 @@ private:
   };
   std::vector<VisualLine> visualLines_;
   int visualLayoutMaxColumns_ = 0;
+  std::size_t visualLayoutBuildCount_ = 0;
 
   struct FocusReferenceLinkLess {
     bool operator()(const FocusReferenceLink& lhs, const FocusReferenceLink& rhs) const {
