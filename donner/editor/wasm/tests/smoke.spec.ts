@@ -1,3 +1,6 @@
+import { installOwnerEventTimerHold, readOwnerEventTimerHold, releaseOwnerEventTimerHold } from "./event-presentation-delay.mjs";
+import { completedResultHandoff } from "./completed-result-handoff.mjs";
+import { packageHashes } from "./package-identity.mjs";
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
@@ -2005,9 +2008,20 @@ for (
       y: 282,
       holdWorkerRaf: true,
     },
+    {
+      id: "basic-shapes",
+      name: "Basic Shapes with delayed presentation control",
+      xFraction: 0.76,
+      y: 282,
+      holdWorkerRaf: true,
+      delayPresentation: true,
+    },
   ] as const
 ) {
-  test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page }) => {
+  test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page, browserName }, testInfo) => {
+    const delayedControl = "delayPresentation" in sample;
+    test.skip(delayedControl && browserName !== "chromium", "controlled Chromium scheduling fault");
+    let presentationFault: { delayMs: number; requested: number; flushed: number } | undefined;
     const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
     const canvas = page.locator("canvas#canvas");
     const bounds = await canvas.boundingBox();
@@ -2086,15 +2100,30 @@ for (
         message: "the sample's finished render is held once driven ticks have drained",
         timeout: scaledMs(3000),
       }).toBe("holding");
-      expect(await completionBarrier(page, "release"), "the finished render was still held")
-        .toBe("holding");
+      if (delayedControl) {
+        const owner = await boundBrowserDiagnostic(Promise.any(page.workers().map(async (worker) => {
+          await worker.evaluate(installOwnerEventTimerHold);
+          return worker;
+        })), 2000);
+        if (!owner) throw new Error("the GPU owner did not acknowledge the event-task hold");
+        try {
+          expect(await completionBarrier(page, "release"), "the finished render was still held")
+            .toBe("holding");
+          await expect.poll(async () => (await owner.evaluate(readOwnerEventTimerHold))?.pending ?? 0,
+            { message: "the completed result must request a held event task" }).toBeGreaterThan(0);
+          await page.waitForTimeout(1500);
+        } finally {
+          const released = await owner.evaluate(releaseOwnerEventTimerHold);
+          presentationFault = { delayMs: 1500, ...released };
+        }
+        expect(presentationFault.flushed).toBeGreaterThan(0);
+      } else {
+        expect(await completionBarrier(page, "release"), "the finished render was still held")
+          .toBe("holding");
+      }
     }
-    // The poll below only bounds a hang. How long the completed result takes to reach the canvas
-    // is not a correctness property here: right after boot the GPU can still be executing earlier
-    // work, such as the carousel thumbnails' first use of their render pipelines, and a frame
-    // cannot present before the in-order GPU queue retires the frames ahead of it. That wait is
-    // GPU throughput and belongs to a performance lane. What this test owns is ordering: once the
-    // result is polled, the first frame that reaches the canvas carries it.
+    // Ordering and the separately named nominal performance gate retain the raw GPU backlog.
+    // A controlled negative case delays owner event tasks only after its render is finished.
     const phaseTimings: {
       activatedMs?: number;
       submittedMs?: number;
@@ -2129,6 +2158,7 @@ for (
         activeSample: window.__donnerActiveSampleStats,
         frames: window.__donnerMainLoopRenderedFrames || 0,
         worker: window.__donnerWorkerStats,
+        documentPresentation: window.__donnerPresentedDocumentStats,
       }));
       lastPresentationState = state;
       if (state.activeSample?.sampleId === sample.id) {
@@ -2143,21 +2173,16 @@ for (
         phaseTimings.dequeuedMs = phaseTimings.startedMs - state.worker.dequeueToStartMs;
         phaseTimings.submittedMs = phaseTimings.dequeuedMs - state.worker.queueWaitMs;
       }
-      // The presenting frame is the one that polled the result off the
-      // worker: the editor stamps that result's stats with 'presentedAtMs'
-      // when the frame that consumed it finishes. Both ends of the handoff
-      // are product-published page-clock timestamps, so this measurement no
-      // longer depends on how late the test's own poll runs on a loaded
-      // runner - poll scheduling latency used to inflate the handoff by
-      // whole poll periods and fail the promptness gate below against a
-      // presentation that was actually on time.
+      // Match GPU-complete document telemetry; CPU frame acceptance can precede its retirement.
       const pixelsPresented = state.activeSample?.sampleId === sample.id
         && completedResults > beforeSample
         && state.frames > beforeFrames
-        && state.worker?.presentedAtMs !== undefined
-        && state.worker?.resultFramePresented === true;
+        && state.worker?.resultFramePresented === true
+        && state.documentPresentation?.documentGeneration === state.worker.documentGeneration
+        && state.documentPresentation?.frameVersion === state.worker.frameVersion
+        && Number.isFinite(state.documentPresentation?.lastPresentedAtMs);
       if (pixelsPresented) {
-        phaseTimings.presentedMs ??= state.worker!.presentedAtMs! - clickStartedAt;
+        phaseTimings.presentedMs ??= state.documentPresentation!.lastPresentedAtMs - clickStartedAt;
       }
       return pixelsPresented;
     };
@@ -2256,6 +2281,23 @@ for (
     }
     expect(phaseTimings.presentedMs).toBeDefined();
     expect(phaseTimings.completedMs).toBeDefined();
+    if (browserName === "chromium" || holdsScheduledFrames) {
+      const handoff = completedResultHandoff(phaseTimings.completedMs, phaseTimings.presentedMs);
+      const runtime = await page.evaluate(() => ({
+        backend: window.__donnerBackend,
+        viewport: { width: innerWidth, height: innerHeight },
+        dpr: devicePixelRatio,
+      }));
+      const report = { workload: sample.id, heldWorkerRaf: holdsScheduledFrames, browser: browserName,
+        ...runtime, ...packageHashes(), ...handoff, phaseTimings, presentationFault,
+        worker: completedWorkerStats };
+      const reportPath = testInfo.outputPath("nominal-completed-result-handoff.json");
+      await writeFile(reportPath, JSON.stringify(report, null, 2));
+      await testInfo.attach("nominal-completed-result-handoff", { path: reportPath,
+        contentType: "application/json" });
+      expect(handoff.withinLimit, `nominal completed-result handoff: ${JSON.stringify(report)}`)
+        .toBe(!delayedControl);
+    }
     expect(
       completedWorkerStats?.postPollFramesCompletedWithoutResult,
       `a post-poll admitted frame omitted the completed capture: ${JSON.stringify(completedWorkerStats)}`,
