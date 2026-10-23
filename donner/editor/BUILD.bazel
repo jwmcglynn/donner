@@ -311,6 +311,12 @@ objc_library(
 )
 
 donner_cc_library(
+    name = "browser_file_dialog",
+    srcs = ["BrowserFileDialog.cc"],
+    hdrs = ["BrowserFileDialog.h"],
+)
+
+donner_cc_library(
     name = "file_dialog_state",
     srcs = ["FileDialogState.cc"],
     hdrs = ["FileDialogState.h"],
@@ -1231,6 +1237,7 @@ donner_cc_library(
     }),
     deps = [
         ":attribute_writeback",
+        ":browser_file_dialog",
         ":canvas_scrollbars",
         ":clipboard_interface",
         ":compositor_debug_panel",

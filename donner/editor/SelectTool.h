@@ -186,6 +186,18 @@ public:
   /// held after a `onMouseDown` that hit empty space).
   [[nodiscard]] bool isMarqueeing() const { return marqueeState_.has_value(); }
 
+  /// Discard an unfinished marquee when a host dialog takes over pointer input.
+  void cancelMarquee() { marqueeState_.reset(); }
+
+  /// Drop gestures and writeback targets belonging to the document being replaced.
+  void resetForLoadedDocument() {
+    dragState_.reset();
+    marqueeState_.reset();
+    completedDragWriteback_.reset();
+    lockedFlashElement_.reset();
+    lockedFlashRemainingSeconds_ = 0.0f;
+  }
+
   /// Start a marquee drag from `documentPoint` without performing a hit-test.
   void beginMarquee(EditorApp& editor, const Vector2d& documentPoint, bool additive);
 

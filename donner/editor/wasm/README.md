@@ -7,6 +7,12 @@ inside the module. Native editors embed the same catalog WOFF2 bytes and decode
 in memory; they need no companion font files, network connection, or writable
 font cache.
 
+File > Open uses the browser's native file picker. Save and Save As use a native
+save picker when the browser supports writable file handles; other browsers download
+an SVG. A cancelled picker leaves the current document unchanged, and failed writes
+leave it unsaved. Opening and saving accept SVG text up to 8 MiB. Exporting a viewport
+keeps the document's original save destination.
+
 Build the complete bundle with:
 
 ```sh

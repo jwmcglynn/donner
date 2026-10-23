@@ -4208,7 +4208,7 @@ TEST_F(TextEditorTests, SelectorRopeEndpointsStayAtChipsDuringAnnotationRefresh)
       .chipCount = 1,
   }});
   const FocusReferenceLink link{.from = SourcePoint{.line = 3, .column = 13},
-                                 .to = SourcePoint{.line = 0, .column = 0}};
+                                .to = SourcePoint{.line = 0, .column = 0}};
   editor.setFocusPartition(FocusPartition{.fullColor = {LineRange{.startLine = 0, .endLine = 4}},
                                           .referenceLinks = {link}});
   RenderEditorFrame(ImVec2(360, 120));

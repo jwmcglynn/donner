@@ -1,5 +1,5 @@
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
 import { join } from "node:path";
 import {
@@ -5522,20 +5522,26 @@ test("browser File Open uses the native file picker", async ({ page }) => {
     state.__filePickerCalls = 0;
     state.showOpenFilePicker = async () => {
       state.__filePickerCalls!++;
+      if (!navigator.userActivation.isActive) throw new Error("Open lost user activation");
       return [{
         name: "picked-art.svg",
-        getFile: async () => new File([
-          '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="260"><rect id="picked" x="40" y="40" width="140" height="90" fill="lime"/></svg>',
-        ], "picked-art.svg", { type: "image/svg+xml" }),
+        getFile: async () =>
+          new File(
+            [
+              "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"260\"><rect id=\"picked\" x=\"40\" y=\"40\" width=\"140\" height=\"90\" fill=\"lime\"/></svg>",
+            ],
+            "picked-art.svg",
+            { type: "image/svg+xml" },
+          ),
       }];
     };
   });
   await openEditor(page, { postInitializationDwellMs: 0 });
   await page.locator("canvas#canvas").focus();
   await page.keyboard.press("Control+o");
-  await expect.poll(() => page.evaluate(() =>
-    (window as Window & { __filePickerCalls?: number }).__filePickerCalls
-  )).toBe(1);
+  await expect.poll(() =>
+    page.evaluate(() => (window as Window & { __filePickerCalls?: number }).__filePickerCalls)
+  ).toBe(1);
   await expect(page).toHaveTitle(/picked-art\.svg/);
 });
 
@@ -5549,6 +5555,7 @@ test("browser Save As writes through the native save picker", async ({ page }) =
     state.__savePickerCalls = 0;
     state.showSaveFilePicker = async () => {
       state.__savePickerCalls!++;
+      if (!navigator.userActivation.isActive) throw new Error("Save lost user activation");
       return {
         name: "saved-art.svg",
         createWritable: async () => ({
@@ -5564,11 +5571,41 @@ test("browser Save As writes through the native save picker", async ({ page }) =
   await openEditor(page, { postInitializationDwellMs: 0 });
   await page.locator("canvas#canvas").focus();
   await page.keyboard.press("Control+Shift+s");
-  await expect.poll(() => page.evaluate(() =>
-    (window as Window & { __savePickerCalls?: number }).__savePickerCalls
-  )).toBe(1);
-  await expect.poll(() => page.evaluate(() =>
-    (window as Window & { __savedSvg?: string }).__savedSvg ?? ""
-  )).toContain("<svg");
+  await expect.poll(() =>
+    page.evaluate(() => (window as Window & { __savePickerCalls?: number }).__savePickerCalls)
+  ).toBe(1);
+  await expect.poll(() =>
+    page.evaluate(() => (window as Window & { __savedSvg?: string }).__savedSvg ?? "")
+  ).toContain("<svg");
   await expect(page).toHaveTitle(/saved-art\.svg/);
+});
+
+test("browser Open supports the native file input chooser", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "showOpenFilePicker", { value: undefined, configurable: true });
+  });
+  await openEditor(page, { postInitializationDwellMs: 0 });
+  await page.locator("canvas#canvas").focus();
+  const chooserEvent = page.waitForEvent("filechooser");
+  await page.keyboard.press("Control+o");
+  const chooser = await chooserEvent;
+  await chooser.setFiles({
+    name: "native-choice.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"260\"><rect x=\"40\" y=\"40\" width=\"140\" height=\"90\" fill=\"lime\"/></svg>",
+    ),
+  });
+  await expect(page).toHaveTitle(/native-choice\.svg/);
+  await page.screenshot({ path: test.info().outputPath("native-file-open.png") });
+  await page.evaluate(() => {
+    Object.defineProperty(window, "showSaveFilePicker", { value: undefined, configurable: true });
+  });
+  const downloadEvent = page.waitForEvent("download");
+  await page.keyboard.press("Control+Shift+s");
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toBe("native-choice.svg");
+  const downloadedPath = await download.path();
+  expect(downloadedPath).not.toBeNull();
+  expect(await readFile(downloadedPath!, "utf8")).toContain("fill=\"lime\"");
 });
