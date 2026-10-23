@@ -374,6 +374,9 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     /// that caches across frames must compare this id instead.
     uint64_t bufferId = 0;
     std::vector<gpu::Buffer> retired;
+    /// Owned geometry bytes awaiting one bounded upload before submission or buffer growth.
+    std::vector<uint8_t> pendingBytes;
+    uint64_t pendingOffset = 0;
     gpu::BufferUsage usage = gpu::BufferUsage::CopyDst;
     const char* label = "GeodeArena";
   };
@@ -473,11 +476,66 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     return sceneBatchUniformAlloc;
   }
 
+  void recordArenaWriteFailure() {
+    arenaWriteFailed = true;
+    if (frameArenaWriteFailed != nullptr) {
+      *frameArenaWriteFailed = true;
+    }
+  }
+
+  void writeArenaBytes(Arena& arena, uint64_t offset, std::span<const uint8_t> bytes) {
+    if (std::exchange(failNextArenaWriteForTesting, false)) {
+      recordArenaWriteFailure();
+    }
+    if (!arenaWriteFailed &&
+        gpuContext->gpuDevice->writeBuffer(arena.buffer, offset, bytes).hasError()) {
+      recordArenaWriteFailure();
+    }
+  }
+
+  void flushArena(Arena& arena) {
+    if (!arena.pendingBytes.empty()) {
+      writeArenaBytes(arena, arena.pendingOffset, arena.pendingBytes);
+      arena.pendingBytes.clear();
+    }
+  }
+
+  void stageArenaBytes(Arena& arena, uint64_t offset, std::span<const uint8_t> bytes) {
+    constexpr std::size_t kMaximumStagedBytes = 64u * 1024u;
+    if (bytes.size() >= kMaximumStagedBytes) {
+      flushArena(arena);
+      writeArenaBytes(arena, offset, bytes);
+      return;
+    }
+    if (!arena.pendingBytes.empty() &&
+        offset - arena.pendingOffset + bytes.size() > kMaximumStagedBytes) {
+      flushArena(arena);
+    }
+    if (arena.pendingBytes.empty()) {
+      arena.pendingOffset = offset;
+    }
+    if (arena.pendingBytes.capacity() == 0) {
+      arena.pendingBytes.reserve(kMaximumStagedBytes);
+    }
+    const std::size_t relativeOffset = static_cast<std::size_t>(offset - arena.pendingOffset);
+    arena.pendingBytes.resize(relativeOffset + bytes.size(), 0);
+    std::copy(bytes.begin(), bytes.end(), arena.pendingBytes.begin() + relativeOffset);
+  }
+
+  void flushArenas() {
+    for (Arena* arena : {&bandArena, &curveArena, &uniformArena, &vBandArena, &vCurveArena,
+                         &gridArena, &instanceRecordArena}) {
+      flushArena(*arena);
+      std::vector<uint8_t>().swap(arena->pendingBytes);
+    }
+  }
+
   /// Grow `arena` so at least `size` bytes fit from offset 0: retire the
   /// current buffer (already-recorded commands keep referencing it through
   /// encoder submission) and install a pooled or fresh larger one. Returns
   /// with `arena.offset == 0`.
   void growArena(Arena& arena, uint64_t size) {
+    flushArena(arena);
     {
       if (arena.buffer.isValid()) {
         arena.retired.push_back(std::move(arena.buffer));
@@ -576,18 +634,12 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       growArena(arena, size);
       alignedOffset = 0;
     }
-    bool refused = std::exchange(failNextArenaWriteForTesting, false);
-    if (!refused) {
-      const gpu::Status writeStatus = gpuContext->gpuDevice->writeBuffer(
-          arena.buffer, alignedOffset,
-          std::span<const uint8_t>(static_cast<const uint8_t*>(data), size));
-      refused = writeStatus.hasError();
+    if (std::exchange(failNextArenaWriteForTesting, false)) {
+      recordArenaWriteFailure();
     }
-    if (refused) {
-      arenaWriteFailed = true;
-      if (frameArenaWriteFailed != nullptr) {
-        *frameArenaWriteFailed = true;
-      }
+    if (!arenaWriteFailed) {
+      stageArenaBytes(arena, alignedOffset,
+                      std::span<const uint8_t>(static_cast<const uint8_t*>(data), size));
     }
     arena.offset = alignedOffset + size;
     return {arena.buffer, alignedOffset, size, arena.bufferId};
@@ -3511,6 +3563,7 @@ void GeoEncoder::drawTexture(const gpu::Texture& texture, const Box2d& destRect,
 }
 
 void GeoEncoder::finish() {
+  impl_->flushArenas();
   if (impl_->passOpen) {
     (void)impl_->pass->end();
     impl_->pass = nullptr;

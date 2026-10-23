@@ -510,6 +510,10 @@ protected:
     editor.readyForAutocomplete_ = true;
   }
 
+  [[nodiscard]] std::size_t VisualLayoutBuildCount() const {
+    return editor.visualLayoutBuildCount_;
+  }
+
   [[nodiscard]] int VisualLineCount() const { return static_cast<int>(editor.visualLines_.size()); }
 
   [[nodiscard]] int VisualLineStartColumn(int visualIndex) const {
@@ -597,7 +601,9 @@ protected:
   [[nodiscard]] float CharacterAdvanceX() const { return editor.charAdvance_.x; }
   [[nodiscard]] float CharacterAdvanceY() const { return editor.charAdvance_.y; }
   [[nodiscard]] float TextStart() const { return editor.textStart_; }
-  void EnterCharacter(ImWchar character) { editor.enterCharacter(character, /*shift=*/false); }
+  void EnterCharacter(ImWchar character, bool shift = false) {
+    editor.enterCharacter(character, shift);
+  }
 
   void OpenAutocompleteAtCursor(std::string_view displayText) {
     editor.autocompleteOpened_ = true;
@@ -2096,6 +2102,75 @@ TEST_F(TextEditorTests, FocusPartitionScrollHelpersUseVisualLineRangesWithoutWor
   const float cursorTarget =
       EnsureCursorVisibleDirectInChild(0.0f, ImVec2(220.0f, CharacterAdvanceY()));
   EXPECT_GT(cursorTarget, 0.0f);
+}
+
+TEST_F(TextEditorTests, UnchangedSourceFramesReuseVisualLayout) {
+  editor.setText(std::string(100000, 'x'));
+  RenderEditorFrame();
+  RenderEditorFrame();
+  const std::size_t builds = VisualLayoutBuildCount();
+  for (int i = 0; i < 5; ++i) {
+    editor.clearFocusPartition();
+    RenderEditorFrame();
+  }
+  EXPECT_EQ(VisualLayoutBuildCount(), builds);
+}
+
+TEST_F(TextEditorTests, CachedVisualLayoutTracksContentWidthAndWrapChanges) {
+  editor.setText("short");
+  RenderEditorFrame();
+  EXPECT_EQ(VisualLineCount(), 1);
+  editor.setText(std::string(200, 'x'));
+  RenderEditorFrame();
+  const int narrowLines = VisualLineCount();
+  EXPECT_GT(narrowLines, 1);
+  RenderEditorFrame(ImVec2(500.0f, 180.0f));
+  EXPECT_LT(VisualLineCount(), narrowLines);
+  editor.setWordWrapEnabled(false);
+  RenderEditorFrame();
+  EXPECT_EQ(VisualLineCount(), 1);
+  editor.applyExternalSourceEdit(0, 200, "one\ntwo");
+  RenderEditorFrame();
+  EXPECT_EQ(VisualLineCount(), 2);
+}
+
+TEST_F(TextEditorTests, CachedVisualLayoutTracksSelectedIndentation) {
+  editor.setText("one\ntwo");
+  editor.setWordWrapEnabled(false);
+  editor.setTabSize(4);
+  editor.setInsertSpaces(true);
+  RenderEditorFrame();
+  editor.setSelection(Coordinates(0, 0), Coordinates(1, 3));
+  EnterCharacter('\t');
+  RenderEditorFrame();
+  EXPECT_EQ(VisualLineEndColumn(0), 7);
+  EXPECT_EQ(VisualLineEndColumn(1), 7);
+  EnterCharacter('\t', true);
+  RenderEditorFrame();
+  EXPECT_EQ(VisualLineEndColumn(0), 3);
+  EXPECT_EQ(VisualLineEndColumn(1), 3);
+}
+
+TEST_F(TextEditorTests, CachedVisualLayoutTracksFocusChanges) {
+  editor.setText("one\ntwo\nthree\nfour");
+  RenderEditorFrame();
+  EXPECT_EQ(VisualLineCount(), 4);
+  const FocusPartition partition{
+      .fullColor = {LineRange{.startLine = 0, .endLine = 1},
+                    LineRange{.startLine = 3, .endLine = 4}},
+      .hidden = {LineRange{.startLine = 1, .endLine = 3}},
+  };
+  editor.setFocusPartition(partition);
+  RenderEditorFrame();
+  EXPECT_EQ(VisualLineCount(), 3);
+  EXPECT_TRUE(VisualLineIsFocusHiddenPlaceholder(1));
+  const std::size_t builds = VisualLayoutBuildCount();
+  editor.setFocusPartition(partition);
+  RenderEditorFrame();
+  EXPECT_EQ(VisualLayoutBuildCount(), builds);
+  editor.clearFocusPartition();
+  RenderEditorFrame();
+  EXPECT_EQ(VisualLineCount(), 4);
 }
 
 TEST_F(TextEditorTests, WrappedCursorUsesVisualLineColumn) {

@@ -6242,7 +6242,7 @@ TEST_F(RendererGeodeTest, ClippedVerticalOnlyFillWithEmptyVerticalBandsRenders) 
 }
 
 #if defined(__APPLE__)
-TEST_F(RendererGeodeTest, ArenaWriteRefusalAtNormalMetalLimitKeepsRendererUsable) {
+TEST_F(RendererGeodeTest, BatchedArenaUploadsStayWithinNormalMetalLimit) {
   std::string source =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
              <defs><clipPath id="clip"><rect width="64" height="64"/></clipPath></defs>
@@ -6275,7 +6275,8 @@ TEST_F(RendererGeodeTest, ArenaWriteRefusalAtNormalMetalLimitKeepsRendererUsable
   renderer.draw(busyDocument);
   EXPECT_EQ(metal.writeStatsForTest().pendingWrites, 0u);
   EXPECT_THAT(renderer.deviceLost(), testing::Eq(false));
-  EXPECT_THAT(renderer.takeTextureSnapshot(), testing::IsNull());
+  // Combining small writes keeps this workload below the normal pending-write limit.
+  EXPECT_THAT(renderer.takeTextureSnapshot(), testing::NotNull());
   metal.resumeSubmissionsForTest();
   ASSERT_EQ(device->waitForQueueIdle(), geode::GpuWaitResult::Complete);
 

@@ -149,6 +149,61 @@ TEST_F(GeoEncoderTest, ClearWritesDirectTarget) {
   EXPECT_THAT(pixel, RgbaEq(0, 128, 255, 255));
 }
 
+TEST_F(GeoEncoderTest, SmallArenaUploadsAreCombinedBeforeSubmission) {
+  GeodeCounters counters;
+  device_->setCounters(&counters);
+  struct CounterScope {
+    GeodeDevice* device;
+    ~CounterScope() { device->setCounters(nullptr); }
+  } counterScope{device_.get()};
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
+  encoder.clear(css::RGBA(0, 0, 0, 0));
+  for (int i = 0; i < 20; ++i) {
+    encoder.fillPath(PathBuilder().addRect(Box2d({2.0 + i, 2}, {30.0 + i, 30})).build(),
+                     css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  }
+  encoder.finish();
+  EXPECT_LE(counters.bufferWrites, 8u);
+  EXPECT_THAT(pixelAt(readback(), 25, 20), RgbaEq(255, 0, 0, 255));
+  EXPECT_THAT(pixelAt(readback(), 55, 55), RgbaEq(0, 0, 0, 0));
+}
+
+TEST_F(GeoEncoderTest, StagedGeometrySurvivesArenaGrowthAndSharedSubmission) {
+  auto shared = device_->runtimeDevice().createCommandEncoder();
+  ASSERT_TRUE(shared.hasResult());
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize, *shared.result());
+  encoder.clear(css::RGBA(0, 0, 0, 0));
+  encoder.fillPath(PathBuilder().addRect(Box2d({2, 2}, {20, 20})).build(),
+                   css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  for (int i = 0; i < 600; ++i) {
+    encoder.fillPath(PathBuilder().addRect(Box2d({30, 30}, {60, 60})).build(),
+                     css::RGBA(0, 255, 0, 255), FillRule::NonZero);
+  }
+  encoder.finish();
+  auto commands = shared.result()->finish();
+  ASSERT_TRUE(commands.hasResult());
+  ASSERT_FALSE(device_->runtimeDevice().submit(std::move(commands).result()).hasError());
+  const auto pixels = readback();
+  EXPECT_THAT(pixelAt(pixels, 10, 10), RgbaEq(255, 0, 0, 255));
+  EXPECT_THAT(pixelAt(pixels, 45, 45), RgbaEq(0, 255, 0, 255));
+}
+
+TEST_F(GeoEncoderTest, RefusedStagedUploadSkipsSubmissionAndNotifiesFrameOwner) {
+  const uint64_t serialBefore = device_->runtimeDevice().lastSubmittedSerial();
+  bool frameFailed = false;
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
+  encoder.setArenaWriteFailureFlag(&frameFailed);
+  encoder.fillPath(PathBuilder().addRect(Box2d({8, 8}, {56, 56})).build(),
+                   css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  encoder.injectNextArenaWriteFailureForTesting();
+  encoder.finish();
+  EXPECT_TRUE(frameFailed);
+  EXPECT_EQ(device_->runtimeDevice().lastSubmittedSerial(), serialBefore);
+}
+
 TEST_F(GeoEncoderTest, RefusedArenaWriteSkipsOwnedSubmissionAndRecovers) {
   const uint64_t serialBefore = device_->runtimeDevice().lastSubmittedSerial();
   GeoEncoder refused(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,

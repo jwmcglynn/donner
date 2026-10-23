@@ -256,6 +256,7 @@ playwright_bin.playwright_test(
         "browser-heartbeat.cjs",
         "browser-resource-quiescence.mjs",
         "browser-responsiveness.perf.ts",
+        "browser-runtime-diagnostics.ts",
         "browser-watchdog-setup.js",
         "canvas-color-stats.ts",
         "canvas-pointer.ts",

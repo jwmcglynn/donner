@@ -1222,6 +1222,7 @@ void TextEditorCore::handleMultiLineTab(UndoState& state, bool shift) {
 
     state_.selectionStart = start;
     state_.selectionEnd = end;
+    fireContentUpdate();
     requestEnsureCursorVisible();
   }
 }

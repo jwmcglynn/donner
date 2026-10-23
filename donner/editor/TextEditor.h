@@ -770,7 +770,10 @@ public:
   // Editor settings
   /// Set tab width in columns, clamped by the core to 0 through 32.
   /// @param size Requested tab width.
-  void setTabSize(int size) { core_.setTabSize(size); }
+  void setTabSize(int size) {
+    core_.setTabSize(size);
+    visualLayoutMaxColumns_ = 0;
+  }
   /// Return tab width in columns.
   int getTabSize() const { return core_.getTabSize(); }
 
@@ -823,7 +826,12 @@ public:
   void setFoldEnabled(bool value) { foldEnabled_ = value; }
   /// Enable or disable visual line wrapping.
   /// @param value Whether long lines wrap.
-  void setWordWrapEnabled(bool value) { wordWrapEnabled_ = value; }
+  void setWordWrapEnabled(bool value) {
+    if (wordWrapEnabled_ != value) {
+      wordWrapEnabled_ = value;
+      visualLayoutMaxColumns_ = 0;
+    }
+  }
   /// Report whether visual line wrapping is enabled.
   [[nodiscard]] bool wordWrapEnabled() const { return wordWrapEnabled_; }
 
@@ -1391,6 +1399,7 @@ private:
   };
   std::vector<VisualLine> visualLines_;
   int visualLayoutMaxColumns_ = 0;
+  std::size_t visualLayoutBuildCount_ = 0;
 
   struct FocusReferenceLinkLess {
     bool operator()(const FocusReferenceLink& lhs, const FocusReferenceLink& rhs) const {

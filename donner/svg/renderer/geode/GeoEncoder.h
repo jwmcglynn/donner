@@ -169,10 +169,9 @@ struct RadialGradientParams {
  * texture, issue draw calls (`fillPath`, `clear`, etc.), then call `finish()`
  * to submit the command buffer to the GPU.
  *
- * The encoder owns no GPU buffers itself - each draw call allocates fresh
- * vertex / band / curve / uniform buffers. This is the simplest possible
- * implementation; later phases will add buffer pooling and the ECS-backed
- * `GeodePathCacheComponent` for paths whose geometry hasn't changed.
+ * Per-draw data uses pooled GPU arenas and resident path caches. Small arena uploads are
+ * combined in owned staging storage, capped at 64 KiB per arena, and flushed before buffer
+ * growth or submission. Rendered pixels remain in GPU textures.
  *
  * Typical usage:
  *
@@ -203,7 +202,7 @@ public:
   /**
    * Shared-CommandEncoder constructor.
    * Uses the provided `sharedCommandEncoder` instead of creating its own.
-   * When this overload is used, `finish()` only ends any open render
+   * When this overload is used, `finish()` flushes staged geometry and ends any open render
    * pass - it does NOT finish the CommandEncoder or submit to the
    * queue. The caller (typically `RendererGeode`) owns the encoder's
    * lifetime, finishes it into one of the frame's command buffers, and

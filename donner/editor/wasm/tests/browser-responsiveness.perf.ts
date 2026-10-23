@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
 import { checkDocumentGpuResidency } from "./browser-gpu-residency";
+import { readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
 import { resourceQueuesAreQuiescent } from "./browser-resource-quiescence.mjs";
 import {
   contentMotionFraction,
@@ -543,8 +544,9 @@ async function continuousDrag(
       sample.presentation?.inputRepresented
       && sample.presentation.completedSerial > (before.presentation?.completedSerial ?? 0)
       && sample.presentation.completedAtMs >= stream.startedAtMs
-      && stream.dispatchPoints.findIndex((applied) =>
+      && stream.dispatchPoints.findLastIndex((applied, appliedIndex) =>
           applied.x === sample.presentation!.pointerX && applied.y === sample.presentation!.pointerY
+          && stream.dispatchTimes[appliedIndex] <= sample.presentation!.completedAtMs
         ) >= index
       && sample.presentation.completedAtMs >= stream.dispatchTimes[index]
     );
@@ -1660,4 +1662,122 @@ test("first sample click after boot", async ({ page, browser }, info) => {
   console.log(`first-click-after-boot ${JSON.stringify(report)}`);
   await attachJson(info, "first-click-after-boot.json", { ...report, timeline: gpu!.timeline });
   expect(failures).toEqual([]);
+});
+
+test.describe("Geode detailed interactions", () => {
+  test.use({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 2 });
+  for (const sourceVisible of [false, true]) {
+    test(
+      `masked crown drag with source ${sourceVisible ? "open" : "closed"}`,
+      async ({ page, browser }, info) => {
+        const report: Record<string, unknown> = {
+          browser: browser.version(),
+          sourceVisible,
+          ...packageHashes(),
+        };
+        let stopHeartbeat: (() => void) | undefined;
+        const save = (stage: string) => {
+          report.stage = stage;
+          fs.writeFileSync(info.outputPath("geode-interaction.json"), JSON.stringify(report));
+        };
+        try {
+          const url = new URL(process.env.DONNER_WASM_BASE_URL!);
+          url.searchParams.set("testControl", "eyedropper");
+          await page.goto(url.href, { waitUntil: "domcontentloaded" });
+          await expect.poll(() =>
+            page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented)
+          ).toBe(true);
+          stopHeartbeat = await startApplicationHeartbeat(page);
+          const bounds = await page.locator("canvas#canvas").boundingBox();
+          if (!bounds) throw new Error("missing canvas");
+          await dispatchCanvasPointer(
+            page,
+            { x: bounds.x + bounds.width * 0.5, y: bounds.y + 282 },
+            true,
+          );
+          await expect(page.locator("canvas#canvas")).toHaveAttribute(
+            "data-active-sample-id",
+            "geode-splash",
+          );
+          await expect.poll(async () => (await snapshot(page)).worker?.acceptedForPresentation)
+            .toBe(true);
+          await waitForIdle(page);
+          report.loaded = await snapshot(page, true);
+          save("loaded");
+          if (sourceVisible) {
+            const before = await snapshot(page);
+            const began = performance.now();
+            await dispatchCanvasPointer(page, { x: 16, y: 180 }, true);
+            await expect.poll(async () => (await snapshot(page)).viewport?.paneX ?? 0)
+              .toBeGreaterThan(200);
+            report.sourceOpenWallMs = performance.now() - began;
+            save("source opened");
+            for (let i = 0; i < 12; ++i) {
+              const x = 100 + i * 5;
+              await dispatchCanvasPointer(page, { x, y: 300 });
+              await expect.poll(async () => (await snapshot(page)).interaction?.pointerX, {
+                timeout: 10000,
+              }).toBe(x);
+            }
+            report.sourceHover = phaseReport(before, await snapshot(page), []);
+            save("source hovered");
+          }
+          await waitForIdle(page);
+          for (let step = 0; step < 6; ++step) {
+            const v = (await snapshot(page)).viewport!;
+            if (Math.abs(v.zoom - 1.5) < 0.01) break;
+            const aim = {
+              x: v.documentX + v.documentWidth * (1589 / 3) / 1536,
+              y: v.documentY + v.documentHeight * (1558 / 3) / 1024,
+            };
+            await dispatchCanvasPointer(page, { x: Math.round(aim.x), y: Math.round(aim.y) });
+            await page.evaluate(
+              ({ aim, deltaY }) =>
+                document.querySelector("canvas#canvas")!.dispatchEvent(
+                  new WheelEvent("wheel", {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: aim.x,
+                    clientY: aim.y,
+                    ctrlKey: true,
+                    deltaY,
+                  }),
+                ),
+              { aim, deltaY: -100 * Math.max(-0.25, Math.min(0.25, Math.log(1.5 / v.zoom))) },
+            );
+            await expect.poll(async () => (await snapshot(page)).viewport?.zoom).not.toBe(v.zoom);
+            await waitForIdle(page);
+          }
+          const viewport = (await snapshot(page)).viewport!;
+          const point = {
+            x: Math.round(viewport.documentX + viewport.documentWidth * (1589 / 3) / 1536),
+            y: Math.round(viewport.documentY + viewport.documentHeight * (1558 / 3) / 1024),
+          };
+          await dispatchCanvasPointer(page, point, true);
+          await expect.poll(() =>
+            page.evaluate(() =>
+              (window as Window & {
+                __donnerEyedropperTestState?: { selectedId: string };
+              }).__donnerEyedropperTestState?.selectedId
+            ), { message: "select the actual masked crown face" })
+            .toBe("central-crown-face-3");
+          await waitForIdle(page);
+          report.selected = await snapshot(page, true);
+          save("crown selected");
+          // Separate selection from the drag press so this does not enter double-click editing.
+          await page.waitForTimeout(500);
+          report.ownerBeforeDrag = await readGpuOwnerDispatchStats(page);
+          report.drag = await continuousDrag(page, point, 0.25, "geode-crown");
+          report.ownerAfterDrag = await readGpuOwnerDispatchStats(page);
+          save("drag finished");
+          await page.screenshot({ path: info.outputPath("geode-interaction.png") });
+        } finally {
+          report.final = await snapshot(page, true).catch(() => null);
+          save("finished");
+          stopHeartbeat?.();
+          console.log(`geode-interaction ${JSON.stringify(report)}`);
+        }
+      },
+    );
+  }
 });

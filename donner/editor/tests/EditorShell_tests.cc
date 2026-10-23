@@ -4459,6 +4459,38 @@ TEST(EditorShellTest, SourceFocusAndStyleDecorationsTrackSelectionAndDirtySource
   EXPECT_TRUE(source.sourceStyleDecorations().empty());
 }
 
+TEST(EditorShellTest, SourceStyleAnnotationAdoptionDoesNotWaitForDocumentWriter) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+  EditorShell shell(window, OptionsWithSource(kStyledSvg, "styled.svg"));
+  ASSERT_THAT(shell.valid(), testing::IsTrue());
+  auto& document = EditorShellTestAccess::App(shell).document().document();
+  document.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  EditorShellTestAccess::StageReadyStyleAnnotationsForCurrentSource(shell);
+
+  std::promise<void> acquired;
+  std::promise<void> release;
+  auto released = release.get_future();
+  bool writerDeadlineExpired = false;
+  std::thread writer([&] {
+    auto access = document.writeAccess();
+    acquired.set_value();
+    writerDeadlineExpired = released.wait_for(std::chrono::seconds(2)) != std::future_status::ready;
+  });
+  acquired.get_future().wait();
+  EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
+  const bool adoptedBeforeRelease = EditorShellTestAccess::StyleSourceDecorationsValid(shell);
+  release.set_value();
+  writer.join();
+
+  EXPECT_THAT(writerDeadlineExpired, testing::IsFalse())
+      << "source annotation adoption blocked behind the document writer";
+  EXPECT_THAT(adoptedBeforeRelease, testing::IsFalse());
+  EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
+  EXPECT_THAT(EditorShellTestAccess::StyleSourceDecorationsValid(shell), testing::IsTrue())
+      << "the ready annotation result must survive deferral";
+}
+
 TEST(EditorShellTest, StaleTransformAnnotationResultKeepsRefreshPending) {
   gui::EditorWindow window = MakeHiddenWindow();
   ASSERT_THAT(window.valid(), testing::IsTrue());
