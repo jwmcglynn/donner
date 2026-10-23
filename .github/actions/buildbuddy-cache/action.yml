@@ -181,6 +181,24 @@ runs:
           fi
         fi
 
+        # Package updates can change system headers without changing the runner image.
+        # Carry the digest in action keys too, so an older disk-cache result cannot
+        # populate the new remote partition.
+        package_sha256=""
+        if [[ "${RUNNER_OS:-}" == "Linux" ]]; then
+          if ! packages="$(dpkg-query --show \
+              --showformat='${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Abbrev}\n')"; then
+            fail "cannot identify installed Linux packages."
+          fi
+          [[ -n "${packages}" && "${#packages}" -le 1048576 ]] ||
+            fail "installed Linux package inventory is empty or exceeds its bound."
+          package_sha256="$(printf '%s\n' "${packages}" | LC_ALL=C sort | sha256sum)"
+          package_sha256="${package_sha256%% *}"
+          [[ "${package_sha256}" =~ ^[0-9a-f]{64}$ ]] || fail "invalid Linux package digest."
+          image="${image}-dpkg-${package_sha256}"
+          unset packages
+        fi
+
         # An unreachable cache must cost nothing, so probe first and build
         # without it on any transport failure; the fallback flags below cover
         # an outage later in the job. Without --fail, curl succeeds on every
@@ -223,6 +241,11 @@ runs:
           fi
           echo "build --remote_cache=grpcs://${endpoint}"
           echo "build --remote_instance_name=${prefix}${image}"
+          if [[ -n "${package_sha256}" ]]; then
+            echo "build --action_env=DONNER_LINUX_PACKAGES_SHA256=${package_sha256}"
+            echo "build --host_action_env=DONNER_LINUX_PACKAGES_SHA256=${package_sha256}"
+            echo "test --test_env=DONNER_LINUX_PACKAGES_SHA256=${package_sha256}"
+          fi
           echo "build --remote_timeout=60s"
           echo "build --remote_cache_compression"
           # The probe sees the cache only now. When a later Bazel command
