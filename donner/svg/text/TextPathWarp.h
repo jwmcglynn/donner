@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 
@@ -10,10 +11,18 @@
 
 namespace donner::svg {
 
+inline constexpr size_t kMaximumTextPathWarpExpansion = 64u;
+
 namespace text_path_warp_details {
 
 inline bool InvalidSample(double distance, double length) {
   return !std::isfinite(distance) || !(length > 0.0) || !std::isfinite(length);
+}
+
+inline bool FiniteOutline(const Path& outline) {
+  return std::all_of(outline.points().begin(), outline.points().end(), [](const Vector2d& point) {
+    return std::isfinite(point.x) && std::isfinite(point.y);
+  });
 }
 
 inline Path::PointOnPath Sample(const StretchedTextPath& mapping, double distance) {
@@ -104,8 +113,12 @@ inline Path LinearOutline(const Path& outline, const StretchedTextPath& mapping,
 class GeneralOutlineWarper {
 public:
   GeneralOutlineWarper(const StretchedTextPath& mapping, const TextGlyph& glyph,
-                       std::span<const Vector2d> points)
-      : mapping_(mapping), glyph_(glyph), points_(points) {}
+                       std::span<const Vector2d> points, double tolerance)
+      : mapping_(mapping),
+        glyph_(glyph),
+        points_(points),
+        tolerance_(tolerance),
+        remainingOutput_(points.size() * kMaximumTextPathWarpExpansion) {}
 
   bool append(const Path::Command& command) {
     switch (command.verb) {
@@ -167,16 +180,45 @@ private:
     if (!hasCurrent_) {
       return false;
     }
-    for (size_t i = 1; i <= 8u; ++i) {
-      const double t = static_cast<double>(i) / 8.0;
-      const auto mapped = map(current_ * (1.0 - t) + end * t);
-      if (!mapped) {
-        return false;
-      }
-      builder_.lineTo(*mapped);
+    const auto mappedStart = map(current_);
+    const auto mappedEnd = map(end);
+    if (!mappedStart || !mappedEnd ||
+        !appendAdaptive(current_, end, *mappedStart, *mappedEnd, 0u)) {
+      return false;
     }
     current_ = end;
     return true;
+  }
+  bool appendAdaptive(const Vector2d& start, const Vector2d& end, const Vector2d& mappedStart,
+                      const Vector2d& mappedEnd, size_t depth) {
+    if (remainingWork_ < 3u || depth > 16u) {
+      return false;
+    }
+    remainingWork_ -= 3u;
+    const Vector2d quarter = start * 0.75 + end * 0.25;
+    const Vector2d middle = (start + end) * 0.5;
+    const Vector2d threeQuarter = start * 0.25 + end * 0.75;
+    const auto mappedQuarter = map(quarter);
+    const auto mappedMiddle = map(middle);
+    const auto mappedThreeQuarter = map(threeQuarter);
+    if (!mappedQuarter || !mappedMiddle || !mappedThreeQuarter) {
+      return false;
+    }
+    const Vector2d chordQuarter = mappedStart * 0.75 + mappedEnd * 0.25;
+    const Vector2d chordMiddle = (mappedStart + mappedEnd) * 0.5;
+    const Vector2d chordThreeQuarter = mappedStart * 0.25 + mappedEnd * 0.75;
+    if ((*mappedQuarter - chordQuarter).length() <= tolerance_ &&
+        (*mappedMiddle - chordMiddle).length() <= tolerance_ &&
+        (*mappedThreeQuarter - chordThreeQuarter).length() <= tolerance_) {
+      if (remainingOutput_ == 0u) {
+        return false;
+      }
+      --remainingOutput_;
+      builder_.lineTo(mappedEnd);
+      return true;
+    }
+    return appendAdaptive(start, middle, mappedStart, *mappedMiddle, depth + 1u) &&
+           appendAdaptive(middle, end, *mappedMiddle, mappedEnd, depth + 1u);
   }
   const StretchedTextPath& mapping_;
   const TextGlyph& glyph_;
@@ -185,11 +227,14 @@ private:
   Vector2d current_;
   Vector2d subpathStart_;
   bool hasCurrent_ = false;
+  double tolerance_;
+  size_t remainingWork_ = Path::kMaximumGeometryQueryWork;
+  size_t remainingOutput_ = 0u;
 };
 
 inline Path GeneralOutline(const Path& outline, const StretchedTextPath& mapping,
-                           const TextGlyph& glyph) {
-  GeneralOutlineWarper warper(mapping, glyph, outline.points());
+                           const TextGlyph& glyph, double tolerance) {
+  GeneralOutlineWarper warper(mapping, glyph, outline.points(), tolerance);
   for (const auto& command : outline.commands()) {
     if (!warper.append(command)) {
       return Path();
@@ -200,17 +245,23 @@ inline Path GeneralOutline(const Path& outline, const StretchedTextPath& mapping
 
 }  // namespace text_path_warp_details
 
+/// Map one glyph-local point through a stretched text-path placement.
+inline std::optional<Vector2d> MapTextPathPoint(const StretchedTextPath& mapping,
+                                                const TextGlyph& glyph, const Vector2d& point) {
+  return text_path_warp_details::Point(mapping, glyph, point);
+}
+
 /// Warp glyph outline endpoints and control points along text-path perpendiculars.
 inline Path WarpTextPathOutline(const Path& outline, const StretchedTextPath& mapping,
-                                const TextGlyph& glyph) {
-  constexpr size_t kLineSubdivisions = 8;
-  if (outline.empty() ||
-      outline.verbCount() > Path::kMaximumGeometryQueryWork / kLineSubdivisions) {
+                                const TextGlyph& glyph,
+                                double tolerance = Path::kLocalFlattenTolerance) {
+  if (outline.empty() || !text_path_warp_details::FiniteOutline(outline) ||
+      outline.verbCount() > Path::kMaximumGeometryQueryWork / kMaximumTextPathWarpExpansion) {
     return Path();
   }
   return mapping.linear && glyph.textPathOrigin
              ? text_path_warp_details::LinearOutline(outline, mapping, glyph)
-             : text_path_warp_details::GeneralOutline(outline, mapping, glyph);
+             : text_path_warp_details::GeneralOutline(outline, mapping, glyph, tolerance);
 }
 
 }  // namespace donner::svg

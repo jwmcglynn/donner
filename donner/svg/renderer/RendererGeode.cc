@@ -62,6 +62,7 @@
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
+#include "donner/svg/text/TextPathWarp.h"
 #endif
 
 namespace donner::svg {
@@ -289,9 +290,9 @@ bool IsBgraTextureFormat(gpu::TextureFormat format) {
 
 #ifdef DONNER_TEXT_ENABLED
 std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
-    const FontManager::GlyphOutlineComplexity& complexity) {
-  constexpr std::size_t kCommandCopiesPerVertex = 6;
-  constexpr std::size_t kPointCopiesPerVertex = 9;
+    const FontManager::GlyphOutlineComplexity& complexity, std::size_t expansion = 1u) {
+  const std::size_t kCommandCopiesPerVertex = 6u * expansion;
+  const std::size_t kPointCopiesPerVertex = 9u * expansion;
   if (complexity.maximumVertices >
       std::numeric_limits<std::size_t>::max() / kPointCopiesPerVertex) {
     return std::nullopt;
@@ -4056,7 +4057,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                          const TextEngine& textEngine, const TextRun& run, const TextGlyph& glyph,
                          float scale) {
     bool hasComplexity = false;
-    if (!admitGlyphMiss(fontManager, run.font, glyph.glyphIndex, hasComplexity)) {
+    if (!admitGlyphMiss(fontManager, run.font, glyph.glyphIndex, hasComplexity,
+                        kMaximumTextPathWarpExpansion)) {
       return false;
     }
     Path placed = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale);
@@ -4083,13 +4085,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
    * @return False when the budget rejects the miss.
    */
   bool admitGlyphMiss(FontManager& fontManager, FontHandle font, int glyphIndex,
-                      bool& hasComplexity) {
+                      bool& hasComplexity, std::size_t expansion = 1u) {
     const std::optional<FontManager::GlyphOutlineComplexity> complexity =
         fontManager.glyphOutlineComplexity(font, glyphIndex);
     hasComplexity = complexity.has_value();
     if (complexity.has_value()) {
       const std::optional<RendererTextMaterializationBudget::Cost> cost =
-          GlyphPredecodeCost(*complexity);
+          GlyphPredecodeCost(*complexity, expansion);
       if (!cost.has_value() || !textMaterializationBudget->reserve(*cost)) {
         return false;
       }

@@ -188,13 +188,18 @@ std::optional<Box2d> TextGlyphCellBounds(const TextRun& run, const TextGlyph& gl
     return Box2d::FromXYWH(glyph.xPosition, glyph.yPosition - emTop, glyph.xAdvance,
                            emTop + emBottom);
   }
-  const Path localCell = PathBuilder()
-                             .moveTo(Vector2d(0.0, -emTop))
-                             .lineTo(Vector2d(glyph.xAdvance, -emTop))
-                             .lineTo(Vector2d(glyph.xAdvance, emBottom))
-                             .lineTo(Vector2d(0.0, emBottom))
-                             .closePath()
-                             .build();
+  Path localCell = PathBuilder()
+                       .moveTo(Vector2d(0.0, -emTop))
+                       .lineTo(Vector2d(glyph.xAdvance, -emTop))
+                       .lineTo(Vector2d(glyph.xAdvance, emBottom))
+                       .lineTo(Vector2d(0.0, emBottom))
+                       .closePath()
+                       .build();
+  const double rotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
+  if (rotation != 0.0) {
+    localCell = TransformPath(localCell,
+                              Transform2d::Rotate(rotation * MathConstants<double>::kPi / 180.0));
+  }
   const Path warpedCell = WarpTextPathOutline(localCell, *run.stretchedTextPath, glyph);
   return warpedCell.empty() ? std::nullopt : std::optional(warpedCell.bounds());
 }

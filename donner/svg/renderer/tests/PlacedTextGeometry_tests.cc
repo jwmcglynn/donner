@@ -7,6 +7,7 @@
 
 #include "donner/base/Path.h"
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/svg/text/TextPathWarp.h"
 
 namespace donner::svg {
 namespace {
@@ -82,6 +83,11 @@ TEST(PlacedTextGeometryTest, StretchSubdividesWideRectangularGlyphEdgesAcrossCur
   const Box2d bounds = warped.bounds();
   EXPECT_GT(bounds.bottomRight.y - bounds.topLeft.y, 4.0);
   EXPECT_GT(bounds.bottomRight.x - bounds.topLeft.x, 10.0);
+
+  const Path tighter = WarpTextPathOutline(rectangle, MeasurePath(route), glyph, 0.01);
+  ASSERT_FALSE(tighter.empty());
+  EXPECT_GT(tighter.points().size(), warped.points().size());
+  EXPECT_TRUE(WarpTextPathOutline(rectangle, MeasurePath(route), glyph, 0.0).empty());
 }
 
 }  // namespace

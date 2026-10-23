@@ -198,6 +198,8 @@ public:
   long getCharNumAtPosition(EntityHandle handle, const Vector2d& point) const;
 
 private:
+  Path cachedGlyphOutline(const TextRun& run, const TextGlyph& glyph, float scale, Entity owner,
+                          std::size_t& stretchedReservation) const;
   FontManager& fontManager_;
   Registry& registry_;
   std::unique_ptr<TextBackend> backend_;

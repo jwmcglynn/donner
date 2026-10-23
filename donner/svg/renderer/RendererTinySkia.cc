@@ -37,6 +37,7 @@
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextEngineHelpers.h"
 #include "donner/svg/text/TextLayoutParams.h"
+#include "donner/svg/text/TextPathWarp.h"
 #endif
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/Path.h"
@@ -70,9 +71,9 @@ std::optional<int> CheckedPixelDimension(double logicalDimension, double deviceP
 
 #ifdef DONNER_TEXT_ENABLED
 std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
-    const FontManager::GlyphOutlineComplexity& complexity) {
-  constexpr std::size_t kCommandCopiesPerVertex = 6;
-  constexpr std::size_t kPointCopiesPerVertex = 9;
+    const FontManager::GlyphOutlineComplexity& complexity, std::size_t expansion = 1u) {
+  const std::size_t kCommandCopiesPerVertex = 6u * expansion;
+  const std::size_t kPointCopiesPerVertex = 9u * expansion;
   if (complexity.maximumVertices >
       std::numeric_limits<std::size_t>::max() / kPointCopiesPerVertex) {
     return std::nullopt;
@@ -2836,7 +2837,7 @@ bool RendererTinySkia::admitTextGlyphBatch(const std::vector<TextRun>& runs, boo
 }
 
 bool RendererTinySkia::admitGlyphPredecode(const FontManager& fontManager, FontHandle font,
-                                           int glyphIndex, bool& hasComplexity) {
+                                           int glyphIndex, bool warped, bool& hasComplexity) {
   if (drawBudget_->rejected()) {
     return false;
   }
@@ -2845,7 +2846,7 @@ bool RendererTinySkia::admitGlyphPredecode(const FontManager& fontManager, FontH
   hasComplexity = complexity.has_value();
   if (complexity.has_value()) {
     const std::optional<RendererTextMaterializationBudget::Cost> cost =
-        GlyphPredecodeCost(*complexity);
+        GlyphPredecodeCost(*complexity, warped ? kMaximumTextPathWarpExpansion : 1u);
     return cost.has_value() && textMaterializationBudget_->reserve(*cost);
   }
   if (!fontManager.isTrustedFont(font)) {
@@ -3044,7 +3045,8 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       Path glyphPath;
       if (!isBitmapFont) {
         bool hasComplexity = false;
-        if (!admitGlyphPredecode(fontManager, run.font, glyph.glyphIndex, hasComplexity)) {
+        if (!admitGlyphPredecode(fontManager, run.font, glyph.glyphIndex,
+                                 static_cast<bool>(run.stretchedTextPath), hasComplexity)) {
           drawBudget_->reject();
           return;
         }
