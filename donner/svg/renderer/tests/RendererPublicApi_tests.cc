@@ -2928,9 +2928,9 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyp
         <text x="200"><textPath href="#p" method="stretch">e</textPath></text>
       </svg>)svg");
   const RendererBitmap wordBitmap = RenderPublicDocument(word);
-  editor::tests::CompareBitmapToBitmap(
-      wordBitmap, RenderPublicDocument(separateGlyphs),
-      "textpath-stretch-curved-word", editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(wordBitmap, RenderPublicDocument(separateGlyphs),
+                                       "textpath-stretch-curved-word",
+                                       editor::tests::PixelmatchIdentityParams());
 
   const auto text = word.querySelector("text");
   ASSERT_TRUE(text.has_value());
@@ -2949,9 +2949,9 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyp
     outline.setSpline(glyph);
     outlines.svgElement().appendChild(outline);
   }
-  editor::tests::CompareBitmapToBitmap(
-      wordBitmap, RenderPublicDocument(outlines), "textpath-stretch-curved-word-outlines",
-      editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(wordBitmap, RenderPublicDocument(outlines),
+                                       "textpath-stretch-curved-word-outlines",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,
