@@ -38,6 +38,7 @@ PACKAGE_ALIAS = "//tools/ci:editor_wasm_package"
 # The files every package serves besides the catalog fonts that catalog-fonts.json lists.
 SITE_FILES = (
     "CatalogFontNotices.txt",
+    "browser-file-dialogs.js",
     "catalog-fonts.js",
     "catalog-fonts.json",
     "donner_icon.svg",
