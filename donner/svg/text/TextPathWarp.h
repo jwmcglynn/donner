@@ -306,7 +306,8 @@ private:
       const double u = 1.0 - t;
       return start * (u * u) + control * (2.0 * u * t) + end * (t * t);
     };
-    if (mappedCurveWithinTolerance(start, end, evaluate(0.25), evaluate(0.5), evaluate(0.75))) {
+    if (monotonicQuadraticX(start, control, end) &&
+        mappedCurveWithinTolerance(start, end, evaluate(0.25), evaluate(0.5), evaluate(0.75))) {
       return appendLine(end);
     }
     const Vector2d first = (start + control) * 0.5;
@@ -326,7 +327,8 @@ private:
       return start * (u * u * u) + firstControl * (3.0 * u * u * t) +
              secondControl * (3.0 * u * t * t) + end * (t * t * t);
     };
-    if (mappedCurveWithinTolerance(start, end, evaluate(0.25), evaluate(0.5), evaluate(0.75))) {
+    if (monotonicCubicX(start, firstControl, secondControl, end) &&
+        mappedCurveWithinTolerance(start, end, evaluate(0.25), evaluate(0.5), evaluate(0.75))) {
       return appendLine(end);
     }
     const Vector2d a = (start + firstControl) * 0.5;
@@ -352,6 +354,16 @@ private:
     return (*mappedQuarter - (*mappedStart * 0.75 + *mappedEnd * 0.25)).length() <= tolerance_ &&
            (*mappedMiddle - (*mappedStart + *mappedEnd) * 0.5).length() <= tolerance_ &&
            (*mappedThreeQuarter - (*mappedStart * 0.25 + *mappedEnd * 0.75)).length() <= tolerance_;
+  }
+  static bool monotonicQuadraticX(const Vector2d& start, const Vector2d& control,
+                                  const Vector2d& end) {
+    return start.x <= end.x ? control.x >= start.x && control.x <= end.x
+                            : control.x <= start.x && control.x >= end.x;
+  }
+  static bool monotonicCubicX(const Vector2d& start, const Vector2d& first, const Vector2d& second,
+                              const Vector2d& end) {
+    return start.x <= end.x ? first.x >= start.x && second.x >= first.x && end.x >= second.x
+                            : first.x <= start.x && second.x <= first.x && end.x <= second.x;
   }
   const StretchedTextPath& mapping_;
   const TextGlyph& glyph_;
