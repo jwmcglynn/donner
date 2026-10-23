@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160">
+  <rect width="160" height="160" fill="white"/>
+  <text x="48" y="16" font-family="Noto Sans, sans-serif" font-size="24"
+        writing-mode="vertical-rl" fill="#172554">x&#x301;A</text>
+  <text x="112" y="16" font-family="Mplus 1p, Noto Sans, sans-serif" font-size="24"
+        writing-mode="vertical-lr" fill="#9f1239">日x&#x301;本B</text>
+</svg>
