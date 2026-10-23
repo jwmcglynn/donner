@@ -772,6 +772,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
 
     span.textAnchor = style->properties->textAnchor.get().value();
     span.textDecoration = style->properties->textDecoration.get().value();
+    span.textOrientation = style->properties->textOrientation.get().value();
     span.baselineShift = style->properties->baselineShift.get().value();
 
     // Effective baseline alignment (matching resvg): a non-auto `alignment-baseline`
@@ -3198,7 +3199,10 @@ private:
 
   void orientVerticalGlyph(const SpanState& state, const TextBackend::ShapedGlyph& shapedGlyph,
                            uint32_t codepoint, unsigned int charIndex, TextGlyph& glyph) const {
-    if (codepoint < 0x2E80) {
+    const bool sideways =
+        state.span->textOrientation == TextOrientation::Sideways ||
+        (state.span->textOrientation == TextOrientation::Mixed && codepoint < 0x2E80);
+    if (sideways) {
       glyph.yAdvance = shapedGlyph.xAdvance > 0 ? shapedGlyph.xAdvance : shapedGlyph.yAdvance;
       glyph.xPosition -= shapedGlyph.yOffset;
       glyph.yPosition += shapedGlyph.xOffset;

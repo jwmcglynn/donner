@@ -1550,7 +1550,8 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/glyph-orientation-vertical",
                 {
                     {"simple-case.svg",
-                     Params::Skip("Not impl: glyph-orientation-vertical (deprecated SVG 1.1)")},
+                     Params::Skip("glyph orientation is honored, but upright Latin origin and "
+                                  "cell geometry still differ from the reference")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
