@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <source_location>
@@ -16,6 +17,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/TerminalImageViewer.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg {
 
@@ -502,6 +504,14 @@ std::string RenderTerminalComparisonGridForTesting(
 std::filesystem::path ResolveRunfilesResourceRootForTesting(
     const std::filesystem::path& runfilesRoot, const std::filesystem::path& documentPath);
 
+/// Creates the resvg-only loader that maps two exact HTTPS URLs to pinned local inputs.
+/// @param resourceRoot Root for ordinary sandboxed corpus files.
+/// @param documentPath Document whose relative references are resolved.
+/// @param httpsFixtureRoot Directory holding the two committed HTTP-resource snapshots.
+std::unique_ptr<ResourceLoaderInterface> CreateResvgResourceLoaderForTesting(
+    const std::filesystem::path& resourceRoot, const std::filesystem::path& documentPath,
+    const std::filesystem::path& httpsFixtureRoot);
+
 /// Marks font bytes embedded in a committed golden-test document as trusted test data.
 void TrustDocumentFontFacesForTesting(SVGDocument& document);
 
@@ -535,10 +545,12 @@ protected:
    * @param filename The path to the SVG file.
    * @param resourceDir Optional path to a directory containing resources (e.g., external images)
    *                    referenced by the SVG.
+   * @param resourceLoader Optional explicit test loader; otherwise files use the sandboxed loader.
    * @return The loaded \ref SVGDocument.
    */
   SVGDocument loadSVG(const char* filename,
-                      const std::optional<std::filesystem::path>& resourceDir = std::nullopt);
+                      const std::optional<std::filesystem::path>& resourceDir = std::nullopt,
+                      std::unique_ptr<ResourceLoaderInterface> resourceLoader = nullptr);
 
   /**
    * @brief Renders the given SVG document and compares it against a golden image.

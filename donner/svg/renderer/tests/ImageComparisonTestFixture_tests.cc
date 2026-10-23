@@ -67,6 +67,50 @@ TEST_F(GoldenArtifactTest, MismatchExportsActualExpectedAndDiff) {
               testing::VariantWith<std::string>(testing::Eq(std::get<std::string>(golden))));
 }
 
+TEST(ImageComparisonTestFixtureTests, ResvgHttpsLoaderMapsOnlyExactSnapshots) {
+  const auto root = TestTempDir() / "resvg-https-mapping";
+  const auto local = root / "local";
+  const auto snapshots = root / "snapshots";
+  std::filesystem::create_directories(local);
+  std::filesystem::create_directories(snapshots);
+  { std::ofstream(snapshots / "PNG_transparency_demonstration_1.png") << "png"; }
+  { std::ofstream(snapshots / "SVG_Logo.svg") << "svg"; }
+  { std::ofstream(local / "relative.svg") << "local"; }
+  { std::ofstream(root / "outside.svg") << "outside"; }
+  auto loader = CreateResvgResourceLoaderForTesting(local, local / "document.svg", snapshots);
+  EXPECT_THAT(loader->fetchExternalResource("https://upload.wikimedia.org/wikipedia/commons/4/47/"
+                                            "PNG_transparency_demonstration_1.png"),
+              testing::VariantWith<std::vector<uint8_t>>(testing::ElementsAre('p', 'n', 'g')));
+  EXPECT_THAT(loader->fetchExternalResource(
+                  "https://upload.wikimedia.org/wikipedia/commons/4/4f/SVG_Logo.svg"),
+              testing::VariantWith<std::vector<uint8_t>>(testing::ElementsAre('s', 'v', 'g')));
+  EXPECT_THAT(
+      loader->fetchExternalResource("relative.svg"),
+      testing::VariantWith<std::vector<uint8_t>>(testing::ElementsAre('l', 'o', 'c', 'a', 'l')));
+  for (const std::string_view url :
+       {"https://example.invalid/SVG_Logo.svg",
+        "http://upload.wikimedia.org/wikipedia/commons/4/4f/SVG_Logo.svg",
+        "https://upload.wikimedia.org/wikipedia/commons/4/4f/SVG_Logo.svg?different=1"}) {
+    SCOPED_TRACE(url);
+    EXPECT_THAT(loader->fetchExternalResource(url),
+                testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::NotFound));
+  }
+  EXPECT_THAT(loader->fetchExternalResource("../outside.svg"),
+              testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::SandboxViolation));
+  auto missing =
+      CreateResvgResourceLoaderForTesting(local, local / "document.svg", root / "missing");
+  EXPECT_THAT(missing->fetchExternalResource(
+                  "https://upload.wikimedia.org/wikipedia/commons/4/4f/SVG_Logo.svg"),
+              testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::NotFound));
+  {
+    std::ofstream(snapshots / "SVG_Logo.svg", std::ios::binary | std::ios::trunc)
+        << std::string(512 * 1024 + 1, 'x');
+  }
+  EXPECT_THAT(loader->fetchExternalResource(
+                  "https://upload.wikimedia.org/wikipedia/commons/4/4f/SVG_Logo.svg"),
+              testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::TooLarge));
+}
+
 testing::TestParamInfo<ImageComparisonTestParam> MakeParamInfo(ImageComparisonParams params) {
   ImageComparisonTestcase testcase;
   testcase.svgFilename = "embedded-png.svg";

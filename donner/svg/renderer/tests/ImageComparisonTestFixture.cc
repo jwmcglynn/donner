@@ -17,6 +17,7 @@
 #include <tuple>
 #include <vector>
 
+#include "donner/base/FileUtils.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/css/FontFace.h"
@@ -35,6 +36,43 @@
 namespace donner::svg {
 
 namespace {
+
+/// Keeps the historical HTTPS corpus cases hermetic without expanding production resource access.
+class ResvgFixtureResourceLoader final : public ResourceLoaderInterface {
+public:
+  ResvgFixtureResourceLoader(const std::filesystem::path& root,
+                             const std::filesystem::path& documentPath,
+                             const std::filesystem::path& httpsFixtureRoot)
+      : local_(root, documentPath), httpsFixtureRoot_(httpsFixtureRoot) {}
+
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view url) override {
+    std::string_view filename;
+    if (url ==
+        "https://upload.wikimedia.org/wikipedia/commons/4/47/"
+        "PNG_transparency_demonstration_1.png") {
+      filename = "PNG_transparency_demonstration_1.png";
+    } else if (url == "https://upload.wikimedia.org/wikipedia/commons/4/4f/SVG_Logo.svg") {
+      filename = "SVG_Logo.svg";
+    } else {
+      return url.find("://") == std::string_view::npos
+                 ? local_.fetchExternalResource(url)
+                 : std::variant<std::vector<uint8_t>, ResourceLoaderError>(
+                       ResourceLoaderError::NotFound);
+    }
+    const auto result = ReadFileBounded(httpsFixtureRoot_ / filename, 512 * 1024);
+    if (const auto* bytes = std::get_if<std::string>(&result)) {
+      return std::vector<uint8_t>(bytes->begin(), bytes->end());
+    }
+    return std::get<FileReadError>(result) == FileReadError::TooLarge
+               ? ResourceLoaderError::TooLarge
+               : ResourceLoaderError::NotFound;
+  }
+
+private:
+  SandboxedFileResourceLoader local_;
+  std::filesystem::path httpsFixtureRoot_;
+};
 
 std::filesystem::path ResolveRunfilesResourceRoot(const std::filesystem::path& runfilesRoot,
                                                   const std::filesystem::path& documentPath) {
@@ -518,6 +556,13 @@ std::filesystem::path ResolveRunfilesResourceRootForTesting(
   return ResolveRunfilesResourceRoot(runfilesRoot, documentPath);
 }
 
+std::unique_ptr<ResourceLoaderInterface> CreateResvgResourceLoaderForTesting(
+    const std::filesystem::path& resourceRoot, const std::filesystem::path& documentPath,
+    const std::filesystem::path& httpsFixtureRoot) {
+  return std::make_unique<ResvgFixtureResourceLoader>(
+      ResolveRunfilesResourceRoot(resourceRoot, documentPath), documentPath, httpsFixtureRoot);
+}
+
 void TrustDocumentFontFacesForTesting(SVGDocument& document) {
   auto trustFaces = [](std::span<const css::FontFace> faces) {
     for (const css::FontFace& constFace : faces) {
@@ -772,7 +817,8 @@ void RegisterFontsFromDirectoryForTesting(SVGDocument& document,
 }
 
 SVGDocument ImageComparisonTestFixture::loadSVG(
-    const char* filename, const std::optional<std::filesystem::path>& resourceDir) {
+    const char* filename, const std::optional<std::filesystem::path>& resourceDir,
+    std::unique_ptr<ResourceLoaderInterface> resourceLoader) {
   std::ifstream file(filename);
   EXPECT_TRUE(file) << "Failed to open file: " << filename;
   if (!file) {
@@ -790,7 +836,9 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
   parser::SVGParser::Options options;
 
   SVGDocument::Settings settings;
-  if (resourceDir) {
+  if (resourceLoader) {
+    settings.resourceLoader = std::move(resourceLoader);
+  } else if (resourceDir) {
     settings.resourceLoader = std::make_unique<SandboxedFileResourceLoader>(
         ResolveRunfilesResourceRootForTesting(*resourceDir, filename),
         std::filesystem::path(filename));

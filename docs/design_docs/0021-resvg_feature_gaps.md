@@ -123,6 +123,22 @@ regression, and both comparison modes pass; do not restore the category-level di
 
 ---
 
+## External resource policy
+
+The resvg harness uses a test-only loader that maps the two exact HTTPS identifiers in
+`structure/image/url-to-png.svg` and `url-to-svg.svg` to committed local copies. Other URL schemes
+are rejected, and ordinary local references still use `SandboxedFileResourceLoader`. Snapshot
+reads are bounded to 512 KiB; attribution and source hashes are recorded beside the files. Tests
+perform no live network requests. Applications independently provide resource bytes through
+`ResourceLoaderInterface`; deterministic image-loader tests cover accepted PNG/SVG bytes, denied
+requests and resource-size limits.
+
+The local `structure/use/xlink-to-an-external-file.svg` resource resolves and renders its text.
+Its upstream reference is entirely opaque, whereas the SVG canvas is transparent outside painted
+content. The comparison remains gated pending background and typography reference qualification.
+An independently authored inline-versus-external text-fragment comparison covers host style
+inheritance, fragment selection, the callback identifier and transparent canvas behavior.
+
 ## Masked bugs behind inflated CPU thresholds
 
 These tests **pass**, but only because `maxMismatchedPixels` was raised far above
