@@ -4582,9 +4582,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
 
     def test_public_diagnostics_do_not_enable_raw_console_tails(self):
-        summary = _step_body(self.supply_chain_files[".github/workflows/main.yml"],
-                             "Summarize diagnostics")
-        self.assertNotIn("--include-console-tails", summary)
+        for path, text in self.supply_chain_files.items():
+            with self.subTest(path=path):
+                self.assertNotIn("--include-console-tails", text, msg=path)
 
 
 
