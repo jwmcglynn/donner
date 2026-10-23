@@ -136,3 +136,18 @@ test("export destination does not replace the document backing", async () => {
   assert.equal((await api.run(1, 2, "", "<svg/>", false)).status, 0);
   assert.equal(api.sessions.get(1).handle, old);
 });
+
+test("download fallback reports a copy without replacing the original handle", async () => {
+  let downloads = 0;
+  const original = {};
+  const api = fixture();
+  api.download = () => {
+    ++downloads;
+  };
+  api.sessions.set(1, { handle: original });
+  await api.run(1, 1, "copy.svg", "", true);
+  const result = await api.run(1, 2, "", "<svg/>", false);
+  assert.equal(result.status, 3);
+  assert.equal(downloads, 1);
+  assert.equal(api.sessions.get(1).handle, original);
+});

@@ -113,9 +113,9 @@
       } else {
         this.download(source, target.name);
       }
-      if (target.replaceBacking) session.handle = target.handle;
+      if (target.replaceBacking && target.handle) session.handle = target.handle;
       session.target = null;
-      return { status: 0, name: target.name };
+      return { status: target.handle ? 0 : 3, name: target.name };
     }
 
     async run(id, operation, name, source, saveAs) {

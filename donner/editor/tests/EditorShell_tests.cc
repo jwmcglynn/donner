@@ -1304,14 +1304,15 @@ public:
 
   static void StageBrowserSave(EditorShell& shell) {
     shell.browserSavedSource_ = std::string(shell.app_.document().document().source());
-    shell.browserSaveGeneration_ = shell.app_.document().documentGeneration();
+    shell.browserSaveSessionId_ = shell.documentSessionId_;
     shell.browserSavedFrameVersion_ = shell.app_.document().currentFrameVersion();
   }
 
-  static void CompleteBrowserSave(EditorShell& shell) {
+  static void CompleteBrowserSave(
+      EditorShell& shell, BrowserFileDialog::Status status = BrowserFileDialog::Status::Success) {
     shell.consumeBrowserFileResult(BrowserFileDialog::Result{
         .operation = BrowserFileDialog::Operation::Write,
-        .status = BrowserFileDialog::Status::Success,
+        .status = status,
         .name = "saved.svg",
     });
   }
@@ -4245,6 +4246,34 @@ TEST(EditorShellTest, BrowserSaveCompletionUsesCanonicalCleanBaseline) {
   EXPECT_FALSE(EditorShellTestAccess::App(shell).isDirty());
   EXPECT_EQ(EditorShellTestAccess::App(shell).cleanSourceText(),
             EditorShellTestAccess::Source(shell).getText());
+}
+
+TEST(EditorShellTest, BrowserSaveCompletionDoesNotRenameAReplacementDocument) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "old.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::StageBrowserSave(shell);
+  const auto path = TempPathForTest("replacement.svg");
+  WriteTextFile(path, kInitialSvg);
+  std::string error;
+  ASSERT_TRUE(EditorShellTestAccess::TryOpenPath(shell, path.string(), &error)) << error;
+  EditorShellTestAccess::CompleteBrowserSave(shell);
+  EXPECT_EQ(EditorShellTestAccess::App(shell).currentFilePath(), path.string());
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).isDirty());
+}
+
+TEST(EditorShellTest, BrowserDownloadDoesNotClaimThatPendingEditsReachedDisk) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "original.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  app.markDirty();
+  EditorShellTestAccess::StageBrowserSave(shell);
+  EditorShellTestAccess::CompleteBrowserSave(shell, BrowserFileDialog::Status::Downloaded);
+  EXPECT_TRUE(app.isDirty());
+  EXPECT_EQ(app.currentFilePath(), "original.svg");
 }
 
 TEST(EditorShellTest, BrowserSaveCompletionTracksRevertOfSameFile) {

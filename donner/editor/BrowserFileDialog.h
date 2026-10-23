@@ -14,7 +14,7 @@ public:
   /// Browser operation whose completion is being delivered.
   enum class Operation { Open, ChooseSaveTarget, Write, ChooseExportTarget };
   /// Completion outcome, with cancellation distinct from failure.
-  enum class Status { Success, Cancelled, Failed };
+  enum class Status { Success, Cancelled, Failed, Downloaded };
   /// Owning result consumed by the editor thread.
   struct Result {
     Operation operation;  //!< Completed operation.

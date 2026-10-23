@@ -9,7 +9,8 @@ font cache.
 
 File > Open uses the browser's native file picker. Save and Save As use a native
 save picker when the browser supports writable file handles; other browsers download
-an SVG. A cancelled picker leaves the current document unchanged, and failed writes
+an SVG copy without marking pending edits saved. A cancelled picker leaves the current
+document unchanged, and failed writes
 leave it unsaved. Opening and saving accept SVG text up to 8 MiB. Exporting a viewport
 keeps the document's original save destination.
 

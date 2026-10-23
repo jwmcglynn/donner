@@ -1116,7 +1116,9 @@ private:
   NativeDialogCoordinator nativeDialogs_;
   BrowserFileDialog browserDialogs_;
   bool browserSavePending_ = false;
-  std::uint64_t browserSaveGeneration_ = 0;
+  /// Logical document lifetime; source reparse and Revert keep the same file session.
+  std::uint64_t documentSessionId_ = 0;
+  std::uint64_t browserSaveSessionId_ = 0;
   std::uint64_t browserSavedFrameVersion_ = 0;
   std::chrono::steady_clock::time_point browserSaveDeadline_;
   std::optional<std::string> browserSavedSource_;

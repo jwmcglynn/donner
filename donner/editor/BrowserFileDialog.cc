@@ -32,9 +32,8 @@ extern "C" EMSCRIPTEN_KEEPALIVE void donner_browser_file_result(unsigned int id,
                                                                 const char* error) {
   BrowserFileDialog::Result result{
       .operation = BrowserFileDialog::Operation::Open,
-      .status = status == 0 ? BrowserFileDialog::Status::Success
-                            : (status == 1 ? BrowserFileDialog::Status::Cancelled
-                                           : BrowserFileDialog::Status::Failed),
+      .status = status >= 0 && status <= 3 ? static_cast<BrowserFileDialog::Status>(status)
+                                           : BrowserFileDialog::Status::Failed,
       .name = name ? std::string(name, strnlen(name, 1024)) : std::string(),
       .source = source ? std::string(source, strnlen(source, kMaximumSourceBytes)) : std::string(),
       .error =

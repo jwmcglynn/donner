@@ -2442,6 +2442,7 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
     return false;
   }
 
+  ++documentSessionId_;
   cancelSampleThumbnailGeneration();
   welcomePlaceholderActive_ = false;
   samplePresentationPending_ = false;
@@ -2946,7 +2947,7 @@ void EditorShell::requestBrowserSave(bool saveAs) {
   if (browserDialogs_.pending() || browserSavePending_ || !app_.hasDocument()) {
     return;
   }
-  browserSaveGeneration_ = app_.document().documentGeneration();
+  browserSaveSessionId_ = documentSessionId_;
   const std::string suggested = dialogPresenter_.saveFileModalRequested()
                                     ? dialogPresenter_.pendingSaveFilePath()
                                     : app_.currentFilePath().value_or("untitled.svg");
@@ -2959,7 +2960,8 @@ void EditorShell::consumeBrowserFileResult(BrowserFileDialog::Result result) {
   if (result.operation != BrowserFileDialog::Operation::Write) {
     resetFileDialogInput();
   }
-  if (result.status != BrowserFileDialog::Status::Success) {
+  if (result.status != BrowserFileDialog::Status::Success &&
+      result.status != BrowserFileDialog::Status::Downloaded) {
     browserSavePending_ = false;
     browserSavedSource_.reset();
     pendingViewportExport_ = false;
@@ -2989,8 +2991,9 @@ void EditorShell::consumeBrowserFileResult(BrowserFileDialog::Result result) {
 }
 
 void EditorShell::finishBrowserSave(const BrowserFileDialog::Result& result) {
-  if (browserSavedSource_ && app_.hasDocument() &&
-      app_.document().documentGeneration() == browserSaveGeneration_ && !pendingViewportExport_) {
+  if (result.status == BrowserFileDialog::Status::Success && browserSavedSource_ &&
+      app_.hasDocument() && documentSessionId_ == browserSaveSessionId_ &&
+      !pendingViewportExport_) {
     const std::string currentSource = textEditor_.getText();
     app_.setCurrentFilePath(result.name);
     app_.setCleanSourceText(CanonicalizeForTextEditor(*browserSavedSource_));
@@ -3015,7 +3018,7 @@ void EditorShell::servicePendingBrowserSave() {
   std::string error;
   bool retry = false;
   std::optional<std::string> source;
-  if (!app_.hasDocument() || app_.document().documentGeneration() != browserSaveGeneration_) {
+  if (!app_.hasDocument() || documentSessionId_ != browserSaveSessionId_) {
     error = "The document changed after choosing a save location. Save again.";
   } else if (std::chrono::steady_clock::now() >= browserSaveDeadline_) {
     error = "Saving timed out while preparing the document. Try again.";
@@ -3025,7 +3028,6 @@ void EditorShell::servicePendingBrowserSave() {
     source = std::string(app_.document().document().source());
   }
   if (retry) {
-    browserSaveGeneration_ = app_.document().documentGeneration();
     if (!renderCoordinator_.asyncRenderer().isBusyWithIdleWake()) {
       window_.wakeEventLoop();
     }
@@ -3033,7 +3035,6 @@ void EditorShell::servicePendingBrowserSave() {
   }
   browserSavePending_ = false;
   if (source) {
-    browserSaveGeneration_ = app_.document().documentGeneration();
     browserSavedSource_ = *source;
     browserSavedFrameVersion_ = app_.document().currentFrameVersion();
     if (browserDialogs_.write(*source)) {
