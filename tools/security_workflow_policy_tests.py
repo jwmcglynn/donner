@@ -3515,7 +3515,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def _run_buildbuddy_action(self, root, *, event, ref="refs/heads/main", write="",
                                read="", trusted="false", renovate="false",
-                               download="minimal", curl_status=0, **overrides):
+                               download="minimal", curl_status=0,
+                               package_identity="libfreetype6:amd64\t2.13-1\tamd64\tii \n",
+                               **overrides):
         script = textwrap.dedent(_run_bodies(
             self.supply_chain_files[".github/actions/buildbuddy-cache/action.yml"])[0])
         workspace = root / "workspace"
@@ -3527,10 +3529,14 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         curl = tools / "curl"
         curl.write_text("#!/bin/sh\nexit %d\n" % curl_status, encoding="utf-8")
         curl.chmod(0o755)
+        packages = tools / "dpkg-query"
+        packages.write_text('#!/bin/sh\nprintf "%s" "$PACKAGE_IDENTITY"\n'
+                            'exit "${DPKG_STATUS:-0}"\n', encoding="utf-8")
+        packages.chmod(0o755)
         env = {"PATH": "%s:%s" % (tools, os.environ["PATH"]), "GITHUB_WORKSPACE": str(workspace),
                "RUNNER_TEMP": str(temp), "RUNNER_ENVIRONMENT": "github-hosted",
                "GITHUB_OUTPUT": str(root / "output"), "REMOTE_EXECUTION": "false",
-               "RUNNER_OS": "Linux",
+               "PACKAGE_IDENTITY": package_identity, "RUNNER_OS": "Linux",
                "ImageOS": "ubuntu24", "ImageVersion": "20261005.1", "RUNNER_ARCH": "X64",
                "WRITE_KEY": write, "READ_KEY": read, "TRUSTED_PR": trusted,
                "RENOVATE_PR": renovate, "DOWNLOAD_OUTPUTS": download, "EVENT_NAME": event,
@@ -3773,6 +3779,26 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIsNone(REMOTE_FALLBACK_FLAG.search("\n".join(
             line for line in _read(".bazelrc").splitlines()
             if not line.startswith("build:buildbuddy-re "))))
+
+    def test_linux_package_change_invalidates_cache_with_the_same_runner_image(self):
+        for route in (dict(event="push", write="fixture-key"),
+                      dict(event="pull_request", ref="refs/pull/1/merge", write="fixture-key",
+                           trusted="true", REMOTE_EXECUTION="true"),
+                      dict(event="pull_request", ref="refs/pull/1/merge", read="fixture-key",
+                           renovate="true")):
+            with self.subTest(route=route):
+                instances = []
+                for version in ("2.13-1", "2.13-2"):
+                    identity = "libfreetype6:amd64\t%s\tamd64\tii \n" % version
+                    with tempfile.TemporaryDirectory() as directory:
+                        code, fragment, _, output = self._run_buildbuddy_action(
+                            Path(directory), package_identity=identity, **route)
+                        self.assertEqual(0, code, output)
+                        self.assertNotIn(identity.strip(), output)
+                        instances.append(next(line for line in fragment.splitlines()
+                                              if line.startswith("build --remote_instance_name=")))
+                self.assertNotEqual(instances[0], instances[1],
+                                    "Package updates must not reuse the previous action cache")
 
     def test_buildbuddy_cache_partition_replaces_only_the_image_identity(self):
         write = "write-key-fixture"
