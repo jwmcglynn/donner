@@ -129,6 +129,7 @@ public:
   /// Resolve a circle clipping shape in element-local coordinates; invalid geometry is empty.
   /// @param handle Styled element supplying reference geometry and length metrics.
   /// @param circle Parsed circle and reference-box selection.
+  /// @param budget Shared admission budget for the render preparation.
   Path circleClipPath(EntityHandle handle, const CircleClipPath& circle,
                       CircleClipGeometryBudget& budget);
 

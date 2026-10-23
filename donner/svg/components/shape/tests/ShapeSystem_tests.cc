@@ -84,7 +84,7 @@ TEST_F(ShapeSystemTest, CircleFillReferenceAdmitsPathScanBeforeBounds) {
   svg += R"("/></svg>)";
   auto document = ParseAndComputeShapes(svg);
   auto element = document.querySelector("#p");
-  ASSERT_TRUE(element.has_value());
+  ASSERT_THAT(element, testing::Optional(testing::_));
   CircleClipPath circle;
   circle.box = CircleClipPath::Box::Fill;
   circle.radiusType = CircleClipPath::Radius::Length;
@@ -93,16 +93,18 @@ TEST_F(ShapeSystemTest, CircleFillReferenceAdmitsPathScanBeforeBounds) {
   // Enough for one entity and a circle, but insufficient for the 101-segment reference path.
   CircleClipGeometryBudget limited;
   limited.remainingWork = 64;
-  EXPECT_TRUE(shapeSystem.circleClipPath(element->entityHandle(), circle, limited).empty());
-  EXPECT_TRUE(limited.rejected);
+  EXPECT_THAT(shapeSystem.circleClipPath(element->entityHandle(), circle, limited).commands(),
+              testing::IsEmpty());
+  EXPECT_THAT(limited.rejected, testing::IsTrue());
   EXPECT_EQ(limited.remainingWork, 0u);
   limited.remainingWork = CircleClipGeometryBudget::kMaximumWork;
-  EXPECT_TRUE(shapeSystem.circleClipPath(element->entityHandle(), circle, limited).empty());
+  EXPECT_THAT(shapeSystem.circleClipPath(element->entityHandle(), circle, limited).commands(),
+              testing::IsEmpty());
 
   CircleClipGeometryBudget admitted;
   const Path clip = shapeSystem.circleClipPath(element->entityHandle(), circle, admitted);
-  ASSERT_FALSE(clip.empty());
-  EXPECT_FALSE(admitted.rejected);
+  ASSERT_THAT(clip.commands(), testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(admitted.rejected, testing::IsFalse());
   EXPECT_THAT(clip.bounds(), BoxEq(Vector2d(49, 0), Vector2d(51, 2)));
 }
 
@@ -114,8 +116,8 @@ TEST_F(ShapeSystemTest, ImageShadowReferenceUsesLightTypeAndOccurrenceTransform)
     </svg>)");
   auto sourceElement = document.querySelector("#source");
   auto instanceElement = document.querySelector("#instance");
-  ASSERT_TRUE(sourceElement.has_value());
-  ASSERT_TRUE(instanceElement.has_value());
+  ASSERT_THAT(sourceElement, testing::Optional(testing::_));
+  ASSERT_THAT(instanceElement, testing::Optional(testing::_));
   const EntityHandle source = sourceElement->entityHandle();
   const EntityHandle instance = instanceElement->entityHandle();
   source.emplace_or_replace<ComputedSizedElementComponent>(Box2d::FromXYWH(10, 20, 30, 40),
@@ -126,18 +128,18 @@ TEST_F(ShapeSystemTest, ImageShadowReferenceUsesLightTypeAndOccurrenceTransform)
                                                                   true);
 
   const auto bounds = shapeSystem.getShapeWorldBounds(instance);
-  ASSERT_TRUE(bounds.has_value());
+  ASSERT_THAT(bounds, testing::Optional(testing::_));
   EXPECT_THAT(*bounds, BoxEq(Vector2d(110, 220), Vector2d(140, 260)));
 
   // An instance's own dimensions take precedence without changing the light-tree image.
   instance.emplace<ComputedSizedElementComponent>(Box2d::FromXYWH(2, 3, 12, 14), Box2d());
   const auto sizedBounds = shapeSystem.getShapeWorldBounds(instance);
-  ASSERT_TRUE(sizedBounds.has_value());
+  ASSERT_THAT(sizedBounds, testing::Optional(testing::_));
   EXPECT_THAT(*sizedBounds, BoxEq(Vector2d(102, 203), Vector2d(114, 217)));
 
   instance.emplace<ComputedShadowSizedElementComponent>(Box2d::FromXYWH(4, 5, 16, 18));
   const auto shadowBounds = shapeSystem.getShapeWorldBounds(instance);
-  ASSERT_TRUE(shadowBounds.has_value());
+  ASSERT_THAT(shadowBounds, testing::Optional(testing::_));
   EXPECT_THAT(*shadowBounds, BoxEq(Vector2d(104, 205), Vector2d(120, 223)));
   EXPECT_THAT(source.get<ComputedSizedElementComponent>().bounds,
               BoxEq(Vector2d(10, 20), Vector2d(40, 60)));

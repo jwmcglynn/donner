@@ -282,15 +282,15 @@ TEST(TextEngineScriptedTest, ReferenceFillBoundsIncludeHiddenCellsWithoutDecodin
   const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Hidden);
   std::size_t work = 100000;
   const auto geometry = engine.referenceGeometry(root, false, work);
-  ASSERT_TRUE(geometry.has_value());
-  ASSERT_TRUE(geometry->objectBounds.has_value());
+  ASSERT_THAT(geometry, testing::Optional(testing::_));
+  ASSERT_THAT(geometry->objectBounds, testing::Optional(testing::_));
   EXPECT_DOUBLE_EQ(geometry->objectBounds->topLeft.x, 10.0);
   EXPECT_NEAR(geometry->objectBounds->topLeft.y, 10.0, 1e-6);
   EXPECT_DOUBLE_EQ(geometry->objectBounds->bottomRight.x, 20.0);
   EXPECT_NEAR(geometry->objectBounds->bottomRight.y, 22.0, 1e-6);
-  EXPECT_TRUE(geometry->outlines.empty());
+  EXPECT_THAT(geometry->outlines, IsEmpty());
   EXPECT_EQ(probe->outlineCalls, 0u);
-  EXPECT_FALSE(root.all_of<components::ComputedTextGeometryComponent>());
+  EXPECT_THAT(root.all_of<components::ComputedTextGeometryComponent>(), testing::IsFalse());
 }
 
 TEST(TextEngineScriptedTest, ReferenceStrokeOutlinesIncludeHiddenGlyphsWithoutChangingInkCache) {
@@ -302,14 +302,14 @@ TEST(TextEngineScriptedTest, ReferenceStrokeOutlinesIncludeHiddenGlyphsWithoutCh
   const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Hidden);
   std::size_t work = 100000;
   const auto geometry = engine.referenceGeometry(root, true, work);
-  ASSERT_TRUE(geometry.has_value());
+  ASSERT_THAT(geometry, testing::Optional(testing::_));
   ASSERT_THAT(geometry->outlines, SizeIs(1));
   EXPECT_EQ(geometry->outlines[0].sourceEntity, root.entity());
   // The scripted outline is independently authored as [0,6] x [-8,0], placed at (10,20).
   EXPECT_THAT(geometry->outlines[0].path.bounds(), BitmapBoundsNear(Box2d::FromXYWH(10, 12, 6, 8)));
   EXPECT_EQ(probe->outlineCalls, 1u);
-  EXPECT_FALSE(root.all_of<components::ComputedTextGeometryComponent>());
-  EXPECT_TRUE(engine.ensureComputedTextGeometryComponent(root).glyphs.empty());
+  EXPECT_THAT(root.all_of<components::ComputedTextGeometryComponent>(), testing::IsFalse());
+  EXPECT_THAT(engine.ensureComputedTextGeometryComponent(root).glyphs, IsEmpty());
 }
 
 TEST(TextEngineScriptedTest, ReferenceInputBudgetRejectsBeforeLayout) {
@@ -318,7 +318,7 @@ TEST(TextEngineScriptedTest, ReferenceInputBudgetRejectsBeforeLayout) {
   TextEngine engine = MakeScriptedEngine(registry, manager);
   const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Visible);
   std::size_t work = 0;
-  EXPECT_FALSE(engine.referenceGeometry(root, false, work).has_value());
+  EXPECT_THAT(engine.referenceGeometry(root, false, work), testing::Eq(std::nullopt));
   EXPECT_EQ(engine.layoutCallCountForTesting(), 0u);
   EXPECT_EQ(work, 0u);
 }
@@ -331,7 +331,7 @@ TEST(TextEngineScriptedTest, ReferenceVerticalCellsRefuseInsteadOfReturningZeroW
   root.get<components::ComputedStyleComponent>().properties->writingMode.set(
       WritingMode::VerticalRl, css::Specificity::Override());
   std::size_t work = 100000;
-  EXPECT_FALSE(engine.referenceGeometry(root, false, work).has_value());
+  EXPECT_THAT(engine.referenceGeometry(root, false, work), testing::Eq(std::nullopt));
   EXPECT_EQ(engine.layoutCallCountForTesting(), 0u);
   EXPECT_EQ(work, 0u);
 }
@@ -344,10 +344,10 @@ TEST(TextEngineScriptedTest, ReferenceOutlineBudgetRejectsBeforeDecodeAndReturns
   TextEngine engine(manager, registry, std::move(backend));
   const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Visible);
   std::size_t work = 16;
-  EXPECT_FALSE(engine.referenceGeometry(root, true, work).has_value());
+  EXPECT_THAT(engine.referenceGeometry(root, true, work), testing::Eq(std::nullopt));
   EXPECT_EQ(probe->outlineCalls, 0u);
   EXPECT_EQ(work, 0u);
-  EXPECT_FALSE(root.all_of<components::ComputedTextGeometryComponent>());
+  EXPECT_THAT(root.all_of<components::ComputedTextGeometryComponent>(), testing::IsFalse());
 }
 
 TEST(TextEngineScriptedTest, AddFontFacesOnlyRegistersNewBatchEntries) {
