@@ -1267,10 +1267,17 @@ TEST(TextEngineTest, UprightLatinUsesVerticalShapingWithoutAdvancingCombiningMar
                     std::make_unique<TextBackendFull>(fontManager, registry));
   const auto runs = engine.layout(text, params);
   ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(3))));
-  EXPECT_THAT(runs[0].glyphs[1].yPosition,
-              DoubleEq(runs[0].glyphs[0].yPosition + runs[0].glyphs[0].yAdvance));
-  EXPECT_THAT(runs[0].glyphs[2].yPosition,
-              DoubleEq(runs[0].glyphs[1].yPosition + runs[0].glyphs[1].yAdvance));
+  const Vector2d expectedMarkFromBase(
+      upright.glyphs[1].xOffset - upright.glyphs[0].xOffset,
+      upright.glyphs[0].yAdvance + upright.glyphs[1].yOffset - upright.glyphs[0].yOffset);
+  EXPECT_THAT(runs[0].glyphs[1].xPosition - runs[0].glyphs[0].xPosition,
+              DoubleNear(expectedMarkFromBase.x, 1e-6));
+  EXPECT_THAT(runs[0].glyphs[1].yPosition - runs[0].glyphs[0].yPosition,
+              DoubleNear(expectedMarkFromBase.y, 1e-6));
+  EXPECT_THAT(runs[0].glyphs[1].yAdvance, DoubleEq(0.0));
+  const double basePenY = runs[0].glyphs[0].yPosition - upright.glyphs[0].yOffset;
+  const double nextPenY = runs[0].glyphs[2].yPosition - upright.glyphs[2].yOffset;
+  EXPECT_THAT(nextPenY, DoubleNear(basePenY + upright.glyphs[0].yAdvance, 1e-6));
 }
 
 TEST(TextEngineTest, SidewaysCjkUsesHorizontalShapingMetrics) {
@@ -1291,6 +1298,43 @@ TEST(TextEngineTest, SidewaysCjkUsesHorizontalShapingMetrics) {
   for (const auto& glyph : sideways.glyphs) {
     EXPECT_THAT(glyph.xAdvance, Gt(0.0));
     EXPECT_THAT(glyph.yAdvance, DoubleEq(0.0));
+  }
+}
+
+TEST(TextEngineTest, VerticalCrossSpanKerningMatchesUnsplitOrientation) {
+#ifndef DONNER_TEXT_FULL
+  GTEST_SKIP() << "HarfBuzz shaping requires the full text backend.";
+#endif
+
+  for (const TextOrientation orientation : {TextOrientation::Upright, TextOrientation::Sideways}) {
+    SCOPED_TRACE(testing::PrintToString(orientation));
+    Registry registry;
+    FontManager fontManager(registry);
+    ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+    TextEngine engine(fontManager, registry);
+
+    auto layout = [&](bool split) {
+      components::ComputedTextComponent text;
+      auto first = MakeSpan(split ? "A" : "AV");
+      first.textOrientation = orientation;
+      text.spans.push_back(std::move(first));
+      if (split) {
+        auto second = MakeSpan("V");
+        second.startsNewChunk = false;
+        second.textOrientation = orientation;
+        text.spans.push_back(std::move(second));
+      }
+      TextLayoutParams params = MakeTextParams(64.0);
+      params.fontFamilies = {RcString("Noto Sans")};
+      params.writingMode = WritingMode::VerticalRl;
+      return engine.layout(text, params);
+    };
+
+    const auto unsplit = layout(false);
+    const auto split = layout(true);
+    ASSERT_THAT(unsplit, ElementsAre(RunGlyphsAre(SizeIs(2))));
+    ASSERT_THAT(split, ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(SizeIs(1))));
+    EXPECT_THAT(split[1].glyphs[0].yPosition, DoubleNear(unsplit[0].glyphs[1].yPosition, 1e-6));
   }
 }
 

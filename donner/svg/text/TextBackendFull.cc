@@ -990,21 +990,25 @@ struct ShapedGlyphInfo {
   hb_glyph_position_t pos;
   bool isSynthSmallCap;
 };
+
+bool UsesSidewaysMetrics(TextOrientation orientation, uint32_t codepoint) {
+  return orientation == TextOrientation::Sideways ||
+         (orientation == TextOrientation::Mixed && codepoint > 0 && codepoint < 0x2E80);
+}
+
 /// Applies the existing sideways or upright vertical-origin adjustment to a shaped glyph.
 void AdjustVerticalGlyph(TextBackend::ShapedGlyph& glyph, const ShapedGlyphInfo& sg,
                          hb_font_t* hbFont, float fontSizePx, double pixelScaleX,
                          std::string_view spanText, TextOrientation textOrientation) {
   const uint32_t codepoint = decodeCodepointAt(spanText, glyph.cluster);
-  const bool sideways =
-      textOrientation == TextOrientation::Sideways ||
-      (textOrientation == TextOrientation::Mixed && codepoint > 0 && codepoint < 0x2E80);
+  const bool sideways = UsesSidewaysMetrics(textOrientation, codepoint);
   if (sideways) {
     glyph.xAdvance =
         static_cast<double>(hb_font_get_glyph_h_advance(hbFont, sg.info.codepoint)) * pixelScaleX;
     glyph.yAdvance = 0.0;
     glyph.xOffset = 0.0;
     glyph.yOffset = 0.0;
-  } else {
+  } else if (textOrientation == TextOrientation::Mixed) {
     FT_Face verticalFace = hb_ft_font_get_ft_face(hbFont);
     if (verticalFace && verticalFace->units_per_EM > 0) {
       double vertOriginY = glyph.yOffset;
@@ -1220,6 +1224,14 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
 double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,
                                       float curSizePx, uint32_t prevCodepoint,
                                       uint32_t curCodepoint, bool isVertical) const {
+  return crossSpanKern(prevFont, prevSizePx, curFont, curSizePx, prevCodepoint, curCodepoint,
+                       isVertical, TextOrientation::Mixed);
+}
+
+double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,
+                                      float curSizePx, uint32_t prevCodepoint,
+                                      uint32_t curCodepoint, bool isVertical,
+                                      TextOrientation textOrientation) const {
   if (!fontManager_.fontsShareFamily(prevFont, curFont) || !std::isfinite(curSizePx) ||
       curSizePx <= 0.0f) {
     return 0.0;
@@ -1240,7 +1252,9 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
   hb_buffer_t* pairBuf = hb_buffer_create();
   const uint32_t pair[2] = {prevCodepoint, curCodepoint};
   hb_buffer_add_codepoints(pairBuf, pair, 2, 0, 2);
-  hb_buffer_set_direction(pairBuf, isVertical ? HB_DIRECTION_TTB : HB_DIRECTION_LTR);
+  const bool sideways = UsesSidewaysMetrics(textOrientation, curCodepoint);
+  const hb_direction_t direction = isVertical && !sideways ? HB_DIRECTION_TTB : HB_DIRECTION_LTR;
+  hb_buffer_set_direction(pairBuf, direction);
   hb_buffer_set_script(pairBuf, HB_SCRIPT_LATIN);
   hb_buffer_guess_segment_properties(pairBuf);
   hb_shape(hbFont, pairBuf, nullptr, 0);
@@ -1255,7 +1269,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
     // Shape the previous character alone to get its standalone advance.
     hb_buffer_t* soloBuf = hb_buffer_create();
     hb_buffer_add_codepoints(soloBuf, &prevCodepoint, 1, 0, 1);
-    hb_buffer_set_direction(soloBuf, isVertical ? HB_DIRECTION_TTB : HB_DIRECTION_LTR);
+    hb_buffer_set_direction(soloBuf, direction);
     hb_buffer_set_script(soloBuf, HB_SCRIPT_LATIN);
     hb_buffer_guess_segment_properties(soloBuf);
     hb_shape(hbFont, soloBuf, nullptr, 0);

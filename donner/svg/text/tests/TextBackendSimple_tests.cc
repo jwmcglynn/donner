@@ -476,6 +476,17 @@ TEST_F(TextBackendSimpleTest, SidewaysCjkUsesHorizontalAdvances) {
                                                GlyphYAdvanceIs(DoubleNear(70.0, 1e-4)))));
 }
 
+TEST_F(TextBackendSimpleTest, CrossSpanKerningUsesResolvedVerticalOrientation) {
+  const FontHandle font = fullFont();
+
+  EXPECT_THAT(
+      backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', true, TextOrientation::Upright),
+      DoubleEq(0.0));
+  EXPECT_THAT(
+      backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', true, TextOrientation::Sideways),
+      DoubleNear(-10.0, 1e-4));
+}
+
 TEST_F(TextBackendSimpleTest, ShapeRunVerticalCjkAdvancesByEmHeight) {
   const FontHandle font = fullFont();
 

@@ -232,6 +232,14 @@ public:
                                float curSizePx, uint32_t prevCodepoint, uint32_t curCodepoint,
                                bool isVertical) const = 0;
 
+  /// Compute cross-span kerning with the resolved vertical orientation.
+  virtual double crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,
+                               float curSizePx, uint32_t prevCodepoint, uint32_t curCodepoint,
+                               bool isVertical, TextOrientation textOrientation) const {
+    return crossSpanKern(prevFont, prevSizePx, curFont, curSizePx, prevCodepoint, curCodepoint,
+                         isVertical);
+  }
+
   /// Compute cross-span kerning with kerning disabled.
   virtual double crossSpanKernNoKerning(FontHandle, float, FontHandle, float, uint32_t, uint32_t,
                                         bool) const {

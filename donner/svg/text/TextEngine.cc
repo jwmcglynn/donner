@@ -2874,6 +2874,7 @@ private:
     float scale = 0.0f;
     std::optional<double> fontSizeAdjust;
     bool vertical = false;
+    TextOrientation orientation = TextOrientation::Mixed;
     bool fontKerning = true;
     double defaultY = 0.0;
     double penX = 0.0;
@@ -2979,6 +2980,7 @@ private:
   void prepareSpanPen(SpanState& state) {
     const TextSpan& span = *state.span;
     state.vertical = isVertical(params_.writingMode);
+    state.orientation = span.pathSpline ? TextOrientation::Mixed : span.textOrientation;
     state.penX = haveCurrentPosition_ ? currentPenX_ : 0.0;
     state.defaultY = effectiveBaselineShift(state) -
                      computeSpanBaselineShiftPx(backend_, span, state.font, state.scale, params_);
@@ -3037,10 +3039,8 @@ private:
     state.runPenStartY = state.penY;
     state.chunkRanges = findChunkRanges(state.text, state.xList, state.yList);
     state.indexMappings = buildByteIndexMappings(state.text);
-    const TextOrientation shapingOrientation =
-        state.span->pathSpline ? TextOrientation::Mixed : state.span->textOrientation;
     state.shaping = PrepareSpanShaping(backend_, state.run, state.text, state.chunkRanges,
-                                       state.vertical, shapingOrientation, state.span->fontVariant,
+                                       state.vertical, state.orientation, state.span->fontVariant,
                                        state.fontKerning, state.indexMappings);
     state.dxList = ResolveGroupDisplacements(
         state.span->pathSpline ? state.span->dxList : state.dxList, state.shaping.groupStarts,
@@ -3109,7 +3109,7 @@ private:
         state.fontKerning && state.previousChunkKerning
             ? backend_.crossSpanKern(state.previousChunkFont, state.previousChunkFontSizePx,
                                      state.font, state.fontSizePx, state.previousChunkCodepoint,
-                                     firstCodepoint, state.vertical)
+                                     firstCodepoint, state.vertical, state.orientation)
             : 0.0;
     return {value, true};
   }
@@ -3121,13 +3121,15 @@ private:
     }
     size_t firstByte = state.chunkRanges.front().byteStart;
     const uint32_t firstCodepoint = decodeUtf8(state.text, firstByte);
-    const bool compatible = CompatibleKerningRuns(
-        fontManager_, state.run, state.span->fontVariant, previousSpanFont_,
-        previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning, previousSpanKerning_);
+    const bool compatible =
+        previousSpanOrientation_ == state.orientation &&
+        CompatibleKerningRuns(fontManager_, state.run, state.span->fontVariant, previousSpanFont_,
+                              previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning,
+                              previousSpanKerning_);
     const double value =
         compatible ? backend_.crossSpanKern(previousSpanFont_, previousSpanFontSizePx_, state.font,
                                             state.fontSizePx, previousSpanCodepoint_,
-                                            firstCodepoint, state.vertical)
+                                            firstCodepoint, state.vertical, state.orientation)
                    : 0.0;
     return {value, true};
   }
@@ -3205,9 +3207,8 @@ private:
 
   void orientVerticalGlyph(const SpanState& state, const TextBackend::ShapedGlyph& shapedGlyph,
                            uint32_t codepoint, unsigned int charIndex, TextGlyph& glyph) const {
-    const bool sideways =
-        state.span->textOrientation == TextOrientation::Sideways ||
-        (state.span->textOrientation == TextOrientation::Mixed && codepoint < 0x2E80);
+    const bool sideways = state.orientation == TextOrientation::Sideways ||
+                          (state.orientation == TextOrientation::Mixed && codepoint < 0x2E80);
     if (sideways) {
       glyph.yAdvance = shapedGlyph.xAdvance > 0 ? shapedGlyph.xAdvance : shapedGlyph.yAdvance;
       glyph.xPosition -= shapedGlyph.yOffset;
@@ -3225,8 +3226,9 @@ private:
       return;
     }
 
-    glyph.yAdvance = shapedGlyph.yAdvance > 0 ? shapedGlyph.yAdvance
-                                              : (isNonSpacing(codepoint) ? 0.0 : state.fontSizePx);
+    glyph.yAdvance = shapedGlyph.yAdvance > 0
+                         ? shapedGlyph.yAdvance
+                         : (shapedGlyph.xAdvance == 0 ? 0.0 : state.fontSizePx);
     glyph.xPosition = state.penX + shapedGlyph.xOffset;
     glyph.yPosition = state.penY + shapedGlyph.yOffset;
     glyph.rotateDegrees = rotationFor(*state.span, charIndex, 0.0);
@@ -3389,6 +3391,7 @@ private:
     previousSpanFontSizePx_ = state.fontSizePx;
     previousSpanKerning_ = state.fontKerning;
     previousSpanFontVariant_ = state.span->fontVariant;
+    previousSpanOrientation_ = state.orientation;
     previousSpanPathSource_ = SpanKerningPathSource(*state.span);
   }
 
@@ -3529,6 +3532,7 @@ private:
   float previousSpanFontSizePx_ = 0.0f;
   bool previousSpanKerning_ = true;
   FontVariant previousSpanFontVariant_ = FontVariant::Normal;
+  TextOrientation previousSpanOrientation_ = TextOrientation::Mixed;
   std::optional<Entity> previousSpanPathSource_;
   Entity previousTextPathSource_ = entt::null;
   std::optional<size_t> firstPathRun_;
