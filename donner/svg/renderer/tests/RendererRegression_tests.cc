@@ -566,13 +566,14 @@ TEST_F(RendererRegressionTests, CssFilterContractUrlChainsMatchEquivalentPrimiti
     <filter id="flood"><feFlood flood-color="blue"/></filter>
     <filter id="blur"><feGaussianBlur stdDeviation="1"/></filter>
     <filter id="combined"><feFlood flood-color="blue"/><feGaussianBlur stdDeviation="1"/></filter>
-    <filter id="twice"><feGaussianBlur stdDeviation="1"/><feGaussianBlur stdDeviation="1"/></filter>
+    <filter id="step"><feOffset dx="1"/></filter>
+    <filter id="twice"><feOffset dx="2"/></filter>
   )svg";
   const auto expected = render(definitions, "url(#combined)");
   ExpectVisibleBitmap(expected, "url_chain_combined_visible");
   ExpectBitmapsIdentical(render(definitions, "url(#flood) url(#blur)"), expected,
                          "url_chain_implicit_previous_input");
-  ExpectBitmapsIdentical(render(definitions, "url(#blur) url(#blur)"),
+  ExpectBitmapsIdentical(render(definitions, "url(#step) url(#step)"),
                          render(definitions, "url(#twice)"),
                          "repeated_url_implicit_previous_input");
 }
