@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  <defs>
+    <filter id="step" filterUnits="userSpaceOnUse" x="-20" y="-10" width="100" height="84">
+      <feOffset in="SourceGraphic" dx="1" result="local"/>
+      <feBlend in="local" in2="SourceAlpha"/>
+    </filter>
+    <filter id="paint"><feOffset in="FillPaint"/></filter>
+    <filter id="empty"/>
+    <filter id="flood"><feFlood flood-color="blue"/></filter>
+    <pattern id="tile" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect width="4" height="8" fill="red"/>
+    </pattern>
+  </defs>
+  <g filter="url(#step) brightness(.5) url(#step)" opacity=".5">
+    <rect x="12" y="12" width="20" height="20" fill="url(#tile)"/>
+  </g>
+  <rect x="8" y="8" width="4" height="4" fill="red" filter="opacity(0) url(#paint)"/>
+  <rect x="40" y="40" width="8" height="8" filter="url(#empty) url(#flood)"/>
+</svg>
