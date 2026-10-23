@@ -270,8 +270,11 @@ implemented. Their focused geometry and renderer contracts are active. The vendo
 `method=stretch` image is identical to the align reference, so that corpus row is render-only while
 independent curved-outline tests distinguish the methods. A fragment-free relative `xlink:href`
 under the secure static resource policy does not resolve to a same-document element or initiate an
-external fetch; its conflicting corpus image is also render-only with an independent control-scene
-test.
+external fetch; its conflicting corpus image is also render-only. The
+`TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank` case enforces that policy in
+`//donner/svg/renderer/tests:renderer_public_api_tests` and
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode` using a visible control scene and
+a resource loader that records requests.
 
 **Remaining impact:** 4 in `text/textPath/`: vertical/circular layout (`complex.svg` and
 `writing-mode=tb.svg`), kerning across mixed children, and the known filtered-glyph coverage

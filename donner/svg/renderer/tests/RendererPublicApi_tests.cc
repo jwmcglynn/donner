@@ -2255,7 +2255,7 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedGeometryDiffersFromAlign) {
         std::string(method) + "'>e</textPath></text></svg>");
     (void)RenderPublicDocument(document);
     const auto text = document.querySelector("text");
-    EXPECT_TRUE(text.has_value());
+    EXPECT_THAT(text, testing::Optional(_));
     if (!text) {
       return std::vector<Path>();
     }
@@ -2265,10 +2265,11 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedGeometryDiffersFromAlign) {
 
   const std::vector<Path> align = glyphPaths("align");
   const std::vector<Path> stretch = glyphPaths("stretch");
-  ASSERT_FALSE(align.empty());
-  ASSERT_EQ(stretch.size(), align.size());
-  EXPECT_GT(stretch.front().points().size(), align.front().points().size());
-  EXPECT_NE(stretch.front().bounds(), align.front().bounds());
+  ASSERT_THAT(align, testing::SizeIs(1));
+  ASSERT_THAT(stretch, testing::SizeIs(align.size()));
+  EXPECT_THAT(stretch.front().points(),
+              testing::SizeIs(testing::Gt(align.front().points().size())));
+  EXPECT_THAT(stretch.front().bounds(), testing::Ne(align.front().bounds()));
 }
 
 TEST(RendererPublicApiTest, TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText) {
