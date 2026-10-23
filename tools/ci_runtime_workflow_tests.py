@@ -1066,12 +1066,15 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             if name not in suites:
                 continue  # Not a suite, such as a build-only canary binary.
             with self.subTest(suite=name):
-                if name == "deterministic_fuzzer_soak":
-                    self.assertEqual(re.findall(r'"(//[^"\n]+)"', suites[name]),
-                                     ["//build_defs:soak_probe_fuzzer_soak"])
-                else:
-                    self.assertNotRegex(suites[name], r'_soak"')
+                self._assert_pr_soak_suite_membership(name, suites[name])
             pending.extend(re.findall(r'"(?://tools/ci)?:(\w+)"', suites[name]))
+
+    def _assert_pr_soak_suite_membership(self, name, body):
+        if name == "deterministic_fuzzer_soak":
+            self.assertEqual(re.findall(r'"(//[^"\n]+)"', body),
+                             ["//build_defs:soak_probe_fuzzer_soak"])
+        else:
+            self.assertNotRegex(body, r'_soak"')
 
     def test_linux_wgpu_resvg_reference_is_selected_only_for_relevant_prs(self):
         """The manual comparison and dependency audit stay in the explicit Linux suite."""
