@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 180">
+  <rect width="240" height="180" fill="white"/>
+  <g writing-mode="vertical-rl" font-family="Mplus 1p, Noto Sans, sans-serif" font-size="20">
+    <text x="40" y="16" text-orientation="mixed" fill="#172554">日A、本B</text>
+    <text x="88" y="16" text-orientation="upright" fill="#166534">日A、本B</text>
+    <text x="136" y="16" text-orientation="sideways" fill="#9f1239">日A、本B</text>
+    <g glyph-orientation-vertical="0">
+      <text x="184" y="16" fill="#6b21a8">A<tspan glyph-orientation-vertical="90">B</tspan>C</text>
+    </g>
+  </g>
+</svg>
