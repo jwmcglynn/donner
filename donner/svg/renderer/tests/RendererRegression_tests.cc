@@ -446,6 +446,69 @@ TEST_F(RendererRegressionTests, ReferenceContractArcsUsesDocumentedMiterFallback
   ExpectBitmapsIdentical(actual, render("miter"), "arcs_documented_miter_fallback");
 }
 
+RendererBitmap RenderCssFilterContract(std::string_view filter, bool style = false) {
+  const std::string attribute = style ? "style=\"filter: " : "filter=\"";
+  SVGDocument document = instantiateSubtree(
+      std::string(R"svg(<rect x="12" y="12" width="20" height="20" fill="seagreen"
+                           color="blue" font-size="16" )svg") +
+          attribute + std::string(filter) + R"svg("/>)svg",
+      {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractInvalidShadowStyleRejectsWholeChain) {
+  const auto expected = RenderCssFilterContract("none");
+  ExpectVisibleBitmap(expected, "invalid_shadow_plain_visible");
+  for (std::string_view filter :
+       {"invert(1) drop-shadow(4 5)", "invert(1) drop-shadow(4px 5px -2px)"}) {
+    SCOPED_TRACE(filter);
+    ExpectBitmapsIdentical(RenderCssFilterContract(filter, true), expected,
+                           "invalid_shadow_style_ignored");
+  }
+  ExpectBitmapsIdentical(RenderCssFilterContract("drop-shadow(4 5 -2)"), expected,
+                         "negative_shadow_presentation_ignored");
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractShadowUnitsColorsAndDefaultMatch) {
+  const auto expected = RenderCssFilterContract("drop-shadow(blue 12px 6px 3px)", true);
+  ExpectBitmapsDiffer(expected, RenderCssFilterContract("none"), "shadow_visible_control");
+  for (std::string_view filter :
+       {"drop-shadow(blue 12 6 3)", "drop-shadow(12px 6px 3px blue)", "drop-shadow(12px 6px 3px)",
+        "drop-shadow(blue 0.75em 0.375em 0.1875em)",
+        "drop-shadow(blue 3.175mm 1.5875mm 0.79375mm)"}) {
+    SCOPED_TRACE(filter);
+    ExpectBitmapsIdentical(RenderCssFilterContract(filter), expected, "shadow_units_colors");
+  }
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractShadowColorAlphaIsAppliedOnce) {
+  const auto actual = RenderCssFilterContract("drop-shadow(rgba(0,0,255,0.5) 28px 0 0)", true);
+  SVGDocument expectedDocument = instantiateSubtree(R"svg(
+    <rect x="40" y="12" width="20" height="20" fill="rgba(0,0,255,0.5)"/>
+    <rect x="12" y="12" width="20" height="20" fill="seagreen"/>)svg",
+                                                    {}, Vector2i(64, 64));
+  const auto expected = RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "translucent_shadow_visible");
+  ExpectBitmapsIdentical(actual, expected, "shadow_color_alpha_once");
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractMixedUrlGrayscaleUsesSrgb) {
+  SVGDocument actualDocument = instantiateSubtree(R"svg(
+    <filter id="identity"><feOffset/></filter>
+    <rect x="12" y="12" width="20" height="20" fill="seagreen"
+          filter="url(#identity) grayscale()"/>)svg",
+                                                  {}, Vector2i(64, 64));
+  // CSS grayscale uses encoded sRGB: .2126*46 + .7152*139 + .0722*87 = 115.4738.
+  SVGDocument expectedDocument = instantiateSubtree(R"svg(
+    <rect x="12" y="12" width="20" height="20" fill="rgb(115 115 115)"/>)svg",
+                                                    {}, Vector2i(64, 64));
+  const auto actual = RenderDocumentWithBackend(actualDocument, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "mixed_url_grayscale_visible");
+  ExpectBitmapsIdentical(actual,
+                         RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend()),
+                         "mixed_url_grayscale_srgb");
+}
+
 TEST_F(RendererRegressionTests, UnitlessPresentationAttributeBlurUsesUserUnits) {
   const auto render = [](std::string_view filter) {
     const std::string markup =
