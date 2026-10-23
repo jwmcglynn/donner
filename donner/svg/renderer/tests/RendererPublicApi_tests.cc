@@ -6566,6 +6566,29 @@ TEST(RendererPublicApiTest, NestedClipSiblingSurvivesOverflowingChildReference) 
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, NestedClipSelfReferenceIntersectsAllChildren) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="left"><rect width="16" height="16"/></clipPath>)svg",
+      R"svg(<rect x="2" y="4" width="6" height="8"/>
+             <rect x="20" y="4" width="6" height="8"/>)svg",
+      R"svg(clip-path="url(#left)")svg");
+  editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipSiblingReference(),
+                                       "nested_clip_self_intersection",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, NestedClipSelfAndChildReferencesBothApply) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="left"><rect width="16" height="16"/></clipPath>
+             <clipPath id="middle"><rect y="4" width="32" height="8"/></clipPath>)svg",
+      R"svg(<rect x="2" width="6" height="16" clip-path="url(#middle)"/>
+             <rect x="20" width="6" height="16" clip-path="url(#middle)"/>)svg",
+      R"svg(clip-path="url(#left)")svg");
+  editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipSiblingReference(),
+                                       "nested_clip_self_and_child_intersections",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, NestedClipSelfEmptyReferenceRemainsEmptyWithValidChild) {
   const RendererBitmap actual = RenderNestedClipSiblingFixture(
       R"svg(<clipPath id="empty"/>)svg", R"svg(<rect x="2" y="4" width="6" height="8"/>)svg",
