@@ -2922,8 +2922,8 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
     const parser::PropertyParseBehavior parseBehavior =
-        name == "filter" ? parser::PropertyParseBehavior::Default
-                         : parser::PropertyParseBehavior::AllowUserUnits;
+        name == "filter" || name == "clip-path" ? parser::PropertyParseBehavior::Default
+                                                : parser::PropertyParseBehavior::AllowUserUnits;
     return (*parseFn)(
         *this, parser::PropertyParseFnParams::Create(declaration, specificity, parseBehavior));
   }
