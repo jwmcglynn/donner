@@ -149,6 +149,26 @@ TEST_F(GeoEncoderTest, ClearWritesDirectTarget) {
   EXPECT_THAT(pixel, RgbaEq(0, 128, 255, 255));
 }
 
+TEST_F(GeoEncoderTest, SmallArenaUploadsAreCombinedBeforeSubmission) {
+  GeodeCounters counters;
+  device_->setCounters(&counters);
+  struct CounterScope {
+    GeodeDevice* device;
+    ~CounterScope() { device->setCounters(nullptr); }
+  } counterScope{device_.get()};
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
+  encoder.clear(css::RGBA(0, 0, 0, 0));
+  for (int i = 0; i < 20; ++i) {
+    encoder.fillPath(PathBuilder().addRect(Box2d({2.0 + i, 2}, {30.0 + i, 30})).build(),
+                     css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  }
+  encoder.finish();
+  EXPECT_LE(counters.bufferWrites, 8u);
+  EXPECT_THAT(pixelAt(readback(), 25, 20), RgbaEq(255, 0, 0, 255));
+  EXPECT_THAT(pixelAt(readback(), 55, 55), RgbaEq(0, 0, 0, 0));
+}
+
 TEST_F(GeoEncoderTest, RefusedArenaWriteSkipsOwnedSubmissionAndRecovers) {
   const uint64_t serialBefore = device_->runtimeDevice().lastSubmittedSerial();
   GeoEncoder refused(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
