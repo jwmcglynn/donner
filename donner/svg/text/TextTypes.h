@@ -15,6 +15,7 @@ struct StretchedTextPath {
   Path::MeasuredPath measuredPath;
   double startOffset = 0.0;
   bool closed = false;
+  bool linear = false;
 };
 
 /// Resolved face and used font size for layout or declaring-element decoration metrics.
@@ -44,6 +45,7 @@ struct TextGlyph {
   float stretchScaleY = 1.0f;            ///< Additional Y-axis glyph stretch from lengthAdjust.
   std::optional<double> textPathOrigin;  ///< Logical path distance for a stretched outline origin.
   double textPathNormalOffset = 0.0;     ///< Offset from the path along its left normal.
+  std::optional<double> textPathLocalRotateDegrees;  ///< Authored rotation before path warping.
 };
 
 /**

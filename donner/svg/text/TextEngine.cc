@@ -36,6 +36,7 @@
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/text/TextBackendSimple.h"
 #include "donner/svg/text/TextEngineHelpers.h"
+#include "donner/svg/text/TextPathWarp.h"
 #ifdef DONNER_TEXT_FULL
 #include "donner/svg/text/TextBackendFull.h"
 #endif
@@ -965,6 +966,7 @@ struct TextPathStagingState {
 
 struct DeferredTextPath {
   size_t firstRun = 0;
+  size_t endRun = 0;
   Path::MeasuredPath measuredPath;
   bool closed = false;
   std::vector<TextPathCluster> clusters;
@@ -1106,6 +1108,12 @@ bool IsSingleClosedTextPath(const Path& source) {
   return moves == 1 && closes == 1;
 }
 
+bool IsStraightTextPath(const Path& source) {
+  const auto commands = source.commands();
+  return commands.size() == 2u && commands[0].verb == Path::Verb::MoveTo &&
+         commands[1].verb == Path::Verb::LineTo;
+}
+
 /// Normalize finite distances without changing the open-path clipping policy.
 double NormalizeTextPathDistance(double distance, double length) {
   const double normalized = std::fmod(distance, length);
@@ -1161,6 +1169,7 @@ void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, b
         if (method == components::TextPathMethod::Stretch) {
           glyph.textPathOrigin = cluster.pathOffset + localX;
           glyph.textPathNormalOffset = cluster.baselineOffset + localY;
+          glyph.textPathLocalRotateDegrees = glyph.rotateDegrees;
         }
         glyph.xPosition = origin.x + localX * std::cos(angle) - localY * std::sin(angle);
         glyph.yPosition = origin.y + localX * std::sin(angle) + localY * std::cos(angle);
@@ -1195,8 +1204,9 @@ void placeTextPath(const components::ComputedTextComponent& text, const TextLayo
                         path.clusters, firstSpan.textPathMethod);
   if (firstSpan.textPathMethod == components::TextPathMethod::Stretch) {
     auto mapping = std::make_shared<StretchedTextPath>(
-        StretchedTextPath{std::move(path.measuredPath), firstSpan.pathStartOffset, path.closed});
-    for (size_t runIndex = path.firstRun; runIndex < runs.size(); ++runIndex) {
+        StretchedTextPath{std::move(path.measuredPath), firstSpan.pathStartOffset, path.closed,
+                          IsStraightTextPath(*firstSpan.pathSpline)});
+    for (size_t runIndex = path.firstRun; runIndex < path.endRun; ++runIndex) {
       runs[runIndex].stretchedTextPath = mapping;
     }
   }
@@ -3435,8 +3445,8 @@ private:
 
   void retainTextPath(Path::MeasuredPath measuredPath, bool closed, size_t retainedBytes) {
     deferredTextPathBytes_ += retainedBytes;
-    deferredTextPaths_.push_back(
-        {*firstPathRun_, std::move(measuredPath), closed, std::move(pathStaging_.clusters)});
+    deferredTextPaths_.push_back({*firstPathRun_, runs_.size(), std::move(measuredPath), closed,
+                                  std::move(pathStaging_.clusters)});
   }
 
   void discardTextPathRuns() {
@@ -3697,13 +3707,31 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
     }
 
     if (!run.glyphs.empty()) {
-      Box2d runEmBounds =
-          Box2d::FromXYWH(run.glyphs.front().xPosition, run.glyphs.front().yPosition - emTop, 0.0,
-                          emTop + emBottom);
+      Box2d runEmBounds;
+      bool hasRunEmBounds = false;
       for (const auto& glyph : run.glyphs) {
-        runEmBounds.addPoint(Vector2d(glyph.xPosition, glyph.yPosition - emTop));
-        runEmBounds.addPoint(
-            Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + emBottom));
+        Box2d glyphCell;
+        if (run.stretchedTextPath && glyph.textPathOrigin) {
+          const Path localCell = PathBuilder()
+                                     .moveTo(Vector2d(0.0, -emTop))
+                                     .lineTo(Vector2d(glyph.xAdvance, -emTop))
+                                     .lineTo(Vector2d(glyph.xAdvance, emBottom))
+                                     .lineTo(Vector2d(0.0, emBottom))
+                                     .closePath()
+                                     .build();
+          const Path warpedCell = WarpTextPathOutline(localCell, *run.stretchedTextPath, glyph);
+          if (warpedCell.empty()) {
+            continue;
+          }
+          glyphCell = warpedCell.bounds();
+        } else {
+          glyphCell = Box2d::FromXYWH(glyph.xPosition, glyph.yPosition - emTop, glyph.xAdvance,
+                                      emTop + emBottom);
+        }
+        addBox(runEmBounds, hasRunEmBounds, glyphCell);
+      }
+      if (!hasRunEmBounds) {
+        continue;
       }
       addBox(cache.emBoxBounds, hasEmBoxBounds, runEmBounds);
       ++objectBoundingBoxSpanVisits_;
@@ -3742,14 +3770,26 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
                                     Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
         }
 
-        Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-        if (glyph.rotateDegrees != 0.0) {
-          glyphFromLocal =
-              Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
-              glyphFromLocal;
+        Path transformed;
+        if (run.stretchedTextPath && glyph.textPathOrigin) {
+          const double localRotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
+          if (localRotation != 0.0) {
+            glyphPath = transformPath(
+                glyphPath, Transform2d::Rotate(localRotation * MathConstants<double>::kPi / 180.0));
+          }
+          transformed = WarpTextPathOutline(glyphPath, *run.stretchedTextPath, glyph);
+        } else {
+          Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+          if (glyph.rotateDegrees != 0.0) {
+            glyphFromLocal =
+                Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+                glyphFromLocal;
+          }
+          transformed = transformPath(glyphPath, glyphFromLocal);
         }
-
-        Path transformed = transformPath(glyphPath, glyphFromLocal);
+        if (transformed.empty()) {
+          continue;
+        }
         const Box2d extent = transformed.bounds();
         cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
         addBox(cache.inkBounds, hasInkBounds, extent);

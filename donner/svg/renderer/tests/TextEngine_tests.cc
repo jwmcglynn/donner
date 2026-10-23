@@ -1338,6 +1338,30 @@ TEST(TextEngineTest, TextPathStretchKeepsCombiningMarkInBaseClusterFrame) {
               shaped.glyphs[1].yOffset - shaped.glyphs[0].yOffset, 1e-6);
 }
 
+TEST(TextEngineTest, TextPathStretchMappingStopsAtItsOwningRunRange) {
+  Registry registry;
+  FontManager fontManager(registry);
+  components::ComputedTextComponent text;
+  const Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(200.0, 0.0)).build();
+  auto stretched = MakeSpan("A");
+  stretched.pathSpline = path;
+  stretched.textPathSourceEntity = registry.create();
+  stretched.textPathMethod = components::TextPathMethod::Stretch;
+  auto flat = MakeSpan("B");
+  auto aligned = MakeSpan("C");
+  aligned.pathSpline = path;
+  aligned.textPathSourceEntity = registry.create();
+  text.spans = {std::move(stretched), std::move(flat), std::move(aligned)};
+
+  TextEngine engine(fontManager, registry);
+  const auto runs = engine.layout(text, MakeTextParams(24.0));
+
+  ASSERT_THAT(runs, SizeIs(3));
+  EXPECT_TRUE(runs[0].stretchedTextPath);
+  EXPECT_FALSE(runs[1].stretchedTextPath);
+  EXPECT_FALSE(runs[2].stretchedTextPath);
+}
+
 TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
   Registry registry;
   FontManager fontManager(registry);

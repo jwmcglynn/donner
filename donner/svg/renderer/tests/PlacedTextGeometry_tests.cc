@@ -65,5 +65,24 @@ TEST(PlacedTextGeometryTest, StretchRejectsNonfiniteGlyphCoordinates) {
   EXPECT_TRUE(WarpGlyphOutline(outline, MeasurePath(route), glyph).empty());
 }
 
+TEST(PlacedTextGeometryTest, StretchSubdividesWideRectangularGlyphEdgesAcrossCurve) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .curveTo(Vector2d(0.0, 20.0), Vector2d(20.0, 20.0), Vector2d(20.0, 0.0))
+                         .build();
+  const Path rectangle = PathBuilder().addRect(Box2d::FromXYWH(0.0, -2.0, 18.0, 4.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 0.0;
+
+  const Path warped = WarpGlyphOutline(rectangle, MeasurePath(route), glyph);
+
+  ASSERT_FALSE(warped.empty());
+  EXPECT_GT(warped.verbCount(), rectangle.verbCount());
+  EXPECT_GT(warped.points().size(), rectangle.points().size());
+  const Box2d bounds = warped.bounds();
+  EXPECT_GT(bounds.bottomRight.y - bounds.topLeft.y, 4.0);
+  EXPECT_GT(bounds.bottomRight.x - bounds.topLeft.x, 10.0);
+}
+
 }  // namespace
 }  // namespace donner::svg
