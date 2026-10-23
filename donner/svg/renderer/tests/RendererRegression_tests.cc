@@ -380,13 +380,14 @@ TEST_F(RendererRegressionTests, ReferenceContractObsoleteIccPaintRejectsWholeDec
   const auto actual = RenderReferenceContract(R"svg(
     <linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/>
     </linearGradient><g fill="lime"><rect x="8" y="8" width="48" height="48"
-      fill="url(#g) red icc-color(profile, 0.2, 0.4, 0.1)"/></g>)svg");
+      style="fill: url(#g) red icc-color(profile, 0.2, 0.4, 0.1)"/></g>)svg");
   const auto expected =
       RenderReferenceContract(R"svg(<rect x="8" y="8" width="48" height="48" fill="lime"/>)svg");
   ExpectVisibleBitmap(actual, "obsolete_icc_inherited_visible");
   ExpectBitmapsIdentical(actual, expected, "obsolete_icc_declaration_rejected");
 }
 
+// The font presentation shorthand is a supported Donner extension.
 TEST_F(RendererRegressionTests, ReferenceContractUnitlessFontShorthandMatchesLonghands) {
   SVGDocument shorthand = instantiateSubtree(R"svg(
     <text x="4" y="38" font="italic bold 28 Noto Sans">Ab</text>)svg",
