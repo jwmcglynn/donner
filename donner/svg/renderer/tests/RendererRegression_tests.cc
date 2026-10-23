@@ -608,6 +608,27 @@ TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphRotationMatchesGroupRotation)
 }
 #endif
 
+TEST_F(RendererRegressionTests, MiterClipMatchesClippedJoinPolygon) {
+  SVGDocument expectedDocument = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+      <path fill="green" d="M16 33 L30.25 14 L33.75 14 L48 33
+                            L40 39 L32 28.333333333333333 L24 39 Z"/>
+    </svg>)svg");
+  const RendererBitmap expected =
+      RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend());
+  for (const std::string_view path : {"M20 36 L32 20 L44 36", "M44 36 L32 20 L20 36"}) {
+    SCOPED_TRACE(path);
+    SVGDocument document =
+        ParseSvg(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+          <path fill="none" stroke="green" stroke-width="10" stroke-linejoin="miter-clip"
+                stroke-miterlimit="1.2" d=")svg") +
+                 std::string(path) + R"svg("/></svg>)svg");
+    const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+    editor::tests::CompareBitmapToBitmap(actual, expected, "miter_clip_analytic_join",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererRegressionTests, FontPropertiesDoNotChangeReducedCrosshair) {
   SVGDocument reduced = instantiateSubtree(R"(
     <svg width="500" height="500" viewBox="0 0 200 200">
