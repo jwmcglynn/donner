@@ -9069,9 +9069,18 @@ void EditorShell::updateSourceStyleDecorations() {
     return;
   }
 
+  // The browser GPU owner must not wait for a renderer holding document write access.
+  const auto documentAccess = app_.document().document().tryReadAccess();
+  if (!documentAccess.has_value()) {
+    if (!renderCoordinator_.asyncRenderer().isBusyWithIdleWake()) {
+      window_.wakeEventLoop();
+    }
+    return;
+  }
+
   DetachedStyleSourceAnnotations detached = styleSourceAnnotationsFuture_.get();
   if (styleSourceAnnotationPendingDocumentGeneration_ != documentGeneration ||
-      styleSourceAnnotationPendingSourceVersion_ != sourceVersion) {
+      styleSourceAnnotationPendingSourceVersion_ != app_.document().document().sourceVersion()) {
     clearSourceStyleDecorations(true);
     window_.wakeEventLoop();
     return;
