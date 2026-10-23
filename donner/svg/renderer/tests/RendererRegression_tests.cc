@@ -321,10 +321,12 @@ RendererBitmap RenderReferenceContract(std::string_view body) {
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
-RendererBitmap RenderReferenceRadial(std::string_view attributes) {
+RendererBitmap RenderReferenceRadial(std::string_view attributes, bool singleStop = false) {
   return RenderReferenceContract(
       std::string(R"svg(<radialGradient id="g" )svg") + std::string(attributes) +
-      R"svg(><stop stop-color="red"/><stop offset="1" stop-color="blue"/></radialGradient>
+      (singleStop ? R"svg(><stop stop-color="blue"/>)svg"
+                  : R"svg(><stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg") +
+      R"svg(</radialGradient>
       <rect x="8" y="8" width="48" height="48" fill="url(#g)"/>
       <rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
 }
@@ -333,13 +335,27 @@ TEST_F(RendererRegressionTests, ReferenceContractRadialNegativeRadiiDoNotPaint) 
   const auto expected =
       RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
   ExpectVisibleBitmap(expected, "radial_negative_sibling_visible");
-  for (std::string_view attribute : {R"(r="-0.25")", R"(fr="-0.25")", R"(r="0" fr="-0.25")"}) {
+  for (std::string_view attribute :
+       {R"(r="-0.25")", R"(fr="-0.25")", R"(r="0" fr="-0.25")", R"(r="-1e-12")"}) {
     SCOPED_TRACE(attribute);
     ExpectBitmapsIdentical(RenderReferenceRadial(attribute), expected, "negative_radius_no_paint");
   }
   const auto zeroRadius = RenderReferenceRadial(R"(r="0")");
   ExpectBitmapsDiffer(zeroRadius, expected, "zero_radius_last_stop_control");
   EXPECT_THAT(PixelAt(zeroRadius, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractRadialSingleStopNegativeRadiiDoNotPaint) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+  for (std::string_view attribute : {R"(r="-0.25")", R"(fr="-0.25")", R"(r="-1e-12")"}) {
+    SCOPED_TRACE(attribute);
+    ExpectBitmapsIdentical(RenderReferenceRadial(attribute, true), expected,
+                           "single_stop_negative_radius_no_paint");
+  }
+  const auto valid = RenderReferenceRadial("", true);
+  ExpectBitmapsDiffer(valid, expected, "single_stop_valid_control");
+  EXPECT_THAT(PixelAt(valid, 32, 32), testing::ElementsAre(0, 0, 255, 255));
 }
 
 TEST_F(RendererRegressionTests, ReferenceContractRadialContainingStartCircleDoesNotPaint) {
