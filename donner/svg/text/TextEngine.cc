@@ -3200,8 +3200,8 @@ private:
                            uint32_t codepoint, unsigned int charIndex, TextGlyph& glyph) const {
     if (codepoint < 0x2E80) {
       glyph.yAdvance = shapedGlyph.xAdvance > 0 ? shapedGlyph.xAdvance : shapedGlyph.yAdvance;
-      glyph.xPosition += shapedGlyph.xOffset;
-      glyph.yPosition += shapedGlyph.yOffset;
+      glyph.xPosition -= shapedGlyph.yOffset;
+      glyph.yPosition += shapedGlyph.xOffset;
       const FontVMetrics metrics = backend_.fontVMetrics(state.font);
       const double pixelHeightScale =
           metrics.ascent != metrics.descent
