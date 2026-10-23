@@ -2161,11 +2161,14 @@ bool EmitClippedMiterPiece(const Vector2d& vertex, const Vector2d& previousOuter
   if (!std::isfinite(limit) || limit <= cosine || denominator <= 0.0) {
     return false;
   }
-  const double fraction = (limit - cosine) * cosine / denominator;
-  const Vector2d tipNormal = sum / (sumLength * cosine);
+  const double distance = cosine > 0.0 ? std::min(limit, 1.0 / cosine) : limit;
+  const double alongBisector = (distance - cosine) / denominator;
+  const double fraction = alongBisector * cosine;
+  const Vector2d bisector =
+      sumLength > 0.0 ? sum / sumLength : Vector2d(previousOuterNormal.y, -previousOuterNormal.x);
   const Vector2d previousClipped =
-      previousOuterNormal + (tipNormal - previousOuterNormal) * fraction;
-  const Vector2d currentClipped = currentOuterNormal + (tipNormal - currentOuterNormal) * fraction;
+      previousOuterNormal * (1.0 - fraction) + bisector * alongBisector;
+  const Vector2d currentClipped = currentOuterNormal * (1.0 - fraction) + bisector * alongBisector;
   EmitPositiveStrokePiece(
       {vertex, vertex + previousOuterNormal * halfWidth, vertex + previousClipped * halfWidth,
        vertex + currentClipped * halfWidth, vertex + currentOuterNormal * halfWidth},

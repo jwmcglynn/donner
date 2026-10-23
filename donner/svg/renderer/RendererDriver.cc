@@ -2601,9 +2601,14 @@ RangeBoundContribution BoundPathEntity(Registry& registry, Entity entity,
   if (!std::holds_alternative<PaintServer::None>(paint.stroke) &&
       paint.strokeParams.strokeWidth > 0.0) {
     double padding = paint.strokeParams.strokeWidth / 2.0;
-    if (paint.strokeParams.lineJoin == StrokeLinejoin::Miter ||
-        paint.strokeParams.lineJoin == StrokeLinejoin::MiterClip) {
+    if (paint.strokeParams.lineJoin == StrokeLinejoin::Miter) {
       padding *= paint.strokeParams.miterLimit;
+    } else if (paint.strokeParams.lineJoin == StrokeLinejoin::MiterClip) {
+      padding = StrokeCullHalfExtent(paint.strokeParams.strokeWidth, paint.strokeParams.lineCap,
+                                     paint.strokeParams.lineJoin, paint.strokeParams.miterLimit);
+    }
+    if (!std::isfinite(padding)) {
+      return {.unknown = true};
     }
     local = Box2d(local.topLeft - Vector2d(padding, padding),
                   local.bottomRight + Vector2d(padding, padding));
