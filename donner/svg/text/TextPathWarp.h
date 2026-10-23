@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <optional>
 
 #include "donner/base/Path.h"
@@ -192,11 +194,12 @@ private:
     const double origin = mapping_.startOffset + *glyph_.textPathOrigin;
     const double startDistance = origin + current_.x;
     const double endDistance = origin + end.x;
+    const auto boundaries = crossedBoundaries(startDistance, endDistance);
+    if (!boundaries) {
+      return false;
+    }
     if (end.x != current_.x) {
-      for (const double boundary : mapping_.segmentEndDistances) {
-        if (!CrossesBoundary(startDistance, endDistance, boundary)) {
-          continue;
-        }
+      for (const double boundary : *boundaries) {
         const double t = (boundary - startDistance) / (endDistance - startDistance);
         const Vector2d intervalEnd = current_ * (1.0 - t) + end * t;
         const auto mappedEnd = map(intervalEnd);
@@ -213,6 +216,62 @@ private:
       return false;
     }
     current_ = end;
+    return true;
+  }
+  std::optional<std::vector<double>> crossedBoundaries(double start, double end) {
+    std::vector<double> result;
+    if (start == end || mapping_.segmentEndDistances.empty()) {
+      return result;
+    }
+    const double low = std::min(start, end);
+    const double high = std::max(start, end);
+    const bool admitted = mapping_.closed ? appendClosedBoundaries(result, low, high)
+                                          : appendBoundaryRange(result, low, high, 0.0);
+    if (!admitted) {
+      return std::nullopt;
+    }
+    if (start > end) {
+      std::reverse(result.begin(), result.end());
+    }
+    return result;
+  }
+  bool appendBoundaryRange(std::vector<double>& result, double low, double high, double shift) {
+    const auto first = std::upper_bound(mapping_.segmentEndDistances.begin(),
+                                        mapping_.segmentEndDistances.end(), low - shift);
+    const auto last = std::lower_bound(first, mapping_.segmentEndDistances.end(), high - shift);
+    for (auto it = first; it != last; ++it) {
+      if (remainingWork_ == 0u) {
+        return false;
+      }
+      --remainingWork_;
+      result.push_back(*it + shift);
+    }
+    return true;
+  }
+  bool appendClosedBoundaries(std::vector<double>& result, double low, double high) {
+    const double length = mapping_.measuredPath.pathLength();
+    const double firstPeriod = std::floor(low / length);
+    const double lastPeriod = std::floor(high / length);
+    constexpr double kMaxCircuit = static_cast<double>(std::numeric_limits<std::int64_t>::max());
+    constexpr double kMinCircuit = static_cast<double>(std::numeric_limits<std::int64_t>::min());
+    if (!std::isfinite(firstPeriod) || !std::isfinite(lastPeriod) || firstPeriod < kMinCircuit ||
+        lastPeriod > kMaxCircuit ||
+        lastPeriod - firstPeriod > static_cast<double>(remainingWork_)) {
+      return false;
+    }
+    const std::int64_t firstCircuit = static_cast<std::int64_t>(firstPeriod);
+    const std::int64_t lastCircuit = static_cast<std::int64_t>(lastPeriod);
+    if (lastCircuit < firstCircuit) {
+      return false;
+    }
+    for (std::int64_t circuit = firstCircuit;; ++circuit) {
+      if (!appendBoundaryRange(result, low, high, static_cast<double>(circuit) * length)) {
+        return false;
+      }
+      if (circuit == lastCircuit) {
+        break;
+      }
+    }
     return true;
   }
   bool appendAdaptive(const Vector2d& start, const Vector2d& end, const Vector2d& mappedStart,
@@ -260,8 +319,13 @@ private:
 
 inline Path GeneralOutline(const Path& outline, const StretchedTextPath& mapping,
                            const TextGlyph& glyph, double tolerance) {
-  GeneralOutlineWarper warper(mapping, glyph, outline.points(), tolerance);
-  for (const auto& command : outline.commands()) {
+  const Path flattened = outline.flatten(tolerance);
+  if (flattened.empty() ||
+      flattened.points().size() > outline.points().size() * kMaximumTextPathWarpExpansion) {
+    return Path();
+  }
+  GeneralOutlineWarper warper(mapping, glyph, flattened.points(), tolerance);
+  for (const auto& command : flattened.commands()) {
     if (!warper.append(command)) {
       return Path();
     }
@@ -282,7 +346,8 @@ inline Path WarpTextPathOutline(const Path& outline, const StretchedTextPath& ma
                                 const TextGlyph& glyph,
                                 double tolerance = Path::kLocalFlattenTolerance) {
   if (outline.empty() || !text_path_warp_details::FiniteOutline(outline) ||
-      outline.verbCount() > Path::kMaximumGeometryQueryWork / kMaximumTextPathWarpExpansion) {
+      outline.verbCount() > Path::kMaximumGeometryQueryWork / kMaximumTextPathWarpExpansion ||
+      outline.points().size() > Path::kMaximumGeometryQueryWork / kMaximumTextPathWarpExpansion) {
     return Path();
   }
   return mapping.linear && glyph.textPathOrigin

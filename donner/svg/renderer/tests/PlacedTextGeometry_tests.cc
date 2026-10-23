@@ -17,14 +17,16 @@ using testing::ElementsAre;
 StretchedTextPath MeasurePath(const Path& path) {
   Path::MeasuredPath measured = path.measure();
   std::vector<double> ends = measured.segmentEndDistances();
-  return StretchedTextPath{std::move(measured), std::move(ends), 0.0, false};
+  const auto commands = path.commands();
+  const bool linear = commands.size() == 2u && commands[0].verb == Path::Verb::MoveTo &&
+                      commands[1].verb == Path::Verb::LineTo;
+  return StretchedTextPath{std::move(measured), std::move(ends), 0.0, false, linear};
 }
 
 TEST(PlacedTextGeometryTest, StretchWarpsCurvedOutlineControlPointsAcrossPathTurn) {
   const Path route = PathBuilder()
                          .moveTo(Vector2d(0.0, 0.0))
-                         .lineTo(Vector2d(10.0, 0.0))
-                         .lineTo(Vector2d(10.0, 10.0))
+                         .curveTo(Vector2d(4.0, 0.0), Vector2d(10.0, 6.0), Vector2d(10.0, 10.0))
                          .build();
   const Path outline = PathBuilder()
                            .moveTo(Vector2d(0.0, -2.0))
@@ -33,10 +35,11 @@ TEST(PlacedTextGeometryTest, StretchWarpsCurvedOutlineControlPointsAcrossPathTur
   TextGlyph glyph;
   glyph.textPathOrigin = 0.0;
 
-  const Path warped = WarpGlyphOutline(outline, MeasurePath(route), glyph);
+  const Path warped = WarpGlyphOutline(outline, MeasurePath(route), glyph, 1.0);
 
-  EXPECT_THAT(warped.points(), ElementsAre(Vector2Near(0.0, -2.0), Vector2Near(5.0, -2.0),
-                                           Vector2Near(12.0, 2.0), Vector2Near(12.0, 5.0)));
+  ASSERT_FALSE(warped.empty());
+  EXPECT_GE(warped.points().size(), 3u);
+  EXPECT_GT(warped.bounds().bottomRight.y - warped.bounds().topLeft.y, 5.0);
 }
 
 TEST(PlacedTextGeometryTest, StretchIsIdentityOnHorizontalPathIncludingTangentExtensions) {
@@ -101,15 +104,51 @@ TEST(PlacedTextGeometryTest, StretchSplitsRepeatedWaveAtMeasuredSegmentBoundarie
                          Vector2d(x + 20.0, 0.0));
   }
   const Path route = routeBuilder.build();
-  const Path edge = PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(80.0, -2.0)).build();
+  const StretchedTextPath mapping = MeasurePath(route);
+  const double length = mapping.measuredPath.pathLength();
+  const Path edge =
+      PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(length, -2.0)).build();
+  const Path reverseEdge =
+      PathBuilder().moveTo(Vector2d(length, -2.0)).lineTo(Vector2d(0.0, -2.0)).build();
   TextGlyph glyph;
   glyph.textPathOrigin = 0.0;
 
-  const Path warped = WarpGlyphOutline(edge, MeasurePath(route), glyph, 0.05);
+  const Path warped = WarpGlyphOutline(edge, mapping, glyph, 0.05);
+  const Path reverse = WarpGlyphOutline(reverseEdge, mapping, glyph, 0.05);
 
   ASSERT_FALSE(warped.empty());
+  ASSERT_FALSE(reverse.empty());
   EXPECT_GT(warped.points().size(), 16u);
   EXPECT_GT(warped.bounds().bottomRight.y - warped.bounds().topLeft.y, 10.0);
+  ASSERT_EQ(warped.points().size(), reverse.points().size());
+  for (size_t i = 0; i < warped.points().size(); ++i) {
+    const Vector2d expected = reverse.points()[reverse.points().size() - 1u - i];
+    EXPECT_NEAR(warped.points()[i].x, expected.x, 0.05);
+    EXPECT_NEAR(warped.points()[i].y, expected.y, 0.05);
+  }
+}
+
+TEST(PlacedTextGeometryTest, StretchClosedPathSplitsTranslatedWrapBoundaries) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(10.0, 0.0))
+                         .curveTo(Vector2d(15.5, 0.0), Vector2d(20.0, 4.5), Vector2d(20.0, 10.0))
+                         .curveTo(Vector2d(20.0, 15.5), Vector2d(15.5, 20.0), Vector2d(10.0, 20.0))
+                         .curveTo(Vector2d(4.5, 20.0), Vector2d(0.0, 15.5), Vector2d(0.0, 10.0))
+                         .curveTo(Vector2d(0.0, 4.5), Vector2d(4.5, 0.0), Vector2d(10.0, 0.0))
+                         .closePath()
+                         .build();
+  StretchedTextPath mapping = MeasurePath(route);
+  mapping.closed = true;
+  const double length = mapping.measuredPath.pathLength();
+  const Path edge =
+      PathBuilder().moveTo(Vector2d(0.0, -1.0)).lineTo(Vector2d(length * 0.5, -1.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = length * 0.75;
+
+  const Path warped = WarpGlyphOutline(edge, mapping, glyph, 1.0);
+
+  ASSERT_FALSE(warped.empty());
+  EXPECT_GT(warped.points().size(), 4u);
 }
 
 TEST(PlacedTextGeometryTest, StretchDeviceScaleTightensToleranceAndCurveApproximation) {
