@@ -2213,6 +2213,52 @@ TEST(RendererPublicApiTest, TextPathPairSplitMatchesUnsplitPixels) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank) {
+  SVGDocument invalid = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+        xmlns:xlink="http://www.w3.org/1999/xlink" width="192" height="96">
+        <defs><path id="path1" d="M8 64H184"/></defs>
+        <rect x="8" y="8" width="24" height="24" fill="#27ae60"/>
+        <text font-family="Public Sans" font-size="32">
+          <textPath path="q" xlink:href="path1">Must not render</textPath>
+        </text>
+      </svg>)svg");
+  SVGDocument blank = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="192" height="96">
+        <rect x="8" y="8" width="24" height="24" fill="#27ae60"/>
+      </svg>)svg");
+
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(invalid), RenderPublicDocument(blank),
+                                       "textpath-invalid-path-fragment-free-href",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, TextPathStretchCurvedRenderingDiffersFromAlign) {
+  const auto glyphPaths = [](std::string_view method) {
+    SVGDocument document = ParseDocument(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='224' height='128' "
+        "font-family='Public Sans' font-size='36'><defs><path id='p' "
+        "d='M8 72 C48 8 96 120 136 56 S192 24 216 80'/></defs><text>"
+        "<textPath href='#p' method='" +
+        std::string(method) + "'>e</textPath></text></svg>");
+    (void)RenderPublicDocument(document);
+    const auto text = document.querySelector("text");
+    EXPECT_TRUE(text.has_value());
+    if (!text) {
+      return std::vector<Path>();
+    }
+    return document.registry().ctx().get<TextEngine>().computedGlyphPaths(
+        text->unsafeEntityHandle());
+  };
+
+  const std::vector<Path> align = glyphPaths("align");
+  const std::vector<Path> stretch = glyphPaths("stretch");
+  ASSERT_FALSE(align.empty());
+  ASSERT_EQ(stretch.size(), align.size());
+  EXPECT_GT(stretch.front().points().size(), align.front().points().size());
+  EXPECT_NE(stretch.front().bounds(), align.front().bounds());
+}
+
 TEST(RendererPublicApiTest, TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText) {
   const auto compare = [](std::string_view route, std::string_view ordinaryAttributes,
                           std::string_view label) {

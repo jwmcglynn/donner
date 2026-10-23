@@ -1782,10 +1782,11 @@ INSTANTIATE_TEST_SUITE_P(
                                        "donner/svg/renderer/testdata/golden/resvg-m-L-Z-path.png")
                                        .withReason("Minor char")},
                 {"method=stretch.svg",
-                 Params::Skip("Implemented by warping outline endpoints and control points along "
-                              "path normals; the vendored reference is byte-identical to "
-                              "simple-case.png and therefore pins align placement. Independent "
-                              "geometry regressions cover the stretch contract")},
+                 Params::RenderOnly(
+                     "Implemented by warping outline endpoints and control points along path "
+                     "normals; the vendored reference is byte-identical to simple-case.png and "
+                     "therefore pins align placement. Independent geometry and renderer "
+                     "regressions cover the stretch contract")},
                 {"mixed-children-1.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
@@ -1865,12 +1866,11 @@ INSTANTIATE_TEST_SUITE_P(
                 // into the glyph interiors, where it is counted.
                 {"with-filter.svg", Params::Skip("Glyph coverage is lighter than the reference")},
                 {"with-invalid-path-and-xlink-href.svg",
-                 Params::Skip("Reference disagrees with the corpus: after the invalid `path` is "
-                              "ignored, the remaining `xlink:href=\"path1\"` has no fragment, so "
-                              "it names a document rather than an element. The corpus' own "
-                              "paint-servers/radialGradient/invalid-xlink-href.svg pins that as "
-                              "unresolvable, and results.csv records every engine failing this "
-                              "reference")},
+                 Params::RenderOnly(
+                     "Reference disagrees with the corpus: after invalid `path` is ignored, "
+                     "relative `xlink:href=\"path1\"` names an external document, not the local "
+                     "element. Without an admitted external SVG resource it is unresolved; "
+                     "independent control-scene coverage pins that policy")},
                 {"with-rotate.svg", Params::WithGoldenOverride(
                                         "donner/svg/renderer/testdata/golden/resvg-with-rotate.png")
                                         .withReason("Minor char")},
