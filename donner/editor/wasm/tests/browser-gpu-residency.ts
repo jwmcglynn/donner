@@ -1,9 +1,9 @@
-import { dispatchCanvasPointer } from "./canvas-pointer";
 import { expect, type Page, type TestInfo, type Worker } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { readEditorPixelBoundsFromPng } from "./canvas-color-stats";
+import { dispatchCanvasPointer } from "./canvas-pointer";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 
 type WorkerStats = {
@@ -43,6 +43,61 @@ export type SelectionWindow = Window & {
     pending?: boolean;
   };
 };
+
+type ResizeCallbackHold = {
+  held: boolean;
+  pending: (() => void)[];
+  release: () => void;
+};
+type ResizeTestWindow = Window & { __donnerResizeCallbackHold?: ResizeCallbackHold };
+
+async function installResizeCallbackHold(page: Page) {
+  await page.addInitScript(() => {
+    const add = window.addEventListener.bind(window);
+    const remove = window.removeEventListener.bind(window);
+    const wrappers = [
+      new Map<EventListenerOrEventListenerObject, EventListener>(),
+      new Map<EventListenerOrEventListenerObject, EventListener>(),
+    ];
+    const hold: ResizeCallbackHold = {
+      held: false,
+      pending: [],
+      release() {
+        hold.held = false;
+        for (const invoke of hold.pending.splice(0)) invoke();
+      },
+    };
+    (window as ResizeTestWindow).__donnerResizeCallbackHold = hold;
+    window.addEventListener = ((type, listener, options) => {
+      // The bridge's passive listeners keep publishing viewport dimensions and the frame request.
+      if (type !== "resize" || !listener || (typeof options === "object" && options.passive)) {
+        return add(type, listener!, options);
+      }
+      const capture = typeof options === "boolean" ? options : options?.capture === true;
+      const table = wrappers[Number(capture)];
+      let wrapper = table.get(listener);
+      if (!wrapper) {
+        wrapper = (event) => {
+          const invoke = () => {
+            if (typeof listener === "function") listener.call(window, event);
+            else listener.handleEvent(event);
+          };
+          if (hold.held) hold.pending.push(invoke);
+          else invoke();
+        };
+        table.set(listener, wrapper);
+      }
+      add(type, wrapper, options);
+    }) as typeof window.addEventListener;
+    window.removeEventListener = ((type, listener, options) => {
+      const capture = typeof options === "boolean" ? options : options?.capture === true;
+      const table = wrappers[Number(capture)];
+      const wrapper = type === "resize" && listener ? table.get(listener) : undefined;
+      remove(type, wrapper ?? listener!, options);
+      if (wrapper && listener) table.delete(listener);
+    }) as typeof window.removeEventListener;
+  });
+}
 
 type GpuStats = Record<string, number>;
 type PreviewStats = NonNullable<SelectionWindow["__donnerSampleThumbnailStats"]>;
@@ -203,7 +258,11 @@ async function openBasicShapes(page: Page, priorResults: number) {
   const canvas = page.locator("canvas#canvas");
   const bounds = await canvas.boundingBox();
   expect(bounds, "the editor canvas is missing").not.toBeNull();
-  await dispatchCanvasPointer(page, { x: bounds!.x + bounds!.width * 0.76, y: bounds!.y + 282 }, true);
+  await dispatchCanvasPointer(
+    page,
+    { x: bounds!.x + bounds!.width * 0.76, y: bounds!.y + 282 },
+    true,
+  );
   await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expect.poll(async () => (await readWorkerStats(page))?.completedResults, { timeout: 10000 })
     .toBeGreaterThan(priorResults);
@@ -263,10 +322,40 @@ async function waitForCompletedCamera(page: Page) {
 
 async function redrawDocument(page: Page, probe: GpuAccountingProbe, priorPresents: number) {
   const priorViewport = await readViewport(page);
-  await page.setViewportSize({ width: 1440, height: 920 });
-  await expect.poll(async () => (await readViewport(page)).paneWidth, { timeout: 10000 }).not.toBe(
-    priorViewport.paneWidth,
-  );
+  await page.evaluate(() => {
+    (window as ResizeTestWindow).__donnerResizeCallbackHold!.held = true;
+  });
+  try {
+    await page.setViewportSize({ width: 1440, height: 920 });
+    await expect.poll(
+      () =>
+        page.evaluate(() =>
+          (window as ResizeTestWindow).__donnerResizeCallbackHold!.pending.length
+        ),
+      { message: "the GLFW resize callbacks must actually be withheld" },
+    ).toBeGreaterThan(0);
+    await expect.poll(() =>
+      page.evaluate((priorWidth) => {
+        const state = window as SelectionWindow & Record<string, any>;
+        const frames = state.__donnerFrameLoopStats;
+        return {
+          resized: state.__donnerViewportStats?.paneWidth !== priorWidth,
+          viewport: state.__donnerViewportStats,
+          browser: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+          frames: { rendered: frames?.renderedFrames, lastAtMs: frames?.lastFrameAtMs },
+          ticks: state.__donnerFrameTickStats,
+          admission: state.__donnerFrameAdmissionStats,
+          interaction: state.__donnerInteractionStats,
+          worker: state.__donnerWorkerStats,
+          queue: state.__donnerPresentationQueueStats,
+        };
+      }, priorViewport.paneWidth), {
+      message: "pane layout must follow the published viewport before delayed GLFW callbacks",
+      timeout: 10000,
+    }).toMatchObject({ resized: true });
+  } finally {
+    await page.evaluate(() => (window as ResizeTestWindow).__donnerResizeCallbackHold!.release());
+  }
   await probe.waitForPresentAfter(priorPresents);
   const afterResizePresents = (await probe.readGpu()).surfacePresents;
   await pinchAtViewportCenter(page, await readViewport(page));
@@ -334,6 +423,7 @@ export async function checkDocumentGpuResidency(
   info: TestInfo,
   onReady?: () => Promise<void>,
 ) {
+  await installResizeCallbackHold(page);
   await openEditor(page, onReady);
   const owner = await findGpuOwner(page);
   await installTransferProbe(owner);
