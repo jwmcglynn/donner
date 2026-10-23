@@ -270,5 +270,37 @@ TEST(PlacedTextGeometryTest, StretchSplitsQuadraticAtNonDyadicXExtremum) {
   EXPECT_GT(warped.points().size(), 2u);
 }
 
+TEST(PlacedTextGeometryTest, StretchSplitsUniformlyTinyQuadraticXExtremum) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .curveTo(Vector2d(0.0, 20.0), Vector2d(20.0, 20.0), Vector2d(20.0, 0.0))
+                         .build();
+  const Path outline = PathBuilder()
+                           .moveTo(Vector2d(0.0, -2.0))
+                           .quadTo(Vector2d(1e-20, -2.0), Vector2d(0.5e-20, -2.0))
+                           .build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 4.0;
+
+  EXPECT_FALSE(WarpGlyphOutline(outline, MeasurePath(route), glyph, 0.05).empty());
+}
+
+TEST(PlacedTextGeometryTest, StretchRejectsOverflowingExtremaNormalization) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .curveTo(Vector2d(0.0, 10.0), Vector2d(20.0, 10.0),
+                                  Vector2d(20.0, 0.0))
+                         .build();
+  const double maximum = std::numeric_limits<double>::max();
+  const Path outline = PathBuilder()
+                           .moveTo(Vector2d(-maximum, 0.0))
+                           .quadTo(Vector2d(maximum, 0.0), Vector2d(0.0, 0.0))
+                           .build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 4.0;
+
+  EXPECT_TRUE(WarpGlyphOutline(outline, MeasurePath(route), glyph, 0.05).empty());
+}
+
 }  // namespace
 }  // namespace donner::svg

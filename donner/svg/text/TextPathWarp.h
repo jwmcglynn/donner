@@ -371,16 +371,18 @@ private:
   }
   bool appendQuadraticAtExtrema(const Vector2d& start, const Vector2d& control,
                                 const Vector2d& end) {
-    const auto extrema = QuadraticXExtrema(start, control, end);
-    if (extrema.empty()) {
-      return appendQuadratic(start, control, end, 0u);
-    }
-    const double t = extrema.front();
-    if (!std::isfinite(t)) {
+    const auto extrema = normalizedQuadraticXExtrema(start, control, end);
+    if (!extrema) {
       return false;
     }
-    const auto [left, right] =
-        SplitQuadratic(start, control, end, std::clamp(t, 1e-12, 1.0 - 1e-12));
+    if (extrema->empty()) {
+      return appendQuadratic(start, control, end, 0u);
+    }
+    const double t = extrema->front();
+    if (!std::isfinite(t) || t <= 0.0 || t >= 1.0) {
+      return false;
+    }
+    const auto [left, right] = SplitQuadratic(start, control, end, t);
     return appendQuadratic(left[0], left[1], left[2], 0u) &&
            appendQuadratic(right[0], right[1], right[2], 0u);
   }
@@ -388,11 +390,18 @@ private:
                             const Vector2d& end) {
     std::array<Vector2d, 4> remainder = {start, first, second, end};
     double previous = 0.0;
-    for (const double root : CubicXExtrema(start, first, second, end)) {
+    const auto extrema = normalizedCubicXExtrema(start, first, second, end);
+    if (!extrema) {
+      return false;
+    }
+    for (const double root : *extrema) {
       if (!std::isfinite(root) || root <= previous || root >= 1.0) {
         return false;
       }
-      const double relative = std::clamp((root - previous) / (1.0 - previous), 1e-12, 1.0 - 1e-12);
+      const double relative = (root - previous) / (1.0 - previous);
+      if (!std::isfinite(relative) || relative <= 0.0 || relative >= 1.0) {
+        return false;
+      }
       const auto [left, right] =
           SplitCubic(remainder[0], remainder[1], remainder[2], remainder[3], relative);
       if (!appendCubic(left[0], left[1], left[2], left[3], 0u)) {
@@ -402,6 +411,40 @@ private:
       previous = root;
     }
     return appendCubic(remainder[0], remainder[1], remainder[2], remainder[3], 0u);
+  }
+  static std::optional<SmallVector<double, 1>> normalizedQuadraticXExtrema(const Vector2d& start,
+                                                                           const Vector2d& control,
+                                                                           const Vector2d& end) {
+    const double controlDelta = control.x - start.x;
+    const double endDelta = end.x - start.x;
+    const double scale = std::max(std::abs(controlDelta), std::abs(endDelta));
+    if (!std::isfinite(controlDelta) || !std::isfinite(endDelta) || !std::isfinite(scale)) {
+      return std::nullopt;
+    }
+    if (scale == 0.0) {
+      return SmallVector<double, 1>();
+    }
+    return QuadraticXExtrema(Vector2d(0.0, 0.0), Vector2d(controlDelta / scale, 0.0),
+                             Vector2d(endDelta / scale, 0.0));
+  }
+  static std::optional<SmallVector<double, 2>> normalizedCubicXExtrema(const Vector2d& start,
+                                                                       const Vector2d& first,
+                                                                       const Vector2d& second,
+                                                                       const Vector2d& end) {
+    const double firstDelta = first.x - start.x;
+    const double secondDelta = second.x - start.x;
+    const double endDelta = end.x - start.x;
+    const double scale =
+        std::max({std::abs(firstDelta), std::abs(secondDelta), std::abs(endDelta)});
+    if (!std::isfinite(firstDelta) || !std::isfinite(secondDelta) || !std::isfinite(endDelta) ||
+        !std::isfinite(scale)) {
+      return std::nullopt;
+    }
+    if (scale == 0.0) {
+      return SmallVector<double, 2>();
+    }
+    return CubicXExtrema(Vector2d(0.0, 0.0), Vector2d(firstDelta / scale, 0.0),
+                         Vector2d(secondDelta / scale, 0.0), Vector2d(endDelta / scale, 0.0));
   }
   bool controlResidualWithinTolerance(const Vector2d& start, const Vector2d& control,
                                       const Vector2d& end) const {
