@@ -1,8 +1,10 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <string>
 #include <string_view>
 
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -24,7 +26,8 @@ void ExpectCircleReference(std::string_view clip, std::string_view circle,
   const auto expected =
       RenderCircleScene("<clipPath id='expected'>" + std::string(circle) +
                         "</clipPath><g clip-path='url(#expected)'>" + content + "</g>");
-  ExpectBitmapsIdentical(actual, expected, label);
+  editor::tests::CompareBitmapToBitmap(actual, expected, label,
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(CircleClipPath, DefaultCircleClipsAllGroupChildren) {
@@ -84,7 +87,8 @@ TEST(CircleClipPath, EdgeOffsetsAndFarthestSideResolveInReferenceBox) {
 TEST(CircleClipPath, ZeroRadiusSuppressesWholeGroup) {
   const auto actual = RenderCircleScene(
       "<g clip-path='circle(0)'><rect x='8' y='8' width='40' height='40' fill='red'/></g>");
-  ExpectBitmapsIdentical(actual, RenderCircleScene(""), "circle_zero_radius_group");
+  editor::tests::CompareBitmapToBitmap(actual, RenderCircleScene(""), "circle_zero_radius_group",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(CircleClipPath, BasicShapeOnClipChildIntersectsItsGeometry) {
@@ -93,7 +97,8 @@ TEST(CircleClipPath, BasicShapeOnClipChildIntersectsItsGeometry) {
           clip-path="circle(8px at 25% 50%) fill-box"/></clipPath>
       <rect width="64" height="64" fill="red" clip-path="url(#clip)"/>)svg");
   const auto expected = RenderCircleScene("<circle cx='18' cy='28' r='8' fill='red'/>");
-  ExpectBitmapsIdentical(actual, expected, "circle_nested_clip_child");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "circle_nested_clip_child",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(CircleClipPath, InvalidCircleDoesNotReplaceEarlierDeclaration) {
@@ -107,7 +112,8 @@ TEST(CircleClipPath, InvalidCircleDoesNotReplaceEarlierDeclaration) {
                                           "style='clip-path:url(#clip);clip-path:" +
                                           std::string(value) + "'/>");
     const auto expected = RenderCircleScene("<circle cx='24' cy='24' r='8' fill='red'/>");
-    ExpectBitmapsIdentical(actual, expected, "circle_invalid_declaration");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "circle_invalid_declaration",
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -118,9 +124,28 @@ TEST(CircleClipPath, NoneClearsAnEarlierCircleOrReference) {
         "<clipPath id='clip'><circle cx='24' cy='24' r='8'/></clipPath>"
         "<rect x='8' y='8' width='32' height='32' fill='red' style='clip-path:" +
         std::string(initial) + ";clip-path:none'/>");
-    ExpectBitmapsIdentical(
+    editor::tests::CompareBitmapToBitmap(
         actual, RenderCircleScene("<rect x='8' y='8' width='32' height='32' fill='red'/>"),
-        "circle_none_reset");
+        "circle_none_reset", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(CircleClipPath, StyleMutationRebuildsAndClearsCircleGeometry) {
+  constexpr std::string_view kContent =
+      "<rect id='target' x='8' y='8' width='48' height='48' fill='red'/>"
+      "<rect x='1' y='1' width='3' height='3' fill='lime'/>";
+  SVGDocument document = instantiateSubtree(kContent, {}, Vector2i(64, 64));
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  for (const std::string_view clip :
+       {"circle(8px at 16px 16px) view-box", "none", "circle(12px at 44px 40px) view-box"}) {
+    target->setAttribute("style", "clip-path:" + std::string(clip));
+    const auto actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+    const auto expected =
+        RenderCircleScene("<rect x='8' y='8' width='48' height='48' fill='red' style='clip-path:" +
+                          std::string(clip) + "'/>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "circle_style_mutation",
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -135,19 +160,46 @@ TEST(CircleClipPath, ImageLeafAndGroupSupplyReferenceBoxes) {
   for (const std::string_view uri : {kRaster, kSvg}) {
     const std::string image =
         "<image x='16' y='16' width='32' height='32' href='" + std::string(uri);
-    ExpectBitmapsIdentical(RenderCircleScene(image + "' clip-path='circle()'/>"), expected,
-                           "circle_image_leaf");
-    ExpectBitmapsIdentical(RenderCircleScene("<g clip-path='circle()'>" + image + "'/></g>"),
-                           expected, "circle_image_group");
+    editor::tests::CompareBitmapToBitmap(RenderCircleScene(image + "' clip-path='circle()'/>"),
+                                         expected, "circle_image_leaf",
+                                         editor::tests::PixelmatchIdentityParams());
+    editor::tests::CompareBitmapToBitmap(
+        RenderCircleScene("<g clip-path='circle()'>" + image + "'/></g>"), expected,
+        "circle_image_group", editor::tests::PixelmatchIdentityParams());
   }
+}
+
+TEST(CircleClipPath, ImageUseSuppliesOccurrenceReferenceBox) {
+  constexpr std::string_view kUri =
+      "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%222%22%20"
+      "height=%222%22%3E%3Crect%20width=%222%22%20height=%222%22%20fill=%22red%22/%3E%3C/svg%3E";
+  const auto actual = RenderCircleScene(
+      "<defs><image id='image' width='32' height='32' href='" + std::string(kUri) +
+      "'/></defs><use href='#image' x='16' y='16' clip-path='circle()'/>");
+  editor::tests::CompareBitmapToBitmap(
+      actual, RenderCircleScene("<circle cx='32' cy='32' r='16' fill='red'/>"), "circle_image_use",
+      editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(CircleClipPath, HiddenTextRetainsStrokeReferenceGeometry) {
+  const std::string prefix =
+      "<g clip-path='circle() stroke-box'>"
+      "<rect x='8' y='8' width='48' height='48' fill='red'/>"
+      "<text x='8' y='40' font-size='40' stroke='blue' "
+      "stroke-width='24' ";
+  const auto hidden = RenderCircleScene(prefix + "visibility='hidden'>W</text></g>");
+  const auto transparent = RenderCircleScene(prefix + "opacity='0'>W</text></g>");
+  editor::tests::CompareBitmapToBitmap(hidden, transparent, "circle_hidden_text_stroke_box",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(CircleClipPath, UseHostSuppliesShadowGeometry) {
   const auto actual = RenderCircleScene(
       "<defs><rect id='source' width='32' height='32' fill='red'/></defs>"
       "<use href='#source' x='16' y='16' clip-path='circle()'/>");
-  ExpectBitmapsIdentical(actual, RenderCircleScene("<circle cx='32' cy='32' r='16' fill='red'/>"),
-                         "circle_use_host");
+  editor::tests::CompareBitmapToBitmap(
+      actual, RenderCircleScene("<circle cx='32' cy='32' r='16' fill='red'/>"), "circle_use_host",
+      editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(CircleClipPath, StyledUsesKeepOccurrenceGeometryAndFontMetrics) {
@@ -158,7 +210,8 @@ TEST(CircleClipPath, StyledUsesKeepOccurrenceGeometryAndFontMetrics) {
       "<use href='#source' x='28' y='24' font-size='16'/>");
   const auto expected = RenderCircleScene(
       "<circle cx='16' cy='16' r='4' fill='red'/><circle cx='44' cy='40' r='8' fill='red'/>");
-  ExpectBitmapsIdentical(actual, expected, "circle_use_occurrences");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "circle_use_occurrences",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(CircleClipPath, TextSpanSuppliesItsOwnReferenceBox) {
@@ -166,7 +219,8 @@ TEST(CircleClipPath, TextSpanSuppliesItsOwnReferenceBox) {
       "<text x='8' y='32' font-size='20' fill='red'>A<tspan "
       "clip-path='circle(1000px)'>B</tspan></text>");
   const auto expected = RenderCircleScene("<text x='8' y='32' font-size='20' fill='red'>AB</text>");
-  ExpectBitmapsIdentical(actual, expected, "circle_text_span");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "circle_text_span",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(CircleClipPath, StrokeBoxUsesStrokeShapeInsteadOfMiterEnvelope) {
@@ -184,7 +238,8 @@ TEST(CircleClipPath, NonScalingStrokeBoxUsesHostStrokeGeometry) {
   const auto expected =
       RenderCircleScene("<clipPath id='clip'><circle cx='16' cy='16' r='10'/></clipPath>" +
                         std::string(kShape) + "clip-path='url(#clip)'/>");
-  ExpectBitmapsIdentical(actual, expected, "circle_non_scaling_stroke_box");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "circle_non_scaling_stroke_box",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace

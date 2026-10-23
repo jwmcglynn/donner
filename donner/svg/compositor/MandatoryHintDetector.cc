@@ -47,7 +47,7 @@ bool HasCompositingBreakingAncestor(Registry& registry, Entity entity, Mandatory
   while (cursor != entt::null && registry.valid(cursor)) {
     if (const auto* ancestorInstance =
             registry.try_get<components::RenderingInstanceComponent>(cursor)) {
-      if (ancestorInstance->clipPath.has_value() || ancestorInstance->mask.has_value() ||
+      if (ancestorInstance->hasClipPath() || ancestorInstance->mask.has_value() ||
           ancestorInstance->resolvedFilter.has_value()) {
         return true;
       }

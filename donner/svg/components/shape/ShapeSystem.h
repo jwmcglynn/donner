@@ -17,6 +17,33 @@
 
 namespace donner::svg::components {
 
+/// Shared work limit for resolving basic-shape reference geometry during one render preparation.
+struct CircleClipGeometryBudget {
+  /// Maximum aggregate path/entity work accepted during one preparation.
+  static constexpr std::size_t kMaximumWork = Path::kMaximumGeometryQueryWork;
+
+  /// Reserve bounded geometry work. Once rejected, every later reservation also fails.
+  /// @param work Work units required by the next operation.
+  /// @return True when the reservation was accepted.
+  bool reserve(std::size_t work) {
+    if (rejected || work > remainingWork) {
+      rejected = true;
+      return false;
+    }
+    remainingWork -= work;
+    return true;
+  }
+
+  /// Reject this preparation and every later reservation.
+  void reject() {
+    rejected = true;
+    remainingWork = 0;
+  }
+
+  std::size_t remainingWork = kMaximumWork;  ///< Work still available to this preparation.
+  bool rejected = false;                     ///< Whether this budget has rejected any reservation.
+};
+
 /**
  * Creates computed path for shapes such as \ref xml_circle, \ref xml_line, and \ref xml_path.
  *
@@ -95,14 +122,15 @@ public:
    */
   std::optional<Box2d> getShapeBounds(EntityHandle handle);
 
-  /// Return the CSS Masking stroke reference box, including descendant stroke boxes.
+  /// Return the SVG stroke-shape bounds, including descendant object and stroke geometry.
   /// @param handle Element whose local reference box is required.
   std::optional<Box2d> getStrokeBounds(EntityHandle handle);
 
   /// Resolve a circle clipping shape in element-local coordinates; invalid geometry is empty.
   /// @param handle Styled element supplying reference geometry and length metrics.
   /// @param circle Parsed circle and reference-box selection.
-  Path circleClipPath(EntityHandle handle, const CircleClipPath& circle);
+  Path circleClipPath(EntityHandle handle, const CircleClipPath& circle,
+                      CircleClipGeometryBudget& budget);
 
   /**
    * Get the bounds for the given entity in world space, if it has a shape component.
@@ -148,7 +176,15 @@ private:
    */
   std::optional<Box2d> getTransformedShapeBounds(EntityHandle handle,
                                                  const Transform2d& worldFromTarget,
-                                                 bool includeStroke = false);
+                                                 bool includeStroke = false,
+                                                 CircleClipGeometryBudget* budget = nullptr);
+
+  /// Resolve the selected circle reference box in the element's local coordinate space.
+  /// @param handle Styled element supplying reference geometry.
+  /// @param box Reference-box selection.
+  /// @param budget Shared geometry work budget.
+  std::optional<Box2d> getCircleReferenceBox(EntityHandle handle, CircleClipPath::Box box,
+                                             CircleClipGeometryBudget& budget);
 
   ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
                                                       const CircleComponent& circle,

@@ -615,7 +615,7 @@ public:
       ++layerDepth;
     }
 
-    if (instance.clipPath || instance.basicClipPath) {
+    if (instance.hasClipPath()) {
       instance.isolatedLayer = true;
       ++layerDepth;
     }
@@ -834,9 +834,10 @@ public:
     if (const auto* circle = std::get_if<CircleClipPath>(&clip->value)) {
       const Transform2d referenceFromEntity =
           LayoutSystem().getAbsoluteTransformComponent(entity).worldFromEntity;
-      collection.paths.emplace_back(ShapeSystem().circleClipPath(entity, *circle),
-                                    referenceFromEntity * collection.rootClipFromReference,
-                                    ClipRule::NonZero, collection.layer + 1);
+      collection.paths.emplace_back(
+          ShapeSystem().circleClipPath(entity, *circle, circleClipBudget_),
+          referenceFromEntity * collection.rootClipFromReference, ClipRule::NonZero,
+          collection.layer + 1);
       return true;
     }
     const ResolvedClipPath resolved =
@@ -1220,8 +1221,10 @@ public:
 #endif
     if (circle) {
       instance.basicClipPath = true;
-      paths.clipPaths.emplace_back(ShapeSystem().circleClipPath(dataHandle, *circle), Transform2d(),
-                                   ClipRule::NonZero, 0);
+      paths.clipPaths.emplace_back(
+          ShapeSystem().circleClipPath(EntityHandle(registry_, styleEntity), *circle,
+                                       circleClipBudget_),
+          Transform2d(), ClipRule::NonZero, 0);
     } else {
       instance.clipPath = resolved;
       RecursionGuard guard;
@@ -1401,9 +1404,10 @@ public:
 
 private:
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-  Registry& registry_;        //!< Registry being operated on for rendering..
-  bool verbose_;              //!< If true, enable verbose logging.
-  bool ignoreNonrenderable_;  //!< If true, skip the Nonrenderable behavior check.
+  Registry& registry_;                         //!< Registry being operated on for rendering..
+  CircleClipGeometryBudget circleClipBudget_;  //!< Shared by all basic-shape clips in this pass.
+  bool verbose_;                               //!< If true, enable verbose logging.
+  bool ignoreNonrenderable_;                   //!< If true, skip the Nonrenderable behavior check.
 
   int drawOrder_ = 0;  //!< The current draw order index.
   /// Root \ref xml_text entity for the one effect-carrying span about to be instantiated. Cleared

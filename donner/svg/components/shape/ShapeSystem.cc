@@ -16,15 +16,16 @@
 #include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #ifdef DONNER_TEXT_ENABLED
-#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextEngine.h"
 #endif
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/core/NonScalingStroke.h"
 #include "donner/svg/parser/PathParser.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
@@ -78,38 +79,135 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
   return metrics;
 }
 
-/// CSS Masking 1 Appendix B defines stroke-box inflation independently of dash/opacity.
-double StrokeBoxInflation(EntityHandle handle) {
+LineCap ToLineCap(StrokeLinecap cap) {
+  switch (cap) {
+    case StrokeLinecap::Butt: return LineCap::Butt;
+    case StrokeLinecap::Round: return LineCap::Round;
+    case StrokeLinecap::Square: return LineCap::Square;
+  }
+  return LineCap::Butt;
+}
+
+LineJoin ToLineJoin(StrokeLinejoin join) {
+  switch (join) {
+    case StrokeLinejoin::Miter: return LineJoin::Miter;
+    case StrokeLinejoin::MiterClip: return LineJoin::MiterClip;
+    case StrokeLinejoin::Round: return LineJoin::Round;
+    case StrokeLinejoin::Bevel: return LineJoin::Bevel;
+    case StrokeLinejoin::Arcs: return LineJoin::Miter;
+  }
+  return LineJoin::Miter;
+}
+
+void RejectGeometry(CircleClipGeometryBudget* budget, bool& failed) {
+  failed = true;
+  if (budget) {
+    budget->reject();
+  }
+}
+
+bool IsFiniteBox(const Box2d& box) {
+  return std::isfinite(box.topLeft.x) && std::isfinite(box.topLeft.y) &&
+         std::isfinite(box.bottomRight.x) && std::isfinite(box.bottomRight.y);
+}
+
+std::optional<StrokeStyle> StrokeStyleFor(EntityHandle handle, double widthScale,
+                                          CircleClipGeometryBudget* budget, bool& failed) {
   const auto* style = handle.try_get<ComputedStyleComponent>();
   if (!style || !style->properties ||
       style->properties->stroke.get().value() == PaintServer::None()) {
-    return 0.0;
+    return std::nullopt;
   }
   const auto& properties = *style->properties;
   const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
   const double width = properties.strokeWidth.get().value().toPixels(
-      LayoutSystem().getViewBox(handle), metrics, Lengthd::Extent::Mixed);
-  if (width <= 0) {
-    return 0.0;
+                           LayoutSystem().getViewBox(handle), metrics, Lengthd::Extent::Mixed) *
+                       widthScale;
+  if (!std::isfinite(width)) {
+    RejectGeometry(budget, failed);
+    return std::nullopt;
   }
-  double factor = 1.0;
-  const auto* type = handle.try_get<ElementTypeComponent>();
-  const bool simpleShape =
-      type && (type->type() == ElementType::Rect || type->type() == ElementType::Circle ||
-               type->type() == ElementType::Ellipse || type->type() == ElementType::Image);
-  if (!simpleShape) {
-    const bool square = properties.strokeLinecap.get().value() == StrokeLinecap::Square;
-    const auto join = properties.strokeLinejoin.get().value();
-    if (join == StrokeLinejoin::Miter || join == StrokeLinejoin::Arcs) {
-      factor = properties.strokeMiterlimit.get().value();
-    } else if (join == StrokeLinejoin::MiterClip) {
-      factor = std::hypot(properties.strokeMiterlimit.get().value(), 1.0);
-    }
-    if (square) {
-      factor = std::max(factor, std::sqrt(2.0));
-    }
+  if (!(width > 0.0)) {
+    return std::nullopt;
   }
-  return width * 0.5 * factor;
+
+  return StrokeStyle{.width = width,
+                     .cap = ToLineCap(properties.strokeLinecap.get().value()),
+                     .join = ToLineJoin(properties.strokeLinejoin.get().value()),
+                     .miterLimit = properties.strokeMiterlimit.get().value()};
+}
+
+bool ReservePathGeometry(CircleClipGeometryBudget* budget, const Path& path) {
+  // Reserve separately so a combined command/point count cannot overflow before admission.
+  return !budget ||
+         (budget->reserve(path.commands().size()) && budget->reserve(path.points().size()));
+}
+
+const Path* PrepareStrokeSource(const Path& centerline, const Transform2d& worldFromGeometry,
+                                bool hostSpace, CircleClipGeometryBudget* budget, bool& failed,
+                                std::optional<Path>& transformed) {
+  if (!ReservePathGeometry(budget, centerline)) {
+    RejectGeometry(budget, failed);
+    return nullptr;
+  }
+  if (hostSpace) {
+    transformed = centerline.transformed(worldFromGeometry);
+  }
+  const Path* source = transformed ? &*transformed : &centerline;
+  if (!IsFiniteBox(source->bounds())) {
+    RejectGeometry(budget, failed);
+    return nullptr;
+  }
+  return source;
+}
+
+void RejectPositiveExtentEmptyOutline(const Path& source, CircleClipGeometryBudget* budget,
+                                      bool& failed) {
+  const Box2d bounds = source.bounds();
+  if (bounds.width() > 0.0 || bounds.height() > 0.0) {
+    RejectGeometry(budget, failed);
+  }
+}
+
+std::optional<Box2d> StrokeBounds(EntityHandle styleHandle, const Path& centerline,
+                                  const Transform2d& worldFromGeometry,
+                                  const Transform2d& worldFromTarget,
+                                  CircleClipGeometryBudget* budget, bool geometryMustStayLocal,
+                                  bool& failed) {
+  const auto* style = styleHandle.try_get<ComputedStyleComponent>();
+  if (!style || !style->properties) {
+    return std::nullopt;
+  }
+  const NonScalingStrokeMode mode =
+      ResolveNonScalingStrokeMode(style->properties->vectorEffect.getOr(VectorEffect::None),
+                                  worldFromGeometry, geometryMustStayLocal);
+  const double authoredWidthScale = mode == NonScalingStrokeMode::ScaledLocal
+                                        ? EffectiveStrokeWidth(1.0, mode, worldFromGeometry)
+                                        : 1.0;
+  const auto strokeStyle = StrokeStyleFor(styleHandle, authoredWidthScale, budget, failed);
+  if (!strokeStyle) {
+    return std::nullopt;
+  }
+
+  const bool hostSpace = mode == NonScalingStrokeMode::HostSpace;
+  std::optional<Path> hostCenterline;
+  const Path* strokeSource =
+      PrepareStrokeSource(centerline, worldFromGeometry, hostSpace, budget, failed, hostCenterline);
+  if (!strokeSource) {
+    return std::nullopt;
+  }
+  const Path outline = strokeSource->strokeToFill(*strokeStyle, Path::kLocalFlattenTolerance);
+  if (outline.empty()) {
+    RejectPositiveExtentEmptyOutline(*strokeSource, budget, failed);
+    return std::nullopt;
+  }
+  if (!ReservePathGeometry(budget, outline)) {
+    failed = true;
+    return std::nullopt;
+  }
+  const Transform2d targetFromOutline =
+      hostSpace ? worldFromTarget : worldFromGeometry * worldFromTarget;
+  return outline.transformed(targetFromOutline).bounds();
 }
 
 constexpr std::array<std::string_view, 13> kShapeLengthAttributes = {
@@ -410,6 +508,179 @@ bool IsDisplayNone(EntityHandle handle, ParseWarningSink& warningSink) {
   return style.properties && style.properties->display.get().value() == Display::None;
 }
 
+double CircleRadius(const CircleClipPath& circle, const Box2d& box, double x, double y,
+                    const FontMetrics& metrics) {
+  if (circle.radiusType == CircleClipPath::Radius::Length) {
+    return circle.radius.toPixels(box, metrics, Lengthd::Extent::Mixed);
+  }
+  const std::array<double, 4> distances = {std::abs(x), std::abs(box.width() - x), std::abs(y),
+                                           std::abs(box.height() - y)};
+  return circle.radiusType == CircleClipPath::Radius::ClosestSide
+             ? *std::min_element(distances.begin(), distances.end())
+             : *std::max_element(distances.begin(), distances.end());
+}
+
+bool IsFiniteCircle(const Vector2d& center, double radius) {
+  return radius > 0.0 && std::isfinite(center.x - radius) && std::isfinite(center.x + radius) &&
+         std::isfinite(center.y - radius) && std::isfinite(center.y + radius);
+}
+
+class ReferenceBoundsAccumulator {
+public:
+  ReferenceBoundsAccumulator(ShapeSystem& shapes, EntityHandle root,
+                             const Transform2d& worldFromTarget, bool includeStroke,
+                             CircleClipGeometryBudget* budget)
+      : shapes_(shapes),
+        root_(root),
+        worldFromTarget_(worldFromTarget),
+        includeStroke_(includeStroke),
+        budget_(budget) {}
+
+  bool visit(EntityHandle child) {
+    if (failed_ || (budget_ && !budget_->reserve(1))) {
+      failed_ = true;
+      return false;
+    }
+    if (IsDisplayNone(child, warningSink_)) {
+      return false;
+    }
+
+    const Transform2d worldFromChild = LayoutSystem().getEntityFromWorldTransform(child);
+    accumulatePath(child, worldFromChild);
+    if (failed_) {
+      return false;
+    }
+    accumulateSizedElement(child, worldFromChild * worldFromTarget_);
+    return !failed_ && !accumulateText(child) && !failed_;
+  }
+
+  std::optional<Box2d> result() const { return failed_ ? std::nullopt : bounds_; }
+
+private:
+  void add(const Box2d& bounds) {
+    if (!IsFiniteBox(bounds)) {
+      RejectGeometry(budget_, failed_);
+      return;
+    }
+    bounds_ = bounds_ ? Box2d::Union(*bounds_, bounds) : bounds;
+  }
+
+  ComputedPathComponent* referencePath(EntityHandle child) {
+    if (const auto* shadow = child.try_get<ShadowEntityComponent>()) {
+      // Reference bounds do not need the renderer's cache-sharing identity. Selecting the
+      // occurrence's prepared path directly avoids an unadmitted full-path equality scan.
+      const Entity owner =
+          child.all_of<ComputedInstanceGeometryComponent>() ? child.entity() : shadow->lightEntity;
+      return child.registry()->try_get<ComputedPathComponent>(owner);
+    }
+    return shapes_.createComputedPathIfShape(child, FontMetrics(), warningSink_);
+  }
+
+  void accumulatePath(EntityHandle child, const Transform2d& worldFromChild) {
+    ComputedPathComponent* path = referencePath(child);
+    if (!path) {
+      return;
+    }
+    // Even a fill-only reference box scans the entire path; admit that scan before it begins.
+    if (!ReservePathGeometry(budget_, path->spline)) {
+      RejectGeometry(budget_, failed_);
+      return;
+    }
+    add(path->transformedBounds(worldFromChild * worldFromTarget_));
+    if (!includeStroke_) {
+      return;
+    }
+    if (const auto bounds = StrokeBounds(child, path->spline, worldFromChild, worldFromTarget_,
+                                         budget_, false, failed_)) {
+      add(*bounds);
+    }
+  }
+
+  void accumulateSizedElement(EntityHandle child, const Transform2d& targetFromChild) {
+    EntityHandle light = child;
+    if (const auto* shadow = child.try_get<ShadowEntityComponent>()) {
+      light = EntityHandle(*child.registry(), shadow->lightEntity);
+    }
+    const auto* type = light.try_get<ElementTypeComponent>();
+    if (!type || type->type() != ElementType::Image) {
+      return;
+    }
+    // Structural type and fallback dimensions live on the light element. Any instance sizing
+    // wins, while the caller always supplies the occurrence's transform.
+    if (const auto* sized = child.try_get<ComputedShadowSizedElementComponent>()) {
+      add(targetFromChild.transformBox(sized->bounds));
+    } else if (const auto* sized = child.try_get<ComputedSizedElementComponent>()) {
+      add(targetFromChild.transformBox(sized->bounds));
+    } else if (const auto* sized = light.try_get<ComputedSizedElementComponent>()) {
+      add(targetFromChild.transformBox(sized->bounds));
+    }
+  }
+
+  bool accumulateText(EntityHandle entity) {
+#ifdef DONNER_TEXT_ENABLED
+    auto* textEngine = entity.registry()->ctx().find<TextEngine>();
+    if (!textEngine) {
+      return false;
+    }
+    const Entity textRoot = textEngine->textRootEntity(entity);
+    if (textRoot == entt::null ||
+        (entity.entity() != root_.entity() && entity.entity() != textRoot)) {
+      return false;
+    }
+    accumulateTextGeometry(*textEngine, entity, EntityHandle(*entity.registry(), textRoot));
+    return true;
+#else
+    (void)entity;
+    return false;
+#endif
+  }
+
+#ifdef DONNER_TEXT_ENABLED
+  void accumulateTextGeometry(TextEngine& textEngine, EntityHandle entity, EntityHandle textRoot) {
+    const Transform2d worldFromText = LayoutSystem().getEntityFromWorldTransform(textRoot);
+    if (!budget_ && !includeStroke_) {
+      // Preserve the existing public object-bounds query; circle reference queries always carry
+      // a budget and must not enter this painted-cache construction path.
+      const Box2d bounds = textEngine.computedObjectBoundingBox(entity);
+      if (!bounds.isEmpty()) {
+        add((worldFromText * worldFromTarget_).transformBox(bounds));
+      }
+      return;
+    }
+    std::size_t localWork = CircleClipGeometryBudget::kMaximumWork;
+    std::size_t& remainingWork = budget_ ? budget_->remainingWork : localWork;
+    const auto geometry = textEngine.referenceGeometry(entity, includeStroke_, remainingWork);
+    if (!geometry) {
+      RejectGeometry(budget_, failed_);
+      return;
+    }
+    if (geometry->objectBounds) {
+      add((worldFromText * worldFromTarget_).transformBox(*geometry->objectBounds));
+    }
+    for (const auto& glyph : geometry->outlines) {
+      const EntityHandle source(*entity.registry(), glyph.sourceEntity);
+      if (const auto bounds = StrokeBounds(source, glyph.path, worldFromText, worldFromTarget_,
+                                           budget_, true, failed_)) {
+        add(*bounds);
+      }
+      if (failed_) {
+        return;
+      }
+    }
+  }
+
+#endif
+
+  ShapeSystem& shapes_;
+  EntityHandle root_;
+  const Transform2d& worldFromTarget_;
+  bool includeStroke_;
+  CircleClipGeometryBudget* budget_;
+  ParseWarningSink warningSink_ = ParseWarningSink::Disabled();
+  std::optional<Box2d> bounds_;
+  bool failed_ = false;
+};
+
 }  // namespace
 
 EntityHandle ShapeSystem::geometryHandle(EntityHandle instance) {
@@ -534,13 +805,12 @@ std::optional<Box2d> ShapeSystem::getStrokeBounds(EntityHandle handle) {
   return getTransformedShapeBounds(handle, worldFromOuterEntityLocal, true);
 }
 
-Path ShapeSystem::circleClipPath(EntityHandle handle, const CircleClipPath& circle) {
-  std::optional<Box2d> box;
-  switch (circle.box) {
-    case CircleClipPath::Box::Fill: box = getShapeBounds(handle); break;
-    case CircleClipPath::Box::Stroke: box = getStrokeBounds(handle); break;
-    case CircleClipPath::Box::View: box = LayoutSystem().getViewBox(handle); break;
+Path ShapeSystem::circleClipPath(EntityHandle handle, const CircleClipPath& circle,
+                                 CircleClipGeometryBudget& budget) {
+  if (budget.rejected) {
+    return {};
   }
+  const std::optional<Box2d> box = getCircleReferenceBox(handle, circle.box, budget);
   const auto* style = handle.try_get<ComputedStyleComponent>();
   if (!box || !style || !style->properties) {
     return {};
@@ -550,20 +820,30 @@ Path ShapeSystem::circleClipPath(EntityHandle handle, const CircleClipPath& circ
   const double offsetY = circle.y.offset.toPixels(*box, metrics, Lengthd::Extent::Y);
   const double x = circle.x.fromFarEdge ? box->width() - offsetX : offsetX;
   const double y = circle.y.fromFarEdge ? box->height() - offsetY : offsetY;
-  double radius = circle.radius.toPixels(*box, metrics, Lengthd::Extent::Mixed);
-  if (circle.radiusType != CircleClipPath::Radius::Length) {
-    const std::array<double, 4> distances = {std::abs(x), std::abs(box->width() - x), std::abs(y),
-                                             std::abs(box->height() - y)};
-    radius = circle.radiusType == CircleClipPath::Radius::ClosestSide
-                 ? *std::min_element(distances.begin(), distances.end())
-                 : *std::max_element(distances.begin(), distances.end());
-  }
+  const double radius = CircleRadius(circle, *box, x, y, metrics);
   const Vector2d center = box->topLeft + Vector2d(x, y);
-  if (!(radius > 0) || !std::isfinite(center.x - radius) || !std::isfinite(center.x + radius) ||
-      !std::isfinite(center.y - radius) || !std::isfinite(center.y + radius)) {
+  if (!IsFiniteCircle(center, radius)) {
     return {};
   }
-  return PathBuilder(32).addCircle(center, radius).build();
+  Path result = PathBuilder(32).addCircle(center, radius).build();
+  if (!ReservePathGeometry(&budget, result)) {
+    return {};
+  }
+  return result;
+}
+
+std::optional<Box2d> ShapeSystem::getCircleReferenceBox(EntityHandle handle,
+                                                        CircleClipPath::Box box,
+                                                        CircleClipGeometryBudget& budget) {
+  const Transform2d localFromWorld = LayoutSystem().getEntityFromWorldTransform(handle).inverse();
+  switch (box) {
+    case CircleClipPath::Box::Fill:
+      return getTransformedShapeBounds(handle, localFromWorld, false, &budget);
+    case CircleClipPath::Box::Stroke:
+      return getTransformedShapeBounds(handle, localFromWorld, true, &budget);
+    case CircleClipPath::Box::View: return LayoutSystem().getViewBox(handle);
+  }
+  return std::nullopt;
 }
 
 std::optional<Box2d> ShapeSystem::getShapeWorldBounds(EntityHandle handle) {
@@ -594,73 +874,16 @@ bool ShapeSystem::pathStrokeIntersects(EntityHandle handle, const Vector2d& poin
 
 std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
                                                             const Transform2d& worldFromTarget,
-                                                            bool includeStroke) {
-  std::optional<Box2d> overallBounds;
-
+                                                            bool includeStroke,
+                                                            CircleClipGeometryBudget* budget) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (IsDisplayNone(handle, disabledSink)) {
     return std::nullopt;
   }
-
-  const auto accumulate = [&overallBounds](const Box2d& bounds) {
-    overallBounds = overallBounds ? Box2d::Union(overallBounds.value(), bounds) : bounds;
-  };
-
-  // Text geometry is produced by the text engine rather than a ComputedPathComponent, so it has to
-  // be accumulated separately. The box is taken at the text root and its subtree is not descended
-  // into, because the root's box already spans every span it contains. `visibility: hidden` is not
-  // consulted: it suppresses painting only, and hidden text still contributes to the box.
-  const auto accumulateTextBounds = [&](EntityHandle entity) {
-#ifdef DONNER_TEXT_ENABLED
-    if (!entity.all_of<TextRootComponent>()) {
-      return;
-    }
-
-    auto* textEngine = entity.registry()->ctx().find<TextEngine>();
-    if (!textEngine) {
-      return;
-    }
-
-    const Box2d textBounds = textEngine->computedObjectBoundingBox(entity);
-    if (textBounds.isEmpty()) {
-      return;
-    }
-
-    const Box2d referenceBounds =
-        includeStroke ? textBounds.inflatedBy(StrokeBoxInflation(entity)) : textBounds;
-    accumulate((LayoutSystem().getEntityFromWorldTransform(entity) * worldFromTarget)
-                   .transformBox(referenceBounds));
-#else
-    (void)entity;
-#endif
-  };
-
-  // Accumulate `handle` and its descendants; the walk visits `handle` itself first. `display: none`
-  // removes an element and its whole subtree from the rendering tree, so a hidden element prunes:
-  // skipping only the element itself would still let its descendants widen the box.
+  ReferenceBoundsAccumulator accumulator(*this, handle, worldFromTarget, includeStroke, budget);
   donner::components::ForAllChildrenRecursivePruned(
-      handle, [this, &disabledSink, &accumulate, &accumulateTextBounds, &worldFromTarget,
-               includeStroke](EntityHandle child) {
-        if (IsDisplayNone(child, disabledSink)) {
-          return false;
-        }
-
-        if (ComputedPathComponent* computedPath =
-                createComputedPathIfShape(child, FontMetrics(), disabledSink)) {
-          const Transform2d targetFromChild =
-              LayoutSystem().getEntityFromWorldTransform(child) * worldFromTarget;
-          if (includeStroke) {
-            accumulate(targetFromChild.transformBox(
-                computedPath->localBounds().inflatedBy(StrokeBoxInflation(child))));
-          } else {
-            accumulate(computedPath->transformedBounds(targetFromChild));
-          }
-        }
-        accumulateTextBounds(child);
-        return true;
-      });
-
-  return overallBounds;
+      handle, [&accumulator](EntityHandle child) { return accumulator.visit(child); });
+  return accumulator.result();
 }
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(

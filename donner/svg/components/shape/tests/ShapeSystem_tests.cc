@@ -8,11 +8,15 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <string>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -69,6 +73,74 @@ TEST_F(ShapeSystemTest, InstanceSharesOnlyIdenticalAvailableGeometry) {
   instance.emplace<ComputedPathComponent>(sourcePath);
   source.remove<ComputedPathComponent>();
   EXPECT_EQ(shapeSystem.geometryHandle(instance).entity(), instance.entity());
+}
+
+TEST_F(ShapeSystemTest, CircleFillReferenceAdmitsPathScanBeforeBounds) {
+  std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+    <path id="p" d="M0 0)";
+  for (int x = 1; x <= 100; ++x) {
+    svg += " L" + std::to_string(x) + " 2";
+  }
+  svg += R"("/></svg>)";
+  auto document = ParseAndComputeShapes(svg);
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  CircleClipPath circle;
+  circle.box = CircleClipPath::Box::Fill;
+  circle.radiusType = CircleClipPath::Radius::Length;
+  circle.radius = Lengthd(1, Lengthd::Unit::None);
+
+  // Enough for one entity and a circle, but insufficient for the 101-segment reference path.
+  CircleClipGeometryBudget limited;
+  limited.remainingWork = 64;
+  EXPECT_TRUE(shapeSystem.circleClipPath(element->entityHandle(), circle, limited).empty());
+  EXPECT_TRUE(limited.rejected);
+  EXPECT_EQ(limited.remainingWork, 0u);
+  limited.remainingWork = CircleClipGeometryBudget::kMaximumWork;
+  EXPECT_TRUE(shapeSystem.circleClipPath(element->entityHandle(), circle, limited).empty());
+
+  CircleClipGeometryBudget admitted;
+  const Path clip = shapeSystem.circleClipPath(element->entityHandle(), circle, admitted);
+  ASSERT_FALSE(clip.empty());
+  EXPECT_FALSE(admitted.rejected);
+  EXPECT_THAT(clip.bounds(), BoxEq(Vector2d(49, 0), Vector2d(51, 2)));
+}
+
+TEST_F(ShapeSystemTest, ImageShadowReferenceUsesLightTypeAndOccurrenceTransform) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+      <image id="source" x="10" y="20" width="30" height="40"/>
+      <g id="instance"/>
+    </svg>)");
+  auto sourceElement = document.querySelector("#source");
+  auto instanceElement = document.querySelector("#instance");
+  ASSERT_TRUE(sourceElement.has_value());
+  ASSERT_TRUE(instanceElement.has_value());
+  const EntityHandle source = sourceElement->entityHandle();
+  const EntityHandle instance = instanceElement->entityHandle();
+  source.emplace_or_replace<ComputedSizedElementComponent>(Box2d::FromXYWH(10, 20, 30, 40),
+                                                           Box2d::WithSize(Vector2d(400, 400)));
+  instance.remove<ElementTypeComponent>();
+  instance.emplace<ShadowEntityComponent>(source.entity());
+  instance.emplace_or_replace<ComputedAbsoluteTransformComponent>(Transform2d::Translate(100, 200),
+                                                                  true);
+
+  const auto bounds = shapeSystem.getShapeWorldBounds(instance);
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_THAT(*bounds, BoxEq(Vector2d(110, 220), Vector2d(140, 260)));
+
+  // An instance's own dimensions take precedence without changing the light-tree image.
+  instance.emplace<ComputedSizedElementComponent>(Box2d::FromXYWH(2, 3, 12, 14), Box2d());
+  const auto sizedBounds = shapeSystem.getShapeWorldBounds(instance);
+  ASSERT_TRUE(sizedBounds.has_value());
+  EXPECT_THAT(*sizedBounds, BoxEq(Vector2d(102, 203), Vector2d(114, 217)));
+
+  instance.emplace<ComputedShadowSizedElementComponent>(Box2d::FromXYWH(4, 5, 16, 18));
+  const auto shadowBounds = shapeSystem.getShapeWorldBounds(instance);
+  ASSERT_TRUE(shadowBounds.has_value());
+  EXPECT_THAT(*shadowBounds, BoxEq(Vector2d(104, 205), Vector2d(120, 223)));
+  EXPECT_THAT(source.get<ComputedSizedElementComponent>().bounds,
+              BoxEq(Vector2d(10, 20), Vector2d(40, 60)));
 }
 
 // --- Circle ---

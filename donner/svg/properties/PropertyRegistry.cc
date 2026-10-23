@@ -1075,22 +1075,29 @@ ParseResult<Reference> ParseReference(std::string_view tag,
   return err;
 }
 
-ParseResult<ClipPath> ParseClipPathValue(const parser::PropertyParseFnParams& params) {
+ParseResult<std::optional<ClipPath>> ParseClipPathValue(
+    const parser::PropertyParseFnParams& params) {
+  using Result = std::optional<ClipPath>;
   const auto components = params.components();
+  if (const auto ident = TryGetSingleIdent(components); ident && ident->equalsLowercase("none")) {
+    return Result();
+  }
   if (components.empty()) {
-    return ParseReference("clip-path", components).map<ClipPath>([](Reference reference) {
+    return ParseReference("clip-path", components).map<Result>([](Reference reference) {
       return ClipPath(std::move(reference));
     });
   }
   if (const auto url = ParseUrlComponent(components.front())) {
     if (components.size() == 1) {
-      return ClipPath(Reference(*url));
+      return Result(ClipPath(Reference(*url)));
     }
     ParseDiagnostic error;
     error.reason = "Unexpected tokens after clip-path reference";
     return error;
   }
-  return ParseCircleClipPath(components, params.allowUserUnits());
+  return ParseCircleClipPath(components, params.allowUserUnits()).map<Result>([](ClipPath clip) {
+    return Result(std::move(clip));
+  });
 }
 
 /// Parse a CSS angle value from a Dimension token, converting to degrees.

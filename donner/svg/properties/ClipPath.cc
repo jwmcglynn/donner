@@ -89,16 +89,20 @@ std::optional<Position> SimplePosition(const Component& component, int axis, boo
   return std::nullopt;
 }
 
+bool ParseSinglePosition(const Component& argument, CircleClipPath& circle, bool allowUserUnits) {
+  const int axis = PositionAxis(argument) == 1 ? 1 : 0;
+  const auto position = SimplePosition(argument, axis, allowUserUnits);
+  if (!position) {
+    return false;
+  }
+  (axis == 0 ? circle.x : circle.y) = *position;
+  return true;
+}
+
 bool ParseSimplePosition(std::span<const Component* const> args, CircleClipPath& circle,
                          bool allowUserUnits) {
   if (args.size() == 1) {
-    const int axis = PositionAxis(*args[0]) == 1 ? 1 : 0;
-    const auto position = SimplePosition(*args[0], axis, allowUserUnits);
-    if (!position) {
-      return false;
-    }
-    (axis == 0 ? circle.x : circle.y) = *position;
-    return true;
+    return ParseSinglePosition(*args[0], circle, allowUserUnits);
   }
   const bool reverse = PositionAxis(*args[0]) == 1 || PositionAxis(*args[1]) == 0;
   if (reverse &&
@@ -150,6 +154,22 @@ bool ParseEdgePosition(std::span<const Component* const> args, CircleClipPath& c
   return true;
 }
 
+bool ParseRadius(const Component& radius, CircleClipPath& circle, bool allowUserUnits) {
+  if (IsIdent(radius, "closest-side")) {
+    circle.radiusType = CircleClipPath::Radius::ClosestSide;
+  } else if (IsIdent(radius, "farthest-side")) {
+    circle.radiusType = CircleClipPath::Radius::FarthestSide;
+  } else {
+    const auto length = FiniteLength(radius, allowUserUnits);
+    if (!length || length->value < 0) {
+      return false;
+    }
+    circle.radiusType = CircleClipPath::Radius::Length;
+    circle.radius = *length;
+  }
+  return true;
+}
+
 bool ParseCircleArguments(const css::Function& function, CircleClipPath& circle,
                           bool allowUserUnits) {
   Arguments args;
@@ -158,20 +178,11 @@ bool ParseCircleArguments(const css::Function& function, CircleClipPath& circle,
   }
   std::size_t next = 0;
   if (next < args.size && !IsIdent(*args.values[next], "at")) {
-    const Component& radius = *args.values[next++];
-    if (IsIdent(radius, "closest-side")) {
-      circle.radiusType = CircleClipPath::Radius::ClosestSide;
-    } else if (IsIdent(radius, "farthest-side")) {
-      circle.radiusType = CircleClipPath::Radius::FarthestSide;
-    } else {
-      const auto length = FiniteLength(radius, allowUserUnits);
-      if (!length || length->value < 0) {
-        return false;
-      }
-      circle.radiusType = CircleClipPath::Radius::Length;
-      circle.radius = *length;
+    if (!ParseRadius(*args.values[next++], circle, allowUserUnits)) {
+      return false;
     }
   }
+
   if (next == args.size) {
     return true;
   }

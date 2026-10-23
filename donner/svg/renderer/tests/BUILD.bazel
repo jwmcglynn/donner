@@ -1462,6 +1462,7 @@ donner_cc_test(
     variants = ["geode"],
     deps = [
         ":image_comparison_test_fixture",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],

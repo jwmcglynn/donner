@@ -3617,6 +3617,233 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
   return measured;
 }
 
+namespace {
+
+class TextReferenceWork {
+public:
+  explicit TextReferenceWork(std::size_t& remaining) : remaining_(remaining) {}
+
+  bool reserve(std::size_t count) {
+    if (failed_ || count > remaining_) {
+      failed_ = true;
+      remaining_ = 0;
+      return false;
+    }
+    remaining_ -= count;
+    return true;
+  }
+
+  bool reserveProduct(std::size_t count, std::size_t factor) {
+    if (factor != 0 && count > remaining_ / factor) {
+      return reject();
+    }
+    return reserve(count * factor);
+  }
+
+  bool reject() {
+    failed_ = true;
+    remaining_ = 0;
+    return false;
+  }
+
+  bool reservePath(const Path& path) {
+    return reserve(path.commands().size()) && reserve(path.points().size());
+  }
+
+  bool failed() const { return failed_; }
+
+private:
+  std::size_t& remaining_;
+  bool failed_ = false;
+};
+
+bool ReserveTextReferenceSpan(const components::ComputedTextComponent::TextSpan& span,
+                              TextReferenceWork& work) {
+  if (span.start > span.end || span.end > span.text.size()) {
+    return work.reject();
+  }
+  const std::array counts{
+      span.end - span.start, span.fontFamilies.size(), span.ancestorBaselineShifts.size(),
+      span.xList.size(),     span.yList.size(),        span.dxList.size(),
+      span.dyList.size(),    span.rotateList.size()};
+  for (const std::size_t count : counts) {
+    if (!work.reserve(count)) {
+      return false;
+    }
+  }
+  return !span.pathSpline || work.reservePath(*span.pathSpline);
+}
+
+bool ReserveTextReferenceInput(const components::ComputedTextComponent& text,
+                               TextReferenceWork& work) {
+  if (!work.reserve(text.spans.size()) || !work.reserve(text.ownerSpanRanges.size()) ||
+      !work.reserve(text.textLengthOwnerFontSizes.size())) {
+    return false;
+  }
+  for (const auto& span : text.spans) {
+    if (!ReserveTextReferenceSpan(span, work)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ReferenceSpanIsInSubtree(Registry& registry, Entity source, Entity subtree,
+                              TextReferenceWork& work) {
+  while (source != entt::null) {
+    if (!work.reserve(1)) {
+      return false;
+    }
+    if (source == subtree) {
+      return true;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(source);
+    source = tree ? tree->parent() : entt::null;
+  }
+  return false;
+}
+
+Transform2d ReferenceGlyphPlacement(const TextGlyph& glyph) {
+  return Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+         Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+}
+
+bool AddReferenceGlyphCell(TextEngine::ReferenceGeometry& result, const TextGlyph& glyph,
+                           double emTop, double emBottom, TextReferenceWork& work) {
+  const double advance = glyph.xAdvance;
+  const double verticalScale = glyph.fontSizeScale * glyph.stretchScaleY;
+  const Box2d localCell(Vector2d(std::min(0.0, advance), -emTop * verticalScale),
+                        Vector2d(std::max(0.0, advance), emBottom * verticalScale));
+  const Box2d cell = ReferenceGlyphPlacement(glyph).transformBox(localCell);
+  if (!std::isfinite(cell.topLeft.x) || !std::isfinite(cell.topLeft.y) ||
+      !std::isfinite(cell.bottomRight.x) || !std::isfinite(cell.bottomRight.y)) {
+    return work.reject();
+  }
+  result.objectBounds = result.objectBounds ? Box2d::Union(*result.objectBounds, cell) : cell;
+  return true;
+}
+
+bool AdmitReferenceOutline(FontManager& manager, FontHandle font, int glyphIndex,
+                           TextReferenceWork& work) {
+  auto complexity = manager.glyphOutlineComplexity(font, glyphIndex);
+  if (!complexity) {
+    if (!manager.isTrustedFont(font)) {
+      return work.reject();
+    }
+    // Unknown trusted outlines use the global conservative ceiling, never a guessed glyph size.
+    complexity =
+        FontManager::GlyphOutlineComplexity{.maximumVertices = fonts::kMaximumExpandedGlyphVertices,
+                                            .work = fonts::kMaximumGlyphOutlineWork};
+  }
+  return work.reserve(complexity->work) && work.reserveProduct(complexity->maximumVertices, 15);
+}
+
+bool AppendReferenceOutline(const TextEngine& engine, FontManager& manager, const TextRun& run,
+                            const TextGlyph& glyph, Entity source,
+                            TextEngine::ReferenceGeometry& result, TextReferenceWork& work) {
+  if (engine.isBitmapOnly(run.font)) {
+    return true;
+  }
+  if (!AdmitReferenceOutline(manager, run.font, glyph.glyphIndex, work)) {
+    return false;
+  }
+  const float scale = engine.scaleForEmToPixels(run.font, run.usedFontSizePx) * glyph.fontSizeScale;
+  const Path raw = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
+  if (raw.empty()) {
+    return true;
+  }
+  if (!work.reservePath(raw) || !work.reserve(1)) {
+    return false;
+  }
+  const Transform2d placement =
+      Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY) * ReferenceGlyphPlacement(glyph);
+  Path placed = raw.transformed(placement);
+  const Box2d bounds = placed.bounds();
+  if (!IsFiniteTextPosition(bounds.topLeft) || !IsFiniteTextPosition(bounds.bottomRight)) {
+    return work.reject();
+  }
+  result.outlines.push_back({std::move(placed), source});
+  return true;
+}
+
+bool AppendTextReferenceRun(const TextEngine& engine, FontManager& manager, const TextRun& run,
+                            Entity source, bool includeOutlines,
+                            TextEngine::ReferenceGeometry& result, TextReferenceWork& work) {
+  if (!work.reserve(run.glyphs.size())) {
+    return false;
+  }
+  const float scale = run.font ? engine.scaleForPixelHeight(run.font, run.usedFontSizePx) : 0.0f;
+  const FontVMetrics metrics = run.font ? engine.fontVMetrics(run.font) : FontVMetrics();
+  const double emTop = scale > 0.0f ? metrics.ascent * scale : run.usedFontSizePx;
+  const double emBottom = scale > 0.0f ? -metrics.descent * scale : 0.0;
+  for (const auto& glyph : run.glyphs) {
+    if (!AddReferenceGlyphCell(result, glyph, emTop, emBottom, work) ||
+        (includeOutlines &&
+         !AppendReferenceOutline(engine, manager, run, glyph, source, result, work))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool AppendTextReferenceRuns(const TextEngine& engine, FontManager& manager, Registry& registry,
+                             const components::ComputedTextComponent& text,
+                             const std::vector<TextRun>& runs, Entity subtree, bool includeOutlines,
+                             TextEngine::ReferenceGeometry& result, TextReferenceWork& work) {
+  if (!work.reserve(runs.size())) {
+    return false;
+  }
+  for (std::size_t index = 0; index < runs.size() && index < text.spans.size(); ++index) {
+    const Entity source = text.spans[index].sourceEntity;
+    if (ReferenceSpanIsInSubtree(registry, source, subtree, work) &&
+        !AppendTextReferenceRun(engine, manager, runs[index], source, includeOutlines, result,
+                                work)) {
+      return false;
+    }
+    if (work.failed()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
+    EntityHandle handle, bool includeOutlines, std::size_t& remainingWork) const {
+  TextReferenceWork work(remainingWork);
+  const Entity root = findTextRootEntity(handle);
+  const auto* computed = registry_.try_get<components::ComputedTextComponent>(root);
+  const auto* text = registry_.try_get<components::TextComponent>(root);
+  const auto* style = registry_.try_get<components::ComputedStyleComponent>(root);
+  if (!computed || !text || !style || !style->properties) {
+    return ReferenceGeometry();
+  }
+  if (!ReserveTextReferenceInput(*computed, work) ||
+      !work.reserve(style->properties->fontFamily.get().value().size())) {
+    return std::nullopt;
+  }
+  if (isVertical(style->properties->writingMode.get().value())) {
+    // The horizontal glyph-cell contract cannot stand in for upright/sideways vertical cells.
+    work.reject();
+    return std::nullopt;
+  }
+  ReferenceGeometry result;
+  {
+    const auto capture = fontManager_.captureDependencies(result.fontDependencies);
+    auto styled = *computed;
+    const TextLayoutParams params =
+        buildTextLayoutParams(registry_, EntityHandle(registry_, root), *style, *text);
+    ResolvePerSpanLayoutStyles(registry_, styled, params.viewBox, params.fontMetrics);
+    const auto runs = const_cast<TextEngine*>(this)->layout(styled, params);
+    if (!AppendTextReferenceRuns(*this, fontManager_, registry_, styled, runs, handle.entity(),
+                                 includeOutlines, result, work)) {
+      return std::nullopt;
+    }
+  }
+  return result;
+}
+
 const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextGeometryComponent(
     EntityHandle handle) const {
   const Entity textRootEntity = findTextRootEntity(handle);

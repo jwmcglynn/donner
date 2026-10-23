@@ -976,7 +976,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
 
   // If clip-path is set but has no computed paths (e.g., empty <clipPath> element),
   // add an empty path to force a clip that hides everything.
-  if (instance.clipPath.has_value() && clip.clipPaths.empty()) {
+  if (instance.hasClipPath() && clip.clipPaths.empty()) {
     clip.clipPaths.emplace_back();
   }
 
@@ -1802,7 +1802,7 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
 bool IsPlainVisibleLeaf(const components::RenderingInstanceComponent& instance) {
   return instance.visible && !instance.subtreeInfo.has_value() &&
          !instance.resolvedFilter.has_value() && !instance.mask.has_value() &&
-         !instance.clipPath.has_value() && !instance.clipRect.has_value() &&
+         !instance.hasClipPath() && !instance.clipRect.has_value() &&
          !instance.markerStart.has_value() && !instance.markerMid.has_value() &&
          !instance.markerEnd.has_value();
 }
