@@ -1308,6 +1308,41 @@ TEST_F(TextEngineLayoutTest, VerticalCjkUsesBackendOffsetsAndAdvanceFallback) {
                   GlyphRotateDegreesIs(DoubleEq(12.0)))))));
 }
 
+TEST_F(TextEngineLayoutTest, VerticalRotatedLatinPreservesBackendOffsets) {
+  ON_CALL(*mockBackend_, fontVMetrics(testing::_))
+      .WillByDefault(testing::Return(FontVMetrics{900, -300, 0}));
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault(
+          [](FontHandle, float, std::string_view, size_t offset, size_t, bool, FontVariant, bool) {
+            TextBackend::ShapedRun run;
+            run.glyphs.push_back(TextBackend::ShapedGlyph{
+                .glyphIndex = 7,
+                .xAdvance = 10.0,
+                .xOffset = 1.5,
+                .yOffset = -2.0,
+                .cluster = static_cast<uint32_t>(offset),
+            });
+            return run;
+          });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("A");
+  span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(25.0, Lengthd::Unit::None));
+  text.spans.push_back(std::move(span));
+
+  auto params = makeParams();
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine_->layout(text, params);
+
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(AllOf(
+                  GlyphIndexIs(7u), GlyphXPositionIs(DoubleNear(98.0, 0.1)),
+                  GlyphYPositionIs(DoubleNear(26.5, 0.1)), GlyphYAdvanceIs(DoubleNear(10.0, 0.1)),
+                  GlyphRotateDegreesIs(DoubleEq(90.0)))))));
+}
+
 TEST_F(TextEngineLayoutTest, VerticalPerCharacterAbsolutePositionsApplyDxDy) {
   ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
                                   testing::_, testing::_, testing::_))

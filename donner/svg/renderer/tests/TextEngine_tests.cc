@@ -1194,6 +1194,44 @@ TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
   EXPECT_NEAR(rotatedMark.yPosition - rotatedBase.yPosition, expectedDy, 1.0);
 }
 
+TEST(TextEngineTest, VerticalSidewaysCombiningMarkMatchesRotatedHorizontalGeometry) {
+#ifndef DONNER_TEXT_FULL
+  GTEST_SKIP() << "Combining-mark positioning requires the full text backend.";
+#endif
+
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
+
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("x\xCC\x81");
+  span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+  text.spans.push_back(std::move(span));
+
+  TextLayoutParams horizontalParams = MakeTextParams(64.0);
+  horizontalParams.fontFamilies = {RcString("Noto Sans")};
+  const auto horizontalRuns = engine.layout(text, horizontalParams);
+  ASSERT_THAT(horizontalRuns, ElementsAre(RunGlyphsAre(SizeIs(2))));
+
+  TextLayoutParams verticalParams = horizontalParams;
+  verticalParams.writingMode = WritingMode::VerticalRl;
+  const auto verticalRuns = engine.layout(text, verticalParams);
+  ASSERT_THAT(verticalRuns, ElementsAre(RunGlyphsAre(SizeIs(2))));
+
+  const Vector2d horizontalDelta(
+      horizontalRuns[0].glyphs[1].xPosition - horizontalRuns[0].glyphs[0].xPosition,
+      horizontalRuns[0].glyphs[1].yPosition - horizontalRuns[0].glyphs[0].yPosition);
+  const Vector2d verticalDelta(
+      verticalRuns[0].glyphs[1].xPosition - verticalRuns[0].glyphs[0].xPosition,
+      verticalRuns[0].glyphs[1].yPosition - verticalRuns[0].glyphs[0].yPosition);
+
+  EXPECT_THAT(verticalDelta.x, DoubleNear(-horizontalDelta.y, 0.01));
+  EXPECT_THAT(verticalDelta.y, DoubleNear(horizontalDelta.x, 0.01));
+}
+
 TEST(TextEngineTest, TextPathSpacingPreservesFullShapingCombiningMarkCluster) {
   Registry registry;
   FontManager fontManager(registry);
