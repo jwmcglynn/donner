@@ -20,6 +20,9 @@
 #include <emscripten.h>
 #include <emscripten/html5.h>
 #include <cstring>
+#include <functional>
+#include <optional>
+#include <string>
 
 #ifdef __EMSCRIPTEN_PTHREADS__
 #include <emscripten/proxying.h>
@@ -27,7 +30,6 @@
 #include <atomic>
 #include <bitset>
 #include <memory>
-#include <string>
 #endif
 
 #include "ErrorHandler.h"
@@ -71,28 +73,22 @@ namespace emscripten::glfw3 {
 
 static ErrorHandler &kErrorHandler = ErrorHandler::instance();
 
+// Optional observer installed by browser tests.
+void ObserveContextCallback(int iKind, char const *iText = nullptr)
+{
+  EM_ASM({
+    if(typeof globalThis.__glfwContextCallbackObserver === 'function')
+      globalThis.__glfwContextCallbackObserver($0, $1 ? UTF8ToString($1) : null);
+  }, iKind, iText);
+}
+
+
 //------------------------------------------------------------------------
 // Context::init
 //------------------------------------------------------------------------
 std::unique_ptr<Context> Context::init()
 {
   return std::unique_ptr<Context>(new Context{});
-}
-
-//------------------------------------------------------------------------
-// ContextScaleChangeCallback
-//------------------------------------------------------------------------
-void ContextScaleChangeCallback(Context *iContext)
-{
-  iContext->onScaleChange();
-}
-
-//------------------------------------------------------------------------
-// ContextWindowResizeCallback
-//------------------------------------------------------------------------
-void ContextWindowResizeCallback(Context *iContext, GLFWwindow *iWindow, int iWidth, int iHeight)
-{
-  iContext->onWindowResize(iWindow, iWidth, iHeight);
 }
 
 #ifdef __EMSCRIPTEN_PTHREADS__
@@ -105,14 +101,29 @@ namespace {
 // browser default before the listener returns, reading only the DOM and the state below.
 
 // Written on the owner thread before the listener is registered, so main-thread reads follow them.
-Context const *kKeyboardContext = nullptr;
-uint64_t kKeyboardContextGeneration = 0;
-pthread_t kKeyboardOwnerThread{};
+std::atomic<Context *> kCallbackContext{};
+std::atomic<uint64_t> kContextGeneration{};
+std::atomic<pthread_t> kContextOwnerThread{};
 // Written on the owner thread as windows come and go; read on the main thread.
 std::atomic<GLFWwindow *> kKeyboardWindow{};
 // Main thread only: keys whose key down was forwarded, so a key up prevents the browser default
 // only for a key the window saw pressed.
 std::bitset<GLFW_KEY_LAST + 1> kForwardedKeysDown{};
+
+struct ForwardedContextCallback
+{
+  Context *fContext;
+  uint64_t fGeneration;
+  std::function<void()> fApply;
+};
+
+void RunForwardedContextCallback(void *iArg)
+{
+  std::unique_ptr<ForwardedContextCallback> event{static_cast<ForwardedContextCallback *>(iArg)};
+  if(event->fContext != kCallbackContext.load() || event->fGeneration != kContextGeneration.load())
+    return;
+  event->fApply();
+}
 
 struct ForwardedKeyboardEvent
 {
@@ -129,7 +140,7 @@ struct ForwardedKeyboardEvent
 void RunForwardedKeyboardEvent(void *iArg)
 {
   std::unique_ptr<ForwardedKeyboardEvent> event{static_cast<ForwardedKeyboardEvent *>(iArg)};
-  if(event->fContext != kKeyboardContext || event->fGeneration != kKeyboardContextGeneration)
+  if(event->fContext != kCallbackContext.load() || event->fGeneration != kContextGeneration.load())
     return;
   Keyboard::Event keyboardEvent{event->fCode.c_str(), event->fKey.c_str(), event->fRepeat, event->fCodepoint, event->fModifierBits};
   event->fContext->applyForwardedKeyboardEvent(event->fKeyDown, keyboardEvent);
@@ -138,12 +149,12 @@ void RunForwardedKeyboardEvent(void *iArg)
 void PostKeyboardEvent(Context *iContext, bool iKeyDown, Keyboard::Event const &iEvent)
 {
   auto event = std::make_unique<ForwardedKeyboardEvent>(ForwardedKeyboardEvent{
-    iContext, kKeyboardContextGeneration, iKeyDown, iEvent.code ? iEvent.code : "", iEvent.key ? iEvent.key : "",
+    iContext, kContextGeneration.load(), iKeyDown, iEvent.code ? iEvent.code : "", iEvent.key ? iEvent.key : "",
     iEvent.repeat, iEvent.codepoint, iEvent.modifierBits});
-  if(emscripten_proxy_async(emscripten_proxy_get_system_queue(), kKeyboardOwnerThread, RunForwardedKeyboardEvent, event.get()))
+  if(emscripten_proxy_async(emscripten_proxy_get_system_queue(), kContextOwnerThread.load(), RunForwardedKeyboardEvent, event.get()))
     event.release();
   else
-    kErrorHandler.logError(GLFW_PLATFORM_ERROR, "Error while forwarding a keyboard event");
+    emscripten_log(EM_LOG_ERROR, "Error while forwarding a keyboard event");
 }
 
 // Whether the browser default is prevented, decided once on the main thread; the owner applies the
@@ -157,9 +168,9 @@ bool PreventsBrowserDefault(Context const *iContext, GLFWwindow *iWindow, bool i
   return !browserKeyCallback(iWindow, iKey, Keyboard::getKeyScancode(iKey), action, iEvent.modifierBits);
 }
 
-bool IsKeyboardOwnerThread()
+bool IsContextOwnerThread()
 {
-  return pthread_equal(pthread_self(), kKeyboardOwnerThread) != 0;
+  return pthread_equal(pthread_self(), kContextOwnerThread.load()) != 0;
 }
 
 bool ForwardKeyboardEvent(Context *iContext, bool iKeyDown, Keyboard::Event const &iEvent)
@@ -192,6 +203,56 @@ void ClearKeyboardWindow(GLFWwindow *iWindow)
 
 }
 #endif
+
+// Callback strings belong to JavaScript only until the callback returns. Queued work owns every
+// payload and checks the context generation on its owner before touching any GLFW state.
+void DispatchContextCallback(Context *iContext, std::function<void()> iApply)
+{
+#ifdef __EMSCRIPTEN_PTHREADS__
+  if(!iContext)
+    return;
+  if(!IsContextOwnerThread())
+  {
+    auto event = std::make_unique<ForwardedContextCallback>(ForwardedContextCallback{
+      iContext, kContextGeneration.load(), std::move(iApply)});
+    if(emscripten_proxy_async(emscripten_proxy_get_system_queue(), kContextOwnerThread.load(),
+                             RunForwardedContextCallback, event.get()))
+      event.release();
+    else
+      emscripten_log(EM_LOG_ERROR, "Error while forwarding a GLFW context callback");
+    return;
+  }
+  if(iContext != kCallbackContext.load())
+    return;
+#else
+  (void)iContext;
+#endif
+  iApply();
+}
+
+//------------------------------------------------------------------------
+// ContextScaleChangeCallback
+//------------------------------------------------------------------------
+void ContextScaleChangeCallback(Context *iContext)
+{
+  // Read browser state at the event source, without a synchronous owner-to-main-thread round trip.
+  const float scale = static_cast<float>(emscripten_get_device_pixel_ratio());
+  DispatchContextCallback(iContext, [iContext, scale] {
+    iContext->onScaleChange(scale);
+    ObserveContextCallback(0);
+  });
+}
+
+//------------------------------------------------------------------------
+// ContextWindowResizeCallback
+//------------------------------------------------------------------------
+void ContextWindowResizeCallback(Context *iContext, GLFWwindow *iWindow, int iWidth, int iHeight)
+{
+  DispatchContextCallback(iContext, [iContext, iWindow, iWidth, iHeight] {
+    iContext->onWindowResize(iWindow, iWidth, iHeight);
+    ObserveContextCallback(1);
+  });
+}
 
 #ifdef __EMSCRIPTEN_PTHREADS__
 //------------------------------------------------------------------------
@@ -229,7 +290,7 @@ bool ContextKeyboardCallback(emscripten::glfw3::Context *iContext,
 {
   Keyboard::Event event{iCode, iKey, iRepeat, iCodepoint, iModifierBits};
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if(!IsKeyboardOwnerThread())
+  if(!IsContextOwnerThread())
     return ForwardKeyboardEvent(iContext, iKeyDown, event);
 #endif
   if(iKeyDown)
@@ -243,7 +304,12 @@ bool ContextKeyboardCallback(emscripten::glfw3::Context *iContext,
 //------------------------------------------------------------------------
 void ContextClipboardStringCallback(Context *iContext, char const *iText, char const *iError)
 {
-  iContext->onClipboard(iText, iError);
+  const std::optional<std::string> text = iText ? std::optional<std::string>(iText) : std::nullopt;
+  const std::optional<std::string> error = iError ? std::optional<std::string>(iError) : std::nullopt;
+  DispatchContextCallback(iContext, [iContext, text, error] {
+    iContext->onClipboard(text ? text->c_str() : nullptr, error ? error->c_str() : nullptr);
+    ObserveContextCallback(2, iContext->getClipboardString());
+  });
 }
 
 //------------------------------------------------------------------------
@@ -251,7 +317,16 @@ void ContextClipboardStringCallback(Context *iContext, char const *iText, char c
 //------------------------------------------------------------------------
 void ContextErrorHandler(int iErrorCode, char const *iErrorMessage)
 {
-  kErrorHandler.logError(iErrorCode, iErrorMessage);
+  const std::string message = iErrorMessage ? iErrorMessage : "";
+#ifdef __EMSCRIPTEN_PTHREADS__
+  Context *context = kCallbackContext.load();
+#else
+  Context *context = nullptr;
+#endif
+  DispatchContextCallback(context, [iErrorCode, message] {
+    kErrorHandler.logError(iErrorCode, message.c_str());
+    ObserveContextCallback(3);
+  });
 }
 
 //------------------------------------------------------------------------
@@ -260,9 +335,9 @@ void ContextErrorHandler(int iErrorCode, char const *iErrorMessage)
 Context::Context()
 {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  ++kKeyboardContextGeneration;
-  kKeyboardContext = this;
-  kKeyboardOwnerThread = pthread_self();
+  ++kContextGeneration;
+  kCallbackContext = this;
+  kContextOwnerThread = pthread_self();
 #endif
   fScale = static_cast<float>(emscripten_get_device_pixel_ratio());
   emscripten_glfw3_context_init(this,
@@ -282,8 +357,8 @@ Context::Context()
 Context::~Context()
 {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if(kKeyboardContext == this)
-    kKeyboardContext = nullptr;
+  if(kCallbackContext.load() == this)
+    kCallbackContext = nullptr;
 #endif
   terminate();
   addOrRemoveEventListeners(false);
@@ -450,9 +525,9 @@ void Context::computeWindowPos()
 //------------------------------------------------------------------------
 // Context::onScaleChange
 //------------------------------------------------------------------------
-void Context::onScaleChange()
+void Context::onScaleChange(float iScale)
 {
-  fScale = static_cast<float>(emscripten_get_device_pixel_ratio());
+  fScale = iScale;
 #ifndef EMSCRIPTEN_GLFW3_DISABLE_MULTI_WINDOW_SUPPORT
   for(auto &w: fWindows)
   {

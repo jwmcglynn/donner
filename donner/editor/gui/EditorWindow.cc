@@ -2151,10 +2151,15 @@ Vector2i EditorWindow::windowSize() const {
                     static_cast<int>(std::lround(framebufferHeight / frameDisplayScaleOverride_)));
   }
 
+#ifdef __EMSCRIPTEN__
+  // Pane layout and canvas sizing must agree before queued GLFW resize callbacks arrive.
+  return Vector2i(CanvasCssWidth(), CanvasCssHeight());
+#else
   int width = 0;
   int height = 0;
   glfwGetWindowSize(window_, &width, &height);
   return Vector2i(width, height);
+#endif
 }
 
 Vector2i EditorWindow::framebufferSize() const {
