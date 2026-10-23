@@ -47,26 +47,26 @@ TextDrawGeometry PrepareTextDrawGeometry(Registry& registry,
   return geometry;
 }
 
-Path TransformPath(const Path& path, const Transform2d& transform) {
+Path TransformPath(const Path& path, const Transform2d& destinationFromSource) {
   PathBuilder builder;
   const auto points = path.points();
 
   for (const Path::Command& command : path.commands()) {
     switch (command.verb) {
       case Path::Verb::MoveTo:
-        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
+        builder.moveTo(destinationFromSource.transformPosition(points[command.pointIndex]));
         break;
       case Path::Verb::LineTo:
-        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
+        builder.lineTo(destinationFromSource.transformPosition(points[command.pointIndex]));
         break;
       case Path::Verb::QuadTo:
-        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
-                       transform.transformPosition(points[command.pointIndex + 1]));
+        builder.quadTo(destinationFromSource.transformPosition(points[command.pointIndex]),
+                       destinationFromSource.transformPosition(points[command.pointIndex + 1]));
         break;
       case Path::Verb::CurveTo:
-        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
-                        transform.transformPosition(points[command.pointIndex + 1]),
-                        transform.transformPosition(points[command.pointIndex + 2]));
+        builder.curveTo(destinationFromSource.transformPosition(points[command.pointIndex]),
+                        destinationFromSource.transformPosition(points[command.pointIndex + 1]),
+                        destinationFromSource.transformPosition(points[command.pointIndex + 2]));
         break;
       case Path::Verb::ClosePath: builder.closePath(); break;
     }

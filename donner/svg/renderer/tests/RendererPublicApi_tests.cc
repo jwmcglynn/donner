@@ -2951,6 +2951,33 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyp
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, TextPathStretchAcrossSharpCornerMatchesCachedOutline) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"
+        font-family="Public Sans" font-size="32">
+        <defs><path id="p" d="M8 64 H48 V112"/></defs>
+        <rect x="4" y="4" width="6" height="6" fill="lime"/>
+        <text><textPath href="#p" method="stretch" startOffset="20">M</textPath></text>
+      </svg>)svg");
+  const RendererBitmap textBitmap = RenderPublicDocument(document);
+  const auto text = document.querySelector("text");
+  ASSERT_TRUE(text.has_value());
+  const std::vector<Path> glyphs =
+      document.registry().ctx().get<TextEngine>().computedGlyphPaths(text->unsafeEntityHandle());
+  ASSERT_THAT(glyphs, testing::ElementsAre(testing::Property(&Path::empty, false)));
+
+  SVGDocument outlines = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128">
+        <rect x="4" y="4" width="6" height="6" fill="lime"/>
+      </svg>)svg");
+  SVGPathElement outline = SVGPathElement::Create(outlines);
+  outline.setSpline(glyphs.front());
+  outlines.svgElement().appendChild(outline);
+  editor::tests::CompareBitmapToBitmap(textBitmap, RenderPublicDocument(outlines),
+                                       "textpath-stretch-sharp-corner-outline",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 /// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,
 /// then a sentinel glyph alone in the bottom-right corner.
 std::string ManyDistinctGlyphsDocument() {

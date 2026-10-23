@@ -972,9 +972,23 @@ struct DeferredTextPath {
   Path::MeasuredPath measuredPath;
   bool closed = false;
   std::vector<TextPathCluster> clusters;
+  std::shared_ptr<TextPathMeasurementReservation> measurementReservation;
 };
 
 constexpr size_t kMaximumDeferredTextPathBytes = Path::kMaximumMeasuredPathRetainedBytes;
+
+std::shared_ptr<components::DocumentResourceFamilyBudget> TextPathResourceFamily(
+    Registry& registry) {
+  auto& context = registry.ctx();
+  if (!context.contains<components::DocumentResourceFamilyContext>()) {
+    context.emplace<components::DocumentResourceFamilyContext>();
+  }
+  auto& familyContext = context.get<components::DocumentResourceFamilyContext>();
+  if (!familyContext.budget) {
+    familyContext.budget = std::make_shared<components::DocumentResourceFamilyBudget>();
+  }
+  return familyContext.budget;
+}
 
 /// Resolves a per-character displacement, returning zero when it is absent.
 double TextPathDisplacement(const SmallVector<std::optional<Lengthd>, 1>& positions,
@@ -1208,7 +1222,8 @@ void placeTextPath(const components::ComputedTextComponent& text, const TextLayo
     std::vector<double> segmentEnds = path.measuredPath.segmentEndDistances();
     auto mapping = std::make_shared<StretchedTextPath>(StretchedTextPath{
         std::move(path.measuredPath), std::move(segmentEnds), firstSpan.pathStartOffset,
-        path.closed, IsStraightTextPath(*firstSpan.pathSpline)});
+        path.closed, IsStraightTextPath(*firstSpan.pathSpline),
+        std::move(path.measurementReservation)});
     for (size_t runIndex = path.firstRun; runIndex < path.endRun; ++runIndex) {
       runs[runIndex].stretchedTextPath = mapping;
     }
@@ -3446,10 +3461,12 @@ private:
            deferredTextPathBytes_ <= kMaximumDeferredTextPathBytes - *measuredBytes - clusterBytes;
   }
 
-  void retainTextPath(Path::MeasuredPath measuredPath, bool closed, size_t retainedBytes) {
+  void retainTextPath(Path::MeasuredPath measuredPath, bool closed, size_t retainedBytes,
+                      std::shared_ptr<TextPathMeasurementReservation> measurementReservation) {
     deferredTextPathBytes_ += retainedBytes;
     deferredTextPaths_.push_back({*firstPathRun_, runs_.size(), std::move(measuredPath), closed,
-                                  std::move(pathStaging_.clusters)});
+                                  std::move(pathStaging_.clusters),
+                                  std::move(measurementReservation)});
   }
 
   void discardTextPathRuns() {
@@ -3472,17 +3489,58 @@ private:
       return;
     }
     const TextSpan& firstSpan = text_.spans[*firstPathRun_];
-    Path::MeasuredPath measuredPath = firstSpan.pathSpline->measure();
+    constexpr size_t kMappingOverhead = sizeof(StretchedTextPath) + 2u * sizeof(void*);
+    const Path& sourcePath = *firstSpan.pathSpline;
+    const size_t maximumSegmentEndBytes =
+        sourcePath.commands().size() <= std::numeric_limits<size_t>::max() / sizeof(double)
+            ? sourcePath.commands().size() * sizeof(double)
+            : std::numeric_limits<size_t>::max();
+    auto family = TextPathResourceFamily(registry_);
+    const size_t availableBytes =
+        family->availableBytes(components::DocumentResourceFamilyBudget::Kind::Geometry);
+    const bool ancillaryFits = maximumSegmentEndBytes <= availableBytes &&
+                               kMappingOverhead <= availableBytes - maximumSegmentEndBytes;
+    const size_t measurementBytesAvailable =
+        ancillaryFits ? availableBytes - maximumSegmentEndBytes - kMappingOverhead : 0u;
+    const size_t measurementWork =
+        sourcePath.measurementWorkLimitForRetainedBytes(measurementBytesAvailable);
+    const auto measurementUpper = sourcePath.measurementRetainedBytesUpperBound(measurementWork);
+    const bool reservationFits =
+        ancillaryFits && measurementUpper && *measurementUpper <= measurementBytesAvailable;
+    const size_t reservationBytes =
+        reservationFits ? *measurementUpper + maximumSegmentEndBytes + kMappingOverhead
+                        : availableBytes + (availableBytes != std::numeric_limits<size_t>::max());
+    auto measurementReservation =
+        TextPathMeasurementReservation::Create(std::move(family), reservationBytes);
+    Path::MeasuredPath measuredPath = measurementReservation && measurementWork > 0u
+                                          ? sourcePath.measure(measurementWork)
+                                          : Path::MeasuredPath();
+    if (measurementReservation && !measuredPath.valid()) {
+      measurementReservation->rejectFurtherReservations();
+    }
     const bool closed = isClosedTextPath(measuredPath, firstSpan);
     postPathBoundaries_.push_back(
         {runs_.size(), TextPathContinuation(measuredPath, closed, firstSpan.pathStartOffset)});
     const auto measuredBytes = measuredPath.retainedBytes();
+    const bool measuredMappingFits =
+        measuredBytes &&
+        measuredPath.segmentCount() <=
+            (std::numeric_limits<size_t>::max() - kMappingOverhead) / sizeof(double);
+    const size_t measuredMappingBytes =
+        measuredMappingFits
+            ? *measuredBytes + measuredPath.segmentCount() * sizeof(double) + kMappingOverhead
+            : 0u;
+    if (measurementReservation && measuredMappingFits) {
+      measurementReservation->shrink(measuredMappingBytes);
+    }
     const bool clustersFit =
         pathStaging_.clusters.capacity() <= kMaximumDeferredTextPathBytes / sizeof(TextPathCluster);
     const size_t clusterBytes =
         clustersFit ? pathStaging_.clusters.capacity() * sizeof(TextPathCluster) : 0;
-    if (canRetainTextPath(measuredBytes, clustersFit, clusterBytes)) {
-      retainTextPath(std::move(measuredPath), closed, *measuredBytes + clusterBytes);
+    if (measurementReservation && measuredPath.valid() && measuredMappingFits &&
+        canRetainTextPath(measuredBytes, clustersFit, clusterBytes)) {
+      retainTextPath(std::move(measuredPath), closed, *measuredBytes + clusterBytes,
+                     std::move(measurementReservation));
     } else {
       discardTextPathRuns();
     }
@@ -3718,12 +3776,13 @@ Path PlaceCachedGlyphOutline(Path outline, const TextRun& run, const TextGlyph& 
     }
     return WarpTextPathOutline(outline, *run.stretchedTextPath, glyph);
   }
-  Transform2d placement = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+  Transform2d textElementFromGlyphLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
   if (glyph.rotateDegrees != 0.0) {
-    placement =
-        Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) * placement;
+    textElementFromGlyphLocal =
+        Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+        textElementFromGlyphLocal;
   }
-  return transformPath(outline, placement);
+  return transformPath(outline, textElementFromGlyphLocal);
 }
 
 const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextGeometryComponent(

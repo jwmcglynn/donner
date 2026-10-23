@@ -34,18 +34,23 @@ inline bool CrossesBoundary(double start, double end, double boundary) {
   return start < end ? boundary > start && boundary < end : boundary < start && boundary > end;
 }
 
-inline Path::PointOnPath Sample(const StretchedTextPath& mapping, double distance) {
+inline Path::PointOnPath Sample(
+    const StretchedTextPath& mapping, double distance,
+    Path::MeasuredPath::BoundarySide boundarySide = Path::MeasuredPath::BoundarySide::Incoming) {
   const double length = mapping.measuredPath.pathLength();
   if (InvalidSample(distance, length)) {
     return {.valid = false};
   }
   if (mapping.closed) {
     const double normalized = std::fmod(distance, length);
-    return mapping.measuredPath.pointAtArcLength(normalized < 0.0 ? normalized + length
-                                                                  : normalized);
+    double sampledDistance = normalized < 0.0 ? normalized + length : normalized;
+    if (sampledDistance == 0.0 && boundarySide == Path::MeasuredPath::BoundarySide::Incoming) {
+      sampledDistance = length;
+    }
+    return mapping.measuredPath.pointAtArcLength(sampledDistance, boundarySide);
   }
   if (distance >= 0.0 && distance <= length) {
-    return mapping.measuredPath.pointAtArcLength(distance);
+    return mapping.measuredPath.pointAtArcLength(distance, boundarySide);
   }
   const double endpointDistance = distance < 0.0 ? 0.0 : length;
   Path::PointOnPath endpoint = mapping.measuredPath.pointAtArcLength(endpointDistance);
@@ -58,14 +63,16 @@ inline Path::PointOnPath Sample(const StretchedTextPath& mapping, double distanc
   return endpoint;
 }
 
-inline std::optional<Vector2d> Point(const StretchedTextPath& mapping, const TextGlyph& glyph,
-                                     const Vector2d& point) {
+inline std::optional<Vector2d> Point(
+    const StretchedTextPath& mapping, const TextGlyph& glyph, const Vector2d& point,
+    Path::MeasuredPath::BoundarySide boundarySide = Path::MeasuredPath::BoundarySide::Incoming) {
   if (!glyph.textPathOrigin || !std::isfinite(*glyph.textPathOrigin) ||
       !std::isfinite(glyph.textPathNormalOffset) || !std::isfinite(point.x) ||
       !std::isfinite(point.y)) {
     return std::nullopt;
   }
-  const auto sample = Sample(mapping, mapping.startOffset + *glyph.textPathOrigin + point.x);
+  const auto sample =
+      Sample(mapping, mapping.startOffset + *glyph.textPathOrigin + point.x, boundarySide);
   const double normal = glyph.textPathNormalOffset + point.y;
   if (!sample.valid || !std::isfinite(sample.angle) || !std::isfinite(normal)) {
     return std::nullopt;
@@ -76,22 +83,23 @@ inline std::optional<Vector2d> Point(const StretchedTextPath& mapping, const Tex
 }
 
 inline bool AppendTransformed(PathBuilder& builder, const Path::Command& command,
-                              std::span<const Vector2d> points, const Transform2d& transform) {
+                              std::span<const Vector2d> points,
+                              const Transform2d& textElementFromGlyphLocal) {
   switch (command.verb) {
     case Path::Verb::MoveTo:
-      builder.moveTo(transform.transformPosition(points[command.pointIndex]));
+      builder.moveTo(textElementFromGlyphLocal.transformPosition(points[command.pointIndex]));
       return true;
     case Path::Verb::LineTo:
-      builder.lineTo(transform.transformPosition(points[command.pointIndex]));
+      builder.lineTo(textElementFromGlyphLocal.transformPosition(points[command.pointIndex]));
       return true;
     case Path::Verb::QuadTo:
-      builder.quadTo(transform.transformPosition(points[command.pointIndex]),
-                     transform.transformPosition(points[command.pointIndex + 1]));
+      builder.quadTo(textElementFromGlyphLocal.transformPosition(points[command.pointIndex]),
+                     textElementFromGlyphLocal.transformPosition(points[command.pointIndex + 1]));
       return true;
     case Path::Verb::CurveTo:
-      builder.curveTo(transform.transformPosition(points[command.pointIndex]),
-                      transform.transformPosition(points[command.pointIndex + 1]),
-                      transform.transformPosition(points[command.pointIndex + 2]));
+      builder.curveTo(textElementFromGlyphLocal.transformPosition(points[command.pointIndex]),
+                      textElementFromGlyphLocal.transformPosition(points[command.pointIndex + 1]),
+                      textElementFromGlyphLocal.transformPosition(points[command.pointIndex + 2]));
       return true;
     case Path::Verb::ClosePath: builder.closePath(); return true;
   }
@@ -106,13 +114,13 @@ inline Path LinearOutline(const Path& outline, const StretchedTextPath& mapping,
   }
   const Vector2d origin(sample.point.x - std::sin(sample.angle) * glyph.textPathNormalOffset,
                         sample.point.y + std::cos(sample.angle) * glyph.textPathNormalOffset);
-  Transform2d transform = Transform2d::Translate(origin);
+  Transform2d textElementFromGlyphLocal = Transform2d::Translate(origin);
   if (sample.angle != 0.0) {
-    transform = Transform2d::Rotate(sample.angle) * transform;
+    textElementFromGlyphLocal = Transform2d::Rotate(sample.angle) * textElementFromGlyphLocal;
   }
   PathBuilder builder;
   for (const auto& command : outline.commands()) {
-    if (!AppendTransformed(builder, command, outline.points(), transform)) {
+    if (!AppendTransformed(builder, command, outline.points(), textElementFromGlyphLocal)) {
       return Path();
     }
   }
@@ -145,6 +153,10 @@ public:
 private:
   std::optional<Vector2d> map(const Vector2d& point) const {
     return Point(mapping_, glyph_, point);
+  }
+  std::optional<Vector2d> map(const Vector2d& point,
+                              Path::MeasuredPath::BoundarySide boundarySide) const {
+    return Point(mapping_, glyph_, point, boundarySide);
   }
   bool moveTo(size_t index) {
     current_ = points_[index];
@@ -188,16 +200,25 @@ private:
       return false;
     }
     if (end.x != current_.x) {
+      const bool increasing = endDistance > startDistance;
+      const auto beforeBoundary = increasing ? Path::MeasuredPath::BoundarySide::Incoming
+                                             : Path::MeasuredPath::BoundarySide::Outgoing;
+      const auto afterBoundary = increasing ? Path::MeasuredPath::BoundarySide::Outgoing
+                                            : Path::MeasuredPath::BoundarySide::Incoming;
       for (const double boundary : *boundaries) {
         const double t = (boundary - startDistance) / (endDistance - startDistance);
         const Vector2d intervalEnd = current_ * (1.0 - t) + end * t;
-        const auto mappedEnd = map(intervalEnd);
+        const auto mappedEnd = map(intervalEnd, beforeBoundary);
         if (!mappedEnd ||
             !appendAdaptive(intervalStart, intervalEnd, *mappedStart, *mappedEnd, 0u)) {
           return false;
         }
+        const auto mappedAfterBoundary = map(intervalEnd, afterBoundary);
+        if (!mappedAfterBoundary || !appendBoundaryJoin(*mappedEnd, *mappedAfterBoundary)) {
+          return false;
+        }
         intervalStart = intervalEnd;
-        mappedStart = mappedEnd;
+        mappedStart = mappedAfterBoundary;
       }
     }
     const auto mappedEnd = map(end);
@@ -205,6 +226,18 @@ private:
       return false;
     }
     current_ = end;
+    return true;
+  }
+  bool appendBoundaryJoin(const Vector2d& incoming, const Vector2d& outgoing) {
+    if (incoming == outgoing) {
+      return true;
+    }
+    if (remainingWork_ == 0u || remainingOutput_ == 0u) {
+      return false;
+    }
+    --remainingWork_;
+    --remainingOutput_;
+    builder_.lineTo(outgoing);
     return true;
   }
   std::optional<std::vector<double>> crossedBoundaries(double start, double end) {

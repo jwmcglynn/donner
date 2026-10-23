@@ -12,6 +12,7 @@
 namespace donner::svg {
 namespace {
 
+using testing::Contains;
 using testing::ElementsAre;
 
 StretchedTextPath MeasurePath(const Path& path) {
@@ -93,6 +94,51 @@ TEST(PlacedTextGeometryTest, StretchSubdividesWideRectangularGlyphEdgesAcrossCur
   ASSERT_FALSE(tighter.empty());
   EXPECT_GT(tighter.points().size(), warped.points().size());
   EXPECT_TRUE(WarpTextPathOutline(rectangle, MeasurePath(route), glyph, 0.0).empty());
+}
+
+TEST(PlacedTextGeometryTest, StretchJoinsOneSidedNormalsAcrossSharpCorner) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 10.0))
+                         .build();
+  const Path forward =
+      PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(10.0, -2.0)).build();
+  const Path reverse = PathBuilder().moveTo(Vector2d(10.0, 2.0)).lineTo(Vector2d(0.0, 2.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 5.0;
+  const StretchedTextPath mapping = MeasurePath(route);
+
+  const Path warpedForward = WarpGlyphOutline(forward, mapping, glyph, 0.05);
+  const Path warpedReverse = WarpGlyphOutline(reverse, mapping, glyph, 0.05);
+
+  ASSERT_FALSE(warpedForward.empty());
+  ASSERT_FALSE(warpedReverse.empty());
+  EXPECT_THAT(warpedForward.points(), Contains(Vector2Near(10.0, -2.0)));
+  EXPECT_THAT(warpedForward.points(), Contains(Vector2Near(12.0, 0.0)));
+  EXPECT_THAT(warpedReverse.points(), Contains(Vector2Near(8.0, 0.0)));
+  EXPECT_THAT(warpedReverse.points(), Contains(Vector2Near(10.0, 2.0)));
+}
+
+TEST(PlacedTextGeometryTest, StretchJoinsOneSidedNormalsAcrossClosedSeam) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 10.0))
+                         .lineTo(Vector2d(0.0, 10.0))
+                         .closePath()
+                         .build();
+  StretchedTextPath mapping = MeasurePath(route);
+  mapping.closed = true;
+  const Path edge = PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(10.0, -2.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = mapping.measuredPath.pathLength() - 5.0;
+
+  const Path warped = WarpGlyphOutline(edge, mapping, glyph, 0.05);
+
+  ASSERT_FALSE(warped.empty());
+  EXPECT_THAT(warped.points(), Contains(Vector2Near(-2.0, 0.0)));
+  EXPECT_THAT(warped.points(), Contains(Vector2Near(0.0, -2.0)));
 }
 
 TEST(PlacedTextGeometryTest, StretchSplitsRepeatedWaveAtMeasuredSegmentBoundaries) {

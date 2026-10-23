@@ -525,6 +525,44 @@ std::optional<std::size_t> Path::measurementBaseRetainedBytes() const {
   return bytes <= kMaximumMeasuredPathRetainedBytes ? std::optional(bytes) : std::nullopt;
 }
 
+std::optional<std::size_t> Path::measurementRetainedBytesUpperBound(
+    std::size_t maximumWorkUnits) const {
+  const auto base = measurementBaseRetainedBytes();
+  if (!base) {
+    return std::nullopt;
+  }
+  const std::size_t work = std::min(maximumWorkUnits, kMaximumGeometryQueryWork);
+  constexpr std::size_t kMaximum = std::numeric_limits<std::size_t>::max();
+  if (commands_.size() > kMaximum - work) {
+    return std::nullopt;
+  }
+  const std::size_t maximumSamples = commands_.size() + work;
+  if (maximumSamples > kMaximum / 2u) {
+    return std::nullopt;
+  }
+  const std::size_t maximumSampleCapacity = std::max<std::size_t>(8u, maximumSamples * 2u);
+  if (maximumSampleCapacity > (kMaximum - *base) / sizeof(MeasuredPath::ArcSample)) {
+    return std::nullopt;
+  }
+  const std::size_t bytes = *base + maximumSampleCapacity * sizeof(MeasuredPath::ArcSample);
+  return bytes <= kMaximumMeasuredPathRetainedBytes ? std::optional(bytes) : std::nullopt;
+}
+
+std::size_t Path::measurementWorkLimitForRetainedBytes(std::size_t maximumBytes) const {
+  std::size_t low = 0;
+  std::size_t high = kMaximumGeometryQueryWork;
+  while (low < high) {
+    const std::size_t middle = low + (high - low + 1u) / 2u;
+    const auto bytes = measurementRetainedBytesUpperBound(middle);
+    if (bytes && *bytes <= maximumBytes) {
+      low = middle;
+    } else {
+      high = middle - 1u;
+    }
+  }
+  return low;
+}
+
 double Path::pathLength() const {
   return measure().pathLength();
 }
@@ -583,7 +621,8 @@ std::vector<double> Path::MeasuredPath::segmentEndDistances() const {
   return result;
 }
 
-Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance) const {
+Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance,
+                                                       BoundarySide boundarySide) const {
   if (!valid_ || !std::isfinite(distance) || distance < 0.0) {
     return {{}, {}, 0.0, false};
   }
@@ -595,11 +634,26 @@ Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance) const {
     return {endpoint_, {}, 0.0, false};
   }
 
-  const auto it = std::lower_bound(
+  auto it = std::lower_bound(
       segments_.begin(), segments_.end(), distance,
       [](const Segment& segment, double target) { return segment.endLength < target; });
   if (it == segments_.end()) {
     return {endpoint_, {}, 0.0, false};
+  }
+
+  if (boundarySide == BoundarySide::Outgoing && distance == it->endLength) {
+    auto next = std::next(it);
+    const Vector2d boundaryPoint = it->type == SegmentType::Line ? it->points[1] : it->points[3];
+    if (next == segments_.end() && distance == totalLength_ &&
+        segments_.front().startLength == 0.0 && boundaryPoint == segments_.front().points[0]) {
+      next = segments_.begin();
+    }
+    if (next != segments_.end() &&
+        next->startLength == (distance == totalLength_ ? 0.0 : distance) &&
+        boundaryPoint == next->points[0]) {
+      it = next;
+      distance = it->startLength;
+    }
   }
 
   const double segmentLength = it->endLength - it->startLength;

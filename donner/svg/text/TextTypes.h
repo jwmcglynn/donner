@@ -1,14 +1,63 @@
 #pragma once
 /// @file
 
+#include <limits>
 #include <memory>
 #include <optional>
 #include <vector>
 
 #include "donner/base/Path.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::svg {
+
+/// Lifetime charge for retained text-path measurement geometry.
+class TextPathMeasurementReservation {
+public:
+  /// Reserve geometry bytes from a document family, returning null on refusal.
+  static std::shared_ptr<TextPathMeasurementReservation> Create(
+      std::shared_ptr<components::DocumentResourceFamilyBudget> family, std::size_t bytes) {
+    if (!family ||
+        !family->reserve(components::DocumentResourceFamilyBudget::Kind::Geometry, bytes)) {
+      return nullptr;
+    }
+    return std::shared_ptr<TextPathMeasurementReservation>(
+        new TextPathMeasurementReservation(std::move(family), bytes));
+  }
+
+  ~TextPathMeasurementReservation() {
+    family_->release(components::DocumentResourceFamilyBudget::Kind::Geometry, bytes_);
+  }
+
+  TextPathMeasurementReservation(const TextPathMeasurementReservation&) = delete;
+  TextPathMeasurementReservation& operator=(const TextPathMeasurementReservation&) = delete;
+
+  /// Reduce the retained charge after measurement determines exact capacities.
+  void shrink(std::size_t bytes) {
+    if (bytes < bytes_) {
+      family_->release(components::DocumentResourceFamilyBudget::Kind::Geometry, bytes_ - bytes);
+      bytes_ = bytes;
+    }
+  }
+
+  /// Make later family reservations fail closed after admitted measurement cannot complete.
+  void rejectFurtherReservations() {
+    const std::size_t available =
+        family_->availableBytes(components::DocumentResourceFamilyBudget::Kind::Geometry);
+    const std::size_t refused =
+        available == std::numeric_limits<std::size_t>::max() ? available : available + 1u;
+    (void)family_->reserve(components::DocumentResourceFamilyBudget::Kind::Geometry, refused);
+  }
+
+private:
+  TextPathMeasurementReservation(std::shared_ptr<components::DocumentResourceFamilyBudget> family,
+                                 std::size_t bytes)
+      : family_(std::move(family)), bytes_(bytes) {}
+
+  std::shared_ptr<components::DocumentResourceFamilyBudget> family_;
+  std::size_t bytes_ = 0;
+};
 
 /// Shared path mapping used to warp glyph outlines for `textPath method="stretch"`.
 struct StretchedTextPath {
@@ -17,6 +66,7 @@ struct StretchedTextPath {
   double startOffset = 0.0;
   bool closed = false;
   bool linear = false;
+  std::shared_ptr<TextPathMeasurementReservation> measurementReservation;
 };
 
 /// Resolved face and used font size for layout or declaring-element decoration metrics.

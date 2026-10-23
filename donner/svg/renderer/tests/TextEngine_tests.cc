@@ -19,6 +19,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextBackendFull.h"
 #include "donner/svg/text/TextBackendSimple.h"
@@ -1297,6 +1298,42 @@ TEST(TextEngineTest, TextPathStretchFollowsEachGlyphChord) {
     EXPECT_NEAR(*glyph.textPathOrigin, expectedOrigin, 1e-6);
     expectedOrigin += glyph.xAdvance;
   }
+}
+
+TEST(TextEngineTest, TextPathMeasurementRetentionUsesDocumentFamilyBudget) {
+  Registry registry;
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.geometryBytes = 16 * 1024 * 1024;
+  limits.maximumTotalRetainedBytes = 16 * 1024 * 1024;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  registry.ctx().emplace<components::DocumentResourceFamilyContext>(family);
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .curveTo(Vector2d(0.0, 1e7), Vector2d(1e7, 1e7), Vector2d(1e7, 0.0))
+                        .build();
+  std::vector<std::vector<TextRun>> retainedRuns;
+  retainedRuns.reserve(32);
+  std::size_t admitted = 0;
+  for (int root = 0; root < 32; ++root) {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("A");
+    span.pathSpline = path;
+    span.textPathSourceEntity = registry.create();
+    span.textPathMethod = components::TextPathMethod::Stretch;
+    text.spans.push_back(std::move(span));
+    auto runs = engine.layout(text, MakeTextParams(24.0));
+    if (!runs.empty() && runs.front().stretchedTextPath) {
+      ++admitted;
+    }
+    retainedRuns.push_back(std::move(runs));
+  }
+
+  EXPECT_THAT(admitted, AllOf(Gt(0u), Lt(32u)));
+  EXPECT_LE(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::Geometry),
+            limits.geometryBytes);
+  EXPECT_TRUE(family->securityStats().rejected);
 }
 
 TEST(TextEngineTest, TextPathStretchKeepsCombiningMarkInBaseClusterFrame) {
