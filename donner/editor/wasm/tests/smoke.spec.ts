@@ -5514,3 +5514,61 @@ test.describe("Retina Geode splash", () => {
     expect(fatalMessages).toEqual([]);
   });
 });
+
+
+test("browser File Open uses the native file picker", async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = window as Window & { __filePickerCalls?: number; showOpenFilePicker?: unknown };
+    state.__filePickerCalls = 0;
+    state.showOpenFilePicker = async () => {
+      state.__filePickerCalls!++;
+      return [{
+        name: "picked-art.svg",
+        getFile: async () => new File([
+          '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="260"><rect id="picked" x="40" y="40" width="140" height="90" fill="lime"/></svg>',
+        ], "picked-art.svg", { type: "image/svg+xml" }),
+      }];
+    };
+  });
+  await openEditor(page, { postInitializationDwellMs: 0 });
+  await page.locator("canvas#canvas").focus();
+  await page.keyboard.press("Control+o");
+  await expect.poll(() => page.evaluate(() =>
+    (window as Window & { __filePickerCalls?: number }).__filePickerCalls
+  )).toBe(1);
+  await expect(page).toHaveTitle(/picked-art\.svg/);
+});
+
+test("browser Save As writes through the native save picker", async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = window as Window & {
+      __savedSvg?: string;
+      __savePickerCalls?: number;
+      showSaveFilePicker?: unknown;
+    };
+    state.__savePickerCalls = 0;
+    state.showSaveFilePicker = async () => {
+      state.__savePickerCalls!++;
+      return {
+        name: "saved-art.svg",
+        createWritable: async () => ({
+          write: async (source: string | Blob) => {
+            state.__savedSvg = typeof source === "string" ? source : await source.text();
+          },
+          close: async () => {},
+          abort: async () => {},
+        }),
+      };
+    };
+  });
+  await openEditor(page, { postInitializationDwellMs: 0 });
+  await page.locator("canvas#canvas").focus();
+  await page.keyboard.press("Control+Shift+s");
+  await expect.poll(() => page.evaluate(() =>
+    (window as Window & { __savePickerCalls?: number }).__savePickerCalls
+  )).toBe(1);
+  await expect.poll(() => page.evaluate(() =>
+    (window as Window & { __savedSvg?: string }).__savedSvg ?? ""
+  )).toContain("<svg");
+  await expect(page).toHaveTitle(/saved-art\.svg/);
+});
