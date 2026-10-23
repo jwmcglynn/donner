@@ -4475,8 +4475,7 @@ TEST(EditorShellTest, SourceStyleAnnotationAdoptionDoesNotWaitForDocumentWriter)
   std::thread writer([&] {
     auto access = document.writeAccess();
     acquired.set_value();
-    writerDeadlineExpired =
-        released.wait_for(std::chrono::seconds(2)) != std::future_status::ready;
+    writerDeadlineExpired = released.wait_for(std::chrono::seconds(2)) != std::future_status::ready;
   });
   acquired.get_future().wait();
   EditorShellTestAccess::UpdateSourceStyleDecorations(shell);

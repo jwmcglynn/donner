@@ -227,7 +227,8 @@ struct EyedropperSelectedTestFields {
 EyedropperSelectedTestFields ReadEyedropperSelectedTestFields(const svg::SVGElement& selected) {
   EyedropperSelectedTestFields fields;
   selected.withReadAccess([&](svg::DocumentReadAccess&, EntityHandle) {
-    fields.id = std::string(std::string_view(selected.id()).substr(0, kEyedropperTestFieldMaxBytes));
+    fields.id =
+        std::string(std::string_view(selected.id()).substr(0, kEyedropperTestFieldMaxBytes));
     if (const std::optional<RcString> style = selected.getAttribute("style")) {
       fields.style = std::string(std::string_view(*style).substr(0, kEyedropperTestFieldMaxBytes));
     }
