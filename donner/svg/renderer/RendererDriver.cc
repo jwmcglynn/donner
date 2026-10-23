@@ -1216,7 +1216,7 @@ std::optional<components::FilterGraph> resolveFilterGraph(
     const Box2d& viewBox, const FontMetrics& fontMetrics) {
   if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
     // Convert CSS filter functions to a FilterGraph.
-    // CSS Filter Effects Level 1 §8: shorthand filter functions use sRGB color space for
+    // CSS Filter Effects Level 1 §6: shorthand filter functions use sRGB color space for
     // interpolation, unlike SVG filter elements which default to linearRGB.
     if (effects->size() > components::kMaximumFilterGraphNodes) {
       return std::nullopt;
