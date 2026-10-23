@@ -1300,6 +1300,23 @@ public:
     shell.confirmPendingSampleLoadDiscard();
   }
 
+  static void ResetFileDialogInput(EditorShell& shell) { shell.resetFileDialogInput(); }
+
+  static void StageBrowserSave(EditorShell& shell) {
+    shell.browserSavedSource_ = std::string(shell.app_.document().document().source());
+    shell.browserSaveSessionId_ = shell.documentSessionId_;
+    shell.browserSavedFrameVersion_ = shell.app_.document().currentFrameVersion();
+  }
+
+  static void CompleteBrowserSave(
+      EditorShell& shell, BrowserFileDialog::Status status = BrowserFileDialog::Status::Success) {
+    shell.consumeBrowserFileResult(BrowserFileDialog::Result{
+        .operation = BrowserFileDialog::Operation::Write,
+        .status = status,
+        .name = "saved.svg",
+    });
+  }
+
   static void RequestSave(EditorShell& shell) { shell.requestSave(); }
 
   static void RequestSaveAs(EditorShell& shell, std::string error = std::string()) {
@@ -1815,6 +1832,10 @@ public:
 
   static bool PenDragFlushedThisFrame(const EditorShell& shell) {
     return shell.penDragFlushedThisFrame_;
+  }
+
+  static bool SelectToolIsDragging(const EditorShell& shell) {
+    return shell.selectTool_.isDragging();
   }
 
   static bool SelectToolIsMarqueeing(const EditorShell& shell) {
@@ -4108,6 +4129,190 @@ TEST(EditorShellTest, NewerFileAndRevertRequestsCancelDeferredSampleReplacement)
                   .document()
                   .querySelector("#newer-file")
                   .has_value());
+}
+
+TEST(EditorShellTest, OpeningDocumentClearsBufferedCanvasPress) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(-500, 1000));
+  const auto path = TempPathForTest("open-clears-pending-press.svg");
+  WriteTextFile(path, kInitialSvg);
+  std::string error;
+  ASSERT_TRUE(EditorShellTestAccess::TryOpenPath(shell, path.string(), &error)) << error;
+  EXPECT_FALSE(EditorShellTestAccess::HasPendingClick(shell));
+}
+
+TEST(EditorShellTest, OpeningDocumentDiscardsThePreviousDocumentDrag) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+  ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(
+      shell, Vector2d(30, 24), Box2d(Vector2d(10, 12), Vector2d(50, 36))));
+  const auto path = TempPathForTest("open-clears-drag.svg");
+  WriteTextFile(path, kInitialSvg);
+  std::string error;
+  ASSERT_TRUE(EditorShellTestAccess::TryOpenPath(shell, path.string(), &error)) << error;
+  EXPECT_FALSE(EditorShellTestAccess::SelectToolIsDragging(shell));
+  EXPECT_FALSE(app.isDirty());
+}
+
+TEST(EditorShellTest, ReturningFromFileDialogDiscardsQueuedAndHeldInput) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  ImGuiIO& io = ImGui::GetIO();
+  io.MouseDown[0] = true;
+  io.MouseClicked[0] = true;
+  io.MouseDragMaxDistanceSqr[0] = 1000000.0f;
+  io.AddMouseButtonEvent(0, true);
+  io.AddKeyEvent(ImGuiMod_Ctrl, true);
+  EditorShellTestAccess::BufferPendingClick(shell, Vector2d(-500, 1000));
+  EditorShellTestAccess::ResetFileDialogInput(shell);
+  EXPECT_FALSE(io.MouseDown[0]);
+  EXPECT_FALSE(io.MouseClicked[0]);
+  EXPECT_FALSE(EditorShellTestAccess::HasPendingClick(shell));
+  window.beginFrame();
+  EXPECT_FALSE(ImGui::IsMouseDown(0));
+  EXPECT_FALSE(ImGui::IsMouseDragging(0));
+  EXPECT_FALSE(io.KeyCtrl);
+  window.endFrame();
+}
+
+TEST(EditorShellTest, FirstSelectionClickAfterDialogDoesNotMoveTheShape) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+  RunFramesUntilDisplayedSelectionBounds(window, shell);
+  const std::string before(app.document().document().source());
+  ImGuiIO& io = ImGui::GetIO();
+  io.MouseDown[0] = true;
+  io.MouseClickedPos[0] = ImVec2(-500, -500);
+  io.MouseDragMaxDistanceSqr[0] = 1000000.0f;
+  EditorShellTestAccess::ResetFileDialogInput(shell);
+  RenderPaneMouseFrame(window, shell, Vector2d(30, 24), false);
+  RenderPaneMouseFrame(window, shell, Vector2d(30, 24), true);
+  RenderPaneMouseFrame(window, shell, Vector2d(30, 24), false);
+  RunShellFrame(window, shell);
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_FALSE(app.isDirty());
+  EXPECT_FALSE(EditorShellTestAccess::SelectToolIsDragging(shell));
+  ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(
+      shell, Vector2d(30, 24), Box2d(Vector2d(10, 12), Vector2d(50, 36))));
+  EditorShellTestAccess::MoveSelectedShapeDrag(shell, Vector2d(40, 30));
+  EditorShellTestAccess::EndSelectedShapeDrag(shell, Vector2d(40, 30));
+  std::string error;
+  const auto path = TempPathForTest("post-dialog-drag.svg");
+  bool saved = false;
+  for (const tests::HangGuard guard; !saved && guard.active();) {
+    RunShellFrame(window, shell);
+    saved = EditorShellTestAccess::TrySavePath(shell, path.string(), &error);
+  }
+  ASSERT_TRUE(saved) << error;
+  EXPECT_NE(app.document().document().source(), before);
+  EditorShellTestAccess::RequestUndo(shell);
+  for (const tests::HangGuard guard; guard.active();) {
+    RunShellFrame(window, shell);
+    const auto restored = app.document().document().querySelector("#target");
+    if (restored && !restored->getAttribute("transform").has_value() &&
+        EditorShellTestAccess::PendingHistoryActionCount(shell) == 0) {
+      break;
+    }
+  }
+  const auto restored = app.document().document().querySelector("#target");
+  ASSERT_THAT(restored, testing::Optional(testing::_));
+  EXPECT_THAT(restored->getAttribute("transform"), testing::Eq(std::nullopt));
+}
+
+TEST(EditorShellTest, BrowserSaveCompletionUsesCanonicalCleanBaseline) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::StageBrowserSave(shell);
+  EditorShellTestAccess::CompleteBrowserSave(shell);
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).isDirty());
+  EXPECT_EQ(EditorShellTestAccess::App(shell).cleanSourceText(),
+            EditorShellTestAccess::Source(shell).getText());
+}
+
+TEST(EditorShellTest, BrowserSaveCompletionDoesNotRenameAReplacementDocument) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "old.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::StageBrowserSave(shell);
+  const auto path = TempPathForTest("replacement.svg");
+  WriteTextFile(path, kInitialSvg);
+  std::string error;
+  ASSERT_TRUE(EditorShellTestAccess::TryOpenPath(shell, path.string(), &error)) << error;
+  EditorShellTestAccess::CompleteBrowserSave(shell);
+  EXPECT_THAT(EditorShellTestAccess::App(shell).currentFilePath(),
+              testing::Optional(path.string()));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).isDirty());
+}
+
+TEST(EditorShellTest, BrowserDownloadDoesNotClaimThatPendingEditsReachedDisk) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "original.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  app.markDirty();
+  EditorShellTestAccess::StageBrowserSave(shell);
+  EditorShellTestAccess::CompleteBrowserSave(shell, BrowserFileDialog::Status::Downloaded);
+  EXPECT_TRUE(app.isDirty());
+  EXPECT_THAT(app.currentFilePath(), testing::Optional(testing::StrEq("original.svg")));
+}
+
+TEST(EditorShellTest, BrowserSaveCompletionTracksRevertOfSameFile) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "saved.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.applyMutation(EditorCommand::SetAttributeCommand(*target, "x", "31"));
+  ASSERT_TRUE(app.flushFrame());
+  EditorShellTestAccess::StageBrowserSave(shell);
+  EditorShellTestAccess::RequestRevert(shell);
+  ASSERT_FALSE(app.isDirty());
+  EditorShellTestAccess::CompleteBrowserSave(shell);
+  EXPECT_TRUE(app.isDirty());
+  EXPECT_NE(app.cleanSourceText(), EditorShellTestAccess::Source(shell).getText());
+}
+
+TEST(EditorShellTest, BrowserSaveCompletionPreservesNewEditsAndPointerGesture) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+  EditorShellTestAccess::StageBrowserSave(shell);
+  ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(
+      shell, Vector2d(30, 24), Box2d(Vector2d(10, 12), Vector2d(50, 36))));
+  app.applyMutation(EditorCommand::SetAttributeCommand(*target, "x", "31"));
+  EditorShellTestAccess::CompleteBrowserSave(shell);
+  EXPECT_TRUE(app.isDirty());
+  EXPECT_TRUE(app.document().hasPendingMutations());
+  EXPECT_TRUE(EditorShellTestAccess::SelectToolIsDragging(shell));
+  EXPECT_THAT(app.currentFilePath(), testing::Optional(testing::StrEq("saved.svg")));
 }
 
 TEST(EditorShellTest, RevertRequestIgnoresGuardStates) {

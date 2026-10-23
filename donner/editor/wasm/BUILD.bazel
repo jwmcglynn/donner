@@ -209,6 +209,7 @@ wasm_cc_binary(
 web_package(
     name = "wasm_web_package",
     srcs = [
+        "browser-file-dialogs.js",
         "catalog-fonts.js",
         "editor.css",
         "editor-bootstrap.js",

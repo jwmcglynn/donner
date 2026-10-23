@@ -20,8 +20,8 @@ namespace donner::editor {
 /// Presents native open/save dialogs and tracks directory/recents state.
 class NativeDialogCoordinator {
 public:
-  /// Whether native dialogs are available on this platform. When false,
-  /// callers should fall back to the in-editor ImGui modal.
+  /// Whether desktop native dialogs are available. BrowserFileDialog handles browser hosts;
+  /// other platforms can use the in-editor ImGui modal.
   [[nodiscard]] bool available() const;
 
   /// Present a native "Open SVG" dialog.

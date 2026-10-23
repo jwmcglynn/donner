@@ -1642,7 +1642,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       compositorDebugPanel_(UiGeodeDevice(window),
                             {.allowFileSystemActions = options_.allowFileSystemActions,
                              .fixedOutputPath = options_.diagnosticTelemetryOutputPath}),
-      dialogPresenter_(options_.editorNoticeText, options_.editorBuildInfo) {
+      dialogPresenter_(options_.editorNoticeText, options_.editorBuildInfo),
+      browserDialogs_([this] { window_.wakeEventLoop(); }) {
 #ifdef __EMSCRIPTEN__
   const bool workerStartedBeforeUiSetup =
       renderCoordinator_.asyncRenderer().workerStartedForTesting();
@@ -2441,6 +2442,7 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
     return false;
   }
 
+  ++documentSessionId_;
   cancelSampleThumbnailGeneration();
   welcomePlaceholderActive_ = false;
   samplePresentationPending_ = false;
@@ -2603,6 +2605,10 @@ bool EditorShell::tryApplyGroupOperation(bool ungroup) {
 }
 
 void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalSource) {
+  selectTool_.resetForLoadedDocument();
+  penTool_.cancel();
+  textTool_.cancel();
+  resetFileDialogInput();
   animationPreview_ = false;
   animationResetPending_ = false;
   renderCoordinator_.setPointerTargetCaptureEnabled(false);
@@ -2654,6 +2660,8 @@ bool EditorShell::synchronizeSourceBeforeSave(std::string* error, bool* retryWhe
     *error = "Cannot save while the renderer is applying pending edits.";
     return false;
   }
+
+  documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
 
   for (int pass = 0; pass < kMaxSaveSyncFlushPasses; ++pass) {
     if (!app_.flushFrame()) {
@@ -2718,7 +2726,8 @@ bool EditorShell::trySavePath(std::string_view path, std::string* error, bool* r
 }
 
 void EditorShell::requestSaveAs(std::string error) {
-  if (!options_.allowFileSystemActions) {
+  if (!options_.allowFileSystemActions ||
+      (BrowserFileDialog::available() && (browserDialogs_.pending() || browserSavePending_))) {
     return;
   }
   pendingNativeSavePath_.reset();
@@ -2728,7 +2737,8 @@ void EditorShell::requestSaveAs(std::string error) {
 }
 
 void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string error) {
-  if (!options_.allowFileSystemActions) {
+  if (!options_.allowFileSystemActions ||
+      (BrowserFileDialog::available() && (browserDialogs_.pending() || browserSavePending_))) {
     return;
   }
   pendingNativeSavePath_.reset();
@@ -2748,27 +2758,27 @@ void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string erro
   dialogPresenter_.requestSaveFile(std::make_optional(defaultPath), std::move(error));
 }
 
-bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string* error,
-                                             bool* retryWhenReady) {
+std::optional<std::string> EditorShell::prepareViewportExportSource(std::string* error,
+                                                                    bool* retryWhenReady) {
   if (retryWhenReady != nullptr) {
     *retryWhenReady = false;
   }
   if (!options_.allowFileSystemActions) {
     *error = "File operations are disabled for this session.";
-    return false;
+    return std::nullopt;
   }
   if (!app_.hasDocument()) {
     *error = "No document is open to export.";
-    return false;
+    return std::nullopt;
   }
   if (!synchronizeSourceBeforeSave(error, retryWhenReady)) {
-    return false;
+    return std::nullopt;
   }
 
   if (pendingViewportExportOverlay_ &&
       !requireCatalogFontsForElement(app_.document().document().svgElement(), error,
                                      retryWhenReady)) {
-    return false;
+    return std::nullopt;
   }
 
   const ViewportState& viewport = interactionController_.viewport();
@@ -2802,11 +2812,20 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
                           overlaySnapshot.has_value() ? &*overlaySnapshot : nullptr);
   if (!exportResult.ok()) {
     *error = exportResult.error;
-    return false;
+    return std::nullopt;
   }
 
+  return std::move(exportResult.value);
+}
+
+bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string* error,
+                                             bool* retryWhenReady) {
+  auto source = prepareViewportExportSource(error, retryWhenReady);
+  if (!source) {
+    return false;
+  }
   const DocumentSaveResult saveResult =
-      SaveSourceToPath(std::filesystem::path(std::string(path)), exportResult.value);
+      SaveSourceToPath(std::filesystem::path(std::string(path)), *source);
   if (!saveResult.ok()) {
     *error = saveResult.message;
     return false;
@@ -2876,11 +2895,19 @@ void EditorShell::servicePendingNativeSave() {
   std::string error;
   if (tryPendingNativeSave(&error) == NativeSaveOutcome::Failed) {
     nativeDialogs_.showSaveError(window_.rawHandle(), error);
+    resetFileDialogInput();
   }
 }
 
 void EditorShell::requestSave() {
-  if (!options_.allowFileSystemActions) {
+  if (!options_.allowFileSystemActions ||
+      (BrowserFileDialog::available() && (browserDialogs_.pending() || browserSavePending_))) {
+    return;
+  }
+  if (BrowserFileDialog::available()) {
+    pendingViewportExport_ = false;
+    pendingViewportExportOverlay_ = false;
+    requestBrowserSave(false);
     return;
   }
   pendingNativeSavePath_.reset();
@@ -2916,12 +2943,183 @@ void EditorShell::requestRevert() {
   window_.wakeEventLoop();
 }
 
+void EditorShell::requestBrowserSave(bool saveAs) {
+  if (browserDialogs_.pending() || browserSavePending_ || !app_.hasDocument()) {
+    return;
+  }
+  browserSaveSessionId_ = documentSessionId_;
+  const std::string suggested = dialogPresenter_.saveFileModalRequested()
+                                    ? dialogPresenter_.pendingSaveFilePath()
+                                    : app_.currentFilePath().value_or("untitled.svg");
+  dialogPresenter_.consumeSaveFileModalRequest();
+  browserDialogs_.chooseSaveTarget(suggested, saveAs || !app_.currentFilePath().has_value(),
+                                   !pendingViewportExport_);
+}
+
+void EditorShell::consumeBrowserFileResult(BrowserFileDialog::Result result) {
+  if (result.operation != BrowserFileDialog::Operation::Write) {
+    resetFileDialogInput();
+  }
+  if (result.status != BrowserFileDialog::Status::Success &&
+      result.status != BrowserFileDialog::Status::Downloaded) {
+    browserSavePending_ = false;
+    browserSavedSource_.reset();
+    pendingViewportExport_ = false;
+    pendingViewportExportOverlay_ = false;
+    if (result.status == BrowserFileDialog::Status::Failed) {
+      BrowserFileDialog::reportError(result.error.empty() ? "The file operation failed."
+                                                          : result.error);
+    }
+    return;
+  }
+  if (result.operation == BrowserFileDialog::Operation::Open) {
+    std::string error;
+    cancelPendingSampleLoad();
+    const bool accepted = tryLoadSource(result.source, result.name, &error);
+    browserDialogs_.acceptOpen(accepted);
+    if (!accepted) {
+      BrowserFileDialog::reportError(error);
+    }
+    updateWindowTitle();
+  } else if (result.operation == BrowserFileDialog::Operation::ChooseSaveTarget ||
+             result.operation == BrowserFileDialog::Operation::ChooseExportTarget) {
+    browserSavePending_ = true;
+    browserSaveDeadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  } else {
+    finishBrowserSave(result);
+  }
+}
+
+void EditorShell::finishBrowserSave(const BrowserFileDialog::Result& result) {
+  if (result.status == BrowserFileDialog::Status::Success && browserSavedSource_ &&
+      app_.hasDocument() && documentSessionId_ == browserSaveSessionId_ &&
+      !pendingViewportExport_) {
+    const std::string currentSource = textEditor_.getText();
+    app_.setCurrentFilePath(result.name);
+    app_.setCleanSourceText(CanonicalizeForTextEditor(*browserSavedSource_));
+    app_.syncDirtyFromSource(currentSource);
+    if (app_.document().hasPendingMutations() || app_.document().hasUnmirroredSourceDeltas() ||
+        documentSyncController_.hasPendingWritebacks() ||
+        app_.document().currentFrameVersion() != browserSavedFrameVersion_) {
+      app_.markDirty();
+    }
+    activeSampleId_.clear();
+    updateWindowTitle();
+  }
+  browserSavedSource_.reset();
+  pendingViewportExport_ = false;
+  pendingViewportExportOverlay_ = false;
+}
+
+void EditorShell::servicePendingBrowserSave() {
+  if (!browserSavePending_) {
+    return;
+  }
+  std::string error;
+  bool retry = false;
+  std::optional<std::string> source;
+  if (!app_.hasDocument() || documentSessionId_ != browserSaveSessionId_) {
+    error = "The document changed after choosing a save location. Save again.";
+  } else if (std::chrono::steady_clock::now() >= browserSaveDeadline_) {
+    error = "Saving timed out while preparing the document. Try again.";
+  } else if (pendingViewportExport_) {
+    source = prepareViewportExportSource(&error, &retry);
+  } else if (synchronizeSourceBeforeSave(&error, &retry)) {
+    source = std::string(app_.document().document().source());
+  }
+  if (retry) {
+    if (!renderCoordinator_.asyncRenderer().isBusyWithIdleWake()) {
+      window_.wakeEventLoop();
+    }
+    return;
+  }
+  browserSavePending_ = false;
+  if (source) {
+    browserSavedSource_ = *source;
+    browserSavedFrameVersion_ = app_.document().currentFrameVersion();
+    if (browserDialogs_.write(*source)) {
+      return;
+    }
+  } else {
+    BrowserFileDialog::reportError(error);
+  }
+  browserSavedSource_.reset();
+  pendingViewportExport_ = false;
+  pendingViewportExportOverlay_ = false;
+}
+
+bool EditorShell::serviceBrowserDialogs() {
+  if (!BrowserFileDialog::available()) {
+    return false;
+  }
+  if (auto result = browserDialogs_.takeResult()) {
+    consumeBrowserFileResult(std::move(*result));
+  }
+  servicePendingBrowserSave();
+  if (browserDialogs_.pending() || browserSavePending_) {
+    return true;
+  }
+  if (dialogPresenter_.openFileModalRequested()) {
+    dialogPresenter_.consumeOpenFileModalRequest();
+    pendingViewportExport_ = false;
+    pendingViewportExportOverlay_ = false;
+    browserDialogs_.open();
+  } else if (dialogPresenter_.saveFileModalRequested()) {
+    requestBrowserSave(true);
+  }
+  return true;
+}
+
+void EditorShell::resetFileDialogInput() {
+  if (selectTool_.isDragging()) {
+    selectTool_.onMouseUp(app_, Vector2d::Zero());
+  }
+  selectTool_.cancelMarquee();
+  interactionController_.clearPendingClick();
+  pendingSelectClickStartSeconds_.reset();
+  std::ignore = interactionController_.updatePanState(false, false, false, false, ImVec2());
+  inputBridge_.clear();
+  ImGuiIO& io = ImGui::GetIO();
+  io.ClearEventsQueue();
+  io.ClearInputKeys();
+  io.ClearInputMouse();
+  io.MouseDelta = ImVec2();
+  for (int button = 0; button < IM_ARRAYSIZE(io.MouseDown); ++button) {
+    io.MouseClicked[button] = false;
+    io.MouseReleased[button] = false;
+    io.MouseDoubleClicked[button] = false;
+    io.MouseClickedCount[button] = 0;
+    io.MouseClickedLastCount[button] = 0;
+    io.MouseClickedTime[button] = -DBL_MAX;
+    io.MouseDragMaxDistanceSqr[button] = 0.0f;
+  }
+  if (window_.rawHandle() != nullptr) {
+    double x = 0.0;
+    double y = 0.0;
+    glfwGetCursorPos(window_.rawHandle(), &x, &y);
+
+#ifndef __EMSCRIPTEN__
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+      int windowX = 0;
+      int windowY = 0;
+      glfwGetWindowPos(window_.rawHandle(), &windowX, &windowY);
+      x += windowX;
+      y += windowY;
+    }
+#endif
+    io.AddMousePosEvent(static_cast<float>(x), static_cast<float>(y));
+  }
+}
+
 void EditorShell::serviceNativeDialogs() {
   if (discardDisabledFileDialogRequests()) {
     return;
   }
+  if (serviceBrowserDialogs()) {
+    return;
+  }
   if (!nativeDialogs_.available()) {
-    return;  // Non-macOS: the ImGui modal handles open/save.
+    return;  // Remaining platforms use the in-editor open/save modal.
   }
 
   if (dialogPresenter_.openFileModalRequested()) {
@@ -2934,8 +3132,10 @@ void EditorShell::serviceNativeDialogs() {
 
   if (dialogPresenter_.openFileModalRequested()) {
     dialogPresenter_.consumeOpenFileModalRequest();
-    if (const std::optional<std::string> chosen =
-            nativeDialogs_.openFile(window_.rawHandle(), app_.currentFilePath())) {
+    const std::optional<std::string> chosen =
+        nativeDialogs_.openFile(window_.rawHandle(), app_.currentFilePath());
+    resetFileDialogInput();
+    if (chosen.has_value()) {
       std::string error;
       if (!tryOpenPath(*chosen, &error)) {
         // Surface the failure through the in-editor modal, pre-filled so the
@@ -2952,8 +3152,10 @@ void EditorShell::serviceNativeDialogs() {
     dialogPresenter_.consumeSaveFileModalRequest();
     const std::optional<std::string> suggestedOpt =
         suggested.empty() ? std::nullopt : std::make_optional(suggested);
-    if (const std::optional<std::string> chosen =
-            nativeDialogs_.saveFile(window_.rawHandle(), suggestedOpt)) {
+    const std::optional<std::string> chosen =
+        nativeDialogs_.saveFile(window_.rawHandle(), suggestedOpt);
+    resetFileDialogInput();
+    if (chosen.has_value()) {
       queueNativeSaveSelection(*chosen);
       servicePendingNativeSave();
     } else {
@@ -9353,9 +9555,7 @@ void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
   }
   applyMenuActions(menuActions);
 
-  // On macOS, service any pending open/save with a native OS panel; this
-  // consumes the request so the ImGui modal below stays closed. On other
-  // platforms it is a no-op and the ImGui modal renders as before.
+  // Desktop and browser native pickers consume their requests before the fallback modal.
   serviceNativeDialogs();
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },

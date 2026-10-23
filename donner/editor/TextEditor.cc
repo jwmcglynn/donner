@@ -1898,6 +1898,9 @@ std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusRefere
         layout.sourceStyleChip = *sourceChip;
         layout.hasSourceStyleChip = true;
         layout.start = ChipConnectorPoint(sourceChip->min, sourceChip->max, layout.tip, uiScale_);
+        if (const auto underline = focusReferenceSourceUnderline(link.from)) {
+          layout.visualAnchor = referenceChipVisualAnchorFor(liveTargetChip, *underline);
+        }
       }
     }
   } else {
@@ -2149,14 +2152,14 @@ std::optional<TextEditor::SourceStyleChipBounds> TextEditor::retainedReferenceCh
 std::optional<TextEditor::ReferenceChipVisualAnchor> TextEditor::referenceChipVisualAnchorFor(
     const std::optional<SourceStyleChipBounds>& liveChip,
     const FocusReferenceSourceUnderline& underline) {
-  if (!liveChip || liveChip->kind != SourceStyleChipKind::ReferenceCount ||
-      underline.sourceToken.end <= underline.sourceToken.start) {
+  if (!liveChip || underline.sourceToken.end <= underline.sourceToken.start) {
     return std::nullopt;
   }
   return ReferenceChipVisualAnchor{.targetHeader = liveChip->anchorRange,
                                    .sourceToken = underline.sourceToken,
                                    .labelSizeInFontUnits = liveChip->labelSizeInFontUnits,
-                                   .presentedCount = liveChip->presentedCount};
+                                   .presentedCount = liveChip->presentedCount,
+                                   .kind = liveChip->kind};
 }
 
 void TextEditor::rememberReferenceChipVisualAnchor(FocusReferenceRopeState& state,
@@ -2276,7 +2279,7 @@ std::optional<TextEditor::SourceStyleChipBounds> TextEditor::referenceChipVisual
   return SourceStyleChipBounds{
       .min = min,
       .max = ImVec2(min.x + chipSize.x, min.y + chipSize.y),
-      .kind = SourceStyleChipKind::ReferenceCount,
+      .kind = visualAnchor.kind,
       .anchorRange = anchorRange,
       .labelSizeInFontUnits = visualAnchor.labelSizeInFontUnits,
   };

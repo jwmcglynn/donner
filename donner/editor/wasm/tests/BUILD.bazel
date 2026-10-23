@@ -27,6 +27,7 @@ eslint_bin.eslint_test(
     ]) + [
         ":node_modules/@eslint/js",
         ":node_modules/globals",
+        "//donner/editor/wasm:browser-file-dialogs.js",
         "//donner/editor/wasm:catalog-fonts.js",
         "//donner/editor/wasm:editor-bootstrap.js",
         "//donner/editor/wasm:enable-threads.js",
@@ -1255,4 +1256,11 @@ js_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+js_test(
+    name = "browser_file_dialogs_test",
+    copy_data_to_bin = False,
+    data = ["//donner/editor/wasm:browser-file-dialogs.js"],
+    entry_point = "browser-file-dialogs.spec.mjs",
 )

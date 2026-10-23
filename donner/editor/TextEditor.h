@@ -1438,6 +1438,7 @@ private:
     SourceByteRange sourceToken;
     ImVec2 labelSizeInFontUnits;
     std::optional<int> presentedCount;
+    SourceStyleChipKind kind = SourceStyleChipKind::ReferenceCount;
   };
 
   struct FocusReferenceRopeState {

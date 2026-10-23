@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "donner/editor/BrowserFileDialog.h"
 #include "donner/editor/CanvasScrollbars.h"
 #include "donner/editor/ClipboardInterface.h"
 #include "donner/editor/CompositorDebugPanel.h"
@@ -467,7 +468,15 @@ private:
   /// platforms, where the ImGui modal renders as before. Called each frame
   /// just before the ImGui dialog render pass, so headless callers that only
   /// drive the request/try-path methods never present native UI.
+  /// Discard host-dialog input and finish the prior selection gesture without a new move.
+  void resetFileDialogInput();
   void serviceNativeDialogs();
+  bool serviceBrowserDialogs();
+  void consumeBrowserFileResult(BrowserFileDialog::Result result);
+  void finishBrowserSave(const BrowserFileDialog::Result& result);
+  void servicePendingBrowserSave();
+  void requestBrowserSave(bool saveAs);
+  std::optional<std::string> prepareViewportExportSource(std::string* error, bool* retryWhenReady);
   /// Result of writing a path chosen in a native save panel.
   enum class NativeSaveOutcome { Saved, Deferred, Failed };
   /// Retain the chosen path while rendering or fonts settle after the OS panel closes.
@@ -1105,6 +1114,14 @@ private:
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
   NativeDialogCoordinator nativeDialogs_;
+  BrowserFileDialog browserDialogs_;
+  bool browserSavePending_ = false;
+  /// Logical document lifetime; source reparse and Revert keep the same file session.
+  std::uint64_t documentSessionId_ = 0;
+  std::uint64_t browserSaveSessionId_ = 0;
+  std::uint64_t browserSavedFrameVersion_ = 0;
+  std::chrono::steady_clock::time_point browserSaveDeadline_;
+  std::optional<std::string> browserSavedSource_;
   /// Owns where this frame's document pixels land. Constructed once for the
   /// session's presentation target, so the per-frame path carries no platform
   /// fork. Never null after construction.
