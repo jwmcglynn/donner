@@ -172,11 +172,10 @@ private:
    * component.
    *
    * @param handle Entity handle to get the bounds for
-   * @param worldFromTarget Transform to the world coordinate system from the target coordinate
-   * system
+   * @param targetFromWorld Transform from world coordinates to the target coordinate system
    */
   std::optional<Box2d> getTransformedShapeBounds(EntityHandle handle,
-                                                 const Transform2d& worldFromTarget,
+                                                 const Transform2d& targetFromWorld,
                                                  bool includeStroke = false,
                                                  CircleClipGeometryBudget* budget = nullptr);
 

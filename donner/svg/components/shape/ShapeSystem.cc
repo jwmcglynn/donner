@@ -171,7 +171,7 @@ void RejectPositiveExtentEmptyOutline(const Path& source, CircleClipGeometryBudg
 
 std::optional<Box2d> StrokeBounds(EntityHandle styleHandle, const Path& centerline,
                                   const Transform2d& worldFromGeometry,
-                                  const Transform2d& worldFromTarget,
+                                  const Transform2d& targetFromWorld,
                                   CircleClipGeometryBudget* budget, bool geometryMustStayLocal,
                                   bool& failed) {
   const auto* style = styleHandle.try_get<ComputedStyleComponent>();
@@ -206,7 +206,7 @@ std::optional<Box2d> StrokeBounds(EntityHandle styleHandle, const Path& centerli
     return std::nullopt;
   }
   const Transform2d targetFromOutline =
-      hostSpace ? worldFromTarget : worldFromGeometry * worldFromTarget;
+      hostSpace ? targetFromWorld : worldFromGeometry * targetFromWorld;
   return outline.transformed(targetFromOutline).bounds();
 }
 
@@ -528,11 +528,11 @@ bool IsFiniteCircle(const Vector2d& center, double radius) {
 class ReferenceBoundsAccumulator {
 public:
   ReferenceBoundsAccumulator(ShapeSystem& shapes, EntityHandle root,
-                             const Transform2d& worldFromTarget, bool includeStroke,
+                             const Transform2d& targetFromWorld, bool includeStroke,
                              CircleClipGeometryBudget* budget)
       : shapes_(shapes),
         root_(root),
-        worldFromTarget_(worldFromTarget),
+        targetFromWorld_(targetFromWorld),
         includeStroke_(includeStroke),
         budget_(budget) {}
 
@@ -550,7 +550,7 @@ public:
     if (failed_) {
       return false;
     }
-    accumulateSizedElement(child, worldFromChild * worldFromTarget_);
+    accumulateSizedElement(child, worldFromChild * targetFromWorld_);
     return !failed_ && !accumulateText(child) && !failed_;
   }
 
@@ -586,11 +586,11 @@ private:
       RejectGeometry(budget_, failed_);
       return;
     }
-    add(path->transformedBounds(worldFromChild * worldFromTarget_));
+    add(path->transformedBounds(worldFromChild * targetFromWorld_));
     if (!includeStroke_) {
       return;
     }
-    if (const auto bounds = StrokeBounds(child, path->spline, worldFromChild, worldFromTarget_,
+    if (const auto bounds = StrokeBounds(child, path->spline, worldFromChild, targetFromWorld_,
                                          budget_, false, failed_)) {
       add(*bounds);
     }
@@ -643,7 +643,7 @@ private:
       // a budget and must not enter this painted-cache construction path.
       const Box2d bounds = textEngine.computedObjectBoundingBox(entity);
       if (!bounds.isEmpty()) {
-        add((worldFromText * worldFromTarget_).transformBox(bounds));
+        add((worldFromText * targetFromWorld_).transformBox(bounds));
       }
       return;
     }
@@ -655,11 +655,11 @@ private:
       return;
     }
     if (geometry->objectBounds) {
-      add((worldFromText * worldFromTarget_).transformBox(*geometry->objectBounds));
+      add((worldFromText * targetFromWorld_).transformBox(*geometry->objectBounds));
     }
     for (const auto& glyph : geometry->outlines) {
       const EntityHandle source(*entity.registry(), glyph.sourceEntity);
-      if (const auto bounds = StrokeBounds(source, glyph.path, worldFromText, worldFromTarget_,
+      if (const auto bounds = StrokeBounds(source, glyph.path, worldFromText, targetFromWorld_,
                                            budget_, true, failed_)) {
         add(*bounds);
       }
@@ -673,7 +673,7 @@ private:
 
   ShapeSystem& shapes_;
   EntityHandle root_;
-  const Transform2d& worldFromTarget_;
+  const Transform2d& targetFromWorld_;
   bool includeStroke_;
   CircleClipGeometryBudget* budget_;
   ParseWarningSink warningSink_ = ParseWarningSink::Disabled();
@@ -793,16 +793,16 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSi
 }
 
 std::optional<Box2d> ShapeSystem::getShapeBounds(EntityHandle handle) {
-  const Transform2d worldFromOuterEntityLocal =
+  const Transform2d outerEntityFromWorld =
       LayoutSystem().getEntityFromWorldTransform(handle).inverse();
 
-  return getTransformedShapeBounds(handle, worldFromOuterEntityLocal);
+  return getTransformedShapeBounds(handle, outerEntityFromWorld);
 }
 
 std::optional<Box2d> ShapeSystem::getStrokeBounds(EntityHandle handle) {
-  const Transform2d worldFromOuterEntityLocal =
+  const Transform2d outerEntityFromWorld =
       LayoutSystem().getEntityFromWorldTransform(handle).inverse();
-  return getTransformedShapeBounds(handle, worldFromOuterEntityLocal, true);
+  return getTransformedShapeBounds(handle, outerEntityFromWorld, true);
 }
 
 Path ShapeSystem::circleClipPath(EntityHandle handle, const CircleClipPath& circle,
@@ -873,14 +873,14 @@ bool ShapeSystem::pathStrokeIntersects(EntityHandle handle, const Vector2d& poin
 }
 
 std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
-                                                            const Transform2d& worldFromTarget,
+                                                            const Transform2d& targetFromWorld,
                                                             bool includeStroke,
                                                             CircleClipGeometryBudget* budget) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (IsDisplayNone(handle, disabledSink)) {
     return std::nullopt;
   }
-  ReferenceBoundsAccumulator accumulator(*this, handle, worldFromTarget, includeStroke, budget);
+  ReferenceBoundsAccumulator accumulator(*this, handle, targetFromWorld, includeStroke, budget);
   donner::components::ForAllChildrenRecursivePruned(
       handle, [&accumulator](EntityHandle child) { return accumulator.visit(child); });
   return accumulator.result();
