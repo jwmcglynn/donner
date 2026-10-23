@@ -2245,7 +2245,7 @@ TEST(RendererPublicApiTest, TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank)
          "in-document #path1 reference or fetch it as an admitted external SVG";
 }
 
-TEST(RendererPublicApiTest, TextPathStretchCurvedRenderingDiffersFromAlign) {
+TEST(RendererPublicApiTest, TextPathStretchCurvedGeometryDiffersFromAlign) {
   const auto glyphPaths = [](std::string_view method) {
     SVGDocument document = ParseDocument(
         "<svg xmlns='http://www.w3.org/2000/svg' width='224' height='128' "
