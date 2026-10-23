@@ -6,6 +6,7 @@
 
 #include "donner/base/Path.h"
 #include "donner/svg/core/FontVariant.h"
+#include "donner/svg/core/TextOrientation.h"
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::svg {
@@ -197,6 +198,15 @@ public:
                              size_t byteOffset, size_t byteLength, bool isVertical,
                              FontVariant fontVariant, bool forceLogicalOrder) const = 0;
 
+  /// Shape a range with the resolved vertical text orientation.
+  virtual ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
+                             size_t byteOffset, size_t byteLength, bool isVertical,
+                             TextOrientation textOrientation, FontVariant fontVariant,
+                             bool forceLogicalOrder) const {
+    return shapeRun(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
+                    forceLogicalOrder);
+  }
+
   /// Shape text with kerning disabled. Backends that cannot selectively disable kerning retain
   /// their normal shaping behavior.
   virtual ShapedRun shapeRunNoKerning(FontHandle font, float fontSizePx, std::string_view spanText,
@@ -204,6 +214,15 @@ public:
                                       FontVariant fontVariant, bool forceLogicalOrder) const {
     return shapeRun(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
                     forceLogicalOrder);
+  }
+
+  /// Shape orientation-aware text with kerning disabled.
+  virtual ShapedRun shapeRunNoKerning(FontHandle font, float fontSizePx, std::string_view spanText,
+                                      size_t byteOffset, size_t byteLength, bool isVertical,
+                                      TextOrientation textOrientation, FontVariant fontVariant,
+                                      bool forceLogicalOrder) const {
+    return shapeRunNoKerning(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                             fontVariant, forceLogicalOrder);
   }
 
   /// Compute cross-span kerning between the last codepoint of the previous span

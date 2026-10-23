@@ -1232,6 +1232,68 @@ TEST(TextEngineTest, VerticalSidewaysCombiningMarkMatchesRotatedHorizontalGeomet
   EXPECT_THAT(verticalDelta.y, DoubleNear(horizontalDelta.x, 0.01));
 }
 
+TEST(TextEngineTest, UprightLatinUsesVerticalShapingWithoutAdvancingCombiningMarks) {
+#ifndef DONNER_TEXT_FULL
+  GTEST_SKIP() << "Vertical HarfBuzz shaping requires the full text backend.";
+#endif
+
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextBackendFull backend(fontManager, registry);
+  const std::string value =
+      "x\xCC\x81"
+      "B";
+
+  const auto upright = backend.shapeRun(font, 32.0f, value, 0, value.size(), true,
+                                        TextOrientation::Upright, FontVariant::Normal, false);
+  ASSERT_THAT(upright.glyphs, SizeIs(3));
+  EXPECT_THAT(upright.glyphs[0].xAdvance, DoubleEq(0.0));
+  EXPECT_THAT(upright.glyphs[0].yAdvance, Gt(0.0));
+  EXPECT_THAT(upright.glyphs[1].xAdvance, DoubleEq(0.0));
+  EXPECT_THAT(upright.glyphs[1].yAdvance, DoubleEq(0.0));
+  EXPECT_THAT(upright.glyphs[2].xAdvance, DoubleEq(0.0));
+  EXPECT_THAT(upright.glyphs[2].yAdvance, Gt(0.0));
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(value);
+  span.textOrientation = TextOrientation::Upright;
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(32.0);
+  params.fontFamilies = {RcString("Noto Sans")};
+  params.writingMode = WritingMode::VerticalRl;
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendFull>(fontManager, registry));
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(3))));
+  EXPECT_THAT(runs[0].glyphs[1].yPosition,
+              DoubleEq(runs[0].glyphs[0].yPosition + runs[0].glyphs[0].yAdvance));
+  EXPECT_THAT(runs[0].glyphs[2].yPosition,
+              DoubleEq(runs[0].glyphs[1].yPosition + runs[0].glyphs[1].yAdvance));
+}
+
+TEST(TextEngineTest, SidewaysCjkUsesHorizontalShapingMetrics) {
+#ifndef DONNER_TEXT_FULL
+  GTEST_SKIP() << "HarfBuzz shaping requires the full text backend.";
+#endif
+
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle font = LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextBackendFull backend(fontManager, registry);
+  const std::string value = "\xE6\x97\xA5\xE6\x9C\xAC";
+
+  const auto sideways = backend.shapeRun(font, 32.0f, value, 0, value.size(), true,
+                                         TextOrientation::Sideways, FontVariant::Normal, false);
+  ASSERT_THAT(sideways.glyphs, SizeIs(2));
+  for (const auto& glyph : sideways.glyphs) {
+    EXPECT_THAT(glyph.xAdvance, Gt(0.0));
+    EXPECT_THAT(glyph.yAdvance, DoubleEq(0.0));
+  }
+}
+
 TEST(TextEngineTest, TextPathSpacingPreservesFullShapingCombiningMarkCluster) {
   Registry registry;
   FontManager fontManager(registry);

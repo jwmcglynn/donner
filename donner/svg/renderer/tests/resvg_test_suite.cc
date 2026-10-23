@@ -1546,13 +1546,12 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextGlyphOrientationVertical, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/glyph-orientation-vertical",
-                {
-                    {"simple-case.svg",
-                     Params::Skip("glyph orientation is honored, but upright Latin origin and "
-                                  "cell geometry still differ from the reference")},
-                })),
+    Combine(ValuesIn(getTestsInCategory("text/glyph-orientation-vertical",
+                                        {{"simple-case.svg",
+                                          Params::Skip("upright glyph bounds align, "
+                                                       "but the reference raster "
+                                                       "still differs by 733 "
+                                                       "interior pixels")}})),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 

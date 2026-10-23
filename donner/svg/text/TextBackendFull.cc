@@ -857,8 +857,18 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
                                                  size_t byteLength, bool isVertical,
                                                  FontVariant fontVariant,
                                                  bool forceLogicalOrder) const {
-  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
-                      true, forceLogicalOrder);
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                      TextOrientation::Mixed, fontVariant, true, forceLogicalOrder);
+}
+
+TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSizePx,
+                                                 std::string_view spanText, size_t byteOffset,
+                                                 size_t byteLength, bool isVertical,
+                                                 TextOrientation textOrientation,
+                                                 FontVariant fontVariant,
+                                                 bool forceLogicalOrder) const {
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                      textOrientation, fontVariant, true, forceLogicalOrder);
 }
 
 TextBackend::ShapedRun TextBackendFull::shapeRunNoKerning(FontHandle font, float fontSizePx,
@@ -866,8 +876,16 @@ TextBackend::ShapedRun TextBackendFull::shapeRunNoKerning(FontHandle font, float
                                                           size_t byteOffset, size_t byteLength,
                                                           bool isVertical, FontVariant fontVariant,
                                                           bool forceLogicalOrder) const {
-  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
-                      false, forceLogicalOrder);
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                      TextOrientation::Mixed, fontVariant, false, forceLogicalOrder);
+}
+
+TextBackend::ShapedRun TextBackendFull::shapeRunNoKerning(
+    FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
+    size_t byteLength, bool isVertical, TextOrientation textOrientation, FontVariant fontVariant,
+    bool forceLogicalOrder) const {
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                      textOrientation, fontVariant, false, forceLogicalOrder);
 }
 
 namespace {
@@ -880,10 +898,13 @@ struct RunScriptProperties {
 };
 
 /// Detects the direction, script, and language used by every subrange of one run.
-RunScriptProperties DetectRunScript(const char* chunkData, size_t byteLength, bool isVertical) {
+RunScriptProperties DetectRunScript(const char* chunkData, size_t byteLength, bool isVertical,
+                                    TextOrientation textOrientation) {
   const int chunkLen = static_cast<int>(byteLength);
   bool useVerticalShaping = false;
-  if (isVertical) {
+  if (isVertical && textOrientation == TextOrientation::Upright) {
+    useVerticalShaping = true;
+  } else if (isVertical && textOrientation == TextOrientation::Mixed) {
     for (size_t i = 0; i < byteLength;) {
       const uint32_t cp = decodeCodepointAt(std::string_view(chunkData, byteLength), i);
       if (cp >= 0x2E80) {
@@ -972,9 +993,11 @@ struct ShapedGlyphInfo {
 /// Applies the existing sideways or upright vertical-origin adjustment to a shaped glyph.
 void AdjustVerticalGlyph(TextBackend::ShapedGlyph& glyph, const ShapedGlyphInfo& sg,
                          hb_font_t* hbFont, float fontSizePx, double pixelScaleX,
-                         std::string_view spanText) {
+                         std::string_view spanText, TextOrientation textOrientation) {
   const uint32_t codepoint = decodeCodepointAt(spanText, glyph.cluster);
-  const bool sideways = (codepoint > 0 && codepoint < 0x2E80);
+  const bool sideways =
+      textOrientation == TextOrientation::Sideways ||
+      (textOrientation == TextOrientation::Mixed && codepoint > 0 && codepoint < 0x2E80);
   if (sideways) {
     glyph.xAdvance =
         static_cast<double>(hb_font_get_glyph_h_advance(hbFont, sg.info.codepoint)) * pixelScaleX;
@@ -1005,7 +1028,7 @@ TextBackend::ShapedRun ConvertShapedRun(const std::vector<ShapedGlyphInfo>& allG
                                         hb_font_t* hbFont, float fontSizePx, double pixelScaleX,
                                         double pixelScaleY, std::string_view spanText,
                                         size_t byteOffset, bool isVertical, bool useVerticalShaping,
-                                        bool forceLogicalOrder) {
+                                        TextOrientation textOrientation, bool forceLogicalOrder) {
   // Convert shaped glyphs to ShapedRun output.
   TextBackend::ShapedRun result;
   result.glyphs.reserve(allGlyphs.size());
@@ -1023,7 +1046,7 @@ TextBackend::ShapedRun ConvertShapedRun(const std::vector<ShapedGlyphInfo>& allG
     glyph.fontSizeScale = sg.isSynthSmallCap ? kSmallCapScale : 1.0f;
 
     if (isVertical && useVerticalShaping) {
-      AdjustVerticalGlyph(glyph, sg, hbFont, fontSizePx, pixelScaleX, spanText);
+      AdjustVerticalGlyph(glyph, sg, hbFont, fontSizePx, pixelScaleX, spanText, textOrientation);
     }
 
     result.glyphs.push_back(glyph);
@@ -1109,6 +1132,7 @@ bool ShapeVariantRanges(FT_Face ftFace, hb_font_t* hbFont, float fontSizePx, con
 TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float fontSizePx,
                                                      std::string_view spanText, size_t byteOffset,
                                                      size_t byteLength, bool isVertical,
+                                                     TextOrientation textOrientation,
                                                      FontVariant fontVariant, bool enableKerning,
                                                      bool forceLogicalOrder) const {
   hb_font_t* hbFont = getOrCreateHbFont(font);
@@ -1129,7 +1153,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
 
   // Detect direction and script from the text chunk.
   const char* chunkData = spanText.data() + byteOffset;
-  const auto scriptProperties = DetectRunScript(chunkData, byteLength, isVertical);
+  const auto scriptProperties = DetectRunScript(chunkData, byteLength, isVertical, textOrientation);
   const bool useVerticalShaping = scriptProperties.vertical;
   const auto detectedDirection = scriptProperties.direction;
   const auto detectedScript = scriptProperties.script;
@@ -1185,7 +1209,8 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
   }
 
   return ConvertShapedRun(allGlyphs, hbFont, fontSizePx, pixelScaleX, pixelScaleY, spanText,
-                          byteOffset, isVertical, useVerticalShaping, forceLogicalOrder);
+                          byteOffset, isVertical, useVerticalShaping, textOrientation,
+                          forceLogicalOrder);
 }
 
 // ---------------------------------------------------------------------------
