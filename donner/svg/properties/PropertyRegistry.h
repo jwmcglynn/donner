@@ -34,6 +34,7 @@
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
+#include "donner/svg/core/TextOrientation.h"
 #include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/core/VectorEffect.h"
 #include "donner/svg/core/Visibility.h"
@@ -424,6 +425,11 @@ public:
   Property<WritingMode, PropertyCascade::Inherit> writingMode{
       "writing-mode", []() -> std::optional<WritingMode> { return WritingMode::HorizontalTb; }};
 
+  /// `text-orientation` property, controlling glyph orientation in vertical text. Inherited.
+  Property<TextOrientation, PropertyCascade::Inherit> textOrientation{
+      "text-orientation",
+      []() -> std::optional<TextOrientation> { return TextOrientation::Mixed; }};
+
   /// `inline-size` property (SVG2). When set to a positive length on a `<text>` element it
   /// establishes an automatic wrapping area whose measure (extent in the inline axis) is the
   /// given length; text greedily wraps to that measure. Not inherited. The initial value `0`
@@ -487,9 +493,9 @@ public:
         vectorEffect, clipPath, clipRule, mask, maskType, colorInterpolation, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, fontKerning,
-        fontSizeAdjust, textAnchor, textDecoration, dominantBaseline, writingMode, inlineSize,
-        letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation,
-        imageRendering, paintOrder);
+        fontSizeAdjust, textAnchor, textDecoration, dominantBaseline, writingMode, textOrientation,
+        inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode,
+        isolation, imageRendering, paintOrder);
   }
 
   /**

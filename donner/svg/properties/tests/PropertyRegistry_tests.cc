@@ -1501,6 +1501,32 @@ TEST(PropertyRegistry, AdditionalKeywordProperties) {
   }
 
   {
+    const std::pair<const char*, TextOrientation> cases[] = {
+        {"mixed", TextOrientation::Mixed},
+        {"upright", TextOrientation::Upright},
+        {"sideways", TextOrientation::Sideways},
+    };
+    for (const auto& [value, expected] : cases) {
+      PropertyRegistry registry;
+      registry.parseStyle(std::string("text-orientation: ") + value);
+      EXPECT_THAT(registry.textOrientation.get(), Optional(expected));
+    }
+  }
+
+  {
+    const std::pair<const char*, TextOrientation> cases[] = {
+        {"auto", TextOrientation::Mixed},     {"0", TextOrientation::Upright},
+        {"0deg", TextOrientation::Upright},   {"90", TextOrientation::Sideways},
+        {"90deg", TextOrientation::Sideways},
+    };
+    for (const auto& [value, expected] : cases) {
+      PropertyRegistry registry;
+      registry.parseStyle(std::string("glyph-orientation-vertical: ") + value);
+      EXPECT_THAT(registry.textOrientation.get(), Optional(expected));
+    }
+  }
+
+  {
     // image-rendering accepts the CSS Images 3 keywords plus the SVG 1.1
     // legacy aliases. CSS keyword matching is case-insensitive, so the
     // camelCase SVG 1.1 spellings AND their minifier-lowercased forms
@@ -1611,6 +1637,16 @@ TEST(PropertyRegistry, AdditionalKeywordProperties) {
       registry.parseStyle(std::string("pointer-events: ") + value);
       EXPECT_THAT(registry.pointerEvents.get(), Optional(expected));
     }
+  }
+}
+
+TEST(PropertyRegistry, InvalidVerticalGlyphAliasPreservesEarlierDeclaration) {
+  for (const char* invalid : {"180", "270deg", "1.5708rad", "upright"}) {
+    SCOPED_TRACE(invalid);
+    PropertyRegistry registry;
+    registry.parseStyle(std::string("glyph-orientation-vertical: 0; glyph-orientation-vertical: ") +
+                        invalid);
+    EXPECT_THAT(registry.textOrientation.get(), Optional(TextOrientation::Upright));
   }
 }
 
