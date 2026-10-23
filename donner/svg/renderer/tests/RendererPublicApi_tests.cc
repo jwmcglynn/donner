@@ -2909,17 +2909,15 @@ TEST(RendererPublicApiTest, CoveredPixelsOfAnEmptySnapshotFails) {
 TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyphGeometry) {
   SVGDocument word = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
-        shape-rendering="crispEdges"
         font-family="Public Sans" font-size="44" font-kerning="none">
-        <defs><path id="p" d="M12 112 Q192 108 372 112"/></defs>
+        <defs><path id="p" d="M12 112 C80 12 152 180 220 80 S328 32 372 120"/></defs>
         <rect x="4" y="4" width="6" height="6" fill="lime"/>
         <text x="8 56 104 152 200"><textPath href="#p" method="stretch">Curve</textPath></text>
       </svg>)svg");
   SVGDocument separateGlyphs = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
-        shape-rendering="crispEdges"
         font-family="Public Sans" font-size="44" font-kerning="none">
-        <defs><path id="p" d="M12 112 Q192 108 372 112"/></defs>
+        <defs><path id="p" d="M12 112 C80 12 152 180 220 80 S328 32 372 120"/></defs>
         <rect x="4" y="4" width="6" height="6" fill="lime"/>
         <text x="8"><textPath href="#p" method="stretch">C</textPath></text>
         <text x="56"><textPath href="#p" method="stretch">u</textPath></text>
@@ -2940,8 +2938,7 @@ TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyp
   EXPECT_THAT(glyphs, testing::Each(testing::Property(&Path::empty, false)));
 
   SVGDocument outlines = ParseDocument(
-      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
-        shape-rendering="crispEdges">
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192">
         <rect x="4" y="4" width="6" height="6" fill="lime"/>
       </svg>)svg");
   for (const Path& glyph : glyphs) {
