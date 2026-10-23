@@ -1363,7 +1363,8 @@ public:
           filters.front().get<FilterEffect::ElementReference>();
 
       if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry());
-          resolvedRef && resolvedRef->handle.all_of<FilterComponent>()) {
+          resolvedRef && HasSvgNamespace(*dataHandle.registry(), *resolvedRef) &&
+          resolvedRef->handle.all_of<FilterComponent>()) {
         return resolvedRef.value();
       } else {
         return std::vector<FilterEffect>();

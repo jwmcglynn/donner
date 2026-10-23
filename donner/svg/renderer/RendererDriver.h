@@ -336,6 +336,10 @@ private:
    * `RenderingInstanceComponent` pool).
    */
   void prepareFilterGraphs(Registry& registry, std::span<const Entity> entities);
+  bool configureFilterStages(std::vector<components::FilterGraph>& stages, const Box2d& viewBox,
+                             const std::optional<Box2d>& elementBounds);
+  bool materializeFilterStages(std::vector<components::FilterGraph>& stages, Registry& registry,
+                               Entity entity);
   const components::RenderingInstanceComponent* beginPreparingFilterEntity(Registry& registry,
                                                                            Entity entity);
   bool reservePreparedFilterGraph(const components::FilterGraph& filterGraph);

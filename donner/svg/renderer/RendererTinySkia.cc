@@ -1337,20 +1337,6 @@ bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph
   return hasBlur;
 }
 
-bool graphUsesStandardInput(const components::FilterGraph& filterGraph,
-                            components::FilterStandardInput input) {
-  for (const components::FilterNode& node : filterGraph.nodes) {
-    for (const components::FilterInput& nodeInput : node.inputs) {
-      const auto* standardInput = std::get_if<components::FilterStandardInput>(&nodeInput.value);
-      if (standardInput != nullptr && *standardInput == input) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
 /// Returns true if the filter graph contains spatial primitives (feOffset, feDisplacementMap)
 /// that can shift content from outside the viewport into view.
 bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
@@ -1821,17 +1807,24 @@ void RendererTinySkia::popIsolatedLayer() {
 }
 
 #ifdef DONNER_FILTERS_ENABLED
+components::FilterStandardInputUsage RendererTinySkia::filterCaptureInputs(
+    const components::FilterGraph& graph) const {
+  components::FilterStandardInputUsage usage = components::StandardInputUsage(graph);
+  if (!surfaceStack_.empty()) {
+    usage.fillPaint |= surfaceStack_.back().fillPaintPixmap.has_value();
+    usage.strokePaint |= surfaceStack_.back().strokePaintPixmap.has_value();
+  }
+  return usage;
+}
+
 std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLayer(
     const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
     const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight) {
   const FilterBufferMetrics buffer = ComputeFilterBufferMetrics(
       filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
-  const bool usesFillPaint =
-      graphUsesStandardInput(filterGraph, components::FilterStandardInput::FillPaint) ||
-      (!surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value());
-  const bool usesStrokePaint =
-      graphUsesStandardInput(filterGraph, components::FilterStandardInput::StrokePaint) ||
-      (!surfaceStack_.empty() && surfaceStack_.back().strokePaintPixmap.has_value());
+  const components::FilterStandardInputUsage inputs = filterCaptureInputs(filterGraph);
+  const bool usesFillPaint = inputs.fillPaint;
+  const bool usesStrokePaint = inputs.strokePaint;
   const std::uint64_t surfaceCount =
       1u + static_cast<std::uint64_t>(usesFillPaint) + static_cast<std::uint64_t>(usesStrokePaint);
   if (buffer.width <= 0 || buffer.height <= 0) {

@@ -435,6 +435,9 @@ private:
   void prepareRetainedClipEpochBudget(int pixelWidth, int pixelHeight);
   [[nodiscard]] bool applyPathLengthAdjustment(const Path& path, StrokeParams& stroke);
   [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip);
+  /// Include parent paint captures in this stage's bounded surface reservation.
+  components::FilterStandardInputUsage filterCaptureInputs(
+      const components::FilterGraph& graph) const;
   [[nodiscard]] std::optional<FilterAdmission> admitFilterLayer(
       const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
       const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight);

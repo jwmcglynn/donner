@@ -1409,18 +1409,69 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
   return Box2d::FromXYWH(xPx, yPx, wPx, hPx);
 }
 
+/// Resolve SVG filters, including valid filters whose preparation failed closed.
+std::optional<ResolvedReference> resolveFilterReference(
+    Registry& registry, const FilterEffect::ElementReference& effect) {
+  auto reference = effect.reference.resolve(registry);
+  if (!reference || !components::HasSvgNamespace(registry, *reference) ||
+      !reference->handle
+           .any_of<components::FilterComponent, components::ComputedFilterComponent>()) {
+    return std::nullopt;
+  }
+  return reference;
+}
+
+/// Group adjacent CSS functions while retaining one stage per referenced filter.
+std::optional<std::vector<components::ResolvedFilterEffect>> collectFilterStages(
+    Registry& registry, const components::ResolvedFilterEffect& filter) {
+  const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter);
+  if (!effects) {
+    return std::vector<components::ResolvedFilterEffect>{filter};
+  }
+  if (effects->size() > components::kMaximumFilterGraphNodes) {
+    return std::nullopt;
+  }
+  std::vector<components::ResolvedFilterEffect> stages;
+  std::vector<FilterEffect> functions;
+  for (const FilterEffect& effect : *effects) {
+    if (effect.is<FilterEffect::ElementReference>()) {
+      const auto reference =
+          resolveFilterReference(registry, effect.get<FilterEffect::ElementReference>());
+      if (!reference) {
+        // One invalid URL invalidates the entire CSS filter chain.
+        return std::vector<components::ResolvedFilterEffect>();
+      }
+      if (!functions.empty()) {
+        stages.emplace_back(std::move(functions));
+        functions.clear();
+      }
+      stages.emplace_back(*reference);
+    } else if (!effect.is<FilterEffect::None>()) {
+      functions.push_back(effect);
+    }
+  }
+  if (!functions.empty()) {
+    stages.emplace_back(std::move(functions));
+  }
+  return stages;
+}
+
 /// Resolve each referenced filter in its own input, result-name, region and units scope.
 std::optional<std::vector<components::FilterGraph>> resolveFilterStages(
     Registry& registry, const components::ResolvedFilterEffect& filter,
     const components::RenderingInstanceComponent& instance, css::RGBA currentColor,
     const Box2d& viewBox, const FontMetrics& fontMetrics) {
+  const auto resolved = collectFilterStages(registry, filter);
+  if (!resolved) {
+    return std::nullopt;
+  }
   std::vector<components::FilterGraph> stages;
   std::size_t nodeCount = 0;
-  auto appendStage = [&](const components::ResolvedFilterEffect& stage) {
+  for (const components::ResolvedFilterEffect& stage : *resolved) {
     std::optional<components::FilterGraph> graph =
         resolveFilterGraph(registry, stage, currentColor, viewBox, fontMetrics);
     if (!graph) {
-      return false;
+      return std::nullopt;
     }
     if (graph->empty()) {
       components::FilterNode transparent;
@@ -1428,46 +1479,11 @@ std::optional<std::vector<components::FilterGraph>> resolveFilterStages(
       graph->nodes.push_back(std::move(transparent));
     }
     if (graph->nodes.size() > components::kMaximumFilterGraphNodes - nodeCount) {
-      return false;
+      return std::nullopt;
     }
     nodeCount += graph->nodes.size();
     graph->filterRegion = computeFilterRegion(registry, stage, instance);
     stages.push_back(std::move(*graph));
-    return true;
-  };
-  if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
-    if (effects->size() > components::kMaximumFilterGraphNodes) {
-      return std::nullopt;
-    }
-    std::vector<FilterEffect> functions;
-    for (const FilterEffect& effect : *effects) {
-      if (effect.is<FilterEffect::ElementReference>()) {
-        const auto reference =
-            effect.get<FilterEffect::ElementReference>().reference.resolve(registry);
-        if (!reference ||
-            !reference->handle
-                 .any_of<components::FilterComponent, components::ComputedFilterComponent>()) {
-          // One invalid URL invalidates the entire CSS filter chain.
-          return std::vector<components::FilterGraph>();
-        }
-        if (!functions.empty()) {
-          if (!appendStage(functions)) {
-            return std::nullopt;
-          }
-          functions.clear();
-        }
-        if (!appendStage(*reference)) {
-          return std::nullopt;
-        }
-      } else if (!effect.is<FilterEffect::None>()) {
-        functions.push_back(effect);
-      }
-    }
-    if (!functions.empty() && !appendStage(functions)) {
-      return std::nullopt;
-    }
-  } else if (!appendStage(filter)) {
-    return std::nullopt;
   }
   return stages;
 }
@@ -2877,6 +2893,38 @@ const components::RenderingInstanceComponent* RendererDriver::beginPreparingFilt
   return style.properties.has_value() ? instance : nullptr;
 }
 
+bool RendererDriver::configureFilterStages(std::vector<components::FilterGraph>& stages,
+                                           const Box2d& viewBox,
+                                           const std::optional<Box2d>& elementBounds) {
+  for (components::FilterGraph& graph : stages) {
+    if (!reservePreparedFilterGraph(graph)) {
+      return false;
+    }
+    graph.primitiveViewport = viewBox;
+    if (graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+      graph.elementBoundingBox = elementBounds;
+    }
+    if (viewBox.width() > 0 && viewBox.height() > 0) {
+      graph.userToPixelScale =
+          Vector2d(renderingSize_.x / viewBox.width(), renderingSize_.y / viewBox.height());
+    }
+  }
+  return true;
+}
+
+bool RendererDriver::materializeFilterStages(std::vector<components::FilterGraph>& stages,
+                                             Registry& registry, Entity entity) {
+  // All configuration was copied before feImage preparation can mutate instance storage.
+  for (components::FilterGraph& graph : stages) {
+    preRenderSvgFeImages(graph, registry, entity);
+    preRenderFeImageFragments(graph, registry, entity, graph.filterRegion);
+    if (!reservePreparedFilterMaterialization(graph)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Entity> entities) {
   // Iterate a caller-provided snapshot of entity IDs so that mid-loop storage mutation (from
   // `createFeImageShadowTree` inside `preRenderFeImageFragments`) cannot invalidate the iteration.
@@ -2908,33 +2956,8 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
     }
     const std::optional<Box2d> elementBounds =
         RenderingObjectBoundingBox(registry, instance->styleHandle(registry));
-    bool accepted = true;
-    for (components::FilterGraph& graph : *stages) {
-      if (!reservePreparedFilterGraph(graph)) {
-        accepted = false;
-        break;
-      }
-      graph.primitiveViewport = filterViewBox;
-      if (graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
-        graph.elementBoundingBox = elementBounds;
-      }
-      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
-        graph.userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
-                                          renderingSize_.y / filterViewBox.height());
-      }
-    }
-    // All stage configuration is copied before feImage preparation can mutate instance storage.
-    if (accepted) {
-      for (components::FilterGraph& graph : *stages) {
-        preRenderSvgFeImages(graph, registry, entity);
-        preRenderFeImageFragments(graph, registry, entity, graph.filterRegion);
-        if (!reservePreparedFilterMaterialization(graph)) {
-          accepted = false;
-          break;
-        }
-      }
-    }
-    if (accepted) {
+    if (configureFilterStages(*stages, filterViewBox, elementBounds) &&
+        materializeFilterStages(*stages, registry, entity)) {
       preparedFilterGraphs_[entity] = std::move(*stages);
     }
   }
