@@ -1444,7 +1444,9 @@ std::optional<std::vector<components::FilterGraph>> resolveFilterStages(
       if (effect.is<FilterEffect::ElementReference>()) {
         const auto reference =
             effect.get<FilterEffect::ElementReference>().reference.resolve(registry);
-        if (!reference || !reference->handle.all_of<components::ComputedFilterComponent>()) {
+        if (!reference ||
+            !reference->handle
+                 .any_of<components::FilterComponent, components::ComputedFilterComponent>()) {
           // One invalid URL invalidates the entire CSS filter chain.
           return std::vector<components::FilterGraph>();
         }
@@ -3035,6 +3037,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
       const bool insideFilterLayer =
+          hasFilterLayer ||
           std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
                       [](const DeferredPop& m) { return m.filterLayerCount != 0; });
       if (!insideFilterLayer) {
@@ -3274,6 +3277,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
       const bool insideFilterLayer =
+          hasFilterLayer ||
           std::any_of(localDeferred.begin(), localDeferred.end(),
                       [](const DeferredPop& m) { return m.filterLayerCount != 0; });
       if (!insideFilterLayer) {

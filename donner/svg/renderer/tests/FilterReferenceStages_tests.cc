@@ -126,5 +126,19 @@ TEST(FilterReferenceStages, AggregateNodeLimitSuppressesEntireGroup) {
   ExpectStageImage(actual, "", "aggregate_node_limit_group");
 }
 
+TEST(FilterReferenceStages, ExpandedCapturesPreserveLeafAndGroupCoordinates) {
+  constexpr std::string_view kDefinitions = R"svg(
+      <filter id="step" filterUnits="userSpaceOnUse" x="-20" y="-10" width="100" height="84">
+        <feOffset dx="1"/></filter>)svg";
+  constexpr std::string_view kExpected =
+      R"svg(<rect x="14" y="12" width="20" height="20" fill="red"/>)svg";
+  ExpectStageImage(RenderStageChain(kDefinitions, "url(#step) url(#step)"), kExpected,
+                   "expanded_capture_leaf");
+  const auto group =
+      RenderStageScene(std::string(kDefinitions) + R"svg(<g filter="url(#step) url(#step)">
+        <rect x="12" y="12" width="20" height="20" fill="red"/></g>)svg");
+  ExpectStageImage(group, kExpected, "expanded_capture_group");
+}
+
 }  // namespace
 }  // namespace donner::svg

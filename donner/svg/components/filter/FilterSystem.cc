@@ -527,10 +527,6 @@ void StoreComputedFilter(EntityHandle handle, ComputedFilterResourceBudget& budg
     RemoveComputedFilter(handle);
     return;
   }
-  if (effects.empty() && graph.empty()) {
-    RemoveComputedFilter(handle);
-    return;
-  }
   const auto retainedBytes = ComputedFilterRetainedBytes(graph, effects);
   if (!retainedBytes.has_value() || !budget.reserve(handle.entity(), *retainedBytes)) {
     RemoveComputedFilter(handle);
@@ -798,8 +794,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
   }
 
   if (!primitiveSource.valid()) {
-    RemoveComputedFilter(handle);
-    return;
+    primitiveSource = handle;
   }
 
   Lengthd computedX(-10.0, Lengthd::Unit::Percent);
