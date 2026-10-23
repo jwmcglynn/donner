@@ -57,8 +57,8 @@ MATCHER_P(DoesNotOverlap, other, "shares no area with " + ::testing::PrintToStri
   return !overlaps;
 }
 
-constexpr std::array<Vector2d, 4> kExclusionProbePoints = {Vector2d(5, 5), Vector2d(25, 25),
-                                                           Vector2d(15, 15), Vector2d(35, 35)};
+const std::array<Vector2d, 4> kExclusionProbePoints = {Vector2d(5, 5), Vector2d(25, 25),
+                                                       Vector2d(15, 15), Vector2d(35, 35)};
 
 struct ExclusionGeometryProbe {
   Path geometry;
