@@ -346,7 +346,8 @@ bool AppendMeasuredArcSample(ArcSampleVector& arcSamples, RetainedBytes&& retain
 
 template <typename SegmentVector, typename SegmentType>
 void AppendMeasuredLine(SegmentVector& segments, SegmentType lineType, double& totalLength,
-                        bool& valid, const Vector2d& start, const Vector2d& end) {
+                        bool& valid, const Vector2d& start, const Vector2d& end,
+                        bool connectedToPrevious) {
   const double segmentLength = start.distance(end);
   if (!std::isfinite(segmentLength) ||
       segmentLength > std::numeric_limits<double>::max() - totalLength) {
@@ -359,7 +360,8 @@ void AppendMeasuredLine(SegmentVector& segments, SegmentType lineType, double& t
                                                         totalLength,
                                                         totalLength + segmentLength,
                                                         0,
-                                                        0});
+                                                        0,
+                                                        connectedToPrevious});
   totalLength += segmentLength;
 }
 
@@ -368,7 +370,7 @@ template <typename SegmentVector, typename ArcSampleVector, typename SegmentType
 void AppendMeasuredCubic(SegmentVector& segments, ArcSampleVector& arcSamples,
                          SegmentType cubicType, double& totalLength, bool& valid,
                          GeometryQueryWorkBudget& workBudget,
-                         const std::array<Vector2d, 4>& cubicPoints,
+                         const std::array<Vector2d, 4>& cubicPoints, bool connectedToPrevious,
                          RetainedBytes&& retainedBytes) {
   const std::size_t firstSample = arcSamples.size();
   const auto appendSample = [&](double t, double length) {
@@ -394,25 +396,27 @@ void AppendMeasuredCubic(SegmentVector& segments, ArcSampleVector& arcSamples,
     totalLength = std::numeric_limits<double>::infinity();
     return;
   }
-  segments.push_back(typename SegmentVector::value_type{cubicType, cubicPoints, totalLength,
-                                                        totalLength + cumulativeLength, firstSample,
-                                                        arcSamples.size() - firstSample});
+  segments.push_back(typename SegmentVector::value_type{
+      cubicType, cubicPoints, totalLength, totalLength + cumulativeLength, firstSample,
+      arcSamples.size() - firstSample, connectedToPrevious});
   totalLength += cumulativeLength;
 }
 
 template <typename AddLine, typename AddCubic>
 void MeasureCommand(const Path::Command& command, std::span<const Vector2d> points,
                     Vector2d& currentPoint, Vector2d& subpathStart, AddLine&& addLine,
-                    AddCubic&& addCubic) {
+                    AddCubic&& addCubic, bool& connectedToPrevious) {
   switch (command.verb) {
     case Path::Verb::MoveTo:
       currentPoint = points[command.pointIndex];
       subpathStart = currentPoint;
+      connectedToPrevious = false;
       break;
     case Path::Verb::LineTo: {
       const Vector2d& end = points[command.pointIndex];
-      addLine(currentPoint, end);
+      addLine(currentPoint, end, connectedToPrevious);
       currentPoint = end;
+      connectedToPrevious = true;
       break;
     }
     case Path::Verb::QuadTo: {
@@ -420,20 +424,24 @@ void MeasureCommand(const Path::Command& command, std::span<const Vector2d> poin
       const Vector2d& end = points[command.pointIndex + 1];
       const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
       const Vector2d c2 = end + (control - end) * (2.0 / 3.0);
-      addCubic(std::array<Vector2d, 4>{currentPoint, c1, c2, end});
+      addCubic(std::array<Vector2d, 4>{currentPoint, c1, c2, end}, connectedToPrevious);
       currentPoint = end;
+      connectedToPrevious = true;
       break;
     }
     case Path::Verb::CurveTo: {
       const Vector2d& end = points[command.pointIndex + 2];
       addCubic(std::array<Vector2d, 4>{currentPoint, points[command.pointIndex],
-                                       points[command.pointIndex + 1], end});
+                                       points[command.pointIndex + 1], end},
+               connectedToPrevious);
       currentPoint = end;
+      connectedToPrevious = true;
       break;
     }
     case Path::Verb::ClosePath:
-      addLine(currentPoint, subpathStart);
+      addLine(currentPoint, subpathStart, connectedToPrevious);
       currentPoint = subpathStart;
+      connectedToPrevious = true;
       break;
   }
 }
@@ -444,12 +452,14 @@ void MeasureCommands(std::span<const Path::Command> commands, std::span<const Ve
                      AddLine&& addLine, AddCubic&& addCubic) {
   Vector2d currentPoint;
   Vector2d subpathStart;
+  bool connectedToPrevious = false;
   for (const Path::Command& command : commands) {
     if (!workBudget.consume()) {
       valid = false;
       break;
     }
-    MeasureCommand(command, points, currentPoint, subpathStart, addLine, addCubic);
+    MeasureCommand(command, points, currentPoint, subpathStart, addLine, addCubic,
+                   connectedToPrevious);
     endpoint = currentPoint;
     if (!valid) {
       break;
@@ -586,15 +596,16 @@ Path::MeasuredPath Path::measure(std::size_t maximumWorkUnits) const {
     return result;
   }
 
-  const auto addLine = [&](const Vector2d& start, const Vector2d& end) {
+  const auto addLine = [&](const Vector2d& start, const Vector2d& end, bool connectedToPrevious) {
     AppendMeasuredLine(result.segments_, MeasuredPath::SegmentType::Line, result.totalLength_,
-                       result.valid_, start, end);
+                       result.valid_, start, end, connectedToPrevious);
   };
 
-  const auto addCubic = [&](const std::array<Vector2d, 4>& cubicPoints) {
+  const auto addCubic = [&](const std::array<Vector2d, 4>& cubicPoints, bool connectedToPrevious) {
     const auto retainedBytes = [&]() { return result.retainedBytes(); };
     AppendMeasuredCubic(result.segments_, result.arcSamples_, MeasuredPath::SegmentType::Cubic,
-                        result.totalLength_, result.valid_, workBudget, cubicPoints, retainedBytes);
+                        result.totalLength_, result.valid_, workBudget, cubicPoints,
+                        connectedToPrevious, retainedBytes);
   };
 
   MeasureCommands(commands_, points_, workBudget, result.endpoint_, result.valid_, addLine,
@@ -644,12 +655,7 @@ Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance,
   if (boundarySide == BoundarySide::Outgoing && distance == it->endLength) {
     auto next = std::next(it);
     const Vector2d boundaryPoint = it->type == SegmentType::Line ? it->points[1] : it->points[3];
-    if (next == segments_.end() && distance == totalLength_ &&
-        segments_.front().startLength == 0.0 && boundaryPoint == segments_.front().points[0]) {
-      next = segments_.begin();
-    }
-    if (next != segments_.end() &&
-        next->startLength == (distance == totalLength_ ? 0.0 : distance) &&
+    if (next != segments_.end() && next->connectedToPrevious && next->startLength == distance &&
         boundaryPoint == next->points[0]) {
       it = next;
       distance = it->startLength;

@@ -41,6 +41,8 @@ public:
     std::size_t maximumTotalRetainedBytes = kDefaultMaximumTotalRetainedBytes;
     /// Maximum retained decoded raster-image bytes across the document family.
     std::size_t decodedImageBytes = 64 * 1024 * 1024;
+    /// Maximum cumulative text-path measurement work across the document family.
+    std::size_t textPathMeasurementWorkUnits = 32 * 1024 * 1024;
   };
 
   /// Current charges and sticky refusal state for diagnostics.
@@ -53,6 +55,8 @@ public:
     std::size_t rejectedReservations = 0;
     /// Whether any reservation has been refused.
     bool rejected = false;
+    /// Cumulative admitted text-path measurement work that was actually consumed.
+    std::size_t textPathMeasurementWorkUnits = 0;
   };
 
   DocumentResourceFamilyBudget() = default;
@@ -107,6 +111,35 @@ public:
     stats_.retainedBytes[index] += bytes;
     stats_.totalRetainedBytes += bytes;
     return true;
+  }
+
+  /// Preflight text-path measurement work before it can allocate adaptive samples.
+  bool reserveTextPathMeasurementWork(std::size_t units) {
+    if (stats_.rejected ||
+        stats_.textPathMeasurementWorkUnits > limits_.textPathMeasurementWorkUnits ||
+        units > limits_.textPathMeasurementWorkUnits - stats_.textPathMeasurementWorkUnits) {
+      ++stats_.rejectedReservations;
+      stats_.rejected = true;
+      return false;
+    }
+    stats_.textPathMeasurementWorkUnits += units;
+    return true;
+  }
+
+  /// Remaining cumulative text-path measurement work before fail-closed rejection.
+  std::size_t availableTextPathMeasurementWork() const {
+    if (stats_.rejected ||
+        stats_.textPathMeasurementWorkUnits > limits_.textPathMeasurementWorkUnits) {
+      return 0;
+    }
+    return limits_.textPathMeasurementWorkUnits - stats_.textPathMeasurementWorkUnits;
+  }
+
+  /// Refund preflight work that the measurement did not consume.
+  void releaseUnusedTextPathMeasurementWork(std::size_t units) {
+    stats_.textPathMeasurementWorkUnits = units > stats_.textPathMeasurementWorkUnits
+                                              ? 0
+                                              : stats_.textPathMeasurementWorkUnits - units;
   }
 
   /**

@@ -13,6 +13,7 @@ namespace donner::svg {
 namespace {
 
 using testing::Contains;
+using testing::DoubleNear;
 using testing::ElementsAre;
 
 StretchedTextPath MeasurePath(const Path& path) {
@@ -120,6 +121,38 @@ TEST(PlacedTextGeometryTest, StretchJoinsOneSidedNormalsAcrossSharpCorner) {
   EXPECT_THAT(warpedReverse.points(), Contains(Vector2Near(10.0, 2.0)));
 }
 
+TEST(PlacedTextGeometryTest, StretchUsesOneSidedNormalsAtSharpCornerEndpoints) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 10.0))
+                         .build();
+  const Path startsAtCorner =
+      PathBuilder().moveTo(Vector2d(5.0, -2.0)).lineTo(Vector2d(10.0, -2.0)).build();
+  const Path endsAtCorner =
+      PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(5.0, -2.0)).build();
+  const Path consecutive = PathBuilder()
+                               .moveTo(Vector2d(0.0, -2.0))
+                               .lineTo(Vector2d(5.0, -2.0))
+                               .lineTo(Vector2d(10.0, -2.0))
+                               .build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 5.0;
+  const StretchedTextPath mapping = MeasurePath(route);
+
+  const Path warpedStart = WarpGlyphOutline(startsAtCorner, mapping, glyph, 0.05);
+  const Path warpedEnd = WarpGlyphOutline(endsAtCorner, mapping, glyph, 0.05);
+  const Path warpedConsecutive = WarpGlyphOutline(consecutive, mapping, glyph, 0.05);
+
+  ASSERT_FALSE(warpedStart.empty());
+  ASSERT_FALSE(warpedEnd.empty());
+  ASSERT_FALSE(warpedConsecutive.empty());
+  EXPECT_THAT(warpedStart.points(), Contains(Vector2Near(12.0, 0.0)));
+  EXPECT_THAT(warpedEnd.points(), Contains(Vector2Near(10.0, -2.0)));
+  EXPECT_THAT(warpedConsecutive.points(), Contains(Vector2Near(10.0, -2.0)));
+  EXPECT_THAT(warpedConsecutive.points(), Contains(Vector2Near(12.0, 0.0)));
+}
+
 TEST(PlacedTextGeometryTest, StretchJoinsOneSidedNormalsAcrossClosedSeam) {
   const Path route = PathBuilder()
                          .moveTo(Vector2d(0.0, 0.0))
@@ -139,6 +172,46 @@ TEST(PlacedTextGeometryTest, StretchJoinsOneSidedNormalsAcrossClosedSeam) {
   ASSERT_FALSE(warped.empty());
   EXPECT_THAT(warped.points(), Contains(Vector2Near(-2.0, 0.0)));
   EXPECT_THAT(warped.points(), Contains(Vector2Near(0.0, -2.0)));
+
+  const Path startsAtSeam =
+      PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(5.0, -2.0)).build();
+  glyph.textPathOrigin = mapping.measuredPath.pathLength();
+  const Path warpedStart = WarpGlyphOutline(startsAtSeam, mapping, glyph, 0.05);
+  ASSERT_FALSE(warpedStart.empty());
+  EXPECT_THAT(warpedStart.points(), Contains(Vector2Near(0.0, -2.0)));
+}
+
+TEST(PlacedTextGeometryTest, StretchDoesNotJoinCoincidentDisconnectedSubpaths) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .moveTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 10.0))
+                         .build();
+  const Path edge = PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(10.0, -2.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 5.0;
+
+  EXPECT_TRUE(WarpGlyphOutline(edge, MeasurePath(route), glyph, 0.05).empty());
+}
+
+TEST(PlacedTextGeometryTest, StretchDoesNotWrapOpenGeometricReturnAsClosedSeam) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(0.0, 0.0))
+                         .build();
+  const StretchedTextPath mapping = MeasurePath(route);
+  const double length = mapping.measuredPath.pathLength();
+
+  const auto incoming =
+      mapping.measuredPath.pointAtArcLength(length, Path::MeasuredPath::BoundarySide::Incoming);
+  const auto outgoing =
+      mapping.measuredPath.pointAtArcLength(length, Path::MeasuredPath::BoundarySide::Outgoing);
+
+  ASSERT_TRUE(incoming.valid);
+  ASSERT_TRUE(outgoing.valid);
+  EXPECT_THAT(outgoing.angle, DoubleNear(incoming.angle, 1e-9));
 }
 
 TEST(PlacedTextGeometryTest, StretchSplitsRepeatedWaveAtMeasuredSegmentBoundaries) {

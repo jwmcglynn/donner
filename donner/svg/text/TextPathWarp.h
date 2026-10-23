@@ -167,6 +167,7 @@ private:
       return false;
     }
     builder_.moveTo(*mapped);
+    mappedCurrent_ = mapped;
     return true;
   }
   bool lineTo(size_t index) { return appendLine(points_[index]); }
@@ -188,19 +189,24 @@ private:
       return false;
     }
     Vector2d intervalStart = current_;
-    auto mappedStart = map(intervalStart);
-    if (!mappedStart) {
-      return false;
-    }
     const double origin = mapping_.startOffset + *glyph_.textPathOrigin;
     const double startDistance = origin + current_.x;
     const double endDistance = origin + end.x;
+    const bool increasing = endDistance > startDistance;
+    const auto departureSide = increasing ? Path::MeasuredPath::BoundarySide::Outgoing
+                                          : Path::MeasuredPath::BoundarySide::Incoming;
+    const auto arrivalSide = increasing ? Path::MeasuredPath::BoundarySide::Incoming
+                                        : Path::MeasuredPath::BoundarySide::Outgoing;
+    auto mappedStart =
+        isBoundary(startDistance) ? map(intervalStart, departureSide) : map(intervalStart);
+    if (!mappedStart || !mappedCurrent_ || !appendBoundaryJoin(*mappedCurrent_, *mappedStart)) {
+      return false;
+    }
     const auto boundaries = crossedBoundaries(startDistance, endDistance);
     if (!boundaries) {
       return false;
     }
     if (end.x != current_.x) {
-      const bool increasing = endDistance > startDistance;
       const auto beforeBoundary = increasing ? Path::MeasuredPath::BoundarySide::Incoming
                                              : Path::MeasuredPath::BoundarySide::Outgoing;
       const auto afterBoundary = increasing ? Path::MeasuredPath::BoundarySide::Outgoing
@@ -221,12 +227,31 @@ private:
         mappedStart = mappedAfterBoundary;
       }
     }
-    const auto mappedEnd = map(end);
+    const auto mappedEnd = isBoundary(endDistance) ? map(end, arrivalSide) : map(end);
     if (!mappedEnd || !appendAdaptive(intervalStart, end, *mappedStart, *mappedEnd, 0u)) {
       return false;
     }
     current_ = end;
+    mappedCurrent_ = mappedEnd;
     return true;
+  }
+  bool isBoundary(double distance) const {
+    const double length = mapping_.measuredPath.pathLength();
+    if (!std::isfinite(distance) || !(length > 0.0)) {
+      return false;
+    }
+    double candidate = distance;
+    if (mapping_.closed) {
+      candidate = std::fmod(distance, length);
+      if (candidate < 0.0) {
+        candidate += length;
+      }
+      if (candidate == 0.0) {
+        return true;
+      }
+    }
+    return std::binary_search(mapping_.segmentEndDistances.begin(),
+                              mapping_.segmentEndDistances.end(), candidate);
   }
   bool appendBoundaryJoin(const Vector2d& incoming, const Vector2d& outgoing) {
     if (incoming == outgoing) {
@@ -496,6 +521,7 @@ private:
   std::span<const Vector2d> points_;
   PathBuilder builder_;
   Vector2d current_;
+  std::optional<Vector2d> mappedCurrent_;
   Vector2d subpathStart_;
   bool hasCurrent_ = false;
   double tolerance_;

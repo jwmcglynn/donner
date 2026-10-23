@@ -304,6 +304,7 @@ public:
       double endLength = 0.0;
       std::size_t firstSample = 0;
       std::size_t sampleCount = 0;
+      bool connectedToPrevious = false;
     };
 
     std::vector<Segment> segments_;

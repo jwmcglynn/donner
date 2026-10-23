@@ -847,6 +847,10 @@ TEST(Path, MeasuredPathRetainedBytesIncludeAdaptiveSampleCapacity) {
   ASSERT_TRUE(retained.has_value());
   EXPECT_GT(*retained, *base);
   EXPECT_LE(*retained, Path::kMaximumMeasuredPathRetainedBytes);
+  const auto upper = path.measurementRetainedBytesUpperBound(measured.measurementWorkUnits());
+  ASSERT_TRUE(upper.has_value());
+  EXPECT_LE(*retained, *upper);
+  EXPECT_GE(path.measurementWorkLimitForRetainedBytes(*upper), measured.measurementWorkUnits());
 }
 
 // =============================================================================

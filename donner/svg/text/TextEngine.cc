@@ -3491,30 +3491,56 @@ private:
     const TextSpan& firstSpan = text_.spans[*firstPathRun_];
     constexpr size_t kMappingOverhead = sizeof(StretchedTextPath) + 2u * sizeof(void*);
     const Path& sourcePath = *firstSpan.pathSpline;
+    const bool clustersFit =
+        pathStaging_.clusters.capacity() <= kMaximumDeferredTextPathBytes / sizeof(TextPathCluster);
+    const size_t clusterBytes =
+        clustersFit ? pathStaging_.clusters.capacity() * sizeof(TextPathCluster) : 0;
+    const bool localCapacityAvailable =
+        clustersFit && deferredTextPathBytes_ <= kMaximumDeferredTextPathBytes &&
+        clusterBytes <= kMaximumDeferredTextPathBytes - deferredTextPathBytes_;
+    const size_t localAvailableBytes =
+        localCapacityAvailable
+            ? kMaximumDeferredTextPathBytes - deferredTextPathBytes_ - clusterBytes
+            : 0u;
     const size_t maximumSegmentEndBytes =
         sourcePath.commands().size() <= std::numeric_limits<size_t>::max() / sizeof(double)
             ? sourcePath.commands().size() * sizeof(double)
             : std::numeric_limits<size_t>::max();
     auto family = TextPathResourceFamily(registry_);
     const size_t availableBytes =
-        family->availableBytes(components::DocumentResourceFamilyBudget::Kind::Geometry);
+        std::min(localAvailableBytes,
+                 family->availableBytes(components::DocumentResourceFamilyBudget::Kind::Geometry));
     const bool ancillaryFits = maximumSegmentEndBytes <= availableBytes &&
                                kMappingOverhead <= availableBytes - maximumSegmentEndBytes;
     const size_t measurementBytesAvailable =
         ancillaryFits ? availableBytes - maximumSegmentEndBytes - kMappingOverhead : 0u;
     const size_t measurementWork =
-        sourcePath.measurementWorkLimitForRetainedBytes(measurementBytesAvailable);
+        std::min(sourcePath.measurementWorkLimitForRetainedBytes(measurementBytesAvailable),
+                 family->availableTextPathMeasurementWork());
     const auto measurementUpper = sourcePath.measurementRetainedBytesUpperBound(measurementWork);
     const bool reservationFits =
         ancillaryFits && measurementUpper && *measurementUpper <= measurementBytesAvailable;
     const size_t reservationBytes =
         reservationFits ? *measurementUpper + maximumSegmentEndBytes + kMappingOverhead
                         : availableBytes + (availableBytes != std::numeric_limits<size_t>::max());
+    const bool workReserved = reservationFits && measurementWork > 0u &&
+                              family->reserveTextPathMeasurementWork(measurementWork);
+    if (reservationFits && measurementWork == 0u) {
+      (void)family->reserveTextPathMeasurementWork(1u);
+    }
     auto measurementReservation =
-        TextPathMeasurementReservation::Create(std::move(family), reservationBytes);
+        workReserved ? TextPathMeasurementReservation::Create(family, reservationBytes) : nullptr;
+    if (workReserved && !measurementReservation) {
+      family->releaseUnusedTextPathMeasurementWork(measurementWork);
+    }
     Path::MeasuredPath measuredPath = measurementReservation && measurementWork > 0u
                                           ? sourcePath.measure(measurementWork)
                                           : Path::MeasuredPath();
+    if (measurementReservation) {
+      const size_t consumedWork = measuredPath.measurementWorkUnits();
+      family->releaseUnusedTextPathMeasurementWork(
+          consumedWork < measurementWork ? measurementWork - consumedWork : 0u);
+    }
     if (measurementReservation && !measuredPath.valid()) {
       measurementReservation->rejectFurtherReservations();
     }
@@ -3533,10 +3559,6 @@ private:
     if (measurementReservation && measuredMappingFits) {
       measurementReservation->shrink(measuredMappingBytes);
     }
-    const bool clustersFit =
-        pathStaging_.clusters.capacity() <= kMaximumDeferredTextPathBytes / sizeof(TextPathCluster);
-    const size_t clusterBytes =
-        clustersFit ? pathStaging_.clusters.capacity() * sizeof(TextPathCluster) : 0;
     if (measurementReservation && measuredPath.valid() && measuredMappingFits &&
         canRetainTextPath(measuredBytes, clustersFit, clusterBytes)) {
       retainTextPath(std::move(measuredPath), closed, *measuredBytes + clusterBytes,

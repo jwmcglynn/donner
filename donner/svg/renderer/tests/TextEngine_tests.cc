@@ -1336,6 +1336,34 @@ TEST(TextEngineTest, TextPathMeasurementRetentionUsesDocumentFamilyBudget) {
   EXPECT_TRUE(family->securityStats().rejected);
 }
 
+TEST(TextEngineTest, TextPathMeasurementWorkIsCumulativeAfterReleasedAlignPaths) {
+  Registry registry;
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.textPathMeasurementWorkUnits = 4;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  registry.ctx().emplace<components::DocumentResourceFamilyContext>(family);
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
+  const Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(100.0, 0.0)).build();
+  std::size_t admitted = 0;
+  for (int root = 0; root < 5; ++root) {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("A");
+    span.pathSpline = path;
+    span.textPathSourceEntity = registry.create();
+    text.spans.push_back(std::move(span));
+    const auto runs = engine.layout(text, MakeTextParams(24.0));
+    if (!runs.empty() && !runs.front().glyphs.empty()) {
+      ++admitted;
+    }
+  }
+
+  EXPECT_EQ(admitted, 2u);
+  EXPECT_EQ(family->securityStats().textPathMeasurementWorkUnits, 4u);
+  EXPECT_EQ(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::Geometry), 0u);
+  EXPECT_TRUE(family->securityStats().rejected);
+}
+
 TEST(TextEngineTest, TextPathStretchKeepsCombiningMarkInBaseClusterFrame) {
   Registry registry;
   FontManager fontManager(registry);
