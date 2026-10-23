@@ -392,7 +392,7 @@ They remain render-only corpus cases, with independent `ReferenceContract*` comp
 | `stroke-linejoin/arcs` | The SVG Strokes draft join is not implemented; Donner retains its documented miter fallback. The reference is the UB marker, not an arcs rendering. |
 | `stroke-linejoin/miter-clip` | Separate Geode/editor parity repair and ordinary reference restoration: [#2057](https://github.com/jwmcglynn/donner/pull/2057). |
 | `svg/no-size` | An unsized root uses the caller canvas (512x512 by default) without fitting content bounds. The reference fits the roughly 200-unit artwork to 500 pixels. Render-only; caller-canvas geometry has an independent assertion. |
-| `font/simple-case` | The PNG is 400x400, so the harness preserves that explicit canvas. The unitless `font` presentation shorthand is a Donner extension and matches expanded longhands. Glyph weight/advance still differ from the reference in both CPU text tiers; qualification remains with #1167/#1173. Render-only. |
+| `font/simple-case` | The PNG is 400x400, so the harness preserves that explicit canvas. The unitless `font` presentation shorthand is a Donner extension and matches expanded longhands. The hermetic set has no BoldItalic face: style-first matching selects NotoSans-Italic at weight 400. Glyph weight/advance still differ from the reference in both CPU text tiers; synthetic-weight/reference qualification remains with #1167/#1173. Render-only. |
 
 [SVG 2 radial-gradient rules](https://www.w3.org/TR/SVG2/pservers.html#RadialGradients) and
 [error processing](https://www.w3.org/TR/SVG2/conform.html#ErrorProcessing) establish the radial
