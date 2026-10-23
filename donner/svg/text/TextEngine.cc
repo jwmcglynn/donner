@@ -2980,7 +2980,8 @@ private:
   void prepareSpanPen(SpanState& state) {
     const TextSpan& span = *state.span;
     state.vertical = isVertical(params_.writingMode);
-    state.orientation = span.pathSpline ? TextOrientation::Mixed : span.textOrientation;
+    state.orientation =
+        !state.vertical || span.pathSpline ? TextOrientation::Mixed : span.textOrientation;
     state.penX = haveCurrentPosition_ ? currentPenX_ : 0.0;
     state.defaultY = effectiveBaselineShift(state) -
                      computeSpanBaselineShiftPx(backend_, span, state.font, state.scale, params_);

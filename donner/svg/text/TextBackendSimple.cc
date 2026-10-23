@@ -390,6 +390,9 @@ void SetSimpleGlyphAdvance(TextBackend::ShapedGlyph& glyph, bool isVertical,
     if (stbtt_GetGlyphBox(info, glyphIndex, &xMin, &yMin, &xMax, &yMax)) {
       glyph.xOffset = -static_cast<double>(advanceWidth) * glyphScale / 2.0;
       glyph.yOffset = static_cast<double>(ascent) * glyphScale;
+      if (advanceWidth == 0) {
+        glyph.yOffset -= cellAdvance;
+      }
     }
   } else if (isVertical) {
     glyph.xAdvance = 0;

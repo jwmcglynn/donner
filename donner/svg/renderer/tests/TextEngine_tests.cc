@@ -1278,6 +1278,49 @@ TEST(TextEngineTest, UprightLatinUsesVerticalShapingWithoutAdvancingCombiningMar
   const double basePenY = runs[0].glyphs[0].yPosition - upright.glyphs[0].yOffset;
   const double nextPenY = runs[0].glyphs[2].yPosition - upright.glyphs[2].yOffset;
   EXPECT_THAT(nextPenY, DoubleNear(basePenY + upright.glyphs[0].yAdvance, 1e-6));
+
+  const float outlineScale = engine.scaleForEmToPixels(runs[0].font, 32.0f);
+  Box2d baseBounds =
+      engine.glyphOutline(runs[0].font, runs[0].glyphs[0].glyphIndex, outlineScale).bounds();
+  Box2d markBounds =
+      engine.glyphOutline(runs[0].font, runs[0].glyphs[1].glyphIndex, outlineScale).bounds();
+  baseBounds += Vector2d(runs[0].glyphs[0].xPosition, runs[0].glyphs[0].yPosition);
+  markBounds += Vector2d(runs[0].glyphs[1].xPosition, runs[0].glyphs[1].yPosition);
+  EXPECT_THAT(markBounds.bottomRight.y, Lt(baseBounds.bottomRight.y));
+  EXPECT_THAT(markBounds.bottomRight.x, Gt(baseBounds.topLeft.x));
+  EXPECT_THAT(markBounds.topLeft.x, Lt(baseBounds.bottomRight.x));
+}
+
+TEST(TextEngineTest, SimpleUprightCombiningMarkStaysOnBaseCell) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextBackendSimple backend(fontManager, registry);
+  const std::string value =
+      "x\xCC\x81"
+      "B";
+  const auto shaped = backend.shapeRun(font, 32.0f, value, 0, value.size(), true,
+                                       TextOrientation::Upright, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, SizeIs(3));
+  ASSERT_THAT(shaped.glyphs[1].yAdvance, DoubleEq(0.0));
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(value);
+  span.textOrientation = TextOrientation::Upright;
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(32.0);
+  params.fontFamilies = {RcString("Noto Sans")};
+  params.writingMode = WritingMode::VerticalRl;
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendSimple>(fontManager, registry));
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(3))));
+  EXPECT_THAT(runs[0].glyphs[1].yAdvance, DoubleEq(0.0));
+  EXPECT_THAT(runs[0].glyphs[1].yPosition, DoubleNear(runs[0].glyphs[0].yPosition, 1e-6));
+  const double basePenY = runs[0].glyphs[0].yPosition - shaped.glyphs[0].yOffset;
+  const double nextPenY = runs[0].glyphs[2].yPosition - shaped.glyphs[2].yOffset;
+  EXPECT_THAT(nextPenY, DoubleNear(basePenY + shaped.glyphs[0].yAdvance, 1e-6));
 }
 
 TEST(TextEngineTest, SidewaysCjkUsesHorizontalShapingMetrics) {

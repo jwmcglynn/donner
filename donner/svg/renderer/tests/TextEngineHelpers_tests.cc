@@ -1421,6 +1421,31 @@ TEST_F(TextEngineLayoutTest, OrientationTransitionResetsCrossSpanKerning) {
               ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(SizeIs(1))));
 }
 
+TEST_F(TextEngineLayoutTest, HorizontalOrientationDifferenceKeepsCrossSpanKerning) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+  EXPECT_CALL(*mockBackend_,
+              crossSpanKern(testing::_, testing::_, testing::_, testing::_, 'A', 'V', false))
+      .WillOnce(testing::Return(-2.0));
+
+  components::ComputedTextComponent text;
+  auto first = makeSpan("A");
+  first.textOrientation = TextOrientation::Mixed;
+  auto second = makeSpan("V");
+  second.startsNewChunk = false;
+  second.textOrientation = TextOrientation::Upright;
+  text.spans.push_back(std::move(first));
+  text.spans.push_back(std::move(second));
+
+  EXPECT_THAT(engine_->layout(text, makeParams()),
+              ElementsAre(RunGlyphsAre(SizeIs(1)),
+                          RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(8.0))))));
+}
+
 TEST_F(TextEngineLayoutTest, VerticalPerCharacterAbsolutePositionsApplyDxDy) {
   ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
                                   testing::_, testing::_, testing::_))

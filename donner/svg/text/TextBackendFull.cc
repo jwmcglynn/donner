@@ -1247,6 +1247,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
   }
 
   const double pixelScaleX = pixelScaleForPpem(ftFace, prevSizePx, true);
+  const double pixelScaleY = pixelScaleForPpem(ftFace, prevSizePx, false);
 
   // Shape the pair [prev, cur] to get the combined advance.
   hb_buffer_t* pairBuf = hb_buffer_create();
@@ -1254,6 +1255,11 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
   hb_buffer_add_codepoints(pairBuf, pair, 2, 0, 2);
   const bool sideways = UsesSidewaysMetrics(textOrientation, curCodepoint);
   const hb_direction_t direction = isVertical && !sideways ? HB_DIRECTION_TTB : HB_DIRECTION_LTR;
+  const auto advance = [&](const hb_glyph_position_t& position) {
+    return direction == HB_DIRECTION_TTB
+               ? std::abs(static_cast<double>(position.y_advance) * pixelScaleY)
+               : static_cast<double>(position.x_advance) * pixelScaleX;
+  };
   hb_buffer_set_direction(pairBuf, direction);
   hb_buffer_set_script(pairBuf, HB_SCRIPT_LATIN);
   hb_buffer_guess_segment_properties(pairBuf);
@@ -1264,7 +1270,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
 
   double kernDelta = 0.0;
   if (pairCount >= 1) {
-    const double pairedAdvance = static_cast<double>(pairPos[0].x_advance) * pixelScaleX;
+    const double pairedAdvance = advance(pairPos[0]);
 
     // Shape the previous character alone to get its standalone advance.
     hb_buffer_t* soloBuf = hb_buffer_create();
@@ -1277,7 +1283,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
     unsigned int soloCount = 0;
     const hb_glyph_position_t* soloPos = hb_buffer_get_glyph_positions(soloBuf, &soloCount);
     if (soloCount >= 1) {
-      const double soloAdvance = static_cast<double>(soloPos[0].x_advance) * pixelScaleX;
+      const double soloAdvance = advance(soloPos[0]);
       kernDelta = pairedAdvance - soloAdvance;
     }
     hb_buffer_destroy(soloBuf);
