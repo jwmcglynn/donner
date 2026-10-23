@@ -25,6 +25,10 @@ inline bool FiniteOutline(const Path& outline) {
   });
 }
 
+inline bool CrossesBoundary(double start, double end, double boundary) {
+  return start < end ? boundary > start && boundary < end : boundary < start && boundary > end;
+}
+
 inline Path::PointOnPath Sample(const StretchedTextPath& mapping, double distance) {
   const double length = mapping.measuredPath.pathLength();
   if (InvalidSample(distance, length)) {
@@ -180,10 +184,32 @@ private:
     if (!hasCurrent_) {
       return false;
     }
-    const auto mappedStart = map(current_);
+    Vector2d intervalStart = current_;
+    auto mappedStart = map(intervalStart);
+    if (!mappedStart) {
+      return false;
+    }
+    const double origin = mapping_.startOffset + *glyph_.textPathOrigin;
+    const double startDistance = origin + current_.x;
+    const double endDistance = origin + end.x;
+    if (end.x != current_.x) {
+      for (const double boundary : mapping_.segmentEndDistances) {
+        if (!CrossesBoundary(startDistance, endDistance, boundary)) {
+          continue;
+        }
+        const double t = (boundary - startDistance) / (endDistance - startDistance);
+        const Vector2d intervalEnd = current_ * (1.0 - t) + end * t;
+        const auto mappedEnd = map(intervalEnd);
+        if (!mappedEnd ||
+            !appendAdaptive(intervalStart, intervalEnd, *mappedStart, *mappedEnd, 0u)) {
+          return false;
+        }
+        intervalStart = intervalEnd;
+        mappedStart = mappedEnd;
+      }
+    }
     const auto mappedEnd = map(end);
-    if (!mappedStart || !mappedEnd ||
-        !appendAdaptive(current_, end, *mappedStart, *mappedEnd, 0u)) {
+    if (!mappedEnd || !appendAdaptive(intervalStart, end, *mappedStart, *mappedEnd, 0u)) {
       return false;
     }
     current_ = end;

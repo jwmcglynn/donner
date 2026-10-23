@@ -1205,9 +1205,10 @@ void placeTextPath(const components::ComputedTextComponent& text, const TextLayo
   PlaceTextPathClusters(path.measuredPath, firstSpan.pathStartOffset, path.closed, runs,
                         path.clusters, firstSpan.textPathMethod);
   if (firstSpan.textPathMethod == components::TextPathMethod::Stretch) {
-    auto mapping = std::make_shared<StretchedTextPath>(
-        StretchedTextPath{std::move(path.measuredPath), firstSpan.pathStartOffset, path.closed,
-                          IsStraightTextPath(*firstSpan.pathSpline)});
+    std::vector<double> segmentEnds = path.measuredPath.segmentEndDistances();
+    auto mapping = std::make_shared<StretchedTextPath>(StretchedTextPath{
+        std::move(path.measuredPath), std::move(segmentEnds), firstSpan.pathStartOffset,
+        path.closed, IsStraightTextPath(*firstSpan.pathSpline)});
     for (size_t runIndex = path.firstRun; runIndex < path.endRun; ++runIndex) {
       runs[runIndex].stretchedTextPath = mapping;
     }

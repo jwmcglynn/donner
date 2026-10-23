@@ -146,11 +146,14 @@ GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, Font
  * @return The placed outline path in the text element's local space.
  */
 Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextRun& run,
-                        const TextGlyph& glyph, float scale);
+                        const TextGlyph& glyph, float scale, double warpTolerance);
 
 /// Warp a glyph-local outline onto the perpendicular vectors of a stretched text path.
-Path WarpGlyphOutline(const Path& outline, const StretchedTextPath& mapping,
-                      const TextGlyph& glyph);
+Path WarpGlyphOutline(const Path& outline, const StretchedTextPath& mapping, const TextGlyph& glyph,
+                      double tolerance = Path::kLocalFlattenTolerance);
+
+/// Derive a path-local warp tolerance from a local-to-device transform.
+double TextWarpToleranceFor(const Transform2d& deviceFromLocal);
 
 /**
  * @brief Compute the text element's bounding box for `objectBoundingBox` paint.

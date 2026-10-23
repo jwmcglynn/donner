@@ -3050,7 +3050,8 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           drawBudget_->reject();
           return;
         }
-        glyphPath = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale);
+        glyphPath = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale,
+                                       TextWarpToleranceFor(deviceFromLocalTransform_));
         if (!admitPlacedGlyph(hasComplexity, glyphPath)) {
           drawBudget_->reject();
           return;

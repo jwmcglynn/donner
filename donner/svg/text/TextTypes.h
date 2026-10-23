@@ -13,6 +13,7 @@ namespace donner::svg {
 /// Shared path mapping used to warp glyph outlines for `textPath method="stretch"`.
 struct StretchedTextPath {
   Path::MeasuredPath measuredPath;
+  std::vector<double> segmentEndDistances;
   double startOffset = 0.0;
   bool closed = false;
   bool linear = false;

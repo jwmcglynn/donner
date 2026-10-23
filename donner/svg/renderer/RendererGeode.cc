@@ -4055,13 +4055,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   bool appendWarpedGlyph(std::vector<Path>& paths, FontManager& fontManager,
                          const TextEngine& textEngine, const TextRun& run, const TextGlyph& glyph,
-                         float scale) {
+                         float scale, double tolerance) {
     bool hasComplexity = false;
     if (!admitGlyphMiss(fontManager, run.font, glyph.glyphIndex, hasComplexity,
                         kMaximumTextPathWarpExpansion)) {
       return false;
     }
-    Path placed = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale);
+    Path placed = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale, tolerance);
     if (placed.empty()) {
       return true;
     }
@@ -7501,7 +7501,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       }
 
       if (glyphModes.warped) {
-        if (!impl_->appendWarpedGlyph(runGlyphPaths, fontManager, textEngine, run, glyph, scale)) {
+        if (!impl_->appendWarpedGlyph(
+                runGlyphPaths, fontManager, textEngine, run, glyph, scale,
+                geode::FillCubicToleranceFor(impl_->deviceFromLocalTransform))) {
           runs.clear();
           return;
         }

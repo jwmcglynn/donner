@@ -126,13 +126,19 @@ GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, Font
   return result;
 }
 
-Path WarpGlyphOutline(const Path& outline, const StretchedTextPath& mapping,
-                      const TextGlyph& glyph) {
-  return WarpTextPathOutline(outline, mapping, glyph);
+Path WarpGlyphOutline(const Path& outline, const StretchedTextPath& mapping, const TextGlyph& glyph,
+                      double tolerance) {
+  return WarpTextPathOutline(outline, mapping, glyph, tolerance);
+}
+
+double TextWarpToleranceFor(const Transform2d& deviceFromLocal) {
+  const double scale = std::max(std::hypot(deviceFromLocal.data[0], deviceFromLocal.data[1]),
+                                std::hypot(deviceFromLocal.data[3], deviceFromLocal.data[4]));
+  return std::clamp(0.1 / std::max(scale, 1.0), 1e-4, Path::kLocalFlattenTolerance);
 }
 
 Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextRun& run,
-                        const TextGlyph& glyph, float scale) {
+                        const TextGlyph& glyph, float scale, double warpTolerance) {
   if (glyph.glyphIndex == 0) {
     return Path();  // `.notdef` -- caller skips.
   }
@@ -158,7 +164,7 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
       glyphPath = TransformPath(
           glyphPath, Transform2d::Rotate(localRotation * MathConstants<double>::kPi / 180.0));
     }
-    return WarpGlyphOutline(glyphPath, *run.stretchedTextPath, glyph);
+    return WarpGlyphOutline(glyphPath, *run.stretchedTextPath, glyph, warpTolerance);
   }
 
   // Translate to the baseline origin and rotate about it, as one transform.
