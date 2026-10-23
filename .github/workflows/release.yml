@@ -151,18 +151,9 @@ jobs:
           python3 tools/release_artifact_publisher.py \
             "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64 \
             "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64.sha256 \
-            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64.provenance \
-            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64.bazel.lock \
-            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64.NOTICE.txt \
             "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64 \
             "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.sha256 \
-            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.provenance \
-            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.bazel.lock \
-            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.NOTICE.txt \
             "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip \
             "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip.sha256 \
-            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip.provenance \
-            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip.bazel.lock \
-            "$RUNNER_TEMP"/release/editor-macos/donner-editor_darwin_arm64.zip.NOTICE.txt \
-            "$RUNNER_TEMP"/release/source/* \
-            "$RUNNER_TEMP"/release/donner-*.candidate.json
+            "$RUNNER_TEMP"/release/source/*.tar.gz \
+            "$RUNNER_TEMP"/release/source/*.tar.gz.sha256
