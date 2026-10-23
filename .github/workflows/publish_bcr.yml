@@ -72,6 +72,10 @@ jobs:
     needs: validate
     if: needs.validate.outputs.prepare == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
     outputs:
       base: ${{ steps.commit.outputs.base }}
       commit: ${{ steps.commit.outputs.commit }}
@@ -140,6 +144,10 @@ jobs:
     needs: [validate, promote-entry]
     if: needs.validate.outputs.prepare == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
     steps:
       - name: Checkout trusted publication checks
         uses: actions/checkout@v7
