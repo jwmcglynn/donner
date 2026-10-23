@@ -2222,9 +2222,11 @@ for (
             frames: window.__donnerMainLoopRenderedFrames,
           }));
           console.log(`geode-post-load ${JSON.stringify(state)}`);
-          return Boolean(state.thumbnails && state.thumbnails.rowCount > 1
-            && state.thumbnails.deferredCount === 0
-            && state.thumbnails.textureSnapshotCount > 0);
+          return Boolean(
+            state.thumbnails && state.thumbnails.rowCount > 1
+              && state.thumbnails.deferredCount === 0
+              && state.thumbnails.textureSnapshotCount > 0,
+          );
         }, {
           message: "Geode splash finishes its post-load layer previews without hanging",
           timeout: 10000,
@@ -2234,16 +2236,19 @@ for (
           const x = bounds.x + 400 + step * 10;
           const y = bounds.y + 200;
           await page.mouse.move(x, y);
-          await expect.poll(() => page.evaluate(() => ({
-            x: window.__donnerInteractionStats?.pointerX,
-            y: window.__donnerInteractionStats?.pointerY,
-          })), {
+          await expect.poll(() =>
+            page.evaluate(() => ({
+              x: window.__donnerInteractionStats?.pointerX,
+              y: window.__donnerInteractionStats?.pointerY,
+            })), {
             message: "Geode splash continues applying input after layer previews",
             timeout: 3000,
           }).toEqual({ x, y });
         }
       } finally {
-        console.log(`geode-post-load-final ${JSON.stringify(await readCarouselFrameDiagnostics(page))}`);
+        console.log(
+          `geode-post-load-final ${JSON.stringify(await readCarouselFrameDiagnostics(page))}`,
+        );
       }
     }
     expect(phaseTimings.presentedMs).toBeDefined();
@@ -5427,18 +5432,21 @@ test("page screenshots keep the canvas while hover changes the cursor", async ({
   expect(fatalMessages).toEqual([]);
 });
 
-
 test("browser paste callback applies on the GLFW context owner", async ({ page }) => {
   const fatalMessages = await openEditor(page);
   const installObserver = () => {
     const scope = globalThis as typeof globalThis & {
       __donnerApplicationWorker?: boolean;
-      __glfwContextCallbackObserver?: (kind: number) => void;
-      __glfwObservedCallbacks?: { kind: number; owner: boolean }[];
+      __glfwContextCallbackObserver?: (kind: number, text: string | null) => void;
+      __glfwObservedCallbacks?: { kind: number; owner: boolean; text: string | null }[];
     };
     scope.__glfwObservedCallbacks = [];
-    scope.__glfwContextCallbackObserver = (kind) => {
-      scope.__glfwObservedCallbacks!.push({ kind, owner: scope.__donnerApplicationWorker === true });
+    scope.__glfwContextCallbackObserver = (kind, text) => {
+      scope.__glfwObservedCallbacks!.push({
+        kind,
+        owner: scope.__donnerApplicationWorker === true,
+        text,
+      });
     };
   };
   await page.evaluate(installObserver);
@@ -5448,9 +5456,10 @@ test("browser paste callback applies on the GLFW context owner", async ({ page }
     clipboardData.setData("text/plain", "clipboard owner regression \u03bb");
     document.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData }));
   });
-  const readCallbacks = () => (globalThis as typeof globalThis & {
-    __glfwObservedCallbacks?: { kind: number; owner: boolean }[];
-  }).__glfwObservedCallbacks ?? [];
+  const readCallbacks = () =>
+    (globalThis as typeof globalThis & {
+      __glfwObservedCallbacks?: { kind: number; owner: boolean; text: string | null }[];
+    }).__glfwObservedCallbacks ?? [];
   await expect.poll(async () => {
     const observations = await Promise.all([
       page.evaluate(readCallbacks),
@@ -5458,6 +5467,45 @@ test("browser paste callback applies on the GLFW context owner", async ({ page }
     ]);
     return observations.flat().filter((entry) => entry.kind === 2);
   }, { message: "paste must update clipboard state on the application pthread" })
-    .toEqual([{ kind: 2, owner: true }]);
+    .toEqual([{ kind: 2, owner: true, text: "clipboard owner regression \u03bb" }]);
   expect(fatalMessages).toEqual([]);
+});
+
+test.describe("Retina Geode splash", () => {
+  test.use({ deviceScaleFactor: 2 });
+  test("carousel loads Geode and remains responsive after preview completion", async ({ page }) => {
+    const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+    const bounds = await page.locator("canvas#canvas").boundingBox();
+    expect(bounds).not.toBeNull();
+    if (!bounds) return;
+    const startedAt = performance.now();
+    await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + 282);
+    await expect(page.locator("canvas#canvas")).toHaveAttribute(
+      "data-active-sample-id",
+      "geode-splash",
+    );
+    await expect.poll(() =>
+      page.evaluate(() => ({
+        count: window.__donnerLayerThumbnailStats?.rowCount,
+        pending: window.__donnerLayerThumbnailStats?.deferredCount,
+        textures: window.__donnerLayerThumbnailStats?.textureSnapshotCount,
+        lost: window.__donnerWorkerStats?.deviceLost,
+      })), { message: "Retina Geode completes every layer preview" })
+      .toEqual({ count: 15, pending: 0, textures: 15, lost: false });
+    console.log(`geode-retina-ready-ms=${performance.now() - startedAt}`);
+    for (let step = 0; step < 20; ++step) {
+      const x = bounds.x + 400 + step * 15;
+      const y = bounds.y + 350;
+      await page.mouse.move(x, y);
+      await expect.poll(() =>
+        page.evaluate(() => ({
+          x: window.__donnerInteractionStats?.pointerX,
+          y: window.__donnerInteractionStats?.pointerY,
+        })), { message: "Retina Geode processes pointer input", timeout: 3000 })
+        .toEqual({ x, y });
+    }
+    console.log(`geode-retina-final ${JSON.stringify(await readCarouselFrameDiagnostics(page))}`);
+    await page.screenshot({ path: test.info().outputPath("geode-retina.png") });
+    expect(fatalMessages).toEqual([]);
+  });
 });

@@ -112,7 +112,7 @@ public:
   bool isRuntimePlatformApple() const;
 
 public:
-  void onScaleChange();
+  void onScaleChange(float iScale);
   void onWindowResize(GLFWwindow *iWindow, int iWidth, int iHeight);
   void onClipboard(char const *iText, char const *iError) { fClipboard.onClipboard(iText, iError); };
   int requestFullscreen(GLFWwindow *iWindow, bool iLockPointer, bool iResizeCanvas);
