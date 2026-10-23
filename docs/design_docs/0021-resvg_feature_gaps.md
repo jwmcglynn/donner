@@ -372,6 +372,44 @@ bug vs. out-of-scope:
 
 ---
 
+## Specification and reference classifications (#1186)
+
+Historical `(UB)` titles are not a specification oracle. Seven assigned PNGs are byte-for-byte
+copies of `third_party/resvg-test-suite/resources/ub.png`, whose SVG source draws a `UB` label.
+They remain render-only corpus cases, with independent `ReferenceContract*` comparisons in
+`RendererRegression_tests.cc`. No reference bitmap or comparison tolerance is changed.
+
+| Assigned fixture | Supported behavior and reference disposition |
+| --- | --- |
+| `radialGradient/fr=-1` | Negative focal radius is invalid and applies no paint. UB marker reference. |
+| `radialGradient/fr=0.5` | Coincident start/end circles apply no paint. UB marker reference. |
+| `radialGradient/fr=0.7` | A start circle containing the end circle applies no paint; the reference instead paints a reversed gradient. Render-only, with an independent transparent-paint oracle. |
+| `radialGradient/invalid-gradientTransform` | The authored all-zero matrix is singular, rather than malformed syntax. No paint; UB marker reference. |
+| `radialGradient/invalid-gradientUnits` | The invalid enumeration is diagnosed and the initial `objectBoundingBox` value is retained. UB marker reference. |
+| `radialGradient/negative-r` | Negative outer radius is invalid and applies no paint. UB marker reference. |
+| `fill/rgb-int-int-int` | Space-separated RGB is supported CSS Color 4 syntax and matches the equivalent hex color. UB marker reference. |
+| `fill/valid-FuncIRI-with-a-fallback-ICC-color` | The obsolete SVG 1.1 `icc-color()` paint grammar is unsupported. Invalid CSS declarations are rejected, preserving inherited paint; the historical reference expects a gradient. Render-only. |
+| `stroke-linejoin/arcs` | The SVG Strokes draft join is not implemented; Donner retains its documented miter fallback. The reference is the UB marker, not an arcs rendering. |
+| `stroke-linejoin/miter-clip` | Separate Geode/editor parity repair and ordinary reference restoration: [#2057](https://github.com/jwmcglynn/donner/pull/2057). |
+| `svg/no-size` | An unsized root uses the caller canvas (512x512 by default) without fitting content bounds. The reference fits the roughly 200-unit artwork to 500 pixels. Render-only; caller-canvas geometry has an independent assertion. |
+| `font/simple-case` | The PNG is 400x400, so the harness preserves that explicit canvas. The unitless `font` presentation shorthand is a Donner extension and matches expanded longhands. Glyph weight/advance still differ from the reference in both CPU text tiers; qualification remains with #1167/#1173. Render-only. |
+
+[SVG 2 radial-gradient rules](https://www.w3.org/TR/SVG2/pservers.html#RadialGradients) and
+[error processing](https://www.w3.org/TR/SVG2/conform.html#ErrorProcessing) establish the radial
+error and containing-circle expectations. The independent tests preserve visible sibling artwork
+and a valid zero-radius last-stop control. Both backends reject negative radii before solid-color
+shortcuts, including single-stop gradients and an outer radius within the CPU near-zero tolerance.
+[CSS Color 4](https://www.w3.org/TR/css-color-4/#rgb-functions) defines the RGB syntax;
+[SVG 2 paint grammar](https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint) does not include the
+old `icc-color()` suffix. The `arcs`, unitless font shorthand, caller canvas and zero-radius controls
+are explicitly project compatibility contracts, not claims of broader SVG 2 conformance.
+
+The focused regression targets are `renderer_regression_tests`, `renderer_regression_tests_geode`
+and `renderer_regression_tests_text_full`. The corpus targets are `resvg_test_suite_default_text`,
+`resvg_test_suite_geode` and `resvg_test_suite_max`. The existing Geode corpus text capability gate
+still skips the text sample; the independent Geode font contract test executes directly. Render-only
+corpus execution establishes stability, not pixel agreement with the historical reference.
+
 ## Out of scope (correctly skipped — do not "fix")
 
 | Category                        |          Tests | Why                                                                                                                                                                               |
@@ -381,7 +419,7 @@ bug vs. out-of-scope:
 | text/tref                       | 9 (+1 display) | `<tref>` removed in SVG 2.                                                                                                                                                        |
 | text/kerning                    |              2 | `kerning` attribute deprecated SVG 1.1.                                                                                                                                           |
 | text/glyph-orientation-*        |              2 | deprecated SVG 1.1.                                                                                                                                                               |
-| paint-servers/radialGradient    |              1 | test-suite bug (`fr>` default — SVG2 behavior changed). `focal-point-correction` now passes and is enabled.                                                                       |
+| paint-servers/radialGradient    |              0 | No skipped focal-radius case: `fr=0.7` is render-only with the containing-circle oracle above. `focal-point-correction` compares normally.                                                                       |
 | structure/style-attribute       |              1 | `<svg version="1.1">` disables geometry-in-style (SVG 1.1 behavior).                                                                                                              |
 | Other RenderOnly UB cases       |             51 | Implementation-defined output; we verify no-crash only (per project policy, kept RenderOnly not Skip).                                                                            |
 
