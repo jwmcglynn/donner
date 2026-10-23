@@ -1477,24 +1477,49 @@ EM_JS(void, RecordPresentedDocumentFrameStats,
 // clang-format on
 
 void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
-                                   bool surfacePresented) {
+                                   bool surfacePresented, std::uint64_t admissionSequence,
+                                   std::uint64_t producerGeneration, std::uint64_t captureId,
+                                   bool currentProducer) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
-        RecordPresentedDocumentFrameStats($0, $1, $2, $3);
+        if ($7) RecordPresentedDocumentFrameStats($0, $1, $2, $3);
         const stats = window['__donnerWorkerStats'];
         if (!stats || stats['publishReason'] !== 'render-result' || stats['resultFramePresented']) {
           return;
         }
-        if (Object.is(stats['documentGeneration'], $0) && Object.is(stats['frameVersion'], $1)) {
+        const boundaryKnown = stats['presentationBoundaryKnown'] === true &&
+            Number.isSafeInteger($4) && $4 > 0 && Number.isSafeInteger($5) && $5 >= 0;
+        const sameProducer = boundaryKnown &&
+            Object.is(stats['presentationProducerGeneration'], $5);
+        const eligible = Boolean($7) && sameProducer && $4 > stats['presentationAdmissionSequence'];
+        const matches = sameProducer && Object.is(stats['documentGeneration'], $0) &&
+            Object.is(stats['frameVersion'], $1) && Object.is(stats['captureId'], $6);
+        if (!boundaryKnown) {
+          stats['presentationBoundaryUnknown'] = true;
+          stats['unattributedFramesCompleted'] = (stats['unattributedFramesCompleted'] | 0) + 1;
+          return;
+        }
+        if (!matches) {
+          stats['framesPresentedWithoutResult'] = (stats['framesPresentedWithoutResult'] | 0) + 1;
+        }
+        if (!eligible) {
+          stats['preexistingFramesCompleted'] = (stats['preexistingFramesCompleted'] | 0) + 1;
+          return;
+        }
+        if (matches) {
           stats['resultFramePresented'] = true;
           stats['framesPresentedWithoutResult'] = stats['framesPresentedWithoutResult'] | 0;
+          stats['postPollFramesCompletedWithoutResult'] =
+              stats['postPollFramesCompletedWithoutResult'] | 0;
         } else {
-          stats['framesPresentedWithoutResult'] = (stats['framesPresentedWithoutResult'] | 0) + 1;
+          stats['postPollFramesCompletedWithoutResult'] =
+              (stats['postPollFramesCompletedWithoutResult'] | 0) + 1;
         }
       },
       static_cast<double>(documentGeneration), static_cast<double>(frameVersion), WorkerEpochNowMs(),
-      static_cast<int>(surfacePresented));
+      static_cast<int>(surfacePresented), static_cast<double>(admissionSequence),
+      static_cast<double>(producerGeneration), static_cast<double>(captureId), currentProducer);
   // clang-format on
 }
 

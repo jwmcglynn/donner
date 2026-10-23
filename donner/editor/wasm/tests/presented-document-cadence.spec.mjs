@@ -26,7 +26,7 @@ function recorder() {
     context,
   );
   const publish = vm.runInNewContext(
-    `(function($0, $1, $2, $3 = true) {${body[1]}\n})`,
+    `(function($0, $1, $2, $3 = true, $4 = 1, $5 = 1, $6 = 1, $7 = true) {${body[1]}\n})`,
     context,
   );
   return { window, publish, stats: () => window.__donnerPresentedDocumentStats };
@@ -46,7 +46,7 @@ test("only distinct presented document identities count, without worker-result t
   assert.equal(r.stats().samples.length, 3);
 });
 
-test("cadence uses the producer's presentation time, not delayed diagnostic delivery", () => {
+test("cadence uses GPU-completion observation time, not delayed diagnostic delivery", () => {
   const r = recorder();
   r.publish(1, 1, 1100);
   r.publish(1, 2, 1117);

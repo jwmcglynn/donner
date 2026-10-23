@@ -516,7 +516,7 @@ test("worker poll timestamps retain their producer clock across delayed proxy de
     "HEAPF64",
     "_free",
     "UTF8ToString",
-    "performance",
+    "performance", "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0",
     body,
   );
   const count = Number(/kValueCount = (\d+)/.exec(publisher)[1]);
@@ -630,11 +630,12 @@ test("the first canvas frame after a polled result must carry that result", () =
     "$0",
     "$1",
     "$2",
-    "$3",
+    "$3", "$4", "$5", "$6", "$7",
     body,
   );
   const frameClock = { timeOrigin: 1000, now: () => 250 };
-  const presentFrame = (window, generation, version, epochMs = 1200, surfacePresented = true) =>
+  const presentFrame = (window, generation, version, epochMs = 1200, surfacePresented = true,
+                        sequence = 2, producer = 1, capture = 22, currentProducer = true) =>
     publish(
       window,
       frameClock,
@@ -642,7 +643,7 @@ test("the first canvas frame after a polled result must carry that result", () =
       generation,
       version,
       epochMs,
-      Number(surfacePresented),
+      Number(surfacePresented), sequence, producer, capture, currentProducer,
     );
   const unpresented = {};
   presentFrame(unpresented, 2, 5, 1200, false);
@@ -650,7 +651,9 @@ test("the first canvas frame after a polled result must carry that result", () =
   presentFrame(unpresented, 2, 5, 900, true);
   assert.equal(unpresented.__donnerPresentedDocumentStats, undefined);
   const window = {
-    __donnerWorkerStats: { publishReason: "render-result", documentGeneration: 2, frameVersion: 5 },
+    __donnerWorkerStats: { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
+      captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 1,
+      presentationProducerGeneration: 1 },
   };
   const stats = window.__donnerWorkerStats;
   presentFrame(window, 2, 4);
@@ -673,7 +676,9 @@ test("the first canvas frame after a polled result must carry that result", () =
     "the count stops at the first frame that carries the result",
   );
 
-  const prompt = { publishReason: "render-result", documentGeneration: 3, frameVersion: 1 };
+  const prompt = { publishReason: "render-result", documentGeneration: 3, frameVersion: 1,
+    captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 1,
+    presentationProducerGeneration: 1 };
   window.__donnerWorkerStats = prompt;
   presentFrame(window, 3, 1);
   assert.deepEqual(
@@ -681,6 +686,53 @@ test("the first canvas frame after a polled result must carry that result", () =
     { presented: true, without: 0 },
     "a result carried by the first presented frame records zero frames without it",
   );
+
+  const backlog = { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
+    captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 10,
+    presentationProducerGeneration: 2 };
+  window.__donnerWorkerStats = backlog;
+  presentFrame(window, 2, 5, 1200, true, 10, 2, 11);
+  assert.deepEqual({ total: backlog.framesPresentedWithoutResult,
+    backlog: backlog.preexistingFramesCompleted, eligible: backlog.postPollFramesCompletedWithoutResult,
+    presented: backlog.resultFramePresented },
+    { total: 1, backlog: 1, eligible: undefined, presented: undefined });
+  presentFrame(window, 2, 5, 1210, true, 11, 2, 22);
+  assert.deepEqual({ total: backlog.framesPresentedWithoutResult,
+    backlog: backlog.preexistingFramesCompleted, eligible: backlog.postPollFramesCompletedWithoutResult,
+    presented: backlog.resultFramePresented },
+    { total: 1, backlog: 1, eligible: 0, presented: true },
+    "retained older backlog is distinct from a correct first post-poll admission");
+
+  const reused = { ...backlog, resultFramePresented: undefined, framesPresentedWithoutResult: 0,
+    preexistingFramesCompleted: 0, postPollFramesCompletedWithoutResult: 0 };
+  window.__donnerWorkerStats = reused;
+  presentFrame(window, 2, 5, 1200, true, 10, 1, 22, false);
+  assert.equal(reused.resultFramePresented, undefined, "an old producer's token collision is backlog");
+  assert.equal(reused.framesPresentedWithoutResult, 1);
+  presentFrame(window, 2, 5, 1210, true, 11, 2, 11);
+  assert.equal(reused.resultFramePresented, undefined, "equal versions cannot hide a stale capture");
+  assert.equal(reused.postPollFramesCompletedWithoutResult, 1);
+  presentFrame(window, 2, 5, 1220, true, 12, 2, 22);
+  assert.equal(reused.resultFramePresented, true);
+  assert.equal(reused.framesPresentedWithoutResult, 2);
+
+  const detached = { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
+    captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 1,
+    presentationProducerGeneration: 1 };
+  window.__donnerWorkerStats = detached;
+  presentFrame(window, 2, 5, 1200, true, 2, 1, 22, false);
+  assert.equal(detached.resultFramePresented, undefined,
+    "a detached producer cannot qualify even its still-published prior result");
+  assert.equal(detached.preexistingFramesCompleted, 1);
+
+  const unknown = { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
+    captureId: 22, presentationBoundaryKnown: false };
+  window.__donnerWorkerStats = unknown;
+  presentFrame(window, 2, 5);
+  assert.equal(unknown.presentationBoundaryUnknown, true);
+  assert.equal(unknown.unattributedFramesCompleted, 1);
+  assert.equal(unknown.resultFramePresented, undefined, "missing boundaries never qualify ordering");
+  assert.equal(unknown.postPollFramesCompletedWithoutResult, undefined);
 
   const failure = { publishReason: "gpu-wait-failure", documentGeneration: 3, frameVersion: 1 };
   window.__donnerWorkerStats = failure;
@@ -692,11 +744,54 @@ test("the first canvas frame after a polled result must carry that result", () =
   )[0];
   assert.match(failurePublisher, /delete stats\['resultFramePresented'\]/);
   assert.match(failurePublisher, /delete stats\['framesPresentedWithoutResult'\]/);
-  assert.match(
-    source,
-    /window\.lastFullyPresentedDocumentFrame_ = documentIdentity;[\s\S]{0,600}PublishPresentedDocumentFrame\(documentIdentity\.documentGeneration,/,
-    "only a fully presented frame reports the document frame it carried",
+  const completed = source.match(
+    /void EditorWindow::recordCompletedDocumentFrame\([\s\S]*?\n\}/,
+  )?.[0];
+  assert.ok(completed, "the GPU-completion observer owns document publication");
+  assert.match(completed, /if \(!frame\.fullFramePresented\) \{\s*return;/,
+    "a partial frame is not a completed presentation");
+  assert.match(completed,
+    /isDeviceLost\(\)\) \{\s*observePresentationDeviceLoss\(device\);\s*return;/,
+    "a failed GPU watermark cannot publish successful presentation stats or acknowledgment");
+  assert.match(completed,
+    /PublishPresentedDocumentFrame\(frame\.documentGeneration,[\s\S]*if \(!currentProducer\) \{\s*return;[\s\S]*lastFullyPresentedDocumentFrame_ = identity;/,
+    "old producer completions stay visible without resurrecting their acknowledgment");
+  const acceptedStart = source.indexOf("    if (!present(guard)) {");
+  const acceptedEnd = source.indexOf("    completed = true;", acceptedStart);
+  assert.ok(acceptedStart >= 0 && acceptedEnd > acceptedStart, "the real CPU acceptance path");
+  assert.doesNotMatch(
+    source.slice(acceptedStart, acceptedEnd),
+    /lastFullyPresentedDocumentFrame_|PublishPresentedDocumentFrame|wakeEventLoopForPresentedDocument/,
+    "CPU present acceptance alone cannot publish or discharge a document wake",
   );
+});
+
+test("ordinary and deferred observations both publish retired document frames", () => {
+  const ordinary = source.match(
+    /bool EditorWindow::observePresentationCompletion\(\) \{[\s\S]*?\n\}/,
+  )?.[0];
+  const deferred = source.match(
+    /EditorWindow::PresentationProgress EditorWindow::pollDeferredPresentation\(\) \{[\s\S]*?\n\}/,
+  )?.[0];
+  for (const [path, observation] of [["ordinary", ordinary], ["deferred", deferred]]) {
+    assert.ok(observation, `${path} completion path exists`);
+    assert.match(observation, /recordCompletedDocumentFrame\(frame\)/,
+      `${path} retirement delivers every frame to the document observer`);
+    assert.match(observation, /device\.lastProgress\(\), onCompleted\)/,
+      `${path} native observation retains its retirement observer`);
+  }
+  assert.match(ordinary, /\},\s*onCompleted\)/,
+    "browser timeout confirmation retains the same per-frame observer");
+  assert.match(deferred, /observe\(completed, now, std::nullopt, onCompleted\)/,
+    "the non-drawing browser progress poll cannot silently consume completed documents");
+  assert.match(deferred,
+    /presentationWasDeferred_ \|\| presentationSubmissions_\.pendingCount\(\) != 0/,
+    "accepted frames retain completion observation even below the admission bound");
+  const commit = source.match(/struct SubmissionFenceCommit \{[\s\S]*?\n\};/)?.[0];
+  assert.ok(commit, "the submission fence commit owns the progress pulse");
+  assert.match(commit,
+    /queue\.submitted\(stamp\);[\s\S]*if \(fullFramePresented\) \{\s*whole_app_worker::RequestPresentationProgress\(\)/,
+    "a completed-frame obligation arms the existing pulse after its fence is queued");
 });
 
 test("the presentation timeline rides the queue-stats proxy call and stays bounded", () => {
@@ -741,7 +836,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
     "HEAPF64",
     "_free",
     "UTF8ToString",
-    "performance",
+    "performance", "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0",
     body(timingPublisher[0]),
   );
   const publishAccepted = new Function("window", "$0", "$1", "$2", body(acceptedPublisher[0]));
@@ -778,6 +873,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
   assert.deepEqual(released, [0], "the asynchronous publication frees its owned buffer once");
   const stats = window.__donnerWorkerStats;
   assert.equal(stats.completedResults, 9);
+  assert.equal(stats.presentationBoundaryKnown, false, "omitted native metadata stays unknown");
   assert.deepEqual([
     stats.compositorReadbackTotal,
     stats.tileHandoffReadbackTotal,

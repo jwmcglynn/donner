@@ -3042,7 +3042,7 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   if (!window.valid()) {
     GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
   }
-  std::uint64_t completedSerial = 0;
+  std::uint64_t completedSerial = std::numeric_limits<std::uint64_t>::max();
   window.setPresentationCompletionProbeForTesting([&] { return completedSerial; });
 
   EditorShellOptions options = OptionsWithSource(
@@ -3060,6 +3060,7 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   }
   const auto oldPresentation = window.lastFullyPresentedDocumentFrame();
   ASSERT_TRUE(oldPresentation.has_value());
+  completedSerial = 0;
   ASSERT_FALSE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
 
   EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
@@ -3129,11 +3130,12 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial);
 
-  // Only a fully drawn and presented frame carrying the matching adopted capture releases new
+  // Only a GPU-complete frame carrying the matching adopted capture releases new
   // preview work. Cached previews and the pending queues remain available throughout the hold.
   EditorShellTestAccess::InstallFramePresentation(shell, acceptedFrame);
   window.beginFrame();
   window.endFrame();
+  window.pollIdleGpu();
   EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial + 1u);
   ASSERT_TRUE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   window.beginFrame();
@@ -3222,6 +3224,7 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
   window.setPresentationCompletionProbeForTesting([&] { return completedSerial; });
 
   gui::EditorWindow::PresentedDocumentFrameIdentity firstIdentity;
+  std::uint64_t previousProducerSerial = 0;
   // Each shell holds its canvas-commit debounce. On a slow host it can elapse within the loops
   // below, and the render-tree rebuild after a HiDPI commit adopts a second capture, so the
   // identities compared here would depend on host speed. The commit is not part of this contract.
@@ -3254,6 +3257,7 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
       RunShellFrame(window, first);
     }
     ASSERT_EQ(window.lastFullyPresentedDocumentFrame(), firstIdentity);
+    previousProducerSerial = window.geodeFramebufferDevice()->runtimeDevice().lastSubmittedSerial();
   }
 
   EditorShell second(window, OptionsWithSource(kInitialSvg));
@@ -3295,6 +3299,18 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
   EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(second), layerRendersBefore);
   EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(second), previewRequestsBefore);
   EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(second), 1u);
+
+  completedSerial = previousProducerSerial;
+  window.pollIdleGpu();
+  EXPECT_THAT(EditorShellTestAccess::ForegroundPresentationAcknowledged(second), testing::IsFalse())
+      << "old producer completions cannot acknowledge a reused document/capture token";
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_THAT(EditorShellTestAccess::ForegroundPresentationAcknowledged(second), testing::IsFalse())
+      << "the new producer's accepted frame is still waiting for GPU completion";
+  completedSerial = std::numeric_limits<std::uint64_t>::max();
+  window.pollIdleGpu();
+  EXPECT_THAT(EditorShellTestAccess::ForegroundPresentationAcknowledged(second), testing::IsTrue());
 }
 #endif
 

@@ -62,7 +62,9 @@ const char* GpuWaitTimeoutSiteName(svg::GpuWaitTimeoutSite site) {
 // literal whose storage outlives the proxy hop.
 void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
-    const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
+    const svg::compositor::CompositorController::RenderFrameStats& compositorStats,
+    std::optional<std::uint64_t> presentationAdmissionSequence,
+    std::optional<std::uint64_t> presentationProducerGeneration) {
   const auto& timing = result.workerTiming;
   constexpr std::size_t kValueCount = 45;
   int bitmapPayloadTiles = 0;
@@ -205,10 +207,19 @@ void PublishWorkerTimingStats(
           stats[total] = Number(previous[total] || 0) + Number(stats[count]);
         }
         stats['publicationDelayMs'] = Math.max(0, performance.now() - stats['publishedAtMs']);
+        stats['presentationBoundaryKnown'] = Boolean($3) && Number.isSafeInteger($4) && $4 >= 0 &&
+            Number.isSafeInteger($5) && $5 >= 0 && Number.isSafeInteger($6) && $6 > 0;
+        stats['presentationAdmissionSequence'] = $4;
+        stats['presentationProducerGeneration'] = $5;
+        stats['captureId'] = $6;
         stats['publishReason'] = 'render-result';
         window['__donnerWorkerStats'] = stats;
       },
-      buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite), kValueCount);
+      buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite), kValueCount,
+      presentationAdmissionSequence.has_value() && presentationProducerGeneration.has_value(),
+      static_cast<double>(presentationAdmissionSequence.value_or(0)),
+      static_cast<double>(presentationProducerGeneration.value_or(0)),
+      static_cast<double>(result.capturedPresentation ? result.capturedPresentation->identity().captureId : 0));
   // clang-format on
 }
 
@@ -254,6 +265,13 @@ void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteNa
         delete stats['presentationPublicationDelayMs'];
         delete stats['resultFramePresented'];
         delete stats['framesPresentedWithoutResult'];
+        delete stats['postPollFramesCompletedWithoutResult'];
+        delete stats['preexistingFramesCompleted'];
+        delete stats['presentationBoundaryKnown'];
+        delete stats['presentationAdmissionSequence'];
+        delete stats['presentationProducerGeneration'];
+        delete stats['presentationBoundaryUnknown'];
+        delete stats['unattributedFramesCompleted'];
         // This failure has no result-poll producer timestamp; prior render delay is unrelated.
         delete stats['publicationDelayMs'];
         stats['acceptedForPresentation'] = false;
@@ -1681,8 +1699,10 @@ bool RenderCoordinator::needsOverviewInfillForViewport(EditorApp& app,
          requiresFreshOverview(currentOverview, currentVersion);
 }
 
-void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,
-                                         GlTextureCache& textures, FrameHistory* frameHistory) {
+void RenderCoordinator::pollRenderResult(
+    EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
+    FrameHistory* frameHistory, std::optional<std::uint64_t> presentationAdmissionSequence,
+    std::optional<std::uint64_t> presentationProducerGeneration) {
   ZoneScopedN("RenderCoordinator::pollRenderResult");
   const ScopedHeapDelta pollHeapDelta(MemoryStage::AppPollResult);
   auto resultOpt = renderWorker_.asyncRenderer.pollResult();
@@ -1716,10 +1736,24 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     return;
   }
 
+  consumePolledRenderResult(resultOpt, app, viewport, textures, frameHistory,
+                            presentationAdmissionSequence, presentationProducerGeneration);
+}
+
+void RenderCoordinator::consumePolledRenderResult(
+    std::optional<RenderResult>& resultOpt, EditorApp& app, const ViewportState& viewport,
+    GlTextureCache& textures, FrameHistory* frameHistory,
+    std::optional<std::uint64_t> presentationAdmissionSequence,
+    std::optional<std::uint64_t> presentationProducerGeneration) {
+#ifndef __EMSCRIPTEN__
+  (void)presentationAdmissionSequence;
+  (void)presentationProducerGeneration;
+#endif
   const auto& result = *resultOpt;
   const auto compositorStats = renderWorker_.asyncRenderer.compositorRenderFrameStats();
 #ifdef __EMSCRIPTEN__
-  PublishWorkerTimingStats(result, app, compositorStats);
+  PublishWorkerTimingStats(result, app, compositorStats, presentationAdmissionSequence,
+                           presentationProducerGeneration);
 #endif
   lastFrameCostBreakdown_.compositedRender = CompositedRenderCostFromStats(compositorStats);
   lastFrameCostBreakdown_.compositedRender.presentationCoverageRepair =

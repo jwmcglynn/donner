@@ -3827,6 +3827,49 @@ TEST(EditorWindowPolicyTest, SubmissionCompletionHasAFiniteDeadlineAndReleasesCo
   EXPECT_EQ(queue.completed().serial, 2u);
 }
 
+TEST(EditorWindowPolicyTest, AdmissionSequenceSurvivesDeviceSerialResetAndProducerReuse) {
+  using Queue = internal::PresentationSubmissionQueue;
+  Queue queue;
+  const auto now = Queue::Clock::time_point{};
+  queue.submitted({.serial = 100, .captureId = 11, .submittedAt = now, .producerGeneration = 1});
+  EXPECT_THAT(queue.observe(100, now), testing::Eq(Queue::Admission::Ready));
+  const auto beforeReset = queue.admissionSequence();
+  EXPECT_THAT(beforeReset, testing::Eq(1u));
+  queue.submitted({.serial = 1, .captureId = 11, .submittedAt = now, .producerGeneration = 2});
+  EXPECT_THAT(queue.observe(1, now), testing::Eq(Queue::Admission::Ready));
+  EXPECT_THAT(queue.completed().serial, testing::Eq(1u));
+  EXPECT_THAT(queue.completed().producerGeneration, testing::Eq(2u));
+  EXPECT_THAT(queue.completed().admissionSequence, testing::Gt(beforeReset));
+}
+
+TEST(EditorWindowPolicyTest, OneCompletionObservationRetiresEveryDocumentInSubmissionOrder) {
+  using Queue = internal::PresentationSubmissionQueue;
+  Queue queue;
+  const auto now = Queue::Clock::time_point{};
+  queue.submitted({.serial = 1,
+                   .captureId = 11,
+                   .submittedAt = now,
+                   .documentGeneration = 7,
+                   .frameVersion = 1,
+                   .fullFramePresented = true});
+  queue.submitted({.serial = 2,
+                   .captureId = 22,
+                   .submittedAt = now,
+                   .documentGeneration = 7,
+                   .frameVersion = 2,
+                   .fullFramePresented = true});
+  std::vector<std::array<std::uint64_t, 4>> retired;
+  const auto record = [&](const Queue::Fence& frame) {
+    retired.push_back(
+        {frame.serial, frame.documentGeneration, frame.frameVersion, frame.captureId});
+  };
+  EXPECT_THAT(queue.observe(2, now, std::nullopt, record), testing::Eq(Queue::Admission::Ready));
+  EXPECT_THAT(retired, testing::ElementsAre(std::array<std::uint64_t, 4>{1, 7, 1, 11},
+                                            std::array<std::uint64_t, 4>{2, 7, 2, 22}));
+  EXPECT_THAT(queue.observe(2, now, std::nullopt, record), testing::Eq(Queue::Admission::Ready));
+  EXPECT_THAT(retired, testing::SizeIs(2));
+}
+
 /// A UI frame's work completes only after everything queued ahead of it, so an overdue frame
 /// behind a device that is still finishing work is slow, not hung: it times out only once the
 /// device has also gone the deadline without progress.
@@ -3910,6 +3953,8 @@ TEST(EditorWindowTest, DocumentAcknowledgmentWaitsForCompletedSubmission) {
   window.endFrame();
   const std::uint64_t olderSerial = device.lastSubmittedSerial();
   ASSERT_THAT(olderSerial, testing::Gt(0u));
+  EXPECT_THAT(window.pollDeferredPresentation(),
+              testing::Eq(EditorWindow::PresentationProgress::Pending));
   const std::uint64_t wakeBefore = window.presentedDocumentWakeSerialForTesting();
   window.requestWakeAfterPresentedDocument(result);
   window.setPresentationFrameIdentity(2, result.captureId, result.documentGeneration,
@@ -3922,15 +3967,53 @@ TEST(EditorWindowTest, DocumentAcknowledgmentWaitsForCompletedSubmission) {
   EXPECT_THAT(window.lastFullyPresentedDocumentFrame(), testing::Eq(std::nullopt));
   EXPECT_THAT(window.presentedDocumentWakeSerialForTesting(), testing::Eq(wakeBefore));
   completed = olderSerial;
-  window.pollIdleGpu();
+  EXPECT_THAT(window.pollDeferredPresentation(),
+              testing::Eq(EditorWindow::PresentationProgress::Pending));
   EXPECT_THAT(window.lastFullyPresentedDocumentFrame(), identityIs(older));
   EXPECT_THAT(window.presentedDocumentWakeSerialForTesting(), testing::Eq(wakeBefore));
   completed = resultSerial;
-  window.pollIdleGpu();
+  EXPECT_THAT(window.pollDeferredPresentation(),
+              testing::Eq(EditorWindow::PresentationProgress::Idle));
   EXPECT_THAT(window.lastFullyPresentedDocumentFrame(), identityIs(result));
   EXPECT_THAT(window.presentedDocumentWakeSerialForTesting(), testing::Eq(wakeBefore + 1));
   window.pollIdleGpu();
   EXPECT_THAT(window.presentedDocumentWakeSerialForTesting(), testing::Eq(wakeBefore + 1));
+}
+
+TEST(EditorWindowTest, FailedGpuCompletionRetiresWithoutDocumentAcknowledgment) {
+  for (const bool deferred : {false, true}) {
+    SCOPED_TRACE(deferred ? "deferred" : "ordinary");
+    EditorWindow window(EditorWindowOptions{.title = "Failed document completion",
+                                            .initialWidth = 64,
+                                            .initialHeight = 64,
+                                            .visible = false});
+    ASSERT_THAT(window.valid(), testing::IsTrue());
+    ASSERT_THAT(window.geodeFramebufferDevice(), testing::NotNull());
+    std::uint64_t completed = 0;
+    window.setPresentationCompletionProbeForTesting([&] { return completed; });
+    window.setPresentationFrameIdentity(1, 11, 7, 1, true, 1.0);
+    window.requestWakeAfterPresentedDocument({7, 1, 11});
+    const std::uint64_t wakeBefore = window.presentedDocumentWakeSerialForTesting();
+    window.beginFrame();
+    window.endFrame();
+    const auto submitted = window.geodeFramebufferDevice()->runtimeDevice().lastSubmittedSerial();
+    ASSERT_THAT(submitted, testing::Gt(0u));
+    window.geodeFramebufferDevice()->markDeviceLost("failed submitted frame advanced completion");
+    completed = submitted;
+
+    if (deferred) {
+      EXPECT_THAT(window.pollDeferredPresentation(),
+                  testing::Eq(EditorWindow::PresentationProgress::Failed));
+    } else {
+      window.pollIdleGpu();
+    }
+    EXPECT_THAT(window.lastFullyPresentedDocumentFrame(), testing::Eq(std::nullopt));
+    EXPECT_THAT(window.presentedDocumentWakeSerialForTesting(), testing::Eq(wakeBefore));
+    EXPECT_THAT(window.presentationDeviceLossForTesting().observed, testing::IsTrue());
+    EXPECT_THAT(window.pollDeferredPresentation(),
+                testing::Eq(EditorWindow::PresentationProgress::Idle))
+        << "failed fences still retire; their raw serial watermark does not acknowledge pixels";
+  }
 }
 
 TEST(EditorWindowTest, PendingGpuCompletionCoalescesUiFramesAtThree) {
