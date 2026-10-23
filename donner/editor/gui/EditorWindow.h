@@ -954,7 +954,8 @@ public:
   void setTitle(std::string_view title);
 
   /// Logical window size in screen coordinates. An `offscreen` window returns the logical size of
-  /// the scale it emulates, which is the size the UI is laid out in.
+  /// the scale it emulates, which is the size the UI is laid out in. The browser uses the published
+  /// viewport dimensions shared with canvas sizing, independent of queued GLFW resize delivery.
   [[nodiscard]] Vector2i windowSize() const;
 
   /// Physical framebuffer size in pixels. Equals \ref windowSize scaled by the

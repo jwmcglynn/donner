@@ -322,6 +322,7 @@ async function waitForCompletedCamera(page: Page) {
 
 async function redrawDocument(page: Page, probe: GpuAccountingProbe, priorPresents: number) {
   const priorViewport = await readViewport(page);
+  let resizeObservation: unknown;
   await page.evaluate(() => {
     (window as ResizeTestWindow).__donnerResizeCallbackHold!.held = true;
   });
@@ -334,12 +335,17 @@ async function redrawDocument(page: Page, probe: GpuAccountingProbe, priorPresen
         ),
       { message: "the GLFW resize callbacks must actually be withheld" },
     ).toBeGreaterThan(0);
-    await expect.poll(() =>
-      page.evaluate((priorWidth) => {
-        const state = window as SelectionWindow & Record<string, any>;
+    await expect.poll(async () => {
+      resizeObservation = await page.evaluate((priorWidth) => {
+        const state = window as SelectionWindow & {
+          __donnerFrameLoopStats?: { renderedFrames: number; lastFrameAtMs: number };
+          __donnerFrameTickStats?: unknown;
+          __donnerFrameAdmissionStats?: unknown;
+        };
         const frames = state.__donnerFrameLoopStats;
         return {
-          resized: state.__donnerViewportStats?.paneWidth !== priorWidth,
+          resized: !!state.__donnerViewportStats
+            && state.__donnerViewportStats.paneWidth !== priorWidth,
           viewport: state.__donnerViewportStats,
           browser: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
           frames: { rendered: frames?.renderedFrames, lastAtMs: frames?.lastFrameAtMs },
@@ -349,10 +355,15 @@ async function redrawDocument(page: Page, probe: GpuAccountingProbe, priorPresen
           worker: state.__donnerWorkerStats,
           queue: state.__donnerPresentationQueueStats,
         };
-      }, priorViewport.paneWidth), {
+      }, priorViewport.paneWidth);
+      return resizeObservation;
+    }, {
       message: "pane layout must follow the published viewport before delayed GLFW callbacks",
       timeout: 10000,
     }).toMatchObject({ resized: true });
+  } catch (error) {
+    console.error(`resize-failure ${JSON.stringify(resizeObservation)}`);
+    throw error;
   } finally {
     await page.evaluate(() => (window as ResizeTestWindow).__donnerResizeCallbackHold!.release());
   }
