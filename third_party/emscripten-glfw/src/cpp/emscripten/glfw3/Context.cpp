@@ -71,6 +71,16 @@ namespace emscripten::glfw3 {
 
 static ErrorHandler &kErrorHandler = ErrorHandler::instance();
 
+// Optional browser-test observer; no callback data is exposed.
+void ObserveContextCallback(int iKind)
+{
+  EM_ASM({
+    if(typeof globalThis.__glfwContextCallbackObserver === 'function')
+      globalThis.__glfwContextCallbackObserver($0);
+  }, iKind);
+}
+
+
 //------------------------------------------------------------------------
 // Context::init
 //------------------------------------------------------------------------
@@ -85,6 +95,7 @@ std::unique_ptr<Context> Context::init()
 void ContextScaleChangeCallback(Context *iContext)
 {
   iContext->onScaleChange();
+  ObserveContextCallback(0);
 }
 
 //------------------------------------------------------------------------
@@ -93,6 +104,7 @@ void ContextScaleChangeCallback(Context *iContext)
 void ContextWindowResizeCallback(Context *iContext, GLFWwindow *iWindow, int iWidth, int iHeight)
 {
   iContext->onWindowResize(iWindow, iWidth, iHeight);
+  ObserveContextCallback(1);
 }
 
 #ifdef __EMSCRIPTEN_PTHREADS__
@@ -244,6 +256,7 @@ bool ContextKeyboardCallback(emscripten::glfw3::Context *iContext,
 void ContextClipboardStringCallback(Context *iContext, char const *iText, char const *iError)
 {
   iContext->onClipboard(iText, iError);
+  ObserveContextCallback(2);
 }
 
 //------------------------------------------------------------------------
@@ -252,6 +265,7 @@ void ContextClipboardStringCallback(Context *iContext, char const *iText, char c
 void ContextErrorHandler(int iErrorCode, char const *iErrorMessage)
 {
   kErrorHandler.logError(iErrorCode, iErrorMessage);
+  ObserveContextCallback(3);
 }
 
 //------------------------------------------------------------------------
