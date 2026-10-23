@@ -42,6 +42,7 @@
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 #include "donner/svg/resources/UrlLoader.h"
+#include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 namespace {
@@ -2228,6 +2229,24 @@ TEST(RendererPublicApiTest, TextPathStretchOnStraightPathsMatchesOrdinaryRotated
 
   compare("M80 24V144", "x='80' y='24' rotate='90'", "textpath-stretch-vertical");
   compare("M24 24L136 136", "x='24' y='24' rotate='45'", "textpath-stretch-diagonal");
+}
+
+TEST(RendererPublicApiTest, TextPathStretchCurvedLowercaseEProducesGlyphGeometry) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="224" height="128"
+        font-family="Public Sans" font-size="36">
+        <defs><path id="p" d="M8 72 C48 8 96 120 136 56 S192 24 216 80"/></defs>
+        <text><textPath href="#p" method="stretch">e</textPath></text>
+      </svg>)svg");
+  (void)RenderPublicDocument(document);
+  const auto text = document.querySelector("text");
+  ASSERT_TRUE(text.has_value());
+
+  const std::vector<Path> glyphs =
+      document.registry().ctx().get<TextEngine>().computedGlyphPaths(text->unsafeEntityHandle());
+
+  ASSERT_THAT(glyphs, testing::SizeIs(1));
+  EXPECT_FALSE(glyphs.front().empty());
 }
 
 TEST(RendererPublicApiTest, TextPathPairYOnlySpanMatchesUnsplitPixels) {

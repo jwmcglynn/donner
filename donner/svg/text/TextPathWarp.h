@@ -8,6 +8,7 @@
 #include <limits>
 #include <optional>
 
+#include "donner/base/BezierUtils.h"
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/text/TextTypes.h"
@@ -157,10 +158,10 @@ private:
   }
   bool lineTo(size_t index) { return appendLine(points_[index]); }
   bool quadTo(size_t index) {
-    return appendQuadratic(current_, points_[index], points_[index + 1], 0u);
+    return appendQuadraticAtExtrema(current_, points_[index], points_[index + 1]);
   }
   bool curveTo(size_t index) {
-    return appendCubic(current_, points_[index], points_[index + 1], points_[index + 2], 0u);
+    return appendCubicAtExtrema(current_, points_[index], points_[index + 1], points_[index + 2]);
   }
   bool close() {
     if (!appendLine(subpathStart_)) {
@@ -307,8 +308,7 @@ private:
       const double u = 1.0 - t;
       return start * (u * u) + control * (2.0 * u * t) + end * (t * t);
     };
-    if (monotonicQuadraticX(start, control, end) &&
-        controlResidualWithinTolerance(start, control, end) &&
+    if (controlResidualWithinTolerance(start, control, end) &&
         mappedCurveWithinTolerance(start, end, evaluate(0.25), evaluate(0.5), evaluate(0.75))) {
       return appendLine(end);
     }
@@ -329,8 +329,7 @@ private:
       return start * (u * u * u) + firstControl * (3.0 * u * u * t) +
              secondControl * (3.0 * u * t * t) + end * (t * t * t);
     };
-    if (monotonicCubicX(start, firstControl, secondControl, end) &&
-        controlResidualWithinTolerance(start, firstControl, end) &&
+    if (controlResidualWithinTolerance(start, firstControl, end) &&
         controlResidualWithinTolerance(start, secondControl, end) &&
         mappedCurveWithinTolerance(start, end, evaluate(0.25), evaluate(0.5), evaluate(0.75))) {
       return appendLine(end);
@@ -370,15 +369,39 @@ private:
            (*mappedMiddle - *emittedMiddle).length() <= tolerance_ &&
            (*mappedThreeQuarter - *emittedThreeQuarter).length() <= tolerance_;
   }
-  static bool monotonicQuadraticX(const Vector2d& start, const Vector2d& control,
-                                  const Vector2d& end) {
-    return start.x <= end.x ? control.x >= start.x && control.x <= end.x
-                            : control.x <= start.x && control.x >= end.x;
+  bool appendQuadraticAtExtrema(const Vector2d& start, const Vector2d& control,
+                                const Vector2d& end) {
+    const auto extrema = QuadraticXExtrema(start, control, end);
+    if (extrema.empty()) {
+      return appendQuadratic(start, control, end, 0u);
+    }
+    const double t = extrema.front();
+    if (!std::isfinite(t)) {
+      return false;
+    }
+    const auto [left, right] =
+        SplitQuadratic(start, control, end, std::clamp(t, 1e-12, 1.0 - 1e-12));
+    return appendQuadratic(left[0], left[1], left[2], 0u) &&
+           appendQuadratic(right[0], right[1], right[2], 0u);
   }
-  static bool monotonicCubicX(const Vector2d& start, const Vector2d& first, const Vector2d& second,
-                              const Vector2d& end) {
-    return start.x <= end.x ? first.x >= start.x && second.x >= first.x && end.x >= second.x
-                            : first.x <= start.x && second.x <= first.x && end.x <= second.x;
+  bool appendCubicAtExtrema(const Vector2d& start, const Vector2d& first, const Vector2d& second,
+                            const Vector2d& end) {
+    std::array<Vector2d, 4> remainder = {start, first, second, end};
+    double previous = 0.0;
+    for (const double root : CubicXExtrema(start, first, second, end)) {
+      if (!std::isfinite(root) || root <= previous || root >= 1.0) {
+        return false;
+      }
+      const double relative = std::clamp((root - previous) / (1.0 - previous), 1e-12, 1.0 - 1e-12);
+      const auto [left, right] =
+          SplitCubic(remainder[0], remainder[1], remainder[2], remainder[3], relative);
+      if (!appendCubic(left[0], left[1], left[2], left[3], 0u)) {
+        return false;
+      }
+      remainder = right;
+      previous = root;
+    }
+    return appendCubic(remainder[0], remainder[1], remainder[2], remainder[3], 0u);
   }
   bool controlResidualWithinTolerance(const Vector2d& start, const Vector2d& control,
                                       const Vector2d& end) const {
@@ -389,8 +412,7 @@ private:
     }
     const double ratio = (control.x - start.x) / dx;
     const double residual = control.y - (start.y + ratio * (end.y - start.y));
-    return std::isfinite(ratio) && ratio >= 0.0 && ratio <= 1.0 && std::isfinite(residual) &&
-           std::abs(residual) <= tolerance_;
+    return std::isfinite(ratio) && std::isfinite(residual) && std::abs(residual) <= tolerance_;
   }
   const StretchedTextPath& mapping_;
   const TextGlyph& glyph_;

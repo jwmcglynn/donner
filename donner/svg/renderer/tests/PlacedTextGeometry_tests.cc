@@ -252,5 +252,23 @@ TEST(PlacedTextGeometryTest, StretchCurveAcceptanceMatchesEmittedLocalChord) {
   EXPECT_GT(warped.points().size(), 2u);
 }
 
+TEST(PlacedTextGeometryTest, StretchSplitsQuadraticAtNonDyadicXExtremum) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .curveTo(Vector2d(0.0, 20.0), Vector2d(20.0, 20.0), Vector2d(20.0, 0.0))
+                         .build();
+  const Path outline = PathBuilder()
+                           .moveTo(Vector2d(0.0, -2.0))
+                           .quadTo(Vector2d(1.0, -2.0), Vector2d(0.5, -2.0))
+                           .build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 4.0;
+
+  const Path warped = WarpGlyphOutline(outline, MeasurePath(route), glyph, 0.05);
+
+  ASSERT_FALSE(warped.empty());
+  EXPECT_GT(warped.points().size(), 2u);
+}
+
 }  // namespace
 }  // namespace donner::svg
