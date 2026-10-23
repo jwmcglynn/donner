@@ -4588,6 +4588,18 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
 
 
+    def test_raw_console_tail_policy_rejects_alternate_report_writers(self):
+        for path in _workflows(self.supply_chain_files):
+            with self.subTest(path=path):
+                alternate = "\n      - name: Rewrite diagnostics report before upload\n" \
+                            "        run: python3 tools/ci_diagnostics_report.py diagnostics " \
+                            "--include-console-tails > report.md\n"
+                case = type(self)("test_public_diagnostics_do_not_enable_raw_console_tails")
+                case.supply_chain_files = {**self.supply_chain_files,
+                                          path: self.supply_chain_files[path] + alternate}
+                with self.assertRaises(AssertionError, msg=path):
+                    case.test_public_diagnostics_do_not_enable_raw_console_tails()
+
     def test_secret_consumers_are_reviewed_at_each_step(self):
         files = self.supply_chain_files
         path = ".github/workflows/badges.yaml"
