@@ -1725,3 +1725,14 @@ test("production worker boundary predicates reject missing and unsafe identities
   assert.equal(Boolean(workerFramePredicates.WorkerFrameEligible(false, true, 2, 1)), false);
   assert.equal(Boolean(workerFramePredicates.WorkerFrameIdentityMatches(1, 2, 3, 1, 2, 4)), false);
 });
+
+
+test("production completion-time predicate preserves finite nonnegative timestamps", () => {
+  const valid = workerFramePredicates.WorkerFrameCompletionTimeValid;
+  for (const [completedAt, expected] of [
+    [0, true], [-0, true], [10, true], [-1, false],
+    [Number.NaN, false], [Number.POSITIVE_INFINITY, false], [undefined, false],
+  ]) {
+    assert.equal(Boolean(valid(completedAt)), expected);
+  }
+});
