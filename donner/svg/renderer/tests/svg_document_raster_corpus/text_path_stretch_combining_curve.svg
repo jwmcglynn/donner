@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="128" viewBox="0 0 256 128">
+  <path id="curve" d="M8 72 C48 8 96 120 136 56 S216 24 248 80"/>
+  <text font-family="Noto Sans" font-size="28">
+    <textPath href="#curve" method="stretch">q&#x301;Curved stretch</textPath>
+  </text>
+</svg>
