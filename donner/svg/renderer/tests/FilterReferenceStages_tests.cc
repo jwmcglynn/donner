@@ -106,8 +106,9 @@ TEST(FilterReferenceStages, LaterFloodCanPaintAfterEmptyStage) {
 TEST(FilterReferenceStages, InvalidReferenceDisablesEntireChain) {
   constexpr std::string_view kExpected =
       R"svg(<rect x="12" y="12" width="20" height="20" fill="red"/>)svg";
-  for (const std::string_view filters : {"url(#missing)", "brightness(0) url(#missing)",
-                                         "url(#wrong) opacity(0)", "brightness(0) url(#foreign)"}) {
+  for (const std::string_view filters :
+       {"url(#missing)", "brightness(0) url(#missing)", "url(#wrong) opacity(0)",
+        "brightness(0) url(#foreign)", "opacity(0.25) url(#missing) invert(1)"}) {
     SCOPED_TRACE(filters);
     ExpectStageImage(
         RenderStageChain(
@@ -115,6 +116,15 @@ TEST(FilterReferenceStages, InvalidReferenceDisablesEntireChain) {
             filters),
         kExpected, "invalid_reference_disables_chain");
   }
+}
+
+TEST(FilterReferenceStages, InvalidReferenceLeavesGroupChildrenVisible) {
+  const auto actual = RenderStageScene(R"svg(
+      <g filter="opacity(0.25) url(#missing) invert(1)">
+        <rect x="12" y="12" width="20" height="20" fill="blue"/>
+      </g>)svg");
+  ExpectStageImage(actual, R"svg(<rect x="12" y="12" width="20" height="20" fill="blue"/>)svg",
+                   "invalid_reference_group_visible");
 }
 
 TEST(FilterReferenceStages, AggregateNodeLimitSuppressesEntireGroup) {

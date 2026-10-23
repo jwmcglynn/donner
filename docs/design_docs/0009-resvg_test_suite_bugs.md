@@ -31,6 +31,22 @@ the test name there to find it inline.
 > direction) were superseded upstream and retired — the surviving marker
 > override is `orient=auto-on-M-C-C-4`.
 
+## Invalid filter URL reference qualifications
+
+Filter Effects 1 specifies that a missing or non-filter URL disables the complete filter chain,
+leaving the object unfiltered ([published definition](https://www.w3.org/TR/filter-effects-1/#FilterProperty),
+[editor's draft](https://drafts.csswg.org/filter-effects-1/#FilterProperty)).
+Two historical PNGs encode different behavior:
+
+- `filters/filter/invalid-FuncIRI.svg`: the PNG makes the referenced rectangle transparent.
+- `filters/filter-functions/one-invalid-url-in-list.svg`: the PNG retains the surrounding
+  grayscale and opacity functions; its center is RGBA `(80,126,100,127)`.
+
+Both files remain render-only against those PNGs. Independently authored pixel tests in
+`FilterReferenceStages_tests.cc` require unchanged visible leaf and group geometry for missing
+and non-filter references, including functions on both sides of a bad URL. No replacement golden
+or enlarged tolerance is used. Empty valid filters are covered separately and remain transparent.
+
 ## Active overrides (37)
 
 ### resvg golden is wrong per spec

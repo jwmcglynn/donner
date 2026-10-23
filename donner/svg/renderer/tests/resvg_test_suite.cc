@@ -449,6 +449,9 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/filter",
             {
+                {"invalid-FuncIRI.svg",
+                 Params::RenderOnly("Reference: PNG hides an invalid URL; Filter Effects ignores "
+                                    "the chain, covered by independent visible-geometry tests")},
                 // Pixelmatch 2.0 checkerboard exposes pre-existing filter-region
                 // compositing alpha deltas vs resvg that white-blending masked. Each
                 // threshold is the measured minimal passing hundredth at the
@@ -522,6 +525,10 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/filter-functions",
             {
+                {"one-invalid-url-in-list.svg",
+                 Params::RenderOnly(
+                     "Reference: PNG applies functions around a missing URL; "
+                     "Filter Effects ignores the entire chain, independently tested")},
                 {"color-adjust-functions-0percent.svg",
                  Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
                 {"color-adjust-functions-100percent.svg",
