@@ -2905,6 +2905,24 @@ TEST(RendererPublicApiTest, CoveredPixelsOfAnEmptySnapshotFails) {
   EXPECT_NONFATAL_FAILURE(CoveredPixels(RendererBitmap{}, 0, 0, 1, 1), "empty 0x0 snapshot");
 }
 
+TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyphGeometry) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160"
+        font-family="Public Sans" font-size="44">
+        <defs><path id="p" d="M12 96 C72 8 136 152 196 64 S272 24 308 104"/></defs>
+        <text><textPath href="#p" method="stretch">Curve</textPath></text>
+      </svg>)svg");
+  const RendererBitmap bitmap = RenderPublicDocument(document);
+  EXPECT_THAT(CoveredPixels(bitmap, 0, 0, 320, 160), Gt(0u));
+
+  const auto text = document.querySelector("text");
+  ASSERT_TRUE(text.has_value());
+  const std::vector<Path> glyphs =
+      document.registry().ctx().get<TextEngine>().computedGlyphPaths(text->unsafeEntityHandle());
+  ASSERT_THAT(glyphs, testing::SizeIs(5));
+  EXPECT_THAT(glyphs, testing::Each(testing::Property(&Path::empty, false)));
+}
+
 /// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,
 /// then a sentinel glyph alone in the bottom-right corner.
 std::string ManyDistinctGlyphsDocument() {
