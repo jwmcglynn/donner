@@ -219,6 +219,7 @@ bool BrowserEyedropperControlEnabledForTesting() {
 }
 
 struct EyedropperSelectedTestFields {
+  std::string id;
   std::string style;
   std::string text;
 };
@@ -226,6 +227,7 @@ struct EyedropperSelectedTestFields {
 EyedropperSelectedTestFields ReadEyedropperSelectedTestFields(const svg::SVGElement& selected) {
   EyedropperSelectedTestFields fields;
   selected.withReadAccess([&](svg::DocumentReadAccess&, EntityHandle) {
+    fields.id = std::string(std::string_view(selected.id()).substr(0, kEyedropperTestFieldMaxBytes));
     if (const std::optional<RcString> style = selected.getAttribute("style")) {
       fields.style = std::string(std::string_view(*style).substr(0, kEyedropperTestFieldMaxBytes));
     }
@@ -255,7 +257,7 @@ void PublishEyedropperTestState(std::string_view activeFill, std::string_view ac
                                 std::size_t sourceBufferByteLength,
                                 std::size_t sourceSelectionByteLength,
                                 std::size_t sourceDiagnosticCount, bool textSyncWakePending,
-                                double documentGeneration) {
+                                double documentGeneration, std::string_view selectedId) {
   // Published every frame, so the post must not wait for the main thread: the main thread may
   // itself be waiting on this canvas-owning pthread (a canvas snapshot). The strings are
   // malloc-allocated copies that the main thread frees after reading.
@@ -268,6 +270,7 @@ void PublishEyedropperTestState(std::string_view activeFill, std::string_view ac
   char* stroke = copy(activeStroke);
   char* style = copy(selectedStyle);
   char* text = copy(selectedText);
+  char* id = copy(selectedId);
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -286,18 +289,20 @@ void PublishEyedropperTestState(std::string_view activeFill, std::string_view ac
             'sourceDiagnosticCount' : Number($10),
             'textSyncWakePending' : !!$11,
             'documentGeneration' : Number($12),
+            'selectedId' : UTF8ToString($13),
           });
         } finally {
           _free($0);
           _free($1);
           _free($2);
           _free($3);
+          _free($13);
         }
       },
       fill, stroke, style, text, strokeActive,
       sourcePaneFocused, sourceSelectionActive, undoEntryCount,
       sourceBufferByteLength, sourceSelectionByteLength, sourceDiagnosticCount,
-      textSyncWakePending, documentGeneration);
+      textSyncWakePending, documentGeneration, id);
   // clang-format on
 }
 
@@ -4271,7 +4276,8 @@ void EditorShell::publishEyedropperTestStateIfEnabled() {
       textEditor_.textByteLength(), textEditor_.selectionByteLength(),
       textEditor_.sourceDiagnostics().size(),
       documentSyncController_.nextTextSyncWakeSeconds().has_value(),
-      app_.hasDocument() ? static_cast<double>(app_.document().documentGeneration()) : 0.0);
+      app_.hasDocument() ? static_cast<double>(app_.document().documentGeneration()) : 0.0,
+      selectedFields.id);
 }
 #endif
 
