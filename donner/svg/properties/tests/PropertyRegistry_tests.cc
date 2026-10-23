@@ -1961,6 +1961,28 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
   }
 }
 
+TEST(PropertyRegistry, CircleClipStyleAndPresentationGrammarStayDistinct) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:url(#clip);clip-path:circle(4)");
+  EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  EXPECT_EQ(registry.parsePresentationAttribute("clip-path", "circle(4)"), std::nullopt);
+  CircleClipPath expected;
+  expected.radiusType = CircleClipPath::Radius::Length;
+  expected.radius = Lengthd(4);
+  EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(expected)));
+}
+
+TEST(PropertyRegistry, InvalidClipDeclarationsPreserveTheEarlierValue) {
+  for (const std::string_view invalid :
+       {"none garbage", "url(#other) garbage", "circle(4px at)", "circle(-1px)",
+        "circle(2px at left right)", "circle(2px) fill-box stroke-box"}) {
+    SCOPED_TRACE(invalid);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(invalid));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
 TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
