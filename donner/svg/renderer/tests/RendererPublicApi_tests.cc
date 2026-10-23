@@ -2209,25 +2209,25 @@ TEST(RendererPublicApiTest, TextPathPairSplitMatchesUnsplitPixels) {
 }
 
 TEST(RendererPublicApiTest, TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText) {
-  const auto compare = [](std::string_view route, std::string_view transform,
+  const auto compare = [](std::string_view route, std::string_view ordinaryAttributes,
                           std::string_view label) {
     SVGDocument stretched = ParseDocument(
         "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' "
         "font-family='Public Sans' font-size='48'><defs><path id='p' d='" +
         std::string(route) +
-        "'/></defs><text><textPath href='#p' method='stretch'>A</textPath>"
+        "'/></defs><text><textPath href='#p' method='stretch'>I</textPath>"
         "</text></svg>");
     SVGDocument ordinary = ParseDocument(
         "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' "
-        "font-family='Public Sans' font-size='48'><text transform='" +
-        std::string(transform) + "'>A</text></svg>");
+        "font-family='Public Sans' font-size='48'><text " +
+        std::string(ordinaryAttributes) + ">I</text></svg>");
     editor::tests::CompareBitmapToBitmap(
         RenderPublicDocument(stretched), RenderPublicDocument(ordinary), label,
-        editor::tests::ApprovedPixelToleranceParams(0.02f, 0, false));
+        editor::tests::PixelmatchIdentityParams());
   };
 
-  compare("M64 16V144", "translate(64 16) rotate(90)", "textpath-stretch-vertical");
-  compare("M24 24L136 136", "translate(24 24) rotate(45)", "textpath-stretch-diagonal");
+  compare("M80 24V144", "x='80' y='24' rotate='90'", "textpath-stretch-vertical");
+  compare("M24 24L136 136", "x='24' y='24' rotate='45'", "textpath-stretch-diagonal");
 }
 
 TEST(RendererPublicApiTest, TextPathPairYOnlySpanMatchesUnsplitPixels) {
