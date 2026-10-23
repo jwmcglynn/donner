@@ -24,12 +24,17 @@ public:
   explicit StaticResourceLoader(std::vector<uint8_t> data) : data_(std::move(data)) {}
 
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
-      std::string_view /*url*/) override {
+      std::string_view url) override {
+    requests_.emplace_back(url);
     return data_;
   }
 
+  /// Returns the exact identifiers supplied to the application callback.
+  std::vector<std::string> requests() const { return requests_; }
+
 private:
   std::vector<uint8_t> data_;
+  std::vector<std::string> requests_;
 };
 
 std::vector<uint8_t> PngHeaderWithDimensions(int width, int height) {
@@ -368,6 +373,51 @@ TEST(ImageLoader, LoadsPngWithAncillaryChunkAndSplitIdat) {
   EXPECT_EQ(image.width, 1);
   EXPECT_EQ(image.height, 1);
   EXPECT_EQ(image.data.size(), 4u);
+}
+
+TEST(ImageLoader, HttpsRasterUsesCallerBytesAndHonorsResourcePolicy) {
+  const std::vector<uint8_t> png = {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+      0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00,
+      0x00, 0xB5, 0x1C, 0x0C, 0x02, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78,
+      0xDA, 0x63, 0xFC, 0xFF, 0x1F, 0x00, 0x03, 0x03, 0x02, 0x00, 0xEF, 0xBF, 0xA7, 0xDB,
+      0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+  };
+  constexpr std::string_view url = "https://example.invalid/pixel.png";
+  StaticResourceLoader supplied(png);
+  ImageLoader accepted(supplied);
+  const auto result = accepted.fromUri(url);
+  const auto* image = std::get_if<ImageResource>(&result);
+  ASSERT_THAT(image, testing::NotNull());
+  EXPECT_EQ(image->width, 1);
+  EXPECT_EQ(image->height, 1);
+  EXPECT_THAT(image->data, testing::SizeIs(4));
+  EXPECT_THAT(supplied.requests(), testing::ElementsAre(url));
+
+  ImageLoader bounded(supplied, png.size() - 1);
+  ExpectImageLoaderError(bounded.fromUri(url), UrlLoaderError::ResourceTooLarge);
+  NullResourceLoader denied;
+  ImageLoader blocked(denied);
+  ExpectImageLoaderError(blocked.fromUri(url), UrlLoaderError::NotFound);
+}
+
+TEST(ImageLoader, HttpsSvgUsesCallerBytesAndHonorsResourcePolicy) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>)svg";
+  const std::vector<uint8_t> bytes(source.begin(), source.end());
+  constexpr std::string_view url = "https://example.invalid/image.svg";
+  StaticResourceLoader supplied(bytes);
+  ImageLoader accepted(supplied);
+  const auto result = accepted.fromUri(url);
+  EXPECT_THAT(result, testing::VariantWith<SvgImageContent>(testing::Field(
+                          &SvgImageContent::data, testing::ElementsAreArray(bytes))));
+  EXPECT_THAT(supplied.requests(), testing::ElementsAre(url));
+
+  ImageLoader bounded(supplied, bytes.size() - 1);
+  ExpectImageLoaderError(bounded.fromUri(url), UrlLoaderError::ResourceTooLarge);
+  NullResourceLoader denied;
+  ImageLoader blocked(denied);
+  ExpectImageLoaderError(blocked.fromUri(url), UrlLoaderError::NotFound);
 }
 
 TEST(ImageLoader, ReturnsUrlLoaderErrors) {
