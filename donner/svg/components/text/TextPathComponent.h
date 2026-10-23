@@ -13,8 +13,7 @@ namespace donner::svg::components {
 /// Method for placing glyphs along a path in \ref xml_textPath.
 enum class TextPathMethod {
   Align,    ///< Each glyph is rigidly rotated and translated onto the path tangent.
-  Stretch,  ///< Glyph outlines are warped along the path. Donner places these glyphs with
-            ///< \ref TextPathMethod::Align, since outline warping is not implemented.
+  Stretch,  ///< Each glyph is stretched and rotated to span its path chord.
 };
 
 /// Ostream output operator for \ref TextPathMethod.

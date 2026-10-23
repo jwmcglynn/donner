@@ -228,6 +228,7 @@ void resolveTextPath(Registry& registry, Entity textPathEntity, const TextPathCo
   // path backwards: glyphs face the opposite way and `startOffset` counts from what was the end.
   span.pathSpline =
       textPath.side == TextPathSide::Right ? geometry->reversed() : std::move(*geometry);
+  span.textPathMethod = textPath.method;
   applyStartOffset(registry, textPathEntity, textPath, span);
 }
 

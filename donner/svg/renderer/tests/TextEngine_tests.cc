@@ -1272,6 +1272,42 @@ TEST(TextEngineTest, TextPathSpacingPreservesFullShapingCombiningMarkCluster) {
           GlyphXPositionIs(DoubleNear(clusterAdvance + shaped.glyphs[2].xOffset + 40.0, 1e-6))))));
 }
 
+TEST(TextEngineTest, TextPathStretchFollowsEachGlyphChord) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .curveTo(Vector2d(0.0, 100.0), Vector2d(100.0, 100.0), Vector2d(100.0, 0.0))
+                        .build();
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB");
+  span.pathSpline = path;
+  span.textPathMethod = components::TextPathMethod::Stretch;
+  text.spans.push_back(std::move(span));
+
+  TextEngine engine(fontManager, registry);
+  const auto runs = engine.layout(text, MakeTextParams(24.0));
+
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(2));
+  const Path::MeasuredPath measured = path.measure();
+  double distance = 0.0;
+  for (const TextGlyph& glyph : runs[0].glyphs) {
+    const auto start = measured.pointAtArcLength(distance);
+    const auto end = measured.pointAtArcLength(distance + glyph.xAdvance);
+    ASSERT_TRUE(start.valid);
+    ASSERT_TRUE(end.valid);
+    const Vector2d chord = end.point - start.point;
+    EXPECT_THAT(Vector2d(glyph.xPosition, glyph.yPosition),
+                Vector2Near(start.point.x, start.point.y));
+    EXPECT_NEAR(glyph.rotateDegrees,
+                std::atan2(chord.y, chord.x) * MathConstants<double>::kRadToDeg, 1e-6);
+    EXPECT_NEAR(glyph.stretchScaleX, chord.length() / glyph.xAdvance, 1e-6);
+    distance += glyph.xAdvance;
+  }
+  EXPECT_NE(runs[0].glyphs[0].rotateDegrees, runs[0].glyphs[1].rotateDegrees);
+}
+
 TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
   Registry registry;
   FontManager fontManager(registry);
