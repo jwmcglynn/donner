@@ -57,6 +57,28 @@ MATCHER_P(DoesNotOverlap, other, "shares no area with " + ::testing::PrintToStri
   return !overlaps;
 }
 
+constexpr std::array<Vector2d, 4> kExclusionProbePoints = {Vector2d(5, 5), Vector2d(25, 25),
+                                                           Vector2d(15, 15), Vector2d(35, 35)};
+
+struct ExclusionGeometryProbe {
+  Path geometry;
+  std::array<bool, 4> inside;
+};
+
+void PrintTo(const ExclusionGeometryProbe& probe, std::ostream* os) {
+  *os << "geometry: " << probe.geometry << "; classifications: {";
+  for (std::size_t i = 0; i < probe.inside.size(); ++i) {
+    *os << (i == 0 ? "" : ", ") << kExclusionProbePoints[i] << ": "
+        << (probe.inside[i] ? "inside" : "outside");
+  }
+  *os << "}";
+}
+
+MATCHER(ExcludesOverlappingRectangles,
+        "classifies (5, 5) and (25, 25) inside; (15, 15) and (35, 35) outside") {
+  return arg.inside == std::array<bool, 4>{true, true, false, false};
+}
+
 /// Screen-space bounds of the open popup drawn in the last frame, if any.
 std::optional<Box2d> OpenPopupWindowRect() {
   for (const ImGuiPopupData& popup : ImGui::GetCurrentContext()->OpenPopupStack) {
@@ -4295,10 +4317,11 @@ TEST_F(SidebarPresenterImGuiTest, ExcludeButtonMutatesOnlyWithLiveAccessAndKeeps
   const auto geometry =
       app.selectedElements().front().cast<svg::SVGGeometryElement>().computedSpline();
   ASSERT_TRUE(geometry.has_value());
-  EXPECT_TRUE(geometry->isInside(Vector2d(5, 5)));
-  EXPECT_TRUE(geometry->isInside(Vector2d(25, 25)));
-  EXPECT_FALSE(geometry->isInside(Vector2d(15, 15)));
-  EXPECT_FALSE(geometry->isInside(Vector2d(35, 35)));
+  ExclusionGeometryProbe probe{*geometry, {}};
+  for (std::size_t i = 0; i < kExclusionProbePoints.size(); ++i) {
+    probe.inside[i] = geometry->isInside(kExclusionProbePoints[i]);
+  }
+  EXPECT_THAT(probe, ExcludesOverlappingRectangles());
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
   app.undo();
   app.flushFrame();
