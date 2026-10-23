@@ -1361,7 +1361,7 @@ TEST(TextEngineTest, TextPathMeasurementWorkIsCumulativeAfterReleasedAlignPaths)
   EXPECT_EQ(admitted, 2u);
   EXPECT_EQ(family->securityStats().textPathMeasurementWorkUnits, 4u);
   EXPECT_EQ(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::Geometry), 0u);
-  EXPECT_TRUE(family->securityStats().rejected);
+  EXPECT_TRUE(family->securityStats().textPathMeasurementWorkRejected);
 }
 
 TEST(TextEngineTest, TextPathStretchKeepsCombiningMarkInBaseClusterFrame) {

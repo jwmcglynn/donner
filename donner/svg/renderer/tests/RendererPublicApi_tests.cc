@@ -2978,6 +2978,32 @@ TEST(RendererPublicApiTest, TextPathStretchAcrossSharpCornerMatchesCachedOutline
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, TextPathMeasurementWorkResetsAcrossTopLevelFrames) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"
+        font-family="Public Sans" font-size="24">
+        <defs><path id="p" d="M8 40 H120"/></defs>
+        <text><textPath href="#p" method="stretch">A</textPath></text>
+      </svg>)svg");
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.textPathMeasurementWorkUnits = 2;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  auto& context = document.registry().ctx().get<components::DocumentResourceFamilyContext>();
+  context.budget = family;
+
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap first = renderer.takeSnapshot();
+  renderer.draw(document);
+  const RendererBitmap second = renderer.takeSnapshot();
+
+  editor::tests::CompareBitmapToBitmap(first, second, "textpath-measurement-frame-epoch",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_FALSE(family->securityStats().textPathMeasurementWorkRejected);
+  EXPECT_LE(family->securityStats().textPathMeasurementWorkUnits,
+            limits.textPathMeasurementWorkUnits);
+}
+
 /// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,
 /// then a sentinel glyph alone in the bottom-right corner.
 std::string ManyDistinctGlyphsDocument() {

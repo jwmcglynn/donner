@@ -214,6 +214,23 @@ TEST(PlacedTextGeometryTest, StretchDoesNotWrapOpenGeometricReturnAsClosedSeam) 
   EXPECT_THAT(outgoing.angle, DoubleNear(incoming.angle, 1e-9));
 }
 
+TEST(PlacedTextGeometryTest, StretchSkipsBoundedConnectedZeroLengthSegmentsAtCorner) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 10.0))
+                         .build();
+  const Path edge = PathBuilder().moveTo(Vector2d(5.0, -2.0)).lineTo(Vector2d(10.0, -2.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 5.0;
+
+  const Path warped = WarpGlyphOutline(edge, MeasurePath(route), glyph, 0.05);
+
+  ASSERT_FALSE(warped.empty());
+  EXPECT_THAT(warped.points(), Contains(Vector2Near(12.0, 0.0)));
+}
+
 TEST(PlacedTextGeometryTest, StretchSplitsRepeatedWaveAtMeasuredSegmentBoundaries) {
   PathBuilder routeBuilder;
   routeBuilder.moveTo(Vector2d(0.0, 0.0));

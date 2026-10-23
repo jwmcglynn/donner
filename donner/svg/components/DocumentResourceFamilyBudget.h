@@ -57,6 +57,8 @@ public:
     bool rejected = false;
     /// Cumulative admitted text-path measurement work that was actually consumed.
     std::size_t textPathMeasurementWorkUnits = 0;
+    /// Whether text-path measurement work was refused in the current epoch.
+    bool textPathMeasurementWorkRejected = false;
   };
 
   DocumentResourceFamilyBudget() = default;
@@ -115,11 +117,11 @@ public:
 
   /// Preflight text-path measurement work before it can allocate adaptive samples.
   bool reserveTextPathMeasurementWork(std::size_t units) {
-    if (stats_.rejected ||
+    if (stats_.textPathMeasurementWorkRejected ||
         stats_.textPathMeasurementWorkUnits > limits_.textPathMeasurementWorkUnits ||
         units > limits_.textPathMeasurementWorkUnits - stats_.textPathMeasurementWorkUnits) {
       ++stats_.rejectedReservations;
-      stats_.rejected = true;
+      stats_.textPathMeasurementWorkRejected = true;
       return false;
     }
     stats_.textPathMeasurementWorkUnits += units;
@@ -128,11 +130,26 @@ public:
 
   /// Remaining cumulative text-path measurement work before fail-closed rejection.
   std::size_t availableTextPathMeasurementWork() const {
-    if (stats_.rejected ||
+    if (stats_.textPathMeasurementWorkRejected ||
         stats_.textPathMeasurementWorkUnits > limits_.textPathMeasurementWorkUnits) {
       return 0;
     }
     return limits_.textPathMeasurementWorkUnits - stats_.textPathMeasurementWorkUnits;
+  }
+
+  /// Begin a nestable render/preparation epoch for cumulative text-path measurement work.
+  void beginTextPathMeasurementWorkEpoch() {
+    if (textPathMeasurementWorkEpochDepth_++ == 0u) {
+      stats_.textPathMeasurementWorkUnits = 0u;
+      stats_.textPathMeasurementWorkRejected = false;
+    }
+  }
+
+  /// End a text-path measurement epoch begun by beginTextPathMeasurementWorkEpoch().
+  void endTextPathMeasurementWorkEpoch() {
+    if (textPathMeasurementWorkEpochDepth_ > 0u) {
+      --textPathMeasurementWorkEpochDepth_;
+    }
   }
 
   /// Refund preflight work that the measurement did not consume.
@@ -194,6 +211,7 @@ private:
 
   Limits limits_;
   SecurityStats stats_;
+  std::size_t textPathMeasurementWorkEpochDepth_ = 0;
 };
 
 /// Shared budget handle carried by a root document and its cached subdocuments.

@@ -653,12 +653,20 @@ Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance,
   }
 
   if (boundarySide == BoundarySide::Outgoing && distance == it->endLength) {
-    auto next = std::next(it);
     const Vector2d boundaryPoint = it->type == SegmentType::Line ? it->points[1] : it->points[3];
-    if (next != segments_.end() && next->connectedToPrevious && next->startLength == distance &&
-        boundaryPoint == next->points[0]) {
-      it = next;
-      distance = it->startLength;
+    auto next = std::next(it);
+    constexpr std::size_t kMaximumZeroLengthBoundaryScan = 64u;
+    for (std::size_t visited = 0; visited < kMaximumZeroLengthBoundaryScan; ++visited) {
+      if (next == segments_.end() || !next->connectedToPrevious || next->startLength != distance ||
+          boundaryPoint != next->points[0]) {
+        break;
+      }
+      if (next->endLength > next->startLength) {
+        it = next;
+        distance = it->startLength;
+        break;
+      }
+      ++next;
     }
   }
 
