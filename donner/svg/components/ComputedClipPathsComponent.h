@@ -26,9 +26,9 @@ struct ComputedClipPathsComponent {
     ClipRule clipRule = ClipRule::NonZero;
 
     /**
-     * Layer index of the clip path, to create a new clip path the layer is incremented. Paths
-     * within a layer are union'd together. When the layer decreases, the combined path of
-     * everything in the layer is differenced with the next path in the list.
+     * Nested clip paths immediately precede their referencing shape at a greater layer index.
+     * Their union intersects only that shape. The resulting sibling shapes at the same layer
+     * are unioned together.
      */
     int layer = 0;
   };

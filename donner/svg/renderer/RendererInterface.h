@@ -937,8 +937,8 @@ struct ClipPathShape {
   FillRule fillRule = FillRule::NonZero;
   /// Transform from clip path child to the clip path's coordinate system.
   Transform2d parentFromEntity;
-  /// Layer index for boolean combination: paths on the same layer are unioned, layers are
-  /// intersected.
+  /// Nested paths precede their referencing shape at a greater layer index. Their union
+  /// intersects only that shape; resulting sibling shapes at the same layer are unioned.
   int layer = 0;
 };
 

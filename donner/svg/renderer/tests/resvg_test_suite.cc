@@ -584,8 +584,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "masking/clipPath",
                 {
-                    {"clip-path-on-children.svg",
-                     Params::Skip("Bug: Nested clip-path not working")},
                     {"clip-path-with-transform-on-text.svg",
                      Params::Skip("Triage: text objectBoundingBox units resolve; 2526px transform "
                                   "alignment residual remains")},
