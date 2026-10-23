@@ -6485,6 +6485,43 @@ TEST(RendererPublicApiTest, NestedClipSiblingFlatControl) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, NestedClipSiblingIntersectionsAreUnioned) {
+  constexpr std::string_view definitions = R"svg(
+    <clipPath id="left"><rect x="2" y="4" width="6" height="8"/></clipPath>
+    <clipPath id="right"><rect x="20" y="4" width="6" height="8"/></clipPath>)svg";
+  constexpr std::string_view left =
+      R"svg(<rect width="12" height="16" clip-path="url(#left)"/>)svg";
+  constexpr std::string_view right =
+      R"svg(<rect x="16" width="16" height="16" clip-path="url(#right)"/>)svg";
+  const RendererBitmap expected =
+      RenderNestedClipSiblingFixture("", R"svg(<rect x="2" y="4" width="6" height="8"/>
+               <rect x="20" y="4" width="6" height="8"/>)svg");
+  for (bool reverse : {false, true}) {
+    SCOPED_TRACE(reverse);
+    const std::string children =
+        reverse ? std::string(right) + std::string(left) : std::string(left) + std::string(right);
+    const RendererBitmap actual = RenderNestedClipSiblingFixture(definitions, children);
+    ASSERT_THAT(actual.empty(), testing::IsFalse());
+    EXPECT_THAT(PixelAt(actual, 4, 8), ElementsAre(32, 64, 96, 255));
+    EXPECT_THAT(PixelAt(actual, 22, 8), ElementsAre(32, 64, 96, 255));
+    EXPECT_THAT(PixelAt(actual, 14, 8), IsTransparent());
+    editor::tests::CompareBitmapToBitmap(actual, expected, "nested_clip_sibling_intersections",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererPublicApiTest, NestedClipDoesNotRestrictUnclippedSibling) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="left"><rect x="2" y="4" width="6" height="8"/></clipPath>)svg",
+      R"svg(<rect width="12" height="16" clip-path="url(#left)"/>
+             <rect x="20" y="4" width="6" height="8"/>)svg");
+  const RendererBitmap expected =
+      RenderNestedClipSiblingFixture("", R"svg(<rect x="2" y="4" width="6" height="8"/>
+               <rect x="20" y="4" width="6" height="8"/>)svg");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "nested_clip_unclipped_sibling",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, NestedClipSiblingSurvivesFollowingEmptyClip) {
   const RendererBitmap actual =
       RenderNestedClipSiblingFixture(R"svg(<clipPath id="empty"/>)svg",
