@@ -18,6 +18,7 @@
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/FontMetricDependenciesComponent.h"
 #include "donner/svg/components/FontPaintDependenciesComponent.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationBaseValue.h"
@@ -3638,6 +3639,72 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
   return measured;
 }
 
+components::GeometryPreparationResourceBudget& TextGeometryBudget(Registry& registry) {
+  auto& context = registry.ctx();
+  if (!context.contains<components::GeometryPreparationResourceBudget>()) {
+    context.emplace<components::GeometryPreparationResourceBudget>();
+  }
+  return context.get<components::GeometryPreparationResourceBudget>();
+}
+
+bool ReserveStretchedCacheOutline(Registry& registry, FontManager& fontManager, Entity owner,
+                                  FontHandle font, int glyphIndex, std::size_t& retainedBytes) {
+  constexpr std::size_t kExpansion = 8u;
+  const auto complexity = fontManager.glyphOutlineComplexity(font, glyphIndex);
+  if (!complexity || complexity->maximumVertices > Path::kMaximumGeometryQueryWork / kExpansion ||
+      complexity->work > Path::kMaximumGeometryQueryWork / kExpansion) {
+    return false;
+  }
+  constexpr std::size_t kPerVertexBytes = sizeof(Vector2d) + sizeof(Path::Command);
+  const std::size_t expandedVertices = complexity->maximumVertices * kExpansion;
+  if (expandedVertices >
+      (components::GeometryPreparationResourceBudget::kMaximumBytes - retainedBytes) /
+          kPerVertexBytes) {
+    return false;
+  }
+  retainedBytes += expandedVertices * kPerVertexBytes;
+  return TextGeometryBudget(registry).reserve(owner, retainedBytes);
+}
+
+std::optional<Box2d> CachedTextRunCellBounds(const TextRun& run, double emTop, double emBottom) {
+  Box2d result;
+  bool initialized = false;
+  for (const TextGlyph& glyph : run.glyphs) {
+    Path cell = PathBuilder()
+                    .addRect(Box2d::FromXYWH(0.0, -emTop, glyph.xAdvance, emTop + emBottom))
+                    .build();
+    if (run.stretchedTextPath && glyph.textPathOrigin) {
+      cell = WarpTextPathOutline(cell, *run.stretchedTextPath, glyph);
+    } else {
+      cell = transformPath(cell, Transform2d::Translate(glyph.xPosition, glyph.yPosition));
+    }
+    if (!cell.empty()) {
+      addBox(result, initialized, cell.bounds());
+    }
+  }
+  return initialized ? std::optional(result) : std::nullopt;
+}
+
+Path PlaceCachedGlyphOutline(Path outline, const TextRun& run, const TextGlyph& glyph) {
+  if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
+    outline = transformPath(outline, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+  }
+  if (run.stretchedTextPath && glyph.textPathOrigin) {
+    const double rotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
+    if (rotation != 0.0) {
+      outline = transformPath(outline,
+                              Transform2d::Rotate(rotation * MathConstants<double>::kPi / 180.0));
+    }
+    return WarpTextPathOutline(outline, *run.stretchedTextPath, glyph);
+  }
+  Transform2d placement = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+  if (glyph.rotateDegrees != 0.0) {
+    placement =
+        Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) * placement;
+  }
+  return transformPath(outline, placement);
+}
+
 const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextGeometryComponent(
     EntityHandle handle) const {
   const Entity textRootEntity = findTextRootEntity(handle);
@@ -3675,6 +3742,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   cache.fontResourceRevision = fontManager_.fontResourceRevision();
   bool hasInkBounds = false;
   bool hasEmBoxBounds = false;
+  std::size_t stretchedCacheReservation = 0u;
 
   for (size_t runIndex = 0; runIndex < runs.size() && runIndex < styledText.spans.size();
        ++runIndex) {
@@ -3706,36 +3774,10 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       cache.characters[charBaseIndex + i].sourceEntity = span.sourceEntity;
     }
 
-    if (!run.glyphs.empty()) {
-      Box2d runEmBounds;
-      bool hasRunEmBounds = false;
-      for (const auto& glyph : run.glyphs) {
-        Box2d glyphCell;
-        if (run.stretchedTextPath && glyph.textPathOrigin) {
-          const Path localCell = PathBuilder()
-                                     .moveTo(Vector2d(0.0, -emTop))
-                                     .lineTo(Vector2d(glyph.xAdvance, -emTop))
-                                     .lineTo(Vector2d(glyph.xAdvance, emBottom))
-                                     .lineTo(Vector2d(0.0, emBottom))
-                                     .closePath()
-                                     .build();
-          const Path warpedCell = WarpTextPathOutline(localCell, *run.stretchedTextPath, glyph);
-          if (warpedCell.empty()) {
-            continue;
-          }
-          glyphCell = warpedCell.bounds();
-        } else {
-          glyphCell = Box2d::FromXYWH(glyph.xPosition, glyph.yPosition - emTop, glyph.xAdvance,
-                                      emTop + emBottom);
-        }
-        addBox(runEmBounds, hasRunEmBounds, glyphCell);
-      }
-      if (!hasRunEmBounds) {
-        continue;
-      }
-      addBox(cache.emBoxBounds, hasEmBoxBounds, runEmBounds);
+    if (const auto runEmBounds = CachedTextRunCellBounds(run, emTop, emBottom)) {
+      addBox(cache.emBoxBounds, hasEmBoxBounds, *runEmBounds);
       ++objectBoundingBoxSpanVisits_;
-      AddTextObjectBounds(cache, span.sourceEntity, runEmBounds);
+      AddTextObjectBounds(cache, span.sourceEntity, *runEmBounds);
     }
 
     const bool hasPaintedGlyphs = HasPaintedTextGlyphs(span, run);
@@ -3763,30 +3805,14 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       }
 
       const float emScale = run.font ? scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
+      if (run.stretchedTextPath &&
+          !ReserveStretchedCacheOutline(registry_, fontManager_, textRootEntity, run.font,
+                                        glyph.glyphIndex, stretchedCacheReservation)) {
+        continue;
+      }
       Path glyphPath = glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
       if (!glyphPath.empty()) {
-        if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-          glyphPath = transformPath(glyphPath,
-                                    Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
-        }
-
-        Path transformed;
-        if (run.stretchedTextPath && glyph.textPathOrigin) {
-          const double localRotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
-          if (localRotation != 0.0) {
-            glyphPath = transformPath(
-                glyphPath, Transform2d::Rotate(localRotation * MathConstants<double>::kPi / 180.0));
-          }
-          transformed = WarpTextPathOutline(glyphPath, *run.stretchedTextPath, glyph);
-        } else {
-          Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-          if (glyph.rotateDegrees != 0.0) {
-            glyphFromLocal =
-                Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
-                glyphFromLocal;
-          }
-          transformed = transformPath(glyphPath, glyphFromLocal);
-        }
+        Path transformed = PlaceCachedGlyphOutline(std::move(glyphPath), run, glyph);
         if (transformed.empty()) {
           continue;
         }

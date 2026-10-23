@@ -182,6 +182,23 @@ void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
   }
 }
 
+std::optional<Box2d> TextGlyphCellBounds(const TextRun& run, const TextGlyph& glyph, double emTop,
+                                         double emBottom) {
+  if (!run.stretchedTextPath || !glyph.textPathOrigin) {
+    return Box2d::FromXYWH(glyph.xPosition, glyph.yPosition - emTop, glyph.xAdvance,
+                           emTop + emBottom);
+  }
+  const Path localCell = PathBuilder()
+                             .moveTo(Vector2d(0.0, -emTop))
+                             .lineTo(Vector2d(glyph.xAdvance, -emTop))
+                             .lineTo(Vector2d(glyph.xAdvance, emBottom))
+                             .lineTo(Vector2d(0.0, emBottom))
+                             .closePath()
+                             .build();
+  const Path warpedCell = WarpTextPathOutline(localCell, *run.stretchedTextPath, glyph);
+  return warpedCell.empty() ? std::nullopt : std::optional(warpedCell.bounds());
+}
+
 Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs) {
   double minX = std::numeric_limits<double>::max();
   double minY = std::numeric_limits<double>::max();
@@ -209,28 +226,14 @@ Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>
       if (glyph.glyphIndex == 0) {
         continue;
       }
-      if (run.stretchedTextPath && glyph.textPathOrigin) {
-        const Path localCell = PathBuilder()
-                                   .moveTo(Vector2d(0.0, -emTop))
-                                   .lineTo(Vector2d(glyph.xAdvance, -emTop))
-                                   .lineTo(Vector2d(glyph.xAdvance, emBottom))
-                                   .lineTo(Vector2d(0.0, emBottom))
-                                   .closePath()
-                                   .build();
-        const Path warpedCell = WarpTextPathOutline(localCell, *run.stretchedTextPath, glyph);
-        if (!warpedCell.empty()) {
-          const Box2d bounds = warpedCell.bounds();
-          minX = std::min(minX, bounds.topLeft.x);
-          maxX = std::max(maxX, bounds.bottomRight.x);
-          minY = std::min(minY, bounds.topLeft.y);
-          maxY = std::max(maxY, bounds.bottomRight.y);
-        }
+      const auto bounds = TextGlyphCellBounds(run, glyph, emTop, emBottom);
+      if (!bounds) {
         continue;
       }
-      minX = std::min(minX, glyph.xPosition);
-      maxX = std::max(maxX, glyph.xPosition + glyph.xAdvance);
-      minY = std::min(minY, glyph.yPosition - emTop);
-      maxY = std::max(maxY, glyph.yPosition + emBottom);
+      minX = std::min(minX, bounds->topLeft.x);
+      maxX = std::max(maxX, bounds->bottomRight.x);
+      minY = std::min(minY, bounds->topLeft.y);
+      maxY = std::max(maxY, bounds->bottomRight.y);
     }
   }
 

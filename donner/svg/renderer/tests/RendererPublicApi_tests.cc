@@ -2221,9 +2221,9 @@ TEST(RendererPublicApiTest, TextPathStretchOnStraightPathsMatchesOrdinaryRotated
         "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' "
         "font-family='Public Sans' font-size='48'><text " +
         std::string(ordinaryAttributes) + ">I</text></svg>");
-    editor::tests::CompareBitmapToBitmap(
-        RenderPublicDocument(stretched), RenderPublicDocument(ordinary), label,
-        editor::tests::PixelmatchIdentityParams());
+    editor::tests::CompareBitmapToBitmap(RenderPublicDocument(stretched),
+                                         RenderPublicDocument(ordinary), label,
+                                         editor::tests::PixelmatchIdentityParams());
   };
 
   compare("M80 24V144", "x='80' y='24' rotate='90'", "textpath-stretch-vertical");
