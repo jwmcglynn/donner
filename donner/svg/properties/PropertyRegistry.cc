@@ -554,6 +554,16 @@ ParseResult<TextOrientation> ParseTextOrientation(std::span<const css::Component
   return err;
 }
 
+std::optional<TextOrientation> GlyphOrientationForDegrees(double value) {
+  if (value == 0.0) {
+    return TextOrientation::Upright;
+  }
+  if (value == 90.0) {
+    return TextOrientation::Sideways;
+  }
+  return std::nullopt;
+}
+
 ParseResult<TextOrientation> ParseGlyphOrientationVertical(
     std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
@@ -563,20 +573,14 @@ ParseResult<TextOrientation> ParseGlyphOrientationVertical(
       return TextOrientation::Mixed;
     }
     if (const auto* number = component.tryGetToken<css::Token::Number>()) {
-      if (number->value == 0.0) {
-        return TextOrientation::Upright;
-      }
-      if (number->value == 90.0) {
-        return TextOrientation::Sideways;
+      if (const auto orientation = GlyphOrientationForDegrees(number->value)) {
+        return *orientation;
       }
     }
     if (const auto* dimension = component.tryGetToken<css::Token::Dimension>();
         dimension && dimension->suffixString.equalsLowercase("deg")) {
-      if (dimension->value == 0.0) {
-        return TextOrientation::Upright;
-      }
-      if (dimension->value == 90.0) {
-        return TextOrientation::Sideways;
+      if (const auto orientation = GlyphOrientationForDegrees(dimension->value)) {
+        return *orientation;
       }
     }
   }
