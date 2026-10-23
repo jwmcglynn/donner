@@ -158,5 +158,38 @@ TEST(FilterReferenceStages, CpuLaterStagesPreserveOriginalFillAndStrokePaint) {
   }
 }
 
+TEST(FilterReferenceStages, ExpandedStagesPreserveNestedSurfaceCoordinates) {
+  constexpr std::string_view kDefinitions = R"svg(
+    <filter id="step" filterUnits="userSpaceOnUse" x="-20" y="-10" width="100" height="84">
+      <feOffset dx="1"/></filter>
+    <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="white"/><rect x="20" width="4" height="64"/></mask>
+    <clipPath id="c"><rect x="16" y="16" width="12" height="12"/></clipPath>
+    <pattern id="p" patternUnits="userSpaceOnUse" width="8" height="8">
+      <rect width="8" height="8" fill="red"/><rect width="4" height="4" fill="blue"/></pattern>
+  )svg";
+  for (const std::string_view attributes :
+       {"opacity='0.5'", "mask='url(#m)'", "clip-path='url(#c)'", "fill='url(#p)'"}) {
+    SCOPED_TRACE(attributes);
+    const std::string content =
+        "<g " + std::string(attributes) + "><rect x='12' y='12' width='20' height='20'/></g>";
+    const auto actual = RenderStageScene(std::string(kDefinitions) +
+                                         "<g filter='url(#step) url(#step)'>" + content + "</g>");
+    ExpectStageImage(
+        actual, std::string(kDefinitions) + "<g transform='translate(2 0)'>" + content + "</g>",
+        "expanded_nested_surface");
+  }
+}
+
+TEST(FilterReferenceStages, StagesCanMoveOffCanvasInputsIntoView) {
+  const auto actual = RenderStageScene(R"svg(
+    <filter id="move" filterUnits="userSpaceOnUse" x="-64" y="0" width="192" height="64">
+      <feOffset dx="20"/></filter>
+    <rect x="-30" y="12" width="10" height="20" fill="red" filter="url(#move) url(#move)"/>
+  )svg");
+  ExpectStageImage(actual, R"svg(<rect x="10" y="12" width="10" height="20" fill="red"/>)svg",
+                   "off_canvas_stage_input");
+}
+
 }  // namespace
 }  // namespace donner::svg
