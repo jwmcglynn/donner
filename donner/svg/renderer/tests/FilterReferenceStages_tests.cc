@@ -103,5 +103,28 @@ TEST(FilterReferenceStages, LaterFloodCanPaintAfterEmptyStage) {
                    "flood_after_empty_stage");
 }
 
+TEST(FilterReferenceStages, InvalidReferenceDisablesEntireChain) {
+  constexpr std::string_view kExpected =
+      R"svg(<rect x="12" y="12" width="20" height="20" fill="red"/>)svg";
+  for (const std::string_view filters :
+       {"url(#missing)", "brightness(0) url(#missing)", "url(#wrong) opacity(0)"}) {
+    SCOPED_TRACE(filters);
+    ExpectStageImage(RenderStageChain(R"svg(<path id="wrong" d="M0 0"/>)svg", filters), kExpected,
+                     "invalid_reference_disables_chain");
+  }
+}
+
+TEST(FilterReferenceStages, AggregateNodeLimitSuppressesEntireGroup) {
+  std::string primitives;
+  for (int i = 0; i < 17; ++i) {
+    primitives += "<feOffset/>";
+  }
+  const auto actual = RenderStageScene("<filter id='many'>" + primitives + "</filter>" +
+                                       R"svg(<g filter="url(#many) url(#many)">
+        <rect x="12" y="12" width="20" height="20" fill="red"/>
+      </g>)svg");
+  ExpectStageImage(actual, "", "aggregate_node_limit_group");
+}
+
 }  // namespace
 }  // namespace donner::svg

@@ -1825,7 +1825,7 @@ TEST_F(RendererDriverTest, PatternFilledEffectSpansPreserveOuterTextPreparation)
 }
 #endif  // DONNER_TEXT_ENABLED
 
-TEST_F(RendererDriverTest, DrawEntityRangeCopiesUrlFilterNodesIntoCssFilterGraph) {
+TEST_F(RendererDriverTest, DrawEntityRangePreservesReferencedFilterStages) {
   SVGDocument document = makeDocument(R"svg(
     <rect x="10" y="20" width="40" height="10" fill="red" />
   )svg",
@@ -1872,30 +1872,30 @@ TEST_F(RendererDriverTest, DrawEntityRangeCopiesUrlFilterNodesIntoCssFilterGraph
   EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
   EXPECT_CALL(renderer, drawPath(_, _)).Times(AtLeast(1));
   EXPECT_CALL(renderer, pushFilterLayer(_, _))
-      .WillOnce([&](const components::FilterGraph& filterGraph,
-                    const std::optional<Box2d>& filterRegion) {
-        ASSERT_TRUE(filterRegion.has_value());
-        EXPECT_NEAR(filterRegion->topLeft.x, 6.0, 1e-6);
-        EXPECT_NEAR(filterRegion->topLeft.y, 19.0, 1e-6);
-        EXPECT_NEAR(filterRegion->width(), 48.0, 1e-6);
-        EXPECT_NEAR(filterRegion->height(), 12.0, 1e-6);
-
-        ASSERT_EQ(filterGraph.nodes.size(), 2u);
-        const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(
-            &filterGraph.nodes[0].primitive);
+      .WillOnce([](const components::FilterGraph& graph, const std::optional<Box2d>& region) {
+        EXPECT_FALSE(region.has_value());
+        EXPECT_EQ(graph.colorInterpolationFilters, ColorInterpolationFilters::SRGB);
+        ASSERT_EQ(graph.nodes.size(), 1u);
+        const auto* hue =
+            std::get_if<components::filter_primitive::ColorMatrix>(&graph.nodes[0].primitive);
+        ASSERT_NE(hue, nullptr);
+        EXPECT_THAT(hue->values, testing::ElementsAre(45.0));
+      })
+      .WillOnce([](const components::FilterGraph& graph, const std::optional<Box2d>& region) {
+        ASSERT_TRUE(region.has_value());
+        EXPECT_NEAR(region->topLeft.x, 6.0, 1e-6);
+        EXPECT_NEAR(region->topLeft.y, 19.0, 1e-6);
+        EXPECT_NEAR(region->width(), 48.0, 1e-6);
+        EXPECT_NEAR(region->height(), 12.0, 1e-6);
+        EXPECT_EQ(graph.colorInterpolationFilters, ColorInterpolationFilters::LinearRGB);
+        ASSERT_EQ(graph.nodes.size(), 1u);
+        const auto* blur =
+            std::get_if<components::filter_primitive::GaussianBlur>(&graph.nodes[0].primitive);
         ASSERT_NE(blur, nullptr);
         EXPECT_DOUBLE_EQ(blur->stdDeviationX, 6.0);
         EXPECT_DOUBLE_EQ(blur->stdDeviationY, 7.0);
-        ASSERT_TRUE(filterGraph.nodes[0].colorInterpolationFilters.has_value());
-        EXPECT_EQ(filterGraph.nodes[0].colorInterpolationFilters.value(),
-                  ColorInterpolationFilters::LinearRGB);
-
-        const auto* hue =
-            std::get_if<components::filter_primitive::ColorMatrix>(&filterGraph.nodes[1].primitive);
-        ASSERT_NE(hue, nullptr);
-        EXPECT_THAT(hue->values, testing::ElementsAre(45.0));
       });
-  EXPECT_CALL(renderer, popFilterLayer()).Times(1);
+  EXPECT_CALL(renderer, popFilterLayer()).Times(2);
 
   RenderViewport viewport;
   viewport.size = Vector2d(200, 100);
