@@ -406,7 +406,7 @@ TEST_F(RendererRegressionTests, ReferenceContractObsoleteIccPaintRejectsWholeDec
 // The font presentation shorthand is a supported Donner extension.
 TEST_F(RendererRegressionTests, ReferenceContractUnitlessFontShorthandMatchesLonghands) {
   SVGDocument shorthand = instantiateSubtree(R"svg(
-    <text x="4" y="38" font="italic bold 28 Noto Sans">Ab</text>)svg",
+    <text x="4" y="38" font="bold italic 28 Noto Sans">Ab</text>)svg",
                                              {}, Vector2i(64, 64));
   SVGDocument expanded = instantiateSubtree(R"svg(
     <text x="4" y="38" font-style="italic" font-weight="bold" font-size="28"
