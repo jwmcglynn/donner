@@ -669,18 +669,15 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     PaintServersRadialGradient, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "paint-servers/radialGradient",
-                {
-                    {"fr=-1.svg", Params::RenderOnly("UB: fr=-1 (SVG 2)")},
-                    {"fr=0.5.svg", Params::RenderOnly("UB: fr=0.5 (SVG 2)")},
-                    {"fr=0.7.svg", Params::Skip("Test suite bug? fr > default value of")},
-                    {"invalid-gradientTransform.svg",
-                     Params::RenderOnly("UB: Invalid `gradientTransform`")},
-                    {"invalid-gradientUnits.svg",
-                     Params::RenderOnly("UB: Invalid `gradientUnits`")},
-                    {"negative-r.svg", Params::RenderOnly("UB: Negative `r`")},
-                })),
+    Combine(ValuesIn(getTestsInCategory("paint-servers/radialGradient",
+                                        {
+                                            {"fr=-1.svg", Params{}},
+                                            {"fr=0.5.svg", Params{}},
+                                            {"fr=0.7.svg", Params{}},
+                                            {"invalid-gradientTransform.svg", Params{}},
+                                            {"invalid-gradientUnits.svg", Params{}},
+                                            {"negative-r.svg", Params{}},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -743,9 +740,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {"icc-color.svg", Params::RenderOnly("UB: ICC color")},
                     {"pattern-on-text.svg", Params::WithThreshold(kDefaultThreshold, 2100)},
-                    {"rgb-int-int-int.svg", Params::RenderOnly("UB: rgb(int int int)")},
-                    {"valid-FuncIRI-with-a-fallback-ICC-color.svg",
-                     Params::Skip("Not impl: Fallback with icc-color")},
+                    {"rgb-int-int-int.svg", Params{}},
+                    {"valid-FuncIRI-with-a-fallback-ICC-color.svg", Params{}},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1195,7 +1191,7 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::RenderOnly("UB: FuncIRI with invalid chars")},
                     {"invalid-id-attribute-1.svg", Params::RenderOnly("UB: Invalid id attribute")},
                     {"invalid-id-attribute-2.svg", Params::RenderOnly("UB: Invalid id attribute")},
-                    {"no-size.svg", Params::Skip("Not impl: Computed bounds from content")},
+                    {"no-size.svg", Params{}},
                     {"not-UTF-8-encoding.svg",
                      Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
                                   "and update the encoding declaration")},
@@ -1364,7 +1360,7 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::Skip("Vertical hairline coverage splits 160/160 against the "
                                   "reference's 128/192, while the horizontal hairline matches; "
                                   "the text under the shorthand is pixel-exact (#1173)")},
-                    {"simple-case.svg", Params::Skip("Canvas size mismatch (400 vs 500)")},
+                    {"simple-case.svg", Params{}},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
