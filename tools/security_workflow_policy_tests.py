@@ -3224,6 +3224,22 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn('"fuzz_geode" in common_tags', rules)
         self.assertIn('ubsan_tags.append("fuzz_ubsan_geode")', rules)
 
+    def test_deterministic_soak_probe_has_an_unfiltered_uncached_pr_gate(self):
+        workflow = self.supply_chain_files[".github/workflows/main.yml"]
+        step = _named_step(_jobs(workflow)["linux"], "Test deterministic fuzzer soak wrapper")
+        self.assertNotEqual("", step, "Linux PR gate must execute the deterministic soak probe")
+        self.assertIsNone(_step_key(step, "if", 8))
+        self.assertIsNone(_step_key(step, "continue-on-error", 8))
+        self.assertEqual("bash", _step_key(step, "shell", 8))
+        scripts = _run_bodies(step)
+        self.assertEqual(1, len(scripts), step)
+        self.assertEqual([
+            "set", "-euo", "pipefail", "bazelisk", "test", "--config=ci",
+            "--config=latest_llvm", "${BUILDBUDDY_FLAGS}", "--test_output=all",
+            "--test_tag_filters=", "--nocache_test_results",
+            "--noskip_incompatible_explicit_targets", "//build_defs:soak_probe_fuzzer_soak",
+        ], shlex.split(scripts[0].replace("\\\n", " ")))
+
     def test_fuzz_soaks_are_tagged_for_pr_exclusion_with_a_hang_guard_timeout(self):
         rules = _read("build_defs/rules.bzl")
         self.assertIn('soak_tags = common_target_tags + ["fuzz_soak"]', rules)
