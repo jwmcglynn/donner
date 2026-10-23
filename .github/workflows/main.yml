@@ -705,6 +705,17 @@ jobs:
             --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $TARGETS
 
+      - name: Test deterministic fuzzer soak wrapper
+        id: deterministic_soak_probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci --config=latest_llvm \
+            --test_output=all --test_tag_filters= --nocache_test_results \
+            --noskip_incompatible_explicit_targets \
+            --build_event_json_file="$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json" \
+            //tools/ci:deterministic_fuzzer_soak
+
       - name: Test Linux WebGPU resvg reference
         id: wgpu_resvg_reference
         if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' && needs.determine-targets.outputs.wgpu_reference == 'true' }}
@@ -769,7 +780,7 @@ jobs:
         run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.local_xvfb.outcome == 'failure' || steps.hosted_parity_test.outcome == 'failure')
+        if: failure() && (steps.test.outcome == 'failure' || steps.deterministic_soak_probe.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.local_xvfb.outcome == 'failure' || steps.hosted_parity_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}

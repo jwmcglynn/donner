@@ -1031,7 +1031,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertFalse(flag.startswith(("--test_", "--config")), flag)
 
     def test_pr_test_lanes_exclude_fuzz_soaks(self):
-        """Mutation soaks run in the Fuzz workflow; PR CI keeps only the corpus replay."""
+        """PR CI selects the deterministic wrapper probe and excludes exploratory mutation."""
         ci_filter = re.search(r"(?m)^test:ci --test_tag_filters=(\S+)$", self.bazelrc)
         self.assertIsNotNone(ci_filter)
         self.assertIn("-fuzz_soak", ci_filter.group(1).split(","))
@@ -1066,8 +1066,15 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             if name not in suites:
                 continue  # Not a suite, such as a build-only canary binary.
             with self.subTest(suite=name):
-                self.assertNotRegex(suites[name], r'_soak"')
+                self._assert_pr_soak_suite_membership(name, suites[name])
             pending.extend(re.findall(r'"(?://tools/ci)?:(\w+)"', suites[name]))
+
+    def _assert_pr_soak_suite_membership(self, name, body):
+        if name == "deterministic_fuzzer_soak":
+            self.assertEqual(re.findall(r'"(//[^"\n]+)"', body),
+                             ["//build_defs:soak_probe_fuzzer_soak"])
+        else:
+            self.assertNotRegex(body, r'_soak"')
 
     def test_linux_wgpu_resvg_reference_is_selected_only_for_relevant_prs(self):
         """The manual comparison and dependency audit stay in the explicit Linux suite."""

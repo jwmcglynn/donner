@@ -38,6 +38,7 @@ _SKIPPED = {"outcome": "skipped"}
 _COMPLETE = {
     "linux": _receipt("linux", {
         "buildbuddy_verify": _ran(), "build": _SKIPPED, "test": _SKIPPED, "local_xvfb": _ran(),
+        "deterministic_soak_probe": _ran(1),
         "hosted_parity_test": _ran(1),
         "linker_canary": _ran(),
         "cmake_consumer": _ran()}),
@@ -64,6 +65,16 @@ class CoverageContractTest(unittest.TestCase):
 
     def _check(self, receipts, selection=None):
         return contract.check(self.manifest, receipts, selection or _EVERYTHING)
+
+    def test_deterministic_soak_probe_cannot_be_skipped_or_empty(self):
+        for step in (_SKIPPED, _ran(0)):
+            with self.subTest(step=step):
+                receipts = copy.deepcopy(_COMPLETE)
+                receipts["linux"]["steps"]["deterministic_soak_probe"] = step
+                problems, _ = self._check(receipts)
+                self.assertIn(
+                    "linux / Test deterministic fuzzer soak wrapper / deterministic-wrapper",
+                    "\n".join(problems))
 
     def test_checked_in_manifest_is_well_formed(self):
         self.assertEqual([], contract.manifest_problems(self.manifest))
