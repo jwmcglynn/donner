@@ -355,9 +355,8 @@ TEST_F(RendererRegressionTests, ReferenceContractRadialContainingStartCircleDoes
 TEST_F(RendererRegressionTests, ReferenceContractSingularRadialTransformDoesNotPaint) {
   const auto expected =
       RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
-  ExpectBitmapsIdentical(RenderReferenceRadial(R"(gradientTransform="matrix(0 0 0 0 0 0)") "),
-                         expected,
-                         "singular_radial_no_paint");
+  ExpectBitmapsIdentical(RenderReferenceRadial(R"svg(gradientTransform="matrix(0 0 0 0 0 0)")svg"),
+                         expected, "singular_radial_no_paint");
   ExpectBitmapsDiffer(RenderReferenceRadial(""), expected, "ordinary_radial_control");
 }
 
