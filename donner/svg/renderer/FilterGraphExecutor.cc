@@ -462,9 +462,8 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::ConvolveMatrix& pri
     const int requiredSize = primitive.orderX * primitive.orderY;
     const std::size_t coefficientCount =
         std::min(primitive.kernelMatrix.size(), static_cast<std::size_t>(requiredSize));
-    const double sum = fp::ConvolveKernelSum(
+    convolveMatrix.divisor = fp::ConvolveKernelDefaultDivisor(
         std::span<const double>(primitive.kernelMatrix).first(coefficientCount));
-    convolveMatrix.divisor = sum == 0.0 ? 1.0 : sum;
   }
   return convolveMatrix;
 }

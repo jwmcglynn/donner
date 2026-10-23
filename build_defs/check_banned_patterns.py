@@ -424,12 +424,13 @@ def _enclosing_scopes(stripped: str, match: re.Match) -> list[tuple[int, str, st
 
 
 def _method_definitions(stripped: str):
-    """Yield out-of-line methods and methods defined inside a class body."""
+    """Yield methods and explicitly typed free-function definitions."""
     for match in _METHOD_DEFINITION_RE.finditer(stripped):
         name = match.group("name")
         if name in _NON_FUNCTION_DEFINITION_NAMES:
             continue
-        if "::" not in name and not any(
+        has_return_type = bool(stripped[match.start():match.start("name")].strip())
+        if "::" not in name and not has_return_type and not any(
             kind == "class" for _, kind, _ in _enclosing_scopes(stripped, match)
         ):
             continue
@@ -491,7 +492,7 @@ def _method_complexities(stripped: str) -> Dict[str, int]:
 def _check_method_complexity(
     stripped: str, baseline_stripped: str | None = None
 ) -> List[Tuple[int, str, str]]:
-    """Flag supported out-of-line C++ method definitions with too many decision points."""
+    """Flag supported C++ definitions with too many decision points."""
     baseline = _method_complexities(baseline_stripped) if baseline_stripped is not None else {}
     errors: List[Tuple[int, str, str]] = []
     for match in _method_definitions(stripped):
@@ -659,7 +660,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument(
         "--complexity-baseline-ref",
         help=(
-            "Git ref used to suppress methods that already exceeded the complexity limit. "
+            "Git ref used to suppress definitions that already exceeded the complexity limit. "
             "Requires --check-method-complexity."
         ),
     )

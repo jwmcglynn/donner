@@ -88,6 +88,21 @@ was written for the C++ port to support SVG `<filter>` rendering in donner.
    Progress: `filter/tests/ConvolveMatrixTest.cpp` checks ConvolveMatrix bias handling on
    both the uint8 and float paths against literal SVG results (positive/negative bias,
    transparent and opaque inputs, saturation, zero bias, and preserved alpha).
+   `ConvolveMatrixTest.SubnormalDivisorAvoidsReciprocalOverflow` also verifies literal byte and
+   float identity for positive/negative subnormal divisors, including a zero color channel.
+   The normal Donner targets `//third_party:tiny_skia_convolve_native_tests` and
+   `//third_party:tiny_skia_convolve_scalar_tests` compile this colocated suite against each
+   existing SIMD-pinned filter library; all 3 tests pass in each mode.
+
+   Omitted-divisor integration now recognizes exact zero sums in the stored coefficients'
+   shortest round-trip decimal spellings (for example `0.1 0.2 -0.3`). Original lexical
+   precision is not retained after parsing. Other kernels retain the compensated binary sum,
+   including lone and cancellation-residual subnormal coefficients; explicit divisors are
+   unchanged. Focused `renderer_public_api_tests_tiny` and `renderer_public_api_tests_geode`
+   each pass all 14 convolution cases on the software, Metal, and Vulkan backends.
+   Vulkan execution loads the Khronos validation layer with synchronization validation enabled
+   and reports zero validation errors or synchronization hazards. The Wasm software-renderer
+   module also compiles and links successfully with the decimal conversion helper.
 
 ### P1 — Should Fix
 

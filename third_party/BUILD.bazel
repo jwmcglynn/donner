@@ -1,3 +1,4 @@
+load("@rules_cc//cc:defs.bzl", "cc_test")
 load("//build_defs:rules.bzl", "donner_perf_sensitive_cc_library")
 
 exports_files(
@@ -41,4 +42,26 @@ donner_perf_sensitive_cc_library(
     name = "freetype",
     visibility = ["//visibility:public"],
     deps = ["@freetype"],
+)
+
+# Compile the colocated convolution suite against the same SIMD-pinned libraries used by Donner.
+# The standalone vendored workspace names its test dependency differently.
+cc_test(
+    name = "tiny_skia_convolve_native_tests",
+    srcs = ["@tiny-skia-cpp//src/tiny_skia/filter/tests:ConvolveMatrixTest.cpp"],
+    copts = ["-ffp-contract=off"],
+    deps = [
+        "@com_google_gtest//:gtest_main",
+        "@tiny-skia-cpp//src:tiny_skia_filter_native",
+    ],
+)
+
+cc_test(
+    name = "tiny_skia_convolve_scalar_tests",
+    srcs = ["@tiny-skia-cpp//src/tiny_skia/filter/tests:ConvolveMatrixTest.cpp"],
+    copts = ["-ffp-contract=off"],
+    deps = [
+        "@com_google_gtest//:gtest_main",
+        "@tiny-skia-cpp//src:tiny_skia_filter_scalar",
+    ],
 )
