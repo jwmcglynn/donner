@@ -156,7 +156,15 @@ When creating a pull request:
 7. **No agent branding in PR titles** — do not prefix pull request titles with agent names or other tool branding. Use a plain project-style title that describes the change.
 8. **Omit `## Summary` in PR descriptions** — the first paragraph or bullet list is implicitly the
    summary, so start with the summary content directly instead of adding a redundant heading.
-9. **Expect an automated code review** within the first few minutes after the PR is opened — address feedback promptly by pushing follow-up commits. An automated approval alone is not sufficient to merge — a `jwmcglynn` review is always required.
+9. **Complete review of the current PR head before declaring merge readiness.** Wait for every
+   triggered automated code and security review to finish on the exact current head. Inspect all PR
+   comments, submitted reviews, inline threads, check annotations, and linked external or advisory
+   reports, even when CI is green. Address every actionable finding and answer and resolve its
+   thread where applicable; findings outside inline threads also require disposition. Re-read the
+   feedback immediately before merging and confirm the head, required and advisory checks, and
+   conflict state are still current. A changed head or new feedback requires renewed review.
+   Never call a PR ready or mergeable based on CI alone. A `jwmcglynn` review and explicit operator
+   merge approval remain required; automated approval does not grant merge authority.
 10. **Transient CI failures** (apt/bazel fetch/chromium rate-limits) are retried automatically. Test, compile, linker, and pixel-diff failures are never transient — investigate the root cause, don't re-run blindly.
 11. **Fix CI diagnosability gaps** — if a CI failure cannot be diagnosed because logs, test output,
     screenshots, undeclared outputs, pixel diffs, artifacts, or job summaries are missing or
