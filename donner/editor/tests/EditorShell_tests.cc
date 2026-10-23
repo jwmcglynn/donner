@@ -3073,7 +3073,8 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
       EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
 
   bool adopted = false;
-  for (int attempt = 0; attempt < 200; ++attempt) {
+  const auto adoptionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < adoptionDeadline) {
     shell.prepareFrame();
     RunShellFrame(window, shell);
     if (EditorShellTestAccess::DisplayedDocVersion(shell) ==
