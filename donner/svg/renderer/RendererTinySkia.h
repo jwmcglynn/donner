@@ -441,6 +441,8 @@ private:
   bool initializeFilterSurface(SurfaceFrame& frame, const FilterAdmission& admission);
   bool compositeTransformedFilter(SurfaceFrame& frame);
   void compositeDeviceFilter(SurfaceFrame& frame);
+  /// Forward unfiltered paint captures to containing stages before executing this stage.
+  void propagateFilterPaintInputs(const SurfaceFrame& frame);
   tiny_skia::Pixmap extractFilterViewport(const SurfaceFrame& frame, int width, int height);
   bool admitTextGlyphBatch(const std::vector<TextRun>& runs, bool stroked);
   bool admitGlyphPredecode(const FontManager& fontManager, FontHandle font, int glyphIndex,

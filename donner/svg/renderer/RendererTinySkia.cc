@@ -1602,23 +1602,18 @@ void RendererTinySkia::endFrame() {
 }
 
 void RendererTinySkia::setTransform(const Transform2d& transform) {
-  if (!surfaceStack_.empty() && surfaceStack_.back().kind == SurfaceKind::PatternTile) {
-    const Transform2d& rasterFromTile = surfaceStack_.back().patternRasterFromTile;
-    deviceFromLocalTransform_ =
-        scaleTransformOutput(transform, Vector2d(rasterFromTile.data[0], rasterFromTile.data[3]));
-  } else if (!surfaceStack_.empty() && surfaceStack_.back().kind == SurfaceKind::FilterLayer) {
-    const auto& frame = surfaceStack_.back();
-    if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
-      // Offset the transform so content at negative device coordinates renders into the
-      // expanded filter buffer. Same pattern as PatternTile's rasterFromTile adjustment.
-      deviceFromLocalTransform_ =
-          transform * Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY);
-    } else {
-      deviceFromLocalTransform_ = transform;
+  deviceFromLocalTransform_ = transform;
+  Vector2d filterOffset;
+  for (auto it = surfaceStack_.rbegin(); it != surfaceStack_.rend(); ++it) {
+    if (it->kind == SurfaceKind::PatternTile) {
+      deviceFromLocalTransform_ = scaleTransformOutput(
+          transform,
+          Vector2d(it->patternRasterFromTile.data[0], it->patternRasterFromTile.data[3]));
+      break;
     }
-  } else {
-    deviceFromLocalTransform_ = transform;
+    filterOffset += Vector2d(it->filterBufferOffsetX, it->filterBufferOffsetY);
   }
+  deviceFromLocalTransform_ = deviceFromLocalTransform_ * Transform2d::Translate(filterOffset);
 }
 
 void RendererTinySkia::pushTransform(const Transform2d& transform) {
@@ -1832,9 +1827,11 @@ std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLa
   const FilterBufferMetrics buffer = ComputeFilterBufferMetrics(
       filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
   const bool usesFillPaint =
-      graphUsesStandardInput(filterGraph, components::FilterStandardInput::FillPaint);
+      graphUsesStandardInput(filterGraph, components::FilterStandardInput::FillPaint) ||
+      (!surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value());
   const bool usesStrokePaint =
-      graphUsesStandardInput(filterGraph, components::FilterStandardInput::StrokePaint);
+      graphUsesStandardInput(filterGraph, components::FilterStandardInput::StrokePaint) ||
+      (!surfaceStack_.empty() && surfaceStack_.back().strokePaintPixmap.has_value());
   const std::uint64_t surfaceCount =
       1u + static_cast<std::uint64_t>(usesFillPaint) + static_cast<std::uint64_t>(usesStrokePaint);
   if (buffer.width <= 0 || buffer.height <= 0) {
@@ -1950,8 +1947,7 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
 
   // Apply the buffer offset to the current transform. setTransform (called by RendererDriver)
   // ran BEFORE this filter layer was pushed, so deviceFromLocalTransform_ doesn't include the
-  // offset yet. Subsequent setTransform calls will pick up the offset from surfaceStack_.back(),
-  // but we need to fix the already-set transform for the element being filtered.
+  // offset yet. Later setTransform calls accumulate offsets through the containing captures.
   const auto& pushedFrame = surfaceStack_.back();
   if (pushedFrame.filterBufferOffsetX != 0 || pushedFrame.filterBufferOffsetY != 0) {
     deviceFromLocalTransform_ =
@@ -2067,6 +2063,28 @@ void RendererTinySkia::compositeDeviceFilter(SurfaceFrame& frame) {
   tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, frame.pixmap.view(), paint,
                                  tiny_skia::Transform::identity(), mask);
 }
+void RendererTinySkia::propagateFilterPaintInputs(const SurfaceFrame& frame) {
+  if (surfaceStack_.empty()) {
+    return;
+  }
+  SurfaceFrame& parent = surfaceStack_.back();
+  const auto compositeInput = [&](const std::optional<tiny_skia::Pixmap>& source,
+                                  std::optional<tiny_skia::Pixmap>& destination) {
+    if (!source || !destination) {
+      return;
+    }
+    tiny_skia::PixmapPaint paint = makePixmapPaint(*destination, tiny_skia::FilterQuality::Nearest);
+    paint.opacity = 1.0f;
+    paint.blendMode = tiny_skia::BlendMode::SourceOver;
+    auto view = destination->mutableView();
+    const tiny_skia::Mask* mask = currentClipMask_ ? &*currentClipMask_ : nullptr;
+    tiny_skia::Painter::drawPixmap(view, -frame.filterBufferOffsetX, -frame.filterBufferOffsetY,
+                                   source->view(), paint, tiny_skia::Transform::identity(), mask);
+  };
+  compositeInput(frame.fillPaintPixmap, parent.fillPaintPixmap);
+  compositeInput(frame.strokePaintPixmap, parent.strokePaintPixmap);
+}
+
 #endif  // DONNER_FILTERS_ENABLED
 
 void RendererTinySkia::popFilterLayer() {
@@ -2097,6 +2115,8 @@ void RendererTinySkia::popFilterLayer() {
   clipRestoreStack_ = std::move(frame.savedClipRestoreStack);
   clipEpoch_ = frame.savedClipEpoch;
   clipEpochStack_ = std::move(frame.savedClipEpochStack);
+
+  propagateFilterPaintInputs(frame);
 
   if (compositeTransformedFilter(frame)) {
     filterExecutionBudget_->release(frame.filterReservation);
