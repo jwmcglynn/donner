@@ -103,6 +103,19 @@
             }
           ]
         }
+      },
+      "Test deterministic fuzzer soak wrapper": {
+        "deterministic-wrapper": {
+          "when": "always",
+          "description": "The generated libFuzzer wrapper replays its seed and completes a deterministic 1024-run mutation probe on every normal PR.",
+          "counterparts": [
+            {
+              "job": "linux",
+              "step": "deterministic_soak_probe",
+              "min_tests": 1
+            }
+          ]
+        }
       }
     },
     "macos": {
