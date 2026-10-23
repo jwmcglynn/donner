@@ -2610,9 +2610,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Finds adjacent sibling shapes that do not have their own nested reference.
-  static std::size_t clipSiblingRunBegin(const ResolvedClip& clip, std::size_t begin, int layer) {
-    while (begin > 0 && clip.clipPaths[begin - 1].layer == layer &&
-           (begin < 2 || clip.clipPaths[begin - 2].layer <= layer)) {
+  static std::size_t clipSiblingRunBegin(const ResolvedClip& clip, std::size_t begin, int layer,
+                                         std::size_t lowerBound) {
+    while (begin > lowerBound && clip.clipPaths[begin - 1].layer == layer &&
+           clip.clipPaths[begin - 1].groupPathCount == 0 &&
+           (begin - lowerBound < 2 || clip.clipPaths[begin - 2].layer <= layer)) {
       --begin;
     }
     return begin;
@@ -2622,7 +2624,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   const gpu::Texture* buildClipLayerMask(const ResolvedClip& clip, ClipStackEntry& entry,
                                          std::size_t& cursor, int layer,
                                          const gpu::Texture* ancestorMask,
-                                         const Transform2d& deviceFromLocal) {
+                                         const Transform2d& deviceFromLocal,
+                                         std::size_t lowerBound = 0) {
     const gpu::TextureDescriptor descriptor{
         RcString("RendererGeodeClipMask"), targetExtent(), gpu::TextureFormat::RGBA8Unorm,
         gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled};
@@ -2635,18 +2638,28 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     entry.maskLayerTextures.push_back({std::move(mask), descriptor});
     const gpu::Texture& destination = entry.maskLayerTextures.back().texture;
     gpu::LoadOp loadOp = gpu::LoadOp::Clear;
-    while (cursor > 0 && clip.clipPaths[cursor - 1].layer == layer) {
+    while (cursor > lowerBound && clip.clipPaths[cursor - 1].layer == layer) {
       const std::size_t end = cursor;
       std::size_t begin = --cursor;
+      if (clip.clipPaths[begin].groupPathCount != 0) {
+        const gpu::Texture* group = buildClipGroupMask(clip, entry, cursor, layer, lowerBound,
+                                                       ancestorMask, deviceFromLocal);
+        if (!unionClipMask(destination, group, loadOp)) {
+          entry.allocationRejected = true;
+          return nullptr;
+        }
+        loadOp = gpu::LoadOp::Load;
+        continue;
+      }
       const gpu::Texture* nested = ancestorMask;
-      if (cursor > 0 && clip.clipPaths[cursor - 1].layer > layer) {
+      if (cursor > lowerBound && clip.clipPaths[cursor - 1].layer > layer) {
         nested = buildClipLayerMask(clip, entry, cursor, clip.clipPaths[cursor - 1].layer,
-                                    ancestorMask, deviceFromLocal);
+                                    ancestorMask, deviceFromLocal, lowerBound);
         if (!nested) {
           return nullptr;
         }
       } else {
-        begin = clipSiblingRunBegin(clip, begin, layer);
+        begin = clipSiblingRunBegin(clip, begin, layer, lowerBound);
         cursor = begin;
       }
       if (nested) {
@@ -2663,6 +2676,59 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return &destination;
   }
 
+  /// Unions already-computed coverage into a mask without leaving GPU memory.
+  bool unionClipMask(const gpu::Texture& destination, const gpu::Texture* coverage,
+                     gpu::LoadOp loadOp) {
+    if (!coverage) {
+      return false;
+    }
+    encoder->setClipMask(*coverage, importTextureView(*coverage));
+    if (!encoder->beginMaskPass(destination, loadOp)) {
+      return false;
+    }
+    encoder->setTransform(Transform2d());
+    const gpu::Extent2d extent = targetExtent();
+    encoder->fillPathIntoMask(
+        PathBuilder().addRect(Box2d::FromXYWH(0, 0, extent.width, extent.height)).build(),
+        FillRule::NonZero);
+    encoder->endMaskPass();
+    return true;
+  }
+
+  /// Applies a clipPath-level reference to its complete counted child union.
+  const gpu::Texture* buildClipGroupMask(const ResolvedClip& clip, ClipStackEntry& entry,
+                                         std::size_t& cursor, int layer, std::size_t lowerBound,
+                                         const gpu::Texture* ancestorMask,
+                                         const Transform2d& deviceFromLocal) {
+    const std::size_t count = clip.clipPaths[cursor].groupPathCount;
+    if (count > cursor - lowerBound || clip.clipPaths[cursor - 1].layer <= layer) {
+      entry.allocationRejected = true;
+      return nullptr;
+    }
+    const std::size_t childEnd = cursor;
+    const std::size_t childBegin = cursor - count;
+    cursor = childBegin;
+    const gpu::Texture* inherited = ancestorMask;
+    if (cursor > lowerBound && clip.clipPaths[cursor - 1].layer > layer) {
+      inherited = buildClipLayerMask(clip, entry, cursor, clip.clipPaths[cursor - 1].layer,
+                                     ancestorMask, deviceFromLocal, lowerBound);
+      if (!inherited) {
+        return nullptr;
+      }
+    }
+    const std::size_t resumeCursor = cursor;
+    cursor = childEnd;
+    const gpu::Texture* result =
+        buildClipLayerMask(clip, entry, cursor, clip.clipPaths[cursor - 1].layer, inherited,
+                           deviceFromLocal, childBegin);
+    if (cursor != childBegin) {
+      entry.allocationRejected = true;
+      return nullptr;
+    }
+    cursor = resumeCursor;
+    return result;
+  }
+
   /// Builds the path mask while preserving the active ancestor clip and main-pass transform.
   void buildClipMask(const ResolvedClip& clip, ClipStackEntry& entry) {
     const Transform2d savedDeviceFromLocal = deviceFromLocalTransform;
@@ -2676,8 +2742,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::size_t cursor = clip.clipPaths.size();
     entry.maskResolveTextureHandle = buildClipLayerMask(
         clip, entry, cursor, clip.clipPaths.back().layer, ancestorMask, savedDeviceFromLocal);
-    if (entry.maskResolveTextureHandle) {
+    if (entry.maskResolveTextureHandle && cursor == 0) {
       entry.maskResolveViewHandle = &importTextureView(*entry.maskResolveTextureHandle);
+    } else {
+      entry.allocationRejected = true;
+      entry.maskResolveTextureHandle = nullptr;
     }
     encoder->clearClipMask();
     encoder->setTransform(savedDeviceFromLocal);

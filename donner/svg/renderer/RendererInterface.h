@@ -940,6 +940,8 @@ struct ClipPathShape {
   /// Nested paths precede their referencing shape at a greater layer index. Their union
   /// intersects only that shape; resulting sibling shapes at the same layer are unioned.
   int layer = 0;
+  /// Nonzero for a group marker whose geometry is the preceding counted record span.
+  std::size_t groupPathCount = 0;
 };
 
 /**

@@ -31,6 +31,9 @@ struct ComputedClipPathsComponent {
      * are unioned together.
      */
     int layer = 0;
+
+    /// Nonzero for a group marker: number of immediately preceding records forming its geometry.
+    std::size_t groupPathCount = 0;
   };
 
   /// All clip paths, in order they need to be applied based on their layer.
