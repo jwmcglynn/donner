@@ -3139,6 +3139,46 @@ TEST(RendererTinySkiaSecurityTest, NestedClipShapeMasksStopAtTheSurfaceCountCap)
   renderer.endFrame();
 }
 
+TEST(RendererPublicApiTest, MalformedOrExcessivelyNestedClipGroupsFailClosed) {
+  const Path rectangle = PathBuilder().addRect(Box2d::FromXYWH(0, 0, 2, 2)).build();
+  for (int scenario = 0; scenario < 4; ++scenario) {
+    SCOPED_TRACE(scenario);
+    auto renderer = CreateActiveRendererInstance();
+    ASSERT_THAT(renderer, testing::NotNull());
+    renderer->beginFrame(RenderViewport{.size = Vector2d(2, 2)});
+    ResolvedClip clip;
+    if (scenario == 0) {
+      clip.clipPaths.push_back({.path = rectangle, .layer = 1});
+      clip.clipPaths.push_back({.groupPathCount = std::numeric_limits<std::size_t>::max()});
+    } else if (scenario == 1) {
+      clip.clipPaths.push_back({.path = rectangle, .layer = 0});
+      clip.clipPaths.push_back({.path = rectangle, .layer = 2});
+      clip.clipPaths.push_back({.groupPathCount = 2});
+    } else if (scenario == 2) {
+      clip.clipPaths.push_back({.path = rectangle, .layer = 257});
+      for (int layer = 256; layer >= 0; --layer) {
+        clip.clipPaths.push_back({.layer = layer, .groupPathCount = clip.clipPaths.size()});
+      }
+    } else {
+      clip.clipPaths.push_back({.path = rectangle, .layer = 0});
+      clip.clipPaths.push_back({.path = rectangle, .layer = 1});
+    }
+    renderer->pushClip(clip);
+    PaintParams paint;
+    paint.fill = PaintServer::Solid{css::Color(css::RGBA(255, 0, 0, 255))};
+    renderer->setPaint(paint);
+    renderer->drawRect(Box2d::FromXYWH(0, 0, 2, 2), StrokeParams{});
+    renderer->popClip();
+    renderer->endFrame();
+    const RendererBitmap actual = NormalizeSnapshot(renderer->takeSnapshot());
+    ASSERT_THAT(actual.empty(), testing::IsFalse());
+    RendererBitmap empty = actual;
+    std::fill(empty.pixels.begin(), empty.pixels.end(), 0);
+    editor::tests::CompareBitmapToBitmap(actual, empty, "rejected_clip_group",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(RendererTinySkiaSecurityTest, RetainedClipEpochMasksHaveAFrameSurfaceEnvelope) {
   constexpr std::size_t kRetainedClipMasks = 8;
   RendererTinySkia renderer;
@@ -6507,6 +6547,43 @@ TEST(RendererPublicApiTest, NestedClipSiblingFlatControl) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, NestedClipSiblingIntersectionsAreUnioned) {
+  constexpr std::string_view definitions = R"svg(
+    <clipPath id="left"><rect x="2" y="4" width="6" height="8"/></clipPath>
+    <clipPath id="right"><rect x="20" y="4" width="6" height="8"/></clipPath>)svg";
+  constexpr std::string_view left =
+      R"svg(<rect width="12" height="16" clip-path="url(#left)"/>)svg";
+  constexpr std::string_view right =
+      R"svg(<rect x="16" width="16" height="16" clip-path="url(#right)"/>)svg";
+  const RendererBitmap expected =
+      RenderNestedClipSiblingFixture("", R"svg(<rect x="2" y="4" width="6" height="8"/>
+               <rect x="20" y="4" width="6" height="8"/>)svg");
+  for (bool reverse : {false, true}) {
+    SCOPED_TRACE(reverse);
+    const std::string children =
+        reverse ? std::string(right) + std::string(left) : std::string(left) + std::string(right);
+    const RendererBitmap actual = RenderNestedClipSiblingFixture(definitions, children);
+    ASSERT_THAT(actual.empty(), testing::IsFalse());
+    EXPECT_THAT(PixelAt(actual, 4, 8), ElementsAre(32, 64, 96, 255));
+    EXPECT_THAT(PixelAt(actual, 22, 8), ElementsAre(32, 64, 96, 255));
+    EXPECT_THAT(PixelAt(actual, 14, 8), IsTransparent());
+    editor::tests::CompareBitmapToBitmap(actual, expected, "nested_clip_sibling_intersections",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererPublicApiTest, NestedClipDoesNotRestrictUnclippedSibling) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="left"><rect x="2" y="4" width="6" height="8"/></clipPath>)svg",
+      R"svg(<rect width="12" height="16" clip-path="url(#left)"/>
+             <rect x="20" y="4" width="6" height="8"/>)svg");
+  const RendererBitmap expected =
+      RenderNestedClipSiblingFixture("", R"svg(<rect x="2" y="4" width="6" height="8"/>
+               <rect x="20" y="4" width="6" height="8"/>)svg");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "nested_clip_unclipped_sibling",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, NestedClipSiblingSurvivesFollowingEmptyClip) {
   const RendererBitmap actual =
       RenderNestedClipSiblingFixture(R"svg(<clipPath id="empty"/>)svg",
@@ -6548,6 +6625,48 @@ TEST(RendererPublicApiTest, NestedClipSiblingSurvivesOverflowingChildReference) 
   EXPECT_THAT(PixelAt(actual, 22, 8), IsTransparent());
   editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipSiblingReference(),
                                        "nested_clip_good_before_overflow",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, NestedClipSelfReferenceIntersectsAllChildren) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="left"><rect width="16" height="16"/></clipPath>)svg",
+      R"svg(<rect x="2" y="4" width="6" height="8"/>
+             <rect x="20" y="4" width="6" height="8"/>)svg",
+      R"svg(clip-path="url(#left)")svg");
+  editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipSiblingReference(),
+                                       "nested_clip_self_intersection",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, NestedClipSelfAndChildReferencesBothApply) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="left"><rect width="16" height="16"/></clipPath>
+             <clipPath id="middle"><rect y="4" width="32" height="8"/></clipPath>)svg",
+      R"svg(<rect x="2" width="6" height="16" clip-path="url(#middle)"/>
+             <rect x="20" width="6" height="16" clip-path="url(#middle)"/>)svg",
+      R"svg(clip-path="url(#left)")svg");
+  editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipSiblingReference(),
+                                       "nested_clip_self_and_child_intersections",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, NestedClipSelfReferencePreservesOuterSibling) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="left"><rect width="16" height="16"/></clipPath>
+             <clipPath id="group" clip-path="url(#left)">
+               <rect x="2" y="4" width="6" height="8"/>
+               <rect x="20" y="4" width="6" height="8"/>
+             </clipPath>
+             <clipPath id="nested" clip-path="url(#group)">
+               <rect width="16" height="16"/><rect x="16" width="16" height="16"/>
+             </clipPath>)svg",
+      R"svg(<rect width="32" height="16" clip-path="url(#nested)"/>
+             <rect x="20" y="4" width="6" height="8"/>)svg");
+  const RendererBitmap expected =
+      RenderNestedClipSiblingFixture("", R"svg(<rect x="2" y="4" width="6" height="8"/>
+               <rect x="20" y="4" width="6" height="8"/>)svg");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "nested_clip_group_outer_sibling",
                                        editor::tests::PixelmatchIdentityParams());
 }
 

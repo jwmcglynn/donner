@@ -983,11 +983,19 @@ public:
     const std::size_t pathCount = clipPaths.size();
     ClipPathCollection collection{clipPaths, std::move(guard), rootClipFromReference, layer};
     collection.valid = collectNestedClipForEntity(clipPathHandle, nullptr, collection);
+    const std::size_t childBegin = clipPaths.size();
+    const bool hasGroupClip = childBegin != pathCount;
+    if (hasGroupClip) {
+      collection.layer = layer + 1;
+    }
     donner::components::ForAllChildren(
         clipPathHandle, [&](EntityHandle child) { appendClipChildAndUse(child, collection); });
     const bool valid = collection.valid && collection.hasAnyChildren;
     if (!valid) {
       clipPaths.erase(clipPaths.begin() + pathCount, clipPaths.end());
+    } else if (hasGroupClip) {
+      clipPaths.emplace_back(Path{}, Transform2d{}, ClipRule::NonZero, layer,
+                             clipPaths.size() - childBegin);
     }
     return valid;
   }

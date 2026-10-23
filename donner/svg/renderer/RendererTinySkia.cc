@@ -1013,7 +1013,9 @@ public:
     }
     paths_ = paths;
     index_ = static_cast<std::ptrdiff_t>(paths.size()) - 1;
-    return buildLayer(paths.back().layer);
+    auto result = buildLayer(paths.back().layer, 0);
+    allocationFailed_ = allocationFailed_ || index_ != -1;
+    return allocationFailed_ ? std::nullopt : std::move(result);
   }
 
   bool allocationFailed() const { return allocationFailed_; }
@@ -1062,18 +1064,39 @@ private:
     return shapeMask;
   }
 
-  std::optional<tiny_skia::Mask> buildLayer(int layer) {
-    std::optional<tiny_skia::Mask> layerMask;
-    while (!allocationFailed_ && index_ >= 0 &&
-           paths_[static_cast<std::size_t>(index_)].layer == layer) {
-      std::optional<tiny_skia::Mask> shapeMask =
-          renderShape(paths_[static_cast<std::size_t>(index_)]);
-      --index_;
+  std::optional<tiny_skia::Mask> buildShapeMask(const ClipPathShape& shape,
+                                                std::ptrdiff_t lowerBound) {
+    if (shape.groupPathCount == 0) {
+      return renderShape(shape);
+    }
+    if (shape.groupPathCount > static_cast<std::size_t>(index_ - lowerBound + 1) ||
+        paths_[static_cast<std::size_t>(index_)].layer <= shape.layer) {
+      allocationFailed_ = true;
+      return std::nullopt;
+    }
+    const std::ptrdiff_t groupBegin =
+        index_ + 1 - static_cast<std::ptrdiff_t>(shape.groupPathCount);
+    auto result = buildLayer(paths_[static_cast<std::size_t>(index_)].layer, groupBegin);
+    allocationFailed_ = allocationFailed_ || index_ != groupBegin - 1;
+    return result;
+  }
 
-      if (shapeMask.has_value() && index_ >= 0 &&
+  std::optional<tiny_skia::Mask> buildLayer(int layer, std::ptrdiff_t lowerBound) {
+    if (depth_ >= RendererSurfaceBudget::kMaximumSurfaces) {
+      allocationFailed_ = true;
+      return std::nullopt;
+    }
+    ++depth_;
+    std::optional<tiny_skia::Mask> layerMask;
+    while (!allocationFailed_ && index_ >= lowerBound &&
+           paths_[static_cast<std::size_t>(index_)].layer == layer) {
+      const ClipPathShape& shape = paths_[static_cast<std::size_t>(index_--)];
+      std::optional<tiny_skia::Mask> shapeMask = buildShapeMask(shape, lowerBound);
+
+      if (shapeMask.has_value() && index_ >= lowerBound &&
           paths_[static_cast<std::size_t>(index_)].layer > layer) {
         std::optional<tiny_skia::Mask> nestedMask =
-            buildLayer(paths_[static_cast<std::size_t>(index_)].layer);
+            buildLayer(paths_[static_cast<std::size_t>(index_)].layer, lowerBound);
         if (nestedMask.has_value()) {
           intersectMaskInPlace(*shapeMask, *nestedMask);
         }
@@ -1088,6 +1111,7 @@ private:
         unionMaskInPlace(*layerMask, *shapeMask);
       }
     }
+    --depth_;
     return layerMask;
   }
 
@@ -1101,6 +1125,7 @@ private:
   bool allocationFailed_ = false;
   std::span<const ClipPathShape> paths_;
   std::ptrdiff_t index_ = -1;
+  std::size_t depth_ = 0;
 };
 
 #ifdef DONNER_FILTERS_ENABLED

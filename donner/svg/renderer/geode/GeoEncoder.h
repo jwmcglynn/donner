@@ -389,11 +389,13 @@ public:
    *
    * @param mask Single-sample RGBA8Unorm target with this encoder's
    *   target extent. Sampled by `setClipMask` after `endMaskPass`.
+   * @param loadOp Clear for the first pass; Load to union more shapes into an initialized mask.
    * @return Whether the mask pass opened. When it did not, the mask
    *   holds no coverage, and `fillPathIntoMask` and `endMaskPass` do
    *   nothing.
    */
-  [[nodiscard]] bool beginMaskPass(const gpu::Texture& mask);
+  [[nodiscard]] bool beginMaskPass(const gpu::Texture& mask,
+                                   gpu::LoadOp loadOp = gpu::LoadOp::Clear);
 
   /**
    * Fill `path` into the currently open mask pass using the Slug mask

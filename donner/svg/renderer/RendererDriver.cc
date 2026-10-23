@@ -969,6 +969,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
       shape.fillRule = path.clipRule == ClipRule::NonZero ? FillRule::NonZero : FillRule::EvenOdd;
       shape.parentFromEntity = path.parentFromEntity;
       shape.layer = path.layer;
+      shape.groupPathCount = path.groupPathCount;
       clip.clipPaths.push_back(shape);
     }
   }
