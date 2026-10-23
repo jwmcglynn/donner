@@ -216,24 +216,30 @@ export async function supervise(executable, args, options = {}) {
       teardownDeadline ??= Date.now() + teardownLimitMs;
     }
   };
+  const heartbeatExpired = (row) =>
+    heartbeatFile && (row.application?.phase === "active" || row.atMs > 5000)
+    && (row.heartbeatAgeMs ?? row.atMs) > heartbeatLimitMs;
+  const sampleLimitFailure = (row) => {
+    if (row.rssBytes > memoryLimit) return "memory limit exceeded";
+    if (row.atMs > deadlineMs) return "test deadline exceeded";
+    if (teardownDeadline && Date.now() > teardownDeadline) {
+      return "browser teardown deadline exceeded";
+    }
+    if (heartbeatExpired(row)) return "test heartbeat stopped";
+    return null;
+  };
   const reportSample = (row) => {
     samples.push(row);
     if (samples.length > 360) samples.shift();
-    if (row.rssBytes > memoryLimit) stop("memory limit exceeded");
-    else if (row.atMs > deadlineMs) stop("test deadline exceeded");
-    else if (teardownDeadline && Date.now() > teardownDeadline) {
-      stop("browser teardown deadline exceeded");
-    } else if (
-      heartbeatFile && (row.application?.phase === "active" || row.atMs > 5000)
-      && (row.heartbeatAgeMs ?? row.atMs) > heartbeatLimitMs
-    ) {
-      stop("test heartbeat stopped");
-    } else {
-      try {
-        writeReceipt();
-      } catch (error) {
-        stop(`watchdog reporting failed: ${error.message}`);
-      }
+    const failure = sampleLimitFailure(row);
+    if (failure) {
+      stop(failure);
+      return;
+    }
+    try {
+      writeReceipt();
+    } catch (error) {
+      stop(`watchdog reporting failed: ${error.message}`);
     }
   };
   const sample = () => {
