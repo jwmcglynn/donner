@@ -140,5 +140,23 @@ TEST(FilterReferenceStages, ExpandedCapturesPreserveLeafAndGroupCoordinates) {
   ExpectStageImage(group, kExpected, "expanded_capture_group");
 }
 
+TEST(FilterReferenceStages, CpuLaterStagesPreserveOriginalFillAndStrokePaint) {
+  for (const bool stroke : {false, true}) {
+    SCOPED_TRACE(stroke);
+    const std::string paint = stroke ? "fill='none' stroke='blue' stroke-width='4'" : "fill='red'";
+    const std::string shape = "<rect x='12' y='12' width='20' height='20' " + paint;
+    const std::string definitions =
+        "<filter id='paint' filterUnits='userSpaceOnUse' x='-20' y='-10' width='100' height='84'>"
+        "<feOffset in='" +
+        std::string(stroke ? "StrokePaint" : "FillPaint") + "'/></filter>";
+    auto actualDocument = instantiateSubtree(
+        definitions + shape + " filter='opacity(0) url(#paint)'/>", {}, Vector2i(64, 64));
+    auto expectedDocument = instantiateSubtree(shape + "/>", {}, Vector2i(64, 64));
+    ExpectBitmapsIdentical(RenderDocumentWithBackend(actualDocument, RendererBackend::TinySkia),
+                           RenderDocumentWithBackend(expectedDocument, RendererBackend::TinySkia),
+                           stroke ? "cpu_stage_stroke_paint" : "cpu_stage_fill_paint");
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
