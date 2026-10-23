@@ -481,6 +481,16 @@ TEST_F(RendererRegressionTests, CssFilterContractShadowUnitsColorsAndDefaultMatc
   }
 }
 
+TEST_F(RendererRegressionTests, CssFilterContractEmShadowUsesComputedNondefaultFontSize) {
+  SVGDocument document = instantiateSubtree(R"svg(
+    <rect x="12" y="12" width="20" height="20" fill="seagreen" font-size="64"
+          filter="drop-shadow(blue 0.1875em 0.09375em 0.046875em)"/>)svg",
+                                            {}, Vector2i(64, 64));
+  ExpectBitmapsIdentical(RenderDocumentWithBackend(document, ActiveRendererBackend()),
+                         RenderCssFilterContract("drop-shadow(blue 12px 6px 3px)"),
+                         "shadow_nondefault_font_size_units");
+}
+
 TEST_F(RendererRegressionTests, CssFilterContractShadowColorAlphaIsAppliedOnce) {
   const auto actual = RenderCssFilterContract("drop-shadow(rgba(0,0,255,0.5) 28px 0 0)", true);
   SVGDocument expectedDocument = instantiateSubtree(R"svg(

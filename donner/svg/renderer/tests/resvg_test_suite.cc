@@ -549,7 +549,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     "reference differences are label glyphs (#1167, #1169)")},
                 {"drop-shadow-function-color-last.svg",
                  Params::RenderOnly(
-                     "Fractional offset/blur sampling differs from reference; color order and "
+                     "Offset/blur sampling differs from reference; color order and "
                      "rounded-offset contracts compare independently (#1169, #1170)")},
                 {"drop-shadow-function-em-values.svg",
                  Params::RenderOnly("Resolved em lengths match px; fractional offset/blur sampling "
@@ -562,7 +562,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     "offset/blur sampling differs from reference (#1169, #1170)")},
                 {"drop-shadow-function.svg",
                  Params::RenderOnly(
-                     "Fractional offset/blur sampling differs from reference; rounded-offset and "
+                     "Offset/blur sampling differs from reference; rounded-offset and "
                      "alpha contracts compare independently (#1169, #1170)")},
                 {"two-exact-urls.svg",
                  Params::RenderOnly("Valid repeated filter URL; reference is the UB marker, with "
