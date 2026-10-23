@@ -4052,6 +4052,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return TransformPath(outline, glyphFromLocal);
   }
 
+  bool appendWarpedGlyph(std::vector<Path>& paths, const TextEngine& textEngine, const TextRun& run,
+                         const TextGlyph& glyph, float scale) {
+    Path placed = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale);
+    if (placed.empty()) {
+      return true;
+    }
+    if (!textMaterializationBudget->reservePathCopy(placed)) {
+      return false;
+    }
+    paths.push_back(std::move(placed));
+    return true;
+  }
+
   /**
    * Charges one glyph-cache miss against the frame's text budget before its outline is decoded:
    * the font's predecode bound when it reports one (an untrusted font must), and the entry the miss
@@ -7229,6 +7242,22 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
   return true;
 }
 
+namespace {
+
+struct GlyphGeometryModes {
+  bool warped;
+  bool residentFill;
+  bool placedPaths;
+};
+
+GlyphGeometryModes ResolveGlyphGeometryModes(bool solidFill, bool gradientFill, bool patternFill,
+                                             bool strokePaint, bool warped) {
+  return {warped, solidFill && !gradientFill && !patternFill && !warped,
+          gradientFill || patternFill || strokePaint || (solidFill && warped)};
+}
+
+}  // namespace
+
 void RendererGeode::drawText(Registry& registry, const components::ComputedTextComponent& text,
                              const TextParams& params) {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
@@ -7436,10 +7465,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     // placement transform. Gradient, pattern, and stroke paint still consume a
     // glyph outline placed in the element's local space, so those keep
     // building placed paths.
-    const bool warpedGlyphs = static_cast<bool>(run.stretchedTextPath);
-    const bool residentGlyphFill = hasFill && !fillIsGradient && !usePatternFill && !warpedGlyphs;
-    const bool needPlacedGlyphPaths =
-        fillIsGradient || usePatternFill || hasStrokePaint || (hasFill && warpedGlyphs);
+    const GlyphGeometryModes glyphModes =
+        ResolveGlyphGeometryModes(hasFill, fillIsGradient, usePatternFill, hasStrokePaint,
+                                  static_cast<bool>(run.stretchedTextPath));
 
     // Glyph occurrences of this run, in paint order. Parallel to
     // `runGlyphPaths` when both are populated.
@@ -7449,27 +7477,24 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     };
     std::vector<RunGlyphOccurrence> runGlyphOccurrences;
     std::vector<Path> runGlyphPaths;
-    if (residentGlyphFill || needPlacedGlyphPaths) {
+    if (glyphModes.residentFill || glyphModes.placedPaths) {
       runGlyphOccurrences.reserve(run.glyphs.size());
     }
-    if (needPlacedGlyphPaths) {
+    if (glyphModes.placedPaths) {
       runGlyphPaths.reserve(run.glyphs.size());
     }
     // A run can reach here with no glyph paint at all - decoration lines only -
     // and must not then fetch, encode, and permanently cache an outline per
     // glyph for geometry nothing draws.
-    const bool runNeedsGlyphGeometry = residentGlyphFill || needPlacedGlyphPaths;
+    const bool runNeedsGlyphGeometry = glyphModes.residentFill || glyphModes.placedPaths;
     for (const auto& glyph : runNeedsGlyphGeometry ? std::span<const TextGlyph>(run.glyphs)
                                                    : std::span<const TextGlyph>()) {
       if (glyph.glyphIndex == 0) {
         continue;  // `.notdef` -- skip to match tiny-skia.
       }
 
-      if (warpedGlyphs) {
-        Path placed = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale);
-        if (!placed.empty() && impl_->textMaterializationBudget->reservePathCopy(placed)) {
-          runGlyphPaths.push_back(std::move(placed));
-        } else if (!placed.empty()) {
+      if (glyphModes.warped) {
+        if (!impl_->appendWarpedGlyph(runGlyphPaths, textEngine, run, glyph, scale)) {
           runs.clear();
           return;
         }
@@ -7503,13 +7528,13 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
       const Transform2d glyphFromLocal = GlyphPlacementTransform(glyph);
       runGlyphOccurrences.push_back(RunGlyphOccurrence{entry, glyphFromLocal});
-      if (needPlacedGlyphPaths) {
+      if (glyphModes.placedPaths) {
         runGlyphPaths.push_back(impl_->materializePlacedGlyph(entry->outline, glyphFromLocal));
       }
     }
 
     const auto drawRunFill = [&]() {
-      if (residentGlyphFill) {
+      if (glyphModes.residentFill) {
         for (const RunGlyphOccurrence& occurrence : runGlyphOccurrences) {
           // The ordinal advances even for an occurrence whose encode turns out
           // empty (a whitespace-only outline), so an element's occurrence ->

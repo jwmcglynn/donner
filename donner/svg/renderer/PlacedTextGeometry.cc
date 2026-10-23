@@ -127,9 +127,13 @@ GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, Font
 
 namespace {
 
+bool InvalidStretchedSample(double distance, double length) {
+  return !std::isfinite(distance) || !(length > 0.0) || !std::isfinite(length);
+}
+
 Path::PointOnPath SampleStretchedPath(const StretchedTextPath& mapping, double distance) {
   const double length = mapping.measuredPath.pathLength();
-  if (!std::isfinite(distance) || !(length > 0.0) || !std::isfinite(length)) {
+  if (InvalidStretchedSample(distance, length)) {
     return {.valid = false};
   }
   if (mapping.closed) {
