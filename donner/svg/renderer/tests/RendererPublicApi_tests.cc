@@ -2906,19 +2906,32 @@ TEST(RendererPublicApiTest, CoveredPixelsOfAnEmptySnapshotFails) {
 }
 
 TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyphGeometry) {
-  SVGDocument document = ParseDocument(
-      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160"
-        font-family="Public Sans" font-size="44">
-        <defs><path id="p" d="M12 96 C72 8 136 152 196 64 S272 24 308 104"/></defs>
-        <text><textPath href="#p" method="stretch">Curve</textPath></text>
+  SVGDocument word = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
+        font-family="Public Sans" font-size="44" font-kerning="none">
+        <defs><path id="p" d="M12 112 C80 12 152 180 220 80 S328 32 372 120"/></defs>
+        <rect x="4" y="4" width="6" height="6" fill="lime"/>
+        <text x="8 56 104 152 200"><textPath href="#p" method="stretch">Curve</textPath></text>
       </svg>)svg");
-  const RendererBitmap bitmap = RenderPublicDocument(document);
-  EXPECT_THAT(CoveredPixels(bitmap, 0, 0, 320, 160), Gt(0u));
+  SVGDocument separateGlyphs = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
+        font-family="Public Sans" font-size="44" font-kerning="none">
+        <defs><path id="p" d="M12 112 C80 12 152 180 220 80 S328 32 372 120"/></defs>
+        <rect x="4" y="4" width="6" height="6" fill="lime"/>
+        <text x="8"><textPath href="#p" method="stretch">C</textPath></text>
+        <text x="56"><textPath href="#p" method="stretch">u</textPath></text>
+        <text x="104"><textPath href="#p" method="stretch">r</textPath></text>
+        <text x="152"><textPath href="#p" method="stretch">v</textPath></text>
+        <text x="200"><textPath href="#p" method="stretch">e</textPath></text>
+      </svg>)svg");
+  editor::tests::CompareBitmapToBitmap(
+      RenderPublicDocument(word), RenderPublicDocument(separateGlyphs),
+      "textpath-stretch-curved-word", editor::tests::PixelmatchIdentityParams());
 
-  const auto text = document.querySelector("text");
+  const auto text = word.querySelector("text");
   ASSERT_TRUE(text.has_value());
   const std::vector<Path> glyphs =
-      document.registry().ctx().get<TextEngine>().computedGlyphPaths(text->unsafeEntityHandle());
+      word.registry().ctx().get<TextEngine>().computedGlyphPaths(text->unsafeEntityHandle());
   ASSERT_THAT(glyphs, testing::SizeIs(5));
   EXPECT_THAT(glyphs, testing::Each(testing::Property(&Path::empty, false)));
 }
