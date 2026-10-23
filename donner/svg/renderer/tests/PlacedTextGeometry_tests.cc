@@ -226,5 +226,31 @@ TEST(PlacedTextGeometryTest, StretchCurveTurnbackCannotAliasClosedPathCircuits) 
   EXPECT_GT(warped.bounds().bottomRight.y - warped.bounds().topLeft.y, 1.5);
 }
 
+TEST(PlacedTextGeometryTest, StretchCurveAcceptanceMatchesEmittedLocalChord) {
+  const Path route =
+      PathBuilder()
+          .moveTo(Vector2d(1.0, 0.0))
+          .curveTo(Vector2d(1.0, 0.5523), Vector2d(0.5523, 1.0), Vector2d(0.0, 1.0))
+          .curveTo(Vector2d(-0.5523, 1.0), Vector2d(-1.0, 0.5523), Vector2d(-1.0, 0.0))
+          .curveTo(Vector2d(-1.0, -0.5523), Vector2d(-0.5523, -1.0), Vector2d(0.0, -1.0))
+          .curveTo(Vector2d(0.5523, -1.0), Vector2d(1.0, -0.5523), Vector2d(1.0, 0.0))
+          .closePath()
+          .build();
+  StretchedTextPath mapping = MeasurePath(route);
+  mapping.closed = true;
+  const double normal = 1.0 - 1.0 / std::cos(0.2);
+  const Path outline = PathBuilder()
+                           .moveTo(Vector2d(0.0, normal))
+                           .quadTo(Vector2d(0.2, -normal), Vector2d(0.4, normal))
+                           .build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = mapping.measuredPath.pathLength() - 0.2;
+
+  const Path warped = WarpGlyphOutline(outline, mapping, glyph, 0.002);
+
+  ASSERT_FALSE(warped.empty());
+  EXPECT_GT(warped.points().size(), 2u);
+}
+
 }  // namespace
 }  // namespace donner::svg

@@ -2,6 +2,7 @@
 /// @file
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -348,12 +349,23 @@ private:
     const auto mappedQuarter = map(quarter);
     const auto mappedMiddle = map(middle);
     const auto mappedThreeQuarter = map(threeQuarter);
-    if (!mappedStart || !mappedEnd || !mappedQuarter || !mappedMiddle || !mappedThreeQuarter) {
+    const auto emittedQuarter = map(start * 0.75 + end * 0.25);
+    const auto emittedMiddle = map((start + end) * 0.5);
+    const auto emittedThreeQuarter = map(start * 0.25 + end * 0.75);
+    const std::array valid = {mappedStart.has_value(),        mappedEnd.has_value(),
+                              mappedQuarter.has_value(),      mappedMiddle.has_value(),
+                              mappedThreeQuarter.has_value(), emittedQuarter.has_value(),
+                              emittedMiddle.has_value(),      emittedThreeQuarter.has_value()};
+    if (!std::all_of(valid.begin(), valid.end(), [](bool value) { return value; })) {
       return false;
     }
     return (*mappedQuarter - (*mappedStart * 0.75 + *mappedEnd * 0.25)).length() <= tolerance_ &&
            (*mappedMiddle - (*mappedStart + *mappedEnd) * 0.5).length() <= tolerance_ &&
-           (*mappedThreeQuarter - (*mappedStart * 0.25 + *mappedEnd * 0.75)).length() <= tolerance_;
+           (*mappedThreeQuarter - (*mappedStart * 0.25 + *mappedEnd * 0.75)).length() <=
+               tolerance_ &&
+           (*mappedQuarter - *emittedQuarter).length() <= tolerance_ &&
+           (*mappedMiddle - *emittedMiddle).length() <= tolerance_ &&
+           (*mappedThreeQuarter - *emittedThreeQuarter).length() <= tolerance_;
   }
   static bool monotonicQuadraticX(const Vector2d& start, const Vector2d& control,
                                   const Vector2d& end) {
