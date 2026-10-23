@@ -925,6 +925,39 @@ class EntryBundleTest(GeneratedEntryFixture, unittest.TestCase):
                          "Module Maintainer <maintainer@example.com>|"
                          "Donner release <donner-release@users.noreply.github.com>")
 
+    def assert_author_refused_before_commit(self, maintainers):
+        path = self.source / ".bcr/metadata.template.json"
+        template = json.loads(path.read_text())
+        template["maintainers"] = maintainers
+        path.write_text(json.dumps(template))
+        (self.registry / "modules/donner/metadata.json").write_bytes(
+            release.bcr_source.derive_metadata(None, template, "1.0.0"))
+        self.stage_validated()
+        base = self.git(self.registry, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(ValueError, "maintainer author"):
+            self.bundle_entry()
+        self.assertEqual(self.git(self.registry, "rev-parse", "HEAD"), base)
+        self.assertEqual(self.git(self.registry, "branch", "--list", SUBMISSION_BRANCH), "")
+        self.assertFalse(self.bundle.exists())
+
+    def test_missing_author_is_refused_before_branch_or_commit(self):
+        self.assert_author_refused_before_commit([])
+
+    def test_ambiguous_authors_are_refused_before_branch_or_commit(self):
+        author = {"name": "Module Maintainer", "email": "maintainer@example.com"}
+        self.assert_author_refused_before_commit([author, author])
+
+    def test_control_characters_in_author_are_refused_before_commit(self):
+        self.assert_author_refused_before_commit([
+            {"name": "Module\nMaintainer", "email": "maintainer@example.com"}])
+
+    def test_malformed_email_is_refused_before_commit(self):
+        self.assert_author_refused_before_commit([{"name": "Module Maintainer", "email": "invalid"}])
+
+    def test_control_characters_in_email_are_refused_before_commit(self):
+        self.assert_author_refused_before_commit([
+            {"name": "Module Maintainer", "email": "maintainer\x00@example.com"}])
+
     def test_bundle_entry_commits_nothing_for_an_unverified_entry_or_another_tag(self):
         base = self.git(self.registry, "rev-parse", "HEAD")
         for arguments, message in (({"sha256": "d" * 64}, "approved source archive"),
