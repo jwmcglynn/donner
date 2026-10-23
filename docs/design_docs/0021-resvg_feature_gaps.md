@@ -125,13 +125,13 @@ regression, and both comparison modes pass; do not restore the category-level di
 
 ## External resource policy
 
-The resvg harness uses `SandboxedFileResourceLoader` for local corpus resources; it does not fetch
-live HTTP resources. `structure/image/url-to-png.svg` and `url-to-svg.svg` remain excluded for that
-hermetic policy, rather than a missing PNG or SVG decoder. Applications can provide resource bytes
-through `ResourceLoaderInterface`. Deterministic image-loader tests cover HTTPS identifiers passed
-to that callback, accepted PNG/SVG bytes, denied requests, and per-resource size limits. Existing
-loader tests also enforce aggregate byte budgets and filesystem confinement. These tests make no
-live-network availability claim.
+The resvg harness uses a test-only loader that maps the two exact HTTPS identifiers in
+`structure/image/url-to-png.svg` and `url-to-svg.svg` to committed local copies. Other URL schemes
+are rejected, and ordinary local references still use `SandboxedFileResourceLoader`. Snapshot
+reads are bounded to 512 KiB; attribution and source hashes are recorded beside the files. Tests
+perform no live network requests. Applications independently provide resource bytes through
+`ResourceLoaderInterface`; deterministic image-loader tests cover accepted PNG/SVG bytes, denied
+requests and resource-size limits.
 
 The local `structure/use/xlink-to-an-external-file.svg` resource resolves and renders its text.
 Its upstream reference is entirely opaque, whereas the SVG canvas is transparent outside painted
