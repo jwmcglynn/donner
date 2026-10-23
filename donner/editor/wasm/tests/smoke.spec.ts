@@ -5492,6 +5492,11 @@ test.describe("Retina Geode splash", () => {
         lost: window.__donnerWorkerStats?.deviceLost,
       })), { message: "Retina Geode completes every layer preview" })
       .toEqual({ count: 15, pending: 0, textures: 15, lost: false });
+    await page.mouse.click(bounds.x + 16, bounds.y + 180);
+    await expect.poll(() =>
+      page.evaluate(() => window.__donnerViewportStats?.paneX ?? 0),
+      { message: "Geode source pane opens without blocking the GPU owner" },
+    ).toBeGreaterThan(200);
     console.log(`geode-retina-ready-ms=${performance.now() - startedAt}`);
     for (let step = 0; step < 20; ++step) {
       const x = bounds.x + 400 + step * 15;

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
 import { checkDocumentGpuResidency } from "./browser-gpu-residency";
+import { readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
 import { resourceQueuesAreQuiescent } from "./browser-resource-quiescence.mjs";
 import {
   contentMotionFraction,
@@ -1764,7 +1765,9 @@ test.describe("Geode detailed interactions", () => {
           save("crown selected");
           // Separate selection from the drag press so this does not enter double-click editing.
           await page.waitForTimeout(500);
+          report.ownerBeforeDrag = await readGpuOwnerDispatchStats(page);
           report.drag = await continuousDrag(page, point, 0.25, "geode-crown");
+          report.ownerAfterDrag = await readGpuOwnerDispatchStats(page);
           save("drag finished");
           await page.screenshot({ path: info.outputPath("geode-interaction.png") });
         } finally {

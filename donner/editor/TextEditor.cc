@@ -100,6 +100,7 @@ TextEditor::TextEditor()
     handleFunctionTooltip(static_cast<ImWchar>(ch), pos);
   };
   core_.onContentUpdateInternal = [this] {
+    visualLayoutMaxColumns_ = 0;
     if (onContentUpdate) {
       onContentUpdate(this);
     }
@@ -1153,7 +1154,6 @@ void TextEditor::renderInternal(std::string_view title) {
   int visibleLineMax = std::max(0, std::min(totalLines - 1, lineNo + pageSize));
 
   updateTextStart();
-  visualLayoutMaxColumns_ = 0;
   rebuildVisualLines(contentSize);
   calculateFolds(lineNo, totalLines);
 
@@ -2074,6 +2074,7 @@ void TextEditor::remapFocusMetadataForSourceEdit(const SourceEditIntent& intent)
   }
   sourceStyleChipHitRects_.clear();
 
+  visualLayoutMaxColumns_ = 0;
   if (!focusPartitionActive_) {
     return;
   }
@@ -2094,7 +2095,6 @@ void TextEditor::remapFocusMetadataForSourceEdit(const SourceEditIntent& intent)
 
   remapFocusReferenceLinksForSourceEdit(intent, bufferSize);
   focusPartitionActive_ = !focusPartition_.empty();
-  visualLayoutMaxColumns_ = 0;
 }
 
 void TextEditor::remapFocusReferenceLinksForSourceEdit(const SourceEditIntent& intent,
@@ -2850,6 +2850,7 @@ void TextEditor::resetReferenceRopesForPartition(const FocusPartition& partition
 
 void TextEditor::setFocusPartition(const FocusPartition& partition) {
   if (!FocusPartitionsEqual(focusPartition_, partition)) {
+    visualLayoutMaxColumns_ = 0;
     expandedFocusHiddenRanges_.clear();
     resetReferenceRopesForPartition(partition);
   }
@@ -3124,6 +3125,9 @@ bool TextEditor::isPositionInsideFocusRange(const Coordinates& position) const {
 }
 
 void TextEditor::clearFocusPartition() {
+  if (focusPartitionActive_) {
+    visualLayoutMaxColumns_ = 0;
+  }
   focusPartition_ = FocusPartition{};
   focusPartitionActive_ = false;
   expandedFocusHiddenRanges_.clear();
@@ -4225,7 +4229,6 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
   calculateCharacterAdvance();
   updateTextStart();
   uiCursorPos_ = ImGui::GetCursorScreenPos();
-  visualLayoutMaxColumns_ = 0;
   rebuildVisualLines(ImGui::GetWindowContentRegionMax());
   updateSourceGutterDragInput();
   updateHoveredTextPosition();
@@ -4389,6 +4392,7 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
 }
 
 void TextEditor::setText(std::string_view text, bool preserveScroll) {
+  visualLayoutMaxColumns_ = 0;
   sourceStyleDecorationRefreshPending_ = false;
   for (auto& [link, state] : focusReferenceRopes_) {
     state.visualAnchor.reset();
