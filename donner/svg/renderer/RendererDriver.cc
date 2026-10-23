@@ -2069,6 +2069,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
                                           const Transform2d& surfaceFromCanvas) {
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
