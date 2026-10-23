@@ -3235,7 +3235,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertEqual(1, len(scripts), step)
         self.assertEqual([
             "set", "-euo", "pipefail", "bazelisk", "test", "--config=ci",
-            "--config=latest_llvm", "${BUILDBUDDY_FLAGS}", "--test_output=all",
+            "--config=latest_llvm", "--test_output=all",
             "--test_tag_filters=", "--nocache_test_results",
             "--noskip_incompatible_explicit_targets",
             "--build_event_json_file=$RUNNER_TEMP/coverage-deterministic_soak_probe.bep.json",
@@ -3800,7 +3800,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                          opted_in)
         self.assertEqual({(main, "linux", step) for step in (
             "Verify BuildBuddy remote execution", "Build", "Test",
-            "Test deterministic fuzzer soak wrapper", "Test (hosted parity subset)")}, consumers)
+            "Test (hosted parity subset)")}, consumers)
 
     def test_bazelrc_leaves_the_buildbuddy_fallback_to_the_fragment(self):
         # A later rc line, a command section such as `test`, or a config such as --config=ci
