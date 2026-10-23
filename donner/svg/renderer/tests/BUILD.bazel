@@ -737,6 +737,16 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "placed_text_geometry_tests",
+    srcs = ["PlacedTextGeometry_tests.cc"],
+    deps = [
+        "//donner/base:base_test_utils",
+        "//donner/svg/renderer:placed_text_geometry",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "bitmap_glyph_geometry_tests_impl",
     srcs = ["BitmapGlyphGeometry_tests.cc"],
     data = ["//donner/svg/text:bitmap_glyph_test_font"],

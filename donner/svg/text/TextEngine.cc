@@ -1139,37 +1139,6 @@ Path::PointOnPath SampleTextPathCluster(const Path::MeasuredPath& path, double s
   return path.pointAtArcLength(distance);
 }
 
-bool PlaceStretchedTextPathGlyph(const Path::MeasuredPath& path, double startOffset, bool closed,
-                                 const TextPathCluster& cluster, TextGlyph& glyph) {
-  if (!(glyph.xAdvance > 0.0) || !std::isfinite(glyph.xPosition) ||
-      !std::isfinite(glyph.xAdvance)) {
-    return false;
-  }
-  const auto start = SampleTextPathCluster(path, startOffset, cluster.pathOffset + glyph.xPosition,
-                                           closed, cluster.circuitAnchor);
-  const auto end = SampleTextPathCluster(path, startOffset,
-                                         cluster.pathOffset + glyph.xPosition + glyph.xAdvance,
-                                         closed, cluster.circuitAnchor);
-  if (!start.valid || !end.valid) {
-    glyph.glyphIndex = 0;
-    return true;
-  }
-
-  const Vector2d chord = end.point - start.point;
-  const double chordLength = chord.length();
-  if (!(chordLength > 0.0) || !std::isfinite(chordLength)) {
-    glyph.glyphIndex = 0;
-    return true;
-  }
-
-  const double angle = std::atan2(chord.y, chord.x);
-  glyph.xPosition = start.point.x - std::sin(angle) * cluster.baselineOffset;
-  glyph.yPosition = start.point.y + std::cos(angle) * cluster.baselineOffset;
-  glyph.rotateDegrees += angle * MathConstants<double>::kRadToDeg;
-  glyph.stretchScaleX *= static_cast<float>(chordLength / glyph.xAdvance);
-  return true;
-}
-
 /// Samples each cluster and places all of its glyphs with their shaped offsets.
 void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, bool closed,
                            std::vector<TextRun>& runs, const std::vector<TextPathCluster>& clusters,
@@ -1186,13 +1155,13 @@ void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, b
                                 std::cos(sample.angle) * cluster.baselineOffset);
       for (size_t gi = cluster.glyphStart; gi < cluster.glyphEnd; ++gi) {
         TextGlyph& glyph = run.glyphs[gi];
-        if (method == components::TextPathMethod::Stretch &&
-            PlaceStretchedTextPathGlyph(path, startOffset, closed, cluster, glyph)) {
-          continue;
-        }
         const double angle = sample.angle + glyph.rotateDegrees * MathConstants<double>::kDegToRad;
         const double localX = glyph.xPosition;
         const double localY = glyph.yPosition;
+        if (method == components::TextPathMethod::Stretch) {
+          glyph.textPathOrigin = cluster.pathOffset + localX;
+          glyph.textPathNormalOffset = cluster.baselineOffset + localY;
+        }
         glyph.xPosition = origin.x + localX * std::cos(angle) - localY * std::sin(angle);
         glyph.yPosition = origin.y + localX * std::sin(angle) + localY * std::cos(angle);
         glyph.rotateDegrees += sample.angle * MathConstants<double>::kRadToDeg;
@@ -1224,6 +1193,13 @@ void placeTextPath(const components::ComputedTextComponent& text, const TextLayo
   const auto& firstSpan = text.spans[path.firstRun];
   PlaceTextPathClusters(path.measuredPath, firstSpan.pathStartOffset, path.closed, runs,
                         path.clusters, firstSpan.textPathMethod);
+  if (firstSpan.textPathMethod == components::TextPathMethod::Stretch) {
+    auto mapping = std::make_shared<StretchedTextPath>(
+        StretchedTextPath{std::move(path.measuredPath), firstSpan.pathStartOffset, path.closed});
+    for (size_t runIndex = path.firstRun; runIndex < runs.size(); ++runIndex) {
+      runs[runIndex].stretchedTextPath = mapping;
+    }
+  }
 }
 
 /// A retired owning path establishes an endpoint for the next unanchored flat character.

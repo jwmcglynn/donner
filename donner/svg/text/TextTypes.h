@@ -1,12 +1,21 @@
 #pragma once
 /// @file
 
+#include <memory>
 #include <optional>
 #include <vector>
 
+#include "donner/base/Path.h"
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::svg {
+
+/// Shared path mapping used to warp glyph outlines for `textPath method="stretch"`.
+struct StretchedTextPath {
+  Path::MeasuredPath measuredPath;
+  double startOffset = 0.0;
+  bool closed = false;
+};
 
 /// Resolved face and used font size for layout or declaring-element decoration metrics.
 struct ResolvedTextFont {
@@ -30,9 +39,11 @@ struct TextGlyph {
   uint32_t cluster = 0;      ///< Byte offset into the span text for the glyph's source cluster.
   /// Byte offset of the SVG positioning group; absent uses the source cluster.
   std::optional<uint32_t> positioningCluster;
-  float fontSizeScale = 1.0f;  ///< Per-glyph font size multiplier (< 1.0 for small-caps).
-  float stretchScaleX = 1.0f;  ///< Additional X-axis glyph stretch from lengthAdjust.
-  float stretchScaleY = 1.0f;  ///< Additional Y-axis glyph stretch from lengthAdjust.
+  float fontSizeScale = 1.0f;            ///< Per-glyph font size multiplier (< 1.0 for small-caps).
+  float stretchScaleX = 1.0f;            ///< Additional X-axis glyph stretch from lengthAdjust.
+  float stretchScaleY = 1.0f;            ///< Additional Y-axis glyph stretch from lengthAdjust.
+  std::optional<double> textPathOrigin;  ///< Logical path distance for a stretched outline origin.
+  double textPathNormalOffset = 0.0;     ///< Offset from the path along its left normal.
 };
 
 /**
@@ -45,6 +56,7 @@ struct TextRun {
   bool onPath = false;            ///< True if glyphs are positioned along a textPath.
   bool textLengthAppliedOnPath =
       false;  ///< True when path placement consumed this run's textLength.
+  std::shared_ptr<const StretchedTextPath> stretchedTextPath;  ///< Shared nonlinear path mapping.
 };
 
 }  // namespace donner::svg

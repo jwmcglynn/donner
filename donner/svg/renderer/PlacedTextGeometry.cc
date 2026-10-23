@@ -125,8 +125,88 @@ GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, Font
   return result;
 }
 
-Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextGlyph& glyph,
-                        float scale) {
+namespace {
+
+Path::PointOnPath SampleStretchedPath(const StretchedTextPath& mapping, double distance) {
+  const double length = mapping.measuredPath.pathLength();
+  if (!std::isfinite(distance) || !(length > 0.0) || !std::isfinite(length)) {
+    return {.valid = false};
+  }
+  if (mapping.closed) {
+    const double normalized = std::fmod(distance, length);
+    return mapping.measuredPath.pointAtArcLength(normalized < 0.0 ? normalized + length
+                                                                  : normalized);
+  }
+  if (distance >= 0.0 && distance <= length) {
+    return mapping.measuredPath.pointAtArcLength(distance);
+  }
+  const double endpointDistance = distance < 0.0 ? 0.0 : length;
+  Path::PointOnPath endpoint = mapping.measuredPath.pointAtArcLength(endpointDistance);
+  if (!endpoint.valid || !std::isfinite(endpoint.angle)) {
+    return {.valid = false};
+  }
+  const double extension = distance - endpointDistance;
+  endpoint.point += Vector2d(std::cos(endpoint.angle), std::sin(endpoint.angle)) * extension;
+  endpoint.valid = std::isfinite(endpoint.point.x) && std::isfinite(endpoint.point.y);
+  return endpoint;
+}
+
+std::optional<Vector2d> WarpGlyphPoint(const StretchedTextPath& mapping, const TextGlyph& glyph,
+                                       const Vector2d& point) {
+  if (!glyph.textPathOrigin || !std::isfinite(*glyph.textPathOrigin) ||
+      !std::isfinite(glyph.textPathNormalOffset) || !std::isfinite(point.x) ||
+      !std::isfinite(point.y)) {
+    return std::nullopt;
+  }
+  const Path::PointOnPath sample =
+      SampleStretchedPath(mapping, mapping.startOffset + *glyph.textPathOrigin + point.x);
+  const double normal = glyph.textPathNormalOffset + point.y;
+  if (!sample.valid || !std::isfinite(sample.angle) || !std::isfinite(normal)) {
+    return std::nullopt;
+  }
+  const Vector2d result(sample.point.x - std::sin(sample.angle) * normal,
+                        sample.point.y + std::cos(sample.angle) * normal);
+  return std::isfinite(result.x) && std::isfinite(result.y) ? std::optional(result) : std::nullopt;
+}
+
+}  // namespace
+
+Path WarpGlyphOutline(const Path& outline, const StretchedTextPath& mapping,
+                      const TextGlyph& glyph) {
+  if (outline.empty() || outline.verbCount() > Path::kMaximumGeometryQueryWork) {
+    return Path();
+  }
+  const auto points = outline.points();
+  std::vector<Vector2d> warped;
+  warped.reserve(points.size());
+  for (const Vector2d& point : points) {
+    const auto mapped = WarpGlyphPoint(mapping, glyph, point);
+    if (!mapped) {
+      return Path();
+    }
+    warped.push_back(*mapped);
+  }
+
+  PathBuilder builder;
+  for (const Path::Command& command : outline.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo: builder.moveTo(warped[command.pointIndex]); break;
+      case Path::Verb::LineTo: builder.lineTo(warped[command.pointIndex]); break;
+      case Path::Verb::QuadTo:
+        builder.quadTo(warped[command.pointIndex], warped[command.pointIndex + 1]);
+        break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(warped[command.pointIndex], warped[command.pointIndex + 1],
+                        warped[command.pointIndex + 2]);
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
+    }
+  }
+  return builder.build();
+}
+
+Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextRun& run,
+                        const TextGlyph& glyph, float scale) {
   if (glyph.glyphIndex == 0) {
     return Path();  // `.notdef` -- caller skips.
   }
@@ -144,6 +224,14 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
   if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
     glyphPath =
         TransformPath(glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+  }
+
+  if (run.stretchedTextPath && glyph.textPathOrigin) {
+    if (glyph.rotateDegrees != 0.0) {
+      glyphPath = TransformPath(
+          glyphPath, Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0));
+    }
+    return WarpGlyphOutline(glyphPath, *run.stretchedTextPath, glyph);
   }
 
   // Translate to the baseline origin and rotate about it, as one transform.
@@ -192,6 +280,17 @@ Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>
 
     for (const auto& glyph : run.glyphs) {
       if (glyph.glyphIndex == 0) {
+        continue;
+      }
+      if (run.stretchedTextPath) {
+        const Path placed = PlacedGlyphOutline(textEngine, run.font, run, glyph, runScale);
+        if (!placed.empty()) {
+          const Box2d bounds = placed.bounds();
+          minX = std::min(minX, bounds.topLeft.x);
+          maxX = std::max(maxX, bounds.bottomRight.x);
+          minY = std::min(minY, bounds.topLeft.y);
+          maxY = std::max(maxY, bounds.bottomRight.y);
+        }
         continue;
       }
       minX = std::min(minX, glyph.xPosition);

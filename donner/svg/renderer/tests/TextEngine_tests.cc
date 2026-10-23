@@ -1290,22 +1290,52 @@ TEST(TextEngineTest, TextPathStretchFollowsEachGlyphChord) {
 
   ASSERT_THAT(runs, SizeIs(1));
   ASSERT_THAT(runs[0].glyphs, SizeIs(2));
-  const Path::MeasuredPath measured = path.measure();
-  double distance = 0.0;
+  ASSERT_TRUE(runs[0].stretchedTextPath);
+  double expectedOrigin = 0.0;
   for (const TextGlyph& glyph : runs[0].glyphs) {
-    const auto start = measured.pointAtArcLength(distance);
-    const auto end = measured.pointAtArcLength(distance + glyph.xAdvance);
-    ASSERT_TRUE(start.valid);
-    ASSERT_TRUE(end.valid);
-    const Vector2d chord = end.point - start.point;
-    EXPECT_THAT(Vector2d(glyph.xPosition, glyph.yPosition),
-                Vector2Near(start.point.x, start.point.y));
-    EXPECT_NEAR(glyph.rotateDegrees,
-                std::atan2(chord.y, chord.x) * MathConstants<double>::kRadToDeg, 1e-6);
-    EXPECT_NEAR(glyph.stretchScaleX, chord.length() / glyph.xAdvance, 1e-6);
-    distance += glyph.xAdvance;
+    ASSERT_TRUE(glyph.textPathOrigin);
+    EXPECT_NEAR(*glyph.textPathOrigin, expectedOrigin, 1e-6);
+    expectedOrigin += glyph.xAdvance;
   }
-  EXPECT_NE(runs[0].glyphs[0].rotateDegrees, runs[0].glyphs[1].rotateDegrees);
+}
+
+TEST(TextEngineTest, TextPathStretchKeepsCombiningMarkInBaseClusterFrame) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_TRUE(static_cast<bool>(font));
+  const std::string value = "q\xCC\x81";
+  TextBackendFull backend(fontManager, registry);
+  const auto shaped =
+      backend.shapeRun(font, 24.0f, value, 0, value.size(), false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, SizeIs(2));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(value);
+  span.pathSpline = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .curveTo(Vector2d(0.0, 100.0), Vector2d(100.0, 100.0), Vector2d(100.0, 0.0))
+                        .build();
+  span.textPathMethod = components::TextPathMethod::Stretch;
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(24.0);
+  params.fontFamilies = {RcString("Noto Sans")};
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendFull>(fontManager, registry));
+
+  const auto runs = engine.layout(text, params);
+
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(2));
+  const TextGlyph& base = runs[0].glyphs[0];
+  const TextGlyph& mark = runs[0].glyphs[1];
+  ASSERT_TRUE(base.textPathOrigin);
+  ASSERT_TRUE(mark.textPathOrigin);
+  EXPECT_DOUBLE_EQ(mark.xAdvance, 0.0);
+  EXPECT_NEAR(*mark.textPathOrigin - *base.textPathOrigin,
+              shaped.glyphs[0].xAdvance + shaped.glyphs[1].xOffset - shaped.glyphs[0].xOffset,
+              1e-6);
+  EXPECT_NEAR(mark.textPathNormalOffset - base.textPathNormalOffset,
+              shaped.glyphs[1].yOffset - shaped.glyphs[0].yOffset, 1e-6);
 }
 
 TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {

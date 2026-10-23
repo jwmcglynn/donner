@@ -7436,8 +7436,10 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     // placement transform. Gradient, pattern, and stroke paint still consume a
     // glyph outline placed in the element's local space, so those keep
     // building placed paths.
-    const bool residentGlyphFill = hasFill && !fillIsGradient && !usePatternFill;
-    const bool needPlacedGlyphPaths = fillIsGradient || usePatternFill || hasStrokePaint;
+    const bool warpedGlyphs = static_cast<bool>(run.stretchedTextPath);
+    const bool residentGlyphFill = hasFill && !fillIsGradient && !usePatternFill && !warpedGlyphs;
+    const bool needPlacedGlyphPaths =
+        fillIsGradient || usePatternFill || hasStrokePaint || (hasFill && warpedGlyphs);
 
     // Glyph occurrences of this run, in paint order. Parallel to
     // `runGlyphPaths` when both are populated.
@@ -7461,6 +7463,17 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
                                                    : std::span<const TextGlyph>()) {
       if (glyph.glyphIndex == 0) {
         continue;  // `.notdef` -- skip to match tiny-skia.
+      }
+
+      if (warpedGlyphs) {
+        Path placed = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale);
+        if (!placed.empty() && impl_->textMaterializationBudget->reservePathCopy(placed)) {
+          runGlyphPaths.push_back(std::move(placed));
+        } else if (!placed.empty()) {
+          runs.clear();
+          return;
+        }
+        continue;
       }
 
       // Outline + placement are split by PlacedTextGeometry, which both
@@ -7542,6 +7555,10 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
               placed, FillRule::NonZero,
               impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity),
               encoded);
+        } else if (hasFill) {
+          const geode::EncodedPath* encoded =
+              impl_->encodeTransientGeometry(placed, FillRule::NonZero);
+          impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero, encoded);
         }
       }
     };

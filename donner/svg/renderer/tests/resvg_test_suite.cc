@@ -1782,10 +1782,10 @@ INSTANTIATE_TEST_SUITE_P(
                                        "donner/svg/renderer/testdata/golden/resvg-m-L-Z-path.png")
                                        .withReason("Minor char")},
                 {"method=stretch.svg",
-                 Params::Skip("Implemented with per-glyph chord stretching; the vendored reference "
-                              "is byte-identical to simple-case.png and therefore pins align "
-                              "placement rather than stretch geometry. Independent engine "
-                              "regressions cover the stretch contract")},
+                 Params::Skip("Implemented by warping outline endpoints and control points along "
+                              "path normals; the vendored reference is byte-identical to "
+                              "simple-case.png and therefore pins align placement. Independent "
+                              "geometry regressions cover the stretch contract")},
                 {"mixed-children-1.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
