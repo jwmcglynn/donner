@@ -2004,14 +2004,14 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
     PropertyRegistry registry;
     registry.parseStyle("clip-path: url(#clip)");
     ASSERT_TRUE(registry.clipPath.isSpecified());
-    EXPECT_THAT(registry.clipPath.get(), Optional(Reference("#clip")));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
   }
 
   {
     PropertyRegistry registry;
     css::Declaration declaration = css::CSS::ParseStyleAttribute("clip-path: invalid").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
-                ParseErrorIs("Invalid url reference"));
+                ParseErrorIs("Invalid circle clip-path"));
   }
 
   {

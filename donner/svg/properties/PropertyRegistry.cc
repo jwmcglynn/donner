@@ -1075,6 +1075,24 @@ ParseResult<Reference> ParseReference(std::string_view tag,
   return err;
 }
 
+ParseResult<ClipPath> ParseClipPathValue(const parser::PropertyParseFnParams& params) {
+  const auto components = params.components();
+  if (components.empty()) {
+    return ParseReference("clip-path", components).map<ClipPath>([](Reference reference) {
+      return ClipPath(std::move(reference));
+    });
+  }
+  if (const auto url = ParseUrlComponent(components.front())) {
+    if (components.size() == 1) {
+      return ClipPath(Reference(*url));
+    }
+    ParseDiagnostic error;
+    error.reason = "Unexpected tokens after clip-path reference";
+    return error;
+  }
+  return ParseCircleClipPath(components, params.allowUserUnits());
+}
+
 /// Parse a CSS angle value from a Dimension token, converting to degrees.
 std::optional<double> ParseAngleDegrees(const css::Token::Dimension& dimension) {
   const RcString& suffix = dimension.suffixString;
@@ -2596,7 +2614,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    return Parse(
                        params,
                        [](const parser::PropertyParseFnParams& params) {
-                         return ParseReference("clip-path", params.components());
+                         return ParseClipPathValue(params);
                        },
                        &registry.clipPath);
                  }},  //

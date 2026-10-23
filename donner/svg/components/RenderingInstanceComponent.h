@@ -192,6 +192,7 @@ struct RenderingInstanceComponent {
 
   std::optional<Box2d> clipRect;  //!< The clip rect of the element, if set.
 
+  bool basicClipPath = false;  //!< A resolved CSS basic shape establishes a subtree clip.
   std::optional<ResolvedClipPath> clipPath;  //!< The clip path of the element, if set.
 
   std::optional<ResolvedMask> mask;  //!< The mask of the element, if set.

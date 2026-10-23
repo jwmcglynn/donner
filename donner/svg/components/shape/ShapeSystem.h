@@ -95,6 +95,15 @@ public:
    */
   std::optional<Box2d> getShapeBounds(EntityHandle handle);
 
+  /// Return the CSS Masking stroke reference box, including descendant stroke boxes.
+  /// @param handle Element whose local reference box is required.
+  std::optional<Box2d> getStrokeBounds(EntityHandle handle);
+
+  /// Resolve a circle clipping shape in element-local coordinates; invalid geometry is empty.
+  /// @param handle Styled element supplying reference geometry and length metrics.
+  /// @param circle Parsed circle and reference-box selection.
+  Path circleClipPath(EntityHandle handle, const CircleClipPath& circle);
+
   /**
    * Get the bounds for the given entity in world space, if it has a shape component.
    *
@@ -138,7 +147,8 @@ private:
    * system
    */
   std::optional<Box2d> getTransformedShapeBounds(EntityHandle handle,
-                                                 const Transform2d& worldFromTarget);
+                                                 const Transform2d& worldFromTarget,
+                                                 bool includeStroke = false);
 
   ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
                                                       const CircleComponent& circle,

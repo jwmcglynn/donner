@@ -504,30 +504,8 @@ public:
     }
 
     if (!isShadowOnlyInLightTree) {
-      if (properties.clipPath.get()) {
-        if (auto resolved = resolveClipPath(dataHandle, properties.clipPath.get().value());
-            resolved.valid()) {
-          instance.clipPath = resolved;
-
-          // Get the paths and store them in a ComputedClipPaths component.
-          auto& clipPaths = registry_.emplace<ComputedClipPathsComponent>(styleEntity);
-
-          RecursionGuard guard;
-          guard.add(styleEntity);
-#ifdef DONNER_TEXT_ENABLED
-          std::optional<FontManager::DependencyCapture> capture;
-          auto* fontManager = registry_.ctx().find<FontManager>();
-          if (fontManager) {
-            capture.emplace(*fontManager, clipPaths.fontDependencies);
-          }
-#endif
-          collectClipPaths(resolved.reference.handle, clipPaths.clipPaths, guard);
-#ifdef DONNER_TEXT_ENABLED
-          if (fontManager) {
-            clipPaths.fontResourceRevision = fontManager->fontResourceRevision();
-          }
-#endif
-        }
+      if (const auto clip = properties.clipPath.get()) {
+        instantiateClipPath(dataHandle, styleEntity, instance, *clip);
       }
 
       if (properties.mask.get()) {
@@ -637,7 +615,7 @@ public:
       ++layerDepth;
     }
 
-    if (instance.clipPath) {
+    if (instance.clipPath || instance.basicClipPath) {
       instance.isolatedLayer = true;
       ++layerDepth;
     }
@@ -850,6 +828,15 @@ public:
                                   ClipPathCollection& collection) {
     const auto* computedStyle = entity.try_get<ComputedStyleComponent>();
     if (!computedStyle || !computedStyle->properties->clipPath.get()) {
+      return true;
+    }
+    const auto clip = computedStyle->properties->clipPath.get();
+    if (const auto* circle = std::get_if<CircleClipPath>(&clip->value)) {
+      const Transform2d referenceFromEntity =
+          LayoutSystem().getAbsoluteTransformComponent(entity).worldFromEntity;
+      collection.paths.emplace_back(ShapeSystem().circleClipPath(entity, *circle),
+                                    referenceFromEntity * collection.rootClipFromReference,
+                                    ClipRule::NonZero, collection.layer + 1);
       return true;
     }
     const ResolvedClipPath resolved =
@@ -1216,11 +1203,47 @@ public:
     return bounds;
   }
 
-  ResolvedClipPath resolveClipPath(EntityHandle dataHandle, const Reference& reference) {
+  void instantiateClipPath(EntityHandle dataHandle, Entity styleEntity,
+                           RenderingInstanceComponent& instance, const ClipPath& clip) {
+    const auto* circle = std::get_if<CircleClipPath>(&clip.value);
+    const ResolvedClipPath resolved = resolveClipPath(dataHandle, clip);
+    if (!circle && !resolved.valid()) {
+      return;
+    }
+    auto& paths = registry_.emplace<ComputedClipPathsComponent>(styleEntity);
+#ifdef DONNER_TEXT_ENABLED
+    std::optional<FontManager::DependencyCapture> capture;
+    auto* fontManager = registry_.ctx().find<FontManager>();
+    if (fontManager) {
+      capture.emplace(*fontManager, paths.fontDependencies);
+    }
+#endif
+    if (circle) {
+      instance.basicClipPath = true;
+      paths.clipPaths.emplace_back(ShapeSystem().circleClipPath(dataHandle, *circle), Transform2d(),
+                                   ClipRule::NonZero, 0);
+    } else {
+      instance.clipPath = resolved;
+      RecursionGuard guard;
+      guard.add(styleEntity);
+      collectClipPaths(resolved.reference.handle, paths.clipPaths, guard);
+    }
+#ifdef DONNER_TEXT_ENABLED
+    if (fontManager) {
+      paths.fontResourceRevision = fontManager->fontResourceRevision();
+    }
+#endif
+  }
+
+  ResolvedClipPath resolveClipPath(EntityHandle dataHandle, const ClipPath& clip) {
+    const auto* reference = std::get_if<Reference>(&clip.value);
+    if (!reference) {
+      return ResolvedClipPath{ResolvedReference{EntityHandle()}, ClipPathUnits::Default};
+    }
     // Only resolve paints if the paint server references a supported <clipPath> element, and the
     // shadow tree was instantiated. If the shadow tree is not instantiated, that indicates there
     // was recursion and we treat the reference as invalid.
-    if (auto resolvedRef = reference.resolve(*dataHandle.registry());
+    if (auto resolvedRef = reference->resolve(*dataHandle.registry());
         resolvedRef && IsValidClipPath(resolvedRef->handle)) {
       return ResolvedClipPath{resolvedRef.value(),
                               resolvedRef->handle.get<ClipPathComponent>().clipPathUnits.value_or(

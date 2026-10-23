@@ -38,6 +38,7 @@
 #include "donner/svg/core/VectorEffect.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/core/WritingMode.h"
+#include "donner/svg/properties/ClipPath.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/properties/PropertyParsing.h"  // IWYU pragma: keep, used for parser::UnparsedProperty
@@ -258,8 +259,8 @@ public:
 
   /// `clip-path` property, which determines the shape of the element's clipping region. Defaults to
   /// none.
-  Property<Reference, PropertyCascade::None> clipPath{
-      "clip-path", []() -> std::optional<Reference> { return std::nullopt; }};
+  Property<ClipPath, PropertyCascade::None> clipPath{
+      "clip-path", []() -> std::optional<ClipPath> { return std::nullopt; }};
 
   /// `clip-rule` property, which determines how the interior of the element is filled in the case
   /// of overlapping shapes. Defaults to \ref ClipRule::NonZero.
