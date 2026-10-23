@@ -9070,6 +9070,10 @@ void EditorShell::updateSourceStyleDecorations() {
     return;
   }
 
+  adoptReadySourceStyleAnnotations();
+}
+
+void EditorShell::adoptReadySourceStyleAnnotations() {
   // The browser GPU owner must not wait for a renderer holding document write access.
   const auto documentAccess = app_.document().document().tryReadAccess();
   if (!documentAccess.has_value()) {
@@ -9079,9 +9083,11 @@ void EditorShell::updateSourceStyleDecorations() {
     return;
   }
 
+  const std::uint64_t documentGeneration = app_.document().documentGeneration();
+  const std::uint64_t sourceVersion = app_.document().document().sourceVersion();
   DetachedStyleSourceAnnotations detached = styleSourceAnnotationsFuture_.get();
   if (styleSourceAnnotationPendingDocumentGeneration_ != documentGeneration ||
-      styleSourceAnnotationPendingSourceVersion_ != app_.document().document().sourceVersion()) {
+      styleSourceAnnotationPendingSourceVersion_ != sourceVersion) {
     clearSourceStyleDecorations(true);
     window_.wakeEventLoop();
     return;

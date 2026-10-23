@@ -904,6 +904,8 @@ private:
   [[nodiscard]] bool sourcePaneAwaitsDocumentEdits() const;
   void clearSourceStyleDecorations(bool pending);
   void updateSourceStyleDecorations();
+  /// Adopt a ready annotation result only when document access is immediately available.
+  void adoptReadySourceStyleAnnotations();
   void applySourceStyleDecorationChipClick();
   void setSourceFocusMode(bool enabled);
   void toggleSourceFocusMode();
