@@ -791,11 +791,8 @@ INSTANTIATE_TEST_SUITE_P(
                          .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
                          .withReason("Nearest sampling at destination pixel centers")},
                     {"optimizeSpeed.svg",
-                     Params::RenderOnly(
-                         "The deprecated optimizeSpeed value maps to crisp-edges nearest "
-                         "sampling. The vendored reference chooses a different allowed nearest "
-                         "grid under viewport scaling; an authored public-renderer identity test "
-                         "pins the alias contract")},
+                     Params::Skip("Reference oracle: allowed crisp-edges nearest grid differs from "
+                                  "the resvg pixel-center convention under viewport scaling")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

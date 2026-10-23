@@ -551,28 +551,6 @@ TEST(RendererPublicApiTest, PngIntrinsicDimensionsPlaceWidthHeightAndAutoImages)
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-TEST(RendererPublicApiTest, EmbeddedSvgUsesDocumentFontContext) {
-  constexpr std::string_view kChild =
-      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' "
-      "font-family='Public Sans' font-size='12'>"
-      "<rect x='1' y='1' width='3' height='3' fill='#27ae60'/>"
-      "<text x='6' y='13'>I</text></svg>";
-  SVGDocument embedded = ParseDocument(
-      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
-      "<image width='16' height='16' href='" +
-      SvgDataUrl(kChild) + "'/></svg>");
-  SVGDocument expected = ParseDocument(kChild);
-
-  Renderer renderer;
-  renderer.draw(embedded);
-  Renderer expectedRenderer;
-  expectedRenderer.draw(expected);
-  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
-                                       NormalizeSnapshot(expectedRenderer.takeSnapshot()),
-                                       "embedded-svg-document-font-context",
-                                       editor::tests::PixelmatchIdentityParams());
-}
-
 TEST(RendererPublicApiTest, SecureDataSvgDoesNotExecuteExperimentalAnimation) {
   constexpr std::string_view kChild =
       "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
@@ -2906,6 +2884,32 @@ std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1
     }
   }
   return covered;
+}
+
+TEST(RendererPublicApiTest, EmbeddedSvgUsesDocumentFontContext) {
+  constexpr std::string_view kChild =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' "
+      "font-family='Public Sans' font-size='12'>"
+      "<rect x='1' y='1' width='3' height='3' fill='#27ae60'/>"
+      "<text x='6' y='13'>I</text></svg>";
+  SVGDocument embedded = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<image width='16' height='16' href='" +
+      SvgDataUrl(kChild) + "'/></svg>");
+  SVGDocument expected = ParseDocument(kChild);
+
+  Renderer renderer;
+  renderer.draw(embedded);
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap embeddedBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  EXPECT_THAT(CoveredPixels(embeddedBitmap, 5, 4, 16, 16), Gt(0u))
+      << "The region excludes the green control and must contain the embedded text.";
+  EXPECT_THAT(CoveredPixels(expectedBitmap, 5, 4, 16, 16), Gt(0u));
+  editor::tests::CompareBitmapToBitmap(embeddedBitmap, expectedBitmap,
+                                       "embedded-svg-document-font-context",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 /// A renderer that could not read its frame back returns an empty snapshot, which covers no pixel

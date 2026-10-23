@@ -223,17 +223,20 @@ eras with different `<image>` upscale kernels:
 
 The `embedded-svg-with-text` policy case is independently qualified: the vendored reference omits
 the embedded SVG's text, while Donner uses the document font catalog. An authored
-embedded-versus-direct renderer identity test pins Donner's behavior, so the corpus row is
+`EmbeddedSvgUsesDocumentFontContext` case checks embedded-versus-direct identity plus visible text
+ink in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant, so the corpus row is
 render-only rather than a missing feature.
 
 **Next step (needs a maintainer decision):** refresh the whole
 `structure/image` golden set from current resvg and adopt Mitchell-bicubic in
 `RendererTinySkia::drawImage`/`drawBitmap` (+ the Geode sampler) to match
-current resvg, or keep bilinear and leave the 13 mismatched-era tests skipped.
+current resvg, or keep bilinear and leave the 12 kernel-dependent tests skipped.
 Per-test threshold inflation is not an option.
 
-The kernel measurements above were introduced in `be5f999367` without a retained executable or
-raw output. They remain historical evidence rather than a current reproduction. Reclassification
+The kernel measurements above were introduced in `be5f999367`; reproduction metadata and raw
+output are not included with those recorded measurements. They remain historical claims rather
+than a current reproduction. Reclassification
 of the 12 kernel-dependent issue #1168 rows requires a fresh run pinned to the source, decoder,
 reference images, transforms, and compared kernels; the independent PNG intrinsic-placement test
 separately prevents a sampling-policy decision from concealing sizing or placement regressions.
@@ -309,7 +312,7 @@ content-placement transform.
 | structure/svg             |     0 | `structure/svg/funcIRI-with-quotes.svg` compares with ordinary budgets after the [paint URL parsing fix](../../donner/svg/properties/PropertyRegistry.cc), and `structure/svg/nested-svg-one-with-rect-and-one-with-viewBox.svg` compares with ordinary budgets after the [viewport sizing fix](../../donner/svg/components/layout/LayoutSystem.cc). |
 | structure/style           |     1 | CSS `@import` / external CSS remains unsupported: imports are diagnosed and ignored, with no target requests; `UnsupportedCssImportsNeverRequestConfiguredResponses` in `//donner/svg/renderer/tests:renderer_public_api_tests` enforces that.                                                                                                                 |
 | structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                                                               |
-| painting/image-rendering  |  **DONE** | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. `on-feImage` uses an independently derived nearest reference. The deprecated `optimizeSpeed` alias is render-only because the vendored image chooses a different allowed nearest grid; an authored public-renderer identity test pins its equality with `crisp-edges`. |
+| painting/image-rendering  |     1 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. `on-feImage` uses an independently derived nearest reference; `optimizeSpeed` remains pending reference qualification at allowed nearest-sampling ties, rather than missing SVG support.                                                                        |
 | masking/clipPath          |     4 | Child clip intersections are unioned independently on both renderers. CSS circle shorthand edge cases remain. Vector text children use shared placed glyph outlines. The transformed-text vendored golden uses ink bounds, unlike SVG 2 full-glyph-cell bounds and Firefox, so it remains classified pending broader browser review.                                                                              |
 | masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                                |
 | text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                          |
