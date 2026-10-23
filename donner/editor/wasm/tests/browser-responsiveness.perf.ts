@@ -544,8 +544,9 @@ async function continuousDrag(
       sample.presentation?.inputRepresented
       && sample.presentation.completedSerial > (before.presentation?.completedSerial ?? 0)
       && sample.presentation.completedAtMs >= stream.startedAtMs
-      && stream.dispatchPoints.findIndex((applied) =>
+      && stream.dispatchPoints.findLastIndex((applied, appliedIndex) =>
           applied.x === sample.presentation!.pointerX && applied.y === sample.presentation!.pointerY
+          && stream.dispatchTimes[appliedIndex] <= sample.presentation!.completedAtMs
         ) >= index
       && sample.presentation.completedAtMs >= stream.dispatchTimes[index]
     );
