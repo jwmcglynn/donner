@@ -14,7 +14,7 @@
 
 namespace donner::svg {
 
-inline constexpr size_t kMaximumTextPathWarpExpansion = 64u;
+inline constexpr size_t kMaximumTextPathWarpExpansion = 256u;
 
 namespace text_path_warp_details {
 
@@ -124,7 +124,7 @@ public:
       : mapping_(mapping),
         glyph_(glyph),
         points_(points),
-        tolerance_(tolerance),
+        tolerance_(tolerance * 0.5),
         remainingOutput_(points.size() * kMaximumTextPathWarpExpansion),
         remainingBoundaryStorage_(points.size() * kMaximumTextPathWarpExpansion) {}
 
@@ -308,6 +308,7 @@ private:
       return start * (u * u) + control * (2.0 * u * t) + end * (t * t);
     };
     if (monotonicQuadraticX(start, control, end) &&
+        controlResidualWithinTolerance(start, control, end) &&
         mappedCurveWithinTolerance(start, end, evaluate(0.25), evaluate(0.5), evaluate(0.75))) {
       return appendLine(end);
     }
@@ -329,6 +330,8 @@ private:
              secondControl * (3.0 * u * t * t) + end * (t * t * t);
     };
     if (monotonicCubicX(start, firstControl, secondControl, end) &&
+        controlResidualWithinTolerance(start, firstControl, end) &&
+        controlResidualWithinTolerance(start, secondControl, end) &&
         mappedCurveWithinTolerance(start, end, evaluate(0.25), evaluate(0.5), evaluate(0.75))) {
       return appendLine(end);
     }
@@ -376,6 +379,18 @@ private:
                               const Vector2d& end) {
     return start.x <= end.x ? first.x >= start.x && second.x >= first.x && end.x >= second.x
                             : first.x <= start.x && second.x <= first.x && end.x <= second.x;
+  }
+  bool controlResidualWithinTolerance(const Vector2d& start, const Vector2d& control,
+                                      const Vector2d& end) const {
+    const double dx = end.x - start.x;
+    if (dx == 0.0) {
+      return start.y <= end.y ? control.y >= start.y && control.y <= end.y
+                              : control.y <= start.y && control.y >= end.y;
+    }
+    const double ratio = (control.x - start.x) / dx;
+    const double residual = control.y - (start.y + ratio * (end.y - start.y));
+    return std::isfinite(ratio) && ratio >= 0.0 && ratio <= 1.0 && std::isfinite(residual) &&
+           std::abs(residual) <= tolerance_;
   }
   const StretchedTextPath& mapping_;
   const TextGlyph& glyph_;
