@@ -1858,6 +1858,23 @@ TEST(Path, StrokeToFillMiterClipHonorsTheBisectorLimitInBothDirections) {
   }
 }
 
+TEST(Path, StrokeToFillMiterClipBoundsExactAndNearReversals) {
+  for (double direction : {-1.0, 1.0}) {
+    for (double offset : {-1e-11, 0.0, 1e-11}) {
+      SCOPED_TRACE(direction);
+      SCOPED_TRACE(offset);
+      const Path path =
+          PathBuilder().moveTo({0, 0}).lineTo({10 * direction, 0}).lineTo({0, offset}).build();
+      const Path outline = path.strokeToFill(
+          {.width = 2, .join = LineJoin::MiterClip, .miterLimit = 1.2}, kFlattenTolerance);
+      EXPECT_THAT(StrokeContains(outline, {10.5 * direction, 0}), testing::IsTrue());
+      EXPECT_THAT(StrokeContains(outline, {11.3 * direction, 0}), testing::IsFalse());
+      const Box2d bounds = outline.bounds();
+      EXPECT_NEAR(direction > 0 ? bounds.bottomRight.x : -bounds.topLeft.x, 11.2, 1e-9);
+    }
+  }
+}
+
 TEST(Path, StrokeToFillMiterClipHandlesNonExtendingAndNaNLimits) {
   const Path path = PathBuilder().moveTo({20, 36}).lineTo({32, 20}).lineTo({44, 36}).build();
   const Path bevel = path.strokeToFill({.width = 10, .join = LineJoin::Bevel}, kFlattenTolerance);
