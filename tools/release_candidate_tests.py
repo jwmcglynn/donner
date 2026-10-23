@@ -99,6 +99,20 @@ class ZipValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "publishable role"):
             candidate._verify_role_files("bcr-entry", required - {"admission.json"}, "0.8.0")
 
+    def test_editor_inventory_accepts_legacy_or_complete_dialog_script_pair(self):
+        legacy = {"provenance.json", "SHA256SUMS", "MODULE.bazel.lock", "site/editor.wasm",
+                  "deploy/editor.wasm.gz"}
+        legacy.update(f"{prefix}/{name}" for prefix in ("site", "deploy")
+                      for name in candidate.EDITOR_COMMON_FILES)
+        dialogs = {"site/browser-file-dialogs.js", "deploy/browser-file-dialogs.js"}
+        candidate._verify_role_files("editor", legacy, "0.8.0")
+        candidate._verify_role_files("editor", legacy | dialogs, "0.8.0")
+        for extra in ({name} for name in dialogs):
+            with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "publishable role"):
+                candidate._verify_role_files("editor", legacy | extra, "0.8.0")
+        with self.assertRaisesRegex(ValueError, "publishable role"):
+            candidate._verify_role_files("editor", legacy | dialogs | {"site/extra.js"}, "0.8.0")
+
     def test_private_shaped_or_control_character_names_are_rejected_without_echo(self):
         with self.assertRaisesRegex(ValueError, "publishable role"):
             candidate._verify_role_files("source", {"home/user/private.txt"}, "0.8.0")
@@ -574,6 +588,40 @@ class SourceAndEditorTest(unittest.TestCase):
         del expected["deploy/editor.wasm.gz"]
         with self.assertRaisesRegex(ValueError, "required site or deploy"):
             candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
+
+    def test_editor_dialog_script_matches_selected_source_and_preserves_legacy(self):
+        script = b"globalThis.dialogs = {};\n"
+        cases = {
+            "legacy": (False, {}, True),
+            "new": (True, {"site": script, "deploy": script}, True),
+            "missing": (True, {}, False),
+            "missing-site": (True, {"deploy": script}, False),
+            "missing-deploy": (True, {"site": script}, False),
+            "changed": (True, {"site": script, "deploy": b"changed"}, False),
+            "legacy-extra": (False, {"site": script, "deploy": script}, False),
+        }
+        for name, (has_source, copies, accepted) in cases.items():
+            with self.subTest(case=name):
+                self.setUp()
+                directory, provenance, expected = self._editor_package()
+                if has_source:
+                    (self.root / "donner/editor/wasm/browser-file-dialogs.js").write_bytes(script)
+                for prefix, data in copies.items():
+                    relative = f"{prefix}/browser-file-dialogs.js"
+                    (directory / relative).write_bytes(data)
+                    expected[relative] = digest(data)
+                checksums = "".join(f"{sha}  {path}\n" for path, sha in sorted(expected.items())
+                                    if path.startswith(("site/", "deploy/")))
+                (directory / "SHA256SUMS").write_text(checksums)
+                expected["SHA256SUMS"] = digest(checksums.encode())
+                self._write_editor_provenance(directory, provenance, expected)
+                if accepted:
+                    self.assertEqual(
+                        candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2"),
+                        expected["MODULE.bazel.lock"])
+                else:
+                    with self.assertRaisesRegex(ValueError, "dialog script"):
+                        candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
 
     def _rewrite_editor_bytes(self, directory, expected, raw, served):
         for name, data in (("site/editor.wasm", raw), ("deploy/editor.wasm.gz", served)):
@@ -1098,6 +1146,21 @@ class AssemblyAndReleaseTest(unittest.TestCase):
         self.assertEqual({path.relative_to(output).as_posix() for path in output.rglob("*")
                           if path.is_file()}, set(entry["files"]))
         payload.assert_called_once_with("bcr-entry", output, entry, record, self.root)
+
+    def test_editor_fetch_requires_the_clean_exact_source_checkout(self):
+        record = json.loads(self.assemble())
+        with self.patches():
+            candidate.fetch_role(record, "editor", self.root, self.base / "clean.zip",
+                                 self.base / "clean", self.github, self.download)
+            (self.root / "untracked.txt").write_text("dirty")
+            with self.assertRaisesRegex(ValueError, "clean exact-source"):
+                candidate.fetch_role(record, "editor", self.root, self.base / "dirty.zip",
+                                     self.base / "dirty", self.github, self.download)
+            (self.root / "untracked.txt").unlink()
+            record["source"]["commit"] = "f" * 40
+            with self.assertRaisesRegex(ValueError, "clean exact-source"):
+                candidate.fetch_role(record, "editor", self.root, self.base / "other.zip",
+                                     self.base / "other", self.github, self.download)
 
     def test_published_role_must_still_be_retained_and_unchanged(self):
         _, _, files = self.publish_record()
