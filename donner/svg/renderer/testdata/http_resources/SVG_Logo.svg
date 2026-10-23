@@ -2,7 +2,7 @@
 
   <title>SVG Logo</title>
   <desc>Designed for the SVG Logo Contest in 2006 by Harvey Rayner, and adopted by W3C in 2009. It is available under the Creative Commons license for those who have an SVG product or who are using SVG on their site.</desc>
- 
+
    <metadata id="license">
      <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://web.resource.org/cc/">
        <cc:Work rdf:about="">
@@ -28,7 +28,7 @@
        </cc:License>
      </rdf:RDF>
    </metadata>
-   
+
 
    <defs>
      <g id="SVG" fill="#ffffff" transform="scale(2) translate(20,79)">

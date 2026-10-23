@@ -1,8 +1,8 @@
 # Local copies for the resvg HTTPS cases
 
-These files are unmodified local copies. The test-only resource loader recognizes only the two
+These files are local copies of the original resources. The test-only resource loader recognizes only the two
 original HTTPS identifiers below; tests never fetch the network. Git pins the bytes, and the hashes
-record the imported versions.
+record the original imported versions.
 
 | File | Original URL | SHA-256 |
 | --- | --- | --- |
@@ -18,5 +18,6 @@ No changes were made.
 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), as offered by the
 [W3C SVG logo usage policy](https://www.w3.org/2009/08/svg-logos.html#LogoWithoutW3C).
 [Downloaded source](https://commons.wikimedia.org/wiki/File:SVG_Logo.svg).
-No changes were made, including to the historical license metadata embedded in the SVG. The current
+Only trailing whitespace on two lines was removed. The geometry and historical license metadata
+embedded in the SVG are unchanged. The stored SVG SHA-256 is `d30bfc13fbe53152e2eaf3cec4c010c074097780dea5d25eb5a8ba6c0016eba9`. The current
 W3C policy provides the CC BY-SA 4.0 option separately. These test inputs do not imply endorsement.

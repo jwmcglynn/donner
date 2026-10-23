@@ -13,6 +13,7 @@ filegroup(
         # scanline rasterizer goldens in `golden/`, so it has its own set).
         "golden/*/*.png",
     ]) + [
+        "http_resources/SOURCES.md",
         "//:logo_svgs",
     ],
     visibility = [
