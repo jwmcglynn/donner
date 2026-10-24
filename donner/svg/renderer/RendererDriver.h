@@ -336,6 +336,10 @@ private:
    * `RenderingInstanceComponent` pool).
    */
   void prepareFilterGraphs(Registry& registry, std::span<const Entity> entities);
+  bool configureFilterStages(std::vector<components::FilterGraph>& stages, const Box2d& viewBox,
+                             const std::optional<Box2d>& elementBounds);
+  bool materializeFilterStages(std::vector<components::FilterGraph>& stages, Registry& registry,
+                               Entity entity);
   const components::RenderingInstanceComponent* beginPreparingFilterEntity(Registry& registry,
                                                                            Entity entity);
   bool reservePreparedFilterGraph(const components::FilterGraph& filterGraph);
@@ -345,12 +349,11 @@ private:
   std::shared_ptr<const std::vector<std::uint8_t>> adoptPreparedFilterSnapshot(
       RendererBitmap snapshot, std::uint64_t reservedBytes, Registry& registry);
 
-  /// Fetch a prepared filter graph for an entity, if any. Returns nullptr if the entity has no
-  /// filter or if the pre-pass didn't record one for it.
-  const components::FilterGraph* preparedFilterGraphFor(Entity entity) const;
-
-  /// Fetch the prepared filter region for an entity, if any.
-  std::optional<Box2d> preparedFilterRegionFor(Entity entity) const;
+  /// Return prepared stages whose storage remains valid until the next preparation pass.
+  /// A missing entry indicates preparation failed; an empty vector disables filtering.
+  const std::vector<components::FilterGraph>* preparedFilterStagesFor(Entity entity) const;
+  void pushFilterStages(const std::vector<components::FilterGraph>* stages);
+  void popFilterStages(std::size_t count);
 
   void drawPreparedDocument(SVGDocument& document);
   void drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
@@ -461,7 +464,7 @@ private:
     Entity lastEntity{};
     bool hasViewportClip = false;
     bool hasIsolatedLayer = false;
-    bool hasFilterLayer = false;
+    std::size_t filterLayerCount = 0;
     bool hasEntityClip = false;
     int maskDepth = 0;
   };
@@ -549,12 +552,7 @@ private:
   /// Filter graphs resolved and pre-rendered by \ref prepareFilterGraphs. Keyed by the entity
   /// whose filter produced the graph. Populated in a pre-pass before \ref traverse so the main
   /// traversal never mutates \ref components::RenderingInstanceComponent storage mid-iteration.
-  std::unordered_map<Entity, components::FilterGraph> preparedFilterGraphs_;
-
-  /// Filter regions resolved alongside \ref preparedFilterGraphs_. Stored separately because
-  /// `computeFilterRegion` needs the (live) `RenderingInstanceComponent` reference, and the region
-  /// is otherwise just an `std::optional<Box2d>` value pulled back out per-entity in traverse.
-  std::unordered_map<Entity, std::optional<Box2d>> preparedFilterRegions_;
+  std::unordered_map<Entity, std::vector<components::FilterGraph>> preparedFilterGraphs_;
 };
 
 }  // namespace donner::svg

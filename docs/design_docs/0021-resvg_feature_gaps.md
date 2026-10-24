@@ -123,6 +123,23 @@ regression, and both comparison modes pass; do not restore the category-level di
 
 ---
 
+## CSS filter reference stages
+
+Each URL in a CSS filter list receives the previous stage's output as its own `SourceGraphic`
+and `SourceAlpha`. Named results remain local to that filter element; its filter region,
+primitive units and color space remain intact. Adjacent CSS functions share an sRGB stage.
+An invalid URL disables the chain, while a valid empty filter produces transparent output;
+a later flood can still paint over that output. The aggregate 32-node limit and frame budgets
+apply across the stages, and rejected preparation suppresses the whole filtered subtree.
+
+Independent geometric tests cover repeated references, input and result scope, filter regions,
+object-bounding-box units, empty stages, expanded captures and original CPU paint inputs. Nested
+captures preserve their coordinate offsets through groups and use existing renderer surfaces;
+GPU stages remain on the GPU. These contracts do not replace or widen corpus pixel tolerances. The
+`invalid-FuncIRI` and `one-invalid-url-in-list` PNGs encode incompatible invalid-URL behavior;
+they retain explicit render-only qualifications backed by visible-geometry assertions, documented
+in [0009](0009-resvg_test_suite_bugs.md#invalid-filter-url-reference-qualifications).
+
 ## External resource policy
 
 The resvg harness uses a test-only loader that maps the two exact HTTPS identifiers in
