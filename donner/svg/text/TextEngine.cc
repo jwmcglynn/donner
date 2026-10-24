@@ -3703,7 +3703,7 @@ bool ReferenceSpanIsInSubtree(Registry& registry, Entity source, Entity subtree,
   return false;
 }
 
-Transform2d ReferenceGlyphPlacement(const TextGlyph& glyph) {
+Transform2d TextRootFromReferenceGlyph(const TextGlyph& glyph) {
   return Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
          Transform2d::Translate(glyph.xPosition, glyph.yPosition);
 }
@@ -3714,7 +3714,7 @@ bool AddReferenceGlyphCell(TextEngine::ReferenceGeometry& result, const TextGlyp
   const double verticalScale = glyph.fontSizeScale * glyph.stretchScaleY;
   const Box2d localCell(Vector2d(std::min(0.0, advance), -emTop * verticalScale),
                         Vector2d(std::max(0.0, advance), emBottom * verticalScale));
-  const Box2d cell = ReferenceGlyphPlacement(glyph).transformBox(localCell);
+  const Box2d cell = TextRootFromReferenceGlyph(glyph).transformBox(localCell);
   if (!std::isfinite(cell.topLeft.x) || !std::isfinite(cell.topLeft.y) ||
       !std::isfinite(cell.bottomRight.x) || !std::isfinite(cell.bottomRight.y)) {
     return work.reject();
@@ -3755,9 +3755,10 @@ bool AppendReferenceOutline(const TextEngine& engine, FontManager& manager, cons
   if (!work.reservePath(raw) || !work.reserve(1)) {
     return false;
   }
-  const Transform2d placement =
-      Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY) * ReferenceGlyphPlacement(glyph);
-  Path placed = raw.transformed(placement);
+  const Transform2d textRootFromGlyph =
+      Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY) *
+      TextRootFromReferenceGlyph(glyph);
+  Path placed = raw.transformed(textRootFromGlyph);
   const Box2d bounds = placed.bounds();
   if (!IsFiniteTextPosition(bounds.topLeft) || !IsFiniteTextPosition(bounds.bottomRight)) {
     return work.reject();
