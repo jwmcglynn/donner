@@ -111,6 +111,42 @@ protected:
   RendererDriver driver{renderer};
 };
 
+TEST_F(RendererDriverTest, MiterClipRangeBoundsIncludeTheClippedTip) {
+  auto document = makeDocument(R"svg(
+    <path id="stroke" d="M20 36 L32 20 L44 36" fill="none" stroke="green"
+          stroke-width="10" stroke-linejoin="miter-clip" stroke-miterlimit="1.2"/>
+  )svg",
+                               Vector2i(64, 64));
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  const auto element = document.querySelector("#stroke");
+  ASSERT_THAT(element, testing::Ne(std::nullopt));
+  const Entity entity = element->entityHandle().entity();
+  const auto bounds = driver.computeEntityRangeBounds(
+      document.registry(), entity, entity, RenderViewport{.size = Vector2d(64, 64)}, Transform2d());
+  ASSERT_THAT(bounds, testing::Ne(std::nullopt));
+  EXPECT_LE(bounds->topLeft.y, 14.0);
+}
+
+TEST_F(RendererDriverTest, MiterClipRangeBoundsIncludeDiagonalReversalCorners) {
+  auto document = makeDocument(R"svg(
+    <path id="stroke" d="M10 10 L20 20 L10 10" fill="none" stroke="green"
+          stroke-width="2" stroke-linejoin="miter-clip" stroke-miterlimit="1.2"/>
+  )svg",
+                               Vector2i(64, 64));
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  const auto element = document.querySelector("#stroke");
+  ASSERT_THAT(element, testing::Ne(std::nullopt));
+  const Entity entity = element->entityHandle().entity();
+  const auto bounds = driver.computeEntityRangeBounds(
+      document.registry(), entity, entity, RenderViewport{.size = Vector2d(64, 64)}, Transform2d());
+  ASSERT_THAT(bounds, testing::Ne(std::nullopt));
+  const double corner = 20.0 + 2.2 / std::sqrt(2.0);
+  EXPECT_GE(bounds->bottomRight.x, corner);
+  EXPECT_GE(bounds->bottomRight.y, corner);
+}
+
 TEST_F(RendererDriverTest, BeginsAndEndsFrameAroundTraversal) {
   SVGDocument document = makeDocument(R"svg(
     <rect width="8" height="6" fill="red" />

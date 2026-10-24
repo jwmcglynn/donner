@@ -951,8 +951,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"arcs.svg",
                      Params::RenderOnly("SVG Strokes draft arcs is not implemented: documented "
                                         "miter fallback; reference is the UB marker (#1186)")},
-                    {"miter-clip.svg",
-                     Params::RenderOnly("UB (SVG 2), no UA supports `miter-clip`")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

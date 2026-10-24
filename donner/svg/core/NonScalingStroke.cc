@@ -86,12 +86,16 @@ double StrokeCullHalfExtent(double strokeWidth, StrokeLinecap linecap, StrokeLin
   double joinReach = halfStroke;
   switch (linejoin) {
     case StrokeLinejoin::Miter:
-    case StrokeLinejoin::MiterClip:
     case StrokeLinejoin::Arcs:
       // An unbounded miter limit means the tip is unbounded too. A cull bound may only
       // over-count, so report an infinite reach and let the caller decline to cull.
       joinReach = std::isfinite(miterLimit) ? halfStroke * std::max(1.0, miterLimit)
                                             : std::numeric_limits<double>::infinity();
+      break;
+    case StrokeLinejoin::MiterClip:
+      joinReach = std::isfinite(miterLimit)
+                      ? halfStroke * std::hypot(std::max(1.0, miterLimit), 1.0)
+                      : std::numeric_limits<double>::infinity();
       break;
     case StrokeLinejoin::Round:
     case StrokeLinejoin::Bevel: joinReach = halfStroke; break;

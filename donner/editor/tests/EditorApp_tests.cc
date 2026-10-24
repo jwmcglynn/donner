@@ -1981,6 +1981,19 @@ TEST(EditorAppTest, HitTestRectFindsAllIntersectingElements) {
   EXPECT_THAT(ElementIds(edgeHits), ::testing::ElementsAre("r1"));
 }
 
+TEST(EditorAppTest, MiterClipMarqueeIncludesTheClippedTip) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+      <path id="stroke" d="M20 36 L32 20 L44 36" fill="none" stroke="green"
+            stroke-width="10" stroke-linejoin="miter-clip" stroke-miterlimit="1.2"/>
+    </svg>)svg"),
+              testing::IsTrue());
+  EXPECT_THAT(ElementIds(app.hitTestRect(Box2d::FromXYWH(31, 13.5, 2, 1))),
+              testing::ElementsAre("stroke"));
+  EXPECT_THAT(app.hitTestRect(Box2d::FromXYWH(31, 12, 2, 1)), testing::IsEmpty());
+}
+
 TEST(EditorAppTest, HitTestRectUsesFilledShapeIntersectionNotAabb) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(

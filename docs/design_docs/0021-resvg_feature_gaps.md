@@ -156,6 +156,20 @@ content. The comparison remains gated pending background and typography referenc
 An independently authored inline-versus-external text-fragment comparison covers host style
 inheritance, fragment selection, the callback identifier and transparent canvas behavior.
 
+## Miter-clip stroke joins
+
+Both renderers distinguish `miter-clip` from the bevel fallback of ordinary `miter`. The shared
+outline stroker clips the exterior join at the configured bisector distance, including exact and
+near reversals, without constructing an unbounded tip. Selection, marquee, culling, range and
+thumbnail bounds include the clipped-corner extent. The original `miter-clip.svg` corpus case uses
+its ordinary comparison settings; analytic geometry tests and sanitizer corpus seeds cover the
+bounded construction.
+
+This is support for the existing parsed join value and the geometry described in the
+[SVG Strokes draft](https://www.w3.org/TR/svg-strokes/#StrokeLinejoinProperty), not a claim that all
+experimental stroke joins are implemented. `arcs` retains its miter fallback and remains a separate
+reference/feature qualification case.
+
 ## Masked bugs behind inflated CPU thresholds
 
 These tests **pass**, but only because `maxMismatchedPixels` was raised far above
