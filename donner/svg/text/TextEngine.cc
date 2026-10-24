@@ -3845,8 +3845,8 @@ Path PlaceCachedGlyphOutline(Path outline, const TextRun& run, const TextGlyph& 
   return transformPath(outline, textElementFromGlyphLocal);
 }
 
-void PopulateCachedGlyph(TextEngine& engine, Registry& registry, Entity textRootEntity,
-                         const TextRun& run,
+void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fontManager,
+                         Entity textRootEntity, const TextRun& run,
                          const components::ComputedTextComponent::TextSpan& span,
                          const TextGlyph& glyph, float runFontSizePx, bool hasPaintedGlyphs,
                          components::ComputedTextGeometryComponent::CharacterGeometry& charGeom,
@@ -3872,12 +3872,13 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, Entity textRoot
   }
 
   const float emScale = run.font ? engine.scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
-  if (run.stretchedTextPath &&
-      !ReserveStretchedCacheOutline(registry, registry.ctx().get<FontManager>(), textRootEntity,
-                                    run.font, glyph.glyphIndex, stretchedCacheReservation)) {
-    return;
-  }
-  Path glyphPath = engine.glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
+  const bool outlineAdmitted =
+      !run.stretchedTextPath ||
+      ReserveStretchedCacheOutline(registry, fontManager, textRootEntity, run.font,
+                                   glyph.glyphIndex, stretchedCacheReservation);
+  Path glyphPath = outlineAdmitted ? engine.glyphOutline(run.font, glyph.glyphIndex,
+                                                         emScale * glyph.fontSizeScale)
+                                   : Path();
   if (!glyphPath.empty()) {
     Path transformed = PlaceCachedGlyphOutline(std::move(glyphPath), run, glyph);
     if (transformed.empty()) {
@@ -3894,8 +3895,8 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, Entity textRoot
   }
 }
 
-void PopulateCachedTextRun(TextEngine& engine, Registry& registry, Entity textRootEntity,
-                           const TextRun& run,
+void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& fontManager,
+                           Entity textRootEntity, const TextRun& run,
                            const components::ComputedTextComponent::TextSpan& span,
                            components::ComputedTextGeometryComponent& cache, bool& hasInkBounds,
                            bool& hasEmBoxBounds, std::size_t& objectBoundingBoxSpanVisits,
@@ -3932,9 +3933,10 @@ void PopulateCachedTextRun(TextEngine& engine, Registry& registry, Entity textRo
                                       ? apiMappings.byteToFirstUnit[glyph.cluster]
                                       : 0;
     if (localCharIndex < localCharCount) {
-      PopulateCachedGlyph(engine, registry, textRootEntity, run, span, glyph, runFontSizePx,
-                          hasPaintedGlyphs, cache.characters[charBaseIndex + localCharIndex], cache,
-                          hasInkBounds, stretchedCacheReservation);
+      PopulateCachedGlyph(engine, registry, fontManager, textRootEntity, run, span, glyph,
+                          runFontSizePx, hasPaintedGlyphs,
+                          cache.characters[charBaseIndex + localCharIndex], cache, hasInkBounds,
+                          stretchedCacheReservation);
     }
   }
   ExpandApiCharacterGeometryAliases(cache, charBaseIndex, apiMappings);
@@ -3986,9 +3988,9 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   std::size_t stretchedCacheReservation = 0u;
   for (size_t runIndex = 0; runIndex < runs.size() && runIndex < styledText.spans.size();
        ++runIndex) {
-    PopulateCachedTextRun(const_cast<TextEngine&>(*this), registry_, textRootEntity, runs[runIndex],
-                          styledText.spans[runIndex], cache, hasInkBounds, hasEmBoxBounds,
-                          objectBoundingBoxSpanVisits_, stretchedCacheReservation);
+    PopulateCachedTextRun(const_cast<TextEngine&>(*this), registry_, fontManager_, textRootEntity,
+                          runs[runIndex], styledText.spans[runIndex], cache, hasInkBounds,
+                          hasEmBoxBounds, objectBoundingBoxSpanVisits_, stretchedCacheReservation);
   }
 
   BuildTextObjectBoundsIndex(registry_, textRootEntity, cache);
