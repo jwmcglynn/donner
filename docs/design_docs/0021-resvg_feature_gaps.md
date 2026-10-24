@@ -91,7 +91,7 @@ bottom for completeness.
 
 | ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B2  | `filters/filter-functions` coverage                                     | **DONE** (28/43 files compare) | All cases execute; 15 reference qualifications have independent contract tests.                                                                                                                                           |
+| B2  | `filters/filter-functions` coverage                                     | **DONE** (27/43 files compare) | All cases execute; 16 reference qualifications have independent contract tests.                                                                                                                                           |
 | B3  | `structure/image` golden kernel-era mismatch                            |                             12 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
@@ -110,9 +110,10 @@ bottom for completeness.
 
 ### B2: `filters/filter-functions` category coverage
 
-All 43 fixtures execute. Twenty-eight retain ordinary comparisons, including `blur-function` and
-`drop-shadow-function-filter-region`; fifteen have explicit reference qualifications and independent
-`CssFilterContract*` rendering assertions. No threshold or golden is changed.
+All 43 fixtures execute. Twenty-seven retain ordinary comparisons, including `blur-function` and
+`drop-shadow-function-filter-region`; sixteen have explicit reference qualifications and independent
+rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL case uses
+`FilterReferenceStages`. No threshold or golden is changed.
 
 | Assigned cases | Disposition |
 | --- | --- |
@@ -121,6 +122,7 @@ All 43 fixtures execute. Twenty-eight retain ordinary comparisons, including `bl
 | `two-exact-urls` | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph. |
 | `two-urls` | Chained flood/blur matches the equivalent single primitive graph. The historical difference is at the filter-region boundary (2,191 CPU / 2,618 Geode pixels); boundary sampling remains with #1170. |
 | `url-and-grayscale` | CSS functions use sRGB. An independent solid-color oracle gives 115 for the sample's encoded-channel luminance; the historical reference center is 122, consistent with linearRGB processing. |
+| `one-invalid-url-in-list` | An invalid URL disables the entire chain rather than preserving the prior stage. `FilterReferenceStages.InvalidReferenceDisablesEntireChain` independently covers that behavior. |
 
 [Filter Effects](https://www.w3.org/TR/filter-effects-1/#FilterFunctions) defines function grammar,
 sRGB processing and chaining. Drop-shadow now rejects nonzero unitless CSS lengths while preserving
