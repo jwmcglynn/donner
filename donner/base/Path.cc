@@ -674,10 +674,13 @@ std::optional<std::size_t> Path::MeasuredPath::outgoingSegmentIndexAtBoundary(
 
 Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance,
                                                        BoundarySide boundarySide) const {
-  if (!valid_ || !std::isfinite(distance) || distance < 0.0 || distance > totalLength_) {
+  if (!valid_ || !std::isfinite(distance) || distance < 0.0) {
     return {{}, {}, 0.0, false};
   }
   if (segments_.empty()) {
+    return {endpoint_, {}, 0.0, false};
+  }
+  if (distance > totalLength_) {
     return {endpoint_, {}, 0.0, false};
   }
   const auto segmentIndex = segmentIndexAtArcLength(distance, boundarySide);
