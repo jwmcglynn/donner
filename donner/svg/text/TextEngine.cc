@@ -2992,12 +2992,15 @@ private:
       return 0.0;
     }
     const FontVMetrics metrics = backend_.fontVMetrics(state.font);
-    const double alignmentShift =
-        state.span->alignmentBaseline == DominantBaseline::Auto ||
-                state.span->alignmentBaseline == DominantBaseline::Central
-            ? 0.0
-            : verticalCentralOriginOffset(state, metrics) -
-                  computeBaselineShift(state.span->alignmentBaseline, metrics, state.scale);
+    const DominantBaseline baseline = state.span->alignmentBaseline;
+    const bool usesCentralOrigin =
+        baseline == DominantBaseline::Auto || baseline == DominantBaseline::Central ||
+        baseline == DominantBaseline::UseScript || baseline == DominantBaseline::ResetSize ||
+        baseline == DominantBaseline::NoChange;
+    const double alignmentShift = usesCentralOrigin
+                                      ? 0.0
+                                      : verticalCentralOriginOffset(state, metrics) -
+                                            computeBaselineShift(baseline, metrics, state.scale);
     // Baseline alignment is transversal to the inline axis. In both vertical writing modes,
     // line-over is right and line-under is left, so a positive horizontal baseline distance
     // maps to negative X. The alignment offset above is already expressed in physical X;
