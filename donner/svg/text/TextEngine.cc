@@ -3800,16 +3800,6 @@ bool ReserveStretchedCacheOutline(Registry& registry, FontManager& fontManager, 
   return TextGeometryBudget(registry).reserve(owner, retainedBytes);
 }
 
-Path TextEngine::cachedGlyphOutline(const TextRun& run, const TextGlyph& glyph, float scale,
-                                    Entity owner, std::size_t& stretchedReservation) const {
-  if (run.stretchedTextPath &&
-      !ReserveStretchedCacheOutline(registry_, fontManager_, owner, run.font, glyph.glyphIndex,
-                                    stretchedReservation)) {
-    return Path();
-  }
-  return glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
-}
-
 std::optional<Box2d> CachedTextRunCellBounds(const TextRun& run, double emTop, double emBottom) {
   Box2d result;
   bool initialized = false;
@@ -3853,6 +3843,101 @@ Path PlaceCachedGlyphOutline(Path outline, const TextRun& run, const TextGlyph& 
         textElementFromGlyphLocal;
   }
   return transformPath(outline, textElementFromGlyphLocal);
+}
+
+void PopulateCachedGlyph(TextEngine& engine, Registry& registry, Entity textRootEntity,
+                         const TextRun& run,
+                         const components::ComputedTextComponent::TextSpan& span,
+                         const TextGlyph& glyph, float runFontSizePx, bool hasPaintedGlyphs,
+                         components::ComputedTextGeometryComponent::CharacterGeometry& charGeom,
+                         components::ComputedTextGeometryComponent& cache, bool& hasInkBounds,
+                         std::size_t& stretchedCacheReservation) {
+  if (!charGeom.rendered) {
+    const auto warpedStart =
+        run.stretchedTextPath ? MapTextPathPoint(*run.stretchedTextPath, glyph, Vector2d(0.0, 0.0))
+                              : std::nullopt;
+    charGeom.startPosition = warpedStart.value_or(Vector2d(glyph.xPosition, glyph.yPosition));
+    charGeom.rotation = glyph.rotateDegrees;
+    charGeom.rendered = true;
+  }
+  const auto warpedEnd = run.stretchedTextPath
+                             ? MapTextPathPoint(*run.stretchedTextPath, glyph,
+                                                Vector2d(glyph.xAdvance, glyph.yAdvance))
+                             : std::nullopt;
+  charGeom.endPosition = warpedEnd.value_or(
+      Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + glyph.yAdvance));
+  charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
+  if (!hasPaintedGlyphs) {
+    return;
+  }
+
+  const float emScale = run.font ? engine.scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
+  if (run.stretchedTextPath &&
+      !ReserveStretchedCacheOutline(registry, registry.ctx().get<FontManager>(), textRootEntity,
+                                    run.font, glyph.glyphIndex, stretchedCacheReservation)) {
+    return;
+  }
+  Path glyphPath = engine.glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
+  if (!glyphPath.empty()) {
+    Path transformed = PlaceCachedGlyphOutline(std::move(glyphPath), run, glyph);
+    if (transformed.empty()) {
+      return;
+    }
+    const Box2d extent = transformed.bounds();
+    cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
+    addBox(cache.inkBounds, hasInkBounds, extent);
+    addBox(charGeom.extent, charGeom.hasExtent, extent);
+  } else if (const auto extent = BitmapGlyphExtent(
+                 glyph, engine.bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale))) {
+    addBox(cache.inkBounds, hasInkBounds, *extent);
+    addBox(charGeom.extent, charGeom.hasExtent, *extent);
+  }
+}
+
+void PopulateCachedTextRun(TextEngine& engine, Registry& registry, Entity textRootEntity,
+                           const TextRun& run,
+                           const components::ComputedTextComponent::TextSpan& span,
+                           components::ComputedTextGeometryComponent& cache, bool& hasInkBounds,
+                           bool& hasEmBoxBounds, std::size_t& objectBoundingBoxSpanVisits,
+                           std::size_t& stretchedCacheReservation) {
+  const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+  if (spanText.empty()) {
+    return;
+  }
+  const float runFontSizePx = run.usedFontSizePx;
+  const float runScale = run.font ? engine.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
+  double emTop = static_cast<double>(runFontSizePx);
+  double emBottom = 0.0;
+  if (run.font && runScale > 0.0f) {
+    const FontVMetrics metrics = engine.fontVMetrics(run.font);
+    emTop = static_cast<double>(metrics.ascent) * runScale;
+    emBottom = -static_cast<double>(metrics.descent) * runScale;
+  }
+  const ApiCharacterIndexMappings apiMappings =
+      BuildApiCharacterIndexMappings(spanText, run.glyphs);
+  const size_t localCharCount = apiMappings.firstUnitByUnit.size();
+  const size_t charBaseIndex = cache.characters.size();
+  cache.characters.resize(charBaseIndex + localCharCount);
+  for (size_t i = 0; i < localCharCount; ++i) {
+    cache.characters[charBaseIndex + i].sourceEntity = span.sourceEntity;
+  }
+  if (const auto runEmBounds = CachedTextRunCellBounds(run, emTop, emBottom)) {
+    addBox(cache.emBoxBounds, hasEmBoxBounds, *runEmBounds);
+    ++objectBoundingBoxSpanVisits;
+    AddTextObjectBounds(cache, span.sourceEntity, *runEmBounds);
+  }
+  const bool hasPaintedGlyphs = HasPaintedTextGlyphs(span, run);
+  for (const auto& glyph : run.glyphs) {
+    const size_t localCharIndex = glyph.cluster < apiMappings.byteToFirstUnit.size()
+                                      ? apiMappings.byteToFirstUnit[glyph.cluster]
+                                      : 0;
+    if (localCharIndex < localCharCount) {
+      PopulateCachedGlyph(engine, registry, textRootEntity, run, span, glyph, runFontSizePx,
+                          hasPaintedGlyphs, cache.characters[charBaseIndex + localCharIndex], cache,
+                          hasInkBounds, stretchedCacheReservation);
+    }
+  }
+  ExpandApiCharacterGeometryAliases(cache, charBaseIndex, apiMappings);
 }
 
 const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextGeometryComponent(
@@ -3899,93 +3984,11 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   bool hasInkBounds = false;
   bool hasEmBoxBounds = false;
   std::size_t stretchedCacheReservation = 0u;
-
   for (size_t runIndex = 0; runIndex < runs.size() && runIndex < styledText.spans.size();
        ++runIndex) {
-    const auto& run = runs[runIndex];
-    const auto& span = styledText.spans[runIndex];
-    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
-
-    if (spanText.empty()) {
-      continue;
-    }
-
-    const float runFontSizePx = run.usedFontSizePx;
-
-    const float runScale = run.font ? scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
-    double emTop = static_cast<double>(runFontSizePx);
-    double emBottom = 0.0;
-    if (run.font && runScale > 0.0f) {
-      const FontVMetrics metrics = fontVMetrics(run.font);
-      emTop = static_cast<double>(metrics.ascent) * runScale;
-      emBottom = -static_cast<double>(metrics.descent) * runScale;
-    }
-
-    const ApiCharacterIndexMappings apiMappings =
-        BuildApiCharacterIndexMappings(spanText, run.glyphs);
-    const size_t localCharCount = apiMappings.firstUnitByUnit.size();
-    const size_t charBaseIndex = cache.characters.size();
-    cache.characters.resize(charBaseIndex + localCharCount);
-    for (size_t i = 0; i < localCharCount; ++i) {
-      cache.characters[charBaseIndex + i].sourceEntity = span.sourceEntity;
-    }
-
-    if (const auto runEmBounds = CachedTextRunCellBounds(run, emTop, emBottom)) {
-      addBox(cache.emBoxBounds, hasEmBoxBounds, *runEmBounds);
-      ++objectBoundingBoxSpanVisits_;
-      AddTextObjectBounds(cache, span.sourceEntity, *runEmBounds);
-    }
-
-    const bool hasPaintedGlyphs = HasPaintedTextGlyphs(span, run);
-    for (const auto& glyph : run.glyphs) {
-      const size_t localCharIndex = glyph.cluster < apiMappings.byteToFirstUnit.size()
-                                        ? apiMappings.byteToFirstUnit[glyph.cluster]
-                                        : 0;
-      if (localCharIndex >= localCharCount) {
-        continue;
-      }
-
-      auto& charGeom = cache.characters[charBaseIndex + localCharIndex];
-      if (!charGeom.rendered) {
-        const auto warpedStart = run.stretchedTextPath ? MapTextPathPoint(*run.stretchedTextPath,
-                                                                          glyph, Vector2d(0.0, 0.0))
-                                                       : std::nullopt;
-        charGeom.startPosition = warpedStart.value_or(Vector2d(glyph.xPosition, glyph.yPosition));
-        charGeom.rotation = glyph.rotateDegrees;
-        charGeom.rendered = true;
-      }
-
-      const auto warpedEnd = run.stretchedTextPath
-                                 ? MapTextPathPoint(*run.stretchedTextPath, glyph,
-                                                    Vector2d(glyph.xAdvance, glyph.yAdvance))
-                                 : std::nullopt;
-      charGeom.endPosition = warpedEnd.value_or(
-          Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + glyph.yAdvance));
-      charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
-
-      if (!hasPaintedGlyphs) {
-        continue;
-      }
-
-      const float emScale = run.font ? scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
-      Path glyphPath =
-          cachedGlyphOutline(run, glyph, emScale, textRootEntity, stretchedCacheReservation);
-      if (!glyphPath.empty()) {
-        Path transformed = PlaceCachedGlyphOutline(std::move(glyphPath), run, glyph);
-        if (transformed.empty()) {
-          continue;
-        }
-        const Box2d extent = transformed.bounds();
-        cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
-        addBox(cache.inkBounds, hasInkBounds, extent);
-        addBox(charGeom.extent, charGeom.hasExtent, extent);
-      } else if (const auto extent = BitmapGlyphExtent(
-                     glyph, bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale))) {
-        addBox(cache.inkBounds, hasInkBounds, *extent);
-        addBox(charGeom.extent, charGeom.hasExtent, *extent);
-      }
-    }
-    ExpandApiCharacterGeometryAliases(cache, charBaseIndex, apiMappings);
+    PopulateCachedTextRun(const_cast<TextEngine&>(*this), registry_, textRootEntity, runs[runIndex],
+                          styledText.spans[runIndex], cache, hasInkBounds, hasEmBoxBounds,
+                          objectBoundingBoxSpanVisits_, stretchedCacheReservation);
   }
 
   BuildTextObjectBoundsIndex(registry_, textRootEntity, cache);

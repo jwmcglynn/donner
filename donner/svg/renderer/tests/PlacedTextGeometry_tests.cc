@@ -255,7 +255,8 @@ TEST(PlacedTextGeometryTest, StretchRefusesMoreThanBoundedZeroLengthCornerSegmen
   TextGlyph glyph;
   glyph.textPathOrigin = 5.0;
 
-  EXPECT_TRUE(WarpGlyphOutline(edge, MeasurePath(routeBuilder.build()), glyph, 0.05).empty());
+  EXPECT_THAT(WarpGlyphOutline(edge, MeasurePath(routeBuilder.build()), glyph, 0.05),
+              testing::Property(&Path::empty, true));
 }
 
 TEST(PlacedTextGeometryTest, StretchSplitsRepeatedWaveAtMeasuredSegmentBoundaries) {

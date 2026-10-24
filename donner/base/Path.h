@@ -292,6 +292,8 @@ public:
 
     std::optional<std::size_t> segmentIndexAtArcLength(double& distance,
                                                        BoundarySide boundarySide) const;
+    std::optional<std::size_t> outgoingSegmentIndexAtBoundary(std::size_t incomingIndex,
+                                                              double& distance) const;
 
     enum class SegmentType : uint8_t { Line, Cubic };
 

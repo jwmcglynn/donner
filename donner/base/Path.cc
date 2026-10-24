@@ -641,30 +641,35 @@ std::optional<std::size_t> Path::MeasuredPath::segmentIndexAtArcLength(
     return std::nullopt;
   }
 
+  const std::size_t incomingIndex = static_cast<std::size_t>(std::distance(segments_.begin(), it));
   if (boundarySide == BoundarySide::Outgoing && distance == it->endLength) {
-    const Vector2d boundaryPoint = it->type == SegmentType::Line ? it->points[1] : it->points[3];
-    auto next = std::next(it);
-    constexpr std::size_t kMaximumZeroLengthBoundaryScan = 64u;
-    bool scanExhausted = true;
-    for (std::size_t visited = 0; visited < kMaximumZeroLengthBoundaryScan; ++visited) {
-      if (next == segments_.end() || !next->connectedToPrevious || next->startLength != distance ||
-          boundaryPoint != next->points[0]) {
-        scanExhausted = false;
-        break;
-      }
-      if (next->endLength > next->startLength) {
-        it = next;
-        distance = it->startLength;
-        scanExhausted = false;
-        break;
-      }
-      ++next;
+    return outgoingSegmentIndexAtBoundary(incomingIndex, distance);
+  }
+  return incomingIndex;
+}
+
+std::optional<std::size_t> Path::MeasuredPath::outgoingSegmentIndexAtBoundary(
+    std::size_t incomingIndex, double& distance) const {
+  const Segment& incoming = segments_[incomingIndex];
+  const Vector2d boundaryPoint =
+      incoming.type == SegmentType::Line ? incoming.points[1] : incoming.points[3];
+  std::size_t nextIndex = incomingIndex + 1u;
+  constexpr std::size_t kMaximumZeroLengthBoundaryScan = 64u;
+  for (std::size_t visited = 0; visited < kMaximumZeroLengthBoundaryScan; ++visited, ++nextIndex) {
+    if (nextIndex >= segments_.size()) {
+      return incomingIndex;
     }
-    if (scanExhausted) {
-      return std::nullopt;
+    const Segment& next = segments_[nextIndex];
+    if (!next.connectedToPrevious || next.startLength != distance ||
+        boundaryPoint != next.points[0]) {
+      return incomingIndex;
+    }
+    if (next.endLength > next.startLength) {
+      distance = next.startLength;
+      return nextIndex;
     }
   }
-  return static_cast<std::size_t>(std::distance(segments_.begin(), it));
+  return std::nullopt;
 }
 
 Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance,
