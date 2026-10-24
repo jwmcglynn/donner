@@ -162,8 +162,7 @@ TEST(PlacedTextGeometryTest, StretchCubicCrossesSharpCornerWithNormalOffset) {
                          .build();
   const Path outline = PathBuilder()
                            .moveTo(Vector2d(0.0, -2.0))
-                           .curveTo(Vector2d(3.0, -3.0), Vector2d(7.0, -3.0),
-                                    Vector2d(10.0, -2.0))
+                           .curveTo(Vector2d(3.0, -3.0), Vector2d(7.0, -3.0), Vector2d(10.0, -2.0))
                            .build();
   TextGlyph glyph;
   glyph.textPathOrigin = 5.0;
