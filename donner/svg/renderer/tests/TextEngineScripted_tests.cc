@@ -293,6 +293,30 @@ TEST(TextEngineScriptedTest, ReferenceFillBoundsIncludeHiddenCellsWithoutDecodin
   EXPECT_THAT(root.all_of<components::ComputedTextGeometryComponent>(), testing::IsFalse());
 }
 
+TEST(TextEngineScriptedTest, ReferenceSmallCapsCellsKeepFullFontHeight) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  const ScriptedTextBackend* probe = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Hidden);
+  root.get<components::TextComponent>().text = RcString("a");
+  auto& span = root.get<components::ComputedTextComponent>().spans.front();
+  span.text = RcString("a");
+  span.fontVariant = FontVariant::SmallCaps;
+  std::size_t work = 100000;
+
+  const auto geometry = engine.referenceGeometry(root, false, work);
+
+  ASSERT_THAT(geometry, testing::Optional(testing::_));
+  // Synthetic small caps scale the ink by 0.8, not the element's 12px font cell.
+  // The scripted font cell extends 10px above and 2px below its baseline at (10,20).
+  EXPECT_THAT(geometry->objectBounds,
+              testing::Optional(BitmapBoundsNear(Box2d::FromXYWH(10, 10, 10, 12))));
+  EXPECT_THAT(geometry->outlines, IsEmpty());
+  EXPECT_THAT(probe->outlineCalls, Eq(0u));
+}
+
 TEST(TextEngineScriptedTest, ReferenceStrokeOutlinesIncludeHiddenGlyphsWithoutChangingInkCache) {
   Registry registry;
   FontManager manager(registry);
