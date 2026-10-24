@@ -1065,6 +1065,9 @@ bool FinalizeTextPathMeasurementAdmission(TextPathMeasurementAdmission& admissio
   const size_t consumedWork = measuredPath.measurementWorkUnits();
   admission.family->releaseUnusedTextPathMeasurementWork(
       consumedWork < admission.workUnits ? admission.workUnits - consumedWork : 0u);
+  if (!measuredPath.valid() && consumedWork >= admission.workUnits) {
+    admission.family->rejectTextPathMeasurementWork();
+  }
   measuredBytes = measuredPath.retainedBytes();
   if (!measuredPath.valid() || !measuredBytes ||
       measuredPath.segmentCount() >
@@ -3861,7 +3864,9 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   // Return cached component if it already exists.
   if (const auto* existing =
           registry_.try_get<components::ComputedTextGeometryComponent>(textRootEntity)) {
-    if (!existing->retryAfterTextPathWorkRejection) {
+    const bool workCanRetry =
+        !TextPathResourceFamily(registry_)->securityStats().textPathMeasurementWorkRejected;
+    if (!existing->retryAfterTextPathWorkRejection || !workCanRetry) {
       fontManager_.recordDependencies(existing->fontDependencies);
       return *existing;
     }

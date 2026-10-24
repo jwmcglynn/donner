@@ -137,6 +137,12 @@ public:
     return limits_.textPathMeasurementWorkUnits - stats_.textPathMeasurementWorkUnits;
   }
 
+  /// Refuse the rest of the current epoch after an admitted measurement exhausts its allowance.
+  void rejectTextPathMeasurementWork() {
+    ++stats_.rejectedReservations;
+    stats_.textPathMeasurementWorkRejected = true;
+  }
+
   /// Begin a nestable render/preparation epoch for cumulative text-path measurement work.
   void beginTextPathMeasurementWorkEpoch() {
     if (textPathMeasurementWorkEpochDepth_++ == 0u) {

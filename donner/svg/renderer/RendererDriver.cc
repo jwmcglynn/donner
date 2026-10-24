@@ -1600,8 +1600,10 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
   std::vector<TextRun> runs;
   if (const auto* cached =
           registry.try_get<components::ComputedTextGeometryComponent>(textRootHandle.entity());
-      cached != nullptr && !cached->runs.empty()) {
+      cached != nullptr && !cached->retryAfterTextPathWorkRejection && !cached->runs.empty()) {
     runs = cached->runs;
+  } else if (cached != nullptr && cached->retryAfterTextPathWorkRejection) {
+    runs = textEngine.ensureComputedTextGeometryComponent(textRootHandle).runs;
   } else {
     runs = textEngine.layout(text, ToTextLayoutParams(params));
   }

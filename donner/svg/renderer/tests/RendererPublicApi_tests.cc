@@ -3040,14 +3040,17 @@ TEST(RendererPublicApiTest, GroupBoundsQuerySharesTextPathWorkAcrossRoots) {
   SVGDocument document = ParseDocument(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"
         font-family="Public Sans" font-size="24">
-        <defs><path id="p" d="M8 40 H120"/></defs>
+        <defs>
+          <path id="short" d="M8 40 H120"/>
+          <path id="longer" d="M8 40 H64 V56"/>
+        </defs>
         <g id="group">
-          <text id="first"><textPath href="#p" method="stretch">A</textPath></text>
-          <text id="second"><textPath href="#p" method="stretch">B</textPath></text>
+          <text id="first"><textPath href="#short" method="stretch">A</textPath></text>
+          <text id="second"><textPath href="#longer" method="stretch">B</textPath></text>
         </g>
       </svg>)svg");
   components::DocumentResourceFamilyBudget::Limits limits;
-  limits.textPathMeasurementWorkUnits = 2;
+  limits.textPathMeasurementWorkUnits = 4;
   auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
   document.registry().ctx().get<components::DocumentResourceFamilyContext>().budget = family;
   ParseWarningSink warnings;
@@ -3063,7 +3066,7 @@ TEST(RendererPublicApiTest, GroupBoundsQuerySharesTextPathWorkAcrossRoots) {
   const auto bounds = components::ShapeSystem().getShapeBounds(group->unsafeEntityHandle());
   ASSERT_THAT(bounds, testing::Optional(_));
   EXPECT_FALSE(bounds->isEmpty());
-  EXPECT_EQ(family->securityStats().textPathMeasurementWorkUnits, 2u);
+  EXPECT_EQ(family->securityStats().textPathMeasurementWorkUnits, 4u);
   EXPECT_TRUE(family->securityStats().textPathMeasurementWorkRejected);
   const auto& firstGeometry =
       first->unsafeEntityHandle().get<components::ComputedTextGeometryComponent>();
@@ -3073,6 +3076,11 @@ TEST(RendererPublicApiTest, GroupBoundsQuerySharesTextPathWorkAcrossRoots) {
   EXPECT_THAT(glyphCounts, testing::UnorderedElementsAre(0u, 1u));
 
   const auto refused = firstGeometry.glyphs.empty() ? first : second;
+  Renderer renderer;
+  renderer.draw(document);
+  EXPECT_FALSE(refused->unsafeEntityHandle()
+                   .get<components::ComputedTextGeometryComponent>()
+                   .retryAfterTextPathWorkRejection);
   EXPECT_THAT(
       document.registry().ctx().get<TextEngine>().computedGlyphPaths(refused->unsafeEntityHandle()),
       testing::ElementsAre(testing::Property(&Path::empty, false)));
