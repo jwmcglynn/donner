@@ -3902,22 +3902,25 @@ bool AppendTextReferenceRuns(const TextEngine& engine, FontManager& manager, Reg
 
 bool ReserveTextStyleContextExpansion(Registry& registry,
                                       const components::ComputedTextComponent& computed,
-                                      const TextStyleContext& styleContext,
+                                      const TextStyleContext* styleContext,
                                       TextReferenceWork& work) {
+  if (!styleContext) {
+    return true;
+  }
   for (const auto& span : computed.spans) {
     if (span.sourceEntity == entt::null) {
       continue;
     }
-    Entity styleEntity = styleContext.styleEntityFor(span.sourceEntity);
+    Entity styleEntity = styleContext->styleEntityFor(span.sourceEntity);
     const auto* spanStyle = registry.try_get<components::ComputedStyleComponent>(styleEntity);
     if (!spanStyle || !spanStyle->properties ||
         !work.reserve(spanStyle->properties->fontFamily.get().value().size())) {
       return false;
     }
     std::size_t ancestors = 0;
-    while (styleEntity != styleContext.rootEntity) {
+    while (styleEntity != styleContext->rootEntity) {
       const auto* tree = registry.try_get<donner::components::TreeComponent>(styleEntity);
-      if (!tree || ++ancestors > styleContext.entities.size() || !work.reserve(1u)) {
+      if (!tree || ++ancestors > styleContext->entities.size() || !work.reserve(1u)) {
         return false;
       }
       styleEntity = tree->parent();
@@ -3929,10 +3932,13 @@ bool ReserveTextStyleContextExpansion(Registry& registry,
   return true;
 }
 
-bool RemapReferenceOutlineSources(const TextStyleContext& styleContext,
+bool RemapReferenceOutlineSources(const TextStyleContext* styleContext,
                                   TextEngine::ReferenceGeometry& result, TextReferenceWork& work) {
+  if (!styleContext) {
+    return true;
+  }
   for (auto& glyph : result.outlines) {
-    glyph.sourceEntity = styleContext.styleEntityFor(glyph.sourceEntity);
+    glyph.sourceEntity = styleContext->styleEntityFor(glyph.sourceEntity);
     if (glyph.sourceEntity == entt::null) {
       return work.reject();
     }
@@ -3971,8 +3977,7 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
   if (!AdmitTextReferenceInput(*computed, *style, work)) {
     return std::nullopt;
   }
-  if (styleContext &&
-      !ReserveTextStyleContextExpansion(registry_, *computed, *styleContext, work)) {
+  if (!ReserveTextStyleContextExpansion(registry_, *computed, styleContext, work)) {
     return std::nullopt;
   }
   ReferenceGeometry result;
@@ -3987,7 +3992,7 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
                                  includeOutlines, result, work)) {
       return std::nullopt;
     }
-    if (styleContext && !RemapReferenceOutlineSources(*styleContext, result, work)) {
+    if (!RemapReferenceOutlineSources(styleContext, result, work)) {
       return std::nullopt;
     }
   }
