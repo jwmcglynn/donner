@@ -3887,8 +3887,8 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
   {
     const auto capture = fontManager_.captureDependencies(result.fontDependencies);
     auto styled = *computed;
-    const TextLayoutParams params = buildTextLayoutParams(
-        registry_, EntityHandle(registry_, styleRootEntity), *style, *text);
+    const TextLayoutParams params =
+        buildTextLayoutParams(registry_, EntityHandle(registry_, styleRootEntity), *style, *text);
     ResolvePerSpanLayoutStyles(registry_, styled, params.viewBox, params.fontMetrics, styleContext);
     const auto runs = const_cast<TextEngine*>(this)->layout(styled, params);
     if (!AppendTextReferenceRuns(*this, fontManager_, registry_, styled, runs, handle.entity(),

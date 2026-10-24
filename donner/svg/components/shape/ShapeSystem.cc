@@ -672,8 +672,8 @@ private:
       }
       return;
     }
-    const auto geometry = textEngine.referenceGeometry(geometryEntity, includeStroke_, remainingWork,
-                                                       styleContext ? &*styleContext : nullptr);
+    const auto geometry = textEngine.referenceGeometry(
+        geometryEntity, includeStroke_, remainingWork, styleContext ? &*styleContext : nullptr);
     if (!geometry) {
       RejectGeometry(budget_, failed_);
       return;

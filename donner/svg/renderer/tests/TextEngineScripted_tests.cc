@@ -329,14 +329,11 @@ TEST(TextEngineScriptedTest, ShadowTextStyleContextIsBoundedAndRequiresSpanCover
   const Entity lightSpan = registry.create();
   const Entity shadowRoot = registry.create();
   const Entity shadowSpan = registry.create();
-  registry.emplace<donner::components::TreeComponent>(lightRoot,
-                                                       xml::XMLQualifiedNameRef("text"));
-  registry.emplace<donner::components::TreeComponent>(lightSpan,
-                                                       xml::XMLQualifiedNameRef("tspan"));
-  registry.emplace<donner::components::TreeComponent>(shadowRoot,
-                                                       xml::XMLQualifiedNameRef("text"));
+  registry.emplace<donner::components::TreeComponent>(lightRoot, xml::XMLQualifiedNameRef("text"));
+  registry.emplace<donner::components::TreeComponent>(lightSpan, xml::XMLQualifiedNameRef("tspan"));
+  registry.emplace<donner::components::TreeComponent>(shadowRoot, xml::XMLQualifiedNameRef("text"));
   registry.emplace<donner::components::TreeComponent>(shadowSpan,
-                                                       xml::XMLQualifiedNameRef("tspan"));
+                                                      xml::XMLQualifiedNameRef("tspan"));
   registry.get<donner::components::TreeComponent>(shadowRoot).appendChild(registry, shadowSpan);
   registry.emplace<components::ShadowEntityComponent>(shadowRoot, lightRoot);
   registry.emplace<components::ShadowEntityComponent>(shadowSpan, lightSpan);
