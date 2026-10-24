@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <string>
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
@@ -85,6 +86,57 @@ TEST(VerticalTextGeodeTest, HangingBaselineMatchesExplicitAlphabeticPosition) {
   ASSERT_GT(test::CountNonTransparentPixels(explicitPosition), 0u);
   editor::tests::CompareBitmapToBitmap(hanging, explicitPosition,
                                        "vertical-hanging-baseline-position",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(VerticalTextGeodeTest, AutoEquivalentBaselineAliasesMatchAuto) {
+  const auto source = [](std::string_view baseline) {
+    return std::string(
+               R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128">
+      <text x="80" y="16" font-family="Noto Sans" font-size="20"
+            writing-mode="vertical-rl" text-orientation="sideways">
+        <tspan dominant-baseline=")svg") +
+           std::string(baseline) + R"svg(">AB</tspan>
+      </text>
+    </svg>)svg";
+  };
+
+  const RendererBitmap automatic = RenderVerticalText(source("auto"));
+  ASSERT_GT(test::CountNonTransparentPixels(automatic), 0u);
+  for (const std::string_view alias : {"use-script", "reset-size", "no-change"}) {
+    const RendererBitmap aliased = RenderVerticalText(source(alias));
+    ASSERT_GT(test::CountNonTransparentPixels(aliased), 0u);
+    editor::tests::CompareBitmapToBitmap(aliased, automatic,
+                                         std::string("vertical-baseline-") + std::string(alias),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(VerticalTextGeodeTest, NoChangeKeepsResolvedParentHangingBaseline) {
+  constexpr std::string_view kInherited = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"
+         viewBox="0 0 6000 6000">
+      <text x="5000" y="200" font-family="Noto Sans" font-size="5000"
+            writing-mode="vertical-rl" text-orientation="sideways"
+            dominant-baseline="hanging">
+        <tspan dominant-baseline="no-change">A</tspan>
+      </text>
+    </svg>)svg";
+  constexpr std::string_view kExplicit = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"
+         viewBox="0 0 6000 6000">
+      <text x="5000" y="200" font-family="Noto Sans" font-size="5000"
+            writing-mode="vertical-rl" text-orientation="sideways">
+        <tspan dominant-baseline="hanging">A</tspan>
+      </text>
+    </svg>)svg";
+
+  const RendererBitmap inherited = RenderVerticalText(kInherited);
+  const RendererBitmap explicitBaseline = RenderVerticalText(kExplicit);
+  ASSERT_GT(test::CountNonTransparentPixels(inherited), 0u);
+  ASSERT_GT(test::CountNonTransparentPixels(explicitBaseline), 0u);
+  editor::tests::CompareBitmapToBitmap(inherited, explicitBaseline,
+                                       "vertical-no-change-parent-hanging",
                                        editor::tests::PixelmatchIdentityParams());
 }
 

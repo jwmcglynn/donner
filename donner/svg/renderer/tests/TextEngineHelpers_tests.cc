@@ -1581,6 +1581,49 @@ TEST_F(TextEngineLayoutTest, BaselineAlignmentShiftsAcrossVerticalColumn) {
   }
 }
 
+TEST_F(TextEngineLayoutTest, AutoEquivalentBaselinesPreserveVerticalCentralOrigin) {
+  ON_CALL(*mockBackend_, fontVMetrics(testing::_))
+      .WillByDefault(testing::Return(FontVMetrics{900, -300, 0}));
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  auto layoutFirstGlyphPosition = [&](WritingMode writingMode, DominantBaseline baseline,
+                                      double baselineShift) {
+    components::ComputedTextComponent text;
+    auto span = makeSpan("A");
+    span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(20.0, Lengthd::Unit::None));
+    span.alignmentBaseline = baseline;
+    span.baselineShift = Lengthd(baselineShift, Lengthd::Unit::Px);
+    text.spans.push_back(std::move(span));
+
+    auto params = makeParams();
+    params.writingMode = writingMode;
+    const auto runs = engine_->layout(text, params);
+    EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(1))));
+    return Vector2d(runs[0].glyphs[0].xPosition, runs[0].glyphs[0].yPosition);
+  };
+
+  for (const WritingMode writingMode : {WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    for (const double baselineShift : {0.0, 4.0}) {
+      const Vector2d autoPosition =
+          layoutFirstGlyphPosition(writingMode, DominantBaseline::Auto, baselineShift);
+      for (const DominantBaseline baseline :
+           {DominantBaseline::UseScript, DominantBaseline::ResetSize, DominantBaseline::NoChange}) {
+        SCOPED_TRACE(static_cast<int>(writingMode));
+        SCOPED_TRACE(baselineShift);
+        SCOPED_TRACE(static_cast<int>(baseline));
+        EXPECT_THAT(layoutFirstGlyphPosition(writingMode, baseline, baselineShift),
+                    testing::Eq(autoPosition));
+      }
+    }
+  }
+}
+
 TEST_F(TextEngineLayoutTest, BaselineShiftRaisesVerticalSpanWithoutAdvancingFollowingSpan) {
   ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
                                   testing::_, testing::_, testing::_))
