@@ -6,6 +6,7 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 namespace donner::svg {
@@ -213,6 +214,85 @@ TEST(CircleClipPath, StyledUsesKeepOccurrenceGeometryAndFontMetrics) {
   editor::tests::CompareBitmapToBitmap(actual, expected, "circle_use_occurrences",
                                        editor::tests::PixelmatchIdentityParams());
 }
+
+#ifdef DONNER_TEXT_ENABLED
+void ExpectVisibleRedText(const RendererBitmap& bitmap) {
+  EXPECT_GT(test::CountPixelsWhere(
+                bitmap, [](const auto& pixel) { return pixel[0] > pixel[1] && pixel[3] > 0; }),
+            0u);
+}
+
+TEST(CircleClipPath, TextUseLargeCircleKeepsVisibleText) {
+  constexpr std::string_view kDefinitions = "<defs><text id='text' y='30'>Hello</text></defs>";
+  const auto expected = RenderCircleScene(std::string(kDefinitions) +
+                                          "<use href='#text' x='4' font-size='18' fill='red'/>");
+  ExpectVisibleRedText(expected);
+  for (const std::string_view box : {"fill-box", "stroke-box"}) {
+    SCOPED_TRACE(box);
+    const std::string clip = "circle(1000px) " + std::string(box);
+    const auto actual = RenderCircleScene(std::string(kDefinitions) +
+                                          "<use href='#text' x='4' font-size='18' fill='red' "
+                                          "clip-path='" +
+                                          clip + "'/>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "circle_text_use_large",
+                                         editor::tests::PixelmatchIdentityParams());
+    const auto group =
+        RenderCircleScene(std::string(kDefinitions) + "<g clip-path='" + clip +
+                          "'><use href='#text' x='4' font-size='18' fill='red'/></g>");
+    editor::tests::CompareBitmapToBitmap(group, expected, "circle_text_use_group_large",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(CircleClipPath, TextUsesKeepStyledReferenceBoxes) {
+  constexpr std::string_view kSpans = "<tspan font-size='125%' stroke-width='0.15em'>A</tspan>";
+  for (const std::string_view box : {"fill-box", "stroke-box"}) {
+    SCOPED_TRACE(box);
+    const std::string clip = "circle(8px at 25% 50%) " + std::string(box);
+    const std::string actualContent =
+        "<defs><text id='text'>" + std::string(kSpans) +
+        "</text></defs>"
+        "<use href='#text' x='4' y='24' font-size='16' fill='red' stroke='red' "
+        "clip-path='" +
+        clip +
+        "'/>"
+        "<use href='#text' x='28' y='48' font-size='28' fill='red' stroke='red' "
+        "clip-path='" +
+        clip + "'/>";
+    const std::string expectedContent =
+        "<g transform='translate(4 24)' font-size='16' fill='red' stroke='red' "
+        "clip-path='" +
+        clip + "'><text>" + std::string(kSpans) +
+        "</text></g>"
+        "<g transform='translate(28 48)' font-size='28' fill='red' stroke='red' "
+        "clip-path='" +
+        clip + "'><text>" + std::string(kSpans) + "</text></g>";
+    const auto expected = RenderCircleScene(expectedContent);
+    ExpectVisibleRedText(expected);
+    editor::tests::CompareBitmapToBitmap(RenderCircleScene(actualContent), expected,
+                                         "circle_text_use_styled_boxes",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(CircleClipPath, GroupCircleIncludesTransformedTextUseStroke) {
+  constexpr std::string_view kText = "<text y='30'><tspan>A</tspan></text>";
+  const auto actual = RenderCircleScene(
+      "<defs><g id='source'>" + std::string(kText) +
+      "</g></defs>"
+      "<g clip-path='circle(12px at 30% 50%) stroke-box'>"
+      "<use href='#source' transform='translate(6 4) scale(1.2 .8)' font-size='32' "
+      "fill='red' stroke='red' stroke-width='4'/></g>");
+  const auto expected = RenderCircleScene(
+      "<g clip-path='circle(12px at 30% 50%) stroke-box'>"
+      "<g transform='translate(6 4) scale(1.2 .8)' font-size='32' fill='red' "
+      "stroke='red' stroke-width='4'>" +
+      std::string(kText) + "</g></g>");
+  ExpectVisibleRedText(expected);
+  editor::tests::CompareBitmapToBitmap(actual, expected, "circle_group_shadow_text_stroke",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+#endif
 
 TEST(CircleClipPath, TextSpanSuppliesItsOwnReferenceBox) {
   const auto actual = RenderCircleScene(
