@@ -1249,6 +1249,26 @@ ParseResult<FilterEffect> ParseHueRotate(const css::Function& function) {
   return err;
 }
 
+/// Consume one drop-shadow length, permitting nonzero unitless values only in SVG attributes.
+std::optional<Lengthd> ParseDropShadowLength(std::span<const css::ComponentValue>& remaining,
+                                             bool allowUserUnits) {
+  if (remaining.empty()) {
+    return std::nullopt;
+  }
+  const auto& arg = remaining.front();
+  if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
+    if (dimension->suffixUnit && *dimension->suffixUnit != Lengthd::Unit::Percent) {
+      remaining = remaining.subspan(1);
+      return Lengthd(dimension->value, *dimension->suffixUnit);
+    }
+  } else if (const auto* number = arg.tryGetToken<css::Token::Number>();
+             number && (allowUserUnits || number->value == 0.0)) {
+    remaining = remaining.subspan(1);
+    return Lengthd(number->value, Lengthd::Unit::None);
+  }
+  return std::nullopt;
+}
+
 /// Parse a single CSS filter function and return the corresponding FilterEffect.
 ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, bool allowUserUnits) {
   if (function.name.equalsLowercase("blur")) {
@@ -1391,26 +1411,8 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, boo
       }
     }
 
-    // Helper to parse a length value (dimension or unitless number).
-    auto parseLengthArg = [](std::span<const css::ComponentValue>& rem) -> std::optional<Lengthd> {
-      if (rem.empty()) {
-        return std::nullopt;
-      }
-      const auto& arg = rem.front();
-      if (const auto* dim = arg.tryGetToken<css::Token::Dimension>()) {
-        if (dim->suffixUnit && *dim->suffixUnit != Lengthd::Unit::Percent) {
-          rem = rem.subspan(1);
-          return Lengthd(dim->value, *dim->suffixUnit);
-        }
-      } else if (const auto* num = arg.tryGetToken<css::Token::Number>()) {
-        rem = rem.subspan(1);
-        return Lengthd(num->value, Lengthd::Unit::None);
-      }
-      return std::nullopt;
-    };
-
     // Parse offset-x (required).
-    auto offsetX = parseLengthArg(remaining);
+    auto offsetX = ParseDropShadowLength(remaining, allowUserUnits);
     if (!offsetX) {
       ParseDiagnostic err;
       err.reason = "Expected offset-x for drop-shadow";
@@ -1422,7 +1424,7 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, boo
     SkipWhitespace(remaining);
 
     // Parse offset-y (required).
-    auto offsetY = parseLengthArg(remaining);
+    auto offsetY = ParseDropShadowLength(remaining, allowUserUnits);
     if (!offsetY) {
       ParseDiagnostic err;
       err.reason = "Expected offset-y for drop-shadow";
@@ -1435,9 +1437,14 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, boo
 
     // Parse optional blur-radius.
     Lengthd stdDeviation(0.0, Lengthd::Unit::Px);
-    if (auto blur = parseLengthArg(remaining)) {
+    if (auto blur = ParseDropShadowLength(remaining, allowUserUnits)) {
       stdDeviation = *blur;
       SkipWhitespace(remaining);
+    }
+
+    if (stdDeviation.value < 0.0) {
+      return ParseDiagnostic::Error("Negative standard deviation is not allowed for drop-shadow()",
+                                    function.sourceOffset);
     }
 
     // Try to parse trailing color if not found yet.

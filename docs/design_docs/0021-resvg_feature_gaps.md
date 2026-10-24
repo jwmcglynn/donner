@@ -91,7 +91,7 @@ bottom for completeness.
 
 | ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B2  | `filters/filter-functions` coverage                                     | **DONE** (26/43 files compare) | Category active; 17 mismatches are explicit triage skips.                                                                                                                                           |
+| B2  | `filters/filter-functions` coverage                                     | **DONE** (27/43 files compare) | All cases execute; 16 reference qualifications have independent contract tests.                                                                                                                                           |
 | B3  | `structure/image` golden kernel-era mismatch                            |                             12 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
@@ -110,16 +110,33 @@ bottom for completeness.
 
 ### B2: `filters/filter-functions` category coverage
 
-**Resolved as a coverage gap.** All 43 files are instantiated. A combined TinySkia and Geode run
-executes 86 comparisons: 53 passed before exception classification, representing 26 files on both
-backends plus one TinySkia-only pass. Seventeen unique mismatching files now carry explicit
-normal-path `Triage:` skips for blur, color-adjust, drop-shadow, or URL-chain cases. No category
-remains dark, but these skips are not yet classified as Donner defects.
+All 43 fixtures execute. Twenty-seven retain ordinary comparisons, including `blur-function` and
+`drop-shadow-function-filter-region`; sixteen have explicit reference qualifications and independent
+rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL case uses
+`FilterReferenceStages`. No threshold or golden is changed.
 
-**Next step:** classify the 17 mismatches against the normative grammar and independent browser
-pixels, then fix only confirmed Donner defects through their owning blur, color-adjust,
-drop-shadow, and URL-chain paths. Remove each local skip only after that classification, a focused
-regression, and both comparison modes pass; do not restore the category-level disable.
+| Assigned cases | Disposition |
+| --- | --- |
+| Seven `color-adjust-functions-*` cases | Every canonical mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. Label qualification remains with #1167. |
+| Five remaining `drop-shadow-function*` cases | Color order, omitted currentColor, em/mm-to-px conversion and alpha compare independently. Offset/blur sampling differs from the historical PNGs; for the basic case the device Y offset is 12.5, and Donner rounds to 13 while the reference shadow profile is one row earlier. Half-pixel rounding is a Donner rasterization contract, not a CSS requirement. Sampling qualification remains with #1170. |
+| `two-exact-urls` | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph. |
+| `two-urls` | Chained flood/blur matches the equivalent single primitive graph. The historical difference is at the filter-region boundary (2,191 CPU / 2,618 Geode pixels); boundary sampling remains with #1170. |
+| `url-and-grayscale` | CSS functions use sRGB. An independent solid-color oracle gives 115 for the sample's encoded-channel luminance; the historical reference center is 122, consistent with linearRGB processing. |
+| `one-invalid-url-in-list` | An invalid URL disables the entire chain rather than preserving the prior stage. `FilterReferenceStages.InvalidReferenceDisablesEntireChain` independently covers that behavior. |
+
+[Filter Effects](https://www.w3.org/TR/filter-effects-1/#FilterFunctions) defines function grammar,
+sRGB processing and chaining. Drop-shadow now rejects nonzero unitless CSS lengths while preserving
+SVG presentation-attribute user units and unitless zero. Negative standard deviations reject the
+whole declaration. Its color alpha is applied once; flood-opacity is a separate factor. Focused
+regressions first reproduce invalid declarations changing output and translucent shadows receiving
+alpha twice, then pass on TinySkia, full text and Geode. The full property suite also checks that
+rejected declarations preserve the prior value at the same cascade priority.
+
+The named gates are `properties_tests`, `renderer_driver_tests`, the three
+`renderer_regression_tests` configurations and all three resvg corpus targets. A raster sanitizer
+seed covers valid translucent shadows and invalid declarations. Render-only execution of a
+qualified corpus case establishes stability, not historical PNG agreement. #1169 tracks these
+classifications; general filter-region and sampling behavior remains separate in #1170.
 
 ---
 

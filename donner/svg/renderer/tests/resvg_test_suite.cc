@@ -530,38 +530,57 @@ INSTANTIATE_TEST_SUITE_P(
                      "Reference: PNG applies functions around a missing URL; "
                      "Filter Effects ignores the entire chain, independently tested")},
                 {"color-adjust-functions-0percent.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly("Filtered geometry agrees; 354 default-text, 370 full-text, "
+                                    "375 Geode mismatches are only label glyphs (#1167, #1169)")},
                 {"color-adjust-functions-100percent.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly(
+                     "Filtered geometry agrees; label-only glyph reference differences, "
+                     "independently checked color contracts (#1167, #1169)")},
                 {"color-adjust-functions-2.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly(
+                     "Filtered geometry agrees; label-only glyph reference differences, "
+                     "independently checked color contracts (#1167, #1169)")},
                 {"color-adjust-functions-200percent.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly(
+                     "Filtered geometry agrees; label-only glyph reference differences, "
+                     "independently checked color contracts (#1167, #1169)")},
                 {"color-adjust-functions-50percent.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly(
+                     "Filtered geometry agrees; label-only glyph reference differences, "
+                     "independently checked color contracts (#1167, #1169)")},
                 {"color-adjust-functions-default-value.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly("Defaults agree with explicit amounts; remaining reference "
+                                    "differences are label glyphs (#1167, #1169)")},
                 {"color-adjust-functions-negative.svg",
-                 Params::Skip(
-                     "Triage: text labels differ after invalid negative filters are rejected")},
+                 Params::RenderOnly("Invalid negative declarations are rejected; remaining "
+                                    "reference differences are label glyphs (#1167, #1169)")},
                 {"drop-shadow-function-color-last.svg",
-                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
+                 Params::RenderOnly(
+                     "Offset/blur sampling differs from reference; color order and "
+                     "rounded-offset contracts compare independently (#1169, #1170)")},
                 {"drop-shadow-function-em-values.svg",
-                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
-                {"drop-shadow-function-filter-region.svg",
-                 Params::Skip("Triage: CSS drop-shadow filter-region oracle mismatch")},
+                 Params::RenderOnly("Resolved em lengths match px; fractional offset/blur sampling "
+                                    "differs from reference (#1169, #1170)")},
                 {"drop-shadow-function-mm-values.svg",
-                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
+                 Params::RenderOnly("Resolved mm lengths match px; fractional offset/blur sampling "
+                                    "differs from reference (#1169, #1170)")},
                 {"drop-shadow-function-no-color.svg",
-                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
+                 Params::RenderOnly("Omitted color resolves to currentColor; fractional "
+                                    "offset/blur sampling differs from reference (#1169, #1170)")},
                 {"drop-shadow-function.svg",
-                 Params::Skip("Triage: CSS drop-shadow output oracle mismatch")},
+                 Params::RenderOnly(
+                     "Offset/blur sampling differs from reference; rounded-offset and "
+                     "alpha contracts compare independently (#1169, #1170)")},
                 {"two-exact-urls.svg",
-                 Params::Skip("Triage: chained CSS filter URL reference oracle mismatch")},
+                 Params::RenderOnly("Valid repeated filter URL; reference is the UB marker, with "
+                                    "independent equivalent-graph comparison (#1169)")},
                 {"two-urls.svg",
-                 Params::Skip("Triage: chained CSS filter URL reference oracle mismatch")},
+                 Params::RenderOnly(
+                     "Chained flood/blur differs at filter-region boundary; equivalent primitive "
+                     "graph is the independent oracle (#1169, #1170)")},
                 {"url-and-grayscale.svg",
-                 Params::Skip("Triage: mixed CSS filter URL and function oracle mismatch")},
+                 Params::RenderOnly("CSS grayscale must use sRGB (center115); historical "
+                                    "mixed-chain reference uses linearRGB-like center122 (#1169)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

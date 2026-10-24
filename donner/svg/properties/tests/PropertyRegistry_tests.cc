@@ -2171,7 +2171,8 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
 
   {
     PropertyRegistry registry;
-    registry.parseStyle("filter: drop-shadow(1 2)");
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", "drop-shadow(1 2)"),
+                ParseResultIs(true));
     const auto& shadow =
         (*registry.filter.getStoredValue()).front().get<FilterEffect::DropShadow>();
     EXPECT_EQ(shadow.offsetX, Lengthd(1, Lengthd::Unit::None));
@@ -2595,6 +2596,48 @@ TEST(PropertyRegistry, FilterSingleOperandValidPresentationValuesReplacePriorFil
                     FilterOpacityIs(args.amountValue), FilterSaturateIs(args.amountValue),
                     FilterSepiaIs(args.amountValue), FilterHueRotateIs(args.angleDegrees, 0.0))));
   }
+}
+
+TEST(PropertyRegistry, DropShadowRejectsUnitlessStyleLengthsWithoutPartialMutation) {
+  for (std::string_view invalid : {"drop-shadow(4 5)", "drop-shadow(0 5)", "drop-shadow(4px 5px 2)",
+                                   "brightness(2) drop-shadow(4 5) opacity(0.5)"}) {
+    SCOPED_TRACE(invalid);
+    PropertyRegistry registry;
+    registry.parseStyle("filter: opacity(0.25)");
+    const auto declaration = css::CSS::ParseStyleAttribute("filter: " + std::string(invalid)).at(0);
+    EXPECT_TRUE(registry.parseProperty(declaration, Specificity::StyleAttribute()).has_value());
+    ASSERT_TRUE(registry.filter.isSpecified());
+    EXPECT_THAT(*registry.filter.getStoredValue(), testing::ElementsAre(FilterOpacityIs(0.25)));
+  }
+}
+
+TEST(PropertyRegistry, DropShadowRejectsNegativeStandardDeviation) {
+  for (std::string_view invalid :
+       {"drop-shadow(1px 2px -3px)", "drop-shadow(red -1px -2px -0.5em)"}) {
+    SCOPED_TRACE(invalid);
+    PropertyRegistry registry;
+    const auto declaration = css::CSS::ParseStyleAttribute("filter: " + std::string(invalid)).at(0);
+    EXPECT_TRUE(registry.parseProperty(declaration, Specificity()).has_value());
+    EXPECT_TRUE(registry.parsePresentationAttribute("filter", invalid).hasError());
+    EXPECT_FALSE(registry.filter.isSpecified());
+  }
+  PropertyRegistry presentation;
+  EXPECT_TRUE(presentation.parsePresentationAttribute("filter", "drop-shadow(1 2 -3)").hasError());
+}
+
+TEST(PropertyRegistry, DropShadowAllowsPresentationUnitsAndUnitlessZero) {
+  PropertyRegistry presentation;
+  EXPECT_THAT(presentation.parsePresentationAttribute("filter", "drop-shadow(blue -4 5 2)"),
+              ParseResultIs(true));
+  EXPECT_THAT(*presentation.filter.getStoredValue(),
+              testing::ElementsAre(FilterDropShadowIs(Lengthd(-4), Lengthd(5), Lengthd(2),
+                                                      Color(RGBA(0, 0, 255, 255)))));
+  PropertyRegistry style;
+  style.parseStyle("filter: drop-shadow(0 0 0 blue)");
+  ASSERT_TRUE(style.filter.isSpecified());
+  EXPECT_THAT(*style.filter.getStoredValue(),
+              testing::ElementsAre(FilterDropShadowIs(Lengthd(0), Lengthd(0), Lengthd(0),
+                                                      Color(RGBA(0, 0, 255, 255)))));
 }
 
 TEST(PropertyRegistry, FilterParsing) {
