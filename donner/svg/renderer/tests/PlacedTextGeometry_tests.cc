@@ -152,6 +152,24 @@ TEST(PlacedTextGeometryTest, StretchQuadraticCrossesSharpCornerWithNormalOffset)
   EXPECT_FALSE(WarpGlyphOutline(reverse, MeasurePath(route), glyph, 0.05).empty());
   EXPECT_FALSE(WarpGlyphOutline(startsAtCorner, MeasurePath(route), glyph, 0.05).empty());
   EXPECT_FALSE(WarpGlyphOutline(endsAtCorner, MeasurePath(route), glyph, 0.05).empty());
+
+  const Path turnback = PathBuilder()
+                            .moveTo(Vector2d(0.0, -2.0))
+                            .quadTo(Vector2d(12.0, -3.0), Vector2d(0.0, -2.0))
+                            .build();
+  EXPECT_FALSE(WarpGlyphOutline(turnback, MeasurePath(route), glyph, 0.05).empty());
+
+  const Path closedRoute = PathBuilder()
+                               .moveTo(Vector2d(0.0, 0.0))
+                               .lineTo(Vector2d(10.0, 0.0))
+                               .lineTo(Vector2d(10.0, 10.0))
+                               .lineTo(Vector2d(0.0, 10.0))
+                               .closePath()
+                               .build();
+  StretchedTextPath closedMapping = MeasurePath(closedRoute);
+  closedMapping.closed = true;
+  glyph.textPathOrigin = closedMapping.measuredPath.pathLength() - 5.0;
+  EXPECT_FALSE(WarpGlyphOutline(outline, closedMapping, glyph, 0.05).empty());
 }
 
 TEST(PlacedTextGeometryTest, StretchCubicCrossesSharpCornerWithNormalOffset) {
@@ -164,12 +182,36 @@ TEST(PlacedTextGeometryTest, StretchCubicCrossesSharpCornerWithNormalOffset) {
                            .moveTo(Vector2d(0.0, -2.0))
                            .curveTo(Vector2d(3.0, -3.0), Vector2d(7.0, -3.0), Vector2d(10.0, -2.0))
                            .build();
+  const Path reverse = PathBuilder()
+                           .moveTo(Vector2d(10.0, -2.0))
+                           .curveTo(Vector2d(7.0, -3.0), Vector2d(3.0, -3.0), Vector2d(0.0, -2.0))
+                           .build();
+  const Path startsAtCorner =
+      PathBuilder()
+          .moveTo(Vector2d(5.0, -2.0))
+          .curveTo(Vector2d(6.5, -3.0), Vector2d(8.5, -3.0), Vector2d(10.0, -2.0))
+          .build();
+  const Path endsAtCorner =
+      PathBuilder()
+          .moveTo(Vector2d(0.0, -2.0))
+          .curveTo(Vector2d(1.5, -3.0), Vector2d(3.5, -3.0), Vector2d(5.0, -2.0))
+          .build();
   TextGlyph glyph;
   glyph.textPathOrigin = 5.0;
 
   const Path warped = WarpGlyphOutline(outline, MeasurePath(route), glyph, 0.05);
 
   EXPECT_FALSE(warped.empty());
+  EXPECT_FALSE(WarpGlyphOutline(reverse, MeasurePath(route), glyph, 0.05).empty());
+  EXPECT_FALSE(WarpGlyphOutline(startsAtCorner, MeasurePath(route), glyph, 0.05).empty());
+  EXPECT_FALSE(WarpGlyphOutline(endsAtCorner, MeasurePath(route), glyph, 0.05).empty());
+
+  const Path turnback =
+      PathBuilder()
+          .moveTo(Vector2d(0.0, -2.0))
+          .curveTo(Vector2d(12.0, -3.0), Vector2d(12.0, -3.0), Vector2d(0.0, -2.0))
+          .build();
+  EXPECT_FALSE(WarpGlyphOutline(turnback, MeasurePath(route), glyph, 0.05).empty());
 
   const Path closedRoute = PathBuilder()
                                .moveTo(Vector2d(0.0, 0.0))
