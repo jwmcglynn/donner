@@ -400,12 +400,7 @@ private:
       return false;
     }
     remainingWork_ -= 3u;
-    const auto evaluate = [&](double t) {
-      const double u = 1.0 - t;
-      return start * (u * u) + control * (2.0 * u * t) + end * (t * t);
-    };
-    if (controlResidualWithinTolerance(start, control, end) &&
-        mappedCurveWithinTolerance(start, end, evaluate(0.25), evaluate(0.5), evaluate(0.75))) {
+    if (controlResidualWithinTolerance(start, control, end)) {
       return appendLine(end);
     }
     const Vector2d first = (start + control) * 0.5;
@@ -420,14 +415,8 @@ private:
       return false;
     }
     remainingWork_ -= 3u;
-    const auto evaluate = [&](double t) {
-      const double u = 1.0 - t;
-      return start * (u * u * u) + firstControl * (3.0 * u * u * t) +
-             secondControl * (3.0 * u * t * t) + end * (t * t * t);
-    };
     if (controlResidualWithinTolerance(start, firstControl, end) &&
-        controlResidualWithinTolerance(start, secondControl, end) &&
-        mappedCurveWithinTolerance(start, end, evaluate(0.25), evaluate(0.5), evaluate(0.75))) {
+        controlResidualWithinTolerance(start, secondControl, end)) {
       return appendLine(end);
     }
     const Vector2d a = (start + firstControl) * 0.5;
@@ -438,32 +427,6 @@ private:
     const Vector2d middle = (d + e) * 0.5;
     return appendCubic(start, a, d, middle, depth + 1u) &&
            appendCubic(middle, e, c, end, depth + 1u);
-  }
-  bool mappedCurveWithinTolerance(const Vector2d& start, const Vector2d& end,
-                                  const Vector2d& quarter, const Vector2d& middle,
-                                  const Vector2d& threeQuarter) const {
-    const auto mappedStart = map(start);
-    const auto mappedEnd = map(end);
-    const auto mappedQuarter = map(quarter);
-    const auto mappedMiddle = map(middle);
-    const auto mappedThreeQuarter = map(threeQuarter);
-    const auto emittedQuarter = map(start * 0.75 + end * 0.25);
-    const auto emittedMiddle = map((start + end) * 0.5);
-    const auto emittedThreeQuarter = map(start * 0.25 + end * 0.75);
-    const std::array valid = {mappedStart.has_value(),        mappedEnd.has_value(),
-                              mappedQuarter.has_value(),      mappedMiddle.has_value(),
-                              mappedThreeQuarter.has_value(), emittedQuarter.has_value(),
-                              emittedMiddle.has_value(),      emittedThreeQuarter.has_value()};
-    if (!std::all_of(valid.begin(), valid.end(), [](bool value) { return value; })) {
-      return false;
-    }
-    return (*mappedQuarter - (*mappedStart * 0.75 + *mappedEnd * 0.25)).length() <= tolerance_ &&
-           (*mappedMiddle - (*mappedStart + *mappedEnd) * 0.5).length() <= tolerance_ &&
-           (*mappedThreeQuarter - (*mappedStart * 0.25 + *mappedEnd * 0.75)).length() <=
-               tolerance_ &&
-           (*mappedQuarter - *emittedQuarter).length() <= tolerance_ &&
-           (*mappedMiddle - *emittedMiddle).length() <= tolerance_ &&
-           (*mappedThreeQuarter - *emittedThreeQuarter).length() <= tolerance_;
   }
   bool appendQuadraticAtExtrema(const Vector2d& start, const Vector2d& control,
                                 const Vector2d& end) {
