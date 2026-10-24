@@ -1170,9 +1170,10 @@ INSTANTIATE_TEST_SUITE_P(
                               "upscaling (current resvg); Donner uses bilinear (0021 B3)")},
 
                 {"embedded-svg-with-text.svg",
-                 Params::Skip("Golden mismatch: resvg parses <image>-embedded SVGs with an empty "
-                              "fontdb so its golden renders no text; Donner renders the text "
-                              "(0021 B3)")},
+                 Params::RenderOnly(
+                     "The vendored reference omits the embedded SVG's text. Donner renders it "
+                     "with the document font catalog; an authored embedded-versus-direct "
+                     "identity test pins that policy (0021 B3)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

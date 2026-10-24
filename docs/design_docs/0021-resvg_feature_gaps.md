@@ -92,7 +92,7 @@ bottom for completeness.
 | ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | B2  | `filters/filter-functions` coverage                                     | **DONE** (26/43 files compare) | Category active; 17 mismatches are explicit triage skips.                                                                                                                                           |
-| B3  | `structure/image` golden kernel-era mismatch                            |                             13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
+| B3  | `structure/image` golden kernel-era mismatch                            |                             12 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                              8 | Feature                                                                                                                                                                                             |
@@ -221,15 +221,25 @@ eras with different `<image>` upscale kernels:
   kernel (12.5k px vs Bilinear, 21.8k px vs Bicubic for the no-* group; the
   deterministic-decode GIF golden rules out decoder differences).
 
-Plus one policy case: `embedded-svg-with-text` — resvg parses `<image>`-embedded
-SVGs with an empty fontdb, so its golden renders no text; Donner renders the
-text (browser-consistent).
+The `embedded-svg-with-text` policy case is independently qualified: the vendored reference omits
+the embedded SVG's text, while Donner uses the document font catalog. An authored
+`EmbeddedSvgUsesDocumentFontContext` case checks embedded-versus-direct identity plus visible text
+ink in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant, so the corpus row is
+render-only rather than a missing feature.
 
 **Next step (needs a maintainer decision):** refresh the whole
 `structure/image` golden set from current resvg and adopt Mitchell-bicubic in
 `RendererTinySkia::drawImage`/`drawBitmap` (+ the Geode sampler) to match
-current resvg, or keep bilinear and leave the 13 mismatched-era tests skipped.
+current resvg, or keep bilinear and leave the 12 kernel-dependent tests skipped.
 Per-test threshold inflation is not an option.
+
+The kernel measurements above were introduced in `be5f999367`; reproduction metadata and raw
+output are not included with those recorded measurements. They remain historical claims rather
+than a current reproduction. Reclassification
+of the 12 kernel-dependent issue #1168 rows requires a fresh run pinned to the source, decoder,
+reference images, transforms, and compared kernels; the independent PNG intrinsic-placement test
+separately prevents a sampling-policy decision from concealing sizing or placement regressions.
 
 **B5 (feMorphology degenerate radius) is now fixed** — see
 [Recently fixed](#recently-fixed-prs-608611).
