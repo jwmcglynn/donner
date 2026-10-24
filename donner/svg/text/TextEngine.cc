@@ -3940,6 +3940,20 @@ bool RemapReferenceOutlineSources(const TextStyleContext& styleContext,
   return true;
 }
 
+bool AdmitTextReferenceInput(const components::ComputedTextComponent& computed,
+                             const components::ComputedStyleComponent& style,
+                             TextReferenceWork& work) {
+  if (!ReserveTextReferenceInput(computed, work) ||
+      !work.reserve(style.properties->fontFamily.get().value().size())) {
+    return false;
+  }
+  if (isVertical(style.properties->writingMode.get().value())) {
+    // The horizontal glyph-cell contract cannot stand in for upright/sideways vertical cells.
+    return work.reject();
+  }
+  return true;
+}
+
 }  // namespace
 
 std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
@@ -3954,13 +3968,7 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
   if (!computed || !text || !style || !style->properties) {
     return ReferenceGeometry();
   }
-  if (!ReserveTextReferenceInput(*computed, work) ||
-      !work.reserve(style->properties->fontFamily.get().value().size())) {
-    return std::nullopt;
-  }
-  if (isVertical(style->properties->writingMode.get().value())) {
-    // The horizontal glyph-cell contract cannot stand in for upright/sideways vertical cells.
-    work.reject();
+  if (!AdmitTextReferenceInput(*computed, *style, work)) {
     return std::nullopt;
   }
   if (styleContext &&
