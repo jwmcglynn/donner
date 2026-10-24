@@ -623,6 +623,7 @@ private:
       return false;
     }
     EntityHandle geometryEntity = entity;
+    EntityHandle transformEntity = entity;
     const components::ComputedTextComponent* authoredText = nullptr;
     if (const auto* shadow = entity.try_get<ShadowEntityComponent>()) {
       geometryEntity = EntityHandle(*entity.registry(), shadow->lightEntity);
@@ -647,8 +648,10 @@ private:
         RejectGeometry(budget_, failed_);
         return true;
       }
+    } else {
+      transformEntity = EntityHandle(*entity.registry(), textRoot);
     }
-    accumulateTextGeometry(*textEngine, geometryEntity, entity, std::move(styleContext),
+    accumulateTextGeometry(*textEngine, geometryEntity, transformEntity, std::move(styleContext),
                            remainingWork);
     return true;
 #else

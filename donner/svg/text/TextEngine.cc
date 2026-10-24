@@ -50,14 +50,24 @@ std::optional<TextStyleContext> BuildShadowTextStyleContext(
   TextStyleContext result;
   result.rootEntity = root;
   const std::size_t admitted = registry.view<components::ShadowEntityComponent>().size();
+  const auto consumeWork = [&]() {
+    if (!remainingWork) {
+      return true;
+    }
+    if (*remainingWork == 0u) {
+      return false;
+    }
+    --*remainingWork;
+    return true;
+  };
+  if (!consumeWork()) {
+    return std::nullopt;
+  }
   std::vector<Entity> pending{root};
   std::size_t visited = 0;
   while (!pending.empty()) {
-    if ((remainingWork && *remainingWork == 0u) || ++visited > admitted) {
+    if (++visited > admitted) {
       return std::nullopt;
-    }
-    if (remainingWork) {
-      --*remainingWork;
     }
     const Entity entity = pending.back();
     pending.pop_back();
@@ -68,7 +78,7 @@ std::optional<TextStyleContext> BuildShadowTextStyleContext(
     if (entity != root && registry.any_of<components::TextRootComponent>(shadow->lightEntity)) {
       continue;
     }
-    if (!result.entities.emplace(shadow->lightEntity, entity).second) {
+    if (!consumeWork() || !result.entities.emplace(shadow->lightEntity, entity).second) {
       return std::nullopt;
     }
     const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
@@ -77,6 +87,9 @@ std::optional<TextStyleContext> BuildShadowTextStyleContext(
     }
     for (Entity child = tree->firstChild(); child != entt::null;) {
       if (pending.size() >= admitted) {
+        return std::nullopt;
+      }
+      if (!consumeWork()) {
         return std::nullopt;
       }
       pending.push_back(child);
@@ -88,7 +101,8 @@ std::optional<TextStyleContext> BuildShadowTextStyleContext(
     }
   }
   for (const auto& span : text.spans) {
-    if (span.sourceEntity != entt::null && !result.entities.contains(span.sourceEntity)) {
+    if (!consumeWork() ||
+        (span.sourceEntity != entt::null && !result.entities.contains(span.sourceEntity))) {
       return std::nullopt;
     }
   }

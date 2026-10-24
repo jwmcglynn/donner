@@ -303,6 +303,18 @@ TEST(CircleClipPath, TextSpanSuppliesItsOwnReferenceBox) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(CircleClipPath, TransformedTextSpanKeepsTextRootReferenceCoordinates) {
+  constexpr std::string_view kText =
+      "<text x='8' y='28' transform='translate(3 4)' font-size='20' fill='red'>"
+      "<tspan transform='translate(6 2)'>A</tspan></text>";
+  const auto expected = RenderCircleScene(kText);
+  const auto actual = RenderCircleScene(
+      "<text x='8' y='28' transform='translate(3 4)' font-size='20' fill='red'>"
+      "<tspan transform='translate(6 2)' clip-path='circle(1000px)'>A</tspan></text>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "circle_transformed_text_span",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(CircleClipPath, StrokeBoxUsesStrokeShapeInsteadOfMiterEnvelope) {
   ExpectCircleReference(
       "circle() stroke-box", "<circle cx='30' cy='30' r='12.82842712474619'/>",

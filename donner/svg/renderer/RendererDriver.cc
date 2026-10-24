@@ -1714,6 +1714,9 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
 #endif
   const TextStyleContext* styleContext = nullptr;
   if (!spansHaveOwnEffectInstances) {
+#ifndef DONNER_TEXT_ENABLED
+    return;
+#else
     auto [found, inserted] = textFrameCache.shadowStyles[&registry].try_emplace(entity);
     if (inserted) {
       found->second = BuildShadowTextStyleContext(registry, entity, *text);
@@ -1725,6 +1728,7 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
     textParams.viewBox = components::LayoutSystem().getViewBox(EntityHandle(registry, entity));
     // Each instance can shape differently from the original text's cached geometry.
     textParams.textRootEntity = entt::null;
+#endif
   }
   ++textPreparationStats.fullElementStylePasses;
   textPreparationStats.spanStyleVisits += text->spans.size();

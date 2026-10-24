@@ -345,7 +345,7 @@ TEST(TextEngineScriptedTest, ShadowTextStyleContextIsBoundedAndRequiresSpanCover
               Eq(std::nullopt));
   EXPECT_EQ(insufficientWork, 0u);
 
-  std::size_t admittedWork = 2;
+  std::size_t admittedWork = 5;
   const auto context = BuildShadowTextStyleContext(registry, shadowRoot, text, &admittedWork);
   ASSERT_THAT(context, testing::Optional(testing::_));
   EXPECT_EQ(context->rootEntity, shadowRoot);
@@ -354,7 +354,7 @@ TEST(TextEngineScriptedTest, ShadowTextStyleContextIsBoundedAndRequiresSpanCover
   EXPECT_EQ(admittedWork, 0u);
 
   text.spans.front().sourceEntity = registry.create();
-  std::size_t missingCoverageWork = 2;
+  std::size_t missingCoverageWork = 5;
   EXPECT_THAT(BuildShadowTextStyleContext(registry, shadowRoot, text, &missingCoverageWork),
               Eq(std::nullopt));
 }
