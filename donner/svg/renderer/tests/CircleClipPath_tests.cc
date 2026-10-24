@@ -305,6 +305,7 @@ TEST(CircleClipPath, TextSpanSuppliesItsOwnReferenceBox) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+#ifdef DONNER_TEXT_ENABLED
 TEST(CircleClipPath, TransformedTextSpanKeepsTextRootReferenceCoordinates) {
   const auto circleFor = [](std::string_view transform) {
     SVGDocument document = instantiateSubtree(
@@ -330,6 +331,7 @@ TEST(CircleClipPath, TransformedTextSpanKeepsTextRootReferenceCoordinates) {
   EXPECT_THAT(transformed.bounds(), BoxEq(ordinary.bounds().topLeft - Vector2d(6, 2),
                                           ordinary.bounds().bottomRight - Vector2d(6, 2)));
 }
+#endif
 
 TEST(CircleClipPath, StrokeBoxUsesStrokeShapeInsteadOfMiterEnvelope) {
   ExpectCircleReference(
