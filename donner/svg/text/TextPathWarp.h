@@ -34,21 +34,19 @@ inline bool CrossesBoundary(double start, double end, double boundary) {
   return start < end ? boundary > start && boundary < end : boundary < start && boundary > end;
 }
 
-inline Path::PointOnPath Sample(
-    const StretchedTextPath& mapping, double distance,
-    Path::MeasuredPath::BoundarySide boundarySide = Path::MeasuredPath::BoundarySide::Incoming) {
-  const double length = mapping.measuredPath.pathLength();
-  if (InvalidSample(distance, length)) {
-    return {.valid = false};
+inline Path::PointOnPath SampleClosed(const StretchedTextPath& mapping, double distance,
+                                      double length,
+                                      Path::MeasuredPath::BoundarySide boundarySide) {
+  const double normalized = std::fmod(distance, length);
+  double sampledDistance = normalized < 0.0 ? normalized + length : normalized;
+  if (sampledDistance == 0.0 && boundarySide == Path::MeasuredPath::BoundarySide::Incoming) {
+    sampledDistance = length;
   }
-  if (mapping.closed) {
-    const double normalized = std::fmod(distance, length);
-    double sampledDistance = normalized < 0.0 ? normalized + length : normalized;
-    if (sampledDistance == 0.0 && boundarySide == Path::MeasuredPath::BoundarySide::Incoming) {
-      sampledDistance = length;
-    }
-    return mapping.measuredPath.pointAtArcLength(sampledDistance, boundarySide);
-  }
+  return mapping.measuredPath.pointAtArcLength(sampledDistance, boundarySide);
+}
+
+inline Path::PointOnPath SampleOpen(const StretchedTextPath& mapping, double distance,
+                                    double length, Path::MeasuredPath::BoundarySide boundarySide) {
   if (distance >= 0.0 && distance <= length) {
     return mapping.measuredPath.pointAtArcLength(distance, boundarySide);
   }
@@ -61,6 +59,17 @@ inline Path::PointOnPath Sample(
   endpoint.point += Vector2d(std::cos(endpoint.angle), std::sin(endpoint.angle)) * extension;
   endpoint.valid = std::isfinite(endpoint.point.x) && std::isfinite(endpoint.point.y);
   return endpoint;
+}
+
+inline Path::PointOnPath Sample(
+    const StretchedTextPath& mapping, double distance,
+    Path::MeasuredPath::BoundarySide boundarySide = Path::MeasuredPath::BoundarySide::Incoming) {
+  const double length = mapping.measuredPath.pathLength();
+  if (InvalidSample(distance, length)) {
+    return {.valid = false};
+  }
+  return mapping.closed ? SampleClosed(mapping, distance, length, boundarySide)
+                        : SampleOpen(mapping, distance, length, boundarySide);
 }
 
 inline std::optional<Vector2d> Point(
@@ -184,55 +193,83 @@ private:
     builder_.closePath();
     return true;
   }
-  bool appendLine(const Vector2d& end) {
+  struct LineState {
+    Vector2d intervalStart;
+    std::optional<Vector2d> mappedStart;
+    double startDistance = 0.0;
+    double endDistance = 0.0;
+    bool increasing = false;
+    Path::MeasuredPath::BoundarySide arrivalSide = Path::MeasuredPath::BoundarySide::Incoming;
+  };
+
+  std::optional<LineState> beginLine(const Vector2d& end) {
     if (!hasCurrent_) {
-      return false;
+      return std::nullopt;
     }
-    Vector2d intervalStart = current_;
     const double origin = mapping_.startOffset + *glyph_.textPathOrigin;
     const double startDistance = origin + current_.x;
     const double endDistance = origin + end.x;
     const bool increasing = endDistance > startDistance;
+    const bool constantDistance = endDistance == startDistance;
     const auto departureSide = increasing ? Path::MeasuredPath::BoundarySide::Outgoing
                                           : Path::MeasuredPath::BoundarySide::Incoming;
-    const auto arrivalSide = increasing ? Path::MeasuredPath::BoundarySide::Incoming
-                                        : Path::MeasuredPath::BoundarySide::Outgoing;
-    auto mappedStart =
-        isBoundary(startDistance) ? map(intervalStart, departureSide) : map(intervalStart);
+    const auto arrivalSide = constantDistance
+                                 ? departureSide
+                                 : (increasing ? Path::MeasuredPath::BoundarySide::Incoming
+                                               : Path::MeasuredPath::BoundarySide::Outgoing);
+    auto mappedStart = isBoundary(startDistance) ? map(current_, departureSide) : map(current_);
     if (!mappedStart || !mappedCurrent_ || !appendBoundaryJoin(*mappedCurrent_, *mappedStart)) {
+      return std::nullopt;
+    }
+    return LineState{current_, mappedStart, startDistance, endDistance, increasing, arrivalSide};
+  }
+
+  bool appendLine(const Vector2d& end) {
+    auto line = beginLine(end);
+    if (!line) {
       return false;
     }
-    const auto boundaries = crossedBoundaries(startDistance, endDistance);
+    const auto boundaries = crossedBoundaries(line->startDistance, line->endDistance);
     if (!boundaries) {
       return false;
     }
-    if (end.x != current_.x) {
-      const auto beforeBoundary = increasing ? Path::MeasuredPath::BoundarySide::Incoming
-                                             : Path::MeasuredPath::BoundarySide::Outgoing;
-      const auto afterBoundary = increasing ? Path::MeasuredPath::BoundarySide::Outgoing
-                                            : Path::MeasuredPath::BoundarySide::Incoming;
-      for (const double boundary : *boundaries) {
-        const double t = (boundary - startDistance) / (endDistance - startDistance);
-        const Vector2d intervalEnd = current_ * (1.0 - t) + end * t;
-        const auto mappedEnd = map(intervalEnd, beforeBoundary);
-        if (!mappedEnd ||
-            !appendAdaptive(intervalStart, intervalEnd, *mappedStart, *mappedEnd, 0u)) {
-          return false;
-        }
-        const auto mappedAfterBoundary = map(intervalEnd, afterBoundary);
-        if (!mappedAfterBoundary || !appendBoundaryJoin(*mappedEnd, *mappedAfterBoundary)) {
-          return false;
-        }
-        intervalStart = intervalEnd;
-        mappedStart = mappedAfterBoundary;
-      }
+    if (!appendBoundaryIntervals(end, line->startDistance, line->endDistance, line->increasing,
+                                 *boundaries, line->intervalStart, line->mappedStart)) {
+      return false;
     }
-    const auto mappedEnd = isBoundary(endDistance) ? map(end, arrivalSide) : map(end);
-    if (!mappedEnd || !appendAdaptive(intervalStart, end, *mappedStart, *mappedEnd, 0u)) {
+    const auto mappedEnd = isBoundary(line->endDistance) ? map(end, line->arrivalSide) : map(end);
+    if (!mappedEnd ||
+        !appendAdaptive(line->intervalStart, end, *line->mappedStart, *mappedEnd, 0u)) {
       return false;
     }
     current_ = end;
     mappedCurrent_ = mappedEnd;
+    return true;
+  }
+  bool appendBoundaryIntervals(const Vector2d& end, double startDistance, double endDistance,
+                               bool increasing, std::span<const double> boundaries,
+                               Vector2d& intervalStart, std::optional<Vector2d>& mappedStart) {
+    if (end.x == current_.x) {
+      return true;
+    }
+    const auto beforeBoundary = increasing ? Path::MeasuredPath::BoundarySide::Incoming
+                                           : Path::MeasuredPath::BoundarySide::Outgoing;
+    const auto afterBoundary = increasing ? Path::MeasuredPath::BoundarySide::Outgoing
+                                          : Path::MeasuredPath::BoundarySide::Incoming;
+    for (const double boundary : boundaries) {
+      const double t = (boundary - startDistance) / (endDistance - startDistance);
+      const Vector2d intervalEnd = current_ * (1.0 - t) + end * t;
+      const auto mappedEnd = map(intervalEnd, beforeBoundary);
+      if (!mappedEnd || !appendAdaptive(intervalStart, intervalEnd, *mappedStart, *mappedEnd, 0u)) {
+        return false;
+      }
+      const auto mappedAfterBoundary = map(intervalEnd, afterBoundary);
+      if (!mappedAfterBoundary || !appendBoundaryJoin(*mappedEnd, *mappedAfterBoundary)) {
+        return false;
+      }
+      intervalStart = intervalEnd;
+      mappedStart = mappedAfterBoundary;
+    }
     return true;
   }
   bool isBoundary(double distance) const {

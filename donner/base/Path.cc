@@ -632,24 +632,13 @@ std::vector<double> Path::MeasuredPath::segmentEndDistances() const {
   return result;
 }
 
-Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance,
-                                                       BoundarySide boundarySide) const {
-  if (!valid_ || !std::isfinite(distance) || distance < 0.0) {
-    return {{}, {}, 0.0, false};
-  }
-  if (segments_.empty()) {
-    return {endpoint_, {}, 0.0, false};
-  }
-
-  if (distance > totalLength_) {
-    return {endpoint_, {}, 0.0, false};
-  }
-
+std::optional<std::size_t> Path::MeasuredPath::segmentIndexAtArcLength(
+    double& distance, BoundarySide boundarySide) const {
   auto it = std::lower_bound(
       segments_.begin(), segments_.end(), distance,
       [](const Segment& segment, double target) { return segment.endLength < target; });
   if (it == segments_.end()) {
-    return {endpoint_, {}, 0.0, false};
+    return std::nullopt;
   }
 
   if (boundarySide == BoundarySide::Outgoing && distance == it->endLength) {
@@ -669,18 +658,34 @@ Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance,
       ++next;
     }
   }
+  return static_cast<std::size_t>(std::distance(segments_.begin(), it));
+}
 
-  const double segmentLength = it->endLength - it->startLength;
-  const double remaining = distance - it->startLength;
-  if (it->type == SegmentType::Line) {
-    return PointOnMeasuredLine(*it, remaining, segmentLength);
+Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance,
+                                                       BoundarySide boundarySide) const {
+  if (!valid_ || !std::isfinite(distance) || distance < 0.0 || distance > totalLength_) {
+    return {{}, {}, 0.0, false};
   }
-  if (distance == it->endLength) {
+  if (segments_.empty()) {
+    return {endpoint_, {}, 0.0, false};
+  }
+  const auto segmentIndex = segmentIndexAtArcLength(distance, boundarySide);
+  if (!segmentIndex) {
+    return {endpoint_, {}, 0.0, false};
+  }
+  const Segment& segment = segments_[*segmentIndex];
+
+  const double segmentLength = segment.endLength - segment.startLength;
+  const double remaining = distance - segment.startLength;
+  if (segment.type == SegmentType::Line) {
+    return PointOnMeasuredLine(segment, remaining, segmentLength);
+  }
+  if (distance == segment.endLength) {
     // Global-to-local subtraction can round beyond the last retained sample.
-    const Vector2d tangent = evalCubicTangent(it->points, 1.0);
-    return {it->points[3], tangent, std::atan2(tangent.y, tangent.x), true};
+    const Vector2d tangent = evalCubicTangent(segment.points, 1.0);
+    return {segment.points[3], tangent, std::atan2(tangent.y, tangent.x), true};
   }
-  return PointOnMeasuredCubic(*it, arcSamples_, remaining, endpoint_);
+  return PointOnMeasuredCubic(segment, arcSamples_, remaining, endpoint_);
 }
 
 Vector2d Path::pointAt(size_t index, double t) const {

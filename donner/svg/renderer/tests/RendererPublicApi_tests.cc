@@ -25,6 +25,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/filter/FilterGraph.h"
@@ -3002,6 +3003,35 @@ TEST(RendererPublicApiTest, TextPathMeasurementWorkResetsAcrossTopLevelFrames) {
   EXPECT_FALSE(family->securityStats().textPathMeasurementWorkRejected);
   EXPECT_LE(family->securityStats().textPathMeasurementWorkUnits,
             limits.textPathMeasurementWorkUnits);
+}
+
+TEST(RendererPublicApiTest, TextPathGeometryQueryRecoversAfterPriorWorkExhaustion) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"
+        font-family="Public Sans" font-size="24">
+        <defs><path id="p" d="M8 40 C8 0 120 0 120 40"/></defs>
+        <text id="t"><textPath href="#p" method="stretch">A</textPath></text>
+      </svg>)svg");
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.textPathMeasurementWorkUnits = 2;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  document.registry().ctx().get<components::DocumentResourceFamilyContext>().budget = family;
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+  TextEngine& engine = document.registry().ctx().get<TextEngine>();
+  const auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  EXPECT_THAT(engine.computedGlyphPaths(text->unsafeEntityHandle()), testing::IsEmpty());
+  EXPECT_EQ(family->securityStats().textPathMeasurementWorkUnits, 2u);
+  document.querySelector("#p")->cast<SVGPathElement>().setD("M8 32 H120");
+  document.querySelector("textPath")->cast<SVGTextPathElement>().setTextContent("B");
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+  EXPECT_THAT(engine.computedGlyphPaths(text->unsafeEntityHandle()),
+              testing::ElementsAre(testing::Property(&Path::empty, false)));
+  EXPECT_FALSE(family->securityStats().textPathMeasurementWorkRejected);
 }
 
 /// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,

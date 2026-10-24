@@ -290,6 +290,9 @@ public:
   private:
     friend class Path;
 
+    std::optional<std::size_t> segmentIndexAtArcLength(double& distance,
+                                                       BoundarySide boundarySide) const;
+
     enum class SegmentType : uint8_t { Line, Cubic };
 
     struct ArcSample {

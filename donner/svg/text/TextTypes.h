@@ -1,7 +1,6 @@
 #pragma once
 /// @file
 
-#include <limits>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -39,15 +38,6 @@ public:
       family_->release(components::DocumentResourceFamilyBudget::Kind::Geometry, bytes_ - bytes);
       bytes_ = bytes;
     }
-  }
-
-  /// Make later family reservations fail closed after admitted measurement cannot complete.
-  void rejectFurtherReservations() {
-    const std::size_t available =
-        family_->availableBytes(components::DocumentResourceFamilyBudget::Kind::Geometry);
-    const std::size_t refused =
-        available == std::numeric_limits<std::size_t>::max() ? available : available + 1u;
-    (void)family_->reserve(components::DocumentResourceFamilyBudget::Kind::Geometry, refused);
   }
 
 private:

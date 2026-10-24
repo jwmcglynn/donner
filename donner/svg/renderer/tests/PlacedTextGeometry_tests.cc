@@ -136,6 +136,8 @@ TEST(PlacedTextGeometryTest, StretchUsesOneSidedNormalsAtSharpCornerEndpoints) {
                                .lineTo(Vector2d(5.0, -2.0))
                                .lineTo(Vector2d(10.0, -2.0))
                                .build();
+  const Path constantAtCorner =
+      PathBuilder().moveTo(Vector2d(5.0, -2.0)).lineTo(Vector2d(5.0, 2.0)).build();
   TextGlyph glyph;
   glyph.textPathOrigin = 5.0;
   const StretchedTextPath mapping = MeasurePath(route);
@@ -143,14 +145,18 @@ TEST(PlacedTextGeometryTest, StretchUsesOneSidedNormalsAtSharpCornerEndpoints) {
   const Path warpedStart = WarpGlyphOutline(startsAtCorner, mapping, glyph, 0.05);
   const Path warpedEnd = WarpGlyphOutline(endsAtCorner, mapping, glyph, 0.05);
   const Path warpedConsecutive = WarpGlyphOutline(consecutive, mapping, glyph, 0.05);
+  const Path warpedConstant = WarpGlyphOutline(constantAtCorner, mapping, glyph, 0.05);
 
   ASSERT_FALSE(warpedStart.empty());
   ASSERT_FALSE(warpedEnd.empty());
   ASSERT_FALSE(warpedConsecutive.empty());
+  ASSERT_FALSE(warpedConstant.empty());
   EXPECT_THAT(warpedStart.points(), Contains(Vector2Near(12.0, 0.0)));
   EXPECT_THAT(warpedEnd.points(), Contains(Vector2Near(10.0, -2.0)));
   EXPECT_THAT(warpedConsecutive.points(), Contains(Vector2Near(10.0, -2.0)));
   EXPECT_THAT(warpedConsecutive.points(), Contains(Vector2Near(12.0, 0.0)));
+  EXPECT_THAT(warpedConstant.points(), Contains(Vector2Near(10.0, -2.0)));
+  EXPECT_THAT(warpedConstant.points(), Contains(Vector2Near(10.0, 2.0)));
 }
 
 TEST(PlacedTextGeometryTest, StretchJoinsOneSidedNormalsAcrossClosedSeam) {
@@ -179,6 +185,13 @@ TEST(PlacedTextGeometryTest, StretchJoinsOneSidedNormalsAcrossClosedSeam) {
   const Path warpedStart = WarpGlyphOutline(startsAtSeam, mapping, glyph, 0.05);
   ASSERT_FALSE(warpedStart.empty());
   EXPECT_THAT(warpedStart.points(), Contains(Vector2Near(0.0, -2.0)));
+
+  const Path constantAtSeam =
+      PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(0.0, 2.0)).build();
+  const Path warpedConstant = WarpGlyphOutline(constantAtSeam, mapping, glyph, 0.05);
+  ASSERT_FALSE(warpedConstant.empty());
+  EXPECT_THAT(warpedConstant.points(), Contains(Vector2Near(-2.0, 0.0)));
+  EXPECT_THAT(warpedConstant.points(), Contains(Vector2Near(2.0, 0.0)));
 }
 
 TEST(PlacedTextGeometryTest, StretchDoesNotJoinCoincidentDisconnectedSubpaths) {

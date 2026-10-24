@@ -1333,7 +1333,7 @@ TEST(TextEngineTest, TextPathMeasurementRetentionUsesDocumentFamilyBudget) {
   EXPECT_THAT(admitted, AllOf(Gt(0u), Lt(32u)));
   EXPECT_LE(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::Geometry),
             limits.geometryBytes);
-  EXPECT_TRUE(family->securityStats().rejected);
+  EXPECT_FALSE(family->securityStats().rejected);
 }
 
 TEST(TextEngineTest, TextPathMeasurementWorkIsCumulativeAfterReleasedAlignPaths) {
