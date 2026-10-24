@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="negativeOuter" r="-0.25"><stop stop-color="blue"/></radialGradient>
+    <radialGradient id="negativeFocal" fr="-0.25"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></radialGradient>
+    <radialGradient id="zeroOuter" r="0" fr="-0.25"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></radialGradient>
+    <radialGradient id="tinyNegative" r="-1e-20"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></radialGradient>
+    <radialGradient id="containing" fr="0.75"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></radialGradient>
+  </defs>
+  <rect width="64" height="64" fill="lime"/>
+  <rect width="32" height="32" fill="url(#negativeOuter)"/>
+  <rect x="32" width="32" height="32" fill="url(#negativeFocal)"/>
+  <rect y="32" width="32" height="32" fill="url(#zeroOuter)"/>
+  <rect x="32" y="32" width="32" height="32" fill="url(#tinyNegative)"/>
+  <rect width="64" height="64" fill="url(#containing)"/>
+</svg>

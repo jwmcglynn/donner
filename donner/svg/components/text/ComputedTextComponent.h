@@ -20,6 +20,7 @@
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
+#include "donner/svg/core/TextOrientation.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/text/TextTypes.h"
 
@@ -170,6 +171,9 @@ struct ComputedTextComponent {
     /// Auto, otherwise the span's resolved (inherited) `dominant-baseline`. Auto means the
     /// alphabetic baseline (no shift). Populated by RendererDriver from sourceEntity.
     DominantBaseline alignmentBaseline = DominantBaseline::Auto;
+
+    /// Computed glyph orientation for vertical text.
+    TextOrientation textOrientation = TextOrientation::Mixed;
 
     /// CSS `visibility` value for this span. Hidden/collapsed spans are laid out normally
     /// (they still advance the pen position) but their glyphs are not drawn.

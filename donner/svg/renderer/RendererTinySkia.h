@@ -435,12 +435,17 @@ private:
   void prepareRetainedClipEpochBudget(int pixelWidth, int pixelHeight);
   [[nodiscard]] bool applyPathLengthAdjustment(const Path& path, StrokeParams& stroke);
   [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip);
+  /// Include parent paint captures in this stage's bounded surface reservation.
+  components::FilterStandardInputUsage filterCaptureInputs(
+      const components::FilterGraph& graph) const;
   [[nodiscard]] std::optional<FilterAdmission> admitFilterLayer(
       const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
       const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight);
   bool initializeFilterSurface(SurfaceFrame& frame, const FilterAdmission& admission);
   bool compositeTransformedFilter(SurfaceFrame& frame);
   void compositeDeviceFilter(SurfaceFrame& frame);
+  /// Forward unfiltered paint captures to containing stages before executing this stage.
+  void propagateFilterPaintInputs(const SurfaceFrame& frame);
   tiny_skia::Pixmap extractFilterViewport(const SurfaceFrame& frame, int width, int height);
   bool admitTextGlyphBatch(const std::vector<TextRun>& runs, bool stroked);
   bool admitGlyphPredecode(const FontManager& fontManager, FontHandle font, int glyphIndex,
