@@ -94,7 +94,13 @@ struct SubmissionFenceCommit {
     if (device.lastSubmittedSerial() > beforeSerial) {
       stamp.serial = device.lastSubmittedSerial();
       stamp.inputRepresented &= fullFramePresented;
+      stamp.fullFramePresented = fullFramePresented;
       queue.submitted(stamp);
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+      if (fullFramePresented) {
+        whole_app_worker::RequestPresentationProgress();
+      }
+#endif
     }
   }
 };
@@ -378,9 +384,12 @@ void PublishFirstPresentedFrame(int headlessDeviceCreations) {
   whole_app_worker::NotifyFirstFramePresented(headlessDeviceCreations);
 }
 void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
-                                   bool surfacePresented) {
+                                   bool surfacePresented, std::uint64_t admissionSequence,
+                                   std::uint64_t producerGeneration, std::uint64_t captureId,
+                                   bool currentProducer) {
   whole_app_worker::PublishPresentedDocumentFrame(documentGeneration, frameVersion,
-                                                  surfacePresented);
+                                                  surfacePresented, admissionSequence,
+                                                  producerGeneration, captureId, currentProducer);
 }
 // The readback diagnostic's page handshake lives in the whole-app bridge: the
 // request/completed ids ride the shared-memory mirror and the stats publishes
@@ -2405,8 +2414,43 @@ void EditorWindow::declarePresentationTimeoutLossForTesting(std::chrono::millise
   declarePresentationTimeoutLoss(device, age);
 }
 
+bool EditorWindow::hasPresentationDevice() const {
+  return wgpuState_ != nullptr && wgpuState_->framebufferGeodeDevice != nullptr;
+}
+
+void EditorWindow::recordCompletedDocumentFrame(
+    const internal::PresentationSubmissionQueue::Fence& frame) {
+  if (!frame.fullFramePresented) {
+    return;
+  }
+  auto& device = wgpuState_->framebufferGeodeDevice->runtimeDevice();
+  if (wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+    observePresentationDeviceLoss(device);
+    return;
+  }
+  const bool currentProducer = frame.producerGeneration == presentationProducerGeneration_;
+#ifdef __EMSCRIPTEN__
+  PublishPresentedDocumentFrame(frame.documentGeneration, frame.frameVersion,
+                                frame.surfacePresented, frame.admissionSequence,
+                                frame.producerGeneration, frame.captureId, currentProducer);
+#endif
+  if (!currentProducer) {
+    return;
+  }
+  const PresentedDocumentFrameIdentity identity{frame.documentGeneration, frame.frameVersion,
+                                                frame.captureId};
+  lastFullyPresentedDocumentFrame_ = identity;
+  if (pendingPresentedDocumentWake_ == identity) {
+    pendingPresentedDocumentWake_.reset();
+    wakeEventLoopForPresentedDocument();
+  }
+#ifdef __EMSCRIPTEN__
+  PublishFirstPresentedFrame(geode::GeodeDevice::headlessCreationCountForTesting());
+#endif
+}
+
 bool EditorWindow::observePresentationCompletion() {
-  if (wgpuState_ == nullptr || wgpuState_->framebufferGeodeDevice == nullptr) {
+  if (!hasPresentationDevice()) {
     return false;
   }
   auto& device = wgpuState_->framebufferGeodeDevice->runtimeDevice();
@@ -2414,13 +2458,13 @@ bool EditorWindow::observePresentationCompletion() {
   const auto completed = presentationCompletionProbeForTesting_
                              ? presentationCompletionProbeForTesting_()
                              : device.completedSerial();
+  const auto onCompleted = [this](const internal::PresentationSubmissionQueue::Fence& frame) {
+    recordCompletedDocumentFrame(frame);
+  };
 #ifdef __EMSCRIPTEN__
-  const bool deviceLost = wgpuState_->framebufferGeodeDevice->isDeviceLost();
-  observePresentationDeviceLoss(device);
-#endif
-#ifdef __EMSCRIPTEN__
-  const auto admission =
-      presentationSubmissions_.observe(completed, std::chrono::steady_clock::now(), [&] {
+  const auto admission = presentationSubmissions_.observe(
+      completed, std::chrono::steady_clock::now(),
+      [&] {
         if (!wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
           ++presentationCompletionConfirmations_;
           // A paused browser can have finished GPU work whose callback has not run yet.
@@ -2428,10 +2472,11 @@ bool EditorWindow::observePresentationCompletion() {
         }
         return internal::PresentationSubmissionQueue::CompletionObservation{
             device.completedSerial(), std::chrono::steady_clock::now()};
-      });
+      },
+      onCompleted);
 #else
   const auto admission = presentationSubmissions_.observe(
-      completed, std::chrono::steady_clock::now(), device.lastProgress());
+      completed, std::chrono::steady_clock::now(), device.lastProgress(), onCompleted);
 #endif
   if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut &&
       presentationTimeoutSerial_ == 0) {
@@ -2439,6 +2484,8 @@ bool EditorWindow::observePresentationCompletion() {
     presentationTimeoutAge_ = presentationSubmissions_.oldestAge(std::chrono::steady_clock::now());
   }
 #ifdef __EMSCRIPTEN__
+  const bool deviceLost = wgpuState_->framebufferGeodeDevice->isDeviceLost();
+  observePresentationDeviceLoss(device);
   const auto frame = presentationSubmissions_.completed();
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
@@ -2486,6 +2533,10 @@ bool EditorWindow::observePresentationCompletion() {
       static_cast<double>(presentationCompletionConfirmations_));
   // clang-format on
 #endif
+  if (wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+    observePresentationDeviceLoss(device);
+    return false;
+  }
   if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut) {
     declarePresentationTimeoutLoss(device, presentationTimeoutAge_);
     return false;
@@ -2520,12 +2571,8 @@ void EditorWindow::pollIdleGpu() {
 
 EditorWindow::PresentationProgress EditorWindow::pollDeferredPresentation() {
 #ifdef DONNER_EDITOR_WGPU
-  if (presentationWasDeferred_) {
-    if (wgpuState_ != nullptr && wgpuState_->framebufferGeodeDevice != nullptr) {
-      observePresentationDeviceLoss(wgpuState_->framebufferGeodeDevice->runtimeDevice());
-    }
-    if (wgpuState_ == nullptr || wgpuState_->framebufferGeodeDevice == nullptr ||
-        wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+  if (presentationWasDeferred_ || presentationSubmissions_.pendingCount() != 0) {
+    if (!hasPresentationDevice()) {
       return PresentationProgress::Failed;
     }
     auto& device = wgpuState_->framebufferGeodeDevice->runtimeDevice();
@@ -2534,14 +2581,27 @@ EditorWindow::PresentationProgress EditorWindow::pollDeferredPresentation() {
                                ? presentationCompletionProbeForTesting_()
                                : device.completedSerial();
     const auto now = std::chrono::steady_clock::now();
+    const auto onCompleted = [this](const internal::PresentationSubmissionQueue::Fence& frame) {
+      recordCompletedDocumentFrame(frame);
+    };
 #ifdef __EMSCRIPTEN__
-    const auto admission = presentationSubmissions_.observe(completed, now);
+    const auto admission =
+        presentationSubmissions_.observe(completed, now, std::nullopt, onCompleted);
 #else
-    const auto admission = presentationSubmissions_.observe(completed, now, device.lastProgress());
+    const auto admission =
+        presentationSubmissions_.observe(completed, now, device.lastProgress(), onCompleted);
 #endif
+    if (wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+      observePresentationDeviceLoss(device);
+      return PresentationProgress::Failed;
+    }
     switch (admission) {
       case internal::PresentationSubmissionQueue::Admission::Ready:
-        return PresentationProgress::Ready;
+        if (presentationWasDeferred_) {
+          return PresentationProgress::Ready;
+        }
+        return presentationSubmissions_.pendingCount() != 0 ? PresentationProgress::Pending
+                                                            : PresentationProgress::Idle;
       case internal::PresentationSubmissionQueue::Admission::Busy:
         return PresentationProgress::Pending;
       case internal::PresentationSubmissionQueue::Admission::TimedOut:
@@ -3203,10 +3263,9 @@ struct EditorWindow::GpuFrameSubmission {
                                 .stamp = window.presentationInputStamp_,
                                 .fullFramePresented = fullFramePresented};
     fence.stamp.submittedAt = std::chrono::steady_clock::now();
-    const PresentedDocumentFrameIdentity documentIdentity{
-        .documentGeneration = window.presentationDocumentIdentity_.documentGeneration,
-        .frameVersion = window.presentationDocumentIdentity_.frameVersion,
-        .captureId = fence.stamp.captureId};
+    fence.stamp.documentGeneration = window.presentationDocumentIdentity_.documentGeneration;
+    fence.stamp.frameVersion = window.presentationDocumentIdentity_.frameVersion;
+    fence.stamp.producerGeneration = window.presentationProducerGeneration_;
     gpu::Texture acquiredFrame;
     if (!acquireTarget(acquiredFrame)) {
       return;
@@ -3228,17 +3287,8 @@ struct EditorWindow::GpuFrameSubmission {
     if (!present(guard)) {
       return;
     }
-    window.lastFullyPresentedDocumentFrame_ = documentIdentity;
-    if (window.pendingPresentedDocumentWake_ == documentIdentity) {
-      window.pendingPresentedDocumentWake_.reset();
-      window.wakeEventLoopForPresentedDocument();
-    }
+    fence.stamp.surfacePresented = surfacePresented;
     fullFramePresented = true;
-#ifdef __EMSCRIPTEN__
-    PublishFirstPresentedFrame(geode::GeodeDevice::headlessCreationCountForTesting());
-    PublishPresentedDocumentFrame(documentIdentity.documentGeneration,
-                                  documentIdentity.frameVersion, surfacePresented);
-#endif
     completed = true;
   }
 };

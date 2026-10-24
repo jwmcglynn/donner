@@ -243,9 +243,15 @@ void NotifyFirstFramePresented(int headlessDeviceCreations);
  * @param documentGeneration Document generation of the presented frame.
  * @param frameVersion Frame version of the presented frame.
  * @param surfacePresented Whether a real surface was acquired and successfully presented.
+ * @param admissionSequence Window-owned submission order independent of device serial resets.
+ * @param producerGeneration Producer lifetime that submitted the frame.
+ * @param captureId Immutable raster capture carried by the completed frame.
+ * @param currentProducer Whether this producer still owns the window's document acknowledgment.
  */
 void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
-                                   bool surfacePresented);
+                                   bool surfacePresented, std::uint64_t admissionSequence,
+                                   std::uint64_t producerGeneration, std::uint64_t captureId,
+                                   bool currentProducer);
 
 /// Mirror one scroll event onto `window.__donnerLastScrollEvent` for the
 /// browser suites.

@@ -9968,8 +9968,15 @@ void EditorShell::runFrame() {
   updateWindowTitle();
   markPhase(mainFrameCost.preparationMs);
 
+  std::optional<std::uint64_t> admissionSequence;
+  std::optional<std::uint64_t> producerGeneration;
+#ifdef DONNER_EDITOR_WGPU
+  admissionSequence = window_.presentationAdmissionSequence();
+  producerGeneration = window_.presentationProducerGeneration();
+#endif
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
-                                      &interactionController_.frameHistory());
+                                      &interactionController_.frameHistory(), admissionSequence,
+                                      producerGeneration);
   applyPendingHistoryActions();
   adoptCatalogFontResources();
   adoptPresentedSample();
