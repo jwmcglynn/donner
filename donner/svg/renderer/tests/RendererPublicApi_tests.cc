@@ -28,9 +28,11 @@
 #include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
@@ -3032,6 +3034,43 @@ TEST(RendererPublicApiTest, TextPathGeometryQueryRecoversAfterPriorWorkExhaustio
   EXPECT_THAT(engine.computedGlyphPaths(text->unsafeEntityHandle()),
               testing::ElementsAre(testing::Property(&Path::empty, false)));
   EXPECT_FALSE(family->securityStats().textPathMeasurementWorkRejected);
+}
+
+TEST(RendererPublicApiTest, GroupBoundsQuerySharesTextPathWorkAcrossRoots) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"
+        font-family="Public Sans" font-size="24">
+        <defs><path id="p" d="M8 40 H120"/></defs>
+        <g id="group">
+          <text id="first"><textPath href="#p" method="stretch">A</textPath></text>
+          <text id="second"><textPath href="#p" method="stretch">B</textPath></text>
+        </g>
+      </svg>)svg");
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.textPathMeasurementWorkUnits = 2;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  document.registry().ctx().get<components::DocumentResourceFamilyContext>().budget = family;
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+  const auto group = document.querySelector("#group");
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+
+  const auto bounds = components::ShapeSystem().getShapeBounds(group->unsafeEntityHandle());
+  ASSERT_THAT(bounds, testing::Optional(_));
+  EXPECT_FALSE(bounds->isEmpty());
+  EXPECT_EQ(family->securityStats().textPathMeasurementWorkUnits, 2u);
+  EXPECT_TRUE(family->securityStats().textPathMeasurementWorkRejected);
+  const auto& firstGeometry =
+      first->unsafeEntityHandle().get<components::ComputedTextGeometryComponent>();
+  const auto& secondGeometry =
+      second->unsafeEntityHandle().get<components::ComputedTextGeometryComponent>();
+  const std::array glyphCounts = {firstGeometry.glyphs.size(), secondGeometry.glyphs.size()};
+  EXPECT_THAT(glyphCounts, testing::UnorderedElementsAre(0u, 1u));
 }
 
 /// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,
