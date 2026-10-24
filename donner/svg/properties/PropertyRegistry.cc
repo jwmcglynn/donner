@@ -1075,6 +1075,32 @@ ParseResult<Reference> ParseReference(std::string_view tag,
   return err;
 }
 
+ParseResult<std::optional<ClipPath>> ParseClipPathValue(
+    const parser::PropertyParseFnParams& params) {
+  using Result = std::optional<ClipPath>;
+  const auto components = params.components();
+  if (const auto ident = parser::TryGetSingleIdent(components);
+      ident && ident->equalsLowercase("none")) {
+    return Result();
+  }
+  if (components.empty()) {
+    return ParseReference("clip-path", components).map<Result>([](Reference reference) {
+      return ClipPath(std::move(reference));
+    });
+  }
+  if (const auto url = ParseUrlComponent(components.front())) {
+    if (components.size() == 1) {
+      return Result(ClipPath(Reference(*url)));
+    }
+    ParseDiagnostic error;
+    error.reason = "Unexpected tokens after clip-path reference";
+    return error;
+  }
+  return ParseCircleClipPath(components, params.allowUserUnits()).map<Result>([](ClipPath clip) {
+    return Result(std::move(clip));
+  });
+}
+
 /// Parse a CSS angle value from a Dimension token, converting to degrees.
 std::optional<double> ParseAngleDegrees(const css::Token::Dimension& dimension) {
   const RcString& suffix = dimension.suffixString;
@@ -2596,7 +2622,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    return Parse(
                        params,
                        [](const parser::PropertyParseFnParams& params) {
-                         return ParseReference("clip-path", params.components());
+                         return ParseClipPathValue(params);
                        },
                        &registry.clipPath);
                  }},  //
@@ -2896,8 +2922,8 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
     const parser::PropertyParseBehavior parseBehavior =
-        name == "filter" ? parser::PropertyParseBehavior::Default
-                         : parser::PropertyParseBehavior::AllowUserUnits;
+        name == "filter" || name == "clip-path" ? parser::PropertyParseBehavior::Default
+                                                : parser::PropertyParseBehavior::AllowUserUnits;
     return (*parseFn)(
         *this, parser::PropertyParseFnParams::Create(declaration, specificity, parseBehavior));
   }
