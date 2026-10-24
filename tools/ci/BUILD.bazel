@@ -384,6 +384,7 @@ py_test(
     data = [
         "editor_wasm_stage.py",
         "//donner/editor/wasm:catalog_package_integrity_test.py",
+        "//donner/editor/wasm:index.html",
     ],
     deps = [
         "//tools:test_executable_fixtures",

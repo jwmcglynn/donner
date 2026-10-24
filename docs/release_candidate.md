@@ -36,7 +36,10 @@ and in the release body; the record cannot contain its own hash.
   and a map of every ZIP member path to its uncompressed SHA-256. The artifact ID and ZIP digest
   must match GitHub's metadata. The editor package provenance also records its producer run and
   attempt; older editor packages without those fields, or without a generated lockfile, cannot
-  qualify a candidate. `docs-provenance` is retained by the docs build beside its Pages artifact
+  qualify a candidate. Browser file-dialog scripts are accepted only as a complete site/deploy
+  pair matching the selected source checkout; older source revisions may omit both. Fetching an
+  editor role also requires that clean exact-source checkout. `docs-provenance` is retained by
+  the docs build beside its Pages artifact
   and is never published. `bcr-entry` is described [below](#ReleaseCandidateRegistryEntry).
 - `evidence`: exactly `ci`, `coverage`, `fuzz`, and `sanitizers`. Each names a successful
   exact-source run ID and attempt, its retained evidence-file SHA-256, and successful/skipped

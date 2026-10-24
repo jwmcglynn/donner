@@ -307,29 +307,54 @@ TextBackend::ShapedRun TextBackendSimple::shapeRun(FontHandle font, float fontSi
                                                    size_t byteLength, bool isVertical,
                                                    FontVariant fontVariant,
                                                    bool forceLogicalOrder) const {
-  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
-                      true, forceLogicalOrder);
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                      TextOrientation::Mixed, fontVariant, true, forceLogicalOrder);
+}
+
+TextBackend::ShapedRun TextBackendSimple::shapeRun(FontHandle font, float fontSizePx,
+                                                   std::string_view spanText, size_t byteOffset,
+                                                   size_t byteLength, bool isVertical,
+                                                   TextOrientation textOrientation,
+                                                   FontVariant fontVariant,
+                                                   bool forceLogicalOrder) const {
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                      textOrientation, fontVariant, true, forceLogicalOrder);
 }
 
 TextBackend::ShapedRun TextBackendSimple::shapeRunNoKerning(
     FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
     size_t byteLength, bool isVertical, FontVariant fontVariant, bool forceLogicalOrder) const {
-  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical, fontVariant,
-                      false, forceLogicalOrder);
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                      TextOrientation::Mixed, fontVariant, false, forceLogicalOrder);
+}
+
+TextBackend::ShapedRun TextBackendSimple::shapeRunNoKerning(
+    FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
+    size_t byteLength, bool isVertical, TextOrientation textOrientation, FontVariant fontVariant,
+    bool forceLogicalOrder) const {
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                      textOrientation, fontVariant, false, forceLogicalOrder);
 }
 
 namespace {
 
+bool UsesSidewaysMetrics(TextOrientation orientation, uint32_t codepoint) {
+  return orientation == TextOrientation::Sideways ||
+         (orientation == TextOrientation::Mixed && codepoint < 0x2E80);
+}
+
 /// Returns the pair adjustment in horizontal or sideways-vertical text.
 Vector2d SimplePairKerning(const stbtt_fontinfo* info, int prevGlyph, int glyphIndex, float scale,
-                           bool isVertical, uint32_t codepoint, bool enableKerning) {
+                           bool isVertical, TextOrientation textOrientation, uint32_t codepoint,
+                           bool enableKerning) {
   // Compute kerning from previous glyph to this one.
   double kernX = 0;
   double kernY = 0;
   if (enableKerning && prevGlyph != 0 && glyphIndex != 0) {
     const int kern = stbtt_GetGlyphKernAdvance(info, prevGlyph, glyphIndex);
     if (kern != 0) {
-      if (isVertical && codepoint < 0x2E80) {
+      const bool sideways = UsesSidewaysMetrics(textOrientation, codepoint);
+      if (isVertical && sideways) {
         kernY = static_cast<double>(kern) * scale;
       } else if (!isVertical) {
         kernX = static_cast<double>(kern) * scale;
@@ -341,16 +366,37 @@ Vector2d SimplePairKerning(const stbtt_fontinfo* info, int prevGlyph, int glyphI
 }
 
 /// Sets the advance axis for horizontal, sideways Latin, or upright CJK text.
-void SetSimpleGlyphAdvance(TextBackend::ShapedGlyph& glyph, bool isVertical, uint32_t codepoint,
-                           int advanceWidth, float glyphScale, float fontSizePx) {
-  if (isVertical && codepoint < 0x2E80) {
+void SetSimpleGlyphAdvance(TextBackend::ShapedGlyph& glyph, bool isVertical,
+                           TextOrientation textOrientation, uint32_t codepoint,
+                           const stbtt_fontinfo* info, int glyphIndex, int advanceWidth,
+                           float glyphScale, float fontSizePx) {
+  const bool sideways = UsesSidewaysMetrics(textOrientation, codepoint);
+  if (isVertical && sideways) {
     // Sideways Latin in vertical mode: horizontal advance becomes vertical.
     glyph.xAdvance = 0;
     glyph.yAdvance = static_cast<double>(advanceWidth) * glyphScale;
-  } else if (isVertical) {
-    // Upright CJK in vertical mode: advance = em height.
+  } else if (isVertical && textOrientation == TextOrientation::Upright) {
+    int ascent = 0;
+    int descent = 0;
+    int lineGap = 0;
+    stbtt_GetFontVMetrics(info, &ascent, &descent, &lineGap);
+    const double cellAdvance = static_cast<double>(ascent - descent) * glyphScale;
     glyph.xAdvance = 0;
-    glyph.yAdvance = static_cast<double>(fontSizePx);
+    glyph.yAdvance = advanceWidth == 0 ? 0.0 : cellAdvance;
+    int xMin = 0;
+    int yMin = 0;
+    int xMax = 0;
+    int yMax = 0;
+    if (stbtt_GetGlyphBox(info, glyphIndex, &xMin, &yMin, &xMax, &yMax)) {
+      glyph.xOffset = -static_cast<double>(advanceWidth) * glyphScale / 2.0;
+      glyph.yOffset = static_cast<double>(ascent) * glyphScale;
+      if (advanceWidth == 0) {
+        glyph.yOffset -= cellAdvance;
+      }
+    }
+  } else if (isVertical) {
+    glyph.xAdvance = 0;
+    glyph.yAdvance = advanceWidth == 0 ? 0.0 : static_cast<double>(fontSizePx);
   } else {
     glyph.xAdvance = static_cast<double>(advanceWidth) * glyphScale;
     glyph.yAdvance = 0;
@@ -362,6 +408,7 @@ void SetSimpleGlyphAdvance(TextBackend::ShapedGlyph& glyph, bool isVertical, uin
 TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fontSizePx,
                                                        std::string_view spanText, size_t byteOffset,
                                                        size_t byteLength, bool isVertical,
+                                                       TextOrientation textOrientation,
                                                        FontVariant fontVariant, bool enableKerning,
                                                        bool /*forceLogicalOrder*/) const {
   if (!std::isfinite(fontSizePx) || fontSizePx <= 0.0f) {
@@ -400,8 +447,8 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fo
 
     const float glyphScale = smallCap ? scale * kSmallCapScale : scale;
 
-    const Vector2d kerning =
-        SimplePairKerning(info, prevGlyph, glyphIndex, scale, isVertical, codepoint, enableKerning);
+    const Vector2d kerning = SimplePairKerning(info, prevGlyph, glyphIndex, scale, isVertical,
+                                               textOrientation, codepoint, enableKerning);
 
     ShapedGlyph glyph;
     glyph.glyphIndex = glyphIndex;
@@ -410,7 +457,8 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fo
     glyph.xKern = kerning.x;
     glyph.yKern = kerning.y;
 
-    SetSimpleGlyphAdvance(glyph, isVertical, codepoint, advanceWidth, glyphScale, fontSizePx);
+    SetSimpleGlyphAdvance(glyph, isVertical, textOrientation, codepoint, info, glyphIndex,
+                          advanceWidth, glyphScale, fontSizePx);
 
     result.glyphs.push_back(glyph);
     prevGlyph = glyphIndex;
@@ -422,6 +470,14 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fo
 double TextBackendSimple::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,
                                         float curSizePx, uint32_t prevCodepoint,
                                         uint32_t curCodepoint, bool isVertical) const {
+  return crossSpanKern(prevFont, prevSizePx, curFont, curSizePx, prevCodepoint, curCodepoint,
+                       isVertical, TextOrientation::Mixed);
+}
+
+double TextBackendSimple::crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont,
+                                        float curSizePx, uint32_t prevCodepoint,
+                                        uint32_t curCodepoint, bool isVertical,
+                                        TextOrientation textOrientation) const {
   if (!fontManager_.fontsShareFamily(prevFont, curFont) || !std::isfinite(prevSizePx) ||
       !std::isfinite(curSizePx) || prevSizePx <= 0.0f || curSizePx <= 0.0f) {
     return 0.0;
@@ -439,7 +495,8 @@ double TextBackendSimple::crossSpanKern(FontHandle prevFont, float prevSizePx, F
     return 0.0;
   }
 
-  if (isVertical && curCodepoint < 0x2E80) {
+  const bool sideways = UsesSidewaysMetrics(textOrientation, curCodepoint);
+  if (isVertical && sideways) {
     return static_cast<double>(kern) * scale;
   }
   if (!isVertical) {

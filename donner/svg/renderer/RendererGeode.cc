@@ -492,13 +492,11 @@ LineCap toLineCap(StrokeLinecap cap) {
 }
 
 /// Convert an SVG stroke-linejoin enum to the donner::LineJoin used by
-/// Path::strokeToFill. MiterClip and Arcs are specialized SVG2 variants that
-/// strokeToFill does not yet distinguish; fall back to Miter (matching the
-/// tiny-skia backend's handling of these values).
+/// Path::strokeToFill. Arcs retain the same miter fallback as the tiny-skia backend.
 LineJoin toLineJoin(StrokeLinejoin join) {
   switch (join) {
     case StrokeLinejoin::Miter: return LineJoin::Miter;
-    case StrokeLinejoin::MiterClip: return LineJoin::Miter;
+    case StrokeLinejoin::MiterClip: return LineJoin::MiterClip;
     case StrokeLinejoin::Round: return LineJoin::Round;
     case StrokeLinejoin::Bevel: return LineJoin::Bevel;
     case StrokeLinejoin::Arcs: return LineJoin::Miter;
@@ -836,11 +834,18 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
 
   const double radius =
       resolveGradientCoord(radial->r, frame->coordBounds, frame->numbersArePercent);
+  const double focalRadius =
+      resolveGradientCoord(radial->fr, frame->coordBounds, frame->numbersArePercent);
+  // Negative radii are invalid, unlike the valid zero-radius last-stop case below.
+  // Validate both before either degeneracy rule so r=0 cannot hide an invalid fr.
+  if (radius < 0.0 || focalRadius < 0.0) {
+    return ResolvedRadialGradient{};
+  }
   // SVG2: a radius of zero collapses the gradient to a single point. Match
   // the removed full-Skia backend's behavior of painting a solid color equal to the LAST
   // stop in the gradient - this keeps elements visible for valid degenerate
   // radial gradients (e.g., `r="0"` with a single visible color).
-  if (radius <= 0.0) {
+  if (radius == 0.0) {
     ResolvedRadialGradient out;
     const auto& lastStop = computedGradient->stops.back();
     const css::RGBA base = lastStop.color.resolve(currentColor, opacity);
@@ -852,8 +857,6 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
     return out;
   }
 
-  const double focalRadius =
-      resolveGradientCoord(radial->fr, frame->coordBounds, frame->numbersArePercent);
   const Vector2d center =
       resolveGradientCoords(radial->cx, radial->cy, frame->coordBounds, frame->numbersArePercent);
   // SVG 2: if `fx` / `fy` aren't specified, they coincide with `cx` / `cy`.

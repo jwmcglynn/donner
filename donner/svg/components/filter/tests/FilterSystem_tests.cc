@@ -1155,33 +1155,35 @@ TEST_F(FilterSystemTest, FeSpecularLighting) {
   EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
-TEST_F(FilterSystemTest, EmptyFilterRemovesComputedComponent) {
+TEST_F(FilterSystemTest, EmptyFilterReplacesStaleComputedPrimitives) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <defs>
-        <filter id="f"/>
+        <filter id="f" x="-20%" width="140%"/>
       </defs>
     </svg>
   )");
 
   auto element = document.querySelector("#f");
   ASSERT_TRUE(element.has_value());
-  element->entityHandle().emplace<ComputedFilterComponent>();
+  element->entityHandle().emplace<ComputedFilterComponent>().filterGraph.nodes.emplace_back();
 
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   StyleSystem().computeAllStyles(document.registry(), disabledSink);
   filterSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
 
-  EXPECT_FALSE(element->entityHandle().all_of<ComputedFilterComponent>());
+  const auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
+  ASSERT_THAT(computed, NotNull());
+  EXPECT_TRUE(computed->filterGraph.empty());
 }
 
 // --- Empty filter ---
 
-TEST_F(FilterSystemTest, EmptyFilterNoComputed) {
+TEST_F(FilterSystemTest, EmptyFilterPreservesComputedRegion) {
   auto document = ParseAndComputeFilters(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <defs>
-        <filter id="f"/>
+        <filter id="f" x="-20%" width="140%"/>
       </defs>
     </svg>
   )");
@@ -1189,7 +1191,10 @@ TEST_F(FilterSystemTest, EmptyFilterNoComputed) {
   auto element = document.querySelector("#f");
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
-  EXPECT_EQ(computed, nullptr);
+  ASSERT_THAT(computed, NotNull());
+  EXPECT_TRUE(computed->filterGraph.empty());
+  EXPECT_EQ(computed->x, Lengthd(-20.0, Lengthd::Unit::Percent));
+  EXPECT_EQ(computed->width, Lengthd(140.0, Lengthd::Unit::Percent));
 }
 
 // --- Filter chain (multiple primitives) ---

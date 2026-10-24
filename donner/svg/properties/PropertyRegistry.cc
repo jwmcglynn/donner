@@ -533,6 +533,64 @@ ParseResult<WritingMode> ParseWritingMode(std::span<const css::ComponentValue> c
   return err;
 }
 
+ParseResult<TextOrientation> ParseTextOrientation(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("mixed")) {
+        return TextOrientation::Mixed;
+      }
+      if (ident->value.equalsLowercase("upright")) {
+        return TextOrientation::Upright;
+      }
+      if (ident->value.equalsLowercase("sideways")) {
+        return TextOrientation::Sideways;
+      }
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid text-orientation value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+std::optional<TextOrientation> GlyphOrientationForDegrees(double value) {
+  if (value == 0.0) {
+    return TextOrientation::Upright;
+  }
+  if (value == 90.0) {
+    return TextOrientation::Sideways;
+  }
+  return std::nullopt;
+}
+
+ParseResult<TextOrientation> ParseGlyphOrientationVertical(
+    std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const auto& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>();
+        ident && ident->value.equalsLowercase("auto")) {
+      return TextOrientation::Mixed;
+    }
+    if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+      if (const auto orientation = GlyphOrientationForDegrees(number->value)) {
+        return *orientation;
+      }
+    }
+    if (const auto* dimension = component.tryGetToken<css::Token::Dimension>();
+        dimension && dimension->suffixString.equalsLowercase("deg")) {
+      if (const auto orientation = GlyphOrientationForDegrees(dimension->value)) {
+        return *orientation;
+      }
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid glyph-orientation-vertical value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 /// Parse "baseline | sub | super | <length> | <percentage>" for baseline-shift.
 /// "sub" and "super" are converted to em-relative values matching typical browser rendering.
 /// Percentages are relative to font-size per SVG spec, converted to em units.
@@ -1191,6 +1249,26 @@ ParseResult<FilterEffect> ParseHueRotate(const css::Function& function) {
   return err;
 }
 
+/// Consume one drop-shadow length, permitting nonzero unitless values only in SVG attributes.
+std::optional<Lengthd> ParseDropShadowLength(std::span<const css::ComponentValue>& remaining,
+                                             bool allowUserUnits) {
+  if (remaining.empty()) {
+    return std::nullopt;
+  }
+  const auto& arg = remaining.front();
+  if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
+    if (dimension->suffixUnit && *dimension->suffixUnit != Lengthd::Unit::Percent) {
+      remaining = remaining.subspan(1);
+      return Lengthd(dimension->value, *dimension->suffixUnit);
+    }
+  } else if (const auto* number = arg.tryGetToken<css::Token::Number>();
+             number && (allowUserUnits || number->value == 0.0)) {
+    remaining = remaining.subspan(1);
+    return Lengthd(number->value, Lengthd::Unit::None);
+  }
+  return std::nullopt;
+}
+
 /// Parse a single CSS filter function and return the corresponding FilterEffect.
 ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, bool allowUserUnits) {
   if (function.name.equalsLowercase("blur")) {
@@ -1333,26 +1411,8 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, boo
       }
     }
 
-    // Helper to parse a length value (dimension or unitless number).
-    auto parseLengthArg = [](std::span<const css::ComponentValue>& rem) -> std::optional<Lengthd> {
-      if (rem.empty()) {
-        return std::nullopt;
-      }
-      const auto& arg = rem.front();
-      if (const auto* dim = arg.tryGetToken<css::Token::Dimension>()) {
-        if (dim->suffixUnit && *dim->suffixUnit != Lengthd::Unit::Percent) {
-          rem = rem.subspan(1);
-          return Lengthd(dim->value, *dim->suffixUnit);
-        }
-      } else if (const auto* num = arg.tryGetToken<css::Token::Number>()) {
-        rem = rem.subspan(1);
-        return Lengthd(num->value, Lengthd::Unit::None);
-      }
-      return std::nullopt;
-    };
-
     // Parse offset-x (required).
-    auto offsetX = parseLengthArg(remaining);
+    auto offsetX = ParseDropShadowLength(remaining, allowUserUnits);
     if (!offsetX) {
       ParseDiagnostic err;
       err.reason = "Expected offset-x for drop-shadow";
@@ -1364,7 +1424,7 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, boo
     SkipWhitespace(remaining);
 
     // Parse offset-y (required).
-    auto offsetY = parseLengthArg(remaining);
+    auto offsetY = ParseDropShadowLength(remaining, allowUserUnits);
     if (!offsetY) {
       ParseDiagnostic err;
       err.reason = "Expected offset-y for drop-shadow";
@@ -1377,9 +1437,14 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, boo
 
     // Parse optional blur-radius.
     Lengthd stdDeviation(0.0, Lengthd::Unit::Px);
-    if (auto blur = parseLengthArg(remaining)) {
+    if (auto blur = ParseDropShadowLength(remaining, allowUserUnits)) {
       stdDeviation = *blur;
       SkipWhitespace(remaining);
+    }
+
+    if (stdDeviation.value < 0.0) {
+      return ParseDiagnostic::Error("Negative standard deviation is not allowed for drop-shadow()",
+                                    function.sourceOffset);
     }
 
     // Try to parse trailing color if not found yet.
@@ -2103,7 +2168,7 @@ std::optional<ParseDiagnostic> ParseFontShorthand(PropertyRegistry& registry,
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-constexpr std::array<std::pair<std::string_view, bool>, 74> kValidPresentationAttributeEntries{{
+constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAttributeEntries{{
     {"cx", true},
     {"cy", true},
     {"height", true},
@@ -2170,6 +2235,7 @@ constexpr std::array<std::pair<std::string_view, bool>, 74> kValidPresentationAt
     {"stroke-width", true},
     {"text-anchor", true},
     {"text-decoration", true},
+    {"text-orientation", true},
     {"text-overflow", true},
     {"text-rendering", true},
     {"unicode-bidi", true},
@@ -2390,6 +2456,24 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParseWritingMode(params.components());
                        },
                        &registry.writingMode);
+                 }},  //
+                {"text-orientation",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseTextOrientation(params.components());
+                       },
+                       &registry.textOrientation);
+                 }},  //
+                {"glyph-orientation-vertical",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseGlyphOrientationVertical(params.components());
+                       },
+                       &registry.textOrientation);
                  }},  //
                 {"inline-size",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

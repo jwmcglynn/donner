@@ -314,6 +314,287 @@ RendererBitmap RenderImageOpacityCase(bool imageOpacity, bool groupOpacity) {
 
 class RendererRegressionTests : public ImageComparisonTestFixture {};
 
+// Independent contract oracles for resvg cases whose historical labels or reference images
+// do not establish the behavior of the supported syntax.
+RendererBitmap RenderReferenceContract(std::string_view body) {
+  SVGDocument document = instantiateSubtree(body, {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+RendererBitmap RenderReferenceRadial(std::string_view attributes, bool singleStop = false) {
+  return RenderReferenceContract(
+      std::string(R"svg(<radialGradient id="g" )svg") + std::string(attributes) +
+      (singleStop ? R"svg(><stop stop-color="blue"/>)svg"
+                  : R"svg(><stop stop-color="red"/><stop offset="1" stop-color="blue"/>)svg") +
+      R"svg(</radialGradient>
+      <rect x="8" y="8" width="48" height="48" fill="url(#g)"/>
+      <rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractRadialNegativeRadiiDoNotPaint) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+  ExpectVisibleBitmap(expected, "radial_negative_sibling_visible");
+  for (std::string_view attribute :
+       {R"(r="-0.25")", R"(fr="-0.25")", R"(r="0" fr="-0.25")", R"(r="-1e-20")"}) {
+    SCOPED_TRACE(attribute);
+    ExpectBitmapsIdentical(RenderReferenceRadial(attribute), expected, "negative_radius_no_paint");
+  }
+  const auto zeroRadius = RenderReferenceRadial(R"(r="0")");
+  ExpectBitmapsDiffer(zeroRadius, expected, "zero_radius_last_stop_control");
+  EXPECT_THAT(PixelAt(zeroRadius, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractRadialSingleStopNegativeRadiiDoNotPaint) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+  for (std::string_view attribute : {R"(r="-0.25")", R"(fr="-0.25")", R"(r="-1e-20")"}) {
+    SCOPED_TRACE(attribute);
+    ExpectBitmapsIdentical(RenderReferenceRadial(attribute, true), expected,
+                           "single_stop_negative_radius_no_paint");
+  }
+  const auto valid = RenderReferenceRadial("", true);
+  ExpectBitmapsDiffer(valid, expected, "single_stop_valid_control");
+  EXPECT_THAT(PixelAt(valid, 32, 32), testing::ElementsAre(0, 0, 255, 255));
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractRadialContainingStartCircleDoesNotPaint) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+  for (std::string_view attribute : {R"(fr="0.5")", R"(fr="0.75")"}) {
+    SCOPED_TRACE(attribute);
+    ExpectBitmapsIdentical(RenderReferenceRadial(attribute), expected, "contained_circle_no_paint");
+  }
+  ExpectBitmapsDiffer(RenderReferenceRadial(R"(fr="0.25")"), expected, "nonempty_annulus_control");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractSingularRadialTransformDoesNotPaint) {
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="1" y="1" width="3" height="3" fill="lime"/>)svg");
+  ExpectBitmapsIdentical(RenderReferenceRadial(R"svg(gradientTransform="matrix(0 0 0 0 0 0)")svg"),
+                         expected, "singular_radial_no_paint");
+  ExpectBitmapsDiffer(RenderReferenceRadial(""), expected, "ordinary_radial_control");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractInvalidGradientUnitsUseInitialValue) {
+  const auto expected = RenderReferenceRadial(R"(gradientUnits="objectBoundingBox")");
+  ExpectVisibleBitmap(expected, "radial_default_units_visible");
+  ExpectBitmapsIdentical(RenderReferenceRadial(R"(gradientUnits="invalid")"), expected,
+                         "invalid_gradient_units_default");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractSpaceSeparatedRgbMatchesHex) {
+  const auto actual = RenderReferenceContract(
+      R"svg(<rect x="8" y="8" width="48" height="48" fill="rgb(17 133 49)"/>)svg");
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="8" y="8" width="48" height="48" fill="#118531"/>)svg");
+  ExpectVisibleBitmap(actual, "space_rgb_visible");
+  ExpectBitmapsIdentical(actual, expected, "space_rgb_hex_identity");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractObsoleteIccPaintRejectsWholeDeclaration) {
+  const auto actual = RenderReferenceContract(R"svg(
+    <linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+    </linearGradient><g fill="lime"><rect x="8" y="8" width="48" height="48"
+      style="fill: url(#g) red icc-color(profile, 0.2, 0.4, 0.1)"/></g>)svg");
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="8" y="8" width="48" height="48" fill="lime"/>)svg");
+  ExpectVisibleBitmap(actual, "obsolete_icc_inherited_visible");
+  ExpectBitmapsIdentical(actual, expected, "obsolete_icc_declaration_rejected");
+}
+
+// The font presentation shorthand is a supported Donner extension.
+TEST_F(RendererRegressionTests, ReferenceContractUnitlessFontShorthandMatchesLonghands) {
+  SVGDocument shorthand = instantiateSubtree(R"svg(
+    <text x="4" y="38" font="bold italic 28 Noto Sans">Ab</text>)svg",
+                                             {}, Vector2i(64, 64));
+  SVGDocument expanded = instantiateSubtree(R"svg(
+    <text x="4" y="38" font-style="italic" font-weight="bold" font-size="28"
+          font-family="Noto Sans">Ab</text>)svg",
+                                            {}, Vector2i(64, 64));
+  RegisterFontsFromDirectoryForTesting(shorthand, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(expanded, ResvgResourceRoot() / "fonts");
+  const auto actual = RenderDocumentWithBackend(shorthand, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "unitless_font_shorthand_visible");
+  ExpectBitmapsIdentical(actual, RenderDocumentWithBackend(expanded, ActiveRendererBackend()),
+                         "unitless_font_shorthand_longhands");
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractUnsizedRootUsesCallerCanvasWithoutContentFit) {
+  SVGDocument document = ParseSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect x="8" y="8" width="16" height="16" fill="lime"/></svg>)svg");
+  EXPECT_EQ(document.canvasSize(), Vector2i(512, 512));
+  document.setCanvasSize(64, 64);
+  const auto actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  const auto expected =
+      RenderReferenceContract(R"svg(<rect x="8" y="8" width="16" height="16" fill="lime"/>)svg");
+  ASSERT_EQ(actual.dimensions, Vector2i(64, 64));
+  ExpectVisibleBitmap(actual, "unsized_root_visible");
+  ExpectBitmapsIdentical(actual, expected, "unsized_root_caller_canvas");
+  EXPECT_THAT(PixelAt(actual, 12, 12), testing::ElementsAre(0, 255, 0, 255));
+  EXPECT_EQ(PixelAt(actual, 32, 32)[3], 0);
+}
+
+TEST_F(RendererRegressionTests, ReferenceContractArcsUsesDocumentedMiterFallback) {
+  const auto render = [](std::string_view join) {
+    return RenderReferenceContract(std::string(R"svg(<path d="M12 52 Q12 8 48 12 Q24 32 36 52"
+      fill="none" stroke="green" stroke-width="5" stroke-linejoin=")svg") +
+                                   std::string(join) + R"svg("/>)svg");
+  };
+  const auto actual = render("arcs");
+  ExpectVisibleBitmap(actual, "arcs_fallback_visible");
+  ExpectBitmapsIdentical(actual, render("miter"), "arcs_documented_miter_fallback");
+}
+
+RendererBitmap RenderCssFilterContract(std::string_view filter, bool style = false) {
+  const std::string attribute = style ? "style=\"filter: " : "filter=\"";
+  SVGDocument document = instantiateSubtree(
+      std::string(R"svg(<rect x="12" y="12" width="20" height="20" fill="seagreen"
+                           color="blue" font-size="16" )svg") +
+          attribute + std::string(filter) + R"svg("/>)svg",
+      {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractInvalidShadowStyleRejectsWholeChain) {
+  const auto expected = RenderCssFilterContract("none");
+  ExpectVisibleBitmap(expected, "invalid_shadow_plain_visible");
+  for (std::string_view filter :
+       {"invert(1) drop-shadow(4 5)", "invert(1) drop-shadow(4px 5px -2px)"}) {
+    SCOPED_TRACE(filter);
+    ExpectBitmapsIdentical(RenderCssFilterContract(filter, true), expected,
+                           "invalid_shadow_style_ignored");
+  }
+  ExpectBitmapsIdentical(RenderCssFilterContract("drop-shadow(4 5 -2)"), expected,
+                         "negative_shadow_presentation_ignored");
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractShadowUnitsColorsAndDefaultMatch) {
+  const auto expected = RenderCssFilterContract("drop-shadow(blue 12px 6px 3px)", true);
+  ExpectBitmapsDiffer(expected, RenderCssFilterContract("none"), "shadow_visible_control");
+  for (std::string_view filter :
+       {"drop-shadow(blue 12 6 3)", "drop-shadow(12px 6px 3px blue)", "drop-shadow(12px 6px 3px)",
+        "drop-shadow(blue 0.75em 0.375em 0.1875em)",
+        "drop-shadow(blue 3.175mm 1.5875mm 0.79375mm)"}) {
+    SCOPED_TRACE(filter);
+    ExpectBitmapsIdentical(RenderCssFilterContract(filter), expected, "shadow_units_colors");
+  }
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractEmShadowUsesComputedNondefaultFontSize) {
+  SVGDocument document = instantiateSubtree(R"svg(
+    <rect x="12" y="12" width="20" height="20" fill="seagreen" font-size="64"
+          filter="drop-shadow(blue 0.1875em 0.09375em 0.046875em)"/>)svg",
+                                            {}, Vector2i(64, 64));
+  ExpectBitmapsIdentical(RenderDocumentWithBackend(document, ActiveRendererBackend()),
+                         RenderCssFilterContract("drop-shadow(blue 12px 6px 3px)"),
+                         "shadow_nondefault_font_size_units");
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractShadowColorAlphaIsAppliedOnce) {
+  const auto actual = RenderCssFilterContract("drop-shadow(rgba(0,0,255,0.5) 28px 0 0)", true);
+  SVGDocument expectedDocument = instantiateSubtree(R"svg(
+    <rect x="40" y="12" width="20" height="20" fill="rgba(0,0,255,0.5)"/>
+    <rect x="12" y="12" width="20" height="20" fill="seagreen"/>)svg",
+                                                    {}, Vector2i(64, 64));
+  const auto expected = RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "translucent_shadow_visible");
+  ExpectBitmapsIdentical(actual, expected, "shadow_color_alpha_once");
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractColorAmountsMatchIndependentEndpoints) {
+  for (const auto& [function, color] : std::array<std::pair<std::string_view, std::string_view>, 7>{
+           {{"brightness", "black"},
+            {"contrast", "rgb(128 128 128)"},
+            {"grayscale", "seagreen"},
+            {"invert", "seagreen"},
+            {"opacity", "none"},
+            {"sepia", "seagreen"},
+            {"saturate", "rgb(115 115 115)"}}}) {
+    SCOPED_TRACE(function);
+    SVGDocument expectedDocument = instantiateSubtree(
+        std::string(R"svg(<rect x="12" y="12" width="20" height="20" fill=")svg") +
+            std::string(color) + R"svg("/>)svg",
+        {}, Vector2i(64, 64));
+    ExpectBitmapsIdentical(RenderCssFilterContract(std::string(function) + "(0)"),
+                           RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend()),
+                           "filter_zero_endpoint_" + std::string(function));
+  }
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractColorAmountSyntaxDefaultsAndInvalidValues) {
+  const auto plain = RenderCssFilterContract("none");
+  for (std::string_view function :
+       {"brightness", "contrast", "grayscale", "invert", "opacity", "saturate", "sepia"}) {
+    SCOPED_TRACE(function);
+    const auto render = [function](std::string_view value) {
+      return RenderCssFilterContract(std::string(function) + "(" + std::string(value) + ")");
+    };
+    ExpectBitmapsIdentical(render(""), render("1"), "filter_default_" + std::string(function));
+    ExpectBitmapsIdentical(render("50%"), render("0.5"), "filter_percent_" + std::string(function));
+    ExpectBitmapsIdentical(render("200%"), render("2"), "filter_two_" + std::string(function));
+    ExpectBitmapsIdentical(render("-1"), plain, "filter_negative_" + std::string(function));
+  }
+  for (std::string_view function : {"grayscale", "invert", "opacity", "sepia"}) {
+    ExpectBitmapsIdentical(RenderCssFilterContract(std::string(function) + "(2)"),
+                           RenderCssFilterContract(std::string(function) + "(1)"),
+                           "filter_clamp_" + std::string(function));
+  }
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels) {
+  const auto actual = RenderCssFilterContract("drop-shadow(blue 12.5px 6.5px 0)", true);
+  SVGDocument expectedDocument = instantiateSubtree(R"svg(
+    <rect x="25" y="19" width="20" height="20" fill="blue"/>
+    <rect x="12" y="12" width="20" height="20" fill="seagreen"/>)svg",
+                                                    {}, Vector2i(64, 64));
+  ExpectBitmapsIdentical(actual,
+                         RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend()),
+                         "shadow_half_pixel_rounding_contract");
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractUrlChainsMatchEquivalentPrimitiveGraphs) {
+  const auto render = [](std::string_view definitions, std::string_view filter) {
+    SVGDocument document = instantiateSubtree(
+        std::string(definitions) +
+            R"svg(<rect x="12" y="12" width="20" height="20" fill="seagreen" filter=")svg" +
+            std::string(filter) + R"svg("/>)svg",
+        {}, Vector2i(64, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  const std::string_view definitions = R"svg(
+    <filter id="flood"><feFlood flood-color="blue"/></filter>
+    <filter id="blur"><feGaussianBlur stdDeviation="1"/></filter>
+    <filter id="combined"><feFlood flood-color="blue"/><feGaussianBlur stdDeviation="1"/></filter>
+    <filter id="step"><feOffset dx="1"/></filter>
+    <filter id="twice"><feOffset dx="2"/></filter>
+  )svg";
+  const auto expected = render(definitions, "url(#combined)");
+  ExpectVisibleBitmap(expected, "url_chain_combined_visible");
+  ExpectBitmapsIdentical(render(definitions, "url(#flood) url(#blur)"), expected,
+                         "url_chain_implicit_previous_input");
+  ExpectBitmapsIdentical(render(definitions, "url(#step) url(#step)"),
+                         render(definitions, "url(#twice)"),
+                         "repeated_url_implicit_previous_input");
+}
+
+TEST_F(RendererRegressionTests, CssFilterContractMixedUrlGrayscaleUsesSrgb) {
+  SVGDocument actualDocument = instantiateSubtree(R"svg(
+    <filter id="identity"><feOffset/></filter>
+    <rect x="12" y="12" width="20" height="20" fill="seagreen"
+          filter="url(#identity) grayscale()"/>)svg",
+                                                  {}, Vector2i(64, 64));
+  // CSS grayscale uses encoded sRGB: .2126*46 + .7152*139 + .0722*87 = 115.4738.
+  SVGDocument expectedDocument = instantiateSubtree(R"svg(
+    <rect x="12" y="12" width="20" height="20" fill="rgb(115 115 115)"/>)svg",
+                                                    {}, Vector2i(64, 64));
+  const auto actual = RenderDocumentWithBackend(actualDocument, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "mixed_url_grayscale_visible");
+  ExpectBitmapsIdentical(actual,
+                         RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend()),
+                         "mixed_url_grayscale_srgb");
+}
+
 TEST_F(RendererRegressionTests, UnitlessPresentationAttributeBlurUsesUserUnits) {
   const auto render = [](std::string_view filter) {
     const std::string markup =
@@ -475,6 +756,29 @@ TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphRotationMatchesGroupRotation)
   }
 }
 #endif
+
+TEST_F(RendererRegressionTests, MiterClipMatchesClippedJoinPolygon) {
+  SVGDocument expectedDocument = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+      <path fill="green" d="M16 33 L30.25 14 L33.75 14 L48 33
+                            L40 39 L32 28.333333333333333 L24 39 Z"/>
+    </svg>)svg");
+  // Geometry identity excludes edge AA; the corpus comparison retains normal antialiasing.
+  const RendererBitmap expected =
+      RenderDocumentWithBackendForAscii(expectedDocument, ActiveRendererBackend());
+  for (const std::string_view path : {"M20 36 L32 20 L44 36", "M44 36 L32 20 L20 36"}) {
+    SCOPED_TRACE(path);
+    SVGDocument document =
+        ParseSvg(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+          <path fill="none" stroke="green" stroke-width="10" stroke-linejoin="miter-clip"
+                stroke-miterlimit="1.2" d=")svg") +
+                 std::string(path) + R"svg("/></svg>)svg");
+    const RendererBitmap actual =
+        RenderDocumentWithBackendForAscii(document, ActiveRendererBackend());
+    editor::tests::CompareBitmapToBitmap(actual, expected, "miter_clip_analytic_join",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
 
 TEST_F(RendererRegressionTests, FontPropertiesDoNotChangeReducedCrosshair) {
   SVGDocument reduced = instantiateSubtree(R"(

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect x="4" y="4" width="16" height="16" fill="seagreen"
+        style="filter:drop-shadow(rgba(0,0,255,0.5) 20px 0 0)"/>
+  <rect x="4" y="28" width="16" height="16" fill="blue"
+        style="filter:invert(1) drop-shadow(4 5)"/>
+  <rect x="28" y="28" width="16" height="16" fill="green"
+        filter="brightness(2) drop-shadow(1 2 -3)"/>
+</svg>
