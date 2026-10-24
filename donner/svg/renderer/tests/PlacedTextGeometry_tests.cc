@@ -244,6 +244,20 @@ TEST(PlacedTextGeometryTest, StretchSkipsBoundedConnectedZeroLengthSegmentsAtCor
   EXPECT_THAT(warped.points(), Contains(Vector2Near(12.0, 0.0)));
 }
 
+TEST(PlacedTextGeometryTest, StretchRefusesMoreThanBoundedZeroLengthCornerSegments) {
+  PathBuilder routeBuilder;
+  routeBuilder.moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(10.0, 0.0));
+  for (int i = 0; i < 65; ++i) {
+    routeBuilder.lineTo(Vector2d(10.0, 0.0));
+  }
+  routeBuilder.lineTo(Vector2d(10.0, 10.0));
+  const Path edge = PathBuilder().moveTo(Vector2d(5.0, -2.0)).lineTo(Vector2d(10.0, -2.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 5.0;
+
+  EXPECT_TRUE(WarpGlyphOutline(edge, MeasurePath(routeBuilder.build()), glyph, 0.05).empty());
+}
+
 TEST(PlacedTextGeometryTest, StretchSplitsRepeatedWaveAtMeasuredSegmentBoundaries) {
   PathBuilder routeBuilder;
   routeBuilder.moveTo(Vector2d(0.0, 0.0));

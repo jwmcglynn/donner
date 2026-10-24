@@ -645,17 +645,23 @@ std::optional<std::size_t> Path::MeasuredPath::segmentIndexAtArcLength(
     const Vector2d boundaryPoint = it->type == SegmentType::Line ? it->points[1] : it->points[3];
     auto next = std::next(it);
     constexpr std::size_t kMaximumZeroLengthBoundaryScan = 64u;
+    bool scanExhausted = true;
     for (std::size_t visited = 0; visited < kMaximumZeroLengthBoundaryScan; ++visited) {
       if (next == segments_.end() || !next->connectedToPrevious || next->startLength != distance ||
           boundaryPoint != next->points[0]) {
+        scanExhausted = false;
         break;
       }
       if (next->endLength > next->startLength) {
         it = next;
         distance = it->startLength;
+        scanExhausted = false;
         break;
       }
       ++next;
+    }
+    if (scanExhausted) {
+      return std::nullopt;
     }
   }
   return static_cast<std::size_t>(std::distance(segments_.begin(), it));
