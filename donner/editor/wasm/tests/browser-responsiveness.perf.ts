@@ -1,8 +1,7 @@
+import { packageHashes } from "./package-identity.mjs";
 import { dispatchCanvasPointer } from "./canvas-pointer";
 import { expect, type Page, test } from "@playwright/test";
-import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
 import { checkDocumentGpuResidency } from "./browser-gpu-residency";
 import { readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
@@ -39,6 +38,14 @@ test.beforeEach(({ page }) => {
 interface Diagnostics extends Window {
   __donnerBackend?: string;
   __donnerFirstFramePresented?: boolean;
+  __donnerPresentedDocumentStats?: {
+    count: number;
+    documentGeneration: number;
+    frameVersion: number;
+    lastPresentedAtMs: number;
+    lastPublicationDelayMs: number;
+    samples: [number, number, number, number][];
+  };
   __donnerFrameLoopStats?: {
     renderedFrames: number;
     uiFrameMsSamples: number[];
@@ -79,6 +86,7 @@ interface Diagnostics extends Window {
   };
   __donnerWorkerStats?: {
     completedResults: number;
+    resultFrameCompletedAtMs?: number;
     publishedAtMs: number;
     presentedAtMs?: number;
     workerMs: number;
@@ -128,14 +136,6 @@ interface Diagnostics extends Window {
   __donnerLastDragStream?: unknown;
 }
 
-function packageHashes() {
-  return Object.fromEntries(["wasm", "js"].map((extension) => [
-    `${extension}Sha256`,
-    crypto.createHash("sha256").update(
-      fs.readFileSync(path.join(process.env.DONNER_WASM_PACKAGE_DIR!, `editor.${extension}`)),
-    ).digest("hex"),
-  ]));
-}
 async function attachJson(info: import("@playwright/test").TestInfo, name: string, data: unknown) {
   const output = info.outputPath(name);
   fs.writeFileSync(output, JSON.stringify(data));
@@ -166,6 +166,7 @@ async function snapshot(page: Page, detailed = false) {
       interaction: state.__donnerInteractionStats,
       viewport: state.__donnerViewportStats,
       worker: state.__donnerWorkerStats,
+      documentPresentation: state.__donnerPresentedDocumentStats,
       presentation: state.__donnerPresentationQueueStats,
       gpuObjects: state.__donnerGpuObjectStats,
       overlay: state.__donnerOverlayStats,
@@ -1630,17 +1631,24 @@ test("first sample click after boot", async ({ page, browser }, info) => {
   expect(canvas).not.toBeNull();
   if (canvas === null) throw new Error("missing editor canvas");
   const beforeResults = (await snapshot(page)).worker?.completedResults ?? 0;
-  const clickAt = await page.evaluate(() => performance.now());
-  await dispatchCanvasPointer(page, { x: canvas.x + canvas.width * 0.76, y: canvas.y + 282 }, true);
+  const clickAt = await dispatchCanvasPointer(
+    page, { x: canvas.x + canvas.width * 0.76, y: canvas.y + 282 }, true,
+  );
   await expect(page.locator("canvas#canvas")).toHaveAttribute(
     "data-active-sample-id",
     "basic-shapes",
   );
   let worker: Diagnostics["__donnerWorkerStats"];
+  let presentation: Diagnostics["__donnerPresentedDocumentStats"];
   await expect.poll(async () => {
-    worker = (await snapshot(page)).worker;
+    const state = await snapshot(page);
+    worker = state.worker;
+    presentation = state.documentPresentation;
     return (worker?.completedResults ?? 0) > beforeResults && worker?.presentedAtMs !== undefined
-      && worker?.resultFramePresented === true;
+      && worker?.resultFramePresented === true
+      && presentation?.documentGeneration === worker.documentGeneration
+      && presentation?.frameVersion === worker.frameVersion
+      && Number.isFinite(worker?.resultFrameCompletedAtMs);
   }, { timeout: 60000, message: "the clicked document must reach the canvas" }).toBe(true);
   // The breakdown needs every pre-click submission retired, which presentation implies.
   const gpu = await readGpuTimelineOnPageClock(page);
@@ -1649,13 +1657,20 @@ test("first sample click after boot", async ({ page, browser }, info) => {
   const breakdown = firstClickBreakdown(gpu!.timeline, {
     clickAt,
     completedAt,
-    presentedAt: worker!.presentedAtMs!,
+    presentedAt: worker!.resultFrameCompletedAtMs!,
   });
   const report = {
     browser: info.project.name,
     version: browser.version(),
     adapter: process.env.DONNER_BROWSER_WEBGPU_ADAPTER ?? "default",
+    backend: (await snapshot(page)).backend,
+    viewport: await page.evaluate(() => ({ width: innerWidth, height: innerHeight })),
+    raster: await rasterIdentity(page),
     ...packageHashes(),
+    clickAt,
+    completedAt,
+    cpuFrameFinishedAt: worker!.presentedAtMs!,
+    presentedAt: worker!.resultFrameCompletedAtMs!,
     ...breakdown,
     gpuObjects: gpu!.statistics,
   };

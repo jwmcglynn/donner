@@ -1500,6 +1500,11 @@ EM_JS(int, WorkerFrameEligible,
       (int currentProducer, int sameProducer, double admissionSequence, double boundarySequence), {
         return Boolean(currentProducer) && Boolean(sameProducer) && admissionSequence > boundarySequence;
       });
+
+EM_JS(int, WorkerFrameCompletionTimeValid,
+      (double completedAt), {
+        return Number.isFinite(completedAt) && completedAt >= 0;
+      });
 // clang-format on
 
 void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
@@ -1535,6 +1540,9 @@ void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64
           return;
         }
         if (matches) {
+          const completedAt = $2 - performance.timeOrigin;
+          if (!WorkerFrameCompletionTimeValid(completedAt)) return;
+          stats['resultFrameCompletedAtMs'] = completedAt;
           stats['resultFramePresented'] = true;
           stats['framesPresentedWithoutResult'] = stats['framesPresentedWithoutResult'] | 0;
           stats['postPollFramesCompletedWithoutResult'] =
