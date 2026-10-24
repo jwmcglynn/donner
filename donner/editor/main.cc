@@ -218,14 +218,14 @@ extern "C" EMSCRIPTEN_KEEPALIVE int donner_test_gpu_owner_libc_wait() {
       std::shared_ptr<donner::gpu::Device>(device, &device->runtimeDevice()));
   // clang-format off
   EM_ASM({
-    globalThis['__donnerGpuOwnerWaitProbeResult'] = {
+    globalThis['__donnerGpuOwnerWaitProbeResult'] = ({
       'completedSerial': $0,
       'realWaitSliceMs': $1,
       'isGpuOwner': Boolean($2),
       'isApplicationPthread': Boolean($3),
       'producerIsGpuOwner': Boolean($4),
       'joinElapsedMs': $5,
-    };
+    });
   }, static_cast<double>(result.completedSerial), result.realWaitSliceMs, gpuOwner,
      applicationPthread, result.producerIsGpuOwner, result.joinElapsedMs);
   // clang-format on
