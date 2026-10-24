@@ -96,7 +96,7 @@ bottom for completeness.
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                              8 | Feature                                                                                                                                                                                             |
-| F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`)           |                              8 | Feature                                                                                                                                                                                             |
+| F10 | Remaining `textPath` vertical, kerning, and filter cases                |                              4 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
 | B7  | font substitution — missing bundled families (masked by fat thresholds) |                             ~9 | Triage: bundle fonts vs. document as known gap                                                                                                                                                      |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
@@ -306,10 +306,20 @@ decoration extents, vertical layout, and textPath ordering remain implementation
 
 ### F10: `textPath` SVG2 attributes
 
-**Impact:** 8 in `text/textPath/`: `path` attribute, `side=right`, `method=stretch`,
-`spacing=auto`, `path`+`xlink:href` combinations, `filter` on textPath, plus modern vertical
-writing-mode cases. Obsolete SVG 1.1 writing-mode aliases are classification work, not new feature
-work.
+Inline `path`, geometry references, `side=right`, `method=stretch`, and `spacing=auto` are
+implemented. Their focused geometry and renderer contracts are active. The vendored
+`method=stretch` image is identical to the align reference, so that corpus row is render-only while
+independent curved-outline tests distinguish the methods. A fragment-free relative `xlink:href`
+under the secure static resource policy does not resolve to a same-document element or initiate an
+external fetch; its conflicting corpus image is also render-only. The
+`TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank` case enforces that policy in
+`//donner/svg/renderer/tests:renderer_public_api_tests` and
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode` using a visible control scene and
+a resource loader that records requests.
+
+**Remaining impact:** 4 in `text/textPath/`: vertical/circular layout (`complex.svg` and
+`writing-mode=tb.svg`), kerning across mixed children, and the known filtered-glyph coverage
+residual. These belong to the vertical, shaping, and effects workstreams respectively.
 
 ### F11: BiDi / RTL text shaping
 
