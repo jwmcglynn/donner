@@ -101,7 +101,7 @@ TEST(NonScalingStroke, CullHalfExtentCoversTheMiterTip) {
   EXPECT_DOUBLE_EQ(StrokeCullHalfExtent(20.0, StrokeLinecap::Butt, StrokeLinejoin::Miter, 4.0),
                    40.0);
   EXPECT_DOUBLE_EQ(StrokeCullHalfExtent(20.0, StrokeLinecap::Butt, StrokeLinejoin::MiterClip, 2.5),
-                   25.0);
+                   10.0 * std::hypot(2.5, 1.0));
   EXPECT_DOUBLE_EQ(StrokeCullHalfExtent(20.0, StrokeLinecap::Butt, StrokeLinejoin::Miter, 0.5),
                    10.0)
       << "a miter limit below 1 cannot pull the reach inside the half width";
@@ -109,6 +109,12 @@ TEST(NonScalingStroke, CullHalfExtentCoversTheMiterTip) {
 
 // A square cap extends the segment by half the stroke width, so its far corners sit
 // sqrt(2) * halfStroke from the endpoint rather than halfStroke from the centerline.
+TEST(NonScalingStroke, MiterClipCullHalfExtentCoversDiagonalReversalCorners) {
+  const double cornerProjection = 2.2 / std::sqrt(2.0);
+  EXPECT_GE(StrokeCullHalfExtent(2.0, StrokeLinecap::Butt, StrokeLinejoin::MiterClip, 1.2),
+            cornerProjection);
+}
+
 TEST(NonScalingStroke, CullHalfExtentCoversTheSquareCapCorner) {
   EXPECT_DOUBLE_EQ(StrokeCullHalfExtent(20.0, StrokeLinecap::Square, StrokeLinejoin::Round, 4.0),
                    10.0 * std::numbers::sqrt2);

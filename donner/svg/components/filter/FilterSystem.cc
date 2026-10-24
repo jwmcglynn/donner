@@ -339,7 +339,7 @@ std::vector<EntityHandle> getInheritanceChain(EntityHandle handle, ParseWarningS
         warningSink.add(ParseDiagnostic::Warning("Filter inheritance resource limit exceeded",
                                                  FileOffset::Offset(0)));
       }
-      break;
+      return {};
     }
 
     auto resolvedReference = filter->href->resolve(registry);
@@ -524,10 +524,6 @@ void StoreComputedFilter(EntityHandle handle, ComputedFilterResourceBudget& budg
                          PrimitiveUnits primitiveUnits,
                          ColorInterpolationFilters colorInterpolation) {
   if (budget.rejected()) {
-    RemoveComputedFilter(handle);
-    return;
-  }
-  if (effects.empty() && graph.empty()) {
     RemoveComputedFilter(handle);
     return;
   }
@@ -788,6 +784,10 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
   auto& computedBudget = GetComputedFilterResourceBudget(registry);
 
   const std::vector<EntityHandle> inheritanceChain = getInheritanceChain(handle, warningSink);
+  if (inheritanceChain.empty()) {
+    RemoveComputedFilter(handle);
+    return;
+  }
 
   EntityHandle primitiveSource;
   for (EntityHandle candidate : inheritanceChain) {
@@ -798,8 +798,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
   }
 
   if (!primitiveSource.valid()) {
-    RemoveComputedFilter(handle);
-    return;
+    primitiveSource = handle;
   }
 
   Lengthd computedX(-10.0, Lengthd::Unit::Percent);

@@ -449,6 +449,9 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/filter",
             {
+                {"invalid-FuncIRI.svg",
+                 Params::RenderOnly("Reference: PNG hides an invalid URL; Filter Effects ignores "
+                                    "the chain, covered by independent visible-geometry tests")},
                 // Pixelmatch 2.0 checkerboard exposes pre-existing filter-region
                 // compositing alpha deltas vs resvg that white-blending masked. Each
                 // threshold is the measured minimal passing hundredth at the
@@ -522,6 +525,10 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/filter-functions",
             {
+                {"one-invalid-url-in-list.svg",
+                 Params::RenderOnly(
+                     "Reference: PNG applies functions around a missing URL; "
+                     "Filter Effects ignores the entire chain, independently tested")},
                 {"color-adjust-functions-0percent.svg",
                  Params::RenderOnly("Filtered geometry agrees; 354 default-text, 370 full-text, "
                                     "375 Geode mismatches are only label glyphs (#1167, #1169)")},
@@ -963,8 +970,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"arcs.svg",
                      Params::RenderOnly("SVG Strokes draft arcs is not implemented: documented "
                                         "miter fallback; reference is the UB marker (#1186)")},
-                    {"miter-clip.svg",
-                     Params::RenderOnly("UB (SVG 2), no UA supports `miter-clip`")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1189,9 +1194,10 @@ INSTANTIATE_TEST_SUITE_P(
                               "upscaling (current resvg); Donner uses bilinear (0021 B3)")},
 
                 {"embedded-svg-with-text.svg",
-                 Params::Skip("Golden mismatch: resvg parses <image>-embedded SVGs with an empty "
-                              "fontdb so its golden renders no text; Donner renders the text "
-                              "(0021 B3)")},
+                 Params::RenderOnly(
+                     "The vendored reference omits the embedded SVG's text. Donner renders it "
+                     "with the document font catalog; an authored embedded-versus-direct "
+                     "identity test pins that policy (0021 B3)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1567,10 +1573,9 @@ INSTANTIATE_TEST_SUITE_P(
     TextGlyphOrientationVertical, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
                 "text/glyph-orientation-vertical",
-                {
-                    {"simple-case.svg",
-                     Params::Skip("Not impl: glyph-orientation-vertical (deprecated SVG 1.1)")},
-                })),
+                {{"simple-case.svg", Params::Skip("upright Latin reference comparison remains "
+                                                  "unresolved after orientation and cell-metric "
+                                                  "coverage")}})),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 

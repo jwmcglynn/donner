@@ -492,13 +492,11 @@ LineCap toLineCap(StrokeLinecap cap) {
 }
 
 /// Convert an SVG stroke-linejoin enum to the donner::LineJoin used by
-/// Path::strokeToFill. MiterClip and Arcs are specialized SVG2 variants that
-/// strokeToFill does not yet distinguish; fall back to Miter (matching the
-/// tiny-skia backend's handling of these values).
+/// Path::strokeToFill. Arcs retain the same miter fallback as the tiny-skia backend.
 LineJoin toLineJoin(StrokeLinejoin join) {
   switch (join) {
     case StrokeLinejoin::Miter: return LineJoin::Miter;
-    case StrokeLinejoin::MiterClip: return LineJoin::Miter;
+    case StrokeLinejoin::MiterClip: return LineJoin::MiterClip;
     case StrokeLinejoin::Round: return LineJoin::Round;
     case StrokeLinejoin::Bevel: return LineJoin::Bevel;
     case StrokeLinejoin::Arcs: return LineJoin::Miter;

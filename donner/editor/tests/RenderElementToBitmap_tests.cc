@@ -411,6 +411,23 @@ TEST(RenderElementToBitmapTest, TransparentGeometryDoesNotBiasTightCrop) {
       << "transparent geometry in the same group must not push visible pixels to the edge";
 }
 
+TEST(RenderElementToBitmapTest, MiterClipThumbnailIncludesTheClippedTipExtent) {
+  editor::EditorApp app;
+  ASSERT_THAT(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+      <path id="stroke" d="M20 36 L32 20 L44 36" fill="none" stroke="green"
+            stroke-width="10" stroke-linejoin="miter-clip" stroke-miterlimit="1.2"/>
+    </svg>)svg"),
+              testing::IsTrue());
+  const auto element = ElementById(app, "stroke");
+  ASSERT_THAT(element, testing::Ne(std::nullopt));
+  Renderer renderer;
+  const auto image = renderer.renderElement(*element, Vector2i(64, 64));
+  EXPECT_EQ(image.dimensions().x, 64);
+  // The complete outline is 32 by 25; a 64px-wide thumbnail must retain at least 50px height.
+  EXPECT_GE(image.dimensions().y, 50);
+}
+
 TEST(RenderElementToBitmapTest, StrokeOnlyLayerThumbnailUsesStrokeContentBounds) {
   editor::EditorApp app;
   ASSERT_TRUE(app.loadFromString(kStrokeOnlyLineSvg));

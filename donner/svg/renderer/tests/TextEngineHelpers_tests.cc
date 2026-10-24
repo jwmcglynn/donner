@@ -33,6 +33,7 @@ using ::testing::_;
 using ::testing::AllOf;
 using ::testing::DoubleEq;
 using ::testing::DoubleNear;
+using ::testing::Each;
 using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::FloatEq;
@@ -1282,7 +1283,7 @@ TEST_F(TextEngineLayoutTest, VerticalCjkUsesBackendOffsetsAndAdvanceFallback) {
             run.glyphs.push_back(TextBackend::ShapedGlyph{
                 .glyphIndex = 7,
                 .xAdvance = 0.0,
-                .yAdvance = 0.0,
+                .yAdvance = 16.0,
                 .xOffset = 3.0,
                 .yOffset = -4.0,
                 .cluster = static_cast<uint32_t>(offset),
@@ -1306,6 +1307,143 @@ TEST_F(TextEngineLayoutTest, VerticalCjkUsesBackendOffsetsAndAdvanceFallback) {
                   GlyphIndexIs(7u), GlyphXPositionIs(DoubleNear(83.0, 0.1)),
                   GlyphYPositionIs(DoubleNear(21.0, 0.1)), GlyphYAdvanceIs(DoubleNear(16.0, 0.1)),
                   GlyphRotateDegreesIs(DoubleEq(12.0)))))));
+}
+
+TEST_F(TextEngineLayoutTest, VerticalRotatedLatinPreservesBackendOffsets) {
+  ON_CALL(*mockBackend_, fontVMetrics(testing::_))
+      .WillByDefault(testing::Return(FontVMetrics{900, -300, 0}));
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault(
+          [](FontHandle, float, std::string_view, size_t offset, size_t, bool, FontVariant, bool) {
+            TextBackend::ShapedRun run;
+            run.glyphs.push_back(TextBackend::ShapedGlyph{
+                .glyphIndex = 7,
+                .xAdvance = 10.0,
+                .xOffset = 1.5,
+                .yOffset = -2.0,
+                .cluster = static_cast<uint32_t>(offset),
+            });
+            return run;
+          });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("A");
+  span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(25.0, Lengthd::Unit::None));
+  text.spans.push_back(std::move(span));
+
+  auto params = makeParams();
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine_->layout(text, params);
+
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(AllOf(
+                  GlyphIndexIs(7u), GlyphXPositionIs(DoubleNear(98.0, 0.1)),
+                  GlyphYPositionIs(DoubleNear(26.5, 0.1)), GlyphYAdvanceIs(DoubleNear(10.0, 0.1)),
+                  GlyphRotateDegreesIs(DoubleEq(90.0)))))));
+}
+
+TEST_F(TextEngineLayoutTest, VerticalTextOrientationOverridesUnicodeDefaults) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  auto layoutRotations = [&](TextOrientation orientation) {
+    components::ComputedTextComponent text;
+    auto span = makeSpan("A\xE6\x97\xA5");
+    span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(20.0, Lengthd::Unit::None));
+    span.textOrientation = orientation;
+    text.spans.push_back(std::move(span));
+
+    auto params = makeParams();
+    params.writingMode = WritingMode::VerticalRl;
+    return engine_->layout(text, params);
+  };
+
+  EXPECT_THAT(layoutRotations(TextOrientation::Mixed),
+              ElementsAre(RunGlyphsAre(ElementsAre(GlyphRotateDegreesIs(DoubleEq(90.0)),
+                                                   GlyphRotateDegreesIs(DoubleEq(0.0))))));
+  EXPECT_THAT(layoutRotations(TextOrientation::Upright),
+              ElementsAre(RunGlyphsAre(Each(GlyphRotateDegreesIs(DoubleEq(0.0))))));
+  EXPECT_THAT(layoutRotations(TextOrientation::Sideways),
+              ElementsAre(RunGlyphsAre(Each(GlyphRotateDegreesIs(DoubleEq(90.0))))));
+}
+
+TEST_F(TextEngineLayoutTest, VerticalTextPathKeepsMixedOrientationContract) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("A");
+  span.textOrientation = TextOrientation::Upright;
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0, 0)).lineTo(Vector2d(100, 0)).build();
+  text.spans.push_back(std::move(span));
+
+  auto params = makeParams();
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine_->layout(text, params);
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphRotateDegreesIs(DoubleEq(90.0))))));
+}
+
+TEST_F(TextEngineLayoutTest, OrientationTransitionResetsCrossSpanKerning) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+  EXPECT_CALL(*mockBackend_, crossSpanKern(testing::_, testing::_, testing::_, testing::_,
+                                           testing::_, testing::_, testing::_))
+      .Times(0);
+
+  components::ComputedTextComponent text;
+  auto upright = makeSpan("A");
+  upright.textOrientation = TextOrientation::Upright;
+  auto sideways = makeSpan("V");
+  sideways.startsNewChunk = false;
+  sideways.textOrientation = TextOrientation::Sideways;
+  text.spans.push_back(std::move(upright));
+  text.spans.push_back(std::move(sideways));
+
+  auto params = makeParams();
+  params.writingMode = WritingMode::VerticalRl;
+  EXPECT_THAT(engine_->layout(text, params),
+              ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(SizeIs(1))));
+}
+
+TEST_F(TextEngineLayoutTest, HorizontalOrientationDifferenceKeepsCrossSpanKerning) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+  EXPECT_CALL(*mockBackend_,
+              crossSpanKern(testing::_, testing::_, testing::_, testing::_, 'A', 'V', false))
+      .WillOnce(testing::Return(-2.0));
+
+  components::ComputedTextComponent text;
+  auto first = makeSpan("A");
+  first.textOrientation = TextOrientation::Mixed;
+  auto second = makeSpan("V");
+  second.startsNewChunk = false;
+  second.textOrientation = TextOrientation::Upright;
+  text.spans.push_back(std::move(first));
+  text.spans.push_back(std::move(second));
+
+  EXPECT_THAT(engine_->layout(text, makeParams()),
+              ElementsAre(RunGlyphsAre(SizeIs(1)),
+                          RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(8.0))))));
 }
 
 TEST_F(TextEngineLayoutTest, VerticalPerCharacterAbsolutePositionsApplyDxDy) {
@@ -1575,6 +1713,21 @@ MATCHER_P2(SpanWithEffectiveBaseline, expectedText, expectedBaseline,
   return true;
 }
 
+MATCHER_P2(SpanWithTextOrientation, expectedText, expectedOrientation,
+           std::string("span with text '") + expectedText + "' and text orientation '" +
+               testing::PrintToString(expectedOrientation) + "'") {
+  const std::string_view spanText(arg.text.data() + arg.start, arg.end - arg.start);
+  if (spanText != expectedText) {
+    *result_listener << "span text is '" << spanText << "'";
+    return false;
+  }
+  if (arg.textOrientation != expectedOrientation) {
+    *result_listener << "text orientation differs";
+    return false;
+  }
+  return true;
+}
+
 class EffectiveBaselineResolutionTest : public testing::Test {
 protected:
   /// Parses \p svg, computes styles and text spans, and runs the per-span layout-style
@@ -1623,6 +1776,20 @@ TEST_F(EffectiveBaselineResolutionTest, DominantBaselineInheritsToTspan) {
   )");
 
   EXPECT_THAT(spans, testing::Contains(SpanWithEffectiveBaseline("A", DominantBaseline::Middle)));
+}
+
+TEST_F(EffectiveBaselineResolutionTest, GlyphOrientationAliasInheritsAndTspanOverrides) {
+  const auto spans = resolveSpans(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <g glyph-orientation-vertical="0">
+        <text id="t" writing-mode="vertical-rl">A<tspan
+          glyph-orientation-vertical="90">B</tspan></text>
+      </g>
+    </svg>
+  )");
+
+  EXPECT_THAT(spans, testing::Contains(SpanWithTextOrientation("A", TextOrientation::Upright)));
+  EXPECT_THAT(spans, testing::Contains(SpanWithTextOrientation("B", TextOrientation::Sideways)));
 }
 
 TEST_F(EffectiveBaselineResolutionTest, AlignmentBaselineOverridesDominantBaseline) {

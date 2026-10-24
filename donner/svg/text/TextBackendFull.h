@@ -43,12 +43,23 @@ public:
   ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
                      size_t byteOffset, size_t byteLength, bool isVertical, FontVariant fontVariant,
                      bool forceLogicalOrder) const override;
+  ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
+                     size_t byteOffset, size_t byteLength, bool isVertical,
+                     TextOrientation textOrientation, FontVariant fontVariant,
+                     bool forceLogicalOrder) const override;
   ShapedRun shapeRunNoKerning(FontHandle font, float fontSizePx, std::string_view spanText,
                               size_t byteOffset, size_t byteLength, bool isVertical,
                               FontVariant fontVariant, bool forceLogicalOrder) const override;
+  ShapedRun shapeRunNoKerning(FontHandle font, float fontSizePx, std::string_view spanText,
+                              size_t byteOffset, size_t byteLength, bool isVertical,
+                              TextOrientation textOrientation, FontVariant fontVariant,
+                              bool forceLogicalOrder) const override;
   double crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont, float curSizePx,
                        uint32_t prevCodepoint, uint32_t curCodepoint,
                        bool isVertical) const override;
+  double crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont, float curSizePx,
+                       uint32_t prevCodepoint, uint32_t curCodepoint, bool isVertical,
+                       TextOrientation textOrientation) const override;
 
   /// Whether the HarfBuzz/FreeType glyph-load flags suppress embedded bitmap strikes.
   ///
@@ -57,12 +68,12 @@ public:
   [[nodiscard]] bool embeddedBitmapLoadingDisabledForTesting(FontHandle font) const;
 
 private:
-  /// Decode a previously validated current glyph slot without another metrics-only load.
-  std::optional<BitmapGlyph> decodeBitmapGlyph(const BitmapGlyphMetrics& metrics) const;
-
   ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
                          size_t byteOffset, size_t byteLength, bool isVertical,
-                         FontVariant fontVariant, bool enableKerning, bool forceLogicalOrder) const;
+                         TextOrientation textOrientation, FontVariant fontVariant,
+                         bool enableKerning, bool forceLogicalOrder) const;
+  /// Decode a previously validated current glyph slot without another metrics-only load.
+  std::optional<BitmapGlyph> decodeBitmapGlyph(const BitmapGlyphMetrics& metrics) const;
 
   FontManager& fontManager_;
   Registry& registry_;

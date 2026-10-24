@@ -1238,26 +1238,6 @@ std::optional<components::FilterGraph> resolveFilterGraph(
               node.inputs.push_back(components::FilterInput{});
               graph.nodes.push_back(std::move(node));
 
-            } else if constexpr (std::is_same_v<T, FilterEffect::ElementReference>) {
-              // Resolve the element reference and copy its filter graph nodes.
-              // Preserve the source filter's color space on each copied node so that
-              // url() nodes run in the <filter> element's color space (typically linearRGB)
-              // while CSS function nodes use the graph-level sRGB.
-              if (auto resolvedRef = e.reference.resolve(registry);
-                  resolvedRef &&
-                  resolvedRef->handle.template all_of<components::ComputedFilterComponent>()) {
-                if (const auto* computed =
-                        registry.try_get<components::ComputedFilterComponent>(*resolvedRef)) {
-                  const auto srcColorSpace = computed->filterGraph.colorInterpolationFilters;
-                  for (auto refNode : computed->filterGraph.nodes) {
-                    if (!refNode.colorInterpolationFilters.has_value()) {
-                      refNode.colorInterpolationFilters = srcColorSpace;
-                    }
-                    graph.nodes.push_back(std::move(refNode));
-                  }
-                }
-              }
-
             } else if constexpr (std::is_same_v<T, FilterEffect::HueRotate>) {
               components::FilterNode node;
               node.primitive = components::filter_primitive::ColorMatrix{
@@ -1391,31 +1371,7 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
                                          const components::RenderingInstanceComponent& instance) {
   const auto* reference = std::get_if<ResolvedReference>(&filter);
   if (!reference) {
-    // For CSS filter function lists, check if any entry is a url() reference.
-    // url() references need a filter region; pure CSS functions don't.
-    const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter);
-    if (!effects) {
-      return std::nullopt;
-    }
-
-    const bool hasUrlReference = std::any_of(effects->begin(), effects->end(), [](const auto& e) {
-      return e.template is<FilterEffect::ElementReference>();
-    });
-    if (!hasUrlReference) {
-      return std::nullopt;  // Pure CSS filter functions: no filter region clipping.
-    }
-
-    // Mixed list with url() references: use the default filter region.
-    const std::optional<Box2d> shapeBounds =
-        RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
-    if (!shapeBounds) {
-      return std::nullopt;
-    }
-    const double bx = shapeBounds->topLeft.x;
-    const double by = shapeBounds->topLeft.y;
-    const double bw = shapeBounds->width();
-    const double bh = shapeBounds->height();
-    return Box2d::FromXYWH(bx - 0.1 * bw, by - 0.1 * bh, 1.2 * bw, 1.2 * bh);
+    return std::nullopt;
   }
 
   const auto* computed = registry.try_get<components::ComputedFilterComponent>(*reference);
@@ -1452,6 +1408,85 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
   const double wPx = computed->width.toPixels(viewBox, FontMetrics(), Lengthd::Extent::X);
   const double hPx = computed->height.toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y);
   return Box2d::FromXYWH(xPx, yPx, wPx, hPx);
+}
+
+/// Resolve SVG filters, including valid filters whose preparation failed closed.
+std::optional<ResolvedReference> resolveFilterReference(
+    Registry& registry, const FilterEffect::ElementReference& effect) {
+  auto reference = effect.reference.resolve(registry);
+  if (!reference || !components::HasSvgNamespace(registry, *reference) ||
+      !reference->handle
+           .any_of<components::FilterComponent, components::ComputedFilterComponent>()) {
+    return std::nullopt;
+  }
+  return reference;
+}
+
+/// Group adjacent CSS functions while retaining one stage per referenced filter.
+std::optional<std::vector<components::ResolvedFilterEffect>> collectFilterStages(
+    Registry& registry, const components::ResolvedFilterEffect& filter) {
+  const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter);
+  if (!effects) {
+    return std::vector<components::ResolvedFilterEffect>{filter};
+  }
+  if (effects->size() > components::kMaximumFilterGraphNodes) {
+    return std::nullopt;
+  }
+  std::vector<components::ResolvedFilterEffect> stages;
+  std::vector<FilterEffect> functions;
+  for (const FilterEffect& effect : *effects) {
+    if (effect.is<FilterEffect::ElementReference>()) {
+      const auto reference =
+          resolveFilterReference(registry, effect.get<FilterEffect::ElementReference>());
+      if (!reference) {
+        // One invalid URL invalidates the entire CSS filter chain.
+        return std::vector<components::ResolvedFilterEffect>();
+      }
+      if (!functions.empty()) {
+        stages.emplace_back(std::move(functions));
+        functions.clear();
+      }
+      stages.emplace_back(*reference);
+    } else if (!effect.is<FilterEffect::None>()) {
+      functions.push_back(effect);
+    }
+  }
+  if (!functions.empty()) {
+    stages.emplace_back(std::move(functions));
+  }
+  return stages;
+}
+
+/// Resolve each referenced filter in its own input, result-name, region and units scope.
+std::optional<std::vector<components::FilterGraph>> resolveFilterStages(
+    Registry& registry, const components::ResolvedFilterEffect& filter,
+    const components::RenderingInstanceComponent& instance, css::RGBA currentColor,
+    const Box2d& viewBox, const FontMetrics& fontMetrics) {
+  const auto resolved = collectFilterStages(registry, filter);
+  if (!resolved) {
+    return std::nullopt;
+  }
+  std::vector<components::FilterGraph> stages;
+  std::size_t nodeCount = 0;
+  for (const components::ResolvedFilterEffect& stage : *resolved) {
+    std::optional<components::FilterGraph> graph =
+        resolveFilterGraph(registry, stage, currentColor, viewBox, fontMetrics);
+    if (!graph) {
+      return std::nullopt;
+    }
+    if (graph->empty()) {
+      components::FilterNode transparent;
+      transparent.primitive = components::filter_primitive::Flood{.floodOpacity = 0.0};
+      graph->nodes.push_back(std::move(transparent));
+    }
+    if (graph->nodes.size() > components::kMaximumFilterGraphNodes - nodeCount) {
+      return std::nullopt;
+    }
+    nodeCount += graph->nodes.size();
+    graph->filterRegion = computeFilterRegion(registry, stage, instance);
+    stages.push_back(std::move(*graph));
+  }
+  return stages;
 }
 
 css::Color resolveFillColor(const components::RenderingInstanceComponent& instance,
@@ -2029,7 +2064,6 @@ void RendererDriver::draw(const RenderSnapshot& snapshot) {
   activeFontSubDocuments_.reset();
   visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
-  preparedFilterRegions_.clear();
 }
 
 void RendererDriver::drawPreparedDocument(SVGDocument& document) {
@@ -2096,7 +2130,6 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
   activeFontSubDocuments_.reset();
   visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
-  preparedFilterRegions_.clear();
 }
 
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
@@ -2122,7 +2155,6 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   activeFontSubDocuments_.reset();
   visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
-  preparedFilterRegions_.clear();
 }
 
 bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity firstEntity,
@@ -2149,7 +2181,6 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
   activeFontSubDocuments_.reset();
   visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
-  preparedFilterRegions_.clear();
   return completed;
 }
 
@@ -2200,7 +2231,6 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
   activeFontSubDocuments_.reset();
   visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
-  preparedFilterRegions_.clear();
 }
 
 bool RendererDriver::drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Entity maskedEntity,
@@ -2251,16 +2281,13 @@ bool RendererDriver::drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Ent
   activeFontSubDocuments_.reset();
   visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
-  preparedFilterRegions_.clear();
   return drawn;
 }
 
 void RendererDriver::popEndedSubtrees(std::vector<DeferredPop>& markers, Entity entity) {
   while (!markers.empty() && markers.back().lastEntity == entity) {
     const DeferredPop& deferred = markers.back();
-    if (deferred.hasFilterLayer) {
-      renderer_.popFilterLayer();
-    }
+    popFilterStages(deferred.filterLayerCount);
     if (deferred.hasEntityClip) {
       renderer_.popClip();
     }
@@ -2284,7 +2311,7 @@ bool RendererDriver::shouldCullEarlyLeaf(Registry& registry,
   if (!earlyLeafViewportCulling_ || !IsPlainVisibleLeaf(instance) ||
       !HasNeutralLeafCompositing(style) ||
       std::any_of(markers.begin(), markers.end(),
-                  [](const DeferredPop& marker) { return marker.hasFilterLayer; })) {
+                  [](const DeferredPop& marker) { return marker.filterLayerCount != 0; })) {
     return false;
   }
   const auto bounds = DeviceDrawableBoundsWithStroke(
@@ -2383,7 +2410,10 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     // regression guarded by TightBoundsRotatedEllipseWithRotatingGradient.
     renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
 
-    const double opacity = style.properties->opacity.get().value();
+    const auto* filterStages = preparedFilterStagesFor(entity);
+    const std::size_t filterLayerCount = filterStages ? filterStages->size() : 0;
+    const bool filterHidesElement = instance.resolvedFilter.has_value() && !filterStages;
+    const double opacity = filterHidesElement ? 0.0 : style.properties->opacity.get().value();
     const MixBlendMode blendMode = style.properties->mixBlendMode.get().value();
     const Isolation isolation = style.properties->isolation.get().value();
     const bool hasIsolatedLayer =
@@ -2391,12 +2421,6 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     if (hasIsolatedLayer) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
-
-    // Filter graph / region already resolved in `prepareFilterGraphs` above.
-    const components::FilterGraph* preparedGraph = preparedFilterGraphFor(entity);
-    const std::optional<Box2d> filterRegion = preparedFilterRegionFor(entity);
-    const bool hasFilterLayer = preparedGraph != nullptr && !preparedGraph->empty();
-    const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     int maskDepth = 0;
 
@@ -2413,9 +2437,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       renderer_.pushClip(entityClip);
     }
 
-    if (hasFilterLayer) {
-      renderer_.pushFilterLayer(*preparedGraph, filterRegion);
-    }
+    pushFilterStages(filterStages);
 
     if (const auto* fillRef =
             std::get_if<components::PaintResolvedReference>(&instance.resolvedFill)) {
@@ -2460,14 +2482,12 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
       deferred.hasViewportClip = hasViewportClip;
       deferred.hasIsolatedLayer = hasIsolatedLayer;
-      deferred.hasFilterLayer = hasFilterLayer;
+      deferred.filterLayerCount = filterLayerCount;
       deferred.hasEntityClip = hasEntityClip;
       deferred.maskDepth = maskDepth;
       subtreeMarkers_.push_back(deferred);
     } else {
-      if (hasFilterLayer) {
-        renderer_.popFilterLayer();
-      }
+      popFilterStages(filterLayerCount);
       if (hasEntityClip) {
         renderer_.popClip();
       }
@@ -2489,9 +2509,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
   // a subtree root whose deferred pop hasn't fired yet).
   while (!subtreeMarkers_.empty()) {
     const DeferredPop& deferred = subtreeMarkers_.back();
-    if (deferred.hasFilterLayer) {
-      renderer_.popFilterLayer();
-    }
+    popFilterStages(deferred.filterLayerCount);
     if (deferred.hasEntityClip) {
       renderer_.popClip();
     }
@@ -2604,6 +2622,12 @@ RangeBoundContribution BoundPathEntity(Registry& registry, Entity entity,
     double padding = paint.strokeParams.strokeWidth / 2.0;
     if (paint.strokeParams.lineJoin == StrokeLinejoin::Miter) {
       padding *= paint.strokeParams.miterLimit;
+    } else if (paint.strokeParams.lineJoin == StrokeLinejoin::MiterClip) {
+      padding = StrokeCullHalfExtent(paint.strokeParams.strokeWidth, paint.strokeParams.lineCap,
+                                     paint.strokeParams.lineJoin, paint.strokeParams.miterLimit);
+    }
+    if (!std::isfinite(padding)) {
+      return {.unknown = true};
     }
     local = Box2d(local.topLeft - Vector2d(padding, padding),
                   local.bottomRight + Vector2d(padding, padding));
@@ -2760,18 +2784,26 @@ RendererBitmap RendererDriver::takeSnapshot() const {
   return renderer_.takeSnapshot();
 }
 
-const components::FilterGraph* RendererDriver::preparedFilterGraphFor(Entity entity) const {
+const std::vector<components::FilterGraph>* RendererDriver::preparedFilterStagesFor(
+    Entity entity) const {
   if (const auto it = preparedFilterGraphs_.find(entity); it != preparedFilterGraphs_.end()) {
     return &it->second;
   }
   return nullptr;
 }
 
-std::optional<Box2d> RendererDriver::preparedFilterRegionFor(Entity entity) const {
-  if (const auto it = preparedFilterRegions_.find(entity); it != preparedFilterRegions_.end()) {
-    return it->second;
+void RendererDriver::pushFilterStages(const std::vector<components::FilterGraph>* stages) {
+  if (stages) {
+    for (auto it = stages->rbegin(); it != stages->rend(); ++it) {
+      renderer_.pushFilterLayer(*it, it->filterRegion);
+    }
   }
-  return std::nullopt;
+}
+
+void RendererDriver::popFilterStages(std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    renderer_.popFilterLayer();
+  }
 }
 
 bool RendererDriver::reservePreparedFilterGraph(const components::FilterGraph& filterGraph) {
@@ -2868,6 +2900,38 @@ const components::RenderingInstanceComponent* RendererDriver::beginPreparingFilt
   return style.properties.has_value() ? instance : nullptr;
 }
 
+bool RendererDriver::configureFilterStages(std::vector<components::FilterGraph>& stages,
+                                           const Box2d& viewBox,
+                                           const std::optional<Box2d>& elementBounds) {
+  for (components::FilterGraph& graph : stages) {
+    if (!reservePreparedFilterGraph(graph)) {
+      return false;
+    }
+    graph.primitiveViewport = viewBox;
+    if (graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+      graph.elementBoundingBox = elementBounds;
+    }
+    if (viewBox.width() > 0 && viewBox.height() > 0) {
+      graph.userToPixelScale =
+          Vector2d(renderingSize_.x / viewBox.width(), renderingSize_.y / viewBox.height());
+    }
+  }
+  return true;
+}
+
+bool RendererDriver::materializeFilterStages(std::vector<components::FilterGraph>& stages,
+                                             Registry& registry, Entity entity) {
+  // All configuration was copied before feImage preparation can mutate instance storage.
+  for (components::FilterGraph& graph : stages) {
+    preRenderSvgFeImages(graph, registry, entity);
+    preRenderFeImageFragments(graph, registry, entity, graph.filterRegion);
+    if (!reservePreparedFilterMaterialization(graph)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Entity> entities) {
   // Iterate a caller-provided snapshot of entity IDs so that mid-loop storage mutation (from
   // `createFeImageShadowTree` inside `preRenderFeImageFragments`) cannot invalidate the iteration.
@@ -2891,42 +2955,17 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         style.properties->fontSize.get().value().toPixels(filterViewBox, filterBaseFontMetrics);
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
 
-    std::optional<components::FilterGraph> filterGraph = resolveFilterGraph(
-        registry, instance->resolvedFilter.value(), style.properties->color.get().value().rgba(),
-        filterViewBox, filterFontMetrics);
-    const std::optional<Box2d> filterRegion =
-        computeFilterRegion(registry, instance->resolvedFilter.value(), *instance);
-
-    if (filterGraph.has_value()) {
-      if (!reservePreparedFilterGraph(*filterGraph)) {
-        continue;
-      }
-      filterGraph->filterRegion = filterRegion;
-      filterGraph->primitiveViewport = filterViewBox;
-      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
-        filterGraph->elementBoundingBox =
-            RenderingObjectBoundingBox(registry, instance->styleHandle(registry));
-      }
-      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
-        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
-                                                 renderingSize_.y / filterViewBox.height());
-      }
-
-      if (!filterGraph->empty()) {
-        // These calls may mutate `RenderingInstanceComponent` storage (shadow-tree creation +
-        // global sort inside `createFeImageShadowTree`). We do NOT hold the `instance` reference
-        // across them - the next iteration of this loop re-fetches via `storage.get(entity)`.
-        preRenderSvgFeImages(*filterGraph, registry, entity);
-        preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
-      }
-      if (!reservePreparedFilterMaterialization(*filterGraph)) {
-        continue;
-      }
+    std::optional<std::vector<components::FilterGraph>> stages = resolveFilterStages(
+        registry, instance->resolvedFilter.value(), *instance,
+        style.properties->color.get().value().rgba(), filterViewBox, filterFontMetrics);
+    if (!stages) {
+      continue;
     }
-
-    preparedFilterRegions_[entity] = filterRegion;
-    if (filterGraph.has_value()) {
-      preparedFilterGraphs_[entity] = std::move(*filterGraph);
+    const std::optional<Box2d> elementBounds =
+        RenderingObjectBoundingBox(registry, instance->styleHandle(registry));
+    if (configureFilterStages(*stages, filterViewBox, elementBounds) &&
+        materializeFilterStages(*stages, registry, entity)) {
+      preparedFilterGraphs_[entity] = std::move(*stages);
     }
   }
 }
@@ -2965,7 +3004,11 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     }
     renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
 
-    const double opacity = style.properties->opacity.get().value();
+    const auto* filterStages = preparedFilterStagesFor(entity);
+    const std::size_t filterLayerCount = filterStages ? filterStages->size() : 0;
+    const bool hasFilterLayer = filterLayerCount != 0;
+    const bool filterHidesElement = instance.resolvedFilter.has_value() && !filterStages;
+    const double opacity = filterHidesElement ? 0.0 : style.properties->opacity.get().value();
     const MixBlendMode blendMode = style.properties->mixBlendMode.get().value();
     const Isolation isolation = style.properties->isolation.get().value();
     const bool hasIsolatedLayer =
@@ -2973,15 +3016,6 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     if (hasIsolatedLayer) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
-
-    // Filter graph and region were resolved (and any feImage fragments pre-rendered) by
-    // `prepareFilterGraphs` before the traverse started. Look them up from the cache rather than
-    // mutating storage mid-iteration.
-    const components::FilterGraph* preparedGraph = preparedFilterGraphFor(entity);
-    const std::optional<Box2d> filterRegion = preparedFilterRegionFor(entity);
-    const bool hasFilterLayer = preparedGraph != nullptr && !preparedGraph->empty();
-    // Per SVG spec, an empty or invalid filter reference makes the element invisible.
-    const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     int maskDepth = 0;
 
@@ -3001,9 +3035,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushClip(entityClip);
     }
 
-    if (hasFilterLayer) {
-      renderer_.pushFilterLayer(*preparedGraph, filterRegion);
-    }
+    pushFilterStages(filterStages);
 
     // Render pattern subtrees before drawing so the pattern shader is available.
     if (const auto* fillRef =
@@ -3035,8 +3067,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
       const bool insideFilterLayer =
+          hasFilterLayer ||
           std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
-                      [](const DeferredPop& m) { return m.hasFilterLayer; });
+                      [](const DeferredPop& m) { return m.filterLayerCount != 0; });
       if (!insideFilterLayer) {
         if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
                 components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
@@ -3132,14 +3165,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
       deferred.hasViewportClip = hasViewportClip;
       deferred.hasIsolatedLayer = hasIsolatedLayer;
-      deferred.hasFilterLayer = hasFilterLayer;
+      deferred.filterLayerCount = filterLayerCount;
       deferred.hasEntityClip = hasEntityClip;
       deferred.maskDepth = maskDepth;
       subtreeMarkers_.push_back(deferred);
     } else {
-      if (hasFilterLayer) {
-        renderer_.popFilterLayer();
-      }
+      popFilterStages(filterLayerCount);
       if (hasEntityClip) {
         renderer_.popClip();
       }
@@ -3157,9 +3188,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Pop deferred subtree layers when we reach their last entity.
     while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
       const DeferredPop& deferred = subtreeMarkers_.back();
-      if (deferred.hasFilterLayer) {
-        renderer_.popFilterLayer();
-      }
+      popFilterStages(deferred.filterLayerCount);
       if (deferred.hasEntityClip) {
         renderer_.popClip();
       }
@@ -3219,7 +3248,11 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     }
     renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
 
-    const double opacity = style.properties->opacity.get().value();
+    const auto* filterStages = preparedFilterStagesFor(entity);
+    const std::size_t filterLayerCount = filterStages ? filterStages->size() : 0;
+    const bool hasFilterLayer = filterLayerCount != 0;
+    const bool filterHidesElement = instance.resolvedFilter.has_value() && !filterStages;
+    const double opacity = filterHidesElement ? 0.0 : style.properties->opacity.get().value();
     const MixBlendMode blendMode = style.properties->mixBlendMode.get().value();
     const Isolation isolation = style.properties->isolation.get().value();
     const bool hasIsolatedLayer =
@@ -3227,13 +3260,6 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     if (hasIsolatedLayer) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
-
-    // Filter graph / region are cached by `prepareFilterGraphs` before traversal. See the
-    // matching comment in `traverse()`.
-    const components::FilterGraph* preparedGraph = preparedFilterGraphFor(entity);
-    const std::optional<Box2d> filterRegion = preparedFilterRegionFor(entity);
-    const bool hasFilterLayer = preparedGraph != nullptr && !preparedGraph->empty();
-    const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     int maskDepth = 0;
     if (instance.mask.has_value() && instance.mask->valid()) {
@@ -3249,9 +3275,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushClip(entityClip);
     }
 
-    if (hasFilterLayer) {
-      renderer_.pushFilterLayer(*preparedGraph, filterRegion);
-    }
+    pushFilterStages(filterStages);
 
     // Render pattern subtrees before drawing so the pattern shader is available.
     if (const auto* fillRef =
@@ -3283,8 +3307,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
       const bool insideFilterLayer =
+          hasFilterLayer ||
           std::any_of(localDeferred.begin(), localDeferred.end(),
-                      [](const DeferredPop& m) { return m.hasFilterLayer; });
+                      [](const DeferredPop& m) { return m.filterLayerCount != 0; });
       if (!insideFilterLayer) {
         if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
                 components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
@@ -3363,14 +3388,12 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       DeferredPop deferred;
       deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
       deferred.hasIsolatedLayer = hasIsolatedLayer;
-      deferred.hasFilterLayer = hasFilterLayer;
+      deferred.filterLayerCount = filterLayerCount;
       deferred.hasEntityClip = hasEntityClip;
       deferred.maskDepth = maskDepth;
       localDeferred.push_back(deferred);
     } else {
-      if (hasFilterLayer) {
-        renderer_.popFilterLayer();
-      }
+      popFilterStages(filterLayerCount);
       if (hasEntityClip) {
         renderer_.popClip();
       }
