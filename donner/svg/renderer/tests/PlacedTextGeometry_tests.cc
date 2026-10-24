@@ -121,6 +121,43 @@ TEST(PlacedTextGeometryTest, StretchJoinsOneSidedNormalsAcrossSharpCorner) {
   EXPECT_THAT(warpedReverse.points(), Contains(Vector2Near(10.0, 2.0)));
 }
 
+TEST(PlacedTextGeometryTest, StretchQuadraticCrossesSharpCornerWithNormalOffset) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 10.0))
+                         .build();
+  const Path outline = PathBuilder()
+                           .moveTo(Vector2d(0.0, -2.0))
+                           .quadTo(Vector2d(4.0, -3.0), Vector2d(10.0, -2.0))
+                           .build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 5.0;
+
+  const Path warped = WarpGlyphOutline(outline, MeasurePath(route), glyph, 0.05);
+
+  EXPECT_FALSE(warped.empty());
+}
+
+TEST(PlacedTextGeometryTest, StretchCubicCrossesSharpCornerWithNormalOffset) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 10.0))
+                         .build();
+  const Path outline = PathBuilder()
+                           .moveTo(Vector2d(0.0, -2.0))
+                           .curveTo(Vector2d(3.0, -3.0), Vector2d(7.0, -3.0),
+                                    Vector2d(10.0, -2.0))
+                           .build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 5.0;
+
+  const Path warped = WarpGlyphOutline(outline, MeasurePath(route), glyph, 0.05);
+
+  EXPECT_FALSE(warped.empty());
+}
+
 TEST(PlacedTextGeometryTest, StretchUsesOneSidedNormalsAtSharpCornerEndpoints) {
   const Path route = PathBuilder()
                          .moveTo(Vector2d(0.0, 0.0))
