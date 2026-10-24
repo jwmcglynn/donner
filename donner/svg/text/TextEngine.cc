@@ -44,67 +44,84 @@
 
 namespace donner::svg {
 
+namespace {
+
+bool ConsumeShadowStyleWork(std::size_t* remainingWork) {
+  if (!remainingWork) {
+    return true;
+  }
+  if (*remainingWork == 0u) {
+    return false;
+  }
+  --*remainingWork;
+  return true;
+}
+
+bool PopulateShadowStyleContext(Registry& registry, Entity root, std::size_t admitted,
+                                std::size_t* remainingWork, TextStyleContext& result) {
+  if (!ConsumeShadowStyleWork(remainingWork)) {
+    return false;
+  }
+  std::vector<Entity> pending{root};
+  std::size_t visited = 0;
+  while (!pending.empty()) {
+    if (++visited > admitted) {
+      return false;
+    }
+    const Entity entity = pending.back();
+    pending.pop_back();
+    const auto* shadow = registry.try_get<components::ShadowEntityComponent>(entity);
+    if (!shadow) {
+      return false;
+    }
+    if (entity != root && registry.any_of<components::TextRootComponent>(shadow->lightEntity)) {
+      continue;
+    }
+    if (!ConsumeShadowStyleWork(remainingWork) ||
+        !result.entities.emplace(shadow->lightEntity, entity).second) {
+      return false;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+    if (!tree) {
+      return false;
+    }
+    for (Entity child = tree->firstChild(); child != entt::null;) {
+      if (pending.size() >= admitted || !ConsumeShadowStyleWork(remainingWork)) {
+        return false;
+      }
+      pending.push_back(child);
+      const auto* childTree = registry.try_get<donner::components::TreeComponent>(child);
+      if (!childTree) {
+        return false;
+      }
+      child = childTree->nextSibling();
+    }
+  }
+  return true;
+}
+
+bool ShadowStyleContextCoversText(const components::ComputedTextComponent& text,
+                                  std::size_t* remainingWork, const TextStyleContext& result) {
+  for (const auto& span : text.spans) {
+    if (!ConsumeShadowStyleWork(remainingWork) ||
+        (span.sourceEntity != entt::null && !result.entities.contains(span.sourceEntity))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
 std::optional<TextStyleContext> BuildShadowTextStyleContext(
     Registry& registry, Entity root, const components::ComputedTextComponent& text,
     std::size_t* remainingWork) {
   TextStyleContext result;
   result.rootEntity = root;
   const std::size_t admitted = registry.view<components::ShadowEntityComponent>().size();
-  const auto consumeWork = [&]() {
-    if (!remainingWork) {
-      return true;
-    }
-    if (*remainingWork == 0u) {
-      return false;
-    }
-    --*remainingWork;
-    return true;
-  };
-  if (!consumeWork()) {
+  if (!PopulateShadowStyleContext(registry, root, admitted, remainingWork, result) ||
+      !ShadowStyleContextCoversText(text, remainingWork, result)) {
     return std::nullopt;
-  }
-  std::vector<Entity> pending{root};
-  std::size_t visited = 0;
-  while (!pending.empty()) {
-    if (++visited > admitted) {
-      return std::nullopt;
-    }
-    const Entity entity = pending.back();
-    pending.pop_back();
-    const auto* shadow = registry.try_get<components::ShadowEntityComponent>(entity);
-    if (!shadow) {
-      return std::nullopt;
-    }
-    if (entity != root && registry.any_of<components::TextRootComponent>(shadow->lightEntity)) {
-      continue;
-    }
-    if (!consumeWork() || !result.entities.emplace(shadow->lightEntity, entity).second) {
-      return std::nullopt;
-    }
-    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
-    if (!tree) {
-      return std::nullopt;
-    }
-    for (Entity child = tree->firstChild(); child != entt::null;) {
-      if (pending.size() >= admitted) {
-        return std::nullopt;
-      }
-      if (!consumeWork()) {
-        return std::nullopt;
-      }
-      pending.push_back(child);
-      const auto* childTree = registry.try_get<donner::components::TreeComponent>(child);
-      if (!childTree) {
-        return std::nullopt;
-      }
-      child = childTree->nextSibling();
-    }
-  }
-  for (const auto& span : text.spans) {
-    if (!consumeWork() ||
-        (span.sourceEntity != entt::null && !result.entities.contains(span.sourceEntity))) {
-      return std::nullopt;
-    }
   }
   return result;
 }
@@ -3874,6 +3891,35 @@ bool AppendTextReferenceRuns(const TextEngine& engine, FontManager& manager, Reg
   return true;
 }
 
+bool ReserveTextStyleContextExpansion(Registry& registry,
+                                      const components::ComputedTextComponent& computed,
+                                      const TextStyleContext& styleContext,
+                                      TextReferenceWork& work) {
+  for (const auto& span : computed.spans) {
+    if (span.sourceEntity == entt::null) {
+      continue;
+    }
+    Entity styleEntity = styleContext.styleEntityFor(span.sourceEntity);
+    const auto* spanStyle = registry.try_get<components::ComputedStyleComponent>(styleEntity);
+    if (!spanStyle || !spanStyle->properties ||
+        !work.reserve(spanStyle->properties->fontFamily.get().value().size())) {
+      return false;
+    }
+    std::size_t ancestors = 0;
+    while (styleEntity != styleContext.rootEntity) {
+      const auto* tree = registry.try_get<donner::components::TreeComponent>(styleEntity);
+      if (!tree || ++ancestors > styleContext.entities.size() || !work.reserve(1u)) {
+        return false;
+      }
+      styleEntity = tree->parent();
+      if (styleEntity == entt::null) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
@@ -3897,29 +3943,9 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
     work.reject();
     return std::nullopt;
   }
-  if (styleContext) {
-    for (const auto& span : computed->spans) {
-      if (span.sourceEntity == entt::null) {
-        continue;
-      }
-      Entity styleEntity = styleContext->styleEntityFor(span.sourceEntity);
-      const auto* spanStyle = registry_.try_get<components::ComputedStyleComponent>(styleEntity);
-      if (!spanStyle || !spanStyle->properties ||
-          !work.reserve(spanStyle->properties->fontFamily.get().value().size())) {
-        return std::nullopt;
-      }
-      std::size_t ancestors = 0;
-      while (styleEntity != styleContext->rootEntity) {
-        const auto* tree = registry_.try_get<donner::components::TreeComponent>(styleEntity);
-        if (!tree || ++ancestors > styleContext->entities.size() || !work.reserve(1u)) {
-          return std::nullopt;
-        }
-        styleEntity = tree->parent();
-        if (styleEntity == entt::null) {
-          return std::nullopt;
-        }
-      }
-    }
+  if (styleContext &&
+      !ReserveTextStyleContextExpansion(registry_, *computed, *styleContext, work)) {
+    return std::nullopt;
   }
   ReferenceGeometry result;
   {
