@@ -57,6 +57,23 @@ bool ConsumeShadowStyleWork(std::size_t* remainingWork) {
   return true;
 }
 
+bool AppendShadowStyleChildren(Registry& registry, const donner::components::TreeComponent& tree,
+                               std::size_t admitted, std::size_t* remainingWork,
+                               std::vector<Entity>& pending) {
+  for (Entity child = tree.firstChild(); child != entt::null;) {
+    if (pending.size() >= admitted || !ConsumeShadowStyleWork(remainingWork)) {
+      return false;
+    }
+    pending.push_back(child);
+    const auto* childTree = registry.try_get<donner::components::TreeComponent>(child);
+    if (!childTree) {
+      return false;
+    }
+    child = childTree->nextSibling();
+  }
+  return true;
+}
+
 bool PopulateShadowStyleContext(Registry& registry, Entity root, std::size_t admitted,
                                 std::size_t* remainingWork, TextStyleContext& result) {
   if (!ConsumeShadowStyleWork(remainingWork)) {
@@ -85,16 +102,8 @@ bool PopulateShadowStyleContext(Registry& registry, Entity root, std::size_t adm
     if (!tree) {
       return false;
     }
-    for (Entity child = tree->firstChild(); child != entt::null;) {
-      if (pending.size() >= admitted || !ConsumeShadowStyleWork(remainingWork)) {
-        return false;
-      }
-      pending.push_back(child);
-      const auto* childTree = registry.try_get<donner::components::TreeComponent>(child);
-      if (!childTree) {
-        return false;
-      }
-      child = childTree->nextSibling();
+    if (!AppendShadowStyleChildren(registry, *tree, admitted, remainingWork, pending)) {
+      return false;
     }
   }
   return true;
@@ -3920,6 +3929,17 @@ bool ReserveTextStyleContextExpansion(Registry& registry,
   return true;
 }
 
+bool RemapReferenceOutlineSources(const TextStyleContext& styleContext,
+                                  TextEngine::ReferenceGeometry& result, TextReferenceWork& work) {
+  for (auto& glyph : result.outlines) {
+    glyph.sourceEntity = styleContext.styleEntityFor(glyph.sourceEntity);
+    if (glyph.sourceEntity == entt::null) {
+      return work.reject();
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
@@ -3959,14 +3979,8 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
                                  includeOutlines, result, work)) {
       return std::nullopt;
     }
-    if (styleContext) {
-      for (auto& glyph : result.outlines) {
-        glyph.sourceEntity = styleContext->styleEntityFor(glyph.sourceEntity);
-        if (glyph.sourceEntity == entt::null) {
-          work.reject();
-          return std::nullopt;
-        }
-      }
+    if (styleContext && !RemapReferenceOutlineSources(*styleContext, result, work)) {
+      return std::nullopt;
     }
   }
   return result;
