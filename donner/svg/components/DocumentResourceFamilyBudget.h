@@ -41,6 +41,8 @@ public:
     std::size_t maximumTotalRetainedBytes = kDefaultMaximumTotalRetainedBytes;
     /// Maximum retained decoded raster-image bytes across the document family.
     std::size_t decodedImageBytes = 64 * 1024 * 1024;
+    /// Maximum cumulative text-path measurement work across the document family.
+    std::size_t textPathMeasurementWorkUnits = 32 * 1024 * 1024;
   };
 
   /// Current charges and sticky refusal state for diagnostics.
@@ -53,6 +55,10 @@ public:
     std::size_t rejectedReservations = 0;
     /// Whether any reservation has been refused.
     bool rejected = false;
+    /// Cumulative admitted text-path measurement work that was actually consumed.
+    std::size_t textPathMeasurementWorkUnits = 0;
+    /// Whether text-path measurement work was refused in the current epoch.
+    bool textPathMeasurementWorkRejected = false;
   };
 
   DocumentResourceFamilyBudget() = default;
@@ -109,6 +115,56 @@ public:
     return true;
   }
 
+  /// Preflight text-path measurement work before it can allocate adaptive samples.
+  bool reserveTextPathMeasurementWork(std::size_t units) {
+    if (stats_.textPathMeasurementWorkRejected ||
+        stats_.textPathMeasurementWorkUnits > limits_.textPathMeasurementWorkUnits ||
+        units > limits_.textPathMeasurementWorkUnits - stats_.textPathMeasurementWorkUnits) {
+      ++stats_.rejectedReservations;
+      stats_.textPathMeasurementWorkRejected = true;
+      return false;
+    }
+    stats_.textPathMeasurementWorkUnits += units;
+    return true;
+  }
+
+  /// Remaining cumulative text-path measurement work before fail-closed rejection.
+  std::size_t availableTextPathMeasurementWork() const {
+    if (stats_.textPathMeasurementWorkRejected ||
+        stats_.textPathMeasurementWorkUnits > limits_.textPathMeasurementWorkUnits) {
+      return 0;
+    }
+    return limits_.textPathMeasurementWorkUnits - stats_.textPathMeasurementWorkUnits;
+  }
+
+  /// Refuse the rest of the current epoch after an admitted measurement exhausts its allowance.
+  void rejectTextPathMeasurementWork() {
+    ++stats_.rejectedReservations;
+    stats_.textPathMeasurementWorkRejected = true;
+  }
+
+  /// Begin a nestable render/preparation epoch for cumulative text-path measurement work.
+  void beginTextPathMeasurementWorkEpoch() {
+    if (textPathMeasurementWorkEpochDepth_++ == 0u) {
+      stats_.textPathMeasurementWorkUnits = 0u;
+      stats_.textPathMeasurementWorkRejected = false;
+    }
+  }
+
+  /// End a text-path measurement epoch begun by beginTextPathMeasurementWorkEpoch().
+  void endTextPathMeasurementWorkEpoch() {
+    if (textPathMeasurementWorkEpochDepth_ > 0u) {
+      --textPathMeasurementWorkEpochDepth_;
+    }
+  }
+
+  /// Refund preflight work that the measurement did not consume.
+  void releaseUnusedTextPathMeasurementWork(std::size_t units) {
+    stats_.textPathMeasurementWorkUnits = units > stats_.textPathMeasurementWorkUnits
+                                              ? 0
+                                              : stats_.textPathMeasurementWorkUnits - units;
+  }
+
   /**
    * Release up to the currently retained bytes for one resource category.
    * @param kind Resource category to debit.
@@ -161,6 +217,7 @@ private:
 
   Limits limits_;
   SecurityStats stats_;
+  std::size_t textPathMeasurementWorkEpochDepth_ = 0;
 };
 
 /// Shared budget handle carried by a root document and its cached subdocuments.

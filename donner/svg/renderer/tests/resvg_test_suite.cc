@@ -1788,10 +1788,10 @@ INSTANTIATE_TEST_SUITE_P(
                                        "donner/svg/renderer/testdata/golden/resvg-m-L-Z-path.png")
                                        .withReason("Minor char")},
                 {"method=stretch.svg",
-                 Params::Skip("Not impl: method=stretch outline warping; the vendored reference is "
-                              "byte-identical to simple-case.png (align placement, which resvg "
-                              "also fails), so a passing comparison would pin align behaviour that "
-                              "a correct stretch implementation must change")},
+                 Params::Skip("Implemented by warping outline endpoints and control points along "
+                              "path normals; the vendored reference is byte-identical to "
+                              "simple-case.png and therefore pins align placement. Independent "
+                              "geometry regressions cover the stretch contract")},
                 {"mixed-children-1.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")

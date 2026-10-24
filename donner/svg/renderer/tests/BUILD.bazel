@@ -540,6 +540,7 @@ donner_cc_test(
         "//donner/svg/renderer",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:font_manager",
+        "//donner/svg/text:text_engine",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -732,6 +733,16 @@ donner_cc_test(
         "//donner/svg/text:text_backend_simple",
         "//donner/svg/text:text_engine",
         "//donner/svg/text:text_layout_params",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "placed_text_geometry_tests",
+    srcs = ["PlacedTextGeometry_tests.cc"],
+    deps = [
+        "//donner/base:base_test_utils",
+        "//donner/svg/renderer:placed_text_geometry",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -711,6 +711,14 @@ TEST_F(TextSystemTest, TextPathSideRightAppliesToInlinePathGeometry) {
               testing::ElementsAre(Vector2Near(100.0, 0.0), Vector2Near(0.0, 0.0)));
 }
 
+TEST_F(TextSystemTest, TextPathMethodPropagatesToComputedSpan) {
+  SVGDocument document = ParseAndCompute(R"(<svg xmlns="http://www.w3.org/2000/svg">
+      <text id="t"><textPath path="M0 0H100" method="stretch">A</textPath></text></svg>)");
+
+  const auto& span = TextPathSpanOf(document, "#t");
+  EXPECT_EQ(span.textPathMethod, TextPathMethod::Stretch);
+}
+
 TEST_F(TextSystemTest, TextPathInlinePathWithModerateCoordinatesResolvesPercentOffset) {
   auto document = ParseAndCompute(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
