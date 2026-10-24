@@ -1535,7 +1535,9 @@ TEST_F(TextEngineLayoutTest, AlignmentBaselineHangingShiftsGlyphsDown) {
                                                    GlyphYPositionIs(DoubleNear(60.24, 0.01))))));
 }
 
-TEST_F(TextEngineLayoutTest, BaselineAlignmentIsIgnoredInVerticalWritingMode) {
+TEST_F(TextEngineLayoutTest, BaselineAlignmentShiftsAcrossVerticalColumn) {
+  ON_CALL(*mockBackend_, fontVMetrics(testing::_))
+      .WillByDefault(testing::Return(FontVMetrics{900, -300, 0}));
   ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
                                   testing::_, testing::_, testing::_))
       .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
@@ -1543,7 +1545,7 @@ TEST_F(TextEngineLayoutTest, BaselineAlignmentIsIgnoredInVerticalWritingMode) {
         return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
       });
 
-  auto layoutFirstGlyphPosition = [&](DominantBaseline effectiveBaseline) {
+  auto layoutFirstGlyphPosition = [&](WritingMode writingMode, DominantBaseline effectiveBaseline) {
     components::ComputedTextComponent text;
     auto span = makeSpan("AB");
     span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
@@ -1552,7 +1554,7 @@ TEST_F(TextEngineLayoutTest, BaselineAlignmentIsIgnoredInVerticalWritingMode) {
     text.spans.push_back(std::move(span));
 
     auto params = makeParams();
-    params.writingMode = WritingMode::VerticalRl;
+    params.writingMode = writingMode;
     const auto runs = engine_->layout(text, params);
     EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(2))));
     if (runs.empty() || runs[0].glyphs.empty()) {
@@ -1561,10 +1563,57 @@ TEST_F(TextEngineLayoutTest, BaselineAlignmentIsIgnoredInVerticalWritingMode) {
     return Vector2d(runs[0].glyphs[0].xPosition, runs[0].glyphs[0].yPosition);
   };
 
-  const Vector2d hangingPosition = layoutFirstGlyphPosition(DominantBaseline::Hanging);
-  const Vector2d autoPosition = layoutFirstGlyphPosition(DominantBaseline::Auto);
-  EXPECT_THAT(hangingPosition.x, testing::DoubleEq(autoPosition.x));
-  EXPECT_THAT(hangingPosition.y, testing::DoubleEq(autoPosition.y));
+  // The existing vertical glyph origin is central in pixel-height coordinates:
+  // (900 - 300) / 2 * (16 / 1200) = 4. Hanging is in em coordinates:
+  // 0.8 * 900 * 0.016 = 11.52. Aligning hanging therefore moves X by 11.52 - 4 = 7.52.
+  constexpr double kHangingFromCentral = 7.52;
+  for (const WritingMode writingMode : {WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    const Vector2d hangingPosition =
+        layoutFirstGlyphPosition(writingMode, DominantBaseline::Hanging);
+    const Vector2d autoPosition = layoutFirstGlyphPosition(writingMode, DominantBaseline::Auto);
+    EXPECT_THAT(hangingPosition.x, testing::DoubleNear(autoPosition.x - kHangingFromCentral, 0.01));
+    EXPECT_THAT(hangingPosition.y, testing::DoubleEq(autoPosition.y));
+
+    const Vector2d centralPosition =
+        layoutFirstGlyphPosition(writingMode, DominantBaseline::Central);
+    EXPECT_THAT(centralPosition.x, testing::DoubleEq(autoPosition.x));
+    EXPECT_THAT(centralPosition.y, testing::DoubleEq(autoPosition.y));
+  }
+}
+
+TEST_F(TextEngineLayoutTest, BaselineShiftRaisesVerticalSpanWithoutAdvancingFollowingSpan) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  auto layout = [&](double baselineShift) {
+    components::ComputedTextComponent text;
+    auto shifted = makeSpan("A");
+    shifted.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    shifted.yList.push_back(Lengthd(20.0, Lengthd::Unit::None));
+    shifted.baselineShift = Lengthd(baselineShift, Lengthd::Unit::Px);
+    text.spans.push_back(std::move(shifted));
+    auto following = makeSpan("B");
+    following.startsNewChunk = false;
+    text.spans.push_back(std::move(following));
+
+    auto params = makeParams();
+    params.writingMode = WritingMode::VerticalRl;
+    return engine_->layout(text, params);
+  };
+
+  const auto shifted = layout(4.0);
+  const auto control = layout(0.0);
+  ASSERT_THAT(shifted, ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(SizeIs(1))));
+  ASSERT_THAT(control, ElementsAre(RunGlyphsAre(SizeIs(1)), RunGlyphsAre(SizeIs(1))));
+  EXPECT_THAT(shifted[0].glyphs[0].xPosition,
+              testing::DoubleEq(control[0].glyphs[0].xPosition + 4.0));
+  EXPECT_THAT(shifted[0].glyphs[0].yPosition, testing::DoubleEq(control[0].glyphs[0].yPosition));
+  EXPECT_THAT(shifted[1].glyphs[0].xPosition, testing::DoubleEq(control[1].glyphs[0].xPosition));
+  EXPECT_THAT(shifted[1].glyphs[0].yPosition, testing::DoubleEq(control[1].glyphs[0].yPosition));
 }
 
 TEST_F(TextEngineLayoutTest, VisibilityHiddenAdvancesAndKeepsGlyphs) {
