@@ -25,6 +25,7 @@ struct ComputedTextGeometryComponent {
   /// keeps its own dependency even when the manager reused an existing face lookup.
   std::vector<FontFaceDependency> fontDependencies;
   uint64_t fontResourceRevision = 0;  ///< Font resolution revision used for this geometry.
+  bool retryAfterTextPathWorkRejection = false;  ///< Retry in a fresh preparation/query epoch.
   /**
    * Outline geometry for a single rendered glyph.
    */

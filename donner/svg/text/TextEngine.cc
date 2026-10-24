@@ -3856,14 +3856,17 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
     EntityHandle handle) const {
   const Entity textRootEntity = findTextRootEntity(handle);
   UTILS_RELEASE_ASSERT_MSG(textRootEntity != entt::null, "Text content element has no text root");
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry_);
 
   // Return cached component if it already exists.
   if (const auto* existing =
           registry_.try_get<components::ComputedTextGeometryComponent>(textRootEntity)) {
-    fontManager_.recordDependencies(existing->fontDependencies);
-    return *existing;
+    if (!existing->retryAfterTextPathWorkRejection) {
+      fontManager_.recordDependencies(existing->fontDependencies);
+      return *existing;
+    }
+    registry_.remove<components::ComputedTextGeometryComponent>(textRootEntity);
   }
-  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry_);
 
   auto emptyAndReturn = [&]() -> const components::ComputedTextGeometryComponent& {
     return registry_.emplace_or_replace<components::ComputedTextGeometryComponent>(textRootEntity);
@@ -3983,6 +3986,8 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   BuildTextObjectBoundsIndex(registry_, textRootEntity, cache);
 
   cache.runs = runs;
+  cache.retryAfterTextPathWorkRejection =
+      TextPathResourceFamily(registry_)->securityStats().textPathMeasurementWorkRejected;
 
   return registry_.emplace_or_replace<components::ComputedTextGeometryComponent>(textRootEntity,
                                                                                  std::move(cache));

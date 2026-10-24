@@ -3056,9 +3056,9 @@ TEST(RendererPublicApiTest, GroupBoundsQuerySharesTextPathWorkAcrossRoots) {
   const auto group = document.querySelector("#group");
   const auto first = document.querySelector("#first");
   const auto second = document.querySelector("#second");
-  ASSERT_TRUE(group.has_value());
-  ASSERT_TRUE(first.has_value());
-  ASSERT_TRUE(second.has_value());
+  ASSERT_THAT(group, testing::Optional(_));
+  ASSERT_THAT(first, testing::Optional(_));
+  ASSERT_THAT(second, testing::Optional(_));
 
   const auto bounds = components::ShapeSystem().getShapeBounds(group->unsafeEntityHandle());
   ASSERT_THAT(bounds, testing::Optional(_));
@@ -3071,6 +3071,11 @@ TEST(RendererPublicApiTest, GroupBoundsQuerySharesTextPathWorkAcrossRoots) {
       second->unsafeEntityHandle().get<components::ComputedTextGeometryComponent>();
   const std::array glyphCounts = {firstGeometry.glyphs.size(), secondGeometry.glyphs.size()};
   EXPECT_THAT(glyphCounts, testing::UnorderedElementsAre(0u, 1u));
+
+  const auto refused = firstGeometry.glyphs.empty() ? first : second;
+  EXPECT_THAT(
+      document.registry().ctx().get<TextEngine>().computedGlyphPaths(refused->unsafeEntityHandle()),
+      testing::ElementsAre(testing::Property(&Path::empty, false)));
 }
 
 /// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,
