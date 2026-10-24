@@ -2877,6 +2877,7 @@ private:
     TextOrientation orientation = TextOrientation::Mixed;
     bool fontKerning = true;
     double defaultY = 0.0;
+    double verticalBaselineOffset = 0.0;
     double penX = 0.0;
     double penY = 0.0;
     double runPenStartX = 0.0;
@@ -2977,14 +2978,47 @@ private:
     return 0.0;
   }
 
+  double verticalCentralOriginOffset(const SpanState& state, const FontVMetrics& metrics) const {
+    const double pixelHeightScale =
+        metrics.ascent != metrics.descent
+            ? static_cast<double>(state.fontSizePx) / (metrics.ascent - metrics.descent)
+            : 0.0;
+    return (static_cast<double>(metrics.ascent) + static_cast<double>(metrics.descent)) *
+           pixelHeightScale / 2.0;
+  }
+
+  double resolveVerticalBaselineOffset(const SpanState& state, double baselineShift) const {
+    if (!state.vertical || state.span->pathSpline) {
+      return 0.0;
+    }
+    const FontVMetrics metrics = backend_.fontVMetrics(state.font);
+    const DominantBaseline baseline = state.span->alignmentBaseline;
+    const bool usesCentralOrigin =
+        baseline == DominantBaseline::Auto || baseline == DominantBaseline::Central ||
+        baseline == DominantBaseline::UseScript || baseline == DominantBaseline::ResetSize ||
+        baseline == DominantBaseline::NoChange;
+    const double alignmentShift = usesCentralOrigin
+                                      ? 0.0
+                                      : verticalCentralOriginOffset(state, metrics) -
+                                            computeBaselineShift(baseline, metrics, state.scale);
+    // Baseline alignment is transversal to the inline axis. In both vertical writing modes,
+    // line-over is right and line-under is left, so a positive horizontal baseline distance
+    // maps to negative X. The alignment offset above is already expressed in physical X;
+    // positive baseline-shift then raises the aligned glyph toward line-over.
+    return alignmentShift + baselineShift;
+  }
+
   void prepareSpanPen(SpanState& state) {
     const TextSpan& span = *state.span;
     state.vertical = isVertical(params_.writingMode);
     state.orientation =
         !state.vertical || span.pathSpline ? TextOrientation::Mixed : span.textOrientation;
     state.penX = haveCurrentPosition_ ? currentPenX_ : 0.0;
-    state.defaultY = effectiveBaselineShift(state) -
-                     computeSpanBaselineShiftPx(backend_, span, state.font, state.scale, params_);
+    const double baselineShift =
+        computeSpanBaselineShiftPx(backend_, span, state.font, state.scale, params_);
+    state.verticalBaselineOffset = resolveVerticalBaselineOffset(state, baselineShift);
+    state.defaultY =
+        effectiveBaselineShift(state) - (state.vertical && !span.pathSpline ? 0.0 : baselineShift);
     state.penY =
         haveCurrentPosition_ ? currentPenY_ - previousDefaultY_ + state.defaultY : state.defaultY;
     state.xList = span.xList;
@@ -3215,14 +3249,7 @@ private:
       glyph.xPosition -= shapedGlyph.yOffset;
       glyph.yPosition += shapedGlyph.xOffset;
       const FontVMetrics metrics = backend_.fontVMetrics(state.font);
-      const double pixelHeightScale =
-          metrics.ascent != metrics.descent
-              ? static_cast<double>(state.fontSizePx) / (metrics.ascent - metrics.descent)
-              : 0.0;
-      const double centralBaselineOffset =
-          (static_cast<double>(metrics.ascent) + static_cast<double>(metrics.descent)) *
-          pixelHeightScale / 2.0;
-      glyph.xPosition -= centralBaselineOffset;
+      glyph.xPosition -= verticalCentralOriginOffset(state, metrics);
       glyph.rotateDegrees = rotationFor(*state.span, charIndex, 90.0);
       return;
     }
@@ -3266,6 +3293,7 @@ private:
     glyph.cluster = shapedGlyph.cluster;
     glyph.positioningCluster = positioningCluster;
     orientVerticalGlyph(state, shapedGlyph, codepoint, charIndex, glyph);
+    glyph.xPosition += state.verticalBaselineOffset;
     state.run.glyphs.push_back(glyph);
     advanceVerticalPen(state, prepared, glyphIndex, codepoint, glyph);
   }

@@ -1336,10 +1336,9 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::RenderOnly("UB: golden is a UB placeholder image")},
 
                     {"hanging-on-vertical.svg",
-                     Params::Skip("Bug: mixed-script vertical flow (upright CJK + rotated Latin) "
-                                  "column geometry differs from resvg; alignment-baseline is "
-                                  "correctly ignored in vertical mode. Same gap as the "
-                                  "text/writing-mode mixed-languages-with-tb skip.")},
+                     Params::Skip("Reference limitation: resvg does not apply alignment-baseline "
+                                  "in vertical layout; Donner follows the vertical baseline axis "
+                                  "and still differs in mixed upright/sideways glyph geometry.")},
                     {"two-textPath-with-middle-on-first.svg",
                      Params().withMaxPixelsDifferent(200).withReason(
                          "Sub-pixel glyph placement along the two paths; ~108 scattered "
