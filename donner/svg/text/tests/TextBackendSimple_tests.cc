@@ -454,6 +454,39 @@ TEST_F(TextBackendSimpleTest, ShapeRunVerticalLatinUsesSidewaysAdvancesAndVertic
                         GlyphYKernIs(DoubleNear(-10.0, 1e-4)), GlyphXKernIs(DoubleEq(0.0)))));
 }
 
+TEST_F(TextBackendSimpleTest, UprightLatinUsesVerticalCellsWithoutHorizontalKerning) {
+  const FontHandle font = fullFont();
+
+  const auto shaped = backend_.shapeRun(font, 100.0f, "AV", 0, 2, true, TextOrientation::Upright,
+                                        FontVariant::Normal, false);
+
+  ASSERT_THAT(shaped.glyphs, testing::SizeIs(2));
+  EXPECT_THAT(shaped.glyphs,
+              Each(AllOf(GlyphXAdvanceIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleNear(100.0, 1e-4)),
+                         GlyphXKernIs(DoubleEq(0.0)), GlyphYKernIs(DoubleEq(0.0)))));
+}
+
+TEST_F(TextBackendSimpleTest, SidewaysCjkUsesHorizontalAdvances) {
+  const FontHandle font = fullFont();
+
+  const auto shaped = backend_.shapeRun(font, 100.0f, "\xE4\xB8\x80", 0, 3, true,
+                                        TextOrientation::Sideways, FontVariant::Normal, false);
+
+  EXPECT_THAT(shaped.glyphs, ElementsAre(AllOf(GlyphXAdvanceIs(DoubleEq(0.0)),
+                                               GlyphYAdvanceIs(DoubleNear(70.0, 1e-4)))));
+}
+
+TEST_F(TextBackendSimpleTest, CrossSpanKerningUsesResolvedVerticalOrientation) {
+  const FontHandle font = fullFont();
+
+  EXPECT_THAT(
+      backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', true, TextOrientation::Upright),
+      DoubleEq(0.0));
+  EXPECT_THAT(
+      backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', true, TextOrientation::Sideways),
+      DoubleNear(-10.0, 1e-4));
+}
+
 TEST_F(TextBackendSimpleTest, ShapeRunVerticalCjkAdvancesByEmHeight) {
   const FontHandle font = fullFont();
 
@@ -461,7 +494,7 @@ TEST_F(TextBackendSimpleTest, ShapeRunVerticalCjkAdvancesByEmHeight) {
   const auto shaped =
       backend_.shapeRun(font, 100.0f, "\xE4\xB8\x80", 0, 3, true, FontVariant::Normal, false);
   EXPECT_THAT(shaped.glyphs, ElementsAre(AllOf(GlyphIndexIs(3), GlyphXAdvanceIs(DoubleEq(0.0)),
-                                               GlyphYAdvanceIs(DoubleEq(100.0)))));
+                                               GlyphYAdvanceIs(DoubleNear(100.0, 1e-4)))));
 }
 
 TEST_F(TextBackendSimpleTest, ShapeRunZeroFontSizeReturnsEmpty) {

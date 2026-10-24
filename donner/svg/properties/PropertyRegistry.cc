@@ -533,6 +533,64 @@ ParseResult<WritingMode> ParseWritingMode(std::span<const css::ComponentValue> c
   return err;
 }
 
+ParseResult<TextOrientation> ParseTextOrientation(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("mixed")) {
+        return TextOrientation::Mixed;
+      }
+      if (ident->value.equalsLowercase("upright")) {
+        return TextOrientation::Upright;
+      }
+      if (ident->value.equalsLowercase("sideways")) {
+        return TextOrientation::Sideways;
+      }
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid text-orientation value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+std::optional<TextOrientation> GlyphOrientationForDegrees(double value) {
+  if (value == 0.0) {
+    return TextOrientation::Upright;
+  }
+  if (value == 90.0) {
+    return TextOrientation::Sideways;
+  }
+  return std::nullopt;
+}
+
+ParseResult<TextOrientation> ParseGlyphOrientationVertical(
+    std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    const auto& component = components.front();
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>();
+        ident && ident->value.equalsLowercase("auto")) {
+      return TextOrientation::Mixed;
+    }
+    if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+      if (const auto orientation = GlyphOrientationForDegrees(number->value)) {
+        return *orientation;
+      }
+    }
+    if (const auto* dimension = component.tryGetToken<css::Token::Dimension>();
+        dimension && dimension->suffixString.equalsLowercase("deg")) {
+      if (const auto orientation = GlyphOrientationForDegrees(dimension->value)) {
+        return *orientation;
+      }
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid glyph-orientation-vertical value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 /// Parse "baseline | sub | super | <length> | <percentage>" for baseline-shift.
 /// "sub" and "super" are converted to em-relative values matching typical browser rendering.
 /// Percentages are relative to font-size per SVG spec, converted to em units.
@@ -2103,7 +2161,7 @@ std::optional<ParseDiagnostic> ParseFontShorthand(PropertyRegistry& registry,
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-constexpr std::array<std::pair<std::string_view, bool>, 74> kValidPresentationAttributeEntries{{
+constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAttributeEntries{{
     {"cx", true},
     {"cy", true},
     {"height", true},
@@ -2170,6 +2228,7 @@ constexpr std::array<std::pair<std::string_view, bool>, 74> kValidPresentationAt
     {"stroke-width", true},
     {"text-anchor", true},
     {"text-decoration", true},
+    {"text-orientation", true},
     {"text-overflow", true},
     {"text-rendering", true},
     {"unicode-bidi", true},
@@ -2390,6 +2449,24 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParseWritingMode(params.components());
                        },
                        &registry.writingMode);
+                 }},  //
+                {"text-orientation",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseTextOrientation(params.components());
+                       },
+                       &registry.textOrientation);
+                 }},  //
+                {"glyph-orientation-vertical",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseGlyphOrientationVertical(params.components());
+                       },
+                       &registry.textOrientation);
                  }},  //
                 {"inline-size",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

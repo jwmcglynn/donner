@@ -1554,10 +1554,9 @@ INSTANTIATE_TEST_SUITE_P(
     TextGlyphOrientationVertical, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
                 "text/glyph-orientation-vertical",
-                {
-                    {"simple-case.svg",
-                     Params::Skip("Not impl: glyph-orientation-vertical (deprecated SVG 1.1)")},
-                })),
+                {{"simple-case.svg", Params::Skip("upright Latin reference comparison remains "
+                                                  "unresolved after orientation and cell-metric "
+                                                  "coverage")}})),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 

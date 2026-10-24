@@ -772,6 +772,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
 
     span.textAnchor = style->properties->textAnchor.get().value();
     span.textDecoration = style->properties->textDecoration.get().value();
+    span.textOrientation = style->properties->textOrientation.get().value();
     span.baselineShift = style->properties->baselineShift.get().value();
 
     // Effective baseline alignment (matching resvg): a non-auto `alignment-baseline`
@@ -2691,15 +2692,17 @@ TextBackend::ShapedRun ShapeAddressableZeroSizeText(std::string_view text, size_
 /// Select zero-advance character records or the normal kerning-aware shaping path.
 TextBackend::ShapedRun ShapeSpanChunk(const TextBackend& backend, const TextRun& run,
                                       std::string_view text, const ChunkRange& chunk, bool vertical,
-                                      FontVariant variant, bool kerning) {
+                                      TextOrientation orientation, FontVariant variant,
+                                      bool kerning) {
   if (run.usedFontSizePx == 0.0f) {
     return ShapeAddressableZeroSizeText(text, chunk.byteStart, chunk.byteEnd - chunk.byteStart);
   }
-  return kerning
-             ? backend.shapeRun(run.font, run.usedFontSizePx, text, chunk.byteStart,
-                                chunk.byteEnd - chunk.byteStart, vertical, variant, false)
-             : backend.shapeRunNoKerning(run.font, run.usedFontSizePx, text, chunk.byteStart,
-                                         chunk.byteEnd - chunk.byteStart, vertical, variant, false);
+  return kerning ? backend.shapeRun(run.font, run.usedFontSizePx, text, chunk.byteStart,
+                                    chunk.byteEnd - chunk.byteStart, vertical, orientation, variant,
+                                    false)
+                 : backend.shapeRunNoKerning(run.font, run.usedFontSizePx, text, chunk.byteStart,
+                                             chunk.byteEnd - chunk.byteStart, vertical, orientation,
+                                             variant, false);
 }
 
 /// A shaped chunk retains backend source clusters and separate SVG positioning groups.
@@ -2716,7 +2719,8 @@ struct PreparedSpanShaping {
 
 PreparedSpanShaping PrepareSpanShaping(const TextBackend& backend, const TextRun& run,
                                        std::string_view text, const std::vector<ChunkRange>& ranges,
-                                       bool vertical, FontVariant variant, bool kerning,
+                                       bool vertical, TextOrientation orientation,
+                                       FontVariant variant, bool kerning,
                                        const ByteIndexMappings& mappings) {
   PreparedSpanShaping result;
   result.chunks.reserve(ranges.size());
@@ -2727,7 +2731,8 @@ PreparedSpanShaping PrepareSpanShaping(const TextBackend& backend, const TextRun
   result.groupStarts.resize(codepointCount, false);
   for (const auto& range : ranges) {
     PreparedSpanChunk prepared;
-    prepared.shaped = ShapeSpanChunk(backend, run, text, range, vertical, variant, kerning);
+    prepared.shaped =
+        ShapeSpanChunk(backend, run, text, range, vertical, orientation, variant, kerning);
     prepared.positioningClusters.reserve(prepared.shaped.glyphs.size());
     for (size_t index = 0; index < prepared.shaped.glyphs.size(); ++index) {
       const auto& glyph = prepared.shaped.glyphs[index];
@@ -2869,6 +2874,7 @@ private:
     float scale = 0.0f;
     std::optional<double> fontSizeAdjust;
     bool vertical = false;
+    TextOrientation orientation = TextOrientation::Mixed;
     bool fontKerning = true;
     double defaultY = 0.0;
     double penX = 0.0;
@@ -2974,6 +2980,8 @@ private:
   void prepareSpanPen(SpanState& state) {
     const TextSpan& span = *state.span;
     state.vertical = isVertical(params_.writingMode);
+    state.orientation =
+        !state.vertical || span.pathSpline ? TextOrientation::Mixed : span.textOrientation;
     state.penX = haveCurrentPosition_ ? currentPenX_ : 0.0;
     state.defaultY = effectiveBaselineShift(state) -
                      computeSpanBaselineShiftPx(backend_, span, state.font, state.scale, params_);
@@ -3032,9 +3040,9 @@ private:
     state.runPenStartY = state.penY;
     state.chunkRanges = findChunkRanges(state.text, state.xList, state.yList);
     state.indexMappings = buildByteIndexMappings(state.text);
-    state.shaping =
-        PrepareSpanShaping(backend_, state.run, state.text, state.chunkRanges, state.vertical,
-                           state.span->fontVariant, state.fontKerning, state.indexMappings);
+    state.shaping = PrepareSpanShaping(backend_, state.run, state.text, state.chunkRanges,
+                                       state.vertical, state.orientation, state.span->fontVariant,
+                                       state.fontKerning, state.indexMappings);
     state.dxList = ResolveGroupDisplacements(
         state.span->pathSpline ? state.span->dxList : state.dxList, state.shaping.groupStarts,
         Lengthd::Extent::X, params_, pendingDx_);
@@ -3102,7 +3110,7 @@ private:
         state.fontKerning && state.previousChunkKerning
             ? backend_.crossSpanKern(state.previousChunkFont, state.previousChunkFontSizePx,
                                      state.font, state.fontSizePx, state.previousChunkCodepoint,
-                                     firstCodepoint, state.vertical)
+                                     firstCodepoint, state.vertical, state.orientation)
             : 0.0;
     return {value, true};
   }
@@ -3114,13 +3122,15 @@ private:
     }
     size_t firstByte = state.chunkRanges.front().byteStart;
     const uint32_t firstCodepoint = decodeUtf8(state.text, firstByte);
-    const bool compatible = CompatibleKerningRuns(
-        fontManager_, state.run, state.span->fontVariant, previousSpanFont_,
-        previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning, previousSpanKerning_);
+    const bool compatible =
+        previousSpanOrientation_ == state.orientation &&
+        CompatibleKerningRuns(fontManager_, state.run, state.span->fontVariant, previousSpanFont_,
+                              previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning,
+                              previousSpanKerning_);
     const double value =
         compatible ? backend_.crossSpanKern(previousSpanFont_, previousSpanFontSizePx_, state.font,
                                             state.fontSizePx, previousSpanCodepoint_,
-                                            firstCodepoint, state.vertical)
+                                            firstCodepoint, state.vertical, state.orientation)
                    : 0.0;
     return {value, true};
   }
@@ -3198,7 +3208,9 @@ private:
 
   void orientVerticalGlyph(const SpanState& state, const TextBackend::ShapedGlyph& shapedGlyph,
                            uint32_t codepoint, unsigned int charIndex, TextGlyph& glyph) const {
-    if (codepoint < 0x2E80) {
+    const bool sideways = state.orientation == TextOrientation::Sideways ||
+                          (state.orientation == TextOrientation::Mixed && codepoint < 0x2E80);
+    if (sideways) {
       glyph.yAdvance = shapedGlyph.xAdvance > 0 ? shapedGlyph.xAdvance : shapedGlyph.yAdvance;
       glyph.xPosition -= shapedGlyph.yOffset;
       glyph.yPosition += shapedGlyph.xOffset;
@@ -3215,7 +3227,9 @@ private:
       return;
     }
 
-    glyph.yAdvance = shapedGlyph.yAdvance > 0 ? shapedGlyph.yAdvance : state.fontSizePx;
+    glyph.yAdvance = shapedGlyph.yAdvance > 0
+                         ? shapedGlyph.yAdvance
+                         : (shapedGlyph.xAdvance == 0 ? 0.0 : state.fontSizePx);
     glyph.xPosition = state.penX + shapedGlyph.xOffset;
     glyph.yPosition = state.penY + shapedGlyph.yOffset;
     glyph.rotateDegrees = rotationFor(*state.span, charIndex, 0.0);
@@ -3378,6 +3392,7 @@ private:
     previousSpanFontSizePx_ = state.fontSizePx;
     previousSpanKerning_ = state.fontKerning;
     previousSpanFontVariant_ = state.span->fontVariant;
+    previousSpanOrientation_ = state.orientation;
     previousSpanPathSource_ = SpanKerningPathSource(*state.span);
   }
 
@@ -3518,6 +3533,7 @@ private:
   float previousSpanFontSizePx_ = 0.0f;
   bool previousSpanKerning_ = true;
   FontVariant previousSpanFontVariant_ = FontVariant::Normal;
+  TextOrientation previousSpanOrientation_ = TextOrientation::Mixed;
   std::optional<Entity> previousSpanPathSource_;
   Entity previousTextPathSource_ = entt::null;
   std::optional<size_t> firstPathRun_;
