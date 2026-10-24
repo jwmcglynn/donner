@@ -4,7 +4,9 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -304,15 +306,29 @@ TEST(CircleClipPath, TextSpanSuppliesItsOwnReferenceBox) {
 }
 
 TEST(CircleClipPath, TransformedTextSpanKeepsTextRootReferenceCoordinates) {
-  constexpr std::string_view kText =
-      "<text x='8' y='28' transform='translate(3 4)' font-size='20' fill='red'>"
-      "<tspan transform='translate(6 2)'>A</tspan></text>";
-  const auto expected = RenderCircleScene(kText);
-  const auto actual = RenderCircleScene(
-      "<text x='8' y='28' transform='translate(3 4)' font-size='20' fill='red'>"
-      "<tspan transform='translate(6 2)' clip-path='circle(1000px)'>A</tspan></text>");
-  editor::tests::CompareBitmapToBitmap(actual, expected, "circle_transformed_text_span",
-                                       editor::tests::PixelmatchIdentityParams());
+  const auto circleFor = [](std::string_view transform) {
+    SVGDocument document = instantiateSubtree(
+        "<text x='8' y='28' transform='translate(3 4)' font-size='20'>"
+        "<tspan id='span' transform='" +
+            std::string(transform) + "'>A</tspan></text>",
+        {}, Vector2i(64, 64));
+    (void)RenderDocumentWithBackend(document, ActiveRendererBackend());
+    const auto span = document.querySelector("#span");
+    EXPECT_THAT(span, testing::Optional(testing::_));
+    CircleClipPath circle;
+    circle.box = CircleClipPath::Box::Fill;
+    circle.radiusType = CircleClipPath::Radius::Length;
+    circle.radius = Lengthd(6.0, Lengthd::Unit::None);
+    components::CircleClipGeometryBudget budget;
+    return components::ShapeSystem().circleClipPath(span->entityHandle(), circle, budget);
+  };
+
+  const Path ordinary = circleFor("translate(0 0)");
+  const Path transformed = circleFor("translate(6 2)");
+  ASSERT_THAT(ordinary.commands(), testing::Not(testing::IsEmpty()));
+  ASSERT_THAT(transformed.commands(), testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(transformed.bounds(), BoxEq(ordinary.bounds().topLeft - Vector2d(6, 2),
+                                          ordinary.bounds().bottomRight - Vector2d(6, 2)));
 }
 
 TEST(CircleClipPath, StrokeBoxUsesStrokeShapeInsteadOfMiterEnvelope) {

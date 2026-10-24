@@ -337,6 +337,16 @@ TEST(TextEngineScriptedTest, ShadowTextStyleContextIsBoundedAndRequiresSpanCover
   registry.get<donner::components::TreeComponent>(shadowRoot).appendChild(registry, shadowSpan);
   registry.emplace<components::ShadowEntityComponent>(shadowRoot, lightRoot);
   registry.emplace<components::ShadowEntityComponent>(shadowSpan, lightSpan);
+  for (int index = 1; index < 32; ++index) {
+    const Entity extraLight = registry.create();
+    const Entity extraShadow = registry.create();
+    registry.emplace<donner::components::TreeComponent>(extraLight,
+                                                        xml::XMLQualifiedNameRef("tspan"));
+    registry.emplace<donner::components::TreeComponent>(extraShadow,
+                                                        xml::XMLQualifiedNameRef("tspan"));
+    registry.get<donner::components::TreeComponent>(shadowRoot).appendChild(registry, extraShadow);
+    registry.emplace<components::ShadowEntityComponent>(extraShadow, extraLight);
+  }
   components::ComputedTextComponent text;
   text.spans.emplace_back().sourceEntity = lightSpan;
 
@@ -345,7 +355,7 @@ TEST(TextEngineScriptedTest, ShadowTextStyleContextIsBoundedAndRequiresSpanCover
               Eq(std::nullopt));
   EXPECT_EQ(insufficientWork, 0u);
 
-  std::size_t admittedWork = 5;
+  std::size_t admittedWork = 67;
   const auto context = BuildShadowTextStyleContext(registry, shadowRoot, text, &admittedWork);
   ASSERT_THAT(context, testing::Optional(testing::_));
   EXPECT_EQ(context->rootEntity, shadowRoot);
@@ -354,7 +364,7 @@ TEST(TextEngineScriptedTest, ShadowTextStyleContextIsBoundedAndRequiresSpanCover
   EXPECT_EQ(admittedWork, 0u);
 
   text.spans.front().sourceEntity = registry.create();
-  std::size_t missingCoverageWork = 5;
+  std::size_t missingCoverageWork = 67;
   EXPECT_THAT(BuildShadowTextStyleContext(registry, shadowRoot, text, &missingCoverageWork),
               Eq(std::nullopt));
 }

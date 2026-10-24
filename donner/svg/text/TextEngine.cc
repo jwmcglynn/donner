@@ -3897,6 +3897,30 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
     work.reject();
     return std::nullopt;
   }
+  if (styleContext) {
+    for (const auto& span : computed->spans) {
+      if (span.sourceEntity == entt::null) {
+        continue;
+      }
+      Entity styleEntity = styleContext->styleEntityFor(span.sourceEntity);
+      const auto* spanStyle = registry_.try_get<components::ComputedStyleComponent>(styleEntity);
+      if (!spanStyle || !spanStyle->properties ||
+          !work.reserve(spanStyle->properties->fontFamily.get().value().size())) {
+        return std::nullopt;
+      }
+      std::size_t ancestors = 0;
+      while (styleEntity != styleContext->rootEntity) {
+        const auto* tree = registry_.try_get<donner::components::TreeComponent>(styleEntity);
+        if (!tree || ++ancestors > styleContext->entities.size() || !work.reserve(1u)) {
+          return std::nullopt;
+        }
+        styleEntity = tree->parent();
+        if (styleEntity == entt::null) {
+          return std::nullopt;
+        }
+      }
+    }
+  }
   ReferenceGeometry result;
   {
     const auto capture = fontManager_.captureDependencies(result.fontDependencies);
