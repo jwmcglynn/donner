@@ -1642,48 +1642,6 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
 }
 #endif
 
-/// Build bounded style identities for one shadow text root, without retaining document references.
-/// @param registry Document storage. @param root Shadow root. @param text Authored spans to map.
-std::optional<TextStyleContext> BuildShadowTextStyles(
-    Registry& registry, Entity root, const components::ComputedTextComponent& text) {
-  TextStyleContext result;
-  result.rootEntity = root;
-  const std::size_t admitted = registry.view<components::ShadowEntityComponent>().size();
-  std::vector<Entity> pending{root};
-  std::size_t visited = 0;
-  while (!pending.empty()) {
-    const Entity entity = pending.back();
-    pending.pop_back();
-    if (++visited > admitted) {
-      return std::nullopt;
-    }
-    const auto* shadow = registry.try_get<components::ShadowEntityComponent>(entity);
-    if (!shadow) {
-      return std::nullopt;
-    }
-    if (entity != root && registry.any_of<components::TextRootComponent>(shadow->lightEntity)) {
-      continue;
-    }
-    if (!result.entities.emplace(shadow->lightEntity, entity).second) {
-      return std::nullopt;
-    }
-    const auto& tree = registry.get<donner::components::TreeComponent>(entity);
-    for (Entity child = tree.firstChild(); child != entt::null;
-         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-      if (pending.size() >= admitted) {
-        return std::nullopt;
-      }
-      pending.push_back(child);
-    }
-  }
-  for (const auto& span : text.spans) {
-    if (span.sourceEntity != entt::null && !result.entities.contains(span.sourceEntity)) {
-      return std::nullopt;
-    }
-  }
-  return result;
-}
-
 /**
  * @brief Draw the spans of \p textRootEntity that \p instance is responsible for.
  *
@@ -1758,7 +1716,7 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   if (!spansHaveOwnEffectInstances) {
     auto [found, inserted] = textFrameCache.shadowStyles[&registry].try_emplace(entity);
     if (inserted) {
-      found->second = BuildShadowTextStyles(registry, entity, *text);
+      found->second = BuildShadowTextStyleContext(registry, entity, *text);
     }
     if (!found->second) {
       return;

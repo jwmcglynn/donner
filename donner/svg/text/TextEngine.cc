@@ -25,6 +25,7 @@
 #include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -42,6 +43,57 @@
 #include "donner/svg/core/WritingMode.h"
 
 namespace donner::svg {
+
+std::optional<TextStyleContext> BuildShadowTextStyleContext(
+    Registry& registry, Entity root, const components::ComputedTextComponent& text,
+    std::size_t* remainingWork) {
+  TextStyleContext result;
+  result.rootEntity = root;
+  const std::size_t admitted = registry.view<components::ShadowEntityComponent>().size();
+  std::vector<Entity> pending{root};
+  std::size_t visited = 0;
+  while (!pending.empty()) {
+    if ((remainingWork && *remainingWork == 0u) || ++visited > admitted) {
+      return std::nullopt;
+    }
+    if (remainingWork) {
+      --*remainingWork;
+    }
+    const Entity entity = pending.back();
+    pending.pop_back();
+    const auto* shadow = registry.try_get<components::ShadowEntityComponent>(entity);
+    if (!shadow) {
+      return std::nullopt;
+    }
+    if (entity != root && registry.any_of<components::TextRootComponent>(shadow->lightEntity)) {
+      continue;
+    }
+    if (!result.entities.emplace(shadow->lightEntity, entity).second) {
+      return std::nullopt;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+    if (!tree) {
+      return std::nullopt;
+    }
+    for (Entity child = tree->firstChild(); child != entt::null;) {
+      if (pending.size() >= admitted) {
+        return std::nullopt;
+      }
+      pending.push_back(child);
+      const auto* childTree = registry.try_get<donner::components::TreeComponent>(child);
+      if (!childTree) {
+        return std::nullopt;
+      }
+      child = childTree->nextSibling();
+    }
+  }
+  for (const auto& span : text.spans) {
+    if (span.sourceEntity != entt::null && !result.entities.contains(span.sourceEntity)) {
+      return std::nullopt;
+    }
+  }
+  return result;
+}
 
 namespace {
 
@@ -3811,12 +3863,14 @@ bool AppendTextReferenceRuns(const TextEngine& engine, FontManager& manager, Reg
 }  // namespace
 
 std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
-    EntityHandle handle, bool includeOutlines, std::size_t& remainingWork) const {
+    EntityHandle handle, bool includeOutlines, std::size_t& remainingWork,
+    const TextStyleContext* styleContext) const {
   TextReferenceWork work(remainingWork);
   const Entity root = findTextRootEntity(handle);
   const auto* computed = registry_.try_get<components::ComputedTextComponent>(root);
   const auto* text = registry_.try_get<components::TextComponent>(root);
-  const auto* style = registry_.try_get<components::ComputedStyleComponent>(root);
+  const Entity styleRootEntity = styleContext ? styleContext->rootEntity : root;
+  const auto* style = registry_.try_get<components::ComputedStyleComponent>(styleRootEntity);
   if (!computed || !text || !style || !style->properties) {
     return ReferenceGeometry();
   }
@@ -3833,13 +3887,22 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
   {
     const auto capture = fontManager_.captureDependencies(result.fontDependencies);
     auto styled = *computed;
-    const TextLayoutParams params =
-        buildTextLayoutParams(registry_, EntityHandle(registry_, root), *style, *text);
-    ResolvePerSpanLayoutStyles(registry_, styled, params.viewBox, params.fontMetrics);
+    const TextLayoutParams params = buildTextLayoutParams(
+        registry_, EntityHandle(registry_, styleRootEntity), *style, *text);
+    ResolvePerSpanLayoutStyles(registry_, styled, params.viewBox, params.fontMetrics, styleContext);
     const auto runs = const_cast<TextEngine*>(this)->layout(styled, params);
     if (!AppendTextReferenceRuns(*this, fontManager_, registry_, styled, runs, handle.entity(),
                                  includeOutlines, result, work)) {
       return std::nullopt;
+    }
+    if (styleContext) {
+      for (auto& glyph : result.outlines) {
+        glyph.sourceEntity = styleContext->styleEntityFor(glyph.sourceEntity);
+        if (glyph.sourceEntity == entt::null) {
+          work.reject();
+          return std::nullopt;
+        }
+      }
     }
   }
   return result;

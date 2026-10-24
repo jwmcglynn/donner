@@ -622,12 +622,34 @@ private:
     if (!textEngine) {
       return false;
     }
-    const Entity textRoot = textEngine->textRootEntity(entity);
+    EntityHandle geometryEntity = entity;
+    const components::ComputedTextComponent* authoredText = nullptr;
+    if (const auto* shadow = entity.try_get<ShadowEntityComponent>()) {
+      geometryEntity = EntityHandle(*entity.registry(), shadow->lightEntity);
+    }
+    const Entity textRoot = textEngine->textRootEntity(geometryEntity);
     if (textRoot == entt::null ||
-        (entity.entity() != root_.entity() && entity.entity() != textRoot)) {
+        (entity.entity() != root_.entity() && geometryEntity.entity() != textRoot)) {
       return false;
     }
-    accumulateTextGeometry(*textEngine, entity, EntityHandle(*entity.registry(), textRoot));
+    std::size_t localWork = CircleClipGeometryBudget::kMaximumWork;
+    std::size_t& remainingWork = budget_ ? budget_->remainingWork : localWork;
+    std::optional<TextStyleContext> styleContext;
+    if (entity.all_of<ShadowEntityComponent>()) {
+      authoredText = entity.registry()->try_get<components::ComputedTextComponent>(textRoot);
+      if (!authoredText) {
+        RejectGeometry(budget_, failed_);
+        return true;
+      }
+      styleContext = BuildShadowTextStyleContext(*entity.registry(), entity.entity(), *authoredText,
+                                                 &remainingWork);
+      if (!styleContext) {
+        RejectGeometry(budget_, failed_);
+        return true;
+      }
+    }
+    accumulateTextGeometry(*textEngine, geometryEntity, entity, std::move(styleContext),
+                           remainingWork);
     return true;
 #else
     (void)entity;
@@ -636,20 +658,22 @@ private:
   }
 
 #ifdef DONNER_TEXT_ENABLED
-  void accumulateTextGeometry(TextEngine& textEngine, EntityHandle entity, EntityHandle textRoot) {
-    const Transform2d worldFromText = LayoutSystem().getEntityFromWorldTransform(textRoot);
-    if (!budget_ && !includeStroke_) {
+  void accumulateTextGeometry(TextEngine& textEngine, EntityHandle geometryEntity,
+                              EntityHandle transformEntity,
+                              std::optional<TextStyleContext> styleContext,
+                              std::size_t& remainingWork) {
+    const Transform2d worldFromText = LayoutSystem().getEntityFromWorldTransform(transformEntity);
+    if (!budget_ && !includeStroke_ && !styleContext) {
       // Preserve the existing public object-bounds query; circle reference queries always carry
       // a budget and must not enter this painted-cache construction path.
-      const Box2d bounds = textEngine.computedObjectBoundingBox(entity);
+      const Box2d bounds = textEngine.computedObjectBoundingBox(geometryEntity);
       if (!bounds.isEmpty()) {
         add((worldFromText * targetFromWorld_).transformBox(bounds));
       }
       return;
     }
-    std::size_t localWork = CircleClipGeometryBudget::kMaximumWork;
-    std::size_t& remainingWork = budget_ ? budget_->remainingWork : localWork;
-    const auto geometry = textEngine.referenceGeometry(entity, includeStroke_, remainingWork);
+    const auto geometry = textEngine.referenceGeometry(geometryEntity, includeStroke_, remainingWork,
+                                                       styleContext ? &*styleContext : nullptr);
     if (!geometry) {
       RejectGeometry(budget_, failed_);
       return;
@@ -658,7 +682,7 @@ private:
       add((worldFromText * targetFromWorld_).transformBox(*geometry->objectBounds));
     }
     for (const auto& glyph : geometry->outlines) {
-      const EntityHandle source(*entity.registry(), glyph.sourceEntity);
+      const EntityHandle source(*geometryEntity.registry(), glyph.sourceEntity);
       if (const auto bounds = StrokeBounds(source, glyph.path, worldFromText, targetFromWorld_,
                                            budget_, true, failed_)) {
         add(*bounds);

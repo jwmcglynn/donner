@@ -17,6 +17,7 @@
 #include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
@@ -320,6 +321,45 @@ TEST(TextEngineScriptedTest, ReferenceSmallCapsCellsKeepFullFontHeight) {
               testing::Optional(BitmapBoundsNear(Box2d::FromXYWH(10, 10, 10, 12))));
   EXPECT_THAT(geometry->outlines, IsEmpty());
   EXPECT_THAT(probe->outlineCalls, Eq(0u));
+}
+
+TEST(TextEngineScriptedTest, ShadowTextStyleContextIsBoundedAndRequiresSpanCoverage) {
+  Registry registry;
+  const Entity lightRoot = registry.create();
+  const Entity lightSpan = registry.create();
+  const Entity shadowRoot = registry.create();
+  const Entity shadowSpan = registry.create();
+  registry.emplace<donner::components::TreeComponent>(lightRoot,
+                                                       xml::XMLQualifiedNameRef("text"));
+  registry.emplace<donner::components::TreeComponent>(lightSpan,
+                                                       xml::XMLQualifiedNameRef("tspan"));
+  registry.emplace<donner::components::TreeComponent>(shadowRoot,
+                                                       xml::XMLQualifiedNameRef("text"));
+  registry.emplace<donner::components::TreeComponent>(shadowSpan,
+                                                       xml::XMLQualifiedNameRef("tspan"));
+  registry.get<donner::components::TreeComponent>(shadowRoot).appendChild(registry, shadowSpan);
+  registry.emplace<components::ShadowEntityComponent>(shadowRoot, lightRoot);
+  registry.emplace<components::ShadowEntityComponent>(shadowSpan, lightSpan);
+  components::ComputedTextComponent text;
+  text.spans.emplace_back().sourceEntity = lightSpan;
+
+  std::size_t insufficientWork = 1;
+  EXPECT_THAT(BuildShadowTextStyleContext(registry, shadowRoot, text, &insufficientWork),
+              Eq(std::nullopt));
+  EXPECT_EQ(insufficientWork, 0u);
+
+  std::size_t admittedWork = 2;
+  const auto context = BuildShadowTextStyleContext(registry, shadowRoot, text, &admittedWork);
+  ASSERT_THAT(context, testing::Optional(testing::_));
+  EXPECT_EQ(context->rootEntity, shadowRoot);
+  EXPECT_EQ(context->styleEntityFor(lightRoot), shadowRoot);
+  EXPECT_EQ(context->styleEntityFor(lightSpan), shadowSpan);
+  EXPECT_EQ(admittedWork, 0u);
+
+  text.spans.front().sourceEntity = registry.create();
+  std::size_t missingCoverageWork = 2;
+  EXPECT_THAT(BuildShadowTextStyleContext(registry, shadowRoot, text, &missingCoverageWork),
+              Eq(std::nullopt));
 }
 
 TEST(TextEngineScriptedTest, ReferenceStrokeOutlinesIncludeHiddenGlyphsWithoutChangingInkCache) {
