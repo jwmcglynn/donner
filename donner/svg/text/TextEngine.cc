@@ -3900,6 +3900,22 @@ bool AppendTextReferenceRuns(const TextEngine& engine, FontManager& manager, Reg
   return true;
 }
 
+bool ReserveTextStyleAncestors(Registry& registry, Entity styleEntity,
+                               const TextStyleContext& styleContext, TextReferenceWork& work) {
+  std::size_t ancestors = 0;
+  while (styleEntity != styleContext.rootEntity) {
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(styleEntity);
+    if (!tree || ++ancestors > styleContext.entities.size() || !work.reserve(1u)) {
+      return false;
+    }
+    styleEntity = tree->parent();
+    if (styleEntity == entt::null) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ReserveTextStyleContextExpansion(Registry& registry,
                                       const components::ComputedTextComponent& computed,
                                       const TextStyleContext* styleContext,
@@ -3917,16 +3933,8 @@ bool ReserveTextStyleContextExpansion(Registry& registry,
         !work.reserve(spanStyle->properties->fontFamily.get().value().size())) {
       return false;
     }
-    std::size_t ancestors = 0;
-    while (styleEntity != styleContext->rootEntity) {
-      const auto* tree = registry.try_get<donner::components::TreeComponent>(styleEntity);
-      if (!tree || ++ancestors > styleContext->entities.size() || !work.reserve(1u)) {
-        return false;
-      }
-      styleEntity = tree->parent();
-      if (styleEntity == entt::null) {
-        return false;
-      }
+    if (!ReserveTextStyleAncestors(registry, styleEntity, *styleContext, work)) {
+      return false;
     }
   }
   return true;
