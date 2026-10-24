@@ -238,8 +238,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "Checkerboard exposes convolve alpha-math delta; measured minimal")},
                     {"edgeMode=wrap-with-matrix-larger-than-target.svg",
                      Params::RenderOnly("UB: wrap with oversized kernel")},
-                    {"kernelMatrix-with-zero-sum-and-no-divisor.svg",
-                     Params::RenderOnly("MatrixConvolution edge shift vs golden")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
