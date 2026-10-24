@@ -66,6 +66,7 @@ public:
   std::shared_ptr<float> shapedFontSizePx;
   int xHeight = 500;
   mutable std::size_t outlineCalls = 0;
+  mutable std::optional<FontVariant> lastShapedVariant;
 
   FontVMetrics fontVMetrics(FontHandle /*font*/) const override {
     return FontVMetrics{
@@ -119,6 +120,7 @@ public:
   ShapedRun shapeRun(FontHandle /*font*/, float fontSizePx, std::string_view spanText,
                      size_t byteOffset, size_t byteLength, bool /*isVertical*/,
                      FontVariant fontVariant, bool forceLogicalOrder) const override {
+    lastShapedVariant = fontVariant;
     if (shapedFontSizePx) {
       *shapedFontSizePx = fontSizePx;
     }
@@ -304,10 +306,13 @@ TEST(TextEngineScriptedTest, ReferenceSmallCapsCellsKeepFullFontHeight) {
   auto& span = root.get<components::ComputedTextComponent>().spans.front();
   span.text = RcString("a");
   span.fontVariant = FontVariant::SmallCaps;
+  root.get<components::ComputedStyleComponent>().properties->fontVariant.set(
+      FontVariant::SmallCaps, css::Specificity::Override());
   std::size_t work = 100000;
 
   const auto geometry = engine.referenceGeometry(root, false, work);
 
+  ASSERT_THAT(probe->lastShapedVariant, testing::Optional(FontVariant::SmallCaps));
   ASSERT_THAT(geometry, testing::Optional(testing::_));
   // Synthetic small caps scale the ink by 0.8, not the element's 12px font cell.
   // The scripted font cell extends 10px above and 2px below its baseline at (10,20).
