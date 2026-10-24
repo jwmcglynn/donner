@@ -3711,7 +3711,7 @@ Transform2d TextRootFromReferenceGlyph(const TextGlyph& glyph) {
 bool AddReferenceGlyphCell(TextEngine::ReferenceGeometry& result, const TextGlyph& glyph,
                            double emTop, double emBottom, TextReferenceWork& work) {
   const double advance = glyph.xAdvance;
-  const double verticalScale = glyph.fontSizeScale * glyph.stretchScaleY;
+  const double verticalScale = glyph.stretchScaleY;
   const Box2d localCell(Vector2d(std::min(0.0, advance), -emTop * verticalScale),
                         Vector2d(std::max(0.0, advance), emBottom * verticalScale));
   const Box2d cell = TextRootFromReferenceGlyph(glyph).transformBox(localCell);
