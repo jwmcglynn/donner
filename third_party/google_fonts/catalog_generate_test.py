@@ -270,6 +270,13 @@ class CatalogGeneratorTest(unittest.TestCase):
             self.assertEqual(
                 encoder_provenance(deps, module, source, sources)["woff2_commit"], "a" * 40,
             )
+            module.write_text(
+                'bazel_dep(name = "brotli", version = "1.2.1", dev_dependency = True)\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                encoder_provenance(deps, module, source, sources)["brotli_module_version"], "1.2.1",
+            )
             deps.write_text(block + block, encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "one pinned"):
                 encoder_provenance(deps, module, source, sources)
