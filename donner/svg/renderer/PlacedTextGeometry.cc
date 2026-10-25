@@ -7,7 +7,6 @@
 #include "donner/base/MathUtils.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/RendererInterface.h"
-#include "donner/svg/renderer/geode/GeodeStrokeTolerance.h"
 #include "donner/svg/text/TextPathWarp.h"
 
 namespace donner::svg {
@@ -133,11 +132,30 @@ Path WarpGlyphOutline(const Path& outline, const StretchedTextPath& mapping, con
   return WarpTextPathOutline(outline, mapping, glyph, tolerance);
 }
 
+namespace {
+
+/// Largest singular value of the linear part of \p transform, ignoring translation. The default
+/// renderer must not depend on Geode packages, so this does not share Geode's tolerance helper.
+double LinearMaxScale(const Transform2d& transform) {
+  const double a = transform.data[0];
+  const double b = transform.data[1];
+  const double c = transform.data[2];
+  const double d = transform.data[3];
+  const double col0 = a * a + b * b;
+  const double col1 = c * c + d * d;
+  const double cross = a * c + b * d;
+  const double diff = col0 - col1;
+  const double sigmaSquared = 0.5 * (col0 + col1 + std::sqrt(diff * diff + 4.0 * cross * cross));
+  return sigmaSquared > 0.0 ? std::sqrt(sigmaSquared) : 0.0;
+}
+
+}  // namespace
+
 double TextWarpToleranceFor(const Transform2d& deviceFromLocal) {
   constexpr double kDeviceTolerance = 0.1;
   constexpr double kMinTolerance = 1e-4;
   // The largest singular value is at least the largest coefficient magnitude, so a coefficient
-  // this large already reaches the minimum. Rejecting it here also keeps `MaxAbsScaleFactor` from
+  // this large already reaches the minimum. Rejecting it here also keeps `LinearMaxScale` from
   // squaring a huge coefficient to infinity, or a non-finite one to NaN, which it reports as zero
   // scale.
   for (int i = 0; i < 4; ++i) {
@@ -147,7 +165,7 @@ double TextWarpToleranceFor(const Transform2d& deviceFromLocal) {
   }
   // The largest singular value of the linear part bounds how far any local error can move in
   // device space; translation does not magnify it.
-  const double scale = geode::MaxAbsScaleFactor(deviceFromLocal);
+  const double scale = LinearMaxScale(deviceFromLocal);
   return std::clamp(kDeviceTolerance / std::max(scale, 1.0), kMinTolerance,
                     Path::kLocalFlattenTolerance);
 }
