@@ -273,6 +273,27 @@ Vector2d evalCubicTangent(const std::array<Vector2d, 4>& pts, double t) {
          (s * s * (pts[1] - pts[0]) + 2.0 * s * t * (pts[2] - pts[1]) + t * t * (pts[3] - pts[2]));
 }
 
+Vector2d evalMeasuredCubicTangent(const std::array<Vector2d, 4>& pts, double t) {
+  const Vector2d tangent = evalCubicTangent(pts, t);
+  if (tangent.x != 0.0 || tangent.y != 0.0) {
+    return tangent;
+  }
+  if (t == 0.0) {
+    for (size_t index = 1; index < pts.size(); ++index) {
+      if (pts[index].x != pts[0].x || pts[index].y != pts[0].y) {
+        return pts[index] - pts[0];
+      }
+    }
+  } else if (t == 1.0) {
+    for (size_t index = pts.size() - 1; index-- > 0;) {
+      if (pts[index].x != pts[3].x || pts[index].y != pts[3].y) {
+        return pts[3] - pts[index];
+      }
+    }
+  }
+  return tangent;
+}
+
 /// Get the end point of command at index \p i.
 Vector2d endPointOfCommand(const std::vector<Path::Command>& commands,
                            const std::vector<Vector2d>& points, size_t i) {
@@ -507,7 +528,7 @@ Path::PointOnPath PointOnMeasuredCubic(const Segment& segment, const ArcSampleVe
 
   const double t = InterpolateArcSampleParameter(samplesBegin, sample, remaining);
   const Vector2d point = evalCubic(segment.points, t);
-  const Vector2d tangent = evalCubicTangent(segment.points, t);
+  const Vector2d tangent = evalMeasuredCubicTangent(segment.points, t);
   return {point, tangent, std::atan2(tangent.y, tangent.x), true};
 }
 
@@ -696,7 +717,7 @@ Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance,
   }
   if (distance == segment.endLength) {
     // Global-to-local subtraction can round beyond the last retained sample.
-    const Vector2d tangent = evalCubicTangent(segment.points, 1.0);
+    const Vector2d tangent = evalMeasuredCubicTangent(segment.points, 1.0);
     return {segment.points[3], tangent, std::atan2(tangent.y, tangent.x), true};
   }
   return PointOnMeasuredCubic(segment, arcSamples_, remaining, endpoint_);

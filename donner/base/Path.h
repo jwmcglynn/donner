@@ -245,7 +245,8 @@ public:
   /// Result of sampling the path at a given arc length distance.
   struct PointOnPath {
     Vector2d point;     ///< Position on the path.
-    Vector2d tangent;   ///< Un-normalized tangent vector at the point.
+    Vector2d tangent;   ///< Un-normalized tangent vector. Measured paths use the limiting direction
+                        ///< at a curve endpoint whose derivative is zero.
     double angle;       ///< Tangent angle in radians (atan2).
     bool valid = true;  ///< False if the distance is negative, non-finite, or exceeds the path
                         ///< length, or if the path has no drawable segments or could not be

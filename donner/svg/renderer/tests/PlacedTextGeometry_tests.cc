@@ -3,8 +3,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <limits>
 
+#include "donner/base/MathUtils.h"
 #include "donner/base/Path.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/text/TextPathWarp.h"
@@ -17,6 +19,7 @@ using testing::DoubleNear;
 using testing::ElementsAre;
 using testing::IsEmpty;
 using testing::Not;
+using testing::Optional;
 
 StretchedTextPath MeasurePath(const Path& path) {
   Path::MeasuredPath measured = path.measure();
@@ -44,6 +47,95 @@ TEST(PlacedTextGeometryTest, StretchWarpsCurvedOutlineControlPointsAcrossPathTur
   ASSERT_FALSE(warped.empty());
   EXPECT_GE(warped.points().size(), 3u);
   EXPECT_GT(warped.bounds().bottomRight.y - warped.bounds().topLeft.y, 5.0);
+}
+
+TEST(PlacedTextGeometryTest, StretchUsesLimitingTangentsAtCoincidentCurveEndpoints) {
+  const std::array<Path, 6> routes = {
+      PathBuilder()
+          .moveTo(Vector2d(0.0, 0.0))
+          .curveTo(Vector2d(0.0, 0.0), Vector2d(0.0, 10.0), Vector2d(0.0, 20.0))
+          .build(),
+      PathBuilder()
+          .moveTo(Vector2d(0.0, 0.0))
+          .curveTo(Vector2d(0.0, 0.0), Vector2d(0.0, 0.0), Vector2d(0.0, 20.0))
+          .build(),
+      PathBuilder()
+          .moveTo(Vector2d(0.0, 0.0))
+          .quadTo(Vector2d(0.0, 0.0), Vector2d(0.0, 20.0))
+          .build(),
+      PathBuilder()
+          .moveTo(Vector2d(0.0, 0.0))
+          .curveTo(Vector2d(0.0, 10.0), Vector2d(0.0, 20.0), Vector2d(0.0, 20.0))
+          .build(),
+      PathBuilder()
+          .moveTo(Vector2d(0.0, 0.0))
+          .curveTo(Vector2d(0.0, 20.0), Vector2d(0.0, 20.0), Vector2d(0.0, 20.0))
+          .build(),
+      PathBuilder()
+          .moveTo(Vector2d(0.0, 0.0))
+          .quadTo(Vector2d(0.0, 20.0), Vector2d(0.0, 20.0))
+          .build(),
+  };
+  const Path rectangle = PathBuilder().addRect(Box2d::FromXYWH(0.0, -2.0, 10.0, 4.0)).build();
+
+  for (size_t index = 0; index < routes.size(); ++index) {
+    SCOPED_TRACE(index);
+    StretchedTextPath mapping = MeasurePath(routes[index]);
+    TextGlyph glyph;
+    const bool samplesEnd = index >= 3u;
+    glyph.textPathOrigin = samplesEnd ? mapping.measuredPath.pathLength() - 10.0 : 0.0;
+    glyph.xAdvance = 10.0;
+    TextRun run;
+    run.stretchedTextPath = std::make_shared<StretchedTextPath>(mapping);
+
+    const Vector2d endpointLocal(samplesEnd ? 10.0 : 0.0, -2.0);
+    const auto mappedEndpoint = MapTextPathPoint(mapping, glyph, endpointLocal);
+    EXPECT_THAT(mappedEndpoint, Optional(Vector2Near(2.0, samplesEnd ? 20.0 : 0.0)));
+    EXPECT_THAT(WarpGlyphOutline(rectangle, mapping, glyph).commands(), Not(IsEmpty()));
+    TextGlyph cellGlyph = glyph;
+    cellGlyph.textPathOrigin = 0.0;
+    cellGlyph.xAdvance = mapping.measuredPath.pathLength();
+    const Path cell = PlaceStretchedTextPathCell(run, cellGlyph, 2.0, 2.0);
+    EXPECT_THAT(cell.commands(), Not(IsEmpty()));
+    EXPECT_THAT(cell.bounds(), BoxEq(Vector2d(-2.0, 0.0), Vector2d(2.0, 20.0)));
+  }
+}
+
+TEST(PlacedTextGeometryTest, StretchDistinguishesTinyAndZeroCurveEndpointDerivatives) {
+  const auto expectEndpoint = [](const Path& route, bool samplesEnd, double expectedAngle,
+                                 const Vector2d& expectedMapped) {
+    StretchedTextPath mapping = MeasurePath(route);
+    const double distance = samplesEnd ? mapping.measuredPath.pathLength() : 0.0;
+    const auto sample = mapping.measuredPath.pointAtArcLength(distance);
+    ASSERT_TRUE(sample.valid);
+    EXPECT_THAT(sample.angle, DoubleNear(expectedAngle, 1e-12));
+
+    TextGlyph glyph;
+    glyph.textPathOrigin = distance;
+    EXPECT_THAT(MapTextPathPoint(mapping, glyph, Vector2d(0.0, -2.0)),
+                Optional(Vector2Near(expectedMapped.x, expectedMapped.y)));
+  };
+
+  expectEndpoint(PathBuilder()
+                     .moveTo(Vector2d(0.0, 0.0))
+                     .curveTo(Vector2d(1e-20, 0.0), Vector2d(0.0, 10.0), Vector2d(0.0, 20.0))
+                     .build(),
+                 false, 0.0, Vector2d(0.0, -2.0));
+  expectEndpoint(PathBuilder()
+                     .moveTo(Vector2d(0.0, 0.0))
+                     .curveTo(Vector2d(0.0, 10.0), Vector2d(1e-20, 20.0), Vector2d(0.0, 20.0))
+                     .build(),
+                 true, MathConstants<double>::kPi, Vector2d(0.0, 22.0));
+  expectEndpoint(PathBuilder()
+                     .moveTo(Vector2d(0.0, 0.0))
+                     .curveTo(Vector2d(0.0, 0.0), Vector2d(1e-20, 0.0), Vector2d(0.0, 20.0))
+                     .build(),
+                 false, 0.0, Vector2d(0.0, -2.0));
+  expectEndpoint(PathBuilder()
+                     .moveTo(Vector2d(0.0, 0.0))
+                     .curveTo(Vector2d(1e-20, 20.0), Vector2d(0.0, 20.0), Vector2d(0.0, 20.0))
+                     .build(),
+                 true, MathConstants<double>::kPi, Vector2d(0.0, 22.0));
 }
 
 TEST(PlacedTextGeometryTest, StretchIsIdentityOnHorizontalPathIncludingTangentExtensions) {
