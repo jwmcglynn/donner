@@ -894,6 +894,35 @@ TEST(TextEngineTest, ScriptedVerticalLayoutCoversSidewaysUprightSpacingAndRotati
   EXPECT_THAT(runs[0].glyphs[2].yPosition, Gt(runs[0].glyphs[1].yPosition));
 }
 
+// Sideways glyphs sit on the central baseline: halfway between ascent and descent in font units,
+// scaled by the em scale and not normalized to a 1em box. The scripted font has ascent 1000,
+// descent -200 and 1000 units per em, so at 20px the alphabetic baseline sits
+// (1000 - 200) / 2 * 20 / 1000 = 8px line-under (left) of the inline-axis position in both
+// vertical writing modes. The em scale is a float, hence the small tolerance.
+TEST(TextEngineTest, SidewaysVerticalGlyphCentersOnAscentDescentMidpoint) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+
+  for (const WritingMode mode : {WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    SCOPED_TRACE(testing::Message() << "writingMode=" << mode);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("A");
+    span.xList = {Lengthd(100.0, Lengthd::Unit::None)};
+    span.yList = {Lengthd(10.0, Lengthd::Unit::None)};
+    text.spans.push_back(std::move(span));
+
+    TextLayoutParams params = MakeTextParams(20.0);
+    params.writingMode = mode;
+    const auto runs = engine.layout(text, params);
+
+    EXPECT_THAT(runs,
+                ElementsAre(RunGlyphsAre(ElementsAre(AllOf(GlyphRotateDegreesIs(DoubleEq(90.0)),
+                                                           GlyphXPositionIs(DoubleNear(92.0, 1e-5)),
+                                                           GlyphYPositionIs(DoubleEq(10.0)))))));
+  }
+}
+
 TEST(TextEngineTest, ScriptedRtlChunkYOverrideKeepsVisualGlyphsOnSameBaseline) {
   Registry registry;
   FontManager fontManager(registry);
