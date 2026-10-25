@@ -275,6 +275,13 @@ class GeneratedRootCmakeTest(unittest.TestCase):
         self.assertIsNotNone(url, "Brotli archive requires one release URL")
         self.assertIn(f"  URL {url.group(1)}", contents)
         self.assertIn(f"  URL_HASH SHA256={base64.b64decode(integrity.group(1)).hex()}", contents)
+        release = re.search(r"/v([^/]+)\.tar\.gz$", url.group(1))
+        self.assertIsNotNone(release, "Brotli source must be a release archive")
+        for directory, suffix in (("SOURCE_DIR", "src"), ("BINARY_DIR", "build")):
+            self.assertIn(
+                f'  {directory} "${{FETCHCONTENT_BASE_DIR}}/brotli-{release.group(1)}-{suffix}"',
+                contents,
+            )
 
         self.assertNotIn("DONNER_BUILD_EXAMPLES", contents)
         # Issue #1212: the generated root must not advertise a test contract
