@@ -322,7 +322,7 @@ bytes before attesting them.
 
 The signed ZIP retains its original filename and bundled licenses. Verification extracts it again,
 checks resource preservation, signatures, the stapled ticket and Gatekeeper acceptance, and exercises
-the invalid-option loader check. The signed ZIP and derivation receipt receive workflow attestations.
+the invalid-option loader check. The signed ZIP, checksum, derivation receipt and verification receive workflow attestations.
 Only the signed ZIP and its checksum belong on the public release; receipts and Apple diagnostics
 remain in Actions artifacts. A successful signing run does not publish anything or qualify the GUI.
 

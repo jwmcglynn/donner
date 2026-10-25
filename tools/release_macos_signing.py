@@ -333,6 +333,8 @@ def verify_artifact(work: Path) -> None:
     """Exercise signed bytes only on a separate runner without signing or attestation access."""
     archive, receipt_path = work / ARCHIVE, work / "receipt.json"
     receipt_digest = native.release_cli.digest(receipt_path)
+    checksum_path = work / (ARCHIVE + ".sha256")
+    checksum_digest = native.release_cli.digest(checksum_path)
     receipt = json.loads(receipt_path.read_text())
     digest = native.release_cli.digest(archive)
     if digest != receipt["archive_sha256"] or receipt["source_commit"] != BACKFILL["commit"]:
@@ -351,16 +353,21 @@ def verify_artifact(work: Path) -> None:
     native._check_entrypoint(app, environment={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
                                              "HOME": str(work / "verified-bundle"),
                                              "TMPDIR": str(work / "verified-bundle")})
-    if native.release_cli.digest(archive) != digest or native.release_cli.digest(receipt_path) != receipt_digest:
+    if (native.release_cli.digest(archive) != digest
+            or native.release_cli.digest(receipt_path) != receipt_digest
+            or native.release_cli.digest(checksum_path) != checksum_digest):
         raise ValueError("artifact changed during executable verification")
-    proof = {"archive_sha256": digest, "receipt_sha256": receipt_digest, "entrypoint": True}
+    proof = {"archive_sha256": digest, "receipt_sha256": receipt_digest,
+             "checksum_sha256": checksum_digest, "entrypoint": True}
     (work / "verification.json").write_text(json.dumps(proof, indent=2) + "\n")
 
 
 def check_verification(work: Path) -> None:
     proof = json.loads((work / "verification.json").read_text())
     expected = {"archive_sha256": native.release_cli.digest(work / ARCHIVE),
-                "receipt_sha256": native.release_cli.digest(work / "receipt.json"), "entrypoint": True}
+                "receipt_sha256": native.release_cli.digest(work / "receipt.json"),
+                "checksum_sha256": native.release_cli.digest(work / (ARCHIVE + ".sha256")),
+                "entrypoint": True}
     if proof != expected:
         raise ValueError("verification evidence does not bind the artifacts being attested")
 

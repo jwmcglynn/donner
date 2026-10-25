@@ -187,11 +187,17 @@ class SigningTest(unittest.TestCase):
     def test_attestation_rejects_different_bytes_than_the_verifier_checked(self):
         (self.root / signing.ARCHIVE).write_bytes(b"signed package")
         (self.root / "receipt.json").write_text('{"receipt":"fixture"}')
+        checksum = self.root / (signing.ARCHIVE + ".sha256")
+        checksum.write_text("fixture checksum")
         proof = {"archive_sha256": signing.native.release_cli.digest(self.root / signing.ARCHIVE),
                  "receipt_sha256": signing.native.release_cli.digest(self.root / "receipt.json"),
-                 "entrypoint": True}
+                 "checksum_sha256": signing.native.release_cli.digest(checksum), "entrypoint": True}
         (self.root / "verification.json").write_text(json.dumps(proof))
         signing.check_verification(self.root)
+        checksum.write_text("mutated sidecar")
+        with self.assertRaises(ValueError):
+            signing.check_verification(self.root)
+        checksum.write_text("fixture checksum")
         (self.root / signing.ARCHIVE).write_bytes(b"changed package")
         with self.assertRaises(ValueError):
             signing.check_verification(self.root)
