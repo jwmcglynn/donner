@@ -266,16 +266,17 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeDistantLight, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeDropShadow, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feDropShadow",
-                {
-                    {"only-stdDeviation.svg",
-                     Params::WithThreshold(0.05f, 160, "Minor blur diffs")},
-                    {"with-flood-color.svg", Params::WithThreshold(0.03f, 160, "Minor blur diffs")},
-
-                    {"with-percent-offset.svg", Params::Skip("Bug: feDropShadow edge case")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "filters/feDropShadow",
+            {
+                {"only-stdDeviation.svg", Params::WithThreshold(0.05f, 160, "Minor blur diffs")},
+                {"with-flood-color.svg", Params::WithThreshold(0.03f, 160, "Minor blur diffs")},
+                // Percentage dx/dy are invalid <number> values and fall back to the default
+                // offset of 2, so this case renders the same as only-stdDeviation.svg.
+                {"with-percent-offset.svg", Params::WithThreshold(0.05f, 160, "Minor blur diffs")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeFlood, ImageComparisonTestFixture,
@@ -502,17 +503,19 @@ INSTANTIATE_TEST_SUITE_P(
                 {"with-subregion-3.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                                                "Minor shading differences")},
                 {"content-outside-the-canvas-2.svg",
-                 Params::Skip(
-                     "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
+                 Params::Skip("Bug #1170: feGaussianBlur samples transparent pixels at the "
+                              "canvas top/left edge because content above and left of the canvas "
+                              "is not rasterized into the filter input (TinySkia 2321 and Geode "
+                              "2323 pixels differ, edge band only)")},
                 {"in=BackgroundAlpha.svg",
                  Params::Skip(
                      "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
-                {"with-mask-on-parent.svg",
-                 Params::Skip(
-                     "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
                 {"with-transform-outside-of-canvas.svg",
-                 Params::Skip(
-                     "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
+                 Params::Skip("Bug #1170: feImage element references ignore the filtered "
+                              "element's axis-aligned transform when placed, and are rasterized "
+                              "only over the untransformed canvas, so the referenced content is "
+                              "lost (TinySkia and Geode: 62500 pixels differ, the whole referenced "
+                              "square)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

@@ -1677,6 +1677,25 @@ TEST(AttributeParserTest, ExperimentalFilterInvalidNumberBranchesPreserveDefault
   EXPECT_DOUBLE_EQ(offset.dy, 0.0);
 }
 
+// feDropShadow dx/dy are <number>, not <length-percentage>, so percentage values are invalid and
+// the attributes keep their initial value of 2.
+TEST(AttributeParserTest, ExperimentalDropShadowPercentOffsetKeepsDefaults) {
+  auto document = ParseSVGExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <filter id="f">
+        <feDropShadow id="shadow-percent" dx="10%" dy="20%" stdDeviation="6"/>
+      </filter>
+    </svg>
+  )");
+
+  const auto& shadow =
+      QueryComponent<components::FEDropShadowComponent>(document, "#shadow-percent");
+  EXPECT_DOUBLE_EQ(shadow.dx, 2.0);
+  EXPECT_DOUBLE_EQ(shadow.dy, 2.0);
+  EXPECT_DOUBLE_EQ(shadow.stdDeviationX, 6.0);
+  EXPECT_DOUBLE_EQ(shadow.stdDeviationY, 6.0);
+}
+
 TEST(AttributeParserTest, InvalidShapeGradientAndTextPathAttributesPreserveDefaults) {
   ParseWarningSink warningSink;
   auto maybeDocument = SVGParser::ParseSVG(R"(
