@@ -120,6 +120,44 @@ class SigningTest(unittest.TestCase):
         self.assertNotIn(secret, str(caught.exception))
         self.assertIsNone(caught.exception.__cause__)
 
+    def test_keychain_failure_retains_safe_actionable_diagnostic(self):
+        import contextlib
+        import io
+        output = io.StringIO()
+        path = self.root / "signing-errors.json"
+        secret = "fixture-private-password"
+        failure = subprocess.CalledProcessError(1, ["security", "import", "-P", secret],
+                                                output=b"untrusted certificate", stderr=(
+                                                    "MAC verification failed: " + secret).encode())
+        with mock.patch.object(signing, "DIAGNOSTIC_PATH", path, create=True), \
+             mock.patch.object(signing.subprocess, "run", side_effect=failure), \
+             contextlib.redirect_stderr(output), self.assertRaises(ValueError):
+            signing.run("/usr/bin/security", "import", "fixture.p12", "-P", secret)
+        diagnostic = json.loads(path.read_text())[0]
+        self.assertEqual(diagnostic["operation"], "import")
+        self.assertEqual(diagnostic["reason"], "pkcs12-password-or-data")
+        self.assertEqual(diagnostic["exit_code"], 1)
+        self.assertNotIn(secret, path.read_text() + output.getvalue())
+        self.assertNotIn("fixture.p12", path.read_text() + output.getvalue())
+        self.assertIn("pkcs12-password-or-data", output.getvalue())
+
+    def test_timeout_retains_tool_and_bounded_classification(self):
+        import contextlib
+        import io
+        path = self.root / "signing-errors.json"
+        failure = subprocess.TimeoutExpired(["codesign", "secret"], 120,
+                                            stderr=b"secret" * 20000)
+        with mock.patch.object(signing, "DIAGNOSTIC_PATH", path, create=True), \
+             mock.patch.object(signing.subprocess, "run", side_effect=failure), \
+             contextlib.redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
+            signing.run("/usr/bin/codesign", "--sign", "secret", "app")
+        record = json.loads(path.read_text())[0]
+        self.assertEqual(record["tool"], "codesign")
+        self.assertEqual(record["reason"], "timeout")
+        self.assertTrue(record["output_truncated"])
+        self.assertLess(path.stat().st_size, 1024)
+        self.assertNotIn("secret", path.read_text())
+
     def test_keychain_and_certificate_cleanup_runs_on_signing_failure(self):
         values = {name: "fixture" for name in signing.SECRET_NAMES}
         values["MACOS_CERTIFICATE_BASE64"] = base64.b64encode(b"fixture-p12").decode() + "\n"
