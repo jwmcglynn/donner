@@ -3063,12 +3063,13 @@ class TextLayoutInvocation {
 public:
   TextLayoutInvocation(Registry& registry, FontManager& fontManager, TextBackend& backend,
                        const components::ComputedTextComponent& text,
-                       const TextLayoutParams& params)
+                       const TextLayoutParams& params, bool* resourceRejected = nullptr)
       : registry_(registry),
         fontManager_(fontManager),
         backend_(backend),
         text_(text),
-        params_(params) {}
+        params_(params),
+        resourceRejected_(resourceRejected) {}
 
   std::vector<TextRun> run() {
     resolveBaseFont();
@@ -3747,6 +3748,9 @@ private:
       retainTextPath(std::move(measuredPath), closed, *measuredBytes + clusterBytes,
                      std::move(admission.reservation));
     } else {
+      if (resourceRejected_) {
+        *resourceRejected_ = true;
+      }
       discardTextPathRuns();
     }
     resetTextPathState();
@@ -3816,14 +3820,24 @@ private:
   std::vector<ChunkBoundary> chunkBoundaries_;
   std::vector<RunPenExtent> runExtents_;
   bool wrapped_ = false;
+  bool* resourceRejected_ = nullptr;
 };
 
 }  // namespace
 
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
                                         const TextLayoutParams& params) {
+  bool resourceRejected = false;
+  return layoutWithResourceStatus(text, params, resourceRejected);
+}
+
+std::vector<TextRun> TextEngine::layoutWithResourceStatus(
+    const components::ComputedTextComponent& text, const TextLayoutParams& params,
+    bool& resourceRejected) {
   ++layoutCallCount_;
-  return TextLayoutInvocation(registry_, fontManager_, *backend_, text, params).run();
+  resourceRejected = false;
+  return TextLayoutInvocation(registry_, fontManager_, *backend_, text, params, &resourceRejected)
+      .run();
 }
 
 FontVMetrics TextEngine::fontVMetrics(FontHandle font) const {
@@ -3936,23 +3950,6 @@ bool ReserveStretchedCacheOutline(Registry& registry, FontManager& fontManager, 
   return TextGeometryBudget(registry).reserve(owner, retainedBytes);
 }
 
-Path PlaceStretchedTextPathCell(const TextRun& run, const TextGlyph& glyph, double emTop,
-                                double emBottom) {
-  if (!run.stretchedTextPath || !glyph.textPathOrigin) {
-    return Path();
-  }
-  const double geometricScaleY = glyph.stretchScaleY;
-  Path cell = PathBuilder()
-                  .addRect(Box2d::FromXYWH(0.0, -emTop * geometricScaleY, glyph.xAdvance,
-                                           (emTop + emBottom) * geometricScaleY))
-                  .build();
-  const double rotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
-  if (rotation != 0.0) {
-    cell = transformPath(cell, Transform2d::Rotate(rotation * MathConstants<double>::kPi / 180.0));
-  }
-  return WarpTextPathOutline(cell, *run.stretchedTextPath, glyph);
-}
-
 std::optional<Box2d> CachedTextRunCellBounds(const TextRun& run, double emTop, double emBottom) {
   Box2d result;
   bool initialized = false;
@@ -3961,8 +3958,10 @@ std::optional<Box2d> CachedTextRunCellBounds(const TextRun& run, double emTop, d
     if (run.stretchedTextPath && glyph.textPathOrigin) {
       cell = PlaceStretchedTextPathCell(run, glyph, emTop, emBottom);
     } else {
+      const double geometricScaleY = glyph.stretchScaleY;
       cell = PathBuilder()
-                 .addRect(Box2d::FromXYWH(0.0, -emTop, glyph.xAdvance, emTop + emBottom))
+                 .addRect(Box2d::FromXYWH(0.0, -emTop * geometricScaleY, glyph.xAdvance,
+                                          (emTop + emBottom) * geometricScaleY))
                  .build();
       cell = transformPath(cell, Transform2d::Translate(glyph.xPosition, glyph.yPosition));
     }
@@ -3978,12 +3977,7 @@ Path PlaceCachedGlyphOutline(Path outline, const TextRun& run, const TextGlyph& 
     outline = transformPath(outline, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
   }
   if (run.stretchedTextPath && glyph.textPathOrigin) {
-    const double rotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
-    if (rotation != 0.0) {
-      outline = transformPath(outline,
-                              Transform2d::Rotate(rotation * MathConstants<double>::kPi / 180.0));
-    }
-    return WarpTextPathOutline(outline, *run.stretchedTextPath, glyph);
+    return PlaceStretchedTextPathOutline(std::move(outline), run, glyph);
   }
   Transform2d textElementFromGlyphLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
   if (glyph.rotateDegrees != 0.0) {
@@ -4398,7 +4392,13 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
     const TextLayoutParams params =
         buildTextLayoutParams(registry_, EntityHandle(registry_, styleRootEntity), *style, *text);
     ResolvePerSpanLayoutStyles(registry_, styled, params.viewBox, params.fontMetrics, styleContext);
-    const auto runs = const_cast<TextEngine*>(this)->layout(styled, params);
+    bool layoutResourceRejected = false;
+    const auto runs = const_cast<TextEngine*>(this)->layoutWithResourceStatus(
+        styled, params, layoutResourceRejected);
+    if (layoutResourceRejected) {
+      work.reject();
+      return std::nullopt;
+    }
     if (!AppendTextReferenceRuns(*this, fontManager_, registry_, styled, runs, handle.entity(),
                                  includeOutlines, result, work)) {
       return std::nullopt;
