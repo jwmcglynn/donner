@@ -235,6 +235,7 @@ donner_perf_sensitive_cc_library(
         ":renderer_interface",
         "//donner/base",
         "//donner/svg/components/text:components",
+        "//donner/svg/renderer/geode:geode_stroke_tolerance",
         "//donner/svg/text:text_engine",
         "//donner/svg/text:text_types",
     ],

@@ -1,11 +1,13 @@
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 #include "donner/base/MathUtils.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/geode/GeodeStrokeTolerance.h"
 #include "donner/svg/text/TextPathWarp.h"
 
 namespace donner::svg {
@@ -132,9 +134,22 @@ Path WarpGlyphOutline(const Path& outline, const StretchedTextPath& mapping, con
 }
 
 double TextWarpToleranceFor(const Transform2d& deviceFromLocal) {
-  const double scale = std::max(std::hypot(deviceFromLocal.data[0], deviceFromLocal.data[1]),
-                                std::hypot(deviceFromLocal.data[3], deviceFromLocal.data[4]));
-  return std::clamp(0.1 / std::max(scale, 1.0), 1e-4, Path::kLocalFlattenTolerance);
+  constexpr double kDeviceTolerance = 0.1;
+  constexpr double kMinTolerance = 1e-4;
+  // The largest singular value is at least the largest coefficient magnitude, so a coefficient
+  // this large already reaches the minimum. Rejecting it here also keeps `MaxAbsScaleFactor` from
+  // squaring a huge coefficient to infinity, or a non-finite one to NaN, which it reports as zero
+  // scale.
+  for (int i = 0; i < 4; ++i) {
+    if (!(std::abs(deviceFromLocal.data[i]) < kDeviceTolerance / kMinTolerance)) {
+      return kMinTolerance;
+    }
+  }
+  // The largest singular value of the linear part bounds how far any local error can move in
+  // device space; translation does not magnify it.
+  const double scale = geode::MaxAbsScaleFactor(deviceFromLocal);
+  return std::clamp(kDeviceTolerance / std::max(scale, 1.0), kMinTolerance,
+                    Path::kLocalFlattenTolerance);
 }
 
 Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextRun& run,
