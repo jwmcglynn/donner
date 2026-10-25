@@ -511,8 +511,11 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip(
                      "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
                 {"with-transform-outside-of-canvas.svg",
-                 Params::Skip(
-                     "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
+                 Params::Skip("Bug #1170: feImage element references ignore the filtered "
+                              "element's axis-aligned transform when placed, and are rasterized "
+                              "only over the untransformed canvas, so the referenced content is "
+                              "lost (TinySkia and Geode: 62500 pixels differ, the whole referenced "
+                              "square)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
