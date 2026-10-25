@@ -15,6 +15,8 @@ namespace {
 using testing::Contains;
 using testing::DoubleNear;
 using testing::ElementsAre;
+using testing::IsEmpty;
+using testing::Not;
 
 StretchedTextPath MeasurePath(const Path& path) {
   Path::MeasuredPath measured = path.measure();
@@ -147,6 +149,28 @@ TEST(PlacedTextGeometryTest, StretchJoinsOneSidedNormalsAcrossSharpCorner) {
   EXPECT_THAT(warpedForward.points(), Contains(Vector2Near(12.0, 0.0)));
   EXPECT_THAT(warpedReverse.points(), Contains(Vector2Near(8.0, 0.0)));
   EXPECT_THAT(warpedReverse.points(), Contains(Vector2Near(10.0, 2.0)));
+}
+
+TEST(PlacedTextGeometryTest, StretchReverseEdgeSamplesExactSharpCornerBoundary) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 10.0))
+                         .build();
+  const Path reverseEdge =
+      PathBuilder().moveTo(Vector2d(15.0, -2.0)).lineTo(Vector2d(0.0, -2.0)).build();
+  const Path rectangle = PathBuilder().addRect(Box2d::FromXYWH(0.0, -2.0, 15.0, 4.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 0.0;
+  const StretchedTextPath mapping = MeasurePath(route);
+
+  const Path warpedReverse = WarpGlyphOutline(reverseEdge, mapping, glyph, 0.05);
+  const Path warpedRectangle = WarpGlyphOutline(rectangle, mapping, glyph, 0.05);
+
+  ASSERT_THAT(warpedReverse.commands(), Not(IsEmpty()));
+  EXPECT_THAT(warpedReverse.points(), Contains(Vector2Near(12.0, 0.0)));
+  EXPECT_THAT(warpedReverse.points(), Contains(Vector2Near(10.0, -2.0)));
+  EXPECT_THAT(warpedRectangle.commands(), Not(IsEmpty()));
 }
 
 TEST(PlacedTextGeometryTest, StretchQuadraticCrossesSharpCornerWithNormalOffset) {

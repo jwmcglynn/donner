@@ -31,6 +31,12 @@ inline bool FiniteOutline(const Path& outline) {
   });
 }
 
+inline bool ValidMappedPointInput(const TextGlyph& glyph, const Vector2d& point) {
+  return glyph.textPathOrigin && std::isfinite(*glyph.textPathOrigin) &&
+         std::isfinite(glyph.textPathNormalOffset) && std::isfinite(point.x) &&
+         std::isfinite(point.y);
+}
+
 inline bool CrossesBoundary(double start, double end, double boundary) {
   return start < end ? boundary > start && boundary < end : boundary < start && boundary > end;
 }
@@ -73,16 +79,14 @@ inline Path::PointOnPath Sample(
                         : SampleOpen(mapping, distance, length, boundarySide);
 }
 
-inline std::optional<Vector2d> Point(
+inline std::optional<Vector2d> PointAtDistance(
     const StretchedTextPath& mapping, const TextGlyph& glyph, const Vector2d& point,
+    double distance,
     Path::MeasuredPath::BoundarySide boundarySide = Path::MeasuredPath::BoundarySide::Incoming) {
-  if (!glyph.textPathOrigin || !std::isfinite(*glyph.textPathOrigin) ||
-      !std::isfinite(glyph.textPathNormalOffset) || !std::isfinite(point.x) ||
-      !std::isfinite(point.y)) {
+  if (!ValidMappedPointInput(glyph, point) || !std::isfinite(distance)) {
     return std::nullopt;
   }
-  const auto sample =
-      Sample(mapping, mapping.startOffset + *glyph.textPathOrigin + point.x, boundarySide);
+  const auto sample = Sample(mapping, distance, boundarySide);
   const double normal = glyph.textPathNormalOffset + point.y;
   if (!sample.valid || !std::isfinite(sample.angle) || !std::isfinite(normal)) {
     return std::nullopt;
@@ -90,6 +94,16 @@ inline std::optional<Vector2d> Point(
   const Vector2d result(sample.point.x - std::sin(sample.angle) * normal,
                         sample.point.y + std::cos(sample.angle) * normal);
   return std::isfinite(result.x) && std::isfinite(result.y) ? std::optional(result) : std::nullopt;
+}
+
+inline std::optional<Vector2d> Point(
+    const StretchedTextPath& mapping, const TextGlyph& glyph, const Vector2d& point,
+    Path::MeasuredPath::BoundarySide boundarySide = Path::MeasuredPath::BoundarySide::Incoming) {
+  if (!glyph.textPathOrigin || !std::isfinite(*glyph.textPathOrigin)) {
+    return std::nullopt;
+  }
+  return PointAtDistance(mapping, glyph, point,
+                         mapping.startOffset + *glyph.textPathOrigin + point.x, boundarySide);
 }
 
 inline bool AppendTransformed(PathBuilder& builder, const Path::Command& command,
@@ -168,6 +182,10 @@ private:
                               Path::MeasuredPath::BoundarySide boundarySide) const {
     return Point(mapping_, glyph_, point, boundarySide);
   }
+  std::optional<Vector2d> mapBoundary(const Vector2d& point, double sampleDistance,
+                                      Path::MeasuredPath::BoundarySide boundarySide) const {
+    return PointAtDistance(mapping_, glyph_, point, sampleDistance, boundarySide);
+  }
   bool moveTo(size_t index) {
     current_ = points_[index];
     subpathStart_ = current_;
@@ -201,6 +219,10 @@ private:
     double endDistance = 0.0;
     bool increasing = false;
     Path::MeasuredPath::BoundarySide arrivalSide = Path::MeasuredPath::BoundarySide::Incoming;
+  };
+  struct Boundary {
+    double traversalDistance = 0.0;
+    double sampleDistance = 0.0;
   };
 
   std::optional<LineState> beginLine(const Vector2d& end) {
@@ -248,7 +270,7 @@ private:
     return true;
   }
   bool appendBoundaryIntervals(const Vector2d& end, double startDistance, double endDistance,
-                               bool increasing, std::span<const double> boundaries,
+                               bool increasing, std::span<const Boundary> boundaries,
                                Vector2d& intervalStart, std::optional<Vector2d>& mappedStart) {
     if (end.x == current_.x) {
       return true;
@@ -257,14 +279,15 @@ private:
                                            : Path::MeasuredPath::BoundarySide::Outgoing;
     const auto afterBoundary = increasing ? Path::MeasuredPath::BoundarySide::Outgoing
                                           : Path::MeasuredPath::BoundarySide::Incoming;
-    for (const double boundary : boundaries) {
-      const double t = (boundary - startDistance) / (endDistance - startDistance);
+    for (const Boundary& boundary : boundaries) {
+      const double t = (boundary.traversalDistance - startDistance) / (endDistance - startDistance);
       const Vector2d intervalEnd = current_ * (1.0 - t) + end * t;
-      const auto mappedEnd = map(intervalEnd, beforeBoundary);
+      const auto mappedEnd = mapBoundary(intervalEnd, boundary.sampleDistance, beforeBoundary);
       if (!mappedEnd || !appendAdaptive(intervalStart, intervalEnd, *mappedStart, *mappedEnd, 0u)) {
         return false;
       }
-      const auto mappedAfterBoundary = map(intervalEnd, afterBoundary);
+      const auto mappedAfterBoundary =
+          mapBoundary(intervalEnd, boundary.sampleDistance, afterBoundary);
       if (!mappedAfterBoundary || !appendBoundaryJoin(*mappedEnd, *mappedAfterBoundary)) {
         return false;
       }
@@ -303,8 +326,8 @@ private:
     builder_.lineTo(outgoing);
     return true;
   }
-  std::optional<std::vector<double>> crossedBoundaries(double start, double end) {
-    std::vector<double> result;
+  std::optional<std::vector<Boundary>> crossedBoundaries(double start, double end) {
+    std::vector<Boundary> result;
     if (start == end || mapping_.segmentEndDistances.empty()) {
       return result;
     }
@@ -320,7 +343,7 @@ private:
     }
     return result;
   }
-  bool appendBoundaryRange(std::vector<double>& result, double low, double high, double shift) {
+  bool appendBoundaryRange(std::vector<Boundary>& result, double low, double high, double shift) {
     const auto first = std::upper_bound(mapping_.segmentEndDistances.begin(),
                                         mapping_.segmentEndDistances.end(), low - shift);
     const auto last = std::lower_bound(first, mapping_.segmentEndDistances.end(), high - shift);
@@ -330,11 +353,11 @@ private:
       }
       --remainingWork_;
       --remainingBoundaryStorage_;
-      result.push_back(*it + shift);
+      result.push_back(Boundary{*it + shift, *it});
     }
     return true;
   }
-  bool appendClosedBoundaries(std::vector<double>& result, double low, double high) {
+  bool appendClosedBoundaries(std::vector<Boundary>& result, double low, double high) {
     const double length = mapping_.measuredPath.pathLength();
     const double firstPeriod = std::floor(low / length);
     const double lastPeriod = std::floor(high / length);
