@@ -300,3 +300,38 @@ verification on Linux validates the frozen bytes and producer provenance; it doe
 signature or GUI checks. Main preflight attests the ZIP, generated lock and NOTICE. Release
 verifies those exact subjects and uploads the retained ZIP and sidecars without rebuilding,
 repacking, signing or replacing published assets.
+
+## Developer ID signing of a published editor ZIP
+
+`sign_macos_release.yml` prepares a signed derivative without changing the release. Dispatch it
+from `main`. The helper pins the reviewed v0.8.0 release ID, tag, source commit, candidate-record
+selection and original ZIP/checksum asset IDs and hashes in trusted source. It accepts no alternate
+release or caller-supplied digest. The `donner-notarization` environment requires a maintainer's approval. Its secrets are
+`MACOS_CERTIFICATE_BASE64` (the exported PKCS#12 identity), `MACOS_CERTIFICATE_PASSWORD`,
+`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`.
+
+Before importing credentials, the job verifies the release asset IDs, sizes and digests, the tag's
+resolved commit, the ZIP's hosted BCR Preflight attestation, embedded build identity and existing
+ad-hoc signature. It retains the original ZIP, checksum and input receipt in an Actions artifact. Signing uses an isolated temporary
+keychain, Developer ID, secure timestamps and hardened runtime. The Apple submission ID is saved
+before waiting; rejected or timed-out submissions retain a status receipt for investigation without
+blind resubmission. Credential files and the temporary keychain are removed before the signing job
+ends. A separate read-only job runs the app's loader check with a minimal environment; it receives neither Apple
+credentials nor attestation permissions. A third job binds that verification to the exact signed
+bytes before attesting them.
+
+The signed ZIP retains its original filename and bundled licenses. Verification extracts it again,
+checks resource preservation, signatures, the stapled ticket and Gatekeeper acceptance, and exercises
+the invalid-option loader check. The signed ZIP and derivation receipt receive workflow attestations.
+Only the signed ZIP and its checksum belong on the public release; receipts and Apple diagnostics
+remain in Actions artifacts. A successful signing run does not publish anything or qualify the GUI.
+
+Replacement of an existing release asset is a separate maintainer operation. Preserve the original
+bytes and input receipt, verify the signing workflow's attestation and exact run/attempt, and test the
+app from the signed ZIP before replacement. Recheck the release ID, tag commit and original asset
+IDs/digests immediately before replacing only the editor ZIP and checksum under their original names.
+Download both replacements to verify their final bytes. Record the signing run and receipt digest in
+the release audit; the old candidate record continues to describe the original preflight bytes, not
+the signed derivative. Keep the source archive and tag unchanged. If replacement is interrupted,
+reconcile the two actual assets against the retained original and signed hashes before continuing or
+restoring the originals. Do not use the ordinary no-overwrite publisher to bypass these checks.

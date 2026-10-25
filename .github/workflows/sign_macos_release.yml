@@ -1,0 +1,125 @@
+name: Sign macOS release editor
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sign-editor-v0.8.0
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: xcode-27
+    timeout-minutes: 35
+    environment: donner-notarization
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Select pinned Xcode
+        run: tools/ci_select_macos_xcode.sh
+      - name: Download and verify the exact existing release package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B -m tools.release_macos_signing prepare --work "$RUNNER_TEMP/editor-signing"
+      - name: Preserve original release bytes before signing
+        uses: actions/upload-artifact@v7
+        with:
+          name: original-editor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/editor-signing/original/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Sign, notarize, staple and verify the extracted ZIP
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 -B -m tools.release_macos_signing sign --work "$RUNNER_TEMP/editor-signing"
+      - name: Preserve signed files for isolated verification
+        uses: actions/upload-artifact@v7
+        with:
+          name: signed-editor-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/editor-signing/signed/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Preserve Apple notarization diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: editor-notarization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/editor-signing/notary-*.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  verify:
+    needs: sign
+    runs-on: xcode-27
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed-editor-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signed-editor
+      - name: Verify signed package without Apple credentials
+        run: python3 -B -m tools.release_macos_signing verify --work "$RUNNER_TEMP/signed-editor"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed-editor-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signed-editor/verification.json
+          if-no-files-found: error
+          retention-days: 90
+
+  attest:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed-editor-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signed-editor
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed-editor-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signed-editor
+      - name: Bind verification to the bytes being attested
+        run: python3 -B -m tools.release_macos_signing check-verification --work "$RUNNER_TEMP/signed-editor"
+      - name: Attest the signed ZIP, derivation receipt and verification
+        uses: actions/attest-build-provenance@v3.2.0
+        with:
+          subject-path: |
+            ${{ runner.temp }}/signed-editor/donner-editor_darwin_arm64.zip
+            ${{ runner.temp }}/signed-editor/receipt.json
+            ${{ runner.temp }}/signed-editor/verification.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed-editor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signed-editor/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0

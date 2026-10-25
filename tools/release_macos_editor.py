@@ -342,9 +342,9 @@ def _roundtrip(path: Path, files: dict) -> None:
         _check_entrypoint(root / BUNDLE)
 
 
-def _check_entrypoint(app: Path) -> None:
+def _check_entrypoint(app: Path, environment: dict | None = None) -> None:
     option = "--donner-release-loader-check"
-    environment = {key: value for key, value in os.environ.items()
+    environment = {key: value for key, value in (os.environ if environment is None else environment).items()
                    if not key.startswith(("DYLD_", "RUNFILES_"))
                    and key not in {"BUILD_WORKING_DIRECTORY", "BUILD_WORKSPACE_DIRECTORY",
                                    "LD_LIBRARY_PATH", "JAVA_RUNFILES", "PYTHON_RUNFILES"}}

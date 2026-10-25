@@ -654,7 +654,23 @@ py_test(
 py_library(
     name = "release_macos_editor",
     srcs = ["release_macos_editor.py"],
-    deps = [":bcr_source", ":release_cli"],
+    deps = [
+        ":bcr_source",
+        ":release_cli",
+    ],
+)
+
+py_library(
+    name = "release_macos_signing",
+    srcs = ["release_macos_signing.py"],
+    deps = [":release_macos_editor"],
+)
+
+py_test(
+    name = "release_macos_signing_tests",
+    size = "small",
+    srcs = ["release_macos_signing_tests.py"],
+    deps = [":release_macos_signing"],
 )
 
 py_library(
@@ -710,7 +726,11 @@ py_test(
     size = "small",
     srcs = ["release_macos_editor_tests.py"],
     data = ["BUILD.bazel"],
-    deps = [":release_macos_editor", ":release_candidate", ":bcr_preflight"],
+    deps = [
+        ":bcr_preflight",
+        ":release_candidate",
+        ":release_macos_editor",
+    ],
 )
 
 py_test(
