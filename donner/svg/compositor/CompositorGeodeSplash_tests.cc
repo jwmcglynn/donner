@@ -994,6 +994,35 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
   }
 }
 
+TEST(CompositorGeodeSplashTest, MaskedChildDragPreservesOwnerCircleClip) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+      <defs>
+        <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+          <rect width="96" height="96" fill="white"/>
+        </mask>
+      </defs>
+      <g id="owner" mask="url(#m)" style="clip-path: circle(22px at 48px 48px) view-box">
+        <rect x="16" y="16" width="64" height="64" fill="#0a0"/>
+        <rect id="target" x="24" y="24" width="30" height="30" fill="#c00"/>
+      </g>
+    </svg>)svg";
+  const RenderViewport viewport{Vector2d(96, 96)};
+  const auto held = RunHeldMaskedDrag(kSource, "#owner", "#target", Vector2d(6, 0), 1, viewport);
+  EXPECT_EQ(held.fastPathFrames, 0u);
+  EXPECT_EQ(held.slowPathFrames, 1u);
+  EXPECT_EQ(held.maskedChildComposeTiles, 0);
+  Vector2d referenceOffset;
+  const RendererBitmap reference =
+      FreshOwnerTexture(kSource, "#owner", "#target", Vector2d(6, 0), viewport, &referenceOffset);
+  ASSERT_FALSE(held.ownerTexture.empty());
+  ASSERT_FALSE(reference.empty());
+  EXPECT_EQ(held.ownerCanvasOffset, referenceOffset);
+  editor::tests::CompareBitmapToBitmap(held.ownerTexture, reference,
+                                       "circle_clipped_owner_drag_vs_full_render",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(CompositorGeodeSplashTest, MaskedChildDragUpdatesUseCopyOutsideTheOwner) {
   // A `use` copy of the dragged shape outside its masked owner must follow the shape on the
   // held frame, whichever path renders that frame.

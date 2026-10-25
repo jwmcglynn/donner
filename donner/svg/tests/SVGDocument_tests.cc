@@ -1694,6 +1694,20 @@ TEST(SVGDocument, TSpanTextEditInvalidatesAncestorTextRoot) {
   EXPECT_TRUE(dirtyFlags->test(components::DirtyFlagsComponent::TextGeometry));
 }
 
+TEST(SVGDocument, GlyphOrientationMutationInvalidatesAncestorTextGeometry) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="m"
+    writing-mode="vertical-rl"><tspan id="s">A</tspan></text></svg>)");
+  SVGElement tspan = document.querySelector("#s").value();
+  SVGElement text = document.querySelector("#m").value();
+  text.entityHandle().remove<components::DirtyFlagsComponent>();
+
+  tspan.setAttribute("glyph-orientation-vertical", "0");
+
+  const auto* dirtyFlags = text.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(dirtyFlags, nullptr);
+  EXPECT_TRUE(dirtyFlags->test(components::DirtyFlagsComponent::TextGeometry));
+}
+
 TEST(SVGDocument, StandaloneAnchorTextEditProjectsWithoutTextRoot) {
   // An <a> outside of text content carries text components but has no <text> root ancestor; the
   // invalidation walk terminates at the document root without finding one.

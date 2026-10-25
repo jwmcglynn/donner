@@ -21,12 +21,20 @@ function recorder() {
     window,
     performance: { timeOrigin: 1000, now: () => 1000000 },
   };
+  const predicates = /EM_JS\(int, (WorkerFrame\w+),\s*\(([\s\S]*?)\), \{([\s\S]*?)\n {6}\}\);/g;
+  let predicateCount = 0;
+  for (const [, name, signature, predicateBody] of source.matchAll(predicates)) {
+    const parameters = signature.split(",").map((parameter) => parameter.trim().match(/[A-Za-z_]\w*$/)[0]);
+    context[name] = vm.runInNewContext(`(function(${parameters.join(",")}) {${predicateBody}\n})`, context);
+    ++predicateCount;
+  }
+  assert.ok(predicateCount >= 4, "production completion predicates");
   context.RecordPresentedDocumentFrameStats = vm.runInNewContext(
     `(function(documentGeneration, frameVersion, presentedAtEpochMs, surfacePresented) {${statsBody[1]}\n})`,
     context,
   );
   const publish = vm.runInNewContext(
-    `(function($0, $1, $2, $3 = true) {${body[1]}\n})`,
+    `(function($0, $1, $2, $3 = true, $4 = 1, $5 = 1, $6 = 1, $7 = true) {${body[1]}\n})`,
     context,
   );
   return { window, publish, stats: () => window.__donnerPresentedDocumentStats };
@@ -46,7 +54,7 @@ test("only distinct presented document identities count, without worker-result t
   assert.equal(r.stats().samples.length, 3);
 });
 
-test("cadence uses the producer's presentation time, not delayed diagnostic delivery", () => {
+test("cadence uses GPU-completion observation time, not delayed diagnostic delivery", () => {
   const r = recorder();
   r.publish(1, 1, 1100);
   r.publish(1, 2, 1117);

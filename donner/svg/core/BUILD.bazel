@@ -42,6 +42,7 @@ cc_library(
         "Stroke.h",
         "TextAnchor.h",
         "TextDecoration.h",
+        "TextOrientation.h",
         "TransformOrigin.h",
         "UserAgentStylesheet.h",
         "VectorEffect.h",

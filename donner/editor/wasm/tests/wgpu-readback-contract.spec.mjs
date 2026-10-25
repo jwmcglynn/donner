@@ -81,6 +81,29 @@ const browserLibrarySource = await readFile(
   "utf8",
 );
 
+function productionPredicates(sourceText, prefix) {
+  const predicates = {};
+  const pattern = /EM_JS\(int, ([A-Za-z_][\w]*),\s*\(([\s\S]*?)\), \{([\s\S]*?)\n {6}\}\);/g;
+  for (const [, name, signature, body] of sourceText.matchAll(pattern)) {
+    if (!name.startsWith(prefix)) continue;
+    const parameters = signature.split(",").map((parameter) => parameter.trim().match(/[A-Za-z_]\w*$/)[0]);
+    predicates[name] = new Function(...parameters, body);
+  }
+  assert.ok(Object.keys(predicates).length > 0, `expected production ${prefix} predicates`);
+  return predicates;
+}
+
+const workerTimingPredicates = productionPredicates(renderCoordinatorSource, "WorkerResult");
+const workerFramePredicates = productionPredicates(workerBridgeSource, "WorkerFrame");
+
+function makeProductionPublisher(predicates, ...signatureAndBody) {
+  const body = signatureAndBody.pop();
+  return new Function(
+    ...Object.keys(predicates),
+    `return function(${signatureAndBody.join(",")}) {${body}\n};`,
+  )(...Object.values(predicates));
+}
+
 function extractAsyncFunction(sourceText, functionName) {
   const signature = `async function ${functionName}(`;
   const start = sourceText.indexOf(signature);
@@ -508,7 +531,7 @@ test("worker poll timestamps retain their producer clock across delayed proxy de
     /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
   )[0];
   const body = publisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
-  const publish = new Function(
+  const publish = makeProductionPublisher(workerTimingPredicates,
     "window",
     "$0",
     "$1",
@@ -516,7 +539,7 @@ test("worker poll timestamps retain their producer clock across delayed proxy de
     "HEAPF64",
     "_free",
     "UTF8ToString",
-    "performance",
+    "performance", "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0",
     body,
   );
   const count = Number(/kValueCount = (\d+)/.exec(publisher)[1]);
@@ -623,18 +646,19 @@ test("the first canvas frame after a polled result must carry that result", () =
     "surfacePresented",
     statsHelper[1],
   );
-  const publish = new Function(
+  const publish = makeProductionPublisher(workerFramePredicates,
     "window",
     "performance",
     "RecordPresentedDocumentFrameStats",
     "$0",
     "$1",
     "$2",
-    "$3",
+    "$3", "$4", "$5", "$6", "$7",
     body,
   );
   const frameClock = { timeOrigin: 1000, now: () => 250 };
-  const presentFrame = (window, generation, version, epochMs = 1200, surfacePresented = true) =>
+  const presentFrame = (window, generation, version, epochMs = 1200, surfacePresented = true,
+                        sequence = 2, producer = 1, capture = 22, currentProducer = true) =>
     publish(
       window,
       frameClock,
@@ -642,7 +666,7 @@ test("the first canvas frame after a polled result must carry that result", () =
       generation,
       version,
       epochMs,
-      Number(surfacePresented),
+      Number(surfacePresented), sequence, producer, capture, currentProducer,
     );
   const unpresented = {};
   presentFrame(unpresented, 2, 5, 1200, false);
@@ -650,7 +674,9 @@ test("the first canvas frame after a polled result must carry that result", () =
   presentFrame(unpresented, 2, 5, 900, true);
   assert.equal(unpresented.__donnerPresentedDocumentStats, undefined);
   const window = {
-    __donnerWorkerStats: { publishReason: "render-result", documentGeneration: 2, frameVersion: 5 },
+    __donnerWorkerStats: { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
+      captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 1,
+      presentationProducerGeneration: 1 },
   };
   const stats = window.__donnerWorkerStats;
   presentFrame(window, 2, 4);
@@ -673,7 +699,9 @@ test("the first canvas frame after a polled result must carry that result", () =
     "the count stops at the first frame that carries the result",
   );
 
-  const prompt = { publishReason: "render-result", documentGeneration: 3, frameVersion: 1 };
+  const prompt = { publishReason: "render-result", documentGeneration: 3, frameVersion: 1,
+    captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 1,
+    presentationProducerGeneration: 1 };
   window.__donnerWorkerStats = prompt;
   presentFrame(window, 3, 1);
   assert.deepEqual(
@@ -681,6 +709,69 @@ test("the first canvas frame after a polled result must carry that result", () =
     { presented: true, without: 0 },
     "a result carried by the first presented frame records zero frames without it",
   );
+
+  const backlog = { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
+    captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 10,
+    presentationProducerGeneration: 2 };
+  window.__donnerWorkerStats = backlog;
+  presentFrame(window, 2, 5, 1200, true, 10, 2, 11);
+  assert.deepEqual({ total: backlog.framesPresentedWithoutResult,
+    backlog: backlog.preexistingFramesCompleted, eligible: backlog.postPollFramesCompletedWithoutResult,
+    presented: backlog.resultFramePresented },
+    { total: 1, backlog: 1, eligible: undefined, presented: undefined });
+  presentFrame(window, 2, 5, 1210, true, 11, 2, 22);
+  assert.deepEqual({ total: backlog.framesPresentedWithoutResult,
+    backlog: backlog.preexistingFramesCompleted, eligible: backlog.postPollFramesCompletedWithoutResult,
+    presented: backlog.resultFramePresented },
+    { total: 1, backlog: 1, eligible: 0, presented: true },
+    "retained older backlog is distinct from a correct first post-poll admission");
+
+  assert.equal(backlog.resultFrameCompletedAtMs, 210,
+    "same-version capture B publishes its own completion time independently of cadence A");
+  assert.equal(window.__donnerPresentedDocumentStats.lastPresentedAtMs, 200,
+    "version cadence remains deduplicated while capture completion advances");
+
+  const reused = { ...backlog, resultFramePresented: undefined, framesPresentedWithoutResult: 0,
+    preexistingFramesCompleted: 0, postPollFramesCompletedWithoutResult: 0 };
+  window.__donnerWorkerStats = reused;
+  presentFrame(window, 2, 5, 1200, true, 10, 1, 22, false);
+  assert.equal(reused.resultFramePresented, undefined, "an old producer's token collision is backlog");
+  assert.equal(reused.framesPresentedWithoutResult, 1);
+  presentFrame(window, 2, 5, 1210, true, 11, 2, 11);
+  assert.equal(reused.resultFramePresented, undefined, "equal versions cannot hide a stale capture");
+  assert.equal(reused.postPollFramesCompletedWithoutResult, 1);
+  presentFrame(window, 2, 5, 1220, true, 12, 2, 22);
+  assert.equal(reused.resultFramePresented, true);
+  assert.equal(reused.framesPresentedWithoutResult, 2);
+
+  for (const invalidAt of [NaN, Infinity, 900]) {
+    const invalid = { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
+      captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 1,
+      presentationProducerGeneration: 1 };
+    window.__donnerWorkerStats = invalid;
+    presentFrame(window, 2, 5, invalidAt);
+    assert.equal(invalid.resultFramePresented, undefined,
+      "invalid or negative completion times cannot qualify a capture");
+    assert.equal(invalid.resultFrameCompletedAtMs, undefined);
+  }
+
+  const detached = { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
+    captureId: 22, presentationBoundaryKnown: true, presentationAdmissionSequence: 1,
+    presentationProducerGeneration: 1 };
+  window.__donnerWorkerStats = detached;
+  presentFrame(window, 2, 5, 1200, true, 2, 1, 22, false);
+  assert.equal(detached.resultFramePresented, undefined,
+    "a detached producer cannot qualify even its still-published prior result");
+  assert.equal(detached.preexistingFramesCompleted, 1);
+
+  const unknown = { publishReason: "render-result", documentGeneration: 2, frameVersion: 5,
+    captureId: 22, presentationBoundaryKnown: false };
+  window.__donnerWorkerStats = unknown;
+  presentFrame(window, 2, 5);
+  assert.equal(unknown.presentationBoundaryUnknown, true);
+  assert.equal(unknown.unattributedFramesCompleted, 1);
+  assert.equal(unknown.resultFramePresented, undefined, "missing boundaries never qualify ordering");
+  assert.equal(unknown.postPollFramesCompletedWithoutResult, undefined);
 
   const failure = { publishReason: "gpu-wait-failure", documentGeneration: 3, frameVersion: 1 };
   window.__donnerWorkerStats = failure;
@@ -691,12 +782,56 @@ test("the first canvas frame after a polled result must carry that result", () =
     /void PublishWorkerGpuWaitFailure\([\s\S]*?\n\}/,
   )[0];
   assert.match(failurePublisher, /delete stats\['resultFramePresented'\]/);
+  assert.match(failurePublisher, /delete stats\['resultFrameCompletedAtMs'\]/);
   assert.match(failurePublisher, /delete stats\['framesPresentedWithoutResult'\]/);
-  assert.match(
-    source,
-    /window\.lastFullyPresentedDocumentFrame_ = documentIdentity;[\s\S]{0,600}PublishPresentedDocumentFrame\(documentIdentity\.documentGeneration,/,
-    "only a fully presented frame reports the document frame it carried",
+  const completed = source.match(
+    /void EditorWindow::recordCompletedDocumentFrame\([\s\S]*?\n\}/,
+  )?.[0];
+  assert.ok(completed, "the GPU-completion observer owns document publication");
+  assert.match(completed, /if \(!frame\.fullFramePresented\) \{\s*return;/,
+    "a partial frame is not a completed presentation");
+  assert.match(completed,
+    /isDeviceLost\(\)\) \{\s*observePresentationDeviceLoss\(device\);\s*return;/,
+    "a failed GPU watermark cannot publish successful presentation stats or acknowledgment");
+  assert.match(completed,
+    /PublishPresentedDocumentFrame\(frame\.documentGeneration,[\s\S]*if \(!currentProducer\) \{\s*return;[\s\S]*lastFullyPresentedDocumentFrame_ = identity;/,
+    "old producer completions stay visible without resurrecting their acknowledgment");
+  const acceptedStart = source.indexOf("    if (!present(guard)) {");
+  const acceptedEnd = source.indexOf("    completed = true;", acceptedStart);
+  assert.ok(acceptedStart >= 0 && acceptedEnd > acceptedStart, "the real CPU acceptance path");
+  assert.doesNotMatch(
+    source.slice(acceptedStart, acceptedEnd),
+    /lastFullyPresentedDocumentFrame_|PublishPresentedDocumentFrame|wakeEventLoopForPresentedDocument/,
+    "CPU present acceptance alone cannot publish or discharge a document wake",
   );
+});
+
+test("ordinary and deferred observations both publish retired document frames", () => {
+  const ordinary = source.match(
+    /bool EditorWindow::observePresentationCompletion\(\) \{[\s\S]*?\n\}/,
+  )?.[0];
+  const deferred = source.match(
+    /EditorWindow::PresentationProgress EditorWindow::pollDeferredPresentation\(\) \{[\s\S]*?\n\}/,
+  )?.[0];
+  for (const [path, observation] of [["ordinary", ordinary], ["deferred", deferred]]) {
+    assert.ok(observation, `${path} completion path exists`);
+    assert.match(observation, /recordCompletedDocumentFrame\(frame\)/,
+      `${path} retirement delivers every frame to the document observer`);
+    assert.match(observation, /device\.lastProgress\(\), onCompleted\)/,
+      `${path} native observation retains its retirement observer`);
+  }
+  assert.match(ordinary, /\},\s*onCompleted\)/,
+    "browser timeout confirmation retains the same per-frame observer");
+  assert.match(deferred, /observe\(completed, now, std::nullopt, onCompleted\)/,
+    "the non-drawing browser progress poll cannot silently consume completed documents");
+  assert.match(deferred,
+    /presentationWasDeferred_ \|\| presentationSubmissions_\.pendingCount\(\) != 0/,
+    "accepted frames retain completion observation even below the admission bound");
+  const commit = source.match(/struct SubmissionFenceCommit \{[\s\S]*?\n\};/)?.[0];
+  assert.ok(commit, "the submission fence commit owns the progress pulse");
+  assert.match(commit,
+    /queue\.submitted\(stamp\);[\s\S]*if \(fullFramePresented\) \{\s*whole_app_worker::RequestPresentationProgress\(\)/,
+    "a completed-frame obligation arms the existing pulse after its fence is queued");
 });
 
 test("the presentation timeline rides the queue-stats proxy call and stays bounded", () => {
@@ -733,7 +868,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
   assert.ok(timingPublisher);
   assert.ok(acceptedPublisher);
   const body = (method) => method.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
-  const publishTiming = new Function(
+  const publishTiming = makeProductionPublisher(workerTimingPredicates,
     "window",
     "$0",
     "$1",
@@ -741,7 +876,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
     "HEAPF64",
     "_free",
     "UTF8ToString",
-    "performance",
+    "performance", "$3 = false", "$4 = 0", "$5 = 0", "$6 = 0",
     body(timingPublisher[0]),
   );
   const publishAccepted = new Function("window", "$0", "$1", "$2", body(acceptedPublisher[0]));
@@ -778,6 +913,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
   assert.deepEqual(released, [0], "the asynchronous publication frees its owned buffer once");
   const stats = window.__donnerWorkerStats;
   assert.equal(stats.completedResults, 9);
+  assert.equal(stats.presentationBoundaryKnown, false, "omitted native metadata stays unknown");
   assert.deepEqual([
     stats.compositorReadbackTotal,
     stats.tileHandoffReadbackTotal,
@@ -1559,5 +1695,44 @@ test("selection chrome probe refreshes stale captures without flooding pending r
         assert.deepEqual(observations, [0, 0, 0, 0, 0]);
       }
     });
+  }
+});
+
+
+test("production worker boundary predicates reject missing and unsafe identities", () => {
+  const known = workerTimingPredicates.WorkerResultBoundaryKnown;
+  for (const [supplied, sequence, producer, capture, expected] of [
+    [true, 0, 0, 1, true],
+    [false, 0, 0, 1, false],
+    [true, -1, 0, 1, false],
+    [true, Number.NaN, 0, 1, false],
+    [true, Number.MAX_SAFE_INTEGER + 1, 0, 1, false],
+    [true, 1, Number.POSITIVE_INFINITY, 1, false],
+    [true, 1, 0, 0, false],
+    [true, 1, 0, Number.MAX_SAFE_INTEGER + 1, false],
+  ]) {
+    assert.equal(Boolean(known(supplied, sequence, producer, capture)), expected);
+  }
+  const completion = workerFramePredicates.WorkerFrameBoundaryKnown;
+  assert.equal(Boolean(completion(true, 0, 0)), false);
+  assert.equal(Boolean(completion(true, 1, 0)), true);
+  assert.equal(Boolean(completion(true, 1, -1)), false);
+  assert.equal(Boolean(completion(true, Number.NaN, 0)), false);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameSameProducer(false, 1, 1)), false);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameSameProducer(true, 1, 2)), false);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameEligible(true, true, 2, 1)), true);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameEligible(true, true, 1, 1)), false);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameEligible(false, true, 2, 1)), false);
+  assert.equal(Boolean(workerFramePredicates.WorkerFrameIdentityMatches(1, 2, 3, 1, 2, 4)), false);
+});
+
+
+test("production completion-time predicate preserves finite nonnegative timestamps", () => {
+  const valid = workerFramePredicates.WorkerFrameCompletionTimeValid;
+  for (const [completedAt, expected] of [
+    [0, true], [-0, true], [10, true], [-1, false],
+    [Number.NaN, false], [Number.POSITIVE_INFINITY, false], [undefined, false],
+  ]) {
+    assert.equal(Boolean(valid(completedAt)), expected);
   }
 });

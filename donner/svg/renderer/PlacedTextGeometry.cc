@@ -191,22 +191,11 @@ void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
 std::optional<Box2d> TextGlyphCellBounds(const TextRun& run, const TextGlyph& glyph, double emTop,
                                          double emBottom) {
   if (!run.stretchedTextPath || !glyph.textPathOrigin) {
-    return Box2d::FromXYWH(glyph.xPosition, glyph.yPosition - emTop, glyph.xAdvance,
-                           emTop + emBottom);
+    const double geometricScaleY = glyph.stretchScaleY;
+    return Box2d::FromXYWH(glyph.xPosition, glyph.yPosition - emTop * geometricScaleY,
+                           glyph.xAdvance, (emTop + emBottom) * geometricScaleY);
   }
-  Path localCell = PathBuilder()
-                       .moveTo(Vector2d(0.0, -emTop))
-                       .lineTo(Vector2d(glyph.xAdvance, -emTop))
-                       .lineTo(Vector2d(glyph.xAdvance, emBottom))
-                       .lineTo(Vector2d(0.0, emBottom))
-                       .closePath()
-                       .build();
-  const double rotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
-  if (rotation != 0.0) {
-    localCell = TransformPath(localCell,
-                              Transform2d::Rotate(rotation * MathConstants<double>::kPi / 180.0));
-  }
-  const Path warpedCell = WarpTextPathOutline(localCell, *run.stretchedTextPath, glyph);
+  const Path warpedCell = PlaceStretchedTextPathCell(run, glyph, emTop, emBottom);
   return warpedCell.empty() ? std::nullopt : std::optional(warpedCell.bounds());
 }
 

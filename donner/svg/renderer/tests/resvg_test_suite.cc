@@ -238,8 +238,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "Checkerboard exposes convolve alpha-math delta; measured minimal")},
                     {"edgeMode=wrap-with-matrix-larger-than-target.svg",
                      Params::RenderOnly("UB: wrap with oversized kernel")},
-                    {"kernelMatrix-with-zero-sum-and-no-divisor.svg",
-                     Params::RenderOnly("MatrixConvolution edge shift vs golden")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -449,6 +447,9 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/filter",
             {
+                {"invalid-FuncIRI.svg",
+                 Params::RenderOnly("Reference: PNG hides an invalid URL; Filter Effects ignores "
+                                    "the chain, covered by independent visible-geometry tests")},
                 // Pixelmatch 2.0 checkerboard exposes pre-existing filter-region
                 // compositing alpha deltas vs resvg that white-blending masked. Each
                 // threshold is the measured minimal passing hundredth at the
@@ -522,39 +523,62 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/filter-functions",
             {
+                {"one-invalid-url-in-list.svg",
+                 Params::RenderOnly(
+                     "Reference: PNG applies functions around a missing URL; "
+                     "Filter Effects ignores the entire chain, independently tested")},
                 {"color-adjust-functions-0percent.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly("Filtered geometry agrees; 354 default-text, 370 full-text, "
+                                    "375 Geode mismatches are only label glyphs (#1167, #1169)")},
                 {"color-adjust-functions-100percent.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly(
+                     "Filtered geometry agrees; label-only glyph reference differences, "
+                     "independently checked color contracts (#1167, #1169)")},
                 {"color-adjust-functions-2.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly(
+                     "Filtered geometry agrees; label-only glyph reference differences, "
+                     "independently checked color contracts (#1167, #1169)")},
                 {"color-adjust-functions-200percent.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly(
+                     "Filtered geometry agrees; label-only glyph reference differences, "
+                     "independently checked color contracts (#1167, #1169)")},
                 {"color-adjust-functions-50percent.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly(
+                     "Filtered geometry agrees; label-only glyph reference differences, "
+                     "independently checked color contracts (#1167, #1169)")},
                 {"color-adjust-functions-default-value.svg",
-                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                 Params::RenderOnly("Defaults agree with explicit amounts; remaining reference "
+                                    "differences are label glyphs (#1167, #1169)")},
                 {"color-adjust-functions-negative.svg",
-                 Params::Skip(
-                     "Triage: text labels differ after invalid negative filters are rejected")},
+                 Params::RenderOnly("Invalid negative declarations are rejected; remaining "
+                                    "reference differences are label glyphs (#1167, #1169)")},
                 {"drop-shadow-function-color-last.svg",
-                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
+                 Params::RenderOnly(
+                     "Offset/blur sampling differs from reference; color order and "
+                     "rounded-offset contracts compare independently (#1169, #1170)")},
                 {"drop-shadow-function-em-values.svg",
-                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
-                {"drop-shadow-function-filter-region.svg",
-                 Params::Skip("Triage: CSS drop-shadow filter-region oracle mismatch")},
+                 Params::RenderOnly("Resolved em lengths match px; fractional offset/blur sampling "
+                                    "differs from reference (#1169, #1170)")},
                 {"drop-shadow-function-mm-values.svg",
-                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
+                 Params::RenderOnly("Resolved mm lengths match px; fractional offset/blur sampling "
+                                    "differs from reference (#1169, #1170)")},
                 {"drop-shadow-function-no-color.svg",
-                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
+                 Params::RenderOnly("Omitted color resolves to currentColor; fractional "
+                                    "offset/blur sampling differs from reference (#1169, #1170)")},
                 {"drop-shadow-function.svg",
-                 Params::Skip("Triage: CSS drop-shadow output oracle mismatch")},
+                 Params::RenderOnly(
+                     "Offset/blur sampling differs from reference; rounded-offset and "
+                     "alpha contracts compare independently (#1169, #1170)")},
                 {"two-exact-urls.svg",
-                 Params::Skip("Triage: chained CSS filter URL reference oracle mismatch")},
+                 Params::RenderOnly("Valid repeated filter URL; reference is the UB marker, with "
+                                    "independent equivalent-graph comparison (#1169)")},
                 {"two-urls.svg",
-                 Params::Skip("Triage: chained CSS filter URL reference oracle mismatch")},
+                 Params::RenderOnly(
+                     "Chained flood/blur differs at filter-region boundary; equivalent primitive "
+                     "graph is the independent oracle (#1169, #1170)")},
                 {"url-and-grayscale.svg",
-                 Params::Skip("Triage: mixed CSS filter URL and function oracle mismatch")},
+                 Params::RenderOnly("CSS grayscale must use sRGB (center115); historical "
+                                    "mixed-chain reference uses linearRGB-like center122 (#1169)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -597,11 +621,11 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::RenderOnly("UB: on root `<svg>` without size")},
 
                     {"circle-shorthand-with-stroke-box.svg",
-                     Params::Skip("Bug: clipPath edge cases beyond core support")},
+                     Params::RenderOnly("Opaque reference background differs from transparent "
+                                        "RGBA output; independent circle stroke-box contracts")},
                     {"circle-shorthand-with-view-box.svg",
-                     Params::Skip("Bug: clipPath edge cases beyond core support")},
-                    {"circle-shorthand.svg",
-                     Params::Skip("Bug: clipPath edge cases beyond core support")},
+                     Params::RenderOnly("Opaque reference background differs from transparent "
+                                        "RGBA output; independent circle view-box contracts")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -944,8 +968,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"arcs.svg",
                      Params::RenderOnly("SVG Strokes draft arcs is not implemented: documented "
                                         "miter fallback; reference is the UB marker (#1186)")},
-                    {"miter-clip.svg",
-                     Params::RenderOnly("UB (SVG 2), no UA supports `miter-clip`")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1170,9 +1192,10 @@ INSTANTIATE_TEST_SUITE_P(
                               "upscaling (current resvg); Donner uses bilinear (0021 B3)")},
 
                 {"embedded-svg-with-text.svg",
-                 Params::Skip("Golden mismatch: resvg parses <image>-embedded SVGs with an empty "
-                              "fontdb so its golden renders no text; Donner renders the text "
-                              "(0021 B3)")},
+                 Params::RenderOnly(
+                     "The vendored reference omits the embedded SVG's text. Donner renders it "
+                     "with the document font catalog; an authored embedded-versus-direct "
+                     "identity test pins that policy (0021 B3)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1311,10 +1334,9 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::RenderOnly("UB: golden is a UB placeholder image")},
 
                     {"hanging-on-vertical.svg",
-                     Params::Skip("Bug: mixed-script vertical flow (upright CJK + rotated Latin) "
-                                  "column geometry differs from resvg; alignment-baseline is "
-                                  "correctly ignored in vertical mode. Same gap as the "
-                                  "text/writing-mode mixed-languages-with-tb skip.")},
+                     Params::Skip("Reference limitation: resvg does not apply alignment-baseline "
+                                  "in vertical layout; Donner follows the vertical baseline axis "
+                                  "and still differs in mixed upright/sideways glyph geometry.")},
                     {"two-textPath-with-middle-on-first.svg",
                      Params().withMaxPixelsDifferent(200).withReason(
                          "Sub-pixel glyph placement along the two paths; ~108 scattered "
@@ -1548,10 +1570,9 @@ INSTANTIATE_TEST_SUITE_P(
     TextGlyphOrientationVertical, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
                 "text/glyph-orientation-vertical",
-                {
-                    {"simple-case.svg",
-                     Params::Skip("Not impl: glyph-orientation-vertical (deprecated SVG 1.1)")},
-                })),
+                {{"simple-case.svg", Params::Skip("upright Latin reference comparison remains "
+                                                  "unresolved after orientation and cell-metric "
+                                                  "coverage")}})),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 

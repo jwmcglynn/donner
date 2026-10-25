@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <utility>
 
 #include "donner/base/BezierUtils.h"
 #include "donner/base/Path.h"
@@ -561,6 +562,32 @@ inline Path WarpTextPathOutline(const Path& outline, const StretchedTextPath& ma
   return mapping.linear && glyph.textPathOrigin
              ? text_path_warp_details::LinearOutline(outline, mapping, glyph)
              : text_path_warp_details::GeneralOutline(outline, mapping, glyph, tolerance);
+}
+
+/// Apply glyph-local authored rotation and the shared nonlinear text-path mapping.
+inline Path PlaceStretchedTextPathOutline(Path outline, const TextRun& run, const TextGlyph& glyph,
+                                          double tolerance = kDefaultTextPathWarpTolerance) {
+  if (!run.stretchedTextPath || !glyph.textPathOrigin) {
+    return Path();
+  }
+  const double rotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
+  if (rotation != 0.0) {
+    outline =
+        outline.transformed(Transform2d::Rotate(rotation * MathConstants<double>::kPi / 180.0));
+  }
+  return WarpTextPathOutline(outline, *run.stretchedTextPath, glyph, tolerance);
+}
+
+/// Build and place the full-font glyph cell for a stretched horizontal run.
+inline Path PlaceStretchedTextPathCell(const TextRun& run, const TextGlyph& glyph, double emTop,
+                                       double emBottom,
+                                       double tolerance = kDefaultTextPathWarpTolerance) {
+  const double geometricScaleY = glyph.stretchScaleY;
+  Path cell = PathBuilder()
+                  .addRect(Box2d::FromXYWH(0.0, -emTop * geometricScaleY, glyph.xAdvance,
+                                           (emTop + emBottom) * geometricScaleY))
+                  .build();
+  return PlaceStretchedTextPathOutline(std::move(cell), run, glyph, tolerance);
 }
 
 }  // namespace donner::svg

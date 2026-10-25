@@ -39,6 +39,12 @@ bool SourceWithinOutlineBudget(const Path& path, std::size_t maxVerbs, std::size
 std::optional<Transform2d> ClipUnitsTransform(
     const SVGGraphicsElement& owner, Registry& registry,
     const components::RenderingInstanceComponent& instance) {
+  if (instance.basicClipPath) {
+    return Transform2d();
+  }
+  if (!instance.clipPath) {
+    return std::nullopt;
+  }
   if (instance.clipPath->units == ClipPathUnits::UserSpaceOnUse) {
     return Transform2d();
   }
@@ -69,7 +75,7 @@ std::optional<SimpleClipSource> ResolveSimpleClipSource(
     const SVGGraphicsElement& owner, Registry& registry,
     const components::RenderingInstanceComponent& instance, std::size_t maxVerbs,
     std::size_t maxPoints, std::size_t maxBytes) {
-  if (!instance.clipPath.has_value() || !instance.clipPath->valid()) {
+  if (!instance.hasClipPath() || (instance.clipPath && !instance.clipPath->valid())) {
     return std::nullopt;
   }
   const auto* computed =
@@ -136,7 +142,7 @@ std::optional<Path> SVGGraphicsElement::resolvedSimpleClipPathOutline(std::size_
     return std::nullopt;
   }
   if (hasClipPath != nullptr) {
-    *hasClipPath = instance->clipPath.has_value();
+    *hasClipPath = instance->hasClipPath();
   }
   const std::optional<SimpleClipSource> source =
       ResolveSimpleClipSource(*this, registry, *instance, maxVerbs, maxPoints, maxBytes);

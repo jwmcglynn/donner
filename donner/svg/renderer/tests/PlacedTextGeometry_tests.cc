@@ -61,6 +61,34 @@ TEST(PlacedTextGeometryTest, StretchIsIdentityOnHorizontalPathIncludingTangentEx
               ElementsAre(Vector2Near(-2.0, -3.0), Vector2Near(5.0, 4.0), Vector2Near(12.0, -1.0)));
 }
 
+TEST(PlacedTextGeometryTest, GlyphCellBoundsApplyGeometricVerticalScaleBeforePathWarp) {
+  Registry registry;
+  FontManager manager(registry);
+  TextEngine engine(manager, registry);
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(5.0, 0.0))
+                         .lineTo(Vector2d(5.0, 20.0))
+                         .build();
+  TextRun run;
+  run.usedFontSizePx = 8.0f;
+  TextGlyph glyph;
+  glyph.glyphIndex = 1;
+  glyph.textPathOrigin = 0.0;
+  glyph.xAdvance = 10.0;
+  glyph.stretchScaleY = 2.0f;
+  run.glyphs.push_back(glyph);
+
+  const Box2d ordinaryBounds = ComputeTextBounds(engine, {run});
+  run.stretchedTextPath = std::make_shared<StretchedTextPath>(MeasurePath(route));
+  const Box2d pathBounds = ComputeTextBounds(engine, {run});
+
+  EXPECT_THAT(ordinaryBounds, BoxEq(Vector2d(0.0, -16.0), Vector2d(10.0, 0.0)));
+  // Across the corner, the scaled 16-unit normal extends X to 21 while the ten-unit advance
+  // reaches Y=5 on the outgoing segment.
+  EXPECT_THAT(pathBounds, BoxEq(Vector2d(0.0, -16.0), Vector2d(21.0, 5.0)));
+}
+
 TEST(PlacedTextGeometryTest, StretchRejectsNonfiniteGlyphCoordinates) {
   const Path route = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(10.0, 0.0)).build();
   const Path outline = PathBuilder()

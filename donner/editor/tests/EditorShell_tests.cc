@@ -3042,7 +3042,7 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   if (!window.valid()) {
     GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
   }
-  std::uint64_t completedSerial = 0;
+  std::uint64_t completedSerial = std::numeric_limits<std::uint64_t>::max();
   window.setPresentationCompletionProbeForTesting([&] { return completedSerial; });
 
   EditorShellOptions options = OptionsWithSource(
@@ -3060,6 +3060,7 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   }
   const auto oldPresentation = window.lastFullyPresentedDocumentFrame();
   ASSERT_TRUE(oldPresentation.has_value());
+  completedSerial = 0;
   ASSERT_FALSE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
 
   EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
@@ -3072,7 +3073,8 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
       EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
 
   bool adopted = false;
-  for (int attempt = 0; attempt < 200; ++attempt) {
+  const auto adoptionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < adoptionDeadline) {
     shell.prepareFrame();
     RunShellFrame(window, shell);
     if (EditorShellTestAccess::DisplayedDocVersion(shell) ==
@@ -3129,11 +3131,12 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial);
 
-  // Only a fully drawn and presented frame carrying the matching adopted capture releases new
+  // Only a GPU-complete frame carrying the matching adopted capture releases new
   // preview work. Cached previews and the pending queues remain available throughout the hold.
   EditorShellTestAccess::InstallFramePresentation(shell, acceptedFrame);
   window.beginFrame();
   window.endFrame();
+  window.pollIdleGpu();
   EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial + 1u);
   ASSERT_TRUE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   window.beginFrame();
@@ -3222,6 +3225,7 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
   window.setPresentationCompletionProbeForTesting([&] { return completedSerial; });
 
   gui::EditorWindow::PresentedDocumentFrameIdentity firstIdentity;
+  std::uint64_t previousProducerSerial = 0;
   // Each shell holds its canvas-commit debounce. On a slow host it can elapse within the loops
   // below, and the render-tree rebuild after a HiDPI commit adopts a second capture, so the
   // identities compared here would depend on host speed. The commit is not part of this contract.
@@ -3254,6 +3258,7 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
       RunShellFrame(window, first);
     }
     ASSERT_EQ(window.lastFullyPresentedDocumentFrame(), firstIdentity);
+    previousProducerSerial = window.geodeFramebufferDevice()->runtimeDevice().lastSubmittedSerial();
   }
 
   EditorShell second(window, OptionsWithSource(kInitialSvg));
@@ -3295,6 +3300,18 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
   EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(second), layerRendersBefore);
   EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(second), previewRequestsBefore);
   EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(second), 1u);
+
+  completedSerial = previousProducerSerial;
+  window.pollIdleGpu();
+  EXPECT_THAT(EditorShellTestAccess::ForegroundPresentationAcknowledged(second), testing::IsFalse())
+      << "old producer completions cannot acknowledge a reused document/capture token";
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_THAT(EditorShellTestAccess::ForegroundPresentationAcknowledged(second), testing::IsFalse())
+      << "the new producer's accepted frame is still waiting for GPU completion";
+  completedSerial = std::numeric_limits<std::uint64_t>::max();
+  window.pollIdleGpu();
+  EXPECT_THAT(EditorShellTestAccess::ForegroundPresentationAcknowledged(second), testing::IsTrue());
 }
 #endif
 
@@ -6967,15 +6984,24 @@ TEST(EditorShellTest, SidebarRefreshWaitsForRendererWakeInsteadOfRequestingFrame
   EXPECT_TRUE(EditorShellTestAccess::SidebarSnapshotRefreshPending(shell));
   ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
 
-  // Drive the loop the way the browser does: a frame runs only for an outstanding wake. The
-  // renderer's completion wake must carry the owed refresh to an idle frame.
+  // Keep native frames wake-driven while preserving the event loop's non-drawing GPU idle
+  // progress. The renderer or completed presentation must wake the owed refresh into an idle
+  // frame; the browser's separate progress pulse is covered by browser runtime tests.
   renderer.setReplayDocumentAccessBlockedForTesting(false);
   const tests::HangGuard completionGuard;
   std::uint64_t consumedWakeSerial = blockedWakeSerial;
+  auto nextGpuIdlePoll = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
   for (int frame = 0; frame < 20 && EditorShellTestAccess::SidebarSnapshotRefreshPending(shell);
        ++frame) {
     while (window.wakeEventLoopRequestSerialForTesting() == consumedWakeSerial &&
            completionGuard.active()) {
+      // The native event loop polls pending GPU work on its 100 ms idle timer, even without an
+      // input wake. Observe completion here too; only its real wake may admit the next frame.
+      const auto now = std::chrono::steady_clock::now();
+      if (window.hasIdleGpuWork() && now >= nextGpuIdlePoll) {
+        window.pollIdleGpu();
+        nextGpuIdlePoll = now + std::chrono::milliseconds(100);
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_GT(window.wakeEventLoopRequestSerialForTesting(), consumedWakeSerial)

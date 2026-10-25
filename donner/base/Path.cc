@@ -2237,13 +2237,62 @@ void EmitRoundJoinPiece(const Vector2d& vertex, const Vector2d& previousOuterNor
   EmitPositiveStrokePiece(std::move(points), builder);
 }
 
+/// Emits a miter clipped along its angle bisector when the limit lies beyond the bevel edge.
+bool EmitClippedMiterPiece(const Vector2d& vertex, const Vector2d& previousOuterNormal,
+                           const Vector2d& currentOuterNormal, double halfWidth, double limit,
+                           PathBuilder& builder) {
+  const Vector2d sum = previousOuterNormal + currentOuterNormal;
+  const double sumLength = std::hypot(sum.x, sum.y);
+  const double cosine = sumLength * 0.5;
+  const double denominator = 1.0 - cosine * cosine;
+  if (!std::isfinite(limit) || limit <= cosine || denominator <= 0.0) {
+    return false;
+  }
+  const double distance = cosine > 0.0 ? std::min(limit, 1.0 / cosine) : limit;
+  const double alongBisector = (distance - cosine) / denominator;
+  const double fraction = alongBisector * cosine;
+  const Vector2d bisector =
+      sumLength > 0.0 ? sum / sumLength : Vector2d(previousOuterNormal.y, -previousOuterNormal.x);
+  const Vector2d previousClipped =
+      previousOuterNormal * (1.0 - fraction) + bisector * alongBisector;
+  const Vector2d currentClipped = currentOuterNormal * (1.0 - fraction) + bisector * alongBisector;
+  EmitPositiveStrokePiece(
+      {vertex, vertex + previousOuterNormal * halfWidth, vertex + previousClipped * halfWidth,
+       vertex + currentClipped * halfWidth, vertex + currentOuterNormal * halfWidth},
+      builder);
+  return true;
+}
+
+/// Emits either the full miter, its clipped tip, or a bevel fallback.
+void EmitMiterJoinPiece(const Vector2d& vertex, const Vector2d& previousOuterNormal,
+                        const Vector2d& currentOuterNormal, double halfWidth,
+                        const StrokeStyle& style, PathBuilder& builder) {
+  const MiterResult miter =
+      computeMiterPoint(vertex, previousOuterNormal, currentOuterNormal, halfWidth);
+  const Vector2d previousOuter = vertex + previousOuterNormal * halfWidth;
+  const Vector2d currentOuter = vertex + currentOuterNormal * halfWidth;
+  if (miter.valid && miter.lengthFromVertex / halfWidth <= style.miterLimit) {
+    EmitPositiveStrokePiece({vertex, previousOuter, miter.point, currentOuter}, builder);
+  } else if (!(style.join == LineJoin::MiterClip &&
+               EmitClippedMiterPiece(vertex, previousOuterNormal, currentOuterNormal, halfWidth,
+                                     style.miterLimit, builder))) {
+    EmitPositiveStrokePiece({vertex, previousOuter, currentOuter}, builder);
+  }
+}
+
 void EmitOutsideJoinPiece(const Vector2d& vertex, const Vector2d& previousNormal,
                           const Vector2d& currentNormal, double halfWidth, const StrokeStyle& style,
                           PathBuilder& builder) {
   const double turn = previousNormal.x * currentNormal.y - previousNormal.y * currentNormal.x;
   if (turn == 0.0) {
-    if (style.join == LineJoin::Round && previousNormal.dot(currentNormal) < 0.0) {
-      EmitRoundCapPiece(vertex, Vector2d(previousNormal.y, -previousNormal.x), halfWidth, builder);
+    if (previousNormal.dot(currentNormal) < 0.0) {
+      if (style.join == LineJoin::Round) {
+        EmitRoundCapPiece(vertex, Vector2d(previousNormal.y, -previousNormal.x), halfWidth,
+                          builder);
+      } else if (style.join == LineJoin::MiterClip) {
+        (void)EmitClippedMiterPiece(vertex, previousNormal, currentNormal, halfWidth,
+                                    style.miterLimit, builder);
+      }
     }
     return;
   }
@@ -2259,14 +2308,8 @@ void EmitOutsideJoinPiece(const Vector2d& vertex, const Vector2d& previousNormal
     return;
   }
 
-  if (style.join == LineJoin::Miter) {
-    const MiterResult miter =
-        computeMiterPoint(vertex, previousOuterNormal, currentOuterNormal, halfWidth);
-    if (miter.valid && miter.lengthFromVertex / halfWidth <= style.miterLimit) {
-      EmitPositiveStrokePiece({vertex, previousOuter, miter.point, currentOuter}, builder);
-    } else {
-      EmitPositiveStrokePiece({vertex, previousOuter, currentOuter}, builder);
-    }
+  if (style.join == LineJoin::Miter || style.join == LineJoin::MiterClip) {
+    EmitMiterJoinPiece(vertex, previousOuterNormal, currentOuterNormal, halfWidth, style, builder);
     return;
   }
 

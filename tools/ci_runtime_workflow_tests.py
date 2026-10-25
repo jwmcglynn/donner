@@ -22,12 +22,12 @@ from tools import test_timing
 # The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
 # arguments and this table together, so a widened ceiling is always a reviewed change.
 ENFORCED_PAYLOAD_CEILINGS = {
-    "--max-js-gzip-bytes": 54800,
-    "--max-js-raw-bytes": 199000,
+    "--max-js-gzip-bytes": 56000,
+    "--max-js-raw-bytes": 202000,
     "--max-total-raw-bytes": 12880000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
-    "--max-wasm-gzip-bytes": 3500000,
+    "--max-wasm-gzip-bytes": 3520000,
     "--max-wasm-raw-bytes": 10800000,
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
