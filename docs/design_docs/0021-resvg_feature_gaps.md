@@ -173,6 +173,29 @@ content. The comparison remains gated pending background and typography referenc
 An independently authored inline-versus-external text-fragment comparison covers host style
 inheritance, fragment selection, the callback identifier and transparent canvas behavior.
 
+## CSS circle clipping
+
+`clip-path: circle()` supports length, percentage and `closest-side`/`farthest-side` radii, CSS positions,
+and fill/stroke/view reference boxes. Default SVG border boxes use stroke geometry. Reference
+geometry includes image occurrences and horizontal text, including hidden glyphs for stroke bounds.
+Work admission precedes path scans and glyph outline decoding. Vertical text fill/stroke reference
+boxes are currently refused; viewport-based circles remain available. This does not claim a hard
+allocation bound inside the existing text shaper.
+
+Both renderers apply circles to entire groups and preserve them during retained masked-child drag.
+Independent live-bitmap comparisons cover boxes, nested clips, occurrence styles, images, text spans,
+non-scaling strokes and style mutation; CSS declaration lengths require units while presentation
+attributes retain user units.
+
+The plain `circle-shorthand.svg` comparison is restored. The stroke-box and view-box PNGs use an
+opaque white backdrop, while Donner's RGBA API retains transparency outside painted content.
+[SVG rendering contexts](https://www.w3.org/TR/SVG2/render.html) permit different final backdrops.
+Compositing diagnostic copies of both actual and reference images over white produces zero
+pixelmatch mismatches on both backends under the unchanged corpus policy. Strict identity still
+differs at raster edges, so this is a background qualification, not a bit-identity claim. The original
+PNGs and tolerances remain unchanged; these two fixtures render normally without comparing their
+opaque references, and authored geometry comparisons continue to use strict identity.
+
 ## Miter-clip stroke joins
 
 Both renderers distinguish `miter-clip` from the bevel fallback of ordinary `miter`. The shared
@@ -361,7 +384,7 @@ content-placement transform.
 | structure/style           |     1 | CSS `@import` / external CSS remains unsupported: imports are diagnosed and ignored, with no target requests; `UnsupportedCssImportsNeverRequestConfiguredResponses` in `//donner/svg/renderer/tests:renderer_public_api_tests` enforces that.                                                                                                                 |
 | structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                                                               |
 | painting/image-rendering  |     1 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. `on-feImage` uses an independently derived nearest reference; `optimizeSpeed` remains pending reference qualification at allowed nearest-sampling ties, rather than missing SVG support.                                                                        |
-| masking/clipPath          |     4 | Child clip intersections are unioned independently on both renderers. CSS circle shorthand edge cases remain. Vector text children use shared placed glyph outlines. The transformed-text vendored golden uses ink bounds, unlike SVG 2 full-glyph-cell bounds and Firefox, so it remains classified pending broader browser review.                                                                              |
+| masking/clipPath          |     1 | CSS circle shapes support fill, stroke and viewport reference boxes with bounded geometry preparation; two opaque reference images retain explicit background qualifications. The transformed-text reference remains under review. |
 | masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                                |
 | text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                          |
 | text/tspan                |     3 | tspan interaction with `clip-path`/`filter`/`mask`                                                                                                                                                                                                                                                                                                             |

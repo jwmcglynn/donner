@@ -109,7 +109,7 @@ bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {
     // where the filter/mask/clip came from CSS rather than an attribute.
     if (const auto* ancestorInstance =
             registry.try_get<components::RenderingInstanceComponent>(cursor)) {
-      if (ancestorInstance->clipPath.has_value() || ancestorInstance->mask.has_value() ||
+      if (ancestorInstance->hasClipPath() || ancestorInstance->mask.has_value() ||
           ancestorInstance->resolvedFilter.has_value() || ancestorInstance->isolatedLayer) {
         return true;
       }
@@ -369,7 +369,7 @@ void AccumulateStaticSpanCost(Registry& registry, Entity entity, StaticSpanCostE
   }
 
   if ((!ignoreIsolatedLayer && instance->isolatedLayer) || instance->resolvedFilter.has_value() ||
-      instance->clipPath.has_value() || (instance->mask.has_value() && instance->mask->valid()) ||
+      instance->hasClipPath() || (instance->mask.has_value() && instance->mask->valid()) ||
       instance->markerStart.has_value() || instance->markerMid.has_value() ||
       instance->markerEnd.has_value() || PaintUsesExpensiveResource(instance->resolvedFill) ||
       PaintUsesExpensiveResource(instance->resolvedStroke)) {

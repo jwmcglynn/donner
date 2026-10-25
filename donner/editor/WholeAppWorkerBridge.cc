@@ -1476,25 +1476,85 @@ EM_JS(void, RecordPresentedDocumentFrameStats,
       });
 // clang-format on
 
+// Pure scalar predicates keep completion attribution separate from its accounting effects.
+// clang-format off
+EM_JS(int, WorkerFrameBoundaryKnown,
+      (int supplied, double admissionSequence, double producerGeneration), {
+        return Boolean(supplied) && Number.isSafeInteger(admissionSequence) && admissionSequence > 0 &&
+            Number.isSafeInteger(producerGeneration) && producerGeneration >= 0;
+      });
+
+EM_JS(int, WorkerFrameSameProducer,
+      (int boundaryKnown, double expectedGeneration, double completedGeneration), {
+        return Boolean(boundaryKnown) && Object.is(expectedGeneration, completedGeneration);
+      });
+
+EM_JS(int, WorkerFrameIdentityMatches,
+      (double expectedDocument, double expectedVersion, double expectedCapture,
+       double completedDocument, double completedVersion, double completedCapture), {
+        return Object.is(expectedDocument, completedDocument) &&
+            Object.is(expectedVersion, completedVersion) && Object.is(expectedCapture, completedCapture);
+      });
+
+EM_JS(int, WorkerFrameEligible,
+      (int currentProducer, int sameProducer, double admissionSequence, double boundarySequence), {
+        return Boolean(currentProducer) && Boolean(sameProducer) && admissionSequence > boundarySequence;
+      });
+
+EM_JS(int, WorkerFrameCompletionTimeValid,
+      (double completedAt), {
+        return Number.isFinite(completedAt) && completedAt >= 0;
+      });
+// clang-format on
+
 void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
-                                   bool surfacePresented) {
+                                   bool surfacePresented, std::uint64_t admissionSequence,
+                                   std::uint64_t producerGeneration, std::uint64_t captureId,
+                                   bool currentProducer) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
-        RecordPresentedDocumentFrameStats($0, $1, $2, $3);
+        if ($7) RecordPresentedDocumentFrameStats($0, $1, $2, $3);
         const stats = window['__donnerWorkerStats'];
         if (!stats || stats['publishReason'] !== 'render-result' || stats['resultFramePresented']) {
           return;
         }
-        if (Object.is(stats['documentGeneration'], $0) && Object.is(stats['frameVersion'], $1)) {
+        const boundaryKnown = Boolean(WorkerFrameBoundaryKnown(
+            stats['presentationBoundaryKnown'] === true, $4, $5));
+        const sameProducer = Boolean(WorkerFrameSameProducer(
+            boundaryKnown, stats['presentationProducerGeneration'], $5));
+        const eligible = Boolean(WorkerFrameEligible(
+            $7, sameProducer, $4, stats['presentationAdmissionSequence']));
+        const matches = sameProducer && Boolean(WorkerFrameIdentityMatches(
+            stats['documentGeneration'], stats['frameVersion'], stats['captureId'], $0, $1, $6));
+        if (!boundaryKnown) {
+          stats['presentationBoundaryUnknown'] = true;
+          stats['unattributedFramesCompleted'] = (stats['unattributedFramesCompleted'] | 0) + 1;
+          return;
+        }
+        if (!matches) {
+          stats['framesPresentedWithoutResult'] = (stats['framesPresentedWithoutResult'] | 0) + 1;
+        }
+        if (!eligible) {
+          stats['preexistingFramesCompleted'] = (stats['preexistingFramesCompleted'] | 0) + 1;
+          return;
+        }
+        if (matches) {
+          const completedAt = $2 - performance.timeOrigin;
+          if (!WorkerFrameCompletionTimeValid(completedAt)) return;
+          stats['resultFrameCompletedAtMs'] = completedAt;
           stats['resultFramePresented'] = true;
           stats['framesPresentedWithoutResult'] = stats['framesPresentedWithoutResult'] | 0;
+          stats['postPollFramesCompletedWithoutResult'] =
+              stats['postPollFramesCompletedWithoutResult'] | 0;
         } else {
-          stats['framesPresentedWithoutResult'] = (stats['framesPresentedWithoutResult'] | 0) + 1;
+          stats['postPollFramesCompletedWithoutResult'] =
+              (stats['postPollFramesCompletedWithoutResult'] | 0) + 1;
         }
       },
       static_cast<double>(documentGeneration), static_cast<double>(frameVersion), WorkerEpochNowMs(),
-      static_cast<int>(surfacePresented));
+      static_cast<int>(surfacePresented), static_cast<double>(admissionSequence),
+      static_cast<double>(producerGeneration), static_cast<double>(captureId), currentProducer);
   // clang-format on
 }
 

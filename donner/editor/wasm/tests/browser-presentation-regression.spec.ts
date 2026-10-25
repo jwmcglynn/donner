@@ -1199,7 +1199,7 @@ async function readPressSelectionState(
 
 async function openEditor(
   page: Page,
-  testControl: false | "overlay" | "eyedropper" = false,
+  testControl: false | "overlay" | "eyedropper" | "eyedropper-owner-wait" = false,
   failureReadback = false,
   frameDriver: false | "proxied-main-raf" = false,
 ): Promise<string[]> {
@@ -1222,7 +1222,13 @@ async function openEditor(
   const editorUrl = new URL(kBaseUrl);
   if (frameDriver) editorUrl.searchParams.set("frameDriver", frameDriver);
   if (testControl) {
-    editorUrl.searchParams.set("testControl", testControl);
+    editorUrl.searchParams.set(
+      "testControl",
+      testControl === "eyedropper-owner-wait" ? "eyedropper" : testControl,
+    );
+    if (testControl === "eyedropper-owner-wait") {
+      editorUrl.searchParams.set("gpuOwnerWaitProbe", "1");
+    }
   }
   if (testControl === "overlay") {
     editorUrl.searchParams.set("wgpuReadbackStats", "1");
@@ -4726,7 +4732,7 @@ async function expectEyedropperReady(page: Page): Promise<void> {
 }
 
 test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", async ({ page }) => {
-  const failures = await openEditor(page, "eyedropper");
+  const failures = await openEditor(page, "eyedropper-owner-wait");
   await openDonnerSplash(page);
   const viewport = await readViewportStats(page);
   const stem = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
@@ -4880,25 +4886,75 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     selectedText: "SVG",
     selectedStyle: expect.stringContaining(expectedFill),
   }));
-  const waitStats = await Promise.any(
+  const owner = await Promise.any(
     page.workers().map(async (worker) => {
-      const observation = await worker.evaluate(() => {
-        const scope = globalThis as typeof globalThis & {
-          __donnerReadGpuOwnerWaitStats?: () => {
-            pumps: number;
-            dispatches: number;
-            maximumPumpMs: number;
-            requested: number;
-            started: number;
-            finished: number;
-          };
-        };
-        return scope.__donnerReadGpuOwnerWaitStats?.() ?? null;
-      });
-      if (observation === null) throw new Error("not the registered GPU owner");
-      return observation;
+      if (
+        !await worker.evaluate(() =>
+          Boolean(
+            (globalThis as typeof globalThis & { __donnerGpuOwner?: boolean }).__donnerGpuOwner,
+          )
+        )
+      ) throw new Error("not the registered GPU owner");
+      return worker;
     }),
   );
+  const attemptOwnerWaitProbe = () =>
+    owner.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __donnerExerciseGpuOwnerWait?: () => number;
+        __donnerGpuOwnerWaitProbeResult?: {
+          completedSerial: number;
+          realWaitSliceMs: number;
+          isGpuOwner: boolean;
+          isApplicationPthread: boolean;
+          producerIsGpuOwner: boolean;
+          joinElapsedMs: number;
+        };
+        __donnerReadGpuOwnerWaitStats?: () => {
+          pumps: number;
+          dispatches: number;
+          maximumPumpMs: number;
+          requested: number;
+          started: number;
+          finished: number;
+          completionQueries: number;
+        };
+      };
+      if (!scope.__donnerExerciseGpuOwnerWait || !scope.__donnerReadGpuOwnerWaitStats) {
+        throw new Error("the explicit owner-wait fixture is unavailable");
+      }
+      const before = scope.__donnerReadGpuOwnerWaitStats();
+      const admitted = scope.__donnerExerciseGpuOwnerWait();
+      return {
+        admitted,
+        before,
+        after: scope.__donnerReadGpuOwnerWaitStats(),
+        result: scope.__donnerGpuOwnerWaitProbeResult,
+      };
+    });
+  let ownerWaitProof = await attemptOwnerWaitProbe();
+  await expect.poll(async () => {
+    if (ownerWaitProof.admitted !== 1) ownerWaitProof = await attemptOwnerWaitProbe();
+    return ownerWaitProof.admitted;
+  }, {
+    message: "probe must be admitted outside active editor/canvas callbacks",
+    timeout: scaledMs(2_000),
+  }).toBe(1);
+  expect(ownerWaitProof.result?.isGpuOwner).toBe(true);
+  expect(ownerWaitProof.result?.isApplicationPthread).toBe(true);
+  expect(ownerWaitProof.result?.producerIsGpuOwner).toBe(false);
+  expect(Number.isFinite(ownerWaitProof.result?.joinElapsedMs)).toBe(true);
+  expect(ownerWaitProof.result?.joinElapsedMs).toBeGreaterThanOrEqual(0);
+  expect(Number.isFinite(ownerWaitProof.result?.realWaitSliceMs)).toBe(true);
+  expect(ownerWaitProof.result?.realWaitSliceMs).toBeGreaterThan(0);
+  expect(Number.isFinite(ownerWaitProof.result?.completedSerial)).toBe(true);
+  expect(ownerWaitProof.result?.completedSerial).toBeGreaterThanOrEqual(0);
+  expect(ownerWaitProof.after.dispatches - ownerWaitProof.before.dispatches).toBeGreaterThan(0);
+  expect(ownerWaitProof.after.completionQueries - ownerWaitProof.before.completionQueries)
+    .toBeGreaterThan(0);
+  expect(ownerWaitProof.after.finished - ownerWaitProof.before.finished).toBeGreaterThan(0);
+  console.log(`Explicit owner wait: ${JSON.stringify(ownerWaitProof)}`);
+  const waitStats = ownerWaitProof.after;
   console.log(`GPU dispatch during owner waits: ${JSON.stringify(waitStats)}`);
   expect(waitStats.dispatches, "GPU requests must execute while the app owner is in a libc wait")
     .toBeGreaterThan(0);

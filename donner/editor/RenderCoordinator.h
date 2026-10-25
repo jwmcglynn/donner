@@ -455,8 +455,16 @@ public:
   /// the backend (worker) ms reported by `AsyncRenderer` so the frame
   /// graph can plot backend time alongside ImGui frame time. `nullptr`
   /// is allowed for callers that don't care about backend timing.
+  /// @param app Editor application and document.
+  /// @param viewport Current viewport used for result admission.
+  /// @param textures UI-owned presentation resource cache.
+  /// @param frameHistory Optional timing history for the consumed result.
+  /// @param presentationAdmissionSequence Last presentation admitted before polling, or unknown.
+  /// @param presentationProducerGeneration Producer lifetime paired with that boundary, or unknown.
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
-                        FrameHistory* frameHistory = nullptr);
+                        FrameHistory* frameHistory = nullptr,
+                        std::optional<std::uint64_t> presentationAdmissionSequence = std::nullopt,
+                        std::optional<std::uint64_t> presentationProducerGeneration = std::nullopt);
   /// Post a worker render when document, viewport, and presentation state require one.
   /// @param app Editor application and current document.
   /// @param selectTool Active drag and selection preview source.
@@ -600,6 +608,12 @@ private:
 
   friend class EditorShellTestAccess;
   friend struct RenderCoordinatorTestAccess;
+  /// Applies an admitted polled result, retaining the poll-time presentation boundary.
+  void consumePolledRenderResult(std::optional<RenderResult>& result, EditorApp& app,
+                                 const ViewportState& viewport, GlTextureCache& textures,
+                                 FrameHistory* frameHistory,
+                                 std::optional<std::uint64_t> presentationAdmissionSequence,
+                                 std::optional<std::uint64_t> presentationProducerGeneration);
   void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
   void rejectRenderResult(const std::optional<RenderResult>& result);
   void rejectPixelCaptureResult(const std::optional<RenderResult>& result);

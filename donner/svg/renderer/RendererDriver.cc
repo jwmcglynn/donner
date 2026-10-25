@@ -976,7 +976,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
 
   // If clip-path is set but has no computed paths (e.g., empty <clipPath> element),
   // add an empty path to force a clip that hides everything.
-  if (instance.clipPath.has_value() && clip.clipPaths.empty()) {
+  if (instance.hasClipPath() && clip.clipPaths.empty()) {
     clip.clipPaths.emplace_back();
   }
 
@@ -1643,48 +1643,6 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
 }
 #endif
 
-/// Build bounded style identities for one shadow text root, without retaining document references.
-/// @param registry Document storage. @param root Shadow root. @param text Authored spans to map.
-std::optional<TextStyleContext> BuildShadowTextStyles(
-    Registry& registry, Entity root, const components::ComputedTextComponent& text) {
-  TextStyleContext result;
-  result.rootEntity = root;
-  const std::size_t admitted = registry.view<components::ShadowEntityComponent>().size();
-  std::vector<Entity> pending{root};
-  std::size_t visited = 0;
-  while (!pending.empty()) {
-    const Entity entity = pending.back();
-    pending.pop_back();
-    if (++visited > admitted) {
-      return std::nullopt;
-    }
-    const auto* shadow = registry.try_get<components::ShadowEntityComponent>(entity);
-    if (!shadow) {
-      return std::nullopt;
-    }
-    if (entity != root && registry.any_of<components::TextRootComponent>(shadow->lightEntity)) {
-      continue;
-    }
-    if (!result.entities.emplace(shadow->lightEntity, entity).second) {
-      return std::nullopt;
-    }
-    const auto& tree = registry.get<donner::components::TreeComponent>(entity);
-    for (Entity child = tree.firstChild(); child != entt::null;
-         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-      if (pending.size() >= admitted) {
-        return std::nullopt;
-      }
-      pending.push_back(child);
-    }
-  }
-  for (const auto& span : text.spans) {
-    if (span.sourceEntity != entt::null && !result.entities.contains(span.sourceEntity)) {
-      return std::nullopt;
-    }
-  }
-  return result;
-}
-
 /**
  * @brief Draw the spans of \p textRootEntity that \p instance is responsible for.
  *
@@ -1757,9 +1715,12 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
 #endif
   const TextStyleContext* styleContext = nullptr;
   if (!spansHaveOwnEffectInstances) {
+#ifndef DONNER_TEXT_ENABLED
+    return;
+#else
     auto [found, inserted] = textFrameCache.shadowStyles[&registry].try_emplace(entity);
     if (inserted) {
-      found->second = BuildShadowTextStyles(registry, entity, *text);
+      found->second = BuildShadowTextStyleContext(registry, entity, *text);
     }
     if (!found->second) {
       return;
@@ -1768,6 +1729,7 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
     textParams.viewBox = components::LayoutSystem().getViewBox(EntityHandle(registry, entity));
     // Each instance can shape differently from the original text's cached geometry.
     textParams.textRootEntity = entt::null;
+#endif
   }
   ++textPreparationStats.fullElementStylePasses;
   textPreparationStats.spanStyleVisits += text->spans.size();
@@ -1803,7 +1765,7 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
 bool IsPlainVisibleLeaf(const components::RenderingInstanceComponent& instance) {
   return instance.visible && !instance.subtreeInfo.has_value() &&
          !instance.resolvedFilter.has_value() && !instance.mask.has_value() &&
-         !instance.clipPath.has_value() && !instance.clipRect.has_value() &&
+         !instance.hasClipPath() && !instance.clipRect.has_value() &&
          !instance.markerStart.has_value() && !instance.markerMid.has_value() &&
          !instance.markerEnd.has_value();
 }

@@ -1997,6 +1997,29 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
   }
 }
 
+TEST(PropertyRegistry, CircleClipStyleAndPresentationGrammarStayDistinct) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:url(#clip);clip-path:circle(4)");
+  EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  PropertyRegistry presentation;
+  EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "circle(4)"), NoParseError());
+  CircleClipPath expected;
+  expected.radiusType = CircleClipPath::Radius::Length;
+  expected.radius = Lengthd(4);
+  EXPECT_THAT(presentation.clipPath.get(), Optional(ClipPath(expected)));
+}
+
+TEST(PropertyRegistry, InvalidClipDeclarationsPreserveTheEarlierValue) {
+  for (const std::string_view invalid :
+       {"none garbage", "url(#other) garbage", "circle(4px at)", "circle(-1px)",
+        "circle(2px at left right)", "circle(2px) fill-box stroke-box"}) {
+    SCOPED_TRACE(invalid);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(invalid));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
 TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
@@ -2040,14 +2063,14 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
     PropertyRegistry registry;
     registry.parseStyle("clip-path: url(#clip)");
     ASSERT_TRUE(registry.clipPath.isSpecified());
-    EXPECT_THAT(registry.clipPath.get(), Optional(Reference("#clip")));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
   }
 
   {
     PropertyRegistry registry;
     css::Declaration declaration = css::CSS::ParseStyleAttribute("clip-path: invalid").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
-                ParseErrorIs("Invalid url reference"));
+                ParseErrorIs("Invalid circle clip-path"));
   }
 
   {

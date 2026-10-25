@@ -71,6 +71,12 @@ const kSyncGlfwFunctions = {
 
 // Synchronous main-thread calls in the editor: file, enclosing function, call count and reason.
 const kSyncEditorCalls = {
+  "main.cc": {
+    InstallGpuOwnerWaitProbeForTesting: [
+      1,
+      "query-string read during editor setup before the first frame",
+    ],
+  },
   "RotateCursorSet.cc": {
     RegisterBrowserCursor: [1, "cursor registration during editor setup; returns SVG cursor support"],
     DestroyBrowserCursorRegistry: [1, "setup and teardown; restores the page cursor first"],

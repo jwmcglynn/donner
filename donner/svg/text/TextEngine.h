@@ -34,6 +34,11 @@ struct TextStyleContext {
   }
 };
 
+/// Build the bounded authored-to-occurrence style mapping for one shadow text root.
+std::optional<TextStyleContext> BuildShadowTextStyleContext(
+    Registry& registry, Entity root, const components::ComputedTextComponent& text,
+    std::size_t* remainingWork = nullptr);
+
 /**
  * Shared SVG text engine.
  *
@@ -146,6 +151,24 @@ public:
     Path path;                         ///< Glyph outline in text-element local coordinates.
     Entity sourceEntity = entt::null;  ///< Span source entity (text/tspan) that owns this glyph.
   };
+
+  /// Visibility-independent reference geometry in text-root local coordinates.
+  struct ReferenceGeometry {
+    std::optional<Box2d> objectBounds;   ///< Full glyph-cell union, including hidden glyphs.
+    std::vector<GlyphOutline> outlines;  ///< Optional source-tagged outlines for stroke bounds.
+    std::vector<FontFaceDependency> fontDependencies;  ///< Faces consulted by this query.
+  };
+
+  /// Internal rendering query for horizontal reference geometry without a painted-ink cache.
+  /// @internal
+  /// Vertical glyph-cell geometry is unsupported and explicitly refused.
+  /// @param handle Text content subtree to include.
+  /// @param includeOutlines Whether stroke-reference outlines are required.
+  /// @param remainingWork Shared input, decode and geometry work allowance; zeroed on refusal.
+  /// @return Empty optional on refusal, otherwise the admitted geometry (which can be empty).
+  std::optional<ReferenceGeometry> referenceGeometry(
+      EntityHandle handle, bool includeOutlines, std::size_t& remainingWork,
+      const TextStyleContext* styleContext = nullptr) const;
 
   /// Return glyph outlines for the text subtree rooted at \p handle.
   std::vector<Path> computedGlyphPaths(EntityHandle handle) const;

@@ -621,11 +621,11 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::RenderOnly("UB: on root `<svg>` without size")},
 
                     {"circle-shorthand-with-stroke-box.svg",
-                     Params::Skip("Bug: clipPath edge cases beyond core support")},
+                     Params::RenderOnly("Opaque reference background differs from transparent "
+                                        "RGBA output; independent circle stroke-box contracts")},
                     {"circle-shorthand-with-view-box.svg",
-                     Params::Skip("Bug: clipPath edge cases beyond core support")},
-                    {"circle-shorthand.svg",
-                     Params::Skip("Bug: clipPath edge cases beyond core support")},
+                     Params::RenderOnly("Opaque reference background differs from transparent "
+                                        "RGBA output; independent circle view-box contracts")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

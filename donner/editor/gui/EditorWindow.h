@@ -536,9 +536,17 @@ public:
     /// Whether the frame represents the input sealed with it; cleared when the full frame was not
     /// presented.
     bool inputRepresented = false;
-    double viewportZoom = 0.0;      //!< Viewport zoom the frame was drawn with.
-    Clock::time_point submittedAt;  //!< When the frame's work was submitted.
+    double viewportZoom = 0.0;             //!< Viewport zoom the frame was drawn with.
+    Clock::time_point submittedAt;         //!< When the frame's work was submitted.
+    std::uint64_t documentGeneration = 0;  //!< Document lifetime sealed with the frame.
+    std::uint64_t frameVersion = 0;        //!< Committed document mutation version.
+    std::uint64_t producerGeneration = 0;  //!< Presentation producer lifetime.
+    std::uint64_t admissionSequence = 0;   //!< Window-owned admission order across device resets.
+    bool fullFramePresented = false;       //!< Both document and UI passed surface acceptance.
+    bool surfacePresented = false;         //!< The frame targeted the visible surface.
   };
+  /// Observer called once per retired frame, in submission order, including frames in one poll.
+  using FrameCompletionObserver = std::function<void(const Fence&)>;
   /// Serial and clock read after a bounded GPU completion confirmation.
   struct CompletionObservation {
     std::uint64_t serial;          //!< Highest completed submission serial observed.
@@ -553,14 +561,19 @@ public:
    *
    * @param completedSerial Highest submission serial the device has completed.
    * @param now Current time.
+   * @param onCompleted Receives every completed frame before it is superseded by a later frame.
    * @param lastProgress When the device last made progress, or nothing when it does not track
    *   progress, in which case the oldest frame's age alone reaches the deadline.
    */
   Admission observe(std::uint64_t completedSerial, Clock::time_point now,
-                    std::optional<Clock::time_point> lastProgress = std::nullopt) {
+                    std::optional<Clock::time_point> lastProgress = std::nullopt,
+                    const FrameCompletionObserver& onCompleted = {}) {
     while (!pending_.empty() && pending_.front().serial <= completedSerial) {
       completed_ = pending_.front();
       pending_.pop_front();
+      if (onCompleted) {
+        onCompleted(completed_);
+      }
     }
     if (!pending_.empty() && now - pending_.front().submittedAt >= kCompletionDeadline &&
         (!lastProgress.has_value() || now - *lastProgress >= kCompletionDeadline)) {
@@ -572,16 +585,22 @@ public:
   template <typename CompletionProbe>
     requires std::invocable<CompletionProbe&>
   Admission observe(std::uint64_t completedSerial, Clock::time_point now,
-                    CompletionProbe&& confirmCompletion) {
-    const Admission admission = observe(completedSerial, now);
+                    CompletionProbe&& confirmCompletion,
+                    const FrameCompletionObserver& onCompleted = {}) {
+    const Admission admission = observe(completedSerial, now, std::nullopt, onCompleted);
     if (admission != Admission::TimedOut) {
       return admission;
     }
     const CompletionObservation confirmed = confirmCompletion();
-    return observe(confirmed.serial, confirmed.observedAt);
+    return observe(confirmed.serial, confirmed.observedAt, std::nullopt, onCompleted);
   }
   /// Seal the serial and input that reached the GPU as one UI frame.
-  void submitted(Fence fence) { pending_.push_back(fence); }
+  void submitted(Fence fence) {
+    fence.admissionSequence = ++admissionSequence_;
+    pending_.push_back(fence);
+  }
+  /// Monotonic last admission, independent of backend submission serial resets.
+  std::uint64_t admissionSequence() const { return admissionSequence_; }
   /// Number of submitted frames whose GPU work has not been observed complete.
   std::size_t pendingCount() const { return pending_.size(); }
   /// Most recently retired frame, or a default fence before any frame retires.
@@ -598,6 +617,7 @@ public:
 private:
   std::deque<Fence> pending_;
   Fence completed_;
+  std::uint64_t admissionSequence_ = 0;
 };
 
 /// Immutable first observation of settled presentation-device loss diagnostics.
@@ -799,7 +819,8 @@ using WgpuDirectRenderCallback = std::function<void(const EditorWindowWgpuRender
 /// means we can't easily have two at once.
 class EditorWindow {
 public:
-  /// Stable document identity committed only after a complete framebuffer presentation.
+  /// Stable document identity committed after the accepted framebuffer submission is GPU-complete.
+  /// GPU completion does not establish physical scanout.
   struct PresentedDocumentFrameIdentity {
     std::uint64_t documentGeneration = 0;  //!< Document lifetime rendered into the frame.
     std::uint64_t frameVersion = 0;        //!< Committed document mutation version.
@@ -1035,7 +1056,14 @@ public:
                                     std::uint64_t documentGeneration, std::uint64_t frameVersion,
                                     bool inputRepresented, double viewportZoom);
 
-  /// Last document frame whose underlay and UI were successfully presented together.
+  /// Last admitted presentation frame, independent of a backend device's submission serials.
+  std::uint64_t presentationAdmissionSequence() const {
+    return presentationSubmissions_.admissionSequence();
+  }
+  /// Producer lifetime paired with an admission boundary sampled at worker-result polling.
+  std::uint64_t presentationProducerGeneration() const { return presentationProducerGeneration_; }
+
+  /// Last document frame whose complete framebuffer submission was observed GPU-complete.
   [[nodiscard]] std::optional<PresentedDocumentFrameIdentity> lastFullyPresentedDocumentFrame()
       const {
     return lastFullyPresentedDocumentFrame_;
@@ -1045,6 +1073,9 @@ public:
   void clearLastFullyPresentedDocumentFrame() {
     lastFullyPresentedDocumentFrame_.reset();
     pendingPresentedDocumentWake_.reset();
+#ifdef DONNER_EDITOR_WGPU
+    ++presentationProducerGeneration_;
+#endif
   }
 
   /// Request one event-loop wake after @p identity is fully presented.
@@ -1062,12 +1093,12 @@ public:
     return pendingPresentedDocumentWake_.has_value();
   }
 
-  /// Substitute completion observation while driving the real framebuffer test path.
-  /// @param probe Completed submission serial reported to the presentation scheduler.
   /// Refuse UI recording after the document pass has submitted, simulating an allocation failure.
   /// @param enabled Whether to refuse the UI pass.
   void forceUiPassFailureForTesting(bool enabled) { forceUiPassFailureForTesting_ = enabled; }
 
+  /// Substitute completion observation while driving the real framebuffer test path.
+  /// @param probe Completed submission serial reported to the presentation scheduler.
   void setPresentationCompletionProbeForTesting(std::function<std::uint64_t()> probe) {
     presentationCompletionProbeForTesting_ = std::move(probe);
   }
@@ -1231,7 +1262,12 @@ private:
   std::atomic_bool wasmFrameRequested_{true};
 #endif
 #ifdef DONNER_EDITOR_WGPU
+  /// Whether the window has an attached framebuffer GPU device.
+  bool hasPresentationDevice() const;
   bool observePresentationCompletion();
+  /// Commits the document acknowledgment for a completed frame in the current producer lifetime.
+  /// @param frame Immutable identity and acceptance status sealed with the completed submission.
+  void recordCompletedDocumentFrame(const internal::PresentationSubmissionQueue::Fence& frame);
   void observePresentationDeviceLoss(gpu::Device& device);
   void declarePresentationTimeoutLoss(gpu::Device& device, std::chrono::milliseconds age);
   bool hasUsableFrameTarget(int width, int height);
@@ -1250,6 +1286,7 @@ private:
   std::uint64_t presentationCaptureId_ = 0;
   internal::PresentationSubmissionQueue::Fence presentationInputStamp_;
   PresentedDocumentFrameIdentity presentationDocumentIdentity_;
+  std::uint64_t presentationProducerGeneration_ = 0;
   std::function<std::uint64_t()> presentationCompletionProbeForTesting_;
 #endif
   std::optional<PresentedDocumentFrameIdentity> lastFullyPresentedDocumentFrame_;

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <rect id="shape" width="2em" height="2em" fill="teal" clip-path="circle(0.5em)"/>
+    <clipPath id="nested"><rect width="64" height="64" clip-path="circle(45% at center) view-box"/></clipPath>
+  </defs>
+  <g clip-path="circle(farthest-side at right 4px bottom 6px) fill-box">
+    <path d="M4 30L24 4L44 30" fill="orange" stroke="navy" stroke-width="5" stroke-linejoin="miter-clip"/>
+  </g>
+  <use href="#shape" x="8" y="32" font-size="10"/>
+  <use href="#shape" x="36" y="32" font-size="6"/>
+  <g clip-path="url(#nested)">
+    <path d="M10 46L28 60" stroke="purple" stroke-width="4" vector-effect="non-scaling-stroke"
+          transform="scale(1.4 0.8)" clip-path="circle() stroke-box"/>
+    <text x="4" y="20" font-size="12" clip-path="circle() fill-box">A<tspan visibility="hidden">B</tspan></text>
+  </g>
+</svg>
