@@ -348,12 +348,23 @@ private:
                                         mapping_.segmentEndDistances.end(), low - shift);
     const auto last = std::lower_bound(first, mapping_.segmentEndDistances.end(), high - shift);
     for (auto it = first; it != last; ++it) {
-      if (remainingWork_ == 0u || remainingBoundaryStorage_ == 0u) {
+      if (remainingWork_ == 0u) {
         return false;
       }
       --remainingWork_;
+      // Zero-length segments repeat their end distance, and on a closed path a leading one ends at
+      // the seam the previous circuit's final entry already crossed. Emit each crossing once: a
+      // repeat would map a zero-length interval between the two one-sided normals.
+      const double traversalDistance = *it + shift;
+      if ((mapping_.closed && *it == 0.0) ||
+          (!result.empty() && traversalDistance <= result.back().traversalDistance)) {
+        continue;
+      }
+      if (remainingBoundaryStorage_ == 0u) {
+        return false;
+      }
       --remainingBoundaryStorage_;
-      result.push_back(Boundary{*it + shift, *it});
+      result.push_back(Boundary{traversalDistance, *it});
     }
     return true;
   }

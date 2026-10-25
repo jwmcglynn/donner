@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cmath>
 #include <limits>
 
 #include "donner/base/MathUtils.h"
@@ -493,6 +494,143 @@ TEST(PlacedTextGeometryTest, StretchSkipsBoundedConnectedZeroLengthSegmentsAtCor
   EXPECT_THAT(warped.points(), Contains(Vector2Near(12.0, 0.0)));
 }
 
+TEST(PlacedTextGeometryTest, StretchCrossesConnectedZeroLengthSegmentAtCornerOnce) {
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 0.0))
+                         .lineTo(Vector2d(10.0, 10.0))
+                         .build();
+  const Path withoutZeroLength = PathBuilder()
+                                     .moveTo(Vector2d(0.0, 0.0))
+                                     .lineTo(Vector2d(10.0, 0.0))
+                                     .lineTo(Vector2d(10.0, 10.0))
+                                     .build();
+  const Path edge = PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(10.0, -2.0)).build();
+  const Path reverseEdge =
+      PathBuilder().moveTo(Vector2d(10.0, -2.0)).lineTo(Vector2d(0.0, -2.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 5.0;
+
+  for (const Path* outline : {&edge, &reverseEdge}) {
+    const Path warped = WarpGlyphOutline(*outline, MeasurePath(route), glyph, 0.05);
+    const Path expected = WarpGlyphOutline(*outline, MeasurePath(withoutZeroLength), glyph, 0.05);
+
+    ASSERT_FALSE(warped.empty());
+    EXPECT_THAT(warped.points(), Contains(Vector2Near(10.0, -2.0)));
+    EXPECT_THAT(warped.points(), Contains(Vector2Near(12.0, 0.0)));
+    EXPECT_THAT(warped.points(), Contains(Vector2Near(12.0, 5.0)));
+    ASSERT_EQ(warped.points().size(), expected.points().size());
+    for (size_t i = 0; i < warped.points().size(); ++i) {
+      EXPECT_THAT(warped.points()[i], Vector2Near(expected.points()[i].x, expected.points()[i].y));
+    }
+  }
+}
+
+TEST(PlacedTextGeometryTest, StretchClosedPathCrossesZeroLengthSegmentsOncePerCircuit) {
+  const Path withoutZeroLength = PathBuilder()
+                                     .moveTo(Vector2d(0.0, 0.0))
+                                     .lineTo(Vector2d(10.0, 0.0))
+                                     .lineTo(Vector2d(10.0, 10.0))
+                                     .lineTo(Vector2d(0.0, 10.0))
+                                     .closePath()
+                                     .build();
+  // A leading zero-length segment ends at distance 0, the same seam point as the closing
+  // segment's end; an interior one repeats the corner at distance 10 on every circuit.
+  const std::array<Path, 2> routes = {
+      PathBuilder()
+          .moveTo(Vector2d(0.0, 0.0))
+          .lineTo(Vector2d(0.0, 0.0))
+          .lineTo(Vector2d(10.0, 0.0))
+          .lineTo(Vector2d(10.0, 10.0))
+          .lineTo(Vector2d(0.0, 10.0))
+          .closePath()
+          .build(),
+      PathBuilder()
+          .moveTo(Vector2d(0.0, 0.0))
+          .lineTo(Vector2d(10.0, 0.0))
+          .lineTo(Vector2d(10.0, 0.0))
+          .lineTo(Vector2d(10.0, 10.0))
+          .lineTo(Vector2d(0.0, 10.0))
+          .closePath()
+          .build(),
+  };
+  StretchedTextPath expectedMapping = MeasurePath(withoutZeroLength);
+  expectedMapping.closed = true;
+  // Starts 5 before the seam and ends past the first corner of the next circuit.
+  const Path edge = PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(20.0, -2.0)).build();
+  const Path reverseEdge =
+      PathBuilder().moveTo(Vector2d(20.0, -2.0)).lineTo(Vector2d(0.0, -2.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = expectedMapping.measuredPath.pathLength() - 5.0;
+
+  for (const Path* outline : {&edge, &reverseEdge}) {
+    const Path expected = WarpGlyphOutline(*outline, expectedMapping, glyph, 0.05);
+    ASSERT_FALSE(expected.empty());
+
+    for (size_t index = 0; index < routes.size(); ++index) {
+      SCOPED_TRACE(index);
+      StretchedTextPath mapping = MeasurePath(routes[index]);
+      mapping.closed = true;
+
+      const Path warped = WarpGlyphOutline(*outline, mapping, glyph, 0.05);
+
+      ASSERT_FALSE(warped.empty());
+      ASSERT_EQ(warped.points().size(), expected.points().size());
+      for (size_t i = 0; i < warped.points().size(); ++i) {
+        EXPECT_THAT(warped.points()[i],
+                    Vector2Near(expected.points()[i].x, expected.points()[i].y));
+      }
+    }
+  }
+}
+
+TEST(PlacedTextGeometryTest, StretchClosedPathLeadingZeroLengthSeamMatchesAcrossCircuits) {
+  // With 0.1 sides, `(k - 1) * length + length` and `k * length` can differ by an ulp, so on
+  // some circuits the seam reached as the previous circuit's final segment end is not equal to
+  // the seam reached as this circuit's leading zero-length segment end. That crossing must still
+  // be emitted exactly once on every circuit.
+  const Path withoutZeroLength = PathBuilder()
+                                     .moveTo(Vector2d(0.0, 0.0))
+                                     .lineTo(Vector2d(0.1, 0.0))
+                                     .lineTo(Vector2d(0.1, 0.1))
+                                     .lineTo(Vector2d(0.0, 0.1))
+                                     .closePath()
+                                     .build();
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(0.1, 0.0))
+                         .lineTo(Vector2d(0.1, 0.1))
+                         .lineTo(Vector2d(0.0, 0.1))
+                         .closePath()
+                         .build();
+  StretchedTextPath expectedMapping = MeasurePath(withoutZeroLength);
+  expectedMapping.closed = true;
+  StretchedTextPath mapping = MeasurePath(route);
+  mapping.closed = true;
+  const double length = mapping.measuredPath.pathLength();
+  ASSERT_EQ(length, expectedMapping.measuredPath.pathLength());
+
+  const Path edge =
+      PathBuilder().moveTo(Vector2d(0.0, -0.02)).lineTo(Vector2d(0.06, -0.02)).build();
+  for (int circuit = 1; circuit <= 64; ++circuit) {
+    SCOPED_TRACE(circuit);
+    TextGlyph glyph;
+    glyph.textPathOrigin = static_cast<double>(circuit) * length - 0.03;
+
+    const Path expected = WarpGlyphOutline(edge, expectedMapping, glyph, 1e-3);
+    const Path warped = WarpGlyphOutline(edge, mapping, glyph, 1e-3);
+
+    ASSERT_FALSE(expected.empty());
+    ASSERT_FALSE(warped.empty());
+    ASSERT_EQ(warped.points().size(), expected.points().size());
+    for (size_t i = 0; i < warped.points().size(); ++i) {
+      EXPECT_THAT(warped.points()[i], Vector2Near(expected.points()[i].x, expected.points()[i].y));
+    }
+  }
+}
+
 TEST(PlacedTextGeometryTest, StretchRefusesMoreThanBoundedZeroLengthCornerSegments) {
   PathBuilder routeBuilder;
   routeBuilder.moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(10.0, 0.0));
@@ -583,6 +721,38 @@ TEST(PlacedTextGeometryTest, StretchDeviceScaleTightensToleranceAndCurveApproxim
   ASSERT_FALSE(ordinary.empty());
   ASSERT_FALSE(zoomed.empty());
   EXPECT_GT(zoomed.points().size(), ordinary.points().size());
+}
+
+TEST(PlacedTextGeometryTest, StretchToleranceUsesLinearTransformOnly) {
+  const double identityTolerance = TextWarpToleranceFor(Transform2d());
+
+  // Translation does not magnify local error.
+  EXPECT_EQ(TextWarpToleranceFor(Transform2d::Translate(1000.0, 0.0)), identityTolerance);
+  EXPECT_EQ(TextWarpToleranceFor(Transform2d::Translate(0.0, -1000.0)), identityTolerance);
+
+  // Conformal transforms keep their existing tolerance.
+  EXPECT_THAT(TextWarpToleranceFor(Transform2d::Rotate(MathConstants<double>::kPi / 3.0)),
+              DoubleNear(identityTolerance, 1e-15));
+  EXPECT_THAT(TextWarpToleranceFor(Transform2d::Scale(4.0)), DoubleNear(0.1 / 4.0, 1e-15));
+
+  // X shear `matrix(1,0,100,1,0,0)` maps local (0, 1) to device (100, 1): its largest singular
+  // value bounds the device error, so the tolerance must be at least that much tighter.
+  Transform2d shear;
+  shear.data[2] = 100.0;
+  EXPECT_LE(TextWarpToleranceFor(shear), 0.1 / std::hypot(100.0, 1.0));
+  EXPECT_GE(TextWarpToleranceFor(shear), 1e-4);
+
+  Transform2d nonfinite;
+  nonfinite.data[2] = std::numeric_limits<double>::infinity();
+  EXPECT_EQ(TextWarpToleranceFor(nonfinite), 1e-4);
+  nonfinite.data[2] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_EQ(TextWarpToleranceFor(nonfinite), 1e-4);
+
+  // Magnification large enough to overflow the singular-value calculation still tightens to the
+  // minimum, as does any magnification that already reaches it.
+  EXPECT_EQ(TextWarpToleranceFor(Transform2d::Scale(1e200)), 1e-4);
+  EXPECT_EQ(TextWarpToleranceFor(Transform2d::Scale(1000.0)), 1e-4);
+  EXPECT_THAT(TextWarpToleranceFor(Transform2d::Scale(500.0)), DoubleNear(0.1 / 500.0, 1e-15));
 }
 
 TEST(PlacedTextGeometryTest, StretchCurvedOutlineUsesMappedErrorNotLocalFlatness) {
