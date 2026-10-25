@@ -1999,10 +1999,14 @@ INSTANTIATE_TEST_SUITE_P(
                     {"tb-with-alignment.svg", Params().withMaxPixelsDifferent(1500).withReason(
                                                   "Bug: Baseline is ~2px off compared to resvg")},
                     {"tb-with-dx-on-second-tspan.svg",
-                     Params::Skip("Bug: `writing-mode=tb` with `dx`")},
-                    {"tb-with-dx-on-tspan.svg", Params::Skip("Bug: `writing-mode=tb` with `dx`")},
+                     Params::Skip("Bug #1172: dx and column spacing match, but both columns sit "
+                                  "0.8 units left of the reference (central-origin convention, "
+                                  "as in tb.svg); two columns double the diff to ~1830 px")},
+                    {"tb-with-dx-on-tspan.svg", Params().withMaxPixelsDifferent(1500).withReason(
+                                                    "Bug: Baseline is ~2px off compared to resvg")},
                     {"tb-with-dy-on-second-tspan.svg",
-                     Params::Skip("Bug: `writing-mode=tb` with `dy`")},
+                     Params().withMaxPixelsDifferent(1500).withReason(
+                         "Bug: Baseline is ~2px off compared to resvg")},
                     {"tb-with-rotate-and-underline.svg",
                      Params::RenderOnly("UB: tb with rotate and underline")},
                     {"tb-with-rotate.svg", Params::RenderOnly("UB: tb with rotate")},
