@@ -631,6 +631,69 @@ TEST_F(RendererRegressionTests, UnitlessStylesheetBlurIsIgnored) {
   EXPECT_EQ(PixelAt(actual, 16, 40)[3], 0);
 }
 
+// An feImage that references an element renders that element in the user space of the filtered
+// element, so the filtered element's transform also applies to the referenced content. The filter
+// region starts at the user-space origin, so the referenced content is not offset by it. The red
+// filtered content is fully replaced by the feImage result.
+RendererBitmap RenderFeImageFragment(std::string_view hostTransform, std::string_view hostRect,
+                                     std::string_view sourceRect) {
+  const std::string markup =
+      R"svg(<defs>
+      <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+        <feImage href="#src"/>
+      </filter>
+      <rect id="src" )svg" +
+      std::string(sourceRect) + R"svg( fill="lime"/>
+    </defs>
+    <g transform=")svg" +
+      std::string(hostTransform) + R"svg(" filter="url(#f)"><rect )svg" + std::string(hostRect) +
+      R"svg( fill="red"/></g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// The untransformed filtered element is the oracle: its referenced content already sits where the
+// transformed case must place it, and both cases resample the fragment at whole-pixel offsets.
+TEST_F(RendererRegressionTests, FeImageFragmentFollowsTranslatedFilteredElement) {
+  const RendererBitmap expected =
+      RenderFeImageFragment("translate(0 0)", R"svg(x="24" y="24" width="32" height="32")svg",
+                            R"svg(x="32" y="32" width="16" height="16")svg");
+  ExpectVisibleBitmap(expected, "fe_image_translated_expected_visible");
+  EXPECT_THAT(PixelAt(expected, 40, 40), test::RgbaEq(0, 255, 0, 255));
+
+  const RendererBitmap actual =
+      RenderFeImageFragment("translate(24 24)", R"svg(width="32" height="32")svg",
+                            R"svg(x="8" y="8" width="16" height="16")svg");
+  ExpectBitmapsIdentical(actual, expected, "fe_image_fragment_translated_host");
+}
+
+TEST_F(RendererRegressionTests, FeImageFragmentOutsideCanvasBeforeHostTransformIsVisible) {
+  // Before the host transform, both the filtered content and the referenced content lie entirely
+  // beyond the 64x64 canvas; the host transform brings the referenced content onto the canvas.
+  const RendererBitmap expected =
+      RenderFeImageFragment("translate(0 0)", R"svg(width="48" height="48")svg",
+                            R"svg(x="8" y="8" width="16" height="16")svg");
+  ExpectVisibleBitmap(expected, "fe_image_offcanvas_expected_visible");
+  EXPECT_THAT(PixelAt(expected, 16, 16), test::RgbaEq(0, 255, 0, 255));
+
+  const RendererBitmap actual =
+      RenderFeImageFragment("translate(-96 -96)", R"svg(x="96" y="96" width="48" height="48")svg",
+                            R"svg(x="104" y="104" width="16" height="16")svg");
+  ExpectBitmapsIdentical(actual, expected, "fe_image_fragment_offcanvas_before_host_transform");
+}
+
+TEST_F(RendererRegressionTests, FeImageFragmentFollowsScaledFilteredElement) {
+  // translate(8 8) scale(2) maps the referenced 8x8 square to device pixels 8 through 24.
+  const RendererBitmap actual =
+      RenderFeImageFragment("translate(8 8) scale(2)", R"svg(width="16" height="16")svg",
+                            R"svg(width="8" height="8")svg");
+  ExpectVisibleBitmap(actual, "fe_image_scaled_visible");
+  EXPECT_THAT(PixelAt(actual, 16, 16), test::RgbaEq(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actual, 12, 12), test::RgbaEq(0, 255, 0, 255));
+  EXPECT_EQ(PixelAt(actual, 4, 4)[3], 0);
+  EXPECT_EQ(PixelAt(actual, 40, 40)[3], 0);
+}
+
 #ifdef DONNER_TEXT_FULL
 TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphPreservesDecodedPremultipliedAlpha) {
   SVGDocument document = ParseSvg(R"svg(
