@@ -3936,21 +3936,34 @@ bool ReserveStretchedCacheOutline(Registry& registry, FontManager& fontManager, 
   return TextGeometryBudget(registry).reserve(owner, retainedBytes);
 }
 
+Path PlaceStretchedTextPathCell(const TextRun& run, const TextGlyph& glyph, double emTop,
+                                double emBottom) {
+  if (!run.stretchedTextPath || !glyph.textPathOrigin) {
+    return Path();
+  }
+  const double geometricScaleY = glyph.stretchScaleY;
+  Path cell = PathBuilder()
+                  .addRect(Box2d::FromXYWH(0.0, -emTop * geometricScaleY, glyph.xAdvance,
+                                           (emTop + emBottom) * geometricScaleY))
+                  .build();
+  const double rotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
+  if (rotation != 0.0) {
+    cell = transformPath(cell, Transform2d::Rotate(rotation * MathConstants<double>::kPi / 180.0));
+  }
+  return WarpTextPathOutline(cell, *run.stretchedTextPath, glyph);
+}
+
 std::optional<Box2d> CachedTextRunCellBounds(const TextRun& run, double emTop, double emBottom) {
   Box2d result;
   bool initialized = false;
   for (const TextGlyph& glyph : run.glyphs) {
-    Path cell = PathBuilder()
-                    .addRect(Box2d::FromXYWH(0.0, -emTop, glyph.xAdvance, emTop + emBottom))
-                    .build();
+    Path cell;
     if (run.stretchedTextPath && glyph.textPathOrigin) {
-      const double rotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
-      if (rotation != 0.0) {
-        cell =
-            transformPath(cell, Transform2d::Rotate(rotation * MathConstants<double>::kPi / 180.0));
-      }
-      cell = WarpTextPathOutline(cell, *run.stretchedTextPath, glyph);
+      cell = PlaceStretchedTextPathCell(run, glyph, emTop, emBottom);
     } else {
+      cell = PathBuilder()
+                 .addRect(Box2d::FromXYWH(0.0, -emTop, glyph.xAdvance, emTop + emBottom))
+                 .build();
       cell = transformPath(cell, Transform2d::Translate(glyph.xPosition, glyph.yPosition));
     }
     if (!cell.empty()) {
@@ -4169,13 +4182,27 @@ Transform2d TextRootFromReferenceGlyph(const TextGlyph& glyph) {
          Transform2d::Translate(glyph.xPosition, glyph.yPosition);
 }
 
-bool AddReferenceGlyphCell(TextEngine::ReferenceGeometry& result, const TextGlyph& glyph,
-                           double emTop, double emBottom, TextReferenceWork& work) {
-  const double advance = glyph.xAdvance;
-  const double verticalScale = glyph.stretchScaleY;
-  const Box2d localCell(Vector2d(std::min(0.0, advance), -emTop * verticalScale),
-                        Vector2d(std::max(0.0, advance), emBottom * verticalScale));
-  const Box2d cell = TextRootFromReferenceGlyph(glyph).transformBox(localCell);
+bool AddReferenceGlyphCell(TextEngine::ReferenceGeometry& result, const TextRun& run,
+                           const TextGlyph& glyph, double emTop, double emBottom,
+                           TextReferenceWork& work) {
+  Box2d cell;
+  if (run.stretchedTextPath && glyph.textPathOrigin) {
+    constexpr std::size_t kCellCommandsAndPoints = 5u + 4u;
+    if (!work.reserveProduct(kCellCommandsAndPoints, kMaximumTextPathWarpExpansion) ||
+        !work.reserve(1u)) {
+      return false;
+    }
+    Path cellPath = PlaceStretchedTextPathCell(run, glyph, emTop, emBottom);
+    if (cellPath.empty()) {
+      return work.reject();
+    }
+    cell = cellPath.bounds();
+  } else {
+    const double geometricScaleY = glyph.stretchScaleY;
+    const Box2d localCell(Vector2d(std::min(0.0, glyph.xAdvance), -emTop * geometricScaleY),
+                          Vector2d(std::max(0.0, glyph.xAdvance), emBottom * geometricScaleY));
+    cell = TextRootFromReferenceGlyph(glyph).transformBox(localCell);
+  }
   if (!std::isfinite(cell.topLeft.x) || !std::isfinite(cell.topLeft.y) ||
       !std::isfinite(cell.bottomRight.x) || !std::isfinite(cell.bottomRight.y)) {
     return work.reject();
@@ -4184,7 +4211,7 @@ bool AddReferenceGlyphCell(TextEngine::ReferenceGeometry& result, const TextGlyp
   return true;
 }
 
-bool AdmitReferenceOutline(FontManager& manager, FontHandle font, int glyphIndex,
+bool AdmitReferenceOutline(FontManager& manager, FontHandle font, int glyphIndex, bool stretched,
                            TextReferenceWork& work) {
   auto complexity = manager.glyphOutlineComplexity(font, glyphIndex);
   if (!complexity) {
@@ -4196,7 +4223,12 @@ bool AdmitReferenceOutline(FontManager& manager, FontHandle font, int glyphIndex
         FontManager::GlyphOutlineComplexity{.maximumVertices = fonts::kMaximumExpandedGlyphVertices,
                                             .work = fonts::kMaximumGlyphOutlineWork};
   }
-  return work.reserve(complexity->work) && work.reserveProduct(complexity->maximumVertices, 15);
+  constexpr std::size_t kDecodedOutlineFactor = 15u;
+  constexpr std::size_t kWarpedCommandAndPointFactor = 2u * 3u * kMaximumTextPathWarpExpansion;
+  const std::size_t expansion =
+      stretched ? kDecodedOutlineFactor + kWarpedCommandAndPointFactor : kDecodedOutlineFactor;
+  return work.reserve(complexity->work) &&
+         work.reserveProduct(complexity->maximumVertices, expansion);
 }
 
 bool AppendReferenceOutline(const TextEngine& engine, FontManager& manager, const TextRun& run,
@@ -4205,21 +4237,22 @@ bool AppendReferenceOutline(const TextEngine& engine, FontManager& manager, cons
   if (engine.isBitmapOnly(run.font)) {
     return true;
   }
-  if (!AdmitReferenceOutline(manager, run.font, glyph.glyphIndex, work)) {
+  if (!AdmitReferenceOutline(manager, run.font, glyph.glyphIndex,
+                             static_cast<bool>(run.stretchedTextPath), work)) {
     return false;
   }
   const float scale = engine.scaleForEmToPixels(run.font, run.usedFontSizePx) * glyph.fontSizeScale;
-  const Path raw = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
+  Path raw = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
   if (raw.empty()) {
     return true;
   }
   if (!work.reservePath(raw) || !work.reserve(1)) {
     return false;
   }
-  const Transform2d textRootFromGlyph =
-      Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY) *
-      TextRootFromReferenceGlyph(glyph);
-  Path placed = raw.transformed(textRootFromGlyph);
+  Path placed = PlaceCachedGlyphOutline(std::move(raw), run, glyph);
+  if (placed.empty()) {
+    return work.reject();
+  }
   const Box2d bounds = placed.bounds();
   if (!IsFiniteTextPosition(bounds.topLeft) || !IsFiniteTextPosition(bounds.bottomRight)) {
     return work.reject();
@@ -4239,7 +4272,7 @@ bool AppendTextReferenceRun(const TextEngine& engine, FontManager& manager, cons
   const double emTop = scale > 0.0f ? metrics.ascent * scale : run.usedFontSizePx;
   const double emBottom = scale > 0.0f ? -metrics.descent * scale : 0.0;
   for (const auto& glyph : run.glyphs) {
-    if (!AddReferenceGlyphCell(result, glyph, emTop, emBottom, work) ||
+    if (!AddReferenceGlyphCell(result, run, glyph, emTop, emBottom, work) ||
         (includeOutlines &&
          !AppendReferenceOutline(engine, manager, run, glyph, source, result, work))) {
       return false;
@@ -4342,6 +4375,7 @@ bool AdmitTextReferenceInput(const components::ComputedTextComponent& computed,
 std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
     EntityHandle handle, bool includeOutlines, std::size_t& remainingWork,
     const TextStyleContext* styleContext) const {
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry_);
   TextReferenceWork work(remainingWork);
   const Entity root = findTextRootEntity(handle);
   const auto* computed = registry_.try_get<components::ComputedTextComponent>(root);
