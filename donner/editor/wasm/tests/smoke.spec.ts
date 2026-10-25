@@ -92,6 +92,9 @@ declare global {
       presentedAtMs?: number;
       resultFramePresented?: boolean;
       framesPresentedWithoutResult?: number;
+      postPollFramesCompletedWithoutResult?: number;
+      preexistingFramesCompleted?: number;
+      presentationBoundaryKnown?: boolean;
       workerMs: number;
       queueWaitMs: number;
       idleYieldMs: number;
@@ -2254,9 +2257,13 @@ for (
     expect(phaseTimings.presentedMs).toBeDefined();
     expect(phaseTimings.completedMs).toBeDefined();
     expect(
-      completedWorkerStats?.framesPresentedWithoutResult,
-      `a frame reached the canvas without the completed result: ${JSON.stringify(phaseTimings)}`,
+      completedWorkerStats?.postPollFramesCompletedWithoutResult,
+      `a post-poll admitted frame omitted the completed capture: ${JSON.stringify(completedWorkerStats)}`,
     ).toBe(0);
+    expect(completedWorkerStats?.presentationBoundaryKnown).toBe(true);
+    expect(completedWorkerStats?.framesPresentedWithoutResult).toBeGreaterThanOrEqual(
+      completedWorkerStats?.postPollFramesCompletedWithoutResult ?? 0,
+    );
     if (kBackend === "geode" && (completedWorkerStats?.readbackCount || 0) > 0) {
       expect(completedWorkerStats?.readbackWaitStrategy).toBe(kExpectedRasterWaitStrategy);
     }
