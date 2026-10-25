@@ -183,8 +183,9 @@ bool HasStableDamageMask(const components::RenderingInstanceComponent& instance)
 }
 
 bool HasStableDamageNode(const components::RenderingInstanceComponent& instance) {
-  const bool unsupportedClip = instance.clipPath.has_value() && instance.clipPath->valid() &&
-                               instance.clipPath->units != ClipPathUnits::UserSpaceOnUse;
+  const bool unsupportedClip =
+      instance.basicClipPath || (instance.clipPath.has_value() && instance.clipPath->valid() &&
+                                 instance.clipPath->units != ClipPathUnits::UserSpaceOnUse);
   return !instance.resolvedFilter.has_value() && !instance.markerStart.has_value() &&
          !instance.markerMid.has_value() && !instance.markerEnd.has_value() && !unsupportedClip &&
          HasStableDamageMask(instance);
@@ -3179,9 +3180,8 @@ bool OpensCompositingContext(Registry& registry,
   const auto& properties = *style->properties;
   return properties.opacity.get().value() < 1.0 ||
          properties.mixBlendMode.get().value() != MixBlendMode::Normal ||
-         properties.isolation.get().value() == Isolation::Isolate ||
-         instance.clipPath.has_value() || instance.resolvedFilter.has_value() ||
-         instance.clipRect.has_value();
+         properties.isolation.get().value() == Isolation::Isolate || instance.hasClipPath() ||
+         instance.resolvedFilter.has_value() || instance.clipRect.has_value();
 }
 
 // True when @p owner holds a retained, unshifted texture of its own subtree. A dirty owner has a
@@ -3524,8 +3524,8 @@ FallbackReason CompositorController::detectFallbackReasons(
     reasons |= FallbackReason::Filter;
   }
 
-  // Clip paths reference elements that may be outside the promoted subtree.
-  if (instance.clipPath.has_value()) {
+  // Clip paths constrain the entire promoted subtree.
+  if (instance.hasClipPath()) {
     reasons |= FallbackReason::ClipPath;
   }
 

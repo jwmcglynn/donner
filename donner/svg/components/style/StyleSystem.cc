@@ -114,12 +114,25 @@ bool BlockExternalReference(Property<Reference, cascade>& property,
   return true;
 }
 
+bool BlockExternalClipPath(PropertyRegistry& properties, const PropertyRegistry& local) {
+  const auto clip = properties.clipPath.get();
+  if (local.clipPath.state != PropertyState::Inherit || !clip) {
+    return false;
+  }
+  const auto* reference = std::get_if<Reference>(&clip->value);
+  if (!reference || reference->href.empty()) {
+    return false;
+  }
+  properties.clipPath.set(PropertyState::ExplicitInitial, css::Specificity());
+  return true;
+}
+
 bool BlockExternalResources(PropertyRegistry& properties, const PropertyRegistry& local) {
   bool rejected = BlockExternalReference(properties.markerStart, local.markerStart);
   rejected |= BlockExternalReference(properties.markerMid, local.markerMid);
   rejected |= BlockExternalReference(properties.markerEnd, local.markerEnd);
   rejected |= BlockExternalReference(properties.mask, local.mask);
-  rejected |= BlockExternalReference(properties.clipPath, local.clipPath);
+  rejected |= BlockExternalClipPath(properties, local);
   if (local.filter.state == PropertyState::Inherit) {
     const auto* effects = properties.filter.getStoredValue();
     if (effects && std::any_of(effects->begin(), effects->end(), [](const FilterEffect& effect) {
