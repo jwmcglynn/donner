@@ -6,6 +6,7 @@
 #include <array>
 #include <limits>
 
+#include "donner/base/MathUtils.h"
 #include "donner/base/Path.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/text/TextPathWarp.h"
@@ -96,6 +97,43 @@ TEST(PlacedTextGeometryTest, StretchUsesLimitingTangentsAtCoincidentCurveEndpoin
     EXPECT_THAT(cell.bounds(), BoxEq(Vector2d(-2.0, samplesEnd ? 10.0 : 0.0),
                                      Vector2d(2.0, samplesEnd ? 20.0 : 10.0)));
   }
+}
+
+TEST(PlacedTextGeometryTest, StretchDistinguishesTinyAndZeroCurveEndpointDerivatives) {
+  const auto expectEndpoint = [](const Path& route, bool samplesEnd, double expectedAngle,
+                                 const Vector2d& expectedMapped) {
+    StretchedTextPath mapping = MeasurePath(route);
+    const double distance = samplesEnd ? mapping.measuredPath.pathLength() : 0.0;
+    const auto sample = mapping.measuredPath.pointAtArcLength(distance);
+    ASSERT_TRUE(sample.valid);
+    EXPECT_THAT(sample.angle, DoubleNear(expectedAngle, 1e-12));
+
+    TextGlyph glyph;
+    glyph.textPathOrigin = distance;
+    EXPECT_THAT(MapTextPathPoint(mapping, glyph, Vector2d(0.0, -2.0)),
+                Optional(Vector2Near(expectedMapped.x, expectedMapped.y)));
+  };
+
+  expectEndpoint(PathBuilder()
+                     .moveTo(Vector2d(0.0, 0.0))
+                     .curveTo(Vector2d(1e-20, 0.0), Vector2d(0.0, 10.0), Vector2d(0.0, 20.0))
+                     .build(),
+                 false, 0.0, Vector2d(0.0, -2.0));
+  expectEndpoint(PathBuilder()
+                     .moveTo(Vector2d(0.0, 0.0))
+                     .curveTo(Vector2d(0.0, 10.0), Vector2d(1e-20, 20.0), Vector2d(0.0, 20.0))
+                     .build(),
+                 true, MathConstants<double>::kPi, Vector2d(0.0, 22.0));
+  expectEndpoint(PathBuilder()
+                     .moveTo(Vector2d(0.0, 0.0))
+                     .curveTo(Vector2d(0.0, 0.0), Vector2d(1e-20, 0.0), Vector2d(0.0, 20.0))
+                     .build(),
+                 false, 0.0, Vector2d(0.0, -2.0));
+  expectEndpoint(PathBuilder()
+                     .moveTo(Vector2d(0.0, 0.0))
+                     .curveTo(Vector2d(1e-20, 20.0), Vector2d(0.0, 20.0), Vector2d(0.0, 20.0))
+                     .build(),
+                 true, MathConstants<double>::kPi, Vector2d(0.0, 22.0));
 }
 
 TEST(PlacedTextGeometryTest, StretchIsIdentityOnHorizontalPathIncludingTangentExtensions) {
