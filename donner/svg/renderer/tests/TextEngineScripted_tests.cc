@@ -286,7 +286,6 @@ EntityHandle MakeStretchedReferenceTextRoot(Registry& registry, Visibility visib
   span.textPathSourceEntity = root.entity();
   span.textPathMethod = components::TextPathMethod::Stretch;
   span.rotateList = {15.0};
-  span.fontVariant = FontVariant::SmallCaps;
   return root;
 }
 
@@ -439,7 +438,6 @@ TEST(TextEngineScriptedTest, ReferenceGeometryHasAnalyticSharpCornerStretchBound
                         .build();
   span.textPathSourceEntity = root.entity();
   span.textPathMethod = components::TextPathMethod::Stretch;
-  span.fontVariant = FontVariant::SmallCaps;
   std::size_t work = 100000;
 
   const auto geometry = engine.referenceGeometry(root, true, work);
@@ -447,8 +445,8 @@ TEST(TextEngineScriptedTest, ReferenceGeometryHasAnalyticSharpCornerStretchBound
   ASSERT_THAT(geometry, testing::Optional(testing::_));
   ASSERT_THAT(geometry->objectBounds, testing::Optional(testing::_));
   ASSERT_THAT(geometry->outlines, SizeIs(1));
-  // Scripted metrics define a full 10x12 cell while the synthetic small-caps outline is 0.8 scale.
-  // The baseline turns at x=5, so incoming +Y and outgoing -X normals give these exact unions.
+  // Scripted metrics define a full 10x12 cell and a fixed 6x8 outline. The baseline turns at x=5,
+  // so incoming +Y and outgoing -X normals give these exact unions.
   EXPECT_THAT(*geometry->objectBounds, BitmapBoundsNear(Box2d::FromXYWH(0.0, -10.0, 15.0, 15.0)));
   EXPECT_THAT(geometry->outlines.front().path.bounds(),
               BitmapBoundsNear(Box2d::FromXYWH(0.0, -8.0, 13.0, 9.0)));

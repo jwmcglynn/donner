@@ -1,11 +1,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <string>
 #include <string_view>
 
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
@@ -195,6 +197,32 @@ TEST(CircleClipPath, HiddenTextRetainsStrokeReferenceGeometry) {
   editor::tests::CompareBitmapToBitmap(hidden, transparent, "circle_hidden_text_stroke_box",
                                        editor::tests::PixelmatchIdentityParams());
 }
+
+#ifdef DONNER_TEXT_ENABLED
+TEST(CircleClipPath, CurvedStretchWorkRefusalSuppressesWholeCircleClip) {
+  SVGDocument document = instantiateSubtree(
+      R"svg(<defs><path id="curve" d="M8 44 C8 4 56 4 56 44"/></defs>
+        <g clip-path="circle() stroke-box">
+          <rect x="4" y="4" width="56" height="56" fill="red"/>
+          <text visibility="hidden" font-family="Public Sans" font-size="28" stroke="blue">
+            <textPath href="#curve" method="stretch">Curve</textPath>
+          </text>
+        </g>
+        <rect x="1" y="1" width="3" height="3" fill="lime"/>)svg",
+      {}, Vector2i(64, 64));
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.textPathMeasurementWorkUnits = 2;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  document.registry().ctx().get<components::DocumentResourceFamilyContext>().budget = family;
+
+  const auto actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+
+  editor::tests::CompareBitmapToBitmap(actual, RenderCircleScene(""),
+                                       "circle_curved_stretch_work_refusal",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(family->securityStats().textPathMeasurementWorkRejected, testing::IsTrue());
+}
+#endif
 
 TEST(CircleClipPath, UseHostSuppliesShadowGeometry) {
   const auto actual = RenderCircleScene(
