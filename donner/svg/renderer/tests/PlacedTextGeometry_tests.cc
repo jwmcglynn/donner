@@ -92,10 +92,12 @@ TEST(PlacedTextGeometryTest, StretchUsesLimitingTangentsAtCoincidentCurveEndpoin
     const auto mappedEndpoint = MapTextPathPoint(mapping, glyph, endpointLocal);
     EXPECT_THAT(mappedEndpoint, Optional(Vector2Near(2.0, samplesEnd ? 20.0 : 0.0)));
     EXPECT_THAT(WarpGlyphOutline(rectangle, mapping, glyph).commands(), Not(IsEmpty()));
-    const Path cell = PlaceStretchedTextPathCell(run, glyph, 2.0, 2.0);
+    TextGlyph cellGlyph = glyph;
+    cellGlyph.textPathOrigin = 0.0;
+    cellGlyph.xAdvance = mapping.measuredPath.pathLength();
+    const Path cell = PlaceStretchedTextPathCell(run, cellGlyph, 2.0, 2.0);
     EXPECT_THAT(cell.commands(), Not(IsEmpty()));
-    EXPECT_THAT(cell.bounds(), BoxEq(Vector2d(-2.0, samplesEnd ? 10.0 : 0.0),
-                                     Vector2d(2.0, samplesEnd ? 20.0 : 10.0)));
+    EXPECT_THAT(cell.bounds(), BoxEq(Vector2d(-2.0, 0.0), Vector2d(2.0, 20.0)));
   }
 }
 
