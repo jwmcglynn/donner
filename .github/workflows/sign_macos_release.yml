@@ -1,5 +1,9 @@
 name: Sign macOS release editor
 
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 on:
   workflow_dispatch:
 
@@ -7,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: sign-editor-v0.8.0
+  group: sign-editor-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -54,12 +58,14 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
-      - name: Preserve Apple notarization diagnostics
+      - name: Preserve signing and notarization diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: editor-notarization-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/editor-signing/notary-*.json
+          path: |
+            ${{ runner.temp }}/editor-signing/notary-*.json
+            ${{ runner.temp }}/editor-signing/signing-errors.json
           if-no-files-found: ignore
           retention-days: 90
 
@@ -74,6 +80,8 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+      - name: Select pinned Xcode
+        run: tools/ci_select_macos_xcode.sh
       - uses: actions/download-artifact@v8
         with:
           name: signed-editor-input-${{ github.run_id }}-${{ github.run_attempt }}
@@ -85,6 +93,15 @@ jobs:
           name: signed-editor-verification-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/signed-editor/verification.json
           if-no-files-found: error
+          retention-days: 90
+
+      - name: Preserve isolated verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: editor-verification-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signed-editor/signing-errors.json
+          if-no-files-found: ignore
           retention-days: 90
 
   attest:

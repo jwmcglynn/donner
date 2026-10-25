@@ -13,6 +13,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import zipfile
 
 from tools import release_macos_editor as native
@@ -34,12 +35,68 @@ SECRET_NAMES = ("MACOS_CERTIFICATE_BASE64", "MACOS_CERTIFICATE_PASSWORD", "APPLE
                 "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID")
 
 
+DIAGNOSTIC_PATH: Path | None = None
+DIAGNOSTIC_LIMIT = 65536
+
+
+def command_identity(args: tuple[str, ...]) -> tuple[str, str]:
+    tool = Path(args[0]).name
+    if tool not in {"security", "codesign", "xcrun", "spctl", "gh"}:
+        return "platform-tool", "execute"
+    operations = {"create-keychain", "set-keychain-settings", "unlock-keychain", "import",
+                  "set-key-partition-list", "find-identity", "delete-keychain", "notarytool",
+                  "stapler", "api", "attestation"}
+    operation = args[1] if len(args) > 1 and args[1] in operations else "execute"
+    if tool == "xcrun" and len(args) > 2 and args[2] in {
+            "store-credentials", "submit", "wait", "log", "staple", "validate"}:
+        operation += "-" + args[2]
+    return tool, operation
+
+
+def failure_reason(failure: Exception, output: bytes) -> str:
+    if isinstance(failure, subprocess.TimeoutExpired):
+        return "timeout"
+    if isinstance(failure, OSError):
+        return "tool-unavailable"
+    reasons = ((b"mac verification failed", "pkcs12-password-or-data"),
+               (b"user interaction is not allowed", "keychain-interaction-required"),
+               (b"errsecinternalcomponent", "keychain-signing-failure"),
+               (b"the specified item could not be found", "signing-item-not-found"),
+               (b"no identity found", "signing-identity-not-found"),
+               (b"timestamp service is not available", "timestamp-service-unavailable"),
+               (b"unable to build chain", "certificate-chain-incomplete"),
+               (b"sealed resource is missing or invalid", "sealed-resource-invalid"),
+               (b"ticket not found", "notarization-ticket-unavailable"),
+               (b"http 401", "authentication-rejected"),
+               (b"http 403", "permission-rejected"),
+               (b"could not resolve", "network-name-resolution"))
+    return next((reason for token, reason in reasons if token in output.lower()), "unclassified")
+
+
+def retain_failure(args: tuple[str, ...], failure: Exception) -> dict:
+    chunks = [getattr(failure, name, None) or b"" for name in ("stdout", "stderr")]
+    chunks = [part.encode("utf-8", errors="replace") if isinstance(part, str) else part for part in chunks]
+    output = b"".join(part[:DIAGNOSTIC_LIMIT] for part in chunks)[:DIAGNOSTIC_LIMIT]
+    tool, operation = command_identity(args)
+    code = getattr(failure, "returncode", None)
+    record = {"tool": tool, "operation": operation, "reason": failure_reason(failure, output),
+              "exit_code": code if type(code) is int else None,
+              "output_truncated": sum(len(part) for part in chunks) > DIAGNOSTIC_LIMIT}
+    print("Editor signing command failure: " + json.dumps(record), file=sys.stderr)
+    if DIAGNOSTIC_PATH is not None:
+        DIAGNOSTIC_PATH.parent.mkdir(parents=True, exist_ok=True)
+        prior = json.loads(DIAGNOSTIC_PATH.read_text()) if DIAGNOSTIC_PATH.exists() else []
+        DIAGNOSTIC_PATH.write_text(json.dumps((prior + [record])[-32:], indent=2) + "\n")
+    return record
+
+
 def run(*args: str, timeout: int = 120) -> str:
     """Run a platform tool without echoing credential-bearing arguments on failure."""
     try:
         result = subprocess.run(args, check=True, capture_output=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError):
-        raise ValueError("signing platform command failed: " + Path(args[0]).name) from None
+    except (OSError, subprocess.SubprocessError) as failure:
+        diagnostic = retain_failure(args, failure)
+        raise ValueError("signing command failed: " + diagnostic["tool"] + ": " + diagnostic["reason"]) from None
     if len(result.stdout) + len(result.stderr) > native.MAX_CONTROL_BYTES:
         raise ValueError("signing platform command output exceeds its limit")
     return (result.stdout + result.stderr).decode("utf-8")
@@ -373,11 +430,13 @@ def check_verification(work: Path) -> None:
 
 
 def main() -> None:
+    global DIAGNOSTIC_PATH
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("prepare", "sign", "verify", "check-verification"))
     parser.add_argument("--work", type=Path, required=True)
     args = parser.parse_args()
     work = args.work.resolve()
+    DIAGNOSTIC_PATH = work / "signing-errors.json"
     if args.operation == "prepare":
         prepare(work, BACKFILL["tag"], BACKFILL["commit"], BACKFILL["archive_sha256"])
     elif args.operation == "sign":

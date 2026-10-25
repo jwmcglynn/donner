@@ -634,7 +634,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "main.yml:" + HOSTED, "main.yml:macos-browser", "main.yml:" + SELF_HOSTED,
                 "main.yml:" + PARITY, "cmake.yml:macos", "editor_wasm.yml:build",
                 "bcr_preflight.yml:consumer", "bcr_preflight.yml:cli-macos", "fuzz.yml:macos",
-                "perf.yml:perf")})
+                "perf.yml:perf", "sign_macos_release.yml:sign", "sign_macos_release.yml:verify")})
         cmake, wasm = ".github/workflows/cmake.yml", ".github/workflows/editor_wasm.yml"
         fuzz, bcr = ".github/workflows/fuzz.yml", ".github/workflows/bcr_preflight.yml"
         perf = ".github/workflows/perf.yml"
