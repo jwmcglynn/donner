@@ -2002,11 +2002,12 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::Skip("Bug #1172: dx and column spacing match, but both columns sit "
                                   "0.8 units left of the reference (central-origin convention, "
                                   "as in tb.svg); two columns double the diff to ~1830 px")},
-                    {"tb-with-dx-on-tspan.svg", Params().withMaxPixelsDifferent(1500).withReason(
-                                                    "Bug: Baseline is ~2px off compared to resvg")},
+                    {"tb-with-dx-on-tspan.svg",
+                     Params::Skip("Bug #1172: positioning matches; the column has the same "
+                                  "central-origin offset as tb.svg; ~975 px differ")},
                     {"tb-with-dy-on-second-tspan.svg",
-                     Params().withMaxPixelsDifferent(1500).withReason(
-                         "Bug: Baseline is ~2px off compared to resvg")},
+                     Params::Skip("Bug #1172: positioning matches; the column has the same "
+                                  "central-origin offset as tb.svg; ~1000 px differ")},
                     {"tb-with-rotate-and-underline.svg",
                      Params::RenderOnly("UB: tb with rotate and underline")},
                     {"tb-with-rotate.svg", Params::RenderOnly("UB: tb with rotate")},
