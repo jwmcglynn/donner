@@ -1155,8 +1155,11 @@ def generate_root() -> None:
         f.write("# brotli compression (required by woff2)\n")
         f.write(
             "FetchContent_Declare(brotli\n"
-            "  GIT_REPOSITORY https://github.com/google/brotli.git\n"
-            "  GIT_TAG        028fb5a23661f123017c060daa546b55cf4bde29\n"
+            "  URL https://github.com/google/brotli/archive/refs/tags/v1.2.1.tar.gz\n"
+            "  URL_HASH SHA256=98d35d11a78dc453aebb7d10c3748f3f73ff78c8267c0dc697b8631f67bf7e8f\n"
+            # CMake 3.20 preserves archive timestamps; new object paths prevent stale decoders.
+            '  SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/brotli-1.2.1-src"\n'
+            '  BINARY_DIR "${FETCHCONTENT_BASE_DIR}/brotli-1.2.1-build"\n'
             ")\n"
         )
         f.write("FetchContent_MakeAvailable(brotli)\n")
