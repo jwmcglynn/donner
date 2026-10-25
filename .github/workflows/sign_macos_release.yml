@@ -18,6 +18,7 @@ jobs:
     environment: donner-notarization
     permissions:
       contents: read
+      attestations: read
     steps:
       - uses: actions/checkout@v7
         with:
