@@ -15,6 +15,8 @@ namespace {
 using testing::Contains;
 using testing::DoubleNear;
 using testing::ElementsAre;
+using testing::IsEmpty;
+using testing::Not;
 
 StretchedTextPath MeasurePath(const Path& path) {
   Path::MeasuredPath measured = path.measure();
