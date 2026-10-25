@@ -107,7 +107,7 @@ def encoder_provenance(dependency_pins, module, encoder_source, codec_sources):
         raise ValueError("Expected one pinned WOFF2 repository")
     commits = re.findall(r'\bcommit\s*=\s*"([a-f0-9]{40})"', woff2[0])
     brotli = re.findall(
-        r'bazel_dep\(name\s*=\s*"brotli",\s*version\s*=\s*"([^"]+)"\)',
+        r'bazel_dep\(\s*name\s*=\s*"brotli",\s*version\s*=\s*"([^"]+)"(?:,\s*dev_dependency\s*=\s*True)?\s*\)',
         Path(module).read_text(encoding="utf-8"),
     )
     if len(commits) != 1 or len(brotli) != 1:
