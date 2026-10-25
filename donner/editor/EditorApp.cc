@@ -115,7 +115,7 @@ LineCap ToLineCap(svg::StrokeLinecap cap) {
 LineJoin ToLineJoin(svg::StrokeLinejoin join) {
   switch (join) {
     case svg::StrokeLinejoin::Miter: return LineJoin::Miter;
-    case svg::StrokeLinejoin::MiterClip: return LineJoin::Miter;
+    case svg::StrokeLinejoin::MiterClip: return LineJoin::MiterClip;
     case svg::StrokeLinejoin::Round: return LineJoin::Round;
     case svg::StrokeLinejoin::Bevel: return LineJoin::Bevel;
     case svg::StrokeLinejoin::Arcs: return LineJoin::Miter;

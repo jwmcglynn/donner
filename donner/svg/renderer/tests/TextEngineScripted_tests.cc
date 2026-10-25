@@ -17,6 +17,7 @@
 #include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
@@ -65,6 +66,8 @@ public:
   std::optional<SubSuperMetrics> subSuper;
   std::shared_ptr<float> shapedFontSizePx;
   int xHeight = 500;
+  mutable std::size_t outlineCalls = 0;
+  mutable std::optional<FontVariant> lastShapedVariant;
 
   FontVMetrics fontVMetrics(FontHandle /*font*/) const override {
     return FontVMetrics{
@@ -97,6 +100,7 @@ public:
   }
 
   Path glyphOutline(FontHandle /*font*/, int glyphIndex, float /*scale*/) const override {
+    ++outlineCalls;
     if (glyphIndex == 0) {
       return Path();
     }
@@ -117,6 +121,7 @@ public:
   ShapedRun shapeRun(FontHandle /*font*/, float fontSizePx, std::string_view spanText,
                      size_t byteOffset, size_t byteLength, bool /*isVertical*/,
                      FontVariant fontVariant, bool forceLogicalOrder) const override {
+    lastShapedVariant = fontVariant;
     if (shapedFontSizePx) {
       *shapedFontSizePx = fontSizePx;
     }
@@ -243,6 +248,183 @@ auto RunOnPathIs(auto matcher) {
 }
 
 }  // namespace
+
+namespace {
+
+EntityHandle MakeReferenceTextRoot(Registry& registry, Visibility visibility) {
+  const Entity root = registry.create();
+  registry.emplace<donner::components::TreeComponent>(root, xml::XMLQualifiedNameRef("text"));
+  registry.emplace<components::TextRootComponent>(root);
+  registry.emplace<components::ComputedViewBoxComponent>(root, Box2d::FromXYWH(0, 0, 200, 100));
+  components::TextComponent text;
+  text.text = RcString("A");
+  registry.emplace<components::TextComponent>(root, text);
+  components::ComputedTextComponent computed;
+  auto span = MakeSpan("A");
+  span.sourceEntity = root;
+  span.xList = {Lengthd(10, Lengthd::Unit::None)};
+  span.yList = {Lengthd(20, Lengthd::Unit::None)};
+  computed.spans.push_back(std::move(span));
+  registry.emplace<components::ComputedTextComponent>(root, std::move(computed));
+  components::ComputedStyleComponent style;
+  style.properties.emplace();
+  style.properties->fontSize.set(Lengthd(12, Lengthd::Unit::Px), css::Specificity::Override());
+  style.properties->visibility.set(visibility, css::Specificity::Override());
+  registry.emplace<components::ComputedStyleComponent>(root, std::move(style));
+  return EntityHandle(registry, root);
+}
+
+}  // namespace
+
+TEST(TextEngineScriptedTest, ReferenceFillBoundsIncludeHiddenCellsWithoutDecodingOutlines) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  const ScriptedTextBackend* probe = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Hidden);
+  std::size_t work = 100000;
+  const auto geometry = engine.referenceGeometry(root, false, work);
+  ASSERT_THAT(geometry, testing::Optional(testing::_));
+  ASSERT_THAT(geometry->objectBounds, testing::Optional(testing::_));
+  EXPECT_DOUBLE_EQ(geometry->objectBounds->topLeft.x, 10.0);
+  EXPECT_NEAR(geometry->objectBounds->topLeft.y, 10.0, 1e-6);
+  EXPECT_DOUBLE_EQ(geometry->objectBounds->bottomRight.x, 20.0);
+  EXPECT_NEAR(geometry->objectBounds->bottomRight.y, 22.0, 1e-6);
+  EXPECT_THAT(geometry->outlines, IsEmpty());
+  EXPECT_EQ(probe->outlineCalls, 0u);
+  EXPECT_THAT(root.all_of<components::ComputedTextGeometryComponent>(), testing::IsFalse());
+}
+
+TEST(TextEngineScriptedTest, ReferenceSmallCapsCellsKeepFullFontHeight) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  const ScriptedTextBackend* probe = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Hidden);
+  root.get<components::TextComponent>().text = RcString("a");
+  auto& span = root.get<components::ComputedTextComponent>().spans.front();
+  span.text = RcString("a");
+  span.fontVariant = FontVariant::SmallCaps;
+  root.get<components::ComputedStyleComponent>().properties->fontVariant.set(
+      FontVariant::SmallCaps, css::Specificity::Override());
+  std::size_t work = 100000;
+
+  const auto geometry = engine.referenceGeometry(root, false, work);
+
+  ASSERT_THAT(probe->lastShapedVariant, testing::Optional(FontVariant::SmallCaps));
+  ASSERT_THAT(geometry, testing::Optional(testing::_));
+  // Synthetic small caps scale the ink by 0.8, not the element's 12px font cell.
+  // The scripted font cell extends 10px above and 2px below its baseline at (10,20).
+  EXPECT_THAT(geometry->objectBounds,
+              testing::Optional(BitmapBoundsNear(Box2d::FromXYWH(10, 10, 10, 12))));
+  EXPECT_THAT(geometry->outlines, IsEmpty());
+  EXPECT_THAT(probe->outlineCalls, Eq(0u));
+}
+
+TEST(TextEngineScriptedTest, ShadowTextStyleContextIsBoundedAndRequiresSpanCoverage) {
+  Registry registry;
+  const Entity lightRoot = registry.create();
+  const Entity lightSpan = registry.create();
+  const Entity shadowRoot = registry.create();
+  const Entity shadowSpan = registry.create();
+  registry.emplace<donner::components::TreeComponent>(lightRoot, xml::XMLQualifiedNameRef("text"));
+  registry.emplace<donner::components::TreeComponent>(lightSpan, xml::XMLQualifiedNameRef("tspan"));
+  registry.emplace<donner::components::TreeComponent>(shadowRoot, xml::XMLQualifiedNameRef("text"));
+  registry.emplace<donner::components::TreeComponent>(shadowSpan,
+                                                      xml::XMLQualifiedNameRef("tspan"));
+  registry.get<donner::components::TreeComponent>(shadowRoot).appendChild(registry, shadowSpan);
+  registry.emplace<components::ShadowEntityComponent>(shadowRoot, lightRoot);
+  registry.emplace<components::ShadowEntityComponent>(shadowSpan, lightSpan);
+  for (int index = 1; index < 32; ++index) {
+    const Entity extraLight = registry.create();
+    const Entity extraShadow = registry.create();
+    registry.emplace<donner::components::TreeComponent>(extraLight,
+                                                        xml::XMLQualifiedNameRef("tspan"));
+    registry.emplace<donner::components::TreeComponent>(extraShadow,
+                                                        xml::XMLQualifiedNameRef("tspan"));
+    registry.get<donner::components::TreeComponent>(shadowRoot).appendChild(registry, extraShadow);
+    registry.emplace<components::ShadowEntityComponent>(extraShadow, extraLight);
+  }
+  components::ComputedTextComponent text;
+  text.spans.emplace_back().sourceEntity = lightSpan;
+
+  std::size_t insufficientWork = 1;
+  EXPECT_THAT(BuildShadowTextStyleContext(registry, shadowRoot, text, &insufficientWork),
+              Eq(std::nullopt));
+  EXPECT_EQ(insufficientWork, 0u);
+
+  std::size_t admittedWork = 67;
+  const auto context = BuildShadowTextStyleContext(registry, shadowRoot, text, &admittedWork);
+  ASSERT_THAT(context, testing::Optional(testing::_));
+  EXPECT_EQ(context->rootEntity, shadowRoot);
+  EXPECT_EQ(context->styleEntityFor(lightRoot), shadowRoot);
+  EXPECT_EQ(context->styleEntityFor(lightSpan), shadowSpan);
+  EXPECT_EQ(admittedWork, 0u);
+
+  text.spans.front().sourceEntity = registry.create();
+  std::size_t missingCoverageWork = 67;
+  EXPECT_THAT(BuildShadowTextStyleContext(registry, shadowRoot, text, &missingCoverageWork),
+              Eq(std::nullopt));
+}
+
+TEST(TextEngineScriptedTest, ReferenceStrokeOutlinesIncludeHiddenGlyphsWithoutChangingInkCache) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  const ScriptedTextBackend* probe = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Hidden);
+  std::size_t work = 100000;
+  const auto geometry = engine.referenceGeometry(root, true, work);
+  ASSERT_THAT(geometry, testing::Optional(testing::_));
+  ASSERT_THAT(geometry->outlines, SizeIs(1));
+  EXPECT_EQ(geometry->outlines[0].sourceEntity, root.entity());
+  // The scripted outline is independently authored as [0,6] x [-8,0], placed at (10,20).
+  EXPECT_THAT(geometry->outlines[0].path.bounds(), BitmapBoundsNear(Box2d::FromXYWH(10, 12, 6, 8)));
+  EXPECT_EQ(probe->outlineCalls, 1u);
+  EXPECT_THAT(root.all_of<components::ComputedTextGeometryComponent>(), testing::IsFalse());
+  EXPECT_THAT(engine.ensureComputedTextGeometryComponent(root).glyphs, IsEmpty());
+}
+
+TEST(TextEngineScriptedTest, ReferenceInputBudgetRejectsBeforeLayout) {
+  Registry registry;
+  FontManager manager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, manager);
+  const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Visible);
+  std::size_t work = 0;
+  EXPECT_THAT(engine.referenceGeometry(root, false, work), testing::Eq(std::nullopt));
+  EXPECT_EQ(engine.layoutCallCountForTesting(), 0u);
+  EXPECT_EQ(work, 0u);
+}
+
+TEST(TextEngineScriptedTest, ReferenceVerticalCellsRefuseInsteadOfReturningZeroWidthBounds) {
+  Registry registry;
+  FontManager manager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, manager);
+  const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Visible);
+  root.get<components::ComputedStyleComponent>().properties->writingMode.set(
+      WritingMode::VerticalRl, css::Specificity::Override());
+  std::size_t work = 100000;
+  EXPECT_THAT(engine.referenceGeometry(root, false, work), testing::Eq(std::nullopt));
+  EXPECT_EQ(engine.layoutCallCountForTesting(), 0u);
+  EXPECT_EQ(work, 0u);
+}
+
+TEST(TextEngineScriptedTest, ReferenceOutlineBudgetRejectsBeforeDecodeAndReturnsNoPartialGeometry) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  const ScriptedTextBackend* probe = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Visible);
+  std::size_t work = 16;
+  EXPECT_THAT(engine.referenceGeometry(root, true, work), testing::Eq(std::nullopt));
+  EXPECT_EQ(probe->outlineCalls, 0u);
+  EXPECT_EQ(work, 0u);
+  EXPECT_THAT(root.all_of<components::ComputedTextGeometryComponent>(), testing::IsFalse());
+}
 
 TEST(TextEngineScriptedTest, AddFontFacesOnlyRegistersNewBatchEntries) {
   Registry registry;

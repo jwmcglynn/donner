@@ -528,6 +528,34 @@ TEST(RendererPublicApiTest, SecureDataImagesRenderThroughNestedSvgDocuments) {
   }
 }
 
+TEST(RendererPublicApiTest, PngIntrinsicDimensionsPlaceWidthHeightAndAutoImages) {
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='48' height='24'>"
+      "<image x='0' y='0' href='" +
+      std::string(kAnalyticRedPngDataUrl) + "'/><image x='10' y='0' width='16' href='" +
+      std::string(kAnalyticRedPngDataUrl) + "'/><image x='28' y='0' height='4' href='" +
+      std::string(kAnalyticRedPngDataUrl) +
+      "'/><image x='34' y='0' width='auto' height='6' href='" +
+      std::string(kAnalyticRedPngDataUrl) + "'/></svg>";
+  SVGDocument document = ParseDocument(source);
+  SVGDocument expected = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="24">
+      <rect x="0" y="0" width="8" height="8" fill="red"/>
+      <rect x="10" y="0" width="16" height="16" fill="red"/>
+      <rect x="28" y="0" width="4" height="4" fill="red"/>
+      <rect x="34" y="0" width="6" height="6" fill="red"/>
+    </svg>)svg");
+
+  Renderer renderer;
+  renderer.draw(document);
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
+                                       NormalizeSnapshot(expectedRenderer.takeSnapshot()),
+                                       "png-intrinsic-image-placement",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, SecureDataSvgDoesNotExecuteExperimentalAnimation) {
   constexpr std::string_view kChild =
       "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
@@ -2903,6 +2931,32 @@ std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1
   return covered;
 }
 
+TEST(RendererPublicApiTest, EmbeddedSvgUsesDocumentFontContext) {
+  constexpr std::string_view kChild =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' "
+      "font-family='Public Sans' font-size='12'>"
+      "<rect x='1' y='1' width='3' height='3' fill='#27ae60'/>"
+      "<text x='6' y='13'>I</text></svg>";
+  SVGDocument embedded = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<image width='16' height='16' href='" +
+      SvgDataUrl(kChild) + "'/></svg>");
+  SVGDocument expected = ParseDocument(kChild);
+
+  Renderer renderer;
+  renderer.draw(embedded);
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap embeddedBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  EXPECT_THAT(CoveredPixels(embeddedBitmap, 5, 4, 16, 16), Gt(0u))
+      << "The region excludes the green control and must contain the embedded text.";
+  EXPECT_THAT(CoveredPixels(expectedBitmap, 5, 4, 16, 16), Gt(0u));
+  editor::tests::CompareBitmapToBitmap(embeddedBitmap, expectedBitmap,
+                                       "embedded-svg-document-font-context",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 /// A renderer that could not read its frame back returns an empty snapshot, which covers no pixel
 /// of any region; a region that must stay uncovered would otherwise accept it.
 TEST(RendererPublicApiTest, CoveredPixelsOfAnEmptySnapshotFails) {
@@ -5240,6 +5294,29 @@ TEST(RendererPublicApiTest, PixelatedAndCrispEdgesUseDistinctNonIntegerScaling) 
               Rgba(::testing::Gt(0), 0, ::testing::Gt(0), 255));
   EXPECT_THAT(PixelAt(render(ImageRendering::CrispEdges), 2, 2),
               ::testing::AnyOf(Rgba(255, 0, 0, 255), Rgba(0, 0, 255, 255)));
+}
+
+TEST(RendererPublicApiTest, LegacyOptimizeSpeedMatchesCrispEdgesSampling) {
+  const ImageResource image{
+      {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255}, 2, 2};
+  const auto render = [&](ImageRendering imageRendering) {
+    std::unique_ptr<RendererInterface> renderer = CreateActiveRendererInstance();
+    renderer->beginFrame(RenderViewport{.size = Vector2d(5, 5), .devicePixelRatio = 1.0});
+    ImageParams params;
+    params.targetRect = Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0);
+    params.imageRendering = imageRendering;
+    renderer->drawImage(image, params);
+    renderer->endFrame();
+    return NormalizeSnapshot(renderer->takeSnapshot());
+  };
+
+  const RendererBitmap crispEdges = render(ImageRendering::CrispEdges);
+  const RendererBitmap optimizeSpeed = render(ImageRendering::OptimizeSpeed);
+  EXPECT_THAT(PixelAt(crispEdges, 0, 0), test::Rgba(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(crispEdges, 4, 4), test::Rgba(255, 255, 0, 255));
+  editor::tests::CompareBitmapToBitmap(optimizeSpeed, crispEdges,
+                                       "legacy-optimize-speed-crisp-edges",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RendererPublicApiTest, PixelatedInterpolatesPremultipliedColors) {

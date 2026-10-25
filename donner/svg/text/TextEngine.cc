@@ -27,6 +27,7 @@
 #include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -45,6 +46,97 @@
 #include "donner/svg/core/WritingMode.h"
 
 namespace donner::svg {
+
+namespace {
+
+bool ConsumeShadowStyleWork(std::size_t* remainingWork) {
+  if (!remainingWork) {
+    return true;
+  }
+  if (*remainingWork == 0u) {
+    return false;
+  }
+  --*remainingWork;
+  return true;
+}
+
+bool AppendShadowStyleChildren(Registry& registry, const donner::components::TreeComponent& tree,
+                               std::size_t admitted, std::size_t* remainingWork,
+                               std::vector<Entity>& pending) {
+  for (Entity child = tree.firstChild(); child != entt::null;) {
+    if (pending.size() >= admitted || !ConsumeShadowStyleWork(remainingWork)) {
+      return false;
+    }
+    pending.push_back(child);
+    const auto* childTree = registry.try_get<donner::components::TreeComponent>(child);
+    if (!childTree) {
+      return false;
+    }
+    child = childTree->nextSibling();
+  }
+  return true;
+}
+
+bool PopulateShadowStyleContext(Registry& registry, Entity root, std::size_t admitted,
+                                std::size_t* remainingWork, TextStyleContext& result) {
+  if (!ConsumeShadowStyleWork(remainingWork)) {
+    return false;
+  }
+  std::vector<Entity> pending{root};
+  std::size_t visited = 0;
+  while (!pending.empty()) {
+    if (++visited > admitted) {
+      return false;
+    }
+    const Entity entity = pending.back();
+    pending.pop_back();
+    const auto* shadow = registry.try_get<components::ShadowEntityComponent>(entity);
+    if (!shadow) {
+      return false;
+    }
+    if (entity != root && registry.any_of<components::TextRootComponent>(shadow->lightEntity)) {
+      continue;
+    }
+    if (!ConsumeShadowStyleWork(remainingWork) ||
+        !result.entities.emplace(shadow->lightEntity, entity).second) {
+      return false;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+    if (!tree) {
+      return false;
+    }
+    if (!AppendShadowStyleChildren(registry, *tree, admitted, remainingWork, pending)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ShadowStyleContextCoversText(const components::ComputedTextComponent& text,
+                                  std::size_t* remainingWork, const TextStyleContext& result) {
+  for (const auto& span : text.spans) {
+    if (!ConsumeShadowStyleWork(remainingWork) ||
+        (span.sourceEntity != entt::null && !result.entities.contains(span.sourceEntity))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+std::optional<TextStyleContext> BuildShadowTextStyleContext(
+    Registry& registry, Entity root, const components::ComputedTextComponent& text,
+    std::size_t* remainingWork) {
+  TextStyleContext result;
+  result.rootEntity = root;
+  const std::size_t admitted = registry.view<components::ShadowEntityComponent>().size();
+  if (!PopulateShadowStyleContext(registry, root, admitted, remainingWork, result) ||
+      !ShadowStyleContextCoversText(text, remainingWork, result)) {
+    return std::nullopt;
+  }
+  return result;
+}
 
 namespace {
 
@@ -775,6 +867,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
 
     span.textAnchor = style->properties->textAnchor.get().value();
     span.textDecoration = style->properties->textDecoration.get().value();
+    span.textOrientation = style->properties->textOrientation.get().value();
     span.baselineShift = style->properties->baselineShift.get().value();
 
     // Effective baseline alignment (matching resvg): a non-auto `alignment-baseline`
@@ -2820,15 +2913,17 @@ TextBackend::ShapedRun ShapeAddressableZeroSizeText(std::string_view text, size_
 /// Select zero-advance character records or the normal kerning-aware shaping path.
 TextBackend::ShapedRun ShapeSpanChunk(const TextBackend& backend, const TextRun& run,
                                       std::string_view text, const ChunkRange& chunk, bool vertical,
-                                      FontVariant variant, bool kerning) {
+                                      TextOrientation orientation, FontVariant variant,
+                                      bool kerning) {
   if (run.usedFontSizePx == 0.0f) {
     return ShapeAddressableZeroSizeText(text, chunk.byteStart, chunk.byteEnd - chunk.byteStart);
   }
-  return kerning
-             ? backend.shapeRun(run.font, run.usedFontSizePx, text, chunk.byteStart,
-                                chunk.byteEnd - chunk.byteStart, vertical, variant, false)
-             : backend.shapeRunNoKerning(run.font, run.usedFontSizePx, text, chunk.byteStart,
-                                         chunk.byteEnd - chunk.byteStart, vertical, variant, false);
+  return kerning ? backend.shapeRun(run.font, run.usedFontSizePx, text, chunk.byteStart,
+                                    chunk.byteEnd - chunk.byteStart, vertical, orientation, variant,
+                                    false)
+                 : backend.shapeRunNoKerning(run.font, run.usedFontSizePx, text, chunk.byteStart,
+                                             chunk.byteEnd - chunk.byteStart, vertical, orientation,
+                                             variant, false);
 }
 
 /// A shaped chunk retains backend source clusters and separate SVG positioning groups.
@@ -2845,7 +2940,8 @@ struct PreparedSpanShaping {
 
 PreparedSpanShaping PrepareSpanShaping(const TextBackend& backend, const TextRun& run,
                                        std::string_view text, const std::vector<ChunkRange>& ranges,
-                                       bool vertical, FontVariant variant, bool kerning,
+                                       bool vertical, TextOrientation orientation,
+                                       FontVariant variant, bool kerning,
                                        const ByteIndexMappings& mappings) {
   PreparedSpanShaping result;
   result.chunks.reserve(ranges.size());
@@ -2856,7 +2952,8 @@ PreparedSpanShaping PrepareSpanShaping(const TextBackend& backend, const TextRun
   result.groupStarts.resize(codepointCount, false);
   for (const auto& range : ranges) {
     PreparedSpanChunk prepared;
-    prepared.shaped = ShapeSpanChunk(backend, run, text, range, vertical, variant, kerning);
+    prepared.shaped =
+        ShapeSpanChunk(backend, run, text, range, vertical, orientation, variant, kerning);
     prepared.positioningClusters.reserve(prepared.shaped.glyphs.size());
     for (size_t index = 0; index < prepared.shaped.glyphs.size(); ++index) {
       const auto& glyph = prepared.shaped.glyphs[index];
@@ -2998,8 +3095,10 @@ private:
     float scale = 0.0f;
     std::optional<double> fontSizeAdjust;
     bool vertical = false;
+    TextOrientation orientation = TextOrientation::Mixed;
     bool fontKerning = true;
     double defaultY = 0.0;
+    double verticalBaselineOffset = 0.0;
     double penX = 0.0;
     double penY = 0.0;
     double runPenStartX = 0.0;
@@ -3100,12 +3199,47 @@ private:
     return 0.0;
   }
 
+  double verticalCentralOriginOffset(const SpanState& state, const FontVMetrics& metrics) const {
+    const double pixelHeightScale =
+        metrics.ascent != metrics.descent
+            ? static_cast<double>(state.fontSizePx) / (metrics.ascent - metrics.descent)
+            : 0.0;
+    return (static_cast<double>(metrics.ascent) + static_cast<double>(metrics.descent)) *
+           pixelHeightScale / 2.0;
+  }
+
+  double resolveVerticalBaselineOffset(const SpanState& state, double baselineShift) const {
+    if (!state.vertical || state.span->pathSpline) {
+      return 0.0;
+    }
+    const FontVMetrics metrics = backend_.fontVMetrics(state.font);
+    const DominantBaseline baseline = state.span->alignmentBaseline;
+    const bool usesCentralOrigin =
+        baseline == DominantBaseline::Auto || baseline == DominantBaseline::Central ||
+        baseline == DominantBaseline::UseScript || baseline == DominantBaseline::ResetSize ||
+        baseline == DominantBaseline::NoChange;
+    const double alignmentShift = usesCentralOrigin
+                                      ? 0.0
+                                      : verticalCentralOriginOffset(state, metrics) -
+                                            computeBaselineShift(baseline, metrics, state.scale);
+    // Baseline alignment is transversal to the inline axis. In both vertical writing modes,
+    // line-over is right and line-under is left, so a positive horizontal baseline distance
+    // maps to negative X. The alignment offset above is already expressed in physical X;
+    // positive baseline-shift then raises the aligned glyph toward line-over.
+    return alignmentShift + baselineShift;
+  }
+
   void prepareSpanPen(SpanState& state) {
     const TextSpan& span = *state.span;
     state.vertical = isVertical(params_.writingMode);
+    state.orientation =
+        !state.vertical || span.pathSpline ? TextOrientation::Mixed : span.textOrientation;
     state.penX = haveCurrentPosition_ ? currentPenX_ : 0.0;
-    state.defaultY = effectiveBaselineShift(state) -
-                     computeSpanBaselineShiftPx(backend_, span, state.font, state.scale, params_);
+    const double baselineShift =
+        computeSpanBaselineShiftPx(backend_, span, state.font, state.scale, params_);
+    state.verticalBaselineOffset = resolveVerticalBaselineOffset(state, baselineShift);
+    state.defaultY =
+        effectiveBaselineShift(state) - (state.vertical && !span.pathSpline ? 0.0 : baselineShift);
     state.penY =
         haveCurrentPosition_ ? currentPenY_ - previousDefaultY_ + state.defaultY : state.defaultY;
     state.xList = span.xList;
@@ -3161,9 +3295,9 @@ private:
     state.runPenStartY = state.penY;
     state.chunkRanges = findChunkRanges(state.text, state.xList, state.yList);
     state.indexMappings = buildByteIndexMappings(state.text);
-    state.shaping =
-        PrepareSpanShaping(backend_, state.run, state.text, state.chunkRanges, state.vertical,
-                           state.span->fontVariant, state.fontKerning, state.indexMappings);
+    state.shaping = PrepareSpanShaping(backend_, state.run, state.text, state.chunkRanges,
+                                       state.vertical, state.orientation, state.span->fontVariant,
+                                       state.fontKerning, state.indexMappings);
     state.dxList = ResolveGroupDisplacements(
         state.span->pathSpline ? state.span->dxList : state.dxList, state.shaping.groupStarts,
         Lengthd::Extent::X, params_, pendingDx_);
@@ -3231,7 +3365,7 @@ private:
         state.fontKerning && state.previousChunkKerning
             ? backend_.crossSpanKern(state.previousChunkFont, state.previousChunkFontSizePx,
                                      state.font, state.fontSizePx, state.previousChunkCodepoint,
-                                     firstCodepoint, state.vertical)
+                                     firstCodepoint, state.vertical, state.orientation)
             : 0.0;
     return {value, true};
   }
@@ -3243,13 +3377,15 @@ private:
     }
     size_t firstByte = state.chunkRanges.front().byteStart;
     const uint32_t firstCodepoint = decodeUtf8(state.text, firstByte);
-    const bool compatible = CompatibleKerningRuns(
-        fontManager_, state.run, state.span->fontVariant, previousSpanFont_,
-        previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning, previousSpanKerning_);
+    const bool compatible =
+        previousSpanOrientation_ == state.orientation &&
+        CompatibleKerningRuns(fontManager_, state.run, state.span->fontVariant, previousSpanFont_,
+                              previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning,
+                              previousSpanKerning_);
     const double value =
         compatible ? backend_.crossSpanKern(previousSpanFont_, previousSpanFontSizePx_, state.font,
                                             state.fontSizePx, previousSpanCodepoint_,
-                                            firstCodepoint, state.vertical)
+                                            firstCodepoint, state.vertical, state.orientation)
                    : 0.0;
     return {value, true};
   }
@@ -3327,24 +3463,21 @@ private:
 
   void orientVerticalGlyph(const SpanState& state, const TextBackend::ShapedGlyph& shapedGlyph,
                            uint32_t codepoint, unsigned int charIndex, TextGlyph& glyph) const {
-    if (codepoint < 0x2E80) {
+    const bool sideways = state.orientation == TextOrientation::Sideways ||
+                          (state.orientation == TextOrientation::Mixed && codepoint < 0x2E80);
+    if (sideways) {
       glyph.yAdvance = shapedGlyph.xAdvance > 0 ? shapedGlyph.xAdvance : shapedGlyph.yAdvance;
       glyph.xPosition -= shapedGlyph.yOffset;
       glyph.yPosition += shapedGlyph.xOffset;
       const FontVMetrics metrics = backend_.fontVMetrics(state.font);
-      const double pixelHeightScale =
-          metrics.ascent != metrics.descent
-              ? static_cast<double>(state.fontSizePx) / (metrics.ascent - metrics.descent)
-              : 0.0;
-      const double centralBaselineOffset =
-          (static_cast<double>(metrics.ascent) + static_cast<double>(metrics.descent)) *
-          pixelHeightScale / 2.0;
-      glyph.xPosition -= centralBaselineOffset;
+      glyph.xPosition -= verticalCentralOriginOffset(state, metrics);
       glyph.rotateDegrees = rotationFor(*state.span, charIndex, 90.0);
       return;
     }
 
-    glyph.yAdvance = shapedGlyph.yAdvance > 0 ? shapedGlyph.yAdvance : state.fontSizePx;
+    glyph.yAdvance = shapedGlyph.yAdvance > 0
+                         ? shapedGlyph.yAdvance
+                         : (shapedGlyph.xAdvance == 0 ? 0.0 : state.fontSizePx);
     glyph.xPosition = state.penX + shapedGlyph.xOffset;
     glyph.yPosition = state.penY + shapedGlyph.yOffset;
     glyph.rotateDegrees = rotationFor(*state.span, charIndex, 0.0);
@@ -3381,6 +3514,7 @@ private:
     glyph.cluster = shapedGlyph.cluster;
     glyph.positioningCluster = positioningCluster;
     orientVerticalGlyph(state, shapedGlyph, codepoint, charIndex, glyph);
+    glyph.xPosition += state.verticalBaselineOffset;
     state.run.glyphs.push_back(glyph);
     advanceVerticalPen(state, prepared, glyphIndex, codepoint, glyph);
   }
@@ -3507,6 +3641,7 @@ private:
     previousSpanFontSizePx_ = state.fontSizePx;
     previousSpanKerning_ = state.fontKerning;
     previousSpanFontVariant_ = state.span->fontVariant;
+    previousSpanOrientation_ = state.orientation;
     previousSpanPathSource_ = SpanKerningPathSource(*state.span);
   }
 
@@ -3670,6 +3805,7 @@ private:
   float previousSpanFontSizePx_ = 0.0f;
   bool previousSpanKerning_ = true;
   FontVariant previousSpanFontVariant_ = FontVariant::Normal;
+  TextOrientation previousSpanOrientation_ = TextOrientation::Mixed;
   std::optional<Entity> previousSpanPathSource_;
   Entity previousTextPathSource_ = entt::null;
   std::optional<size_t> firstPathRun_;
@@ -3940,6 +4076,304 @@ void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& 
     }
   }
   ExpandApiCharacterGeometryAliases(cache, charBaseIndex, apiMappings);
+}
+
+namespace {
+
+class TextReferenceWork {
+public:
+  explicit TextReferenceWork(std::size_t& remaining) : remaining_(remaining) {}
+
+  bool reserve(std::size_t count) {
+    if (failed_ || count > remaining_) {
+      failed_ = true;
+      remaining_ = 0;
+      return false;
+    }
+    remaining_ -= count;
+    return true;
+  }
+
+  bool reserveProduct(std::size_t count, std::size_t factor) {
+    if (factor != 0 && count > remaining_ / factor) {
+      return reject();
+    }
+    return reserve(count * factor);
+  }
+
+  bool reject() {
+    failed_ = true;
+    remaining_ = 0;
+    return false;
+  }
+
+  bool reservePath(const Path& path) {
+    return reserve(path.commands().size()) && reserve(path.points().size());
+  }
+
+  bool failed() const { return failed_; }
+
+private:
+  std::size_t& remaining_;
+  bool failed_ = false;
+};
+
+bool ReserveTextReferenceSpan(const components::ComputedTextComponent::TextSpan& span,
+                              TextReferenceWork& work) {
+  if (span.start > span.end || span.end > span.text.size()) {
+    return work.reject();
+  }
+  const std::array counts{
+      span.end - span.start, span.fontFamilies.size(), span.ancestorBaselineShifts.size(),
+      span.xList.size(),     span.yList.size(),        span.dxList.size(),
+      span.dyList.size(),    span.rotateList.size()};
+  for (const std::size_t count : counts) {
+    if (!work.reserve(count)) {
+      return false;
+    }
+  }
+  return !span.pathSpline || work.reservePath(*span.pathSpline);
+}
+
+bool ReserveTextReferenceInput(const components::ComputedTextComponent& text,
+                               TextReferenceWork& work) {
+  if (!work.reserve(text.spans.size()) || !work.reserve(text.ownerSpanRanges.size()) ||
+      !work.reserve(text.textLengthOwnerFontSizes.size())) {
+    return false;
+  }
+  for (const auto& span : text.spans) {
+    if (!ReserveTextReferenceSpan(span, work)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ReferenceSpanIsInSubtree(Registry& registry, Entity source, Entity subtree,
+                              TextReferenceWork& work) {
+  while (source != entt::null) {
+    if (!work.reserve(1)) {
+      return false;
+    }
+    if (source == subtree) {
+      return true;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(source);
+    source = tree ? tree->parent() : entt::null;
+  }
+  return false;
+}
+
+Transform2d TextRootFromReferenceGlyph(const TextGlyph& glyph) {
+  return Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+         Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+}
+
+bool AddReferenceGlyphCell(TextEngine::ReferenceGeometry& result, const TextGlyph& glyph,
+                           double emTop, double emBottom, TextReferenceWork& work) {
+  const double advance = glyph.xAdvance;
+  const double verticalScale = glyph.stretchScaleY;
+  const Box2d localCell(Vector2d(std::min(0.0, advance), -emTop * verticalScale),
+                        Vector2d(std::max(0.0, advance), emBottom * verticalScale));
+  const Box2d cell = TextRootFromReferenceGlyph(glyph).transformBox(localCell);
+  if (!std::isfinite(cell.topLeft.x) || !std::isfinite(cell.topLeft.y) ||
+      !std::isfinite(cell.bottomRight.x) || !std::isfinite(cell.bottomRight.y)) {
+    return work.reject();
+  }
+  result.objectBounds = result.objectBounds ? Box2d::Union(*result.objectBounds, cell) : cell;
+  return true;
+}
+
+bool AdmitReferenceOutline(FontManager& manager, FontHandle font, int glyphIndex,
+                           TextReferenceWork& work) {
+  auto complexity = manager.glyphOutlineComplexity(font, glyphIndex);
+  if (!complexity) {
+    if (!manager.isTrustedFont(font)) {
+      return work.reject();
+    }
+    // Unknown trusted outlines use the global conservative ceiling, never a guessed glyph size.
+    complexity =
+        FontManager::GlyphOutlineComplexity{.maximumVertices = fonts::kMaximumExpandedGlyphVertices,
+                                            .work = fonts::kMaximumGlyphOutlineWork};
+  }
+  return work.reserve(complexity->work) && work.reserveProduct(complexity->maximumVertices, 15);
+}
+
+bool AppendReferenceOutline(const TextEngine& engine, FontManager& manager, const TextRun& run,
+                            const TextGlyph& glyph, Entity source,
+                            TextEngine::ReferenceGeometry& result, TextReferenceWork& work) {
+  if (engine.isBitmapOnly(run.font)) {
+    return true;
+  }
+  if (!AdmitReferenceOutline(manager, run.font, glyph.glyphIndex, work)) {
+    return false;
+  }
+  const float scale = engine.scaleForEmToPixels(run.font, run.usedFontSizePx) * glyph.fontSizeScale;
+  const Path raw = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
+  if (raw.empty()) {
+    return true;
+  }
+  if (!work.reservePath(raw) || !work.reserve(1)) {
+    return false;
+  }
+  const Transform2d textRootFromGlyph =
+      Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY) *
+      TextRootFromReferenceGlyph(glyph);
+  Path placed = raw.transformed(textRootFromGlyph);
+  const Box2d bounds = placed.bounds();
+  if (!IsFiniteTextPosition(bounds.topLeft) || !IsFiniteTextPosition(bounds.bottomRight)) {
+    return work.reject();
+  }
+  result.outlines.push_back({std::move(placed), source});
+  return true;
+}
+
+bool AppendTextReferenceRun(const TextEngine& engine, FontManager& manager, const TextRun& run,
+                            Entity source, bool includeOutlines,
+                            TextEngine::ReferenceGeometry& result, TextReferenceWork& work) {
+  if (!work.reserve(run.glyphs.size())) {
+    return false;
+  }
+  const float scale = run.font ? engine.scaleForPixelHeight(run.font, run.usedFontSizePx) : 0.0f;
+  const FontVMetrics metrics = run.font ? engine.fontVMetrics(run.font) : FontVMetrics();
+  const double emTop = scale > 0.0f ? metrics.ascent * scale : run.usedFontSizePx;
+  const double emBottom = scale > 0.0f ? -metrics.descent * scale : 0.0;
+  for (const auto& glyph : run.glyphs) {
+    if (!AddReferenceGlyphCell(result, glyph, emTop, emBottom, work) ||
+        (includeOutlines &&
+         !AppendReferenceOutline(engine, manager, run, glyph, source, result, work))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool AppendTextReferenceRuns(const TextEngine& engine, FontManager& manager, Registry& registry,
+                             const components::ComputedTextComponent& text,
+                             const std::vector<TextRun>& runs, Entity subtree, bool includeOutlines,
+                             TextEngine::ReferenceGeometry& result, TextReferenceWork& work) {
+  if (!work.reserve(runs.size())) {
+    return false;
+  }
+  for (std::size_t index = 0; index < runs.size() && index < text.spans.size(); ++index) {
+    const Entity source = text.spans[index].sourceEntity;
+    if (ReferenceSpanIsInSubtree(registry, source, subtree, work) &&
+        !AppendTextReferenceRun(engine, manager, runs[index], source, includeOutlines, result,
+                                work)) {
+      return false;
+    }
+    if (work.failed()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ReserveTextStyleAncestors(Registry& registry, Entity styleEntity,
+                               const TextStyleContext& styleContext, TextReferenceWork& work) {
+  std::size_t ancestors = 0;
+  while (styleEntity != styleContext.rootEntity) {
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(styleEntity);
+    if (!tree || ++ancestors > styleContext.entities.size() || !work.reserve(1u)) {
+      return false;
+    }
+    styleEntity = tree->parent();
+    if (styleEntity == entt::null) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ReserveTextStyleContextExpansion(Registry& registry,
+                                      const components::ComputedTextComponent& computed,
+                                      const TextStyleContext* styleContext,
+                                      TextReferenceWork& work) {
+  if (!styleContext) {
+    return true;
+  }
+  for (const auto& span : computed.spans) {
+    if (span.sourceEntity == entt::null) {
+      continue;
+    }
+    Entity styleEntity = styleContext->styleEntityFor(span.sourceEntity);
+    const auto* spanStyle = registry.try_get<components::ComputedStyleComponent>(styleEntity);
+    if (!spanStyle || !spanStyle->properties ||
+        !work.reserve(spanStyle->properties->fontFamily.get().value().size())) {
+      return false;
+    }
+    if (!ReserveTextStyleAncestors(registry, styleEntity, *styleContext, work)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool RemapReferenceOutlineSources(const TextStyleContext* styleContext,
+                                  TextEngine::ReferenceGeometry& result, TextReferenceWork& work) {
+  if (!styleContext) {
+    return true;
+  }
+  for (auto& glyph : result.outlines) {
+    glyph.sourceEntity = styleContext->styleEntityFor(glyph.sourceEntity);
+    if (glyph.sourceEntity == entt::null) {
+      return work.reject();
+    }
+  }
+  return true;
+}
+
+bool AdmitTextReferenceInput(const components::ComputedTextComponent& computed,
+                             const components::ComputedStyleComponent& style,
+                             TextReferenceWork& work) {
+  if (!ReserveTextReferenceInput(computed, work) ||
+      !work.reserve(style.properties->fontFamily.get().value().size())) {
+    return false;
+  }
+  if (isVertical(style.properties->writingMode.get().value())) {
+    // The horizontal glyph-cell contract cannot stand in for upright/sideways vertical cells.
+    return work.reject();
+  }
+  return true;
+}
+
+}  // namespace
+
+std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
+    EntityHandle handle, bool includeOutlines, std::size_t& remainingWork,
+    const TextStyleContext* styleContext) const {
+  TextReferenceWork work(remainingWork);
+  const Entity root = findTextRootEntity(handle);
+  const auto* computed = registry_.try_get<components::ComputedTextComponent>(root);
+  const auto* text = registry_.try_get<components::TextComponent>(root);
+  const Entity styleRootEntity = styleContext ? styleContext->rootEntity : root;
+  const auto* style = registry_.try_get<components::ComputedStyleComponent>(styleRootEntity);
+  if (!computed || !text || !style || !style->properties) {
+    return ReferenceGeometry();
+  }
+  if (!AdmitTextReferenceInput(*computed, *style, work)) {
+    return std::nullopt;
+  }
+  if (!ReserveTextStyleContextExpansion(registry_, *computed, styleContext, work)) {
+    return std::nullopt;
+  }
+  ReferenceGeometry result;
+  {
+    const auto capture = fontManager_.captureDependencies(result.fontDependencies);
+    auto styled = *computed;
+    const TextLayoutParams params =
+        buildTextLayoutParams(registry_, EntityHandle(registry_, styleRootEntity), *style, *text);
+    ResolvePerSpanLayoutStyles(registry_, styled, params.viewBox, params.fontMetrics, styleContext);
+    const auto runs = const_cast<TextEngine*>(this)->layout(styled, params);
+    if (!AppendTextReferenceRuns(*this, fontManager_, registry_, styled, runs, handle.entity(),
+                                 includeOutlines, result, work)) {
+      return std::nullopt;
+    }
+    if (!RemapReferenceOutlineSources(styleContext, result, work)) {
+      return std::nullopt;
+    }
+  }
+  return result;
 }
 
 const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextGeometryComponent(

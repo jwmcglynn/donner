@@ -55,6 +55,31 @@ const char* GpuWaitTimeoutSiteName(svg::GpuWaitTimeoutSite site) {
   return "unknown";
 }
 
+struct WorkerTilePayloadCounts {
+  int bitmap = 0;
+  int texture = 0;
+};
+
+WorkerTilePayloadCounts CountWorkerTilePayloads(const RenderResult& result) {
+  WorkerTilePayloadCounts counts;
+  if (result.compositedPreview) {
+    for (const auto& tile : result.compositedPreview->tiles) {
+      counts.bitmap += !tile.bitmap.empty();
+      counts.texture += tile.textureSnapshot != nullptr;
+    }
+  }
+  return counts;
+}
+
+// clang-format off
+EM_JS(int, WorkerResultBoundaryKnown,
+      (int supplied, double admissionSequence, double producerGeneration, double captureId), {
+        return Boolean(supplied) && Number.isSafeInteger(admissionSequence) && admissionSequence >= 0 &&
+            Number.isSafeInteger(producerGeneration) && producerGeneration >= 0 &&
+            Number.isSafeInteger(captureId) && captureId > 0;
+      });
+// clang-format on
+
 // Proxied to the browser main thread: the render pthread has no `window`.
 // Numeric values ride an owned heap buffer because EM_ASM argument substitution stops at $15.
 // Each asynchronous proxy owns its buffer until the main thread copies and frees it, so a later
@@ -62,17 +87,12 @@ const char* GpuWaitTimeoutSiteName(svg::GpuWaitTimeoutSite site) {
 // literal whose storage outlives the proxy hop.
 void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
-    const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
+    const svg::compositor::CompositorController::RenderFrameStats& compositorStats,
+    std::optional<std::uint64_t> presentationAdmissionSequence,
+    std::optional<std::uint64_t> presentationProducerGeneration) {
   const auto& timing = result.workerTiming;
   constexpr std::size_t kValueCount = 45;
-  int bitmapPayloadTiles = 0;
-  int texturePayloadTiles = 0;
-  if (result.compositedPreview) {
-    for (const auto& tile : result.compositedPreview->tiles) {
-      bitmapPayloadTiles += !tile.bitmap.empty();
-      texturePayloadTiles += tile.textureSnapshot != nullptr;
-    }
-  }
+  const WorkerTilePayloadCounts payloadCounts = CountWorkerTilePayloads(result);
   const double values[kValueCount] = {
       result.workerMs,
       timing.queueWaitMs,
@@ -97,8 +117,8 @@ void PublishWorkerTimingStats(
       static_cast<double>(compositorStats.offscreenRecycleTotal),
       static_cast<double>(timing.readbackCount),
       static_cast<double>(timing.readbackPollIterations),
-      timing.usedTimedWaitAny ? 1.0 : 0.0,
-      timing.deviceLost ? 1.0 : 0.0,
+      static_cast<double>(timing.usedTimedWaitAny),
+      static_cast<double>(timing.deviceLost),
       static_cast<double>(timing.timedOutWaitMs),
       static_cast<double>(result.documentGeneration),
       static_cast<double>(result.version),
@@ -106,14 +126,14 @@ void PublishWorkerTimingStats(
       static_cast<double>(app.document().document().sourceVersion()),
       static_cast<double>(app.undoTimeline().entryCount()),
       static_cast<double>(timing.fullCanvasTextureAllocationFailureCount),
-      timing.nothingToPresent ? 1.0 : 0.0,
+      static_cast<double>(timing.nothingToPresent),
       timing.documentWriteLockMs,
       static_cast<double>(result.presentationRepairReason),
       static_cast<double>(timing.compositorReadbackCount),
       static_cast<double>(timing.tileHandoffReadbackCount),
       static_cast<double>(timing.finalSnapshotReadbackCount),
-      static_cast<double>(bitmapPayloadTiles),
-      static_cast<double>(texturePayloadTiles),
+      static_cast<double>(payloadCounts.bitmap),
+      static_cast<double>(payloadCounts.texture),
       timing.polledAtEpochMs,
       timing.idleYieldMs,
       timing.idleCallbackMs,
@@ -205,10 +225,18 @@ void PublishWorkerTimingStats(
           stats[total] = Number(previous[total] || 0) + Number(stats[count]);
         }
         stats['publicationDelayMs'] = Math.max(0, performance.now() - stats['publishedAtMs']);
+        stats['presentationBoundaryKnown'] = Boolean(WorkerResultBoundaryKnown($3, $4, $5, $6));
+        stats['presentationAdmissionSequence'] = $4;
+        stats['presentationProducerGeneration'] = $5;
+        stats['captureId'] = $6;
         stats['publishReason'] = 'render-result';
         window['__donnerWorkerStats'] = stats;
       },
-      buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite), kValueCount);
+      buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite), kValueCount,
+      presentationAdmissionSequence.has_value() && presentationProducerGeneration.has_value(),
+      static_cast<double>(presentationAdmissionSequence.value_or(0)),
+      static_cast<double>(presentationProducerGeneration.value_or(0)),
+      static_cast<double>(result.capturedPresentation ? result.capturedPresentation->identity().captureId : 0));
   // clang-format on
 }
 
@@ -253,7 +281,15 @@ void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteNa
         delete stats['presentingFrame'];
         delete stats['presentationPublicationDelayMs'];
         delete stats['resultFramePresented'];
+        delete stats['resultFrameCompletedAtMs'];
         delete stats['framesPresentedWithoutResult'];
+        delete stats['postPollFramesCompletedWithoutResult'];
+        delete stats['preexistingFramesCompleted'];
+        delete stats['presentationBoundaryKnown'];
+        delete stats['presentationAdmissionSequence'];
+        delete stats['presentationProducerGeneration'];
+        delete stats['presentationBoundaryUnknown'];
+        delete stats['unattributedFramesCompleted'];
         // This failure has no result-poll producer timestamp; prior render delay is unrelated.
         delete stats['publicationDelayMs'];
         stats['acceptedForPresentation'] = false;
@@ -1681,8 +1717,10 @@ bool RenderCoordinator::needsOverviewInfillForViewport(EditorApp& app,
          requiresFreshOverview(currentOverview, currentVersion);
 }
 
-void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,
-                                         GlTextureCache& textures, FrameHistory* frameHistory) {
+void RenderCoordinator::pollRenderResult(
+    EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
+    FrameHistory* frameHistory, std::optional<std::uint64_t> presentationAdmissionSequence,
+    std::optional<std::uint64_t> presentationProducerGeneration) {
   ZoneScopedN("RenderCoordinator::pollRenderResult");
   const ScopedHeapDelta pollHeapDelta(MemoryStage::AppPollResult);
   auto resultOpt = renderWorker_.asyncRenderer.pollResult();
@@ -1716,10 +1754,24 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     return;
   }
 
+  consumePolledRenderResult(resultOpt, app, viewport, textures, frameHistory,
+                            presentationAdmissionSequence, presentationProducerGeneration);
+}
+
+void RenderCoordinator::consumePolledRenderResult(
+    std::optional<RenderResult>& resultOpt, EditorApp& app, const ViewportState& viewport,
+    GlTextureCache& textures, FrameHistory* frameHistory,
+    std::optional<std::uint64_t> presentationAdmissionSequence,
+    std::optional<std::uint64_t> presentationProducerGeneration) {
+#ifndef __EMSCRIPTEN__
+  (void)presentationAdmissionSequence;
+  (void)presentationProducerGeneration;
+#endif
   const auto& result = *resultOpt;
   const auto compositorStats = renderWorker_.asyncRenderer.compositorRenderFrameStats();
 #ifdef __EMSCRIPTEN__
-  PublishWorkerTimingStats(result, app, compositorStats);
+  PublishWorkerTimingStats(result, app, compositorStats, presentationAdmissionSequence,
+                           presentationProducerGeneration);
 #endif
   lastFrameCostBreakdown_.compositedRender = CompositedRenderCostFromStats(compositorStats);
   lastFrameCostBreakdown_.compositedRender.presentationCoverageRepair =

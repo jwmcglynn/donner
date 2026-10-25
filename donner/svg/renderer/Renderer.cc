@@ -20,6 +20,7 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/core/NonScalingStroke.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -271,6 +272,24 @@ std::optional<Box2d> TextRootLocalInkBounds(Registry& registry, Entity entity) {
   return inkBounds;
 }
 
+/// Includes clipped-corner reach without changing ordinary stroke padding.
+double SubtreeStrokePadding(const Path& path, const PropertyRegistry& properties,
+                            double strokeWidth) {
+  const double halfWidth = strokeWidth * 0.5;
+  if (!PathCanHaveStrokeJoin(path)) {
+    return halfWidth;
+  }
+  const StrokeLinejoin join = properties.strokeLinejoin.get().value();
+  if (join == StrokeLinejoin::Miter) {
+    return halfWidth * properties.strokeMiterlimit.get().value();
+  }
+  if (join == StrokeLinejoin::MiterClip) {
+    return StrokeCullHalfExtent(strokeWidth, properties.strokeLinecap.get().value(), join,
+                                properties.strokeMiterlimit.get().value());
+  }
+  return halfWidth;
+}
+
 SubtreeRenderSpan ResolveSubtreeRenderSpan(Registry& registry,
                                            const std::unordered_set<Entity>& subtreeEntities) {
   SubtreeRenderSpan span;
@@ -327,10 +346,10 @@ SubtreeRenderSpan ResolveSubtreeRenderSpan(Registry& registry,
               props.color.get().value().resolve(css::RGBA::RGB(0, 0, 0), /*opacity=*/1.0f),
               props.opacity.get().value() * props.strokeOpacity.get().value()) &&
           strokeWidth > 0.0) {
-        double padding = strokeWidth * 0.5;
-        if (props.strokeLinejoin.get().value() == StrokeLinejoin::Miter &&
-            PathCanHaveStrokeJoin(path->spline)) {
-          padding *= props.strokeMiterlimit.get().value();
+        const double padding = SubtreeStrokePadding(path->spline, props, strokeWidth);
+        if (!std::isfinite(padding)) {
+          span.worldBounds.reset();
+          return span;
         }
         local = Box2d(local.topLeft - Vector2d(padding, padding),
                       local.bottomRight + Vector2d(padding, padding));

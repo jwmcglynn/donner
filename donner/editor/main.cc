@@ -12,10 +12,12 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#include <emscripten/threading.h>
 
 #include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/editor/FrameCallbackAdmission.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
+#include "donner/editor/wasm/BrowserGpuOwnerWait.h"
 #include "donner/gpu/browser/BrowserGpuOwner.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
@@ -145,6 +147,7 @@ void RunEditorFrame(
 
 #ifdef __EMSCRIPTEN__
 struct WasmEditorLoopState {
+  ~WasmEditorLoopState();
   using RenderFrameCallback = void (*)(donner::editor::gui::EditorWindow&,
                                        donner::editor::EditorShell&,
                                        donner::editor::EditorFrameKind);
@@ -183,6 +186,68 @@ public:
 private:
   WasmEditorLoopState& state_;
 };
+
+WasmEditorLoopState* gOwnerWaitProbeState = nullptr;
+
+WasmEditorLoopState::~WasmEditorLoopState() {
+  if (gOwnerWaitProbeState == this) {
+    gOwnerWaitProbeState = nullptr;
+    EM_ASM({
+      delete globalThis['__donnerExerciseGpuOwnerWait'];
+      delete globalThis['__donnerGpuOwnerWaitProbeResult'];
+    });
+  }
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int donner_test_gpu_owner_libc_wait() {
+  auto* state = gOwnerWaitProbeState;
+  if (!state || !CanRunWasmEditorFrame(state) || state->window->shouldClose()) {
+    return 0;
+  }
+  const bool gpuOwner = donner::gpu::browser::IsBrowserGpuOwnerThread();
+  const bool applicationPthread = !emscripten_is_main_runtime_thread();
+  if (!gpuOwner || !applicationPthread) {
+    return 0;
+  }
+  WasmFrameScope callbackScope(*state);
+  const auto device = state->window->geodeDevice();
+  if (!device) {
+    return 0;
+  }
+  const auto result = donner::editor::wasm::ExerciseGpuOwnerLibcWaitForTesting(
+      std::shared_ptr<donner::gpu::Device>(device, &device->runtimeDevice()));
+  // clang-format off
+  EM_ASM({
+    globalThis['__donnerGpuOwnerWaitProbeResult'] = ({
+      'completedSerial': $0,
+      'realWaitSliceMs': $1,
+      'isGpuOwner': Boolean($2),
+      'isApplicationPthread': Boolean($3),
+      'producerIsGpuOwner': Boolean($4),
+      'joinElapsedMs': $5,
+    });
+  }, static_cast<double>(result.completedSerial), result.realWaitSliceMs, gpuOwner,
+     applicationPthread, result.producerIsGpuOwner, result.joinElapsedMs);
+  // clang-format on
+  return 1;
+}
+
+void InstallGpuOwnerWaitProbeForTesting(WasmEditorLoopState& state) {
+  // clang-format off
+  const bool enabled = MAIN_THREAD_EM_ASM_INT({
+    return new URLSearchParams(window.location.search).get('gpuOwnerWaitProbe') === '1';
+  });
+  // clang-format on
+  if (!enabled) {
+    return;
+  }
+  gOwnerWaitProbeState = &state;
+  // clang-format off
+  EM_ASM({
+    globalThis['__donnerExerciseGpuOwnerWait'] = () => _donner_test_gpu_owner_libc_wait();
+  });
+  // clang-format on
+}
 
 bool PollWasmPresentationProgress(void* userdata) {
   if (!CanRunWasmEditorFrame(userdata)) {
@@ -386,6 +451,7 @@ int main(int argc, char** argv) {
 
 #ifdef __EMSCRIPTEN__
   auto* loopState = new WasmEditorLoopState{std::move(window), std::move(shell), std::nullopt};
+  InstallGpuOwnerWaitProbeForTesting(*loopState);
   PublishWasmPinchZoomPolicy(donner::editor::PinchWheelDeltaPerLnScale());
   // The browser presents the WebGPU canvas when the requestAnimationFrame callback returns.
   // `main()` runs on a worker here. Emscripten's rAF scheduler silently

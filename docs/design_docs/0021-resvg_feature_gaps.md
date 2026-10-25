@@ -91,8 +91,8 @@ bottom for completeness.
 
 | ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B2  | `filters/filter-functions` coverage                                     | **DONE** (26/43 files compare) | Category active; 17 mismatches are explicit triage skips.                                                                                                                                           |
-| B3  | `structure/image` golden kernel-era mismatch                            |                             13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
+| B2  | `filters/filter-functions` coverage                                     | **DONE** (27/43 files compare) | All cases execute; 16 reference qualifications have independent contract tests.                                                                                                                                           |
+| B3  | `structure/image` golden kernel-era mismatch                            |                             12 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                              8 | Feature                                                                                                                                                                                             |
@@ -110,18 +110,52 @@ bottom for completeness.
 
 ### B2: `filters/filter-functions` category coverage
 
-**Resolved as a coverage gap.** All 43 files are instantiated. A combined TinySkia and Geode run
-executes 86 comparisons: 53 passed before exception classification, representing 26 files on both
-backends plus one TinySkia-only pass. Seventeen unique mismatching files now carry explicit
-normal-path `Triage:` skips for blur, color-adjust, drop-shadow, or URL-chain cases. No category
-remains dark, but these skips are not yet classified as Donner defects.
+All 43 fixtures execute. Twenty-seven retain ordinary comparisons, including `blur-function` and
+`drop-shadow-function-filter-region`; sixteen have explicit reference qualifications and independent
+rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL case uses
+`FilterReferenceStages`. No threshold or golden is changed.
 
-**Next step:** classify the 17 mismatches against the normative grammar and independent browser
-pixels, then fix only confirmed Donner defects through their owning blur, color-adjust,
-drop-shadow, and URL-chain paths. Remove each local skip only after that classification, a focused
-regression, and both comparison modes pass; do not restore the category-level disable.
+| Assigned cases | Disposition |
+| --- | --- |
+| Seven `color-adjust-functions-*` cases | Every canonical mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. Label qualification remains with #1167. |
+| Five remaining `drop-shadow-function*` cases | Color order, omitted currentColor, em/mm-to-px conversion and alpha compare independently. Offset/blur sampling differs from the historical PNGs; for the basic case the device Y offset is 12.5, and Donner rounds to 13 while the reference shadow profile is one row earlier. Half-pixel rounding is a Donner rasterization contract, not a CSS requirement. Sampling qualification remains with #1170. |
+| `two-exact-urls` | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph. |
+| `two-urls` | Chained flood/blur matches the equivalent single primitive graph. The historical difference is at the filter-region boundary (2,191 CPU / 2,618 Geode pixels); boundary sampling remains with #1170. |
+| `url-and-grayscale` | CSS functions use sRGB. An independent solid-color oracle gives 115 for the sample's encoded-channel luminance; the historical reference center is 122, consistent with linearRGB processing. |
+| `one-invalid-url-in-list` | An invalid URL disables the entire chain rather than preserving the prior stage. `FilterReferenceStages.InvalidReferenceDisablesEntireChain` independently covers that behavior. |
+
+[Filter Effects](https://www.w3.org/TR/filter-effects-1/#FilterFunctions) defines function grammar,
+sRGB processing and chaining. Drop-shadow now rejects nonzero unitless CSS lengths while preserving
+SVG presentation-attribute user units and unitless zero. Negative standard deviations reject the
+whole declaration. Its color alpha is applied once; flood-opacity is a separate factor. Focused
+regressions first reproduce invalid declarations changing output and translucent shadows receiving
+alpha twice, then pass on TinySkia, full text and Geode. The full property suite also checks that
+rejected declarations preserve the prior value at the same cascade priority.
+
+The named gates are `properties_tests`, `renderer_driver_tests`, the three
+`renderer_regression_tests` configurations and all three resvg corpus targets. A raster sanitizer
+seed covers valid translucent shadows and invalid declarations. Render-only execution of a
+qualified corpus case establishes stability, not historical PNG agreement. #1169 tracks these
+classifications; general filter-region and sampling behavior remains separate in #1170.
 
 ---
+
+## CSS filter reference stages
+
+Each URL in a CSS filter list receives the previous stage's output as its own `SourceGraphic`
+and `SourceAlpha`. Named results remain local to that filter element; its filter region,
+primitive units and color space remain intact. Adjacent CSS functions share an sRGB stage.
+An invalid URL disables the chain, while a valid empty filter produces transparent output;
+a later flood can still paint over that output. The aggregate 32-node limit and frame budgets
+apply across the stages, and rejected preparation suppresses the whole filtered subtree.
+
+Independent geometric tests cover repeated references, input and result scope, filter regions,
+object-bounding-box units, empty stages, expanded captures and original CPU paint inputs. Nested
+captures preserve their coordinate offsets through groups and use existing renderer surfaces;
+GPU stages remain on the GPU. These contracts do not replace or widen corpus pixel tolerances. The
+`invalid-FuncIRI` and `one-invalid-url-in-list` PNGs encode incompatible invalid-URL behavior;
+they retain explicit render-only qualifications backed by visible-geometry assertions, documented
+in [0009](0009-resvg_test_suite_bugs.md#invalid-filter-url-reference-qualifications).
 
 ## External resource policy
 
@@ -138,6 +172,43 @@ Its upstream reference is entirely opaque, whereas the SVG canvas is transparent
 content. The comparison remains gated pending background and typography reference qualification.
 An independently authored inline-versus-external text-fragment comparison covers host style
 inheritance, fragment selection, the callback identifier and transparent canvas behavior.
+
+## CSS circle clipping
+
+`clip-path: circle()` supports length, percentage and `closest-side`/`farthest-side` radii, CSS positions,
+and fill/stroke/view reference boxes. Default SVG border boxes use stroke geometry. Reference
+geometry includes image occurrences and horizontal text, including hidden glyphs for stroke bounds.
+Work admission precedes path scans and glyph outline decoding. Vertical text fill/stroke reference
+boxes are currently refused; viewport-based circles remain available. This does not claim a hard
+allocation bound inside the existing text shaper.
+
+Both renderers apply circles to entire groups and preserve them during retained masked-child drag.
+Independent live-bitmap comparisons cover boxes, nested clips, occurrence styles, images, text spans,
+non-scaling strokes and style mutation; CSS declaration lengths require units while presentation
+attributes retain user units.
+
+The plain `circle-shorthand.svg` comparison is restored. The stroke-box and view-box PNGs use an
+opaque white backdrop, while Donner's RGBA API retains transparency outside painted content.
+[SVG rendering contexts](https://www.w3.org/TR/SVG2/render.html) permit different final backdrops.
+Compositing diagnostic copies of both actual and reference images over white produces zero
+pixelmatch mismatches on both backends under the unchanged corpus policy. Strict identity still
+differs at raster edges, so this is a background qualification, not a bit-identity claim. The original
+PNGs and tolerances remain unchanged; these two fixtures render normally without comparing their
+opaque references, and authored geometry comparisons continue to use strict identity.
+
+## Miter-clip stroke joins
+
+Both renderers distinguish `miter-clip` from the bevel fallback of ordinary `miter`. The shared
+outline stroker clips the exterior join at the configured bisector distance, including exact and
+near reversals, without constructing an unbounded tip. Selection, marquee, culling, range and
+thumbnail bounds include the clipped-corner extent. The original `miter-clip.svg` corpus case uses
+its ordinary comparison settings; analytic geometry tests and sanitizer corpus seeds cover the
+bounded construction.
+
+This is support for the existing parsed join value and the geometry described in the
+[SVG Strokes draft](https://www.w3.org/TR/svg-strokes/#StrokeLinejoinProperty), not a claim that all
+experimental stroke joins are implemented. `arcs` retains its miter fallback and remains a separate
+reference/feature qualification case.
 
 ## Masked bugs behind inflated CPU thresholds
 
@@ -221,15 +292,25 @@ eras with different `<image>` upscale kernels:
   kernel (12.5k px vs Bilinear, 21.8k px vs Bicubic for the no-* group; the
   deterministic-decode GIF golden rules out decoder differences).
 
-Plus one policy case: `embedded-svg-with-text` — resvg parses `<image>`-embedded
-SVGs with an empty fontdb, so its golden renders no text; Donner renders the
-text (browser-consistent).
+The `embedded-svg-with-text` policy case is independently qualified: the vendored reference omits
+the embedded SVG's text, while Donner uses the document font catalog. An authored
+`EmbeddedSvgUsesDocumentFontContext` case checks embedded-versus-direct identity plus visible text
+ink in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant, so the corpus row is
+render-only rather than a missing feature.
 
 **Next step (needs a maintainer decision):** refresh the whole
 `structure/image` golden set from current resvg and adopt Mitchell-bicubic in
 `RendererTinySkia::drawImage`/`drawBitmap` (+ the Geode sampler) to match
-current resvg, or keep bilinear and leave the 13 mismatched-era tests skipped.
+current resvg, or keep bilinear and leave the 12 kernel-dependent tests skipped.
 Per-test threshold inflation is not an option.
+
+The kernel measurements above were introduced in `be5f999367`; reproduction metadata and raw
+output are not included with those recorded measurements. They remain historical claims rather
+than a current reproduction. Reclassification
+of the 12 kernel-dependent issue #1168 rows requires a fresh run pinned to the source, decoder,
+reference images, transforms, and compared kernels; the independent PNG intrinsic-placement test
+separately prevents a sampling-policy decision from concealing sizing or placement regressions.
 
 **B5 (feMorphology degenerate radius) is now fixed** — see
 [Recently fixed](#recently-fixed-prs-608611).
@@ -303,7 +384,7 @@ content-placement transform.
 | structure/style           |     1 | CSS `@import` / external CSS remains unsupported: imports are diagnosed and ignored, with no target requests; `UnsupportedCssImportsNeverRequestConfiguredResponses` in `//donner/svg/renderer/tests:renderer_public_api_tests` enforces that.                                                                                                                 |
 | structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                                                               |
 | painting/image-rendering  |     1 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. `on-feImage` uses an independently derived nearest reference; `optimizeSpeed` remains pending reference qualification at allowed nearest-sampling ties, rather than missing SVG support.                                                                        |
-| masking/clipPath          |     4 | Child clip intersections are unioned independently on both renderers. CSS circle shorthand edge cases remain. Vector text children use shared placed glyph outlines. The transformed-text vendored golden uses ink bounds, unlike SVG 2 full-glyph-cell bounds and Firefox, so it remains classified pending broader browser review.                                                                              |
+| masking/clipPath          |     1 | CSS circle shapes support fill, stroke and viewport reference boxes with bounded geometry preparation; two opaque reference images retain explicit background qualifications. The transformed-text reference remains under review. |
 | masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                                |
 | text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                          |
 | text/tspan                |     3 | tspan interaction with `clip-path`/`filter`/`mask`                                                                                                                                                                                                                                                                                                             |

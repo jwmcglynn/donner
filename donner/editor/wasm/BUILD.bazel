@@ -157,6 +157,7 @@ cc_binary(
     name = "_editor_wasm_binary",
     srcs = [
         "BrowserGpuOwnerWait.cc",
+        "BrowserGpuOwnerWait.h",
         "//donner/editor:main.cc",
     ],
     additional_linker_inputs = [
@@ -186,6 +187,7 @@ cc_binary(
     deps = _EDITOR_WASM_BINARY_DEPS + [
         "//donner/editor:editor_build_info",
         "//donner/editor:notice",
+        "//donner/gpu:gpu",
     ],
 )
 
@@ -384,9 +386,9 @@ py_test(
         "--max-wasm-data-segments",
         "64",
         "--max-js-raw-bytes",
-        "199000",
+        "202000",
         "--max-js-gzip-bytes",
-        "54800",
+        "56000",
         "--max-total-raw-bytes",
         "12880000",
         "--expected-js-property",
