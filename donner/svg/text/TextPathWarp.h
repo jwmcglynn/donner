@@ -31,6 +31,12 @@ inline bool FiniteOutline(const Path& outline) {
   });
 }
 
+inline bool ValidMappedPointInput(const TextGlyph& glyph, const Vector2d& point) {
+  return glyph.textPathOrigin && std::isfinite(*glyph.textPathOrigin) &&
+         std::isfinite(glyph.textPathNormalOffset) && std::isfinite(point.x) &&
+         std::isfinite(point.y);
+}
+
 inline bool CrossesBoundary(double start, double end, double boundary) {
   return start < end ? boundary > start && boundary < end : boundary < start && boundary > end;
 }
@@ -77,9 +83,7 @@ inline std::optional<Vector2d> PointAtDistance(
     const StretchedTextPath& mapping, const TextGlyph& glyph, const Vector2d& point,
     double distance,
     Path::MeasuredPath::BoundarySide boundarySide = Path::MeasuredPath::BoundarySide::Incoming) {
-  if (!glyph.textPathOrigin || !std::isfinite(*glyph.textPathOrigin) ||
-      !std::isfinite(glyph.textPathNormalOffset) || !std::isfinite(point.x) ||
-      !std::isfinite(point.y) || !std::isfinite(distance)) {
+  if (!ValidMappedPointInput(glyph, point) || !std::isfinite(distance)) {
     return std::nullopt;
   }
   const auto sample = Sample(mapping, distance, boundarySide);
