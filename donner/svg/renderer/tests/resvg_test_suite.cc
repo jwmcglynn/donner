@@ -266,16 +266,17 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeDistantLight, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeDropShadow, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feDropShadow",
-                {
-                    {"only-stdDeviation.svg",
-                     Params::WithThreshold(0.05f, 160, "Minor blur diffs")},
-                    {"with-flood-color.svg", Params::WithThreshold(0.03f, 160, "Minor blur diffs")},
-
-                    {"with-percent-offset.svg", Params::Skip("Bug: feDropShadow edge case")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "filters/feDropShadow",
+            {
+                {"only-stdDeviation.svg", Params::WithThreshold(0.05f, 160, "Minor blur diffs")},
+                {"with-flood-color.svg", Params::WithThreshold(0.03f, 160, "Minor blur diffs")},
+                // Percentage dx/dy are invalid <number> values and fall back to the default
+                // offset of 2, so this case renders the same as only-stdDeviation.svg.
+                {"with-percent-offset.svg", Params::WithThreshold(0.05f, 160, "Minor blur diffs")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeFlood, ImageComparisonTestFixture,
