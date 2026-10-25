@@ -165,10 +165,10 @@ TEST(PlacedTextGeometryTest, StretchReverseEdgeSamplesExactSharpCornerBoundary) 
   const Path warpedReverse = WarpGlyphOutline(reverseEdge, mapping, glyph, 0.05);
   const Path warpedRectangle = WarpGlyphOutline(rectangle, mapping, glyph, 0.05);
 
-  ASSERT_FALSE(warpedReverse.empty());
+  ASSERT_THAT(warpedReverse.commands(), Not(IsEmpty()));
   EXPECT_THAT(warpedReverse.points(), Contains(Vector2Near(12.0, 0.0)));
   EXPECT_THAT(warpedReverse.points(), Contains(Vector2Near(10.0, -2.0)));
-  EXPECT_FALSE(warpedRectangle.empty());
+  EXPECT_THAT(warpedRectangle.commands(), Not(IsEmpty()));
 }
 
 TEST(PlacedTextGeometryTest, StretchQuadraticCrossesSharpCornerWithNormalOffset) {
