@@ -138,17 +138,17 @@ bottom for completeness.
 
 ### B2: `filters/filter-functions` category coverage
 
-All 43 fixtures execute. Twenty-seven retain ordinary comparisons, including `blur-function` and
-`drop-shadow-function-filter-region`; sixteen have explicit reference qualifications and independent
+All 43 fixtures execute. Twenty-eight retain ordinary comparisons, including `blur-function` and
+`drop-shadow-function-filter-region`; fifteen have explicit reference qualifications and independent
 rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL case uses
 `FilterReferenceStages`. No threshold or golden is changed.
 
 | Assigned cases | Disposition |
 | --- | --- |
 | Seven `color-adjust-functions-*` cases | Every canonical mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular. Across all label rows the vendored PNGs carry about 14% more ink; against resvg v0.49.0 the residual is consistent with analytic versus 4x4-supersampled edge coverage (see [B7](#b7-text-reference-qualification)). |
-| Five remaining `drop-shadow-function*` cases | Color order, omitted currentColor, em/mm-to-px conversion and alpha compare independently. Offset/blur sampling differs from the historical PNGs; for the basic case the device Y offset is 12.5, and Donner rounds to 13 while the reference shadow profile is one row earlier. Half-pixel rounding is a Donner rasterization contract, not a CSS requirement. Sampling qualification remains with #1170. |
+| Five remaining `drop-shadow-function*` cases | Reference disagreement. Each reference shadow is the Donner shadow moved to a truncated offset: rendering Donner at that offset matches within the default allowance (21 to 72 pixels, against 2,513 to 6,582 at Donner's own offset). For the three `4 5 6` cases the device offset is (10, 12.5); the reference truncates it to (10, 12), while Donner rounds to (10, 13) under its half-pixel rounding contract, and an exact half-pixel shadow still differs from the reference by 447 pixels. For `em-values` and `mm-values` the reference shadows sit at device offsets (30, 47) and (27, 37) instead of the specified (32, 48) and (28.35, 37.80). Reproducing them needs two truncations: the resolved user lengths to whole units before scaling (12.8 19.2 to 12 19, and 11.34 15.12 to 11 15), a hypothesis the current usvg source does not show, and the scaled offset toward zero, which resvg's `apply_drop_shadow` does with `dx as i32`. Color order, currentColor, em/mm resolution and alpha compare independently. |
 | `two-exact-urls` | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph. |
-| `two-urls` | Chained flood/blur matches the equivalent single primitive graph. The historical difference is at the filter-region boundary (2,191 CPU / 2,618 Geode pixels); boundary sampling remains with #1170. |
+| `two-urls` | Compares by default. The boundary difference was Donner's: the three box passes that approximate the Gaussian discarded what the earlier passes spread past the filter raster edge, which the later passes must read back. TinySkia now runs the passes on zero-padded lines, and Geode evaluates the three passes as one cascade kernel per axis that samples the input directly, so a blur near the raster edge equals the same blur computed with room around it. |
 | `url-and-grayscale` | CSS functions use sRGB. An independent solid-color oracle gives 115 for the sample's encoded-channel luminance; the historical reference center is 122, consistent with linearRGB processing. |
 | `one-invalid-url-in-list` | An invalid URL disables the entire chain rather than preserving the prior stage. `FilterReferenceStages.InvalidReferenceDisablesEntireChain` independently covers that behavior. |
 
@@ -163,9 +163,10 @@ rejected declarations preserve the prior value at the same cascade priority.
 The named gates are `properties_tests`, `renderer_driver_tests`, the three
 `renderer_regression_tests` configurations and all three resvg corpus targets. A raster sanitizer
 seed covers valid translucent shadows and invalid declarations. The qualified corpus cases are
-skips that name their bug: label-glyph differences under #1167 and offset/blur sampling under
-#1170. #1169 tracks these classifications; general filter-region and sampling behavior remains
-separate in #1170.
+skips that name their cause: label-glyph differences under #1167, and drop-shadow references whose
+offsets are truncated, which are reference disagreements. #1169 tracks these classifications.
+`two-urls` now compares by default after the box blur edge fix; the remaining filter-region and
+sampling cases stay with #1170.
 
 ---
 
