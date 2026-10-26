@@ -239,7 +239,7 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     {
         /*scene=*/"donner_splash",
         /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{2, 0, 64, 32},
+        /*ceiling=*/{2, 0, 64, 24},
         /*reason=*/
         "filters, clip paths, and dozens of nested opacity groups re-encode and re-upload "
         "their layer geometry every frame",
@@ -281,7 +281,7 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     {
         /*scene=*/"filter_drop_shadow",
         /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 24, 24},
+        /*ceiling=*/{0, 0, 16, 16},
         /*reason=*/
         "three separate drop-shadow filters each rewrite per-pass uniform scratch and "
         "rebuild a bind group per pass every frame",
@@ -291,14 +291,12 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     },
     {
         /*scene=*/"filter_fill_paint",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 10, 10},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 6, 6},
         /*reason=*/
-        "filter passes rewrite their per-pass uniform scratch and rebuild a bind group per "
-        "pass every frame",
+        "filter passes rewrite their per-pass uniform scratch every frame",
         /*tracking=*/
-        "clears when filter passes keep their uniform allocations and bind groups across "
-        "unchanged frames",
+        "clears when filter passes keep their uniform allocations across unchanged frames",
     },
     {
         /*scene=*/"filter_spot_light",
@@ -313,14 +311,12 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     },
     {
         /*scene=*/"filter_stroke_paint",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 10, 10},
+        /*violated=*/kBufferWrites,
+        /*ceiling=*/{0, 0, 6, 6},
         /*reason=*/
-        "filter passes rewrite their per-pass uniform scratch and rebuild a bind group per "
-        "pass every frame",
+        "filter passes rewrite their per-pass uniform scratch every frame",
         /*tracking=*/
-        "clears when filter passes keep their uniform allocations and bind groups across "
-        "unchanged frames",
+        "clears when filter passes keep their uniform allocations across unchanged frames",
     },
     {
         /*scene=*/"geode_pattern_checker",

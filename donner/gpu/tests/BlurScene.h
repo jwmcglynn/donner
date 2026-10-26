@@ -22,12 +22,21 @@
 
 namespace donner::gpu::tests {
 
+/// The `boxLeft` parameter for \p kernelType: window 4 for the three-box cascade (kernel type 2),
+/// else the asymmetric box's left extent 1.
+/// @param kernelType Kernel type passed to the blur program.
+inline uint32_t BlurBoxLeft(uint32_t kernelType) {
+  return kernelType == 2 ? 4u : 1u;
+}
+
 /// Runs Gaussian and asymmetric box passes with folded clipping on a varied float image.
 /// @param device Native device with bounded wait/readback support.
 /// @param shaderDescriptor Backend-emitted module with the shared cs_main entry point.
 /// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
 /// @param sigma Gaussian standard deviation in pixels, zero for the copy path.
-/// @param kernelType Zero for Gaussian, one for an asymmetric box.
+/// @param kernelType Zero for Gaussian, one for an asymmetric box, two for the three-box cascade
+///     of window 4 (the even window of sigma 2, so pass \p sigma 2), checked against the float
+///     CPU blur, which keeps the passes' spill past the image edge.
 /// @param axis Zero for horizontal, one for vertical.
 /// @param edgeMode Zero for transparent, one for duplicate, two for wrap.
 /// @param shaderMetadata Optional frozen metadata used to derive binding indices and workgroup
@@ -110,8 +119,18 @@ void CheckBlurStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDe
   auto uniform = device.createBuffer(
       BufferDescriptor{"blur parameters", 48, BufferUsage::Uniform | BufferUsage::CopyDst});
   ASSERT_THAT(uniform, HasResult());
-  const std::array<uint32_t, 12> params{
-      std::bit_cast<uint32_t>(sigma), axis, edgeMode, kernelType, 1, 2, 0, 0, 3, 3, 1, 0};
+  const std::array<uint32_t, 12> params{std::bit_cast<uint32_t>(sigma),
+                                        axis,
+                                        edgeMode,
+                                        kernelType,
+                                        BlurBoxLeft(kernelType),
+                                        2,
+                                        0,
+                                        0,
+                                        3,
+                                        3,
+                                        1,
+                                        0};
   ASSERT_THAT(
       device.writeBuffer(uniform.result(), 0,
                          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params.data()),

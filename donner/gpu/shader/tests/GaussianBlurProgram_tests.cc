@@ -5,7 +5,9 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <string>
 #include <string_view>
+#include <utility>
 
 #include "donner/gpu/shader/programs/GaussianBlur.h"
 #include "donner/gpu/shader/tests/CompiledGaussian.h"
@@ -31,6 +33,17 @@ TEST(GaussianBlurProgramTests, FreezesAllProjectionsAndDerivedMetadata) {
   EXPECT_TRUE(shader.matchesMember("params", "clipMin", 24, 8, ShaderScalarType::I32, 2));
   EXPECT_TRUE(shader.matchesMember("params", "pad", 44, 4, ShaderScalarType::U32));
   EXPECT_NE(shader.wgsl.find("fn sampleEdge"), std::string_view::npos);
+  for (const auto& [name, value] : std::array<std::pair<std::string_view, uint32_t>, 4>{{
+           {"kKernelBox", programs::kGaussianBlurKernelBox},
+           {"kKernelBoxCascade", programs::kGaussianBlurKernelBoxCascade},
+           {"kEdgeTransparent", programs::kGaussianBlurEdgeTransparent},
+           {"kEdgeDuplicate", programs::kGaussianBlurEdgeDuplicate},
+       }}) {
+    EXPECT_THAT(std::string(shader.wgsl),
+                testing::HasSubstr("const " + std::string(name) +
+                                   ": u32 = " + std::to_string(value) + "u;"))
+        << "the WGSL constant must mirror the host constant";
+  }
   EXPECT_NE(shader.msl.find("donner_msl_texture_load"), std::string_view::npos);
   EXPECT_EQ(shader.spirv.front(), 0x07230203u);
 }

@@ -1,6 +1,7 @@
 #include "tiny_skia/filter/GaussianBlur.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -92,6 +93,16 @@ BoxBlurPlan computeBoxPasses(double sigma) {
     plan.numPasses = 3;
   }
   return plan;
+}
+
+/// Pixels the passes after the first read past either end of a line. With transparent edges, the
+/// earlier passes spread content that far beyond the line, and the later passes bring it back.
+int boxPassSpill(const BoxBlurPlan& plan) {
+  int spill = 0;
+  for (int i = 1; i < plan.numPasses; ++i) {
+    spill += std::max(plan.passes[i].left, plan.passes[i].right);
+  }
+  return spill;
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +351,49 @@ void boxBlurHorizontalFloat(const float* src, float* dst, int width, int height,
   }
 }
 
+/// A line of RGBA float pixels placed at \p origin on a shared coordinate axis.
+struct LineSpan {
+  float* pixels;
+  int origin;
+  int count;
+};
+
+/// One box pass over the coordinates [first, last), reading \p src as zero outside its span and
+/// storing only the coordinates \p dst covers. It accumulates in the same order as
+/// \ref boxBlurHorizontalFloat over a zero-padded [first, last) line, so its results match that
+/// line bit for bit without copying the line into one.
+void boxBlurSpanFloat(const LineSpan& src, const LineSpan& dst, int first, int last,
+                      const BoxPass& pass) {
+  const Vec4f32 invWidth = Vec4f32::splat(1.0f / static_cast<float>(pass.width()));
+  const auto load = [&](int coordinate) {
+    const int index = coordinate - src.origin;
+    return index >= 0 && index < src.count
+               ? Vec4f32::load(src.pixels + static_cast<std::size_t>(index) * 4)
+               : Vec4f32();
+  };
+  const auto store = [&](int coordinate, Vec4f32 value) {
+    const int index = coordinate - dst.origin;
+    if (index >= 0 && index < dst.count) {
+      value.store(dst.pixels + static_cast<std::size_t>(index) * 4);
+    }
+  };
+
+  Vec4f32 sum;
+  for (int k = first; k <= std::min(first + pass.right, last - 1); ++k) {
+    sum += load(k);
+  }
+  store(first, sum * invWidth);
+  for (int x = first + 1; x < last; ++x) {
+    if (x + pass.right < last) {
+      sum += load(x + pass.right);
+    }
+    if (x - pass.left - 1 >= first) {
+      sum -= load(x - pass.left - 1);
+    }
+    store(x, sum * invWidth);
+  }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -434,6 +488,8 @@ void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMod
   // Process one scanline at a time. This bounds blur scratch to two rows or columns instead of one
   // full float surface, so a large but admitted SourceGraphic does not transiently triple its
   // retained memory. Every pass reads a complete line before copying its result back.
+  std::vector<float> wideA;
+  std::vector<float> wideB;
   const auto blurLine = [&](std::span<float> line, std::span<float> scratch, double sigma) {
     if (!(sigma > 0.0)) {
       return;
@@ -447,6 +503,24 @@ void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMod
       std::swap(input, output);
     } else {
       const BoxBlurPlan plan = computeBoxPasses(sigma);
+      // With transparent edges, the passes run over the line widened by their spill: the first
+      // reads the line itself, the middle ones a widened scratch line, and the last writes back.
+      const int spill = edgeMode == BlurEdgeMode::None ? boxPassSpill(plan) : 0;
+      if (spill > 0) {
+        const int widePixels = linePixels + 2 * spill;
+        wideA.resize(static_cast<std::size_t>(widePixels) * 4);
+        wideB.resize(wideA.size());
+        LineSpan from{line.data(), 0, linePixels};
+        std::array<LineSpan, 2> wide{LineSpan{wideA.data(), -spill, widePixels},
+                                     LineSpan{wideB.data(), -spill, widePixels}};
+        for (int i = 0; i < plan.numPasses; ++i) {
+          const LineSpan to = i + 1 == plan.numPasses ? LineSpan{line.data(), 0, linePixels}
+                                                      : wide[static_cast<std::size_t>(i % 2)];
+          boxBlurSpanFloat(from, to, -spill, linePixels + spill, plan.passes[i]);
+          from = to;
+        }
+        return;
+      }
       for (int i = 0; i < plan.numPasses; ++i) {
         boxBlurHorizontalFloat(input.data(), output.data(), linePixels, 1, plan.passes[i],
                                edgeMode);
