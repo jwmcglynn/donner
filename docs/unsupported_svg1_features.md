@@ -18,9 +18,11 @@ transparent black (the SVG spec behavior for unresolved filter inputs). No warni
 **Modern alternative:** CSS compositing with the `mix-blend-mode` and `isolation` properties covers
 blending with backdrop content.
 
-**Affected resvg tests:** `filters/enable-background/*` (category default skip; four cases that
-already match the reference with SVG 2 semantics compare, and `with-mask` is render-only on the UB
-marker reference), `e-filter-032` (skipped), `e-filter-033` (skipped).
+**Affected resvg tests:** `filters/enable-background/*` (category default
+`Params::DeprecatedInSVG2`; four cases that already match the reference with SVG 2 semantics
+compare) and `filters/filter/in=BackgroundImage-with-enable-background` /
+`in=BackgroundAlpha-with-enable-background` (`Params::DeprecatedInSVG2`). These render without a
+pixel comparison.
 
 ## SVG Fonts (&lt;font&gt;, &lt;glyph&gt;, &lt;missing-glyph&gt;, etc.)
 
@@ -55,7 +57,8 @@ same cases.
 
 **SVG 2 status:** Removed.
 
-**Donner behavior:** Not implemented.
+**Donner behavior:** Not implemented. The resvg `text/tref/*` and `painting/display/none-on-tref`
+cases use `Params::DeprecatedInSVG2`.
 
 ## Legacy Glyph Orientation Properties
 
@@ -69,7 +72,49 @@ obsoleted and replaced by `text-orientation`; SVG 2 retains only a narrow compat
 **Donner behavior:** The legacy property names are recognized but have no independent layout
 behavior. The narrow `glyph-orientation-vertical` compatibility alias is not yet applied. Modern
 vertical text should use `writing-mode: vertical-rl` or `vertical-lr` together with
-`text-orientation`.
+`text-orientation`. The resvg `text/glyph-orientation-horizontal` case uses
+`Params::DeprecatedInSVG2`.
+
+## The Kerning Property
+
+**SVG 1.1 behavior:** `kerning` set an explicit inter-glyph adjustment or `auto`.
+
+**SVG 2 status:** Removed in favor of CSS `font-kerning`.
+
+**Donner behavior:** Not implemented; `font-kerning` is supported. The resvg `text/kerning/*` cases
+use `Params::DeprecatedInSVG2`.
+
+## ICC Color Paint
+
+**SVG 1.1 behavior:** A paint could carry an `icc-color()` suffix after an sRGB fallback.
+
+**SVG 2 status:** Not part of the SVG 2 paint grammar.
+
+**Donner behavior:** Not implemented; a declaration with `icc-color()` is invalid and rejected. The
+resvg `painting/fill/icc-color` and `valid-FuncIRI-with-a-fallback-ICC-color` cases use
+`Params::DeprecatedInSVG2`.
+
+## The Version Attribute
+
+**SVG 1.1 behavior:** `<svg version="1.1">` selected SVG 1.1 processing, under which geometry
+properties such as `x` or `width` cannot come from the `style` attribute.
+
+**SVG 2 status:** The `version` attribute is removed; geometry properties are presentation
+attributes and CSS properties.
+
+**Donner behavior:** Applies SVG 2 rules regardless of `version`. The resvg
+`structure/style/non-presentational-attribute` and
+`structure/style-attribute/non-presentational-attribute` cases use `Params::DeprecatedInSVG2`.
+
+## Removed Dominant-Baseline Values
+
+**SVG 1.1 behavior:** `dominant-baseline` accepted `use-script`, `no-change` and `reset-size`.
+
+**SVG 2 status:** Removed; SVG 2 uses the CSS Inline Layout values.
+
+**Donner behavior:** The values parse for compatibility: `use-script` and `reset-size` behave like
+`auto`, and `no-change` takes the parent's value. The resvg
+`text/dominant-baseline/reset-size` and `use-script` cases use `Params::DeprecatedInSVG2`.
 
 ## Obsolete SVG 1.1 Writing-Mode Values
 
@@ -90,7 +135,8 @@ values. There is no separate legacy layout path.
 **SVG 2 status:** Deprecated in favor of `clip-path`.
 
 **Donner behavior:** Not implemented. Use `clip-path` with `clipPathUnits="userSpaceOnUse"` and
-an `inset()` shape instead.
+an `inset()` shape instead. The resvg `masking/clip/simple-case` case uses
+`Params::DeprecatedInSVG2`.
 
 ## XML Language and Whitespace Attributes
 

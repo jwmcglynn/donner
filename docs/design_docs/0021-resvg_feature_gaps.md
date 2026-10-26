@@ -31,35 +31,46 @@ be expressed through the normal `Params` path close to the affected tests:
 
 | State                                                      | Count | Meaning                                                                                                                                                                                  |
 | ---------------------------------------------------------- | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Params::Skip("reason")`                                   |    98 | Not run. Feature gap, known bug, removed SVG 1.1 feature, reference disagreement, harness mismatch or API policy. The bulk of this doc.                                                  |
-| `Params::RenderOnly("UB: reason")`                         |    55 | Rendered, **not** compared. Reserved for undefined behavior; see the policy below.                                                                                                       |
+| `Params::Skip("reason")`                                   |    77 | Not run. Feature gap, known bug, reference disagreement, harness mismatch or API policy. The bulk of this doc.                                                                           |
+| `Params::UndefinedBehavior("reason")`                      |    51 | Rendered, **not** compared. Undefined or implementation-defined behavior; see the policy below.                                                                                          |
+| `Params::DeprecatedInSVG2("reason")`                       |    23 | Rendered, **not** compared. Feature removed from or deprecated in SVG 2 that Donner does not implement.                                                                                  |
 | Commented-out `INSTANTIATE_TEST_SUITE_P`                   |     0 | Every vendored category is instantiated.                                                                                                                                                 |
 | `Params::WithThreshold(…, maxPx)` / local max-pixel budget |   103 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
 | Geode-disabled local `Params` entries                      |     0 | Geode now runs every active resvg case. Verified analytic edge residuals use exact per-backend goldens instead of disabling the backend or inflating thresholds.                         |
 
-**Render-only is reserved for undefined behavior.** A render-only case hides every regression in
-it, so `Params::RenderOnly` may only mark behavior the specification leaves undefined or
-implementation-defined, or a case whose vendored reference is the resvg UB marker image
-(`third_party/resvg-test-suite/resources/ub.png`, SHA-256
-`131f32bfb5bcdb78b9e97021ee94fa0f6c5cb4564254a15bc02add2cedb168e2`). Every reason starts with
-`UB: `. `//tools/resvg_parity:parity_report_tests` fails on any other reason, and on any
-render-only case whose reference is not the marker unless `SPEC_UB_RENDER_ONLY_ALLOWLIST` in
-`tools/resvg_parity/parity_report.py` lists it with its specification-level reason (today only
-`feGaussianBlur/huge-stdDeviation`, an implementation-defined blur resource limit). Donner bugs and
-missing features, features removed in SVG 2 (`Not impl:`), reference disagreements where Donner
-follows the specification, harness or background mismatches, and API policy differences are
-`Params::Skip` with a bug number or reason. A case that passes the default comparison compares.
-A UB marker reference permits render-only but does not require it: a `Not impl:` or `Deferred:`
-feature on a marker reference stays a skip. Skipped cases do not render at all, so they lose
-no-crash and sanitizer coverage. The parity report counts 55 render-only cases (54 on the UB
-marker reference plus the allowlisted case), 113 skipped cases and 1511 compared cases.
+**Rendering without a comparison has two named buckets.** A case that renders without a pixel
+comparison hides every regression in its output, so it needs one of two factories:
+
+- `Params::UndefinedBehavior(reason)` marks behavior the specification leaves undefined or
+  implementation-defined, or a case whose vendored reference is the resvg UB marker image
+  (`third_party/resvg-test-suite/resources/ub.png`, SHA-256
+  `131f32bfb5bcdb78b9e97021ee94fa0f6c5cb4564254a15bc02add2cedb168e2`). Its reference must be the
+  marker unless `SPEC_UB_ALLOWLIST` in `tools/resvg_parity/parity_report.py` lists the case with
+  its specification-level reason (today only `feGaussianBlur/huge-stdDeviation`, an
+  implementation-defined blur resource limit).
+- `Params::DeprecatedInSVG2(reason)` marks a feature that SVG 2 removed or deprecated and Donner
+  deliberately does not implement, such as `enable-background`, `<tref>`, the `kerning` property
+  or `icc-color()` paint. Each case must fall under a feature named in
+  `DEPRECATED_IN_SVG2_FEATURES` in the same file, so this bucket cannot absorb bugs. A case whose
+  subject is a removed feature uses this bucket even when its reference is the UB marker.
+
+`//tools/resvg_parity:parity_report_tests` enforces both rules, and the parity report counts the
+two buckets separately. Both still render, so they keep no-crash and sanitizer coverage. Donner
+bugs and missing features, reference disagreements where Donner follows the specification,
+harness or background mismatches, and API policy differences are `Params::Skip` with a bug number
+or reason; skipped cases do not render at all. A UB marker reference does not by itself make a
+case undefined behavior: a `Not impl:` or `Deferred:` feature on a marker reference stays a skip.
+A case that passes the default comparison compares. The parity report counts 90 render-only cases
+(51 undefined behavior: 50 on the UB marker reference plus the allowlisted case; 39 deprecated in
+SVG 2), 77 skipped cases and 1512 compared cases.
 
 ## Current totals
 
 |                                       |                                                                                                                                                      Count |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------: |
-| `Params::Skip(...)`                   |                                                                                                                             98 (`grep -o 'Params::Skip('`) |
-| `Params::RenderOnly(...)`             |                                                                                                  55 (`UB: ` only; render-must-not-crash, no pixel compare) |
+| `Params::Skip(...)`                   |                                                                                                                             77 (`grep -o 'Params::Skip('`) |
+| `Params::UndefinedBehavior(...)`      |                                                                                                    51 (render-must-not-crash, no pixel compare; 51 cases) |
+| `Params::DeprecatedInSVG2(...)`       |                                                                       23 (render-must-not-crash, no pixel compare; 39 cases including a category default) |
 | `WithThreshold` / max-pixel overrides | 103 call sites: 79 `WithThreshold`, 11 `WithMaxPixels`, and 13 direct `withMaxPixelsDifferent` calls. Large non-text budgets remain masked-bug candidates. |
 | Geode-disabled local `Params` entries |                                                                                                                      0 (all active cases now run on Geode) |
 | Commented-out category blocks         |                                                                                                                                                          0 |
@@ -501,7 +512,7 @@ bug vs. out-of-scope:
 
 Historical `(UB)` titles are not a specification oracle. Seven assigned PNGs are byte-for-byte
 copies of `third_party/resvg-test-suite/resources/ub.png`, whose SVG source draws a `UB` label.
-They remain render-only corpus cases (`UB: ` reasons), with independent `ReferenceContract*`
+They remain `Params::UndefinedBehavior` corpus cases, with independent `ReferenceContract*`
 comparisons in `RendererRegression_tests.cc`. The other assigned fixtures do not use the UB
 marker, so they are skips with their reason. No reference bitmap or comparison tolerance is
 changed.
@@ -515,7 +526,7 @@ changed.
 | `radialGradient/invalid-gradientUnits` | The invalid enumeration is diagnosed and the initial `objectBoundingBox` value is retained. UB marker reference. |
 | `radialGradient/negative-r` | Negative outer radius is invalid and applies no paint. UB marker reference. |
 | `fill/rgb-int-int-int` | Space-separated RGB is supported CSS Color 4 syntax and matches the equivalent hex color. UB marker reference. |
-| `fill/valid-FuncIRI-with-a-fallback-ICC-color` | The obsolete SVG 1.1 `icc-color()` paint grammar is unsupported. Invalid CSS declarations are rejected, preserving inherited paint; the historical reference expects a gradient. `Not impl:` skip (removed in SVG 2). |
+| `fill/valid-FuncIRI-with-a-fallback-ICC-color` | The obsolete SVG 1.1 `icc-color()` paint grammar is unsupported. Invalid CSS declarations are rejected, preserving inherited paint; the historical reference expects a gradient. `Params::DeprecatedInSVG2` (removed in SVG 2): rendered, not compared. |
 | `stroke-linejoin/arcs` | The SVG Strokes draft join is not implemented; Donner retains its documented miter fallback. The reference is the UB marker, not an arcs rendering. |
 | `stroke-linejoin/miter-clip` | Separate Geode/editor parity repair and ordinary reference restoration: [#2057](https://github.com/jwmcglynn/donner/pull/2057). |
 | `svg/no-size` | An unsized root uses the caller canvas (512x512 by default) without fitting content bounds. The reference fits the roughly 200-unit artwork to 500 pixels. API-policy skip; caller-canvas geometry has an independent assertion. |
@@ -538,18 +549,21 @@ still skips the text sample; the independent Geode font contract test executes d
 corpus execution of the UB-marker cases establishes stability, not pixel agreement with the
 historical reference.
 
-## Out of scope (correctly skipped — do not "fix")
+## Out of scope (correctly not compared; do not "fix")
 
-| Category                        |          Tests | Why                                                                                                                                                                               |
-| ------------------------------- | -------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| filters/enable-background       |             16 | Category default `Params::Skip("Not impl: ...")`: removed in SVG 2 (→ `<filter>` chains / `backdrop-filter`). Four of the 21 cases already match the reference with SVG 2 semantics and compare; `with-mask` has the UB marker reference and is render-only. See [`unsupported_svg1_features.md`](../unsupported_svg1_features.md). |
-| filters/filter `in=Background*` |              2 | Same deprecation (BackgroundImage/BackgroundAlpha inputs).                                                                                                                        |
-| text/tref                       | 9 (+1 display) | `<tref>` removed in SVG 2.                                                                                                                                                        |
-| text/kerning                    |              2 | `kerning` attribute deprecated SVG 1.1.                                                                                                                                           |
-| text/glyph-orientation-*        |              2 | deprecated SVG 1.1.                                                                                                                                                               |
-| paint-servers/radialGradient    |              1 | `fr=0.7` is a reference-disagreement skip with the containing-circle oracle above. `focal-point-correction` compares normally.                                                                       |
-| structure/style-attribute       |              1 | `<svg version="1.1">` disables geometry-in-style (SVG 1.1 behavior).                                                                                                              |
-| Other RenderOnly UB cases       |             54 | Undefined or implementation-defined behavior: 53 on the resvg UB marker reference plus `feGaussianBlur/huge-stdDeviation`; we verify no-crash only (`UB: ` reasons, kept RenderOnly not Skip). |
+| Category or case | Tests | State and why |
+| --- | ---: | --- |
+| filters/enable-background | 17 | Category default `Params::DeprecatedInSVG2(...)`: removed in SVG 2 (→ `<filter>` chains / `backdrop-filter`). The other four of the 21 cases already match the reference with SVG 2 semantics and compare. See [`unsupported_svg1_features.md`](../unsupported_svg1_features.md). |
+| filters/filter `in=Background*-with-enable-background` | 2 | `Params::DeprecatedInSVG2`: the BackgroundImage/BackgroundAlpha snapshot comes from `enable-background`. |
+| text/tref, painting/display/none-on-tref | 9 + 1 | `Params::DeprecatedInSVG2`: `<tref>` removed in SVG 2. |
+| text/kerning | 2 | `Params::DeprecatedInSVG2`: `kerning` property removed in SVG 2. |
+| text/glyph-orientation-horizontal | 1 | `Params::DeprecatedInSVG2`: removed in SVG 2. `glyph-orientation-vertical` is implemented and keeps a residual skip. |
+| painting/fill `icc-color`, `valid-FuncIRI-with-a-fallback-ICC-color` | 2 | `Params::DeprecatedInSVG2`: SVG 1.1 `icc-color()` paint is not in the SVG 2 paint grammar. |
+| structure/style-attribute, structure/style `non-presentational-attribute` | 2 | `Params::DeprecatedInSVG2`: `<svg version="1.1">` semantics; SVG 2 removed the `version` attribute. |
+| masking/clip | 1 | `Params::DeprecatedInSVG2`: the CSS `clip` property is deprecated by CSS Masking in favor of `clip-path`. |
+| text/dominant-baseline `reset-size`, `use-script` | 2 | `Params::DeprecatedInSVG2`: SVG 1.1 values removed in SVG 2; UB marker references. |
+| paint-servers/radialGradient | 1 | `fr=0.7` is a reference-disagreement skip with the containing-circle oracle above. `focal-point-correction` compares normally. |
+| Other `Params::UndefinedBehavior` cases | 51 | Undefined or implementation-defined behavior: 50 on the resvg UB marker reference plus `feGaussianBlur/huge-stdDeviation`; we verify no-crash only. |
 
 ---
 
@@ -570,8 +584,8 @@ Policy:
   the backend or widen a Geode-only threshold to absorb the difference.
 - Category-wide defaults are acceptable when the default reason applies to every file not
   explicitly overridden. `filters/enable-background` is the model: one category default
-  `Params::Skip(...)`, not a per-file list, with overrides only for the cases that compare or
-  carry the UB marker reference. Category feature requirements
+  `Params::DeprecatedInSVG2(...)`, not a per-file list, with overrides only for the cases that
+  compare. Category feature requirements
   such as `text/*` requiring text support are additive, so per-test overrides do
   not accidentally opt out of backend capability checks.
 - Non-resvg regression tests belong in focused renderer test files, not in

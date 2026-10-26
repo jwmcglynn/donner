@@ -1,6 +1,6 @@
 ---
 name: donner-resvg-triage
-description: Run and triage Donner's resvg SVG-conformance suite — filtering tests, reading [COMPARE] failures, editing Params::Skip/RenderOnly/threshold entries in resvg_test_suite.cc, and handling the per-backend comparison modes. Use when a resvg_test_suite test fails, when enabling tests for a newly implemented SVG feature, when adding/removing skip entries or thresholds, when running a DISABLED_ (skipped) comparison, or when touching donner/svg/renderer/tests/resvg_test_suite.cc or third_party/resvg-test-suite.
+description: Run and triage Donner's resvg SVG-conformance suite: filtering tests, reading [COMPARE] failures, editing Params::Skip/UndefinedBehavior/DeprecatedInSVG2/threshold entries in resvg_test_suite.cc, and handling the per-backend comparison modes. Use when a resvg_test_suite test fails, when enabling tests for a newly implemented SVG feature, when adding/removing skip entries or thresholds, when running a DISABLED_ (skipped) comparison, or when touching donner/svg/renderer/tests/resvg_test_suite.cc or third_party/resvg-test-suite.
 ---
 
 # Resvg test-suite triage
@@ -159,15 +159,19 @@ Never widen the shared threshold to absorb a one-backend diff — that blinds th
    `Params::Skip("Not impl: <feature>")`.
 3. **Golden is UB** (resvg's golden PNG is the UB marker image, a copy of
    `third_party/resvg-test-suite/resources/ub.png`, or the specification leaves the behavior
-   undefined or implementation-defined) → `Params::RenderOnly("UB: <reason>")`, e.g.
-   `Params::RenderOnly("UB: saturate 99999")`. It renders for no-crash coverage but skips the
-   comparison. A marker golden permits render-only but does not require it: a `Not impl:` or
+   undefined or implementation-defined) → `Params::UndefinedBehavior("<reason>")`, e.g.
+   `Params::UndefinedBehavior("saturate 99999")`. It renders for no-crash coverage but skips the
+   comparison. A marker golden permits this but does not require it: a `Not impl:` or
    `Deferred:` feature keeps its skip (for example `text/direction/rtl-with-vertical-writing-mode`
-   and `text/textPath/complex`). Render-only is reserved for UB: deprecated or removed features,
-   reference disagreements and harness mismatches are `Params::Skip` with a reason.
-   `//tools/resvg_parity:parity_report_tests` fails on a render-only reason without `UB: `, and on
-   a render-only case whose golden is not the marker unless `SPEC_UB_RENDER_ONLY_ALLOWLIST` in
+   and `text/textPath/complex`). `//tools/resvg_parity:parity_report_tests` fails on an
+   undefined-behavior case whose golden is not the marker unless `SPEC_UB_ALLOWLIST` in
    `tools/resvg_parity/parity_report.py` names it with its specification-level reason.
+3a. **Feature removed or deprecated in SVG 2** (`enable-background`, `<tref>`, `kerning`,
+   `icc-color()` paint, and so on; see `docs/unsupported_svg1_features.md`) →
+   `Params::DeprecatedInSVG2("<feature> (removed in SVG 2)")`, which also renders without
+   comparing. Add the feature to `DEPRECATED_IN_SVG2_FEATURES` in `parity_report.py`; the parity
+   tests reject any other use. Reference disagreements and harness mismatches are
+   `Params::Skip` with a reason.
 4. **Known bug, fix deferred** → `Params::Skip("Bug: <description>")` and record it in
    `docs/design_docs/0021-resvg_feature_gaps.md`.
 5. **Unexplained diff of any size** → investigate. "It's just anti-aliasing" is a banned
@@ -216,7 +220,8 @@ Group override entries by reason with a short comment line, e.g.:
 `ImageComparisonParams` builder catalog (verified in `ImageComparisonTestFixture.h` — re-check the
 header when in doubt, it is the source of truth):
 
-- Static constructors: `Params::Skip(reason)`, `Params::RenderOnly(reason)`,
+- Static constructors: `Params::Skip(reason)`, `Params::UndefinedBehavior(reason)`,
+  `Params::DeprecatedInSVG2(reason)`,
   `Params::WithThreshold(threshold, maxPx, reason)`,
   `Params::WithGoldenOverride(filename, threshold, reason)`.
 - Chainable: `.withReason(text)`, `.withMaxPixelsDifferent(px)`, `.withSimpleTextMaxPixels(px)`
@@ -234,7 +239,7 @@ Counts of skips/thresholds are volatile — derive them, don't quote docs:
 
 ```sh
 grep -c 'Params::Skip'       donner/svg/renderer/tests/resvg_test_suite.cc
-grep -c 'Params::RenderOnly' donner/svg/renderer/tests/resvg_test_suite.cc
+grep -c 'Params::UndefinedBehavior\|Params::DeprecatedInSVG2' donner/svg/renderer/tests/resvg_test_suite.cc
 grep -c 'WithThreshold'      donner/svg/renderer/tests/resvg_test_suite.cc
 ls third_party/resvg-test-suite/tests/            # current category roots
 ```
