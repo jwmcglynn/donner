@@ -134,11 +134,9 @@ INSTANTIATE_TEST_SUITE_P(
                      Params().withReason("SVG 2 ignores enable-background; output matches")},
                     {"new-with-invalid-region-3.svg",
                      Params().withReason("SVG 2 ignores enable-background; output matches")},
-                    {"with-mask.svg",
-                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
                 },
-                Params::Skip("Not impl: enable-background / BackgroundImage (SVG 1.1, removed "
-                             "in SVG 2)"))),
+                Params::DeprecatedInSVG2("enable-background / BackgroundImage (SVG 1.1, removed "
+                                         "in SVG 2)"))),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -170,9 +168,9 @@ INSTANTIATE_TEST_SUITE_P(
                 {"type=matrix.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "type=matrix")},
                 {"type=saturate-with-a-large-coefficient.svg",
-                 Params::RenderOnly("UB: saturate 99999")},
+                 Params::UndefinedBehavior("saturate 99999")},
                 {"type=saturate-with-negative-coefficient.svg",
-                 Params::RenderOnly("UB: saturate -0.5")},
+                 Params::UndefinedBehavior("saturate -0.5")},
                 {"type=saturate-without-a-coefficient.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity saturate")},
                 {"type=saturate.svg",
@@ -198,9 +196,9 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "filters/feConvolveMatrix",
                 {
-                    {"bias=-0.5.svg", Params::RenderOnly("UB: bias=-0.5")},
-                    {"bias=0.5.svg", Params::RenderOnly("UB: bias=0.5")},
-                    {"bias=9999.svg", Params::RenderOnly("UB: bias=9999")},
+                    {"bias=-0.5.svg", Params::UndefinedBehavior("bias=-0.5")},
+                    {"bias=0.5.svg", Params::UndefinedBehavior("bias=0.5")},
+                    {"bias=9999.svg", Params::UndefinedBehavior("bias=9999")},
                     // The convolve math (window, 180° flip, target offset, divisor,
                     // preserveAlpha, linearRGB) is byte-equivalent to tiny-skia. The
                     // remaining Geode diff is a ~1px positional band per convolved
@@ -251,7 +249,7 @@ INSTANTIATE_TEST_SUITE_P(
                          0.15f, kDefaultMismatchedPixels,
                          "Checkerboard exposes convolve alpha-math delta; measured minimal")},
                     {"edgeMode=wrap-with-matrix-larger-than-target.svg",
-                     Params::RenderOnly("UB: wrap with oversized kernel")},
+                     Params::UndefinedBehavior("wrap with oversized kernel")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -315,9 +313,10 @@ INSTANTIATE_TEST_SUITE_P(
                              "thin ~1px band (259px). Not a coverage bug; TinyGolden still checks "
                              "tiny-skia vs resvg.")},
                     {"huge-stdDeviation.svg",
-                     Params::RenderOnly("UB: implementation-defined resource limit; blur sigma is "
-                                        "clamped to 256 device px (kMaximumFilterPixelRadius) and "
-                                        "the reference clamps differently")},
+                     Params::UndefinedBehavior(
+                         "implementation-defined resource limit; blur sigma is "
+                         "clamped to 256 device px (kMaximumFilterPixelRadius) and "
+                         "the reference clamps differently")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -438,7 +437,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory("filters/feTile",
                                         {
                                             {"complex-transform.svg",
-                                             Params::RenderOnly("UB: complex transform")},
+                                             Params::UndefinedBehavior("complex transform")},
                                         })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -453,7 +452,7 @@ INSTANTIATE_TEST_SUITE_P(
                                            "Minor shading differences")},
                     {"complex-transform.svg", Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
                                                                     "Minor shading differences")},
-                    {"stitchTiles=stitch.svg", Params::RenderOnly("UB: stitchTiles=stitch")},
+                    {"stitchTiles=stitch.svg", Params::UndefinedBehavior("stitchTiles=stitch")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -499,18 +498,22 @@ INSTANTIATE_TEST_SUITE_P(
                 {"complex-order-and-xlink-href.svg",
                  Params::Skip("Bug: Color is slightly off, we are missing transparency")},
                 {"in=BackgroundAlpha-with-enable-background.svg",
-                 Params::Skip("in=BackgroundAlpha (deprecated SVG 1.1)")},
+                 Params::DeprecatedInSVG2("enable-background: BackgroundAlpha of an SVG 1.1 "
+                                          "enable-background=new snapshot (removed in SVG 2)")},
                 {"in=BackgroundImage-with-enable-background.svg",
-                 Params::Skip("in=BackgroundImage (deprecated SVG 1.1)")},
+                 Params::DeprecatedInSVG2("enable-background: BackgroundImage of an SVG 1.1 "
+                                          "enable-background=new snapshot (removed in SVG 2)")},
                 {"in=FillPaint-on-g-without-children.svg",
-                 Params::RenderOnly("UB: in=FillPaint on empty group")},
-                {"in=FillPaint-with-gradient.svg", Params::RenderOnly("UB: in=FillPaint gradient")},
-                {"in=FillPaint-with-pattern.svg", Params::RenderOnly("UB: in=FillPaint pattern")},
+                 Params::UndefinedBehavior("in=FillPaint on empty group")},
+                {"in=FillPaint-with-gradient.svg",
+                 Params::UndefinedBehavior("in=FillPaint gradient")},
+                {"in=FillPaint-with-pattern.svg",
+                 Params::UndefinedBehavior("in=FillPaint pattern")},
                 {"in=FillPaint-with-target-on-g.svg",
-                 Params::RenderOnly("UB: in=FillPaint on group")},
-                {"in=FillPaint.svg", Params::RenderOnly("UB: in=FillPaint")},
-                {"in=StrokePaint.svg", Params::RenderOnly("UB: in=StrokePaint")},
-                {"on-the-root-svg.svg", Params::RenderOnly("UB: Filter on the root `svg`")},
+                 Params::UndefinedBehavior("in=FillPaint on group")},
+                {"in=FillPaint.svg", Params::UndefinedBehavior("in=FillPaint")},
+                {"in=StrokePaint.svg", Params::UndefinedBehavior("in=StrokePaint")},
+                {"on-the-root-svg.svg", Params::UndefinedBehavior("Filter on the root `svg`")},
                 {"transform-on-shape-with-filter-region.svg",
                  Params::Skip("Bug: We don't blur the right edge")},
                 {"subregion-and-primitiveUnits=objectBoundingBox-1.svg",
@@ -579,9 +582,10 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Bug #1170: offset/blur sampling differs from reference; "
                               "rounded-offset and alpha contracts compare independently (#1169)")},
                 {"two-exact-urls.svg",
-                 Params::RenderOnly("UB: reference is the resvg UB marker image; the valid "
-                                    "repeated filter URL has an independent equivalent-graph "
-                                    "comparison (#1169)")},
+                 Params::UndefinedBehavior(
+                     "reference is the resvg UB marker image; the valid "
+                     "repeated filter URL has an independent equivalent-graph "
+                     "comparison (#1169)")},
                 {"two-urls.svg",
                  Params::Skip("Bug #1170: chained flood/blur differs at the filter-region "
                               "boundary; the equivalent primitive graph is the independent oracle "
@@ -606,12 +610,13 @@ INSTANTIATE_TEST_SUITE_P(FiltersFloodOpacity, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     MaskingClip, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("masking/clip",
-                                        {
-                                            {"simple-case.svg",
-                                             Params::Skip("Not impl: CSS2 `clip` property "
-                                                          "(rect() clipping, deprecated)")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "masking/clip",
+                {
+                    {"simple-case.svg",
+                     Params::DeprecatedInSVG2("CSS `clip` property (rect() clipping, deprecated "
+                                              "by CSS Masking in favor of clip-path)")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -629,7 +634,7 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::Skip("Triage: text objectBoundingBox units resolve; 2526px transform "
                                   "alignment residual remains")},
                     {"on-the-root-svg-without-size.svg",
-                     Params::RenderOnly("UB: on root `<svg>` without size")},
+                     Params::UndefinedBehavior("on root `<svg>` without size")},
 
                     {"circle-shorthand-with-stroke-box.svg",
                      Params::Skip("Harness mismatch: opaque reference background differs from "
@@ -648,7 +653,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "masking/mask",
                 {
-                    {"recursive-on-child.svg", Params::RenderOnly("UB: Recursive on child")},
+                    {"recursive-on-child.svg", Params::UndefinedBehavior("Recursive on child")},
                     {"on-a-small-object.svg", WithMaxPixels(120, "Small mask edge AA")},
                     {"with-image.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
@@ -657,15 +662,15 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    PaintServersLinearGradient, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("paint-servers/linearGradient",
-                                        {
-                                            {"invalid-gradientTransform.svg",
-                                             Params::RenderOnly("UB: Invalid `gradientTransform`")},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(PaintServersLinearGradient, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory(
+                                     "paint-servers/linearGradient",
+                                     {
+                                         {"invalid-gradientTransform.svg",
+                                          Params::UndefinedBehavior("Invalid `gradientTransform`")},
+                                     })),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     PaintServersPattern, ImageComparisonTestFixture,
@@ -673,10 +678,10 @@ INSTANTIATE_TEST_SUITE_P(
                 "paint-servers/pattern",
                 {
                     {"invalid-patternTransform.svg",
-                     Params::RenderOnly("UB: Invalid patternTransform")},
+                     Params::UndefinedBehavior("Invalid patternTransform")},
                     {"out-of-order-referencing.svg",
                      Params::WithThreshold(0.6f, 800, "Nested pattern AA (768px)")},
-                    {"overflow=visible.svg", Params::RenderOnly("UB: overflow=visible")},
+                    {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
                     {"pattern-on-child.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                                                    "Anti-aliasing artifacts")},
                     {"patternContentUnits-with-viewBox.svg",
@@ -715,25 +720,25 @@ INSTANTIATE_TEST_SUITE_P(
             "paint-servers/radialGradient",
             {
                 {"fr=-1.svg",
-                 Params::RenderOnly("UB: reference is the resvg UB marker image; "
-                                    "invalid negative focal radius: no paint (#1186)")},
+                 Params::UndefinedBehavior("reference is the resvg UB marker image; "
+                                           "invalid negative focal radius: no paint (#1186)")},
                 {"fr=0.5.svg",
-                 Params::RenderOnly("UB: reference is the resvg UB marker image; coincident "
-                                    "start/end circles: transparent per SVG 2 (#1186)")},
+                 Params::UndefinedBehavior("reference is the resvg UB marker image; coincident "
+                                           "start/end circles: transparent per SVG 2 (#1186)")},
                 {"fr=0.7.svg",
                  Params::Skip("Reference disagreement: containing start circle is transparent per "
                               "SVG 2; reference paints a reversed gradient "
                               "(ReferenceContractRadialContainingStartCircleDoesNotPaint, #1186)")},
                 {"invalid-gradientTransform.svg",
-                 Params::RenderOnly(
-                     "UB: reference is the resvg UB marker image; singular transform: no paint "
+                 Params::UndefinedBehavior(
+                     "reference is the resvg UB marker image; singular transform: no paint "
                      "(#1186)")},
                 {"invalid-gradientUnits.svg",
-                 Params::RenderOnly("UB: reference is the resvg UB marker image; invalid units "
-                                    "retain the objectBoundingBox default (#1186)")},
+                 Params::UndefinedBehavior("reference is the resvg UB marker image; invalid units "
+                                           "retain the objectBoundingBox default (#1186)")},
                 {"negative-r.svg",
-                 Params::RenderOnly(
-                     "UB: reference is the resvg UB marker image; invalid negative radius: no "
+                 Params::UndefinedBehavior(
+                     "reference is the resvg UB marker image; invalid negative radius: no "
                      "paint (#1186)")},
             })),
         ValuesIn(ActiveComparisonModes())),
@@ -786,7 +791,8 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory("painting/display",
                                         {
                                             {"bBox-impact.svg", WithMaxPixels(170, "Clip edge AA")},
-                                            {"none-on-tref.svg", Params::Skip("Not impl: <tref>")},
+                                            {"none-on-tref.svg",
+                                             Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
                                         })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -796,14 +802,17 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/fill",
                 {
-                    {"icc-color.svg", Params::RenderOnly("UB: ICC color")},
+                    {"icc-color.svg",
+                     Params::DeprecatedInSVG2("SVG 1.1 icc-color() paint (removed in SVG 2); the "
+                                              "reference is the resvg UB marker image")},
                     {"pattern-on-text.svg", Params::WithThreshold(kDefaultThreshold, 2100)},
                     {"rgb-int-int-int.svg",
-                     Params::RenderOnly("UB: reference is the resvg UB marker image; valid CSS "
-                                        "Color 4 space-separated RGB (#1186)")},
+                     Params::UndefinedBehavior("reference is the resvg UB marker image; valid CSS "
+                                               "Color 4 space-separated RGB (#1186)")},
                     {"valid-FuncIRI-with-a-fallback-ICC-color.svg",
-                     Params::Skip("Not impl: SVG 1.1 icc-color() paint fallback (removed in SVG "
-                                  "2); the invalid declaration is rejected (#1186)")},
+                     Params::DeprecatedInSVG2("SVG 1.1 icc-color() paint fallback (removed in "
+                                              "SVG 2); the invalid declaration is rejected "
+                                              "(#1186)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -858,7 +867,7 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
                      .withReason("Pre-existing rendering diff (stroke/AA), not cusp-related")},
-                {"target-with-subpaths-2.svg", Params::RenderOnly("UB: Target with subpaths")},
+                {"target-with-subpaths-2.svg", Params::UndefinedBehavior("Target with subpaths")},
                 {"with-a-large-stroke.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-a-text-child.svg",
                  Params::WithThreshold(kDefaultThreshold, 110, "Minor AA diffs on text_full")
@@ -870,7 +879,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("Image child edge AA")},
                 {"with-invalid-markerUnits.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-markerUnits=userSpaceOnUse.svg", WithMaxPixels(300, "Marker clip edge AA")},
-                {"with-viewBox-1.svg", Params::RenderOnly("UB: with `viewBox`")},
+                {"with-viewBox-1.svg", Params::UndefinedBehavior("with `viewBox`")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -980,10 +989,10 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/stroke-linejoin",
                 {
-                    {"arcs.svg",
-                     Params::RenderOnly("UB: reference is the resvg UB marker image; SVG "
-                                        "Strokes draft arcs is not implemented, documented miter "
-                                        "fallback (#1186)")},
+                    {"arcs.svg", Params::UndefinedBehavior(
+                                     "reference is the resvg UB marker image; SVG "
+                                     "Strokes draft arcs is not implemented, documented miter "
+                                     "fallback (#1186)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1000,11 +1009,11 @@ INSTANTIATE_TEST_SUITE_P(PaintingStrokeOpacity, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingStrokeWidth, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("painting/stroke-width",
-                                        {
-                                            {"negative.svg",
-                                             Params::RenderOnly("UB: Nothing should be rendered")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "painting/stroke-width",
+                {
+                    {"negative.svg", Params::UndefinedBehavior("Nothing should be rendered")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1154,10 +1163,11 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(
                      0.03f, kDefaultMismatchedPixels,
                      "OKLab sensitivity to raster-image color and edge differences")},
-                {"float-size.svg", Params::RenderOnly("UB: Float size")},
-                {"no-height-on-svg.svg", Params::RenderOnly("UB: No height")},
-                {"no-width-and-height-on-svg.svg", Params::RenderOnly("UB: No width and height")},
-                {"no-width-on-svg.svg", Params::RenderOnly("UB: No width")},
+                {"float-size.svg", Params::UndefinedBehavior("Float size")},
+                {"no-height-on-svg.svg", Params::UndefinedBehavior("No height")},
+                {"no-width-and-height-on-svg.svg",
+                 Params::UndefinedBehavior("No width and height")},
+                {"no-width-on-svg.svg", Params::UndefinedBehavior("No width")},
 
                 // Golden kernel mismatch (0021 B3): these vendored goldens were generated by a
                 // resvg whose <image> upscale kernel matches neither tiny-skia Bilinear nor
@@ -1225,7 +1235,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"external-CSS.svg",
                      Params::Skip("Not impl: CSS @import loading (diagnosed and ignored)")},
                     {"non-presentational-attribute.svg",
-                     Params::Skip("Not impl: <svg version=\"1.1\">")},
+                     Params::DeprecatedInSVG2("<svg version=\"1.1\"> semantics (the version "
+                                              "attribute is removed in SVG 2)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1236,58 +1247,60 @@ INSTANTIATE_TEST_SUITE_P(
                 "structure/style-attribute",
                 {
                     {"non-presentational-attribute.svg",
-                     Params::Skip("<svg version=\"1.1\"> disables geometry attributes in style")},
+                     Params::DeprecatedInSVG2("<svg version=\"1.1\"> disables geometry "
+                                              "attributes in style (the version attribute is "
+                                              "removed in SVG 2)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     StructureSvg, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/svg",
-                {
-                    {"funcIRI-parsing.svg", Params::RenderOnly("UB: FuncIRI parsing")},
-                    {"funcIRI-with-invalid-characters.svg",
-                     Params::RenderOnly("UB: FuncIRI with invalid chars")},
-                    {"invalid-id-attribute-1.svg", Params::RenderOnly("UB: Invalid id attribute")},
-                    {"invalid-id-attribute-2.svg", Params::RenderOnly("UB: Invalid id attribute")},
-                    {"no-size.svg",
-                     Params::Skip("API policy: caller canvas preserves user units; reference "
-                                  "fits content bounds without authored dimensions (#1186)")},
-                    {"not-UTF-8-encoding.svg",
-                     Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
-                                  "and update the encoding declaration")},
-                    {"preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
-                     Params::WithThreshold(0.13f, 500, "Viewport edge AA")},
-                    {"preserveAspectRatio=none.svg",
-                     Params::WithThreshold(0.13f, 1000, "Viewport edge AA")},
-                    {"preserveAspectRatio=xMaxYMax-slice.svg",
-                     Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
-                    {"preserveAspectRatio=xMaxYMax.svg",
-                     Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
-                    {"preserveAspectRatio=xMidYMid-slice.svg",
-                     Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
-                    {"preserveAspectRatio=xMidYMid.svg",
-                     Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
-                    {"preserveAspectRatio=xMinYMin-slice.svg",
-                     Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
-                    {"preserveAspectRatio=xMinYMin.svg",
-                     Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
-                    {"proportional-viewBox.svg",
-                     Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
-                    {"viewBox-not-at-zero-pos.svg",
-                     Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "structure/svg",
+            {
+                {"funcIRI-parsing.svg", Params::UndefinedBehavior("FuncIRI parsing")},
+                {"funcIRI-with-invalid-characters.svg",
+                 Params::UndefinedBehavior("FuncIRI with invalid chars")},
+                {"invalid-id-attribute-1.svg", Params::UndefinedBehavior("Invalid id attribute")},
+                {"invalid-id-attribute-2.svg", Params::UndefinedBehavior("Invalid id attribute")},
+                {"no-size.svg",
+                 Params::Skip("API policy: caller canvas preserves user units; reference "
+                              "fits content bounds without authored dimensions (#1186)")},
+                {"not-UTF-8-encoding.svg",
+                 Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
+                              "and update the encoding declaration")},
+                {"preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
+                 Params::WithThreshold(0.13f, 500, "Viewport edge AA")},
+                {"preserveAspectRatio=none.svg",
+                 Params::WithThreshold(0.13f, 1000, "Viewport edge AA")},
+                {"preserveAspectRatio=xMaxYMax-slice.svg",
+                 Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
+                                       "Has anti-aliasing artifacts.")},
+                {"preserveAspectRatio=xMaxYMax.svg",
+                 Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
+                {"preserveAspectRatio=xMidYMid-slice.svg",
+                 Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
+                                       "Has anti-aliasing artifacts.")},
+                {"preserveAspectRatio=xMidYMid.svg",
+                 Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
+                {"preserveAspectRatio=xMinYMin-slice.svg",
+                 Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
+                                       "Has anti-aliasing artifacts.")},
+                {"preserveAspectRatio=xMinYMin.svg",
+                 Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
+                                       "Has anti-aliasing artifacts.")},
+                {"proportional-viewBox.svg", Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
+                                                                   "Has anti-aliasing artifacts.")},
+                {"viewBox-not-at-zero-pos.svg",
+                 Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
+                                       "Has anti-aliasing artifacts.")},
 
-                    {"funcIRI-with-quotes.svg", Params{}},
-                    {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params{}},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+                {"funcIRI-with-quotes.svg", Params{}},
+                {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params{}},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(StructureSwitch, ImageComparisonTestFixture,
@@ -1345,13 +1358,13 @@ INSTANTIATE_TEST_SUITE_P(
                     // UB: resvg's golden PNG is a "UB" placeholder overlay, so no render can
                     // match it. Render for no-crash coverage only.
                     {"after-edge.svg",
-                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
+                     Params::UndefinedBehavior("reference is the resvg UB marker image")},
                     {"baseline.svg",
-                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
+                     Params::UndefinedBehavior("reference is the resvg UB marker image")},
                     {"ideographic.svg",
-                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
+                     Params::UndefinedBehavior("reference is the resvg UB marker image")},
                     {"text-after-edge.svg",
-                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
+                     Params::UndefinedBehavior("reference is the resvg UB marker image")},
 
                     {"hanging-on-vertical.svg",
                      Params::Skip("Reference limitation: resvg does not apply alignment-baseline "
@@ -1399,9 +1412,13 @@ INSTANTIATE_TEST_SUITE_P(
                     // UB: resvg's golden PNG is a "UB" placeholder overlay, so no render can
                     // match it. Render for no-crash coverage only.
                     {"reset-size.svg",
-                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
+                     Params::DeprecatedInSVG2("dominant-baseline: reset-size (SVG 1.1 value, "
+                                              "removed in SVG 2); the reference is the resvg UB "
+                                              "marker image")},
                     {"use-script.svg",
-                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
+                     Params::DeprecatedInSVG2("dominant-baseline: use-script (SVG 1.1 value, "
+                                              "removed in SVG 2); the reference is the resvg UB "
+                                              "marker image")},
 
                     {"hanging.svg",
                      Params::WithThreshold(
@@ -1529,7 +1546,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"named-value.svg", Params::WithGoldenOverride(
                                         "donner/svg/renderer/testdata/golden/resvg-named-value.png")
                                         .withReason("Donner uses CSS Fonts Level 4, which has")},
-                {"negative-size.svg", Params::RenderOnly("UB: negative font size")},
+                {"negative-size.svg", Params::UndefinedBehavior("negative font size")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1583,7 +1600,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/glyph-orientation-horizontal",
                 {
                     {"simple-case.svg",
-                     Params::Skip("Not impl: glyph-orientation-horizontal (deprecated SVG 1.1)")},
+                     Params::DeprecatedInSVG2("glyph-orientation-horizontal (removed in SVG 2)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1603,9 +1620,9 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/kerning",
                 {
-                    {"0.svg", Params::Skip("Not impl: kerning attribute (deprecated SVG 1.1)")},
+                    {"0.svg", Params::DeprecatedInSVG2("kerning property (removed in SVG 2)")},
                     {"10percent.svg",
-                     Params::Skip("Not impl: kerning attribute (deprecated SVG 1.1)")},
+                     Params::DeprecatedInSVG2("kerning property (removed in SVG 2)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1628,7 +1645,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/letter-spacing",
                 {
-                    {"large-negative.svg", Params::RenderOnly("UB: negative letter-spacing")},
+                    {"large-negative.svg", Params::UndefinedBehavior("negative letter-spacing")},
                     {"mixed-scripts.svg",
                      Params::Skip("Needs BiDi: mixed LTR Latin + RTL Arabic in one span")},
                     {"non-ASCII-character.svg",
@@ -1649,7 +1666,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {"bidi-reordering.svg", Params::Skip("Not impl: Bidirectional text shaping")},
                     {"complex-grapheme-split-by-tspan.svg",
-                     Params::RenderOnly("UB: grapheme split by tspan")},
+                     Params::UndefinedBehavior("grapheme split by tspan")},
                     {"complex-graphemes-and-coordinates-list.svg",
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-complex-graphemes-and-coordinates-list.png")
@@ -1887,7 +1904,7 @@ INSTANTIATE_TEST_SUITE_P(
                      "donner/svg/renderer/testdata/golden/resvg-very-long-text.png")
                      .withReason("SVG2 endpoint continuation and anti-aliasing differences")},
                 {"with-baseline-shift-and-rotate.svg",
-                 Params::RenderOnly("UB: baseline-shift + rotate")},
+                 Params::UndefinedBehavior("baseline-shift + rotate")},
                 {"with-baseline-shift.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-baseline-shift.png")
@@ -1942,17 +1959,18 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/tref",
             {
-                {"link-to-a-complex-text.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                {"link-to-a-complex-text.svg",
+                 Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
                 {"link-to-a-non-text-element.svg",
-                 Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                 Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
                 {"link-to-an-external-file-element.svg",
-                 Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
-                {"link-to-text.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
-                {"position-attributes.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
-                {"style-attributes.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
-                {"with-a-title-child.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
-                {"with-text.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
-                {"xml-space.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                 Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
+                {"link-to-text.svg", Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
+                {"position-attributes.svg", Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
+                {"style-attributes.svg", Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
+                {"with-a-title-child.svg", Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
+                {"with-text.svg", Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
+                {"xml-space.svg", Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1992,7 +2010,7 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory("text/word-spacing",
                                         {
                                             {"large-negative.svg",
-                                             Params::RenderOnly("UB: word-spacing=-10000")},
+                                             Params::UndefinedBehavior("word-spacing=-10000")},
                                         })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -2035,8 +2053,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {"tb-with-dx-on-tspan.svg", Params().setCanvasSize(300, 300)},
                 {"tb-with-dy-on-second-tspan.svg", Params().setCanvasSize(300, 300)},
                 {"tb-with-rotate-and-underline.svg",
-                 Params::RenderOnly("UB: tb with rotate and underline")},
-                {"tb-with-rotate.svg", Params::RenderOnly("UB: tb with rotate")},
+                 Params::UndefinedBehavior("tb with rotate and underline")},
+                {"tb-with-rotate.svg", Params::UndefinedBehavior("tb with rotate")},
                 {"tb.svg", Params().setCanvasSize(300, 300)},
             })),
         ValuesIn(ActiveComparisonModes())),
