@@ -2547,6 +2547,28 @@ TEST_F(RendererRegressionTests, NestedTurbulenceKeepsItsNoiseUnderAnOuterInputMa
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// A large feImage fragment is rasterized only over what can reach the visible surface. A later
+// primitive that pulls fragment content into view extends that reach: here the offset brings a
+// square from beyond the visible fragment window to device pixels 10 through 15.
+TEST_F(RendererRegressionTests, FeImageFragmentWindowIncludesDownstreamReach) {
+  SVGDocument document = instantiateSubtree(
+      R"svg(<defs>
+        <filter id="f" filterUnits="userSpaceOnUse" x="-20" y="-20" width="200" height="200">
+          <feImage href="#src"/><feOffset dy="-25"/>
+        </filter>
+        <rect id="src" x="30" y="30" width="5" height="5" fill="lime"/>
+      </defs>
+      <g transform="rotate(90)" filter="url(#f)">
+        <rect x="-20" y="-80" width="200" height="200" fill="red"/>
+      </g>)svg",
+      {}, Vector2i(64, 64));
+  const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "fe_image_downstream_reach_visible");
+  EXPECT_THAT(PixelAt(actual, 12, 12)[1], testing::Gt(200)) << "the offset square must render";
+  EXPECT_THAT(PixelAt(actual, 12, 12)[3], testing::Gt(200));
+  EXPECT_EQ(PixelAt(actual, 40, 40)[3], 0);
+}
+
 constexpr std::array<SpreadingFilterCase, 10> kSpreadingFilterCases = {{
     {"Blur", R"svg(<feGaussianBlur stdDeviation="3"/>)svg",
      R"svg(<feGaussianBlur stdDeviation="3"/>)svg", ""},
