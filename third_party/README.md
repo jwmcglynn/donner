@@ -43,3 +43,14 @@ git subtree pull https://github.com/jwmcglynn/css-parsing-tests --prefix third_p
   system proxying queue to the thread that created the GLFW context, the same queue that carries
   mouse and focus events, so that thread applies all input in order. The main thread decides only
   whether to prevent the browser default.
+
+`third_party/stb` carries Donner-specific changes. Keep them when updating it:
+
+- `stb_image.h`: the PNG `IDAT` reader skips the copy for a zero-length chunk instead of calling
+  `stbi__getn` with a length of 0.
+- `stb_truetype.h`: GPOS pair kerning also follows Extension lookups (type 9) whose extension type
+  is pair adjustment, which fonts such as Source Sans Pro use for all of their kerning. A 32-bit
+  extension offset that leaves the GPOS table is skipped, and an Extension-wrapped PairPos
+  subtable the reader cannot decode skips only that subtable instead of ending the walk.
+  `//donner/svg/text:text_backend_simple_tests` covers these cases. Donner passes only trusted
+  font bytes to stb_truetype.
