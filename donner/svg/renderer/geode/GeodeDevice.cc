@@ -784,9 +784,9 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
 }
 
 void GeodeDevice::buildOnDemandPipelinesAheadOfUse() const {
+  pipeline().batchedPipeline();
   maskPipeline();
   checkerboardPipeline();
-  checkerboardUnderlayPipeline();
   if (!impl_->snapshotReadbackPipeline) {
     // Built directly rather than through `snapshotReadbackPipeline()`, which only a readback
     // context may use: here it only seeds the compile that context later shares.

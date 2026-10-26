@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
-import { pipelineCompileFaultPrologue, readPipelineCompileFault,
+import { armPipelineFirstUseCompiles, pipelineCompileFaultPrologue, readPipelineCompileFault,
   sumPipelineCompilesPending } from "./pipeline-compile-readiness.mjs";
 
 test("pending compiles sum over the contexts that report them", () => {
@@ -100,6 +100,7 @@ test("the fault installs only in a worker with WebGPU, once", () => {
     compilesPending: 0,
     completionsDelayed: 0,
     lastCompileSettledAtMs: 0,
+    firstUseCompilesArmed: false,
     firstUseCompiles: 0,
     timelineBusyUntilMs: 0,
   });
@@ -157,6 +158,7 @@ test("a compile settles no earlier than its delay and holds completions while it
     compilesPending: 0,
     completionsDelayed: 2,
     lastCompileSettledAtMs: 1000,
+    firstUseCompilesArmed: false,
     firstUseCompiles: 0,
     timelineBusyUntilMs: 0,
   });
@@ -182,6 +184,11 @@ test("a pipeline created at first use holds later completions for its compile, i
     queue.onSubmittedWorkDone().then(() => completedAt.push(worker.sandbox.performance.now()));
     worker.completions.shift()();
   };
+
+  // Unarmed, a first-use creation is the browser's own.
+  device.createRenderPipeline({ name: "boot" });
+  assert.equal(readFault(worker).timelineBusyUntilMs, 0);
+  assert.equal(worker.run(`(${armPipelineFirstUseCompiles.toString()})()`), true);
 
   await worker.advance(100);
   device.createRenderPipeline({ name: "a" });

@@ -34,9 +34,11 @@ export function sumPipelineCompilesPending(statistics) {
  * editor's first frame and hold later GPU work behind them, and releases every held completion once
  * the compiles drain, so nothing the fault holds outlives the work it models.
  *
- * A pipeline created synchronously, at its first use, occupies the device timeline for
- * `firstUseCompileMs`, as a cold compile in order with the device's work does: each completion
- * requested while it does arrives no earlier than the end of that compile.
+ * Once `armFirstUseCompiles()` is called, a pipeline created synchronously, at its first use,
+ * occupies the device timeline for `firstUseCompileMs`, as a cold compile in order with the
+ * device's work does: each completion requested while it does arrives no earlier than the end of
+ * that compile. It is armed separately so that boot's own first-use creations, which no readiness
+ * wait observes, cannot leak into a measured interaction.
  *
  * Self-contained, so its source can be prepended to the editor script. Returns whether it installed;
  * it installs nothing outside a worker with WebGPU, and only once per context.
@@ -62,6 +64,7 @@ export function installPipelineCompileFault(config) {
     completionsDelayed: 0,
     lastCompileSettledAtMs: 0,
     firstUseCompileMs: config.firstUseCompileMs ?? 0,
+    firstUseCompilesArmed: false,
     firstUseCompiles: 0,
     timelineBusyUntilMs: 0,
   };
@@ -100,6 +103,7 @@ export function installPipelineCompileFault(config) {
     const original = scope.GPUDevice.prototype[name];
     if (typeof original !== "function") continue;
     scope.GPUDevice.prototype[name] = function(descriptor) {
+      if (!state.firstUseCompilesArmed) return original.call(this, descriptor);
       state.firstUseCompiles += 1;
       state.timelineBusyUntilMs = Math.max(state.timelineBusyUntilMs, now())
         + state.firstUseCompileMs;
@@ -131,13 +135,26 @@ export function installPipelineCompileFault(config) {
       );
     };
   }
-  scope.__donnerPipelineCompileFault = { state: () => ({ ...state }) };
+  scope.__donnerPipelineCompileFault = {
+    state: () => ({ ...state }),
+    armFirstUseCompiles: () => {
+      state.firstUseCompilesArmed = true;
+    },
+  };
   return true;
 }
 
 /** Reads the fault's counters in the calling context, or null where it is not installed. */
 export function readPipelineCompileFault() {
   return globalThis.__donnerPipelineCompileFault?.state() ?? null;
+}
+
+/** Arms the fault's first-use compiles in the calling context; false where it is not installed. */
+export function armPipelineFirstUseCompiles() {
+  const fault = globalThis.__donnerPipelineCompileFault;
+  if (!fault) return false;
+  fault.armFirstUseCompiles();
+  return true;
 }
 
 /** The fault's source as a script prologue, with `config` bound. */

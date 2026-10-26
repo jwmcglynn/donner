@@ -2,6 +2,7 @@ import { installOwnerEventTimerHold, readOwnerEventTimerHold, releaseOwnerEventT
 import { completedResultHandoff } from "./completed-result-handoff.mjs";
 import { packageHashes } from "./package-identity.mjs";
 import {
+  armPipelineFirstUseCompiles,
   pipelineCompileFaultPrologue,
   readPipelineCompileFault,
   sumPipelineCompilesPending,
@@ -2167,8 +2168,13 @@ for (
       expect(pipelineCompileFault?.compilesPending).toBe(0);
       expect(pipelineReadiness.pendingAtStart, "compiles were still pending when the wait began")
         .toBeGreaterThan(0);
+      // From here on, a pipeline created at its first use holds the device timeline as a cold
+      // compile does. Boot's own first-use creations ran before this and are not measured.
+      const owner = await findGpuOwnerWorker(page);
+      expect(owner && await owner.evaluate(armPipelineFirstUseCompiles)).toBe(true);
     }
     const firstUseCreationsBeforeClick = await readPipelinesCreatedAtFirstUse(page);
+    let firstUseCreationsAtPresentation: number | null = null;
     const deviceCreationsBeforeClick = await page.evaluate(
       () => window.__donnerHeadlessDeviceCreations ?? -1,
     );
@@ -2311,6 +2317,7 @@ for (
         timeout: scaledMs(3000),
         intervals: [8, 16, 25, 50],
       }).toBe(true);
+      firstUseCreationsAtPresentation = await readPipelinesCreatedAtFirstUse(page);
     } finally {
       // Best-effort: a whole-test timeout tears the page down, and a rejection
       // here must not replace the real failure.
@@ -2409,7 +2416,7 @@ for (
       }));
       const pipelinesCreatedAtFirstUse = {
         beforeClick: firstUseCreationsBeforeClick,
-        afterPresentation: await readPipelinesCreatedAtFirstUse(page),
+        atPresentation: firstUseCreationsAtPresentation,
       };
       const report = { workload: sample.id, heldWorkerRaf: holdsScheduledFrames, browser: browserName,
         ...runtime, ...packageHashes(), ...handoff, phaseTimings, presentationFault,
@@ -2436,12 +2443,17 @@ for (
         expect(handoff.withinLimit, `nominal completed-result handoff: ${JSON.stringify(report)}`)
           .toBe(true);
       }
-      // Every pipeline the editor draws with was built ahead of use, so the interaction compiles
-      // none in order with its own GPU work. WebKit creates every pipeline at first use by design.
-      if (browserName !== "webkit") {
-        expect(pipelinesCreatedAtFirstUse.beforeClick).not.toBeNull();
+      // The pipelines this interaction draws with were built ahead of use, so it creates none at
+      // first use, in order with its own GPU work. Checked where it is verified, in Chromium;
+      // WebKit creates every pipeline at first use by design.
+      if (browserName === "chromium") {
         expect(
-          pipelinesCreatedAtFirstUse.afterPresentation,
+          pipelinesCreatedAtFirstUse.beforeClick !== null
+            && pipelinesCreatedAtFirstUse.atPresentation !== null,
+          `the GPU owner reported its first-use pipeline count: ${JSON.stringify(report)}`,
+        ).toBe(true);
+        expect(
+          pipelinesCreatedAtFirstUse.atPresentation,
           `pipelines created at first use during the interaction: ${JSON.stringify(report)}`,
         ).toBe(pipelinesCreatedAtFirstUse.beforeClick);
       }

@@ -880,19 +880,20 @@ public:
   GeodeCheckerboardPipeline& checkerboardUnderlayPipeline() const;
 
   /**
-   * Builds now every pipeline this context otherwise builds at its first use: the clip-path
-   * mask, both checkerboard variants and the snapshot readback.
+   * Builds now the pipelines the browser editor's UI context otherwise builds at their first use:
+   * the batched fill variant, the clip-path mask, the replace-blend checkerboard the editor draws
+   * under each presented document, and the snapshot readback. The destination-over checkerboard
+   * stays lazy because the editor never draws it.
    *
    * A pipeline built at its first use is created in order with the device's work, so on a cold
    * shader cache every later submission waits for its compile, the next presented frame
    * included. A backend that compiles pipelines ahead of use, such as the browser, compiles the
    * pipelines built here off the device timeline instead, before any interaction needs them,
-   * and shares each compile with every other context over the same browser device. That is why
-   * the snapshot readback is built on a context that never reads back: it seeds the compile the
-   * snapshot capture context finds when it first builds the same pipeline.
+   * and shares each compile with every other context over the same browser device that builds
+   * the same pipeline. That is why the snapshot readback is built on a context that never reads
+   * back: it seeds the compile the snapshot capture context finds when it first builds it.
    *
-   * Only a consumer that draws these pipelines calls this, at startup; every other consumer
-   * keeps the lazy default.
+   * Only the editor calls this, at startup; every other consumer keeps the lazy default.
    */
   void buildOnDemandPipelinesAheadOfUse() const;
   /// @}
