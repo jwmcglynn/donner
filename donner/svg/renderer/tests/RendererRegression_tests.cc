@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -11,6 +12,7 @@
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
@@ -2374,6 +2376,162 @@ TEST_F(RendererRegressionTests, EffectSpanPaintsAfterTheTextRootsRemainingSpans)
   EXPECT_THAT(PixelAt(bitmap, 152, 75), test::RgbaEq(255, 0, 0, 255))
       << "the sampled glyph must be ink the flood covered, not a gap between the spans";
 }
+
+/// Copy the \p size pixel window at \p origin out of \p source.
+RendererBitmap CropBitmap(const RendererBitmap& source, Vector2i origin, Vector2i size) {
+  RendererBitmap result;
+  if (origin.x < 0 || origin.y < 0 || origin.x + size.x > source.dimensions.x ||
+      origin.y + size.y > source.dimensions.y) {
+    ADD_FAILURE() << "Crop window lies outside the source bitmap";
+    return result;
+  }
+  result.dimensions = size;
+  result.rowBytes = static_cast<std::size_t>(size.x) * 4u;
+  result.alphaType = source.alphaType;
+  result.pixels.resize(result.rowBytes * static_cast<std::size_t>(size.y));
+  for (int y = 0; y < size.y; ++y) {
+    const auto sourceRow = source.pixels.begin() +
+                           static_cast<std::ptrdiff_t>((origin.y + y) * source.rowBytes +
+                                                       static_cast<std::size_t>(origin.x) * 4u);
+    std::copy_n(sourceRow, result.rowBytes,
+                result.pixels.begin() + static_cast<std::ptrdiff_t>(y * result.rowBytes));
+  }
+  return result;
+}
+
+/// A filter that reads input pixels away from each output position, so pixels near a canvas edge
+/// depend on filtered content that lies beyond the canvas. Each edge has its own primitives, so a
+/// primitive that shifts content pulls it in from beyond that edge.
+struct SpreadingFilterCase {
+  std::string_view name;              ///< Test name suffix.
+  std::string_view topLeft;           ///< Primitives for content past the top-left edges.
+  std::string_view bottomRight;       ///< Primitives for content past the bottom-right edges.
+  std::string_view filterAttributes;  ///< Extra attributes on the filter element.
+};
+
+/// Which canvas edges the filtered rectangle runs past.
+enum class OffCanvasEdges { TopLeft, BottomRight };
+
+using FilterInputMarginParam = std::tuple<SpreadingFilterCase, OffCanvasEdges>;
+
+class FilterInputMarginTest : public testing::TestWithParam<FilterInputMarginParam> {};
+
+/// Renders a filtered lime square through a filter whose region extends well past the canvas.
+/// \p shift translates the whole scene, so a larger canvas can show the same scene with the
+/// off-canvas content in view.
+RendererBitmap RenderSpreadingFilter(const SpreadingFilterCase& filter, OffCanvasEdges edges,
+                                     Vector2i canvasSize, int shift) {
+  const bool topLeft = edges == OffCanvasEdges::TopLeft;
+  const std::string_view rect = topLeft ? R"svg(x="-100" y="-100" width="140" height="140")svg"
+                                        : R"svg(x="24" y="24" width="140" height="140")svg";
+  const std::string markup =
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-200" y="-200" width="464" height="464" )svg" +
+      std::string(filter.filterAttributes) + ">" +
+      std::string(topLeft ? filter.topLeft : filter.bottomRight) + R"svg(</filter>
+    <g transform="translate()svg" +
+      std::to_string(shift) + " " + std::to_string(shift) +
+      R"svg()"><g filter="url(#f)"><rect )svg" + std::string(rect) +
+      R"svg( fill="lime"/></g></g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, canvasSize);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// Renders \p render at 64x64 and, as the oracle, on a canvas with 64 pixels of room on every side
+/// cropped back to the original canvas; every reach in these scenes is far smaller than that room.
+template <typename Render>
+void ExpectEdgePixelsMatchRoomyCanvas(const Render& render, std::string_view label) {
+  const RendererBitmap actual = render(Vector2i(64, 64), /*shift=*/0);
+  const RendererBitmap roomy = render(Vector2i(192, 192), /*shift=*/64);
+  ExpectVisibleBitmap(actual, std::string(label) + "_visible");
+  editor::tests::CompareBitmapToBitmap(actual,
+                                       CropBitmap(roomy, Vector2i(64, 64), Vector2i(64, 64)), label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_P(FilterInputMarginTest, ContentBeyondTheCanvasReachesEdgePixels) {
+  const auto& [filter, edges] = GetParam();
+  ExpectEdgePixelsMatchRoomyCanvas(
+      [&](Vector2i canvasSize, int shift) {
+        return RenderSpreadingFilter(filter, edges, canvasSize, shift);
+      },
+      "filter_input_margin");
+}
+
+/// Renders an feImage of a lime square, blurred, inside a filtered group translated so the square
+/// and the filter region run past the canvas's top-left corner. The filter region is no larger than
+/// the canvas, so the whole feImage subregion is rasterized. \p shift translates the whole scene,
+/// as above.
+RendererBitmap RenderBlurredFeImage(Vector2i canvasSize, int shift) {
+  const std::string markup =
+      R"svg(<defs>
+        <filter id="f" filterUnits="userSpaceOnUse" x="80" y="80" width="60" height="60">
+          <feImage href="#src"/><feGaussianBlur stdDeviation="3"/>
+        </filter>
+        <rect id="src" width="140" height="140" fill="lime"/>
+      </defs>
+      <g transform="translate()svg" +
+      std::to_string(shift) + " " + std::to_string(shift) +
+      R"svg()"><g transform="translate(-100 -100)" filter="url(#f)">
+        <rect width="400" height="400" fill="red"/>
+      </g></g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, canvasSize);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// An feImage result feeds the blur like any other input, so the referenced content just past the
+// canvas edge must reach the blurred edge pixels.
+TEST_F(RendererRegressionTests, BlurredFeImageReadsContentBeyondTheCanvas) {
+  ExpectEdgePixelsMatchRoomyCanvas(RenderBlurredFeImage, "blurred_fe_image_input_margin");
+}
+
+constexpr std::array<SpreadingFilterCase, 10> kSpreadingFilterCases = {{
+    {"Blur", R"svg(<feGaussianBlur stdDeviation="3"/>)svg",
+     R"svg(<feGaussianBlur stdDeviation="3"/>)svg", ""},
+    {"ObjectBoundingBoxBlur", R"svg(<feGaussianBlur stdDeviation="0.03"/>)svg",
+     R"svg(<feGaussianBlur stdDeviation="0.03"/>)svg",
+     R"svg(primitiveUnits="objectBoundingBox")svg"},
+    {"Erode", R"svg(<feMorphology operator="erode" radius="4"/>)svg",
+     R"svg(<feMorphology operator="erode" radius="4"/>)svg", ""},
+    {"Convolve",
+     R"svg(<feConvolveMatrix order="5" edgeMode="none"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     R"svg(<feConvolveMatrix order="5" edgeMode="none"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     ""},
+    {"DropShadow", R"svg(<feDropShadow dx="6" dy="6" stdDeviation="2"/>)svg",
+     R"svg(<feDropShadow dx="-6" dy="-6" stdDeviation="2"/>)svg", ""},
+    {"Offset", R"svg(<feOffset dx="10" dy="10"/>)svg", R"svg(<feOffset dx="-10" dy="-10"/>)svg",
+     ""},
+    {"BlurThenOffset", R"svg(<feGaussianBlur stdDeviation="2"/><feOffset dx="8" dy="8"/>)svg",
+     R"svg(<feGaussianBlur stdDeviation="2"/><feOffset dx="-8" dy="-8"/>)svg", ""},
+    // Red is 0 and green is 1, so the red channel displaces toward the top-left and the green
+    // channel toward the bottom-right.
+    {"Displacement",
+     R"svg(<feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="20"
+        xChannelSelector="R" yChannelSelector="R"/>)svg",
+     R"svg(<feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="20"
+        xChannelSelector="G" yChannelSelector="G"/>)svg",
+     ""},
+    {"DiffuseLighting",
+     R"svg(<feDiffuseLighting surfaceScale="10"><feDistantLight azimuth="45" elevation="30"/>
+        </feDiffuseLighting>)svg",
+     R"svg(<feDiffuseLighting surfaceScale="10"><feDistantLight azimuth="45" elevation="30"/>
+        </feDiffuseLighting>)svg",
+     ""},
+    // The tile source lies entirely beyond the canvas.
+    {"Tile",
+     R"svg(<feOffset x="-60" y="-60" width="20" height="20" result="t"/><feTile in="t"/>)svg",
+     R"svg(<feOffset x="100" y="100" width="20" height="20" result="t"/><feTile in="t"/>)svg", ""},
+}};
+
+INSTANTIATE_TEST_SUITE_P(
+    SpreadingPrimitives, FilterInputMarginTest,
+    testing::Combine(testing::ValuesIn(kSpreadingFilterCases),
+                     testing::Values(OffCanvasEdges::TopLeft, OffCanvasEdges::BottomRight)),
+    [](const testing::TestParamInfo<FilterInputMarginParam>& info) {
+      return std::string(std::get<0>(info.param).name) +
+             (std::get<1>(info.param) == OffCanvasEdges::TopLeft ? "TopLeft" : "BottomRight");
+    });
 
 }  // namespace
 }  // namespace donner::svg
