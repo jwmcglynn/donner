@@ -1366,8 +1366,13 @@ void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, b
         const double localX = glyph.xPosition;
         const double localY = glyph.yPosition;
         if (method == components::TextPathMethod::Stretch) {
-          glyph.textPathOrigin = cluster.pathOffset + localX;
-          glyph.textPathNormalOffset = cluster.baselineOffset + localY;
+          // Turn the shaped offset by the authored rotate in path-local space, matching align's
+          // placement; the warp then rotates only the outline about this origin.
+          const double localRotate = glyph.rotateDegrees * MathConstants<double>::kDegToRad;
+          const double pathLocalX = localX * std::cos(localRotate) - localY * std::sin(localRotate);
+          const double pathLocalY = localX * std::sin(localRotate) + localY * std::cos(localRotate);
+          glyph.textPathOrigin = cluster.pathOffset + pathLocalX;
+          glyph.textPathNormalOffset = cluster.baselineOffset + pathLocalY;
           glyph.textPathLocalRotateDegrees = glyph.rotateDegrees;
         }
         glyph.xPosition = origin.x + localX * std::cos(angle) - localY * std::sin(angle);
