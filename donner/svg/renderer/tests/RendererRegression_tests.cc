@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -11,6 +12,8 @@
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
@@ -2130,7 +2133,7 @@ TEST_F(RendererRegressionTests, EffectOnFullCoverageTspanMatchesEffectOnTextElem
       {"mask",
        R"svg(<mask id="e"><rect x="20" y="20" width="160" height="160" fill="gray"/></mask>)svg",
        R"svg(mask="url(#e)")svg"},
-      {"filter", R"svg(<filter id="e"><feGaussianBlur stdDeviation="4"/></filter>)svg",
+      {"filter", R"svg(<filter id="e"><feGaussianBlur stdDeviation="3"/></filter>)svg",
        R"svg(filter="url(#e)")svg"},
   };
 
@@ -2374,6 +2377,532 @@ TEST_F(RendererRegressionTests, EffectSpanPaintsAfterTheTextRootsRemainingSpans)
   EXPECT_THAT(PixelAt(bitmap, 152, 75), test::RgbaEq(255, 0, 0, 255))
       << "the sampled glyph must be ink the flood covered, not a gap between the spans";
 }
+
+/// Copy the \p size pixel window at \p origin out of \p source.
+RendererBitmap CropBitmap(const RendererBitmap& source, Vector2i origin, Vector2i size) {
+  RendererBitmap result;
+  if (origin.x < 0 || origin.y < 0 || origin.x + size.x > source.dimensions.x ||
+      origin.y + size.y > source.dimensions.y) {
+    ADD_FAILURE() << "Crop window lies outside the source bitmap";
+    return result;
+  }
+  result.dimensions = size;
+  result.rowBytes = static_cast<std::size_t>(size.x) * 4u;
+  result.alphaType = source.alphaType;
+  result.pixels.resize(result.rowBytes * static_cast<std::size_t>(size.y));
+  for (int y = 0; y < size.y; ++y) {
+    const auto sourceRow = source.pixels.begin() +
+                           static_cast<std::ptrdiff_t>((origin.y + y) * source.rowBytes +
+                                                       static_cast<std::size_t>(origin.x) * 4u);
+    std::copy_n(sourceRow, result.rowBytes,
+                result.pixels.begin() + static_cast<std::ptrdiff_t>(y * result.rowBytes));
+  }
+  return result;
+}
+
+/// A filter that reads input pixels away from each output position, so pixels near a canvas edge
+/// depend on filtered content that lies beyond the canvas. Each edge has its own primitives, so a
+/// primitive that shifts content pulls it in from beyond that edge.
+struct SpreadingFilterCase {
+  std::string_view name;              ///< Test name suffix.
+  std::string_view topLeft;           ///< Primitives for content past the top-left edges.
+  std::string_view bottomRight;       ///< Primitives for content past the bottom-right edges.
+  std::string_view filterAttributes;  ///< Extra attributes on the filter element.
+};
+
+/// Which canvas edges the filtered rectangle runs past.
+enum class OffCanvasEdges { TopLeft, BottomRight };
+
+using FilterInputMarginParam = std::tuple<SpreadingFilterCase, OffCanvasEdges>;
+
+class FilterInputMarginTest : public testing::TestWithParam<FilterInputMarginParam> {};
+
+/// Renders a filtered lime square through a filter whose region extends well past the canvas.
+/// \p shift translates the whole scene, so a larger canvas can show the same scene with the
+/// off-canvas content in view.
+RendererBitmap RenderSpreadingFilter(const SpreadingFilterCase& filter, OffCanvasEdges edges,
+                                     Vector2i canvasSize, int shift) {
+  const bool topLeft = edges == OffCanvasEdges::TopLeft;
+  const std::string_view rect = topLeft ? R"svg(x="-100" y="-100" width="140" height="140")svg"
+                                        : R"svg(x="24" y="24" width="140" height="140")svg";
+  const std::string markup =
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-200" y="-200" width="464" height="464" )svg" +
+      std::string(filter.filterAttributes) + ">" +
+      std::string(topLeft ? filter.topLeft : filter.bottomRight) + R"svg(</filter>
+    <g transform="translate()svg" +
+      std::to_string(shift) + " " + std::to_string(shift) +
+      R"svg()"><g filter="url(#f)"><rect )svg" + std::string(rect) +
+      R"svg( fill="lime"/></g></g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, canvasSize);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// Renders \p render at 64x64 and, as the oracle, on a canvas with 64 pixels of room on every side
+/// cropped back to the original canvas; every reach in these scenes is far smaller than that room.
+template <typename Render>
+void ExpectEdgePixelsMatchRoomyCanvas(const Render& render, std::string_view label) {
+  const RendererBitmap actual = render(Vector2i(64, 64), /*shift=*/0);
+  const RendererBitmap roomy = render(Vector2i(192, 192), /*shift=*/64);
+  ExpectVisibleBitmap(actual, std::string(label) + "_visible");
+  editor::tests::CompareBitmapToBitmap(actual,
+                                       CropBitmap(roomy, Vector2i(64, 64), Vector2i(64, 64)), label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_P(FilterInputMarginTest, ContentBeyondTheCanvasReachesEdgePixels) {
+  const auto& [filter, edges] = GetParam();
+  ExpectEdgePixelsMatchRoomyCanvas(
+      [&](Vector2i canvasSize, int shift) {
+        return RenderSpreadingFilter(filter, edges, canvasSize, shift);
+      },
+      "filter_input_margin");
+}
+
+/// Renders an feImage of a lime square, blurred, inside a filtered group translated so the square
+/// and the filter region run past the canvas's top-left corner. The filter region is no larger than
+/// the canvas, so the whole feImage subregion is rasterized. \p shift translates the whole scene,
+/// as above.
+RendererBitmap RenderBlurredFeImage(Vector2i canvasSize, int shift) {
+  const std::string markup =
+      R"svg(<defs>
+        <filter id="f" filterUnits="userSpaceOnUse" x="80" y="80" width="60" height="60">
+          <feImage href="#src"/><feGaussianBlur stdDeviation="3"/>
+        </filter>
+        <rect id="src" width="140" height="140" fill="lime"/>
+      </defs>
+      <g transform="translate()svg" +
+      std::to_string(shift) + " " + std::to_string(shift) +
+      R"svg()"><g transform="translate(-100 -100)" filter="url(#f)">
+        <rect width="400" height="400" fill="red"/>
+      </g></g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, canvasSize);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// An feImage result feeds the blur like any other input, so the referenced content just past the
+// canvas edge must reach the blurred edge pixels.
+TEST_F(RendererRegressionTests, BlurredFeImageReadsContentBeyondTheCanvas) {
+  ExpectEdgePixelsMatchRoomyCanvas(RenderBlurredFeImage, "blurred_fe_image_input_margin");
+}
+
+// The transformed blur path blurs a rotated element along its own axes. It must keep working when
+// the capture gets an input margin, here for an anisotropic blur crossing the top-left edges. A
+// quarter turn keeps every transform exact, so the shifted oracle matches bit for bit.
+RendererBitmap RenderRotatedAnisotropicBlur(Vector2i canvasSize, int shift) {
+  const std::string markup =
+      R"svg(<filter id="f"><feGaussianBlur stdDeviation="8 1"/></filter>
+      <g transform="translate()svg" +
+      std::to_string(shift) + " " + std::to_string(shift) +
+      R"svg()"><g transform="rotate(90 10 10)" filter="url(#f)">
+        <rect x="-20" y="-20" width="60" height="60" fill="lime"/>
+      </g></g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, canvasSize);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, RotatedAnisotropicBlurReadsContentBeyondTheCanvas) {
+  ExpectEdgePixelsMatchRoomyCanvas(RenderRotatedAnisotropicBlur, "rotated_blur_input_margin");
+}
+
+/// Renders \p primitives on a band under a horizontal skew. The band's filter region runs 50
+/// pixels past the right canvas edge, so a capture with the whole sampling reach covers all of it
+/// and renders the same pixels as a canvas with room past that edge.
+RendererBitmap RenderSkewedFilter(std::string_view primitives, Vector2i canvasSize) {
+  const std::string markup =
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-120" y="30" width="58" height="14">)svg" +
+      std::string(primitives) + R"svg(</filter>
+      <g transform="matrix(1 0 4 1 0 0)" filter="url(#f)">
+        <rect x="-110" y="30" width="48" height="14" fill="lime"/>
+      </g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, canvasSize);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// Stack the \p width pixels starting at column \p x0 of each of \p rows of \p source.
+RendererBitmap RowStrips(const RendererBitmap& source, const std::vector<int>& rows, int x0,
+                         int width) {
+  RendererBitmap result;
+  result.dimensions = Vector2i(width, static_cast<int>(rows.size()));
+  result.rowBytes = static_cast<std::size_t>(width) * 4u;
+  result.alphaType = source.alphaType;
+  for (int y : rows) {
+    const RendererBitmap row = CropBitmap(source, Vector2i(x0, y), Vector2i(width, 1));
+    result.pixels.insert(result.pixels.end(), row.pixels.begin(), row.pixels.end());
+  }
+  return result;
+}
+
+// The transformed blur path samples along the skewed filter axes, so the capture must cover the
+// device footprint of the sampling reach: a blur of 3 here reads about 45 pixels along device X.
+//
+// Oracle: on a canvas as wide as the filter region the whole band is in view, and some of its
+// blurred rows are level across the 12 columns that end at x 64. Where the band runs on past the
+// 64 pixel canvas, those rows must stay level up to its edge, so the edge strip (columns 58..63)
+// of the 64 pixel render must match its interior strip (columns 52..57), raw pixels through
+// pixelmatch. Each edge row must also be visible, so a row missing from both strips cannot pass
+// as level. The strips come from one render because Geode's skewed resampling rounds a level or
+// two differently for different canvas sizes, so a render on another canvas is not an exact
+// reference.
+TEST_F(RendererRegressionTests, SkewedBlurReadsContentBeyondTheCanvas) {
+  for (std::string_view primitives :
+       {std::string_view(R"svg(<feGaussianBlur stdDeviation="3"/>)svg"),
+        std::string_view(
+            R"svg(<feGaussianBlur stdDeviation="3"/><feOffset dx="-2" dy="-2"/>)svg")}) {
+    SCOPED_TRACE(primitives);
+    const RendererBitmap actual = RenderSkewedFilter(primitives, Vector2i(64, 64));
+    const RendererBitmap roomy = RenderSkewedFilter(primitives, Vector2i(114, 64));
+    ExpectVisibleBitmap(actual, "skewed_blur_input_margin_visible");
+    std::vector<int> levelRows;
+    for (int y = 0; y < 64; ++y) {
+      const RendererBitmap row = CropBitmap(roomy, Vector2i(52, y), Vector2i(12, 1));
+      // A row is checked when it is covered and every pixel matches its first one.
+      bool level = row.pixels[3] != 0;
+      for (int x = 1; x < 12 && level; ++x) {
+        level = std::equal(row.pixels.begin(), row.pixels.begin() + 4, row.pixels.begin() + 4 * x);
+      }
+      if (level) {
+        levelRows.push_back(y);
+      }
+    }
+    ASSERT_THAT(levelRows, testing::Not(testing::IsEmpty()))
+        << "the scene must have level rows to check";
+    editor::tests::CompareBitmapToBitmap(
+        RowStrips(actual, levelRows, 58, 6), RowStrips(actual, levelRows, 52, 6),
+        "skewed_blur_edge_strip_level", editor::tests::PixelmatchIdentityParams());
+    for (int y : levelRows) {
+      SCOPED_TRACE(testing::Message() << "row " << y);
+      ExpectVisibleBitmap(CropBitmap(actual, Vector2i(58, y), Vector2i(6, 1)),
+                          "skewed_blur_edge_row_visible");
+    }
+  }
+}
+
+// Both executors round each feOffset to whole pixels, so eight offsets of 0.6 move content 8
+// pixels, not 4.8. The capture must reach that far: a square just past the left edge lands at the
+// left edge, matching the same square drawn there without a filter.
+TEST_F(RendererRegressionTests, ChainedFractionalOffsetsReachTheirRoundedDistance) {
+  std::string offsets;
+  for (int i = 0; i < 8; ++i) {
+    offsets += R"svg(<feOffset dx="0.6"/>)svg";
+  }
+  SVGDocument document = instantiateSubtree(
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-50" y="0" width="114" height="64">)svg" +
+          offsets + R"svg(</filter>
+      <g filter="url(#f)"><rect x="-8" y="8" width="8" height="16" fill="lime"/></g>)svg",
+      {}, Vector2i(64, 64));
+  SVGDocument expected = instantiateSubtree(
+      R"svg(<rect x="0" y="8" width="8" height="16" fill="lime"/>)svg", {}, Vector2i(64, 64));
+  editor::tests::CompareBitmapToBitmap(RenderDocumentWithBackend(document, ActiveRendererBackend()),
+                                       RenderDocumentWithBackend(expected, ActiveRendererBackend()),
+                                       "chained_fractional_offsets",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Under a skew the transformed blur path runs offsets on a local raster scaled by each filter
+// axis's length and rounds them there. Under matrix(1 0 1 1 0 0) an offset of (0.6, -0.6) moves
+// nothing along device X before rounding, but rounds to (1, -1) local pixels, which moves content
+// about 0.29 device pixels right; 24 of them, with the blur that selects the transformed path,
+// move it about 7 pixels. Content just past the left edge then lands inside the canvas, at
+// (2, 25).
+TEST_F(RendererRegressionTests, SkewedLocalRasterOffsetsReachTheirRoundedDistance) {
+  std::string primitives;
+  for (int i = 0; i < 24; ++i) {
+    primitives += R"svg(<feOffset dx="0.6" dy="-0.6"/>)svg";
+  }
+  primitives += R"svg(<feGaussianBlur stdDeviation="0.01"/>)svg";
+  SVGDocument document = instantiateSubtree(
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-100" y="0" width="200" height="64">)svg" +
+          primitives + R"svg(</filter>
+      <g transform="matrix(1 0 1 1 0 0)" filter="url(#f)">
+        <rect x="-52" y="36" width="8" height="12" fill="lime"/>
+      </g>)svg",
+      {}, Vector2i(64, 64));
+  const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  EXPECT_THAT(PixelAt(actual, 2, 25),
+              test::Rgba(testing::Eq(0), testing::Gt(200), testing::Eq(0), testing::Gt(200)))
+      << "the offset content must land inside the canvas";
+}
+
+// A capture margin must never turn an admissible filter into a frame-wide rejection. At 8x zoom a
+// large blur's margin would need a raster over the frame's filter memory, so the layer falls back
+// to a viewport-sized capture; it still renders, and so does a later filtered element.
+TEST_F(RendererRegressionTests, LargeBlurMarginFallsBackWithinFrameFilterBudget) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 128 128">
+      <filter id="f" filterUnits="userSpaceOnUse" x="-2000" y="-2000" width="4256" height="4256">
+        <feGaussianBlur stdDeviation="40"/>
+      </filter>
+      <filter id="g"><feFlood flood-color="blue"/></filter>
+      <rect x="-1000" y="-1000" width="2128" height="2128" fill="lime" filter="url(#f)"/>
+      <rect x="120" y="2" width="6" height="6" filter="url(#g)"/>
+    </svg>)svg");
+  const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(1024, 1024)));
+  EXPECT_THAT(PixelAt(actual, 512, 512),
+              test::Rgba(testing::Eq(0), testing::Gt(0), testing::Eq(0), testing::Gt(0)))
+      << "the blurred element must render";
+  EXPECT_THAT(PixelAt(actual, 984, 40), test::RgbaEq(0, 0, 255, 255))
+      << "a later filtered element must still render";
+}
+
+/// Renders a turbulence-filtered square, optionally inside a group whose filter shifts its content
+/// out and back. That outer filter reads past the canvas but changes no pixels, so it must not
+/// move the inner turbulence noise either.
+RendererBitmap RenderTurbulenceInsideShift(bool shifted) {
+  const std::string inner =
+      R"svg(<rect x="-10" y="-10" width="40" height="40" filter="url(#t)"/>)svg";
+  const std::string markup =
+      std::string(R"svg(<filter id="t"><feTurbulence baseFrequency="0.1" numOctaves="2"/></filter>
+      <filter id="shift" filterUnits="userSpaceOnUse" x="-50" y="-50" width="200" height="200">
+        <feOffset dx="5" dy="5"/><feOffset dx="-5" dy="-5"/>
+      </filter>)svg") +
+      (shifted ? R"svg(<g filter="url(#shift)">)svg" + inner + "</g>" : "<g>" + inner + "</g>");
+  SVGDocument document = instantiateSubtree(markup, {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, NestedTurbulenceKeepsItsNoiseUnderAnOuterInputMargin) {
+  const RendererBitmap expected = RenderTurbulenceInsideShift(false);
+  ExpectVisibleBitmap(expected, "nested_turbulence_visible");
+  editor::tests::CompareBitmapToBitmap(RenderTurbulenceInsideShift(true), expected,
+                                       "nested_turbulence_input_margin",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// A large feImage fragment is rasterized only over what can reach the visible surface. A later
+// primitive that pulls fragment content into view extends that reach: here the offset brings a
+// square from beyond the visible fragment window to device pixels (3..8, 10..15). The square lies
+// outside the canvas-sized fallback window too, so only a window widened by the reach finds it.
+TEST_F(RendererRegressionTests, FeImageFragmentWindowIncludesDownstreamReach) {
+  SVGDocument document = instantiateSubtree(
+      R"svg(<defs>
+        <filter id="f" filterUnits="userSpaceOnUse" x="-100" y="-20" width="280" height="200">
+          <feImage href="#src"/><feOffset dy="-10"/>
+        </filter>
+        <rect id="src" x="110" y="22" width="5" height="5" fill="lime"/>
+      </defs>
+      <g transform="rotate(90)" filter="url(#f)">
+        <rect x="-100" y="-80" width="280" height="200" fill="red"/>
+      </g>)svg",
+      {}, Vector2i(64, 64));
+  const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "fe_image_downstream_reach_visible");
+  EXPECT_THAT(PixelAt(actual, 5, 12),
+              test::Rgba(testing::Eq(0), testing::Gt(200), testing::Eq(0), testing::Gt(200)))
+      << "the offset square must render";
+  EXPECT_THAT(PixelAt(actual, 40, 40), test::RgbaEq(0, 0, 0, 0));
+}
+
+/// Renders the off-canvas feImage scene: before the translate(-96 -96) host transform, the
+/// referenced square and the filtered element lie beyond the 64x64 canvas. \p primitives follow
+/// the feImage, whose result is named "i".
+RendererBitmap RenderOffCanvasFeImage(std::string_view primitives) {
+  SVGDocument document = instantiateSubtree(std::string(R"svg(<defs>
+        <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+          <feImage href="#src" result="i"/>)svg") +
+                                                std::string(primitives) + R"svg(
+        </filter>
+        <rect id="src" x="104" y="104" width="16" height="16" fill="lime"/>
+      </defs>
+      <g transform="translate(-96 -96)" filter="url(#f)">
+        <rect x="96" y="96" width="48" height="48" fill="red"/>
+      </g>)svg",
+                                            {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// A reach-widened fragment window that exceeds the canvas-sized byte limit must fall back to the
+// unwidened visible window, never to the canvas window, which ignores the host transform. A graph
+// whose reach is the whole region keeps the unwidened visible window for the same reason.
+TEST_F(RendererRegressionTests, FeImageFragmentWindowFallsBackToVisibleWindow) {
+  for (std::string_view primitives :
+       {std::string_view(R"svg(<feGaussianBlur stdDeviation="1"/>)svg"),
+        std::string_view(R"svg(<feTile in="i"/>)svg")}) {
+    SCOPED_TRACE(primitives);
+    const RendererBitmap actual = RenderOffCanvasFeImage(primitives);
+    ExpectVisibleBitmap(actual, "fe_image_visible_window_fallback_visible");
+    EXPECT_THAT(PixelAt(actual, 16, 16),
+                test::Rgba(testing::Eq(0), testing::Gt(200), testing::Eq(0), testing::Gt(200)))
+        << "the referenced square must render";
+  }
+}
+
+// Morphology dilation spreads content that lies entirely beyond the canvas into view.
+TEST_F(RendererRegressionTests, DilateSpreadsContentFromBeyondTheCanvas) {
+  ExpectEdgePixelsMatchRoomyCanvas(
+      [](Vector2i canvasSize, int shift) {
+        SVGDocument document = instantiateSubtree(
+            std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-200" y="-200"
+                width="464" height="464"><feMorphology operator="dilate" radius="6"/></filter>
+              <g transform="translate()svg") +
+                std::to_string(shift) + " " + std::to_string(shift) + R"svg()">
+                <g filter="url(#f)"><rect x="-40" y="-40" width="38" height="38" fill="lime"/></g>
+              </g>)svg",
+            {}, canvasSize);
+        return RenderDocumentWithBackend(document, ActiveRendererBackend());
+      },
+      "dilate_input_margin");
+}
+
+/// Renders \p replayed, which draws turbulence-filtered content again out of draw order, inside a
+/// filter layer. When \p shifted, that layer reads past each output pixel and so gets an input
+/// margin; otherwise it reads no neighbors. Turbulence noise follows raster pixel coordinates, so
+/// the two renders differ only if the margin moves the noise.
+RendererBitmap RenderReplayedTurbulence(std::string_view replayed, bool shifted) {
+  SVGDocument document = instantiateSubtree(
+      std::string(R"svg(<filter id="t"><feTurbulence baseFrequency="0.1" numOctaves="2"/></filter>
+      <filter id="shift" filterUnits="userSpaceOnUse" x="-50" y="-50" width="200" height="200">
+        <feOffset dx="5" dy="5"/><feOffset dx="-5" dy="-5"/>
+      </filter>
+      <filter id="same" filterUnits="userSpaceOnUse" x="-50" y="-50" width="200" height="200">
+        <feColorMatrix type="saturate" values="1"/>
+      </filter>
+      <mask id="m"><rect x="-10" y="-10" width="40" height="40" fill="white" filter="url(#t)"/>
+      </mask>
+      <marker id="turbulent" markerUnits="userSpaceOnUse" markerWidth="64" markerHeight="64"
+          overflow="visible">
+        <rect x="-10" y="-10" width="40" height="40" filter="url(#t)"/>
+      </marker>
+      <marker id="masked" markerUnits="userSpaceOnUse" markerWidth="64" markerHeight="64"
+          overflow="visible">
+        <rect width="64" height="64" fill="lime" mask="url(#m)"/>
+      </marker>)svg") +
+          std::string(replayed) +
+          (shifted ? R"svg(<g filter="url(#shift)">)svg" : R"svg(<g filter="url(#same)">)svg") +
+          std::string(replayed) + "</g>",
+      {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// Mask and marker content draws again at the referencing element, so turbulence in it must keep
+// its noise when that element lies inside a filter layer with an input margin. The cases cover a
+// mask, a marker, and a mask inside a marker.
+TEST_F(RendererRegressionTests, ReplayedTurbulenceKeepsItsNoiseUnderAnInputMargin) {
+  for (std::string_view replayed :
+       {std::string_view(R"svg(<rect width="64" height="64" fill="lime" mask="url(#m)"/>)svg"),
+        std::string_view(R"svg(<path d="M0 0 L1 0" marker-start="url(#turbulent)"/>)svg"),
+        std::string_view(R"svg(<path d="M0 0 L1 0" marker-start="url(#masked)"/>)svg")}) {
+    SCOPED_TRACE(replayed);
+    const RendererBitmap expected = RenderReplayedTurbulence(replayed, /*shifted=*/false);
+    ExpectVisibleBitmap(expected, "replayed_turbulence_visible");
+    editor::tests::CompareBitmapToBitmap(RenderReplayedTurbulence(replayed, /*shifted=*/true),
+                                         expected, "replayed_turbulence_input_margin",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+// A primitive with wrapping edges reads the opposite edge of its input. Here the filter region
+// starts at the left canvas edge and ends 36 pixels beyond the right one, and a lime strip lies at
+// its far end, beyond the canvas and beyond the primitive's own reach. Wrapping must still carry
+// that strip around to the left canvas edge.
+TEST_F(RendererRegressionTests, WrapEdgesReadTheOppositeRegionEdgeBeyondTheCanvas) {
+  for (std::string_view primitive :
+       {std::string_view(R"svg(<feGaussianBlur stdDeviation="3" edgeMode="wrap"/>)svg"),
+        std::string_view(R"svg(<feConvolveMatrix order="5" edgeMode="wrap"
+            kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg")}) {
+    SCOPED_TRACE(primitive);
+    SVGDocument document = instantiateSubtree(
+        std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="-200" width="100"
+            height="464">)svg") +
+            std::string(primitive) + R"svg(</filter>
+        <g filter="url(#f)"><rect x="88" y="-200" width="12" height="464" fill="lime"/></g>)svg",
+        {}, Vector2i(64, 64));
+    const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+    ExpectVisibleBitmap(actual, "wrap_input_margin_visible");
+    EXPECT_THAT(PixelAt(actual, 0, 32),
+                test::Rgba(testing::Eq(0), testing::Gt(0), testing::Eq(0), testing::Gt(0)))
+        << "the strip must wrap into view";
+    EXPECT_THAT(PixelAt(actual, 32, 32), test::RgbaEq(0, 0, 0, 0));
+  }
+}
+
+// An empty edge entry means the case does not discriminate on that edge and is not run there.
+constexpr std::array<SpreadingFilterCase, 15> kSpreadingFilterCases = {{
+    {"Blur", R"svg(<feGaussianBlur stdDeviation="3"/>)svg",
+     R"svg(<feGaussianBlur stdDeviation="3"/>)svg", ""},
+    {"BlurDuplicateEdges", R"svg(<feGaussianBlur stdDeviation="3" edgeMode="duplicate"/>)svg",
+     R"svg(<feGaussianBlur stdDeviation="3" edgeMode="duplicate"/>)svg", ""},
+    {"BlurWrapEdges", R"svg(<feGaussianBlur stdDeviation="3" edgeMode="wrap"/>)svg",
+     R"svg(<feGaussianBlur stdDeviation="3" edgeMode="wrap"/>)svg", ""},
+    {"ObjectBoundingBoxBlur", R"svg(<feGaussianBlur stdDeviation="0.03"/>)svg",
+     R"svg(<feGaussianBlur stdDeviation="0.03"/>)svg",
+     R"svg(primitiveUnits="objectBoundingBox")svg"},
+    {"Erode", R"svg(<feMorphology operator="erode" radius="4"/>)svg",
+     R"svg(<feMorphology operator="erode" radius="4"/>)svg", ""},
+    {"Convolve",
+     R"svg(<feConvolveMatrix order="5" edgeMode="none"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     R"svg(<feConvolveMatrix order="5" edgeMode="none"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     ""},
+    {"ConvolveDuplicateEdges",
+     R"svg(<feConvolveMatrix order="5" edgeMode="duplicate"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     R"svg(<feConvolveMatrix order="5" edgeMode="duplicate"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     ""},
+    {"ConvolveWrapEdges",
+     R"svg(<feConvolveMatrix order="5" edgeMode="wrap"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     R"svg(<feConvolveMatrix order="5" edgeMode="wrap"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     ""},
+    {"DropShadow", R"svg(<feDropShadow dx="6" dy="6" stdDeviation="2"/>)svg",
+     R"svg(<feDropShadow dx="-6" dy="-6" stdDeviation="2"/>)svg", ""},
+    {"Offset", R"svg(<feOffset dx="10" dy="10"/>)svg", R"svg(<feOffset dx="-10" dy="-10"/>)svg",
+     ""},
+    {"BlurThenOffset", R"svg(<feGaussianBlur stdDeviation="2"/><feOffset dx="8" dy="8"/>)svg",
+     R"svg(<feGaussianBlur stdDeviation="2"/><feOffset dx="-8" dy="-8"/>)svg", ""},
+    // Red is 0 and green is 1, so the red channel displaces toward the top-left and the green
+    // channel toward the bottom-right.
+    {"Displacement",
+     R"svg(<feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="20"
+        xChannelSelector="R" yChannelSelector="R"/>)svg",
+     R"svg(<feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="20"
+        xChannelSelector="G" yChannelSelector="G"/>)svg",
+     ""},
+    // Lighting at the bottom-right edges matches with or without the margin, so it runs only at
+    // the top-left edges.
+    {"DiffuseLighting",
+     R"svg(<feDiffuseLighting surfaceScale="10"><feDistantLight azimuth="45" elevation="30"/>
+        </feDiffuseLighting>)svg",
+     "", ""},
+    // The tile source lies entirely beyond the canvas.
+    {"Tile",
+     R"svg(<feOffset x="-60" y="-60" width="20" height="20" result="t"/><feTile in="t"/>)svg",
+     R"svg(<feOffset x="100" y="100" width="20" height="20" result="t"/><feTile in="t"/>)svg", ""},
+    // The tile source subregion is shifted content, so the capture must also cover what the
+    // offset reads beyond that subregion.
+    {"OffsetTile",
+     R"svg(<feOffset dx="30" dy="30" x="-60" y="-60" width="20" height="20" result="t"/>
+        <feTile in="t"/>)svg",
+     R"svg(<feOffset dx="-30" dy="-30" x="100" y="100" width="20" height="20" result="t"/>
+        <feTile in="t"/>)svg",
+     ""},
+}};
+
+/// Every case on every edge it has markup for.
+std::vector<FilterInputMarginParam> SpreadingFilterParams() {
+  std::vector<FilterInputMarginParam> params;
+  for (const SpreadingFilterCase& filter : kSpreadingFilterCases) {
+    if (!filter.topLeft.empty()) {
+      params.emplace_back(filter, OffCanvasEdges::TopLeft);
+    }
+    if (!filter.bottomRight.empty()) {
+      params.emplace_back(filter, OffCanvasEdges::BottomRight);
+    }
+  }
+  return params;
+}
+
+INSTANTIATE_TEST_SUITE_P(SpreadingPrimitives, FilterInputMarginTest,
+                         testing::ValuesIn(SpreadingFilterParams()),
+                         [](const testing::TestParamInfo<FilterInputMarginParam>& info) {
+                           return std::string(std::get<0>(info.param).name) +
+                                  (std::get<1>(info.param) == OffCanvasEdges::TopLeft
+                                       ? "TopLeft"
+                                       : "BottomRight");
+                         });
 
 }  // namespace
 }  // namespace donner::svg

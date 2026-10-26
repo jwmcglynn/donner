@@ -718,9 +718,22 @@ struct FilterGraph {
   /// pixmap. Set by the renderer driver from the viewBox and canvas dimensions.
   Vector2d userToPixelScale = Vector2d(1.0, 1.0);
 
+  /// True when the filter layer's input capture must stay aligned with the viewport: the graph, or
+  /// a filter layer drawn inside it, contains feTurbulence, whose noise would move with the raster
+  /// origin. Set by the renderer driver.
+  bool keepsViewportAlignedCapture = false;
+
   /// Returns true if the graph has no nodes.
   [[nodiscard]] bool empty() const { return nodes.empty(); }
 };
+
+/// Whether \p graph contains feTurbulence, whose noise both backends evaluate from raster pixel
+/// coordinates through only the linear part of the filter transform.
+inline bool FilterGraphHasTurbulence(const FilterGraph& graph) {
+  return std::any_of(graph.nodes.begin(), graph.nodes.end(), [](const FilterNode& node) {
+    return std::holds_alternative<filter_primitive::Turbulence>(node.primitive);
+  });
+}
 
 /// Conservative resource layout for the live float filter execution strategy.
 struct GpuFilterWorkingSet {
@@ -1265,60 +1278,42 @@ public:
                                      std::uint64_t retainedGpuBufferBytes = 0,
                                      std::uint64_t memoryPixels = UINT64_MAX,
                                      std::uint64_t executions = 1, std::size_t gpuSurfaces = 0) {
-    std::uint64_t graphWorkUnits = 0;
-    std::uint64_t graphIntermediateBytes = 0;
     if (rejected_) {
       return std::nullopt;
     }
-    if (!FilterGraphExecutionCost(graph, pixelCount, memoryModel, graphWorkUnits,
-                                  graphIntermediateBytes, memoryPixels, executions)) {
-      rejectionReason_ = RejectionReason::InvalidGraph;
-      rejected_ = true;
-      return std::nullopt;
-    }
-
-    const bool gpu = memoryModel == FilterMemoryModel::GpuAllNodes;
-    const std::uint64_t persistentBytes = std::max(persistentGpuBytes_, retainedGpuBufferBytes);
-    if (gpu && (persistentBytes > kMaximumFilterFrameBytes ||
-                gpuSurfaces > std::numeric_limits<std::size_t>::max() - reservedGpuSurfaces_)) {
-      rejectionReason_ = RejectionReason::MemoryLimit;
-      rejected_ = true;
-      return std::nullopt;
-    }
-    const std::uint64_t retainedBeforeExecution =
-        gpu ? intermediateBytes_ + persistentBytes : liveCpuCaptureBytes_;
-    if (executions_ >= kMaximumExecutions) {
-      rejectionReason_ = RejectionReason::ExecutionLimit;
-      rejected_ = true;
-      return std::nullopt;
-    }
-    if (workUnits_ > kMaximumFilterFrameWorkUnits ||
-        graphWorkUnits > kMaximumFilterFrameWorkUnits - workUnits_) {
-      rejectionReason_ = RejectionReason::WorkLimit;
-      rejected_ = true;
-      return std::nullopt;
-    }
-    if (retainedBeforeExecution > kMaximumFilterFrameBytes ||
-        captureBytes > kMaximumFilterFrameBytes - retainedBeforeExecution ||
-        graphIntermediateBytes >
-            kMaximumFilterFrameBytes - retainedBeforeExecution - captureBytes) {
-      rejectionReason_ = RejectionReason::MemoryLimit;
+    const Admission admission =
+        evaluate(graph, pixelCount, memoryModel, captureBytes, retainedGpuBufferBytes, memoryPixels,
+                 executions, gpuSurfaces);
+    if (admission.failure != RejectionReason::None) {
+      rejectionReason_ = admission.failure;
       rejected_ = true;
       return std::nullopt;
     }
 
     ++executions_;
-    workUnits_ += graphWorkUnits;
+    workUnits_ += admission.workUnits;
     captureBytesReserved_ += captureBytes;
-    if (gpu) {
-      persistentGpuBytes_ = persistentBytes;
+    if (memoryModel == FilterMemoryModel::GpuAllNodes) {
+      persistentGpuBytes_ = admission.persistentBytes;
       reservedGpuSurfaces_ += gpuSurfaces;
-      intermediateBytes_ += captureBytes + graphIntermediateBytes;
+      intermediateBytes_ += captureBytes + admission.intermediateBytes;
       ++activeGpuReservations_;
     } else {
       liveCpuCaptureBytes_ += captureBytes;
     }
     return Reservation{captureBytes, memoryModel, true};
+  }
+
+  /// Whether \ref reserve would succeed with the same arguments, without reserving anything or
+  /// latching a rejection. Lets a renderer try a cheaper layout before committing to one.
+  [[nodiscard]] bool canReserve(const FilterGraph& graph, std::uint64_t pixelCount,
+                                FilterMemoryModel memoryModel, std::uint64_t captureBytes,
+                                std::uint64_t retainedGpuBufferBytes = 0,
+                                std::uint64_t memoryPixels = UINT64_MAX,
+                                std::uint64_t executions = 1, std::size_t gpuSurfaces = 0) const {
+    return !rejected_ && evaluate(graph, pixelCount, memoryModel, captureBytes,
+                                  retainedGpuBufferBytes, memoryPixels, executions, gpuSurfaces)
+                                 .failure == RejectionReason::None;
   }
 
   /// Release a successful CPU capture reservation after its filter layer is popped.
@@ -1387,6 +1382,65 @@ public:
   [[nodiscard]] RejectionReason rejectionReason() const { return rejectionReason_; }
 
 private:
+  /// Outcome of checking one reservation against the frame's remaining capacity.
+  struct Admission {
+    RejectionReason failure = RejectionReason::None;  ///< First limit the reservation exceeds.
+    std::uint64_t workUnits = 0;                      ///< Estimated pixel work of the graph.
+    std::uint64_t intermediateBytes = 0;  ///< Estimated intermediate bytes of the graph.
+    std::uint64_t persistentBytes = 0;    ///< Persistent GPU bytes after the reservation.
+  };
+
+  /// Check a reservation against the frame's capacity without changing any accounting.
+  Admission evaluate(const FilterGraph& graph, std::uint64_t pixelCount,
+                     FilterMemoryModel memoryModel, std::uint64_t captureBytes,
+                     std::uint64_t retainedGpuBufferBytes, std::uint64_t memoryPixels,
+                     std::uint64_t executions, std::size_t gpuSurfaces) const {
+    Admission admission;
+    if (!FilterGraphExecutionCost(graph, pixelCount, memoryModel, admission.workUnits,
+                                  admission.intermediateBytes, memoryPixels, executions)) {
+      admission.failure = RejectionReason::InvalidGraph;
+      return admission;
+    }
+    const bool gpu = memoryModel == FilterMemoryModel::GpuAllNodes;
+    admission.persistentBytes = std::max(persistentGpuBytes_, retainedGpuBufferBytes);
+    const std::uint64_t retainedBeforeExecution =
+        gpu ? intermediateBytes_ + admission.persistentBytes : liveCpuCaptureBytes_;
+    admission.failure =
+        gpu ? gpuSurfaceFailure(admission.persistentBytes, gpuSurfaces) : RejectionReason::None;
+    if (admission.failure == RejectionReason::None) {
+      admission.failure = frameLimitFailure(admission, retainedBeforeExecution, captureBytes);
+    }
+    return admission;
+  }
+
+  /// The GPU persistent-memory or surface-count limit a reservation exceeds, if any.
+  RejectionReason gpuSurfaceFailure(std::uint64_t persistentBytes, std::size_t gpuSurfaces) const {
+    return persistentBytes > kMaximumFilterFrameBytes ||
+                   gpuSurfaces > std::numeric_limits<std::size_t>::max() - reservedGpuSurfaces_
+               ? RejectionReason::MemoryLimit
+               : RejectionReason::None;
+  }
+
+  /// The frame execution, work or memory limit a reservation exceeds, if any.
+  RejectionReason frameLimitFailure(const Admission& admission,
+                                    std::uint64_t retainedBeforeExecution,
+                                    std::uint64_t captureBytes) const {
+    if (executions_ >= kMaximumExecutions) {
+      return RejectionReason::ExecutionLimit;
+    }
+    if (workUnits_ > kMaximumFilterFrameWorkUnits ||
+        admission.workUnits > kMaximumFilterFrameWorkUnits - workUnits_) {
+      return RejectionReason::WorkLimit;
+    }
+    if (retainedBeforeExecution > kMaximumFilterFrameBytes ||
+        captureBytes > kMaximumFilterFrameBytes - retainedBeforeExecution ||
+        admission.intermediateBytes >
+            kMaximumFilterFrameBytes - retainedBeforeExecution - captureBytes) {
+      return RejectionReason::MemoryLimit;
+    }
+    return RejectionReason::None;
+  }
+
   std::uint64_t executions_ = 0;
   std::uint64_t workUnits_ = 0;
   std::uint64_t intermediateBytes_ = 0;

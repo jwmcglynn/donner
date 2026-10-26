@@ -63,6 +63,7 @@
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/FilterRegionContext.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 #endif
@@ -1209,10 +1210,12 @@ bool isAffordableWindow(const std::optional<FragmentRasterWindow>& window,
 
 /// Inputs for choosing an feImage element reference's raster window.
 struct FragmentWindowRequest {
-  Transform2d canvasFromDocument;     ///< Document user space to canvas pixels.
-  Vector2i canvasSize;                ///< Canvas size, the fallback window.
-  std::optional<Box2d> visibleUser;   ///< Visible draw surface in the filtered element's user
-                                      ///< space, when known.
+  Transform2d canvasFromDocument;  ///< Document user space to canvas pixels.
+  Vector2i canvasSize;             ///< Canvas size, the fallback window.
+  /// Visible draw surface in the filtered element's user space, when known.
+  std::optional<Box2d> visibleUser;
+  /// \ref visibleUser widened by the filter graph's sampling reach, when that reach is bounded.
+  std::optional<Box2d> widenedVisibleUser;
   std::uint64_t affordableBytes = 0;  ///< Source-image bytes left in the frame's budget.
 };
 
@@ -1239,6 +1242,21 @@ std::optional<Box2d> visibleFragmentRegion(const components::FilterGraph& filter
   return clipped;
 }
 
+/// The window over the part of \p subregion that can land on \p visibleUser, when it fits
+/// \p byteLimit.
+std::optional<FragmentRasterWindow> visibleFragmentWindow(
+    const components::FilterGraph& filterGraph, const components::FilterNode& node,
+    const Box2d& subregion, const std::optional<Box2d>& visibleUser,
+    const Transform2d& canvasFromDocument, std::uint64_t byteLimit) {
+  const std::optional<Box2d> visible =
+      visibleFragmentRegion(filterGraph, node, subregion, visibleUser);
+  if (!visible.has_value()) {
+    return std::nullopt;
+  }
+  std::optional<FragmentRasterWindow> window = fragmentWindowFor(*visible, canvasFromDocument);
+  return isAffordableWindow(window, byteLimit) ? window : std::nullopt;
+}
+
 /// Choose the canvas-pixel window for an feImage element reference. The referenced content is
 /// placed with its user-space origin at the primitive subregion's origin and the result is clipped
 /// to that subregion, so only user-space points from the origin to the subregion size can reach
@@ -1246,8 +1264,10 @@ std::optional<Box2d> visibleFragmentRegion(const components::FilterGraph& filter
 /// can bring content into view that lies outside the canvas in document coordinates. A chosen
 /// window never needs more bytes than the canvas window: no frame whose canvas-sized rasters fit
 /// the filter preparation budget can be pushed over it. When the whole subregion is larger, keep
-/// only the part that can land on the visible surface; otherwise fall back to the canvas. An
-/// animated subregion size is only known at execution, so it also uses the canvas.
+/// the part that can land on the visible surface after the graph's sampling reach, then without
+/// it, and otherwise fall back to the canvas. The reach covers this filter stage only: a later
+/// stage or an enclosing filter layer that pulls content into view is not included. An animated
+/// subregion size is only known at execution, so it also uses the canvas.
 FragmentRasterWindow resolveFragmentRasterWindow(const components::FilterGraph& filterGraph,
                                                  const components::FilterNode& node,
                                                  const FragmentWindowRequest& request) {
@@ -1266,26 +1286,26 @@ FragmentRasterWindow resolveFragmentRasterWindow(const components::FilterGraph& 
   if (isAffordableWindow(whole, byteLimit)) {
     return *whole;
   }
-  if (const std::optional<Box2d> visible =
-          visibleFragmentRegion(filterGraph, node, subregion, request.visibleUser)) {
-    const std::optional<FragmentRasterWindow> clipped =
-        fragmentWindowFor(*visible, request.canvasFromDocument);
-    if (isAffordableWindow(clipped, byteLimit)) {
-      return *clipped;
+  for (const std::optional<Box2d>& visibleUser :
+       {request.widenedVisibleUser, request.visibleUser}) {
+    if (const std::optional<FragmentRasterWindow> window = visibleFragmentWindow(
+            filterGraph, node, subregion, visibleUser, request.canvasFromDocument, byteLimit)) {
+      return *window;
     }
   }
   return canvasWindow;
 }
 
-/// The visible draw surface mapped back into the filtered element's user space, or
-/// `std::nullopt` when that mapping is not invertible.
-std::optional<Box2d> visibleUserRegion(const Transform2d& surfaceFromUser, Vector2i surfaceSize) {
+/// The visible draw surface, widened by \p reach device pixels on each side, mapped back into the
+/// filtered element's user space, or `std::nullopt` when that mapping is not invertible.
+std::optional<Box2d> visibleUserRegion(const Transform2d& surfaceFromUser, Vector2i surfaceSize,
+                                       Vector2d reach) {
   const double determinant = surfaceFromUser.determinant();
   if (!std::isfinite(determinant) || determinant == 0.0) {
     return std::nullopt;
   }
-  const Box2d visible =
-      surfaceFromUser.inverse().transformBox(Box2d(Vector2d::Zero(), Vector2d(surfaceSize)));
+  const Box2d visible = surfaceFromUser.inverse().transformBox(
+      Box2d(-reach, Vector2d(surfaceSize.x, surfaceSize.y) + reach));
   if (!std::isfinite(visible.topLeft.x) || !std::isfinite(visible.topLeft.y) ||
       !std::isfinite(visible.bottomRight.x) || !std::isfinite(visible.bottomRight.y)) {
     return std::nullopt;
@@ -1293,15 +1313,40 @@ std::optional<Box2d> visibleUserRegion(const Transform2d& surfaceFromUser, Vecto
   return visible;
 }
 
-/// The visible draw surface in a filtered element's user space, read from its rendering instance.
-std::optional<Box2d> hostVisibleUserRegion(Registry& registry, Entity hostEntity,
-                                           const Transform2d& surfaceFromCanvas,
-                                           Vector2i surfaceSize) {
+/// The visible draw surface in a filtered element's user space, plain and widened by the filter
+/// graph's sampling reach.
+struct HostVisibleRegions {
+  std::optional<Box2d> visible;  ///< Surface mapped back through the element's transform.
+  /// Surface widened by how far the graph reads past each output pixel, so a later primitive that
+  /// pulls content into view still finds it, plus any tile source rectangle and what its inputs
+  /// read. Absent when the reach is the whole region.
+  std::optional<Box2d> widened;
+};
+
+/// Map the visible draw surface back into a filtered element's user space, read from its
+/// rendering instance.
+HostVisibleRegions hostVisibleUserRegions(Registry& registry, Entity hostEntity,
+                                          const components::FilterGraph& filterGraph,
+                                          const Transform2d& surfaceFromCanvas,
+                                          Vector2i surfaceSize) {
   const auto* hostInstance = registry.try_get<components::RenderingInstanceComponent>(hostEntity);
-  return hostInstance != nullptr
-             ? visibleUserRegion(hostInstance->worldFromEntityTransform * surfaceFromCanvas,
-                                 surfaceSize)
-             : std::nullopt;
+  if (hostInstance == nullptr) {
+    return {};
+  }
+  const Transform2d surfaceFromUser = hostInstance->worldFromEntityTransform * surfaceFromCanvas;
+  HostVisibleRegions regions;
+  regions.visible = visibleUserRegion(surfaceFromUser, surfaceSize, Vector2d::Zero());
+  const FilterInputMargin reach = ComputeFilterSamplingReach(filterGraph, surfaceFromUser);
+  if (reach.wholeRegion) {
+    return regions;
+  }
+  regions.widened = visibleUserRegion(surfaceFromUser, surfaceSize, reach.pixels);
+  if (regions.widened.has_value() && reach.userCapture.has_value()) {
+    const Box2d source = surfaceFromUser.transformBox(*reach.userCapture);
+    const Box2d read(source.topLeft - reach.captureReach, source.bottomRight + reach.captureReach);
+    regions.widened = Box2d::Union(*regions.widened, surfaceFromUser.inverse().transformBox(read));
+  }
+  return regions;
 }
 
 bool HasCompleteSnapshotRows(const RendererBitmap& snapshot) {
@@ -3090,6 +3135,104 @@ bool RendererDriver::materializeFilterStages(std::vector<components::FilterGraph
   return true;
 }
 
+namespace {
+
+/// Content an instance draws again out of draw order: mask and marker content, which the driver
+/// replays at the referencing instance. Pattern content draws into its own tile surface instead.
+struct ReplayedContent {
+  int replayedAt = 0;  ///< Draw order of the referencing instance.
+  int first = 0;       ///< Draw order of the first instance of the content.
+  int last = 0;        ///< Draw order of the last instance of the content.
+};
+
+/// Collect every mask and marker content range and the instance that replays it.
+std::vector<ReplayedContent> CollectReplayedContent(Registry& registry) {
+  std::vector<ReplayedContent> replays;
+  const auto add = [&](int replayedAt, const std::optional<components::SubtreeInfo>& content) {
+    if (!content) {
+      return;
+    }
+    const auto* first =
+        registry.try_get<components::RenderingInstanceComponent>(content->firstRenderedEntity);
+    const auto* last =
+        registry.try_get<components::RenderingInstanceComponent>(content->lastRenderedEntity);
+    if (first == nullptr || last == nullptr) {
+      return;
+    }
+    replays.push_back({replayedAt, first->drawOrder, last->drawOrder});
+  };
+  for (auto&& [entity, instance] : registry.view<components::RenderingInstanceComponent>().each()) {
+    if (instance.mask) {
+      add(instance.drawOrder, instance.mask->subtreeInfo);
+    }
+    for (const auto* marker : {&instance.markerStart, &instance.markerMid, &instance.markerEnd}) {
+      if (marker->has_value()) {
+        add(instance.drawOrder, (*marker)->subtreeInfo);
+      }
+    }
+  }
+  return replays;
+}
+
+/// Treat every instance that replays content containing turbulence as containing it, repeating
+/// until stable, since replayed content can itself replay content.
+void AddReplayedTurbulence(std::vector<int>& turbulenceDrawOrders,
+                           const std::vector<ReplayedContent>& replays) {
+  const auto contains = [&](int drawOrder) {
+    return std::find(turbulenceDrawOrders.begin(), turbulenceDrawOrders.end(), drawOrder) !=
+           turbulenceDrawOrders.end();
+  };
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (const ReplayedContent& replay : replays) {
+      const bool replaysTurbulence = std::any_of(
+          turbulenceDrawOrders.begin(), turbulenceDrawOrders.end(),
+          [&](int drawOrder) { return drawOrder >= replay.first && drawOrder <= replay.last; });
+      if (replaysTurbulence && !contains(replay.replayedAt)) {
+        turbulenceDrawOrders.push_back(replay.replayedAt);
+        changed = true;
+      }
+    }
+  }
+}
+
+/// Mark every prepared filter layer that contains feTurbulence, or encloses a filter layer that
+/// does, directly or through replayed mask or marker content, to keep its input capture aligned
+/// with the viewport. Both backends evaluate turbulence noise from raster pixel coordinates, so an
+/// input margin on any enclosing layer, or on an outer stage of the same element, would move the
+/// noise pattern. Stages of one element nest, and a
+/// descendant's draw order lies within its ancestor's subtree range.
+void MarkViewportAlignedFilterCaptures(
+    Registry& registry,
+    std::unordered_map<Entity, std::vector<components::FilterGraph>>& preparedGraphs) {
+  std::vector<int> turbulenceDrawOrders;
+  for (const auto& [entity, stages] : preparedGraphs) {
+    if (std::any_of(stages.begin(), stages.end(), components::FilterGraphHasTurbulence)) {
+      turbulenceDrawOrders.push_back(
+          registry.get<components::RenderingInstanceComponent>(entity).drawOrder);
+    }
+  }
+  if (turbulenceDrawOrders.empty()) {
+    return;
+  }
+  AddReplayedTurbulence(turbulenceDrawOrders, CollectReplayedContent(registry));
+  for (auto& [entity, stages] : preparedGraphs) {
+    const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+    const auto* last =
+        registry.try_get<components::RenderingInstanceComponent>(instance.subtreeLastEntity);
+    const int lastDrawOrder = last != nullptr ? last->drawOrder : instance.drawOrder;
+    const bool enclosesTurbulence =
+        std::any_of(turbulenceDrawOrders.begin(), turbulenceDrawOrders.end(), [&](int drawOrder) {
+          return drawOrder >= instance.drawOrder && drawOrder <= lastDrawOrder;
+        });
+    for (components::FilterGraph& stage : stages) {
+      stage.keepsViewportAlignedCapture = stage.keepsViewportAlignedCapture || enclosesTurbulence;
+    }
+  }
+}
+
+}  // namespace
+
 void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Entity> entities) {
   // Iterate a caller-provided snapshot of entity IDs so that mid-loop storage mutation (from
   // `createFeImageShadowTree` inside `preRenderFeImageFragments`) cannot invalidate the iteration.
@@ -3126,6 +3269,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
       preparedFilterGraphs_[entity] = std::move(*stages);
     }
   }
+  MarkViewportAlignedFilterCaptures(registry, preparedFilterGraphs_);
 }
 
 void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
@@ -4739,8 +4883,8 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
 
   // Read the visible surface in the filtered element's user space before shadow-tree creation can
   // reorder rendering instance storage.
-  const std::optional<Box2d> hostVisibleUser = hostVisibleUserRegion(
-      registry, hostEntity, surfaceFromCanvasTransform_, cullingSurfaceSize());
+  const HostVisibleRegions hostVisible = hostVisibleUserRegions(
+      registry, hostEntity, filterGraph, surfaceFromCanvasTransform_, cullingSurfaceSize());
 
   for (auto& node : filterGraph.nodes) {
     auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
@@ -4774,7 +4918,8 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
         components::LayoutSystem().getCanvasFromDocumentTransform(registry);
     const FragmentRasterWindow window = resolveFragmentRasterWindow(
         filterGraph, node,
-        FragmentWindowRequest{canvasFromDocument, renderingSize_, hostVisibleUser,
+        FragmentWindowRequest{canvasFromDocument, renderingSize_, hostVisible.visible,
+                              hostVisible.widened,
                               filterPreparationBudget_->remainingImageBytes()});
     const std::optional<std::uint64_t> imageBytes = reservePreparedFilterImage(window.size);
     if (!imageBytes.has_value()) {

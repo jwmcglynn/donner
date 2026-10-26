@@ -38,6 +38,7 @@
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/FilterRegionContext.h"
 #include "donner/svg/renderer/HeadlessDevicePool.h"
 #include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -323,37 +324,12 @@ std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
 /// (a `GeodeGradientCacheComponent` holding a stop texture).
 constexpr size_t kMaxGradientStopsClient = 16;
 
-int boundedFloorToInt(double value, int minimum, int maximum) {
-  if (std::isnan(value)) {
-    return minimum;
-  }
-  if (value <= static_cast<double>(minimum)) {
-    return minimum;
-  }
-  if (value >= static_cast<double>(maximum)) {
-    return maximum;
-  }
-  return static_cast<int>(std::floor(value));
-}
-
 std::optional<uint32_t> checkedFilterRasterDimension(double value) {
   if (!std::isfinite(value) || value <= 0.0 ||
       value > static_cast<double>(components::kMaximumFilterSurfaceDimension)) {
     return std::nullopt;
   }
   return static_cast<uint32_t>(std::max(1.0, std::ceil(value)));
-}
-
-/// Returns true when the filter graph contains spatial-shift primitives (feOffset) that can bring
-/// content from outside the viewport into view, requiring the filter layer buffer to be expanded.
-bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
-  using namespace components::filter_primitive;
-  for (const components::FilterNode& node : filterGraph.nodes) {
-    if (std::holds_alternative<Offset>(node.primitive)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,44 +1138,24 @@ struct GeodeFilterBuffer {
   int offsetY = 0;
 };
 
-std::optional<GeodeFilterBuffer> ComputeGeodeFilterBuffer(
-    const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
-    const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight) {
-  GeodeFilterBuffer result{
+std::optional<GeodeFilterBuffer> MakeGeodeFilterBuffer(const std::optional<Box2d>& filterRegion,
+                                                       const FilterInputBuffer& layout,
+                                                       int viewportWidth, int viewportHeight) {
+  const GeodeFilterBuffer result{
       filterRegion.value_or(Box2d(Vector2d::Zero(), Vector2d(viewportWidth, viewportHeight))),
-      viewportWidth, viewportHeight, 0, 0};
-  if (filterRegion.has_value()) {
-    constexpr int kMaxExpansion = 4096;
-    const Box2d deviceRegion = deviceFromFilter.transformBox(*filterRegion);
-    const int regionX0 = boundedFloorToInt(deviceRegion.topLeft.x, -kMaxExpansion, 0);
-    const int regionY0 = boundedFloorToInt(deviceRegion.topLeft.y, -kMaxExpansion, 0);
-    if ((regionX0 < 0 || regionY0 < 0) && graphHasSpatialShift(filterGraph)) {
-      result.offsetX = std::min(-regionX0, std::max(0, kMaxExpansion - viewportWidth));
-      result.offsetY = std::min(-regionY0, std::max(0, kMaxExpansion - viewportHeight));
-      result.width += result.offsetX;
-      result.height += result.offsetY;
-    }
-  }
-  const std::uint64_t pixels =
-      static_cast<std::uint64_t>(result.width) * static_cast<std::uint64_t>(result.height);
-  if (pixels > components::kMaximumFilterSurfacePixels) {
-    result.width = viewportWidth;
-    result.height = viewportHeight;
-    result.offsetX = 0;
-    result.offsetY = 0;
-  }
+      layout.width, layout.height, layout.offsetX, layout.offsetY};
   if (result.width <= 0 || result.height <= 0) {
     return std::nullopt;
   }
   return result;
 }
 
+/// Whether the transformed blur path applies. It resamples the capture from device space, placing
+/// the capture's texel (0, 0) at its buffer offset, so a capture with input margins also works.
 bool ShouldPlanGeodeLocalRaster(const components::FilterGraph& filterGraph,
                                 const std::optional<Box2d>& filterRegion,
-                                const Transform2d& deviceFromFilter,
-                                const GeodeFilterBuffer& buffer, bool fullExecutionFits) {
+                                const Transform2d& deviceFromFilter, bool fullExecutionFits) {
   if (!filterRegion.has_value() || filterRegion->width() <= 0.0 || filterRegion->height() <= 0.0 ||
-      buffer.offsetX != 0 || buffer.offsetY != 0 ||
       NearZero(deviceFromFilter.determinant(), 1e-12)) {
     return false;
   }
@@ -1218,9 +1174,8 @@ struct GeodeLocalRasterGeometry {
 
 std::optional<GeodeLocalRasterGeometry> ComputeGeodeLocalRasterGeometry(
     const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
-    const Transform2d& deviceFromFilter, const GeodeFilterBuffer& buffer, bool fullExecutionFits) {
-  if (!ShouldPlanGeodeLocalRaster(filterGraph, filterRegion, deviceFromFilter, buffer,
-                                  fullExecutionFits)) {
+    const Transform2d& deviceFromFilter, bool fullExecutionFits) {
+  if (!ShouldPlanGeodeLocalRaster(filterGraph, filterRegion, deviceFromFilter, fullExecutionFits)) {
     return std::nullopt;
   }
   const double scaleX =
@@ -1246,10 +1201,10 @@ std::optional<GeodeLocalRasterGeometry> ComputeGeodeLocalRasterGeometry(
 
 std::optional<geode::FilterTilePlan> ComputeGeodeLocalFilterPlan(
     const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
-    const Transform2d& deviceFromFilter, const GeodeFilterBuffer& buffer, bool fullExecutionFits,
+    const Transform2d& deviceFromFilter, bool fullExecutionFits,
     const geode::GeodeFilterEngine& engine) {
   const auto geometry = ComputeGeodeLocalRasterGeometry(filterGraph, filterRegion, deviceFromFilter,
-                                                        buffer, fullExecutionFits);
+                                                        fullExecutionFits);
   if (!geometry) {
     return std::nullopt;
   }
@@ -1279,6 +1234,92 @@ struct GeodeFilterWorkBounds {
   }
 };
 
+/// Execution, capture and surface sizes for one candidate filter input layout.
+struct GeodeFilterPlan {
+  GeodeFilterBuffer buffer;                        ///< Input raster layout.
+  geode::FilterTilePlan plan;                      ///< Full-raster execution plan.
+  std::optional<geode::FilterTilePlan> localPlan;  ///< Transformed blur path plan.
+  bool fullExecutionFits = false;                  ///< Whether the full plan fits limits.
+  GeodeFilterWorkBounds bounds;                    ///< Work over the plans that may run.
+  uint64_t captureBytes = 0;                       ///< Capture and copy texture bytes.
+  uint64_t graphBytes = 0;                         ///< Graph intermediate bytes.
+  std::size_t surfaces = 0;                        ///< Retained GPU surfaces.
+  bool costKnown = false;                          ///< Whether the graph cost resolved.
+};
+
+/// Plan a filter layer over \p buffer without reserving anything.
+GeodeFilterPlan PlanGeodeFilter(const components::FilterGraph& filterGraph,
+                                const std::optional<Box2d>& filterRegion,
+                                const Transform2d& deviceFromFilter,
+                                const GeodeFilterBuffer& buffer, int viewportWidth,
+                                int viewportHeight, const geode::GeodeFilterEngine& engine) {
+  GeodeFilterPlan result{
+      buffer, engine.executionPlan(filterGraph, buffer.width, buffer.height, deviceFromFilter)};
+  uint64_t plannedWork = 0;
+  uint64_t plannedBytes = 0;
+  result.fullExecutionFits = components::FilterGraphExecutionCost(
+      filterGraph, result.plan.workPixels(), components::FilterMemoryModel::GpuAllNodes,
+      plannedWork, plannedBytes, result.plan.pixels(), result.plan.tiles);
+  result.localPlan = ComputeGeodeLocalFilterPlan(filterGraph, filterRegion, deviceFromFilter,
+                                                 result.fullExecutionFits, engine);
+  if (result.fullExecutionFits || !result.localPlan) {
+    result.bounds.include(result.plan);
+  }
+  if (result.localPlan) {
+    result.bounds.include(*result.localPlan);
+  }
+  const uint64_t localPixels =
+      result.localPlan ? uint64_t{result.localPlan->width} * result.localPlan->height : 0;
+  const bool copiesViewport =
+      FilterInputBuffer{buffer.width, buffer.height, buffer.offsetX, buffer.offsetY}
+          .exceedsViewport(viewportWidth, viewportHeight);
+  const uint64_t viewportCopyBytes =
+      copiesViewport ? uint64_t{static_cast<uint32_t>(viewportWidth)} * viewportHeight * 4 : 0;
+  const uint64_t bufferPixels =
+      static_cast<std::uint64_t>(buffer.width) * static_cast<std::uint64_t>(buffer.height);
+  result.captureBytes =
+      bufferPixels * 4 + localPixels * 4 + result.bounds.additionalTextureBytes + viewportCopyBytes;
+  uint64_t graphWork = 0;
+  result.costKnown = components::FilterGraphExecutionCost(
+      filterGraph, result.bounds.workPixels, components::FilterMemoryModel::GpuAllNodes, graphWork,
+      result.graphBytes, result.bounds.memoryPixels, result.bounds.executions);
+  if (result.costKnown) {
+    components::GpuFilterWorkingSet layout;
+    (void)components::ComputeGpuFilterWorkingSet(filterGraph, layout);
+    const bool tiled = result.bounds.executions > 1;
+    result.surfaces = layout.floatTextures + 2 + (result.localPlan ? 1 : 0) + (tiled ? 2 : 0) +
+                      (copiesViewport ? 1 : 0);
+    result.surfaces +=
+        std::count_if(filterGraph.nodes.begin(), filterGraph.nodes.end(), [](const auto& node) {
+          return std::holds_alternative<components::filter_primitive::Image>(node.primitive);
+        });
+  }
+  return result;
+}
+
+/// Whether the frame's GPU surface budget can hold \p plan, when its cost is known.
+bool GeodeFilterSurfacesFit(const GeodeFilterPlan& plan,
+                            const components::FilterExecutionBudget& budget,
+                            const RendererSurfaceBudget& surfaceBudget) {
+  return !plan.costKnown ||
+         (budget.reservedGpuSurfaces() <= RendererSurfaceBudget::kMaximumSurfaces &&
+          surfaceBudget.canReserveBytes(
+              plan.captureBytes + plan.graphBytes + budget.retainedGpuBytes(),
+              plan.surfaces + budget.reservedGpuSurfaces()));
+}
+
+/// Whether \p plan fits every frame budget, without reserving or latching anything.
+bool GeodeFilterPlanFits(const components::FilterGraph& filterGraph, const GeodeFilterPlan& plan,
+                         const components::FilterExecutionBudget& budget,
+                         const RendererSurfaceBudget& surfaceBudget,
+                         const geode::GeodeFilterEngine& engine) {
+  return GeodeFilterSurfacesFit(plan, budget, surfaceBudget) &&
+         budget.canReserve(filterGraph, plan.bounds.workPixels,
+                           components::FilterMemoryModel::GpuAllNodes, plan.captureBytes,
+                           engine.retainedBufferBytes(), plan.bounds.memoryPixels,
+                           plan.bounds.executions, plan.surfaces);
+}
+
 std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGraph& filterGraph,
                                                      const std::optional<Box2d>& filterRegion,
                                                      const Transform2d& deviceFromFilter,
@@ -1286,69 +1327,41 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
                                                      components::FilterExecutionBudget& budget,
                                                      const RendererSurfaceBudget& surfaceBudget,
                                                      const geode::GeodeFilterEngine& engine) {
-  const std::optional<GeodeFilterBuffer> buffer = ComputeGeodeFilterBuffer(
+  // Prefer a raster with the graph's input margin, but never let the margin turn an admissible
+  // filter into a frame-wide rejection: fall back to the viewport layout when the larger raster
+  // would not fit.
+  const FilterInputBuffer expanded = ComputeFilterInputBuffer(
       filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
+  const std::optional<GeodeFilterBuffer> buffer =
+      MakeGeodeFilterBuffer(filterRegion, expanded, viewportWidth, viewportHeight);
   if (!buffer.has_value()) {
     budget.reject();
     return std::nullopt;
   }
-  const std::uint64_t bufferPixels =
-      static_cast<std::uint64_t>(buffer->width) * static_cast<std::uint64_t>(buffer->height);
-  const geode::FilterTilePlan plan =
-      engine.executionPlan(filterGraph, buffer->width, buffer->height, deviceFromFilter);
-  uint64_t plannedWork = 0;
-  uint64_t plannedBytes = 0;
-  const bool fullExecutionFits = components::FilterGraphExecutionCost(
-      filterGraph, plan.workPixels(), components::FilterMemoryModel::GpuAllNodes, plannedWork,
-      plannedBytes, plan.pixels(), plan.tiles);
-  const auto localPlan = ComputeGeodeLocalFilterPlan(filterGraph, filterRegion, deviceFromFilter,
-                                                     *buffer, fullExecutionFits, engine);
-  GeodeFilterWorkBounds bounds;
-  if (fullExecutionFits || !localPlan) {
-    bounds.include(plan);
+  GeodeFilterPlan plan = PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, *buffer,
+                                         viewportWidth, viewportHeight, engine);
+  if (expanded.exceedsViewport(viewportWidth, viewportHeight) &&
+      !GeodeFilterPlanFits(filterGraph, plan, budget, surfaceBudget, engine)) {
+    const GeodeFilterBuffer viewport{buffer->region, viewportWidth, viewportHeight, 0, 0};
+    plan = PlanGeodeFilter(filterGraph, filterRegion, deviceFromFilter, viewport, viewportWidth,
+                           viewportHeight, engine);
   }
-  if (localPlan) {
-    bounds.include(*localPlan);
+  if (!GeodeFilterSurfacesFit(plan, budget, surfaceBudget)) {
+    budget.requireMemoryChunk();
+    return std::nullopt;
   }
-  const uint64_t localPixels = localPlan ? uint64_t{localPlan->width} * localPlan->height : 0;
-  const bool tiled = bounds.executions > 1;
-  const uint64_t viewportCopyBytes =
-      buffer->offsetX || buffer->offsetY
-          ? uint64_t{static_cast<uint32_t>(viewportWidth)} * viewportHeight * 4
-          : 0;
-  const uint64_t captureBytes =
-      bufferPixels * 4 + localPixels * 4 + bounds.additionalTextureBytes + viewportCopyBytes;
-  std::size_t surfaces = 0;
-  uint64_t graphBytes = 0;
-  uint64_t graphWork = 0;
-  if (components::FilterGraphExecutionCost(filterGraph, bounds.workPixels,
-                                           components::FilterMemoryModel::GpuAllNodes, graphWork,
-                                           graphBytes, bounds.memoryPixels, bounds.executions)) {
-    components::GpuFilterWorkingSet layout;
-    (void)components::ComputeGpuFilterWorkingSet(filterGraph, layout);
-    surfaces = layout.floatTextures + 2 + (localPlan ? 1 : 0) + (tiled ? 2 : 0) +
-               (viewportCopyBytes ? 1 : 0);
-    surfaces +=
-        std::count_if(filterGraph.nodes.begin(), filterGraph.nodes.end(), [](const auto& node) {
-          return std::holds_alternative<components::filter_primitive::Image>(node.primitive);
-        });
-    if (budget.reservedGpuSurfaces() > RendererSurfaceBudget::kMaximumSurfaces ||
-        !surfaceBudget.canReserveBytes(captureBytes + graphBytes + budget.retainedGpuBytes(),
-                                       surfaces + budget.reservedGpuSurfaces())) {
-      budget.requireMemoryChunk();
-      return std::nullopt;
-    }
-  }
-  auto reservation = budget.reserve(
-      filterGraph, bounds.workPixels, components::FilterMemoryModel::GpuAllNodes, captureBytes,
-      engine.retainedBufferBytes(), bounds.memoryPixels, bounds.executions, surfaces);
+  auto reservation = budget.reserve(filterGraph, plan.bounds.workPixels,
+                                    components::FilterMemoryModel::GpuAllNodes, plan.captureBytes,
+                                    engine.retainedBufferBytes(), plan.bounds.memoryPixels,
+                                    plan.bounds.executions, plan.surfaces);
   if (!reservation.has_value()) {
     return std::nullopt;
   }
-  return GeodeFilterAdmission{buffer->region,     buffer->width,   buffer->height,
-                              buffer->offsetX,    buffer->offsetY, localPlan.has_value(),
-                              !fullExecutionFits, *reservation,    plan,
-                              localPlan};
+  return GeodeFilterAdmission{
+      plan.buffer.region,      plan.buffer.width,   plan.buffer.height,
+      plan.buffer.offsetX,     plan.buffer.offsetY, plan.localPlan.has_value(),
+      !plan.fullExecutionFits, *reservation,        plan.plan,
+      plan.localPlan};
 }
 
 /// The GPU residence one device keeps for a document: its geometry slab, record slab and glyph
@@ -2561,8 +2574,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Transform2d deviceFromFilter;  // Full CTM at push time.
     bool transformedCaptureReserved = false;
     bool localRasterRequiredForBudget = false;
-    int filterBufferOffsetX = 0;  // Expansion into negative device X.
-    int filterBufferOffsetY = 0;  // Expansion into negative device Y.
+    int filterBufferOffsetX = 0;  // Input margin past the outer target's left edge.
+    int filterBufferOffsetY = 0;  // Input margin past the outer target's top edge.
     std::vector<ClipStackEntry> savedClipStack;
     bool allocationRejected = false;
   };
@@ -2578,9 +2591,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::size_t rejectedFilterDepth = 0;
 
   /// How far right and down the active filter captures move what is drawn into them, in pixels.
-  /// A capture expanded for an offset holds the content its region reaches above or left of its
-  /// outer target, moved by that overhang, and a capture nested in another is moved within it, so
-  /// the overhangs of every capture on the stack add up.
+  /// A capture with an input margin holds the content its region reaches above or left of its
+  /// outer target, moved by that margin, and a capture nested in another is moved within it, so
+  /// the margins of every capture on the stack add up.
   [[nodiscard]] Vector2i filterCaptureOffset() const {
     Vector2i offset = Vector2i::Zero();
     for (const FilterStackFrame& frame : filterStack) {
@@ -2867,11 +2880,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         frame.filterGraph.empty()) {
       return std::nullopt;
     }
-    const GeodeFilterBuffer buffer{frame.filterRegion, static_cast<int>(frame.layerDesc.size.width),
-                                   static_cast<int>(frame.layerDesc.size.height),
-                                   frame.filterBufferOffsetX, frame.filterBufferOffsetY};
     return ComputeGeodeLocalRasterGeometry(frame.filterGraph, frame.filterRegion,
-                                           frame.deviceFromFilter, buffer,
+                                           frame.deviceFromFilter,
                                            !frame.localRasterRequiredForBudget);
   }
 
@@ -2904,11 +2914,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       resampleEncoder->injectNextArenaWriteFailureForTesting();
     }
     resampleEncoder->setTransform(localFromDevice);
-    resampleEncoder->drawTexture(
-        frame.layerTexture,
-        Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
-                        static_cast<double>(frame.layerDesc.size.height)),
-        kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
+    // The capture's texel (0, 0) is device (-offsetX, -offsetY) when the input buffer extends
+    // past the viewport's top-left corner.
+    resampleEncoder->drawTexture(frame.layerTexture,
+                                 Box2d::FromXYWH(-static_cast<double>(frame.filterBufferOffsetX),
+                                                 -static_cast<double>(frame.filterBufferOffsetY),
+                                                 static_cast<double>(frame.layerDesc.size.width),
+                                                 static_cast<double>(frame.layerDesc.size.height)),
+                                 kWholeTextureUv, 1.0, /*pixelated=*/false,
+                                 /*sourceIsPremultiplied=*/true);
     resampleEncoder->finish();
     retireFinishedEncoder(std::move(resampleEncoder));
 
@@ -3229,8 +3243,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::vector<GeometryDebugEdge> geometryDebugEdges;
 
   /// Map pixels in the current encoder target back into final root-target
-  /// pixels. Filter captures may be expanded at their top/left; all other
-  /// layer, mask, and clip targets share the root pixel coordinate system.
+  /// pixels. Filter captures may extend past every edge of their outer target by an input
+  /// margin, which moves their content by the top and left margins; all other layer, mask, and
+  /// clip targets share the root pixel coordinate system.
   [[nodiscard]] Transform2d geometryDebugRootFromCurrentTarget(
       int additionalFilterOffsetX = 0, int additionalFilterOffsetY = 0) const {
     const Vector2i offset = filterCaptureOffset();
@@ -6214,7 +6229,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   // Allocate an offscreen layer. All draws issued between push/pop land
   // here; pop composites it back onto the outer target with the stored opacity.
   // The layer takes the outer target's extent, not the surface's: the composite maps the whole
-  // layer over the whole outer target, which inside a filter layer expanded for an offset is
+  // layer over the whole outer target, which inside a filter layer with an input margin is
   // larger than the surface.
   const gpu::TextureDescriptor td{"RendererGeodeIsolatedLayer", impl_->targetExtent(),
                                   impl_->gpuTextureFormat(),
@@ -6372,7 +6387,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     return;
   }
   // The capture covers the target the result composites back onto, which is larger than the
-  // surface when this filter nests inside one expanded for an offset.
+  // surface when this filter nests inside one with an input margin.
   const gpu::Extent2d outerExtent = impl_->targetExtent();
   const int outerWidth = static_cast<int>(outerExtent.width);
   const int outerHeight = static_cast<int>(outerExtent.height);
@@ -6436,7 +6451,7 @@ void RendererGeode::popFilterLayer() {
     return;
   }
 
-  // When the filter buffer was expanded to capture negative-coordinate content, adjust
+  // When the filter buffer has an input margin past the top or left edge, adjust
   // deviceFromFilter to include the offset so the filter engine interprets coordinates correctly.
   const Transform2d bufferDeviceFromFilter =
       (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0)
@@ -6485,10 +6500,15 @@ void RendererGeode::popFilterLayer() {
     impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
-  if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
+  if (FilterInputBuffer{static_cast<int>(frame.layerDesc.size.width),
+                        static_cast<int>(frame.layerDesc.size.height), frame.filterBufferOffsetX,
+                        frame.filterBufferOffsetY}
+          .exceedsViewport(static_cast<int>(outerExtent.width),
+                           static_cast<int>(outerExtent.height))) {
     // The filter result is in an expanded texture. Extract the region the outer target covers,
     // at the buffer offset, using a GPU texture copy, then blit it over that target. The buffer
-    // was sized as that target plus the offset, so the region lies wholly inside the result.
+    // was sized as that target plus margins on each side, so the region lies wholly inside the
+    // result.
     const uint32_t vpW = outerExtent.width;
     const uint32_t vpH = outerExtent.height;
 
@@ -6545,7 +6565,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
   }
 
   // The mask and its content take the outer target's extent, not the surface's: popMask maps both
-  // over the whole outer target, which inside a filter layer expanded for an offset is larger
+  // over the whole outer target, which inside a filter layer with an input margin is larger
   // than the surface.
   const gpu::Extent2d outerExtent = impl_->targetExtent();
   const auto allocTexture = [&](const char* label, gpu::Texture& outTexture,

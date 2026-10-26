@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <limits>
 #include <optional>
+#include <ostream>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,17 @@
 #include "donner/svg/renderer/FilterRegionContext.h"
 
 namespace donner::svg {
+
+// Printers for the input buffer layout structs, so a failed match shows the whole layout.
+void PrintTo(const FilterInputAxis& axis, std::ostream* os) {
+  *os << "FilterInputAxis{before=" << axis.before << ", extent=" << axis.extent << "}";
+}
+
+void PrintTo(const FilterInputBuffer& buffer, std::ostream* os) {
+  *os << "FilterInputBuffer{width=" << buffer.width << ", height=" << buffer.height
+      << ", offsetX=" << buffer.offsetX << ", offsetY=" << buffer.offsetY << "}";
+}
+
 namespace {
 
 using ::testing::_;
@@ -2404,6 +2416,173 @@ TEST(FilterGraphExecutorTest, PerPrimitiveColorSpaceChangesTheResult) {
   const tiny_skia::Pixmap linearInterior = RunNodesAsOneGraph(source, std::move(linearNodes));
 
   EXPECT_GT(MaxChannelDelta(srgbInterior, linearInterior), 16);
+}
+
+/// A one-node graph built from \p primitive with the filter's default (previous) input.
+components::FilterGraph SinglePrimitiveGraph(components::FilterPrimitive primitive) {
+  components::FilterGraph graph;
+  components::FilterNode node;
+  node.primitive = std::move(primitive);
+  graph.nodes.push_back(std::move(node));
+  return graph;
+}
+
+// tiny-skia's float morphology writes nothing when its three float working buffers would exceed
+// 64 MiB. The work budget refuses every morphology raster that large, so an input margin can grow a
+// morphology raster only to a size the budget already bounds at under a quarter of that cap.
+TEST(FilterInputMarginTest, MorphologyWorkBudgetStaysBelowTheMorphologyBufferCap) {
+  using namespace components;
+  constexpr std::uint64_t kMorphologyCapPixels = 64u * 1024u * 1024u / (3u * 4u * sizeof(float));
+  const FilterGraph graph = SinglePrimitiveGraph(
+      filter_primitive::Morphology{filter_primitive::Morphology::Operator::Dilate, 1.0, 1.0});
+  EXPECT_FALSE(FilterGraphFitsExecutionBudget(graph, kMorphologyCapPixels / 4,
+                                              FilterMemoryModel::CpuFloatNamedResults));
+}
+
+TEST(FilterInputMarginTest, CanReserveAgreesWithReserveWithoutLatching) {
+  using namespace components;
+  const FilterGraph graph = SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0});
+  FilterExecutionBudget budget;
+  EXPECT_FALSE(budget.canReserve(graph, 16, FilterMemoryModel::CpuFloatNamedResults,
+                                 kMaximumFilterFrameBytes + 1));
+  EXPECT_THAT(budget.rejectionReason(), testing::Eq(FilterExecutionBudget::RejectionReason::None));
+  EXPECT_EQ(budget.executions(), 0u);
+
+  ASSERT_TRUE(budget.canReserve(graph, 16, FilterMemoryModel::CpuFloatNamedResults, 64));
+  auto reservation = budget.reserve(graph, 16, FilterMemoryModel::CpuFloatNamedResults, 64);
+  ASSERT_TRUE(reservation.has_value());
+  EXPECT_EQ(budget.executions(), 1u);
+
+  EXPECT_FALSE(budget.reserve(graph, 16, FilterMemoryModel::CpuFloatNamedResults,
+                              kMaximumFilterFrameBytes + 1));
+  EXPECT_FALSE(budget.canReserve(graph, 16, FilterMemoryModel::CpuFloatNamedResults, 64))
+      << "a latched rejection closes the frame for both";
+}
+
+TEST(FilterInputMarginTest, LayoutAxisExtendsByReachAndCaptureWithinTheRegion) {
+  using testing::FieldsAre;
+  // Region reaches 10 pixels before and 36 after a 64-pixel viewport.
+  EXPECT_THAT(LayoutFilterInputAxis({-10.0, 100.0}, 3.0, std::nullopt, 64), FieldsAre(3, 70));
+  // A capture rectangle beyond the reach widens only its own side, clamped to the region.
+  EXPECT_THAT(LayoutFilterInputAxis({-10.0, 100.0}, 3.0, std::pair(-40.0, -20.0), 64),
+              FieldsAre(10, 77));
+  // Nothing extends past an edge the region does not cross.
+  EXPECT_THAT(LayoutFilterInputAxis({0.0, 64.0}, 3.0, std::nullopt, 64), FieldsAre(0, 64));
+}
+
+TEST(FilterInputMarginTest, InputBufferFollowsGraphReach) {
+  using namespace components;
+  const std::optional<Box2d> region = Box2d::FromXYWH(-50, -50, 200, 200);
+  using testing::FieldsAre;
+  const auto layout = [&](const FilterGraph& graph) {
+    return ComputeFilterInputBuffer(graph, region, Transform2d(), 64, 64);
+  };
+  // Three standard deviations plus a rounding pixel.
+  EXPECT_THAT(layout(SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0})),
+              FieldsAre(78, 78, 7, 7));
+  // Point-wise primitives keep the viewport.
+  EXPECT_THAT(layout(SinglePrimitiveGraph(filter_primitive::ColorMatrix{})),
+              FieldsAre(64, 64, 0, 0));
+  // Turbulence keeps a viewport-aligned capture.
+  EXPECT_THAT(layout(SinglePrimitiveGraph(filter_primitive::Turbulence{})),
+              FieldsAre(64, 64, 0, 0));
+  // Wrapping edges read the opposite side of the input, so the capture covers the whole region.
+  filter_primitive::GaussianBlur wrap{2.0, 2.0};
+  wrap.edgeMode = filter_primitive::GaussianBlur::EdgeMode::Wrap;
+  EXPECT_THAT(layout(SinglePrimitiveGraph(wrap)), FieldsAre(200, 200, 50, 50));
+}
+
+// Under a skew, a reach along one filter axis lands along a slanted device direction. The reach
+// must cover that footprint: a blur of 3 under matrix(1 0 4 1 0 0) reads 9 user units along the
+// filter Y axis, which is 36 device pixels along X plus 9 along Y.
+TEST(FilterInputMarginTest, SkewedReachCoversTheDeviceFootprint) {
+  using namespace components;
+  Transform2d skew;
+  skew.data[2] = 4.0;  // matrix(1 0 4 1 0 0)
+  // The transformed path's local raster scales the filter Y axis by its length, sqrt(17), and
+  // rounds the blur radius up there: 9 user units become ceil(9 sqrt(17)) = 38 local pixels.
+  // Along X that is 9 from the blur's own X axis plus 4 times those 38 pixels in user units, and
+  // a rounding pixel; along Y, those 38 pixels in user units and a rounding pixel.
+  const double localY = std::ceil(9.0 * std::sqrt(17.0)) / std::sqrt(17.0);
+  EXPECT_THAT(ComputeFilterSamplingReach(
+                  SinglePrimitiveGraph(filter_primitive::GaussianBlur{3.0, 3.0}), skew)
+                  .pixels,
+              testing::FieldsAre(testing::DoubleNear(9.0 + 4.0 * localY + 1.0, 1e-9),
+                                 testing::DoubleNear(localY + 1.0, 1e-9)));
+  // An offset is already a device vector: (2, 2) in filter units moves (10, 2) device pixels.
+  EXPECT_THAT(
+      ComputeFilterSamplingReach(SinglePrimitiveGraph(filter_primitive::Offset{2.0, 2.0}), skew)
+          .pixels,
+      testing::Eq(Vector2d(11.0, 3.0)));
+}
+
+// Both executors round each primitive to whole pixels, so every primitive's reach rounds up before
+// the chain adds them: eight offsets of 0.6 move content 8 pixels, and a blur of 0.5 reads
+// 2 pixels on each side, not 1.5.
+TEST(FilterInputMarginTest, ReachRoundsEachPrimitiveUpToWholePixels) {
+  using namespace components;
+  FilterGraph offsets;
+  for (int i = 0; i < 8; ++i) {
+    FilterNode node;
+    node.primitive = filter_primitive::Offset{0.6, 0.6};
+    offsets.nodes.push_back(node);
+  }
+  // Eight whole pixels, plus a rounding pixel.
+  EXPECT_THAT(ComputeFilterSamplingReach(offsets, Transform2d()).pixels,
+              testing::Eq(Vector2d(9.0, 9.0)));
+  EXPECT_THAT(ComputeFilterSamplingReach(
+                  SinglePrimitiveGraph(filter_primitive::GaussianBlur{0.5, 0.5}), Transform2d())
+                  .pixels,
+              testing::Eq(Vector2d(3.0, 3.0)));
+  EXPECT_THAT(
+      ComputeFilterSamplingReach(SinglePrimitiveGraph(filter_primitive::Morphology{
+                                     filter_primitive::Morphology::Operator::Dilate, 0.6, 0.6}),
+                                 Transform2d())
+          .pixels,
+      testing::Eq(Vector2d(2.0, 2.0)));
+}
+
+// The transformed blur path runs offsets on a local raster whose scale is each filter axis's
+// length, and rounds them there. Under matrix(1 0 1 1 0 0) an offset of (0.6, -0.6) rounds to
+// (1, -1) local pixels, which is (1 - 1/sqrt(2), -1/sqrt(2)) device pixels; on the device raster it
+// would round to (0, -1). Each offset reaches the larger of the two on each axis.
+TEST(FilterInputMarginTest, SkewedOffsetsReachTheirLocalRasterRounding) {
+  using namespace components;
+  Transform2d skew;
+  skew.data[2] = 1.0;  // matrix(1 0 1 1 0 0)
+  FilterGraph graph;
+  for (int i = 0; i < 32; ++i) {
+    FilterNode node;
+    node.primitive = filter_primitive::Offset{0.6, -0.6};
+    graph.nodes.push_back(node);
+  }
+  // 32 offsets, each 1 - 1/sqrt(2) along X and 1 along Y, plus a rounding pixel.
+  const double localX = 1.0 - 1.0 / std::sqrt(2.0);
+  EXPECT_THAT(ComputeFilterSamplingReach(graph, skew).pixels,
+              testing::FieldsAre(testing::DoubleNear(32.0 * localX + 1.0, 1e-9),
+                                 testing::DoubleNear(33.0, 1e-9)));
+}
+
+TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
+  using namespace components;
+  FilterGraph graph;
+  FilterNode offset;
+  offset.primitive = filter_primitive::Offset{30.0, 30.0};
+  offset.x = Lengthd(-60, Lengthd::Unit::None);
+  offset.y = Lengthd(-60, Lengthd::Unit::None);
+  offset.width = Lengthd(20, Lengthd::Unit::None);
+  offset.height = Lengthd(20, Lengthd::Unit::None);
+  offset.result = RcString("t");
+  FilterNode tile;
+  tile.primitive = filter_primitive::Tile{};
+  tile.inputs.push_back(FilterInput(FilterInput::Named{RcString("t")}));
+  graph.nodes = {offset, tile};
+  // The tile repeats the offset's subregion at -60..-40, which reads source pixels 30 farther
+  // out, plus a rounding pixel: the capture reaches 91 pixels before the viewport.
+  const FilterInputBuffer buffer =
+      ComputeFilterInputBuffer(graph, Box2d::FromXYWH(-200, -200, 464, 464), Transform2d(), 64, 64);
+  // After the viewport the capture extends by the graph's own 31-pixel reach.
+  EXPECT_THAT(buffer, testing::FieldsAre(186, 186, 91, 91));
 }
 
 }  // namespace
