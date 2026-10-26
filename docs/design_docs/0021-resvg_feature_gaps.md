@@ -145,7 +145,7 @@ rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL c
 
 | Assigned cases | Disposition |
 | --- | --- |
-| Seven `color-adjust-functions-*` cases | Every canonical mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular. The vendored PNGs draw them about 14% heavier; against resvg v0.49.0 the residual is consistent with analytic versus 4x4-supersampled edge coverage (see [B7](#b7-text-reference-qualification)). |
+| Seven `color-adjust-functions-*` cases | Every canonical mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular. Across all label rows the vendored PNGs carry about 14% more ink; against resvg v0.49.0 the residual is consistent with analytic versus 4x4-supersampled edge coverage (see [B7](#b7-text-reference-qualification)). |
 | Five remaining `drop-shadow-function*` cases | Color order, omitted currentColor, em/mm-to-px conversion and alpha compare independently. Offset/blur sampling differs from the historical PNGs; for the basic case the device Y offset is 12.5, and Donner rounds to 13 while the reference shadow profile is one row earlier. Half-pixel rounding is a Donner rasterization contract, not a CSS requirement. Sampling qualification remains with #1170. |
 | `two-exact-urls` | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph. |
 | `two-urls` | Chained flood/blur matches the equivalent single primitive graph. The historical difference is at the filter-region boundary (2,191 CPU / 2,618 Geode pixels); boundary sampling remains with #1170. |
@@ -276,18 +276,19 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   differing pixels. resvg v0.49.0 draws 900 with Noto Sans Black, so registering
   the other weights belongs with a refresh of those references.
 - **Remaining:** the seven `color-adjust-functions-*` labels are 8-unit Noto Sans
-  Regular. Against the vendored 500x500 PNGs they differ by 354 simple, 370 full
-  and 375 Geode pixels; those PNGs draw the labels about 14% heavier than Noto
-  Sans Regular. Against resvg v0.49.0's 300x300 rendering the label ink boxes are
-  identical and ink agrees within 5%, and the remaining 364 simple and 377 full
-  pixels are consistent with analytic (Donner's CPU rasterizer) versus 4x4
-  supersampled (resvg) edge coverage: 80% of resvg's partial label pixels sit on
-  the 1/16 coverage steps supersampling produces, against 6 to 11% of Donner's.
-  The 40 px font-family cases reach 0 to 2 pixels with the same two rasterizers;
-  the likely reason is size, since at a 12 px em most of a glyph's pixels are
-  edge pixels and stems are only one or two pixels wide, so small per-edge
-  coverage differences cross the comparison threshold far more often. This is
-  not yet measured directly. `text/font/simple-case` disagrees on the unitless
+  Regular, and their pixels are identical across all seven references in each
+  reference set. Against the vendored 500x500 PNGs they differ by 354 simple, 370
+  full and 375 Geode pixels; across all label rows those PNGs carry about 14% more
+  ink than Donner's Noto Sans Regular. Against resvg v0.49.0's 300x300 rendering
+  label ink agrees within 2%, and the remaining 364 simple and 377 full pixels are
+  consistent with analytic (Donner's CPU rasterizer) versus 4x4 supersampled
+  (resvg) edge coverage: 78% of resvg's partial label pixels sit on the 1/16
+  coverage steps supersampling produces, against 7 to 11% of Donner's. The 40 px
+  font-family cases reach 0 to 8 pixels with the same two rasterizers; the likely
+  reason is size, since at a 12 px em most of a glyph's pixels are edge pixels and
+  stems are only one or two pixels wide, so small per-edge coverage differences
+  cross the comparison threshold far more often. This is not yet measured
+  directly. `text/font/simple-case` disagrees on the unitless
   `font` shorthand (see the reference qualification table). `fallback-1` is a
   harness mismatch: resvg's harness falls back to Noto Serif for an unknown
   family and Donner to its embedded Public Sans (445 simple, 444 full pixels).

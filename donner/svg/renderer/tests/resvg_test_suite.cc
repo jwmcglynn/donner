@@ -545,14 +545,15 @@ INSTANTIATE_TEST_SUITE_P(
                               "URL; Filter Effects ignores the entire chain "
                               "(FilterReferenceStages.InvalidReferenceDisablesEntireChain)")},
                 // The seven color-adjust labels are 8-unit Noto Sans Regular (asserted in
-                // FontSelection_tests.cc). Against these vendored 500x500 PNGs they differ by 354
-                // simple, 370 full and 375 Geode pixels; those PNGs draw the labels about 14%
-                // heavier than Noto Sans Regular. Against resvg v0.49.0's 300x300
-                // rendering the label ink boxes are identical and ink agrees within 5%; the
-                // remaining 364 simple and 377 full pixels are consistent with analytic (Donner's
-                // CPU rasterizer) versus 4x4 supersampled (resvg) edge coverage. 80% of resvg's
+                // FontSelection_tests.cc), and their pixels are identical across all seven
+                // references in each reference set. Against these vendored 500x500 PNGs they
+                // differ by 354 simple, 370 full and 375 Geode pixels; across all label rows those
+                // PNGs carry about 14% more ink than Donner's Noto Sans Regular. Against resvg
+                // v0.49.0's 300x300 rendering label ink agrees within 2%, and the remaining 364
+                // simple and 377 full pixels are consistent with analytic (Donner's CPU
+                // rasterizer) versus 4x4 supersampled (resvg) edge coverage: 78% of resvg's
                 // partial label pixels sit on the 1/16 coverage steps supersampling produces,
-                // against 6 to 11% of Donner's.
+                // against 7 to 11% of Donner's.
                 {"color-adjust-functions-0percent.svg",
                  Params::Skip("Reference glyphs: the PNG draws the labels about 14% heavier than "
                               "Noto Sans Regular (354 default-text, 370 full-text, 375 Geode "
@@ -1480,7 +1481,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"cursive.svg", Params().setCanvasSize(300, 300)},
                 // resvg's harness resolves an all-unknown family list to its default family,
                 // drawn here in Noto Serif; Donner's last-resort face is the embedded Public Sans
-                // (FontSelection.UnknownFamilyFallsBackToTheEmbeddedFace). Placement agrees.
+                // (FontSelection.UnknownFamilyFallsBackToTheEmbeddedFace).
                 {"fallback-1.svg",
                  Params::Skip("Harness mismatch: resvg falls back to Noto Serif for an unknown "
                               "family, Donner to its embedded Public Sans (445 simple, 444 full "
