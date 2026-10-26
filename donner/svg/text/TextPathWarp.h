@@ -55,10 +55,17 @@ inline Path::PointOnPath SampleClosed(const StretchedTextPath& mapping, double d
 inline Path::PointOnPath SampleOpen(const StretchedTextPath& mapping, double distance,
                                     double length, Path::MeasuredPath::BoundarySide boundarySide) {
   if (distance >= 0.0 && distance <= length) {
-    return mapping.measuredPath.pointAtArcLength(distance, boundarySide);
+    // An open start has no incoming side; the outgoing side skips leading zero-length segments.
+    return mapping.measuredPath.pointAtArcLength(
+        distance, distance == 0.0 ? Path::MeasuredPath::BoundarySide::Outgoing : boundarySide);
   }
-  const double endpointDistance = distance < 0.0 ? 0.0 : length;
-  Path::PointOnPath endpoint = mapping.measuredPath.pointAtArcLength(endpointDistance);
+  const bool beforeStart = distance < 0.0;
+  const double endpointDistance = beforeStart ? 0.0 : length;
+  // Sample the side facing the extension: the outgoing side skips a leading zero-length segment,
+  // and the incoming side at the end already resolves to the last nonzero segment.
+  Path::PointOnPath endpoint = mapping.measuredPath.pointAtArcLength(
+      endpointDistance, beforeStart ? Path::MeasuredPath::BoundarySide::Outgoing
+                                    : Path::MeasuredPath::BoundarySide::Incoming);
   if (!endpoint.valid || !std::isfinite(endpoint.angle)) {
     return {.valid = false};
   }
