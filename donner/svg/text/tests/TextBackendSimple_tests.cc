@@ -558,6 +558,31 @@ TEST_F(TextBackendSimpleTest, GposExtensionOffsetBeyondTheTableIsIgnored) {
   EXPECT_DOUBLE_EQ(backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', false), 0.0);
 }
 
+/// The first byte past the GPOS table is already outside it. With a 36-byte table (a multiple of
+/// four, so no padding follows) offset 10 from the extension subtable lands exactly on the next
+/// table's valid (A, V) PairPos.
+TEST_F(TextBackendSimpleTest, GposExtensionTargetAtTheTableEndIsIgnored) {
+  const std::vector<uint8_t> gpos = GposTable({GposExtensionLookup(2, {0, 0}, 10)});
+  ASSERT_THAT(gpos, SizeIs(36));
+  const FontHandle font = loadFont(MakeGposTestFont(gpos, {{"zzzz", PairPosSubtable(1, 2, -100)}}));
+
+  EXPECT_DOUBLE_EQ(backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', false), 0.0);
+}
+
+/// A wrapped subtable must start far enough inside GPOS for its fixed header. Here only the first
+/// 10 bytes of a valid PairPos end the 44-byte table and the rest continues in the next table, so
+/// reading it would cross the GPOS boundary.
+TEST_F(TextBackendSimpleTest, GposExtensionSubtableHeaderPastTheTableEndIsIgnored) {
+  const std::vector<uint8_t> pairPos = PairPosSubtable(1, 2, -100);
+  const std::vector<uint8_t> head(pairPos.begin(), pairPos.begin() + 10);
+  const std::vector<uint8_t> tail(pairPos.begin() + 10, pairPos.end());
+  const std::vector<uint8_t> gpos = GposTable({GposExtensionLookup(2, head)});
+  ASSERT_THAT(gpos, SizeIs(44));
+  const FontHandle font = loadFont(MakeGposTestFont(gpos, {{"zzzz", tail}}));
+
+  EXPECT_DOUBLE_EQ(backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', false), 0.0);
+}
+
 /// An Extension subtable the reader cannot use skips only that subtable, so a later direct pair
 /// lookup still applies.
 TEST_F(TextBackendSimpleTest, UnsupportedExtensionPairPosDoesNotHideALaterDirectLookup) {
