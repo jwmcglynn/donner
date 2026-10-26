@@ -1,6 +1,11 @@
 import { installOwnerEventTimerHold, readOwnerEventTimerHold, releaseOwnerEventTimerHold } from "./event-presentation-delay.mjs";
 import { completedResultHandoff } from "./completed-result-handoff.mjs";
 import { packageHashes } from "./package-identity.mjs";
+import {
+  pipelineCompileFaultPrologue,
+  readPipelineCompileFault,
+  sumPipelineCompilesPending,
+} from "./pipeline-compile-readiness.mjs";
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
@@ -1994,6 +1999,76 @@ async function readCarouselGpuTimeline(page: Page) {
   return { presentation: pageState.presentation, phases: pageState.phases, gpu: gpuOnPageClock };
 }
 
+// The worker that owns the browser GPU device. Every GPU call is made there, so its bridge counts
+// every pipeline compile the editor has in flight.
+async function findGpuOwnerWorker(page: Page): Promise<Worker | null> {
+  return boundBrowserDiagnostic(Promise.any(page.workers().map(async (worker) => {
+    const owned = await worker.evaluate(() =>
+      Boolean((globalThis as typeof globalThis & { __donnerGpuOwner?: boolean }).__donnerGpuOwner)
+    );
+    if (!owned) throw new Error("not the GPU owner");
+    return worker;
+  })), 2000);
+}
+
+async function readPipelineCompilesPending(owner: Worker) {
+  const statistics = await boundBrowserDiagnostic(owner.evaluate(() =>
+    (globalThis as typeof globalThis & { __donnerReadGpuObjectStats?: () => unknown })
+      .__donnerReadGpuObjectStats?.() ?? null
+  ), 2000);
+  return sumPipelineCompilesPending([statistics as Record<string, unknown> | null]);
+}
+
+// The editor starts its pipelines' asynchronous compiles when it first builds them, and its first
+// frame can present while they are still compiling: a cold shader cache can take seconds, and the
+// browser can hold later GPU work behind those compiles. An interaction measured against a nominal
+// bound therefore starts once the GPU owner reports no compile in flight. The wait observes that
+// state under the stall guard; the measurement after it stays raw.
+async function waitForPipelineCompilesToSettle(page: Page) {
+  const startedAt = performance.now();
+  const readiness = { pendingAtStart: -1, maxPending: 0, polls: 0, waitMs: 0 };
+  let owner: Worker | null = null;
+  let last = { pending: 0, reporting: 0 };
+  try {
+    await expect.poll(async () => {
+      readiness.polls += 1;
+      // A loaded owner can miss one bounded probe; finding it again is part of the same wait.
+      owner ??= await findGpuOwnerWorker(page);
+      last = owner === null ? { pending: 0, reporting: 0 } : await readPipelineCompilesPending(owner);
+      if (readiness.pendingAtStart < 0 && last.reporting > 0) readiness.pendingAtStart = last.pending;
+      readiness.maxPending = Math.max(readiness.maxPending, last.pending);
+      return last.reporting > 0 && last.pending === 0;
+    }, {
+      message: "the GPU owner's asynchronous pipeline compiles settle before the measured click",
+      intervals: [16, 25, 50, 100],
+    }).toBe(true);
+  } finally {
+    readiness.waitMs = Math.round(performance.now() - startedAt);
+    console.log(`pipeline-compile-readiness ${JSON.stringify({ ...readiness, last })}`);
+  }
+  return readiness;
+}
+
+// Delays the GPU owner's pipeline compiles from the editor's first instruction, as a cold shader
+// cache does. Every context loads the editor script, so the fault rides in front of it. The compile
+// delay must outlast boot to the first presented frame, completions included, so the readiness
+// wait still finds compiles pending; the completion delay alone exceeds the nominal handoff bound,
+// so a click that did not wait would fail it.
+const kPipelineCompileFault = { compileDelayMs: 8000, completionDelayMs: 1200 };
+
+async function readOwnerPipelineCompileFault(page: Page) {
+  const owner = await findGpuOwnerWorker(page);
+  return owner && await boundBrowserDiagnostic(owner.evaluate(readPipelineCompileFault), 2000);
+}
+
+async function armPipelineCompileFault(page: Page) {
+  const prologue = pipelineCompileFaultPrologue(kPipelineCompileFault);
+  await page.route("**/editor.js", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, body: prologue + await response.text() });
+  });
+}
+
 for (
   const sample of [
     { id: "donner-splash", name: "Donner Splash", xFraction: 0.24, y: 282 },
@@ -2017,12 +2092,28 @@ for (
       holdWorkerRaf: true,
       delayPresentation: true,
     },
+    {
+      id: "donner-splash",
+      name: "Donner Splash after delayed pipeline compiles",
+      xFraction: 0.24,
+      y: 282,
+      delayPipelineCompiles: true,
+    },
   ] as const
 ) {
   test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page, browserName }, testInfo) => {
     const delayedControl = "delayPresentation" in sample;
-    test.skip(delayedControl && browserName !== "chromium", "controlled Chromium scheduling fault");
+    const compileFaultControl = "delayPipelineCompiles" in sample;
+    test.skip(
+      (delayedControl || compileFaultControl) && browserName !== "chromium",
+      "controlled Chromium scheduling fault",
+    );
     let presentationFault: { delayMs: number; requested: number; flushed: number } | undefined;
+    if (compileFaultControl) {
+      // The fault adds up to its compile delay before the measured click.
+      testInfo.setTimeout(testInfo.timeout + kPipelineCompileFault.compileDelayMs);
+      await armPipelineCompileFault(page);
+    }
     const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
     const canvas = page.locator("canvas#canvas");
     const bounds = await canvas.boundingBox();
@@ -2049,6 +2140,18 @@ for (
       }).toBeGreaterThan(0);
       expect(await completionBarrier(page, "request"), "the completion barrier is test-only")
         .toBe("off");
+    }
+    const pipelineReadiness = await waitForPipelineCompilesToSettle(page);
+    let pipelineCompileFault: ReturnType<typeof readPipelineCompileFault> = null;
+    if (compileFaultControl) {
+      // The fault must have reached the GPU owner and still held its compiles when the wait began,
+      // or this case would not show that the wait is what keeps the handoff nominal.
+      pipelineCompileFault = await readOwnerPipelineCompileFault(page);
+      expect(pipelineCompileFault?.compilesDelayed ?? 0, "the GPU owner's compiles were delayed")
+        .toBeGreaterThan(0);
+      expect(pipelineCompileFault?.compilesPending).toBe(0);
+      expect(pipelineReadiness.pendingAtStart, "compiles were still pending when the wait began")
+        .toBeGreaterThan(0);
     }
     const deviceCreationsBeforeClick = await page.evaluate(
       () => window.__donnerHeadlessDeviceCreations ?? -1,
@@ -2290,6 +2393,10 @@ for (
       }));
       const report = { workload: sample.id, heldWorkerRaf: holdsScheduledFrames, browser: browserName,
         ...runtime, ...packageHashes(), ...handoff, phaseTimings, presentationFault,
+        pipelineReadiness, pipelineCompileFault,
+        pipelineCompileFaultAfterPresentation: compileFaultControl
+          ? await readOwnerPipelineCompileFault(page)
+          : undefined,
         worker: completedWorkerStats };
       const reportPath = testInfo.outputPath("nominal-completed-result-handoff.json");
       await writeFile(reportPath, JSON.stringify(report, null, 2));

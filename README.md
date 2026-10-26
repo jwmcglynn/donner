@@ -129,3 +129,15 @@ Full program: [svg_to_png.cc](examples/svg_to_png.cc)
 - Java | **[Apache Batik](https://xmlgraphics.apache.org/batik/)**: A full dynamic SVG
   implementation with DOM, scripting, and declarative animation; the closest reference for
   browser-style dynamic SVG outside a browser engine
+
+## Acknowledgments
+
+Donner's CI uses remote build execution and caching provided by
+[BuildBuddy](https://www.buildbuddy.io/).
+
+<a href="https://www.buildbuddy.io/">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/acknowledgments/buildbuddy_white.svg">
+    <img src="docs/img/acknowledgments/buildbuddy.svg" alt="BuildBuddy" height="32">
+  </picture>
+</a>

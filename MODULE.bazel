@@ -141,7 +141,17 @@ single_version_override(
 )
 
 # brotli is required by @woff2 (see non_bcr_deps.bzl); text-full only.
-bazel_dep(name = "brotli", version = "1.2.0.bcr.3")
+bazel_dep(name = "brotli", version = "1.2.1", dev_dependency = True)
+
+# BCR has not published 1.2.1 yet; WOFF2 is likewise restricted to root builds.
+archive_override(
+    module_name = "brotli",
+    integrity = "sha256-mNNdEaeNxFOuu30Qw3SPP3P/eMgmfA3Gl7hjH2e/fo8=",
+    patch_strip = 1,
+    patches = ["//third_party/patches:brotli-1.2.1-bazel-compat.patch"],
+    strip_prefix = "brotli-1.2.1",
+    urls = ["https://github.com/google/brotli/archive/refs/tags/v1.2.1.tar.gz"],
+)
 
 ##
 ## Test dependencies
@@ -186,7 +196,6 @@ single_version_override(
 # rules_nodejs registers the Node runtime toolchains that aspect_rules_js and emsdk use. Tests that
 # run Node take it from that toolchain instead of the host. Matches the version emsdk requires.
 bazel_dep(name = "rules_nodejs", version = "6.7.3", dev_dependency = True)
-
 bazel_dep(name = "rules_playwright", version = "0.5.3", dev_dependency = True)
 
 playwright = use_extension(
