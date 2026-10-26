@@ -112,6 +112,26 @@ struct FilterInputMarginBuilder {
                       : 0.0;
   }
 
+  /// Device footprint of a reach measured in pixels along each filter axis. Under rotation or
+  /// skew, the transformed blur path samples along the filter axes, which land on slanted device
+  /// directions: each device axis gets the absolute linear coefficients times the user-space
+  /// reach. Primitives that execute on the device raster read along the device axes instead, so
+  /// the footprint keeps at least the per-axis reach.
+  /// @param axisPixels Reach in pixels along the filter X and Y axes.
+  Vector2d footprint(Vector2d axisPixels) const {
+    const double* m = deviceFromFilter.data;
+    const double userX = axisPixels.x / scale.x;
+    const double userY = axisPixels.y / scale.y;
+    // A slanted reach can exceed the per-axis radius bound; the raster layout bounds it later.
+    const double limit = static_cast<double>(components::kMaximumFilterSurfaceDimension);
+    const auto device = [&](double reach, double axisReach) {
+      return std::isfinite(reach) ? std::clamp(reach, axisReach, std::max(axisReach, limit))
+                                  : limit;
+    };
+    return Vector2d(device(std::abs(m[0]) * userX + std::abs(m[2]) * userY, axisPixels.x),
+                    device(std::abs(m[1]) * userX + std::abs(m[3]) * userY, axisPixels.y));
+  }
+
   /// Device extent of a primitive offset. @param dx X offset. @param dy Y offset.
   Vector2d offset(double dx, double dy) const {
     const Vector2d pixels = FilterOffsetInPixels({dx, dy}, bounds, objectBounds, deviceFromFilter);
@@ -125,13 +145,14 @@ struct FilterInputMarginBuilder {
       margin.wholeRegion = true;
       return;
     }
-    margin.pixels +=
-        Vector2d(3.0 * length(blur.stdDeviationX, 0), 3.0 * length(blur.stdDeviationY, 1));
+    margin.pixels += footprint(
+        Vector2d(3.0 * length(blur.stdDeviationX, 0), 3.0 * length(blur.stdDeviationY, 1)));
   }
 
   void add(const components::filter_primitive::DropShadow& shadow) {
-    margin.pixels += offset(shadow.dx, shadow.dy) + Vector2d(3.0 * length(shadow.stdDeviationX, 0),
-                                                             3.0 * length(shadow.stdDeviationY, 1));
+    margin.pixels +=
+        offset(shadow.dx, shadow.dy) + footprint(Vector2d(3.0 * length(shadow.stdDeviationX, 0),
+                                                          3.0 * length(shadow.stdDeviationY, 1)));
   }
 
   void add(const components::filter_primitive::Offset& value) {
@@ -139,7 +160,8 @@ struct FilterInputMarginBuilder {
   }
 
   void add(const components::filter_primitive::Morphology& morphology) {
-    margin.pixels += Vector2d(length(morphology.radiusX, 0), length(morphology.radiusY, 1));
+    margin.pixels +=
+        footprint(Vector2d(length(morphology.radiusX, 0), length(morphology.radiusY, 1)));
   }
 
   /// The backends disagree on how displacement scales: one applies the scale directly in raster
@@ -161,19 +183,19 @@ struct FilterInputMarginBuilder {
       margin.wholeRegion = true;
       return;
     }
-    margin.pixels +=
-        Vector2d(std::clamp(convolve.orderX, 0, components::kMaximumFilterConvolveOrder),
-                 std::clamp(convolve.orderY, 0, components::kMaximumFilterConvolveOrder));
+    const int maxOrder = components::kMaximumFilterConvolveOrder;
+    margin.pixels += footprint(Vector2d(std::clamp(convolve.orderX, 0, maxOrder),
+                                        std::clamp(convolve.orderY, 0, maxOrder)));
   }
 
   /// Surface normals read the neighboring pixels.
   void add(const components::filter_primitive::DiffuseLighting&) {
-    margin.pixels += Vector2d(1.0, 1.0);
+    margin.pixels += footprint(Vector2d(1.0, 1.0));
   }
 
   /// Surface normals read the neighboring pixels.
   void add(const components::filter_primitive::SpecularLighting&) {
-    margin.pixels += Vector2d(1.0, 1.0);
+    margin.pixels += footprint(Vector2d(1.0, 1.0));
   }
 
   /// Point-wise primitives read only the input pixel under each output pixel.
@@ -220,14 +242,9 @@ inline const components::FilterNode* FilterFirstInputNode(const components::Filt
   return &graph.nodes[index - 1];
 }
 
-/// Finish a device reach: under rotation or skew a reach along one filter axis lands on both
-/// device axes, and one more pixel covers rounding at the reach's edge.
-/// @param reach Accumulated reach per axis. @param rotated Whether the transform rotates or skews.
-inline Vector2d FinishFilterReach(Vector2d reach, bool rotated) {
-  if (rotated) {
-    const double longest = std::max(reach.x, reach.y);
-    reach = Vector2d(longest, longest);
-  }
+/// Finish a device reach: one more pixel covers rounding at the reach's edge.
+/// @param reach Accumulated device reach per axis.
+inline Vector2d FinishFilterReach(Vector2d reach) {
   return reach.x > 0.0 || reach.y > 0.0 ? reach + Vector2d(1.0, 1.0) : reach;
 }
 
@@ -256,10 +273,8 @@ inline FilterInputMargin ComputeFilterSamplingReach(const components::FilterGrap
                graph.nodes[index].primitive);
   }
   FilterInputMargin margin = builder.margin;
-  const bool rotated =
-      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
-  margin.pixels = FinishFilterReach(margin.pixels, rotated);
-  margin.captureReach = FinishFilterReach(margin.captureReach, rotated);
+  margin.pixels = FinishFilterReach(margin.pixels);
+  margin.captureReach = FinishFilterReach(margin.captureReach);
   return margin;
 }
 
