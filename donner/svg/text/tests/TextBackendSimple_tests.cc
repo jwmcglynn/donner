@@ -8,6 +8,7 @@
 #include <ostream>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace donner::svg {
@@ -29,6 +30,7 @@ using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::FloatEq;
 using ::testing::IsEmpty;
+using ::testing::SizeIs;
 
 auto GlyphIndexIs(auto matcher) {
   return Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, matcher);
@@ -218,45 +220,73 @@ std::vector<uint8_t> KernTable(const std::vector<std::tuple<uint16_t, uint16_t, 
   return table;
 }
 
-/// GPOS table with one pair-kerning lookup holding a single format-1 PairPos subtable for
-/// (left, right) = value. With @p viaExtension the subtable is reached through an Extension
-/// (lookup type 9) wrapper, as font compilers emit when a lookup outgrows 16-bit offsets.
-std::vector<uint8_t> GposPairTable(uint16_t left, uint16_t right, int16_t value,
-                                   bool viaExtension) {
-  std::vector<uint8_t> pairPos;
-  AppendBE16(&pairPos, 1);   // PairPos format 1.
-  AppendBE16(&pairPos, 12);  // Coverage offset.
-  AppendBE16(&pairPos, 4);   // valueFormat1: XAdvance.
-  AppendBE16(&pairPos, 0);   // valueFormat2: none.
-  AppendBE16(&pairPos, 1);   // pairSetCount.
-  AppendBE16(&pairPos, 18);  // pairSetOffsets[0].
-  AppendBE16(&pairPos, 1);   // Coverage format 1.
-  AppendBE16(&pairPos, 1);   // glyphCount.
-  AppendBE16(&pairPos, left);
-  AppendBE16(&pairPos, 1);  // pairValueCount.
-  AppendBE16(&pairPos, right);
-  AppendBE16(&pairPos, static_cast<uint16_t>(value));
-
-  std::vector<uint8_t> table;
-  AppendBE16(&table, 1);                     // Major version.
-  AppendBE16(&table, 0);                     // Minor version.
-  AppendBE16(&table, 10);                    // ScriptList offset.
-  AppendBE16(&table, 12);                    // FeatureList offset.
-  AppendBE16(&table, 14);                    // LookupList offset.
-  AppendBE16(&table, 0);                     // ScriptList: no scripts.
-  AppendBE16(&table, 0);                     // FeatureList: no features.
-  AppendBE16(&table, 1);                     // LookupList: one lookup.
-  AppendBE16(&table, 4);                     // Lookup offset, relative to the LookupList.
-  AppendBE16(&table, viaExtension ? 9 : 2);  // Lookup type.
-  AppendBE16(&table, 0);                     // Lookup flags.
-  AppendBE16(&table, 1);                     // subTableCount.
-  AppendBE16(&table, 8);                     // Subtable offset, relative to the Lookup.
-  if (viaExtension) {
-    AppendBE16(&table, 1);  // ExtensionPos format 1.
-    AppendBE16(&table, 2);  // extensionLookupType: pair adjustment.
-    AppendBE32(&table, 8);  // 32-bit offset to the PairPos subtable.
+/// Format-1 PairPos subtable for the single pair (left, right). With the default value format
+/// (4, XAdvance only) the pair record carries one XAdvance of @p value; any other format writes
+/// @p value into each of the format's value fields.
+std::vector<uint8_t> PairPosSubtable(uint16_t left, uint16_t right, int16_t value,
+                                     uint16_t valueFormat1 = 4) {
+  std::vector<uint8_t> subtable;
+  AppendBE16(&subtable, 1);   // PairPos format 1.
+  AppendBE16(&subtable, 12);  // Coverage offset.
+  AppendBE16(&subtable, valueFormat1);
+  AppendBE16(&subtable, 0);   // valueFormat2: none.
+  AppendBE16(&subtable, 1);   // pairSetCount.
+  AppendBE16(&subtable, 18);  // pairSetOffsets[0].
+  AppendBE16(&subtable, 1);   // Coverage format 1.
+  AppendBE16(&subtable, 1);   // glyphCount.
+  AppendBE16(&subtable, left);
+  AppendBE16(&subtable, 1);  // pairValueCount.
+  AppendBE16(&subtable, right);
+  for (uint16_t bits = valueFormat1; bits != 0; bits &= bits - 1) {
+    AppendBE16(&subtable, static_cast<uint16_t>(value));
   }
-  table.insert(table.end(), pairPos.begin(), pairPos.end());
+  return subtable;
+}
+
+/// A lookup of @p lookupType holding one subtable, placed right after the lookup header.
+std::vector<uint8_t> GposLookup(uint16_t lookupType, const std::vector<uint8_t>& subtable) {
+  std::vector<uint8_t> lookup;
+  AppendBE16(&lookup, lookupType);
+  AppendBE16(&lookup, 0);  // Lookup flags.
+  AppendBE16(&lookup, 1);  // subTableCount.
+  AppendBE16(&lookup, 8);  // Subtable offset, relative to the Lookup.
+  lookup.insert(lookup.end(), subtable.begin(), subtable.end());
+  return lookup;
+}
+
+/// Extension (lookup type 9) lookup whose one subtable wraps a subtable of @p extensionType at
+/// the 32-bit @p extensionOffset, relative to the extension subtable. @p wrapped is placed right
+/// after the 8-byte extension header, where the default offset points.
+std::vector<uint8_t> GposExtensionLookup(uint16_t extensionType,
+                                         const std::vector<uint8_t>& wrapped,
+                                         uint32_t extensionOffset = 8) {
+  std::vector<uint8_t> extension;
+  AppendBE16(&extension, 1);  // ExtensionPos format 1.
+  AppendBE16(&extension, extensionType);
+  AppendBE32(&extension, extensionOffset);
+  extension.insert(extension.end(), wrapped.begin(), wrapped.end());
+  return GposLookup(9, extension);
+}
+
+/// GPOS 1.0 table with empty script and feature lists and @p lookups in order.
+std::vector<uint8_t> GposTable(const std::vector<std::vector<uint8_t>>& lookups) {
+  std::vector<uint8_t> table;
+  AppendBE16(&table, 1);   // Major version.
+  AppendBE16(&table, 0);   // Minor version.
+  AppendBE16(&table, 10);  // ScriptList offset.
+  AppendBE16(&table, 12);  // FeatureList offset.
+  AppendBE16(&table, 14);  // LookupList offset.
+  AppendBE16(&table, 0);   // ScriptList: no scripts.
+  AppendBE16(&table, 0);   // FeatureList: no features.
+  AppendBE16(&table, static_cast<uint16_t>(lookups.size()));
+  size_t lookupOffset = 2 + 2 * lookups.size();
+  for (const auto& lookup : lookups) {
+    AppendBE16(&table, static_cast<uint16_t>(lookupOffset));
+    lookupOffset += lookup.size();
+  }
+  for (const auto& lookup : lookups) {
+    table.insert(table.end(), lookup.begin(), lookup.end());
+  }
   return table;
 }
 
@@ -298,6 +328,28 @@ std::vector<uint8_t> MakeTestFontData(bool withKern, int os2Version, bool withPo
   }
   if (withPost) {
     tables.push_back({"post", PostTable()});
+  }
+  return MakeSfnt(tables);
+}
+
+/// A minimal TrueType font with glyphs 1='A' and 2='V', no `kern` table, the given GPOS table,
+/// and any @p extraTables placed directly after GPOS.
+std::vector<uint8_t> MakeGposTestFont(std::vector<uint8_t> gpos,
+                                      std::vector<TableSpec> extraTables = {}) {
+  std::vector<TableSpec> tables = {{"GPOS", std::move(gpos)}};
+  for (TableSpec& table : extraTables) {
+    tables.push_back(std::move(table));
+  }
+  for (TableSpec& table : std::vector<TableSpec>{
+           {"cmap", CmapTable({{'A', 'A', 1}, {'V', 'V', 2}})},
+           {"glyf", QuadGlyphData()},
+           {"head", HeadTable(1000)},
+           {"hhea", HheaTable(800, -200, 100, 4)},
+           {"hmtx", HmtxTable({400, 500, 600, 700})},
+           {"loca", LocaTable()},
+           {"maxp", MaxpTable(4)},
+       }) {
+    tables.push_back(std::move(table));
   }
   return MakeSfnt(tables);
 }
@@ -490,17 +542,9 @@ TEST_F(TextBackendSimpleTest, ShapeRunAppliesHorizontalKerning) {
 TEST_F(TextBackendSimpleTest, ShapeRunAppliesGposPairKerningDirectAndThroughExtension) {
   for (const bool viaExtension : {false, true}) {
     SCOPED_TRACE(viaExtension ? "Extension-wrapped PairPos" : "Direct PairPos");
-    const std::vector<TableSpec> tables = {
-        {"GPOS", GposPairTable(1, 2, -100, viaExtension)},
-        {"cmap", CmapTable({{'A', 'A', 1}, {'V', 'V', 2}})},
-        {"glyf", QuadGlyphData()},
-        {"head", HeadTable(1000)},
-        {"hhea", HheaTable(800, -200, 100, 4)},
-        {"hmtx", HmtxTable({400, 500, 600, 700})},
-        {"loca", LocaTable()},
-        {"maxp", MaxpTable(4)},
-    };
-    const FontHandle font = loadFont(MakeSfnt(tables));
+    const std::vector<uint8_t> pairPos = PairPosSubtable(1, 2, -100);
+    const FontHandle font = loadFont(MakeGposTestFont(
+        GposTable({viaExtension ? GposExtensionLookup(2, pairPos) : GposLookup(2, pairPos)})));
 
     const auto shaped =
         backend_.shapeRun(font, 100.0f, "AV", 0, 2, false, FontVariant::Normal, false);
@@ -510,6 +554,38 @@ TEST_F(TextBackendSimpleTest, ShapeRunAppliesGposPairKerningDirectAndThroughExte
                                   GlyphYKernIs(DoubleEq(0.0)))));
     EXPECT_NEAR(backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', false), -10.0, 1e-4);
   }
+}
+
+/// An extension offset that leaves the GPOS table is ignored rather than followed. The table right
+/// after GPOS holds a valid (A, V) PairPos that an unchecked offset would land on.
+TEST_F(TextBackendSimpleTest, GposExtensionOffsetBeyondTheTableIsIgnored) {
+  // The extension subtable starts at GPOS offset 26 and the GPOS table, padded, is 36 bytes, so
+  // offset 10 is the first byte of the next table.
+  const std::vector<uint8_t> gpos = GposTable({GposExtensionLookup(2, {}, 10)});
+  ASSERT_THAT(gpos, SizeIs(34));
+  const FontHandle font = loadFont(MakeGposTestFont(gpos, {{"zzzz", PairPosSubtable(1, 2, -100)}}));
+
+  EXPECT_DOUBLE_EQ(backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', false), 0.0);
+}
+
+/// An Extension subtable the reader cannot use skips only that subtable, so a later direct pair
+/// lookup still applies.
+TEST_F(TextBackendSimpleTest, UnsupportedExtensionPairPosDoesNotHideALaterDirectLookup) {
+  // valueFormat1 = 5 (XPlacement | XAdvance) is not a format the reader decodes.
+  const FontHandle font =
+      loadFont(MakeGposTestFont(GposTable({GposExtensionLookup(2, PairPosSubtable(1, 2, -50, 5)),
+                                           GposLookup(2, PairPosSubtable(1, 2, -100))})));
+
+  EXPECT_NEAR(backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', false), -10.0, 1e-4);
+}
+
+/// Extension subtables wrapping lookup types other than pair adjustment never produce kerning.
+TEST_F(TextBackendSimpleTest, ExtensionWrappingMarkToBaseYieldsNoKerning) {
+  // Shaped like a PairPos so a reader that ignored the extension type would find the pair.
+  const FontHandle font =
+      loadFont(MakeGposTestFont(GposTable({GposExtensionLookup(4, PairPosSubtable(1, 2, -100))})));
+
+  EXPECT_DOUBLE_EQ(backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', false), 0.0);
 }
 
 TEST_F(TextBackendSimpleTest, ShapeRunWithoutKerningSuppressesKerningAdjustments) {
