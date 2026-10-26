@@ -544,28 +544,40 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Reference disagreement: PNG applies functions around a missing "
                               "URL; Filter Effects ignores the entire chain "
                               "(FilterReferenceStages.InvalidReferenceDisablesEntireChain)")},
+                // The seven color-adjust labels are 8-unit Noto Sans Regular (asserted in
+                // FontSelection_tests.cc). Their glyph positions match, and their ink agrees within
+                // 5%, with resvg v0.49.0's 300x300 rendering of these SVGs, which still differs by
+                // 364 simple and 377 full pixels: Donner's rasterizer computes analytic coverage
+                // where resvg supersamples 4x4, and edge pixels dominate glyphs at a 12 to 20 px
+                // em. The vendored 500x500 PNGs additionally draw the labels about 14% heavier than
+                // Noto Sans Regular, without supersampled coverage levels.
                 {"color-adjust-functions-0percent.svg",
-                 Params::Skip("Bug #1167: label glyphs differ from the reference (354 "
-                              "default-text, 370 full-text, 375 Geode px); filtered geometry "
-                              "agrees (#1169)")},
+                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
+                              "Sans labels (354 default-text, 370 full-text, 375 Geode px); "
+                              "filtered geometry agrees (#1167, #1169)")},
                 {"color-adjust-functions-100percent.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
-                              "geometry agrees, color contracts checked independently (#1169)")},
+                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
+                              "Sans labels; filtered geometry agrees, color contracts checked "
+                              "independently (#1167, #1169)")},
                 {"color-adjust-functions-2.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
-                              "geometry agrees, color contracts checked independently (#1169)")},
+                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
+                              "Sans labels; filtered geometry agrees, color contracts checked "
+                              "independently (#1167, #1169)")},
                 {"color-adjust-functions-200percent.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
-                              "geometry agrees, color contracts checked independently (#1169)")},
+                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
+                              "Sans labels; filtered geometry agrees, color contracts checked "
+                              "independently (#1167, #1169)")},
                 {"color-adjust-functions-50percent.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
-                              "geometry agrees, color contracts checked independently (#1169)")},
+                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
+                              "Sans labels; filtered geometry agrees, color contracts checked "
+                              "independently (#1167, #1169)")},
                 {"color-adjust-functions-default-value.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; defaults "
-                              "agree with explicit amounts (#1169)")},
+                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
+                              "Sans labels; defaults agree with explicit amounts (#1167, #1169)")},
                 {"color-adjust-functions-negative.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; invalid "
-                              "negative declarations are rejected (#1169)")},
+                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
+                              "Sans labels; invalid negative declarations are rejected (#1167, "
+                              "#1169)")},
                 {"drop-shadow-function-color-last.svg",
                  Params::Skip("Bug #1170: offset/blur sampling differs from reference; color "
                               "order and rounded-offset contracts compare independently (#1169)")},
@@ -1435,9 +1447,15 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Vertical hairline coverage splits 160/160 against the "
                               "reference's 128/192, while the horizontal hairline matches; "
                               "the text under the shorthand is pixel-exact (#1173)")},
+                // `font="bold italic 64 Noto Sans"` resolves to Noto Sans Italic, the only italic
+                // face in the test font set (FontSelection_tests.cc). The vendored 400x400 PNG
+                // draws a synthesized bold over it with wider advances, which neither CPU text
+                // tier synthesizes for document fonts, while resvg v0.49.0 rejects the unitless
+                // size in the shorthand and draws 12px default serif text instead.
                 {"simple-case.svg",
-                 Params::Skip("Bug #1167: 400px reference: shorthand matches longhands, but glyph "
-                              "weight/advance differs in both CPU text tiers (#1173, #1186)")
+                 Params::Skip("Reference disagreement: the PNG synthesizes bold over Noto Sans "
+                              "Italic and resvg v0.49.0 ignores the unitless shorthand; Donner "
+                              "applies it and draws the Italic face (#1167, #1173, #1186)")
                      .setCanvasSize(400, 400)},
             })),
         ValuesIn(ActiveComparisonModes())),

@@ -143,9 +143,9 @@ const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::
       continue;  // Skip fonts with unreadable name tables.
     }
 
-    // Only register regular (400) and bold (700) weight variants. Extreme weights like Thin
-    // (100), Light (300), or Black (900) use different glyph shapes that our stb_truetype
-    // renderer cannot match to the reference renderer's output.
+    // Only register regular (400) and bold (700) weight variants. The vendored text/font-weight
+    // references draw requests for 100 to 300 with Noto Sans Regular and 900 with Noto Sans Bold,
+    // so registering Thin, Light or Black would select faces those references never used.
     if (metadata->fontWeight != 400 && metadata->fontWeight != 700) {
       continue;
     }

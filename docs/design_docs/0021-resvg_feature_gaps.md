@@ -126,7 +126,7 @@ bottom for completeness.
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                              8 | Feature                                                                                                                                                                                             |
 | F10 | Remaining `textPath` vertical, kerning, and filter cases                |                              4 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
-| B7  | font substitution — missing bundled families (masked by fat thresholds) |                             ~9 | Triage: bundle fonts vs. document as known gap                                                                                                                                                      |
+| B7  | text reference qualification                                            |                             10 | Allowances removed; color-adjust labels, `font/simple-case`, `fallback-1` and `non-ASCII-character` remain skipped (see [B7](#b7-text-reference-qualification)) |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
 | —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
 | F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
@@ -145,7 +145,7 @@ rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL c
 
 | Assigned cases | Disposition |
 | --- | --- |
-| Seven `color-adjust-functions-*` cases | Every canonical mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. Label qualification remains with #1167. |
+| Seven `color-adjust-functions-*` cases | Every canonical mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular and their glyph positions match resvg v0.49.0; the residual is analytic versus 4x4-supersampled edge coverage on 12 to 20 px glyphs (see [B7](#b7-text-reference-qualification)). |
 | Five remaining `drop-shadow-function*` cases | Color order, omitted currentColor, em/mm-to-px conversion and alpha compare independently. Offset/blur sampling differs from the historical PNGs; for the basic case the device Y offset is 12.5, and Donner rounds to 13 while the reference shadow profile is one row earlier. Half-pixel rounding is a Donner rasterization contract, not a CSS requirement. Sampling qualification remains with #1170. |
 | `two-exact-urls` | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph. |
 | `two-urls` | Chained flood/blur matches the equivalent single primitive graph. The historical difference is at the filter-region boundary (2,191 CPU / 2,618 Geode pixels); boundary sampling remains with #1170. |
@@ -250,23 +250,36 @@ the real cause was a bilinear-vs-bicubic kernel, not the suspected transform bug
 the 3 "transform" tests were never broken (their fat thresholds were over-inflation,
 now removed). The remaining structural cluster is below.
 
-### B7: font substitution — missing bundled families
+### B7: text reference qualification
 
-**Impact:** ~9 `text/font-family/` tests at `maxPx` 600–5200 (`serif` 4200,
-`sans-serif` 1900, `monospace` 600, `cursive` 5000, `fantasy` 5200,
-`bold-sans-serif` 5200, `source-sans-pro` 1300, `font-list` 1300, `fallback-2`
-1000), plus `text/text/xml-lang=ja` (19100, CJK) and `structure/defs/ style-inheritance-on-text` (6500).
+**Status:** the font-family allowances are gone. Every `text/font-family/` case
+except `fallback-1` compares at default settings in both CPU text tiers, as do
+`text/text/xml-lang=ja` and `structure/defs/style-inheritance-on-text`. Face
+selection for these cases is asserted directly in `FontSelection_tests.cc`.
 
-**Symptom:** the diffs are whole-glyph — Donner substitutes a _different font_ than
-the golden was rendered with (the suite's `cursive`/`fantasy`/CJK families aren't
-bundled), so every glyph outline differs. This is not a renderer bug; it's a
-font-availability gap currently _silently_ absorbed by a fat threshold.
-
-**Next step (triage decision):** either (a) bundle the missing families and tighten
-the thresholds to default, or (b) reclassify these as explicit `Skip("font not bundled: <family>")` so the gap is visible instead of hidden. Do **not** leave them
-as unexplained fat thresholds. Decide per-family; `serif`/`sans-serif`/`monospace`
-likely map to already-bundled Noto faces (real diff to chase), while
-`cursive`/`fantasy` are genuinely missing.
+- **Selection and loading:** the generic families map to the faces upstream's
+  harness uses (Noto Serif, Noto Sans, Noto Mono, Yellowtail, Sedgwick Ave
+  Display). The simple tier now reads GPOS pair kerning wrapped in Extension
+  lookups, which Source Sans Pro uses exclusively; `font-list` and
+  `source-sans-pro` lost their 1300-pixel simple-tier budgets.
+- **Stale references:** the generic-family PNGs and `xml-lang=ja.png` were drawn
+  in faces outside the vendored set. They were refreshed from resvg v0.49.0
+  (provenance in `third_party/resvg-test-suite/BUILD.bazel`) and match within the
+  default budget.
+- **Weights 400 and 700 only:** the comparison fixture registers only these
+  weights. The snapshot's `font-weight` references draw weights 100 to 300 with
+  Noto Sans Regular and 900 with Noto Sans Bold, and Donner matches them with zero
+  differing pixels. resvg v0.49.0 draws 900 with Noto Sans Black, so registering
+  the other weights belongs with a refresh of those references.
+- **Remaining:** the seven `color-adjust-functions-*` labels are 8-unit Noto Sans
+  Regular text whose glyph positions match resvg v0.49.0 and whose ink agrees
+  within 5%; the
+  residual is edge coverage, because Donner's rasterizer uses analytic coverage
+  while resvg supersamples 4x4, and at a 12 to 20 px em the edge pixels dominate
+  each glyph. `text/font/simple-case` disagrees on the unitless `font` shorthand
+  (see the reference qualification table). `fallback-1` and
+  `letter-spacing/non-ASCII-character` keep references that no vendored face
+  reproduces.
 
 > The remaining sub-1000-px CPU thresholds (feColorMatrix matrix/saturate variants,
 > feDropShadow, text-decoration rotate-lists, pattern AA) are small enough to be
@@ -495,7 +508,7 @@ These have a question-mark reason in the file and need a root-cause pass to deci
 bug vs. out-of-scope:
 
 - `text/letter-spacing/non-ASCII-character`: different CJK glyph (wrong font? →
-  overlaps [B7](#b7-font-substitution--missing-bundled-families))
+  overlaps [B7](#b7-text-reference-qualification))
 - `text/font-family/fallback-1`: fallback from invalid family
 - `masking/clip/simple-case`: CSS2 `clip` property (`rect()` clipping on viewport
   elements, deprecated) — not implemented, 76k px diff
@@ -530,7 +543,7 @@ changed.
 | `stroke-linejoin/arcs` | The SVG Strokes draft join is not implemented; Donner retains its documented miter fallback. The reference is the UB marker, not an arcs rendering. |
 | `stroke-linejoin/miter-clip` | Separate Geode/editor parity repair and ordinary reference restoration: [#2057](https://github.com/jwmcglynn/donner/pull/2057). |
 | `svg/no-size` | An unsized root uses the caller canvas (512x512 by default) without fitting content bounds. The reference fits the roughly 200-unit artwork to 500 pixels. API-policy skip; caller-canvas geometry has an independent assertion. |
-| `font/simple-case` | The PNG is 400x400, so the harness preserves that explicit canvas. The unitless `font` presentation shorthand is a Donner extension and matches expanded longhands. The hermetic set has no BoldItalic face: style-first matching selects NotoSans-Italic at weight 400. Glyph weight/advance still differ from the reference in both CPU text tiers; synthetic-weight/reference qualification remains with #1167/#1173. Skip (#1167). |
+| `font/simple-case` | The PNG is 400x400, so the harness preserves that explicit canvas. The unitless `font` presentation shorthand is a Donner extension and matches expanded longhands. The hermetic set has no BoldItalic face: style-first matching selects NotoSans-Italic at weight 400. The vendored PNG synthesizes bold over that face with wider advances, which neither CPU text tier does for document fonts, while resvg v0.49.0 rejects the unitless size and draws 12px default serif text. Reference-disagreement skip (#1167). |
 
 [SVG 2 radial-gradient rules](https://www.w3.org/TR/SVG2/pservers.html#RadialGradients) and
 [error processing](https://www.w3.org/TR/SVG2/conform.html#ErrorProcessing) establish the radial
