@@ -1476,10 +1476,14 @@ INSTANTIATE_TEST_SUITE_P(
                 // family resolves to is asserted directly in FontSelection_tests.cc.
                 {"bold-sans-serif.svg", Params().setCanvasSize(300, 300)},
                 {"cursive.svg", Params().setCanvasSize(300, 300)},
+                // resvg's harness resolves an all-unknown family list to its default family,
+                // drawn here in Noto Serif; Donner's last-resort face is the embedded Public Sans
+                // (FontSelection.UnknownFamilyFallsBackToTheEmbeddedFace). Placement agrees.
                 {"fallback-1.svg",
-                 Params::Skip("Golden is a centered rendering in a face other than Noto Sans "
-                              "(byte-identical to the superseded sans-serif.png), so it cannot "
-                              "match this left-anchored x=70 text (#1167)")},
+                 Params::Skip("Harness mismatch: resvg falls back to Noto Serif for an unknown "
+                              "family, Donner to its embedded Public Sans (445 simple, 444 full "
+                              "px against resvg v0.49.0) (#1167)")
+                     .setCanvasSize(300, 300)},
                 {"fantasy.svg", Params().setCanvasSize(300, 300)},
                 {"monospace.svg", Params().setCanvasSize(300, 300)},
                 {"sans-serif.svg", Params().setCanvasSize(300, 300)},
@@ -1613,10 +1617,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"large-negative.svg", Params::UndefinedBehavior("negative letter-spacing")},
                     {"mixed-scripts.svg",
                      Params::Skip("Needs BiDi: mixed LTR Latin + RTL Arabic in one span")},
-                    {"non-ASCII-character.svg",
-                     Params::Skip("Mplus 1p is the only checked-in face covering U+534A, so the "
-                                  "golden's glyph comes from a font that is not in the test font "
-                                  "set; the whole 108x110 px glyph body differs (#1167)")},
+                    // resvg v0.49.0 quotes the family as 'Mplus 1p'; unquoted it is invalid
+                    // and the snapshot's reference was drawn in a fallback face.
+                    {"non-ASCII-character.svg", Params().setCanvasSize(300, 300)},
                     {"on-Arabic.svg", Params()
                                           .requireFeature(RendererBackendFeature::TextFull)
                                           .withReason("Arabic text")},
