@@ -3149,17 +3149,17 @@ struct ReplayedContent {
 std::vector<ReplayedContent> CollectReplayedContent(Registry& registry) {
   std::vector<ReplayedContent> replays;
   const auto add = [&](int replayedAt, const std::optional<components::SubtreeInfo>& content) {
-    const auto* first =
-        content
-            ? registry.try_get<components::RenderingInstanceComponent>(content->firstRenderedEntity)
-            : nullptr;
-    const auto* last =
-        content
-            ? registry.try_get<components::RenderingInstanceComponent>(content->lastRenderedEntity)
-            : nullptr;
-    if (first != nullptr && last != nullptr) {
-      replays.push_back({replayedAt, first->drawOrder, last->drawOrder});
+    if (!content) {
+      return;
     }
+    const auto* first =
+        registry.try_get<components::RenderingInstanceComponent>(content->firstRenderedEntity);
+    const auto* last =
+        registry.try_get<components::RenderingInstanceComponent>(content->lastRenderedEntity);
+    if (first == nullptr || last == nullptr) {
+      return;
+    }
+    replays.push_back({replayedAt, first->drawOrder, last->drawOrder});
   };
   for (auto&& [entity, instance] : registry.view<components::RenderingInstanceComponent>().each()) {
     if (instance.mask) {
@@ -3198,9 +3198,9 @@ void AddReplayedTurbulence(std::vector<int>& turbulenceDrawOrders,
 
 /// Mark every prepared filter layer that contains feTurbulence, or encloses a filter layer that
 /// does, directly or through replayed mask or marker content, to keep its input capture aligned
-/// with the viewport. Both backends evaluate turbulence
-/// noise from raster pixel coordinates, so an input margin on any enclosing layer, or on an outer
-/// stage of the same element, would move the noise pattern. Stages of one element nest, and a
+/// with the viewport. Both backends evaluate turbulence noise from raster pixel coordinates, so an
+/// input margin on any enclosing layer, or on an outer stage of the same element, would move the
+/// noise pattern. Stages of one element nest, and a
 /// descendant's draw order lies within its ancestor's subtree range.
 void MarkViewportAlignedFilterCaptures(
     Registry& registry,

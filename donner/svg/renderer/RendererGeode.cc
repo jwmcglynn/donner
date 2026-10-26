@@ -2574,8 +2574,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Transform2d deviceFromFilter;  // Full CTM at push time.
     bool transformedCaptureReserved = false;
     bool localRasterRequiredForBudget = false;
-    int filterBufferOffsetX = 0;  // Expansion into negative device X.
-    int filterBufferOffsetY = 0;  // Expansion into negative device Y.
+    int filterBufferOffsetX = 0;  // Input margin past the outer target's left edge.
+    int filterBufferOffsetY = 0;  // Input margin past the outer target's top edge.
     std::vector<ClipStackEntry> savedClipStack;
     bool allocationRejected = false;
   };
@@ -2591,9 +2591,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::size_t rejectedFilterDepth = 0;
 
   /// How far right and down the active filter captures move what is drawn into them, in pixels.
-  /// A capture expanded for an offset holds the content its region reaches above or left of its
-  /// outer target, moved by that overhang, and a capture nested in another is moved within it, so
-  /// the overhangs of every capture on the stack add up.
+  /// A capture with an input margin holds the content its region reaches above or left of its
+  /// outer target, moved by that margin, and a capture nested in another is moved within it, so
+  /// the margins of every capture on the stack add up.
   [[nodiscard]] Vector2i filterCaptureOffset() const {
     Vector2i offset = Vector2i::Zero();
     for (const FilterStackFrame& frame : filterStack) {
@@ -3243,8 +3243,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::vector<GeometryDebugEdge> geometryDebugEdges;
 
   /// Map pixels in the current encoder target back into final root-target
-  /// pixels. Filter captures may be expanded at their top/left; all other
-  /// layer, mask, and clip targets share the root pixel coordinate system.
+  /// pixels. Filter captures may extend past every edge of their outer target by an input
+  /// margin, which moves their content by the top and left margins; all other layer, mask, and
+  /// clip targets share the root pixel coordinate system.
   [[nodiscard]] Transform2d geometryDebugRootFromCurrentTarget(
       int additionalFilterOffsetX = 0, int additionalFilterOffsetY = 0) const {
     const Vector2i offset = filterCaptureOffset();
@@ -6228,7 +6229,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   // Allocate an offscreen layer. All draws issued between push/pop land
   // here; pop composites it back onto the outer target with the stored opacity.
   // The layer takes the outer target's extent, not the surface's: the composite maps the whole
-  // layer over the whole outer target, which inside a filter layer expanded for an offset is
+  // layer over the whole outer target, which inside a filter layer with an input margin is
   // larger than the surface.
   const gpu::TextureDescriptor td{"RendererGeodeIsolatedLayer", impl_->targetExtent(),
                                   impl_->gpuTextureFormat(),
@@ -6386,7 +6387,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     return;
   }
   // The capture covers the target the result composites back onto, which is larger than the
-  // surface when this filter nests inside one expanded for an offset.
+  // surface when this filter nests inside one with an input margin.
   const gpu::Extent2d outerExtent = impl_->targetExtent();
   const int outerWidth = static_cast<int>(outerExtent.width);
   const int outerHeight = static_cast<int>(outerExtent.height);
@@ -6450,7 +6451,7 @@ void RendererGeode::popFilterLayer() {
     return;
   }
 
-  // When the filter buffer was expanded to capture negative-coordinate content, adjust
+  // When the filter buffer has an input margin past the top or left edge, adjust
   // deviceFromFilter to include the offset so the filter engine interprets coordinates correctly.
   const Transform2d bufferDeviceFromFilter =
       (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0)
@@ -6564,7 +6565,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
   }
 
   // The mask and its content take the outer target's extent, not the surface's: popMask maps both
-  // over the whole outer target, which inside a filter layer expanded for an offset is larger
+  // over the whole outer target, which inside a filter layer with an input margin is larger
   // than the surface.
   const gpu::Extent2d outerExtent = impl_->targetExtent();
   const auto allocTexture = [&](const char* label, gpu::Texture& outTexture,
