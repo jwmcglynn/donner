@@ -547,11 +547,11 @@ Transform2d DeviceFromFragmentPixels(const fp::Image& primitive,
          Transform2d::Translate(origin.x, origin.y) * state.context.deviceFromFilter;
 }
 
-/// Whether \p transform only scales by positive factors and translates, so a fragment raster can
-/// be placed as an axis-aligned target rectangle.
-bool IsPositiveAxisAlignedScale(const Transform2d& transform) {
-  return NearZero(transform.data[1], 1e-6) && NearZero(transform.data[2], 1e-6) &&
-         transform.data[0] > 0.0 && transform.data[3] > 0.0;
+/// Whether \p deviceFromFragment only scales by positive factors and translates, so a fragment
+/// raster can be placed as an axis-aligned target rectangle.
+bool IsPositiveAxisAlignedScale(const Transform2d& deviceFromFragment) {
+  return NearZero(deviceFromFragment.data[1], 1e-6) && NearZero(deviceFromFragment.data[2], 1e-6) &&
+         deviceFromFragment.data[0] > 0.0 && deviceFromFragment.data[3] > 0.0;
 }
 
 void PopulateTransformedFragmentImage(gp::Image& image, const fp::Image& primitive,

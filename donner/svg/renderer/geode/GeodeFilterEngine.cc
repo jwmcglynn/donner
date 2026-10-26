@@ -3193,6 +3193,43 @@ std::optional<uint32_t> FilterImageUploadRowPitch(
                              static_cast<uint32_t>(primitive.imageHeight));
 }
 
+/// Inverts \p deviceFromImage into shader sampling parameters, failing closed when the transform
+/// is singular or a parameter is not representable as a finite float.
+std::optional<ImageParams> ImageParamsFromTransform(
+    const svg::components::filter_primitive::Image& primitive, const Transform2d& deviceFromImage) {
+  const double determinant = deviceFromImage.determinant();
+  if (!std::isfinite(determinant) || determinant == 0.0) {
+    return std::nullopt;
+  }
+  const Transform2d imageFromDevice = deviceFromImage.inverse();
+  const std::array<double, 8> imageValues = {
+      imageFromDevice.data[0],
+      imageFromDevice.data[2],
+      imageFromDevice.data[4],
+      imageFromDevice.data[1],
+      imageFromDevice.data[3],
+      imageFromDevice.data[5],
+      std::hypot(deviceFromImage.data[0], deviceFromImage.data[1]),
+      std::hypot(deviceFromImage.data[2], deviceFromImage.data[3])};
+  if (!std::all_of(imageValues.begin(), imageValues.end(), [](double value) {
+        return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
+      })) {
+    return std::nullopt;
+  }
+
+  ImageParams params{};
+  params.m00 = static_cast<float>(imageValues[0]);
+  params.m01 = static_cast<float>(imageValues[1]);
+  params.m02 = static_cast<float>(imageValues[2]);
+  params.m10 = static_cast<float>(imageValues[3]);
+  params.m11 = static_cast<float>(imageValues[4]);
+  params.m12 = static_cast<float>(imageValues[5]);
+  params.samplingMode = ImageSamplingMode(primitive.imageRendering);
+  params.pixelatedScaleX = static_cast<float>(imageValues[6]);
+  params.pixelatedScaleY = static_cast<float>(imageValues[7]);
+  return params;
+}
+
 std::optional<ImageParams> CreateFragmentImageParams(
     const svg::components::filter_primitive::Image& primitive,
     const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
@@ -3203,26 +3240,9 @@ std::optional<ImageParams> CreateFragmentImageParams(
   // Fragment raster pixels map to the referenced content's user space, the primitive origin
   // places that content in the filtered element's user space, and the filter transform maps it to
   // output pixels. This one transform covers translated, scaled and rotated filtered elements.
-  const Transform2d deviceFromFragment =
-      primitive.resolvedFragmentUserFromPixel(graph.userToPixelScale) *
-      Transform2d::Translate(origin.x, origin.y) * deviceFromFilter;
-  if (NearZero(deviceFromFragment.determinant(), 1e-12)) {
-    return std::nullopt;
-  }
-  const Transform2d fragmentFromDevice = deviceFromFragment.inverse();
-  ImageParams params{};
-  params.m00 = static_cast<float>(fragmentFromDevice.data[0]);
-  params.m01 = static_cast<float>(fragmentFromDevice.data[2]);
-  params.m02 = static_cast<float>(fragmentFromDevice.data[4]);
-  params.m10 = static_cast<float>(fragmentFromDevice.data[1]);
-  params.m11 = static_cast<float>(fragmentFromDevice.data[3]);
-  params.m12 = static_cast<float>(fragmentFromDevice.data[5]);
-  params.pixelatedScaleX =
-      static_cast<float>(deviceFromFragment.transformVector(Vector2d(1.0, 0.0)).length());
-  params.pixelatedScaleY =
-      static_cast<float>(deviceFromFragment.transformVector(Vector2d(0.0, 1.0)).length());
-  params.samplingMode = ImageSamplingMode(primitive.imageRendering);
-  return params;
+  return ImageParamsFromTransform(
+      primitive, primitive.resolvedFragmentUserFromPixel(graph.userToPixelScale) *
+                     Transform2d::Translate(origin.x, origin.y) * deviceFromFilter);
 }
 
 FilterTexture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& arena,
@@ -3268,38 +3288,7 @@ std::optional<ImageParams> CreateRasterFilterImageParams(
   const Transform2d filterFromImage =
       primitive.preserveAspectRatio.elementContentFromViewBoxTransform(placementRegionUser,
                                                                        imageBox);
-  const Transform2d deviceFromImage = filterFromImage * deviceFromFilter;
-  const double determinant = deviceFromImage.determinant();
-  if (!std::isfinite(determinant) || determinant == 0.0) {
-    return std::nullopt;
-  }
-  const Transform2d imageFromDevice = deviceFromImage.inverse();
-  const std::array<double, 8> imageValues = {
-      imageFromDevice.data[0],
-      imageFromDevice.data[2],
-      imageFromDevice.data[4],
-      imageFromDevice.data[1],
-      imageFromDevice.data[3],
-      imageFromDevice.data[5],
-      std::hypot(deviceFromImage.data[0], deviceFromImage.data[1]),
-      std::hypot(deviceFromImage.data[2], deviceFromImage.data[3])};
-  if (!std::all_of(imageValues.begin(), imageValues.end(), [](double value) {
-        return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
-      })) {
-    return std::nullopt;
-  }
-
-  ImageParams params{};
-  params.m00 = static_cast<float>(imageValues[0]);
-  params.m01 = static_cast<float>(imageValues[1]);
-  params.m02 = static_cast<float>(imageValues[2]);
-  params.m10 = static_cast<float>(imageValues[3]);
-  params.m11 = static_cast<float>(imageValues[4]);
-  params.m12 = static_cast<float>(imageValues[5]);
-  params.samplingMode = ImageSamplingMode(primitive.imageRendering);
-  params.pixelatedScaleX = static_cast<float>(imageValues[6]);
-  params.pixelatedScaleY = static_cast<float>(imageValues[7]);
-  return params;
+  return ImageParamsFromTransform(primitive, filterFromImage * deviceFromFilter);
 }
 
 std::optional<ImageParams> CreateFilterImageParams(

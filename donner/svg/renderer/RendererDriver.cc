@@ -1122,6 +1122,19 @@ std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& 
                   std::max(1, static_cast<int>(std::ceil(pixelHeight))));
 }
 
+std::optional<std::uint64_t> BoundedRgbaBytes(Vector2i size) {
+  if (size.x <= 0 || size.y <= 0 || size.x > components::kMaximumFilterSurfaceDimension ||
+      size.y > components::kMaximumFilterSurfaceDimension) {
+    return std::nullopt;
+  }
+  const std::uint64_t pixels =
+      static_cast<std::uint64_t>(size.x) * static_cast<std::uint64_t>(size.y);
+  if (pixels > components::kMaximumFilterSurfacePixels) {
+    return std::nullopt;
+  }
+  return pixels * 4u;
+}
+
 /// Canvas-pixel window that a same-document feImage reference is rasterized into.
 struct FragmentRasterWindow {
   Vector2i offset;  ///< Canvas pixel at the window's top-left corner.
@@ -1143,46 +1156,123 @@ bool fitsFilterSurface(double width, double height) {
          width * height <= static_cast<double>(components::kMaximumFilterSurfacePixels);
 }
 
-/// Choose the canvas-pixel window for an feImage element reference. The referenced content is
-/// placed with its user-space origin at the primitive subregion's origin and the result is clipped
-/// to that subregion, so only user-space points from the origin to the subregion size can reach
-/// the output. Rasterize that rectangle, rather than the canvas: the filtered element's transform
-/// can bring content into view that lies outside the canvas in document coordinates. Falls back
-/// to the canvas when the subregion is unresolved or exceeds the filter surface limits.
-FragmentRasterWindow resolveFragmentRasterWindow(const components::FilterGraph& filterGraph,
-                                                 const components::FilterNode& node,
-                                                 const Transform2d& canvasFromDocument,
-                                                 Vector2i canvasSize) {
-  const FragmentRasterWindow canvasWindow{Vector2i(0, 0), canvasSize};
-  const std::optional<Vector2d> userSize = resolveFeImageSubregionSize(filterGraph, node);
-  if (!userSize.has_value()) {
-    return canvasWindow;
-  }
-
-  const Box2d canvasBox =
-      canvasFromDocument.transformBox(Box2d(Vector2d::Zero(), Vector2d(userSize->x, userSize->y)));
+/// The whole-pixel canvas window covering \p fragmentRegion, a rectangle in the referenced
+/// content's user space, or `std::nullopt` when it is empty or exceeds the filter surface limits.
+std::optional<FragmentRasterWindow> fragmentWindowFor(const Box2d& fragmentRegion,
+                                                      const Transform2d& canvasFromDocument) {
+  const Box2d canvasBox = canvasFromDocument.transformBox(fragmentRegion);
   const double left = std::floor(canvasBox.topLeft.x);
   const double top = std::floor(canvasBox.topLeft.y);
   const double width = std::ceil(canvasBox.bottomRight.x) - left;
   const double height = std::ceil(canvasBox.bottomRight.y) - top;
   if (!isRepresentableRasterOrigin(left, top) || !fitsFilterSurface(width, height)) {
-    return canvasWindow;
+    return std::nullopt;
   }
   return FragmentRasterWindow{Vector2i(static_cast<int>(left), static_cast<int>(top)),
                               Vector2i(static_cast<int>(width), static_cast<int>(height))};
 }
 
-std::optional<std::uint64_t> BoundedRgbaBytes(Vector2i size) {
-  if (size.x <= 0 || size.y <= 0 || size.x > components::kMaximumFilterSurfaceDimension ||
-      size.y > components::kMaximumFilterSurfaceDimension) {
+/// Whether a raster window's RGBA bytes fit within \p affordableBytes.
+bool isAffordableWindow(const std::optional<FragmentRasterWindow>& window,
+                        std::uint64_t affordableBytes) {
+  if (!window.has_value()) {
+    return false;
+  }
+  const std::optional<std::uint64_t> bytes = BoundedRgbaBytes(window->size);
+  return bytes.has_value() && *bytes <= affordableBytes;
+}
+
+/// Inputs for choosing an feImage element reference's raster window.
+struct FragmentWindowRequest {
+  Transform2d canvasFromDocument;     ///< Document user space to canvas pixels.
+  Vector2i canvasSize;                ///< Canvas size, the fallback window.
+  std::optional<Box2d> visibleUser;   ///< Visible draw surface in the filtered element's user
+                                      ///< space, when known.
+  std::uint64_t affordableBytes = 0;  ///< Source-image bytes left in the frame's budget.
+};
+
+/// The part of the primitive subregion, in fragment user space, that can land on the visible draw
+/// surface. Only known when the placement origin is the filter region's corner, which holds when
+/// the primitive has no `x`, `y` or animated region.
+std::optional<Box2d> visibleFragmentRegion(const components::FilterGraph& filterGraph,
+                                           const components::FilterNode& node,
+                                           const Box2d& subregion,
+                                           const std::optional<Box2d>& visibleUser) {
+  if (!visibleUser.has_value() || !filterGraph.filterRegion.has_value() || node.x.has_value() ||
+      node.y.has_value() || node.hasAnimatedRegion()) {
     return std::nullopt;
   }
-  const std::uint64_t pixels =
-      static_cast<std::uint64_t>(size.x) * static_cast<std::uint64_t>(size.y);
-  if (pixels > components::kMaximumFilterSurfacePixels) {
+  const Vector2d origin = filterGraph.filterRegion->topLeft;
+  const Box2d visible(visibleUser->topLeft - origin, visibleUser->bottomRight - origin);
+  const Box2d clipped(Vector2d(std::max(subregion.topLeft.x, visible.topLeft.x),
+                               std::max(subregion.topLeft.y, visible.topLeft.y)),
+                      Vector2d(std::min(subregion.bottomRight.x, visible.bottomRight.x),
+                               std::min(subregion.bottomRight.y, visible.bottomRight.y)));
+  if (clipped.width() <= 0.0 || clipped.height() <= 0.0) {
     return std::nullopt;
   }
-  return pixels * 4u;
+  return clipped;
+}
+
+/// Choose the canvas-pixel window for an feImage element reference. The referenced content is
+/// placed with its user-space origin at the primitive subregion's origin and the result is clipped
+/// to that subregion, so only user-space points from the origin to the subregion size can reach
+/// the output. Rasterize that rectangle rather than the canvas: the filtered element's transform
+/// can bring content into view that lies outside the canvas in document coordinates. When that
+/// raster would not fit the frame's remaining source-image budget, keep only the part that can
+/// land on the visible surface; otherwise fall back to the canvas. An animated subregion size is
+/// only known at execution, so it also uses the canvas.
+FragmentRasterWindow resolveFragmentRasterWindow(const components::FilterGraph& filterGraph,
+                                                 const components::FilterNode& node,
+                                                 const FragmentWindowRequest& request) {
+  const FragmentRasterWindow canvasWindow{Vector2i(0, 0), request.canvasSize};
+  const std::optional<Vector2d> userSize = resolveFeImageSubregionSize(filterGraph, node);
+  if (!userSize.has_value() || node.animatedRegion[2] || node.animatedRegion[3]) {
+    return canvasWindow;
+  }
+
+  const Box2d subregion(Vector2d::Zero(), *userSize);
+  const std::optional<FragmentRasterWindow> whole =
+      fragmentWindowFor(subregion, request.canvasFromDocument);
+  if (isAffordableWindow(whole, request.affordableBytes)) {
+    return *whole;
+  }
+  if (const std::optional<Box2d> visible =
+          visibleFragmentRegion(filterGraph, node, subregion, request.visibleUser)) {
+    const std::optional<FragmentRasterWindow> clipped =
+        fragmentWindowFor(*visible, request.canvasFromDocument);
+    if (isAffordableWindow(clipped, request.affordableBytes)) {
+      return *clipped;
+    }
+  }
+  return canvasWindow;
+}
+
+/// The visible draw surface mapped back into the filtered element's user space, or
+/// `std::nullopt` when that mapping is not invertible.
+std::optional<Box2d> visibleUserRegion(const Transform2d& surfaceFromUser, Vector2i surfaceSize) {
+  const double determinant = surfaceFromUser.determinant();
+  if (!std::isfinite(determinant) || NearZero(determinant, 1e-12)) {
+    return std::nullopt;
+  }
+  const Box2d visible =
+      surfaceFromUser.inverse().transformBox(Box2d(Vector2d::Zero(), Vector2d(surfaceSize)));
+  if (!std::isfinite(visible.topLeft.x) || !std::isfinite(visible.topLeft.y) ||
+      !std::isfinite(visible.bottomRight.x) || !std::isfinite(visible.bottomRight.y)) {
+    return std::nullopt;
+  }
+  return visible;
+}
+
+/// The visible draw surface in a filtered element's user space, read from its rendering instance.
+std::optional<Box2d> hostVisibleUserRegion(Registry& registry, Entity hostEntity,
+                                           const Transform2d& surfaceFromCanvas,
+                                           Vector2i surfaceSize) {
+  const auto* hostInstance = registry.try_get<components::RenderingInstanceComponent>(hostEntity);
+  return hostInstance != nullptr
+             ? visibleUserRegion(hostInstance->worldFromEntityTransform * surfaceFromCanvas,
+                                 surfaceSize)
+             : std::nullopt;
 }
 
 bool HasCompleteSnapshotRows(const RendererBitmap& snapshot) {
@@ -3716,8 +3806,11 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
     return;
   }
 
-  // Save and override surfaceFromCanvasTransform for pattern content rendering.
+  // Save and override surfaceFromCanvasTransform for pattern content rendering. The tile is its
+  // own surface, so a fragment raster window's culling extent does not apply to it.
   const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
+  const std::optional<Vector2i> savedDrawSurfaceSize =
+      std::exchange(drawSurfaceSize_, std::nullopt);
   surfaceFromCanvasTransform_ = placement->patternContentFromPatternTile;
   {
     RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
@@ -3737,6 +3830,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   }
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
+  drawSurfaceSize_ = savedDrawSurfaceSize;
 
   renderer_.endPatternTile(forStroke);
 }
@@ -4605,6 +4699,11 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     return;
   }
 
+  // Read the visible surface in the filtered element's user space before shadow-tree creation can
+  // reorder rendering instance storage.
+  const std::optional<Box2d> hostVisibleUser = hostVisibleUserRegion(
+      registry, hostEntity, surfaceFromCanvasTransform_, cullingSurfaceSize());
+
   for (auto& node : filterGraph.nodes) {
     auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
     if (!imageNode || imageNode->fragmentId.empty() || imageNode->hasImageData()) {
@@ -4635,8 +4734,10 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
 
     const Transform2d canvasFromDocument =
         components::LayoutSystem().getCanvasFromDocumentTransform(registry);
-    const FragmentRasterWindow window =
-        resolveFragmentRasterWindow(filterGraph, node, canvasFromDocument, renderingSize_);
+    const FragmentRasterWindow window = resolveFragmentRasterWindow(
+        filterGraph, node,
+        FragmentWindowRequest{canvasFromDocument, renderingSize_, hostVisibleUser,
+                              filterPreparationBudget_->remainingImageBytes()});
     const std::optional<std::uint64_t> imageBytes = reservePreparedFilterImage(window.size);
     if (!imageBytes.has_value()) {
       imageNode->fragmentId = RcString();
