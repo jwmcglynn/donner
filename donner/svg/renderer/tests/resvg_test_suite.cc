@@ -528,8 +528,8 @@ INSTANTIATE_TEST_SUITE_P(
                               "is not rasterized into the filter input (TinySkia 2321 and Geode "
                               "2323 pixels differ, edge band only)")},
                 {"in=BackgroundAlpha.svg",
-                 Params::Skip(
-                     "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
+                 Params::Skip("Not impl: Filter Effects BackgroundAlpha from the isolation-group "
+                              "backdrop")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

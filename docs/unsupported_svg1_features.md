@@ -9,11 +9,14 @@ in SVG 2 and are intentionally not implemented.
 of the canvas behind it. Filter primitives could reference this snapshot with `in="BackgroundImage"`
 or `in="BackgroundAlpha"`.
 
-**SVG 2 status:** Removed. The SVG 2 spec no longer defines `enable-background`,
-`BackgroundImage`, or `BackgroundAlpha`.
+**SVG 2 status:** `enable-background` is removed. Filter Effects Module Level 1 keeps the
+`BackgroundImage` and `BackgroundAlpha` input names, but defines them as the backdrop accumulated
+since the nearest isolation group instead of an `enable-background` snapshot.
 
-**Donner behavior:** These input names are parsed as unresolved named references, producing
-transparent black (the SVG spec behavior for unresolved filter inputs). No warning is emitted.
+**Donner behavior:** `enable-background` is ignored, and the Filter Effects isolation-group backdrop
+is not implemented either. `BackgroundImage` and `BackgroundAlpha` are parsed as unresolved named
+references, producing transparent black (the SVG spec behavior for unresolved filter inputs). No
+warning is emitted.
 
 **Modern alternative:** CSS compositing with the `mix-blend-mode` and `isolation` properties covers
 blending with backdrop content.
@@ -22,7 +25,8 @@ blending with backdrop content.
 `Params::DeprecatedInSVG2`; four cases that already match the reference with SVG 2 semantics
 compare) and `filters/filter/in=BackgroundImage-with-enable-background` /
 `in=BackgroundAlpha-with-enable-background` (`Params::DeprecatedInSVG2`). These render without a
-pixel comparison.
+pixel comparison. `filters/filter/in=BackgroundAlpha` uses the isolation-group backdrop, so it is a
+`Not impl:` skip rather than a removed feature; `filters/filter/in=BackgroundImage` compares.
 
 ## SVG Fonts (&lt;font&gt;, &lt;glyph&gt;, &lt;missing-glyph&gt;, etc.)
 
@@ -69,11 +73,12 @@ per-glyph rotation in horizontal and vertical text.
 obsoleted and replaced by `text-orientation`; SVG 2 retains only a narrow compatibility alias for
 `auto`, `0`, and `90` values.
 
-**Donner behavior:** The legacy property names are recognized but have no independent layout
-behavior. The narrow `glyph-orientation-vertical` compatibility alias is not yet applied. Modern
-vertical text should use `writing-mode: vertical-rl` or `vertical-lr` together with
-`text-orientation`. The resvg `text/glyph-orientation-horizontal` case uses
-`Params::DeprecatedInSVG2`.
+**Donner behavior:** `glyph-orientation-horizontal` is recognized as a presentation attribute but has
+no layout behavior. `glyph-orientation-vertical` applies the SVG 2 compatibility alias: `auto`, `0`
+and `90` (or `0deg` and `90deg`) set `text-orientation` to `mixed`, `upright` and `sideways`, and
+other values are invalid. Modern vertical text should use `writing-mode: vertical-rl` or
+`vertical-lr` together with `text-orientation`. The resvg `text/glyph-orientation-horizontal` case
+uses `Params::DeprecatedInSVG2`.
 
 ## The Kerning Property
 
