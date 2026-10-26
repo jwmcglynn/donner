@@ -20,6 +20,7 @@
 #include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
+#include "donner/base/Transform.h"
 #include "donner/css/Color.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/components/animation/ContextualLengthRecipe.h"
@@ -540,6 +541,24 @@ struct Image {
   /// references use this as a placement fallback when primitive-subregion attributes are absent;
   /// otherwise the resolved primitive subregion supplies the placement origin.
   Vector2d fragmentRegionTopLeft;
+
+  /// For fragment references, the transform from fragment raster pixels to the referenced
+  /// content's user space, supplied by the renderer driver with the raster. The raster covers the
+  /// placed primitive subregion rather than the canvas, so its first pixel is generally not at
+  /// the user-space origin. When absent, the raster starts at the user-space origin at the filter
+  /// graph's user-to-pixel scale.
+  std::optional<Transform2d> fragmentUserFromPixel;
+
+  /// Transform from fragment raster pixels to the referenced content's user space.
+  /// @param userToPixelScale The filter graph's user-to-pixel scale, used when the driver did not
+  /// supply \ref fragmentUserFromPixel.
+  [[nodiscard]] Transform2d resolvedFragmentUserFromPixel(const Vector2d& userToPixelScale) const {
+    if (fragmentUserFromPixel.has_value()) {
+      return *fragmentUserFromPixel;
+    }
+    return Transform2d::Scale(userToPixelScale.x > 0.0 ? 1.0 / userToPixelScale.x : 1.0,
+                              userToPixelScale.y > 0.0 ? 1.0 / userToPixelScale.y : 1.0);
+  }
 
   /// Resolved sampling policy inherited by the source `<feImage>`.
   ImageRendering imageRendering = ImageRendering::Auto;

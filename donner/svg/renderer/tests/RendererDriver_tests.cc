@@ -1277,9 +1277,11 @@ TEST_F(RendererDriverTest, FilterPreparationStopsAtAggregateGraphLimit) {
 }
 
 TEST_F(RendererDriverTest, PreparedFragmentImageKeepsFamilyReservationWithSharedPixels) {
+  // The fragment raster covers the feImage subregion; pin it to the 1x1 canvas so the reservation
+  // matches the mock's 1x1 snapshot.
   SVGDocument document = makeDocument(R"svg(
     <defs>
-      <filter id="filter"><feImage href="#source"/></filter>
+      <filter id="filter" x="0" y="0" width="1" height="1"><feImage href="#source"/></filter>
       <rect id="source" width="1" height="1" fill="red"/>
     </defs>
     <rect width="1" height="1" filter="url(#filter)"/>

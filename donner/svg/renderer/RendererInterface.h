@@ -354,6 +354,10 @@ public:
   [[nodiscard]] std::size_t shadowEntities() const { return shadowEntities_; }
   /// Whether a capacity check has failed in this frame.
   [[nodiscard]] bool rejected() const { return rejected_; }
+  /// Source-image bytes that can still be reserved in this frame; zero once a check has failed.
+  [[nodiscard]] std::uint64_t remainingImageBytes() const {
+    return rejected_ || imageBytes_ >= limits_.imageBytes ? 0 : limits_.imageBytes - imageBytes_;
+  }
 
   /// Tightens test limits without raising any existing capacity.
   void setLimitsForTesting(Limits limits) {

@@ -537,21 +537,27 @@ Vector2d FragmentImageOrigin(const fp::Image& primitive, const PrimitiveConversi
   return primitive.fragmentRegionTopLeft;
 }
 
+/// Transform from fragment raster pixels to filter pixels: pixels to the referenced content's user
+/// space, then the primitive placement origin into the filtered element's user space, then the
+/// filter's device transform. Every fragment placement path uses this one transform.
+Transform2d DeviceFromFragmentPixels(const fp::Image& primitive,
+                                     const PrimitiveConversionState& state) {
+  const Vector2d origin = FragmentImageOrigin(primitive, state);
+  return primitive.resolvedFragmentUserFromPixel(state.context.filterGraph.userToPixelScale) *
+         Transform2d::Translate(origin.x, origin.y) * state.context.deviceFromFilter;
+}
+
+/// Whether \p deviceFromFragment only scales by positive factors and translates, so a fragment
+/// raster can be placed as an axis-aligned target rectangle.
+bool IsPositiveAxisAlignedScale(const Transform2d& deviceFromFragment) {
+  return NearZero(deviceFromFragment.data[1], 1e-6) && NearZero(deviceFromFragment.data[2], 1e-6) &&
+         deviceFromFragment.data[0] > 0.0 && deviceFromFragment.data[3] > 0.0;
+}
+
 void PopulateTransformedFragmentImage(gp::Image& image, const fp::Image& primitive,
                                       const PrimitiveConversionState& state,
-                                      std::span<const std::uint8_t> premultiplied) {
-  const Transform2d viewBoxScaleInv =
-      Transform2d::Scale(NearZero(state.context.filterGraph.userToPixelScale.x, 1e-12)
-                             ? 1.0
-                             : 1.0 / state.context.filterGraph.userToPixelScale.x,
-                         NearZero(state.context.filterGraph.userToPixelScale.y, 1e-12)
-                             ? 1.0
-                             : 1.0 / state.context.filterGraph.userToPixelScale.y);
-  const Vector2d origin = FragmentImageOrigin(primitive, state);
-  const Transform2d regionOffset = Transform2d::Translate(origin.x, origin.y);
-  const Transform2d deviceFromFragment =
-      viewBoxScaleInv * regionOffset * state.context.deviceFromFilter;
-
+                                      std::span<const std::uint8_t> premultiplied,
+                                      const Transform2d& deviceFromFragment) {
   image.pixels = RasterizeImagePremultiplied(
       premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromFragment,
       state.context.outputWidth, state.context.outputHeight, primitive.imageRendering);
@@ -562,18 +568,16 @@ void PopulateTransformedFragmentImage(gp::Image& image, const fp::Image& primiti
                                    static_cast<double>(state.context.outputHeight)};
 }
 
-void PopulateUntransformedFragmentImage(gp::Image& image, const fp::Image& primitive,
-                                        const PrimitiveConversionState& state,
-                                        std::span<const std::uint8_t> premultiplied) {
+void PopulateAxisAlignedFragmentImage(gp::Image& image, const fp::Image& primitive,
+                                      std::span<const std::uint8_t> premultiplied,
+                                      const Transform2d& deviceFromFragment) {
   image.pixels.assign(premultiplied.begin(), premultiplied.end());
   image.width = primitive.imageWidth;
   image.height = primitive.imageHeight;
-  const Vector2d origin = FragmentImageOrigin(primitive, state);
-  const double deviceOffsetX = origin.x * state.context.filterGraph.userToPixelScale.x;
-  const double deviceOffsetY = origin.y * state.context.filterGraph.userToPixelScale.y;
-  image.targetRect = tiny_skia::filter::PixelRect{deviceOffsetX, deviceOffsetY,
-                                                  static_cast<double>(primitive.imageWidth),
-                                                  static_cast<double>(primitive.imageHeight)};
+  const Box2d target = deviceFromFragment.transformBox(
+      Box2d::FromXYWH(0.0, 0.0, primitive.imageWidth, primitive.imageHeight));
+  image.targetRect = tiny_skia::filter::PixelRect{target.topLeft.x, target.topLeft.y,
+                                                  target.width(), target.height()};
 }
 
 void PopulateTransformedImage(gp::Image& image, const fp::Image& primitive,
@@ -650,10 +654,13 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Image& primitive,
   }
 
   const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(imageData);
-  if (primitive.isFragmentReference && state.graph.filterFromDevice.has_value()) {
-    PopulateTransformedFragmentImage(image, primitive, state, premultiplied);
-  } else if (primitive.isFragmentReference) {
-    PopulateUntransformedFragmentImage(image, primitive, state, premultiplied);
+  if (primitive.isFragmentReference) {
+    const Transform2d deviceFromFragment = DeviceFromFragmentPixels(primitive, state);
+    if (IsPositiveAxisAlignedScale(deviceFromFragment)) {
+      PopulateAxisAlignedFragmentImage(image, primitive, premultiplied, deviceFromFragment);
+    } else {
+      PopulateTransformedFragmentImage(image, primitive, state, premultiplied, deviceFromFragment);
+    }
   } else if (state.graph.filterFromDevice.has_value()) {
     PopulateTransformedImage(image, primitive, state, premultiplied);
   } else {

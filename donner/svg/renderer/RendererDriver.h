@@ -519,6 +519,15 @@ private:
   /// `TightBoundsRotatedEllipseWithRotatingGradient`.
   Transform2d surfaceFromCanvasTransform_;
   Vector2i renderingSize_ = Vector2i::Zero();
+  /// Extent of the surface this driver draws into when it is not the canvas. An feImage fragment
+  /// raster window can be larger than the canvas or offset from it, so viewport culling tests
+  /// against that surface while filter user-to-pixel scales keep the canvas size.
+  std::optional<Vector2i> drawSurfaceSize_;
+
+  /// Surface extent used for viewport culling.
+  [[nodiscard]] Vector2i cullingSurfaceSize() const {
+    return drawSurfaceSize_.value_or(renderingSize_);
+  }
   bool earlyLeafViewportCulling_ = false;
   TextPreparationStats textPreparationStats_;
   std::unique_ptr<RendererDriverTextFrameCache> textFrameCache_;
