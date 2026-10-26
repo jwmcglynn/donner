@@ -176,6 +176,7 @@ donner_perf_sensitive_cc_library(
     }),
     visibility = ["//visibility:public"],
     deps = [
+        ":filter_region_context",
         ":render_snapshot",
         ":renderer_interface",
         ":renderer_utils",

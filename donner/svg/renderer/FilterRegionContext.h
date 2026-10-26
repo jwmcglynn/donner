@@ -210,15 +210,10 @@ inline const components::FilterNode* FilterFirstInputNode(const components::Filt
 /// Conservatively measure how far beyond each output pixel a filter graph reads its raster. Every
 /// primitive counts, including those fed only by generators: feFlood, feImage and feTurbulence
 /// produce output only over the raster, so a later blur or tile still needs the raster to extend
-/// past the viewport. Reaches add up, since chained primitives compound. A graph that must stay
-/// viewport-aligned, see \ref components::FilterGraph::keepsViewportAlignedCapture, needs no
-/// margin.
+/// past the viewport. Reaches add up, since chained primitives compound.
 /// @param graph Filter graph. @param deviceFromFilter Filter user space to raster pixels.
-inline FilterInputMargin ComputeFilterInputMargin(const components::FilterGraph& graph,
-                                                  const Transform2d& deviceFromFilter) {
-  if (graph.keepsViewportAlignedCapture || components::FilterGraphHasTurbulence(graph)) {
-    return {};
-  }
+inline FilterInputMargin ComputeFilterSamplingReach(const components::FilterGraph& graph,
+                                                    const Transform2d& deviceFromFilter) {
   const bool objectBounds = graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
                             graph.elementBoundingBox.has_value();
   const double scaleX = FilterDeviceScaleX(deviceFromFilter);
@@ -248,6 +243,18 @@ inline FilterInputMargin ComputeFilterInputMargin(const components::FilterGraph&
     margin.pixels += Vector2d(1.0, 1.0);
   }
   return margin;
+}
+
+/// The input margin a filter layer's capture gets: the graph's sampling reach, or none when the
+/// capture must stay viewport-aligned (see
+/// \ref components::FilterGraph::keepsViewportAlignedCapture and feTurbulence).
+/// @param graph Filter graph. @param deviceFromFilter Filter user space to raster pixels.
+inline FilterInputMargin ComputeFilterInputMargin(const components::FilterGraph& graph,
+                                                  const Transform2d& deviceFromFilter) {
+  if (graph.keepsViewportAlignedCapture || components::FilterGraphHasTurbulence(graph)) {
+    return {};
+  }
+  return ComputeFilterSamplingReach(graph, deviceFromFilter);
 }
 
 /// Filter input raster layout around a viewport: the viewport plus input margins on each side.

@@ -63,6 +63,7 @@
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/FilterRegionContext.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 #endif
@@ -1277,15 +1278,16 @@ FragmentRasterWindow resolveFragmentRasterWindow(const components::FilterGraph& 
   return canvasWindow;
 }
 
-/// The visible draw surface mapped back into the filtered element's user space, or
-/// `std::nullopt` when that mapping is not invertible.
-std::optional<Box2d> visibleUserRegion(const Transform2d& surfaceFromUser, Vector2i surfaceSize) {
+/// The visible draw surface, widened by \p reach device pixels on each side, mapped back into the
+/// filtered element's user space, or `std::nullopt` when that mapping is not invertible.
+std::optional<Box2d> visibleUserRegion(const Transform2d& surfaceFromUser, Vector2i surfaceSize,
+                                       Vector2d reach) {
   const double determinant = surfaceFromUser.determinant();
   if (!std::isfinite(determinant) || determinant == 0.0) {
     return std::nullopt;
   }
-  const Box2d visible =
-      surfaceFromUser.inverse().transformBox(Box2d(Vector2d::Zero(), Vector2d(surfaceSize)));
+  const Box2d visible = surfaceFromUser.inverse().transformBox(
+      Box2d(-reach, Vector2d(surfaceSize.x, surfaceSize.y) + reach));
   if (!std::isfinite(visible.topLeft.x) || !std::isfinite(visible.topLeft.y) ||
       !std::isfinite(visible.bottomRight.x) || !std::isfinite(visible.bottomRight.y)) {
     return std::nullopt;
@@ -1293,15 +1295,30 @@ std::optional<Box2d> visibleUserRegion(const Transform2d& surfaceFromUser, Vecto
   return visible;
 }
 
-/// The visible draw surface in a filtered element's user space, read from its rendering instance.
+/// The part of a filtered element's user space whose filter result can reach the visible draw
+/// surface: the surface mapped back through the element's transform, widened by how far the
+/// filter graph reads past each output pixel so that a later primitive that pulls content into
+/// view still finds it, and covering any tile source rectangle. `std::nullopt` when no such bound
+/// exists.
 std::optional<Box2d> hostVisibleUserRegion(Registry& registry, Entity hostEntity,
+                                           const components::FilterGraph& filterGraph,
                                            const Transform2d& surfaceFromCanvas,
                                            Vector2i surfaceSize) {
   const auto* hostInstance = registry.try_get<components::RenderingInstanceComponent>(hostEntity);
-  return hostInstance != nullptr
-             ? visibleUserRegion(hostInstance->worldFromEntityTransform * surfaceFromCanvas,
-                                 surfaceSize)
-             : std::nullopt;
+  if (hostInstance == nullptr) {
+    return std::nullopt;
+  }
+  const Transform2d surfaceFromUser = hostInstance->worldFromEntityTransform * surfaceFromCanvas;
+  const FilterInputMargin reach = ComputeFilterSamplingReach(filterGraph, surfaceFromUser);
+  if (reach.wholeRegion) {
+    return std::nullopt;
+  }
+  const std::optional<Box2d> visible =
+      visibleUserRegion(surfaceFromUser, surfaceSize, reach.pixels);
+  if (visible.has_value() && reach.userCapture.has_value()) {
+    return Box2d::Union(*visible, *reach.userCapture);
+  }
+  return visible;
 }
 
 bool HasCompleteSnapshotRows(const RendererBitmap& snapshot) {
@@ -4778,7 +4795,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
   // Read the visible surface in the filtered element's user space before shadow-tree creation can
   // reorder rendering instance storage.
   const std::optional<Box2d> hostVisibleUser = hostVisibleUserRegion(
-      registry, hostEntity, surfaceFromCanvasTransform_, cullingSurfaceSize());
+      registry, hostEntity, filterGraph, surfaceFromCanvasTransform_, cullingSurfaceSize());
 
   for (auto& node : filterGraph.nodes) {
     auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
