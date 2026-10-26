@@ -347,9 +347,17 @@ def parse_registrations(source: str) -> list[Registration]:
     return sorted(registrations, key=lambda item: item.category)
 
 
+# Factories that render a case without comparing pixels, mapped to the bucket the report uses.
+# `RenderOnly` is the retired generic factory: it still parses so the policy check can name it.
+RENDER_ONLY_FACTORIES = {
+    "UndefinedBehavior": "undefined-behavior",
+    "DeprecatedInSVG2": "deprecated-in-svg2",
+    "RenderOnly": None,
+}
+
 _REASON_CALLS = {
     "Skip",
-    "RenderOnly",
+    *RENDER_ONLY_FACTORIES,
     "WithThreshold",
     "WithGoldenOverride",
     "WithMaxPixels",
@@ -362,7 +370,7 @@ def _reason_from_params(expression: str) -> str | None:
     reason: str | None = None
     for _, name, arguments in sorted(_iter_named_calls(expression, _REASON_CALLS)):
         argument_index: int | None = None
-        if name in {"Skip", "RenderOnly", "withReason"} and arguments:
+        if (name == "Skip" or name == "withReason" or name in RENDER_ONLY_FACTORIES) and arguments:
             argument_index = 0
         elif name == "WithThreshold" and len(arguments) >= 3:
             argument_index = 2
@@ -395,7 +403,7 @@ def _contains_call(expression: str, names: set[str]) -> bool:
     return bool(_iter_named_calls(expression, names))
 
 
-_STATE_FIELD_RE = re.compile(r"\b(renderOnly|skip)\b")
+_STATE_FIELD_RE = re.compile(r"\b(renderOnly\w*|skip)\b")
 
 
 def _mask_string_literals(text: str) -> str:
@@ -421,14 +429,24 @@ def _primary_state_from_params(expression: str) -> str:
     field = _STATE_FIELD_RE.search(_mask_string_literals(_mask_comments(expression)))
     if field is not None:
         raise ParityReportError(
-            f"set {field.group(1)!r} through Params::Skip or Params::RenderOnly, not the field: "
+            f"set {field.group(1)!r} through Params::Skip, Params::UndefinedBehavior or "
+            f"Params::DeprecatedInSVG2, not the field: "
             f"{expression[:60]!r}"
         )
     skip = _contains_call(expression, {"Skip"})
-    render_only = _contains_call(expression, {"RenderOnly"})
+    render_only = _contains_call(expression, set(RENDER_ONLY_FACTORIES))
     if skip and render_only:
         raise ParityReportError("params expression cannot be both skip and render-only")
     return "skip" if skip else "render-only" if render_only else "compare"
+
+
+def _render_only_kind_from_params(expression: str) -> str | None:
+    """Return the render-only bucket, or None for a comparison, skip or retired factory."""
+
+    names = {name for _, name, _ in _iter_named_calls(expression, set(RENDER_ONLY_FACTORIES))}
+    if len(names) > 1:
+        raise ParityReportError(f"params expression uses several render-only factories: {names}")
+    return RENDER_ONLY_FACTORIES[names.pop()] if names else None
 
 
 def _required_features_from_params(expression: str, category: str) -> tuple[set[str], bool, bool]:
@@ -519,6 +537,7 @@ def _params_facts(expression: str, category: str) -> dict[str, object]:
         "exception_types": exception_types,
         "primary_state": primary_state,
         "reason": _reason_from_params(expression),
+        "render_only_kind": _render_only_kind_from_params(expression),
     }
 
 
@@ -628,6 +647,12 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
         ),
         "pixel_budget_sources": pixel_budget_sources,
         "render_only_cases": count_active(lambda case: case["primary_state"] == "render-only"),
+        "render_only_deprecated_in_svg2_cases": count_active(
+            lambda case: case["render_only_kind"] == "deprecated-in-svg2"
+        ),
+        "render_only_undefined_behavior_cases": count_active(
+            lambda case: case["render_only_kind"] == "undefined-behavior"
+        ),
         "shared_golden_cases": count_active(
             lambda case: "shared_golden" in case["exception_types"]
         ),
@@ -656,12 +681,11 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
     }
 
 
-RENDER_ONLY_REASON_PREFIX = "UB: "
 UB_MARKER_REFERENCE = Path("third_party/resvg-test-suite/resources/ub.png")
 
-# Render-only cases whose vendored reference is not the resvg UB marker image. Each entry must be
-# behavior the specification leaves undefined or implementation-defined, with the reason here.
-SPEC_UB_RENDER_ONLY_ALLOWLIST = {
+# `Params::UndefinedBehavior` cases whose vendored reference is not the resvg UB marker image. Each
+# entry must be behavior the specification leaves undefined or implementation-defined.
+SPEC_UB_ALLOWLIST = {
     # Filter Effects defines an exact Gaussian but no bound on stdDeviation. stdDeviation=1000 is
     # 2500 device pixels; every renderer clamps it to an implementation-defined resource limit
     # (Donner: kMaximumFilterPixelRadius), so the reference records resvg's clamp, not a result
@@ -669,40 +693,68 @@ SPEC_UB_RENDER_ONLY_ALLOWLIST = {
     "filters/feGaussianBlur/huge-stdDeviation.svg",
 }
 
+# Features removed from or deprecated in SVG 2 that Donner deliberately does not implement. Every
+# `Params::DeprecatedInSVG2` case must fall under one of these keys: a category directory, or one
+# case path ending in `.svg`. Keep it to named features so the bucket cannot absorb bugs.
+DEPRECATED_IN_SVG2_FEATURES = {
+    "filters/enable-background": "enable-background and the BackgroundImage it defines",
+    "filters/filter/in=BackgroundAlpha-with-enable-background.svg": "enable-background",
+    "filters/filter/in=BackgroundImage-with-enable-background.svg": "enable-background",
+    "masking/clip": "CSS `clip` property (deprecated by CSS Masking in favor of clip-path)",
+    "painting/display/none-on-tref.svg": "<tref>",
+    "painting/fill/icc-color.svg": "icc-color() paint",
+    "painting/fill/valid-FuncIRI-with-a-fallback-ICC-color.svg": "icc-color() paint",
+    "structure/style-attribute/non-presentational-attribute.svg": "version=\"1.1\" semantics",
+    "structure/style/non-presentational-attribute.svg": "version=\"1.1\" semantics",
+    "text/dominant-baseline/reset-size.svg": "dominant-baseline: reset-size",
+    "text/dominant-baseline/use-script.svg": "dominant-baseline: use-script",
+    "text/glyph-orientation-horizontal": "glyph-orientation-horizontal",
+    "text/kerning": "kerning property",
+    "text/tref": "<tref>",
+}
+
+
+def _active_render_only_cases(report: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        case
+        for case in report["cases"]  # type: ignore[union-attr]
+        if case["registration"] == "active" and case["primary_state"] == "render-only"
+    ]
+
 
 def render_only_policy_violations(report: dict[str, object]) -> list[str]:
-    """Return active render-only cases whose reason does not mark undefined behavior.
+    """Return render-only cases that do not use a named bucket with an informative reason.
 
-    `Params::RenderOnly` renders without a pixel comparison, so it is reserved for behavior the
-    specification leaves undefined or implementation-defined, or for references that are the
-    resvg UB marker image. Every reason must start with `RENDER_ONLY_REASON_PREFIX`; bugs,
-    missing or removed features, reference disagreements and harness mismatches are skips.
+    Rendering without a pixel comparison hides every regression in the case, so it needs one of
+    two explicit factories: `Params::UndefinedBehavior` for behavior the specification leaves
+    undefined or implementation-defined, or `Params::DeprecatedInSVG2` for features removed from or
+    deprecated in SVG 2. Bugs, missing features, reference disagreements and harness mismatches
+    are skips.
     """
 
     violations: list[str] = []
-    for case in report["cases"]:  # type: ignore[union-attr]
-        if case["registration"] != "active" or case["primary_state"] != "render-only":
-            continue
-        reason = case["reason"] or ""
-        if not reason.startswith(RENDER_ONLY_REASON_PREFIX) or not reason[
-            len(RENDER_ONLY_REASON_PREFIX) :
-        ].strip():
-            violations.append(f"{case['path']}: {reason!r}")
+    for case in _active_render_only_cases(report):
+        reason = str(case["reason"] or "").strip()
+        if case["render_only_kind"] is None:
+            violations.append(f"{case['path']}: render-only without Params::UndefinedBehavior or "
+                              "Params::DeprecatedInSVG2")
+        elif not reason:
+            violations.append(f"{case['path']}: {case['render_only_kind']} case has no reason")
     return violations
 
 
-def render_only_reference_violations(
+def undefined_behavior_reference_violations(
     report: dict[str, object],
     tests_root: Path,
     marker_path: Path,
-    allowlist: Iterable[str] = SPEC_UB_RENDER_ONLY_ALLOWLIST,
+    allowlist: Iterable[str] = SPEC_UB_ALLOWLIST,
 ) -> list[str]:
-    """Return render-only cases whose reference is not the UB marker and stale allowlist entries.
+    """Return undefined-behavior cases without the UB marker reference, and stale allowlist entries.
 
-    A render-only case qualifies as undefined behavior either because its vendored reference is a
-    byte-for-byte copy of the resvg UB marker image, or because it is listed in `allowlist` as
-    specification-level UB. Allowlist entries must be active render-only cases whose reference is
-    not the marker, so the list cannot silently outlive a reclassification.
+    An undefined-behavior case qualifies either because its vendored reference is a byte-for-byte
+    copy of the resvg UB marker image, or because `allowlist` lists it as specification-level UB.
+    Allowlist entries must be active undefined-behavior cases whose reference is not the marker, so
+    the list cannot silently outlive a reclassification.
     """
 
     try:
@@ -711,13 +763,13 @@ def render_only_reference_violations(
         raise ParityReportError(f"cannot read UB marker reference {marker_path}: {error}") from error
 
     allowed = set(allowlist)
-    render_only: set[str] = set()
+    undefined: set[str] = set()
     violations: list[str] = []
-    for case in report["cases"]:  # type: ignore[union-attr]
-        if case["registration"] != "active" or case["primary_state"] != "render-only":
+    for case in _active_render_only_cases(report):
+        if case["render_only_kind"] != "undefined-behavior":
             continue
         path = str(case["path"])
-        render_only.add(path)
+        undefined.add(path)
         reference = (tests_root / path).with_suffix(".png")
         try:
             is_marker = reference.read_bytes() == marker
@@ -730,8 +782,31 @@ def render_only_reference_violations(
             violations.append(f"{path}: reference is not the UB marker and the case is not "
                               "allowlisted as specification UB")
 
-    for path in sorted(allowed - render_only):
-        violations.append(f"{path}: allowlisted, but not an active render-only case")
+    for path in sorted(allowed - undefined):
+        violations.append(f"{path}: allowlisted, but not an active undefined-behavior case")
+    return sorted(violations)
+
+
+def deprecated_in_svg2_violations(
+    report: dict[str, object], features: dict[str, str] = DEPRECATED_IN_SVG2_FEATURES
+) -> list[str]:
+    """Return deprecated-in-SVG-2 cases outside the named features, and unused feature keys."""
+
+    used: set[str] = set()
+    violations: list[str] = []
+    for case in _active_render_only_cases(report):
+        if case["render_only_kind"] != "deprecated-in-svg2":
+            continue
+        path = str(case["path"])
+        key = path if path in features else str(case["category"])
+        if key in features:
+            used.add(key)
+        else:
+            violations.append(f"{path}: not under a feature in DEPRECATED_IN_SVG2_FEATURES")
+
+    for key in sorted(set(features) - used):
+        violations.append(f"{key}: listed in DEPRECATED_IN_SVG2_FEATURES, but no active "
+                          "deprecated-in-svg2 case uses it")
     return sorted(violations)
 
 
