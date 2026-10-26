@@ -5,11 +5,21 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <ostream>
 #include <string_view>
 #include <tuple>
 #include <vector>
 
 namespace donner::svg {
+
+/// Prints shaped glyphs field by field so matcher failures name the differing values.
+void PrintTo(const TextBackend::ShapedGlyph& glyph, std::ostream* os) {
+  *os << "ShapedGlyph{glyphIndex=" << glyph.glyphIndex << ", xAdvance=" << glyph.xAdvance
+      << ", yAdvance=" << glyph.yAdvance << ", xKern=" << glyph.xKern << ", yKern=" << glyph.yKern
+      << ", xOffset=" << glyph.xOffset << ", yOffset=" << glyph.yOffset
+      << ", cluster=" << glyph.cluster << ", fontSizeScale=" << glyph.fontSizeScale << "}";
+}
+
 namespace {
 
 using ::testing::AllOf;
@@ -205,6 +215,48 @@ std::vector<uint8_t> KernTable(const std::vector<std::tuple<uint16_t, uint16_t, 
     AppendBE16(&table, right);
     AppendBE16(&table, static_cast<uint16_t>(value));
   }
+  return table;
+}
+
+/// GPOS table with one pair-kerning lookup holding a single format-1 PairPos subtable for
+/// (left, right) = value. With @p viaExtension the subtable is reached through an Extension
+/// (lookup type 9) wrapper, as font compilers emit when a lookup outgrows 16-bit offsets.
+std::vector<uint8_t> GposPairTable(uint16_t left, uint16_t right, int16_t value,
+                                   bool viaExtension) {
+  std::vector<uint8_t> pairPos;
+  AppendBE16(&pairPos, 1);   // PairPos format 1.
+  AppendBE16(&pairPos, 12);  // Coverage offset.
+  AppendBE16(&pairPos, 4);   // valueFormat1: XAdvance.
+  AppendBE16(&pairPos, 0);   // valueFormat2: none.
+  AppendBE16(&pairPos, 1);   // pairSetCount.
+  AppendBE16(&pairPos, 18);  // pairSetOffsets[0].
+  AppendBE16(&pairPos, 1);   // Coverage format 1.
+  AppendBE16(&pairPos, 1);   // glyphCount.
+  AppendBE16(&pairPos, left);
+  AppendBE16(&pairPos, 1);  // pairValueCount.
+  AppendBE16(&pairPos, right);
+  AppendBE16(&pairPos, static_cast<uint16_t>(value));
+
+  std::vector<uint8_t> table;
+  AppendBE16(&table, 1);                     // Major version.
+  AppendBE16(&table, 0);                     // Minor version.
+  AppendBE16(&table, 10);                    // ScriptList offset.
+  AppendBE16(&table, 12);                    // FeatureList offset.
+  AppendBE16(&table, 14);                    // LookupList offset.
+  AppendBE16(&table, 0);                     // ScriptList: no scripts.
+  AppendBE16(&table, 0);                     // FeatureList: no features.
+  AppendBE16(&table, 1);                     // LookupList: one lookup.
+  AppendBE16(&table, 4);                     // Lookup offset, relative to the LookupList.
+  AppendBE16(&table, viaExtension ? 9 : 2);  // Lookup type.
+  AppendBE16(&table, 0);                     // Lookup flags.
+  AppendBE16(&table, 1);                     // subTableCount.
+  AppendBE16(&table, 8);                     // Subtable offset, relative to the Lookup.
+  if (viaExtension) {
+    AppendBE16(&table, 1);  // ExtensionPos format 1.
+    AppendBE16(&table, 2);  // extensionLookupType: pair adjustment.
+    AppendBE32(&table, 8);  // 32-bit offset to the PairPos subtable.
+  }
+  table.insert(table.end(), pairPos.begin(), pairPos.end());
   return table;
 }
 
@@ -431,6 +483,33 @@ TEST_F(TextBackendSimpleTest, ShapeRunAppliesHorizontalKerning) {
                         GlyphXKernIs(DoubleEq(0.0))),
                   AllOf(GlyphIndexIs(2), GlyphXAdvanceIs(DoubleNear(60.0, 1e-4)),
                         GlyphXKernIs(DoubleNear(-10.0, 1e-4)), GlyphYKernIs(DoubleEq(0.0)))));
+}
+
+/// Fonts without a legacy `kern` table carry pair kerning only in GPOS, and large kerning lookups
+/// are wrapped in Extension subtables. Both encodings must yield the same adjustment.
+TEST_F(TextBackendSimpleTest, ShapeRunAppliesGposPairKerningDirectAndThroughExtension) {
+  for (const bool viaExtension : {false, true}) {
+    SCOPED_TRACE(viaExtension ? "Extension-wrapped PairPos" : "Direct PairPos");
+    const std::vector<TableSpec> tables = {
+        {"GPOS", GposPairTable(1, 2, -100, viaExtension)},
+        {"cmap", CmapTable({{'A', 'A', 1}, {'V', 'V', 2}})},
+        {"glyf", QuadGlyphData()},
+        {"head", HeadTable(1000)},
+        {"hhea", HheaTable(800, -200, 100, 4)},
+        {"hmtx", HmtxTable({400, 500, 600, 700})},
+        {"loca", LocaTable()},
+        {"maxp", MaxpTable(4)},
+    };
+    const FontHandle font = loadFont(MakeSfnt(tables));
+
+    const auto shaped =
+        backend_.shapeRun(font, 100.0f, "AV", 0, 2, false, FontVariant::Normal, false);
+    EXPECT_THAT(shaped.glyphs,
+                ElementsAre(AllOf(GlyphIndexIs(1), GlyphXKernIs(DoubleEq(0.0))),
+                            AllOf(GlyphIndexIs(2), GlyphXKernIs(DoubleNear(-10.0, 1e-4)),
+                                  GlyphYKernIs(DoubleEq(0.0)))));
+    EXPECT_NEAR(backend_.crossSpanKern(font, 100.0f, font, 100.0f, 'A', 'V', false), -10.0, 1e-4);
+  }
 }
 
 TEST_F(TextBackendSimpleTest, ShapeRunWithoutKerningSuppressesKerningAdjustments) {
