@@ -1218,10 +1218,11 @@ std::optional<Box2d> visibleFragmentRegion(const components::FilterGraph& filter
 /// placed with its user-space origin at the primitive subregion's origin and the result is clipped
 /// to that subregion, so only user-space points from the origin to the subregion size can reach
 /// the output. Rasterize that rectangle rather than the canvas: the filtered element's transform
-/// can bring content into view that lies outside the canvas in document coordinates. When that
-/// raster would not fit the frame's remaining source-image budget, keep only the part that can
-/// land on the visible surface; otherwise fall back to the canvas. An animated subregion size is
-/// only known at execution, so it also uses the canvas.
+/// can bring content into view that lies outside the canvas in document coordinates. A chosen
+/// window never needs more bytes than the canvas window: no frame whose canvas-sized rasters fit
+/// the filter preparation budget can be pushed over it. When the whole subregion is larger, keep
+/// only the part that can land on the visible surface; otherwise fall back to the canvas. An
+/// animated subregion size is only known at execution, so it also uses the canvas.
 FragmentRasterWindow resolveFragmentRasterWindow(const components::FilterGraph& filterGraph,
                                                  const components::FilterNode& node,
                                                  const FragmentWindowRequest& request) {
@@ -1231,17 +1232,20 @@ FragmentRasterWindow resolveFragmentRasterWindow(const components::FilterGraph& 
     return canvasWindow;
   }
 
+  const std::uint64_t byteLimit =
+      std::min(request.affordableBytes,
+               BoundedRgbaBytes(request.canvasSize).value_or(request.affordableBytes));
   const Box2d subregion(Vector2d::Zero(), *userSize);
   const std::optional<FragmentRasterWindow> whole =
       fragmentWindowFor(subregion, request.canvasFromDocument);
-  if (isAffordableWindow(whole, request.affordableBytes)) {
+  if (isAffordableWindow(whole, byteLimit)) {
     return *whole;
   }
   if (const std::optional<Box2d> visible =
           visibleFragmentRegion(filterGraph, node, subregion, request.visibleUser)) {
     const std::optional<FragmentRasterWindow> clipped =
         fragmentWindowFor(*visible, request.canvasFromDocument);
-    if (isAffordableWindow(clipped, request.affordableBytes)) {
+    if (isAffordableWindow(clipped, byteLimit)) {
       return *clipped;
     }
   }
@@ -1252,7 +1256,7 @@ FragmentRasterWindow resolveFragmentRasterWindow(const components::FilterGraph& 
 /// `std::nullopt` when that mapping is not invertible.
 std::optional<Box2d> visibleUserRegion(const Transform2d& surfaceFromUser, Vector2i surfaceSize) {
   const double determinant = surfaceFromUser.determinant();
-  if (!std::isfinite(determinant) || NearZero(determinant, 1e-12)) {
+  if (!std::isfinite(determinant) || determinant == 0.0) {
     return std::nullopt;
   }
   const Box2d visible =
