@@ -39,6 +39,22 @@ face.
 
   tests/text/writing-mode/tb-and-punctuation.svg
   tests/text/writing-mode/tb-and-punctuation.png
+
+From the same revision and license, these PNGs were replaced with their 300x300
+versions because the snapshot's references were drawn in faces outside the
+vendored font set. Upstream's harness maps the generic families to Noto Serif,
+Noto Sans, Noto Mono, Yellowtail and Sedgwick Ave Display, yet the snapshot's
+sans-serif.png differed from its noto-sans.png (the two are byte-identical at
+v0.49.0), and xml-lang=ja.png used per-language CJK faces that are not vendored.
+Their SVG inputs are byte-identical at both revisions.
+
+  tests/text/font-family/bold-sans-serif.png
+  tests/text/font-family/cursive.png
+  tests/text/font-family/fantasy.png
+  tests/text/font-family/monospace.png
+  tests/text/font-family/sans-serif.png
+  tests/text/font-family/serif.png
+  tests/text/text/xml-lang=ja.png
 """
 
 package(default_visibility = ["//visibility:public"])

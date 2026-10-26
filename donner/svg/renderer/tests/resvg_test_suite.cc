@@ -1461,54 +1461,23 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/font-family",
             {
-                // The five generic-family goldens (cursive, fantasy, monospace, sans-serif,
-                // serif) disagree with the rest of this directory on the same four pixels of the
-                // plain frame <rect>, at (3,3), (496,3), (3,496) and (496,496), which no font
-                // choice can affect. They come from a different rendering than the goldens Donner
-                // matches exactly: noto-sans, double-quoted, fallback-2, font-list and
-                // source-sans-pro. Which face each family resolves to is asserted directly in
-                // FontSelection_tests.cc, so these allowances no longer stand in for selection
-                // coverage. Each allowance sits about 2% above the largest measured residual across
-                // the simple and full text tiers, except serif and sans-serif, which keep their
-                // existing tighter numbers rather than being raised. The Geode lane contributes no
-                // residual here: it reports no text-rendering support, so every text/ case is
-                // skipped there.
-                {"bold-sans-serif.svg",
-                 Params::WithThreshold(
-                     kDefaultThreshold, 5200,
-                     "Larger threshold due to a golden bold face that is not the vendored Noto "
-                     "Sans Bold: that face's ink box is 205x73 px against the golden's 181x67 px. "
-                     "Measured 5078 simple, 5081 full (#1167)")},
-                {"cursive.svg",
-                 Params::WithThreshold(kDefaultThreshold, 4800,
-                                       "Larger threshold due to a golden that no checked-in face "
-                                       "reproduces and that disagrees on the frame <rect> "
-                                       "corners. Measured 4658 simple, 4660 full (#1167)")},
+                // The six generic-family references (bold-sans-serif, cursive, fantasy, monospace,
+                // sans-serif, serif) are the 300x300 renderings from resvg v0.49.0, which Donner
+                // matches. The superseded ones were drawn in faces outside this font set:
+                // sans-serif.png differed from noto-sans.png although the resvg harness maps
+                // sans-serif to Noto Sans (at v0.49.0 the two are byte-identical), and the bold
+                // glyph box was 181x67 px against Noto Sans Bold's 205x73 px. Which face each
+                // family resolves to is asserted directly in FontSelection_tests.cc.
+                {"bold-sans-serif.svg", Params().setCanvasSize(300, 300)},
+                {"cursive.svg", Params().setCanvasSize(300, 300)},
                 {"fallback-1.svg",
-                 Params::Skip("Golden is byte-identical to sans-serif.png, which is a centered "
-                              "different-family rendering, so it cannot match this left-anchored "
-                              "x=70 text (#1167)")},
-                {"fantasy.svg",
-                 Params::WithThreshold(kDefaultThreshold, 5150,
-                                       "Larger threshold due to a golden that no checked-in face "
-                                       "reproduces and that disagrees on the frame <rect> "
-                                       "corners. Measured 5011 simple, 5009 full (#1167)")},
-                {"monospace.svg",
-                 Params::WithThreshold(kDefaultThreshold, 600,
-                                       "Larger threshold due to a golden that matches the "
-                                       "checked-in Noto Mono advances exactly but draws a 3 px "
-                                       "shorter cap height, and disagrees on the frame <rect> "
-                                       "corners. Measured 569 simple, 562 full (#1167)")},
-                {"sans-serif.svg",
-                 Params::WithThreshold(kDefaultThreshold, 1900,
-                                       "Larger threshold due to a golden that no checked-in face "
-                                       "reproduces and that disagrees on the frame <rect> "
-                                       "corners. Measured 1875 simple, 1864 full (#1167)")},
-                {"serif.svg",
-                 Params::WithThreshold(kDefaultThreshold, 4200,
-                                       "Larger threshold due to a golden that no checked-in face "
-                                       "reproduces and that disagrees on the frame <rect> "
-                                       "corners. Measured 4146 simple, 4140 full (#1167)")},
+                 Params::Skip("Golden is a centered rendering in a face other than Noto Sans "
+                              "(byte-identical to the superseded sans-serif.png), so it cannot "
+                              "match this left-anchored x=70 text (#1167)")},
+                {"fantasy.svg", Params().setCanvasSize(300, 300)},
+                {"monospace.svg", Params().setCanvasSize(300, 300)},
+                {"sans-serif.svg", Params().setCanvasSize(300, 300)},
+                {"serif.svg", Params().setCanvasSize(300, 300)},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1695,13 +1664,10 @@ INSTANTIATE_TEST_SUITE_P(
                          .onlyTextFull()
                          .withReason("Arabic text shaping; vertical-axis AA diff not "
                                      "the focus of the test")},
-                    {"xml-lang=ja.svg",
-                     Params::WithThreshold(
-                         kDefaultThreshold, 7600,
-                         "Larger threshold due to Mplus 1p being the only checked-in face "
-                         "covering these CJK codepoints, so all three lines fall back to it "
-                         "while the golden's per-language faces are not in the test font set. "
-                         "Measured 7400 simple, 7377 full (#1167)")},
+                    // The reference is resvg v0.49.0's 300x300 rendering, which draws all three
+                    // lines in Mplus 1p, the only face in the test font set covering these CJK
+                    // codepoints. The superseded one used per-language faces outside the set.
+                    {"xml-lang=ja.svg", Params().setCanvasSize(300, 300)},
                     {"xml-space.svg", Params::WithThreshold(kDefaultThreshold, 1400)},
                     {"zalgo.svg", Params().withMaxPixelsDifferent(300).onlyTextFull().withReason(
                                       "Complex diacritics; vertical-axis AA diff "
