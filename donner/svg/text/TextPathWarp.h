@@ -263,13 +263,16 @@ private:
     if (!boundaries) {
       return false;
     }
+    bool intervalStartAtBoundary = isBoundary(line->startDistance);
     if (!appendBoundaryIntervals(end, line->startDistance, line->endDistance, line->increasing,
-                                 *boundaries, line->intervalStart, line->mappedStart)) {
+                                 *boundaries, line->intervalStart, line->mappedStart,
+                                 intervalStartAtBoundary)) {
       return false;
     }
-    const auto mappedEnd = isBoundary(line->endDistance) ? map(end, line->arrivalSide) : map(end);
-    if (!mappedEnd ||
-        !appendAdaptive(line->intervalStart, end, *line->mappedStart, *mappedEnd, 0u)) {
+    const bool endAtBoundary = isBoundary(line->endDistance);
+    const auto mappedEnd = endAtBoundary ? map(end, line->arrivalSide) : map(end);
+    if (!mappedEnd || !appendAdaptive(line->intervalStart, end, *line->mappedStart, *mappedEnd, 0u,
+                                      intervalStartAtBoundary, endAtBoundary)) {
       return false;
     }
     current_ = end;
@@ -278,7 +281,8 @@ private:
   }
   bool appendBoundaryIntervals(const Vector2d& end, double startDistance, double endDistance,
                                bool increasing, std::span<const Boundary> boundaries,
-                               Vector2d& intervalStart, std::optional<Vector2d>& mappedStart) {
+                               Vector2d& intervalStart, std::optional<Vector2d>& mappedStart,
+                               bool& intervalStartAtBoundary) {
     if (end.x == current_.x) {
       return true;
     }
@@ -290,7 +294,8 @@ private:
       const double t = (boundary.traversalDistance - startDistance) / (endDistance - startDistance);
       const Vector2d intervalEnd = current_ * (1.0 - t) + end * t;
       const auto mappedEnd = mapBoundary(intervalEnd, boundary.sampleDistance, beforeBoundary);
-      if (!mappedEnd || !appendAdaptive(intervalStart, intervalEnd, *mappedStart, *mappedEnd, 0u)) {
+      if (!mappedEnd || !appendAdaptive(intervalStart, intervalEnd, *mappedStart, *mappedEnd, 0u,
+                                        intervalStartAtBoundary, /*endAtBoundary=*/true)) {
         return false;
       }
       const auto mappedAfterBoundary =
@@ -300,6 +305,7 @@ private:
       }
       intervalStart = intervalEnd;
       mappedStart = mappedAfterBoundary;
+      intervalStartAtBoundary = true;
     }
     return true;
   }
@@ -320,28 +326,6 @@ private:
     }
     return std::binary_search(mapping_.segmentEndDistances.begin(),
                               mapping_.segmentEndDistances.end(), candidate);
-  }
-  /// True when the route distances of local x coordinates \p first and \p second lie strictly
-  /// inside one measured segment, touching no segment end or closed seam.
-  bool withinOneSegment(double first, double second) const {
-    const double length = mapping_.measuredPath.pathLength();
-    const double origin = mapping_.startOffset + *glyph_.textPathOrigin;
-    double low = origin + std::min(first, second);
-    double high = origin + std::max(first, second);
-    if (!std::isfinite(low) || !std::isfinite(high) || !(length > 0.0)) {
-      return false;
-    }
-    if (mapping_.closed) {
-      const double period = std::floor(low / length);
-      low -= period * length;
-      high -= period * length;
-      if (low <= 0.0 || high >= length) {
-        return false;
-      }
-    }
-    const auto& ends = mapping_.segmentEndDistances;
-    const auto it = std::lower_bound(ends.begin(), ends.end(), low);
-    return it == ends.end() || *it > high;
   }
   bool appendBoundaryJoin(const Vector2d& incoming, const Vector2d& outgoing) {
     if (incoming == outgoing) {
@@ -428,13 +412,15 @@ private:
     return true;
   }
   bool appendAdaptive(const Vector2d& start, const Vector2d& end, const Vector2d& mappedStart,
-                      const Vector2d& mappedEnd, size_t depth) {
+                      const Vector2d& mappedEnd, size_t depth, bool startAtBoundary,
+                      bool endAtBoundary) {
     if (depth > 16u) {
-      // An interval this short that still has not converged spans a discontinuity in the
-      // mapping. Strictly inside one segment that is a cusp, whose normal flips; join across it
-      // as at a segment boundary. Touching a segment end it may be a subpath break, which is
-      // never joined, so it is refused like any longer interval.
-      return (end - start).length() <= tolerance_ && withinOneSegment(start.x, end.x) &&
+      // A leaf this deep that has not converged spans a discontinuity in the mapping. Away from
+      // the interval's boundary samples that is a cusp inside one segment, whose normal flips;
+      // join across it as at a segment boundary. A leaf touching a boundary sample may sit on a
+      // subpath break, which is never joined, so it is refused. The flags come from the caller's
+      // boundary split, not from comparing recomputed distances.
+      return !startAtBoundary && !endAtBoundary && (end - start).length() <= tolerance_ &&
              appendBoundaryJoin(mappedStart, mappedEnd);
     }
     if (remainingWork_ < 3u) {
@@ -463,8 +449,9 @@ private:
       builder_.lineTo(mappedEnd);
       return true;
     }
-    return appendAdaptive(start, middle, mappedStart, *mappedMiddle, depth + 1u) &&
-           appendAdaptive(middle, end, *mappedMiddle, mappedEnd, depth + 1u);
+    return appendAdaptive(start, middle, mappedStart, *mappedMiddle, depth + 1u, startAtBoundary,
+                          false) &&
+           appendAdaptive(middle, end, *mappedMiddle, mappedEnd, depth + 1u, false, endAtBoundary);
   }
   bool appendQuadratic(const Vector2d& start, const Vector2d& control, const Vector2d& end,
                        size_t depth) {
