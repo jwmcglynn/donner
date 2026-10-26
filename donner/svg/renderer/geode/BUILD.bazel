@@ -585,6 +585,7 @@ donner_cc_test(
     srcs = ["tests/GeodeDevice_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
+        ":checkerboard_pipeline",
         ":geode_device",
         ":geode_gpu_wait",
         ":geode_runtime_device_source",
