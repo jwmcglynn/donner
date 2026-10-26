@@ -809,6 +809,33 @@ TEST_F(RendererRegressionTests, FeImageFragmentWithLargeRegionKeepsFrameFilterBu
   }
 }
 
+// Several fragment rasters in one frame must not need more of the filter preparation budget than
+// canvas-sized rasters would: each 1000x1000 subregion alone fits the budget, but two do not.
+TEST_F(RendererRegressionTests, FeImageFragmentsWithLargeRegionsShareFrameFilterBudget) {
+  const RendererBitmap actual = RenderFeImageCase(
+      R"svg(<defs>
+        <filter id="f1" filterUnits="userSpaceOnUse" x="-200" y="-200" width="1000" height="1000">
+          <feImage href="#a"/>
+        </filter>
+        <filter id="f2" filterUnits="userSpaceOnUse" x="-200" y="-200" width="1000" height="1000">
+          <feImage href="#b"/>
+        </filter>
+        <rect id="a" x="300" y="300" width="40" height="40" fill="lime"/>
+        <rect id="b" x="500" y="500" width="40" height="40" fill="lime"/>
+        <filter id="g"><feFlood flood-color="blue"/></filter>
+      </defs>
+      <g filter="url(#f1)"><rect width="600" height="300" fill="red"/></g>
+      <g filter="url(#f2)"><rect y="300" width="600" height="300" fill="red"/></g>
+      <rect x="560" y="10" width="20" height="20" filter="url(#g)"/>)svg",
+      Vector2i(600, 600));
+  EXPECT_THAT(PixelAt(actual, 120, 120), test::RgbaEq(0, 255, 0, 255))
+      << "the first feImage fragment must render";
+  EXPECT_THAT(PixelAt(actual, 320, 320), test::RgbaEq(0, 255, 0, 255))
+      << "the second feImage fragment must render";
+  EXPECT_THAT(PixelAt(actual, 570, 20), test::RgbaEq(0, 0, 255, 255))
+      << "a later filtered element must still render";
+}
+
 #ifdef DONNER_TEXT_FULL
 TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphPreservesDecodedPremultipliedAlpha) {
   SVGDocument document = ParseSvg(R"svg(
