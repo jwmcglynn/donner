@@ -1339,7 +1339,7 @@ TEST_F(TextEngineLayoutTest, VerticalRotatedLatinPreservesBackendOffsets) {
 
   EXPECT_THAT(runs,
               ElementsAre(RunGlyphsAre(ElementsAre(AllOf(
-                  GlyphIndexIs(7u), GlyphXPositionIs(DoubleNear(98.0, 0.1)),
+                  GlyphIndexIs(7u), GlyphXPositionIs(DoubleNear(97.2, 0.1)),
                   GlyphYPositionIs(DoubleNear(26.5, 0.1)), GlyphYAdvanceIs(DoubleNear(10.0, 0.1)),
                   GlyphRotateDegreesIs(DoubleEq(90.0)))))));
 }
@@ -1563,10 +1563,10 @@ TEST_F(TextEngineLayoutTest, BaselineAlignmentShiftsAcrossVerticalColumn) {
     return Vector2d(runs[0].glyphs[0].xPosition, runs[0].glyphs[0].yPosition);
   };
 
-  // The existing vertical glyph origin is central in pixel-height coordinates:
-  // (900 - 300) / 2 * (16 / 1200) = 4. Hanging is in em coordinates:
-  // 0.8 * 900 * 0.016 = 11.52. Aligning hanging therefore moves X by 11.52 - 4 = 7.52.
-  constexpr double kHangingFromCentral = 7.52;
+  // The vertical glyph origin is the central baseline, the ascent/descent midpoint in em
+  // coordinates: (900 - 300) / 2 * 0.016 = 4.8. Hanging is 0.8 * 900 * 0.016 = 11.52, so aligning
+  // hanging moves X by 11.52 - 4.8 = 6.72.
+  constexpr double kHangingFromCentral = 6.72;
   for (const WritingMode writingMode : {WritingMode::VerticalRl, WritingMode::VerticalLr}) {
     const Vector2d hangingPosition =
         layoutFirstGlyphPosition(writingMode, DominantBaseline::Hanging);

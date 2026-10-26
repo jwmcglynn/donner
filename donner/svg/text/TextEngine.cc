@@ -3070,13 +3070,11 @@ private:
     return 0.0;
   }
 
+  /// Distance from the alphabetic to the central baseline, which CSS Inline 3 Appendix A.2 places
+  /// halfway between ideographic-over and -under. Without those metrics this uses the unnormalized
+  /// ascent/descent midpoint, the A.2 CJK fallback that Chromium and resvg also use.
   double verticalCentralOriginOffset(const SpanState& state, const FontVMetrics& metrics) const {
-    const double pixelHeightScale =
-        metrics.ascent != metrics.descent
-            ? static_cast<double>(state.fontSizePx) / (metrics.ascent - metrics.descent)
-            : 0.0;
-    return (static_cast<double>(metrics.ascent) + static_cast<double>(metrics.descent)) *
-           pixelHeightScale / 2.0;
+    return computeBaselineShift(DominantBaseline::Central, metrics, state.scale);
   }
 
   double resolveVerticalBaselineOffset(const SpanState& state, double baselineShift) const {

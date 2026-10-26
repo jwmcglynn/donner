@@ -634,6 +634,10 @@ TEST(TextEngineScriptedTest, AllPositioningAttributesUseUnicodeCodepointIndices)
   }
 }
 
+/// Sideways glyphs sit on the scripted font's central baseline, the ascent/descent midpoint in em
+/// coordinates: (1000 - 200) / 2 * 20 / 1000 = 8px at font-size 20. The em scale is a float.
+constexpr double kSidewaysCentralOffset = 8.0;
+
 TEST(TextEngineScriptedTest, VerticalPositioningAttributesUseUnicodeCodepointIndices) {
   for (const char32_t middle : {U'\u00E9', U'\U0001F600'}) {
     SCOPED_TRACE(static_cast<uint32_t>(middle));
@@ -655,15 +659,16 @@ TEST(TextEngineScriptedTest, VerticalPositioningAttributesUseUnicodeCodepointInd
     params.writingMode = WritingMode::VerticalRl;
     const auto runs = engine.layout(text, params);
     const bool upright = middle >= 0x2E80;
-    EXPECT_THAT(runs,
-                ElementsAre(RunGlyphsAre(ElementsAre(
-                    AllOf(GlyphXPositionIs(DoubleNear(11 - 20.0 / 3, 1e-8)),
-                          GlyphYPositionIs(DoubleEq(18)), GlyphRotateDegreesIs(DoubleEq(100))),
-                    AllOf(GlyphXPositionIs(DoubleNear(upright ? 24 : 22 - 20.0 / 3, 1e-8)),
-                          GlyphYPositionIs(DoubleEq(upright ? 32 : 29)),
-                          GlyphRotateDegreesIs(DoubleEq(upright ? 20 : 110))),
-                    AllOf(GlyphXPositionIs(DoubleNear(33 - 20.0 / 3, 1e-8)),
-                          GlyphYPositionIs(DoubleEq(40)), GlyphRotateDegreesIs(DoubleEq(120)))))));
+    EXPECT_THAT(
+        runs,
+        ElementsAre(RunGlyphsAre(ElementsAre(
+            AllOf(GlyphXPositionIs(DoubleNear(11 - kSidewaysCentralOffset, 1e-5)),
+                  GlyphYPositionIs(DoubleEq(18)), GlyphRotateDegreesIs(DoubleEq(100))),
+            AllOf(GlyphXPositionIs(DoubleNear(upright ? 24 : 22 - kSidewaysCentralOffset, 1e-5)),
+                  GlyphYPositionIs(DoubleEq(upright ? 32 : 29)),
+                  GlyphRotateDegreesIs(DoubleEq(upright ? 20 : 110))),
+            AllOf(GlyphXPositionIs(DoubleNear(33 - kSidewaysCentralOffset, 1e-5)),
+                  GlyphYPositionIs(DoubleEq(40)), GlyphRotateDegreesIs(DoubleEq(120)))))));
   }
 }
 
@@ -689,15 +694,15 @@ TEST(TextEngineScriptedTest, CombiningGroupSkipsAbsoluteAndCarriesRelativePositi
     const auto runs = engine.layout(text, params);
     ASSERT_EQ(runs.size(), 1u);
     ASSERT_EQ(runs[0].glyphs.size(), 3u);
-    const double baselineOffset = vertical ? 20.0 / 3 : 0;
+    const double baselineOffset = vertical ? kSidewaysCentralOffset : 0;
     EXPECT_THAT(
         runs[0].glyphs.front(),
-        AllOf(GlyphXPositionIs(DoubleNear(11 - baselineOffset, 1e-8)),
+        AllOf(GlyphXPositionIs(DoubleNear(11 - baselineOffset, 1e-5)),
               GlyphYPositionIs(DoubleEq(18)), GlyphRotateDegreesIs(DoubleEq(vertical ? 100 : 10))));
     EXPECT_THAT(runs[0].glyphs[1], GlyphRotateDegreesIs(DoubleEq(vertical ? 100 : 10)));
     EXPECT_THAT(
         runs[0].glyphs.back(),
-        AllOf(GlyphXPositionIs(DoubleNear(35 - baselineOffset, 1e-8)),
+        AllOf(GlyphXPositionIs(DoubleNear(35 - baselineOffset, 1e-5)),
               GlyphYPositionIs(DoubleEq(48)), GlyphRotateDegreesIs(DoubleEq(vertical ? 120 : 30))));
   }
 }
