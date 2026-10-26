@@ -1992,13 +1992,25 @@ INSTANTIATE_TEST_SUITE_P(
                 {"inheritance.svg", Params().setCanvasSize(300, 300)},
                 {"japanese-with-tb.svg",
                  Params().onlyTextFull().withMaxPixelsDifferent(600).withReason(
-                     "Non-ascii text, bug: y position is ~1px off")},
+                     "Bug #1172: upright CJK sits 0.026em lower than resvg (vhea ascender "
+                     "vertical origin vs resvg centering on hhea ascent/descent)")},
                 {"mixed-languages-with-tb-and-underline.svg",
-                 Params::Skip("Non-ascii text, bug: underline not").onlyTextFull()},
+                 Params::Skip("Bug #1172: one face per span, so the CJK fallback chosen for the "
+                              "first non-ASCII character drops the Arabic word, and vertical "
+                              "underline segments sized from x positions collapse (1572 px)")
+                     .onlyTextFull()},
                 {"mixed-languages-with-tb.svg",
-                 Params::Skip("Non-ascii text, bug: mixed language").onlyTextFull()},
+                 Params::Skip("Bug #1172: one face per span, so the Mplus 1p face chosen for the "
+                              "CJK text has no Arabic glyphs and the Arabic word is dropped "
+                              "(1095 px)")
+                     .setCanvasSize(300, 300)
+                     .onlyTextFull()},
                 {"tb-and-punctuation.svg",
-                 Params::Skip("Non-ascii text, bug: CJK punctuation").onlyTextFull()},
+                 Params::Skip("#1172: punctuation forms and spacing match; upright glyphs sit "
+                              "0.026em lower (vhea ascender origin vs resvg centering on "
+                              "hhea ascent/descent), 371 px")
+                     .setCanvasSize(300, 300)
+                     .onlyTextFull()},
                 {"tb-rl.svg", Params().setCanvasSize(300, 300)},
                 {"tb-with-alignment.svg", Params().setCanvasSize(300, 300)},
                 {"tb-with-dx-on-second-tspan.svg", Params().setCanvasSize(300, 300)},
