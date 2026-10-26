@@ -664,7 +664,8 @@ TEST_F(RendererRegressionTests, FeImageFragmentFollowsTranslatedFilteredElement)
   const RendererBitmap actual =
       RenderFeImageFragment("translate(24 24)", R"svg(width="32" height="32")svg",
                             R"svg(x="8" y="8" width="16" height="16")svg");
-  ExpectBitmapsIdentical(actual, expected, "fe_image_fragment_translated_host");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "fe_image_fragment_translated_host",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, FeImageFragmentOutsideCanvasBeforeHostTransformIsVisible) {
@@ -679,7 +680,9 @@ TEST_F(RendererRegressionTests, FeImageFragmentOutsideCanvasBeforeHostTransformI
   const RendererBitmap actual =
       RenderFeImageFragment("translate(-96 -96)", R"svg(x="96" y="96" width="48" height="48")svg",
                             R"svg(x="104" y="104" width="16" height="16")svg");
-  ExpectBitmapsIdentical(actual, expected, "fe_image_fragment_offcanvas_before_host_transform");
+  editor::tests::CompareBitmapToBitmap(actual, expected,
+                                       "fe_image_fragment_offcanvas_before_host_transform",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, FeImageFragmentFollowsScaledFilteredElement) {
@@ -745,8 +748,9 @@ TEST_F(RendererRegressionTests, FeImageFragmentFollowsTranslatedFilteredElementU
   const RendererBitmap expected = render("translate(0 0)", R"svg(x="36" y="36")svg");
   ExpectVisibleBitmap(expected, "fe_image_viewbox_expected_visible");
   EXPECT_THAT(PixelAt(expected, 34, 34), test::RgbaEq(0, 255, 0, 255));
-  ExpectBitmapsIdentical(render("translate(8 8)", R"svg(x="28" y="28")svg"), expected,
-                         "fe_image_fragment_viewbox_origin");
+  editor::tests::CompareBitmapToBitmap(render("translate(8 8)", R"svg(x="28" y="28")svg"), expected,
+                                       "fe_image_fragment_viewbox_origin",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, FeImageFragmentUsesAnimatedSubregionSize) {
