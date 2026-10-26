@@ -3090,6 +3090,43 @@ bool RendererDriver::materializeFilterStages(std::vector<components::FilterGraph
   return true;
 }
 
+namespace {
+
+/// Mark every prepared filter layer that contains feTurbulence, or encloses a filter layer that
+/// does, to keep its input capture aligned with the viewport. Both backends evaluate turbulence
+/// noise from raster pixel coordinates, so an input margin on any enclosing layer, or on an outer
+/// stage of the same element, would move the noise pattern. Stages of one element nest, and a
+/// descendant's draw order lies within its ancestor's subtree range.
+void MarkViewportAlignedFilterCaptures(
+    Registry& registry,
+    std::unordered_map<Entity, std::vector<components::FilterGraph>>& preparedGraphs) {
+  std::vector<int> turbulenceDrawOrders;
+  for (const auto& [entity, stages] : preparedGraphs) {
+    if (std::any_of(stages.begin(), stages.end(), components::FilterGraphHasTurbulence)) {
+      turbulenceDrawOrders.push_back(
+          registry.get<components::RenderingInstanceComponent>(entity).drawOrder);
+    }
+  }
+  if (turbulenceDrawOrders.empty()) {
+    return;
+  }
+  for (auto& [entity, stages] : preparedGraphs) {
+    const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+    const auto* last =
+        registry.try_get<components::RenderingInstanceComponent>(instance.subtreeLastEntity);
+    const int lastDrawOrder = last != nullptr ? last->drawOrder : instance.drawOrder;
+    const bool enclosesTurbulence =
+        std::any_of(turbulenceDrawOrders.begin(), turbulenceDrawOrders.end(), [&](int drawOrder) {
+          return drawOrder >= instance.drawOrder && drawOrder <= lastDrawOrder;
+        });
+    for (components::FilterGraph& stage : stages) {
+      stage.keepsViewportAlignedCapture = stage.keepsViewportAlignedCapture || enclosesTurbulence;
+    }
+  }
+}
+
+}  // namespace
+
 void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Entity> entities) {
   // Iterate a caller-provided snapshot of entity IDs so that mid-loop storage mutation (from
   // `createFeImageShadowTree` inside `preRenderFeImageFragments`) cannot invalidate the iteration.
@@ -3126,6 +3163,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
       preparedFilterGraphs_[entity] = std::move(*stages);
     }
   }
+  MarkViewportAlignedFilterCaptures(registry, preparedFilterGraphs_);
 }
 
 void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {

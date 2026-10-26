@@ -412,6 +412,7 @@ donner_perf_sensitive_cc_library(
 )
 
 _RENDERER_GEODE_COMMON_DEPS = [
+    ":filter_region_context",
     ":headless_device_pool",
     ":pattern_tile",
     ":renderer_driver",
@@ -551,6 +552,7 @@ donner_perf_sensitive_cc_library(
     }) + select({
         ":filters_enabled": [
             ":filter_graph_executor",
+            ":filter_region_context",
             ":tiny_skia_filter_deps",
         ],
         "//conditions:default": [],

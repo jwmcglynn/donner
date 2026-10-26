@@ -718,151 +718,21 @@ struct FilterGraph {
   /// pixmap. Set by the renderer driver from the viewBox and canvas dimensions.
   Vector2d userToPixelScale = Vector2d(1.0, 1.0);
 
+  /// True when the filter layer's input capture must stay aligned with the viewport: the graph, or
+  /// a filter layer drawn inside it, contains feTurbulence, whose noise would move with the raster
+  /// origin. Set by the renderer driver.
+  bool keepsViewportAlignedCapture = false;
+
   /// Returns true if the graph has no nodes.
   [[nodiscard]] bool empty() const { return nodes.empty(); }
 };
 
-/// How far a filter graph's output can depend on input pixels away from the output position.
-struct FilterInputReach {
-  Vector2d user;           ///< Reach in user-space units, per axis.
-  Vector2d pixels;         ///< Additional reach in filter raster pixels, per axis.
-  bool unbounded = false;  ///< True when some primitive can read any position in its input.
-  /// True when some primitive's output depends on where the raster's pixel origin lies.
-  /// feTurbulence evaluates its noise from raster pixel coordinates through only the linear part
-  /// of the filter transform, so moving the raster origin would move the noise pattern.
-  bool originDependent = false;
-};
-
-/// Conservatively bound how far a filter graph samples its inputs. Each primitive's reach is
-/// summed, since chained primitives compound and the sum bounds every path through the graph.
-/// Object-bounding-box primitive units scale user reach by the element's bounding box.
-/// @param graph Filter graph with its primitive units and element bounding box resolved.
-inline FilterInputReach ComputeFilterInputReach(const FilterGraph& graph) {
-  const bool objectBounds = graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
-                            graph.elementBoundingBox.has_value();
-  const Vector2d bounds =
-      objectBounds ? Vector2d(graph.elementBoundingBox->width(), graph.elementBoundingBox->height())
-                   : Vector2d(1.0, 1.0);
-  FilterInputReach reach;
-  const auto addUser = [&](double x, double y) {
-    reach.user += Vector2d(std::abs(x) * bounds.x, std::abs(y) * bounds.y);
-  };
-  for (const FilterNode& node : graph.nodes) {
-    std::visit(
-        [&](const auto& primitive) {
-          using T = std::decay_t<decltype(primitive)>;
-          if constexpr (std::is_same_v<T, filter_primitive::GaussianBlur>) {
-            addUser(3.0 * primitive.stdDeviationX, 3.0 * primitive.stdDeviationY);
-          } else if constexpr (std::is_same_v<T, filter_primitive::DropShadow>) {
-            addUser(3.0 * std::abs(primitive.stdDeviationX) + std::abs(primitive.dx),
-                    3.0 * std::abs(primitive.stdDeviationY) + std::abs(primitive.dy));
-          } else if constexpr (std::is_same_v<T, filter_primitive::Offset>) {
-            addUser(primitive.dx, primitive.dy);
-          } else if constexpr (std::is_same_v<T, filter_primitive::Morphology>) {
-            addUser(primitive.radiusX, primitive.radiusY);
-          } else if constexpr (std::is_same_v<T, filter_primitive::DisplacementMap>) {
-            // Displacement scales by the geometric mean of the bounding box extents.
-            const double half = std::abs(primitive.scale) * 0.5 *
-                                (objectBounds ? std::sqrt(bounds.x * bounds.y) : 1.0);
-            reach.user += Vector2d(half, half);
-          } else if constexpr (std::is_same_v<T, filter_primitive::ConvolveMatrix>) {
-            reach.pixels += Vector2d(primitive.orderX, primitive.orderY);
-          } else if constexpr (std::is_same_v<T, filter_primitive::DiffuseLighting> ||
-                               std::is_same_v<T, filter_primitive::SpecularLighting>) {
-            // Surface normals read the neighboring pixels.
-            reach.pixels += Vector2d(1.0, 1.0);
-          } else if constexpr (std::is_same_v<T, filter_primitive::Tile>) {
-            reach.unbounded = true;
-          } else if constexpr (std::is_same_v<T, filter_primitive::Turbulence>) {
-            reach.originDependent = true;
-          }
-        },
-        node.primitive);
-  }
-  return reach;
-}
-
-/// Device-pixel margin of input a filter graph needs around its output, or `std::nullopt` when the
-/// graph can read any position in its input region. A graph with feTurbulence gets no margin, since
-/// its noise would move with the raster origin.
-/// @param graph Filter graph. @param deviceFromFilter Filter user space to filter raster pixels.
-inline std::optional<Vector2d> FilterInputDeviceMargin(const FilterGraph& graph,
-                                                       const Transform2d& deviceFromFilter) {
-  const FilterInputReach reach = ComputeFilterInputReach(graph);
-  if (reach.originDependent) {
-    // Keep the viewport-aligned capture rather than shift the noise pattern.
-    return Vector2d::Zero();
-  }
-  if (reach.unbounded) {
-    return std::nullopt;
-  }
-  // Bound the device extent of the user-space reach rectangle. A graph that reads only the input
-  // pixel under each output pixel needs no margin; otherwise one more pixel covers rounding.
-  const double* m = deviceFromFilter.data;
-  const Vector2d spread(
-      std::abs(m[0]) * reach.user.x + std::abs(m[2]) * reach.user.y + reach.pixels.x,
-      std::abs(m[1]) * reach.user.x + std::abs(m[3]) * reach.user.y + reach.pixels.y);
-  const double rounding = spread.x > 0.0 || spread.y > 0.0 ? 1.0 : 0.0;
-  const Vector2d margin(spread.x + rounding, spread.y + rounding);
-  if (!std::isfinite(margin.x) || !std::isfinite(margin.y)) {
-    return std::nullopt;
-  }
-  return margin;
-}
-
-/// Filter input raster layout around a viewport: the viewport plus the input margin on each side,
-/// limited to where the filter region extends past the viewport.
-struct FilterInputBuffer {
-  int width = 0;    ///< Raster width in pixels.
-  int height = 0;   ///< Raster height in pixels.
-  int offsetX = 0;  ///< Raster pixels left of the viewport.
-  int offsetY = 0;  ///< Raster pixels above the viewport.
-};
-
-/// Pixels to extend a filter input raster past one viewport edge.
-/// @param beyond How far the filter region extends past the edge. @param reach Input margin.
-inline int FilterInputExtension(double beyond, double reach) {
-  if (!(beyond > 0.0)) {
-    return 0;
-  }
-  const double limit = static_cast<double>(kMaximumFilterSurfaceDimension);
-  return static_cast<int>(std::ceil(std::min({beyond, reach, limit})));
-}
-
-/// Lay out the input raster for a filter layer over a \p viewportWidth by \p viewportHeight
-/// surface. Primitives that read input away from the output position need the filtered content
-/// just past the viewport, so the raster extends by the graph's input margin wherever the filter
-/// region extends past the viewport, up to the whole region for a graph with unbounded reach. Each
-/// axis stays within the surface dimension limit; a layout over the pixel limit falls back to the
-/// viewport.
-inline FilterInputBuffer ComputeFilterInputBuffer(const FilterGraph& graph,
-                                                  const std::optional<Box2d>& filterRegion,
-                                                  const Transform2d& deviceFromFilter,
-                                                  int viewportWidth, int viewportHeight) {
-  const FilterInputBuffer viewport{viewportWidth, viewportHeight, 0, 0};
-  if (!filterRegion.has_value()) {
-    return viewport;
-  }
-  const Box2d deviceRegion = deviceFromFilter.transformBox(*filterRegion);
-  const double limit = static_cast<double>(kMaximumFilterSurfaceDimension);
-  const Vector2d reach =
-      FilterInputDeviceMargin(graph, deviceFromFilter).value_or(Vector2d(limit, limit));
-  const auto layoutAxis = [](double regionMin, double regionMax, double reachAxis, int extent,
-                             int& before) {
-    const int room = std::max(0, kMaximumFilterSurfaceDimension - extent);
-    before = std::min(FilterInputExtension(-regionMin, reachAxis), room);
-    const int after = std::min(
-        FilterInputExtension(regionMax - static_cast<double>(extent), reachAxis), room - before);
-    return extent + before + after;
-  };
-  FilterInputBuffer result;
-  result.width = layoutAxis(deviceRegion.topLeft.x, deviceRegion.bottomRight.x, reach.x,
-                            viewportWidth, result.offsetX);
-  result.height = layoutAxis(deviceRegion.topLeft.y, deviceRegion.bottomRight.y, reach.y,
-                             viewportHeight, result.offsetY);
-  const std::uint64_t pixels = static_cast<std::uint64_t>(std::max(result.width, 0)) *
-                               static_cast<std::uint64_t>(std::max(result.height, 0));
-  return pixels > kMaximumFilterSurfacePixels ? viewport : result;
+/// Whether \p graph contains feTurbulence, whose noise both backends evaluate from raster pixel
+/// coordinates through only the linear part of the filter transform.
+inline bool FilterGraphHasTurbulence(const FilterGraph& graph) {
+  return std::any_of(graph.nodes.begin(), graph.nodes.end(), [](const FilterNode& node) {
+    return std::holds_alternative<filter_primitive::Turbulence>(node.primitive);
+  });
 }
 
 /// Conservative resource layout for the live float filter execution strategy.
@@ -1408,60 +1278,42 @@ public:
                                      std::uint64_t retainedGpuBufferBytes = 0,
                                      std::uint64_t memoryPixels = UINT64_MAX,
                                      std::uint64_t executions = 1, std::size_t gpuSurfaces = 0) {
-    std::uint64_t graphWorkUnits = 0;
-    std::uint64_t graphIntermediateBytes = 0;
     if (rejected_) {
       return std::nullopt;
     }
-    if (!FilterGraphExecutionCost(graph, pixelCount, memoryModel, graphWorkUnits,
-                                  graphIntermediateBytes, memoryPixels, executions)) {
-      rejectionReason_ = RejectionReason::InvalidGraph;
-      rejected_ = true;
-      return std::nullopt;
-    }
-
-    const bool gpu = memoryModel == FilterMemoryModel::GpuAllNodes;
-    const std::uint64_t persistentBytes = std::max(persistentGpuBytes_, retainedGpuBufferBytes);
-    if (gpu && (persistentBytes > kMaximumFilterFrameBytes ||
-                gpuSurfaces > std::numeric_limits<std::size_t>::max() - reservedGpuSurfaces_)) {
-      rejectionReason_ = RejectionReason::MemoryLimit;
-      rejected_ = true;
-      return std::nullopt;
-    }
-    const std::uint64_t retainedBeforeExecution =
-        gpu ? intermediateBytes_ + persistentBytes : liveCpuCaptureBytes_;
-    if (executions_ >= kMaximumExecutions) {
-      rejectionReason_ = RejectionReason::ExecutionLimit;
-      rejected_ = true;
-      return std::nullopt;
-    }
-    if (workUnits_ > kMaximumFilterFrameWorkUnits ||
-        graphWorkUnits > kMaximumFilterFrameWorkUnits - workUnits_) {
-      rejectionReason_ = RejectionReason::WorkLimit;
-      rejected_ = true;
-      return std::nullopt;
-    }
-    if (retainedBeforeExecution > kMaximumFilterFrameBytes ||
-        captureBytes > kMaximumFilterFrameBytes - retainedBeforeExecution ||
-        graphIntermediateBytes >
-            kMaximumFilterFrameBytes - retainedBeforeExecution - captureBytes) {
-      rejectionReason_ = RejectionReason::MemoryLimit;
+    const Admission admission =
+        evaluate(graph, pixelCount, memoryModel, captureBytes, retainedGpuBufferBytes, memoryPixels,
+                 executions, gpuSurfaces);
+    if (admission.failure != RejectionReason::None) {
+      rejectionReason_ = admission.failure;
       rejected_ = true;
       return std::nullopt;
     }
 
     ++executions_;
-    workUnits_ += graphWorkUnits;
+    workUnits_ += admission.workUnits;
     captureBytesReserved_ += captureBytes;
-    if (gpu) {
-      persistentGpuBytes_ = persistentBytes;
+    if (memoryModel == FilterMemoryModel::GpuAllNodes) {
+      persistentGpuBytes_ = admission.persistentBytes;
       reservedGpuSurfaces_ += gpuSurfaces;
-      intermediateBytes_ += captureBytes + graphIntermediateBytes;
+      intermediateBytes_ += captureBytes + admission.intermediateBytes;
       ++activeGpuReservations_;
     } else {
       liveCpuCaptureBytes_ += captureBytes;
     }
     return Reservation{captureBytes, memoryModel, true};
+  }
+
+  /// Whether \ref reserve would succeed with the same arguments, without reserving anything or
+  /// latching a rejection. Lets a renderer try a cheaper layout before committing to one.
+  [[nodiscard]] bool canReserve(const FilterGraph& graph, std::uint64_t pixelCount,
+                                FilterMemoryModel memoryModel, std::uint64_t captureBytes,
+                                std::uint64_t retainedGpuBufferBytes = 0,
+                                std::uint64_t memoryPixels = UINT64_MAX,
+                                std::uint64_t executions = 1, std::size_t gpuSurfaces = 0) const {
+    return !rejected_ && evaluate(graph, pixelCount, memoryModel, captureBytes,
+                                  retainedGpuBufferBytes, memoryPixels, executions, gpuSurfaces)
+                                 .failure == RejectionReason::None;
   }
 
   /// Release a successful CPU capture reservation after its filter layer is popped.
@@ -1530,6 +1382,65 @@ public:
   [[nodiscard]] RejectionReason rejectionReason() const { return rejectionReason_; }
 
 private:
+  /// Outcome of checking one reservation against the frame's remaining capacity.
+  struct Admission {
+    RejectionReason failure = RejectionReason::None;  ///< First limit the reservation exceeds.
+    std::uint64_t workUnits = 0;                      ///< Estimated pixel work of the graph.
+    std::uint64_t intermediateBytes = 0;  ///< Estimated intermediate bytes of the graph.
+    std::uint64_t persistentBytes = 0;    ///< Persistent GPU bytes after the reservation.
+  };
+
+  /// Check a reservation against the frame's capacity without changing any accounting.
+  Admission evaluate(const FilterGraph& graph, std::uint64_t pixelCount,
+                     FilterMemoryModel memoryModel, std::uint64_t captureBytes,
+                     std::uint64_t retainedGpuBufferBytes, std::uint64_t memoryPixels,
+                     std::uint64_t executions, std::size_t gpuSurfaces) const {
+    Admission admission;
+    if (!FilterGraphExecutionCost(graph, pixelCount, memoryModel, admission.workUnits,
+                                  admission.intermediateBytes, memoryPixels, executions)) {
+      admission.failure = RejectionReason::InvalidGraph;
+      return admission;
+    }
+    const bool gpu = memoryModel == FilterMemoryModel::GpuAllNodes;
+    admission.persistentBytes = std::max(persistentGpuBytes_, retainedGpuBufferBytes);
+    const std::uint64_t retainedBeforeExecution =
+        gpu ? intermediateBytes_ + admission.persistentBytes : liveCpuCaptureBytes_;
+    admission.failure =
+        gpu ? gpuSurfaceFailure(admission.persistentBytes, gpuSurfaces) : RejectionReason::None;
+    if (admission.failure == RejectionReason::None) {
+      admission.failure = frameLimitFailure(admission, retainedBeforeExecution, captureBytes);
+    }
+    return admission;
+  }
+
+  /// The GPU persistent-memory or surface-count limit a reservation exceeds, if any.
+  RejectionReason gpuSurfaceFailure(std::uint64_t persistentBytes, std::size_t gpuSurfaces) const {
+    return persistentBytes > kMaximumFilterFrameBytes ||
+                   gpuSurfaces > std::numeric_limits<std::size_t>::max() - reservedGpuSurfaces_
+               ? RejectionReason::MemoryLimit
+               : RejectionReason::None;
+  }
+
+  /// The frame execution, work or memory limit a reservation exceeds, if any.
+  RejectionReason frameLimitFailure(const Admission& admission,
+                                    std::uint64_t retainedBeforeExecution,
+                                    std::uint64_t captureBytes) const {
+    if (executions_ >= kMaximumExecutions) {
+      return RejectionReason::ExecutionLimit;
+    }
+    if (workUnits_ > kMaximumFilterFrameWorkUnits ||
+        admission.workUnits > kMaximumFilterFrameWorkUnits - workUnits_) {
+      return RejectionReason::WorkLimit;
+    }
+    if (retainedBeforeExecution > kMaximumFilterFrameBytes ||
+        captureBytes > kMaximumFilterFrameBytes - retainedBeforeExecution ||
+        admission.intermediateBytes >
+            kMaximumFilterFrameBytes - retainedBeforeExecution - captureBytes) {
+      return RejectionReason::MemoryLimit;
+    }
+    return RejectionReason::None;
+  }
+
   std::uint64_t executions_ = 0;
   std::uint64_t workUnits_ = 0;
   std::uint64_t intermediateBytes_ = 0;

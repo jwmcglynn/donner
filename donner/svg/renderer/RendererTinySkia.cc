@@ -24,6 +24,7 @@
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #ifdef DONNER_FILTERS_ENABLED
 #include "donner/svg/renderer/FilterGraphExecutor.h"
+#include "donner/svg/renderer/FilterRegionContext.h"
 #endif
 #include "donner/svg/renderer/ImageSampling.h"
 #include "donner/svg/renderer/PatternTile.h"
@@ -1152,22 +1153,6 @@ bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
                                   const Transform2d& deviceFromFilter);
 double computeBlurPadding(const components::FilterGraph& filterGraph);
 
-struct FilterBufferMetrics {
-  int width = 0;
-  int height = 0;
-  int offsetX = 0;
-  int offsetY = 0;
-};
-
-FilterBufferMetrics ComputeFilterBufferMetrics(const components::FilterGraph& filterGraph,
-                                               const std::optional<Box2d>& filterRegion,
-                                               const Transform2d& deviceFromFilter,
-                                               int viewportWidth, int viewportHeight) {
-  const components::FilterInputBuffer buffer = components::ComputeFilterInputBuffer(
-      filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
-  return FilterBufferMetrics{buffer.width, buffer.height, buffer.offsetX, buffer.offsetY};
-}
-
 bool CanUseLocalFilterRaster(const components::FilterGraph& filterGraph,
                              const std::optional<Box2d>& filterRegion,
                              const Transform2d& deviceFromFilter, bool fullExecutionFits) {
@@ -1772,26 +1757,28 @@ components::FilterStandardInputUsage RendererTinySkia::filterCaptureInputs(
   return usage;
 }
 
-std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLayer(
-    const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
-    const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight) {
-  const FilterBufferMetrics buffer = ComputeFilterBufferMetrics(
-      filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
-  const components::FilterStandardInputUsage inputs = filterCaptureInputs(filterGraph);
-  const bool usesFillPaint = inputs.fillPaint;
-  const bool usesStrokePaint = inputs.strokePaint;
-  const std::uint64_t surfaceCount =
-      1u + static_cast<std::uint64_t>(usesFillPaint) + static_cast<std::uint64_t>(usesStrokePaint);
+/// Execution and capture sizes for one candidate filter input layout.
+struct TinySkiaFilterPlan {
+  FilterInputBuffer buffer;               ///< Input raster layout.
+  std::uint64_t executionPixelCount = 0;  ///< Pixels the graph executes over.
+  std::uint64_t captureBytes = 0;         ///< Capture surface bytes.
+  bool fullExecutionFits = false;         ///< Whether the whole raster fits execution limits.
+};
+
+/// Plan a filter layer over \p buffer without reserving anything, or `std::nullopt` when the
+/// layout cannot execute within the surface and graph execution limits.
+std::optional<TinySkiaFilterPlan> PlanTinySkiaFilter(const components::FilterGraph& filterGraph,
+                                                     const std::optional<Box2d>& filterRegion,
+                                                     const Transform2d& deviceFromFilter,
+                                                     const FilterInputBuffer& buffer,
+                                                     std::uint64_t surfaceCount) {
   if (buffer.width <= 0 || buffer.height <= 0) {
-    filterExecutionBudget_->reject();
     return std::nullopt;
   }
-
   const std::uint64_t pixelCount =
       static_cast<std::uint64_t>(buffer.width) * static_cast<std::uint64_t>(buffer.height);
   if (pixelCount > components::kMaximumFilterSurfacePixels ||
       pixelCount > std::numeric_limits<std::uint64_t>::max() / 4u / surfaceCount) {
-    filterExecutionBudget_->reject();
     return std::nullopt;
   }
   const bool fullExecutionFits = components::FilterGraphFitsExecutionBudget(
@@ -1799,25 +1786,57 @@ std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLa
   const std::optional<std::uint64_t> localPixelCount =
       ComputeLocalFilterPixels(filterGraph, filterRegion, deviceFromFilter, fullExecutionFits);
   if (!fullExecutionFits && !localPixelCount.has_value()) {
+    return std::nullopt;
+  }
+  TinySkiaFilterPlan plan{buffer, pixelCount, pixelCount * 4u * surfaceCount, fullExecutionFits};
+  if (localPixelCount.has_value()) {
+    plan.executionPixelCount =
+        fullExecutionFits ? std::max(pixelCount, *localPixelCount) : *localPixelCount;
+    plan.captureBytes += *localPixelCount * 4u;
+  }
+  return plan;
+}
+
+std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLayer(
+    const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
+    const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight) {
+  const components::FilterStandardInputUsage inputs = filterCaptureInputs(filterGraph);
+  const bool usesFillPaint = inputs.fillPaint;
+  const bool usesStrokePaint = inputs.strokePaint;
+  const std::uint64_t surfaceCount =
+      1u + static_cast<std::uint64_t>(usesFillPaint) + static_cast<std::uint64_t>(usesStrokePaint);
+
+  // Prefer a raster with the graph's input margin, but never let the margin turn an admissible
+  // filter into a frame-wide rejection: fall back to the viewport layout when the larger raster
+  // would not fit.
+  const FilterInputBuffer expanded = ComputeFilterInputBuffer(
+      filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
+  std::optional<TinySkiaFilterPlan> plan =
+      PlanTinySkiaFilter(filterGraph, filterRegion, deviceFromFilter, expanded, surfaceCount);
+  const auto fits = [&](const std::optional<TinySkiaFilterPlan>& candidate) {
+    return candidate.has_value() &&
+           filterExecutionBudget_->canReserve(filterGraph, candidate->executionPixelCount,
+                                              components::FilterMemoryModel::CpuFloatNamedResults,
+                                              candidate->captureBytes);
+  };
+  if (expanded.exceedsViewport(viewportWidth, viewportHeight) && !fits(plan)) {
+    plan = PlanTinySkiaFilter(filterGraph, filterRegion, deviceFromFilter,
+                              FilterInputBuffer{viewportWidth, viewportHeight, 0, 0}, surfaceCount);
+  }
+  if (!plan.has_value()) {
     filterExecutionBudget_->reject();
     return std::nullopt;
   }
 
-  std::uint64_t executionPixelCount = pixelCount;
-  std::uint64_t captureBytes = pixelCount * 4u * surfaceCount;
-  if (localPixelCount.has_value()) {
-    executionPixelCount =
-        fullExecutionFits ? std::max(pixelCount, *localPixelCount) : *localPixelCount;
-    captureBytes += *localPixelCount * 4u;
-  }
   auto reservation = filterExecutionBudget_->reserve(
-      filterGraph, executionPixelCount, components::FilterMemoryModel::CpuFloatNamedResults,
-      captureBytes);
+      filterGraph, plan->executionPixelCount, components::FilterMemoryModel::CpuFloatNamedResults,
+      plan->captureBytes);
   if (!reservation.has_value()) {
     return std::nullopt;
   }
-  return FilterAdmission{buffer.width,  buffer.height,   buffer.offsetX,     buffer.offsetY,
-                         usesFillPaint, usesStrokePaint, !fullExecutionFits, *reservation};
+  return FilterAdmission{plan->buffer.width,       plan->buffer.height, plan->buffer.offsetX,
+                         plan->buffer.offsetY,     usesFillPaint,       usesStrokePaint,
+                         !plan->fullExecutionFits, *reservation};
 }
 
 bool RendererTinySkia::initializeFilterSurface(SurfaceFrame& frame,
@@ -1990,6 +2009,12 @@ tiny_skia::Pixmap RendererTinySkia::extractFilterViewport(const SurfaceFrame& fr
 
 void RendererTinySkia::compositeDeviceFilter(SurfaceFrame& frame) {
   const bool hasOffset = frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0;
+  auto pixmapView = currentPixmapView();
+  const bool exceedsTarget = FilterInputBuffer{static_cast<int>(frame.pixmap.width()),
+                                               static_cast<int>(frame.pixmap.height()),
+                                               frame.filterBufferOffsetX, frame.filterBufferOffsetY}
+                                 .exceedsViewport(static_cast<int>(pixmapView.width()),
+                                                  static_cast<int>(pixmapView.height()));
   const Transform2d bufferDeviceFromFilter =
       hasOffset ? frame.deviceFromFilter *
                       Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
@@ -2005,8 +2030,7 @@ void RendererTinySkia::compositeDeviceFilter(SurfaceFrame& frame) {
   paint.opacity = 1.0f;
   paint.blendMode = tiny_skia::BlendMode::SourceOver;
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
-  auto pixmapView = currentPixmapView();
-  if (hasOffset) {
+  if (exceedsTarget) {
     tiny_skia::Pixmap viewport = extractFilterViewport(frame, static_cast<int>(pixmapView.width()),
                                                        static_cast<int>(pixmapView.height()));
     tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, viewport.view(), paint,

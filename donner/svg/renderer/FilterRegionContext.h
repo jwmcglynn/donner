@@ -3,9 +3,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Transform.h"
@@ -82,6 +85,257 @@ inline Vector2d FilterOffsetInPixels(Vector2d offset, Vector2d bounds, bool obje
   const Vector2d userOffset =
       objectBounds ? Vector2d(offset.x * bounds.x, offset.y * bounds.y) : offset;
   return transform.transformVector(userOffset);
+}
+
+/// Input a filter layer's capture must include beyond each output pixel, in device pixels.
+struct FilterInputMargin {
+  Vector2d pixels;                   ///< Farthest input read from an output pixel, per axis.
+  std::optional<Box2d> userCapture;  ///< User-space rectangle the capture must cover in full.
+  bool wholeRegion = false;          ///< Some primitive can read any position in its input.
+};
+
+/// Accumulates each primitive's input reach in device pixels, converting lengths with the same
+/// helpers and bounds the filter executors use.
+struct FilterInputMarginBuilder {
+  const components::FilterGraph& graph;  ///< Graph being measured.
+  Transform2d deviceFromFilter;          ///< Filter user space to raster pixels.
+  Vector2d scale;                        ///< Device scale of each filter axis.
+  Vector2d bounds;                       ///< Element bounding box size, or 1 without one.
+  bool objectBounds = false;             ///< Whether primitive lengths are bounding-box fractions.
+  FilterInputMargin margin;              ///< Accumulated margin.
+
+  /// Device length of a nonnegative primitive length. @param value Length. @param axis 0 or 1.
+  double length(double value, int axis) const {
+    return value >= 0 ? BoundedPositiveFilterPixels(
+                            FilterLengthInPixels(value, axis == 0 ? bounds.x : bounds.y,
+                                                 axis == 0 ? scale.x : scale.y, objectBounds))
+                      : 0.0;
+  }
+
+  /// Device extent of a primitive offset. @param dx X offset. @param dy Y offset.
+  Vector2d offset(double dx, double dy) const {
+    const Vector2d pixels = FilterOffsetInPixels({dx, dy}, bounds, objectBounds, deviceFromFilter);
+    return Vector2d(std::abs(BoundedSignedFilterPixels(pixels.x)),
+                    std::abs(BoundedSignedFilterPixels(pixels.y)));
+  }
+
+  void add(const components::filter_primitive::GaussianBlur& blur) {
+    margin.pixels +=
+        Vector2d(3.0 * length(blur.stdDeviationX, 0), 3.0 * length(blur.stdDeviationY, 1));
+  }
+
+  void add(const components::filter_primitive::DropShadow& shadow) {
+    margin.pixels += offset(shadow.dx, shadow.dy) + Vector2d(3.0 * length(shadow.stdDeviationX, 0),
+                                                             3.0 * length(shadow.stdDeviationY, 1));
+  }
+
+  void add(const components::filter_primitive::Offset& value) {
+    margin.pixels += offset(value.dx, value.dy);
+  }
+
+  void add(const components::filter_primitive::Morphology& morphology) {
+    margin.pixels += Vector2d(length(morphology.radiusX, 0), length(morphology.radiusY, 1));
+  }
+
+  /// The backends disagree on how displacement scales: one applies the scale directly in raster
+  /// pixels, the other multiplies it by the transform's area scale. Bound both.
+  void add(const components::filter_primitive::DisplacementMap& displacement) {
+    const double* m = deviceFromFilter.data;
+    const double transformScale =
+        std::max({1.0, std::sqrt(std::abs(deviceFromFilter.determinant())), std::abs(m[0]),
+                  std::abs(m[1]), std::abs(m[2]), std::abs(m[3])});
+    const double half = std::abs(displacement.scale) * 0.5 *
+                        (objectBounds ? std::sqrt(bounds.x * bounds.y) : 1.0) * transformScale;
+    const double bounded = BoundedSignedFilterPixels(half);
+    margin.pixels += Vector2d(bounded, bounded);
+  }
+
+  void add(const components::filter_primitive::ConvolveMatrix& convolve) {
+    margin.pixels +=
+        Vector2d(std::clamp(convolve.orderX, 0, components::kMaximumFilterConvolveOrder),
+                 std::clamp(convolve.orderY, 0, components::kMaximumFilterConvolveOrder));
+  }
+
+  /// Surface normals read the neighboring pixels.
+  void add(const components::filter_primitive::DiffuseLighting&) {
+    margin.pixels += Vector2d(1.0, 1.0);
+  }
+
+  /// Surface normals read the neighboring pixels.
+  void add(const components::filter_primitive::SpecularLighting&) {
+    margin.pixels += Vector2d(1.0, 1.0);
+  }
+
+  /// Point-wise primitives read only the input pixel under each output pixel.
+  template <typename T>
+  void add(const T&) {}
+
+  /// feTile repeats its input's subregion, so the capture must cover that whole rectangle. It is
+  /// known here only when the input primitive authors its region in user-space units; otherwise
+  /// the tile may read anywhere in the filter region.
+  void addTile(const components::FilterNode* input) {
+    const auto userLength = [](const std::optional<Lengthd>& value) {
+      return value.has_value() &&
+             (value->unit == Lengthd::Unit::Px || value->unit == Lengthd::Unit::None);
+    };
+    if (input == nullptr || objectBounds || input->hasAnimatedRegion() || !userLength(input->x) ||
+        !userLength(input->y) || !userLength(input->width) || !userLength(input->height)) {
+      margin.wholeRegion = true;
+      return;
+    }
+    const Box2d source = Box2d::FromXYWH(input->x->value, input->y->value, input->width->value,
+                                         input->height->value);
+    margin.userCapture = margin.userCapture ? Box2d::Union(*margin.userCapture, source) : source;
+  }
+};
+
+/// The node a primitive's first input names, or `nullptr` when it reads a standard input.
+inline const components::FilterNode* FilterFirstInputNode(const components::FilterGraph& graph,
+                                                          size_t index) {
+  using namespace components;
+  const FilterInput input = FilterInputOrDefault(graph.nodes[index], 0);
+  if (const auto* name = std::get_if<FilterInput::Named>(&input.value)) {
+    for (size_t prior = index; prior-- > 0;) {
+      if (graph.nodes[prior].result.has_value() && *graph.nodes[prior].result == name->name) {
+        return &graph.nodes[prior];
+      }
+    }
+  }
+  if (std::holds_alternative<FilterStandardInput>(input.value) || index == 0) {
+    return nullptr;
+  }
+  return &graph.nodes[index - 1];
+}
+
+/// Conservatively measure how far beyond each output pixel a filter graph reads its raster. Every
+/// primitive counts, including those fed only by generators: feFlood, feImage and feTurbulence
+/// produce output only over the raster, so a later blur or tile still needs the raster to extend
+/// past the viewport. Reaches add up, since chained primitives compound. A graph that must stay
+/// viewport-aligned, see \ref components::FilterGraph::keepsViewportAlignedCapture, needs no
+/// margin.
+/// @param graph Filter graph. @param deviceFromFilter Filter user space to raster pixels.
+inline FilterInputMargin ComputeFilterInputMargin(const components::FilterGraph& graph,
+                                                  const Transform2d& deviceFromFilter) {
+  if (graph.keepsViewportAlignedCapture || components::FilterGraphHasTurbulence(graph)) {
+    return {};
+  }
+  const bool objectBounds = graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
+                            graph.elementBoundingBox.has_value();
+  const double scaleX = FilterDeviceScaleX(deviceFromFilter);
+  FilterInputMarginBuilder builder{
+      graph,
+      deviceFromFilter,
+      Vector2d(scaleX, FilterDeviceScaleY(deviceFromFilter, scaleX)),
+      objectBounds ? graph.elementBoundingBox->size() : Vector2d(1.0, 1.0),
+      objectBounds,
+      {}};
+  for (size_t index = 0; index < graph.nodes.size(); ++index) {
+    if (std::holds_alternative<components::filter_primitive::Tile>(graph.nodes[index].primitive)) {
+      builder.addTile(FilterFirstInputNode(graph, index));
+      continue;
+    }
+    std::visit([&](const auto& primitive) { builder.add(primitive); },
+               graph.nodes[index].primitive);
+  }
+  FilterInputMargin margin = builder.margin;
+  // Under rotation or skew a reach along one filter axis lands on both device axes.
+  if (!NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6)) {
+    const double reach = std::max(margin.pixels.x, margin.pixels.y);
+    margin.pixels = Vector2d(reach, reach);
+  }
+  // One more pixel covers rounding at the margin's edge.
+  if (margin.pixels.x > 0.0 || margin.pixels.y > 0.0) {
+    margin.pixels += Vector2d(1.0, 1.0);
+  }
+  return margin;
+}
+
+/// Filter input raster layout around a viewport: the viewport plus input margins on each side.
+struct FilterInputBuffer {
+  int width = 0;    ///< Raster width in pixels.
+  int height = 0;   ///< Raster height in pixels.
+  int offsetX = 0;  ///< Raster pixels left of the viewport.
+  int offsetY = 0;  ///< Raster pixels above the viewport.
+
+  /// Whether the raster extends past the viewport on any side.
+  [[nodiscard]] bool exceedsViewport(int viewportWidth, int viewportHeight) const {
+    return offsetX != 0 || offsetY != 0 || width != viewportWidth || height != viewportHeight;
+  }
+};
+
+/// One axis of a \ref FilterInputBuffer.
+struct FilterInputAxis {
+  int before = 0;  ///< Pixels before the viewport.
+  int extent = 0;  ///< Total pixels.
+};
+
+/// Pixels to extend a filter input raster past one viewport edge.
+/// @param beyond How far the filter region extends past the edge.
+/// @param needed Input the graph reads past that edge.
+inline int FilterInputExtension(double beyond, double needed) {
+  if (!(beyond > 0.0) || !(needed > 0.0)) {
+    return 0;
+  }
+  const double limit = static_cast<double>(components::kMaximumFilterSurfaceDimension);
+  return static_cast<int>(std::ceil(std::min({beyond, needed, limit})));
+}
+
+/// Lay out one raster axis.
+/// @param region Filter region extent on the axis, in device pixels.
+/// @param reach Input read past an output pixel. @param capture Input rectangle to cover.
+/// @param viewport Viewport extent on the axis.
+inline FilterInputAxis LayoutFilterInputAxis(std::pair<double, double> region, double reach,
+                                             std::optional<std::pair<double, double>> capture,
+                                             int viewport) {
+  const double viewportEnd = static_cast<double>(viewport);
+  const double neededBefore = std::max(reach, capture ? -capture->first : 0.0);
+  const double neededAfter = std::max(reach, capture ? capture->second - viewportEnd : 0.0);
+  const int room = std::max(0, components::kMaximumFilterSurfaceDimension - viewport);
+  FilterInputAxis axis;
+  axis.before = std::min(FilterInputExtension(-region.first, neededBefore), room);
+  const int after =
+      std::min(FilterInputExtension(region.second - viewportEnd, neededAfter), room - axis.before);
+  axis.extent = viewport + axis.before + after;
+  return axis;
+}
+
+/// Lay out the input raster for a filter layer over a \p viewportWidth by \p viewportHeight
+/// surface. Primitives that read input away from the output position need the filtered content
+/// just past the viewport, so the raster extends by the graph's input margin wherever the filter
+/// region extends past the viewport, up to the whole region for a graph with unbounded reach. Each
+/// axis stays within the surface dimension limit; a layout over the pixel limit falls back to the
+/// viewport. Renderers also fall back to the viewport when the larger raster would not fit the
+/// frame's filter budgets.
+inline FilterInputBuffer ComputeFilterInputBuffer(const components::FilterGraph& graph,
+                                                  const std::optional<Box2d>& filterRegion,
+                                                  const Transform2d& deviceFromFilter,
+                                                  int viewportWidth, int viewportHeight) {
+  const FilterInputBuffer viewport{viewportWidth, viewportHeight, 0, 0};
+  if (!filterRegion.has_value()) {
+    return viewport;
+  }
+  const FilterInputMargin margin = ComputeFilterInputMargin(graph, deviceFromFilter);
+  const double limit = static_cast<double>(components::kMaximumFilterSurfaceDimension);
+  const Vector2d reach = margin.wholeRegion ? Vector2d(limit, limit) : margin.pixels;
+  const Box2d region = deviceFromFilter.transformBox(*filterRegion);
+  const std::optional<Box2d> capture =
+      margin.userCapture ? std::optional(deviceFromFilter.transformBox(*margin.userCapture))
+                         : std::nullopt;
+  const auto captureAxis = [&](int axis) -> std::optional<std::pair<double, double>> {
+    if (!capture) {
+      return std::nullopt;
+    }
+    return axis == 0 ? std::pair(capture->topLeft.x, capture->bottomRight.x)
+                     : std::pair(capture->topLeft.y, capture->bottomRight.y);
+  };
+  const FilterInputAxis x = LayoutFilterInputAxis({region.topLeft.x, region.bottomRight.x}, reach.x,
+                                                  captureAxis(0), viewportWidth);
+  const FilterInputAxis y = LayoutFilterInputAxis({region.topLeft.y, region.bottomRight.y}, reach.y,
+                                                  captureAxis(1), viewportHeight);
+  const FilterInputBuffer result{x.extent, y.extent, x.before, y.before};
+  const std::uint64_t pixels = static_cast<std::uint64_t>(std::max(result.width, 0)) *
+                               static_cast<std::uint64_t>(std::max(result.height, 0));
+  return pixels > components::kMaximumFilterSurfacePixels ? viewport : result;
 }
 
 /// Invert only finite, nonsingular transforms whose inverse remains finite.
