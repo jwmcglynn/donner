@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <limits>
 #include <optional>
+#include <ostream>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,17 @@
 #include "donner/svg/renderer/FilterRegionContext.h"
 
 namespace donner::svg {
+
+// Printers for the input buffer layout structs, so a failed match shows the whole layout.
+void PrintTo(const FilterInputAxis& axis, std::ostream* os) {
+  *os << "FilterInputAxis{before=" << axis.before << ", extent=" << axis.extent << "}";
+}
+
+void PrintTo(const FilterInputBuffer& buffer, std::ostream* os) {
+  *os << "FilterInputBuffer{width=" << buffer.width << ", height=" << buffer.height
+      << ", offsetX=" << buffer.offsetX << ", offsetY=" << buffer.offsetY << "}";
+}
+
 namespace {
 
 using ::testing::_;
@@ -2448,40 +2460,36 @@ TEST(FilterInputMarginTest, CanReserveAgreesWithReserveWithoutLatching) {
 }
 
 TEST(FilterInputMarginTest, LayoutAxisExtendsByReachAndCaptureWithinTheRegion) {
+  using testing::FieldsAre;
   // Region reaches 10 pixels before and 36 after a 64-pixel viewport.
-  FilterInputAxis axis = LayoutFilterInputAxis({-10.0, 100.0}, 3.0, std::nullopt, 64);
-  EXPECT_EQ(axis.before, 3);
-  EXPECT_EQ(axis.extent, 70);
+  EXPECT_THAT(LayoutFilterInputAxis({-10.0, 100.0}, 3.0, std::nullopt, 64), FieldsAre(3, 70));
   // A capture rectangle beyond the reach widens only its own side, clamped to the region.
-  axis = LayoutFilterInputAxis({-10.0, 100.0}, 3.0, std::pair(-40.0, -20.0), 64);
-  EXPECT_EQ(axis.before, 10);
-  EXPECT_EQ(axis.extent, 77);
+  EXPECT_THAT(LayoutFilterInputAxis({-10.0, 100.0}, 3.0, std::pair(-40.0, -20.0), 64),
+              FieldsAre(10, 77));
   // Nothing extends past an edge the region does not cross.
-  axis = LayoutFilterInputAxis({0.0, 64.0}, 3.0, std::nullopt, 64);
-  EXPECT_EQ(axis.before, 0);
-  EXPECT_EQ(axis.extent, 64);
+  EXPECT_THAT(LayoutFilterInputAxis({0.0, 64.0}, 3.0, std::nullopt, 64), FieldsAre(0, 64));
 }
 
 TEST(FilterInputMarginTest, InputBufferFollowsGraphReach) {
   using namespace components;
   const std::optional<Box2d> region = Box2d::FromXYWH(-50, -50, 200, 200);
+  using testing::FieldsAre;
   const auto layout = [&](const FilterGraph& graph) {
-    const FilterInputBuffer buffer = ComputeFilterInputBuffer(graph, region, Transform2d(), 64, 64);
-    return std::array{buffer.width, buffer.height, buffer.offsetX, buffer.offsetY};
+    return ComputeFilterInputBuffer(graph, region, Transform2d(), 64, 64);
   };
   // Three standard deviations plus a rounding pixel.
   EXPECT_THAT(layout(SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0})),
-              testing::ElementsAre(78, 78, 7, 7));
+              FieldsAre(78, 78, 7, 7));
   // Point-wise primitives keep the viewport.
   EXPECT_THAT(layout(SinglePrimitiveGraph(filter_primitive::ColorMatrix{})),
-              testing::ElementsAre(64, 64, 0, 0));
+              FieldsAre(64, 64, 0, 0));
   // Turbulence keeps a viewport-aligned capture.
   EXPECT_THAT(layout(SinglePrimitiveGraph(filter_primitive::Turbulence{})),
-              testing::ElementsAre(64, 64, 0, 0));
+              FieldsAre(64, 64, 0, 0));
   // Wrapping edges read the opposite side of the input, so the capture covers the whole region.
   filter_primitive::GaussianBlur wrap{2.0, 2.0};
   wrap.edgeMode = filter_primitive::GaussianBlur::EdgeMode::Wrap;
-  EXPECT_THAT(layout(SinglePrimitiveGraph(wrap)), testing::ElementsAre(200, 200, 50, 50));
+  EXPECT_THAT(layout(SinglePrimitiveGraph(wrap)), FieldsAre(200, 200, 50, 50));
 }
 
 TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
@@ -2502,8 +2510,8 @@ TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
   // out, plus a rounding pixel: the capture reaches 91 pixels before the viewport.
   const FilterInputBuffer buffer =
       ComputeFilterInputBuffer(graph, Box2d::FromXYWH(-200, -200, 464, 464), Transform2d(), 64, 64);
-  EXPECT_EQ(buffer.offsetX, 91);
-  EXPECT_EQ(buffer.offsetY, 91);
+  // After the viewport the capture extends by the graph's own 31-pixel reach.
+  EXPECT_THAT(buffer, testing::FieldsAre(186, 186, 91, 91));
 }
 
 }  // namespace
