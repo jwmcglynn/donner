@@ -395,7 +395,35 @@ def _contains_call(expression: str, names: set[str]) -> bool:
     return bool(_iter_named_calls(expression, names))
 
 
+_STATE_FIELD_RE = re.compile(r"\b(renderOnly|skip)\b")
+
+
+def _mask_string_literals(text: str) -> str:
+    """Blank string and character literal contents while preserving offsets."""
+
+    result = list(text)
+    index = 0
+    while index < len(text):
+        if text[index] in {'"', "'"}:
+            end = _skip_quoted(text, index)
+            for position in range(index + 1, end - 1):
+                result[position] = " "
+            index = end
+        else:
+            index += 1
+    return "".join(result)
+
+
 def _primary_state_from_params(expression: str) -> str:
+    # Skip and render-only state must come from the named factories, whose reasons this report and
+    # its policy checks read. A designated initializer such as `Params{.renderOnly = true}` or a
+    # direct field assignment would otherwise be reported as an ordinary comparison.
+    field = _STATE_FIELD_RE.search(_mask_string_literals(_mask_comments(expression)))
+    if field is not None:
+        raise ParityReportError(
+            f"set {field.group(1)!r} through Params::Skip or Params::RenderOnly, not the field: "
+            f"{expression[:60]!r}"
+        )
     skip = _contains_call(expression, {"Skip"})
     render_only = _contains_call(expression, {"RenderOnly"})
     if skip and render_only:
@@ -629,6 +657,17 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
 
 
 RENDER_ONLY_REASON_PREFIX = "UB: "
+UB_MARKER_REFERENCE = Path("third_party/resvg-test-suite/resources/ub.png")
+
+# Render-only cases whose vendored reference is not the resvg UB marker image. Each entry must be
+# behavior the specification leaves undefined or implementation-defined, with the reason here.
+SPEC_UB_RENDER_ONLY_ALLOWLIST = {
+    # Filter Effects defines an exact Gaussian but no bound on stdDeviation. stdDeviation=1000 is
+    # 2500 device pixels; every renderer clamps it to an implementation-defined resource limit
+    # (Donner: kMaximumFilterPixelRadius), so the reference records resvg's clamp, not a result
+    # the specification determines. The upstream test asserts only that rendering does not crash.
+    "filters/feGaussianBlur/huge-stdDeviation.svg",
+}
 
 
 def render_only_policy_violations(report: dict[str, object]) -> list[str]:
@@ -650,6 +689,50 @@ def render_only_policy_violations(report: dict[str, object]) -> list[str]:
         ].strip():
             violations.append(f"{case['path']}: {reason!r}")
     return violations
+
+
+def render_only_reference_violations(
+    report: dict[str, object],
+    tests_root: Path,
+    marker_path: Path,
+    allowlist: Iterable[str] = SPEC_UB_RENDER_ONLY_ALLOWLIST,
+) -> list[str]:
+    """Return render-only cases whose reference is not the UB marker and stale allowlist entries.
+
+    A render-only case qualifies as undefined behavior either because its vendored reference is a
+    byte-for-byte copy of the resvg UB marker image, or because it is listed in `allowlist` as
+    specification-level UB. Allowlist entries must be active render-only cases whose reference is
+    not the marker, so the list cannot silently outlive a reclassification.
+    """
+
+    try:
+        marker = marker_path.read_bytes()
+    except OSError as error:
+        raise ParityReportError(f"cannot read UB marker reference {marker_path}: {error}") from error
+
+    allowed = set(allowlist)
+    render_only: set[str] = set()
+    violations: list[str] = []
+    for case in report["cases"]:  # type: ignore[union-attr]
+        if case["registration"] != "active" or case["primary_state"] != "render-only":
+            continue
+        path = str(case["path"])
+        render_only.add(path)
+        reference = (tests_root / path).with_suffix(".png")
+        try:
+            is_marker = reference.read_bytes() == marker
+        except OSError:
+            violations.append(f"{path}: reference PNG is missing")
+            continue
+        if is_marker and path in allowed:
+            violations.append(f"{path}: allowlisted, but its reference is the UB marker")
+        elif not is_marker and path not in allowed:
+            violations.append(f"{path}: reference is not the UB marker and the case is not "
+                              "allowlisted as specification UB")
+
+    for path in sorted(allowed - render_only):
+        violations.append(f"{path}: allowlisted, but not an active render-only case")
+    return sorted(violations)
 
 
 def generate_report(repo_root: Path) -> dict[str, object]:

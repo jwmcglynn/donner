@@ -36,10 +36,12 @@ class Fixture:
         self.root = Path(self._temporary_directory.name)
         self.tests_root = self.root / parity_report.TESTS_ROOT
 
-    def add_case(self, relative: str) -> None:
+    def add_case(self, relative: str, reference: bytes | None = None) -> None:
         path = self.tests_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("<svg/>\n", encoding="utf-8")
+        if reference is not None:
+            path.with_suffix(".png").write_bytes(reference)
 
     def close(self) -> None:
         self._temporary_directory.cleanup()
@@ -367,6 +369,67 @@ class ParityReportTests(unittest.TestCase):
             ["filters/enable-background/a.svg: 'Deprecated feature'"],
         )
 
+    def test_render_only_references_must_be_the_ub_marker_or_allowlisted(self) -> None:
+        marker = b"ub marker bytes"
+        self.fixture.add_case("painting/fill/marker.svg", marker)
+        self.fixture.add_case("painting/fill/bad.svg", b"a real rendering")
+        self.fixture.add_case("painting/fill/spec-ub.svg", b"an implementation's rendering")
+        self.fixture.add_case("painting/fill/marker-listed.svg", marker)
+        self.fixture.add_case("painting/fill/stale.svg", b"now compared")
+        marker_path = self.fixture.root / "ub.png"
+        marker_path.write_bytes(marker)
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {'
+                '{\"marker.svg\", Params::RenderOnly(\"UB: marker\")},'
+                '{\"bad.svg\", Params::RenderOnly(\"UB: claimed without a marker\")},'
+                '{\"spec-ub.svg\", Params::RenderOnly(\"UB: implementation-defined\")},'
+                '{\"marker-listed.svg\", Params::RenderOnly(\"UB: marker\")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        violations = parity_report.render_only_reference_violations(
+            report,
+            self.fixture.tests_root,
+            marker_path,
+            {"painting/fill/spec-ub.svg", "painting/fill/marker-listed.svg",
+             "painting/fill/stale.svg"},
+        )
+
+        self.assertEqual(
+            violations,
+            [
+                "painting/fill/bad.svg: reference is not the UB marker and the case is not "
+                "allowlisted as specification UB",
+                "painting/fill/marker-listed.svg: allowlisted, but its reference is the UB marker",
+                "painting/fill/stale.svg: allowlisted, but not an active render-only case",
+            ],
+        )
+
+    def test_state_fields_cannot_bypass_the_named_factories(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        for params in ("Params{.renderOnly = true}", "Params{.skip = true}"):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex(parity_report.ParityReportError,
+                                            "through Params::Skip or Params::RenderOnly"):
+                    parity_report.build_report(
+                        _registration("PaintingFill",
+                                      f'\"painting/fill\", {{{{\"a.svg\", {params}}}}}'),
+                        self.fixture.tests_root,
+                    )
+
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {{\"a.svg\", Params().withReason(\"not renderOnly or skip\")}}',
+            ),
+            self.fixture.tests_root,
+        )
+        self.assertEqual(report["cases"][0]["primary_state"], "compare")
+
     def test_cli_resolves_explicit_repo_root_independent_of_cwd(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
         source_path = self.fixture.root / parity_report.REGISTRATION_SOURCE
@@ -440,6 +503,25 @@ class RealTreeParityReportTests(unittest.TestCase):
             "Params::RenderOnly is reserved for undefined or implementation-defined behavior "
             f"and its reason must start with {parity_report.RENDER_ONLY_REASON_PREFIX!r}; use "
             "Params::Skip with a bug number or reference reason instead:\n" + "\n".join(violations),
+        )
+
+    def test_live_render_only_references_are_the_ub_marker_or_spec_ub(self) -> None:
+        repo_root = parity_report._default_repo_root()
+        report = parity_report.generate_report(repo_root)
+
+        violations = parity_report.render_only_reference_violations(
+            report,
+            repo_root / parity_report.TESTS_ROOT,
+            repo_root / parity_report.UB_MARKER_REFERENCE,
+        )
+
+        self.assertEqual(
+            violations,
+            [],
+            "Params::RenderOnly cases need the resvg UB marker reference "
+            f"({parity_report.UB_MARKER_REFERENCE}) or an entry in "
+            "SPEC_UB_RENDER_ONLY_ALLOWLIST explaining the specification-level UB:\n"
+            + "\n".join(violations),
         )
 
 

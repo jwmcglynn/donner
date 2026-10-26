@@ -21,6 +21,7 @@ py_test(
     ],
     data = [
         "//donner/svg/renderer/tests:resvg_test_registration_source",
+        "//third_party/resvg-test-suite:resources/ub.png",
         "//third_party/resvg-test-suite:tests",
     ],
     imports = ["."],
