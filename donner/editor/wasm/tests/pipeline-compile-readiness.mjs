@@ -34,10 +34,14 @@ export function sumPipelineCompilesPending(statistics) {
  * editor's first frame and hold later GPU work behind them, and releases every held completion once
  * the compiles drain, so nothing the fault holds outlives the work it models.
  *
+ * A pipeline created synchronously, at its first use, occupies the device timeline for
+ * `firstUseCompileMs`, as a cold compile in order with the device's work does: each completion
+ * requested while it does arrives no earlier than the end of that compile.
+ *
  * Self-contained, so its source can be prepended to the editor script. Returns whether it installed;
  * it installs nothing outside a worker with WebGPU, and only once per context.
  *
- * @param {{ compileDelayMs: number, completionDelayMs: number }} config
+ * @param {{ compileDelayMs: number, completionDelayMs: number, firstUseCompileMs: number }} config
  */
 export function installPipelineCompileFault(config) {
   const scope = globalThis;
@@ -57,6 +61,9 @@ export function installPipelineCompileFault(config) {
     compilesPending: 0,
     completionsDelayed: 0,
     lastCompileSettledAtMs: 0,
+    firstUseCompileMs: config.firstUseCompileMs ?? 0,
+    firstUseCompiles: 0,
+    timelineBusyUntilMs: 0,
   };
   // Releases of the completions held now, run once no compile is outstanding.
   let drained = [];
@@ -89,17 +96,32 @@ export function installPipelineCompileFault(config) {
       });
     };
   }
+  for (const name of ["createRenderPipeline", "createComputePipeline"]) {
+    const original = scope.GPUDevice.prototype[name];
+    if (typeof original !== "function") continue;
+    scope.GPUDevice.prototype[name] = function(descriptor) {
+      state.firstUseCompiles += 1;
+      state.timelineBusyUntilMs = Math.max(state.timelineBusyUntilMs, now())
+        + state.firstUseCompileMs;
+      return original.call(this, descriptor);
+    };
+  }
   for (const [owner, name] of [[scope.GPUQueue, "onSubmittedWorkDone"], [scope.GPUBuffer, "mapAsync"]]) {
     const original = owner?.prototype?.[name];
     if (typeof original !== "function") continue;
     owner.prototype[name] = function(...args) {
       const result = original.apply(this, args);
-      if (state.compilesPending === 0) return result;
+      const holds = [];
+      if (state.compilesPending > 0) {
+        holds.push(new Promise((resolve) => {
+          setTimer(resolve, state.completionDelayMs);
+          drained.push(resolve);
+        }));
+      }
+      if (state.timelineBusyUntilMs > now()) holds.push(at(state.timelineBusyUntilMs));
+      if (holds.length === 0) return result;
       state.completionsDelayed += 1;
-      const released = new Promise((resolve) => {
-        setTimer(resolve, state.completionDelayMs);
-        drained.push(resolve);
-      });
+      const released = Promise.all(holds);
       return result.then(
         (value) => released.then(() => value),
         (error) =>

@@ -26,6 +26,9 @@ function createWorkerContext({ worker = true } = {}) {
   let clock = 0;
   const settlers = [];
   class GPUDevice {
+    createRenderPipeline(descriptor) {
+      return { descriptor, synchronous: true };
+    }
     createRenderPipelineAsync(descriptor) {
       return new Promise((resolve, reject) => settlers.push({ descriptor, resolve, reject }));
     }
@@ -76,7 +79,7 @@ function createWorkerContext({ worker = true } = {}) {
   };
 }
 
-const kConfig = { compileDelayMs: 1000, completionDelayMs: 300 };
+const kConfig = { compileDelayMs: 1000, completionDelayMs: 300, firstUseCompileMs: 500 };
 // Read through JSON: an object from the worker context has that context's prototypes.
 const readFault = (worker) =>
   JSON.parse(worker.run(`JSON.stringify((${readPipelineCompileFault.toString()})())`));
@@ -97,6 +100,8 @@ test("the fault installs only in a worker with WebGPU, once", () => {
     compilesPending: 0,
     completionsDelayed: 0,
     lastCompileSettledAtMs: 0,
+    firstUseCompiles: 0,
+    timelineBusyUntilMs: 0,
   });
 });
 
@@ -152,6 +157,8 @@ test("a compile settles no earlier than its delay and holds completions while it
     compilesPending: 0,
     completionsDelayed: 2,
     lastCompileSettledAtMs: 1000,
+    firstUseCompiles: 0,
+    timelineBusyUntilMs: 0,
   });
 
   // With nothing pending, completions are the browser's own.
@@ -163,4 +170,35 @@ test("a compile settles no earlier than its delay and holds completions while it
   await worker.advance(1000);
   assert.equal(completed, true);
   assert.equal(readFault(worker).completionsDelayed, 2);
+});
+
+test("a pipeline created at first use holds later completions for its compile, in order", async () => {
+  const worker = createWorkerContext();
+  worker.run(pipelineCompileFaultPrologue(kConfig));
+  const device = new worker.sandbox.GPUDevice();
+  const queue = new worker.sandbox.GPUQueue();
+  const completedAt = [];
+  const requestCompletion = () => {
+    queue.onSubmittedWorkDone().then(() => completedAt.push(worker.sandbox.performance.now()));
+    worker.completions.shift()();
+  };
+
+  await worker.advance(100);
+  device.createRenderPipeline({ name: "a" });
+  device.createRenderPipeline({ name: "b" });
+  // Two compiles in order occupy the timeline back to back.
+  assert.equal(readFault(worker).timelineBusyUntilMs, 1100);
+  await worker.advance(200);
+  requestCompletion();
+  await worker.advance(1000);
+  assert.deepEqual(completedAt, []);
+  await worker.advance(1100);
+  assert.deepEqual(completedAt, [1100]);
+
+  // Once the compiles are done, completions are the browser's own again.
+  requestCompletion();
+  await worker.advance(1100);
+  assert.deepEqual(completedAt, [1100, 1100]);
+  assert.equal(readFault(worker).firstUseCompiles, 2);
+  assert.equal(readFault(worker).completionsDelayed, 1);
 });

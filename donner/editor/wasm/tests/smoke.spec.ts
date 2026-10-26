@@ -2011,12 +2011,25 @@ async function findGpuOwnerWorker(page: Page): Promise<Worker | null> {
   })), 2000);
 }
 
-async function readPipelineCompilesPending(owner: Worker) {
-  const statistics = await boundBrowserDiagnostic(owner.evaluate(() =>
+async function readOwnerGpuStatistics(owner: Worker) {
+  return await boundBrowserDiagnostic(owner.evaluate(() =>
     (globalThis as typeof globalThis & { __donnerReadGpuObjectStats?: () => unknown })
       .__donnerReadGpuObjectStats?.() ?? null
-  ), 2000);
-  return sumPipelineCompilesPending([statistics as Record<string, unknown> | null]);
+  ), 2000) as Record<string, unknown> | null;
+}
+
+async function readPipelineCompilesPending(owner: Worker) {
+  return sumPipelineCompilesPending([await readOwnerGpuStatistics(owner)]);
+}
+
+// How many pipelines the GPU owner has created at their first use. Such a creation compiles in
+// order with the device's work, so on a cold shader cache it holds every later submission,
+// presentation included.
+async function readPipelinesCreatedAtFirstUse(page: Page) {
+  const owner = await findGpuOwnerWorker(page);
+  const statistics = owner && await readOwnerGpuStatistics(owner);
+  const count = statistics?.pipelineCompilesOnFirstUse;
+  return typeof count === "number" ? count : null;
 }
 
 // The editor starts its pipelines' asynchronous compiles when it first builds them, and its first
@@ -2054,7 +2067,9 @@ async function waitForPipelineCompilesToSettle(page: Page) {
 // delay must outlast boot to the first presented frame, completions included, so the readiness
 // wait still finds compiles pending; the completion delay alone exceeds the nominal handoff bound,
 // so a click that did not wait would fail it.
-const kPipelineCompileFault = { compileDelayMs: 8000, completionDelayMs: 1200 };
+// A pipeline created at its first use occupies the timeline long enough on its own to exceed the
+// bound, so an interaction that compiled one would fail it.
+const kPipelineCompileFault = { compileDelayMs: 8000, completionDelayMs: 1200, firstUseCompileMs: 1200 };
 
 async function readOwnerPipelineCompileFault(page: Page) {
   const owner = await findGpuOwnerWorker(page);
@@ -2153,6 +2168,7 @@ for (
       expect(pipelineReadiness.pendingAtStart, "compiles were still pending when the wait began")
         .toBeGreaterThan(0);
     }
+    const firstUseCreationsBeforeClick = await readPipelinesCreatedAtFirstUse(page);
     const deviceCreationsBeforeClick = await page.evaluate(
       () => window.__donnerHeadlessDeviceCreations ?? -1,
     );
@@ -2391,9 +2407,13 @@ for (
         viewport: { width: innerWidth, height: innerHeight },
         dpr: devicePixelRatio,
       }));
+      const pipelinesCreatedAtFirstUse = {
+        beforeClick: firstUseCreationsBeforeClick,
+        afterPresentation: await readPipelinesCreatedAtFirstUse(page),
+      };
       const report = { workload: sample.id, heldWorkerRaf: holdsScheduledFrames, browser: browserName,
         ...runtime, ...packageHashes(), ...handoff, phaseTimings, presentationFault,
-        pipelineReadiness, pipelineCompileFault,
+        pipelineReadiness, pipelinesCreatedAtFirstUse, pipelineCompileFault,
         pipelineCompileFaultAfterPresentation: compileFaultControl
           ? await readOwnerPipelineCompileFault(page)
           : undefined,
@@ -2415,6 +2435,15 @@ for (
       } else {
         expect(handoff.withinLimit, `nominal completed-result handoff: ${JSON.stringify(report)}`)
           .toBe(true);
+      }
+      // Every pipeline the editor draws with was built ahead of use, so the interaction compiles
+      // none in order with its own GPU work. WebKit creates every pipeline at first use by design.
+      if (browserName !== "webkit") {
+        expect(pipelinesCreatedAtFirstUse.beforeClick).not.toBeNull();
+        expect(
+          pipelinesCreatedAtFirstUse.afterPresentation,
+          `pipelines created at first use during the interaction: ${JSON.stringify(report)}`,
+        ).toBe(pipelinesCreatedAtFirstUse.beforeClick);
       }
     }
     expect(
