@@ -126,7 +126,7 @@ bottom for completeness.
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                              8 | Feature                                                                                                                                                                                             |
 | F10 | Remaining `textPath` vertical, kerning, and filter cases                |                              4 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
-| B7  | text reference qualification                                            |                             10 | Allowances removed; color-adjust labels, `font/simple-case`, `fallback-1` and `non-ASCII-character` remain skipped (see [B7](#b7-text-reference-qualification)) |
+| B7  | text reference qualification                                            |                              9 | Allowances removed; color-adjust labels, `font/simple-case` and `fallback-1` remain skipped (see [B7](#b7-text-reference-qualification)) |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
 | —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
 | F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
@@ -145,7 +145,7 @@ rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL c
 
 | Assigned cases | Disposition |
 | --- | --- |
-| Seven `color-adjust-functions-*` cases | Every canonical mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular and their glyph positions match resvg v0.49.0; the residual is analytic versus 4x4-supersampled edge coverage on 12 to 20 px glyphs (see [B7](#b7-text-reference-qualification)). |
+| Seven `color-adjust-functions-*` cases | Every canonical mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular. The vendored PNGs draw them about 14% heavier; against resvg v0.49.0 the residual is consistent with analytic versus 4x4-supersampled edge coverage (see [B7](#b7-text-reference-qualification)). |
 | Five remaining `drop-shadow-function*` cases | Color order, omitted currentColor, em/mm-to-px conversion and alpha compare independently. Offset/blur sampling differs from the historical PNGs; for the basic case the device Y offset is 12.5, and Donner rounds to 13 while the reference shadow profile is one row earlier. Half-pixel rounding is a Donner rasterization contract, not a CSS requirement. Sampling qualification remains with #1170. |
 | `two-exact-urls` | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph. |
 | `two-urls` | Chained flood/blur matches the equivalent single primitive graph. The historical difference is at the filter-region boundary (2,191 CPU / 2,618 Geode pixels); boundary sampling remains with #1170. |
@@ -254,7 +254,8 @@ now removed). The remaining structural cluster is below.
 
 **Status:** the font-family allowances are gone. Every `text/font-family/` case
 except `fallback-1` compares at default settings in both CPU text tiers, as do
-`text/text/xml-lang=ja` and `structure/defs/style-inheritance-on-text`. Face
+`text/text/xml-lang=ja`, `text/letter-spacing/non-ASCII-character` and
+`structure/defs/style-inheritance-on-text`. Face
 selection for these cases is asserted directly in `FontSelection_tests.cc`.
 
 - **Selection and loading:** the generic families map to the faces upstream's
@@ -262,24 +263,34 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   Display). The simple tier now reads GPOS pair kerning wrapped in Extension
   lookups, which Source Sans Pro uses exclusively; `font-list` and
   `source-sans-pro` lost their 1300-pixel simple-tier budgets.
-- **Stale references:** the generic-family PNGs and `xml-lang=ja.png` were drawn
-  in faces outside the vendored set. They were refreshed from resvg v0.49.0
-  (provenance in `third_party/resvg-test-suite/BUILD.bazel`) and match within the
-  default budget.
+- **Stale references:** the generic-family PNGs, `xml-lang=ja.png` and
+  `fallback-1.png` were drawn in faces outside the vendored set or for a
+  different layout, and `letter-spacing/non-ASCII-character` named its family
+  unquoted. They were refreshed from resvg v0.49.0 (provenance in
+  `third_party/resvg-test-suite/BUILD.bazel`). The refreshed `xml-lang=ja` draws
+  all three lines in Mplus 1p, the only vendored face covering them, so it no
+  longer exercises language-specific face selection.
 - **Weights 400 and 700 only:** the comparison fixture registers only these
   weights. The snapshot's `font-weight` references draw weights 100 to 300 with
   Noto Sans Regular and 900 with Noto Sans Bold, and Donner matches them with zero
   differing pixels. resvg v0.49.0 draws 900 with Noto Sans Black, so registering
   the other weights belongs with a refresh of those references.
 - **Remaining:** the seven `color-adjust-functions-*` labels are 8-unit Noto Sans
-  Regular text whose glyph positions match resvg v0.49.0 and whose ink agrees
-  within 5%; the
-  residual is edge coverage, because Donner's rasterizer uses analytic coverage
-  while resvg supersamples 4x4, and at a 12 to 20 px em the edge pixels dominate
-  each glyph. `text/font/simple-case` disagrees on the unitless `font` shorthand
-  (see the reference qualification table). `fallback-1` and
-  `letter-spacing/non-ASCII-character` keep references that no vendored face
-  reproduces.
+  Regular. Against the vendored 500x500 PNGs they differ by 354 simple, 370 full
+  and 375 Geode pixels; those PNGs draw the labels about 14% heavier than Noto
+  Sans Regular. Against resvg v0.49.0's 300x300 rendering the label ink boxes are
+  identical and ink agrees within 5%, and the remaining 364 simple and 377 full
+  pixels are consistent with analytic (Donner's CPU rasterizer) versus 4x4
+  supersampled (resvg) edge coverage: 80% of resvg's partial label pixels sit on
+  the 1/16 coverage steps supersampling produces, against 6 to 11% of Donner's.
+  The 40 px font-family cases reach 0 to 2 pixels with the same two rasterizers;
+  the likely reason is size, since at a 12 px em most of a glyph's pixels are
+  edge pixels and stems are only one or two pixels wide, so small per-edge
+  coverage differences cross the comparison threshold far more often. This is
+  not yet measured directly. `text/font/simple-case` disagrees on the unitless
+  `font` shorthand (see the reference qualification table). `fallback-1` is a
+  harness mismatch: resvg's harness falls back to Noto Serif for an unknown
+  family and Donner to its embedded Public Sans (445 simple, 444 full pixels).
 
 > The remaining sub-1000-px CPU thresholds (feColorMatrix matrix/saturate variants,
 > feDropShadow, text-decoration rotate-lists, pattern AA) are small enough to be
@@ -507,9 +518,6 @@ case-insensitive declaration acceptance, and unrelated encoding-like content.
 These have a question-mark reason in the file and need a root-cause pass to decide
 bug vs. out-of-scope:
 
-- `text/letter-spacing/non-ASCII-character`: different CJK glyph (wrong font? →
-  overlaps [B7](#b7-text-reference-qualification))
-- `text/font-family/fallback-1`: fallback from invalid family
 - `masking/clip/simple-case`: CSS2 `clip` property (`rect()` clipping on viewport
   elements, deprecated) — not implemented, 76k px diff
 - `filters/feImage/empty.svg`: `std::bad_alloc` **crash** on Linux CI runners

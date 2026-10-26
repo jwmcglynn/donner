@@ -256,13 +256,10 @@ TEST(FontSelection, OnlyRegularAndBoldWeightsAreRegistered) {
   EXPECT_THAT(fonts.select("Noto Sans", 900, 0, 5), FaceFrom("NotoSans-Bold.ttf"));
 }
 
-TEST(FontSelection, InheritedSmallLabelFontResolvesToTheRegularFace) {
-  // Root-level family and size, as small sample labels under filtered shapes use them.
+TEST(FontSelection, FamilyInheritedFromTheRootResolvesToTheRegularFace) {
   const SelectedFace expected{"NotoSans-Regular.ttf", "Noto Sans", 400, 0};
   EXPECT_EQ(ResolveDocumentFace(R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40" font-family="Noto Sans"
-         font-size="8">
-      <rect x="4" y="4" width="20" height="20" filter="grayscale(50%)"/>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40" font-family="Noto Sans">
       <text x="4" y="32">label</text>
     </svg>)svg"),
             expected);

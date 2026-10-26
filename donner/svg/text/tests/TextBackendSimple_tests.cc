@@ -5,22 +5,12 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <ostream>
 #include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 namespace donner::svg {
-
-/// Prints shaped glyphs field by field so matcher failures name the differing values.
-void PrintTo(const TextBackend::ShapedGlyph& glyph, std::ostream* os) {
-  *os << "ShapedGlyph{glyphIndex=" << glyph.glyphIndex << ", xAdvance=" << glyph.xAdvance
-      << ", yAdvance=" << glyph.yAdvance << ", xKern=" << glyph.xKern << ", yKern=" << glyph.yKern
-      << ", xOffset=" << glyph.xOffset << ", yOffset=" << glyph.yOffset
-      << ", cluster=" << glyph.cluster << ", fontSizeScale=" << glyph.fontSizeScale << "}";
-}
-
 namespace {
 
 using ::testing::AllOf;

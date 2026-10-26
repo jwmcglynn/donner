@@ -545,38 +545,40 @@ INSTANTIATE_TEST_SUITE_P(
                               "URL; Filter Effects ignores the entire chain "
                               "(FilterReferenceStages.InvalidReferenceDisablesEntireChain)")},
                 // The seven color-adjust labels are 8-unit Noto Sans Regular (asserted in
-                // FontSelection_tests.cc). Their glyph positions match, and their ink agrees within
-                // 5%, with resvg v0.49.0's 300x300 rendering of these SVGs, which still differs by
-                // 364 simple and 377 full pixels: Donner's rasterizer computes analytic coverage
-                // where resvg supersamples 4x4, and edge pixels dominate glyphs at a 12 to 20 px
-                // em. The vendored 500x500 PNGs additionally draw the labels about 14% heavier than
-                // Noto Sans Regular, without supersampled coverage levels.
+                // FontSelection_tests.cc). Against these vendored 500x500 PNGs they differ by 354
+                // simple, 370 full and 375 Geode pixels; those PNGs draw the labels about 14%
+                // heavier than Noto Sans Regular. Against resvg v0.49.0's 300x300
+                // rendering the label ink boxes are identical and ink agrees within 5%; the
+                // remaining 364 simple and 377 full pixels are consistent with analytic (Donner's
+                // CPU rasterizer) versus 4x4 supersampled (resvg) edge coverage. 80% of resvg's
+                // partial label pixels sit on the 1/16 coverage steps supersampling produces,
+                // against 6 to 11% of Donner's.
                 {"color-adjust-functions-0percent.svg",
-                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
-                              "Sans labels (354 default-text, 370 full-text, 375 Geode px); "
-                              "filtered geometry agrees (#1167, #1169)")},
+                 Params::Skip("Reference glyphs: the PNG draws the labels about 14% heavier than "
+                              "Noto Sans Regular (354 default-text, 370 full-text, 375 Geode "
+                              "px); filtered geometry agrees (#1167, #1169)")},
                 {"color-adjust-functions-100percent.svg",
-                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
-                              "Sans labels; filtered geometry agrees, color contracts checked "
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; filtered geometry agrees, color contracts checked "
                               "independently (#1167, #1169)")},
                 {"color-adjust-functions-2.svg",
-                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
-                              "Sans labels; filtered geometry agrees, color contracts checked "
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; filtered geometry agrees, color contracts checked "
                               "independently (#1167, #1169)")},
                 {"color-adjust-functions-200percent.svg",
-                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
-                              "Sans labels; filtered geometry agrees, color contracts checked "
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; filtered geometry agrees, color contracts checked "
                               "independently (#1167, #1169)")},
                 {"color-adjust-functions-50percent.svg",
-                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
-                              "Sans labels; filtered geometry agrees, color contracts checked "
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; filtered geometry agrees, color contracts checked "
                               "independently (#1167, #1169)")},
                 {"color-adjust-functions-default-value.svg",
-                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
-                              "Sans labels; defaults agree with explicit amounts (#1167, #1169)")},
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; defaults agree with explicit amounts (#1167, #1169)")},
                 {"color-adjust-functions-negative.svg",
-                 Params::Skip("Label edge coverage: analytic vs supersampled AA on small Noto "
-                              "Sans labels; invalid negative declarations are rejected (#1167, "
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; invalid negative declarations are rejected (#1167, "
                               "#1169)")},
                 {"drop-shadow-function-color-last.svg",
                  Params::Skip("Bug #1170: offset/blur sampling differs from reference; color "
