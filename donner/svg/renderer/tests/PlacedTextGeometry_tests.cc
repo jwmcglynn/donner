@@ -656,6 +656,36 @@ TEST(PlacedTextGeometryTest, StretchExtendsOpenEndsAlongFirstAndLastNonzeroSegme
               Optional(Vector2Near(2.0, 21.0)));
 }
 
+TEST(PlacedTextGeometryTest, StretchJoinsInteriorCurveCuspLikeASegmentBoundary) {
+  // This cubic reverses direction at its midpoint, so its normal flips inside one segment. The
+  // two-line route reverses at a segment boundary instead; both must warp the glyph.
+  const Path cusp = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .curveTo(Vector2d(10.0, 0.0), Vector2d(10.0, 0.0), Vector2d(0.0, 0.0))
+                        .build();
+  const Path corner = PathBuilder()
+                          .moveTo(Vector2d(0.0, 0.0))
+                          .lineTo(Vector2d(7.5, 0.0))
+                          .lineTo(Vector2d(0.0, 0.0))
+                          .build();
+  const Path rectangle = PathBuilder().addRect(Box2d::FromXYWH(0.0, -2.0, 10.0, 4.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 5.0;
+
+  const Path warpedCorner = WarpGlyphOutline(rectangle, MeasurePath(corner), glyph, 0.05);
+  const Path warpedCusp = WarpGlyphOutline(rectangle, MeasurePath(cusp), glyph, 0.05);
+
+  ASSERT_FALSE(warpedCorner.empty());
+  ASSERT_FALSE(warpedCusp.empty());
+  // Arc length along the cubic differs from the two lines near the cusp, so compare the overall
+  // footprint rather than individual points.
+  const Box2d expected = warpedCorner.bounds();
+  EXPECT_THAT(warpedCusp.bounds(), BoxEq(Vector2Eq(DoubleNear(expected.topLeft.x, 0.5),
+                                                   DoubleNear(expected.topLeft.y, 0.5)),
+                                         Vector2Eq(DoubleNear(expected.bottomRight.x, 0.5),
+                                                   DoubleNear(expected.bottomRight.y, 0.5))));
+}
+
 TEST(PlacedTextGeometryTest, StretchRefusesMoreThanBoundedZeroLengthCornerSegments) {
   PathBuilder routeBuilder;
   routeBuilder.moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(10.0, 0.0));
