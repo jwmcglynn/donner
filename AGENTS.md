@@ -373,7 +373,7 @@ bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- \
 {"filter-bbox.svg", Params::Skip("Bug: letter-spacing edge cases")},
 ```
 
-**Skip comment conventions**: `Not impl: <feature>`, `Bug: <description>`, `Larger threshold due to <reason>`.
+**Skip comment conventions**: `Not impl: <feature>`, `Bug #NNNN: <description>` (or `Bug: <description>` before an issue exists), `Reference disagreement: <why Donner follows the specification>`, `Harness mismatch: <description>`, `API policy: <policy>`, `Larger threshold due to <reason>`.
 
 ### MCP Test Triage Server
 
