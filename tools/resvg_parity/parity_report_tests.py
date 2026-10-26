@@ -457,7 +457,8 @@ class ParityReportTests(unittest.TestCase):
     def test_state_fields_cannot_bypass_the_named_factories(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
         for params in ("Params{.renderOnly = true}", "Params{.skip = true}",
-                       "Params{.renderOnlyBucket = \"undefined behavior\"}"):
+                       "Params{.renderOnlyBucket = \"undefined behavior\"}",
+                       "Params{.skipSimpleText = true}"):
             with self.subTest(params=params):
                 with self.assertRaisesRegex(parity_report.ParityReportError,
                                             "through Params::Skip, Params::UndefinedBehavior"):
@@ -475,6 +476,43 @@ class ParityReportTests(unittest.TestCase):
             self.fixture.tests_root,
         )
         self.assertEqual(report["cases"][0]["primary_state"], "compare")
+
+    def test_unknown_params_calls_cannot_bypass_the_named_factories(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        registrations = {
+            "unknown Params factory": '\"painting/fill\", {{\"a.svg\", Params::NoCompare(\"x\")}}',
+            "helper named like Params": '\"painting/fill\", {{\"a.svg\", ParamsUb(\"x\")}}',
+            "unknown free helper": '\"painting/fill\", {{\"a.svg\", RenderWithoutCompare(\"x\")}}',
+            "unknown chained call": '\"painting/fill\", {{\"a.svg\", Params().noCompare()}}',
+            "unknown category default": '\"painting/fill\", {}, Params::NoCompare(\"x\")',
+        }
+        for label, category_call in registrations.items():
+            with self.subTest(label):
+                with self.assertRaisesRegex(parity_report.ParityReportError,
+                                            "unrecognized .*params"):
+                    parity_report.build_report(_registration("PaintingFill", category_call),
+                                               self.fixture.tests_root)
+
+    def test_known_params_calls_are_accepted(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        chained = (
+            "Params::WithThreshold(0.1f, 10, \"edge AA\")"
+            ".withGeodeGoldenOverride(\"g.png\", \"geode\")"
+            ".requireFeature(RendererBackendFeature::Text, \"text\")"
+            ".disableBackend(RendererBackend::Geode, \"no\")"
+            ".setCanvasSize(10, 10).onlyTextFull().withSimpleTextMaxPixels(3)"
+            ".withMaxPixelsDifferent(4).withGeodeMaxPixelsDifferent(5)"
+            ".includeAntiAliasingDifferences().enableGoldenUpdateFromEnv()"
+        )
+        for params in (chained, "WithMaxPixels(10, \"AA\")", "Params{}", "Params()",
+                       "Params::WithGoldenOverride(\"g.png\", 0.1f, \"why\")", "{}"):
+            with self.subTest(params=params):
+                report = parity_report.build_report(
+                    _registration("PaintingFill",
+                                  f'\"painting/fill\", {{{{\"a.svg\", {params}}}}}'),
+                    self.fixture.tests_root,
+                )
+                self.assertEqual(report["cases"][0]["primary_state"], "compare")
 
     def test_cli_resolves_explicit_repo_root_independent_of_cwd(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
