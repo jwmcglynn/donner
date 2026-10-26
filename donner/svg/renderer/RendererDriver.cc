@@ -1058,8 +1058,29 @@ void SamplePreparedImageDimensions(const components::FilterGraph& graph,
   SamplePreparedImageDimension(node, 3, node.height, context, region.height(), budget);
 }
 
-std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& filterGraph,
-                                                 const components::FilterNode& node) {
+/// Resolve one feImage primitive subregion length in user space; an absent length uses the
+/// default subregion's extent.
+double resolveFeImageSubregionLength(const std::optional<Lengthd>& length, Lengthd::Extent extent,
+                                     const Box2d& defaultSubregion, const Box2d& referenceBox,
+                                     bool isObjectBoundingBox) {
+  const bool isX = extent == Lengthd::Extent::X;
+  if (!length.has_value()) {
+    return isX ? defaultSubregion.width() : defaultSubregion.height();
+  }
+
+  const double refSize = isX ? referenceBox.width() : referenceBox.height();
+  if (isObjectBoundingBox && length->unit == Lengthd::Unit::None) {
+    return length->value * refSize;
+  }
+  if (length->unit == Lengthd::Unit::Percent) {
+    return refSize * length->value / 100.0;
+  }
+  return length->toPixels(referenceBox, FontMetrics(), extent);
+}
+
+/// Resolve an feImage primitive subregion's size in user space.
+std::optional<Vector2d> resolveFeImageSubregionSize(const components::FilterGraph& filterGraph,
+                                                    const components::FilterNode& node) {
   const Box2d defaultSubregion =
       filterGraph.filterRegion.value_or(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0));
   const bool isOBB = filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
@@ -1067,28 +1088,25 @@ std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& 
   const Box2d referenceBox = isOBB ? *filterGraph.elementBoundingBox
                                    : filterGraph.primitiveViewport.value_or(defaultSubregion);
 
-  auto resolveSize = [&](const std::optional<Lengthd>& len, Lengthd::Extent extent) -> double {
-    if (!len.has_value()) {
-      return extent == Lengthd::Extent::X ? defaultSubregion.width() : defaultSubregion.height();
-    }
-
-    const double refSize =
-        extent == Lengthd::Extent::X ? referenceBox.width() : referenceBox.height();
-    if (isOBB && len->unit == Lengthd::Unit::None) {
-      return len->value * refSize;
-    }
-    if (len->unit == Lengthd::Unit::Percent) {
-      return refSize * len->value / 100.0;
-    }
-    return len->toPixels(referenceBox, FontMetrics(), extent);
-  };
-
-  const double widthUser = resolveSize(node.width, Lengthd::Extent::X);
-  const double heightUser = resolveSize(node.height, Lengthd::Extent::Y);
+  const double widthUser = resolveFeImageSubregionLength(node.width, Lengthd::Extent::X,
+                                                         defaultSubregion, referenceBox, isOBB);
+  const double heightUser = resolveFeImageSubregionLength(node.height, Lengthd::Extent::Y,
+                                                          defaultSubregion, referenceBox, isOBB);
   if (!std::isfinite(widthUser) || !std::isfinite(heightUser) || widthUser <= 0.0 ||
       heightUser <= 0.0) {
     return std::nullopt;
   }
+  return Vector2d(widthUser, heightUser);
+}
+
+std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& filterGraph,
+                                                 const components::FilterNode& node) {
+  const std::optional<Vector2d> userSize = resolveFeImageSubregionSize(filterGraph, node);
+  if (!userSize.has_value()) {
+    return std::nullopt;
+  }
+  const double widthUser = userSize->x;
+  const double heightUser = userSize->y;
 
   const double scaleX = filterGraph.userToPixelScale.x > 0.0 ? filterGraph.userToPixelScale.x : 1.0;
   const double scaleY = filterGraph.userToPixelScale.y > 0.0 ? filterGraph.userToPixelScale.y : 1.0;
@@ -1102,6 +1120,56 @@ std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& 
   }
   return Vector2i(std::max(1, static_cast<int>(std::ceil(pixelWidth))),
                   std::max(1, static_cast<int>(std::ceil(pixelHeight))));
+}
+
+/// Canvas-pixel window that a same-document feImage reference is rasterized into.
+struct FragmentRasterWindow {
+  Vector2i offset;  ///< Canvas pixel at the window's top-left corner.
+  Vector2i size;    ///< Window size in pixels.
+};
+
+/// Whether a raster window corner, in whole canvas pixels, fits comfortably in an `int`.
+bool isRepresentableRasterOrigin(double left, double top) {
+  constexpr double kMaxOffset = static_cast<double>(std::numeric_limits<int>::max() / 2);
+  return std::isfinite(left) && std::isfinite(top) && std::abs(left) <= kMaxOffset &&
+         std::abs(top) <= kMaxOffset;
+}
+
+/// Whether a raster of \p width by \p height whole pixels is within the filter surface limits.
+bool fitsFilterSurface(double width, double height) {
+  return std::isfinite(width) && std::isfinite(height) && width >= 1.0 && height >= 1.0 &&
+         width <= components::kMaximumFilterSurfaceDimension &&
+         height <= components::kMaximumFilterSurfaceDimension &&
+         width * height <= static_cast<double>(components::kMaximumFilterSurfacePixels);
+}
+
+/// Choose the canvas-pixel window for an feImage element reference. The referenced content is
+/// placed with its user-space origin at the primitive subregion's origin and the result is clipped
+/// to that subregion, so only user-space points from the origin to the subregion size can reach
+/// the output. Rasterize that rectangle, rather than the canvas: the filtered element's transform
+/// can bring content into view that lies outside the canvas in document coordinates. Falls back
+/// to the canvas when the subregion is unresolved or exceeds the filter surface limits.
+FragmentRasterWindow resolveFragmentRasterWindow(const components::FilterGraph& filterGraph,
+                                                 const components::FilterNode& node,
+                                                 const Transform2d& canvasFromDocument,
+                                                 Vector2i canvasSize) {
+  const FragmentRasterWindow canvasWindow{Vector2i(0, 0), canvasSize};
+  const std::optional<Vector2d> userSize = resolveFeImageSubregionSize(filterGraph, node);
+  if (!userSize.has_value()) {
+    return canvasWindow;
+  }
+
+  const Box2d canvasBox =
+      canvasFromDocument.transformBox(Box2d(Vector2d::Zero(), Vector2d(userSize->x, userSize->y)));
+  const double left = std::floor(canvasBox.topLeft.x);
+  const double top = std::floor(canvasBox.topLeft.y);
+  const double width = std::ceil(canvasBox.bottomRight.x) - left;
+  const double height = std::ceil(canvasBox.bottomRight.y) - top;
+  if (!isRepresentableRasterOrigin(left, top) || !fitsFilterSurface(width, height)) {
+    return canvasWindow;
+  }
+  return FragmentRasterWindow{Vector2i(static_cast<int>(left), static_cast<int>(top)),
+                              Vector2i(static_cast<int>(width), static_cast<int>(height))};
 }
 
 std::optional<std::uint64_t> BoundedRgbaBytes(Vector2i size) {
@@ -2280,7 +2348,7 @@ bool RendererDriver::shouldCullEarlyLeaf(Registry& registry,
       components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
       ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
       surfaceFromCanvasTransform_);
-  return bounds.has_value() && ShouldCullDeviceBox(*bounds, renderingSize_);
+  return bounds.has_value() && ShouldCullDeviceBox(*bounds, cullingSurfaceSize());
 }
 
 bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEntity,
@@ -3038,7 +3106,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                 ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
                 surfaceFromCanvasTransform_);
             deviceBounds.has_value()) {
-          cullDraw = ShouldCullDeviceBox(*deviceBounds, renderingSize_);
+          cullDraw = ShouldCullDeviceBox(*deviceBounds, cullingSurfaceSize());
         }
       }
     }
@@ -3278,7 +3346,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                 ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
                 surfaceFromCanvasTransform_);
             deviceBounds.has_value()) {
-          cullDraw = ShouldCullDeviceBox(*deviceBounds, renderingSize_);
+          cullDraw = ShouldCullDeviceBox(*deviceBounds, cullingSurfaceSize());
         }
       }
     }
@@ -4565,13 +4633,17 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
       continue;
     }
 
-    const std::optional<std::uint64_t> imageBytes = reservePreparedFilterImage(renderingSize_);
+    const Transform2d canvasFromDocument =
+        components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+    const FragmentRasterWindow window =
+        resolveFragmentRasterWindow(filterGraph, node, canvasFromDocument, renderingSize_);
+    const std::optional<std::uint64_t> imageBytes = reservePreparedFilterImage(window.size);
     if (!imageBytes.has_value()) {
       imageNode->fragmentId = RcString();
       continue;
     }
 
-    // Create an offscreen renderer at the same canvas size.
+    // Create an offscreen renderer for the fragment's raster window.
     auto offscreen = renderer_.createOffscreenInstance();
     if (!offscreen) {
       if (verbose_) {
@@ -4619,9 +4691,9 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
       continue;
     }
 
-    // Begin frame with same viewport.
+    // Begin a frame covering the raster window.
     RenderViewport viewport;
-    viewport.size = Vector2d(renderingSize_.x, renderingSize_.y);
+    viewport.size = Vector2d(window.size.x, window.size.y);
     viewport.devicePixelRatio = 1.0;
     offscreen->beginFrame(viewport);
 
@@ -4638,7 +4710,15 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     (void)fontCollectionCache();
     subDriver.fontCollectionCache_ = fontCollectionCache_;
 
-    // Fragment pixels retain document coordinates; filter execution applies the primitive origin.
+    // The sub-driver draws in canvas coordinates; shift the raster window's corner to the origin.
+    subDriver.surfaceFromCanvasTransform_ =
+        Transform2d::Translate(-window.offset.x, -window.offset.y);
+    subDriver.drawSurfaceSize_ = window.size;
+
+    // Fragment pixels map back to document coordinates through the window; filter execution then
+    // applies the primitive origin and the filtered element's transform.
+    imageNode->fragmentUserFromPixel =
+        Transform2d::Translate(window.offset.x, window.offset.y) * canvasFromDocument.inverse();
     if (filterRegion.has_value()) {
       imageNode->fragmentRegionTopLeft = Vector2d(filterRegion->topLeft.x, filterRegion->topLeft.y);
     }

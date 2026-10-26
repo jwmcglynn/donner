@@ -3200,37 +3200,27 @@ std::optional<ImageParams> CreateFragmentImageParams(
   if (!primitive.isFragmentReference) {
     return std::nullopt;
   }
-  ImageParams params{};
-  const bool hasRotation =
-      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
-  if (hasRotation && !NearZero(deviceFromFilter.determinant(), 1e-12)) {
-    const double scaleX = graph.userToPixelScale.x;
-    const double scaleY = graph.userToPixelScale.y;
-    const Transform2d viewBoxScaleInv = Transform2d::Scale(
-        NearZero(scaleX, 1e-12) ? 1.0 : 1.0 / scaleX, NearZero(scaleY, 1e-12) ? 1.0 : 1.0 / scaleY);
-    const Transform2d regionOffset = Transform2d::Translate(origin.x, origin.y);
-    const Transform2d deviceFromFragment = viewBoxScaleInv * regionOffset * deviceFromFilter;
-    const Transform2d fragmentFromDevice = deviceFromFragment.inverse();
-    params.m00 = static_cast<float>(fragmentFromDevice.data[0]);
-    params.m01 = static_cast<float>(fragmentFromDevice.data[2]);
-    params.m02 = static_cast<float>(fragmentFromDevice.data[4]);
-    params.m10 = static_cast<float>(fragmentFromDevice.data[1]);
-    params.m11 = static_cast<float>(fragmentFromDevice.data[3]);
-    params.m12 = static_cast<float>(fragmentFromDevice.data[5]);
-    params.pixelatedScaleX =
-        static_cast<float>(deviceFromFragment.transformVector(Vector2d(1.0, 0.0)).length());
-    params.pixelatedScaleY =
-        static_cast<float>(deviceFromFragment.transformVector(Vector2d(0.0, 1.0)).length());
-  } else {
-    const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
-    const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
-    params.m00 = 1.0f;
-    params.m02 = static_cast<float>(-origin.x * scaleX);
-    params.m11 = 1.0f;
-    params.m12 = static_cast<float>(-origin.y * scaleY);
-    params.pixelatedScaleX = 1.0f;
-    params.pixelatedScaleY = 1.0f;
+  // Fragment raster pixels map to the referenced content's user space, the primitive origin
+  // places that content in the filtered element's user space, and the filter transform maps it to
+  // output pixels. This one transform covers translated, scaled and rotated filtered elements.
+  const Transform2d deviceFromFragment =
+      primitive.resolvedFragmentUserFromPixel(graph.userToPixelScale) *
+      Transform2d::Translate(origin.x, origin.y) * deviceFromFilter;
+  if (NearZero(deviceFromFragment.determinant(), 1e-12)) {
+    return std::nullopt;
   }
+  const Transform2d fragmentFromDevice = deviceFromFragment.inverse();
+  ImageParams params{};
+  params.m00 = static_cast<float>(fragmentFromDevice.data[0]);
+  params.m01 = static_cast<float>(fragmentFromDevice.data[2]);
+  params.m02 = static_cast<float>(fragmentFromDevice.data[4]);
+  params.m10 = static_cast<float>(fragmentFromDevice.data[1]);
+  params.m11 = static_cast<float>(fragmentFromDevice.data[3]);
+  params.m12 = static_cast<float>(fragmentFromDevice.data[5]);
+  params.pixelatedScaleX =
+      static_cast<float>(deviceFromFragment.transformVector(Vector2d(1.0, 0.0)).length());
+  params.pixelatedScaleY =
+      static_cast<float>(deviceFromFragment.transformVector(Vector2d(0.0, 1.0)).length());
   params.samplingMode = ImageSamplingMode(primitive.imageRendering);
   return params;
 }
