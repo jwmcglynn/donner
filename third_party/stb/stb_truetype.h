@@ -2553,12 +2553,14 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
          if (lookupType == 9) {
             // ExtensionPosFormat1: format, extensionLookupType, 32-bit offset to the subtable.
             // Donner only passes trusted font bytes to this library, but the offset is 32-bit, so
-            // a target outside the GPOS table is skipped instead of followed.
+            // a target outside the GPOS table is skipped instead of followed. The target must also
+            // leave room for the 16-byte PairPos format 2 header (format 1's is shorter).
             stbtt_uint32 subtablePos = (stbtt_uint32) (table - data);
             stbtt_uint32 extensionOffset;
             if (ttUSHORT(table) != 1 || ttUSHORT(table + 2) != 2) continue;
             extensionOffset = ttULONG(table + 4);
-            if (subtablePos >= gposLength || extensionOffset >= gposLength - subtablePos) continue;
+            if (subtablePos >= gposLength || gposLength - subtablePos < 16 ||
+                extensionOffset > gposLength - subtablePos - 16) continue;
             table += extensionOffset;
          }
          posFormat = ttUSHORT(table);
