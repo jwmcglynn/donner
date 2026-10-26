@@ -134,6 +134,11 @@ When creating a pull request:
      `//donner/editor/tests:gl_rnr_replay_tests_geode`. This matches the separate CI editor lane;
      run it explicitly in addition to the Geode variants covered by the default `//...` gate.
    - **`tools/lint.sh`** (~3 s) - the banned-patterns gate: `long long`, `std::aligned_storage`, user-defined literal operators, hidden Unicode whitespace/punctuation. This is one repo-wide scan, not a bazel test; it replaced 476 per-target `*_lint` py_tests that cost 31% of the suite's CPU to do the same work.
+   - **Workflow changes:** run `bazel test //tools:ci_concurrency_policy_tests
+     //tools:macos_cache_key_parity_tests //tools:security_workflow_policy_tests
+     //tools:supply_chain_policy_tests` before publication. Syntax lint alone does not check the
+     reviewed secret consumers, token scopes, environment bindings, runner setup or concurrency
+     policy. Update exact inventories with their owning changes and preserve negative controls.
    - **`tools/ci/lint_lane.sh`** - the whole Lint workflow lane: `tools/lint.sh` plus the brace-lint regression, design-doc provenance, private-detail and no-Rust-dependency checks, in CI order. Run it when the change touches anything those checks scan.
    - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
    - **`tools/format/clang_format.sh -i` on every modified C/C++ file** before committing. It runs the pinned clang-format 21.1.6 that the Lint lane checks the whole tree with; `bazel test //...` also checks the plain `srcs`/`hdrs` of every `donner_cc_library`/`donner_cc_test`/`donner_cc_binary` (a `{target}_format` validation). Xcode 27.1's `xcrun clang-format` matched it byte for byte when it was pinned. Other clang-format versions can differ (for example on `Foo::* member` and `struct stat s{}`).

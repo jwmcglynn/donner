@@ -29,6 +29,7 @@ DOXYGEN_SHA256 = "0ec2e5b2c3cd82b7106d19cb42d8466450730b8cb7a9e85af712be38bf4523
 # The repository's default workflow token can write, so every workflow states its token scopes.
 # Only these jobs may request a write scope, and each must request exactly the listed ones.
 WRITE_SCOPES = {
+    (".github/workflows/sign_macos_release.yml", "attest"): {"attestations", "id-token"},
     (".github/workflows/bcr_preflight.yml", "attest-artifacts"): {"attestations", "id-token"},
     (".github/workflows/codeql.yml", "analyze"): {"security-events"},
     (".github/workflows/deploy_docs.yaml", "deploy"): {"id-token", "pages"},
@@ -39,6 +40,10 @@ WRITE_SCOPES = {
 
 # Exact reviewed step consumers: workflow, job, name, id, action (or the run script marker).
 SECRET_USES = {
+    (".github/workflows/sign_macos_release.yml", "sign",
+     "Sign, notarize, staple and verify the extracted ZIP", None, "<run>"): {
+         "MACOS_CERTIFICATE_BASE64", "MACOS_CERTIFICATE_PASSWORD", "APPLE_ID",
+         "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"},
     (".github/workflows/badges.yaml", "update-badges", "Create Lines-of-Code-Badge", None,
      "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
     (".github/workflows/badges.yaml", "update-badges", "Create Test-Lines-of-Code-Badge", None,
@@ -393,6 +398,7 @@ def _writer_step_problem(condition, inputs, gates):
 # Every job that binds an environment, and the literal name it binds. The BuildBuddy jobs bind
 # the write environment through the reviewed conditional form instead.
 REVIEWED_ENVIRONMENTS = {
+    (".github/workflows/sign_macos_release.yml", "sign"): "donner-notarization",
     (".github/workflows/deploy_docs.yaml", "deploy"): "github-pages",
     (".github/workflows/publish_bcr.yml", "publish-fork"): "bcr-fork-preparation",
 }
@@ -2984,6 +2990,38 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertNotEqual(weakened, plan)
                 with self.assertRaises(AssertionError):
                     self._assert_bcr_consumer_audit(preflight, weakened)
+
+    def _assert_signing_workflow_boundary(self, workflow):
+        self.assertEqual(_triggers(workflow), {"workflow_dispatch"})
+        jobs = _jobs(workflow)
+        self.assertEqual(set(jobs), {"sign", "verify", "attest"})
+        self.assertIn("    if: github.ref == 'refs/heads/main' && "
+                      "github.event_name == 'workflow_dispatch'\n", jobs["sign"])
+        self.assertIn("    environment: donner-notarization\n", jobs["sign"])
+        self.assertEqual(_permissions(jobs["sign"], 4),
+                         {"contents": "read", "attestations": "read"})
+        self.assertEqual(_permissions(jobs["verify"], 4), {"contents": "read"})
+        self.assertIn("    needs: sign\n", jobs["verify"])
+        self.assertIn("    needs: verify\n", jobs["attest"])
+        for name in ("verify", "attest"):
+            self.assertFalse(_secret_reads(jobs[name]))
+            self.assertIsNone(_job_environment(jobs[name]))
+        self.assertNotIn("contents: write", workflow)
+
+    def test_signing_workflow_keeps_approval_secrets_execution_and_attestation_separate(self):
+        workflow = self.supply_chain_files[".github/workflows/sign_macos_release.yml"]
+        self._assert_signing_workflow_boundary(workflow)
+        mutations = [
+            workflow.replace("  workflow_dispatch:", "  pull_request:"),
+            workflow.replace("github.ref == 'refs/heads/main'", "true"),
+            workflow.replace("    environment: donner-notarization\n", ""),
+            workflow.replace("    needs: sign\n", "    needs: []\n"),
+            workflow.replace("    needs: verify\n", "    needs: sign\n"),
+            workflow.replace("  verify:\n", "  verify:\n    environment: donner-notarization\n"),
+        ]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                self._assert_signing_workflow_boundary(mutation)
 
     def test_bcr_fork_preparation_requires_manual_approval_and_never_files_a_pr(self):
         workflow = self.supply_chain_files[".github/workflows/publish_bcr.yml"]
