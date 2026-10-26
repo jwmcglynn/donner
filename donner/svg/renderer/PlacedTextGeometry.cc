@@ -134,13 +134,14 @@ Path WarpGlyphOutline(const Path& outline, const StretchedTextPath& mapping, con
 
 namespace {
 
-/// Largest singular value of the linear part of \p transform, ignoring translation. The default
-/// renderer must not depend on Geode packages, so this does not share Geode's tolerance helper.
-double LinearMaxScale(const Transform2d& transform) {
-  const double a = transform.data[0];
-  const double b = transform.data[1];
-  const double c = transform.data[2];
-  const double d = transform.data[3];
+/// Largest singular value of the linear part of \p deviceFromLocal, ignoring translation. The
+/// default renderer must not depend on Geode packages, so this does not share Geode's tolerance
+/// helper.
+double LinearMaxScale(const Transform2d& deviceFromLocal) {
+  const double a = deviceFromLocal.data[0];
+  const double b = deviceFromLocal.data[1];
+  const double c = deviceFromLocal.data[2];
+  const double d = deviceFromLocal.data[3];
   const double col0 = a * a + b * b;
   const double col1 = c * c + d * d;
   const double cross = a * c + b * d;
