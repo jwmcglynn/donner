@@ -355,34 +355,28 @@ RENDER_ONLY_FACTORIES = {
     "RenderOnly": None,
 }
 
-_REASON_CALLS = {
-    "Skip",
-    *RENDER_ONLY_FACTORIES,
-    "WithThreshold",
-    "WithGoldenOverride",
-    "WithMaxPixels",
-    "withReason",
-    "withGeodeGoldenOverride",
+# The positional argument that carries the reason for each reason-bearing call.
+_REASON_ARGUMENT_INDEX = {
+    "Skip": 0,
+    **{name: 0 for name in RENDER_ONLY_FACTORIES},
+    "WithThreshold": 2,
+    "WithGoldenOverride": 2,
+    "WithMaxPixels": 1,
+    "withReason": 0,
+    "withGeodeGoldenOverride": 1,
 }
+_REASON_CALLS = set(_REASON_ARGUMENT_INDEX)
 
 
 def _reason_from_params(expression: str) -> str | None:
     reason: str | None = None
     for _, name, arguments in sorted(_iter_named_calls(expression, _REASON_CALLS)):
-        argument_index: int | None = None
-        if (name == "Skip" or name == "withReason" or name in RENDER_ONLY_FACTORIES) and arguments:
-            argument_index = 0
-        elif name == "WithThreshold" and len(arguments) >= 3:
-            argument_index = 2
-        elif name == "WithGoldenOverride" and len(arguments) >= 3:
-            argument_index = 2
-        elif name in {"WithMaxPixels", "withGeodeGoldenOverride"} and len(arguments) >= 2:
-            argument_index = 1
-
-        if argument_index is not None:
-            candidate = _parse_cpp_string_expression(arguments[argument_index])
-            if candidate:
-                reason = candidate
+        argument_index = _REASON_ARGUMENT_INDEX[name]
+        if len(arguments) <= argument_index:
+            continue
+        candidate = _parse_cpp_string_expression(arguments[argument_index])
+        if candidate:
+            reason = candidate
     return reason
 
 
@@ -556,15 +550,9 @@ def _vendored_cases(tests_root: Path) -> dict[str, list[Path]]:
     return categories
 
 
-def build_report(source: str, tests_root: Path) -> dict[str, object]:
-    """Join parsed source registrations to the vendored SVG corpus."""
-
-    registrations = parse_registrations(source)
-    if not registrations:
-        raise ParityReportError("no resvg category registrations found")
-    registration_by_category = {item.category: item for item in registrations}
-    vendored = _vendored_cases(tests_root)
-
+def _check_category_coverage(
+    registration_by_category: dict[str, Registration], vendored: dict[str, list[Path]]
+) -> None:
     unregistered = sorted(set(vendored) - set(registration_by_category))
     if unregistered:
         raise ParityReportError("unregistered vendored categories: " + ", ".join(unregistered))
@@ -574,97 +562,110 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
             "registered categories missing from vendored corpus: " + ", ".join(missing_categories)
         )
 
+
+def _pixel_budget_source_count(registration: Registration) -> int:
+    """Count the explicit pixel-budget expressions of an active registration."""
+
+    if registration.registration != "active":
+        return 0
+    expressions = [registration.default_params, *registration.overrides.values()]
+    return sum(
+        "threshold" in _params_facts(params, registration.category)["exception_types"]
+        for params in expressions
+    )
+
+
+def _case_params(registration: Registration, filename: str) -> tuple[str, str]:
+    if filename in registration.overrides:
+        return registration.overrides[filename], "override"
+    if registration.default_params != "{}":
+        return registration.default_params, "category-default"
+    return "{}", "implicit-default"
+
+
+def _registration_cases(
+    registration: Registration, category_cases: list[Path]
+) -> list[dict[str, object]]:
+    filenames = {path.name for path in category_cases}
+    missing_overrides = sorted(set(registration.overrides) - filenames)
+    if missing_overrides:
+        raise ParityReportError(
+            f"overrides missing from {registration.category!r}: " + ", ".join(missing_overrides)
+        )
+
     cases: list[dict[str, object]] = []
-    pixel_budget_sources = 0
-    for registration in registrations:
-        category_cases = vendored[registration.category]
-        filenames = {path.name for path in category_cases}
-        missing_overrides = sorted(set(registration.overrides) - filenames)
-        if missing_overrides:
-            raise ParityReportError(
-                f"overrides missing from {registration.category!r}: " + ", ".join(missing_overrides)
-            )
+    for relative_path in category_cases:
+        params, params_source = _case_params(registration, relative_path.name)
+        facts = _params_facts(params, registration.category)
+        comparison_modes = facts.pop("comparison_modes")
+        if registration.registration == "disabled":
+            comparison_modes = []
+        cases.append(
+            {
+                "category": registration.category,
+                "path": relative_path.as_posix(),
+                "registration": registration.registration,
+                "suite_name": registration.suite_name,
+                "params_source": params_source,
+                "raw_params_expression": params,
+                "comparison_modes": comparison_modes,
+                **facts,
+            }
+        )
+    return cases
 
-        if registration.registration == "active":
-            if "threshold" in _params_facts(registration.default_params, registration.category)[
-                "exception_types"
-            ]:
-                pixel_budget_sources += 1
-            pixel_budget_sources += sum(
-                "threshold" in _params_facts(params, registration.category)["exception_types"]
-                for params in registration.overrides.values()
-            )
 
-        for relative_path in category_cases:
-            filename = relative_path.name
-            if filename in registration.overrides:
-                params = registration.overrides[filename]
-                params_source = "override"
-            elif registration.default_params != "{}":
-                params = registration.default_params
-                params_source = "category-default"
-            else:
-                params = "{}"
-                params_source = "implicit-default"
-
-            facts = _params_facts(params, registration.category)
-            comparison_modes = facts.pop("comparison_modes")
-            if registration.registration == "disabled":
-                comparison_modes = []
-            cases.append(
-                {
-                    "category": registration.category,
-                    "path": relative_path.as_posix(),
-                    "registration": registration.registration,
-                    "suite_name": registration.suite_name,
-                    "params_source": params_source,
-                    "raw_params_expression": params,
-                    "comparison_modes": comparison_modes,
-                    **facts,
-                }
-            )
-
-    cases.sort(key=lambda item: str(item["path"]))
+def _summary(cases: list[dict[str, object]], pixel_budget_sources: int) -> dict[str, int]:
     active_cases = [case for case in cases if case["registration"] == "active"]
     disabled_cases = [case for case in cases if case["registration"] == "disabled"]
 
     def count_active(predicate: Callable[[dict[str, object]], bool]) -> int:
         return sum(bool(predicate(case)) for case in active_cases)
 
-    summary = {
+    def count_exception(name: str) -> int:
+        return count_active(lambda case: name in case["exception_types"])
+
+    def count_state(state: str) -> int:
+        return count_active(lambda case: case["primary_state"] == state)
+
+    def count_render_only_kind(kind: str) -> int:
+        return count_active(lambda case: case["render_only_kind"] == kind)
+
+    return {
         "active_cases": len(active_cases),
         "backend_disabled_cases": count_active(lambda case: bool(case["disabled_backends"])),
-        "compare_cases": count_active(lambda case: case["primary_state"] == "compare"),
+        "compare_cases": count_state("compare"),
         "disabled_cases": len(disabled_cases),
-        "effective_pixel_budget_cases": count_active(
-            lambda case: "threshold" in case["exception_types"]
-        ),
-        "geode_golden_cases": count_active(
-            lambda case: "geode_golden" in case["exception_types"]
-        ),
-        "geode_pixel_budget_cases": count_active(
-            lambda case: "geode_threshold" in case["exception_types"]
-        ),
+        "effective_pixel_budget_cases": count_exception("threshold"),
+        "geode_golden_cases": count_exception("geode_golden"),
+        "geode_pixel_budget_cases": count_exception("geode_threshold"),
         "pixel_budget_sources": pixel_budget_sources,
-        "render_only_cases": count_active(lambda case: case["primary_state"] == "render-only"),
-        "render_only_deprecated_in_svg2_cases": count_active(
-            lambda case: case["render_only_kind"] == "deprecated-in-svg2"
-        ),
-        "render_only_undefined_behavior_cases": count_active(
-            lambda case: case["render_only_kind"] == "undefined-behavior"
-        ),
-        "shared_golden_cases": count_active(
-            lambda case: "shared_golden" in case["exception_types"]
-        ),
-        "simple_text_pixel_budget_cases": count_active(
-            lambda case: "simple_text_threshold" in case["exception_types"]
-        ),
-        "skip_cases": count_active(lambda case: case["primary_state"] == "skip"),
-        "text_full_gated_cases": count_active(
-            lambda case: "text_full_gate" in case["exception_types"]
-        ),
+        "render_only_cases": count_state("render-only"),
+        "render_only_deprecated_in_svg2_cases": count_render_only_kind("deprecated-in-svg2"),
+        "render_only_undefined_behavior_cases": count_render_only_kind("undefined-behavior"),
+        "shared_golden_cases": count_exception("shared_golden"),
+        "simple_text_pixel_budget_cases": count_exception("simple_text_threshold"),
+        "skip_cases": count_state("skip"),
+        "text_full_gated_cases": count_exception("text_full_gate"),
         "total_cases": len(cases),
     }
+
+
+def build_report(source: str, tests_root: Path) -> dict[str, object]:
+    """Join parsed source registrations to the vendored SVG corpus."""
+
+    registrations = parse_registrations(source)
+    if not registrations:
+        raise ParityReportError("no resvg category registrations found")
+    vendored = _vendored_cases(tests_root)
+    _check_category_coverage({item.category: item for item in registrations}, vendored)
+
+    cases: list[dict[str, object]] = []
+    pixel_budget_sources = 0
+    for registration in registrations:
+        pixel_budget_sources += _pixel_budget_source_count(registration)
+        cases.extend(_registration_cases(registration, vendored[registration.category]))
+    cases.sort(key=lambda item: str(item["path"]))
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -676,7 +677,7 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
             "registration_source": REGISTRATION_SOURCE.as_posix(),
             "tests_root": TESTS_ROOT.as_posix(),
         },
-        "summary": summary,
+        "summary": _summary(cases, pixel_budget_sources),
         "cases": cases,
     }
 
