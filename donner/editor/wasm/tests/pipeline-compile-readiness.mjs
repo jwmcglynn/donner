@@ -29,8 +29,10 @@ export function sumPipelineCompilesPending(statistics) {
 /**
  * Runs in a worker before the editor script: every asynchronous pipeline compile settles no
  * earlier than `compileDelayMs` after it started, and each queue completion requested while such a
- * compile is outstanding arrives `completionDelayMs` late. That models a browser with a cold shader
- * cache, whose compiles outlast the editor's first frame and hold later GPU work behind them.
+ * compile is outstanding is held until `completionDelayMs` has passed or no compile is outstanding,
+ * whichever comes first. That models a browser with a cold shader cache, whose compiles outlast the
+ * editor's first frame and hold later GPU work behind them, and releases every held completion once
+ * the compiles drain, so nothing the fault holds outlives the work it models.
  *
  * Self-contained, so its source can be prepended to the editor script. Returns whether it installed;
  * it installs nothing outside a worker with WebGPU, and only once per context.
@@ -56,6 +58,8 @@ export function installPipelineCompileFault(config) {
     completionsDelayed: 0,
     lastCompileSettledAtMs: 0,
   };
+  // Releases of the completions held now, run once no compile is outstanding.
+  let drained = [];
   const at = (deadline) =>
     new Promise((resolve) => setTimer(resolve, Math.max(0, deadline - now())));
   const delayed = (result, deadline, after) =>
@@ -77,6 +81,11 @@ export function installPipelineCompileFault(config) {
       return delayed(result, now() + state.compileDelayMs, () => {
         state.compilesPending -= 1;
         state.lastCompileSettledAtMs = now();
+        if (state.compilesPending === 0) {
+          const release = drained;
+          drained = [];
+          release.forEach((resolve) => resolve());
+        }
       });
     };
   }
@@ -87,7 +96,17 @@ export function installPipelineCompileFault(config) {
       const result = original.apply(this, args);
       if (state.compilesPending === 0) return result;
       state.completionsDelayed += 1;
-      return delayed(result, now() + state.completionDelayMs, () => {});
+      const released = new Promise((resolve) => {
+        setTimer(resolve, state.completionDelayMs);
+        drained.push(resolve);
+      });
+      return result.then(
+        (value) => released.then(() => value),
+        (error) =>
+          released.then(() => {
+            throw error;
+          }),
+      );
     };
   }
   scope.__donnerPipelineCompileFault = { state: () => ({ ...state }) };

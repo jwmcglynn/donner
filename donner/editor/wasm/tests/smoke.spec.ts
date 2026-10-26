@@ -2026,15 +2026,16 @@ async function readPipelineCompilesPending(owner: Worker) {
 // state under the stall guard; the measurement after it stays raw.
 async function waitForPipelineCompilesToSettle(page: Page) {
   const startedAt = performance.now();
-  const owner = await findGpuOwnerWorker(page);
-  if (owner === null) throw new Error("the GPU owner did not answer the pipeline readiness probe");
   const readiness = { pendingAtStart: -1, maxPending: 0, polls: 0, waitMs: 0 };
+  let owner: Worker | null = null;
   let last = { pending: 0, reporting: 0 };
   try {
     await expect.poll(async () => {
-      last = await readPipelineCompilesPending(owner);
-      if (readiness.polls === 0) readiness.pendingAtStart = last.pending;
       readiness.polls += 1;
+      // A loaded owner can miss one bounded probe; finding it again is part of the same wait.
+      owner ??= await findGpuOwnerWorker(page);
+      last = owner === null ? { pending: 0, reporting: 0 } : await readPipelineCompilesPending(owner);
+      if (readiness.pendingAtStart < 0 && last.reporting > 0) readiness.pendingAtStart = last.pending;
       readiness.maxPending = Math.max(readiness.maxPending, last.pending);
       return last.reporting > 0 && last.pending === 0;
     }, {
@@ -2049,8 +2050,16 @@ async function waitForPipelineCompilesToSettle(page: Page) {
 }
 
 // Delays the GPU owner's pipeline compiles from the editor's first instruction, as a cold shader
-// cache does. Every context loads the editor script, so the fault rides in front of it.
+// cache does. Every context loads the editor script, so the fault rides in front of it. The compile
+// delay must outlast boot to the first presented frame, completions included, so the readiness
+// wait still finds compiles pending; the completion delay alone exceeds the nominal handoff bound,
+// so a click that did not wait would fail it.
 const kPipelineCompileFault = { compileDelayMs: 8000, completionDelayMs: 1200 };
+
+async function readOwnerPipelineCompileFault(page: Page) {
+  const owner = await findGpuOwnerWorker(page);
+  return owner && await boundBrowserDiagnostic(owner.evaluate(readPipelineCompileFault), 2000);
+}
 
 async function armPipelineCompileFault(page: Page) {
   const prologue = pipelineCompileFaultPrologue(kPipelineCompileFault);
@@ -2100,7 +2109,11 @@ for (
       "controlled Chromium scheduling fault",
     );
     let presentationFault: { delayMs: number; requested: number; flushed: number } | undefined;
-    if (compileFaultControl) await armPipelineCompileFault(page);
+    if (compileFaultControl) {
+      // The fault adds up to its compile delay before the measured click.
+      testInfo.setTimeout(testInfo.timeout + kPipelineCompileFault.compileDelayMs);
+      await armPipelineCompileFault(page);
+    }
     const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
     const canvas = page.locator("canvas#canvas");
     const bounds = await canvas.boundingBox();
@@ -2133,8 +2146,7 @@ for (
     if (compileFaultControl) {
       // The fault must have reached the GPU owner and still held its compiles when the wait began,
       // or this case would not show that the wait is what keeps the handoff nominal.
-      const owner = await findGpuOwnerWorker(page);
-      pipelineCompileFault = owner && await owner.evaluate(readPipelineCompileFault);
+      pipelineCompileFault = await readOwnerPipelineCompileFault(page);
       expect(pipelineCompileFault?.compilesDelayed ?? 0, "the GPU owner's compiles were delayed")
         .toBeGreaterThan(0);
       expect(pipelineCompileFault?.compilesPending).toBe(0);
@@ -2381,7 +2393,11 @@ for (
       }));
       const report = { workload: sample.id, heldWorkerRaf: holdsScheduledFrames, browser: browserName,
         ...runtime, ...packageHashes(), ...handoff, phaseTimings, presentationFault,
-        pipelineReadiness, pipelineCompileFault, worker: completedWorkerStats };
+        pipelineReadiness, pipelineCompileFault,
+        pipelineCompileFaultAfterPresentation: compileFaultControl
+          ? await readOwnerPipelineCompileFault(page)
+          : undefined,
+        worker: completedWorkerStats };
       const reportPath = testInfo.outputPath("nominal-completed-result-handoff.json");
       await writeFile(reportPath, JSON.stringify(report, null, 2));
       await testInfo.attach("nominal-completed-result-handoff", { path: reportPath,

@@ -132,14 +132,25 @@ test("a compile settles no earlier than its delay and holds completions while it
   await worker.advance(310);
   assert.equal(completedAt, 310);
 
+  // A completion held near the end of the compiles is released when they drain, not later.
+  await worker.advance(800);
+  let lateCompletedAt = null;
+  queue.onSubmittedWorkDone().then(() => {
+    lateCompletedAt = worker.sandbox.performance.now();
+  });
+  worker.completions.shift()();
+  await worker.advance(900);
+  assert.equal(lateCompletedAt, null);
+
   await worker.advance(1000);
+  assert.equal(lateCompletedAt, 1000);
   assert.equal(pipeline, "pipeline a");
   assert.equal(refused, "refused b");
   assert.deepEqual(readFault(worker), {
     ...kConfig,
     compilesDelayed: 2,
     compilesPending: 0,
-    completionsDelayed: 1,
+    completionsDelayed: 2,
     lastCompileSettledAtMs: 1000,
   });
 
@@ -151,5 +162,5 @@ test("a compile settles no earlier than its delay and holds completions while it
   worker.completions.shift()();
   await worker.advance(1000);
   assert.equal(completed, true);
-  assert.equal(readFault(worker).completionsDelayed, 1);
+  assert.equal(readFault(worker).completionsDelayed, 2);
 });

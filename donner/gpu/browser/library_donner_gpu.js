@@ -796,8 +796,8 @@ var LibraryDonnerGpu = {
     // shares an earlier compile copies that compile's compiledAt once, when it registers. A new
     // compile's entry is updated when its asynchronous compile installs the pipeline. compiledAt
     // stays 0 while that compile is in flight, and for good when the compile never installs one:
-    // the pipeline was created at first use first, the browser refused the compile, or the browser
-    // does not compile ahead of use. A zero is therefore not evidence of pending work; the
+    // the pipeline was created at first use first, the browser refused the compile, the browser
+    // device was let go first, or the browser does not compile ahead of use. A zero is therefore not evidence of pending work; the
     // statistics' pipelineCompilesPending is.
     compilePipeline: function(record, kind, id, key, descriptor) {
       var status = DonnerGpu.guard(record);
