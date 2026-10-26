@@ -31,8 +31,8 @@ be expressed through the normal `Params` path close to the affected tests:
 
 | State                                                      | Count | Meaning                                                                                                                                                                                  |
 | ---------------------------------------------------------- | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Params::Skip("reason")`                                   |    99 | Not run. Feature gap, known bug, removed SVG 1.1 feature, reference disagreement, harness mismatch or API policy. The bulk of this doc.                                                  |
-| `Params::RenderOnly("UB: reason")`                         |    54 | Rendered, **not** compared. Reserved for undefined behavior; see the policy below.                                                                                                       |
+| `Params::Skip("reason")`                                   |    98 | Not run. Feature gap, known bug, removed SVG 1.1 feature, reference disagreement, harness mismatch or API policy. The bulk of this doc.                                                  |
+| `Params::RenderOnly("UB: reason")`                         |    55 | Rendered, **not** compared. Reserved for undefined behavior; see the policy below.                                                                                                       |
 | Commented-out `INSTANTIATE_TEST_SUITE_P`                   |     0 | Every vendored category is instantiated.                                                                                                                                                 |
 | `Params::WithThreshold(…, maxPx)` / local max-pixel budget |   103 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
 | Geode-disabled local `Params` entries                      |     0 | Geode now runs every active resvg case. Verified analytic edge residuals use exact per-backend goldens instead of disabling the backend or inflating thresholds.                         |
@@ -42,19 +42,24 @@ it, so `Params::RenderOnly` may only mark behavior the specification leaves unde
 implementation-defined, or a case whose vendored reference is the resvg UB marker image
 (`third_party/resvg-test-suite/resources/ub.png`, SHA-256
 `131f32bfb5bcdb78b9e97021ee94fa0f6c5cb4564254a15bc02add2cedb168e2`). Every reason starts with
-`UB: `, and `//tools/resvg_parity:parity_report_tests` fails otherwise. Donner bugs and
+`UB: `. `//tools/resvg_parity:parity_report_tests` fails on any other reason, and on any
+render-only case whose reference is not the marker unless `SPEC_UB_RENDER_ONLY_ALLOWLIST` in
+`tools/resvg_parity/parity_report.py` lists it with its specification-level reason (today only
+`feGaussianBlur/huge-stdDeviation`, an implementation-defined blur resource limit). Donner bugs and
 missing features, features removed in SVG 2 (`Not impl:`), reference disagreements where Donner
 follows the specification, harness or background mismatches, and API policy differences are
 `Params::Skip` with a bug number or reason. A case that passes the default comparison compares.
-The parity report counts 54 render-only cases (all on the UB marker reference), 114 skipped cases
-and 1511 compared cases.
+A UB marker reference permits render-only but does not require it: a `Not impl:` or `Deferred:`
+feature on a marker reference stays a skip. Skipped cases do not render at all, so they lose
+no-crash and sanitizer coverage. The parity report counts 55 render-only cases (54 on the UB
+marker reference plus the allowlisted case), 113 skipped cases and 1511 compared cases.
 
 ## Current totals
 
 |                                       |                                                                                                                                                      Count |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------: |
-| `Params::Skip(...)`                   |                                                                                                                             99 (`grep -o 'Params::Skip('`) |
-| `Params::RenderOnly(...)`             |                                                                                                  54 (`UB: ` only; render-must-not-crash, no pixel compare) |
+| `Params::Skip(...)`                   |                                                                                                                             98 (`grep -o 'Params::Skip('`) |
+| `Params::RenderOnly(...)`             |                                                                                                  55 (`UB: ` only; render-must-not-crash, no pixel compare) |
 | `WithThreshold` / max-pixel overrides | 103 call sites: 79 `WithThreshold`, 11 `WithMaxPixels`, and 13 direct `withMaxPixelsDifferent` calls. Large non-text budgets remain masked-bug candidates. |
 | Geode-disabled local `Params` entries |                                                                                                                      0 (all active cases now run on Geode) |
 | Commented-out category blocks         |                                                                                                                                                          0 |
@@ -544,7 +549,7 @@ historical reference.
 | text/glyph-orientation-*        |              2 | deprecated SVG 1.1.                                                                                                                                                               |
 | paint-servers/radialGradient    |              1 | `fr=0.7` is a reference-disagreement skip with the containing-circle oracle above. `focal-point-correction` compares normally.                                                                       |
 | structure/style-attribute       |              1 | `<svg version="1.1">` disables geometry-in-style (SVG 1.1 behavior).                                                                                                              |
-| Other RenderOnly UB cases       |             53 | Undefined or implementation-defined behavior on the resvg UB marker reference; we verify no-crash only (`UB: ` reasons, kept RenderOnly not Skip).                              |
+| Other RenderOnly UB cases       |             54 | Undefined or implementation-defined behavior: 53 on the resvg UB marker reference plus `feGaussianBlur/huge-stdDeviation`; we verify no-crash only (`UB: ` reasons, kept RenderOnly not Skip). |
 
 ---
 
@@ -563,8 +568,8 @@ Policy:
   resvg file. If an independently verified analytic Geode result differs from the shared reference,
   attach an exact local `withGeodeGoldenOverride(...)` and current reason to that case. Never disable
   the backend or widen a Geode-only threshold to absorb the difference.
-- Category-wide defaults are acceptable only when every file in the category has
-  the same reason. `filters/enable-background` is the model: one category default
+- Category-wide defaults are acceptable when the default reason applies to every file not
+  explicitly overridden. `filters/enable-background` is the model: one category default
   `Params::Skip(...)`, not a per-file list, with overrides only for the cases that compare or
   carry the UB marker reference. Category feature requirements
   such as `text/*` requiring text support are additive, so per-test overrides do

@@ -45,7 +45,8 @@ registrations, unregistered categories, missing overrides, or malformed paramete
 `//tools/resvg_parity:parity_report_tests` verifies parser fixtures and the exact live-tree totals in
 Bazel runfiles. The report distinguishes explicit pixel-budget sources from effective cases after
 category defaults are applied. The same test fails when a render-only reason does not start with
-`UB: ` (see the render-only policy below).
+`UB: `, or when a render-only case's reference is not the resvg UB marker image and the case is not
+in the specification-UB allowlist in `parity_report.py` (see the render-only policy below).
 
 Some tests require a more lenient threshold, or must be skipped entirely due to incomplete Donner
 functionality. To do this, per-test params may be specified. A test registration appears as:

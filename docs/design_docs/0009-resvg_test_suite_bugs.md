@@ -42,10 +42,11 @@ Two historical PNGs encode different behavior:
 - `filters/filter-functions/one-invalid-url-in-list.svg`: the PNG retains the surrounding
   grayscale and opacity functions; its center is RGBA `(80,126,100,127)`.
 
-Both files remain render-only against those PNGs. Independently authored pixel tests in
-`FilterReferenceStages_tests.cc` require unchanged visible leaf and group geometry for missing
-and non-filter references, including functions on both sides of a bad URL. No replacement golden
-or enlarged tolerance is used. Empty valid filters are covered separately and remain transparent.
+Both files are reference-disagreement skips against those PNGs. Independently authored pixel
+tests in `FilterReferenceStages_tests.cc` require unchanged visible leaf and group geometry for
+missing and non-filter references, including functions on both sides of a bad URL. No
+replacement golden or enlarged tolerance is used. Empty valid filters are covered separately and
+remain transparent.
 
 ## Active overrides (37)
 

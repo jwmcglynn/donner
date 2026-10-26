@@ -100,9 +100,11 @@ How divergences are recorded:
   ("resvg-test-suite: Custom Golden Overrides") is the catalog of every override and why it
   exists — both "resvg's golden is wrong per spec" and "blessed minor diff" cases.
 - **Skips** — a separate mechanism: `Params::Skip()`, governed by `AGENTS.md` → "Resvg Test
-  Threshold Conventions". UB-labeled upstream tests (golden is the resvg UB marker image) are
-  `Params::RenderOnly("UB: ...")`, which is reserved for undefined behavior; everything else that
-  cannot pass is skipped.
+  Threshold Conventions". A UB marker golden (a copy of the resvg `resources/ub.png`) permits
+  `Params::RenderOnly("UB: ...")`, which is reserved for undefined behavior. It does not require
+  it: `Not impl:` or `Deferred:` features stay skips even on a marker golden (for example
+  `text/direction/rtl-with-vertical-writing-mode` and `text/textPath/complex`). Everything else
+  that cannot pass is skipped.
 
 Examples of what lives in this category:
 

@@ -315,9 +315,9 @@ INSTANTIATE_TEST_SUITE_P(
                              "thin ~1px band (259px). Not a coverage bug; TinyGolden still checks "
                              "tiny-skia vs resvg.")},
                     {"huge-stdDeviation.svg",
-                     Params::Skip("Resource limit: blur sigma is clamped to 256 device pixels "
-                                  "(kMaximumFilterPixelRadius); the reference clamps sigma=2500px "
-                                  "differently, so the whole frame differs (201043 px)")},
+                     Params::RenderOnly("UB: implementation-defined resource limit; blur sigma is "
+                                        "clamped to 256 device px (kMaximumFilterPixelRadius) and "
+                                        "the reference clamps differently")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1210,8 +1210,9 @@ INSTANTIATE_TEST_SUITE_P(
                 {"embedded-svg-with-text.svg",
                  Params::Skip(
                      "Reference disagreement: the vendored reference omits the embedded SVG's "
-                     "text. Donner renders it with the document font catalog; an authored "
-                     "embedded-versus-direct identity test pins that policy (0021 B3)")},
+                     "text. Donner renders it with the document font catalog; the authored "
+                     "embedded-versus-direct identity test EmbeddedSvgUsesDocumentFontContext "
+                     "pins that policy (0021 B3)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1343,11 +1344,14 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     // UB: resvg's golden PNG is a "UB" placeholder overlay, so no render can
                     // match it. Render for no-crash coverage only.
-                    {"after-edge.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
-                    {"baseline.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
-                    {"ideographic.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+                    {"after-edge.svg",
+                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
+                    {"baseline.svg",
+                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
+                    {"ideographic.svg",
+                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
                     {"text-after-edge.svg",
-                     Params::RenderOnly("UB: golden is a UB placeholder image")},
+                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
 
                     {"hanging-on-vertical.svg",
                      Params::Skip("Reference limitation: resvg does not apply alignment-baseline "
@@ -1394,8 +1398,10 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     // UB: resvg's golden PNG is a "UB" placeholder overlay, so no render can
                     // match it. Render for no-crash coverage only.
-                    {"reset-size.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
-                    {"use-script.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+                    {"reset-size.svg",
+                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
+                    {"use-script.svg",
+                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
 
                     {"hanging.svg",
                      Params::WithThreshold(

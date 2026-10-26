@@ -161,9 +161,13 @@ Never widen the shared threshold to absorb a one-backend diff — that blinds th
    `third_party/resvg-test-suite/resources/ub.png`, or the specification leaves the behavior
    undefined or implementation-defined) → `Params::RenderOnly("UB: <reason>")`, e.g.
    `Params::RenderOnly("UB: saturate 99999")`. It renders for no-crash coverage but skips the
-   comparison. Render-only is reserved for UB: deprecated or removed features, reference
-   disagreements and harness mismatches are `Params::Skip` with a reason, and
-   `//tools/resvg_parity:parity_report_tests` fails on a render-only reason without `UB: `.
+   comparison. A marker golden permits render-only but does not require it: a `Not impl:` or
+   `Deferred:` feature keeps its skip (for example `text/direction/rtl-with-vertical-writing-mode`
+   and `text/textPath/complex`). Render-only is reserved for UB: deprecated or removed features,
+   reference disagreements and harness mismatches are `Params::Skip` with a reason.
+   `//tools/resvg_parity:parity_report_tests` fails on a render-only reason without `UB: `, and on
+   a render-only case whose golden is not the marker unless `SPEC_UB_RENDER_ONLY_ALLOWLIST` in
+   `tools/resvg_parity/parity_report.py` names it with its specification-level reason.
 4. **Known bug, fix deferred** → `Params::Skip("Bug: <description>")` and record it in
    `docs/design_docs/0021-resvg_feature_gaps.md`.
 5. **Unexplained diff of any size** → investigate. "It's just anti-aliasing" is a banned
