@@ -32,13 +32,34 @@ inputs are byte-identical at both revisions.
   tests/text/writing-mode/tb-with-dx-on-tspan.png
   tests/text/writing-mode/tb-with-dy-on-second-tspan.png
 
-From the same revision and license, both the SVG and the PNG of this test were
-replaced, because upstream quoted its `'Mplus 1p'` font-family. Unquoted, that
-value is not a valid family name, and the old reference was drawn in a fallback
-face.
+From the same revision and license, both the SVG and the PNG of these tests were
+replaced, because upstream quoted their `'Mplus 1p'` font-family. Unquoted, that
+value is not a valid family name, and the old references were drawn in a
+fallback face.
 
   tests/text/writing-mode/tb-and-punctuation.svg
   tests/text/writing-mode/tb-and-punctuation.png
+  tests/text/letter-spacing/non-ASCII-character.svg
+  tests/text/letter-spacing/non-ASCII-character.png
+
+From the same revision and license, these PNGs were replaced with their 300x300
+versions because the snapshot's references were drawn in faces outside the
+vendored font set. Upstream's harness maps the generic families to Noto Serif,
+Noto Sans, Noto Mono, Yellowtail and Sedgwick Ave Display, yet the snapshot's
+sans-serif.png differed from its noto-sans.png (the two are byte-identical at
+v0.49.0), and xml-lang=ja.png used per-language CJK faces that are not vendored.
+fallback-1.png was byte-identical to the old sans-serif.png, a centered rendering
+of this left-anchored text. Their SVG inputs are byte-identical at both
+revisions.
+
+  tests/text/font-family/bold-sans-serif.png
+  tests/text/font-family/cursive.png
+  tests/text/font-family/fallback-1.png
+  tests/text/font-family/fantasy.png
+  tests/text/font-family/monospace.png
+  tests/text/font-family/sans-serif.png
+  tests/text/font-family/serif.png
+  tests/text/text/xml-lang=ja.png
 """
 
 package(default_visibility = ["//visibility:public"])

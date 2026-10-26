@@ -2493,17 +2493,37 @@ static stbtt_int32  stbtt__GetGlyphClass(stbtt_uint8 *classDefTable, int glyph)
 // Define to STBTT_assert(x) if you want to break on unimplemented formats.
 #define STBTT_GPOS_TODO_assert(x)
 
+// Donner patch: the byte length of a table, for bounds-checking 32-bit offsets inside it.
+static stbtt_uint32 stbtt__find_table_length(stbtt_uint8 *data, stbtt_uint32 fontstart, const char *tag)
+{
+   stbtt_int32 num_tables = ttUSHORT(data+fontstart+4);
+   stbtt_uint32 tabledir = fontstart + 12;
+   stbtt_int32 i;
+   for (i=0; i < num_tables; ++i) {
+      stbtt_uint32 loc = tabledir + 16*i;
+      if (stbtt_tag(data+loc+0, tag))
+         return ttULONG(data+loc+12);
+   }
+   return 0;
+}
+
+// Donner patch: a PairPos subtable the reader cannot decode ends the walk for a direct lookup, as
+// upstream does, but only skips that subtable when an Extension lookup wrapped it.
+#define STBTT__GPOS_UNSUPPORTED_SUBTABLE() { if (lookupType == 9) continue; return 0; }
+
 static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, int glyph1, int glyph2)
 {
    stbtt_uint16 lookupListOffset;
    stbtt_uint8 *lookupList;
    stbtt_uint16 lookupCount;
    stbtt_uint8 *data;
+   stbtt_uint32 gposLength;
    stbtt_int32 i, sti;
 
    if (!info->gpos) return 0;
 
    data = info->data + info->gpos;
+   gposLength = stbtt__find_table_length(info->data, info->fontstart, "GPOS");
 
    if (ttUSHORT(data+0) != 1) return 0; // Major version 1
    if (ttUSHORT(data+2) != 0) return 0; // Minor version 0
@@ -2519,15 +2539,33 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
       stbtt_uint16 lookupType = ttUSHORT(lookupTable);
       stbtt_uint16 subTableCount = ttUSHORT(lookupTable + 4);
       stbtt_uint8 *subTableOffsets = lookupTable + 6;
-      if (lookupType != 2) // Pair Adjustment Positioning Subtable
+      // Donner patch: also accept Extension lookups (type 9), which font compilers use to wrap
+      // large pair adjustment lookups, such as the kerning in Source Sans Pro.
+      if (lookupType != 2 && lookupType != 9) // Pair Adjustment Positioning Subtable
          continue;
 
       for (sti=0; sti<subTableCount; sti++) {
          stbtt_uint16 subtableOffset = ttUSHORT(subTableOffsets + 2 * sti);
          stbtt_uint8 *table = lookupTable + subtableOffset;
-         stbtt_uint16 posFormat = ttUSHORT(table);
-         stbtt_uint16 coverageOffset = ttUSHORT(table + 2);
-         stbtt_int32 coverageIndex = stbtt__GetCoverageIndex(table + coverageOffset, glyph1);
+         stbtt_uint16 posFormat;
+         stbtt_uint16 coverageOffset;
+         stbtt_int32 coverageIndex;
+         if (lookupType == 9) {
+            // ExtensionPosFormat1: format, extensionLookupType, 32-bit offset to the subtable.
+            // Donner only passes trusted font bytes to this library, but the offset is 32-bit, so
+            // a target outside the GPOS table is skipped instead of followed. The target must also
+            // leave room for the 16-byte PairPos format 2 header (format 1's is shorter).
+            stbtt_uint32 subtablePos = (stbtt_uint32) (table - data);
+            stbtt_uint32 extensionOffset;
+            if (ttUSHORT(table) != 1 || ttUSHORT(table + 2) != 2) continue;
+            extensionOffset = ttULONG(table + 4);
+            if (subtablePos >= gposLength || gposLength - subtablePos < 16 ||
+                extensionOffset > gposLength - subtablePos - 16) continue;
+            table += extensionOffset;
+         }
+         posFormat = ttUSHORT(table);
+         coverageOffset = ttUSHORT(table + 2);
+         coverageIndex = stbtt__GetCoverageIndex(table + coverageOffset, glyph1);
          if (coverageIndex == -1) continue;
 
          switch (posFormat) {
@@ -2544,7 +2582,7 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
                   stbtt_uint16 pairValueCount = ttUSHORT(pairValueTable);
                   stbtt_uint8 *pairValueArray = pairValueTable + 2;
 
-                  if (coverageIndex >= pairSetCount) return 0;
+                  if (coverageIndex >= pairSetCount) STBTT__GPOS_UNSUPPORTED_SUBTABLE();
 
                   needle=glyph2;
                   r=pairValueCount-1;
@@ -2568,7 +2606,7 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
                      }
                   }
                } else
-                  return 0;
+                  STBTT__GPOS_UNSUPPORTED_SUBTABLE();
                break;
             }
 
@@ -2586,26 +2624,28 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
                   stbtt_uint8 *class1Records, *class2Records;
                   stbtt_int16 xAdvance;
 
-                  if (glyph1class < 0 || glyph1class >= class1Count) return 0; // malformed
-                  if (glyph2class < 0 || glyph2class >= class2Count) return 0; // malformed
+                  if (glyph1class < 0 || glyph1class >= class1Count) STBTT__GPOS_UNSUPPORTED_SUBTABLE(); // malformed
+                  if (glyph2class < 0 || glyph2class >= class2Count) STBTT__GPOS_UNSUPPORTED_SUBTABLE(); // malformed
 
                   class1Records = table + 16;
                   class2Records = class1Records + 2 * (glyph1class * class2Count);
                   xAdvance = ttSHORT(class2Records + 2 * glyph2class);
                   return xAdvance;
                } else
-                  return 0;
+                  STBTT__GPOS_UNSUPPORTED_SUBTABLE();
                break;
             }
 
             default:
-               return 0; // Unsupported position format
+               STBTT__GPOS_UNSUPPORTED_SUBTABLE(); // Unsupported position format
          }
       }
    }
 
    return 0;
 }
+
+#undef STBTT__GPOS_UNSUPPORTED_SUBTABLE
 
 STBTT_DEF int  stbtt_GetGlyphKernAdvance(const stbtt_fontinfo *info, int g1, int g2)
 {

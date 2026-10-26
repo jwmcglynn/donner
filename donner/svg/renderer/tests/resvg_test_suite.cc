@@ -544,28 +544,43 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Reference disagreement: PNG applies functions around a missing "
                               "URL; Filter Effects ignores the entire chain "
                               "(FilterReferenceStages.InvalidReferenceDisablesEntireChain)")},
+                // The seven color-adjust labels are 8-unit Noto Sans Regular (asserted in
+                // FontSelection_tests.cc), and their pixels are identical across all seven
+                // references in each reference set. Against these vendored 500x500 PNGs they
+                // differ by 354 simple, 370 full and 375 Geode pixels; across all label rows those
+                // PNGs carry about 14% more ink than Donner's Noto Sans Regular. Against resvg
+                // v0.49.0's 300x300 rendering label ink agrees within 2%, and the remaining 364
+                // simple and 377 full pixels are consistent with analytic (Donner's CPU
+                // rasterizer) versus 4x4 supersampled (resvg) edge coverage: 78% of resvg's
+                // partial label pixels sit on the 1/16 coverage steps supersampling produces,
+                // against 7 to 11% of Donner's.
                 {"color-adjust-functions-0percent.svg",
-                 Params::Skip("Bug #1167: label glyphs differ from the reference (354 "
-                              "default-text, 370 full-text, 375 Geode px); filtered geometry "
-                              "agrees (#1169)")},
+                 Params::Skip("Reference glyphs: the PNG draws the labels about 14% heavier than "
+                              "Noto Sans Regular (354 default-text, 370 full-text, 375 Geode "
+                              "px); filtered geometry agrees (#1167, #1169)")},
                 {"color-adjust-functions-100percent.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
-                              "geometry agrees, color contracts checked independently (#1169)")},
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; filtered geometry agrees, color contracts checked "
+                              "independently (#1167, #1169)")},
                 {"color-adjust-functions-2.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
-                              "geometry agrees, color contracts checked independently (#1169)")},
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; filtered geometry agrees, color contracts checked "
+                              "independently (#1167, #1169)")},
                 {"color-adjust-functions-200percent.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
-                              "geometry agrees, color contracts checked independently (#1169)")},
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; filtered geometry agrees, color contracts checked "
+                              "independently (#1167, #1169)")},
                 {"color-adjust-functions-50percent.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
-                              "geometry agrees, color contracts checked independently (#1169)")},
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; filtered geometry agrees, color contracts checked "
+                              "independently (#1167, #1169)")},
                 {"color-adjust-functions-default-value.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; defaults "
-                              "agree with explicit amounts (#1169)")},
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; defaults agree with explicit amounts (#1167, #1169)")},
                 {"color-adjust-functions-negative.svg",
-                 Params::Skip("Bug #1167: label-only glyph reference differences; invalid "
-                              "negative declarations are rejected (#1169)")},
+                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
+                              "Sans Regular; invalid negative declarations are rejected (#1167, "
+                              "#1169)")},
                 {"drop-shadow-function-color-last.svg",
                  Params::Skip("Bug #1170: offset/blur sampling differs from reference; color "
                               "order and rounded-offset contracts compare independently (#1169)")},
@@ -1098,22 +1113,10 @@ INSTANTIATE_TEST_SUITE_P(StructureA, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    StructureDefs, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/defs",
-                {
-                    {"style-inheritance-on-text.svg",
-                     Params::WithThreshold(kDefaultThreshold, 5500,
-                                           "Larger threshold due to font-size on the <use> not "
-                                           "reaching the referenced <text>, which lays out at "
-                                           "the size inherited in its original tree instead; "
-                                           "moving font-size onto the <text> matches the golden "
-                                           "exactly. Measured 5351 simple, 5350 full, 5370 "
-                                           "Geode (#1167)")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StructureDefs, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("structure/defs")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(StructureG, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("structure/g")),
@@ -1447,9 +1450,15 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Vertical hairline coverage splits 160/160 against the "
                               "reference's 128/192, while the horizontal hairline matches; "
                               "the text under the shorthand is pixel-exact (#1173)")},
+                // `font="bold italic 64 Noto Sans"` resolves to Noto Sans Italic, the only italic
+                // face in the test font set (FontSelection_tests.cc). The vendored 400x400 PNG
+                // draws a synthesized bold over it with wider advances, which neither CPU text
+                // tier synthesizes for document fonts, while resvg v0.49.0 rejects the unitless
+                // size in the shorthand and draws 12px default serif text instead.
                 {"simple-case.svg",
-                 Params::Skip("Bug #1167: 400px reference: shorthand matches longhands, but glyph "
-                              "weight/advance differs in both CPU text tiers (#1173, #1186)")
+                 Params::Skip("Reference disagreement: the PNG synthesizes bold over Noto Sans "
+                              "Italic and resvg v0.49.0 ignores the unitless shorthand; Donner "
+                              "applies it and draws the Italic face (#1167, #1173, #1186)")
                      .setCanvasSize(400, 400)},
             })),
         ValuesIn(ActiveComparisonModes())),
@@ -1461,64 +1470,27 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/font-family",
             {
-                // The five generic-family goldens (cursive, fantasy, monospace, sans-serif,
-                // serif) disagree with the rest of this directory on the same four pixels of the
-                // plain frame <rect>, at (3,3), (496,3), (3,496) and (496,496), which no font
-                // choice can affect. They come from a different rendering than the goldens Donner
-                // matches exactly: noto-sans, double-quoted and fallback-2, plus font-list and
-                // source-sans-pro under full shaping. Which face each family resolves to is
-                // asserted directly in FontSelection_tests.cc, so these allowances no longer stand
-                // in for selection coverage. Each allowance sits about 2% above the largest
-                // measured residual across the simple and full text tiers, except serif and
-                // sans-serif, which keep their existing tighter numbers rather than being raised.
-                // The Geode lane contributes no residual here: it reports no text-rendering
-                // support, so every text/ case is skipped there.
-                {"bold-sans-serif.svg",
-                 Params::WithThreshold(
-                     kDefaultThreshold, 5200,
-                     "Larger threshold due to a golden bold face that is not the vendored Noto "
-                     "Sans Bold: that face's ink box is 205x73 px against the golden's 181x67 px. "
-                     "Measured 5078 simple, 5081 full (#1167)")},
-                {"cursive.svg",
-                 Params::WithThreshold(kDefaultThreshold, 4800,
-                                       "Larger threshold due to a golden that no checked-in face "
-                                       "reproduces and that disagrees on the frame <rect> "
-                                       "corners. Measured 4658 simple, 4660 full (#1167)")},
+                // The six generic-family references (bold-sans-serif, cursive, fantasy, monospace,
+                // sans-serif, serif) are the 300x300 renderings from resvg v0.49.0, which Donner
+                // matches. The superseded ones were drawn in faces outside this font set:
+                // sans-serif.png differed from noto-sans.png although the resvg harness maps
+                // sans-serif to Noto Sans (at v0.49.0 the two are byte-identical), and the bold
+                // glyph box was 181x67 px against Noto Sans Bold's 205x73 px. Which face each
+                // family resolves to is asserted directly in FontSelection_tests.cc.
+                {"bold-sans-serif.svg", Params().setCanvasSize(300, 300)},
+                {"cursive.svg", Params().setCanvasSize(300, 300)},
+                // resvg's harness resolves an all-unknown family list to its default family,
+                // drawn here in Noto Serif; Donner's last-resort face is the embedded Public Sans
+                // (FontSelection.UnknownFamilyFallsBackToTheEmbeddedFace).
                 {"fallback-1.svg",
-                 Params::Skip("Golden is byte-identical to sans-serif.png, which is a centered "
-                              "different-family rendering, so it cannot match this left-anchored "
-                              "x=70 text (#1167)")},
-                {"fantasy.svg",
-                 Params::WithThreshold(kDefaultThreshold, 5150,
-                                       "Larger threshold due to a golden that no checked-in face "
-                                       "reproduces and that disagrees on the frame <rect> "
-                                       "corners. Measured 5011 simple, 5009 full (#1167)")},
-                {"font-list.svg",
-                 Params().withSimpleTextMaxPixels(1300).withReason(
-                     "Source Sans Pro kerns through GPOS only, which the stb_truetype backend "
-                     "does not read; full shaping matches the golden exactly. Measured 1273 "
-                     "simple, 0 full (#1167)")},
-                {"monospace.svg",
-                 Params::WithThreshold(kDefaultThreshold, 600,
-                                       "Larger threshold due to a golden that matches the "
-                                       "checked-in Noto Mono advances exactly but draws a 3 px "
-                                       "shorter cap height, and disagrees on the frame <rect> "
-                                       "corners. Measured 569 simple, 562 full (#1167)")},
-                {"sans-serif.svg",
-                 Params::WithThreshold(kDefaultThreshold, 1900,
-                                       "Larger threshold due to a golden that no checked-in face "
-                                       "reproduces and that disagrees on the frame <rect> "
-                                       "corners. Measured 1875 simple, 1864 full (#1167)")},
-                {"serif.svg",
-                 Params::WithThreshold(kDefaultThreshold, 4200,
-                                       "Larger threshold due to a golden that no checked-in face "
-                                       "reproduces and that disagrees on the frame <rect> "
-                                       "corners. Measured 4146 simple, 4140 full (#1167)")},
-                {"source-sans-pro.svg",
-                 Params().withSimpleTextMaxPixels(1300).withReason(
-                     "Source Sans Pro kerns through GPOS only, which the stb_truetype backend "
-                     "does not read; full shaping matches the golden exactly. Measured 1273 "
-                     "simple, 0 full (#1167)")},
+                 Params::Skip("Harness mismatch: resvg falls back to Noto Serif for an unknown "
+                              "family, Donner to its embedded Public Sans (445 simple, 444 full "
+                              "px against resvg v0.49.0) (#1167)")
+                     .setCanvasSize(300, 300)},
+                {"fantasy.svg", Params().setCanvasSize(300, 300)},
+                {"monospace.svg", Params().setCanvasSize(300, 300)},
+                {"sans-serif.svg", Params().setCanvasSize(300, 300)},
+                {"serif.svg", Params().setCanvasSize(300, 300)},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1648,10 +1620,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"large-negative.svg", Params::UndefinedBehavior("negative letter-spacing")},
                     {"mixed-scripts.svg",
                      Params::Skip("Needs BiDi: mixed LTR Latin + RTL Arabic in one span")},
-                    {"non-ASCII-character.svg",
-                     Params::Skip("Mplus 1p is the only checked-in face covering U+534A, so the "
-                                  "golden's glyph comes from a font that is not in the test font "
-                                  "set; the whole 108x110 px glyph body differs (#1167)")},
+                    // resvg v0.49.0 quotes the family as 'Mplus 1p'; unquoted it is invalid
+                    // and the snapshot's reference was drawn in a fallback face.
+                    {"non-ASCII-character.svg", Params().setCanvasSize(300, 300)},
                     {"on-Arabic.svg", Params()
                                           .requireFeature(RendererBackendFeature::TextFull)
                                           .withReason("Arabic text")},
@@ -1705,13 +1676,10 @@ INSTANTIATE_TEST_SUITE_P(
                          .onlyTextFull()
                          .withReason("Arabic text shaping; vertical-axis AA diff not "
                                      "the focus of the test")},
-                    {"xml-lang=ja.svg",
-                     Params::WithThreshold(
-                         kDefaultThreshold, 7600,
-                         "Larger threshold due to Mplus 1p being the only checked-in face "
-                         "covering these CJK codepoints, so all three lines fall back to it "
-                         "while the golden's per-language faces are not in the test font set. "
-                         "Measured 7400 simple, 7377 full (#1167)")},
+                    // The reference is resvg v0.49.0's 300x300 rendering, which draws all three
+                    // lines in Mplus 1p, the only face in the test font set covering these CJK
+                    // codepoints. The superseded one used per-language faces outside the set.
+                    {"xml-lang=ja.svg", Params().setCanvasSize(300, 300)},
                     {"xml-space.svg", Params::WithThreshold(kDefaultThreshold, 1400)},
                     {"zalgo.svg", Params().withMaxPixelsDifferent(300).onlyTextFull().withReason(
                                       "Complex diacritics; vertical-axis AA diff "

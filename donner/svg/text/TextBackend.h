@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <ostream>
 
 #include "donner/base/Path.h"
 #include "donner/svg/core/FontVariant.h"
@@ -172,6 +173,15 @@ public:
     double yOffset = 0;          ///< Vertical offset (GPOS mark positioning; 0 for simple).
     uint32_t cluster = 0;        ///< Byte offset into the shaped text range.
     float fontSizeScale = 1.0f;  ///< < 1.0 for synthesized small-caps glyphs.
+
+    /// Prints every field, for debugging and test failure messages.
+    friend std::ostream& operator<<(std::ostream& os, const ShapedGlyph& glyph) {
+      return os << "ShapedGlyph{glyphIndex=" << glyph.glyphIndex << ", xAdvance=" << glyph.xAdvance
+                << ", yAdvance=" << glyph.yAdvance << ", xKern=" << glyph.xKern
+                << ", yKern=" << glyph.yKern << ", xOffset=" << glyph.xOffset
+                << ", yOffset=" << glyph.yOffset << ", cluster=" << glyph.cluster
+                << ", fontSizeScale=" << glyph.fontSizeScale << "}";
+    }
   };
 
   /// Result of shaping a text range.

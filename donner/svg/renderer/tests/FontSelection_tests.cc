@@ -246,6 +246,25 @@ TEST(FontSelection, BoldItalicRequestSelectsAvailableItalicFaceBeforeUprightBold
             expected);
 }
 
+TEST(FontSelection, OnlyRegularAndBoldWeightsAreRegistered) {
+  // Thin, Light and Black Noto Sans files are vendored but deliberately not registered, so light
+  // requests resolve to Regular and heavy ones to Bold.
+  HermeticFontSet fonts;
+
+  EXPECT_THAT(fonts.select("Noto Sans", 100, 0, 5), FaceFrom("NotoSans-Regular.ttf"));
+  EXPECT_THAT(fonts.select("Noto Sans", 300, 0, 5), FaceFrom("NotoSans-Regular.ttf"));
+  EXPECT_THAT(fonts.select("Noto Sans", 900, 0, 5), FaceFrom("NotoSans-Bold.ttf"));
+}
+
+TEST(FontSelection, FamilyInheritedFromTheRootResolvesToTheRegularFace) {
+  const SelectedFace expected{"NotoSans-Regular.ttf", "Noto Sans", 400, 0};
+  EXPECT_EQ(ResolveDocumentFace(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40" font-family="Noto Sans">
+      <text x="4" y="32">label</text>
+    </svg>)svg"),
+            expected);
+}
+
 TEST(FontSelection, UnknownFamilyFallsBackToTheEmbeddedFace) {
   HermeticFontSet fonts;
 
