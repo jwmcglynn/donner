@@ -2133,7 +2133,7 @@ TEST_F(RendererRegressionTests, EffectOnFullCoverageTspanMatchesEffectOnTextElem
       {"mask",
        R"svg(<mask id="e"><rect x="20" y="20" width="160" height="160" fill="gray"/></mask>)svg",
        R"svg(mask="url(#e)")svg"},
-      {"filter", R"svg(<filter id="e"><feGaussianBlur stdDeviation="4"/></filter>)svg",
+      {"filter", R"svg(<filter id="e"><feGaussianBlur stdDeviation="3"/></filter>)svg",
        R"svg(filter="url(#e)")svg"},
   };
 
@@ -2502,6 +2502,52 @@ RendererBitmap RenderRotatedAnisotropicBlur(Vector2i canvasSize, int shift) {
 
 TEST_F(RendererRegressionTests, RotatedAnisotropicBlurReadsContentBeyondTheCanvas) {
   ExpectEdgePixelsMatchRoomyCanvas(RenderRotatedAnisotropicBlur, "rotated_blur_input_margin");
+}
+
+/// Renders \p primitives on a band under a horizontal skew. The band's filter region runs 50
+/// pixels past the right canvas edge, so a capture with the whole sampling reach covers all of it
+/// and renders the same pixels as a canvas with room past that edge.
+RendererBitmap RenderSkewedFilter(std::string_view primitives, Vector2i canvasSize) {
+  const std::string markup =
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-120" y="30" width="58" height="14">)svg" +
+      std::string(primitives) + R"svg(</filter>
+      <g transform="matrix(1 0 4 1 0 0)" filter="url(#f)">
+        <rect x="-110" y="30" width="48" height="14" fill="lime"/>
+      </g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, canvasSize);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// The transformed blur path samples along the skewed filter axes, so the capture must cover the
+// device footprint of the sampling reach: a blur of 3 here reads about 45 pixels along device X.
+// Where the band runs on past the right edge, its blurred rows stay level up to that edge. The
+// rows to check come from a canvas as wide as the filter region, where the whole band is in view.
+// Each row is compared within one render, because Geode's skewed resampling rounds differently
+// for different canvas sizes.
+TEST_F(RendererRegressionTests, SkewedBlurReadsContentBeyondTheCanvas) {
+  for (std::string_view primitives :
+       {std::string_view(R"svg(<feGaussianBlur stdDeviation="3"/>)svg"),
+        std::string_view(
+            R"svg(<feGaussianBlur stdDeviation="3"/><feOffset dx="-2" dy="-2"/>)svg")}) {
+    SCOPED_TRACE(primitives);
+    const RendererBitmap actual = RenderSkewedFilter(primitives, Vector2i(64, 64));
+    const RendererBitmap roomy = RenderSkewedFilter(primitives, Vector2i(114, 64));
+    ExpectVisibleBitmap(actual, "skewed_blur_input_margin_visible");
+    int levelRows = 0;
+    for (int y = 0; y < 64; ++y) {
+      const std::uint8_t level = PixelAt(roomy, 52, y)[3];
+      bool rowIsLevel = level != 0;
+      for (int x = 52; x < 64 && rowIsLevel; ++x) {
+        rowIsLevel = PixelAt(roomy, x, y)[3] == level;
+      }
+      if (rowIsLevel) {
+        ++levelRows;
+        EXPECT_EQ(PixelAt(actual, 63, y)[3], PixelAt(actual, 52, y)[3])
+            << "row " << y << " must stay level up to the canvas edge";
+      }
+    }
+    EXPECT_THAT(levelRows, testing::Gt(0)) << "the scene must have level rows to check";
+  }
 }
 
 // A capture margin must never turn an admissible filter into a frame-wide rejection. At 8x zoom a

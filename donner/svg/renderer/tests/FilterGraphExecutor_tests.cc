@@ -2492,6 +2492,25 @@ TEST(FilterInputMarginTest, InputBufferFollowsGraphReach) {
   EXPECT_THAT(layout(SinglePrimitiveGraph(wrap)), FieldsAre(200, 200, 50, 50));
 }
 
+// Under a skew, a reach along one filter axis lands along a slanted device direction. The reach
+// must cover that footprint: a blur of 3 under matrix(1 0 4 1 0 0) reads 9 user units along the
+// filter Y axis, which is 36 device pixels along X plus 9 along Y.
+TEST(FilterInputMarginTest, SkewedReachCoversTheDeviceFootprint) {
+  using namespace components;
+  Transform2d skew;
+  skew.data[2] = 4.0;  // matrix(1 0 4 1 0 0)
+  // 9 along X from the blur's own X axis plus 36 from its Y axis, and a rounding pixel.
+  EXPECT_THAT(ComputeFilterSamplingReach(
+                  SinglePrimitiveGraph(filter_primitive::GaussianBlur{3.0, 3.0}), skew)
+                  .pixels,
+              testing::Eq(Vector2d(46.0, 10.0)));
+  // An offset is already a device vector: (2, 2) in filter units moves (10, 2) device pixels.
+  EXPECT_THAT(
+      ComputeFilterSamplingReach(SinglePrimitiveGraph(filter_primitive::Offset{2.0, 2.0}), skew)
+          .pixels,
+      testing::Eq(Vector2d(11.0, 3.0)));
+}
+
 TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
   using namespace components;
   FilterGraph graph;
