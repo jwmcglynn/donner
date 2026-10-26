@@ -348,10 +348,10 @@ decoration extents, vertical layout, and textPath ordering remain implementation
 
 Inline `path`, geometry references, `side=right`, `method=stretch`, and `spacing=auto` are
 implemented. Their focused geometry and renderer contracts are active. The vendored
-`method=stretch` image is identical to the align reference, so that corpus row is render-only while
+`method=stretch` image is identical to the align reference, so that corpus row stays skipped while
 independent curved-outline tests distinguish the methods. A fragment-free relative `xlink:href`
 under the secure static resource policy does not resolve to a same-document element or initiate an
-external fetch; its conflicting corpus image is also render-only. The
+external fetch; its conflicting corpus image is also skipped. The
 `TextPathInvalidInlineAndFragmentFreeHrefPaintsBlank` case enforces that policy in
 `//donner/svg/renderer/tests:renderer_public_api_tests` and
 `//donner/svg/renderer/tests:renderer_public_api_tests_geode` using a visible control scene and
