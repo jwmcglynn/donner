@@ -694,6 +694,121 @@ TEST_F(RendererRegressionTests, FeImageFragmentFollowsScaledFilteredElement) {
   EXPECT_EQ(PixelAt(actual, 40, 40)[3], 0);
 }
 
+RendererBitmap RenderFeImageCase(std::string_view markup, Vector2i canvasSize) {
+  SVGDocument document = instantiateSubtree(markup, {}, canvasSize);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// Renders a complete document whose root sets its own size and viewBox.
+RendererBitmap RenderFeImageDocument(std::string_view svg) {
+  SVGDocument document = ParseSvg(svg);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, FeImageFragmentFollowsRotatedFilteredElement) {
+  // rotate(180 32 32) maps the referenced square at user 8..24 to device pixels 40..56, through
+  // the general (non-axis-aligned) fragment placement path.
+  const RendererBitmap actual = RenderFeImageCase(
+      R"svg(<defs>
+        <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+          <feImage href="#src"/>
+        </filter>
+        <rect id="src" x="8" y="8" width="16" height="16" fill="lime"/>
+      </defs>
+      <g transform="rotate(180 32 32)" filter="url(#f)">
+        <rect width="64" height="64" fill="red"/>
+      </g>)svg",
+      Vector2i(64, 64));
+  ExpectVisibleBitmap(actual, "fe_image_rotated_visible");
+  EXPECT_THAT(PixelAt(actual, 48, 48), test::RgbaEq(0, 255, 0, 255));
+  EXPECT_EQ(PixelAt(actual, 16, 16)[3], 0);
+  EXPECT_EQ(PixelAt(actual, 32, 32)[3], 0);
+}
+
+TEST_F(RendererRegressionTests, FeImageFragmentFollowsTranslatedFilteredElementUnderViewBoxOrigin) {
+  const auto render = [](std::string_view hostTransform, std::string_view sourceXY) {
+    return RenderFeImageDocument(
+        std::string(
+            R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="10 10 64 64">
+          <defs>
+            <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+              <feImage href="#src"/>
+            </filter>
+            <rect id="src" )svg") +
+        std::string(sourceXY) + R"svg( width="16" height="16" fill="lime"/>
+          </defs>
+          <g transform=")svg" +
+        std::string(hostTransform) +
+        R"svg(" filter="url(#f)"><rect x="10" y="10" width="64" height="64" fill="red"/></g>
+        </svg>)svg");
+  };
+  const RendererBitmap expected = render("translate(0 0)", R"svg(x="36" y="36")svg");
+  ExpectVisibleBitmap(expected, "fe_image_viewbox_expected_visible");
+  EXPECT_THAT(PixelAt(expected, 34, 34), test::RgbaEq(0, 255, 0, 255));
+  ExpectBitmapsIdentical(render("translate(8 8)", R"svg(x="28" y="28")svg"), expected,
+                         "fe_image_fragment_viewbox_origin");
+}
+
+TEST_F(RendererRegressionTests, FeImageFragmentUsesAnimatedSubregionSize) {
+  // The static width is 10, but the animation holds it at 64, so the referenced square at x=24
+  // is inside the feImage subregion while the animation runs.
+  SVGDocument document = instantiateSubtree(
+      R"svg(<defs>
+        <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+          <feImage id="i" href="#src" width="10"/>
+        </filter>
+        <rect id="src" x="24" y="24" width="16" height="16" fill="lime"/>
+      </defs>
+      <rect width="64" height="64" fill="red" filter="url(#f)"/>
+      <animate href="#i" attributeName="width" from="64" to="64" dur="2s"/>)svg",
+      {}, Vector2i(64, 64));
+  document.setTime(1);
+  const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "fe_image_animated_width_visible");
+  EXPECT_THAT(PixelAt(actual, 32, 32), test::RgbaEq(0, 255, 0, 255));
+}
+
+// A fragment raster that would cover a large filter region must not exhaust the per-frame filter
+// preparation budget: the feImage still renders, and so does a later filtered element.
+TEST_F(RendererRegressionTests, FeImageFragmentWithLargeRegionKeepsFrameFilterBudget) {
+  struct Case {
+    std::string_view name;
+    std::string_view filter;
+    std::string_view source;
+    std::string_view host;
+    Vector2i canvas;
+    Vector2i limePixel;
+  };
+  const std::array<Case, 2> cases = {{
+      // Default -10%/120% region of a 900x900 element: 1080x1080 raster pixels.
+      {"default_region", R"svg(<filter id="f"><feImage href="#src"/></filter>)svg",
+       R"svg(x="400" y="400" width="100" height="100")svg", R"svg(width="900" height="900")svg",
+       Vector2i(900, 900), Vector2i(360, 360)},
+      // A 2000x2000 user-space region over a 200x200 canvas.
+      {"user_space_region",
+       R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-900" y="-900" width="2000"
+          height="2000"><feImage href="#src"/></filter>)svg",
+       R"svg(x="950" y="950" width="40" height="40")svg", R"svg(width="200" height="200")svg",
+       Vector2i(200, 200), Vector2i(70, 70)},
+  }};
+  for (const Case& item : cases) {
+    SCOPED_TRACE(item.name);
+    const RendererBitmap actual = RenderFeImageCase(
+        std::string(R"svg(<defs>)svg") + std::string(item.filter) + R"svg(<rect id="src" )svg" +
+            std::string(item.source) + R"svg( fill="lime"/>
+            <filter id="g"><feFlood flood-color="blue"/></filter>
+          </defs>
+          <rect )svg" +
+            std::string(item.host) + R"svg( fill="red" filter="url(#f)"/>
+          <rect x="10" y="10" width="20" height="20" filter="url(#g)"/>)svg",
+        item.canvas);
+    EXPECT_THAT(PixelAt(actual, item.limePixel.x, item.limePixel.y), test::RgbaEq(0, 255, 0, 255))
+        << "the feImage fragment must render";
+    EXPECT_THAT(PixelAt(actual, 20, 20), test::RgbaEq(0, 0, 255, 255))
+        << "a later filtered element must still render";
+  }
+}
+
 #ifdef DONNER_TEXT_FULL
 TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphPreservesDecodedPremultipliedAlpha) {
   SVGDocument document = ParseSvg(R"svg(
