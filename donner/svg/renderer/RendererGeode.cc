@@ -323,37 +323,12 @@ std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
 /// (a `GeodeGradientCacheComponent` holding a stop texture).
 constexpr size_t kMaxGradientStopsClient = 16;
 
-int boundedFloorToInt(double value, int minimum, int maximum) {
-  if (std::isnan(value)) {
-    return minimum;
-  }
-  if (value <= static_cast<double>(minimum)) {
-    return minimum;
-  }
-  if (value >= static_cast<double>(maximum)) {
-    return maximum;
-  }
-  return static_cast<int>(std::floor(value));
-}
-
 std::optional<uint32_t> checkedFilterRasterDimension(double value) {
   if (!std::isfinite(value) || value <= 0.0 ||
       value > static_cast<double>(components::kMaximumFilterSurfaceDimension)) {
     return std::nullopt;
   }
   return static_cast<uint32_t>(std::max(1.0, std::ceil(value)));
-}
-
-/// Returns true when the filter graph contains spatial-shift primitives (feOffset) that can bring
-/// content from outside the viewport into view, requiring the filter layer buffer to be expanded.
-bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
-  using namespace components::filter_primitive;
-  for (const components::FilterNode& node : filterGraph.nodes) {
-    if (std::holds_alternative<Offset>(node.primitive)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,32 +1137,22 @@ struct GeodeFilterBuffer {
   int offsetY = 0;
 };
 
+/// Whether a filter buffer extends past the target it composites onto, so the target's region must
+/// be copied out at the buffer offset rather than blitted whole.
+bool FilterBufferExceedsTarget(int offsetX, int offsetY, gpu::Extent2d buffer,
+                               gpu::Extent2d target) {
+  return offsetX != 0 || offsetY != 0 || buffer.width != target.width ||
+         buffer.height != target.height;
+}
+
 std::optional<GeodeFilterBuffer> ComputeGeodeFilterBuffer(
     const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
     const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight) {
-  GeodeFilterBuffer result{
+  const components::FilterInputBuffer buffer = components::ComputeFilterInputBuffer(
+      filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
+  const GeodeFilterBuffer result{
       filterRegion.value_or(Box2d(Vector2d::Zero(), Vector2d(viewportWidth, viewportHeight))),
-      viewportWidth, viewportHeight, 0, 0};
-  if (filterRegion.has_value()) {
-    constexpr int kMaxExpansion = 4096;
-    const Box2d deviceRegion = deviceFromFilter.transformBox(*filterRegion);
-    const int regionX0 = boundedFloorToInt(deviceRegion.topLeft.x, -kMaxExpansion, 0);
-    const int regionY0 = boundedFloorToInt(deviceRegion.topLeft.y, -kMaxExpansion, 0);
-    if ((regionX0 < 0 || regionY0 < 0) && graphHasSpatialShift(filterGraph)) {
-      result.offsetX = std::min(-regionX0, std::max(0, kMaxExpansion - viewportWidth));
-      result.offsetY = std::min(-regionY0, std::max(0, kMaxExpansion - viewportHeight));
-      result.width += result.offsetX;
-      result.height += result.offsetY;
-    }
-  }
-  const std::uint64_t pixels =
-      static_cast<std::uint64_t>(result.width) * static_cast<std::uint64_t>(result.height);
-  if (pixels > components::kMaximumFilterSurfacePixels) {
-    result.width = viewportWidth;
-    result.height = viewportHeight;
-    result.offsetX = 0;
-    result.offsetY = 0;
-  }
+      buffer.width, buffer.height, buffer.offsetX, buffer.offsetY};
   if (result.width <= 0 || result.height <= 0) {
     return std::nullopt;
   }
@@ -2904,11 +2869,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       resampleEncoder->injectNextArenaWriteFailureForTesting();
     }
     resampleEncoder->setTransform(localFromDevice);
-    resampleEncoder->drawTexture(
-        frame.layerTexture,
-        Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
-                        static_cast<double>(frame.layerDesc.size.height)),
-        kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
+    // The capture's texel (0, 0) is device (-offsetX, -offsetY) when the input buffer extends
+    // past the viewport's top-left corner.
+    resampleEncoder->drawTexture(frame.layerTexture,
+                                 Box2d::FromXYWH(-static_cast<double>(frame.filterBufferOffsetX),
+                                                 -static_cast<double>(frame.filterBufferOffsetY),
+                                                 static_cast<double>(frame.layerDesc.size.width),
+                                                 static_cast<double>(frame.layerDesc.size.height)),
+                                 kWholeTextureUv, 1.0, /*pixelated=*/false,
+                                 /*sourceIsPremultiplied=*/true);
     resampleEncoder->finish();
     retireFinishedEncoder(std::move(resampleEncoder));
 
@@ -6485,10 +6454,12 @@ void RendererGeode::popFilterLayer() {
     impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
-  if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
+  if (FilterBufferExceedsTarget(frame.filterBufferOffsetX, frame.filterBufferOffsetY,
+                                frame.layerDesc.size, outerExtent)) {
     // The filter result is in an expanded texture. Extract the region the outer target covers,
     // at the buffer offset, using a GPU texture copy, then blit it over that target. The buffer
-    // was sized as that target plus the offset, so the region lies wholly inside the result.
+    // was sized as that target plus margins on each side, so the region lies wholly inside the
+    // result.
     const uint32_t vpW = outerExtent.width;
     const uint32_t vpH = outerExtent.height;
 

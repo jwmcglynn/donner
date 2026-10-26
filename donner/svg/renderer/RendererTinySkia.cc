@@ -1139,19 +1139,6 @@ private:
 #ifdef DONNER_FILTERS_ENABLED
 // Blur implementation moved to tiny_skia::filter::gaussianBlur (GaussianBlur.h).
 
-int BoundedFloorToInt(double value, int minimum, int maximum) {
-  if (std::isnan(value)) {
-    return 0;
-  }
-  if (value <= static_cast<double>(minimum)) {
-    return minimum;
-  }
-  if (value >= static_cast<double>(maximum)) {
-    return maximum;
-  }
-  return static_cast<int>(std::floor(value));
-}
-
 std::optional<int> CheckedFilterRasterDimension(double value) {
   if (!std::isfinite(value) || value <= 0.0 ||
       value > static_cast<double>(components::kMaximumFilterSurfaceDimension)) {
@@ -1160,7 +1147,6 @@ std::optional<int> CheckedFilterRasterDimension(double value) {
   return std::max(1, static_cast<int>(std::ceil(value)));
 }
 
-bool graphHasSpatialShift(const components::FilterGraph& filterGraph);
 bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph);
 bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
                                   const Transform2d& deviceFromFilter);
@@ -1177,29 +1163,9 @@ FilterBufferMetrics ComputeFilterBufferMetrics(const components::FilterGraph& fi
                                                const std::optional<Box2d>& filterRegion,
                                                const Transform2d& deviceFromFilter,
                                                int viewportWidth, int viewportHeight) {
-  constexpr int kMaxExpansion = 4096;
-  int bufferX0 = 0;
-  int bufferY0 = 0;
-  if (filterRegion.has_value()) {
-    const Box2d deviceRegion = deviceFromFilter.transformBox(*filterRegion);
-    bufferX0 = std::min(0, BoundedFloorToInt(deviceRegion.topLeft.x, -kMaxExpansion, 0));
-    bufferY0 = std::min(0, BoundedFloorToInt(deviceRegion.topLeft.y, -kMaxExpansion, 0));
-  }
-
-  FilterBufferMetrics result{viewportWidth, viewportHeight, 0, 0};
-  if ((bufferX0 >= 0 && bufferY0 >= 0) || !graphHasSpatialShift(filterGraph)) {
-    return result;
-  }
-  result.offsetX = std::min(-bufferX0, std::max(0, kMaxExpansion - viewportWidth));
-  result.offsetY = std::min(-bufferY0, std::max(0, kMaxExpansion - viewportHeight));
-  result.width = viewportWidth + result.offsetX;
-  result.height = viewportHeight + result.offsetY;
-  const std::uint64_t pixels =
-      static_cast<std::uint64_t>(result.width) * static_cast<std::uint64_t>(result.height);
-  if (pixels > components::kMaximumFilterSurfacePixels) {
-    return {viewportWidth, viewportHeight, 0, 0};
-  }
-  return result;
+  const components::FilterInputBuffer buffer = components::ComputeFilterInputBuffer(
+      filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
+  return FilterBufferMetrics{buffer.width, buffer.height, buffer.offsetX, buffer.offsetY};
 }
 
 bool CanUseLocalFilterRaster(const components::FilterGraph& filterGraph,
@@ -1336,18 +1302,6 @@ bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph
 
   // Must have at least one blur primitive to benefit from the transformed path.
   return hasBlur;
-}
-
-/// Returns true if the filter graph contains spatial primitives (feOffset, feDisplacementMap)
-/// that can shift content from outside the viewport into view.
-bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
-  using namespace components::filter_primitive;
-  for (const components::FilterNode& node : filterGraph.nodes) {
-    if (std::holds_alternative<Offset>(node.primitive)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
@@ -1977,8 +1931,13 @@ bool RendererTinySkia::compositeTransformedFilter(SurfaceFrame& frame) {
   resamplePaint.opacity = 1.0f;
   resamplePaint.blendMode = tiny_skia::BlendMode::Source;
   auto localView = localPixmap.mutableView();
+  // The capture's pixel (0, 0) is device (-offsetX, -offsetY) when the input buffer extends past
+  // the viewport's top-left corner.
+  const Transform2d localFromBuffer =
+      Transform2d::Translate(-frame.filterBufferOffsetX, -frame.filterBufferOffsetY) *
+      localFromDevice;
   tiny_skia::Painter::drawPixmap(localView, 0, 0, frame.pixmap.view(), resamplePaint,
-                                 toTinyTransform(localFromDevice));
+                                 toTinyTransform(localFromBuffer));
 
   const Transform2d localFromFilter = Transform2d::Scale(geometry->scaleX, geometry->scaleY);
   const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),

@@ -522,11 +522,6 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
                 {"with-subregion-3.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                                                "Minor shading differences")},
-                {"content-outside-the-canvas-2.svg",
-                 Params::Skip("Bug #1170: feGaussianBlur samples transparent pixels at the "
-                              "canvas top/left edge because content above and left of the canvas "
-                              "is not rasterized into the filter input (TinySkia 2321 and Geode "
-                              "2323 pixels differ, edge band only)")},
                 {"in=BackgroundAlpha.svg",
                  Params::Skip("Not impl: Filter Effects BackgroundAlpha from the isolation-group "
                               "backdrop")},

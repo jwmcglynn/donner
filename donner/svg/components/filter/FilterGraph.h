@@ -722,6 +722,149 @@ struct FilterGraph {
   [[nodiscard]] bool empty() const { return nodes.empty(); }
 };
 
+/// How far a filter graph's output can depend on input pixels away from the output position.
+struct FilterInputReach {
+  Vector2d user;           ///< Reach in user-space units, per axis.
+  Vector2d pixels;         ///< Additional reach in filter raster pixels, per axis.
+  bool unbounded = false;  ///< True when some primitive can read any position in its input.
+  /// True when some primitive's output depends on where the raster's pixel origin lies.
+  /// feTurbulence evaluates its noise from raster pixel coordinates through only the linear part
+  /// of the filter transform, so moving the raster origin would move the noise pattern.
+  bool originDependent = false;
+};
+
+/// Conservatively bound how far a filter graph samples its inputs. Each primitive's reach is
+/// summed, since chained primitives compound and the sum bounds every path through the graph.
+/// Object-bounding-box primitive units scale user reach by the element's bounding box.
+/// @param graph Filter graph with its primitive units and element bounding box resolved.
+inline FilterInputReach ComputeFilterInputReach(const FilterGraph& graph) {
+  const bool objectBounds = graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
+                            graph.elementBoundingBox.has_value();
+  const Vector2d bounds =
+      objectBounds ? Vector2d(graph.elementBoundingBox->width(), graph.elementBoundingBox->height())
+                   : Vector2d(1.0, 1.0);
+  FilterInputReach reach;
+  const auto addUser = [&](double x, double y) {
+    reach.user += Vector2d(std::abs(x) * bounds.x, std::abs(y) * bounds.y);
+  };
+  for (const FilterNode& node : graph.nodes) {
+    std::visit(
+        [&](const auto& primitive) {
+          using T = std::decay_t<decltype(primitive)>;
+          if constexpr (std::is_same_v<T, filter_primitive::GaussianBlur>) {
+            addUser(3.0 * primitive.stdDeviationX, 3.0 * primitive.stdDeviationY);
+          } else if constexpr (std::is_same_v<T, filter_primitive::DropShadow>) {
+            addUser(3.0 * std::abs(primitive.stdDeviationX) + std::abs(primitive.dx),
+                    3.0 * std::abs(primitive.stdDeviationY) + std::abs(primitive.dy));
+          } else if constexpr (std::is_same_v<T, filter_primitive::Offset>) {
+            addUser(primitive.dx, primitive.dy);
+          } else if constexpr (std::is_same_v<T, filter_primitive::Morphology>) {
+            addUser(primitive.radiusX, primitive.radiusY);
+          } else if constexpr (std::is_same_v<T, filter_primitive::DisplacementMap>) {
+            // Displacement scales by the geometric mean of the bounding box extents.
+            const double half = std::abs(primitive.scale) * 0.5 *
+                                (objectBounds ? std::sqrt(bounds.x * bounds.y) : 1.0);
+            reach.user += Vector2d(half, half);
+          } else if constexpr (std::is_same_v<T, filter_primitive::ConvolveMatrix>) {
+            reach.pixels += Vector2d(primitive.orderX, primitive.orderY);
+          } else if constexpr (std::is_same_v<T, filter_primitive::DiffuseLighting> ||
+                               std::is_same_v<T, filter_primitive::SpecularLighting>) {
+            // Surface normals read the neighboring pixels.
+            reach.pixels += Vector2d(1.0, 1.0);
+          } else if constexpr (std::is_same_v<T, filter_primitive::Tile>) {
+            reach.unbounded = true;
+          } else if constexpr (std::is_same_v<T, filter_primitive::Turbulence>) {
+            reach.originDependent = true;
+          }
+        },
+        node.primitive);
+  }
+  return reach;
+}
+
+/// Device-pixel margin of input a filter graph needs around its output, or `std::nullopt` when the
+/// graph can read any position in its input region. A graph with feTurbulence gets no margin, since
+/// its noise would move with the raster origin.
+/// @param graph Filter graph. @param deviceFromFilter Filter user space to filter raster pixels.
+inline std::optional<Vector2d> FilterInputDeviceMargin(const FilterGraph& graph,
+                                                       const Transform2d& deviceFromFilter) {
+  const FilterInputReach reach = ComputeFilterInputReach(graph);
+  if (reach.originDependent) {
+    // Keep the viewport-aligned capture rather than shift the noise pattern.
+    return Vector2d::Zero();
+  }
+  if (reach.unbounded) {
+    return std::nullopt;
+  }
+  // Bound the device extent of the user-space reach rectangle. A graph that reads only the input
+  // pixel under each output pixel needs no margin; otherwise one more pixel covers rounding.
+  const double* m = deviceFromFilter.data;
+  const Vector2d spread(
+      std::abs(m[0]) * reach.user.x + std::abs(m[2]) * reach.user.y + reach.pixels.x,
+      std::abs(m[1]) * reach.user.x + std::abs(m[3]) * reach.user.y + reach.pixels.y);
+  const double rounding = spread.x > 0.0 || spread.y > 0.0 ? 1.0 : 0.0;
+  const Vector2d margin(spread.x + rounding, spread.y + rounding);
+  if (!std::isfinite(margin.x) || !std::isfinite(margin.y)) {
+    return std::nullopt;
+  }
+  return margin;
+}
+
+/// Filter input raster layout around a viewport: the viewport plus the input margin on each side,
+/// limited to where the filter region extends past the viewport.
+struct FilterInputBuffer {
+  int width = 0;    ///< Raster width in pixels.
+  int height = 0;   ///< Raster height in pixels.
+  int offsetX = 0;  ///< Raster pixels left of the viewport.
+  int offsetY = 0;  ///< Raster pixels above the viewport.
+};
+
+/// Pixels to extend a filter input raster past one viewport edge.
+/// @param beyond How far the filter region extends past the edge. @param reach Input margin.
+inline int FilterInputExtension(double beyond, double reach) {
+  if (!(beyond > 0.0)) {
+    return 0;
+  }
+  const double limit = static_cast<double>(kMaximumFilterSurfaceDimension);
+  return static_cast<int>(std::ceil(std::min({beyond, reach, limit})));
+}
+
+/// Lay out the input raster for a filter layer over a \p viewportWidth by \p viewportHeight
+/// surface. Primitives that read input away from the output position need the filtered content
+/// just past the viewport, so the raster extends by the graph's input margin wherever the filter
+/// region extends past the viewport, up to the whole region for a graph with unbounded reach. Each
+/// axis stays within the surface dimension limit; a layout over the pixel limit falls back to the
+/// viewport.
+inline FilterInputBuffer ComputeFilterInputBuffer(const FilterGraph& graph,
+                                                  const std::optional<Box2d>& filterRegion,
+                                                  const Transform2d& deviceFromFilter,
+                                                  int viewportWidth, int viewportHeight) {
+  const FilterInputBuffer viewport{viewportWidth, viewportHeight, 0, 0};
+  if (!filterRegion.has_value()) {
+    return viewport;
+  }
+  const Box2d deviceRegion = deviceFromFilter.transformBox(*filterRegion);
+  const double limit = static_cast<double>(kMaximumFilterSurfaceDimension);
+  const Vector2d reach =
+      FilterInputDeviceMargin(graph, deviceFromFilter).value_or(Vector2d(limit, limit));
+  const auto layoutAxis = [](double regionMin, double regionMax, double reachAxis, int extent,
+                             int& before) {
+    const int room = std::max(0, kMaximumFilterSurfaceDimension - extent);
+    before = std::min(FilterInputExtension(-regionMin, reachAxis), room);
+    const int after = std::min(
+        FilterInputExtension(regionMax - static_cast<double>(extent), reachAxis), room - before);
+    return extent + before + after;
+  };
+  FilterInputBuffer result;
+  result.width = layoutAxis(deviceRegion.topLeft.x, deviceRegion.bottomRight.x, reach.x,
+                            viewportWidth, result.offsetX);
+  result.height = layoutAxis(deviceRegion.topLeft.y, deviceRegion.bottomRight.y, reach.y,
+                             viewportHeight, result.offsetY);
+  const std::uint64_t pixels = static_cast<std::uint64_t>(std::max(result.width, 0)) *
+                               static_cast<std::uint64_t>(std::max(result.height, 0));
+  return pixels > kMaximumFilterSurfacePixels ? viewport : result;
+}
+
 /// Conservative resource layout for the live float filter execution strategy.
 struct GpuFilterWorkingSet {
   std::uint64_t floatTextures = 0;
