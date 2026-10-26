@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
@@ -2549,29 +2550,116 @@ TEST_F(RendererRegressionTests, NestedTurbulenceKeepsItsNoiseUnderAnOuterInputMa
 
 // A large feImage fragment is rasterized only over what can reach the visible surface. A later
 // primitive that pulls fragment content into view extends that reach: here the offset brings a
-// square from beyond the visible fragment window to device pixels 10 through 15.
+// square from beyond the visible fragment window to device pixels (3..8, 10..15). The square lies
+// outside the canvas-sized fallback window too, so only a window widened by the reach finds it.
 TEST_F(RendererRegressionTests, FeImageFragmentWindowIncludesDownstreamReach) {
   SVGDocument document = instantiateSubtree(
       R"svg(<defs>
-        <filter id="f" filterUnits="userSpaceOnUse" x="-20" y="-20" width="200" height="200">
-          <feImage href="#src"/><feOffset dy="-25"/>
+        <filter id="f" filterUnits="userSpaceOnUse" x="-100" y="-20" width="280" height="200">
+          <feImage href="#src"/><feOffset dy="-10"/>
         </filter>
-        <rect id="src" x="30" y="30" width="5" height="5" fill="lime"/>
+        <rect id="src" x="110" y="22" width="5" height="5" fill="lime"/>
       </defs>
       <g transform="rotate(90)" filter="url(#f)">
-        <rect x="-20" y="-80" width="200" height="200" fill="red"/>
+        <rect x="-100" y="-80" width="280" height="200" fill="red"/>
       </g>)svg",
       {}, Vector2i(64, 64));
   const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
   ExpectVisibleBitmap(actual, "fe_image_downstream_reach_visible");
-  EXPECT_THAT(PixelAt(actual, 12, 12)[1], testing::Gt(200)) << "the offset square must render";
-  EXPECT_THAT(PixelAt(actual, 12, 12)[3], testing::Gt(200));
+  EXPECT_THAT(PixelAt(actual, 5, 12)[1], testing::Gt(200)) << "the offset square must render";
+  EXPECT_THAT(PixelAt(actual, 5, 12)[3], testing::Gt(200));
   EXPECT_EQ(PixelAt(actual, 40, 40)[3], 0);
 }
 
-constexpr std::array<SpreadingFilterCase, 10> kSpreadingFilterCases = {{
+/// Renders the off-canvas feImage scene: before the translate(-96 -96) host transform, the
+/// referenced square and the filtered element lie beyond the 64x64 canvas. \p primitives follow
+/// the feImage, whose result is named "i".
+RendererBitmap RenderOffCanvasFeImage(std::string_view primitives) {
+  SVGDocument document = instantiateSubtree(std::string(R"svg(<defs>
+        <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+          <feImage href="#src" result="i"/>)svg") +
+                                                std::string(primitives) + R"svg(
+        </filter>
+        <rect id="src" x="104" y="104" width="16" height="16" fill="lime"/>
+      </defs>
+      <g transform="translate(-96 -96)" filter="url(#f)">
+        <rect x="96" y="96" width="48" height="48" fill="red"/>
+      </g>)svg",
+                                            {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// A reach-widened fragment window that exceeds the canvas-sized byte limit must fall back to the
+// unwidened visible window, never to the canvas window, which ignores the host transform. A graph
+// whose reach is the whole region keeps the unwidened visible window for the same reason.
+TEST_F(RendererRegressionTests, FeImageFragmentWindowFallsBackToVisibleWindow) {
+  for (std::string_view primitives :
+       {std::string_view(R"svg(<feGaussianBlur stdDeviation="1"/>)svg"),
+        std::string_view(R"svg(<feTile in="i"/>)svg")}) {
+    SCOPED_TRACE(primitives);
+    const RendererBitmap actual = RenderOffCanvasFeImage(primitives);
+    ExpectVisibleBitmap(actual, "fe_image_visible_window_fallback_visible");
+    EXPECT_THAT(PixelAt(actual, 16, 16)[1], testing::Gt(200))
+        << "the referenced square must render";
+    EXPECT_THAT(PixelAt(actual, 16, 16)[3], testing::Gt(200));
+  }
+}
+
+// Morphology dilation spreads content that lies entirely beyond the canvas into view.
+TEST_F(RendererRegressionTests, DilateSpreadsContentFromBeyondTheCanvas) {
+  ExpectEdgePixelsMatchRoomyCanvas(
+      [](Vector2i canvasSize, int shift) {
+        SVGDocument document = instantiateSubtree(
+            std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-200" y="-200"
+                width="464" height="464"><feMorphology operator="dilate" radius="6"/></filter>
+              <g transform="translate()svg") +
+                std::to_string(shift) + " " + std::to_string(shift) + R"svg()">
+                <g filter="url(#f)"><rect x="-40" y="-40" width="38" height="38" fill="lime"/></g>
+              </g>)svg",
+            {}, canvasSize);
+        return RenderDocumentWithBackend(document, ActiveRendererBackend());
+      },
+      "dilate_input_margin");
+}
+
+// Turbulence noise follows raster pixel coordinates. A mask whose content is turbulence-filtered
+// is drawn again inside a filter layer that reads past each output pixel. The oracle draws it
+// inside a filter layer that reads no neighbors, so the two differ only by the input margin.
+RendererBitmap RenderMaskedTurbulence(bool shifted) {
+  const std::string masked = R"svg(<rect width="64" height="64" fill="lime" mask="url(#m)"/>)svg";
+  SVGDocument document = instantiateSubtree(
+      std::string(R"svg(<filter id="t"><feTurbulence baseFrequency="0.1" numOctaves="2"/></filter>
+      <filter id="shift" filterUnits="userSpaceOnUse" x="-50" y="-50" width="200" height="200">
+        <feOffset dx="5" dy="5"/><feOffset dx="-5" dy="-5"/>
+      </filter>
+      <filter id="same" filterUnits="userSpaceOnUse" x="-50" y="-50" width="200" height="200">
+        <feColorMatrix type="saturate" values="1"/>
+      </filter>
+      <mask id="m"><rect x="-10" y="-10" width="40" height="40" fill="white" filter="url(#t)"/>
+      </mask>)svg") +
+          masked +
+          (shifted ? R"svg(<g filter="url(#shift)">)svg" : R"svg(<g filter="url(#same)">)svg") +
+          masked + "</g>",
+      {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, MaskReplayedTurbulenceKeepsItsNoiseUnderAnInputMargin) {
+  const RendererBitmap expected = RenderMaskedTurbulence(false);
+  ExpectVisibleBitmap(expected, "masked_turbulence_visible");
+  editor::tests::CompareBitmapToBitmap(RenderMaskedTurbulence(true), expected,
+                                       "masked_turbulence_input_margin",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// An empty edge entry means the case does not discriminate on that edge and is not run there.
+constexpr std::array<SpreadingFilterCase, 15> kSpreadingFilterCases = {{
     {"Blur", R"svg(<feGaussianBlur stdDeviation="3"/>)svg",
      R"svg(<feGaussianBlur stdDeviation="3"/>)svg", ""},
+    {"BlurDuplicateEdges", R"svg(<feGaussianBlur stdDeviation="3" edgeMode="duplicate"/>)svg",
+     R"svg(<feGaussianBlur stdDeviation="3" edgeMode="duplicate"/>)svg", ""},
+    {"BlurWrapEdges", R"svg(<feGaussianBlur stdDeviation="3" edgeMode="wrap"/>)svg",
+     R"svg(<feGaussianBlur stdDeviation="3" edgeMode="wrap"/>)svg", ""},
     {"ObjectBoundingBoxBlur", R"svg(<feGaussianBlur stdDeviation="0.03"/>)svg",
      R"svg(<feGaussianBlur stdDeviation="0.03"/>)svg",
      R"svg(primitiveUnits="objectBoundingBox")svg"},
@@ -2581,6 +2669,18 @@ constexpr std::array<SpreadingFilterCase, 10> kSpreadingFilterCases = {{
      R"svg(<feConvolveMatrix order="5" edgeMode="none"
         kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
      R"svg(<feConvolveMatrix order="5" edgeMode="none"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     ""},
+    {"ConvolveDuplicateEdges",
+     R"svg(<feConvolveMatrix order="5" edgeMode="duplicate"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     R"svg(<feConvolveMatrix order="5" edgeMode="duplicate"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     ""},
+    {"ConvolveWrapEdges",
+     R"svg(<feConvolveMatrix order="5" edgeMode="wrap"
+        kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
+     R"svg(<feConvolveMatrix order="5" edgeMode="wrap"
         kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg",
      ""},
     {"DropShadow", R"svg(<feDropShadow dx="6" dy="6" stdDeviation="2"/>)svg",
@@ -2597,26 +2697,48 @@ constexpr std::array<SpreadingFilterCase, 10> kSpreadingFilterCases = {{
      R"svg(<feDisplacementMap in="SourceGraphic" in2="SourceGraphic" scale="20"
         xChannelSelector="G" yChannelSelector="G"/>)svg",
      ""},
+    // Lighting at the bottom-right edges matches with or without the margin, so it runs only at
+    // the top-left edges.
     {"DiffuseLighting",
      R"svg(<feDiffuseLighting surfaceScale="10"><feDistantLight azimuth="45" elevation="30"/>
         </feDiffuseLighting>)svg",
-     R"svg(<feDiffuseLighting surfaceScale="10"><feDistantLight azimuth="45" elevation="30"/>
-        </feDiffuseLighting>)svg",
-     ""},
+     "", ""},
     // The tile source lies entirely beyond the canvas.
     {"Tile",
      R"svg(<feOffset x="-60" y="-60" width="20" height="20" result="t"/><feTile in="t"/>)svg",
      R"svg(<feOffset x="100" y="100" width="20" height="20" result="t"/><feTile in="t"/>)svg", ""},
+    // The tile source subregion is shifted content, so the capture must also cover what the
+    // offset reads beyond that subregion.
+    {"OffsetTile",
+     R"svg(<feOffset dx="30" dy="30" x="-60" y="-60" width="20" height="20" result="t"/>
+        <feTile in="t"/>)svg",
+     R"svg(<feOffset dx="-30" dy="-30" x="100" y="100" width="20" height="20" result="t"/>
+        <feTile in="t"/>)svg",
+     ""},
 }};
 
-INSTANTIATE_TEST_SUITE_P(
-    SpreadingPrimitives, FilterInputMarginTest,
-    testing::Combine(testing::ValuesIn(kSpreadingFilterCases),
-                     testing::Values(OffCanvasEdges::TopLeft, OffCanvasEdges::BottomRight)),
-    [](const testing::TestParamInfo<FilterInputMarginParam>& info) {
-      return std::string(std::get<0>(info.param).name) +
-             (std::get<1>(info.param) == OffCanvasEdges::TopLeft ? "TopLeft" : "BottomRight");
-    });
+/// Every case on every edge it has markup for.
+std::vector<FilterInputMarginParam> SpreadingFilterParams() {
+  std::vector<FilterInputMarginParam> params;
+  for (const SpreadingFilterCase& filter : kSpreadingFilterCases) {
+    if (!filter.topLeft.empty()) {
+      params.emplace_back(filter, OffCanvasEdges::TopLeft);
+    }
+    if (!filter.bottomRight.empty()) {
+      params.emplace_back(filter, OffCanvasEdges::BottomRight);
+    }
+  }
+  return params;
+}
+
+INSTANTIATE_TEST_SUITE_P(SpreadingPrimitives, FilterInputMarginTest,
+                         testing::ValuesIn(SpreadingFilterParams()),
+                         [](const testing::TestParamInfo<FilterInputMarginParam>& info) {
+                           return std::string(std::get<0>(info.param).name) +
+                                  (std::get<1>(info.param) == OffCanvasEdges::TopLeft
+                                       ? "TopLeft"
+                                       : "BottomRight");
+                         });
 
 }  // namespace
 }  // namespace donner::svg

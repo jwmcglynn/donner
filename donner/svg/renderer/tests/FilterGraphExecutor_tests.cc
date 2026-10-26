@@ -2406,5 +2406,93 @@ TEST(FilterGraphExecutorTest, PerPrimitiveColorSpaceChangesTheResult) {
   EXPECT_GT(MaxChannelDelta(srgbInterior, linearInterior), 16);
 }
 
+/// A one-node graph built from \p primitive with the filter's default (previous) input.
+components::FilterGraph SinglePrimitiveGraph(components::FilterPrimitive primitive) {
+  components::FilterGraph graph;
+  components::FilterNode node;
+  node.primitive = std::move(primitive);
+  graph.nodes.push_back(std::move(node));
+  return graph;
+}
+
+TEST(FilterInputMarginTest, CanReserveAgreesWithReserveWithoutLatching) {
+  using namespace components;
+  const FilterGraph graph = SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0});
+  FilterExecutionBudget budget;
+  EXPECT_FALSE(budget.canReserve(graph, 16, FilterMemoryModel::CpuFloatNamedResults,
+                                 kMaximumFilterFrameBytes + 1));
+  EXPECT_THAT(budget.rejectionReason(), testing::Eq(FilterExecutionBudget::RejectionReason::None));
+  EXPECT_EQ(budget.executions(), 0u);
+
+  ASSERT_TRUE(budget.canReserve(graph, 16, FilterMemoryModel::CpuFloatNamedResults, 64));
+  auto reservation = budget.reserve(graph, 16, FilterMemoryModel::CpuFloatNamedResults, 64);
+  ASSERT_TRUE(reservation.has_value());
+  EXPECT_EQ(budget.executions(), 1u);
+
+  EXPECT_FALSE(budget.reserve(graph, 16, FilterMemoryModel::CpuFloatNamedResults,
+                              kMaximumFilterFrameBytes + 1));
+  EXPECT_FALSE(budget.canReserve(graph, 16, FilterMemoryModel::CpuFloatNamedResults, 64))
+      << "a latched rejection closes the frame for both";
+}
+
+TEST(FilterInputMarginTest, LayoutAxisExtendsByReachAndCaptureWithinTheRegion) {
+  // Region reaches 10 pixels before and 36 after a 64-pixel viewport.
+  FilterInputAxis axis = LayoutFilterInputAxis({-10.0, 100.0}, 3.0, std::nullopt, 64);
+  EXPECT_EQ(axis.before, 3);
+  EXPECT_EQ(axis.extent, 70);
+  // A capture rectangle beyond the reach widens only its own side, clamped to the region.
+  axis = LayoutFilterInputAxis({-10.0, 100.0}, 3.0, std::pair(-40.0, -20.0), 64);
+  EXPECT_EQ(axis.before, 10);
+  EXPECT_EQ(axis.extent, 77);
+  // Nothing extends past an edge the region does not cross.
+  axis = LayoutFilterInputAxis({0.0, 64.0}, 3.0, std::nullopt, 64);
+  EXPECT_EQ(axis.before, 0);
+  EXPECT_EQ(axis.extent, 64);
+}
+
+TEST(FilterInputMarginTest, InputBufferFollowsGraphReach) {
+  using namespace components;
+  const std::optional<Box2d> region = Box2d::FromXYWH(-50, -50, 200, 200);
+  const auto layout = [&](const FilterGraph& graph) {
+    const FilterInputBuffer buffer = ComputeFilterInputBuffer(graph, region, Transform2d(), 64, 64);
+    return std::array{buffer.width, buffer.height, buffer.offsetX, buffer.offsetY};
+  };
+  // Three standard deviations plus a rounding pixel.
+  EXPECT_THAT(layout(SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0})),
+              testing::ElementsAre(78, 78, 7, 7));
+  // Point-wise primitives keep the viewport.
+  EXPECT_THAT(layout(SinglePrimitiveGraph(filter_primitive::ColorMatrix{})),
+              testing::ElementsAre(64, 64, 0, 0));
+  // Turbulence keeps a viewport-aligned capture.
+  EXPECT_THAT(layout(SinglePrimitiveGraph(filter_primitive::Turbulence{})),
+              testing::ElementsAre(64, 64, 0, 0));
+  // Wrapping edges read the opposite side of the input, so the capture covers the whole region.
+  filter_primitive::GaussianBlur wrap{2.0, 2.0};
+  wrap.edgeMode = filter_primitive::GaussianBlur::EdgeMode::Wrap;
+  EXPECT_THAT(layout(SinglePrimitiveGraph(wrap)), testing::ElementsAre(200, 200, 50, 50));
+}
+
+TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
+  using namespace components;
+  FilterGraph graph;
+  FilterNode offset;
+  offset.primitive = filter_primitive::Offset{30.0, 30.0};
+  offset.x = Lengthd(-60, Lengthd::Unit::None);
+  offset.y = Lengthd(-60, Lengthd::Unit::None);
+  offset.width = Lengthd(20, Lengthd::Unit::None);
+  offset.height = Lengthd(20, Lengthd::Unit::None);
+  offset.result = RcString("t");
+  FilterNode tile;
+  tile.primitive = filter_primitive::Tile{};
+  tile.inputs.push_back(FilterInput(FilterInput::Named{RcString("t")}));
+  graph.nodes = {offset, tile};
+  // The tile repeats the offset's subregion at -60..-40, which reads source pixels 30 farther
+  // out, plus a rounding pixel: the capture reaches 91 pixels before the viewport.
+  const FilterInputBuffer buffer =
+      ComputeFilterInputBuffer(graph, Box2d::FromXYWH(-200, -200, 464, 464), Transform2d(), 64, 64);
+  EXPECT_EQ(buffer.offsetX, 91);
+  EXPECT_EQ(buffer.offsetY, 91);
+}
+
 }  // namespace
 }  // namespace donner::svg
