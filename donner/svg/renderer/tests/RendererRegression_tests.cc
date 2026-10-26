@@ -2598,6 +2598,31 @@ TEST_F(RendererRegressionTests, ChainedFractionalOffsetsReachTheirRoundedDistanc
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// Under a skew the transformed blur path runs offsets on a local raster scaled by each filter
+// axis's length and rounds them there. Under matrix(1 0 1 1 0 0) an offset of (0.6, -0.6) moves
+// nothing along device X before rounding, but rounds to (1, -1) local pixels, which moves content
+// about 0.29 device pixels right; 24 of them, with the blur that selects the transformed path,
+// move it about 7 pixels. Content just past the left edge then lands inside the canvas, at
+// (2, 25).
+TEST_F(RendererRegressionTests, SkewedLocalRasterOffsetsReachTheirRoundedDistance) {
+  std::string primitives;
+  for (int i = 0; i < 24; ++i) {
+    primitives += R"svg(<feOffset dx="0.6" dy="-0.6"/>)svg";
+  }
+  primitives += R"svg(<feGaussianBlur stdDeviation="0.01"/>)svg";
+  SVGDocument document = instantiateSubtree(
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-100" y="0" width="200" height="64">)svg" +
+          primitives + R"svg(</filter>
+      <g transform="matrix(1 0 1 1 0 0)" filter="url(#f)">
+        <rect x="-52" y="36" width="8" height="12" fill="lime"/>
+      </g>)svg",
+      {}, Vector2i(64, 64));
+  const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  EXPECT_THAT(PixelAt(actual, 2, 25),
+              test::Rgba(testing::Eq(0), testing::Gt(200), testing::Eq(0), testing::Gt(200)))
+      << "the offset content must land inside the canvas";
+}
+
 // A capture margin must never turn an admissible filter into a frame-wide rejection. At 8x zoom a
 // large blur's margin would need a raster over the frame's filter memory, so the layer falls back
 // to a viewport-sized capture; it still renders, and so does a later filtered element.

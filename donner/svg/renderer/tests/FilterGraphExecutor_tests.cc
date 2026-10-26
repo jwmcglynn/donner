@@ -2499,11 +2499,16 @@ TEST(FilterInputMarginTest, SkewedReachCoversTheDeviceFootprint) {
   using namespace components;
   Transform2d skew;
   skew.data[2] = 4.0;  // matrix(1 0 4 1 0 0)
-  // 9 along X from the blur's own X axis plus 36 from its Y axis, and a rounding pixel.
+  // The transformed path's local raster scales the filter Y axis by its length, sqrt(17), and
+  // rounds the blur radius up there: 9 user units become ceil(9 sqrt(17)) = 38 local pixels.
+  // Along X that is 9 from the blur's own X axis plus 4 times those 38 pixels in user units, and
+  // a rounding pixel; along Y, those 38 pixels in user units and a rounding pixel.
+  const double localY = std::ceil(9.0 * std::sqrt(17.0)) / std::sqrt(17.0);
   EXPECT_THAT(ComputeFilterSamplingReach(
                   SinglePrimitiveGraph(filter_primitive::GaussianBlur{3.0, 3.0}), skew)
                   .pixels,
-              testing::Eq(Vector2d(46.0, 10.0)));
+              testing::FieldsAre(testing::DoubleNear(9.0 + 4.0 * localY + 1.0, 1e-9),
+                                 testing::DoubleNear(localY + 1.0, 1e-9)));
   // An offset is already a device vector: (2, 2) in filter units moves (10, 2) device pixels.
   EXPECT_THAT(
       ComputeFilterSamplingReach(SinglePrimitiveGraph(filter_primitive::Offset{2.0, 2.0}), skew)
@@ -2535,6 +2540,27 @@ TEST(FilterInputMarginTest, ReachRoundsEachPrimitiveUpToWholePixels) {
                                  Transform2d())
           .pixels,
       testing::Eq(Vector2d(2.0, 2.0)));
+}
+
+// The transformed blur path runs offsets on a local raster whose scale is each filter axis's
+// length, and rounds them there. Under matrix(1 0 1 1 0 0) an offset of (0.6, -0.6) rounds to
+// (1, -1) local pixels, which is (1 - 1/sqrt(2), -1/sqrt(2)) device pixels; on the device raster it
+// would round to (0, -1). Each offset reaches the larger of the two on each axis.
+TEST(FilterInputMarginTest, SkewedOffsetsReachTheirLocalRasterRounding) {
+  using namespace components;
+  Transform2d skew;
+  skew.data[2] = 1.0;  // matrix(1 0 1 1 0 0)
+  FilterGraph graph;
+  for (int i = 0; i < 32; ++i) {
+    FilterNode node;
+    node.primitive = filter_primitive::Offset{0.6, -0.6};
+    graph.nodes.push_back(node);
+  }
+  // 32 offsets, each 1 - 1/sqrt(2) along X and 1 along Y, plus a rounding pixel.
+  const double localX = 1.0 - 1.0 / std::sqrt(2.0);
+  EXPECT_THAT(ComputeFilterSamplingReach(graph, skew).pixels,
+              testing::FieldsAre(testing::DoubleNear(32.0 * localX + 1.0, 1e-9),
+                                 testing::DoubleNear(33.0, 1e-9)));
 }
 
 TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
