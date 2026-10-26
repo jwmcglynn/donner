@@ -99,9 +99,14 @@ struct FilterInputMargin {
 /// helpers and bounds the filter executors use. The executors round each primitive to whole
 /// pixels (offsets and morphology radii to the nearest pixel, blur kernels up), so each
 /// primitive's reach rounds up to whole pixels before the chain adds them.
+///
+/// Blur-family graphs under rotation or skew may instead run on the transformed path's local
+/// raster, scaled by each filter axis's length, where blurs and offsets round in local pixels
+/// before the result maps back to the device. Their reach is the larger of the two.
 struct FilterInputMarginBuilder {
   Transform2d deviceFromFilter;  ///< Filter user space to raster pixels.
   Vector2d scale;                ///< Device scale of each filter axis.
+  Vector2d localScale;           ///< Scale of the transformed path's local raster.
   Vector2d bounds;               ///< Element bounding box size, or 1 without one.
   bool objectBounds = false;     ///< Whether primitive lengths are bounding-box fractions.
   FilterInputMargin margin;      ///< Accumulated margin.
@@ -146,24 +151,65 @@ struct FilterInputMarginBuilder {
                     std::abs(BoundedSignedFilterPixels(pixels.y)));
   }
 
+  /// User-space value of a primitive length or offset. @param value Value. @param axis 0 or 1.
+  double user(double value, int axis) const {
+    return objectBounds ? value * (axis == 0 ? bounds.x : bounds.y) : value;
+  }
+
+  /// Device extent of local raster pixels, mapped through the filter's linear part.
+  /// @param localPixels Signed local raster pixels along each filter axis.
+  Vector2d localToDevice(Vector2d localPixels) const {
+    const Vector2d device = deviceFromFilter.transformVector(
+        Vector2d(localPixels.x / localScale.x, localPixels.y / localScale.y));
+    return Vector2d(std::abs(device.x), std::abs(device.y));
+  }
+
+  /// Reach of an offset: rounded to whole device pixels on the device raster, or rounded to
+  /// whole local pixels on the local raster and mapped back. @param dx X offset. @param dy Y
+  /// offset.
+  Vector2d offsetReach(double dx, double dy) const {
+    const auto rounded = [](double value) {
+      const double limit = static_cast<double>(components::kMaximumFilterPixelOffset);
+      return std::isfinite(value) ? std::round(std::clamp(value, -limit, limit)) : 0.0;
+    };
+    const Vector2d device = wholePixels(offset(dx, dy));
+    const Vector2d local = localToDevice(
+        Vector2d(rounded(user(dx, 0) * localScale.x), rounded(user(dy, 1) * localScale.y)));
+    return Vector2d(std::max(device.x, local.x), std::max(device.y, local.y));
+  }
+
+  /// Reach of a blur: three standard deviations, rounded up to whole pixels on the device raster
+  /// or on the local raster. @param stdDeviationX X deviation. @param stdDeviationY Y deviation.
+  Vector2d blurReach(double stdDeviationX, double stdDeviationY) const {
+    const Vector2d device = footprint(
+        wholePixels(Vector2d(3.0 * length(stdDeviationX, 0), 3.0 * length(stdDeviationY, 1))));
+    const auto localRadius = [&](double deviation, int axis) {
+      return deviation >= 0
+                 ? std::ceil(BoundedPositiveFilterPixels(3.0 * user(deviation, axis) *
+                                                         (axis == 0 ? localScale.x : localScale.y)))
+                 : 0.0;
+    };
+    const Vector2d local = localToDevice(Vector2d(localRadius(stdDeviationX, 0), 0.0)) +
+                           localToDevice(Vector2d(0.0, localRadius(stdDeviationY, 1)));
+    return Vector2d(std::max(device.x, local.x), std::max(device.y, local.y));
+  }
+
   /// Wrapping edges read the opposite side of the input, which may lie anywhere in the region.
   void add(const components::filter_primitive::GaussianBlur& blur) {
     if (blur.edgeMode == components::filter_primitive::GaussianBlur::EdgeMode::Wrap) {
       margin.wholeRegion = true;
       return;
     }
-    margin.pixels += footprint(wholePixels(
-        Vector2d(3.0 * length(blur.stdDeviationX, 0), 3.0 * length(blur.stdDeviationY, 1))));
+    margin.pixels += blurReach(blur.stdDeviationX, blur.stdDeviationY);
   }
 
   void add(const components::filter_primitive::DropShadow& shadow) {
-    margin.pixels += wholePixels(offset(shadow.dx, shadow.dy)) +
-                     footprint(wholePixels(Vector2d(3.0 * length(shadow.stdDeviationX, 0),
-                                                    3.0 * length(shadow.stdDeviationY, 1))));
+    margin.pixels +=
+        offsetReach(shadow.dx, shadow.dy) + blurReach(shadow.stdDeviationX, shadow.stdDeviationY);
   }
 
   void add(const components::filter_primitive::Offset& value) {
-    margin.pixels += wholePixels(offset(value.dx, value.dy));
+    margin.pixels += offsetReach(value.dx, value.dy);
   }
 
   void add(const components::filter_primitive::Morphology& morphology) {
@@ -266,12 +312,14 @@ inline FilterInputMargin ComputeFilterSamplingReach(const components::FilterGrap
   const bool objectBounds = graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
                             graph.elementBoundingBox.has_value();
   const double scaleX = FilterDeviceScaleX(deviceFromFilter);
+  // The transformed path's local raster scales each filter axis by its length, at least 1.
+  const Vector2d localScale(
+      std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length()),
+      std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length()));
   FilterInputMarginBuilder builder{
-      deviceFromFilter,
-      Vector2d(scaleX, FilterDeviceScaleY(deviceFromFilter, scaleX)),
-      objectBounds ? graph.elementBoundingBox->size() : Vector2d(1.0, 1.0),
-      objectBounds,
-      {}};
+      deviceFromFilter, Vector2d(scaleX, FilterDeviceScaleY(deviceFromFilter, scaleX)),
+      localScale,       objectBounds ? graph.elementBoundingBox->size() : Vector2d(1.0, 1.0),
+      objectBounds,     {}};
   for (size_t index = 0; index < graph.nodes.size(); ++index) {
     if (std::holds_alternative<components::filter_primitive::Tile>(graph.nodes[index].primitive)) {
       builder.addTile(FilterFirstInputNode(graph, index));
