@@ -1,5 +1,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -109,6 +111,25 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
     std::fprintf(stderr, "[%s] PASS (%d px differ, max %d)\n", std::string(testLabel).c_str(),
                  mismatched, params.maxMismatchedPixels);
   }
+}
+
+svg::RendererBitmap CropBitmap(const svg::RendererBitmap& bitmap, Vector2i origin, Vector2i size) {
+  svg::RendererBitmap window{size,
+                             std::vector<uint8_t>(static_cast<std::size_t>(size.x) * size.y * 4),
+                             static_cast<std::size_t>(size.x) * 4, bitmap.alphaType};
+  if (origin.x < 0 || origin.y < 0 || origin.x + size.x > bitmap.dimensions.x ||
+      origin.y + size.y > bitmap.dimensions.y) {
+    ADD_FAILURE() << "crop window lies outside the " << bitmap.dimensions.x << "x"
+                  << bitmap.dimensions.y << " bitmap";
+    return window;
+  }
+  for (int y = 0; y < size.y; ++y) {
+    const std::size_t source = static_cast<std::size_t>(origin.y + y) * bitmap.rowBytes +
+                               static_cast<std::size_t>(origin.x) * 4;
+    std::copy_n(bitmap.pixels.begin() + static_cast<std::ptrdiff_t>(source), window.rowBytes,
+                window.pixels.begin() + static_cast<std::ptrdiff_t>(y * window.rowBytes));
+  }
+  return window;
 }
 
 }  // namespace donner::editor::tests

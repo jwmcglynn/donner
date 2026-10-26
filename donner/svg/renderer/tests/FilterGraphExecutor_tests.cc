@@ -11,6 +11,8 @@
 #include <limits>
 #include <optional>
 #include <ostream>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -332,6 +334,73 @@ TEST(FilterGraphExecutorTest, RoundsFractionalOffsetsToNearestPixel) {
   // Pixel at (1,1) moves to (14,1).
   EXPECT_THAT(GetPixel(pixmap, 14, 1), Rgba(255, 0, 0, 255));
   EXPECT_THAT(GetPixel(pixmap, 13, 1), Rgba(0, 0, 0, 0));
+}
+
+/// Box-blurring primitives whose spill past the raster edge the edge tests check: even and odd
+/// windows, an anisotropic blur whose X axis uses the sampled kernel, and a drop shadow. Its
+/// offset is zero: blurring first, Geode would need content beyond the raster for an offset to
+/// pull back, which is the capture margin's job, not the blur's.
+std::vector<std::pair<std::string_view, components::FilterPrimitive>> EdgeSpillPrimitives() {
+  namespace fp = components::filter_primitive;
+  return {
+      {"odd_window", fp::GaussianBlur{.stdDeviationX = 6.0, .stdDeviationY = 6.0}},
+      {"even_window", fp::GaussianBlur{.stdDeviationX = 5.5, .stdDeviationY = 5.5}},
+      {"anisotropic", fp::GaussianBlur{.stdDeviationX = 1.5, .stdDeviationY = 6.0}},
+      {"drop_shadow", fp::DropShadow{.dx = 0.0,
+                                     .dy = 0.0,
+                                     .stdDeviationX = 6.0,
+                                     .stdDeviationY = 6.0,
+                                     .floodColor = css::Color(css::RGBA(0, 0, 255, 255))}},
+  };
+}
+
+/// The whole of \p pixmap as a bitmap for pixelmatch.
+RendererBitmap PixmapBitmap(const tiny_skia::Pixmap& pixmap) {
+  return RendererBitmap{
+      Vector2i(static_cast<int>(pixmap.width()), static_cast<int>(pixmap.height())),
+      std::vector<uint8_t>(pixmap.data().begin(), pixmap.data().end()),
+      static_cast<std::size_t>(pixmap.width()) * 4};
+}
+
+// Each box pass after the first reads what the earlier passes spread past the raster edge, so a
+// blur that reaches the edge must equal the same blur computed with room around it.
+TEST(FilterGraphExecutorTest, BoxBlurNearRasterEdgeMatchesBlurWithRoom) {
+  constexpr int kSize = 32;
+  constexpr int kMargin = 24;
+  for (const auto& [label, primitive] : EdgeSpillPrimitives()) {
+    SCOPED_TRACE(label);
+    const auto blurBlock = [&primitive](int rasterSize, int blockOrigin) {
+      auto maybePixmap = tiny_skia::Pixmap::fromSize(rasterSize, rasterSize);
+      EXPECT_TRUE(maybePixmap.has_value());
+      if (!maybePixmap.has_value()) {
+        return RendererBitmap{};
+      }
+      tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+      for (int y = blockOrigin + 2; y < blockOrigin + kSize - 2; ++y) {
+        for (int x = blockOrigin + 2; x < blockOrigin + kSize - 2; ++x) {
+          SetPixel(pixmap, x, y, Pixel{46, 139, 87, 255});
+        }
+      }
+
+      components::FilterGraph graph;
+      components::FilterNode node;
+      node.inputs.push_back(components::FilterInput{});
+      node.primitive = primitive;
+      graph.nodes.push_back(std::move(node));
+      ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+      return PixmapBitmap(pixmap);
+    };
+
+    const RendererBitmap atEdge = blurBlock(kSize, 0);
+    const RendererBitmap withRoom = blurBlock(kSize + 2 * kMargin, kMargin);
+    ASSERT_FALSE(atEdge.empty());
+    ASSERT_FALSE(withRoom.empty());
+    editor::tests::CompareBitmapToBitmap(
+        atEdge,
+        editor::tests::CropBitmap(withRoom, Vector2i(kMargin, kMargin), Vector2i(kSize, kSize)),
+        "box_blur_raster_edge_spill_" + std::string(label),
+        editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(FilterGraphExecutorTest, ClipsFilterOutputUsingCapturedFilterTransform) {

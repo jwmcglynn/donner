@@ -389,6 +389,61 @@ TEST_F(RendererGeodeTest, TransformedLocalFilterAdmissionCoversItsTileWork) {
   }
 }
 
+// Tiles on the raster edge keep the transparent outside of the raster, so the box passes there
+// must keep their spill past the edge exactly as an untiled raster with room does. Covers even and
+// odd windows, an anisotropic blur whose X axis uses the sampled kernel, and a drop shadow. Its
+// offset is zero: blurring first, Geode would need content beyond the raster for an offset to
+// pull back, which is the capture margin's job, not the blur's.
+TEST_F(RendererGeodeTest, TiledBlurNearRasterEdgeMatchesBlurWithRoom) {
+  using namespace components;
+  const std::array<std::pair<std::string_view, FilterPrimitive>, 4> primitives{{
+      {"odd_window", filter_primitive::GaussianBlur{.stdDeviationX = 6, .stdDeviationY = 6}},
+      {"even_window", filter_primitive::GaussianBlur{.stdDeviationX = 5.5, .stdDeviationY = 5.5}},
+      {"anisotropic", filter_primitive::GaussianBlur{.stdDeviationX = 1.5, .stdDeviationY = 6}},
+      {"drop_shadow",
+       filter_primitive::DropShadow{.dx = 0,
+                                    .dy = 0,
+                                    .stdDeviationX = 6,
+                                    .stdDeviationY = 6,
+                                    .floodColor = css::Color(css::RGBA(0, 0, 255, 255))}},
+  }};
+  for (const auto& [label, primitive] : primitives) {
+    SCOPED_TRACE(label);
+    FilterGraph graph;
+    FilterNode node;
+    node.primitive = primitive;
+    graph.nodes.push_back(node);
+    const auto render = [&](const std::shared_ptr<geode::GeodeDevice>& device, int size,
+                            double origin) {
+      RendererGeode renderer(device);
+      RenderViewport viewport;
+      viewport.size = Vector2d(size, size);
+      viewport.devicePixelRatio = 1.0;
+      renderer.beginFrame(viewport);
+      renderer.pushFilterLayer(graph, Box2d({0, 0}, {size, size}));
+      renderer.setPaint(solidFill(css::RGBA(46, 139, 87, 255)));
+      renderer.drawRect(Box2d({origin + 2, origin + 2}, {origin + 62, origin + 62}),
+                        StrokeParams{});
+      renderer.popFilterLayer();
+      renderer.endFrame();
+      return renderer.takeSnapshot();
+    };
+
+    std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
+    ASSERT_THAT(tiledDevice, testing::NotNull());
+    tiledDevice->filterEngine().setMaximumTileExtentForTesting(48);
+    const RendererBitmap atEdge = render(tiledDevice, 64, 0);
+    ASSERT_THAT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, testing::Gt(1u));
+    const RendererBitmap withRoom = render(sharedDevice(), 128, 32);
+    ASSERT_FALSE(atEdge.empty());
+    ASSERT_FALSE(withRoom.empty());
+    editor::tests::CompareBitmapToBitmap(
+        atEdge, editor::tests::CropBitmap(withRoom, Vector2i(32, 32), Vector2i(64, 64)),
+        "tiled_blur_raster_edge_spill_" + std::string(label),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererGeodeTest, TransformedFilterRestoreFailureAbandonsTheFrame) {
   using namespace components;
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();

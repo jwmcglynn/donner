@@ -85,4 +85,12 @@ void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::Rendere
                            std::string_view testLabel, const BitmapGoldenCompareParams& params = {},
                            int* mismatchedPixels = nullptr);
 
+/// Copies the \p size window of \p bitmap at \p origin, keeping its alpha convention. Use to
+/// compare a render against the matching region of a larger oracle render.
+/// @param bitmap Source bitmap; the window must lie inside it.
+/// @param origin Top-left pixel of the window.
+/// @param size Window size in pixels.
+[[nodiscard]] svg::RendererBitmap CropBitmap(const svg::RendererBitmap& bitmap, Vector2i origin,
+                                             Vector2i size);
+
 }  // namespace donner::editor::tests

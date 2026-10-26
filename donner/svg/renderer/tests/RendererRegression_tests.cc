@@ -581,6 +581,28 @@ TEST_F(RendererRegressionTests, CssFilterContractUrlChainsMatchEquivalentPrimiti
                          "repeated_url_implicit_previous_input");
 }
 
+// The flood fills a region 4px inside the canvas, nearer than the blur's box passes spread, so the
+// canvas-edge render must equal the same filter rendered with room around it.
+TEST_F(RendererRegressionTests, FilterBlurNearCanvasEdgeMatchesBlurWithRoom) {
+  constexpr std::string_view kFilteredRect = R"svg(
+    <filter id="f" filterUnits="userSpaceOnUse" x="4" y="4" width="56" height="56">
+      <feFlood flood-color="seagreen"/><feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <rect x="12" y="12" width="40" height="40" fill="red" filter="url(#f)"/>)svg";
+  SVGDocument atEdge = instantiateSubtree(kFilteredRect, {}, Vector2i(64, 64));
+  SVGDocument withRoom =
+      instantiateSubtree(std::string(R"svg(<g transform="translate(32 32)">)svg") +
+                             std::string(kFilteredRect) + "</g>",
+                         {}, Vector2i(128, 128));
+  const RendererBitmap actual = RenderDocumentWithBackend(atEdge, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "blur_canvas_edge_visible");
+  editor::tests::CompareBitmapToBitmap(
+      actual,
+      editor::tests::CropBitmap(RenderDocumentWithBackend(withRoom, ActiveRendererBackend()),
+                                Vector2i(32, 32), Vector2i(64, 64)),
+      "blur_canvas_edge_spill", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererRegressionTests, CssFilterContractMixedUrlGrayscaleUsesSrgb) {
   SVGDocument actualDocument = instantiateSubtree(R"svg(
     <filter id="identity"><feOffset/></filter>
