@@ -2415,6 +2415,18 @@ components::FilterGraph SinglePrimitiveGraph(components::FilterPrimitive primiti
   return graph;
 }
 
+// tiny-skia's float morphology writes nothing when its three float working buffers would exceed
+// 64 MiB. The work budget refuses every morphology raster that large, so an input margin can grow a
+// morphology raster only to a size the budget already bounds at under a quarter of that cap.
+TEST(FilterInputMarginTest, MorphologyWorkBudgetStaysBelowTheMorphologyBufferCap) {
+  using namespace components;
+  constexpr std::uint64_t kMorphologyCapPixels = 64u * 1024u * 1024u / (3u * 4u * sizeof(float));
+  const FilterGraph graph = SinglePrimitiveGraph(
+      filter_primitive::Morphology{filter_primitive::Morphology::Operator::Dilate, 1.0, 1.0});
+  EXPECT_FALSE(FilterGraphFitsExecutionBudget(graph, kMorphologyCapPixels / 4,
+                                              FilterMemoryModel::CpuFloatNamedResults));
+}
+
 TEST(FilterInputMarginTest, CanReserveAgreesWithReserveWithoutLatching) {
   using namespace components;
   const FilterGraph graph = SinglePrimitiveGraph(filter_primitive::GaussianBlur{2.0, 2.0});

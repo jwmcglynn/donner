@@ -2622,11 +2622,11 @@ TEST_F(RendererRegressionTests, DilateSpreadsContentFromBeyondTheCanvas) {
       "dilate_input_margin");
 }
 
-// Turbulence noise follows raster pixel coordinates. A mask whose content is turbulence-filtered
-// is drawn again inside a filter layer that reads past each output pixel. The oracle draws it
-// inside a filter layer that reads no neighbors, so the two differ only by the input margin.
-RendererBitmap RenderMaskedTurbulence(bool shifted) {
-  const std::string masked = R"svg(<rect width="64" height="64" fill="lime" mask="url(#m)"/>)svg";
+/// Renders \p replayed, which draws turbulence-filtered content again out of draw order, inside a
+/// filter layer. When \p shifted, that layer reads past each output pixel and so gets an input
+/// margin; otherwise it reads no neighbors. Turbulence noise follows raster pixel coordinates, so
+/// the two renders differ only if the margin moves the noise.
+RendererBitmap RenderReplayedTurbulence(std::string_view replayed, bool shifted) {
   SVGDocument document = instantiateSubtree(
       std::string(R"svg(<filter id="t"><feTurbulence baseFrequency="0.1" numOctaves="2"/></filter>
       <filter id="shift" filterUnits="userSpaceOnUse" x="-50" y="-50" width="200" height="200">
@@ -2636,20 +2636,61 @@ RendererBitmap RenderMaskedTurbulence(bool shifted) {
         <feColorMatrix type="saturate" values="1"/>
       </filter>
       <mask id="m"><rect x="-10" y="-10" width="40" height="40" fill="white" filter="url(#t)"/>
-      </mask>)svg") +
-          masked +
+      </mask>
+      <marker id="turbulent" markerUnits="userSpaceOnUse" markerWidth="64" markerHeight="64"
+          overflow="visible">
+        <rect x="-10" y="-10" width="40" height="40" filter="url(#t)"/>
+      </marker>
+      <marker id="masked" markerUnits="userSpaceOnUse" markerWidth="64" markerHeight="64"
+          overflow="visible">
+        <rect width="64" height="64" fill="lime" mask="url(#m)"/>
+      </marker>)svg") +
+          std::string(replayed) +
           (shifted ? R"svg(<g filter="url(#shift)">)svg" : R"svg(<g filter="url(#same)">)svg") +
-          masked + "</g>",
+          std::string(replayed) + "</g>",
       {}, Vector2i(64, 64));
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
-TEST_F(RendererRegressionTests, MaskReplayedTurbulenceKeepsItsNoiseUnderAnInputMargin) {
-  const RendererBitmap expected = RenderMaskedTurbulence(false);
-  ExpectVisibleBitmap(expected, "masked_turbulence_visible");
-  editor::tests::CompareBitmapToBitmap(RenderMaskedTurbulence(true), expected,
-                                       "masked_turbulence_input_margin",
-                                       editor::tests::PixelmatchIdentityParams());
+// Mask and marker content draws again at the referencing element, so turbulence in it must keep
+// its noise when that element lies inside a filter layer with an input margin. The cases cover a
+// mask, a marker, and a mask inside a marker.
+TEST_F(RendererRegressionTests, ReplayedTurbulenceKeepsItsNoiseUnderAnInputMargin) {
+  for (std::string_view replayed :
+       {std::string_view(R"svg(<rect width="64" height="64" fill="lime" mask="url(#m)"/>)svg"),
+        std::string_view(R"svg(<path d="M0 0 L1 0" marker-start="url(#turbulent)"/>)svg"),
+        std::string_view(R"svg(<path d="M0 0 L1 0" marker-start="url(#masked)"/>)svg")}) {
+    SCOPED_TRACE(replayed);
+    const RendererBitmap expected = RenderReplayedTurbulence(replayed, /*shifted=*/false);
+    ExpectVisibleBitmap(expected, "replayed_turbulence_visible");
+    editor::tests::CompareBitmapToBitmap(RenderReplayedTurbulence(replayed, /*shifted=*/true),
+                                         expected, "replayed_turbulence_input_margin",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+// A primitive with wrapping edges reads the opposite edge of its input. Here the filter region
+// starts at the left canvas edge and ends 36 pixels beyond the right one, and a lime strip lies at
+// its far end, beyond the canvas and beyond the primitive's own reach. Wrapping must still carry
+// that strip around to the left canvas edge.
+TEST_F(RendererRegressionTests, WrapEdgesReadTheOppositeRegionEdgeBeyondTheCanvas) {
+  for (std::string_view primitive :
+       {std::string_view(R"svg(<feGaussianBlur stdDeviation="3" edgeMode="wrap"/>)svg"),
+        std::string_view(R"svg(<feConvolveMatrix order="5" edgeMode="wrap"
+            kernelMatrix="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"/>)svg")}) {
+    SCOPED_TRACE(primitive);
+    SVGDocument document = instantiateSubtree(
+        std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="-200" width="100"
+            height="464">)svg") +
+            std::string(primitive) + R"svg(</filter>
+        <g filter="url(#f)"><rect x="88" y="-200" width="12" height="464" fill="lime"/></g>)svg",
+        {}, Vector2i(64, 64));
+    const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+    ExpectVisibleBitmap(actual, "wrap_input_margin_visible");
+    EXPECT_THAT(PixelAt(actual, 0, 32)[1], testing::Gt(0)) << "the strip must wrap into view";
+    EXPECT_THAT(PixelAt(actual, 0, 32)[3], testing::Gt(0));
+    EXPECT_EQ(PixelAt(actual, 32, 32)[3], 0);
+  }
 }
 
 // An empty edge entry means the case does not discriminate on that edge and is not run there.
