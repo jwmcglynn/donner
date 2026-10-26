@@ -2613,7 +2613,9 @@ TEST_F(RendererRegressionTests, LargeBlurMarginFallsBackWithinFrameFilterBudget)
     </svg>)svg");
   const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
   ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(1024, 1024)));
-  EXPECT_THAT(PixelAt(actual, 512, 512)[1], testing::Gt(0)) << "the blurred element must render";
+  EXPECT_THAT(PixelAt(actual, 512, 512),
+              test::Rgba(testing::Eq(0), testing::Gt(0), testing::Eq(0), testing::Gt(0)))
+      << "the blurred element must render";
   EXPECT_THAT(PixelAt(actual, 984, 40), test::RgbaEq(0, 0, 255, 255))
       << "a later filtered element must still render";
 }
@@ -2660,9 +2662,10 @@ TEST_F(RendererRegressionTests, FeImageFragmentWindowIncludesDownstreamReach) {
       {}, Vector2i(64, 64));
   const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
   ExpectVisibleBitmap(actual, "fe_image_downstream_reach_visible");
-  EXPECT_THAT(PixelAt(actual, 5, 12)[1], testing::Gt(200)) << "the offset square must render";
-  EXPECT_THAT(PixelAt(actual, 5, 12)[3], testing::Gt(200));
-  EXPECT_EQ(PixelAt(actual, 40, 40)[3], 0);
+  EXPECT_THAT(PixelAt(actual, 5, 12),
+              test::Rgba(testing::Eq(0), testing::Gt(200), testing::Eq(0), testing::Gt(200)))
+      << "the offset square must render";
+  EXPECT_THAT(PixelAt(actual, 40, 40), test::RgbaEq(0, 0, 0, 0));
 }
 
 /// Renders the off-canvas feImage scene: before the translate(-96 -96) host transform, the
@@ -2693,9 +2696,9 @@ TEST_F(RendererRegressionTests, FeImageFragmentWindowFallsBackToVisibleWindow) {
     SCOPED_TRACE(primitives);
     const RendererBitmap actual = RenderOffCanvasFeImage(primitives);
     ExpectVisibleBitmap(actual, "fe_image_visible_window_fallback_visible");
-    EXPECT_THAT(PixelAt(actual, 16, 16)[1], testing::Gt(200))
+    EXPECT_THAT(PixelAt(actual, 16, 16),
+                test::Rgba(testing::Eq(0), testing::Gt(200), testing::Eq(0), testing::Gt(200)))
         << "the referenced square must render";
-    EXPECT_THAT(PixelAt(actual, 16, 16)[3], testing::Gt(200));
   }
 }
 
@@ -2781,9 +2784,10 @@ TEST_F(RendererRegressionTests, WrapEdgesReadTheOppositeRegionEdgeBeyondTheCanva
         {}, Vector2i(64, 64));
     const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
     ExpectVisibleBitmap(actual, "wrap_input_margin_visible");
-    EXPECT_THAT(PixelAt(actual, 0, 32)[1], testing::Gt(0)) << "the strip must wrap into view";
-    EXPECT_THAT(PixelAt(actual, 0, 32)[3], testing::Gt(0));
-    EXPECT_EQ(PixelAt(actual, 32, 32)[3], 0);
+    EXPECT_THAT(PixelAt(actual, 0, 32),
+                test::Rgba(testing::Eq(0), testing::Gt(0), testing::Eq(0), testing::Gt(0)))
+        << "the strip must wrap into view";
+    EXPECT_THAT(PixelAt(actual, 32, 32), test::RgbaEq(0, 0, 0, 0));
   }
 }
 
