@@ -458,6 +458,25 @@ TEST(PlacedTextGeometryTest, StretchDoesNotJoinCoincidentDisconnectedSubpaths) {
   EXPECT_TRUE(WarpGlyphOutline(edge, MeasurePath(route), glyph, 0.05).empty());
 }
 
+TEST(PlacedTextGeometryTest, StretchNeverJoinsDisconnectedSubpathsAtInexactBreakDistances) {
+  // Interval endpoints at a crossed boundary are recomputed in floating point, so they can land
+  // an ulp either side of the break. The refusal must not depend on that rounding.
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.3, 0.0))
+                         .moveTo(Vector2d(10.3, 0.0))
+                         .lineTo(Vector2d(10.3, 10.7))
+                         .build();
+  const StretchedTextPath mapping = MeasurePath(route);
+  const Path edge = PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(9.1, -2.0)).build();
+  for (int step = 0; step < 200; ++step) {
+    TextGlyph glyph;
+    glyph.textPathOrigin = 3.7 + step * 0.0137;
+    SCOPED_TRACE(*glyph.textPathOrigin);
+    EXPECT_TRUE(WarpGlyphOutline(edge, mapping, glyph, 0.05).empty());
+  }
+}
+
 TEST(PlacedTextGeometryTest, StretchDoesNotWrapOpenGeometricReturnAsClosedSeam) {
   const Path route = PathBuilder()
                          .moveTo(Vector2d(0.0, 0.0))
@@ -654,6 +673,36 @@ TEST(PlacedTextGeometryTest, StretchExtendsOpenEndsAlongFirstAndLastNonzeroSegme
                                                      .build());
   EXPECT_THAT(MapTextPathPoint(trailing, glyph, Vector2d(21.0, -2.0)),
               Optional(Vector2Near(2.0, 21.0)));
+}
+
+TEST(PlacedTextGeometryTest, StretchJoinsInteriorCurveCuspLikeASegmentBoundary) {
+  // This cubic reverses direction at its midpoint, so its normal flips inside one segment. The
+  // two-line route reverses at a segment boundary instead; both must warp the glyph.
+  const Path cusp = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .curveTo(Vector2d(10.0, 0.0), Vector2d(10.0, 0.0), Vector2d(0.0, 0.0))
+                        .build();
+  const Path corner = PathBuilder()
+                          .moveTo(Vector2d(0.0, 0.0))
+                          .lineTo(Vector2d(7.5, 0.0))
+                          .lineTo(Vector2d(0.0, 0.0))
+                          .build();
+  const Path rectangle = PathBuilder().addRect(Box2d::FromXYWH(0.0, -2.0, 10.0, 4.0)).build();
+  TextGlyph glyph;
+  glyph.textPathOrigin = 5.0;
+
+  const Path warpedCorner = WarpGlyphOutline(rectangle, MeasurePath(corner), glyph, 0.05);
+  const Path warpedCusp = WarpGlyphOutline(rectangle, MeasurePath(cusp), glyph, 0.05);
+
+  ASSERT_FALSE(warpedCorner.empty());
+  ASSERT_FALSE(warpedCusp.empty());
+  // Arc length along the cubic differs from the two lines near the cusp, so compare the overall
+  // footprint rather than individual points.
+  const Box2d expected = warpedCorner.bounds();
+  EXPECT_THAT(warpedCusp.bounds(), BoxEq(Vector2Eq(DoubleNear(expected.topLeft.x, 0.5),
+                                                   DoubleNear(expected.topLeft.y, 0.5)),
+                                         Vector2Eq(DoubleNear(expected.bottomRight.x, 0.5),
+                                                   DoubleNear(expected.bottomRight.y, 0.5))));
 }
 
 TEST(PlacedTextGeometryTest, StretchRefusesMoreThanBoundedZeroLengthCornerSegments) {
