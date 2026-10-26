@@ -371,7 +371,7 @@ TEST(FilterGraphExecutorTest, BoxBlurNearRasterEdgeMatchesBlurWithRoom) {
     SCOPED_TRACE(label);
     const auto blurBlock = [&primitive](int rasterSize, int blockOrigin) {
       auto maybePixmap = tiny_skia::Pixmap::fromSize(rasterSize, rasterSize);
-      EXPECT_TRUE(maybePixmap.has_value());
+      EXPECT_THAT(maybePixmap, testing::Optional(testing::_));
       if (!maybePixmap.has_value()) {
         return RendererBitmap{};
       }
