@@ -631,6 +631,31 @@ TEST(PlacedTextGeometryTest, StretchClosedPathLeadingZeroLengthSeamMatchesAcross
   }
 }
 
+TEST(PlacedTextGeometryTest, StretchExtendsOpenEndsAlongFirstAndLastNonzeroSegments) {
+  // A zero-length segment at either end of an open route has no direction, so overhang before the
+  // start and past the end must follow the adjacent segment that does.
+  TextGlyph glyph;
+  glyph.textPathOrigin = 0.0;
+
+  const StretchedTextPath leading = MeasurePath(PathBuilder()
+                                                    .moveTo(Vector2d(0.0, 0.0))
+                                                    .lineTo(Vector2d(0.0, 0.0))
+                                                    .lineTo(Vector2d(0.0, 20.0))
+                                                    .build());
+  EXPECT_THAT(MapTextPathPoint(leading, glyph, Vector2d(-1.0, -2.0)),
+              Optional(Vector2Near(2.0, -1.0)));
+  EXPECT_THAT(MapTextPathPoint(leading, glyph, Vector2d(0.0, -2.0)),
+              Optional(Vector2Near(2.0, 0.0)));
+
+  const StretchedTextPath trailing = MeasurePath(PathBuilder()
+                                                     .moveTo(Vector2d(0.0, 0.0))
+                                                     .lineTo(Vector2d(0.0, 20.0))
+                                                     .lineTo(Vector2d(0.0, 20.0))
+                                                     .build());
+  EXPECT_THAT(MapTextPathPoint(trailing, glyph, Vector2d(21.0, -2.0)),
+              Optional(Vector2Near(2.0, 21.0)));
+}
+
 TEST(PlacedTextGeometryTest, StretchRefusesMoreThanBoundedZeroLengthCornerSegments) {
   PathBuilder routeBuilder;
   routeBuilder.moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(10.0, 0.0));
@@ -737,16 +762,16 @@ TEST(PlacedTextGeometryTest, StretchToleranceUsesLinearTransformOnly) {
 
   // X shear `matrix(1,0,100,1,0,0)` maps local (0, 1) to device (100, 1): its largest singular
   // value bounds the device error, so the tolerance must be at least that much tighter.
-  Transform2d shear;
-  shear.data[2] = 100.0;
-  EXPECT_LE(TextWarpToleranceFor(shear), 0.1 / std::hypot(100.0, 1.0));
-  EXPECT_GE(TextWarpToleranceFor(shear), 1e-4);
+  Transform2d deviceFromLocalShear;
+  deviceFromLocalShear.data[2] = 100.0;
+  EXPECT_LE(TextWarpToleranceFor(deviceFromLocalShear), 0.1 / std::hypot(100.0, 1.0));
+  EXPECT_GE(TextWarpToleranceFor(deviceFromLocalShear), 1e-4);
 
-  Transform2d nonfinite;
-  nonfinite.data[2] = std::numeric_limits<double>::infinity();
-  EXPECT_EQ(TextWarpToleranceFor(nonfinite), 1e-4);
-  nonfinite.data[2] = std::numeric_limits<double>::quiet_NaN();
-  EXPECT_EQ(TextWarpToleranceFor(nonfinite), 1e-4);
+  Transform2d deviceFromLocalNonfinite;
+  deviceFromLocalNonfinite.data[2] = std::numeric_limits<double>::infinity();
+  EXPECT_EQ(TextWarpToleranceFor(deviceFromLocalNonfinite), 1e-4);
+  deviceFromLocalNonfinite.data[2] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_EQ(TextWarpToleranceFor(deviceFromLocalNonfinite), 1e-4);
 
   // Magnification large enough to overflow the singular-value calculation still tightens to the
   // minimum, as does any magnification that already reaches it.
