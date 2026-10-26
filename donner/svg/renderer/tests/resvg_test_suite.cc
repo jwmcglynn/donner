@@ -1098,22 +1098,10 @@ INSTANTIATE_TEST_SUITE_P(StructureA, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    StructureDefs, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/defs",
-                {
-                    {"style-inheritance-on-text.svg",
-                     Params::WithThreshold(kDefaultThreshold, 5500,
-                                           "Larger threshold due to font-size on the <use> not "
-                                           "reaching the referenced <text>, which lays out at "
-                                           "the size inherited in its original tree instead; "
-                                           "moving font-size onto the <text> matches the golden "
-                                           "exactly. Measured 5351 simple, 5350 full, 5370 "
-                                           "Geode (#1167)")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StructureDefs, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("structure/defs")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(StructureG, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("structure/g")),
