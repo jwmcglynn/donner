@@ -458,6 +458,25 @@ TEST(PlacedTextGeometryTest, StretchDoesNotJoinCoincidentDisconnectedSubpaths) {
   EXPECT_TRUE(WarpGlyphOutline(edge, MeasurePath(route), glyph, 0.05).empty());
 }
 
+TEST(PlacedTextGeometryTest, StretchNeverJoinsDisconnectedSubpathsAtInexactBreakDistances) {
+  // Interval endpoints at a crossed boundary are recomputed in floating point, so they can land
+  // an ulp either side of the break. The refusal must not depend on that rounding.
+  const Path route = PathBuilder()
+                         .moveTo(Vector2d(0.0, 0.0))
+                         .lineTo(Vector2d(10.3, 0.0))
+                         .moveTo(Vector2d(10.3, 0.0))
+                         .lineTo(Vector2d(10.3, 10.7))
+                         .build();
+  const StretchedTextPath mapping = MeasurePath(route);
+  const Path edge = PathBuilder().moveTo(Vector2d(0.0, -2.0)).lineTo(Vector2d(9.1, -2.0)).build();
+  for (int step = 0; step < 200; ++step) {
+    TextGlyph glyph;
+    glyph.textPathOrigin = 3.7 + step * 0.0137;
+    SCOPED_TRACE(*glyph.textPathOrigin);
+    EXPECT_TRUE(WarpGlyphOutline(edge, mapping, glyph, 0.05).empty());
+  }
+}
+
 TEST(PlacedTextGeometryTest, StretchDoesNotWrapOpenGeometricReturnAsClosedSeam) {
   const Path route = PathBuilder()
                          .moveTo(Vector2d(0.0, 0.0))
