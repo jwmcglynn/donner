@@ -128,6 +128,27 @@ TEST(ImageComparisonTestFixtureTests, ExplicitSkipsUseDisabledGtestName) {
   EXPECT_THAT(name, testing::HasSubstr("embedded_png"));
 }
 
+// Render-only state is private, so only the named factories can skip a case's comparison.
+template <typename T>
+concept HasPublicRenderOnlyField =
+    requires(T params) { params.renderOnly; } || requires(T params) { params.renderOnly_; };
+static_assert(!HasPublicRenderOnlyField<ImageComparisonParams>);
+
+TEST(ImageComparisonTestFixtureTests, OnlyNamedFactoriesRenderWithoutComparing) {
+  EXPECT_FALSE(ImageComparisonParams().isRenderOnly());
+  EXPECT_FALSE(ImageComparisonParams::Skip("bug").isRenderOnly());
+  EXPECT_FALSE(ImageComparisonParams::WithThreshold(0.1f).isRenderOnly());
+
+  const ImageComparisonParams undefinedBehavior =
+      ImageComparisonParams::UndefinedBehavior("ub").withReason("chained");
+  EXPECT_TRUE(undefinedBehavior.isRenderOnly());
+  EXPECT_EQ(undefinedBehavior.renderOnlyBucket(), "undefined behavior");
+
+  const ImageComparisonParams deprecated = ImageComparisonParams::DeprecatedInSVG2("<tref>");
+  EXPECT_TRUE(deprecated.isRenderOnly());
+  EXPECT_EQ(deprecated.renderOnlyBucket(), "deprecated in SVG 2");
+}
+
 TEST(ImageComparisonTestFixtureTests, GeodeMaxPixelsOnlyAppliesToGeodeModes) {
   ImageComparisonParams params;
   params.withMaxPixelsDifferent(150).withGeodeMaxPixelsDifferent(500);

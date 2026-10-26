@@ -126,11 +126,6 @@ struct ImageComparisonParams {
   uint32_t requiredFeatures = 0;
   /// Human-readable reason used when backend restrictions cause a skip.
   std::string_view backendRequirementReason;
-  /// If true, render but skip the pixel comparison. Set only through \ref UndefinedBehavior or
-  /// \ref DeprecatedInSVG2, which still verify that rendering completes.
-  bool renderOnly = false;
-  /// Which render-without-compare bucket set \ref renderOnly, for the test log.
-  std::string_view renderOnlyBucket;
   /// Human-readable reason attached to Skip / UndefinedBehavior / DeprecatedInSVG2 /
   /// WithThreshold overrides.
   /// Surfaced in test skip messages and failure output - prefer this over trailing
@@ -161,8 +156,8 @@ struct ImageComparisonParams {
    */
   static ImageComparisonParams UndefinedBehavior(std::string_view reason) {
     ImageComparisonParams result;
-    result.renderOnly = true;
-    result.renderOnlyBucket = "undefined behavior";
+    result.renderOnly_ = true;
+    result.renderOnlyBucket_ = "undefined behavior";
     result.reason = reason;
     return result;
   }
@@ -179,8 +174,8 @@ struct ImageComparisonParams {
    */
   static ImageComparisonParams DeprecatedInSVG2(std::string_view reason) {
     ImageComparisonParams result;
-    result.renderOnly = true;
-    result.renderOnlyBucket = "deprecated in SVG 2";
+    result.renderOnly_ = true;
+    result.renderOnlyBucket_ = "deprecated in SVG 2";
     result.reason = reason;
     return result;
   }
@@ -407,6 +402,19 @@ struct ImageComparisonParams {
 #endif
     return false;
   }
+
+  /// True if the case renders without a pixel comparison, which only \ref UndefinedBehavior and
+  /// \ref DeprecatedInSVG2 can set. Rendering still has to complete.
+  bool isRenderOnly() const { return renderOnly_; }
+
+  /// The render-without-compare bucket for the test log, empty unless \ref isRenderOnly.
+  std::string_view renderOnlyBucket() const { return renderOnlyBucket_; }
+
+private:
+  // Private so that a designated initializer or field assignment cannot render a case without
+  // comparing it outside the two named factories, whose reasons the parity report checks.
+  bool renderOnly_ = false;
+  std::string_view renderOnlyBucket_;
 };
 
 /**
