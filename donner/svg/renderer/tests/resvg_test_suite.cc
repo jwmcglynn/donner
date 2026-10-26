@@ -1465,14 +1465,14 @@ INSTANTIATE_TEST_SUITE_P(
                 // serif) disagree with the rest of this directory on the same four pixels of the
                 // plain frame <rect>, at (3,3), (496,3), (3,496) and (496,496), which no font
                 // choice can affect. They come from a different rendering than the goldens Donner
-                // matches exactly: noto-sans, double-quoted and fallback-2, plus font-list and
-                // source-sans-pro under full shaping. Which face each family resolves to is
-                // asserted directly in FontSelection_tests.cc, so these allowances no longer stand
-                // in for selection coverage. Each allowance sits about 2% above the largest
-                // measured residual across the simple and full text tiers, except serif and
-                // sans-serif, which keep their existing tighter numbers rather than being raised.
-                // The Geode lane contributes no residual here: it reports no text-rendering
-                // support, so every text/ case is skipped there.
+                // matches exactly: noto-sans, double-quoted, fallback-2, font-list and
+                // source-sans-pro. Which face each family resolves to is asserted directly in
+                // FontSelection_tests.cc, so these allowances no longer stand in for selection
+                // coverage. Each allowance sits about 2% above the largest measured residual across
+                // the simple and full text tiers, except serif and sans-serif, which keep their
+                // existing tighter numbers rather than being raised. The Geode lane contributes no
+                // residual here: it reports no text-rendering support, so every text/ case is
+                // skipped there.
                 {"bold-sans-serif.svg",
                  Params::WithThreshold(
                      kDefaultThreshold, 5200,
@@ -1493,11 +1493,6 @@ INSTANTIATE_TEST_SUITE_P(
                                        "Larger threshold due to a golden that no checked-in face "
                                        "reproduces and that disagrees on the frame <rect> "
                                        "corners. Measured 5011 simple, 5009 full (#1167)")},
-                {"font-list.svg",
-                 Params().withSimpleTextMaxPixels(1300).withReason(
-                     "Source Sans Pro kerns through GPOS only, which the stb_truetype backend "
-                     "does not read; full shaping matches the golden exactly. Measured 1273 "
-                     "simple, 0 full (#1167)")},
                 {"monospace.svg",
                  Params::WithThreshold(kDefaultThreshold, 600,
                                        "Larger threshold due to a golden that matches the "
@@ -1514,11 +1509,6 @@ INSTANTIATE_TEST_SUITE_P(
                                        "Larger threshold due to a golden that no checked-in face "
                                        "reproduces and that disagrees on the frame <rect> "
                                        "corners. Measured 4146 simple, 4140 full (#1167)")},
-                {"source-sans-pro.svg",
-                 Params().withSimpleTextMaxPixels(1300).withReason(
-                     "Source Sans Pro kerns through GPOS only, which the stb_truetype backend "
-                     "does not read; full shaping matches the golden exactly. Measured 1273 "
-                     "simple, 0 full (#1167)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

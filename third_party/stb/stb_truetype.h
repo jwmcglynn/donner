@@ -2519,15 +2519,25 @@ static stbtt_int32 stbtt__GetGlyphGPOSInfoAdvance(const stbtt_fontinfo *info, in
       stbtt_uint16 lookupType = ttUSHORT(lookupTable);
       stbtt_uint16 subTableCount = ttUSHORT(lookupTable + 4);
       stbtt_uint8 *subTableOffsets = lookupTable + 6;
-      if (lookupType != 2) // Pair Adjustment Positioning Subtable
+      // Donner patch: also accept Extension lookups (type 9), which font compilers use to wrap
+      // large pair adjustment lookups, such as the kerning in Source Sans Pro.
+      if (lookupType != 2 && lookupType != 9) // Pair Adjustment Positioning Subtable
          continue;
 
       for (sti=0; sti<subTableCount; sti++) {
          stbtt_uint16 subtableOffset = ttUSHORT(subTableOffsets + 2 * sti);
          stbtt_uint8 *table = lookupTable + subtableOffset;
-         stbtt_uint16 posFormat = ttUSHORT(table);
-         stbtt_uint16 coverageOffset = ttUSHORT(table + 2);
-         stbtt_int32 coverageIndex = stbtt__GetCoverageIndex(table + coverageOffset, glyph1);
+         stbtt_uint16 posFormat;
+         stbtt_uint16 coverageOffset;
+         stbtt_int32 coverageIndex;
+         if (lookupType == 9) {
+            // ExtensionPosFormat1: format, extensionLookupType, 32-bit offset to the subtable.
+            if (ttUSHORT(table) != 1 || ttUSHORT(table + 2) != 2) continue;
+            table += ttULONG(table + 4);
+         }
+         posFormat = ttUSHORT(table);
+         coverageOffset = ttUSHORT(table + 2);
+         coverageIndex = stbtt__GetCoverageIndex(table + coverageOffset, glyph1);
          if (coverageIndex == -1) continue;
 
          switch (posFormat) {
