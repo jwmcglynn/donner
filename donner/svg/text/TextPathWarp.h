@@ -321,6 +321,28 @@ private:
     return std::binary_search(mapping_.segmentEndDistances.begin(),
                               mapping_.segmentEndDistances.end(), candidate);
   }
+  /// True when the route distances of local x coordinates \p first and \p second lie strictly
+  /// inside one measured segment, touching no segment end or closed seam.
+  bool withinOneSegment(double first, double second) const {
+    const double length = mapping_.measuredPath.pathLength();
+    const double origin = mapping_.startOffset + *glyph_.textPathOrigin;
+    double low = origin + std::min(first, second);
+    double high = origin + std::max(first, second);
+    if (!std::isfinite(low) || !std::isfinite(high) || !(length > 0.0)) {
+      return false;
+    }
+    if (mapping_.closed) {
+      const double period = std::floor(low / length);
+      low -= period * length;
+      high -= period * length;
+      if (low <= 0.0 || high >= length) {
+        return false;
+      }
+    }
+    const auto& ends = mapping_.segmentEndDistances;
+    const auto it = std::lower_bound(ends.begin(), ends.end(), low);
+    return it == ends.end() || *it > high;
+  }
   bool appendBoundaryJoin(const Vector2d& incoming, const Vector2d& outgoing) {
     if (incoming == outgoing) {
       return true;
@@ -407,7 +429,15 @@ private:
   }
   bool appendAdaptive(const Vector2d& start, const Vector2d& end, const Vector2d& mappedStart,
                       const Vector2d& mappedEnd, size_t depth) {
-    if (remainingWork_ < 3u || depth > 16u) {
+    if (depth > 16u) {
+      // An interval this short that still has not converged spans a discontinuity in the
+      // mapping. Strictly inside one segment that is a cusp, whose normal flips; join across it
+      // as at a segment boundary. Touching a segment end it may be a subpath break, which is
+      // never joined, so it is refused like any longer interval.
+      return (end - start).length() <= tolerance_ && withinOneSegment(start.x, end.x) &&
+             appendBoundaryJoin(mappedStart, mappedEnd);
+    }
+    if (remainingWork_ < 3u) {
       return false;
     }
     remainingWork_ -= 3u;
