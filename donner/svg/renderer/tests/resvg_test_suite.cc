@@ -266,16 +266,17 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeDistantLight, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeDropShadow, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feDropShadow",
-                {
-                    {"only-stdDeviation.svg",
-                     Params::WithThreshold(0.05f, 160, "Minor blur diffs")},
-                    {"with-flood-color.svg", Params::WithThreshold(0.03f, 160, "Minor blur diffs")},
-
-                    {"with-percent-offset.svg", Params::Skip("Bug: feDropShadow edge case")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "filters/feDropShadow",
+            {
+                {"only-stdDeviation.svg", Params::WithThreshold(0.05f, 160, "Minor blur diffs")},
+                {"with-flood-color.svg", Params::WithThreshold(0.03f, 160, "Minor blur diffs")},
+                // Percentage dx/dy are invalid <number> values and fall back to the default
+                // offset of 2, so this case renders the same as only-stdDeviation.svg.
+                {"with-percent-offset.svg", Params::WithThreshold(0.05f, 160, "Minor blur diffs")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeFlood, ImageComparisonTestFixture,
@@ -502,17 +503,19 @@ INSTANTIATE_TEST_SUITE_P(
                 {"with-subregion-3.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                                                "Minor shading differences")},
                 {"content-outside-the-canvas-2.svg",
-                 Params::Skip(
-                     "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
+                 Params::Skip("Bug #1170: feGaussianBlur samples transparent pixels at the "
+                              "canvas top/left edge because content above and left of the canvas "
+                              "is not rasterized into the filter input (TinySkia 2321 and Geode "
+                              "2323 pixels differ, edge band only)")},
                 {"in=BackgroundAlpha.svg",
                  Params::Skip(
                      "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
-                {"with-mask-on-parent.svg",
-                 Params::Skip(
-                     "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
                 {"with-transform-outside-of-canvas.svg",
-                 Params::Skip(
-                     "Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
+                 Params::Skip("Bug #1170: feImage element references ignore the filtered "
+                              "element's axis-aligned transform when placed, and are rasterized "
+                              "only over the untransformed canvas, so the referenced content is "
+                              "lost (TinySkia and Geode: 62500 pixels differ, the whole referenced "
+                              "square)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1978,43 +1981,35 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextWritingMode, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/writing-mode",
-                {
-                    {"arabic-with-rl.svg",
-                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
-                    {"inheritance.svg", Params().withMaxPixelsDifferent(1500).withReason(
-                                            "Bug: Baseline is ~2px off compared to resvg")},
-                    {"japanese-with-tb.svg",
-                     Params().onlyTextFull().withMaxPixelsDifferent(600).withReason(
-                         "Non-ascii text, bug: y position is ~1px off")},
-                    {"mixed-languages-with-tb-and-underline.svg",
-                     Params::Skip("Non-ascii text, bug: underline not").onlyTextFull()},
-                    {"mixed-languages-with-tb.svg",
-                     Params::Skip("Non-ascii text, bug: mixed language").onlyTextFull()},
-                    {"tb-and-punctuation.svg",
-                     Params::Skip("Non-ascii text, bug: CJK punctuation").onlyTextFull()},
-                    {"tb-rl.svg", Params().withMaxPixelsDifferent(1500).withReason(
-                                      "Bug: Baseline is ~2px off compared to resvg")},
-                    {"tb-with-alignment.svg", Params().withMaxPixelsDifferent(1500).withReason(
-                                                  "Bug: Baseline is ~2px off compared to resvg")},
-                    {"tb-with-dx-on-second-tspan.svg",
-                     Params::Skip("Bug: `writing-mode=tb` with `dx`")},
-                    {"tb-with-dx-on-tspan.svg", Params::Skip("Bug: `writing-mode=tb` with `dx`")},
-                    {"tb-with-dy-on-second-tspan.svg",
-                     Params::Skip("Bug: `writing-mode=tb` with `dy`")},
-                    {"tb-with-rotate-and-underline.svg",
-                     Params::RenderOnly("UB: tb with rotate and underline")},
-                    {"tb-with-rotate.svg", Params::RenderOnly("UB: tb with rotate")},
-                    {"tb.svg", Params().withMaxPixelsDifferent(1500).withReason(
-                                   "Bug: Baseline is ~2px off compared to resvg")},
-
-                    {"vertical-lr.svg",
-                     Params::Skip("Bug: writing-mode edge cases beyond basic support")},
-                    {"vertical-rl.svg",
-                     Params::Skip("Bug: writing-mode edge cases beyond basic support")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "text/writing-mode",
+            {
+                {"arabic-with-rl.svg",
+                 Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
+                // The 300x300 entries use references refreshed from upstream resvg, which renders
+                // them at that size (provenance in third_party/resvg-test-suite/BUILD.bazel).
+                {"inheritance.svg", Params().setCanvasSize(300, 300)},
+                {"japanese-with-tb.svg",
+                 Params().onlyTextFull().withMaxPixelsDifferent(600).withReason(
+                     "Non-ascii text, bug: y position is ~1px off")},
+                {"mixed-languages-with-tb-and-underline.svg",
+                 Params::Skip("Non-ascii text, bug: underline not").onlyTextFull()},
+                {"mixed-languages-with-tb.svg",
+                 Params::Skip("Non-ascii text, bug: mixed language").onlyTextFull()},
+                {"tb-and-punctuation.svg",
+                 Params::Skip("Non-ascii text, bug: CJK punctuation").onlyTextFull()},
+                {"tb-rl.svg", Params().setCanvasSize(300, 300)},
+                {"tb-with-alignment.svg", Params().setCanvasSize(300, 300)},
+                {"tb-with-dx-on-second-tspan.svg", Params().setCanvasSize(300, 300)},
+                {"tb-with-dx-on-tspan.svg", Params().setCanvasSize(300, 300)},
+                {"tb-with-dy-on-second-tspan.svg", Params().setCanvasSize(300, 300)},
+                {"tb-with-rotate-and-underline.svg",
+                 Params::RenderOnly("UB: tb with rotate and underline")},
+                {"tb-with-rotate.svg", Params::RenderOnly("UB: tb with rotate")},
+                {"tb.svg", Params().setCanvasSize(300, 300)},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 }  // namespace donner::svg

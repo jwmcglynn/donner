@@ -13,6 +13,23 @@ directory. Resources (external images) under resources/, fonts under fonts/.
 The upstream `tools/` (the multi-backend `vdiff` runner), `check.py`, and
 `stats.py` are vendored alongside the data but are not wired into any Bazel
 target here — they are standalone scripts run directly.
+
+Refreshed references: these tests now live in the resvg repository
+(https://github.com/linebender/resvg, crates/resvg/tests/tests/). The snapshot
+above predates resvg placing sideways vertical glyphs on the central baseline
+at the ascent/descent midpoint, so the following PNGs were replaced with their
+300x300 versions from resvg release v0.49.0 (resvg revision
+66ee0dc7d787d7e0b0ab3085b7849f78838cf2ba). resvg is licensed Apache-2.0 OR MIT;
+these files are used under MIT, with its notice in LICENSE-resvg-MIT. Their SVG
+inputs are byte-identical at both revisions.
+
+  tests/text/writing-mode/inheritance.png
+  tests/text/writing-mode/tb.png
+  tests/text/writing-mode/tb-rl.png
+  tests/text/writing-mode/tb-with-alignment.png
+  tests/text/writing-mode/tb-with-dx-on-second-tspan.png
+  tests/text/writing-mode/tb-with-dx-on-tspan.png
+  tests/text/writing-mode/tb-with-dy-on-second-tspan.png
 """
 
 package(default_visibility = ["//visibility:public"])
