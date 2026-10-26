@@ -2532,25 +2532,17 @@ RendererBitmap RowStrips(const RendererBitmap& source, const std::vector<int>& r
   return result;
 }
 
-/// Opaque white wherever \p source has any coverage, transparent elsewhere.
-RendererBitmap CoverageMask(RendererBitmap source) {
-  for (std::size_t offset = 0; offset < source.pixels.size(); offset += 4) {
-    const std::uint8_t value = source.pixels[offset + 3] != 0 ? 255 : 0;
-    std::fill_n(source.pixels.begin() + static_cast<std::ptrdiff_t>(offset), 4, value);
-  }
-  return source;
-}
-
 // The transformed blur path samples along the skewed filter axes, so the capture must cover the
 // device footprint of the sampling reach: a blur of 3 here reads about 45 pixels along device X.
 //
 // Oracle: on a canvas as wide as the filter region the whole band is in view, and some of its
 // blurred rows are level across the 12 columns that end at x 64. Where the band runs on past the
 // 64 pixel canvas, those rows must stay level up to its edge, so the edge strip (columns 58..63)
-// must match the interior strip (columns 52..57) of the same render, and the edge strip must be
-// covered wherever the wide render covers it, so a missing row cannot pass as level. Both checks
-// compare within one render or by coverage only, because Geode's skewed resampling rounds a
-// level or two differently for different canvas sizes.
+// of the 64 pixel render must match its interior strip (columns 52..57), raw pixels through
+// pixelmatch. Each edge row must also be visible, so a row missing from both strips cannot pass
+// as level. The strips come from one render because Geode's skewed resampling rounds a level or
+// two differently for different canvas sizes, so a render on another canvas is not an exact
+// reference.
 TEST_F(RendererRegressionTests, SkewedBlurReadsContentBeyondTheCanvas) {
   for (std::string_view primitives :
        {std::string_view(R"svg(<feGaussianBlur stdDeviation="3"/>)svg"),
@@ -2577,10 +2569,11 @@ TEST_F(RendererRegressionTests, SkewedBlurReadsContentBeyondTheCanvas) {
     editor::tests::CompareBitmapToBitmap(
         RowStrips(actual, levelRows, 58, 6), RowStrips(actual, levelRows, 52, 6),
         "skewed_blur_edge_strip_level", editor::tests::PixelmatchIdentityParams());
-    editor::tests::CompareBitmapToBitmap(CoverageMask(RowStrips(actual, levelRows, 58, 6)),
-                                         CoverageMask(RowStrips(roomy, levelRows, 58, 6)),
-                                         "skewed_blur_edge_strip_coverage",
-                                         editor::tests::PixelmatchIdentityParams());
+    for (int y : levelRows) {
+      SCOPED_TRACE(testing::Message() << "row " << y);
+      ExpectVisibleBitmap(CropBitmap(actual, Vector2i(58, y), Vector2i(6, 1)),
+                          "skewed_blur_edge_row_visible");
+    }
   }
 }
 
