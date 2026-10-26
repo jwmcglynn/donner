@@ -136,6 +136,11 @@ var LibraryDonnerGpu = {
     // null when none are waiting; see startCompiles.
     compilesToStart: null,
     pipelineCompiles: 0,
+    // Asynchronous compiles started and not yet settled, whichever browser device started them: a
+    // compile that outlives its device still occupies the browser until it settles. Together with
+    // compilesToStart this is the compile work still in flight, which tests wait to drain before
+    // timing an interaction, since the browser can hold later GPU work behind it.
+    pipelineCompilesInFlight: 0,
     pipelineCompilesShared: 0,
     pipelineCompilesOnFirstUse: 0,
     // Bounded queue timeline for failure diagnostics, on the epoch clock so a page can align it.
@@ -270,6 +275,8 @@ var LibraryDonnerGpu = {
         "completionProgressKicks": DonnerGpu.completionProgressKicks,
         "completionProgressKickMs": DonnerGpu.completionProgressKickMs,
         "pipelineCompiles": DonnerGpu.pipelineCompiles,
+        "pipelineCompilesPending": DonnerGpu.pipelineCompilesInFlight
+          + (DonnerGpu.compilesToStart === null ? 0 : DonnerGpu.compilesToStart.length),
         "pipelineCompilesShared": DonnerGpu.pipelineCompilesShared,
         "pipelineCompilesOnFirstUse": DonnerGpu.pipelineCompilesOnFirstUse,
       };
@@ -784,6 +791,14 @@ var LibraryDonnerGpu = {
     // asynchronously, where compilesAheadOfUse allows, unless a logical device over the same
     // browser device already has. `key` is the descriptor's content identity, or empty when it
     // cannot be shared.
+    //
+    // Each registration traces ["p", handle, registeredAt, compiledAt, shared]. A registration that
+    // shares an earlier compile copies that compile's compiledAt once, when it registers. A new
+    // compile's entry is updated when its asynchronous compile installs the pipeline. compiledAt
+    // stays 0 while that compile is in flight, and for good when the compile never installs one:
+    // the pipeline was created at first use first, the browser refused the compile, or the browser
+    // does not compile ahead of use. A zero is therefore not evidence of pending work; the
+    // statistics' pipelineCompilesPending is.
     compilePipeline: function(record, kind, id, key, descriptor) {
       var status = DonnerGpu.guard(record);
       if (status !== DonnerGpu.kSuccess) {
@@ -859,7 +874,9 @@ var LibraryDonnerGpu = {
           return;
         }
         DonnerGpu.pipelineCompiles += 1;
+        DonnerGpu.pipelineCompilesInFlight += 1;
         pending.then(function(pipeline) {
+          DonnerGpu.pipelineCompilesInFlight -= 1;
           if (DonnerGpu.pipelines === cache && compile.pipeline === null && pipeline) {
             compile.pipeline = pipeline;
             compile.traced[3] = compile.compiledAt = DonnerGpu.epochMs();
@@ -869,6 +886,7 @@ var LibraryDonnerGpu = {
           // the refusal as an uncaptured error. A pipeline never used would report nothing, so
           // the refusal is logged here as well, unless the device has been let go or lost since:
           // a refusal from a retired device describes nothing the runtime still uses.
+          DonnerGpu.pipelineCompilesInFlight -= 1;
           if (DonnerGpu.pipelines !== cache || DonnerGpu.lost) {
             return;
           }

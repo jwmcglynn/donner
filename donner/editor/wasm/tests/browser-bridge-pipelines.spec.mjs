@@ -463,3 +463,51 @@ test("Chromium and Firefox still compile ahead of use", async () => {
     assert.equal(bridge.state.debugStatistics()["pipelineCompiles"], 2, userAgent);
   }
 });
+
+test("pending compiles count each compile until it settles, even after its device is let go", async () => {
+  const stub = createTimelineDevice();
+  const bridge = await openOver(stub, [kFirst]);
+  const pending = () => bridge.state.debugStatistics()["pipelineCompilesPending"];
+  assert.equal(pending(), 0);
+  buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"], [kPipelineB, "fsB"]]);
+  // Waiting for the creating task to end still counts: the compiles are about to start.
+  assert.equal(pending(), 2);
+  await drain();
+  assert.deepEqual(stub.created.async, ["fsA", "fsB"]);
+  assert.equal(pending(), 2);
+  stub.finishCompile("fsA");
+  await drain();
+  assert.equal(pending(), 1);
+  // A compile that outlives its device still occupies the browser until it settles.
+  bridge.entryPoints.donner_gpu_release_device(kFirst);
+  assert.equal(pending(), 1);
+  stub.finishCompile("fsB");
+  await drain();
+  assert.equal(pending(), 0);
+});
+
+test("a refused compile stops counting as pending once the browser answers", async () => {
+  const stub = createTimelineDevice({ refuseAsync: true });
+  const bridge = await openOver(stub, [kFirst]);
+  buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"]]);
+  await drain();
+  assert.equal(bridge.state.debugStatistics()["pipelineCompilesPending"], 1);
+  stub.finishCompile("fsA");
+  await drain();
+  assert.equal(bridge.state.debugStatistics()["pipelineCompilesPending"], 0);
+});
+
+test("pipelines created at first use, or in WebKit, leave nothing pending", async () => {
+  const onUse = createTimelineDevice();
+  const used = await openOver(onUse, [kFirst]);
+  buildPipelines(used, kFirst, [[kPipelineA, "fsA"]]);
+  submitDraw(used, kFirst, 1, kPipelineA);
+  await drain();
+  assert.equal(used.state.debugStatistics()["pipelineCompilesPending"], 0);
+
+  const webKit = createTimelineDevice();
+  const bridge = await openOver(webKit, [kFirst], { userAgent: kSafariMac });
+  buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"], [kPipelineB, "fsB"]]);
+  await drain();
+  assert.equal(bridge.state.debugStatistics()["pipelineCompilesPending"], 0);
+});
