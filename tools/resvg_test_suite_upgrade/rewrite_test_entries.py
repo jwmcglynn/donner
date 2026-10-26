@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Rewrite resvg_test_suite.cc for the new resvg-test-suite layout.
 
+Historical: this ran once for the Design 0022 migration, and its inputs describe the old test
+names. Params::RenderOnly has since been retired, so a rerun emits each old RenderOnly override as
+a skip that asks for reclassification instead of code that no longer compiles.
+
 Consumes:
   - overrides.json (from extract_overrides.py)
   - rename_map.json (from build_rename_map.py)
@@ -98,6 +102,10 @@ def rewrite_golden_override(
 # Keep this conservative — only rewrite the exact forms we know the codemod emits.
 SKIP_RE = re.compile(r"Params::Skip\(\)")
 RENDER_ONLY_RE = re.compile(r"Params::RenderOnly\(\)")
+RETIRED_RENDER_ONLY_NOTE = (
+    "Reclassify: was Params::RenderOnly; use Params::UndefinedBehavior, "
+    "Params::DeprecatedInSVG2 or a Params::Skip reason"
+)
 WITH_THRESHOLD_ONE_ARG_RE = re.compile(r"Params::WithThreshold\(\s*([^,)]+?)\s*\)")
 WITH_THRESHOLD_TWO_ARG_RE = re.compile(
     r"Params::WithThreshold\(\s*([^,)]+?)\s*,\s*([^,)]+?)\s*\)")
@@ -109,11 +117,14 @@ def escape_reason(text: str) -> str:
 
 
 def inject_reason(params: str, comment: str) -> str:
-    """Rewrite `Params::Skip()` / `::RenderOnly()` / `::WithThreshold(...)` to
+    """Rewrite `Params::Skip()` / `::WithThreshold(...)` to
     include the comment as a trailing reason string argument. Other forms
     (chained builders starting from `Params()`) get a `.withReason("...")`
     call appended. If no comment, return params unchanged.
     """
+    if RENDER_ONLY_RE.search(params):
+        note = RETIRED_RENDER_ONLY_NOTE + (f" ({escape_reason(comment)})" if comment else "")
+        return RENDER_ONLY_RE.sub(f'Params::Skip("{note}")', params, count=1)
     if not comment:
         return params
 
@@ -122,8 +133,6 @@ def inject_reason(params: str, comment: str) -> str:
     # Prefer the factory-arg form for the canonical cases.
     if SKIP_RE.search(params) and "Skip()" in params:
         return SKIP_RE.sub(f'Params::Skip("{reason}")', params, count=1)
-    if RENDER_ONLY_RE.search(params) and "RenderOnly()" in params:
-        return RENDER_ONLY_RE.sub(f'Params::RenderOnly("{reason}")', params, count=1)
 
     # WithThreshold(threshold) → WithThreshold(threshold, kDefaultMismatchedPixels, "reason")
     # WithThreshold(threshold, max) → WithThreshold(threshold, max, "reason")
