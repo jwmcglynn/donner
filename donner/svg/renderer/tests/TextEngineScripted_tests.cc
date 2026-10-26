@@ -953,6 +953,38 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
                         RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(100.0, 0.001)))))));
 }
 
+TEST(TextEngineScriptedTest, StretchTextPathRotatesShapedOffsetsLikeAlign) {
+  // On a straight horizontal path, stretch and align place a glyph origin identically. The
+  // scripted backend gives this CJK glyph a shaped offset of (2, 3), which an authored rotate must
+  // turn before it becomes a path distance and normal offset.
+  const auto layoutWith = [](components::TextPathMethod method) {
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("\xe4\xb8\xad");
+    span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(200.0, 0.0)).build();
+    span.textPathSourceEntity = registry.create();
+    span.textPathMethod = method;
+    span.rotateList = {90.0};
+    text.spans.push_back(std::move(span));
+    return engine.layout(text, MakeTextParams(20.0));
+  };
+
+  const auto aligned = layoutWith(components::TextPathMethod::Align);
+  const auto stretched = layoutWith(components::TextPathMethod::Stretch);
+
+  ASSERT_THAT(aligned, SizeIs(1));
+  ASSERT_THAT(stretched, SizeIs(1));
+  ASSERT_THAT(aligned.front().glyphs, SizeIs(1));
+  ASSERT_THAT(stretched.front().glyphs, SizeIs(1));
+  const TextGlyph& alignGlyph = aligned.front().glyphs.front();
+  const TextGlyph& stretchGlyph = stretched.front().glyphs.front();
+  ASSERT_THAT(stretchGlyph.textPathOrigin, testing::Optional(testing::_));
+  EXPECT_THAT(*stretchGlyph.textPathOrigin, DoubleNear(alignGlyph.xPosition, 1e-9));
+  EXPECT_THAT(stretchGlyph.textPathNormalOffset, DoubleNear(alignGlyph.yPosition, 1e-9));
+}
+
 struct ParsedPathRunDetails {
   std::string text;
   double computedFontSize = 0.0;
