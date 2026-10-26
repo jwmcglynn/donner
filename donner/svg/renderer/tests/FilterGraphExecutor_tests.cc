@@ -2511,6 +2511,32 @@ TEST(FilterInputMarginTest, SkewedReachCoversTheDeviceFootprint) {
       testing::Eq(Vector2d(11.0, 3.0)));
 }
 
+// Both executors round each primitive to whole pixels, so every primitive's reach rounds up before
+// the chain adds them: eight offsets of 0.6 move content 8 pixels, and a blur of 0.5 reads
+// 2 pixels on each side, not 1.5.
+TEST(FilterInputMarginTest, ReachRoundsEachPrimitiveUpToWholePixels) {
+  using namespace components;
+  FilterGraph offsets;
+  for (int i = 0; i < 8; ++i) {
+    FilterNode node;
+    node.primitive = filter_primitive::Offset{0.6, 0.6};
+    offsets.nodes.push_back(node);
+  }
+  // Eight whole pixels, plus a rounding pixel.
+  EXPECT_THAT(ComputeFilterSamplingReach(offsets, Transform2d()).pixels,
+              testing::Eq(Vector2d(9.0, 9.0)));
+  EXPECT_THAT(ComputeFilterSamplingReach(
+                  SinglePrimitiveGraph(filter_primitive::GaussianBlur{0.5, 0.5}), Transform2d())
+                  .pixels,
+              testing::Eq(Vector2d(3.0, 3.0)));
+  EXPECT_THAT(
+      ComputeFilterSamplingReach(SinglePrimitiveGraph(filter_primitive::Morphology{
+                                     filter_primitive::Morphology::Operator::Dilate, 0.6, 0.6}),
+                                 Transform2d())
+          .pixels,
+      testing::Eq(Vector2d(2.0, 2.0)));
+}
+
 TEST(FilterInputMarginTest, TileCaptureIncludesItsInputsReach) {
   using namespace components;
   FilterGraph graph;

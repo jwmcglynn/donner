@@ -2584,6 +2584,27 @@ TEST_F(RendererRegressionTests, SkewedBlurReadsContentBeyondTheCanvas) {
   }
 }
 
+// Both executors round each feOffset to whole pixels, so eight offsets of 0.6 move content 8
+// pixels, not 4.8. The capture must reach that far: a square just past the left edge lands at the
+// left edge, matching the same square drawn there without a filter.
+TEST_F(RendererRegressionTests, ChainedFractionalOffsetsReachTheirRoundedDistance) {
+  std::string offsets;
+  for (int i = 0; i < 8; ++i) {
+    offsets += R"svg(<feOffset dx="0.6"/>)svg";
+  }
+  SVGDocument document = instantiateSubtree(
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-50" y="0" width="114" height="64">)svg" +
+          offsets + R"svg(</filter>
+      <g filter="url(#f)"><rect x="-8" y="8" width="8" height="16" fill="lime"/></g>)svg",
+      {}, Vector2i(64, 64));
+  SVGDocument expected = instantiateSubtree(
+      R"svg(<rect x="0" y="8" width="8" height="16" fill="lime"/>)svg", {}, Vector2i(64, 64));
+  editor::tests::CompareBitmapToBitmap(RenderDocumentWithBackend(document, ActiveRendererBackend()),
+                                       RenderDocumentWithBackend(expected, ActiveRendererBackend()),
+                                       "chained_fractional_offsets",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // A capture margin must never turn an admissible filter into a frame-wide rejection. At 8x zoom a
 // large blur's margin would need a raster over the frame's filter memory, so the layer falls back
 // to a viewport-sized capture; it still renders, and so does a later filtered element.
