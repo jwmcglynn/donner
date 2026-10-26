@@ -123,8 +123,22 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
 INSTANTIATE_TEST_SUITE_P(
     FiltersEnableBackground, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
-                "filters/enable-background", {},
-                Params::RenderOnly("Deprecated SVG 1.1 enable-background / BackgroundImage"))),
+                "filters/enable-background",
+                {
+                    // With enable-background ignored (SVG 2), these match the reference.
+                    {"accumulate.svg",
+                     Params().withReason("SVG 2 ignores enable-background; output matches")},
+                    {"new-with-invalid-region-1.svg",
+                     Params().withReason("SVG 2 ignores enable-background; output matches")},
+                    {"new-with-invalid-region-2.svg",
+                     Params().withReason("SVG 2 ignores enable-background; output matches")},
+                    {"new-with-invalid-region-3.svg",
+                     Params().withReason("SVG 2 ignores enable-background; output matches")},
+                    {"with-mask.svg",
+                     Params::RenderOnly("UB: reference is the resvg UB marker image")},
+                },
+                Params::Skip("Not impl: enable-background / BackgroundImage (SVG 1.1, removed "
+                             "in SVG 2)"))),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -156,9 +170,9 @@ INSTANTIATE_TEST_SUITE_P(
                 {"type=matrix.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "type=matrix")},
                 {"type=saturate-with-a-large-coefficient.svg",
-                 Params::RenderOnly("saturate 99999 (UB)")},
+                 Params::RenderOnly("UB: saturate 99999")},
                 {"type=saturate-with-negative-coefficient.svg",
-                 Params::RenderOnly("saturate -0.5 (UB)")},
+                 Params::RenderOnly("UB: saturate -0.5")},
                 {"type=saturate-without-a-coefficient.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity saturate")},
                 {"type=saturate.svg",
@@ -301,7 +315,9 @@ INSTANTIATE_TEST_SUITE_P(
                              "thin ~1px band (259px). Not a coverage bug; TinyGolden still checks "
                              "tiny-skia vs resvg.")},
                     {"huge-stdDeviation.svg",
-                     Params::RenderOnly("Extreme sigma=1000; output is implementation-defined")},
+                     Params::Skip("Resource limit: blur sigma is clamped to 256 device pixels "
+                                  "(kMaximumFilterPixelRadius); the reference clamps sigma=2500px "
+                                  "differently, so the whole frame differs (201043 px)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -449,8 +465,9 @@ INSTANTIATE_TEST_SUITE_P(
             "filters/filter",
             {
                 {"invalid-FuncIRI.svg",
-                 Params::RenderOnly("Reference: PNG hides an invalid URL; Filter Effects ignores "
-                                    "the chain, covered by independent visible-geometry tests")},
+                 Params::Skip("Reference disagreement: PNG hides an invalid URL; Filter Effects "
+                              "ignores the chain, covered by independent visible-geometry tests "
+                              "(FilterReferenceStages_tests)")},
                 // Pixelmatch 2.0 checkerboard exposes pre-existing filter-region
                 // compositing alpha deltas vs resvg that white-blending masked. Each
                 // threshold is the measured minimal passing hundredth at the
@@ -521,61 +538,58 @@ INSTANTIATE_TEST_SUITE_P(
             "filters/filter-functions",
             {
                 {"one-invalid-url-in-list.svg",
-                 Params::RenderOnly(
-                     "Reference: PNG applies functions around a missing URL; "
-                     "Filter Effects ignores the entire chain, independently tested")},
+                 Params::Skip("Reference disagreement: PNG applies functions around a missing "
+                              "URL; Filter Effects ignores the entire chain "
+                              "(FilterReferenceStages.InvalidReferenceDisablesEntireChain)")},
                 {"color-adjust-functions-0percent.svg",
-                 Params::RenderOnly("Filtered geometry agrees; 354 default-text, 370 full-text, "
-                                    "375 Geode mismatches are only label glyphs (#1167, #1169)")},
+                 Params::Skip("Bug #1167: label glyphs differ from the reference (354 "
+                              "default-text, 370 full-text, 375 Geode px); filtered geometry "
+                              "agrees (#1169)")},
                 {"color-adjust-functions-100percent.svg",
-                 Params::RenderOnly(
-                     "Filtered geometry agrees; label-only glyph reference differences, "
-                     "independently checked color contracts (#1167, #1169)")},
+                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
+                              "geometry agrees, color contracts checked independently (#1169)")},
                 {"color-adjust-functions-2.svg",
-                 Params::RenderOnly(
-                     "Filtered geometry agrees; label-only glyph reference differences, "
-                     "independently checked color contracts (#1167, #1169)")},
+                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
+                              "geometry agrees, color contracts checked independently (#1169)")},
                 {"color-adjust-functions-200percent.svg",
-                 Params::RenderOnly(
-                     "Filtered geometry agrees; label-only glyph reference differences, "
-                     "independently checked color contracts (#1167, #1169)")},
+                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
+                              "geometry agrees, color contracts checked independently (#1169)")},
                 {"color-adjust-functions-50percent.svg",
-                 Params::RenderOnly(
-                     "Filtered geometry agrees; label-only glyph reference differences, "
-                     "independently checked color contracts (#1167, #1169)")},
+                 Params::Skip("Bug #1167: label-only glyph reference differences; filtered "
+                              "geometry agrees, color contracts checked independently (#1169)")},
                 {"color-adjust-functions-default-value.svg",
-                 Params::RenderOnly("Defaults agree with explicit amounts; remaining reference "
-                                    "differences are label glyphs (#1167, #1169)")},
+                 Params::Skip("Bug #1167: label-only glyph reference differences; defaults "
+                              "agree with explicit amounts (#1169)")},
                 {"color-adjust-functions-negative.svg",
-                 Params::RenderOnly("Invalid negative declarations are rejected; remaining "
-                                    "reference differences are label glyphs (#1167, #1169)")},
+                 Params::Skip("Bug #1167: label-only glyph reference differences; invalid "
+                              "negative declarations are rejected (#1169)")},
                 {"drop-shadow-function-color-last.svg",
-                 Params::RenderOnly(
-                     "Offset/blur sampling differs from reference; color order and "
-                     "rounded-offset contracts compare independently (#1169, #1170)")},
+                 Params::Skip("Bug #1170: offset/blur sampling differs from reference; color "
+                              "order and rounded-offset contracts compare independently (#1169)")},
                 {"drop-shadow-function-em-values.svg",
-                 Params::RenderOnly("Resolved em lengths match px; fractional offset/blur sampling "
-                                    "differs from reference (#1169, #1170)")},
+                 Params::Skip("Bug #1170: fractional offset/blur sampling differs from "
+                              "reference; resolved em lengths match px (#1169)")},
                 {"drop-shadow-function-mm-values.svg",
-                 Params::RenderOnly("Resolved mm lengths match px; fractional offset/blur sampling "
-                                    "differs from reference (#1169, #1170)")},
+                 Params::Skip("Bug #1170: fractional offset/blur sampling differs from "
+                              "reference; resolved mm lengths match px (#1169)")},
                 {"drop-shadow-function-no-color.svg",
-                 Params::RenderOnly("Omitted color resolves to currentColor; fractional "
-                                    "offset/blur sampling differs from reference (#1169, #1170)")},
+                 Params::Skip("Bug #1170: fractional offset/blur sampling differs from "
+                              "reference; omitted color resolves to currentColor (#1169)")},
                 {"drop-shadow-function.svg",
-                 Params::RenderOnly(
-                     "Offset/blur sampling differs from reference; rounded-offset and "
-                     "alpha contracts compare independently (#1169, #1170)")},
+                 Params::Skip("Bug #1170: offset/blur sampling differs from reference; "
+                              "rounded-offset and alpha contracts compare independently (#1169)")},
                 {"two-exact-urls.svg",
-                 Params::RenderOnly("Valid repeated filter URL; reference is the UB marker, with "
-                                    "independent equivalent-graph comparison (#1169)")},
+                 Params::RenderOnly("UB: reference is the resvg UB marker image; the valid "
+                                    "repeated filter URL has an independent equivalent-graph "
+                                    "comparison (#1169)")},
                 {"two-urls.svg",
-                 Params::RenderOnly(
-                     "Chained flood/blur differs at filter-region boundary; equivalent primitive "
-                     "graph is the independent oracle (#1169, #1170)")},
+                 Params::Skip("Bug #1170: chained flood/blur differs at the filter-region "
+                              "boundary; the equivalent primitive graph is the independent oracle "
+                              "(#1169)")},
                 {"url-and-grayscale.svg",
-                 Params::RenderOnly("CSS grayscale must use sRGB (center115); historical "
-                                    "mixed-chain reference uses linearRGB-like center122 (#1169)")},
+                 Params::Skip("Reference disagreement: CSS grayscale must use sRGB (center "
+                              "115); the historical mixed-chain reference uses linearRGB-like "
+                              "center 122 (CssFilterContractMixedUrlGrayscaleUsesSrgb, #1169)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -618,11 +632,13 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::RenderOnly("UB: on root `<svg>` without size")},
 
                     {"circle-shorthand-with-stroke-box.svg",
-                     Params::RenderOnly("Opaque reference background differs from transparent "
-                                        "RGBA output; independent circle stroke-box contracts")},
+                     Params::Skip("Harness mismatch: opaque reference background differs from "
+                                  "transparent RGBA output; independent circle stroke-box "
+                                  "contracts (CircleClipPath_tests)")},
                     {"circle-shorthand-with-view-box.svg",
-                     Params::RenderOnly("Opaque reference background differs from transparent "
-                                        "RGBA output; independent circle view-box contracts")},
+                     Params::Skip("Harness mismatch: opaque reference background differs from "
+                                  "transparent RGBA output; independent circle view-box "
+                                  "contracts (CircleClipPath_tests)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -698,21 +714,27 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "paint-servers/radialGradient",
             {
-                {"fr=-1.svg", Params::RenderOnly("Invalid negative focal radius: no paint; "
-                                                 "reference is the UB marker (#1186)")},
-                {"fr=0.5.svg", Params::RenderOnly("Coincident start/end circles: transparent per "
-                                                  "SVG 2; reference is the UB marker (#1186)")},
-                {"fr=0.7.svg", Params::RenderOnly("Containing start circle: transparent per SVG 2; "
-                                                  "reference paints a reversed gradient (#1186)")},
+                {"fr=-1.svg",
+                 Params::RenderOnly("UB: reference is the resvg UB marker image; "
+                                    "invalid negative focal radius: no paint (#1186)")},
+                {"fr=0.5.svg",
+                 Params::RenderOnly("UB: reference is the resvg UB marker image; coincident "
+                                    "start/end circles: transparent per SVG 2 (#1186)")},
+                {"fr=0.7.svg",
+                 Params::Skip("Reference disagreement: containing start circle is transparent per "
+                              "SVG 2; reference paints a reversed gradient "
+                              "(ReferenceContractRadialContainingStartCircleDoesNotPaint, #1186)")},
                 {"invalid-gradientTransform.svg",
                  Params::RenderOnly(
-                     "Singular transform: no paint; reference is the UB marker (#1186)")},
+                     "UB: reference is the resvg UB marker image; singular transform: no paint "
+                     "(#1186)")},
                 {"invalid-gradientUnits.svg",
-                 Params::RenderOnly("Invalid units retain objectBoundingBox default; reference is "
-                                    "the UB marker (#1186)")},
+                 Params::RenderOnly("UB: reference is the resvg UB marker image; invalid units "
+                                    "retain the objectBoundingBox default (#1186)")},
                 {"negative-r.svg",
                  Params::RenderOnly(
-                     "Invalid negative radius: no paint; reference is the UB marker (#1186)")},
+                     "UB: reference is the resvg UB marker image; invalid negative radius: no "
+                     "paint (#1186)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -771,20 +793,19 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingFill, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "painting/fill",
-            {
-                {"icc-color.svg", Params::RenderOnly("UB: ICC color")},
-                {"pattern-on-text.svg", Params::WithThreshold(kDefaultThreshold, 2100)},
-                {"rgb-int-int-int.svg",
-                 Params::RenderOnly(
-                     "Valid CSS Color 4 space-separated RGB; reference is the UB marker (#1186)")},
-                {"valid-FuncIRI-with-a-fallback-ICC-color.svg",
-                 Params::RenderOnly("Unsupported SVG 1.1 icc-color paint grammar; invalid "
-                                    "declaration is rejected (#1186)")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "painting/fill",
+                {
+                    {"icc-color.svg", Params::RenderOnly("UB: ICC color")},
+                    {"pattern-on-text.svg", Params::WithThreshold(kDefaultThreshold, 2100)},
+                    {"rgb-int-int-int.svg",
+                     Params::RenderOnly("UB: reference is the resvg UB marker image; valid CSS "
+                                        "Color 4 space-separated RGB (#1186)")},
+                    {"valid-FuncIRI-with-a-fallback-ICC-color.svg",
+                     Params::Skip("Not impl: SVG 1.1 icc-color() paint fallback (removed in SVG "
+                                  "2); the invalid declaration is rejected (#1186)")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintingFillOpacity, ImageComparisonTestFixture,
@@ -939,9 +960,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"multiple-subpaths.svg",
                      Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
                                            "Larger threshold due to anti-aliasing artifacts.")},
-                    {"negative-sum.svg", Params::RenderOnly("UB (negative sum)")},
-                    {"negative-values.svg", Params::RenderOnly("UB (negative values)")},
-
                     {"n-0.svg", Params::WithThreshold(0.0f, 0, "Closed-path dash seam identity")},
                 })),
             ValuesIn(ActiveComparisonModes())),
@@ -963,8 +981,9 @@ INSTANTIATE_TEST_SUITE_P(
                 "painting/stroke-linejoin",
                 {
                     {"arcs.svg",
-                     Params::RenderOnly("SVG Strokes draft arcs is not implemented: documented "
-                                        "miter fallback; reference is the UB marker (#1186)")},
+                     Params::RenderOnly("UB: reference is the resvg UB marker image; SVG "
+                                        "Strokes draft arcs is not implemented, documented miter "
+                                        "fallback (#1186)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1189,10 +1208,10 @@ INSTANTIATE_TEST_SUITE_P(
                               "upscaling (current resvg); Donner uses bilinear (0021 B3)")},
 
                 {"embedded-svg-with-text.svg",
-                 Params::RenderOnly(
-                     "The vendored reference omits the embedded SVG's text. Donner renders it "
-                     "with the document font catalog; an authored embedded-versus-direct "
-                     "identity test pins that policy (0021 B3)")},
+                 Params::Skip(
+                     "Reference disagreement: the vendored reference omits the embedded SVG's "
+                     "text. Donner renders it with the document font catalog; an authored "
+                     "embedded-versus-direct identity test pins that policy (0021 B3)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1232,8 +1251,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"invalid-id-attribute-1.svg", Params::RenderOnly("UB: Invalid id attribute")},
                     {"invalid-id-attribute-2.svg", Params::RenderOnly("UB: Invalid id attribute")},
                     {"no-size.svg",
-                     Params::RenderOnly("Caller canvas preserves user units; reference fits "
-                                        "content bounds without authored dimensions (#1186)")},
+                     Params::Skip("API policy: caller canvas preserves user units; reference "
+                                  "fits content bounds without authored dimensions (#1186)")},
                     {"not-UTF-8-encoding.svg",
                      Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
                                   "and update the encoding declaration")},
@@ -1390,27 +1409,27 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextFont, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "text/font",
-                {
-                    // All 388 mismatches sit on the vertical gray hairline and none on the text,
-                    // so the `font` shorthand itself round-trips exactly. That hairline is 1.25
-                    // device px wide centered on device x=250: Donner splits its coverage 160/160
-                    // across the two pixels, the exact area split, where the reference uses
-                    // 128/192. Donner emits that same 128/192 split for the geometrically
-                    // identical horizontal hairline, so Donner's two axes disagree with each other
-                    // and this is stroke rasterization, not font handling.
-                    {"font-shorthand.svg",
-                     Params::Skip("Vertical hairline coverage splits 160/160 against the "
-                                  "reference's 128/192, while the horizontal hairline matches; "
-                                  "the text under the shorthand is pixel-exact (#1173)")},
-                    {"simple-case.svg",
-                     Params::RenderOnly(
-                         "400px reference: shorthand matches longhands, but glyph weight/advance "
-                         "differs in both CPU text tiers (#1167, #1173, #1186)")
-                         .setCanvasSize(400, 400)},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "text/font",
+            {
+                // All 388 mismatches sit on the vertical gray hairline and none on the text,
+                // so the `font` shorthand itself round-trips exactly. That hairline is 1.25
+                // device px wide centered on device x=250: Donner splits its coverage 160/160
+                // across the two pixels, the exact area split, where the reference uses
+                // 128/192. Donner emits that same 128/192 split for the geometrically
+                // identical horizontal hairline, so Donner's two axes disagree with each other
+                // and this is stroke rasterization, not font handling.
+                {"font-shorthand.svg",
+                 Params::Skip("Vertical hairline coverage splits 160/160 against the "
+                              "reference's 128/192, while the horizontal hairline matches; "
+                              "the text under the shorthand is pixel-exact (#1173)")},
+                {"simple-case.svg",
+                 Params::Skip("Bug #1167: 400px reference: shorthand matches longhands, but glyph "
+                              "weight/advance differs in both CPU text tiers (#1173, #1186)")
+                     .setCanvasSize(400, 400)},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(

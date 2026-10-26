@@ -335,7 +335,9 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 - Skipped resvg comparisons are emitted as `DISABLED_...` gtest names. To triage one without
   editing skip tables or adding custom env flags, run with a narrow `--gtest_filter` plus
   `--gtest_also_run_disabled_tests`.
-- UB-labeled tests: always `Params::Skip()` — goldens have "UB" text overlay.
+- `Params::RenderOnly("UB: <reason>")` is reserved for undefined or implementation-defined
+  behavior and UB marker goldens; everything else that cannot pass is `Params::Skip()` with a
+  reason (enforced by `//tools/resvg_parity:parity_report_tests`).
 
 ## Development Notes
 

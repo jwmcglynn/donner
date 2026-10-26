@@ -126,8 +126,9 @@ struct ImageComparisonParams {
   uint32_t requiredFeatures = 0;
   /// Human-readable reason used when backend restrictions cause a skip.
   std::string_view backendRequirementReason;
-  /// If true, render but skip the pixel comparison. Used for tests where the output
-  /// is implementation-defined or UB, but we still want to verify rendering stability.
+  /// If true, render but skip the pixel comparison. Reserved for undefined or
+  /// implementation-defined behavior (including resvg UB marker references), where we still want
+  /// to verify rendering stability.
   bool renderOnly = false;
   /// Human-readable reason attached to Skip / RenderOnly / WithThreshold overrides.
   /// Surfaced in test skip messages and failure output - prefer this over trailing
@@ -149,9 +150,11 @@ struct ImageComparisonParams {
   /**
    * @brief Creates parameters that render the test but skip pixel comparison.
    *
-   * Used for tests where the output is implementation-defined or has expected
-   * variance, but we want to verify that rendering completes without crashing.
-   * @param reason Human-readable explanation, shown in the test log.
+   * Reserved for tests whose output the specification leaves undefined or
+   * implementation-defined, or whose resvg reference is the UB marker image, where we still want
+   * to verify that rendering completes without crashing. Bugs, missing or removed features,
+   * reference disagreements and harness mismatches use \ref Skip instead.
+   * @param reason Human-readable explanation starting with "UB: ", shown in the test log.
    * @return ImageComparisonParams configured for render-only mode.
    */
   static ImageComparisonParams RenderOnly(std::string_view reason = std::string_view()) {

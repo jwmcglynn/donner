@@ -44,7 +44,8 @@ The generator joins the C++ registration table to the vendored corpus and fails 
 registrations, unregistered categories, missing overrides, or malformed parameter expressions.
 `//tools/resvg_parity:parity_report_tests` verifies parser fixtures and the exact live-tree totals in
 Bazel runfiles. The report distinguishes explicit pixel-budget sources from effective cases after
-category defaults are applied.
+category defaults are applied. The same test fails when a render-only reason does not start with
+`UB: ` (see the render-only policy below).
 
 Some tests require a more lenient threshold, or must be skipped entirely due to incomplete Donner
 functionality. To do this, per-test params may be specified. A test registration appears as:
@@ -230,7 +231,12 @@ Based on the output, determine what's causing the failure:
 Common failure categories:
 
 - **Not implemented**: Feature doesn't exist yet (e.g., `<tspan>`, `writing-mode`)
-- **UB (Undefined Behavior)**: Edge case or non-standard behavior; render-only (no compare)
+- **UB (Undefined Behavior)**: The specification leaves the behavior undefined or
+  implementation-defined, or the vendored reference is the resvg UB marker image (a byte-for-byte
+  copy of `third_party/resvg-test-suite/resources/ub.png`); render-only (no compare). Nothing else
+  is render-only: bugs, missing features, features removed in SVG 2, reference disagreements,
+  harness or background mismatches, and API policy differences are `Params::Skip` with a bug
+  number or reason, and a case that passes the default comparison compares.
 - **Bug**: Wrong output for an implemented feature — find the root cause (wrong transform,
   coverage geometry, color space, premultiplication, layer compositing). Note: pixelmatch already
   excludes anti-aliased edge pixels, so a diff our harness reports is **never** "just AA" — a
@@ -258,7 +264,9 @@ INSTANTIATE_TEST_SUITE_P(
 **Comment format**:
 
 - `Not impl: <feature>` - Feature not yet implemented
-- `UB: <reason>` - Undefined behavior or edge case (use `Params::RenderOnly`, not `Skip`)
+- `UB: <reason>` - Undefined behavior or a UB marker reference (use `Params::RenderOnly`, not
+  `Skip`). This is the only allowed render-only reason; `//tools/resvg_parity:parity_report_tests`
+  fails on any `Params::RenderOnly` reason that does not start with `UB: `.
 - `Bug: <description>` - Known bug
 - `Params::WithThreshold(t, maxPx)` - only after a root-cause investigation, with the reason. Never
   widen a threshold to absorb a diff you haven't explained (see CLAUDE.md / `AGENTS.md`).

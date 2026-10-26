@@ -157,10 +157,13 @@ Never widen the shared threshold to absorb a one-backend diff — that blinds th
    no-op entries — they are review-rejected churn.
 2. **Feature not implemented** (element/attribute missing) →
    `Params::Skip("Not impl: <feature>")`.
-3. **Golden is UB** (resvg's golden PNG carries a "UB" text overlay, or the case is
-   deprecated/undefined behavior) → `Params::RenderOnly("UB: <reason>")` — renders for no-crash
-   coverage but skips the comparison. (AGENTS.md's "UB → always `Params::Skip()`" line is stale;
-   the suite uses `RenderOnly`, e.g. `Params::RenderOnly("saturate 99999 (UB)")`.)
+3. **Golden is UB** (resvg's golden PNG is the UB marker image, a copy of
+   `third_party/resvg-test-suite/resources/ub.png`, or the specification leaves the behavior
+   undefined or implementation-defined) → `Params::RenderOnly("UB: <reason>")`, e.g.
+   `Params::RenderOnly("UB: saturate 99999")`. It renders for no-crash coverage but skips the
+   comparison. Render-only is reserved for UB: deprecated or removed features, reference
+   disagreements and harness mismatches are `Params::Skip` with a reason, and
+   `//tools/resvg_parity:parity_report_tests` fails on a render-only reason without `UB: `.
 4. **Known bug, fix deferred** → `Params::Skip("Bug: <description>")` and record it in
    `docs/design_docs/0021-resvg_feature_gaps.md`.
 5. **Unexplained diff of any size** → investigate. "It's just anti-aliasing" is a banned

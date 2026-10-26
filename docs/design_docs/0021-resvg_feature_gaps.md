@@ -31,18 +31,30 @@ be expressed through the normal `Params` path close to the affected tests:
 
 | State                                                      | Count | Meaning                                                                                                                                                                                  |
 | ---------------------------------------------------------- | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Params::Skip("reason")`                                   |   133 | Not run. Feature gap or known bug. The bulk of this doc.                                                                                                                                 |
-| `Params::RenderOnly("reason")`                             |    58 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful.                                                                                        |
+| `Params::Skip("reason")`                                   |    99 | Not run. Feature gap, known bug, removed SVG 1.1 feature, reference disagreement, harness mismatch or API policy. The bulk of this doc.                                                  |
+| `Params::RenderOnly("UB: reason")`                         |    54 | Rendered, **not** compared. Reserved for undefined behavior; see the policy below.                                                                                                       |
 | Commented-out `INSTANTIATE_TEST_SUITE_P`                   |     0 | Every vendored category is instantiated.                                                                                                                                                 |
 | `Params::WithThreshold(…, maxPx)` / local max-pixel budget |   103 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
 | Geode-disabled local `Params` entries                      |     0 | Geode now runs every active resvg case. Verified analytic edge residuals use exact per-backend goldens instead of disabling the backend or inflating thresholds.                         |
+
+**Render-only is reserved for undefined behavior.** A render-only case hides every regression in
+it, so `Params::RenderOnly` may only mark behavior the specification leaves undefined or
+implementation-defined, or a case whose vendored reference is the resvg UB marker image
+(`third_party/resvg-test-suite/resources/ub.png`, SHA-256
+`131f32bfb5bcdb78b9e97021ee94fa0f6c5cb4564254a15bc02add2cedb168e2`). Every reason starts with
+`UB: `, and `//tools/resvg_parity:parity_report_tests` fails otherwise. Donner bugs and
+missing features, features removed in SVG 2 (`Not impl:`), reference disagreements where Donner
+follows the specification, harness or background mismatches, and API policy differences are
+`Params::Skip` with a bug number or reason. A case that passes the default comparison compares.
+The parity report counts 54 render-only cases (all on the UB marker reference), 114 skipped cases
+and 1511 compared cases.
 
 ## Current totals
 
 |                                       |                                                                                                                                                      Count |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------: |
-| `Params::Skip(...)`                   |                                                                                                                            133 (`grep -o 'Params::Skip('`) |
-| `Params::RenderOnly(...)`             |                                                                                                               58 (render-must-not-crash, no pixel compare) |
+| `Params::Skip(...)`                   |                                                                                                                             99 (`grep -o 'Params::Skip('`) |
+| `Params::RenderOnly(...)`             |                                                                                                  54 (`UB: ` only; render-must-not-crash, no pixel compare) |
 | `WithThreshold` / max-pixel overrides | 103 call sites: 79 `WithThreshold`, 11 `WithMaxPixels`, and 13 direct `withMaxPixelsDifferent` calls. Large non-text budgets remain masked-bug candidates. |
 | Geode-disabled local `Params` entries |                                                                                                                      0 (all active cases now run on Geode) |
 | Commented-out category blocks         |                                                                                                                                                          0 |
@@ -134,9 +146,10 @@ rejected declarations preserve the prior value at the same cascade priority.
 
 The named gates are `properties_tests`, `renderer_driver_tests`, the three
 `renderer_regression_tests` configurations and all three resvg corpus targets. A raster sanitizer
-seed covers valid translucent shadows and invalid declarations. Render-only execution of a
-qualified corpus case establishes stability, not historical PNG agreement. #1169 tracks these
-classifications; general filter-region and sampling behavior remains separate in #1170.
+seed covers valid translucent shadows and invalid declarations. The qualified corpus cases are
+skips that name their bug: label-glyph differences under #1167 and offset/blur sampling under
+#1170. #1169 tracks these classifications; general filter-region and sampling behavior remains
+separate in #1170.
 
 ---
 
@@ -154,7 +167,7 @@ object-bounding-box units, empty stages, expanded captures and original CPU pain
 captures preserve their coordinate offsets through groups and use existing renderer surfaces;
 GPU stages remain on the GPU. These contracts do not replace or widen corpus pixel tolerances. The
 `invalid-FuncIRI` and `one-invalid-url-in-list` PNGs encode incompatible invalid-URL behavior;
-they retain explicit render-only qualifications backed by visible-geometry assertions, documented
+they are reference-disagreement skips backed by visible-geometry assertions, documented
 in [0009](0009-resvg_test_suite_bugs.md#invalid-filter-url-reference-qualifications).
 
 ## External resource policy
@@ -297,7 +310,7 @@ the embedded SVG's text, while Donner uses the document font catalog. An authore
 `EmbeddedSvgUsesDocumentFontContext` case checks embedded-versus-direct identity plus visible text
 ink in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
 `//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant, so the corpus row is
-render-only rather than a missing feature.
+a reference-disagreement skip rather than a missing feature.
 
 **Next step (needs a maintainer decision):** refresh the whole
 `structure/image` golden set from current resvg and adopt Mitchell-bicubic in
@@ -483,23 +496,25 @@ bug vs. out-of-scope:
 
 Historical `(UB)` titles are not a specification oracle. Seven assigned PNGs are byte-for-byte
 copies of `third_party/resvg-test-suite/resources/ub.png`, whose SVG source draws a `UB` label.
-They remain render-only corpus cases, with independent `ReferenceContract*` comparisons in
-`RendererRegression_tests.cc`. No reference bitmap or comparison tolerance is changed.
+They remain render-only corpus cases (`UB: ` reasons), with independent `ReferenceContract*`
+comparisons in `RendererRegression_tests.cc`. The other assigned fixtures do not use the UB
+marker, so they are skips with their reason. No reference bitmap or comparison tolerance is
+changed.
 
 | Assigned fixture | Supported behavior and reference disposition |
 | --- | --- |
 | `radialGradient/fr=-1` | Negative focal radius is invalid and applies no paint. UB marker reference. |
 | `radialGradient/fr=0.5` | Coincident start/end circles apply no paint. UB marker reference. |
-| `radialGradient/fr=0.7` | A start circle containing the end circle applies no paint; the reference instead paints a reversed gradient. Render-only, with an independent transparent-paint oracle. |
+| `radialGradient/fr=0.7` | A start circle containing the end circle applies no paint; the reference instead paints a reversed gradient. Reference-disagreement skip, with an independent transparent-paint oracle. |
 | `radialGradient/invalid-gradientTransform` | The authored all-zero matrix is singular, rather than malformed syntax. No paint; UB marker reference. |
 | `radialGradient/invalid-gradientUnits` | The invalid enumeration is diagnosed and the initial `objectBoundingBox` value is retained. UB marker reference. |
 | `radialGradient/negative-r` | Negative outer radius is invalid and applies no paint. UB marker reference. |
 | `fill/rgb-int-int-int` | Space-separated RGB is supported CSS Color 4 syntax and matches the equivalent hex color. UB marker reference. |
-| `fill/valid-FuncIRI-with-a-fallback-ICC-color` | The obsolete SVG 1.1 `icc-color()` paint grammar is unsupported. Invalid CSS declarations are rejected, preserving inherited paint; the historical reference expects a gradient. Render-only. |
+| `fill/valid-FuncIRI-with-a-fallback-ICC-color` | The obsolete SVG 1.1 `icc-color()` paint grammar is unsupported. Invalid CSS declarations are rejected, preserving inherited paint; the historical reference expects a gradient. `Not impl:` skip (removed in SVG 2). |
 | `stroke-linejoin/arcs` | The SVG Strokes draft join is not implemented; Donner retains its documented miter fallback. The reference is the UB marker, not an arcs rendering. |
 | `stroke-linejoin/miter-clip` | Separate Geode/editor parity repair and ordinary reference restoration: [#2057](https://github.com/jwmcglynn/donner/pull/2057). |
-| `svg/no-size` | An unsized root uses the caller canvas (512x512 by default) without fitting content bounds. The reference fits the roughly 200-unit artwork to 500 pixels. Render-only; caller-canvas geometry has an independent assertion. |
-| `font/simple-case` | The PNG is 400x400, so the harness preserves that explicit canvas. The unitless `font` presentation shorthand is a Donner extension and matches expanded longhands. The hermetic set has no BoldItalic face: style-first matching selects NotoSans-Italic at weight 400. Glyph weight/advance still differ from the reference in both CPU text tiers; synthetic-weight/reference qualification remains with #1167/#1173. Render-only. |
+| `svg/no-size` | An unsized root uses the caller canvas (512x512 by default) without fitting content bounds. The reference fits the roughly 200-unit artwork to 500 pixels. API-policy skip; caller-canvas geometry has an independent assertion. |
+| `font/simple-case` | The PNG is 400x400, so the harness preserves that explicit canvas. The unitless `font` presentation shorthand is a Donner extension and matches expanded longhands. The hermetic set has no BoldItalic face: style-first matching selects NotoSans-Italic at weight 400. Glyph weight/advance still differ from the reference in both CPU text tiers; synthetic-weight/reference qualification remains with #1167/#1173. Skip (#1167). |
 
 [SVG 2 radial-gradient rules](https://www.w3.org/TR/SVG2/pservers.html#RadialGradients) and
 [error processing](https://www.w3.org/TR/SVG2/conform.html#ErrorProcessing) establish the radial
@@ -515,20 +530,21 @@ The focused regression targets are `renderer_regression_tests`, `renderer_regres
 and `renderer_regression_tests_text_full`. The corpus targets are `resvg_test_suite_default_text`,
 `resvg_test_suite_geode` and `resvg_test_suite_max`. The existing Geode corpus text capability gate
 still skips the text sample; the independent Geode font contract test executes directly. Render-only
-corpus execution establishes stability, not pixel agreement with the historical reference.
+corpus execution of the UB-marker cases establishes stability, not pixel agreement with the
+historical reference.
 
 ## Out of scope (correctly skipped — do not "fix")
 
 | Category                        |          Tests | Why                                                                                                                                                                               |
 | ------------------------------- | -------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| filters/enable-background       |             21 | Category default `Params::RenderOnly(...)`: deprecated in SVG 2 (→ `<filter>` chains / `backdrop-filter`). See [`unsupported_svg1_features.md`](../unsupported_svg1_features.md). |
+| filters/enable-background       |             16 | Category default `Params::Skip("Not impl: ...")`: removed in SVG 2 (→ `<filter>` chains / `backdrop-filter`). Four of the 21 cases already match the reference with SVG 2 semantics and compare; `with-mask` has the UB marker reference and is render-only. See [`unsupported_svg1_features.md`](../unsupported_svg1_features.md). |
 | filters/filter `in=Background*` |              2 | Same deprecation (BackgroundImage/BackgroundAlpha inputs).                                                                                                                        |
 | text/tref                       | 9 (+1 display) | `<tref>` removed in SVG 2.                                                                                                                                                        |
 | text/kerning                    |              2 | `kerning` attribute deprecated SVG 1.1.                                                                                                                                           |
 | text/glyph-orientation-*        |              2 | deprecated SVG 1.1.                                                                                                                                                               |
-| paint-servers/radialGradient    |              0 | No skipped focal-radius case: `fr=0.7` is render-only with the containing-circle oracle above. `focal-point-correction` compares normally.                                                                       |
+| paint-servers/radialGradient    |              1 | `fr=0.7` is a reference-disagreement skip with the containing-circle oracle above. `focal-point-correction` compares normally.                                                                       |
 | structure/style-attribute       |              1 | `<svg version="1.1">` disables geometry-in-style (SVG 1.1 behavior).                                                                                                              |
-| Other RenderOnly UB cases       |             51 | Implementation-defined output; we verify no-crash only (per project policy, kept RenderOnly not Skip).                                                                            |
+| Other RenderOnly UB cases       |             53 | Undefined or implementation-defined behavior on the resvg UB marker reference; we verify no-crash only (`UB: ` reasons, kept RenderOnly not Skip).                              |
 
 ---
 
@@ -549,7 +565,8 @@ Policy:
   the backend or widen a Geode-only threshold to absorb the difference.
 - Category-wide defaults are acceptable only when every file in the category has
   the same reason. `filters/enable-background` is the model: one category default
-  `Params::RenderOnly(...)`, not a per-file list. Category feature requirements
+  `Params::Skip(...)`, not a per-file list, with overrides only for the cases that compare or
+  carry the UB marker reference. Category feature requirements
   such as `text/*` requiring text support are additive, so per-test overrides do
   not accidentally opt out of backend capability checks.
 - Non-resvg regression tests belong in focused renderer test files, not in

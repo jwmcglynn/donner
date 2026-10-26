@@ -18,8 +18,9 @@ transparent black (the SVG spec behavior for unresolved filter inputs). No warni
 **Modern alternative:** CSS compositing with the `mix-blend-mode` and `isolation` properties covers
 blending with backdrop content.
 
-**Affected resvg tests:** `a-enable-background-*` (category disabled), `e-filter-032` (skipped),
-`e-filter-033` (skipped).
+**Affected resvg tests:** `filters/enable-background/*` (category default skip; four cases that
+already match the reference with SVG 2 semantics compare, and `with-mask` is render-only on the UB
+marker reference), `e-filter-032` (skipped), `e-filter-033` (skipped).
 
 ## SVG Fonts (&lt;font&gt;, &lt;glyph&gt;, &lt;missing-glyph&gt;, etc.)
 
