@@ -24,12 +24,21 @@ these files are used under MIT, with its notice in LICENSE-resvg-MIT. Their SVG
 inputs are byte-identical at both revisions.
 
   tests/text/writing-mode/inheritance.png
+  tests/text/writing-mode/mixed-languages-with-tb.png
   tests/text/writing-mode/tb.png
   tests/text/writing-mode/tb-rl.png
   tests/text/writing-mode/tb-with-alignment.png
   tests/text/writing-mode/tb-with-dx-on-second-tspan.png
   tests/text/writing-mode/tb-with-dx-on-tspan.png
   tests/text/writing-mode/tb-with-dy-on-second-tspan.png
+
+From the same revision and license, both the SVG and the PNG of this test were
+replaced, because upstream quoted its `'Mplus 1p'` font-family. Unquoted, that
+value is not a valid family name, and the old reference was drawn in a fallback
+face.
+
+  tests/text/writing-mode/tb-and-punctuation.svg
+  tests/text/writing-mode/tb-and-punctuation.png
 """
 
 package(default_visibility = ["//visibility:public"])
