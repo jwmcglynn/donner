@@ -328,6 +328,45 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual(report["summary"]["shared_golden_cases"], 1)
         self.assertEqual(report["summary"]["geode_golden_cases"], 0)
 
+    def test_render_only_reasons_must_mark_undefined_behavior(self) -> None:
+        for name in ("ub.svg", "bug.svg", "empty.svg", "skip.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {'
+                '{\"ub.svg\", Params::RenderOnly(\"UB: negative opacity\")},'
+                '{\"bug.svg\", Params::RenderOnly(\"Bug #1: glyph weight differs\")},'
+                '{\"empty.svg\", Params::RenderOnly(\"UB: \")},'
+                '{\"skip.svg\", Params::Skip(\"Bug #1: glyph weight differs\")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        self.assertEqual(
+            parity_report.render_only_policy_violations(report),
+            [
+                "painting/fill/bug.svg: 'Bug #1: glyph weight differs'",
+                "painting/fill/empty.svg: 'UB: '",
+            ],
+        )
+
+    def test_render_only_category_default_is_checked_per_case(self) -> None:
+        self.fixture.add_case("filters/enable-background/a.svg")
+        report = parity_report.build_report(
+            _registration(
+                "FiltersEnableBackground",
+                '\"filters/enable-background\", {}, Params::RenderOnly(\"Deprecated feature\")',
+            ),
+            self.fixture.tests_root,
+        )
+
+        self.assertEqual(
+            parity_report.render_only_policy_violations(report),
+            ["filters/enable-background/a.svg: 'Deprecated feature'"],
+        )
+
     def test_cli_resolves_explicit_repo_root_independent_of_cwd(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
         source_path = self.fixture.root / parity_report.REGISTRATION_SOURCE
@@ -389,6 +428,19 @@ class RealTreeParityReportTests(unittest.TestCase):
                              sum(flag in case["exception_types"] for case in cases), metric)
         self.assertEqual(summary["backend_disabled_cases"],
                          sum(bool(case["disabled_backends"]) for case in cases))
+
+    def test_live_render_only_rows_are_reserved_for_undefined_behavior(self) -> None:
+        report = parity_report.generate_report(parity_report._default_repo_root())
+
+        violations = parity_report.render_only_policy_violations(report)
+
+        self.assertEqual(
+            violations,
+            [],
+            "Params::RenderOnly is reserved for undefined or implementation-defined behavior "
+            f"and its reason must start with {parity_report.RENDER_ONLY_REASON_PREFIX!r}; use "
+            "Params::Skip with a bug number or reference reason instead:\n" + "\n".join(violations),
+        )
 
 
 if __name__ == "__main__":

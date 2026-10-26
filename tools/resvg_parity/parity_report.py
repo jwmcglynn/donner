@@ -628,6 +628,30 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
     }
 
 
+RENDER_ONLY_REASON_PREFIX = "UB: "
+
+
+def render_only_policy_violations(report: dict[str, object]) -> list[str]:
+    """Return active render-only cases whose reason does not mark undefined behavior.
+
+    `Params::RenderOnly` renders without a pixel comparison, so it is reserved for behavior the
+    specification leaves undefined or implementation-defined, or for references that are the
+    resvg UB marker image. Every reason must start with `RENDER_ONLY_REASON_PREFIX`; bugs,
+    missing or removed features, reference disagreements and harness mismatches are skips.
+    """
+
+    violations: list[str] = []
+    for case in report["cases"]:  # type: ignore[union-attr]
+        if case["registration"] != "active" or case["primary_state"] != "render-only":
+            continue
+        reason = case["reason"] or ""
+        if not reason.startswith(RENDER_ONLY_REASON_PREFIX) or not reason[
+            len(RENDER_ONLY_REASON_PREFIX) :
+        ].strip():
+            violations.append(f"{case['path']}: {reason!r}")
+    return violations
+
+
 def generate_report(repo_root: Path) -> dict[str, object]:
     source_path = repo_root / REGISTRATION_SOURCE
     if not source_path.is_file():
