@@ -96,7 +96,9 @@ struct FilterInputMargin {
 };
 
 /// Accumulates each primitive's input reach in device pixels, converting lengths with the same
-/// helpers and bounds the filter executors use.
+/// helpers and bounds the filter executors use. The executors round each primitive to whole
+/// pixels (offsets and morphology radii to the nearest pixel, blur kernels up), so each
+/// primitive's reach rounds up to whole pixels before the chain adds them.
 struct FilterInputMarginBuilder {
   Transform2d deviceFromFilter;  ///< Filter user space to raster pixels.
   Vector2d scale;                ///< Device scale of each filter axis.
@@ -110,6 +112,11 @@ struct FilterInputMarginBuilder {
                             FilterLengthInPixels(value, axis == 0 ? bounds.x : bounds.y,
                                                  axis == 0 ? scale.x : scale.y, objectBounds))
                       : 0.0;
+  }
+
+  /// Round a reach up to whole pixels. @param pixels Reach per axis.
+  static Vector2d wholePixels(Vector2d pixels) {
+    return Vector2d(std::ceil(pixels.x), std::ceil(pixels.y));
   }
 
   /// Device footprint of a reach measured in pixels along each filter axis. Under rotation or
@@ -145,27 +152,28 @@ struct FilterInputMarginBuilder {
       margin.wholeRegion = true;
       return;
     }
-    margin.pixels += footprint(
-        Vector2d(3.0 * length(blur.stdDeviationX, 0), 3.0 * length(blur.stdDeviationY, 1)));
+    margin.pixels += footprint(wholePixels(
+        Vector2d(3.0 * length(blur.stdDeviationX, 0), 3.0 * length(blur.stdDeviationY, 1))));
   }
 
   void add(const components::filter_primitive::DropShadow& shadow) {
-    margin.pixels +=
-        offset(shadow.dx, shadow.dy) + footprint(Vector2d(3.0 * length(shadow.stdDeviationX, 0),
-                                                          3.0 * length(shadow.stdDeviationY, 1)));
+    margin.pixels += wholePixels(offset(shadow.dx, shadow.dy)) +
+                     footprint(wholePixels(Vector2d(3.0 * length(shadow.stdDeviationX, 0),
+                                                    3.0 * length(shadow.stdDeviationY, 1))));
   }
 
   void add(const components::filter_primitive::Offset& value) {
-    margin.pixels += offset(value.dx, value.dy);
+    margin.pixels += wholePixels(offset(value.dx, value.dy));
   }
 
   void add(const components::filter_primitive::Morphology& morphology) {
-    margin.pixels +=
-        footprint(Vector2d(length(morphology.radiusX, 0), length(morphology.radiusY, 1)));
+    margin.pixels += footprint(
+        wholePixels(Vector2d(length(morphology.radiusX, 0), length(morphology.radiusY, 1))));
   }
 
   /// The backends disagree on how displacement scales: one applies the scale directly in raster
-  /// pixels, the other multiplies it by the transform's area scale. Bound both.
+  /// pixels, the other multiplies it by the transform's area scale. Bound both. Both sample
+  /// bilinearly, reading one pixel past the rounded-down displaced position.
   void add(const components::filter_primitive::DisplacementMap& displacement) {
     const double* m = deviceFromFilter.data;
     const double transformScale =
@@ -173,7 +181,7 @@ struct FilterInputMarginBuilder {
                   std::abs(m[1]), std::abs(m[2]), std::abs(m[3])});
     const double half = std::abs(displacement.scale) * 0.5 *
                         (objectBounds ? std::sqrt(bounds.x * bounds.y) : 1.0) * transformScale;
-    const double bounded = BoundedSignedFilterPixels(half);
+    const double bounded = std::ceil(BoundedSignedFilterPixels(half)) + 1.0;
     margin.pixels += Vector2d(bounded, bounded);
   }
 
