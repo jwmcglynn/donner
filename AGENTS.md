@@ -335,7 +335,10 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 - Skipped resvg comparisons are emitted as `DISABLED_...` gtest names. To triage one without
   editing skip tables or adding custom env flags, run with a narrow `--gtest_filter` plus
   `--gtest_also_run_disabled_tests`.
-- UB-labeled tests: always `Params::Skip()` — goldens have "UB" text overlay.
+- Only two factories render without comparing: `Params::UndefinedBehavior(reason)` for undefined
+  or implementation-defined behavior and UB marker goldens, and `Params::DeprecatedInSVG2(reason)`
+  for features SVG 2 removed or deprecated. Everything else that cannot pass is `Params::Skip()`
+  with a reason (enforced by `//tools/resvg_parity:parity_report_tests`).
 
 ## Development Notes
 
@@ -370,7 +373,7 @@ bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- \
 {"filter-bbox.svg", Params::Skip("Bug: letter-spacing edge cases")},
 ```
 
-**Skip comment conventions**: `Not impl: <feature>`, `UB: <reason>`, `Bug: <description>`, `Larger threshold due to <reason>`.
+**Skip comment conventions**: `Not impl: <feature>`, `Bug #NNNN: <description>` (or `Bug: <description>` before an issue exists), `Reference disagreement: <why Donner follows the specification>`, `Harness mismatch: <description>`, `API policy: <policy>`, `Larger threshold due to <reason>`.
 
 ### MCP Test Triage Server
 

@@ -44,7 +44,12 @@ The generator joins the C++ registration table to the vendored corpus and fails 
 registrations, unregistered categories, missing overrides, or malformed parameter expressions.
 `//tools/resvg_parity:parity_report_tests` verifies parser fixtures and the exact live-tree totals in
 Bazel runfiles. The report distinguishes explicit pixel-budget sources from effective cases after
-category defaults are applied.
+category defaults are applied, and counts the two render-without-compare buckets separately. The
+same test fails when a case renders without a comparison through anything but
+`Params::UndefinedBehavior` or `Params::DeprecatedInSVG2`, when an undefined-behavior case's
+reference is not the resvg UB marker image and the case is not in `SPEC_UB_ALLOWLIST`, or when a
+deprecated-in-SVG-2 case is not under a feature in `DEPRECATED_IN_SVG2_FEATURES` (both in
+`parity_report.py`; see the policy below).
 
 Some tests require a more lenient threshold, or must be skipped entirely due to incomplete Donner
 functionality. To do this, per-test params may be specified. A test registration appears as:
@@ -230,7 +235,19 @@ Based on the output, determine what's causing the failure:
 Common failure categories:
 
 - **Not implemented**: Feature doesn't exist yet (e.g., `<tspan>`, `writing-mode`)
-- **UB (Undefined Behavior)**: Edge case or non-standard behavior; render-only (no compare)
+- **Undefined behavior**: The specification leaves the behavior undefined or
+  implementation-defined, or the vendored reference is the resvg UB marker image (a byte-for-byte
+  copy of `third_party/resvg-test-suite/resources/ub.png`); `Params::UndefinedBehavior(reason)`
+  renders without a comparison.
+- **Deprecated in SVG 2**: The case exercises a feature SVG 2 removed or deprecated and Donner
+  deliberately does not implement (see `docs/unsupported_svg1_features.md`);
+  `Params::DeprecatedInSVG2(reason)` renders without a comparison. A removed feature with a UB
+  marker reference belongs here.
+
+  Nothing else renders without a comparison: bugs, missing features, reference disagreements,
+  harness or background mismatches, and API policy differences are `Params::Skip` with a bug
+  number or reason, and a case that passes the default comparison compares. Skipped cases do not
+  render, so they lose no-crash and sanitizer coverage.
 - **Bug**: Wrong output for an implemented feature — find the root cause (wrong transform,
   coverage geometry, color space, premultiplication, layer compositing). Note: pixelmatch already
   excludes anti-aliased edge pixels, so a diff our harness reports is **never** "just AA" — a
@@ -258,7 +275,12 @@ INSTANTIATE_TEST_SUITE_P(
 **Comment format**:
 
 - `Not impl: <feature>` - Feature not yet implemented
-- `UB: <reason>` - Undefined behavior or edge case (use `Params::RenderOnly`, not `Skip`)
+- `Params::UndefinedBehavior("<reason>")` - Undefined behavior or a UB marker reference (renders,
+  no compare). The factory name carries the classification, so the reason only explains it.
+- `Params::DeprecatedInSVG2("<feature> (removed in SVG 2)")` - Removed or deprecated SVG 2
+  feature (renders, no compare). Add the feature to `DEPRECATED_IN_SVG2_FEATURES` in
+  `tools/resvg_parity/parity_report.py` first; `//tools/resvg_parity:parity_report_tests` fails
+  otherwise.
 - `Bug: <description>` - Known bug
 - `Params::WithThreshold(t, maxPx)` - only after a root-cause investigation, with the reason. Never
   widen a threshold to absorb a diff you haven't explained (see CLAUDE.md / `AGENTS.md`).

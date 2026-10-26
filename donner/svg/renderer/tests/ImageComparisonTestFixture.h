@@ -126,10 +126,8 @@ struct ImageComparisonParams {
   uint32_t requiredFeatures = 0;
   /// Human-readable reason used when backend restrictions cause a skip.
   std::string_view backendRequirementReason;
-  /// If true, render but skip the pixel comparison. Used for tests where the output
-  /// is implementation-defined or UB, but we still want to verify rendering stability.
-  bool renderOnly = false;
-  /// Human-readable reason attached to Skip / RenderOnly / WithThreshold overrides.
+  /// Human-readable reason attached to Skip / UndefinedBehavior / DeprecatedInSVG2 /
+  /// WithThreshold overrides.
   /// Surfaced in test skip messages and failure output - prefer this over trailing
   /// `// comments` so the reason is discoverable from test logs.
   std::string_view reason;
@@ -147,16 +145,37 @@ struct ImageComparisonParams {
   }
 
   /**
-   * @brief Creates parameters that render the test but skip pixel comparison.
+   * @brief Renders the test without a pixel comparison because its behavior is undefined.
    *
-   * Used for tests where the output is implementation-defined or has expected
-   * variance, but we want to verify that rendering completes without crashing.
+   * For tests whose output the specification leaves undefined or implementation-defined, or
+   * whose resvg reference is the UB marker image. Rendering still has to complete, which keeps
+   * no-crash and sanitizer coverage. Bugs, missing features, reference disagreements and harness
+   * mismatches use \ref Skip instead.
    * @param reason Human-readable explanation, shown in the test log.
-   * @return ImageComparisonParams configured for render-only mode.
+   * @return ImageComparisonParams configured to render without comparing.
    */
-  static ImageComparisonParams RenderOnly(std::string_view reason = std::string_view()) {
+  static ImageComparisonParams UndefinedBehavior(std::string_view reason) {
     ImageComparisonParams result;
-    result.renderOnly = true;
+    result.renderOnly_ = true;
+    result.renderOnlyBucket_ = "undefined behavior";
+    result.reason = reason;
+    return result;
+  }
+
+  /**
+   * @brief Renders the test without a pixel comparison because it exercises a feature that SVG 2
+   * removed or deprecated.
+   *
+   * For features Donner deliberately does not implement because SVG 2 removed or deprecated them,
+   * such as `enable-background`, `<tref>` or `icc-color()` paint. Rendering still has to complete,
+   * which keeps no-crash and sanitizer coverage for documents that use the old feature.
+   * @param reason Human-readable explanation naming the feature, shown in the test log.
+   * @return ImageComparisonParams configured to render without comparing.
+   */
+  static ImageComparisonParams DeprecatedInSVG2(std::string_view reason) {
+    ImageComparisonParams result;
+    result.renderOnly_ = true;
+    result.renderOnlyBucket_ = "deprecated in SVG 2";
     result.reason = reason;
     return result;
   }
@@ -383,6 +402,19 @@ struct ImageComparisonParams {
 #endif
     return false;
   }
+
+  /// True if the case renders without a pixel comparison, which only \ref UndefinedBehavior and
+  /// \ref DeprecatedInSVG2 can set. Rendering still has to complete.
+  bool isRenderOnly() const { return renderOnly_; }
+
+  /// The render-without-compare bucket for the test log, empty unless \ref isRenderOnly.
+  std::string_view renderOnlyBucket() const { return renderOnlyBucket_; }
+
+private:
+  // Private so that a designated initializer or field assignment cannot render a case without
+  // comparing it outside the two named factories, whose reasons the parity report checks.
+  bool renderOnly_ = false;
+  std::string_view renderOnlyBucket_;
 };
 
 /**

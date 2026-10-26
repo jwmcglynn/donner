@@ -36,10 +36,12 @@ class Fixture:
         self.root = Path(self._temporary_directory.name)
         self.tests_root = self.root / parity_report.TESTS_ROOT
 
-    def add_case(self, relative: str) -> None:
+    def add_case(self, relative: str, reference: bytes | None = None) -> None:
         path = self.tests_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("<svg/>\n", encoding="utf-8")
+        if reference is not None:
+            path.with_suffix(".png").write_bytes(reference)
 
     def close(self) -> None:
         self._temporary_directory.cleanup()
@@ -100,7 +102,7 @@ class ParityReportTests(unittest.TestCase):
         self.fixture.add_case("filters/defaults/b.svg")
         source = _registration(
             "FiltersDefaults",
-            '"filters/defaults", {}, Params::RenderOnly("category default")',
+            '"filters/defaults", {}, Params::DeprecatedInSVG2("category default")',
         )
 
         report = parity_report.build_report(source, self.fixture.tests_root)
@@ -114,6 +116,8 @@ class ParityReportTests(unittest.TestCase):
             "category-default",
         ])
         self.assertEqual(report["summary"]["render_only_cases"], 2)
+        self.assertEqual(report["summary"]["render_only_deprecated_in_svg2_cases"], 2)
+        self.assertEqual(report["summary"]["render_only_undefined_behavior_cases"], 0)
 
     def test_disabled_comment_block_is_registration_but_example_is_not(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
@@ -282,7 +286,7 @@ class ParityReportTests(unittest.TestCase):
                 "PaintingFill",
                 '\"painting/fill\", {'
                 '{\"skip.svg\", Params::Skip(\"pending fix\")},'
-                '{\"render-only.svg\", Params::RenderOnly(\"pending oracle\")},'
+                '{\"render-only.svg\", Params::UndefinedBehavior(\"pending oracle\")},'
                 '{\"compare.svg\", Params::WithThreshold(0.1f, 200, \"pending precision fix\")}'
                 '}',
             ),
@@ -327,6 +331,188 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual(report["cases"][0]["exception_types"], ["shared_golden"])
         self.assertEqual(report["summary"]["shared_golden_cases"], 1)
         self.assertEqual(report["summary"]["geode_golden_cases"], 0)
+
+    def test_render_only_cases_must_use_a_named_bucket_with_a_reason(self) -> None:
+        for name in ("ub.svg", "deprecated.svg", "generic.svg", "empty.svg", "skip.svg"):
+            self.fixture.add_case(f"painting/fill/{name}")
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {'
+                '{\"ub.svg\", Params::UndefinedBehavior(\"negative opacity\")},'
+                '{\"deprecated.svg\", Params::DeprecatedInSVG2(\"icc-color() paint\")},'
+                '{\"generic.svg\", Params::RenderOnly(\"Bug #1: glyph weight differs\")},'
+                '{\"empty.svg\", Params::UndefinedBehavior(\" \")},'
+                '{\"skip.svg\", Params::Skip(\"Bug #1: glyph weight differs\")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        kinds = {case["path"]: case["render_only_kind"] for case in report["cases"]}
+        self.assertEqual(kinds["painting/fill/ub.svg"], "undefined-behavior")
+        self.assertEqual(kinds["painting/fill/deprecated.svg"], "deprecated-in-svg2")
+        self.assertIsNone(kinds["painting/fill/skip.svg"])
+        self.assertEqual(report["summary"]["render_only_cases"], 4)
+        self.assertEqual(report["summary"]["render_only_undefined_behavior_cases"], 2)
+        self.assertEqual(report["summary"]["render_only_deprecated_in_svg2_cases"], 1)
+        self.assertEqual(
+            parity_report.render_only_policy_violations(report),
+            [
+                "painting/fill/empty.svg: undefined-behavior case has no reason",
+                "painting/fill/generic.svg: render-only without Params::UndefinedBehavior or "
+                "Params::DeprecatedInSVG2",
+            ],
+        )
+
+    def test_render_only_category_default_is_checked_per_case(self) -> None:
+        self.fixture.add_case("filters/enable-background/a.svg")
+        report = parity_report.build_report(
+            _registration(
+                "FiltersEnableBackground",
+                '\"filters/enable-background\", {}, Params::RenderOnly(\"Deprecated feature\")',
+            ),
+            self.fixture.tests_root,
+        )
+
+        self.assertEqual(
+            parity_report.render_only_policy_violations(report),
+            ["filters/enable-background/a.svg: render-only without Params::UndefinedBehavior or "
+             "Params::DeprecatedInSVG2"],
+        )
+
+    def test_undefined_behavior_references_must_be_the_ub_marker_or_allowlisted(self) -> None:
+        marker = b"ub marker bytes"
+        self.fixture.add_case("painting/fill/marker.svg", marker)
+        self.fixture.add_case("painting/fill/bad.svg", b"a real rendering")
+        self.fixture.add_case("painting/fill/spec-ub.svg", b"an implementation's rendering")
+        self.fixture.add_case("painting/fill/marker-listed.svg", marker)
+        self.fixture.add_case("painting/fill/stale.svg", b"now compared")
+        self.fixture.add_case("painting/fill/deprecated.svg", b"a deprecated feature")
+        marker_path = self.fixture.root / "ub.png"
+        marker_path.write_bytes(marker)
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {'
+                '{\"marker.svg\", Params::UndefinedBehavior(\"marker\")},'
+                '{\"bad.svg\", Params::UndefinedBehavior(\"claimed without a marker\")},'
+                '{\"spec-ub.svg\", Params::UndefinedBehavior(\"implementation-defined\")},'
+                '{\"marker-listed.svg\", Params::UndefinedBehavior(\"marker\")},'
+                '{\"deprecated.svg\", Params::DeprecatedInSVG2(\"not a UB case\")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        violations = parity_report.undefined_behavior_reference_violations(
+            report,
+            self.fixture.tests_root,
+            marker_path,
+            {"painting/fill/spec-ub.svg", "painting/fill/marker-listed.svg",
+             "painting/fill/stale.svg"},
+        )
+
+        self.assertEqual(
+            violations,
+            [
+                "painting/fill/bad.svg: reference is not the UB marker and the case is not "
+                "allowlisted as specification UB",
+                "painting/fill/marker-listed.svg: allowlisted, but its reference is the UB marker",
+                "painting/fill/stale.svg: allowlisted, but not an active undefined-behavior case",
+            ],
+        )
+
+    def test_deprecated_in_svg2_cases_must_name_a_listed_feature(self) -> None:
+        for relative in ("text/tref/a.svg", "text/tref/b.svg", "painting/fill/icc.svg",
+                         "painting/fill/bug.svg"):
+            self.fixture.add_case(relative)
+        source = "".join((
+            _registration("TextTref", '\"text/tref\", {}, Params::DeprecatedInSVG2(\"<tref>\")'),
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {'
+                '{\"icc.svg\", Params::DeprecatedInSVG2(\"icc-color() paint\")},'
+                '{\"bug.svg\", Params::DeprecatedInSVG2(\"actually a bug\")}'
+                '}',
+            ),
+        ))
+        report = parity_report.build_report(source, self.fixture.tests_root)
+
+        violations = parity_report.deprecated_in_svg2_violations(
+            report,
+            {"text/tref": "<tref>", "painting/fill/icc.svg": "icc-color() paint",
+             "text/kerning": "kerning property"},
+        )
+
+        self.assertEqual(
+            violations,
+            [
+                "painting/fill/bug.svg: not under a feature in DEPRECATED_IN_SVG2_FEATURES",
+                "text/kerning: listed in DEPRECATED_IN_SVG2_FEATURES, but no active "
+                "deprecated-in-svg2 case uses it",
+            ],
+        )
+
+    def test_state_fields_cannot_bypass_the_named_factories(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        for params in ("Params{.renderOnly = true}", "Params{.skip = true}",
+                       "Params{.renderOnlyBucket = \"undefined behavior\"}",
+                       "Params{.skipSimpleText = true}"):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex(parity_report.ParityReportError,
+                                            "through Params::Skip, Params::UndefinedBehavior"):
+                    parity_report.build_report(
+                        _registration("PaintingFill",
+                                      f'\"painting/fill\", {{{{\"a.svg\", {params}}}}}'),
+                        self.fixture.tests_root,
+                    )
+
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {{\"a.svg\", Params().withReason(\"not renderOnly or skip\")}}',
+            ),
+            self.fixture.tests_root,
+        )
+        self.assertEqual(report["cases"][0]["primary_state"], "compare")
+
+    def test_unknown_params_calls_cannot_bypass_the_named_factories(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        registrations = {
+            "unknown Params factory": '\"painting/fill\", {{\"a.svg\", Params::NoCompare(\"x\")}}',
+            "helper named like Params": '\"painting/fill\", {{\"a.svg\", ParamsUb(\"x\")}}',
+            "unknown free helper": '\"painting/fill\", {{\"a.svg\", RenderWithoutCompare(\"x\")}}',
+            "unknown chained call": '\"painting/fill\", {{\"a.svg\", Params().noCompare()}}',
+            "unknown category default": '\"painting/fill\", {}, Params::NoCompare(\"x\")',
+        }
+        for label, category_call in registrations.items():
+            with self.subTest(label):
+                with self.assertRaisesRegex(parity_report.ParityReportError,
+                                            "unrecognized .*params"):
+                    parity_report.build_report(_registration("PaintingFill", category_call),
+                                               self.fixture.tests_root)
+
+    def test_known_params_calls_are_accepted(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        chained = (
+            "Params::WithThreshold(0.1f, 10, \"edge AA\")"
+            ".withGeodeGoldenOverride(\"g.png\", \"geode\")"
+            ".requireFeature(RendererBackendFeature::Text, \"text\")"
+            ".disableBackend(RendererBackend::Geode, \"no\")"
+            ".setCanvasSize(10, 10).onlyTextFull().withSimpleTextMaxPixels(3)"
+            ".withMaxPixelsDifferent(4).withGeodeMaxPixelsDifferent(5)"
+            ".includeAntiAliasingDifferences().enableGoldenUpdateFromEnv()"
+        )
+        for params in (chained, "WithMaxPixels(10, \"AA\")", "Params{}", "Params()",
+                       "Params::WithGoldenOverride(\"g.png\", 0.1f, \"why\")", "{}"):
+            with self.subTest(params=params):
+                report = parity_report.build_report(
+                    _registration("PaintingFill",
+                                  f'\"painting/fill\", {{{{\"a.svg\", {params}}}}}'),
+                    self.fixture.tests_root,
+                )
+                self.assertEqual(report["cases"][0]["primary_state"], "compare")
 
     def test_cli_resolves_explicit_repo_root_independent_of_cwd(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
@@ -375,6 +561,12 @@ class RealTreeParityReportTests(unittest.TestCase):
                               ("render_only_cases", "render-only")):
             self.assertEqual(summary[metric], states[state], metric)
         self.assertEqual(sum(states.values()), summary["active_cases"])
+        kinds = Counter(case["render_only_kind"] for case in cases
+                        if case["primary_state"] == "render-only")
+        self.assertEqual(summary["render_only_undefined_behavior_cases"],
+                         kinds["undefined-behavior"])
+        self.assertEqual(summary["render_only_deprecated_in_svg2_cases"],
+                         kinds["deprecated-in-svg2"])
 
         metrics = {
             "effective_pixel_budget_cases": "threshold",
@@ -389,6 +581,50 @@ class RealTreeParityReportTests(unittest.TestCase):
                              sum(flag in case["exception_types"] for case in cases), metric)
         self.assertEqual(summary["backend_disabled_cases"],
                          sum(bool(case["disabled_backends"]) for case in cases))
+
+    def test_live_render_only_rows_use_a_named_bucket(self) -> None:
+        report = parity_report.generate_report(parity_report._default_repo_root())
+
+        violations = parity_report.render_only_policy_violations(report)
+
+        self.assertEqual(
+            violations,
+            [],
+            "A resvg case that renders without a pixel comparison must use "
+            "Params::UndefinedBehavior or Params::DeprecatedInSVG2 with a reason; use "
+            "Params::Skip with a bug number or reference reason otherwise:\n"
+            + "\n".join(violations),
+        )
+
+    def test_live_undefined_behavior_references_are_the_ub_marker_or_spec_ub(self) -> None:
+        repo_root = parity_report._default_repo_root()
+        report = parity_report.generate_report(repo_root)
+
+        violations = parity_report.undefined_behavior_reference_violations(
+            report,
+            repo_root / parity_report.TESTS_ROOT,
+            repo_root / parity_report.UB_MARKER_REFERENCE,
+        )
+
+        self.assertEqual(
+            violations,
+            [],
+            "Params::UndefinedBehavior cases need the resvg UB marker reference "
+            f"({parity_report.UB_MARKER_REFERENCE}) or an entry in SPEC_UB_ALLOWLIST explaining "
+            "the specification-level UB:\n" + "\n".join(violations),
+        )
+
+    def test_live_deprecated_in_svg2_cases_name_a_removed_feature(self) -> None:
+        report = parity_report.generate_report(parity_report._default_repo_root())
+
+        violations = parity_report.deprecated_in_svg2_violations(report)
+
+        self.assertEqual(
+            violations,
+            [],
+            "Params::DeprecatedInSVG2 is limited to the SVG 2 removals and deprecations listed in "
+            "DEPRECATED_IN_SVG2_FEATURES:\n" + "\n".join(violations),
+        )
 
 
 if __name__ == "__main__":

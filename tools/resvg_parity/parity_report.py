@@ -274,17 +274,74 @@ def _parse_overrides(expression: str, category: str) -> dict[str, str]:
         if filename in overrides:
             raise ParityReportError(f"duplicate override {category}/{filename}")
         params = _normalize_cpp_expression(fields[1])
-        if not _is_params_expression(params):
-            raise ParityReportError(
-                f"unrecognized params expression for {category}/{filename}: {params[:60]!r}"
-            )
+        _check_params_expression(params, f"params expression for {category}/{filename}")
         overrides[filename] = params
     return overrides
 
 
-def _is_params_expression(expression: str) -> bool:
-    stripped = expression.strip()
-    return stripped == "{}" or stripped.startswith(("Params", "WithMaxPixels("))
+# The only calls a params expression may chain at its top level. Skip and render-only state must
+# come from the named factories, whose reasons this report and its policy checks read; any other
+# factory, helper or builder method could set that state where the report cannot see it. Call
+# arguments only supply values, so they are not checked. Extend these sets when
+# ImageComparisonParams (ImageComparisonTestFixture.h) or resvg_test_suite.cc gains a new one.
+PARAMS_FACTORIES = {"Skip", "UndefinedBehavior", "DeprecatedInSVG2", "WithThreshold",
+                    "WithGoldenOverride", "RenderOnly"}
+PARAMS_FREE_HELPERS = {"Params", "WithMaxPixels"}
+PARAMS_BUILDER_METHODS = {
+    "withReason", "withGeodeGoldenOverride", "includeAntiAliasingDifferences",
+    "enableGoldenUpdateFromEnv", "setCanvasSize", "disableBackend", "requireFeature",
+    "withSimpleTextMaxPixels", "withMaxPixelsDifferent", "withGeodeMaxPixelsDifferent",
+    "onlyTextFull",
+}
+_PARAMS_TOKEN_RE = re.compile(r"(\.\s*)?(?<![\w:])((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)(\s*[({])?")
+_STATE_FIELD_RE = re.compile(r"\b(renderOnly\w*|skip\w*)\b")
+
+
+def _unknown_params_token(match: re.Match[str]) -> bool:
+    method, name, opener = match.groups()
+    opener = (opener or "").strip()
+    if method:
+        return not (opener == "(" and name in PARAMS_BUILDER_METHODS)
+    if opener == "(":
+        factory = name.removeprefix("Params::")
+        is_factory = factory != name and factory in PARAMS_FACTORIES
+        return name not in PARAMS_FREE_HELPERS and not is_factory
+    return opener != "{" or name != "Params" or not match.string.startswith("}", match.end())
+
+
+def _blank_call_arguments(text: str) -> str:
+    """Blank everything inside parentheses, keeping the parentheses and offsets."""
+
+    result = list(text)
+    depth = 0
+    for index, character in enumerate(text):
+        depth -= character == ")"
+        if depth > 0:
+            result[index] = " "
+        depth += character == "("
+    return "".join(result)
+
+
+def _check_params_expression(expression: str, where: str) -> None:
+    """Reject params expressions whose skip or render-only state the report cannot read."""
+
+    masked = _mask_string_literals(_mask_comments(expression)).strip()
+    field = _STATE_FIELD_RE.search(masked)
+    if field is not None:
+        raise ParityReportError(
+            f"set {field.group(1)!r} through Params::Skip, Params::UndefinedBehavior or "
+            f"Params::DeprecatedInSVG2, not the field: {expression[:60]!r}"
+        )
+    if masked == "{}":
+        return
+    top_level = _PARAMS_TOKEN_RE.finditer(_blank_call_arguments(masked))
+    unknown = next(
+        (token.group(0).strip() for token in top_level if _unknown_params_token(token)), None
+    )
+    if unknown is not None or "=" in masked or not masked.startswith(tuple(PARAMS_FREE_HELPERS)):
+        raise ParityReportError(
+            f"unrecognized {where} ({unknown or 'not a Params expression'}): {expression[:60]!r}"
+        )
 
 
 def _parse_registration(macro_text: str, macro_args: list[str], state: str) -> Registration | None:
@@ -301,10 +358,7 @@ def _parse_registration(macro_text: str, macro_args: list[str], state: str) -> R
     category = _parse_cpp_string_expression(call_args[0])
     overrides = _parse_overrides(call_args[1], category) if len(call_args) >= 2 else {}
     default_params = _normalize_cpp_expression(call_args[2]) if len(call_args) == 3 else "{}"
-    if not _is_params_expression(default_params):
-        raise ParityReportError(
-            f"unrecognized default params expression for {category!r}: {default_params[:60]!r}"
-        )
+    _check_params_expression(default_params, f"default params expression for {category!r}")
     return Registration(
         category=category,
         registration=state,
@@ -347,34 +401,36 @@ def parse_registrations(source: str) -> list[Registration]:
     return sorted(registrations, key=lambda item: item.category)
 
 
-_REASON_CALLS = {
-    "Skip",
-    "RenderOnly",
-    "WithThreshold",
-    "WithGoldenOverride",
-    "WithMaxPixels",
-    "withReason",
-    "withGeodeGoldenOverride",
+# Factories that render a case without comparing pixels, mapped to the bucket the report uses.
+# `RenderOnly` is the retired generic factory: it still parses so the policy check can name it.
+RENDER_ONLY_FACTORIES = {
+    "UndefinedBehavior": "undefined-behavior",
+    "DeprecatedInSVG2": "deprecated-in-svg2",
+    "RenderOnly": None,
 }
+
+# The positional argument that carries the reason for each reason-bearing call.
+_REASON_ARGUMENT_INDEX = {
+    "Skip": 0,
+    **{name: 0 for name in RENDER_ONLY_FACTORIES},
+    "WithThreshold": 2,
+    "WithGoldenOverride": 2,
+    "WithMaxPixels": 1,
+    "withReason": 0,
+    "withGeodeGoldenOverride": 1,
+}
+_REASON_CALLS = set(_REASON_ARGUMENT_INDEX)
 
 
 def _reason_from_params(expression: str) -> str | None:
     reason: str | None = None
     for _, name, arguments in sorted(_iter_named_calls(expression, _REASON_CALLS)):
-        argument_index: int | None = None
-        if name in {"Skip", "RenderOnly", "withReason"} and arguments:
-            argument_index = 0
-        elif name == "WithThreshold" and len(arguments) >= 3:
-            argument_index = 2
-        elif name == "WithGoldenOverride" and len(arguments) >= 3:
-            argument_index = 2
-        elif name in {"WithMaxPixels", "withGeodeGoldenOverride"} and len(arguments) >= 2:
-            argument_index = 1
-
-        if argument_index is not None:
-            candidate = _parse_cpp_string_expression(arguments[argument_index])
-            if candidate:
-                reason = candidate
+        argument_index = _REASON_ARGUMENT_INDEX[name]
+        if len(arguments) <= argument_index:
+            continue
+        candidate = _parse_cpp_string_expression(arguments[argument_index])
+        if candidate:
+            reason = candidate
     return reason
 
 
@@ -395,12 +451,38 @@ def _contains_call(expression: str, names: set[str]) -> bool:
     return bool(_iter_named_calls(expression, names))
 
 
+def _mask_string_literals(text: str) -> str:
+    """Blank string and character literal contents while preserving offsets."""
+
+    result = list(text)
+    index = 0
+    while index < len(text):
+        if text[index] in {'"', "'"}:
+            end = _skip_quoted(text, index)
+            for position in range(index + 1, end - 1):
+                result[position] = " "
+            index = end
+        else:
+            index += 1
+    return "".join(result)
+
+
 def _primary_state_from_params(expression: str) -> str:
+    # _check_params_expression has already rejected state set outside the named factories.
     skip = _contains_call(expression, {"Skip"})
-    render_only = _contains_call(expression, {"RenderOnly"})
+    render_only = _contains_call(expression, set(RENDER_ONLY_FACTORIES))
     if skip and render_only:
         raise ParityReportError("params expression cannot be both skip and render-only")
     return "skip" if skip else "render-only" if render_only else "compare"
+
+
+def _render_only_kind_from_params(expression: str) -> str | None:
+    """Return the render-only bucket, or None for a comparison, skip or retired factory."""
+
+    names = {name for _, name, _ in _iter_named_calls(expression, set(RENDER_ONLY_FACTORIES))}
+    if len(names) > 1:
+        raise ParityReportError(f"params expression uses several render-only factories: {names}")
+    return RENDER_ONLY_FACTORIES[names.pop()] if names else None
 
 
 def _required_features_from_params(expression: str, category: str) -> tuple[set[str], bool, bool]:
@@ -491,6 +573,7 @@ def _params_facts(expression: str, category: str) -> dict[str, object]:
         "exception_types": exception_types,
         "primary_state": primary_state,
         "reason": _reason_from_params(expression),
+        "render_only_kind": _render_only_kind_from_params(expression),
     }
 
 
@@ -509,15 +592,9 @@ def _vendored_cases(tests_root: Path) -> dict[str, list[Path]]:
     return categories
 
 
-def build_report(source: str, tests_root: Path) -> dict[str, object]:
-    """Join parsed source registrations to the vendored SVG corpus."""
-
-    registrations = parse_registrations(source)
-    if not registrations:
-        raise ParityReportError("no resvg category registrations found")
-    registration_by_category = {item.category: item for item in registrations}
-    vendored = _vendored_cases(tests_root)
-
+def _check_category_coverage(
+    registration_by_category: dict[str, Registration], vendored: dict[str, list[Path]]
+) -> None:
     unregistered = sorted(set(vendored) - set(registration_by_category))
     if unregistered:
         raise ParityReportError("unregistered vendored categories: " + ", ".join(unregistered))
@@ -527,91 +604,110 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
             "registered categories missing from vendored corpus: " + ", ".join(missing_categories)
         )
 
+
+def _pixel_budget_source_count(registration: Registration) -> int:
+    """Count the explicit pixel-budget expressions of an active registration."""
+
+    if registration.registration != "active":
+        return 0
+    expressions = [registration.default_params, *registration.overrides.values()]
+    return sum(
+        "threshold" in _params_facts(params, registration.category)["exception_types"]
+        for params in expressions
+    )
+
+
+def _case_params(registration: Registration, filename: str) -> tuple[str, str]:
+    if filename in registration.overrides:
+        return registration.overrides[filename], "override"
+    if registration.default_params != "{}":
+        return registration.default_params, "category-default"
+    return "{}", "implicit-default"
+
+
+def _registration_cases(
+    registration: Registration, category_cases: list[Path]
+) -> list[dict[str, object]]:
+    filenames = {path.name for path in category_cases}
+    missing_overrides = sorted(set(registration.overrides) - filenames)
+    if missing_overrides:
+        raise ParityReportError(
+            f"overrides missing from {registration.category!r}: " + ", ".join(missing_overrides)
+        )
+
     cases: list[dict[str, object]] = []
-    pixel_budget_sources = 0
-    for registration in registrations:
-        category_cases = vendored[registration.category]
-        filenames = {path.name for path in category_cases}
-        missing_overrides = sorted(set(registration.overrides) - filenames)
-        if missing_overrides:
-            raise ParityReportError(
-                f"overrides missing from {registration.category!r}: " + ", ".join(missing_overrides)
-            )
+    for relative_path in category_cases:
+        params, params_source = _case_params(registration, relative_path.name)
+        facts = _params_facts(params, registration.category)
+        comparison_modes = facts.pop("comparison_modes")
+        if registration.registration == "disabled":
+            comparison_modes = []
+        cases.append(
+            {
+                "category": registration.category,
+                "path": relative_path.as_posix(),
+                "registration": registration.registration,
+                "suite_name": registration.suite_name,
+                "params_source": params_source,
+                "raw_params_expression": params,
+                "comparison_modes": comparison_modes,
+                **facts,
+            }
+        )
+    return cases
 
-        if registration.registration == "active":
-            if "threshold" in _params_facts(registration.default_params, registration.category)[
-                "exception_types"
-            ]:
-                pixel_budget_sources += 1
-            pixel_budget_sources += sum(
-                "threshold" in _params_facts(params, registration.category)["exception_types"]
-                for params in registration.overrides.values()
-            )
 
-        for relative_path in category_cases:
-            filename = relative_path.name
-            if filename in registration.overrides:
-                params = registration.overrides[filename]
-                params_source = "override"
-            elif registration.default_params != "{}":
-                params = registration.default_params
-                params_source = "category-default"
-            else:
-                params = "{}"
-                params_source = "implicit-default"
-
-            facts = _params_facts(params, registration.category)
-            comparison_modes = facts.pop("comparison_modes")
-            if registration.registration == "disabled":
-                comparison_modes = []
-            cases.append(
-                {
-                    "category": registration.category,
-                    "path": relative_path.as_posix(),
-                    "registration": registration.registration,
-                    "suite_name": registration.suite_name,
-                    "params_source": params_source,
-                    "raw_params_expression": params,
-                    "comparison_modes": comparison_modes,
-                    **facts,
-                }
-            )
-
-    cases.sort(key=lambda item: str(item["path"]))
+def _summary(cases: list[dict[str, object]], pixel_budget_sources: int) -> dict[str, int]:
     active_cases = [case for case in cases if case["registration"] == "active"]
     disabled_cases = [case for case in cases if case["registration"] == "disabled"]
 
     def count_active(predicate: Callable[[dict[str, object]], bool]) -> int:
         return sum(bool(predicate(case)) for case in active_cases)
 
-    summary = {
+    def count_exception(name: str) -> int:
+        return count_active(lambda case: name in case["exception_types"])
+
+    def count_state(state: str) -> int:
+        return count_active(lambda case: case["primary_state"] == state)
+
+    def count_render_only_kind(kind: str) -> int:
+        return count_active(lambda case: case["render_only_kind"] == kind)
+
+    return {
         "active_cases": len(active_cases),
         "backend_disabled_cases": count_active(lambda case: bool(case["disabled_backends"])),
-        "compare_cases": count_active(lambda case: case["primary_state"] == "compare"),
+        "compare_cases": count_state("compare"),
         "disabled_cases": len(disabled_cases),
-        "effective_pixel_budget_cases": count_active(
-            lambda case: "threshold" in case["exception_types"]
-        ),
-        "geode_golden_cases": count_active(
-            lambda case: "geode_golden" in case["exception_types"]
-        ),
-        "geode_pixel_budget_cases": count_active(
-            lambda case: "geode_threshold" in case["exception_types"]
-        ),
+        "effective_pixel_budget_cases": count_exception("threshold"),
+        "geode_golden_cases": count_exception("geode_golden"),
+        "geode_pixel_budget_cases": count_exception("geode_threshold"),
         "pixel_budget_sources": pixel_budget_sources,
-        "render_only_cases": count_active(lambda case: case["primary_state"] == "render-only"),
-        "shared_golden_cases": count_active(
-            lambda case: "shared_golden" in case["exception_types"]
-        ),
-        "simple_text_pixel_budget_cases": count_active(
-            lambda case: "simple_text_threshold" in case["exception_types"]
-        ),
-        "skip_cases": count_active(lambda case: case["primary_state"] == "skip"),
-        "text_full_gated_cases": count_active(
-            lambda case: "text_full_gate" in case["exception_types"]
-        ),
+        "render_only_cases": count_state("render-only"),
+        "render_only_deprecated_in_svg2_cases": count_render_only_kind("deprecated-in-svg2"),
+        "render_only_undefined_behavior_cases": count_render_only_kind("undefined-behavior"),
+        "shared_golden_cases": count_exception("shared_golden"),
+        "simple_text_pixel_budget_cases": count_exception("simple_text_threshold"),
+        "skip_cases": count_state("skip"),
+        "text_full_gated_cases": count_exception("text_full_gate"),
         "total_cases": len(cases),
     }
+
+
+def build_report(source: str, tests_root: Path) -> dict[str, object]:
+    """Join parsed source registrations to the vendored SVG corpus."""
+
+    registrations = parse_registrations(source)
+    if not registrations:
+        raise ParityReportError("no resvg category registrations found")
+    vendored = _vendored_cases(tests_root)
+    _check_category_coverage({item.category: item for item in registrations}, vendored)
+
+    cases: list[dict[str, object]] = []
+    pixel_budget_sources = 0
+    for registration in registrations:
+        pixel_budget_sources += _pixel_budget_source_count(registration)
+        cases.extend(_registration_cases(registration, vendored[registration.category]))
+    cases.sort(key=lambda item: str(item["path"]))
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -623,9 +719,138 @@ def build_report(source: str, tests_root: Path) -> dict[str, object]:
             "registration_source": REGISTRATION_SOURCE.as_posix(),
             "tests_root": TESTS_ROOT.as_posix(),
         },
-        "summary": summary,
+        "summary": _summary(cases, pixel_budget_sources),
         "cases": cases,
     }
+
+
+UB_MARKER_REFERENCE = Path("third_party/resvg-test-suite/resources/ub.png")
+
+# `Params::UndefinedBehavior` cases whose vendored reference is not the resvg UB marker image. Each
+# entry must be behavior the specification leaves undefined or implementation-defined.
+SPEC_UB_ALLOWLIST = {
+    # Filter Effects defines an exact Gaussian but no bound on stdDeviation. stdDeviation=1000 is
+    # 2500 device pixels; every renderer clamps it to an implementation-defined resource limit
+    # (Donner: kMaximumFilterPixelRadius), so the reference records resvg's clamp, not a result
+    # the specification determines. The upstream test asserts only that rendering does not crash.
+    "filters/feGaussianBlur/huge-stdDeviation.svg",
+}
+
+# Features removed from or deprecated in SVG 2 that Donner deliberately does not implement. Every
+# `Params::DeprecatedInSVG2` case must fall under one of these keys: a category directory, or one
+# case path ending in `.svg`. Keep it to named features so the bucket cannot absorb bugs.
+DEPRECATED_IN_SVG2_FEATURES = {
+    "filters/enable-background": "enable-background and the BackgroundImage it defines",
+    "filters/filter/in=BackgroundAlpha-with-enable-background.svg": "enable-background",
+    "filters/filter/in=BackgroundImage-with-enable-background.svg": "enable-background",
+    "masking/clip": "CSS `clip` property (deprecated by CSS Masking in favor of clip-path)",
+    "painting/display/none-on-tref.svg": "<tref>",
+    "painting/fill/icc-color.svg": "icc-color() paint",
+    "painting/fill/valid-FuncIRI-with-a-fallback-ICC-color.svg": "icc-color() paint",
+    "structure/style-attribute/non-presentational-attribute.svg": "version=\"1.1\" semantics",
+    "structure/style/non-presentational-attribute.svg": "version=\"1.1\" semantics",
+    "text/dominant-baseline/reset-size.svg": "dominant-baseline: reset-size",
+    "text/dominant-baseline/use-script.svg": "dominant-baseline: use-script",
+    "text/glyph-orientation-horizontal": "glyph-orientation-horizontal",
+    "text/kerning": "kerning property",
+    "text/tref": "<tref>",
+}
+
+
+def _active_render_only_cases(report: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        case
+        for case in report["cases"]  # type: ignore[union-attr]
+        if case["registration"] == "active" and case["primary_state"] == "render-only"
+    ]
+
+
+def render_only_policy_violations(report: dict[str, object]) -> list[str]:
+    """Return render-only cases that do not use a named bucket with an informative reason.
+
+    Rendering without a pixel comparison hides every regression in the case, so it needs one of
+    two explicit factories: `Params::UndefinedBehavior` for behavior the specification leaves
+    undefined or implementation-defined, or `Params::DeprecatedInSVG2` for features removed from or
+    deprecated in SVG 2. Bugs, missing features, reference disagreements and harness mismatches
+    are skips.
+    """
+
+    violations: list[str] = []
+    for case in _active_render_only_cases(report):
+        reason = str(case["reason"] or "").strip()
+        if case["render_only_kind"] is None:
+            violations.append(f"{case['path']}: render-only without Params::UndefinedBehavior or "
+                              "Params::DeprecatedInSVG2")
+        elif not reason:
+            violations.append(f"{case['path']}: {case['render_only_kind']} case has no reason")
+    return violations
+
+
+def undefined_behavior_reference_violations(
+    report: dict[str, object],
+    tests_root: Path,
+    marker_path: Path,
+    allowlist: Iterable[str] = SPEC_UB_ALLOWLIST,
+) -> list[str]:
+    """Return undefined-behavior cases without the UB marker reference, and stale allowlist entries.
+
+    An undefined-behavior case qualifies either because its vendored reference is a byte-for-byte
+    copy of the resvg UB marker image, or because `allowlist` lists it as specification-level UB.
+    Allowlist entries must be active undefined-behavior cases whose reference is not the marker, so
+    the list cannot silently outlive a reclassification.
+    """
+
+    try:
+        marker = marker_path.read_bytes()
+    except OSError as error:
+        raise ParityReportError(f"cannot read UB marker reference {marker_path}: {error}") from error
+
+    allowed = set(allowlist)
+    undefined: set[str] = set()
+    violations: list[str] = []
+    for case in _active_render_only_cases(report):
+        if case["render_only_kind"] != "undefined-behavior":
+            continue
+        path = str(case["path"])
+        undefined.add(path)
+        reference = (tests_root / path).with_suffix(".png")
+        try:
+            is_marker = reference.read_bytes() == marker
+        except OSError:
+            violations.append(f"{path}: reference PNG is missing")
+            continue
+        if is_marker and path in allowed:
+            violations.append(f"{path}: allowlisted, but its reference is the UB marker")
+        elif not is_marker and path not in allowed:
+            violations.append(f"{path}: reference is not the UB marker and the case is not "
+                              "allowlisted as specification UB")
+
+    for path in sorted(allowed - undefined):
+        violations.append(f"{path}: allowlisted, but not an active undefined-behavior case")
+    return sorted(violations)
+
+
+def deprecated_in_svg2_violations(
+    report: dict[str, object], features: dict[str, str] = DEPRECATED_IN_SVG2_FEATURES
+) -> list[str]:
+    """Return deprecated-in-SVG-2 cases outside the named features, and unused feature keys."""
+
+    used: set[str] = set()
+    violations: list[str] = []
+    for case in _active_render_only_cases(report):
+        if case["render_only_kind"] != "deprecated-in-svg2":
+            continue
+        path = str(case["path"])
+        key = path if path in features else str(case["category"])
+        if key in features:
+            used.add(key)
+        else:
+            violations.append(f"{path}: not under a feature in DEPRECATED_IN_SVG2_FEATURES")
+
+    for key in sorted(set(features) - used):
+        violations.append(f"{key}: listed in DEPRECATED_IN_SVG2_FEATURES, but no active "
+                          "deprecated-in-svg2 case uses it")
+    return sorted(violations)
 
 
 def generate_report(repo_root: Path) -> dict[str, object]:

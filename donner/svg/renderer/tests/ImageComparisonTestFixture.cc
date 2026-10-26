@@ -947,8 +947,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     }
   }
 
-  if (params.renderOnly) {
-    std::cout << "RENDER-ONLY (comparison skipped)";
+  if (params.isRenderOnly()) {
+    std::cout << "RENDER-ONLY (comparison skipped, " << params.renderOnlyBucket() << ")";
     if (!params.reason.empty()) {
       std::cout << ": " << params.reason;
     }
