@@ -274,17 +274,74 @@ def _parse_overrides(expression: str, category: str) -> dict[str, str]:
         if filename in overrides:
             raise ParityReportError(f"duplicate override {category}/{filename}")
         params = _normalize_cpp_expression(fields[1])
-        if not _is_params_expression(params):
-            raise ParityReportError(
-                f"unrecognized params expression for {category}/{filename}: {params[:60]!r}"
-            )
+        _check_params_expression(params, f"params expression for {category}/{filename}")
         overrides[filename] = params
     return overrides
 
 
-def _is_params_expression(expression: str) -> bool:
-    stripped = expression.strip()
-    return stripped == "{}" or stripped.startswith(("Params", "WithMaxPixels("))
+# The only calls a params expression may chain at its top level. Skip and render-only state must
+# come from the named factories, whose reasons this report and its policy checks read; any other
+# factory, helper or builder method could set that state where the report cannot see it. Call
+# arguments only supply values, so they are not checked. Extend these sets when
+# ImageComparisonParams (ImageComparisonTestFixture.h) or resvg_test_suite.cc gains a new one.
+PARAMS_FACTORIES = {"Skip", "UndefinedBehavior", "DeprecatedInSVG2", "WithThreshold",
+                    "WithGoldenOverride", "RenderOnly"}
+PARAMS_FREE_HELPERS = {"Params", "WithMaxPixels"}
+PARAMS_BUILDER_METHODS = {
+    "withReason", "withGeodeGoldenOverride", "includeAntiAliasingDifferences",
+    "enableGoldenUpdateFromEnv", "setCanvasSize", "disableBackend", "requireFeature",
+    "withSimpleTextMaxPixels", "withMaxPixelsDifferent", "withGeodeMaxPixelsDifferent",
+    "onlyTextFull",
+}
+_PARAMS_TOKEN_RE = re.compile(r"(\.\s*)?(?<![\w:])((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)(\s*[({])?")
+_STATE_FIELD_RE = re.compile(r"\b(renderOnly\w*|skip\w*)\b")
+
+
+def _unknown_params_token(match: re.Match[str]) -> bool:
+    method, name, opener = match.groups()
+    opener = (opener or "").strip()
+    if method:
+        return not (opener == "(" and name in PARAMS_BUILDER_METHODS)
+    if opener == "(":
+        factory = name.removeprefix("Params::")
+        is_factory = factory != name and factory in PARAMS_FACTORIES
+        return name not in PARAMS_FREE_HELPERS and not is_factory
+    return opener != "{" or name != "Params" or not match.string.startswith("}", match.end())
+
+
+def _blank_call_arguments(text: str) -> str:
+    """Blank everything inside parentheses, keeping the parentheses and offsets."""
+
+    result = list(text)
+    depth = 0
+    for index, character in enumerate(text):
+        depth -= character == ")"
+        if depth > 0:
+            result[index] = " "
+        depth += character == "("
+    return "".join(result)
+
+
+def _check_params_expression(expression: str, where: str) -> None:
+    """Reject params expressions whose skip or render-only state the report cannot read."""
+
+    masked = _mask_string_literals(_mask_comments(expression)).strip()
+    field = _STATE_FIELD_RE.search(masked)
+    if field is not None:
+        raise ParityReportError(
+            f"set {field.group(1)!r} through Params::Skip, Params::UndefinedBehavior or "
+            f"Params::DeprecatedInSVG2, not the field: {expression[:60]!r}"
+        )
+    if masked == "{}":
+        return
+    top_level = _PARAMS_TOKEN_RE.finditer(_blank_call_arguments(masked))
+    unknown = next(
+        (token.group(0).strip() for token in top_level if _unknown_params_token(token)), None
+    )
+    if unknown is not None or "=" in masked or not masked.startswith(tuple(PARAMS_FREE_HELPERS)):
+        raise ParityReportError(
+            f"unrecognized {where} ({unknown or 'not a Params expression'}): {expression[:60]!r}"
+        )
 
 
 def _parse_registration(macro_text: str, macro_args: list[str], state: str) -> Registration | None:
@@ -301,10 +358,7 @@ def _parse_registration(macro_text: str, macro_args: list[str], state: str) -> R
     category = _parse_cpp_string_expression(call_args[0])
     overrides = _parse_overrides(call_args[1], category) if len(call_args) >= 2 else {}
     default_params = _normalize_cpp_expression(call_args[2]) if len(call_args) == 3 else "{}"
-    if not _is_params_expression(default_params):
-        raise ParityReportError(
-            f"unrecognized default params expression for {category!r}: {default_params[:60]!r}"
-        )
+    _check_params_expression(default_params, f"default params expression for {category!r}")
     return Registration(
         category=category,
         registration=state,
@@ -397,9 +451,6 @@ def _contains_call(expression: str, names: set[str]) -> bool:
     return bool(_iter_named_calls(expression, names))
 
 
-_STATE_FIELD_RE = re.compile(r"\b(renderOnly\w*|skip)\b")
-
-
 def _mask_string_literals(text: str) -> str:
     """Blank string and character literal contents while preserving offsets."""
 
@@ -417,16 +468,7 @@ def _mask_string_literals(text: str) -> str:
 
 
 def _primary_state_from_params(expression: str) -> str:
-    # Skip and render-only state must come from the named factories, whose reasons this report and
-    # its policy checks read. A designated initializer such as `Params{.renderOnly = true}` or a
-    # direct field assignment would otherwise be reported as an ordinary comparison.
-    field = _STATE_FIELD_RE.search(_mask_string_literals(_mask_comments(expression)))
-    if field is not None:
-        raise ParityReportError(
-            f"set {field.group(1)!r} through Params::Skip, Params::UndefinedBehavior or "
-            f"Params::DeprecatedInSVG2, not the field: "
-            f"{expression[:60]!r}"
-        )
+    # _check_params_expression has already rejected state set outside the named factories.
     skip = _contains_call(expression, {"Skip"})
     render_only = _contains_call(expression, set(RENDER_ONLY_FACTORIES))
     if skip and render_only:
