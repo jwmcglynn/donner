@@ -783,6 +783,18 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
   return *impl_->checkerboardUnderlayPipeline;
 }
 
+void GeodeDevice::buildOnDemandPipelinesAheadOfUse() const {
+  pipeline().batchedPipeline();
+  maskPipeline();
+  checkerboardPipeline();
+  if (!impl_->snapshotReadbackPipeline) {
+    // Built directly rather than through `snapshotReadbackPipeline()`, which only a readback
+    // context may use: here it only seeds the compile that context later shares.
+    impl_->snapshotReadbackPipeline =
+        std::make_unique<GeodeSnapshotReadbackPipeline>(runtimeDevice());
+  }
+}
+
 void GeodeDevice::initSharedBindSlotResources() {
   gpu::Device& device = runtimeDevice();
 

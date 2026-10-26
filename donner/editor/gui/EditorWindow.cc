@@ -1586,8 +1586,16 @@ bool PrepareEditorSurfaceFormat(std::unique_ptr<internal::PresentationSurface>& 
 #ifdef __EMSCRIPTEN__
 std::shared_ptr<geode::GeodeDevice> CreateBrowserUiContext(
     const std::shared_ptr<geode::GeodePhysicalDeviceOwner>& owner, gpu::TextureFormat format) {
-  return std::shared_ptr<geode::GeodeDevice>(
+  std::shared_ptr<geode::GeodeDevice> context(
       geode::GeodeDevice::CreateOverPhysicalDeviceOwner(owner, format));
+  // The editor needs these on-demand pipelines soon after boot: the checkerboard with the first
+  // document it presents, the mask with the first clip path, the readback with the first sample
+  // thumbnail. Building them now lets the browser compile them before the first interaction,
+  // rather than in order with that interaction's GPU work.
+  if (context != nullptr) {
+    context->buildOnDemandPipelinesAheadOfUse();
+  }
+  return context;
 }
 
 void ReportBrowserCanvasAttachment(bool browserRuntimeSelected) {

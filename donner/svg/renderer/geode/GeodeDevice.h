@@ -878,6 +878,24 @@ public:
   /// placed underneath it. Built lazily and independently of the replace-blend
   /// pipeline, so a consumer only pays for the variant it actually draws.
   GeodeCheckerboardPipeline& checkerboardUnderlayPipeline() const;
+
+  /**
+   * Builds now the pipelines the browser editor's UI context otherwise builds at their first use:
+   * the batched fill variant, the clip-path mask, the replace-blend checkerboard the editor draws
+   * under each presented document, and the snapshot readback. The destination-over checkerboard
+   * stays lazy because the editor never draws it.
+   *
+   * A pipeline built at its first use is created in order with the device's work, so on a cold
+   * shader cache every later submission waits for its compile, the next presented frame
+   * included. A backend that compiles pipelines ahead of use, such as the browser, compiles the
+   * pipelines built here off the device timeline instead, before any interaction needs them,
+   * and shares each compile with every other context over the same browser device that builds
+   * the same pipeline. That is why the snapshot readback is built on a context that never reads
+   * back: it seeds the compile the snapshot capture context finds when it first builds it.
+   *
+   * Only the editor calls this, at startup; every other consumer keeps the lazy default.
+   */
+  void buildOnDemandPipelinesAheadOfUse() const;
   /// @}
 
   /// This context's GPU runtime device: the owner of its handle tables, submission serials, and

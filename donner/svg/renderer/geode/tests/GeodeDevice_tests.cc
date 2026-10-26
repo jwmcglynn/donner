@@ -22,6 +22,7 @@
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/SharingTestDevice.h"
+#include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -189,6 +190,25 @@ TEST(GeodeDevice, SharedPipelinesReturnSameInstance) {
   // `maskPipeline()` is lazy - two calls must still return the same
   // instance (first call constructs, second call returns cached).
   EXPECT_EQ(&device->maskPipeline(), &device->maskPipeline());
+}
+
+/// Building the on-demand pipelines ahead of use builds the instances their accessors hand back,
+/// once. The context here never reads back, so the call returning at all also shows that seeding
+/// the snapshot readback does not go through the readback-only accessor.
+TEST(GeodeDevice, OnDemandPipelinesBuiltAheadOfUseAreTheOnesFirstUseFinds) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  device->buildOnDemandPipelinesAheadOfUse();
+  const gpu::RenderPipeline* batched = &device->pipeline().batchedPipeline();
+  GeodeMaskPipeline* mask = &device->maskPipeline();
+  GeodeCheckerboardPipeline* checkerboard = &device->checkerboardPipeline();
+  EXPECT_TRUE(batched->isValid());
+
+  device->buildOnDemandPipelinesAheadOfUse();
+  EXPECT_EQ(&device->pipeline().batchedPipeline(), batched);
+  EXPECT_EQ(&device->maskPipeline(), mask);
+  EXPECT_EQ(&device->checkerboardPipeline(), checkerboard);
 }
 
 /// The record-reading variant of the fill pipeline is compiled lazily, and
