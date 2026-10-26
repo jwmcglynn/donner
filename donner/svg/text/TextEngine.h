@@ -221,6 +221,9 @@ public:
   long getCharNumAtPosition(EntityHandle handle, const Vector2d& point) const;
 
 private:
+  std::vector<TextRun> layoutWithResourceStatus(const components::ComputedTextComponent& text,
+                                                const TextLayoutParams& params,
+                                                bool& resourceRejected);
   FontManager& fontManager_;
   Registry& registry_;
   std::unique_ptr<TextBackend> backend_;

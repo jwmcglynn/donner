@@ -21,14 +21,18 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVG.h"
+#include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
@@ -42,6 +46,7 @@
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 #include "donner/svg/resources/UrlLoader.h"
+#include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 namespace {
@@ -2236,6 +2241,46 @@ TEST(RendererPublicApiTest, TextPathPairSplitMatchesUnsplitPixels) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, TextPathStretchOnStraightPathsMatchesOrdinaryRotatedText) {
+  const auto compare = [](std::string_view route, std::string_view ordinaryAttributes,
+                          std::string_view label) {
+    SVGDocument stretched = ParseDocument(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' "
+        "font-family='Public Sans' font-size='48'><defs><path id='p' d='" +
+        std::string(route) +
+        "'/></defs><text><textPath href='#p' method='stretch'>I</textPath>"
+        "</text></svg>");
+    SVGDocument ordinary = ParseDocument(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' "
+        "font-family='Public Sans' font-size='48'><text " +
+        std::string(ordinaryAttributes) + ">I</text></svg>");
+    editor::tests::CompareBitmapToBitmap(RenderPublicDocument(stretched),
+                                         RenderPublicDocument(ordinary), label,
+                                         editor::tests::PixelmatchIdentityParams());
+  };
+
+  compare("M80 24V144", "x='80' y='24' rotate='90'", "textpath-stretch-vertical");
+  compare("M24 24L136 136", "x='24' y='24' rotate='45'", "textpath-stretch-diagonal");
+}
+
+TEST(RendererPublicApiTest, TextPathStretchCurvedLowercaseEProducesGlyphGeometry) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="224" height="128"
+        font-family="Public Sans" font-size="36">
+        <defs><path id="p" d="M8 72 C48 8 96 120 136 56 S192 24 216 80"/></defs>
+        <text><textPath href="#p" method="stretch">e</textPath></text>
+      </svg>)svg");
+  (void)RenderPublicDocument(document);
+  const auto text = document.querySelector("text");
+  ASSERT_TRUE(text.has_value());
+
+  const std::vector<Path> glyphs =
+      document.registry().ctx().get<TextEngine>().computedGlyphPaths(text->unsafeEntityHandle());
+
+  ASSERT_THAT(glyphs, testing::SizeIs(1));
+  EXPECT_FALSE(glyphs.front().empty());
+}
+
 TEST(RendererPublicApiTest, TextPathPairYOnlySpanMatchesUnsplitPixels) {
   SVGDocument probe = MakeTextPathPairFontProbe();
   const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
@@ -2916,6 +2961,183 @@ TEST(RendererPublicApiTest, EmbeddedSvgUsesDocumentFontContext) {
 /// of any region; a region that must stay uncovered would otherwise accept it.
 TEST(RendererPublicApiTest, CoveredPixelsOfAnEmptySnapshotFails) {
   EXPECT_NONFATAL_FAILURE(CoveredPixels(RendererBitmap{}, 0, 0, 1, 1), "empty 0x0 snapshot");
+}
+
+TEST(RendererPublicApiTest, TextPathStretchCurvedWordProducesVisibleFrameAndGlyphGeometry) {
+  SVGDocument word = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
+        font-family="Public Sans" font-size="44" font-kerning="none">
+        <defs><path id="p" d="M12 112 C80 12 152 180 220 80 S328 32 372 120"/></defs>
+        <rect x="4" y="4" width="6" height="6" fill="lime"/>
+        <text x="8 56 104 152 200"><textPath href="#p" method="stretch">Curve</textPath></text>
+      </svg>)svg");
+  SVGDocument separateGlyphs = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192"
+        font-family="Public Sans" font-size="44" font-kerning="none">
+        <defs><path id="p" d="M12 112 C80 12 152 180 220 80 S328 32 372 120"/></defs>
+        <rect x="4" y="4" width="6" height="6" fill="lime"/>
+        <text x="8"><textPath href="#p" method="stretch">C</textPath></text>
+        <text x="56"><textPath href="#p" method="stretch">u</textPath></text>
+        <text x="104"><textPath href="#p" method="stretch">r</textPath></text>
+        <text x="152"><textPath href="#p" method="stretch">v</textPath></text>
+        <text x="200"><textPath href="#p" method="stretch">e</textPath></text>
+      </svg>)svg");
+  const RendererBitmap wordBitmap = RenderPublicDocument(word);
+  editor::tests::CompareBitmapToBitmap(wordBitmap, RenderPublicDocument(separateGlyphs),
+                                       "textpath-stretch-curved-word",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  const auto text = word.querySelector("text");
+  ASSERT_TRUE(text.has_value());
+  const std::vector<Path> glyphs =
+      word.registry().ctx().get<TextEngine>().computedGlyphPaths(text->unsafeEntityHandle());
+  ASSERT_THAT(glyphs, testing::SizeIs(5));
+  EXPECT_THAT(glyphs, testing::Each(testing::Property(&Path::empty, false)));
+
+  SVGDocument outlines = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="384" height="192">
+        <rect x="4" y="4" width="6" height="6" fill="lime"/>
+      </svg>)svg");
+  for (const Path& glyph : glyphs) {
+    SVGPathElement outline = SVGPathElement::Create(outlines);
+    outline.setSpline(glyph);
+    outlines.svgElement().appendChild(outline);
+  }
+  editor::tests::CompareBitmapToBitmap(wordBitmap, RenderPublicDocument(outlines),
+                                       "textpath-stretch-curved-word-outlines",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, TextPathStretchAcrossSharpCornerMatchesCachedOutline) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"
+        font-family="Public Sans" font-size="32">
+        <defs><path id="p" d="M8 64 H48 V112"/></defs>
+        <rect x="4" y="4" width="6" height="6" fill="lime"/>
+        <text><textPath href="#p" method="stretch" startOffset="20">M</textPath></text>
+      </svg>)svg");
+  const RendererBitmap textBitmap = RenderPublicDocument(document);
+  const auto text = document.querySelector("text");
+  ASSERT_TRUE(text.has_value());
+  const std::vector<Path> glyphs =
+      document.registry().ctx().get<TextEngine>().computedGlyphPaths(text->unsafeEntityHandle());
+  ASSERT_THAT(glyphs, testing::ElementsAre(testing::Property(&Path::empty, false)));
+
+  SVGDocument outlines = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128">
+        <rect x="4" y="4" width="6" height="6" fill="lime"/>
+      </svg>)svg");
+  SVGPathElement outline = SVGPathElement::Create(outlines);
+  outline.setSpline(glyphs.front());
+  outlines.svgElement().appendChild(outline);
+  editor::tests::CompareBitmapToBitmap(textBitmap, RenderPublicDocument(outlines),
+                                       "textpath-stretch-sharp-corner-outline",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, TextPathMeasurementWorkResetsAcrossTopLevelFrames) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"
+        font-family="Public Sans" font-size="24">
+        <defs><path id="p" d="M8 40 H120"/></defs>
+        <text><textPath href="#p" method="stretch">A</textPath></text>
+      </svg>)svg");
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.textPathMeasurementWorkUnits = 2;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  auto& context = document.registry().ctx().get<components::DocumentResourceFamilyContext>();
+  context.budget = family;
+
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap first = renderer.takeSnapshot();
+  renderer.draw(document);
+  const RendererBitmap second = renderer.takeSnapshot();
+
+  editor::tests::CompareBitmapToBitmap(first, second, "textpath-measurement-frame-epoch",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_FALSE(family->securityStats().textPathMeasurementWorkRejected);
+  EXPECT_LE(family->securityStats().textPathMeasurementWorkUnits,
+            limits.textPathMeasurementWorkUnits);
+}
+
+TEST(RendererPublicApiTest, TextPathGeometryQueryRecoversAfterPriorWorkExhaustion) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"
+        font-family="Public Sans" font-size="24">
+        <defs><path id="p" d="M8 40 C8 0 120 0 120 40"/></defs>
+        <text id="t"><textPath href="#p" method="stretch">A</textPath></text>
+      </svg>)svg");
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.textPathMeasurementWorkUnits = 2;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  document.registry().ctx().get<components::DocumentResourceFamilyContext>().budget = family;
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+  TextEngine& engine = document.registry().ctx().get<TextEngine>();
+  const auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  EXPECT_THAT(engine.computedGlyphPaths(text->unsafeEntityHandle()), testing::IsEmpty());
+  EXPECT_EQ(family->securityStats().textPathMeasurementWorkUnits, 2u);
+  document.querySelector("#p")->cast<SVGPathElement>().setD("M8 32 H120");
+  document.querySelector("textPath")->cast<SVGTextPathElement>().setTextContent("B");
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+  EXPECT_THAT(engine.computedGlyphPaths(text->unsafeEntityHandle()),
+              testing::ElementsAre(testing::Property(&Path::empty, false)));
+  EXPECT_FALSE(family->securityStats().textPathMeasurementWorkRejected);
+}
+
+TEST(RendererPublicApiTest, GroupBoundsQuerySharesTextPathWorkAcrossRoots) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"
+        font-family="Public Sans" font-size="24">
+        <defs>
+          <path id="short" d="M8 40 H120"/>
+          <path id="longer" d="M8 40 H64 V56"/>
+        </defs>
+        <g id="group">
+          <text id="first"><textPath href="#short" method="stretch">A</textPath></text>
+          <text id="second"><textPath href="#longer" method="stretch">B</textPath></text>
+        </g>
+      </svg>)svg");
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.textPathMeasurementWorkUnits = 4;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  document.registry().ctx().get<components::DocumentResourceFamilyContext>().budget = family;
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+  const auto group = document.querySelector("#group");
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(group, testing::Optional(_));
+  ASSERT_THAT(first, testing::Optional(_));
+  ASSERT_THAT(second, testing::Optional(_));
+
+  const auto bounds = components::ShapeSystem().getShapeBounds(group->unsafeEntityHandle());
+  ASSERT_THAT(bounds, testing::Optional(_));
+  EXPECT_FALSE(bounds->isEmpty());
+  EXPECT_EQ(family->securityStats().textPathMeasurementWorkUnits, 4u);
+  EXPECT_TRUE(family->securityStats().textPathMeasurementWorkRejected);
+  const auto& firstGeometry =
+      first->unsafeEntityHandle().get<components::ComputedTextGeometryComponent>();
+  const auto& secondGeometry =
+      second->unsafeEntityHandle().get<components::ComputedTextGeometryComponent>();
+  const std::array glyphCounts = {firstGeometry.glyphs.size(), secondGeometry.glyphs.size()};
+  EXPECT_THAT(glyphCounts, testing::UnorderedElementsAre(0u, 1u));
+
+  const auto refused = firstGeometry.glyphs.empty() ? first : second;
+  Renderer renderer;
+  renderer.draw(document);
+  EXPECT_FALSE(refused->unsafeEntityHandle()
+                   .get<components::ComputedTextGeometryComponent>()
+                   .retryAfterTextPathWorkRejection);
+  EXPECT_THAT(
+      document.registry().ctx().get<TextEngine>().computedGlyphPaths(refused->unsafeEntityHandle()),
+      testing::ElementsAre(testing::Property(&Path::empty, false)));
 }
 
 /// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,

@@ -53,6 +53,7 @@ donner_cc_library(
     hdrs = [
         "TextEngine.h",
         "TextEngineHelpers.h",
+        "TextPathWarp.h",
     ],
     defines = select({
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],

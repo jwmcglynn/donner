@@ -10,6 +10,7 @@
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/FontKerning.h"
 #include "donner/svg/core/FontStretch.h"
@@ -257,6 +258,8 @@ struct ComputedTextComponent {
     entt::entity textPathSourceEntity = entt::null;
     /// Start offset along the path (resolved to pixels).
     double pathStartOffset = 0.0;
+    /// How glyphs are placed along \ref pathSpline.
+    TextPathMethod textPathMethod = TextPathMethod::Align;
     /// True when a \ref xml_textPath element's href could not be resolved. Per SVG spec,
     /// a textPath with an invalid or missing href does not render.
     bool textPathFailed = false;

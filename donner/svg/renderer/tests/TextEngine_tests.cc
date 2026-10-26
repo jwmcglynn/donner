@@ -19,6 +19,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextBackendFull.h"
 #include "donner/svg/text/TextBackendSimple.h"
@@ -1448,6 +1449,160 @@ TEST(TextEngineTest, TextPathSpacingPreservesFullShapingCombiningMarkCluster) {
                     DoubleNear(shaped.glyphs[0].xAdvance + shaped.glyphs[1].xOffset, 1e-6)),
                 GlyphYPositionIs(DoubleNear(shaped.glyphs[1].yOffset, 1e-6))),
           GlyphXPositionIs(DoubleNear(clusterAdvance + shaped.glyphs[2].xOffset + 40.0, 1e-6))))));
+}
+
+TEST(TextEngineTest, TextPathStretchFollowsEachGlyphChord) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .curveTo(Vector2d(0.0, 100.0), Vector2d(100.0, 100.0), Vector2d(100.0, 0.0))
+                        .build();
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB");
+  span.pathSpline = path;
+  span.textPathMethod = components::TextPathMethod::Stretch;
+  text.spans.push_back(std::move(span));
+
+  TextEngine engine(fontManager, registry);
+  const auto runs = engine.layout(text, MakeTextParams(24.0));
+
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(2));
+  ASSERT_TRUE(runs[0].stretchedTextPath);
+  double expectedOrigin = 0.0;
+  for (const TextGlyph& glyph : runs[0].glyphs) {
+    ASSERT_TRUE(glyph.textPathOrigin);
+    EXPECT_NEAR(*glyph.textPathOrigin, expectedOrigin, 1e-6);
+    expectedOrigin += glyph.xAdvance;
+  }
+}
+
+TEST(TextEngineTest, TextPathMeasurementRetentionUsesDocumentFamilyBudget) {
+  Registry registry;
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.geometryBytes = 16 * 1024 * 1024;
+  limits.maximumTotalRetainedBytes = 16 * 1024 * 1024;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  registry.ctx().emplace<components::DocumentResourceFamilyContext>(family);
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
+  const Path path = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .curveTo(Vector2d(0.0, 1e7), Vector2d(1e7, 1e7), Vector2d(1e7, 0.0))
+                        .build();
+  std::vector<std::vector<TextRun>> retainedRuns;
+  retainedRuns.reserve(32);
+  std::size_t admitted = 0;
+  for (int root = 0; root < 32; ++root) {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("A");
+    span.pathSpline = path;
+    span.textPathSourceEntity = registry.create();
+    span.textPathMethod = components::TextPathMethod::Stretch;
+    text.spans.push_back(std::move(span));
+    auto runs = engine.layout(text, MakeTextParams(24.0));
+    if (!runs.empty() && runs.front().stretchedTextPath) {
+      ++admitted;
+    }
+    retainedRuns.push_back(std::move(runs));
+  }
+
+  EXPECT_THAT(admitted, AllOf(Gt(0u), Lt(32u)));
+  EXPECT_LE(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::Geometry),
+            limits.geometryBytes);
+  EXPECT_FALSE(family->securityStats().rejected);
+}
+
+TEST(TextEngineTest, TextPathMeasurementWorkIsCumulativeAfterReleasedAlignPaths) {
+  Registry registry;
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.textPathMeasurementWorkUnits = 4;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  registry.ctx().emplace<components::DocumentResourceFamilyContext>(family);
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry);
+  const Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(100.0, 0.0)).build();
+  std::size_t admitted = 0;
+  for (int root = 0; root < 5; ++root) {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("A");
+    span.pathSpline = path;
+    span.textPathSourceEntity = registry.create();
+    text.spans.push_back(std::move(span));
+    const auto runs = engine.layout(text, MakeTextParams(24.0));
+    if (!runs.empty() && !runs.front().glyphs.empty()) {
+      ++admitted;
+    }
+  }
+
+  EXPECT_EQ(admitted, 2u);
+  EXPECT_EQ(family->securityStats().textPathMeasurementWorkUnits, 4u);
+  EXPECT_EQ(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::Geometry), 0u);
+  EXPECT_TRUE(family->securityStats().textPathMeasurementWorkRejected);
+}
+
+TEST(TextEngineTest, TextPathStretchKeepsCombiningMarkInBaseClusterFrame) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_TRUE(static_cast<bool>(font));
+  const std::string value = "q\xCC\x81";
+  TextBackendFull backend(fontManager, registry);
+  const auto shaped =
+      backend.shapeRun(font, 24.0f, value, 0, value.size(), false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, SizeIs(2));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(value);
+  span.pathSpline = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .curveTo(Vector2d(0.0, 100.0), Vector2d(100.0, 100.0), Vector2d(100.0, 0.0))
+                        .build();
+  span.textPathMethod = components::TextPathMethod::Stretch;
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(24.0);
+  params.fontFamilies = {RcString("Noto Sans")};
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendFull>(fontManager, registry));
+
+  const auto runs = engine.layout(text, params);
+
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(2));
+  const TextGlyph& base = runs[0].glyphs[0];
+  const TextGlyph& mark = runs[0].glyphs[1];
+  ASSERT_TRUE(base.textPathOrigin);
+  ASSERT_TRUE(mark.textPathOrigin);
+  EXPECT_DOUBLE_EQ(mark.xAdvance, 0.0);
+  EXPECT_NEAR(*mark.textPathOrigin - *base.textPathOrigin,
+              shaped.glyphs[0].xAdvance + shaped.glyphs[1].xOffset - shaped.glyphs[0].xOffset,
+              1e-6);
+  EXPECT_NEAR(mark.textPathNormalOffset - base.textPathNormalOffset,
+              shaped.glyphs[1].yOffset - shaped.glyphs[0].yOffset, 1e-6);
+}
+
+TEST(TextEngineTest, TextPathStretchMappingStopsAtItsOwningRunRange) {
+  Registry registry;
+  FontManager fontManager(registry);
+  components::ComputedTextComponent text;
+  const Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(200.0, 0.0)).build();
+  auto stretched = MakeSpan("A");
+  stretched.pathSpline = path;
+  stretched.textPathSourceEntity = registry.create();
+  stretched.textPathMethod = components::TextPathMethod::Stretch;
+  auto flat = MakeSpan("B");
+  auto aligned = MakeSpan("C");
+  aligned.pathSpline = path;
+  aligned.textPathSourceEntity = registry.create();
+  text.spans = {std::move(stretched), std::move(flat), std::move(aligned)};
+
+  TextEngine engine(fontManager, registry);
+  const auto runs = engine.layout(text, MakeTextParams(24.0));
+
+  ASSERT_THAT(runs, SizeIs(3));
+  EXPECT_TRUE(runs[0].stretchedTextPath);
+  EXPECT_FALSE(runs[1].stretchedTextPath);
+  EXPECT_FALSE(runs[2].stretchedTextPath);
 }
 
 TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {

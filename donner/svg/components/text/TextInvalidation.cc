@@ -2,6 +2,7 @@
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
@@ -22,6 +23,9 @@ Entity InvalidateTextLayout(EntityHandle handle) {
   while (current != entt::null) {
     if (registry.all_of<TextRootComponent>(current)) {
       registry.remove<ComputedTextGeometryComponent>(current);
+      if (auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>()) {
+        budget->release(current);
+      }
       registry.get_or_emplace<DirtyFlagsComponent>(current).mark(
           DirtyFlagsComponent::TextGeometry | DirtyFlagsComponent::RenderInstance);
       return current;

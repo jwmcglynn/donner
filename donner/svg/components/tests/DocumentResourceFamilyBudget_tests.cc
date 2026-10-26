@@ -92,6 +92,25 @@ TEST(DocumentResourceFamilyBudgetTest, RejectsPerKindBoundaryWithoutChargingTota
   EXPECT_EQ(budget.totalRetainedBytes(), 10u);
 }
 
+TEST(DocumentResourceFamilyBudgetTest, TextPathWorkEpochResetsOnlyAtOutermostBoundary) {
+  auto limits = MakeLimits(100, 100);
+  limits.textPathMeasurementWorkUnits = 4;
+  DocumentResourceFamilyBudget budget(limits);
+
+  budget.beginTextPathMeasurementWorkEpoch();
+  EXPECT_TRUE(budget.reserveTextPathMeasurementWork(3));
+  budget.beginTextPathMeasurementWorkEpoch();
+  EXPECT_EQ(budget.availableTextPathMeasurementWork(), 1u);
+  budget.endTextPathMeasurementWorkEpoch();
+  EXPECT_EQ(budget.availableTextPathMeasurementWork(), 1u);
+  budget.endTextPathMeasurementWorkEpoch();
+
+  budget.beginTextPathMeasurementWorkEpoch();
+  EXPECT_EQ(budget.availableTextPathMeasurementWork(), 4u);
+  EXPECT_FALSE(budget.securityStats().textPathMeasurementWorkRejected);
+  budget.endTextPathMeasurementWorkEpoch();
+}
+
 TEST(DocumentResourceFamilyBudgetTest, AggregateAdditionCannotOverflow) {
   constexpr std::size_t kMaximum = std::numeric_limits<std::size_t>::max();
   DocumentResourceFamilyBudget budget(MakeLimits(kMaximum, kMaximum));

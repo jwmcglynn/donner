@@ -16,8 +16,10 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/FontMetricDependenciesComponent.h"
 #include "donner/svg/components/FontPaintDependenciesComponent.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationBaseValue.h"
@@ -37,6 +39,7 @@
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/text/TextBackendSimple.h"
 #include "donner/svg/text/TextEngineHelpers.h"
+#include "donner/svg/text/TextPathWarp.h"
 #ifdef DONNER_TEXT_FULL
 #include "donner/svg/text/TextBackendFull.h"
 #endif
@@ -1058,12 +1061,117 @@ struct TextPathStagingState {
 
 struct DeferredTextPath {
   size_t firstRun = 0;
+  size_t endRun = 0;
   Path::MeasuredPath measuredPath;
   bool closed = false;
   std::vector<TextPathCluster> clusters;
+  std::shared_ptr<TextPathMeasurementReservation> measurementReservation;
 };
 
 constexpr size_t kMaximumDeferredTextPathBytes = Path::kMaximumMeasuredPathRetainedBytes;
+
+std::shared_ptr<components::DocumentResourceFamilyBudget> TextPathResourceFamily(
+    Registry& registry) {
+  auto& context = registry.ctx();
+  if (!context.contains<components::DocumentResourceFamilyContext>()) {
+    context.emplace<components::DocumentResourceFamilyContext>();
+  }
+  auto& familyContext = context.get<components::DocumentResourceFamilyContext>();
+  if (!familyContext.budget) {
+    familyContext.budget = std::make_shared<components::DocumentResourceFamilyBudget>();
+  }
+  return familyContext.budget;
+}
+
+class ScopedTextPathMeasurementWorkEpoch {
+public:
+  explicit ScopedTextPathMeasurementWorkEpoch(Registry& registry)
+      : family_(TextPathResourceFamily(registry)) {
+    family_->beginTextPathMeasurementWorkEpoch();
+  }
+  ~ScopedTextPathMeasurementWorkEpoch() { family_->endTextPathMeasurementWorkEpoch(); }
+
+  ScopedTextPathMeasurementWorkEpoch(const ScopedTextPathMeasurementWorkEpoch&) = delete;
+  ScopedTextPathMeasurementWorkEpoch& operator=(const ScopedTextPathMeasurementWorkEpoch&) = delete;
+
+private:
+  std::shared_ptr<components::DocumentResourceFamilyBudget> family_;
+};
+
+struct TextPathMeasurementAdmission {
+  std::shared_ptr<components::DocumentResourceFamilyBudget> family;
+  std::shared_ptr<TextPathMeasurementReservation> reservation;
+  size_t workUnits = 0;
+};
+
+std::optional<size_t> TextPathSegmentEndBytes(const Path& sourcePath) {
+  if (sourcePath.commands().size() > std::numeric_limits<size_t>::max() / sizeof(double)) {
+    return std::nullopt;
+  }
+  return sourcePath.commands().size() * sizeof(double);
+}
+
+TextPathMeasurementAdmission AdmitTextPathMeasurement(Registry& registry, const Path& sourcePath,
+                                                      size_t localAvailableBytes,
+                                                      size_t mappingOverhead) {
+  TextPathMeasurementAdmission result;
+  result.family = TextPathResourceFamily(registry);
+  const auto segmentEndBytes = TextPathSegmentEndBytes(sourcePath);
+  const size_t familyAvailable =
+      result.family->availableBytes(components::DocumentResourceFamilyBudget::Kind::Geometry);
+  const size_t availableBytes = std::min(localAvailableBytes, familyAvailable);
+  if (!segmentEndBytes || *segmentEndBytes > availableBytes ||
+      mappingOverhead > availableBytes - *segmentEndBytes) {
+    return result;
+  }
+  const size_t measurementBytesAvailable = availableBytes - *segmentEndBytes - mappingOverhead;
+  result.workUnits =
+      std::min(sourcePath.measurementWorkLimitForRetainedBytes(measurementBytesAvailable),
+               result.family->availableTextPathMeasurementWork());
+  const auto measurementUpper = sourcePath.measurementRetainedBytesUpperBound(result.workUnits);
+  if (!measurementUpper || *measurementUpper > measurementBytesAvailable ||
+      result.workUnits == 0u) {
+    (void)result.family->reserveTextPathMeasurementWork(1u);
+    result.workUnits = 0u;
+    return result;
+  }
+  if (!result.family->reserveTextPathMeasurementWork(result.workUnits)) {
+    result.workUnits = 0u;
+    return result;
+  }
+  const size_t reservationBytes = *measurementUpper + *segmentEndBytes + mappingOverhead;
+  result.reservation = TextPathMeasurementReservation::Create(result.family, reservationBytes);
+  if (!result.reservation) {
+    result.family->releaseUnusedTextPathMeasurementWork(result.workUnits);
+    result.workUnits = 0u;
+  }
+  return result;
+}
+
+bool FinalizeTextPathMeasurementAdmission(TextPathMeasurementAdmission& admission,
+                                          const Path::MeasuredPath& measuredPath,
+                                          size_t mappingOverhead,
+                                          std::optional<size_t>& measuredBytes) {
+  if (!admission.reservation) {
+    return false;
+  }
+  const size_t consumedWork = measuredPath.measurementWorkUnits();
+  admission.family->releaseUnusedTextPathMeasurementWork(
+      consumedWork < admission.workUnits ? admission.workUnits - consumedWork : 0u);
+  if (!measuredPath.valid() && consumedWork >= admission.workUnits) {
+    admission.family->rejectTextPathMeasurementWork();
+  }
+  measuredBytes = measuredPath.retainedBytes();
+  if (!measuredPath.valid() || !measuredBytes ||
+      measuredPath.segmentCount() >
+          (std::numeric_limits<size_t>::max() - mappingOverhead) / sizeof(double)) {
+    return false;
+  }
+  const size_t measuredMappingBytes =
+      *measuredBytes + measuredPath.segmentCount() * sizeof(double) + mappingOverhead;
+  admission.reservation->shrink(measuredMappingBytes);
+  return true;
+}
 
 /// Resolves a per-character displacement, returning zero when it is absent.
 double TextPathDisplacement(const SmallVector<std::optional<Lengthd>, 1>& positions,
@@ -1199,6 +1307,12 @@ bool IsSingleClosedTextPath(const Path& source) {
   return moves == 1 && closes == 1;
 }
 
+bool IsStraightTextPath(const Path& source) {
+  const auto commands = source.commands();
+  return commands.size() == 2u && commands[0].verb == Path::Verb::MoveTo &&
+         commands[1].verb == Path::Verb::LineTo;
+}
+
 /// Normalize finite distances without changing the open-path clipping policy.
 double NormalizeTextPathDistance(double distance, double length) {
   const double normalized = std::fmod(distance, length);
@@ -1232,10 +1346,10 @@ Path::PointOnPath SampleTextPathCluster(const Path::MeasuredPath& path, double s
   return path.pointAtArcLength(distance);
 }
 
-/// Samples each cluster once and places all of its glyphs with their shaped offsets.
+/// Samples each cluster and places all of its glyphs with their shaped offsets.
 void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, bool closed,
-                           std::vector<TextRun>& runs,
-                           const std::vector<TextPathCluster>& clusters) {
+                           std::vector<TextRun>& runs, const std::vector<TextPathCluster>& clusters,
+                           components::TextPathMethod method) {
   for (const TextPathCluster& cluster : clusters) {
     const double halfAdvance = cluster.advance * 0.5;
     const auto sample = SampleTextPathCluster(path, startOffset, cluster.pathOffset + halfAdvance,
@@ -1251,6 +1365,16 @@ void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, b
         const double angle = sample.angle + glyph.rotateDegrees * MathConstants<double>::kDegToRad;
         const double localX = glyph.xPosition;
         const double localY = glyph.yPosition;
+        if (method == components::TextPathMethod::Stretch) {
+          // Turn the shaped offset by the authored rotate in path-local space, matching align's
+          // placement; the warp then rotates only the outline about this origin.
+          const double localRotate = glyph.rotateDegrees * MathConstants<double>::kDegToRad;
+          const double pathLocalX = localX * std::cos(localRotate) - localY * std::sin(localRotate);
+          const double pathLocalY = localX * std::sin(localRotate) + localY * std::cos(localRotate);
+          glyph.textPathOrigin = cluster.pathOffset + pathLocalX;
+          glyph.textPathNormalOffset = cluster.baselineOffset + pathLocalY;
+          glyph.textPathLocalRotateDegrees = glyph.rotateDegrees;
+        }
         glyph.xPosition = origin.x + localX * std::cos(angle) - localY * std::sin(angle);
         glyph.yPosition = origin.y + localX * std::sin(angle) + localY * std::cos(angle);
         glyph.rotateDegrees += sample.angle * MathConstants<double>::kRadToDeg;
@@ -1281,7 +1405,17 @@ void placeTextPath(const components::ComputedTextComponent& text, const TextLayo
   AnchorTextPathClusters(text, path.clusters);
   const auto& firstSpan = text.spans[path.firstRun];
   PlaceTextPathClusters(path.measuredPath, firstSpan.pathStartOffset, path.closed, runs,
-                        path.clusters);
+                        path.clusters, firstSpan.textPathMethod);
+  if (firstSpan.textPathMethod == components::TextPathMethod::Stretch) {
+    std::vector<double> segmentEnds = path.measuredPath.segmentEndDistances();
+    auto mapping = std::make_shared<StretchedTextPath>(StretchedTextPath{
+        std::move(path.measuredPath), std::move(segmentEnds), firstSpan.pathStartOffset,
+        path.closed, IsStraightTextPath(*firstSpan.pathSpline),
+        std::move(path.measurementReservation)});
+    for (size_t runIndex = path.firstRun; runIndex < path.endRun; ++runIndex) {
+      runs[runIndex].stretchedTextPath = mapping;
+    }
+  }
 }
 
 /// A retired owning path establishes an endpoint for the next unanchored flat character.
@@ -2934,12 +3068,13 @@ class TextLayoutInvocation {
 public:
   TextLayoutInvocation(Registry& registry, FontManager& fontManager, TextBackend& backend,
                        const components::ComputedTextComponent& text,
-                       const TextLayoutParams& params)
+                       const TextLayoutParams& params, bool* resourceRejected = nullptr)
       : registry_(registry),
         fontManager_(fontManager),
         backend_(backend),
         text_(text),
-        params_(params) {}
+        params_(params),
+        resourceRejected_(resourceRejected) {}
 
   std::vector<TextRun> run() {
     resolveBaseFont();
@@ -3555,10 +3690,12 @@ private:
            deferredTextPathBytes_ <= kMaximumDeferredTextPathBytes - *measuredBytes - clusterBytes;
   }
 
-  void retainTextPath(Path::MeasuredPath measuredPath, bool closed, size_t retainedBytes) {
+  void retainTextPath(Path::MeasuredPath measuredPath, bool closed, size_t retainedBytes,
+                      std::shared_ptr<TextPathMeasurementReservation> measurementReservation) {
     deferredTextPathBytes_ += retainedBytes;
-    deferredTextPaths_.push_back(
-        {*firstPathRun_, std::move(measuredPath), closed, std::move(pathStaging_.clusters)});
+    deferredTextPaths_.push_back({*firstPathRun_, runs_.size(), std::move(measuredPath), closed,
+                                  std::move(pathStaging_.clusters),
+                                  std::move(measurementReservation)});
   }
 
   void discardTextPathRuns() {
@@ -3576,23 +3713,47 @@ private:
     previousSpanCodepoint_ = 0;
   }
 
+  std::optional<std::pair<size_t, size_t>> textPathLocalCapacity() const {
+    if (pathStaging_.clusters.capacity() >
+        kMaximumDeferredTextPathBytes / sizeof(TextPathCluster)) {
+      return std::nullopt;
+    }
+    const size_t clusterBytes = pathStaging_.clusters.capacity() * sizeof(TextPathCluster);
+    if (deferredTextPathBytes_ > kMaximumDeferredTextPathBytes ||
+        clusterBytes > kMaximumDeferredTextPathBytes - deferredTextPathBytes_) {
+      return std::nullopt;
+    }
+    return std::pair(kMaximumDeferredTextPathBytes - deferredTextPathBytes_ - clusterBytes,
+                     clusterBytes);
+  }
+
   void finishTextPath() {
     if (!firstPathRun_) {
       return;
     }
     const TextSpan& firstSpan = text_.spans[*firstPathRun_];
-    Path::MeasuredPath measuredPath = firstSpan.pathSpline->measure();
+    constexpr size_t kMappingOverhead = sizeof(StretchedTextPath) + 2u * sizeof(void*);
+    const Path& sourcePath = *firstSpan.pathSpline;
+    const auto localCapacity = textPathLocalCapacity();
+    TextPathMeasurementAdmission admission = AdmitTextPathMeasurement(
+        registry_, sourcePath, localCapacity ? localCapacity->first : 0u, kMappingOverhead);
+    Path::MeasuredPath measuredPath =
+        admission.reservation ? sourcePath.measure(admission.workUnits) : Path::MeasuredPath();
+    std::optional<size_t> measuredBytes;
+    const bool measuredMappingFits = FinalizeTextPathMeasurementAdmission(
+        admission, measuredPath, kMappingOverhead, measuredBytes);
     const bool closed = isClosedTextPath(measuredPath, firstSpan);
     postPathBoundaries_.push_back(
         {runs_.size(), TextPathContinuation(measuredPath, closed, firstSpan.pathStartOffset)});
-    const auto measuredBytes = measuredPath.retainedBytes();
-    const bool clustersFit =
-        pathStaging_.clusters.capacity() <= kMaximumDeferredTextPathBytes / sizeof(TextPathCluster);
-    const size_t clusterBytes =
-        clustersFit ? pathStaging_.clusters.capacity() * sizeof(TextPathCluster) : 0;
-    if (canRetainTextPath(measuredBytes, clustersFit, clusterBytes)) {
-      retainTextPath(std::move(measuredPath), closed, *measuredBytes + clusterBytes);
+    const size_t clusterBytes = localCapacity ? localCapacity->second : 0u;
+    if (measuredMappingFits && localCapacity &&
+        canRetainTextPath(measuredBytes, true, clusterBytes)) {
+      retainTextPath(std::move(measuredPath), closed, *measuredBytes + clusterBytes,
+                     std::move(admission.reservation));
     } else {
+      if (resourceRejected_) {
+        *resourceRejected_ = true;
+      }
       discardTextPathRuns();
     }
     resetTextPathState();
@@ -3662,14 +3823,24 @@ private:
   std::vector<ChunkBoundary> chunkBoundaries_;
   std::vector<RunPenExtent> runExtents_;
   bool wrapped_ = false;
+  bool* resourceRejected_ = nullptr;
 };
 
 }  // namespace
 
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
                                         const TextLayoutParams& params) {
+  bool resourceRejected = false;
+  return layoutWithResourceStatus(text, params, resourceRejected);
+}
+
+std::vector<TextRun> TextEngine::layoutWithResourceStatus(
+    const components::ComputedTextComponent& text, const TextLayoutParams& params,
+    bool& resourceRejected) {
   ++layoutCallCount_;
-  return TextLayoutInvocation(registry_, fontManager_, *backend_, text, params).run();
+  resourceRejected = false;
+  return TextLayoutInvocation(registry_, fontManager_, *backend_, text, params, &resourceRejected)
+      .run();
 }
 
 FontVMetrics TextEngine::fontVMetrics(FontHandle font) const {
@@ -3749,6 +3920,172 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
     }
   }
   return measured;
+}
+
+components::GeometryPreparationResourceBudget& TextGeometryBudget(Registry& registry) {
+  auto& context = registry.ctx();
+  if (!context.contains<components::GeometryPreparationResourceBudget>()) {
+    std::shared_ptr<components::DocumentResourceFamilyBudget> family;
+    if (const auto* familyContext = context.find<components::DocumentResourceFamilyContext>()) {
+      family = familyContext->budget;
+    }
+    context.emplace<components::GeometryPreparationResourceBudget>(std::move(family));
+  }
+  return context.get<components::GeometryPreparationResourceBudget>();
+}
+
+bool ReserveStretchedCacheOutline(Registry& registry, FontManager& fontManager, Entity owner,
+                                  FontHandle font, int glyphIndex, std::size_t& retainedBytes) {
+  constexpr std::size_t kExpansion = kMaximumTextPathWarpExpansion;
+  const auto complexity = fontManager.glyphOutlineComplexity(font, glyphIndex);
+  if (!complexity || complexity->maximumVertices > Path::kMaximumGeometryQueryWork / kExpansion ||
+      complexity->work > Path::kMaximumGeometryQueryWork / kExpansion) {
+    return false;
+  }
+  constexpr std::size_t kPerVertexBytes = sizeof(Vector2d) + sizeof(Path::Command);
+  const std::size_t expandedVertices = complexity->maximumVertices * kExpansion;
+  if (expandedVertices >
+      (components::GeometryPreparationResourceBudget::kMaximumBytes - retainedBytes) /
+          kPerVertexBytes) {
+    return false;
+  }
+  retainedBytes += expandedVertices * kPerVertexBytes;
+  return TextGeometryBudget(registry).reserve(owner, retainedBytes);
+}
+
+std::optional<Box2d> CachedTextRunCellBounds(const TextRun& run, double emTop, double emBottom) {
+  Box2d result;
+  bool initialized = false;
+  for (const TextGlyph& glyph : run.glyphs) {
+    Path cell;
+    if (run.stretchedTextPath && glyph.textPathOrigin) {
+      cell = PlaceStretchedTextPathCell(run, glyph, emTop, emBottom);
+    } else {
+      const double geometricScaleY = glyph.stretchScaleY;
+      cell = PathBuilder()
+                 .addRect(Box2d::FromXYWH(0.0, -emTop * geometricScaleY, glyph.xAdvance,
+                                          (emTop + emBottom) * geometricScaleY))
+                 .build();
+      cell = transformPath(cell, Transform2d::Translate(glyph.xPosition, glyph.yPosition));
+    }
+    if (!cell.empty()) {
+      addBox(result, initialized, cell.bounds());
+    }
+  }
+  return initialized ? std::optional(result) : std::nullopt;
+}
+
+Path PlaceCachedGlyphOutline(Path outline, const TextRun& run, const TextGlyph& glyph) {
+  if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
+    outline = transformPath(outline, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+  }
+  if (run.stretchedTextPath && glyph.textPathOrigin) {
+    return PlaceStretchedTextPathOutline(std::move(outline), run, glyph);
+  }
+  Transform2d textElementFromGlyphLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+  if (glyph.rotateDegrees != 0.0) {
+    textElementFromGlyphLocal =
+        Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+        textElementFromGlyphLocal;
+  }
+  return transformPath(outline, textElementFromGlyphLocal);
+}
+
+void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fontManager,
+                         Entity textRootEntity, const TextRun& run,
+                         const components::ComputedTextComponent::TextSpan& span,
+                         const TextGlyph& glyph, float runFontSizePx, bool hasPaintedGlyphs,
+                         components::ComputedTextGeometryComponent::CharacterGeometry& charGeom,
+                         components::ComputedTextGeometryComponent& cache, bool& hasInkBounds,
+                         std::size_t& stretchedCacheReservation) {
+  if (!charGeom.rendered) {
+    const auto warpedStart =
+        run.stretchedTextPath ? MapTextPathPoint(*run.stretchedTextPath, glyph, Vector2d(0.0, 0.0))
+                              : std::nullopt;
+    charGeom.startPosition = warpedStart.value_or(Vector2d(glyph.xPosition, glyph.yPosition));
+    charGeom.rotation = glyph.rotateDegrees;
+    charGeom.rendered = true;
+  }
+  const auto warpedEnd = run.stretchedTextPath
+                             ? MapTextPathPoint(*run.stretchedTextPath, glyph,
+                                                Vector2d(glyph.xAdvance, glyph.yAdvance))
+                             : std::nullopt;
+  charGeom.endPosition = warpedEnd.value_or(
+      Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + glyph.yAdvance));
+  charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
+  if (!hasPaintedGlyphs) {
+    return;
+  }
+
+  const float emScale = run.font ? engine.scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
+  const bool outlineAdmitted =
+      !run.stretchedTextPath ||
+      ReserveStretchedCacheOutline(registry, fontManager, textRootEntity, run.font,
+                                   glyph.glyphIndex, stretchedCacheReservation);
+  Path glyphPath = outlineAdmitted ? engine.glyphOutline(run.font, glyph.glyphIndex,
+                                                         emScale * glyph.fontSizeScale)
+                                   : Path();
+  if (!glyphPath.empty()) {
+    Path transformed = PlaceCachedGlyphOutline(std::move(glyphPath), run, glyph);
+    if (transformed.empty()) {
+      return;
+    }
+    const Box2d extent = transformed.bounds();
+    cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
+    addBox(cache.inkBounds, hasInkBounds, extent);
+    addBox(charGeom.extent, charGeom.hasExtent, extent);
+  } else if (const auto extent = BitmapGlyphExtent(
+                 glyph, engine.bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale))) {
+    addBox(cache.inkBounds, hasInkBounds, *extent);
+    addBox(charGeom.extent, charGeom.hasExtent, *extent);
+  }
+}
+
+void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& fontManager,
+                           Entity textRootEntity, const TextRun& run,
+                           const components::ComputedTextComponent::TextSpan& span,
+                           components::ComputedTextGeometryComponent& cache, bool& hasInkBounds,
+                           bool& hasEmBoxBounds, std::size_t& objectBoundingBoxSpanVisits,
+                           std::size_t& stretchedCacheReservation) {
+  const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+  if (spanText.empty()) {
+    return;
+  }
+  const float runFontSizePx = run.usedFontSizePx;
+  const float runScale = run.font ? engine.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
+  double emTop = static_cast<double>(runFontSizePx);
+  double emBottom = 0.0;
+  if (run.font && runScale > 0.0f) {
+    const FontVMetrics metrics = engine.fontVMetrics(run.font);
+    emTop = static_cast<double>(metrics.ascent) * runScale;
+    emBottom = -static_cast<double>(metrics.descent) * runScale;
+  }
+  const ApiCharacterIndexMappings apiMappings =
+      BuildApiCharacterIndexMappings(spanText, run.glyphs);
+  const size_t localCharCount = apiMappings.firstUnitByUnit.size();
+  const size_t charBaseIndex = cache.characters.size();
+  cache.characters.resize(charBaseIndex + localCharCount);
+  for (size_t i = 0; i < localCharCount; ++i) {
+    cache.characters[charBaseIndex + i].sourceEntity = span.sourceEntity;
+  }
+  if (const auto runEmBounds = CachedTextRunCellBounds(run, emTop, emBottom)) {
+    addBox(cache.emBoxBounds, hasEmBoxBounds, *runEmBounds);
+    ++objectBoundingBoxSpanVisits;
+    AddTextObjectBounds(cache, span.sourceEntity, *runEmBounds);
+  }
+  const bool hasPaintedGlyphs = HasPaintedTextGlyphs(span, run);
+  for (const auto& glyph : run.glyphs) {
+    const size_t localCharIndex = glyph.cluster < apiMappings.byteToFirstUnit.size()
+                                      ? apiMappings.byteToFirstUnit[glyph.cluster]
+                                      : 0;
+    if (localCharIndex < localCharCount) {
+      PopulateCachedGlyph(engine, registry, fontManager, textRootEntity, run, span, glyph,
+                          runFontSizePx, hasPaintedGlyphs,
+                          cache.characters[charBaseIndex + localCharIndex], cache, hasInkBounds,
+                          stretchedCacheReservation);
+    }
+  }
+  ExpandApiCharacterGeometryAliases(cache, charBaseIndex, apiMappings);
 }
 
 namespace {
@@ -3842,13 +4179,27 @@ Transform2d TextRootFromReferenceGlyph(const TextGlyph& glyph) {
          Transform2d::Translate(glyph.xPosition, glyph.yPosition);
 }
 
-bool AddReferenceGlyphCell(TextEngine::ReferenceGeometry& result, const TextGlyph& glyph,
-                           double emTop, double emBottom, TextReferenceWork& work) {
-  const double advance = glyph.xAdvance;
-  const double verticalScale = glyph.stretchScaleY;
-  const Box2d localCell(Vector2d(std::min(0.0, advance), -emTop * verticalScale),
-                        Vector2d(std::max(0.0, advance), emBottom * verticalScale));
-  const Box2d cell = TextRootFromReferenceGlyph(glyph).transformBox(localCell);
+bool AddReferenceGlyphCell(TextEngine::ReferenceGeometry& result, const TextRun& run,
+                           const TextGlyph& glyph, double emTop, double emBottom,
+                           TextReferenceWork& work) {
+  Box2d cell;
+  if (run.stretchedTextPath && glyph.textPathOrigin) {
+    constexpr std::size_t kCellCommandsAndPoints = 5u + 4u;
+    if (!work.reserveProduct(kCellCommandsAndPoints, kMaximumTextPathWarpExpansion) ||
+        !work.reserve(1u)) {
+      return false;
+    }
+    Path cellPath = PlaceStretchedTextPathCell(run, glyph, emTop, emBottom);
+    if (cellPath.empty()) {
+      return work.reject();
+    }
+    cell = cellPath.bounds();
+  } else {
+    const double geometricScaleY = glyph.stretchScaleY;
+    const Box2d localCell(Vector2d(std::min(0.0, glyph.xAdvance), -emTop * geometricScaleY),
+                          Vector2d(std::max(0.0, glyph.xAdvance), emBottom * geometricScaleY));
+    cell = TextRootFromReferenceGlyph(glyph).transformBox(localCell);
+  }
   if (!std::isfinite(cell.topLeft.x) || !std::isfinite(cell.topLeft.y) ||
       !std::isfinite(cell.bottomRight.x) || !std::isfinite(cell.bottomRight.y)) {
     return work.reject();
@@ -3857,7 +4208,7 @@ bool AddReferenceGlyphCell(TextEngine::ReferenceGeometry& result, const TextGlyp
   return true;
 }
 
-bool AdmitReferenceOutline(FontManager& manager, FontHandle font, int glyphIndex,
+bool AdmitReferenceOutline(FontManager& manager, FontHandle font, int glyphIndex, bool stretched,
                            TextReferenceWork& work) {
   auto complexity = manager.glyphOutlineComplexity(font, glyphIndex);
   if (!complexity) {
@@ -3869,7 +4220,12 @@ bool AdmitReferenceOutline(FontManager& manager, FontHandle font, int glyphIndex
         FontManager::GlyphOutlineComplexity{.maximumVertices = fonts::kMaximumExpandedGlyphVertices,
                                             .work = fonts::kMaximumGlyphOutlineWork};
   }
-  return work.reserve(complexity->work) && work.reserveProduct(complexity->maximumVertices, 15);
+  constexpr std::size_t kDecodedOutlineFactor = 15u;
+  constexpr std::size_t kWarpedCommandAndPointFactor = 2u * 3u * kMaximumTextPathWarpExpansion;
+  const std::size_t expansion =
+      stretched ? kDecodedOutlineFactor + kWarpedCommandAndPointFactor : kDecodedOutlineFactor;
+  return work.reserve(complexity->work) &&
+         work.reserveProduct(complexity->maximumVertices, expansion);
 }
 
 bool AppendReferenceOutline(const TextEngine& engine, FontManager& manager, const TextRun& run,
@@ -3878,21 +4234,22 @@ bool AppendReferenceOutline(const TextEngine& engine, FontManager& manager, cons
   if (engine.isBitmapOnly(run.font)) {
     return true;
   }
-  if (!AdmitReferenceOutline(manager, run.font, glyph.glyphIndex, work)) {
+  if (!AdmitReferenceOutline(manager, run.font, glyph.glyphIndex,
+                             static_cast<bool>(run.stretchedTextPath), work)) {
     return false;
   }
   const float scale = engine.scaleForEmToPixels(run.font, run.usedFontSizePx) * glyph.fontSizeScale;
-  const Path raw = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
+  Path raw = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
   if (raw.empty()) {
     return true;
   }
   if (!work.reservePath(raw) || !work.reserve(1)) {
     return false;
   }
-  const Transform2d textRootFromGlyph =
-      Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY) *
-      TextRootFromReferenceGlyph(glyph);
-  Path placed = raw.transformed(textRootFromGlyph);
+  Path placed = PlaceCachedGlyphOutline(std::move(raw), run, glyph);
+  if (placed.empty()) {
+    return work.reject();
+  }
   const Box2d bounds = placed.bounds();
   if (!IsFiniteTextPosition(bounds.topLeft) || !IsFiniteTextPosition(bounds.bottomRight)) {
     return work.reject();
@@ -3912,7 +4269,7 @@ bool AppendTextReferenceRun(const TextEngine& engine, FontManager& manager, cons
   const double emTop = scale > 0.0f ? metrics.ascent * scale : run.usedFontSizePx;
   const double emBottom = scale > 0.0f ? -metrics.descent * scale : 0.0;
   for (const auto& glyph : run.glyphs) {
-    if (!AddReferenceGlyphCell(result, glyph, emTop, emBottom, work) ||
+    if (!AddReferenceGlyphCell(result, run, glyph, emTop, emBottom, work) ||
         (includeOutlines &&
          !AppendReferenceOutline(engine, manager, run, glyph, source, result, work))) {
       return false;
@@ -4015,6 +4372,7 @@ bool AdmitTextReferenceInput(const components::ComputedTextComponent& computed,
 std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
     EntityHandle handle, bool includeOutlines, std::size_t& remainingWork,
     const TextStyleContext* styleContext) const {
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry_);
   TextReferenceWork work(remainingWork);
   const Entity root = findTextRootEntity(handle);
   const auto* computed = registry_.try_get<components::ComputedTextComponent>(root);
@@ -4037,7 +4395,13 @@ std::optional<TextEngine::ReferenceGeometry> TextEngine::referenceGeometry(
     const TextLayoutParams params =
         buildTextLayoutParams(registry_, EntityHandle(registry_, styleRootEntity), *style, *text);
     ResolvePerSpanLayoutStyles(registry_, styled, params.viewBox, params.fontMetrics, styleContext);
-    const auto runs = const_cast<TextEngine*>(this)->layout(styled, params);
+    bool layoutResourceRejected = false;
+    const auto runs = const_cast<TextEngine*>(this)->layoutWithResourceStatus(
+        styled, params, layoutResourceRejected);
+    if (layoutResourceRejected) {
+      work.reject();
+      return std::nullopt;
+    }
     if (!AppendTextReferenceRuns(*this, fontManager_, registry_, styled, runs, handle.entity(),
                                  includeOutlines, result, work)) {
       return std::nullopt;
@@ -4053,12 +4417,18 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
     EntityHandle handle) const {
   const Entity textRootEntity = findTextRootEntity(handle);
   UTILS_RELEASE_ASSERT_MSG(textRootEntity != entt::null, "Text content element has no text root");
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry_);
 
   // Return cached component if it already exists.
   if (const auto* existing =
           registry_.try_get<components::ComputedTextGeometryComponent>(textRootEntity)) {
-    fontManager_.recordDependencies(existing->fontDependencies);
-    return *existing;
+    const bool workCanRetry =
+        !TextPathResourceFamily(registry_)->securityStats().textPathMeasurementWorkRejected;
+    if (!existing->retryAfterTextPathWorkRejection || !workCanRetry) {
+      fontManager_.recordDependencies(existing->fontDependencies);
+      return *existing;
+    }
+    registry_.remove<components::ComputedTextGeometryComponent>(textRootEntity);
   }
 
   auto emptyAndReturn = [&]() -> const components::ComputedTextGeometryComponent& {
@@ -4086,107 +4456,19 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   cache.fontResourceRevision = fontManager_.fontResourceRevision();
   bool hasInkBounds = false;
   bool hasEmBoxBounds = false;
-
+  std::size_t stretchedCacheReservation = 0u;
   for (size_t runIndex = 0; runIndex < runs.size() && runIndex < styledText.spans.size();
        ++runIndex) {
-    const auto& run = runs[runIndex];
-    const auto& span = styledText.spans[runIndex];
-    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
-
-    if (spanText.empty()) {
-      continue;
-    }
-
-    const float runFontSizePx = run.usedFontSizePx;
-
-    const float runScale = run.font ? scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
-    double emTop = static_cast<double>(runFontSizePx);
-    double emBottom = 0.0;
-    if (run.font && runScale > 0.0f) {
-      const FontVMetrics metrics = fontVMetrics(run.font);
-      emTop = static_cast<double>(metrics.ascent) * runScale;
-      emBottom = -static_cast<double>(metrics.descent) * runScale;
-    }
-
-    const ApiCharacterIndexMappings apiMappings =
-        BuildApiCharacterIndexMappings(spanText, run.glyphs);
-    const size_t localCharCount = apiMappings.firstUnitByUnit.size();
-    const size_t charBaseIndex = cache.characters.size();
-    cache.characters.resize(charBaseIndex + localCharCount);
-    for (size_t i = 0; i < localCharCount; ++i) {
-      cache.characters[charBaseIndex + i].sourceEntity = span.sourceEntity;
-    }
-
-    if (!run.glyphs.empty()) {
-      Box2d runEmBounds =
-          Box2d::FromXYWH(run.glyphs.front().xPosition, run.glyphs.front().yPosition - emTop, 0.0,
-                          emTop + emBottom);
-      for (const auto& glyph : run.glyphs) {
-        runEmBounds.addPoint(Vector2d(glyph.xPosition, glyph.yPosition - emTop));
-        runEmBounds.addPoint(
-            Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + emBottom));
-      }
-      addBox(cache.emBoxBounds, hasEmBoxBounds, runEmBounds);
-      ++objectBoundingBoxSpanVisits_;
-      AddTextObjectBounds(cache, span.sourceEntity, runEmBounds);
-    }
-
-    const bool hasPaintedGlyphs = HasPaintedTextGlyphs(span, run);
-    for (const auto& glyph : run.glyphs) {
-      const size_t localCharIndex = glyph.cluster < apiMappings.byteToFirstUnit.size()
-                                        ? apiMappings.byteToFirstUnit[glyph.cluster]
-                                        : 0;
-      if (localCharIndex >= localCharCount) {
-        continue;
-      }
-
-      auto& charGeom = cache.characters[charBaseIndex + localCharIndex];
-      if (!charGeom.rendered) {
-        charGeom.startPosition = Vector2d(glyph.xPosition, glyph.yPosition);
-        charGeom.rotation = glyph.rotateDegrees;
-        charGeom.rendered = true;
-      }
-
-      charGeom.endPosition =
-          Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + glyph.yAdvance);
-      charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
-
-      if (!hasPaintedGlyphs) {
-        continue;
-      }
-
-      const float emScale = run.font ? scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
-      Path glyphPath = glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
-      if (!glyphPath.empty()) {
-        if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-          glyphPath = transformPath(glyphPath,
-                                    Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
-        }
-
-        Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-        if (glyph.rotateDegrees != 0.0) {
-          glyphFromLocal =
-              Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
-              glyphFromLocal;
-        }
-
-        Path transformed = transformPath(glyphPath, glyphFromLocal);
-        const Box2d extent = transformed.bounds();
-        cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
-        addBox(cache.inkBounds, hasInkBounds, extent);
-        addBox(charGeom.extent, charGeom.hasExtent, extent);
-      } else if (const auto extent = BitmapGlyphExtent(
-                     glyph, bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale))) {
-        addBox(cache.inkBounds, hasInkBounds, *extent);
-        addBox(charGeom.extent, charGeom.hasExtent, *extent);
-      }
-    }
-    ExpandApiCharacterGeometryAliases(cache, charBaseIndex, apiMappings);
+    PopulateCachedTextRun(const_cast<TextEngine&>(*this), registry_, fontManager_, textRootEntity,
+                          runs[runIndex], styledText.spans[runIndex], cache, hasInkBounds,
+                          hasEmBoxBounds, objectBoundingBoxSpanVisits_, stretchedCacheReservation);
   }
 
   BuildTextObjectBoundsIndex(registry_, textRootEntity, cache);
 
   cache.runs = runs;
+  cache.retryAfterTextPathWorkRejection =
+      TextPathResourceFamily(registry_)->securityStats().textPathMeasurementWorkRejected;
 
   return registry_.emplace_or_replace<components::ComputedTextGeometryComponent>(textRootEntity,
                                                                                  std::move(cache));

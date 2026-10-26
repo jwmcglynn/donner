@@ -274,6 +274,21 @@ EntityHandle MakeReferenceTextRoot(Registry& registry, Visibility visibility) {
   return EntityHandle(registry, root);
 }
 
+EntityHandle MakeStretchedReferenceTextRoot(Registry& registry, Visibility visibility) {
+  EntityHandle root = MakeReferenceTextRoot(registry, visibility);
+  auto& span = root.get<components::ComputedTextComponent>().spans.front();
+  span.xList.clear();
+  span.yList.clear();
+  span.pathSpline = PathBuilder()
+                        .moveTo(Vector2d(0.0, 40.0))
+                        .curveTo(Vector2d(0.0, 0.0), Vector2d(80.0, 0.0), Vector2d(80.0, 40.0))
+                        .build();
+  span.textPathSourceEntity = root.entity();
+  span.textPathMethod = components::TextPathMethod::Stretch;
+  span.rotateList = {15.0};
+  return root;
+}
+
 }  // namespace
 
 TEST(TextEngineScriptedTest, ReferenceFillBoundsIncludeHiddenCellsWithoutDecodingOutlines) {
@@ -386,6 +401,71 @@ TEST(TextEngineScriptedTest, ReferenceStrokeOutlinesIncludeHiddenGlyphsWithoutCh
   EXPECT_EQ(probe->outlineCalls, 1u);
   EXPECT_THAT(root.all_of<components::ComputedTextGeometryComponent>(), testing::IsFalse());
   EXPECT_THAT(engine.ensureComputedTextGeometryComponent(root).glyphs, IsEmpty());
+}
+
+TEST(TextEngineScriptedTest, ReferenceGeometryMatchesCachedCurvedStretchPlacement) {
+  Registry registry;
+  FontManager manager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, manager);
+  const EntityHandle root = MakeStretchedReferenceTextRoot(registry, Visibility::Visible);
+  std::size_t work = 100000;
+
+  const auto reference = engine.referenceGeometry(root, true, work);
+  const auto& cached = engine.ensureComputedTextGeometryComponent(root);
+
+  ASSERT_THAT(reference, testing::Optional(testing::_));
+  ASSERT_THAT(reference->outlines, SizeIs(1));
+  ASSERT_THAT(cached.glyphs, SizeIs(1));
+  EXPECT_THAT(reference->outlines.front().path.points(),
+              testing::ElementsAreArray(cached.glyphs.front().path.points()));
+  EXPECT_THAT(reference->outlines.front().path.bounds(),
+              BitmapBoundsNear(cached.glyphs.front().extent));
+  EXPECT_THAT(reference->outlines.front().path.verbCount(), Gt(5u));
+}
+
+TEST(TextEngineScriptedTest, ReferenceGeometryHasAnalyticSharpCornerStretchBounds) {
+  Registry registry;
+  FontManager manager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, manager);
+  const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Hidden);
+  auto& span = root.get<components::ComputedTextComponent>().spans.front();
+  span.xList.clear();
+  span.yList.clear();
+  span.pathSpline = PathBuilder()
+                        .moveTo(Vector2d(0.0, 0.0))
+                        .lineTo(Vector2d(5.0, 0.0))
+                        .lineTo(Vector2d(5.0, 20.0))
+                        .build();
+  span.textPathSourceEntity = root.entity();
+  span.textPathMethod = components::TextPathMethod::Stretch;
+  std::size_t work = 100000;
+
+  const auto geometry = engine.referenceGeometry(root, true, work);
+
+  ASSERT_THAT(geometry, testing::Optional(testing::_));
+  ASSERT_THAT(geometry->objectBounds, testing::Optional(testing::_));
+  ASSERT_THAT(geometry->outlines, SizeIs(1));
+  // Scripted metrics define a full 10x12 cell and a fixed 6x8 outline. The baseline turns at x=5,
+  // so incoming +Y and outgoing -X normals give these exact unions.
+  EXPECT_THAT(*geometry->objectBounds, BitmapBoundsNear(Box2d::FromXYWH(0.0, -10.0, 15.0, 15.0)));
+  EXPECT_THAT(geometry->outlines.front().path.bounds(),
+              BitmapBoundsNear(Box2d::FromXYWH(0.0, -8.0, 13.0, 9.0)));
+}
+
+TEST(TextEngineScriptedTest, CurvedStretchReferenceBudgetRejectsBeforeOutlineDecode) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  const ScriptedTextBackend* probe = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  const EntityHandle root = MakeStretchedReferenceTextRoot(registry, Visibility::Hidden);
+  std::size_t work = 3000;
+
+  EXPECT_THAT(engine.referenceGeometry(root, false, work), testing::Optional(testing::_));
+  work = 3000;
+  EXPECT_THAT(engine.referenceGeometry(root, true, work), testing::Eq(std::nullopt));
+  EXPECT_THAT(probe->outlineCalls, Eq(0u));
+  EXPECT_THAT(work, Eq(0u));
 }
 
 TEST(TextEngineScriptedTest, ReferenceInputBudgetRejectsBeforeLayout) {
@@ -876,6 +956,38 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
                                                    firstOrigin + 2.0 * 10.0 + 1.0 + 3.0, 0.001))))),
                   AllOf(RunOnPathIs(Eq(true)),
                         RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(100.0, 0.001)))))));
+}
+
+TEST(TextEngineScriptedTest, StretchTextPathRotatesShapedOffsetsLikeAlign) {
+  // On a straight horizontal path, stretch and align place a glyph origin identically. The
+  // scripted backend gives this CJK glyph a shaped offset of (2, 3), which an authored rotate must
+  // turn before it becomes a path distance and normal offset.
+  const auto layoutWith = [](components::TextPathMethod method) {
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("\xe4\xb8\xad");
+    span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(200.0, 0.0)).build();
+    span.textPathSourceEntity = registry.create();
+    span.textPathMethod = method;
+    span.rotateList = {90.0};
+    text.spans.push_back(std::move(span));
+    return engine.layout(text, MakeTextParams(20.0));
+  };
+
+  const auto aligned = layoutWith(components::TextPathMethod::Align);
+  const auto stretched = layoutWith(components::TextPathMethod::Stretch);
+
+  ASSERT_THAT(aligned, SizeIs(1));
+  ASSERT_THAT(stretched, SizeIs(1));
+  ASSERT_THAT(aligned.front().glyphs, SizeIs(1));
+  ASSERT_THAT(stretched.front().glyphs, SizeIs(1));
+  const TextGlyph& alignGlyph = aligned.front().glyphs.front();
+  const TextGlyph& stretchGlyph = stretched.front().glyphs.front();
+  ASSERT_THAT(stretchGlyph.textPathOrigin, testing::Optional(testing::_));
+  EXPECT_THAT(*stretchGlyph.textPathOrigin, DoubleNear(alignGlyph.xPosition, 1e-9));
+  EXPECT_THAT(stretchGlyph.textPathNormalOffset, DoubleNear(alignGlyph.yPosition, 1e-9));
 }
 
 struct ParsedPathRunDetails {

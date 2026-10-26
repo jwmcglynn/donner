@@ -449,7 +449,7 @@ private:
   tiny_skia::Pixmap extractFilterViewport(const SurfaceFrame& frame, int width, int height);
   bool admitTextGlyphBatch(const std::vector<TextRun>& runs, bool stroked);
   bool admitGlyphPredecode(const FontManager& fontManager, FontHandle font, int glyphIndex,
-                           bool& hasComplexity);
+                           bool warped, bool& hasComplexity);
   bool admitPlacedGlyph(bool hasPredecodeComplexity, const Path& path);
   [[nodiscard]] std::optional<tiny_skia::Paint> makeFillPaint(const Box2d& bounds);
   [[nodiscard]] std::optional<tiny_skia::Paint> makeStrokePaint(const Box2d& bounds,

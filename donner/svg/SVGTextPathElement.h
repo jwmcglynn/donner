@@ -54,7 +54,7 @@ namespace donner::svg {
  * | `path`        | (none)    | Path data laid out in this element's own user space. Takes precedence over `href`. |
  * | `href`        | (none)    | Reference to a `<path>` or any basic shape, whose equivalent path is used. Supplies the geometry when `path` is absent or yields none. |
  * | `startOffset` | `0`       | Offset along the path where text begins                  |
- * | `method`      | `align`   | `align` places each glyph rigidly on the tangent. `stretch` asks for warped glyph outlines, which is parsed but rendered as `align`. |
+ * | `method`      | `align`   | `align` places each glyph rigidly on the tangent. `stretch` warps outline points along path normals. |
  * | `side`        | `left`    | `left` or `right`. `right` places text on the other side by reversing the direction of travel. |
  * | `spacing`     | `exact`   | `exact` advances glyphs by their shaped widths. `auto` leaves the choice to the user agent, and Donner chooses the same spacing as `exact`. |
  *
@@ -74,8 +74,8 @@ namespace donner::svg {
  * any basic shape. `startOffset` positions the text along that geometry, and `side="right"`
  * places it on the other side by reversing the direction of travel. `spacing="auto"` leaves the
  * inter-glyph spacing to the user agent, and Donner chooses the same spacing as `exact`.
- * `method="stretch"` asks for glyph outlines warped along the path; it is parsed and stored, but
- * those glyphs are rendered with `align` placement.
+ * `method="stretch"` warps glyph outline endpoints and control points along perpendiculars to the
+ * path.
  *
  * \see https://www.w3.org/TR/SVG2/text.html#TextPathElement
  */

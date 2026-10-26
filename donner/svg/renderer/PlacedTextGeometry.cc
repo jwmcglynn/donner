@@ -1,11 +1,13 @@
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 #include "donner/base/MathUtils.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/text/TextPathWarp.h"
 
 namespace donner::svg {
 
@@ -46,26 +48,26 @@ TextDrawGeometry PrepareTextDrawGeometry(Registry& registry,
   return geometry;
 }
 
-Path TransformPath(const Path& path, const Transform2d& transform) {
+Path TransformPath(const Path& path, const Transform2d& destinationFromSource) {
   PathBuilder builder;
   const auto points = path.points();
 
   for (const Path::Command& command : path.commands()) {
     switch (command.verb) {
       case Path::Verb::MoveTo:
-        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
+        builder.moveTo(destinationFromSource.transformPosition(points[command.pointIndex]));
         break;
       case Path::Verb::LineTo:
-        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
+        builder.lineTo(destinationFromSource.transformPosition(points[command.pointIndex]));
         break;
       case Path::Verb::QuadTo:
-        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
-                       transform.transformPosition(points[command.pointIndex + 1]));
+        builder.quadTo(destinationFromSource.transformPosition(points[command.pointIndex]),
+                       destinationFromSource.transformPosition(points[command.pointIndex + 1]));
         break;
       case Path::Verb::CurveTo:
-        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
-                        transform.transformPosition(points[command.pointIndex + 1]),
-                        transform.transformPosition(points[command.pointIndex + 2]));
+        builder.curveTo(destinationFromSource.transformPosition(points[command.pointIndex]),
+                        destinationFromSource.transformPosition(points[command.pointIndex + 1]),
+                        destinationFromSource.transformPosition(points[command.pointIndex + 2]));
         break;
       case Path::Verb::ClosePath: builder.closePath(); break;
     }
@@ -125,8 +127,52 @@ GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, Font
   return result;
 }
 
-Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextGlyph& glyph,
-                        float scale) {
+Path WarpGlyphOutline(const Path& outline, const StretchedTextPath& mapping, const TextGlyph& glyph,
+                      double tolerance) {
+  return WarpTextPathOutline(outline, mapping, glyph, tolerance);
+}
+
+namespace {
+
+/// Largest singular value of the linear part of \p deviceFromLocal, ignoring translation. The
+/// default renderer must not depend on Geode packages, so this does not share Geode's tolerance
+/// helper.
+double LinearMaxScale(const Transform2d& deviceFromLocal) {
+  const double a = deviceFromLocal.data[0];
+  const double b = deviceFromLocal.data[1];
+  const double c = deviceFromLocal.data[2];
+  const double d = deviceFromLocal.data[3];
+  const double col0 = a * a + b * b;
+  const double col1 = c * c + d * d;
+  const double cross = a * c + b * d;
+  const double diff = col0 - col1;
+  const double sigmaSquared = 0.5 * (col0 + col1 + std::sqrt(diff * diff + 4.0 * cross * cross));
+  return sigmaSquared > 0.0 ? std::sqrt(sigmaSquared) : 0.0;
+}
+
+}  // namespace
+
+double TextWarpToleranceFor(const Transform2d& deviceFromLocal) {
+  constexpr double kDeviceTolerance = 0.1;
+  constexpr double kMinTolerance = 1e-4;
+  // The largest singular value is at least the largest coefficient magnitude, so a coefficient
+  // this large already reaches the minimum. Rejecting it here also keeps `LinearMaxScale` from
+  // squaring a huge coefficient to infinity, or a non-finite one to NaN, which it reports as zero
+  // scale.
+  for (int i = 0; i < 4; ++i) {
+    if (!(std::abs(deviceFromLocal.data[i]) < kDeviceTolerance / kMinTolerance)) {
+      return kMinTolerance;
+    }
+  }
+  // The largest singular value of the linear part bounds how far any local error can move in
+  // device space; translation does not magnify it.
+  const double scale = LinearMaxScale(deviceFromLocal);
+  return std::clamp(kDeviceTolerance / std::max(scale, 1.0), kMinTolerance,
+                    Path::kLocalFlattenTolerance);
+}
+
+Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextRun& run,
+                        const TextGlyph& glyph, float scale, double warpTolerance) {
   if (glyph.glyphIndex == 0) {
     return Path();  // `.notdef` -- caller skips.
   }
@@ -144,6 +190,15 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
   if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
     glyphPath =
         TransformPath(glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+  }
+
+  if (run.stretchedTextPath && glyph.textPathOrigin) {
+    const double localRotation = glyph.textPathLocalRotateDegrees.value_or(0.0);
+    if (localRotation != 0.0) {
+      glyphPath = TransformPath(
+          glyphPath, Transform2d::Rotate(localRotation * MathConstants<double>::kPi / 180.0));
+    }
+    return WarpGlyphOutline(glyphPath, *run.stretchedTextPath, glyph, warpTolerance);
   }
 
   // Translate to the baseline origin and rotate about it, as one transform.
@@ -165,6 +220,17 @@ void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
       runs[runIndex].glyphs.clear();
     }
   }
+}
+
+std::optional<Box2d> TextGlyphCellBounds(const TextRun& run, const TextGlyph& glyph, double emTop,
+                                         double emBottom) {
+  if (!run.stretchedTextPath || !glyph.textPathOrigin) {
+    const double geometricScaleY = glyph.stretchScaleY;
+    return Box2d::FromXYWH(glyph.xPosition, glyph.yPosition - emTop * geometricScaleY,
+                           glyph.xAdvance, (emTop + emBottom) * geometricScaleY);
+  }
+  const Path warpedCell = PlaceStretchedTextPathCell(run, glyph, emTop, emBottom);
+  return warpedCell.empty() ? std::nullopt : std::optional(warpedCell.bounds());
 }
 
 Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs) {
@@ -194,10 +260,14 @@ Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>
       if (glyph.glyphIndex == 0) {
         continue;
       }
-      minX = std::min(minX, glyph.xPosition);
-      maxX = std::max(maxX, glyph.xPosition + glyph.xAdvance);
-      minY = std::min(minY, glyph.yPosition - emTop);
-      maxY = std::max(maxY, glyph.yPosition + emBottom);
+      const auto bounds = TextGlyphCellBounds(run, glyph, emTop, emBottom);
+      if (!bounds) {
+        continue;
+      }
+      minX = std::min(minX, bounds->topLeft.x);
+      maxX = std::max(maxX, bounds->bottomRight.x);
+      minY = std::min(minY, bounds->topLeft.y);
+      maxY = std::max(maxY, bounds->bottomRight.y);
     }
   }
 

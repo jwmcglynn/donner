@@ -23,6 +23,7 @@
 #include "donner/svg/components/AttachedIdLookup.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/FontPaintDependenciesComponent.h"
 #include "donner/svg/components/FontResourceGraph.h"
@@ -112,6 +113,30 @@ struct RendererDriverTextFrameCache {
 };
 
 namespace {
+
+class ScopedTextPathMeasurementWorkEpoch {
+public:
+  explicit ScopedTextPathMeasurementWorkEpoch(Registry& registry) {
+    auto& context = registry.ctx();
+    if (!context.contains<components::DocumentResourceFamilyContext>()) {
+      context.emplace<components::DocumentResourceFamilyContext>();
+    }
+    auto& familyContext = context.get<components::DocumentResourceFamilyContext>();
+    if (!familyContext.budget) {
+      familyContext.budget = std::make_shared<components::DocumentResourceFamilyBudget>();
+    }
+    family_ = familyContext.budget;
+    family_->beginTextPathMeasurementWorkEpoch();
+  }
+
+  ~ScopedTextPathMeasurementWorkEpoch() { family_->endTextPathMeasurementWorkEpoch(); }
+
+  ScopedTextPathMeasurementWorkEpoch(const ScopedTextPathMeasurementWorkEpoch&) = delete;
+  ScopedTextPathMeasurementWorkEpoch& operator=(const ScopedTextPathMeasurementWorkEpoch&) = delete;
+
+private:
+  std::shared_ptr<components::DocumentResourceFamilyBudget> family_;
+};
 
 class CapturePaintFontDependencies {
 public:
@@ -1611,8 +1636,10 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
   std::vector<TextRun> runs;
   if (const auto* cached =
           registry.try_get<components::ComputedTextGeometryComponent>(textRootHandle.entity());
-      cached != nullptr && !cached->runs.empty()) {
+      cached != nullptr && !cached->retryAfterTextPathWorkRejection && !cached->runs.empty()) {
     runs = cached->runs;
+  } else if (cached != nullptr && cached->retryAfterTextPathWorkRejection) {
+    runs = textEngine.ensureComputedTextGeometryComponent(textRootHandle).runs;
   } else {
     runs = textEngine.layout(text, ToTextLayoutParams(params));
   }
@@ -1879,6 +1906,7 @@ void RendererDriver::draw(SVGDocument& document) {
   DocumentWriteAccess access = document.writeAccess();
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
 
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
@@ -2040,6 +2068,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
                                           const Transform2d& surfaceFromCanvas) {
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
@@ -2099,6 +2128,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
                                      const Transform2d& surfaceFromCanvas) {
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
@@ -2125,6 +2155,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
                                                   const std::function<bool()>& shouldCancel) {
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
@@ -2151,6 +2182,7 @@ void RendererDriver::drawDocumentIntoCurrentFrame(SVGDocument& document,
                                                   const Transform2d& surfaceFromCanvas) {
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(document.registry());
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
 
@@ -2180,6 +2212,7 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
                                                      const Transform2d& surfaceFromCanvas) {
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
@@ -2214,6 +2247,7 @@ bool RendererDriver::drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Ent
 
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
+  const ScopedTextPathMeasurementWorkEpoch textPathWorkEpoch(registry);
   textFrameCache_->roots.clear();
   textFrameCache_->shadowStyles.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);

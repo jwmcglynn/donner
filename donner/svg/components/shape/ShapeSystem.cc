@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <concepts>
+#include <memory>
 #include <tuple>
 #include <utility>
 
@@ -32,6 +33,29 @@
 namespace donner::svg::components {
 
 namespace {
+
+class ScopedTextPathBoundsWorkEpoch {
+public:
+  explicit ScopedTextPathBoundsWorkEpoch(Registry& registry) {
+    auto& context = registry.ctx();
+    if (!context.contains<DocumentResourceFamilyContext>()) {
+      context.emplace<DocumentResourceFamilyContext>();
+    }
+    auto& familyContext = context.get<DocumentResourceFamilyContext>();
+    if (!familyContext.budget) {
+      familyContext.budget = std::make_shared<DocumentResourceFamilyBudget>();
+    }
+    family_ = familyContext.budget;
+    family_->beginTextPathMeasurementWorkEpoch();
+  }
+  ~ScopedTextPathBoundsWorkEpoch() { family_->endTextPathMeasurementWorkEpoch(); }
+
+  ScopedTextPathBoundsWorkEpoch(const ScopedTextPathBoundsWorkEpoch&) = delete;
+  ScopedTextPathBoundsWorkEpoch& operator=(const ScopedTextPathBoundsWorkEpoch&) = delete;
+
+private:
+  std::shared_ptr<DocumentResourceFamilyBudget> family_;
+};
 
 /// Create a FontMetrics with viewport size and font-size context, so that CSS units
 /// (em/ex/ch/rem/vw/vh/vmin/vmax) resolve correctly.
@@ -907,6 +931,7 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
   if (IsDisplayNone(handle, disabledSink)) {
     return std::nullopt;
   }
+  const ScopedTextPathBoundsWorkEpoch textPathWorkEpoch(*handle.registry());
   ReferenceBoundsAccumulator accumulator(*this, handle, targetFromWorld, includeStroke, budget);
   donner::components::ForAllChildrenRecursivePruned(
       handle, [&accumulator](EntityHandle child) { return accumulator.visit(child); });

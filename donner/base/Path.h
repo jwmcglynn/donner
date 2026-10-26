@@ -245,7 +245,8 @@ public:
   /// Result of sampling the path at a given arc length distance.
   struct PointOnPath {
     Vector2d point;     ///< Position on the path.
-    Vector2d tangent;   ///< Un-normalized tangent vector at the point.
+    Vector2d tangent;   ///< Un-normalized tangent vector. Measured paths use the limiting direction
+                        ///< at a curve endpoint whose derivative is zero.
     double angle;       ///< Tangent angle in radians (atan2).
     bool valid = true;  ///< False if the distance is negative, non-finite, or exceeds the path
                         ///< length, or if the path has no drawable segments or could not be
@@ -261,11 +262,18 @@ public:
    */
   class MeasuredPath {
   public:
+    /// Side of a connected segment boundary used for its tangent and normal.
+    enum class BoundarySide : uint8_t {
+      Incoming,  ///< Sample the segment ending at the boundary.
+      Outgoing,  ///< Sample the connected segment beginning at the boundary.
+    };
+
     /// Return the total measured arc length, or infinity when the measurement is not valid.
     [[nodiscard]] double pathLength() const { return totalLength_; }
 
     /// Sample this measured path at the given arc length.
-    [[nodiscard]] PointOnPath pointAtArcLength(double distance) const;
+    [[nodiscard]] PointOnPath pointAtArcLength(
+        double distance, BoundarySide boundarySide = BoundarySide::Incoming) const;
 
     /// Return an owning list of cumulative distances at the drawable segment endpoints.
     [[nodiscard]] std::vector<double> segmentEndDistances() const;
@@ -285,6 +293,11 @@ public:
   private:
     friend class Path;
 
+    std::optional<std::size_t> segmentIndexAtArcLength(double& distance,
+                                                       BoundarySide boundarySide) const;
+    std::optional<std::size_t> outgoingSegmentIndexAtBoundary(std::size_t incomingIndex,
+                                                              double& distance) const;
+
     enum class SegmentType : uint8_t { Line, Cubic };
 
     struct ArcSample {
@@ -299,6 +312,7 @@ public:
       double endLength = 0.0;
       std::size_t firstSample = 0;
       std::size_t sampleCount = 0;
+      bool connectedToPrevious = false;
     };
 
     std::vector<Segment> segments_;
@@ -332,6 +346,16 @@ public:
    * estimate overflows or exceeds the per-index retained-memory cap.
    */
   [[nodiscard]] std::optional<std::size_t> measurementBaseRetainedBytes() const;
+
+  /**
+   * Conservative retained-byte ceiling for a measurement with the given work allowance.
+   * Includes segment and adaptive arc-sample vector capacity.
+   */
+  [[nodiscard]] std::optional<std::size_t> measurementRetainedBytesUpperBound(
+      std::size_t maximumWorkUnits) const;
+
+  /// Largest measurement work allowance whose conservative retention fits in p maximumBytes.
+  [[nodiscard]] std::size_t measurementWorkLimitForRetainedBytes(std::size_t maximumBytes) const;
 
   /// Compute the total arc length of the path.
   ///
