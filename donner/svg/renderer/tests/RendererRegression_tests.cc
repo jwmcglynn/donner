@@ -2484,6 +2484,69 @@ TEST_F(RendererRegressionTests, BlurredFeImageReadsContentBeyondTheCanvas) {
   ExpectEdgePixelsMatchRoomyCanvas(RenderBlurredFeImage, "blurred_fe_image_input_margin");
 }
 
+// The transformed blur path blurs a rotated element along its own axes. It must keep working when
+// the capture gets an input margin, here for an anisotropic blur crossing the top-left edges. A
+// quarter turn keeps every transform exact, so the shifted oracle matches bit for bit.
+RendererBitmap RenderRotatedAnisotropicBlur(Vector2i canvasSize, int shift) {
+  const std::string markup =
+      R"svg(<filter id="f"><feGaussianBlur stdDeviation="8 1"/></filter>
+      <g transform="translate()svg" +
+      std::to_string(shift) + " " + std::to_string(shift) +
+      R"svg()"><g transform="rotate(90 10 10)" filter="url(#f)">
+        <rect x="-20" y="-20" width="60" height="60" fill="lime"/>
+      </g></g>)svg";
+  SVGDocument document = instantiateSubtree(markup, {}, canvasSize);
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, RotatedAnisotropicBlurReadsContentBeyondTheCanvas) {
+  ExpectEdgePixelsMatchRoomyCanvas(RenderRotatedAnisotropicBlur, "rotated_blur_input_margin");
+}
+
+// A capture margin must never turn an admissible filter into a frame-wide rejection. At 8x zoom a
+// large blur's margin would need a raster over the frame's filter memory, so the layer falls back
+// to a viewport-sized capture; it still renders, and so does a later filtered element.
+TEST_F(RendererRegressionTests, LargeBlurMarginFallsBackWithinFrameFilterBudget) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 128 128">
+      <filter id="f" filterUnits="userSpaceOnUse" x="-2000" y="-2000" width="4256" height="4256">
+        <feGaussianBlur stdDeviation="40"/>
+      </filter>
+      <filter id="g"><feFlood flood-color="blue"/></filter>
+      <rect x="-1000" y="-1000" width="2128" height="2128" fill="lime" filter="url(#f)"/>
+      <rect x="120" y="2" width="6" height="6" filter="url(#g)"/>
+    </svg>)svg");
+  const RendererBitmap actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(1024, 1024)));
+  EXPECT_THAT(PixelAt(actual, 512, 512)[1], testing::Gt(0)) << "the blurred element must render";
+  EXPECT_THAT(PixelAt(actual, 984, 40), test::RgbaEq(0, 0, 255, 255))
+      << "a later filtered element must still render";
+}
+
+/// Renders a turbulence-filtered square, optionally inside a group whose filter shifts its content
+/// out and back. That outer filter reads past the canvas but changes no pixels, so it must not
+/// move the inner turbulence noise either.
+RendererBitmap RenderTurbulenceInsideShift(bool shifted) {
+  const std::string inner =
+      R"svg(<rect x="-10" y="-10" width="40" height="40" filter="url(#t)"/>)svg";
+  const std::string markup =
+      std::string(R"svg(<filter id="t"><feTurbulence baseFrequency="0.1" numOctaves="2"/></filter>
+      <filter id="shift" filterUnits="userSpaceOnUse" x="-50" y="-50" width="200" height="200">
+        <feOffset dx="5" dy="5"/><feOffset dx="-5" dy="-5"/>
+      </filter>)svg") +
+      (shifted ? R"svg(<g filter="url(#shift)">)svg" + inner + "</g>" : "<g>" + inner + "</g>");
+  SVGDocument document = instantiateSubtree(markup, {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, NestedTurbulenceKeepsItsNoiseUnderAnOuterInputMargin) {
+  const RendererBitmap expected = RenderTurbulenceInsideShift(false);
+  ExpectVisibleBitmap(expected, "nested_turbulence_visible");
+  editor::tests::CompareBitmapToBitmap(RenderTurbulenceInsideShift(true), expected,
+                                       "nested_turbulence_input_margin",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 constexpr std::array<SpreadingFilterCase, 10> kSpreadingFilterCases = {{
     {"Blur", R"svg(<feGaussianBlur stdDeviation="3"/>)svg",
      R"svg(<feGaussianBlur stdDeviation="3"/>)svg", ""},
