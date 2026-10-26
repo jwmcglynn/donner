@@ -411,37 +411,49 @@ private:
     }
     return true;
   }
+  /// Joins across an unconverged leaf at the subdivision depth limit. Such a leaf spans a
+  /// discontinuity in the mapping. Away from the interval's boundary samples that is a cusp
+  /// inside one segment, whose normal flips; join across it as at a segment boundary. A leaf
+  /// touching a boundary sample may sit on a subpath break, which is never joined, so it is
+  /// refused. The flags come from the caller's boundary split, not from comparing recomputed
+  /// distances.
+  bool appendDepthLimitedLeaf(const Vector2d& start, const Vector2d& end,
+                              const Vector2d& mappedStart, const Vector2d& mappedEnd,
+                              bool startAtBoundary, bool endAtBoundary) {
+    return !startAtBoundary && !endAtBoundary && (end - start).length() <= tolerance_ &&
+           appendBoundaryJoin(mappedStart, mappedEnd);
+  }
+  /// True when three mapped interior samples lie within the tolerance of the mapped chord.
+  bool chordWithinTolerance(const Vector2d& mappedStart, const Vector2d& mappedEnd,
+                            const Vector2d& mappedQuarter, const Vector2d& mappedMiddle,
+                            const Vector2d& mappedThreeQuarter) const {
+    const Vector2d chordQuarter = mappedStart * 0.75 + mappedEnd * 0.25;
+    const Vector2d chordMiddle = (mappedStart + mappedEnd) * 0.5;
+    const Vector2d chordThreeQuarter = mappedStart * 0.25 + mappedEnd * 0.75;
+    return (mappedQuarter - chordQuarter).length() <= tolerance_ &&
+           (mappedMiddle - chordMiddle).length() <= tolerance_ &&
+           (mappedThreeQuarter - chordThreeQuarter).length() <= tolerance_;
+  }
   bool appendAdaptive(const Vector2d& start, const Vector2d& end, const Vector2d& mappedStart,
                       const Vector2d& mappedEnd, size_t depth, bool startAtBoundary,
                       bool endAtBoundary) {
     if (depth > 16u) {
-      // A leaf this deep that has not converged spans a discontinuity in the mapping. Away from
-      // the interval's boundary samples that is a cusp inside one segment, whose normal flips;
-      // join across it as at a segment boundary. A leaf touching a boundary sample may sit on a
-      // subpath break, which is never joined, so it is refused. The flags come from the caller's
-      // boundary split, not from comparing recomputed distances.
-      return !startAtBoundary && !endAtBoundary && (end - start).length() <= tolerance_ &&
-             appendBoundaryJoin(mappedStart, mappedEnd);
+      return appendDepthLimitedLeaf(start, end, mappedStart, mappedEnd, startAtBoundary,
+                                    endAtBoundary);
     }
     if (remainingWork_ < 3u) {
       return false;
     }
     remainingWork_ -= 3u;
-    const Vector2d quarter = start * 0.75 + end * 0.25;
     const Vector2d middle = (start + end) * 0.5;
-    const Vector2d threeQuarter = start * 0.25 + end * 0.75;
-    const auto mappedQuarter = map(quarter);
+    const auto mappedQuarter = map(start * 0.75 + end * 0.25);
     const auto mappedMiddle = map(middle);
-    const auto mappedThreeQuarter = map(threeQuarter);
+    const auto mappedThreeQuarter = map(start * 0.25 + end * 0.75);
     if (!mappedQuarter || !mappedMiddle || !mappedThreeQuarter) {
       return false;
     }
-    const Vector2d chordQuarter = mappedStart * 0.75 + mappedEnd * 0.25;
-    const Vector2d chordMiddle = (mappedStart + mappedEnd) * 0.5;
-    const Vector2d chordThreeQuarter = mappedStart * 0.25 + mappedEnd * 0.75;
-    if ((*mappedQuarter - chordQuarter).length() <= tolerance_ &&
-        (*mappedMiddle - chordMiddle).length() <= tolerance_ &&
-        (*mappedThreeQuarter - chordThreeQuarter).length() <= tolerance_) {
+    if (chordWithinTolerance(mappedStart, mappedEnd, *mappedQuarter, *mappedMiddle,
+                             *mappedThreeQuarter)) {
       if (remainingOutput_ == 0u) {
         return false;
       }
