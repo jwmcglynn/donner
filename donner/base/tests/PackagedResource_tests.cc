@@ -28,6 +28,50 @@ const PackagedResource kFixture{
     "assets/ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.svg",
     ""};
 
+template <typename T>
+concept CanBorrowData = requires(T&& value) { std::forward<T>(value).data(); };
+template <typename T>
+concept CanBorrowText = requires(T&& value) { std::forward<T>(value).text(); };
+template <typename T>
+concept CanBorrowBytes = requires(T&& value) { std::forward<T>(value).bytes(); };
+static_assert(CanBorrowData<ResourceLease&> && CanBorrowText<ResourceLease&> &&
+              CanBorrowBytes<ResourceLease&>);
+static_assert(!CanBorrowData<ResourceLease> && !CanBorrowText<ResourceLease> &&
+              !CanBorrowBytes<ResourceLease>);
+static_assert(std::is_convertible_v<const ResourceLease&, std::span<const uint8_t>>);
+static_assert(!std::is_convertible_v<ResourceLease&&, std::span<const uint8_t>>);
+static_assert(!std::is_constructible_v<std::span<const uint8_t>, ResourceLease&&>);
+
+TEST(PackagedResource, DeferredRequestsCoalesceUntilSuccessOrExplicitRetry) {
+  PackagedResourceSession session;
+  size_t dispatches = 0;
+  for (size_t frame = 0; frame < 1000; ++frame) {
+    session.request(kFixture, [&] { ++dispatches; });
+  }
+  EXPECT_EQ(dispatches, 1u);
+  EXPECT_EQ(session.ready(kFixture), false);
+  EXPECT_EQ(session.retry(kFixture), false);
+  session.fail(kFixture);
+  for (size_t frame = 0; frame < 1000; ++frame) {
+    session.request(kFixture, [&] { ++dispatches; });
+  }
+  EXPECT_EQ(dispatches, 1u);
+  EXPECT_EQ(session.failed(kFixture), true);
+  EXPECT_EQ(session.retry(kFixture), true);
+  session.request(kFixture, [&] {
+    ++dispatches;
+    EXPECT_EQ(session.install(kFixture, std::vector<uint8_t>{'a', 'b', 'c'}), true);
+  });
+  for (size_t frame = 0; frame < 1000; ++frame) {
+    session.request(kFixture, [&] { ++dispatches; });
+  }
+  EXPECT_EQ(dispatches, 2u);
+  EXPECT_EQ(session.ready(kFixture), true);
+  EXPECT_EQ(session.failed(kFixture), false);
+  EXPECT_EQ(session.retry(kFixture), false);
+  EXPECT_EQ(session.retainedBytes(), 3u);
+}
+
 TEST(PackagedResource, HashKnownVectorsAndBlockBoundaries) {
   EXPECT_EQ(ResourceSha256({}), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
   EXPECT_EQ(ResourceSha256(std::vector<uint8_t>{'a', 'b', 'c'}), kFixture.sha256);
@@ -63,7 +107,7 @@ TEST(PackagedResource, OwningLeaseAllowsSessionSwitchWithoutDangling) {
   auto second = std::make_shared<PackagedResourceSession>();
   EXPECT_EQ(SetPackagedResourceSession(second), true);
   first.reset();
-  EXPECT_THAT(lease, ElementsAre('a', 'b', 'c'));
+  EXPECT_THAT(lease.bytes(), ElementsAre('a', 'b', 'c'));
   EXPECT_EQ(SetPackagedResourceSession(previous), true);
 }
 

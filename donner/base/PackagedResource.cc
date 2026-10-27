@@ -242,6 +242,7 @@ struct PackagedResourceSession::Impl {
   PackagedResourceProvider provider;
   std::map<std::string, ResourceBytes> bytes;
   std::set<std::string> failures;
+  std::set<std::string> pending;
   size_t retained = 0;
   bool borrowed = false;
   std::string error;
@@ -271,6 +272,7 @@ bool PackagedResourceSession::install(const PackagedResource& resource,
     return false;
   }
   impl_->failures.erase(resource.sha256);
+  impl_->pending.erase(resource.sha256);
   impl_->bytes.emplace(resource.sha256,
                        std::make_shared<const std::vector<uint8_t>>(bytes.begin(), bytes.end()));
   impl_->retained += bytes.size();
@@ -306,6 +308,35 @@ ResourceBytes PackagedResourceSession::load(const PackagedResource& resource) {
   std::lock_guard lock(impl_->mutex);
   return impl_->bytes.at(resource.sha256);
 }
+bool PackagedResourceSession::request(const PackagedResource& resource,
+                                      const std::function<void()>& dispatch) {
+  if (!dispatch || !ValidIdentity(resource)) {
+    fail(resource);
+    return false;
+  }
+  {
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->bytes.contains(resource.sha256) || impl_->failures.contains(resource.sha256) ||
+        impl_->pending.contains(resource.sha256)) {
+      return false;
+    }
+    if (impl_->pending.size() >= 128) {
+      impl_->failures.insert(resource.sha256);
+      impl_->error = "Too many pending packaged resources";
+      return false;
+    }
+    impl_->pending.insert(resource.sha256);
+  }
+  dispatch();
+  return true;
+}
+bool PackagedResourceSession::retry(const PackagedResource& resource) {
+  std::lock_guard lock(impl_->mutex);
+  if (impl_->pending.contains(resource.sha256) || impl_->bytes.contains(resource.sha256)) {
+    return false;
+  }
+  return impl_->failures.erase(resource.sha256) != 0;
+}
 void PackagedResourceSession::markBorrowed() {
   std::lock_guard lock(impl_->mutex);
   impl_->borrowed = true;
@@ -325,6 +356,7 @@ bool PackagedResourceSession::failed(const PackagedResource& resource) const {
 void PackagedResourceSession::fail(const PackagedResource& resource) {
   std::lock_guard lock(impl_->mutex);
   impl_->failures.insert(resource.sha256);
+  impl_->pending.erase(resource.sha256);
   impl_->error = std::string("Unavailable packaged resource: ") + resource.id;
 }
 bool PackagedResourceSession::verify(const PackagedResource& resource) {

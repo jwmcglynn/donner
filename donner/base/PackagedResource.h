@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/Utils.h"
+
 namespace donner {
 
 /// Immutable encoded resource bytes. An owning lease remains valid across session teardown.
@@ -26,16 +28,19 @@ public:
   ResourceLease(ResourceBytes bytes) : bytes_(std::move(bytes)) {}
   ResourceLease(std::span<const uint8_t> bytes)
       : bytes_(std::make_shared<const std::vector<uint8_t>>(bytes.begin(), bytes.end())) {}
-  const uint8_t* data() const { return bytes_ ? bytes_->data() : nullptr; }
+  const uint8_t* data() const& UTILS_LIFETIME_BOUND { return bytes_ ? bytes_->data() : nullptr; }
+  const uint8_t* data() const&& = delete;
   size_t size() const { return bytes_ ? bytes_->size() : 0; }
   bool empty() const { return size() == 0; }
-  const uint8_t* begin() const { return data(); }
-  const uint8_t* end() const { return empty() ? data() : data() + size(); }
-  operator std::span<const uint8_t>() const { return {data(), size()}; }
-  std::string_view text() const {
+  std::span<const uint8_t> bytes() const& UTILS_LIFETIME_BOUND { return {data(), size()}; }
+  std::span<const uint8_t> bytes() const&& = delete;
+  operator std::span<const uint8_t>() const& UTILS_LIFETIME_BOUND { return bytes(); }
+  operator std::span<const uint8_t>() const&& = delete;
+  std::string_view text() const& UTILS_LIFETIME_BOUND {
     return empty() ? std::string_view()
                    : std::string_view(reinterpret_cast<const char*>(data()), size());
   }
+  std::string_view text() const&& = delete;
 
 private:
   ResourceBytes bytes_;
@@ -95,6 +100,10 @@ public:
   PackagedResourceSession& operator=(const PackagedResourceSession&) = delete;
   ResourceBytes load(const PackagedResource& resource);
   bool install(const PackagedResource& resource, std::span<const uint8_t> bytes);
+  /// Dispatch one deferred request per identity. The callback runs immediately outside the lock.
+  bool request(const PackagedResource& resource, const std::function<void()>& dispatch);
+  /// Allow an explicit retry only after a completed failure/cancellation.
+  bool retry(const PackagedResource& resource);
   void markBorrowed();
   bool hasBorrowedViews() const;
   bool ready(const PackagedResource& resource) const;

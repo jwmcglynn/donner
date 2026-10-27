@@ -52,7 +52,7 @@ public:
                                     ? embedded::kNotoSansItalicTtf
                                     : embedded::kNotoSansRegularTtf;
 #endif
-    return {bytes.begin(), bytes.end()};
+    return {bytes.bytes().begin(), bytes.bytes().end()};
   }
 };
 

@@ -357,6 +357,7 @@ donner_cc_library(
     srcs = ["PackagedResource.cc"],
     hdrs = ["PackagedResource.h"],
     visibility = ["//visibility:public"],
+    deps = [":base"],
 )
 
 donner_cc_test(

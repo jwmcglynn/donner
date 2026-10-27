@@ -348,8 +348,10 @@ std::string BrowserCursorSvg(EditorCursor cursor, SelectionTransformCorner corne
     }
     case EditorCursor::Rotate: return RotatedCursorSvg(embedded::kRotateCursorSvg, corner);
     case EditorCursor::Scale: return RotatedCursorSvg(embedded::kScaleCursorSvg, corner);
-    case EditorCursor::PathModify:
-      return std::string(ResourceLease(embedded::kPathModifyCursorSvg).text());
+    case EditorCursor::PathModify: {
+      const ResourceLease source(embedded::kPathModifyCursorSvg);
+      return std::string(source.text());
+    }
     case EditorCursor::PanOpen:
     case EditorCursor::PanClosed: {
       const ResourceLease bytes = PanCursorSvgBytes(

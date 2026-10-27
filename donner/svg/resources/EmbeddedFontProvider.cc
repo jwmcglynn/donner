@@ -104,7 +104,7 @@ std::vector<uint8_t> EmbeddedFontProvider::loadFamilyData(
   }
 #ifndef __EMSCRIPTEN__
   const auto data = EmbeddedData(family);
-  return {data.begin(), data.end()};
+  return {data.bytes().begin(), data.bytes().end()};
 #else
   return {};
 #endif

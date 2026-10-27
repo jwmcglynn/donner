@@ -27,11 +27,9 @@ std::string_view EditorSampleSource::view() const {
 
 bool EditorSampleSource::request() const {
 #ifdef __EMSCRIPTEN__
-  if (!resource.ready() && !resource.failed()) {
-    RequestBrowserPackagedResource(resource.sha256);
-    return false;
-  }
-  return resource.ready();
+  const auto session = GetPackagedResourceSession();
+  session->request(resource, [this] { RequestBrowserPackagedResource(resource.sha256); });
+  return session->ready(resource);
 #else
   return static_cast<bool>(resource.load());
 #endif

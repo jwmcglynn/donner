@@ -1076,7 +1076,7 @@ FontHandle FontManager::fallbackFont() {
 
   // Keep a verified owning lease until the manager has copied its private face data.
   const ResourceLease fallback(embedded::kPublicSansMediumOtf);
-  std::vector<uint8_t> data(fallback.begin(), fallback.end());
+  std::vector<uint8_t> data(fallback.bytes().begin(), fallback.bytes().end());
   if (!setRawFontData(entity, std::move(data), FontDataTrust::Trusted)) {
     registry_.destroy(entity);
     std::cerr << "FontManager: Failed to load packaged fallback font (Public Sans)\n";
