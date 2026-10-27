@@ -2,7 +2,7 @@
 
 import unittest
 
-from native_resource_delivery_tests import ResourceDeliveryFixture
+from examples.native_resource_delivery_tests import ResourceDeliveryFixture
 
 
 class NativeNoTextResourceDeliveryTests(ResourceDeliveryFixture):

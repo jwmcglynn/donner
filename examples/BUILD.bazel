@@ -437,6 +437,7 @@ py_test(
         ":svg_text_interaction",
         ":svg_text_interaction_resources",
     ],
+    main = "native_resource_delivery_tests.py",
     tags = ["manual"],
     deps = ["@rules_python//python/runfiles"],
 )
