@@ -1478,6 +1478,22 @@ donner_cc_test(
     ],
 )
 
+donner_cc_test(
+    name = "icon_prewarm_ownership_tests",
+    srcs = ["IconPrewarmOwnership_tests.cc"],
+    renderer_backend = "tiny_skia",
+    deps = [
+        "//donner/base:packaged_resource",
+        "//donner/editor:disclosure_chevron",
+        "//donner/editor:embedded_svg_icon",
+        "//donner/editor:layers_panel",
+        "//donner/editor:sidebar_presenter",
+        "//donner/editor:toolbar_icon_set",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Embedded-SVG icon rasterizer: alpha-mask output plus (geode builds) the
 # shared-renderer guarantee — a fresh renderer per icon would create a full
 # WebGPU instance/adapter/device per icon.
