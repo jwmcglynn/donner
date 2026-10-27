@@ -1542,13 +1542,17 @@ RendererBitmap RenderCheckerImage(std::string_view imageRendering) {
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
-/// Renders the same placement through `feImage`, whose smooth sampling is the Mitchell-Netravali
-/// cubic (B = C = 1/3) on both backends. This is the oracle for the `<image>` quality kernel.
-RendererBitmap RenderCheckerFeImage() {
-  const std::string body =
+/// Renders the same placement through `feImage`, with the given `image-rendering` attribute on the
+/// `feImage`, omitted when empty. Its default quality sampling is the Mitchell-Netravali cubic
+/// (B = C = 1/3) on both backends, which makes it the oracle for the `<image>` quality kernel.
+RendererBitmap RenderCheckerFeImage(std::string_view imageRendering = "") {
+  std::string body =
       R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
-              <feImage x="8" y="8" width="48" height="48" href=")svg" +
-      std::string(kCheckerImageDataUri) + R"svg("/>
+              <feImage x="8" y="8" width="48" height="48")svg";
+  if (!imageRendering.empty()) {
+    body += " image-rendering=\"" + std::string(imageRendering) + "\"";
+  }
+  body += " href=\"" + std::string(kCheckerImageDataUri) + R"svg("/>
             </filter>
             <rect width="64" height="64" filter="url(#f)"/>)svg";
   SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(64, 64));
@@ -1700,19 +1704,110 @@ TEST_F(RendererRegressionTests, ImageCubicClampsChannelsOnlyToOne) {
       "image_cubic_translucent", ImageSamplingOracleParams());
 }
 
+/// The `image-rendering` values of the sampling tests, with the empty string for none.
+constexpr std::array<std::string_view, 8> kImageRenderingValues = {
+    "",       "auto",          "optimizeQuality", "high-quality",
+    "smooth", "optimizeSpeed", "crisp-edges",     "pixelated"};
+
+std::string ImageRenderingLabel(std::string_view imageRendering) {
+  return std::string(imageRendering.empty() ? "unspecified" : imageRendering);
+}
+
+/// The `image-rendering` attribute for \p imageRendering, empty when it is.
+std::string ImageRenderingAttribute(std::string_view imageRendering) {
+  return imageRendering.empty() ? std::string()
+                                : " image-rendering=\"" + std::string(imageRendering) + "\"";
+}
+
 TEST_F(RendererRegressionTests, ImageTranslatedAtIntrinsicSizeSamplesNearest) {
   // The interior excludes the edge pixels the fractional translation covers partially.
   const Vector2i interiorOrigin(11, 21);
   const Vector2i interiorSize(7, 7);
-  editor::tests::CompareBitmapToBitmap(
-      editor::tests::CropBitmap(RenderImageOverGray(R"svg(<image x="10.25" y="20.75" href=")svg" +
-                                                    std::string(kGradientImageDataUri) + "\"/>"),
-                                interiorOrigin, interiorSize),
-      editor::tests::CropBitmap(
-          TinySkiaImageReference(GradientPixels(), 8, 8, Box2d::FromXYWH(10.25, 20.75, 8, 8),
-                                 tiny_skia::FilterQuality::Bicubic),
-          interiorOrigin, interiorSize),
-      "image_translated_nearest", editor::tests::PixelmatchIdentityParams());
+  const RendererBitmap expected = editor::tests::CropBitmap(
+      TinySkiaImageReference(GradientPixels(), 8, 8, Box2d::FromXYWH(10.25, 20.75, 8, 8),
+                             tiny_skia::FilterQuality::Bicubic),
+      interiorOrigin, interiorSize);
+  for (std::string_view imageRendering : kImageRenderingValues) {
+    SCOPED_TRACE(testing::Message() << "image-rendering=\"" << imageRendering << "\"");
+    editor::tests::CompareBitmapToBitmap(
+        editor::tests::CropBitmap(
+            RenderImageOverGray(R"svg(<image x="10.25" y="20.75")svg" +
+                                ImageRenderingAttribute(imageRendering) + " href=\"" +
+                                std::string(kGradientImageDataUri) + "\"/>"),
+            interiorOrigin, interiorSize),
+        expected, "image_translated_nearest_" + ImageRenderingLabel(imageRendering),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, FeImageSamplesLikeImageForEachRendering) {
+  for (std::string_view imageRendering : kImageRenderingValues) {
+    SCOPED_TRACE(testing::Message() << "image-rendering=\"" << imageRendering << "\"");
+    const RendererBitmap expected = RenderCheckerImage(imageRendering);
+    AssertVisibleFixture(expected, "feimage_image_oracle_" + ImageRenderingLabel(imageRendering));
+    editor::tests::CompareBitmapToBitmap(RenderCheckerFeImage(imageRendering), expected,
+                                         "feimage_sampling_" + ImageRenderingLabel(imageRendering),
+                                         ImageSamplingOracleParams());
+  }
+}
+
+/// Renders \p element on a transparent 64x64 canvas through \p filterPrimitives, or unfiltered
+/// when they are empty, inside \p groupTransform.
+RendererBitmap RenderSamplingCase(std::string_view groupTransform, std::string_view element,
+                                  std::string_view filterPrimitives) {
+  std::string body;
+  if (!filterPrimitives.empty()) {
+    body = R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-64" y="-64" width="192"
+                         height="192">)svg" +
+           std::string(filterPrimitives) + "</filter>";
+  }
+  body += "<g transform=\"" + std::string(groupTransform) + "\">";
+  body += filterPrimitives.empty()
+              ? std::string(element)
+              : std::string(R"svg(<rect width="64" height="64" filter="url(#f)"/>)svg");
+  body += "</g>";
+  SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, FeImageTranslatedAtIntrinsicSizeSamplesLikeImage) {
+  // The interior excludes the edge pixels the fractional translation covers partially.
+  const Vector2i interiorOrigin(11, 21);
+  const Vector2i interiorSize(7, 7);
+  for (std::string_view imageRendering : kImageRenderingValues) {
+    SCOPED_TRACE(testing::Message() << "image-rendering=\"" << imageRendering << "\"");
+    const std::string attributes = R"svg(x="10.25" y="20.75" width="8" height="8")svg" +
+                                   ImageRenderingAttribute(imageRendering) + " href=\"" +
+                                   std::string(kGradientImageDataUri) + "\"";
+    editor::tests::CompareBitmapToBitmap(
+        editor::tests::CropBitmap(RenderSamplingCase("", "", "<feImage " + attributes + "/>"),
+                                  interiorOrigin, interiorSize),
+        editor::tests::CropBitmap(RenderSamplingCase("", "<image " + attributes + "/>", ""),
+                                  interiorOrigin, interiorSize),
+        "feimage_translated_" + ImageRenderingLabel(imageRendering),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, FeImageRotatedSamplesLikeImage) {
+  // The interior excludes the image edges, which `<image>` antialiases and feImage clips to whole
+  // pixels.
+  const Vector2i interiorOrigin(16, 16);
+  const Vector2i interiorSize(32, 32);
+  for (std::string_view imageRendering : kImageRenderingValues) {
+    SCOPED_TRACE(testing::Message() << "image-rendering=\"" << imageRendering << "\"");
+    const std::string attributes = R"svg(x="8" y="8" width="48" height="48")svg" +
+                                   ImageRenderingAttribute(imageRendering) + " href=\"" +
+                                   std::string(kCheckerImageDataUri) + "\"";
+    editor::tests::CompareBitmapToBitmap(
+        editor::tests::CropBitmap(
+            RenderSamplingCase("rotate(30 32 32)", "", "<feImage " + attributes + "/>"),
+            interiorOrigin, interiorSize),
+        editor::tests::CropBitmap(
+            RenderSamplingCase("rotate(30 32 32)", "<image " + attributes + "/>", ""),
+            interiorOrigin, interiorSize),
+        "feimage_rotated_" + ImageRenderingLabel(imageRendering), ImageSamplingOracleParams());
+  }
 }
 
 TEST_F(RendererRegressionTests, EffectSpanLayoutRunsOncePerTextElement) {
