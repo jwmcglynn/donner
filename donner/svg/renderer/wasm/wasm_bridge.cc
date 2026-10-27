@@ -14,6 +14,9 @@
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/base/PackagedResource.h"
+#endif
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/wasm/WasmBridgeUtils.h"
@@ -24,6 +27,18 @@ namespace {
 std::string gLastError;
 
 constexpr size_t kMaximumPixelBufferSize = 64 * 1024 * 1024;
+
+#ifdef DONNER_TEXT_ENABLED
+/// Require authenticated host-installed font resources before rendering text.
+bool PrepareResources() {
+  std::string error;
+  if (!donner::PreparePackagedResources(&error)) {
+    gLastError = "Packaged resources unavailable: " + error;
+    return false;
+  }
+  return true;
+}
+#endif
 
 uint8_t* RenderSvg(std::string_view svgText, int width, int height) {
   using namespace donner;
@@ -95,6 +110,14 @@ uint8_t* RenderSvg(std::string_view svgText, int width, int height) {
 
 extern "C" {
 
+#ifdef DONNER_TEXT_ENABLED
+/// Install-only startup capability; this does not start an application or fetch resource bytes.
+int donner_prepare_resources() {
+  gLastError.clear();
+  return PrepareResources() ? 1 : 0;
+}
+#endif
+
 void donner_init() {
   // No global initialization required; reserved for future use.
 }
@@ -113,6 +136,11 @@ uint8_t* donner_render_svg(const char* svgText, int width, int height) {
     gLastError = "SVG text is outside WebAssembly memory";
     return nullptr;
   }
+#ifdef DONNER_TEXT_ENABLED
+  if (!PrepareResources()) {
+    return nullptr;
+  }
+#endif
   return RenderSvg(std::string_view(svgText, *length), width, height);
 }
 
@@ -130,6 +158,11 @@ uint8_t* donner_render_svg_len(const char* svgText, size_t svgTextSize, int widt
     gLastError = "SVG text is outside WebAssembly memory";
     return nullptr;
   }
+#ifdef DONNER_TEXT_ENABLED
+  if (!PrepareResources()) {
+    return nullptr;
+  }
+#endif
   return RenderSvg(std::string_view(svgText, svgTextSize), width, height);
 }
 

@@ -65,14 +65,16 @@ cc_binary(
         "-sEXPORT_ES6=1",
         "-sENVIRONMENT=web",
         "-sALLOW_MEMORY_GROWTH=1",
-        "-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
         # Smaller allocator than the default dlmalloc; safe with USE_PTHREADS=0.
         "-sMALLOC=emmalloc",
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
         "-sUSE_PTHREADS=0",
         "-sSTACK_SIZE=1048576",
         "--no-entry",
-    ],
+    ] + select({
+        "//donner/svg/renderer:text_enabled": ["-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free,_donner_prepare_resources"],
+        "//conditions:default": ["-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free"],
+    }),
     tags = ["manual"],
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
     deps = [
@@ -127,8 +129,28 @@ py_test(
     ],
     env = {"DONNER_NODE_PATH": "$(NODE_PATH)"},
     tags = ["manual"],
-    toolchains = ["@rules_nodejs//nodejs:current_node_runtime"],
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+    toolchains = ["@rules_nodejs//nodejs:current_node_runtime"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+# Run with --config=wasm-size --//donner/svg/renderer:text=true.
+py_test(
+    name = "render_text_test",
+    size = "small",
+    srcs = ["render_text_test.py"],
+    data = [
+        "render_text_test_driver.mjs",
+        ":donner_wasm",
+        "//donner/editor/wasm:catalog-fonts.js",
+        "//donner/editor/wasm:packaged-resource-loader.js",
+        "//third_party/public-sans:public-sans_resource_files",
+        "@rules_nodejs//nodejs:current_node_runtime",
+    ],
+    env = {"DONNER_NODE_PATH": "$(NODE_PATH)"},
+    tags = ["manual"],
+    target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+    toolchains = ["@rules_nodejs//nodejs:current_node_runtime"],
     deps = ["@rules_python//python/runfiles"],
 )
 
@@ -189,13 +211,15 @@ cc_binary(
         "-sALLOW_MEMORY_GROWTH=1",
         "-sASYNCIFY=1",
         "-sASYNCIFY_STACK_SIZE=131072",
-        "-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_geode_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
         "-sUSE_PTHREADS=0",
         "-sSTACK_SIZE=1048576",
         "--no-entry",
         "--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)",
-    ],
+    ] + select({
+        "//donner/svg/renderer:text_enabled": ["-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_geode_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free,_donner_prepare_resources"],
+        "//conditions:default": ["-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_geode_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free"],
+    }),
     tags = ["manual"],
     target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
     deps = [
