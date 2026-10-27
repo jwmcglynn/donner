@@ -25,8 +25,9 @@ if(DONNER_TEXT)
     message(FATAL_ERROR "The Donner fallback font resource directory is unavailable")
   endif()
   add_custom_command(TARGET donner_cmake_consumer POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${_donner_font_assets}"
-            "$<TARGET_FILE_DIR:donner_cmake_consumer>/donner-assets"
+    COMMAND ${CMAKE_COMMAND} "-DSOURCE=${_donner_font_assets}"
+            "-DDESTINATION=$<TARGET_FILE_DIR:donner_cmake_consumer>/donner-assets"
+            -P "${DONNER_SOURCE_DIR}/tools/cmake/stage_consumer_resources.cmake"
     VERBATIM)
 endif()
 
@@ -36,5 +37,6 @@ if(DONNER_TEXT)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME donner_cmake_consumer_resources
     COMMAND ${Python3_EXECUTABLE} "${DONNER_SOURCE_DIR}/tools/cmake/consumer_resources_test.py"
-            --binary "$<TARGET_FILE:donner_cmake_consumer>" --assets "${_donner_font_assets}")
+            --binary "$<TARGET_FILE:donner_cmake_consumer>" --assets "${_donner_font_assets}"
+            --cmake "${CMAKE_COMMAND}")
 endif()

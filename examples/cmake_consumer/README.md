@@ -7,7 +7,8 @@ non-zero if any step fails.
 
 Fonts are external package resources. With text enabled, deploy the generated fallback-font
 directory beside the executable as `donner-assets`; linking the library alone does not copy data.
-The example does this in its post-build step. Keep the complete directory, including its manifest,
+The example replaces its generated companion directory in its post-build step, so an incremental
+asset change cannot leave obsolete files behind. Keep the complete directory, including its manifest,
 with the executable when relocating or packaging it. A host with a different installation layout
 can explicitly install a `PackagedResourceDirectoryProvider` instead. Resource lookup never uses
 the working directory. No-text builds do not need this font data.
@@ -24,8 +25,9 @@ target_link_libraries(my_app PRIVATE donner)
 if(DONNER_TEXT)
   get_target_property(font_assets donner_third_party_public-sans_public-sans DONNER_RESOURCE_DIRECTORY)
   add_custom_command(TARGET my_app POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${font_assets}"
-            "$<TARGET_FILE_DIR:my_app>/donner-assets"
+    COMMAND ${CMAKE_COMMAND} "-DSOURCE=${font_assets}"
+            "-DDESTINATION=$<TARGET_FILE_DIR:my_app>/donner-assets"
+            -P "${DONNER_SOURCE_DIR}/tools/cmake/stage_consumer_resources.cmake"
     VERBATIM)
 endif()
 ```
