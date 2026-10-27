@@ -513,7 +513,8 @@ TEST(CompositorGeodeSplashTest, MaskedCrystalFaceDragRepaintsOwningTileBeforeRel
   const donner::tests::RequiredRunfile source =
       donner::tests::ReadRequiredRunfile("geode_splash.svg");
   DONNER_REQUIRE_RUNFILE(source);
-  for (const char* selector : {"#central-crown-face-2", "#central-silhouette"}) {
+  for (const char* selector :
+       {"#central-crown-face-2", "#central-crown-face-3", "#central-silhouette"}) {
     ParseWarningSink warnings = ParseWarningSink::Disabled();
     auto parsed = parser::SVGParser::ParseSVG(source.contents, warnings);
     ASSERT_FALSE(parsed.hasError());
@@ -555,10 +556,20 @@ TEST(CompositorGeodeSplashTest, MaskedCrystalFaceDragRepaintsOwningTileBeforeRel
               CompositorController::PromoteResult::OwningTilesRequired)
         << selector << " stays inside the shared cavity mask";
 
-    target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12, 0)));
+    // Several held moves, each patched from the previous one, must track a full re-raster of the
+    // final position without rebuilding the document's render tree.
+    for (const double x : {4.0, 8.0, 12.0}) {
+      target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(x, 0)));
+      const CompositorController::FastPathCounters before = compositor.fastPathCountersForTesting();
+      compositor.renderFrame(viewport);
+      const CompositorController::FastPathCounters& after = compositor.fastPathCountersForTesting();
+      EXPECT_EQ(after.fastPathFrames, before.fastPathFrames + 1)
+          << selector << " held move to x=" << x << " must not rebuild the render tree";
+      EXPECT_EQ(after.slowPathFramesWithDirty, before.slowPathFramesWithDirty) << selector;
+      EXPECT_EQ(compositor.lastRenderFrameStats().damagePatchTileCount, 1) << selector;
+    }
     referenceTarget->cast<SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(12, 0)));
-    compositor.renderFrame(viewport);
     ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation()) << selector;
     ownerLayer = compositor.findLayerForTest(ownerEntity);
     ASSERT_NE(ownerLayer, nullptr);
