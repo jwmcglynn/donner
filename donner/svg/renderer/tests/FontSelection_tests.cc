@@ -485,6 +485,7 @@ public:
     params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
     params.fontMetrics = FontMetrics();
     const std::vector<TextRun> runs = engine.layout(text, params);
+    coverageEntries_ = engine.fallbackCoverageEntriesForTesting();
     EXPECT_THAT(runs, SizeIs(1));
     std::vector<GlyphFace> result;
     for (const TextRun& run : runs) {
@@ -496,6 +497,9 @@ public:
     }
     return result;
   }
+
+  /// Coverage answers fallback retained during the last \ref layOut.
+  std::size_t coverageEntries() const { return coverageEntries_; }
 
 private:
   void add(const std::string& file, const std::string& family, size_t padding = 0) {
@@ -515,6 +519,7 @@ private:
   Registry registry_;
   FontManager fontManager_;
   SmallVector<RcString, 1> families_;
+  std::size_t coverageEntries_ = 0;
 };
 
 TEST(FontSelection, FallbackSearchesEveryCandidateFaceForAShortSpan) {
@@ -533,6 +538,66 @@ TEST(FontSelection, FallbackStopsSearchingOnceTheQueryGrantIsSpent) {
   ASSERT_THAT(faces, SizeIs(16));
   EXPECT_THAT(faces.front(), Eq(GlyphFace{U'B', "Yellowtail-Regular.ttf", true}));
   EXPECT_THAT(faces.back(), Eq(GlyphFace{U'Q', "NotoEmoji-Regular.ttf", false}));
+}
+
+TEST(FontSelection, FallbackCoverageMemoryStaysBoundedForManyDistinctCodepoints) {
+  // 1000 distinct CJK codepoints that no registered face covers, against 41 candidate faces: the
+  // query grant allows every lookup, but the retained answers must stay within a fixed bound so a
+  // document cannot grow fallback memory with its text length times its face count.
+  FallbackBudgetFontSet fonts(40);
+  std::string text;
+  for (char32_t codepoint = U'一'; codepoint < U'一' + 1000; ++codepoint) {
+    Utf8::Append(codepoint, std::back_inserter(text));
+  }
+  const std::vector<GlyphFace> faces = fonts.layOut(text);
+  ASSERT_THAT(faces, SizeIs(1000));
+  EXPECT_THAT(faces, Each(Field("drawn", &GlyphFace::drawn, Eq(false))));
+  EXPECT_THAT(fonts.coverageEntries(), testing::Le(TextEngine::kMaximumFallbackCoverageEntries));
+}
+
+TEST(FontSelection, FallbackFaceKernsAcrossAPaintOnlySpanBoundary) {
+  // Noto Emoji has no Latin, so both letters of "AV" fall back to Noto Sans, which kerns the pair.
+  // Splitting the text into two spans that differ only in paint must not change the spacing.
+  HermeticFontSet fonts;
+  TextEngine engine(fonts.fontManager(), fonts.registry());
+  TextLayoutParams params;
+  params.fontFamilies.emplace_back(RcString("Noto Emoji"));
+  params.fontFamilies.emplace_back(RcString("Noto Sans"));
+  params.fontSize = Lengthd(64, Lengthd::Unit::Px);
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+
+  const auto makeSpan = [](std::string_view utf8, bool startsNewChunk) {
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString(utf8);
+    span.start = 0;
+    span.end = span.text.size();
+    span.startsNewChunk = startsNewChunk;
+    return span;
+  };
+  components::ComputedTextComponent unsplit;
+  unsplit.spans.push_back(makeSpan("AV", true));
+  components::ComputedTextComponent split;
+  split.spans.push_back(makeSpan("A", true));
+  auto paintOnly = makeSpan("V", false);
+  paintOnly.paintOrder.order = {PaintComponent::Stroke, PaintComponent::Fill,
+                                PaintComponent::Markers};
+  split.spans.push_back(std::move(paintOnly));
+
+  const auto glyphXs = [&](const components::ComputedTextComponent& text) {
+    std::vector<double> xs;
+    for (const TextRun& run : engine.layout(text, params)) {
+      for (const TextGlyph& glyph : run.glyphs) {
+        EXPECT_THAT(DescribeFace(fonts.fontManager(), GlyphFont(run, glyph)),
+                    FaceFrom("NotoSans-Regular.ttf"));
+        xs.push_back(glyph.xPosition);
+      }
+    }
+    return xs;
+  };
+  const std::vector<double> unsplitXs = glyphXs(unsplit);
+  ASSERT_THAT(unsplitXs, SizeIs(2));
+  EXPECT_THAT(glyphXs(split), testing::Pointwise(testing::DoubleNear(1e-9), unsplitXs));
 }
 
 }  // namespace

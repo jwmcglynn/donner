@@ -2970,6 +2970,9 @@ public:
   /// Whether the element's query grant is spent, after which no new coverage can be learned.
   bool exhausted() const { return remaining_ == 0; }
 
+  /// Number of retained coverage answers.
+  std::size_t entries() const { return cache_.size(); }
+
   /// Whether \p font maps \p codepoint, from the cache or one budgeted backend query.
   bool covers(const TextBackend& backend, FontHandle font, float sizePx, uint32_t codepoint) {
     const uint64_t key =
@@ -3358,13 +3361,15 @@ class TextLayoutInvocation {
 public:
   TextLayoutInvocation(Registry& registry, FontManager& fontManager, TextBackend& backend,
                        const components::ComputedTextComponent& text,
-                       const TextLayoutParams& params, bool* resourceRejected = nullptr)
+                       const TextLayoutParams& params, bool* resourceRejected = nullptr,
+                       std::size_t* fallbackCoverageEntries = nullptr)
       : registry_(registry),
         fontManager_(fontManager),
         backend_(backend),
         text_(text),
         params_(params),
-        resourceRejected_(resourceRejected) {}
+        resourceRejected_(resourceRejected),
+        fallbackCoverageEntries_(fallbackCoverageEntries) {}
 
   std::vector<TextRun> run() {
     resolveBaseFont();
@@ -3375,6 +3380,9 @@ public:
     applyInlineWrap();
     applyFinalAdjustments();
     ApplyPostTextPathTranslations(runs_, text_, postPathBoundaries_);
+    if (fallbackCoverageEntries_) {
+      *fallbackCoverageEntries_ = fallbackCoverage_.entries();
+    }
     return std::move(runs_);
   }
 
@@ -4134,6 +4142,7 @@ private:
   std::vector<RunPenExtent> runExtents_;
   bool wrapped_ = false;
   bool* resourceRejected_ = nullptr;
+  std::size_t* fallbackCoverageEntries_ = nullptr;
   FallbackCoverage fallbackCoverage_;
 };
 
@@ -4150,7 +4159,8 @@ std::vector<TextRun> TextEngine::layoutWithResourceStatus(
     bool& resourceRejected) {
   ++layoutCallCount_;
   resourceRejected = false;
-  return TextLayoutInvocation(registry_, fontManager_, *backend_, text, params, &resourceRejected)
+  return TextLayoutInvocation(registry_, fontManager_, *backend_, text, params, &resourceRejected,
+                              &fallbackCoverageEntries_)
       .run();
 }
 

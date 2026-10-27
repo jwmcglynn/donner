@@ -87,6 +87,15 @@ public:
   /// Number of full text layouts performed by this engine, for CPU-work regression tests.
   [[nodiscard]] std::size_t layoutCallCountForTesting() const { return layoutCallCount_; }
 
+  /// Most face and codepoint coverage answers that font fallback retains for one text element.
+  static constexpr std::size_t kMaximumFallbackCoverageEntries = 16384;
+
+  /// Coverage answers that font fallback retained during the most recent layout, for
+  /// memory-bound regression tests.
+  [[nodiscard]] std::size_t fallbackCoverageEntriesForTesting() const {
+    return fallbackCoverageEntries_;
+  }
+
   /// Span bounding-box entries examined while building or answering object-box queries.
   [[nodiscard]] std::size_t objectBoundingBoxSpanVisitsForTesting() const {
     return objectBoundingBoxSpanVisits_;
@@ -230,6 +239,7 @@ private:
   size_t registeredFontFaceCount_ = 0;
   uint64_t observedFontResourceRevision_ = 0;
   std::size_t layoutCallCount_ = 0;
+  std::size_t fallbackCoverageEntries_ = 0;
   mutable std::size_t objectBoundingBoxSpanVisits_ = 0;
 };
 
