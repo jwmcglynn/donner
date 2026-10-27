@@ -12,6 +12,7 @@ import json
 import stat
 import struct
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 import re
@@ -43,6 +44,9 @@ MAX_RESOURCE_BYTES = 32 * 1024 * 1024
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_PACKAGE_BYTES = 128 * 1024 * 1024
 MAX_RESOURCE_COUNT = 4096
+MAX_ARCHIVE_FILES = MAX_RESOURCE_COUNT + 4
+MAX_ZIP_DIRECTORY_BYTES = MAX_ARCHIVE_FILES * 512
+MAX_TAR_METADATA_BYTES = 8 * 1024 * 1024
 MANIFEST = "donner-assets/manifest.json"
 NOTICE_HEADER = "Third-party licenses for build variant: "
 MAX_NOTICE_BYTES = 1024 * 1024
@@ -353,7 +357,37 @@ def _read_archive(path: Path) -> dict[str, bytes]:
     return files
 
 
+def _admit_zip_directory(path: Path) -> None:
+    size = path.stat().st_size
+    if size < 22:
+        raise ValueError("release CLI ZIP directory is invalid")
+    with path.open("rb") as source:
+        if source.read(4) != b"PK\x03\x04":
+            raise ValueError("release CLI ZIP local header is invalid")
+        source.seek(-22, 2)
+        end = source.read(22)
+    marker, disk, directory_disk, disk_count, count, length, offset, comment = struct.unpack(
+        "<4s4H2IH", end)
+    if (marker != b"PK\x05\x06" or disk or directory_disk or disk_count != count or comment
+            or not 0 < count <= MAX_ARCHIVE_FILES
+            or not count * 46 <= length <= MAX_ZIP_DIRECTORY_BYTES
+            or offset + length != size - 22):
+        raise ValueError("release CLI ZIP directory exceeds its bounded contract")
+
+
+def _expand_bounded_tar(path: Path, destination) -> None:
+    remaining = MAX_PACKAGE_BYTES + MAX_TAR_METADATA_BYTES
+    with gzip.open(path, "rb") as compressed:
+        while chunk := compressed.read(min(1024 * 1024, remaining + 1)):
+            if len(chunk) > remaining:
+                raise ValueError("release CLI expanded tar exceeds its byte budget")
+            destination.write(chunk)
+            remaining -= len(chunk)
+    destination.seek(0)
+
+
 def _read_zip(path: Path) -> dict[str, bytes]:
+    _admit_zip_directory(path)
     files = {}
     with zipfile.ZipFile(path) as archive:
         for member in archive.infolist():
@@ -370,19 +404,21 @@ def _read_zip(path: Path) -> dict[str, bytes]:
 
 def _read_tar(path: Path) -> dict[str, bytes]:
     files = {}
-    with tarfile.open(path, "r:gz") as archive:
-        for member in archive:
-            _check_member(member.name, member.size, member.isfile(), files)
-            if member.name == "donner-cli" and not member.mode & stat.S_IXUSR:
-                raise ValueError("release CLI archive executable is not executable")
-            files[member.name] = archive.extractfile(member).read()
+    with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as expanded:
+        _expand_bounded_tar(path, expanded)
+        with tarfile.open(fileobj=expanded, mode="r:") as archive:
+            for member in archive:
+                _check_member(member.name, member.size, member.isfile(), files)
+                if member.name == "donner-cli" and not member.mode & stat.S_IXUSR:
+                    raise ValueError("release CLI archive executable is not executable")
+                files[member.name] = archive.extractfile(member).read()
     return files
 
 
 def _check_member(name: str, size: int, regular: bool, files: dict[str, bytes]) -> None:
     if (name in files or not regular or not 0 < size <= MAX_RESOURCE_BYTES
             or name == MANIFEST and size > MAX_MANIFEST_BYTES
-            or len(files) >= MAX_RESOURCE_COUNT + 4
+            or len(files) >= MAX_ARCHIVE_FILES
             or sum(map(len, files.values())) + size > MAX_PACKAGE_BYTES
             or name not in {"donner-cli", "LICENSE", "NOTICE.txt", MANIFEST}
             and not re.fullmatch(r"donner-assets/assets/[0-9a-f]{64}\.[a-z0-9]+", name)):

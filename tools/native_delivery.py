@@ -109,7 +109,7 @@ def _check_inputs(binary: Path, output: Path, symbols: Path, platform: str,
             or evidence.stat().st_uid != os.geteuid()
             or stat.S_IMODE(evidence.stat().st_mode) & 0o077):
         raise ValueError("native delivery symbols require an existing private evidence directory")
-    if not binary.is_file() or output.exists() or symbols.exists():
+    if not binary.is_file() or os.path.lexists(output) or os.path.lexists(symbols):
         raise ValueError("native delivery needs an input and fresh owned output paths")
 
 
@@ -139,14 +139,22 @@ def _prepare_linux(binary: Path, output: Path, symbols: Path) -> tuple[str, dict
     return identity, before, debug
 
 
+def _copy_fresh_executable(binary: Path, output: Path) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    with binary.open("rb") as source:
+        descriptor = os.open(output, flags, 0o755)
+        with os.fdopen(descriptor, "wb") as destination:
+            os.fchmod(destination.fileno(), 0o755)
+            shutil.copyfileobj(source, destination)
+
+
 def prepare(*, binary: Path, output: Path, symbols: Path, platform: str,
             dsym: Path | None = None, sign: bool = False) -> dict:
     """Strip a fresh copy while proving identity and unwind preservation against paired symbols."""
     _check_inputs(binary, output, symbols, platform, dsym)
     output.parent.mkdir(parents=True, exist_ok=True)
     symbols.mkdir(mode=0o700)
-    shutil.copyfile(binary, output)
-    output.chmod(0o755)
+    _copy_fresh_executable(binary, output)
     if platform == "darwin-arm64":
         identity, unwind, debug = _prepare_macos(binary, output, symbols, dsym, sign)
     else:

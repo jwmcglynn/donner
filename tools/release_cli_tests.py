@@ -262,6 +262,34 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid or duplicate member"):
             release_cli._read_archive(archive)
 
+    def test_zip_directory_limits_apply_before_zipfile_parses_metadata(self) -> None:
+        archive = Path(self.temporary.name) / "metadata.zip"
+        release_cli._write_archive(archive, {"first": b"a", "second": b"b"})
+        for limit in ("MAX_ARCHIVE_FILES", "MAX_ZIP_DIRECTORY_BYTES"):
+            with self.subTest(limit=limit), mock.patch.object(release_cli, limit, 1), \
+                 mock.patch.object(release_cli.zipfile, "ZipFile",
+                                   side_effect=AssertionError("must not parse metadata")):
+                with self.assertRaisesRegex(ValueError, "ZIP directory"):
+                    release_cli._read_archive(archive)
+
+    def test_pax_and_gnu_metadata_expansion_is_bounded_before_tarfile_parsing(self) -> None:
+        import tarfile
+        for flavor in (tarfile.PAX_FORMAT, tarfile.GNU_FORMAT):
+            archive = Path(self.temporary.name) / f"metadata-{flavor}.tar.gz"
+            with tarfile.open(archive, "w:gz", format=flavor) as output:
+                item = tarfile.TarInfo("donner-cli" if flavor == tarfile.PAX_FORMAT else "x" * 10000)
+                if flavor == tarfile.PAX_FORMAT:
+                    item.pax_headers = {"comment": "x" * 10000}
+                output.addfile(item)
+            self.assertLess(archive.stat().st_size, 1024)
+            with self.subTest(flavor=flavor), \
+                 mock.patch.object(release_cli, "MAX_PACKAGE_BYTES", 1024), \
+                 mock.patch.object(release_cli, "MAX_TAR_METADATA_BYTES", 1024), \
+                 mock.patch.object(release_cli.tarfile, "open",
+                                   side_effect=AssertionError("must not parse metadata")):
+                with self.assertRaisesRegex(ValueError, "expanded tar exceeds"):
+                    release_cli._read_archive(archive)
+
     def test_rehashed_archive_cannot_change_executable_or_manifest_provenance(self) -> None:
         self._package()
         archive_name = release_cli.PLATFORMS["linux-x86-64"]

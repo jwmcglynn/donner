@@ -1,6 +1,7 @@
 """Contracts for paired native delivery diagnostics and lossless unwinding."""
 
 from pathlib import Path
+import os
 import tempfile
 import unittest
 from unittest import mock
@@ -99,6 +100,29 @@ class NativeDeliveryTest(unittest.TestCase):
                 delivery.prepare(binary=self.binary, output=self.output, symbols=parent / "symbols",
                                  platform="linux-x86-64")
             self.assertFalse(self.output.exists())
+
+    def test_dangling_output_symlink_is_rejected_before_mutation(self):
+        victim = self.root / "missing-victim"
+        self.output.symlink_to(victim)
+        with self.assertRaisesRegex(ValueError, "fresh owned output"):
+            delivery.prepare(binary=self.binary, output=self.output, symbols=self.symbols,
+                             platform="linux-x86-64")
+        self.assertFalse(victim.exists())
+        self.assertFalse(self.symbols.exists())
+        self.assertTrue(self.output.is_symlink())
+
+    def test_exclusive_output_copy_refuses_links_inserted_after_preflight(self):
+        victim = self.root / "preserved-victim"
+        victim.write_bytes(b"preserve existing bytes")
+        self.output.symlink_to(victim)
+        with mock.patch.object(delivery.os, "open", wraps=os.open) as opened:
+            with self.assertRaises(FileExistsError):
+                delivery._copy_fresh_executable(self.binary, self.output)
+        flags = opened.call_args.args[1]
+        self.assertTrue(flags & os.O_EXCL)
+        self.assertTrue(flags & os.O_NOFOLLOW)
+        self.assertEqual(victim.read_bytes(), b"preserve existing bytes")
+        self.assertEqual(self.binary.read_bytes(), b"linked executable")
 
     def test_mach_section_data_uses_file_offsets_not_virtual_addresses(self):
         self.binary.write_bytes(b"header__unwind__tail")
