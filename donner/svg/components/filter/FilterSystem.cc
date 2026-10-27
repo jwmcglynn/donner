@@ -458,7 +458,8 @@ bool ConvolveExceedsLimits(const FEConvolveMatrixComponent& component) {
          component.kernelMatrix.size() > kMaximumFilterKernelValues;
 }
 
-/// Appends an feConvolveMatrix node; an invalid order appends nothing.
+/// Appends an feConvolveMatrix node. An order of 0 or less, which the parser and animation never
+/// produce but a component built in code can hold, appends nothing.
 void AppendConvolveNode(FilterGraph& graph, const FEConvolveMatrixComponent& component,
                         const FilterPrimitiveComponent& attributes,
                         std::optional<ColorInterpolationFilters> colorInterpolation) {
@@ -516,8 +517,9 @@ void AppendImageNode(Registry& registry, Entity current, FilterGraph& graph,
   graph.nodes.push_back(std::move(node));
 }
 
-/// Whether an active primitive adds a graph node. An feConvolveMatrix with an invalid order adds
-/// none; one over the kernel limits counts, since it rejects the filter.
+/// Whether an active primitive adds a graph node. An feConvolveMatrix with an order of 0 or less,
+/// possible only for a component built in code, adds none; one over the kernel limits counts,
+/// since it rejects the filter.
 bool PrimitiveAddsNode(const Registry& registry, Entity entity) {
   const auto* convolve = registry.try_get<FEConvolveMatrixComponent>(entity);
   return !convolve || ConvolveExceedsLimits(*convolve) ||
@@ -881,7 +883,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
     const auto primitiveCIF = resolveColorInterpolationFilters(registry, cur);
 
     // Checked before building, so an extra feImage never copies its pixels.
-    if (filterGraph.nodes.size() == kMaximumFilterGraphNodes && PrimitiveAddsNode(registry, cur)) {
+    if (filterGraph.nodes.size() >= kMaximumFilterGraphNodes && PrimitiveAddsNode(registry, cur)) {
       RejectFilterOverLimit(handle, "Filter primitive limit exceeded", warningSink);
       return;
     }
