@@ -8,6 +8,8 @@ env:
 on:
   pull_request:
     paths:
+      # A change to this workflow must run it, or the change merges untested.
+      - ".github/workflows/sanitizers-pr.yml"
       - "tools/ci/**"
       - ".github/actions/buildbuddy-cache/**"
       - "donner/gpu/shader/**"
@@ -47,6 +49,12 @@ jobs:
     environment:
       name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
       deployment: false
+    # Budget: the test step takes 3 to 15 minutes and a normal apt step under 30 seconds. Every
+    # run cancelled at this limit had a hosted runner whose Ubuntu mirror served 38 to 64 kB/s,
+    # which stretched a 59.4 MB apt step to 15 to 24 minutes before the build started; the CI linux
+    # job saw the same slow mirror in about one run in ten. This job now downloads only Mesa's
+    # 17.5 MB Vulkan driver, about 8 minutes at the slowest rate seen. If the lane approaches the
+    # limit, cut work or restore caching; do not raise it.
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -54,22 +62,39 @@ jobs:
         with:
           persist-credentials: false
 
+      # The Geode test suite links only libdl and libpthread from the host, against the LLVM
+      # toolchain's own sysroot, and loads the Vulkan loader and Mesa's software Vulkan driver at
+      # run time. Development packages and compilers from the archive would only lengthen this
+      # download, which a slow mirror turns into most of the job's budget.
       - name: Install system dependencies
         uses: ./.github/actions/apt-install
         with:
-          packages: >-
-            pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
-            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
-            libgl1-mesa-dev clang-tidy-19
+          packages: mesa-vulkan-drivers libvulkan1
+          # One attempt at the slowest mirror rate seen takes about 8 minutes, so an attempt still
+          # running at 10 is stalled. The default 15 minutes left too little of the job's budget
+          # for the retry and the build that follow it.
+          attempt-timeout: 10m
 
+      # This workflow runs only for pull requests, which never save caches, so nothing keyed on
+      # this job is ever written: its disk cache and external repository manifest were never
+      # restored, and every run fetched the LLVM toolchain and sysroot again during analysis.
+      # Restore the external repositories that the CI workflow's linux job saves from main instead.
+      # They are keyed by repository name and MODULE.bazel, so the same entries serve this lane;
+      # the manifest entries below skip the browser and WebAssembly toolchains it never uses. A
+      # repository missing from that manifest is fetched during analysis, as before.
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan-geode
           repository-cache: true
-          external-cache: true
-          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          external-cache: |
+            name: ci-linux
+            manifest:
+              "emsdk++emscripten_deps+emscripten_bin_linux": false
+              "+_repo_rules3+playwright_chromium_headless_linux_x64": false
+              "+_repo_rules3+playwright_chromium_linux_x64": false
+              "rules_nodejs++node+nodejs_linux_amd64": false
+          cache-save: false
 
       # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
       # runs and trusted maintainer pull requests read and write; Renovate pull
