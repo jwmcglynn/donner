@@ -905,6 +905,7 @@ js_test(
     data = [
         "catalog-fonts.spec.mjs",
         "//donner/editor:WholeAppWorkerBridge.cc",
+        "//donner/editor/wasm:BUILD.bazel",
         "//donner/editor/wasm:PackagedResourceBridge.cc",
         "//donner/editor/wasm:catalog-fonts.js",
         "//donner/editor/wasm:packaged-resource-loader.js",

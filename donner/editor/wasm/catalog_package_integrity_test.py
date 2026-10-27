@@ -141,6 +141,10 @@ class CatalogPackageValidationTest(unittest.TestCase):
         (self.package / "packaged-resources.js").write_text(
             "globalThis.DonnerPackagedResources = " + serialized + ";\n")
         (self.package / "editor.wasm").write_bytes(b"\0asm\1\0\0\0")
+        self.glue = "\n".join(f"Module.{name}={name};" for name in (
+            "callMain", "HEAPU8", "_malloc", "_free", "_DonnerPackagedResourceManifest",
+            "_DonnerInstallPackagedResource", "_DonnerFailPackagedResource"))
+        (self.package / "editor.js").write_text(self.glue)
         fonts = []
         for index, family in enumerate(sorted(FAMILIES)):
             payload = bytearray([index] * 64)
@@ -189,6 +193,16 @@ class CatalogPackageValidationTest(unittest.TestCase):
         (self.package / "packaged-resources.js").write_text("globalThis.DonnerPackagedResources = {};")
         with self.assertRaisesRegex(ValueError, "bootstrap metadata differs"):
             validate_package(self.package)
+
+    def test_resource_startup_requires_actual_public_module_bindings(self):
+        for name in ("callMain", "HEAPU8", "_malloc", "_free",
+                     "_DonnerPackagedResourceManifest", "_DonnerInstallPackagedResource",
+                     "_DonnerFailPackagedResource"):
+            with self.subTest(export=name):
+                (self.package / "editor.js").write_text(
+                    self.glue.replace(f"Module.{name}={name};", ""))
+                with self.assertRaisesRegex(ValueError, "Missing public resource bridge export"):
+                    validate_package(self.package)
 
 
 if __name__ == "__main__":

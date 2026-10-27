@@ -1085,3 +1085,22 @@ test("close rejects every shared waiter and forbids late install or retry", asyn
   assert.equal(loader.installing.size, 0);
   await assert.rejects(loader.request(sample.asset.sha256, true), /not initialized/);
 });
+
+const wasmBuildSource = await readFile(new URL("../BUILD.bazel", import.meta.url), "utf8");
+
+function exportedSetting(name) {
+  const values = [...wasmBuildSource.matchAll(new RegExp(`"-s${name}=([^"\n]+)"`, "g"))];
+  assert.equal(values.length, 1, `${name} must have one explicit definition`);
+  return JSON.parse(values[0][1].replaceAll("'", "\""));
+}
+
+test("resource startup declares its public heap and allocator module contract", () => {
+  const runtime = exportedSetting("EXPORTED_RUNTIME_METHODS");
+  for (const name of ["callMain", "HEAPU8"]) {
+    assert.ok(runtime.includes(name), `the external loader requires Module.${name}`);
+  }
+  const functions = exportedSetting("EXPORTED_FUNCTIONS");
+  for (const name of ["_main", "_malloc", "_free"]) {
+    assert.ok(functions.includes(name), `${name} must remain explicitly exported`);
+  }
+});

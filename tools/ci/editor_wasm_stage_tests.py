@@ -201,6 +201,9 @@ class EditorWasmStageTest(unittest.TestCase):
                      "packaged-resource-loader.js"):
             (package / name).write_text(name)
         (package / "editor.wasm").write_bytes(b"\0asm\1\0\0\0")
+        (package / "editor.js").write_text("\n".join(f"Module.{name}={name};" for name in (
+            "callMain", "HEAPU8", "_malloc", "_free", "_DonnerPackagedResourceManifest",
+            "_DonnerInstallPackagedResource", "_DonnerFailPackagedResource")))
         (package / "CatalogFontNotices.txt").write_text("SIL OPEN FONT LICENSE Version 1.1")
         fonts = []
         for index, family in enumerate(FAMILIES):
