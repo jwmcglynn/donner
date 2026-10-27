@@ -924,6 +924,65 @@ TEST(TextEngineTest, SidewaysVerticalGlyphCentersOnAscentDescentMidpoint) {
   }
 }
 
+// A vertical chunk's anchor length runs from the pen position before its first glyph to the pen
+// position after its last. Upright CJK glyphs sit below their pen position by the face's vertical
+// origin while sideways Latin glyphs sit on it, so a chunk mixing them must not measure from the
+// first glyph's drawn position. Middle anchoring shifts every glyph of the start-anchored layout
+// back by half the pen extent; with the chunk starting at y=0 and ending on a sideways glyph, that
+// extent is the last glyph's end.
+TEST(TextEngineTest, VerticalMiddleAnchorCentersPenExtentOfMixedOrientationChunk) {
+  for (const bool fullBackend : {false, true}) {
+    SCOPED_TRACE(fullBackend ? "full backend" : "simple backend");
+    Registry registry;
+    FontManager fontManager(registry);
+    ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "Mplus 1p")));
+    std::unique_ptr<TextBackend> backend;
+    if (fullBackend) {
+      backend = std::make_unique<TextBackendFull>(fontManager, registry);
+    } else {
+      backend = std::make_unique<TextBackendSimple>(fontManager, registry);
+    }
+    TextEngine engine(fontManager, registry, std::move(backend));
+
+    const auto layOut = [&](TextAnchor anchor) {
+      components::ComputedTextComponent text;
+      auto span = MakeSpan("\xE6\x97\xA5\xE6\x9C\xAC Ab");  // 日本 Ab
+      span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+      span.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+      span.textAnchor = anchor;
+      text.spans.push_back(std::move(span));
+      TextLayoutParams params = MakeTextParams(20.0);
+      params.fontFamilies = {RcString("Mplus 1p")};
+      params.writingMode = WritingMode::VerticalRl;
+      return engine.layout(text, params);
+    };
+
+    const std::vector<TextRun> start = layOut(TextAnchor::Start);
+    ASSERT_THAT(start, ElementsAre(RunGlyphsAre(SizeIs(5))));
+    // The first glyph is upright and the last sideways at its pen position. The full backend draws
+    // the upright glyph below its pen by the face's vertical origin; the simple backend's origin
+    // for this face coincides with the pen, so only the full backend exercises the offset.
+    ASSERT_THAT(start[0].glyphs.front(), GlyphRotateDegreesIs(DoubleEq(0.0)));
+    ASSERT_THAT(start[0].glyphs.back(), GlyphRotateDegreesIs(DoubleEq(90.0)));
+    if (fullBackend) {
+      ASSERT_THAT(start[0].glyphs.front(), GlyphYPositionIs(Gt(0.0)));
+    }
+    const double penExtent = start[0].glyphs.back().yPosition + start[0].glyphs.back().yAdvance;
+
+    std::vector<double> expected;
+    for (const TextGlyph& glyph : start[0].glyphs) {
+      expected.push_back(glyph.yPosition - penExtent / 2.0);
+    }
+    const std::vector<TextRun> middle = layOut(TextAnchor::Middle);
+    ASSERT_THAT(middle, SizeIs(1));
+    std::vector<double> actual;
+    for (const TextGlyph& glyph : middle[0].glyphs) {
+      actual.push_back(glyph.yPosition);
+    }
+    EXPECT_THAT(actual, testing::Pointwise(DoubleNear(1e-9), expected));
+  }
+}
+
 TEST(TextEngineTest, ScriptedRtlChunkYOverrideKeepsVisualGlyphsOnSameBaseline) {
   Registry registry;
   FontManager fontManager(registry);
