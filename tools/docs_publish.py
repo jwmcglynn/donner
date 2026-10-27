@@ -334,19 +334,20 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
         raise ValueError("HTTPS redirects are not allowed")
 
 
-def _https_response(url: str, headers: dict):
+def _https_response(url: str, headers: dict, timeout: float = 30):
     parsed = urllib.parse.urlsplit(url)
     site.require(parsed.scheme == "https" and bool(parsed.hostname)
                  and not parsed.username and not parsed.password and not parsed.fragment
                  and parsed.port in (None, 443), "request requires a direct HTTPS URL")
     request = urllib.request.Request(url, headers=headers)
-    return urllib.request.build_opener(_NoRedirects()).open(request, timeout=30)
+    return urllib.request.build_opener(_NoRedirects()).open(request, timeout=timeout)
 
 
-def live_marker(url: str = SITE_URL) -> dict | None:
+def live_marker(url: str = SITE_URL, *, deadline: float | None = None) -> dict | None:
     try:
-        with _https_response(url + "docs-site.json", {"Cache-Control": "no-cache"}) as response:
-            data = response.read(site.MAX_FILE + 1)
+        with _https_response(url + "docs-site.json", {"Cache-Control": "no-cache"},
+                             timeout=_request_timeout(deadline)) as response:
+            data = _read_body(response, site.MAX_FILE, deadline)
         site.require(len(data) <= site.MAX_FILE, "live marker is oversized")
         return json.loads(data)
     except urllib.error.HTTPError as error:
@@ -407,29 +408,34 @@ def _previous(api, snapshot: str, prior: str, work: Path) -> tuple[dict, dict]:
     return {}, {"kind": "legacy", "index_sha256": actual}
 
 
-def _live_identity(expected: dict) -> bool:
+def _live_identity(expected: dict, *, deadline: float | None = None) -> bool:
+    deadline = deadline if deadline is not None else time.monotonic() + 120
     if expected["kind"] == "composition":
         try:
-            _verify_live(expected["marker"]["manifest_sha256"], expected["marker"])
+            _verify_live(expected["marker"]["manifest_sha256"], expected["marker"], deadline=deadline)
             return True
         except ValueError:
             return False
-    with _https_response(SITE_URL + "index.html", {"Cache-Control": "no-cache"}) as response:
-        data = response.read(site.MAX_FILE + 1)
-    site.require(len(data) <= site.MAX_FILE, "live index is oversized")
-    return site.digest(data) == expected["index_sha256"] and live_marker() is None
+    data = _live_file("index.html", deadline=deadline)
+    return site.digest(data) == expected["index_sha256"] and live_marker(deadline=deadline) is None
 
 
 def _wait_for_live(expected: dict, wait=None) -> None:
     pause = wait or time.sleep
+    deadline = time.monotonic() + 120
     for attempt in range(24):
+        if time.monotonic() >= deadline:
+            break
         try:
-            if _live_identity(expected):
+            if _live_identity(expected, deadline=deadline) and time.monotonic() < deadline:
                 return
         except (ValueError, OSError, urllib.error.URLError):
             pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         if attempt < 23:
-            pause(5)
+            pause(min(5, remaining))
     raise ValueError("public site did not converge within the bounded propagation window")
 
 
@@ -522,19 +528,42 @@ def _retain_and_deploy(record, plan, previous_id, work, api):
     return result
 
 
-def _live_file(name: str, limit=site.MAX_FILE) -> bytes:
+def _request_timeout(deadline: float | None) -> float:
+    if deadline is None:
+        return 30
+    remaining = deadline - time.monotonic()
+    site.require(remaining > 0, "live health deadline expired")
+    return min(5, remaining)
+
+
+def _read_body(response, limit: int, deadline: float | None) -> bytes:
+    if deadline is None:
+        return response.read(limit + 1)
+    data = bytearray()
+    while len(data) <= limit:
+        _request_timeout(deadline)
+        part = response.read1(min(65536, limit + 1 - len(data)))
+        _request_timeout(deadline)
+        if not part:
+            break
+        data.extend(part)
+    return bytes(data)
+
+
+def _live_file(name: str, limit=site.MAX_FILE, *, deadline: float | None = None) -> bytes:
     site.safe_path(name)
-    with _https_response(SITE_URL + name, {"Cache-Control": "no-cache"}) as response:
+    with _https_response(SITE_URL + name, {"Cache-Control": "no-cache"},
+                         timeout=_request_timeout(deadline)) as response:
         site.require(response.geturl().startswith(SITE_URL), "live file redirected outside docs")
-        data = response.read(limit + 1)
+        data = _read_body(response, limit, deadline)
     site.require(len(data) <= limit, "live file is oversized")
     return data
 
 
-def _verify_live(manifest: str, expected_marker: dict) -> None:
-    marker = live_marker()
+def _verify_live(manifest: str, expected_marker: dict, *, deadline: float | None = None) -> None:
+    marker = live_marker(deadline=deadline)
     site.require(marker == expected_marker and marker["manifest_sha256"] == manifest, "live composition differs")
-    raw = _live_file("_docs/versions.json", 65536)
+    raw = _live_file("_docs/versions.json", 65536, deadline=deadline)
     site.require(site.digest(raw) == manifest, "live version manifest differs")
     versions = json.loads(raw)["versions"]
     names = ["index.html", "_docs/selector.js", "_docs/selector.css"]
@@ -542,7 +571,7 @@ def _verify_live(manifest: str, expected_marker: dict) -> None:
         site.require(version == "main" or site.VERSION.fullmatch(version), "invalid live version")
         names += [version + "/index.html", version + "/docs-build.json"]
     for name in names:
-        site.require(site.digest(_live_file(name)) == marker["files"][name], "live content differs: " + name)
+        site.require(site.digest(_live_file(name, deadline=deadline)) == marker["files"][name], "live content differs: " + name)
 
 
 def _offline_attestation(path: Path, raw: bytes, commit: str, work: Path, workflow: str = WORKFLOW) -> None:

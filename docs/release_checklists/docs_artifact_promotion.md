@@ -118,7 +118,11 @@ its exact bytes, persists the candidate and evidence to the protected branch, do
 copy back, and only then requests Pages cutover. Normal publication does not build documentation.
 
 Live verification checks the composition marker, version manifest, root and per-version indexes,
-source markers and selector assets. Successful activation records the new current/prior pair in
+source markers and selector assets. After Pages reports success, promotion, rollback and recovery
+allow a two-minute propagation window with a shared monotonic deadline, bounded reads and
+remaining-budget socket timeouts. The 45-minute manual deployment job leaves preparation and
+recovery allowance around both ten-minute Pages waits; it does not guarantee arbitrary slow
+transfers finish. Socket timeouts are cooperative and do not bound platform DNS resolution. Successful activation records the new current/prior pair in
 `docs-snapshots`. `docs-promotion-evidence-ATTEMPT` retains the preflight and result receipts.
 
 A failure receipt distinguishes `published`, `unchanged`, `restored` and `recovery-required`.

@@ -1944,6 +1944,7 @@ def _docs_deploy_violations(workflow):
     guard = "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
     failures = _failed([
         (all(guard in job for job in (deploy, assemble, seed)), "manual dispatch on main required"),
+        ("timeout-minutes: 45" in deploy, "deploy must reserve preparation and recovery time"),
         ("tools/build_docs.sh" not in deploy and "upload-pages-artifact@" not in deploy,
          "deploy builds an unreviewed site"),
         ("tools.docs_publish preflight" in preflight and "tools.docs_publish rollback-preflight" in rollback,
@@ -3149,6 +3150,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         path = DOCS_WORKFLOW
         workflow = self.supply_chain_files[path]
         self._assert_rejected(lambda files, path: _docs_deploy_violations(files[path]), {
+            "insufficient recovery allowance": (path, workflow.replace("timeout-minutes: 45", "timeout-minutes: 30", 1),
+                                                "reserve preparation and recovery time"),
             "unverified composition": (path, workflow.replace("tools.docs_publish preflight", "true", 1),
                                        "verify both whole-site"),
             "no durable recovery": (path, workflow.replace("previous-pages/artifact.tar", "other.tar", 1),
