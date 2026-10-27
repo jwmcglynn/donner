@@ -2951,7 +2951,15 @@ class FallbackCoverage {
 public:
   /// Adds the query allowance for a span of \p textBytes UTF-8 bytes, which bounds its
   /// codepoint count.
-  void grant(size_t textBytes) { remaining_ += textBytes * kQueriesPerCodepoint; }
+  void grant(size_t textBytes) { add(textBytes * kQueriesPerByte); }
+
+  /// Raises the element's total grant to at least \p queries, so a short span can still try each
+  /// of its fallback candidates once.
+  void ensureGrantAtLeast(size_t queries) {
+    if (granted_ < queries) {
+      add(queries - granted_);
+    }
+  }
 
   /// Whether the element's query grant is spent, after which no new coverage can be learned.
   bool exhausted() const { return remaining_ == 0; }
@@ -2974,9 +2982,15 @@ public:
 
 private:
   /// Enough to try every face of a typical fallback chain for each codepoint.
-  static constexpr size_t kQueriesPerCodepoint = 32;
+  static constexpr size_t kQueriesPerByte = 32;
+
+  void add(size_t queries) {
+    granted_ += queries;
+    remaining_ += queries;
+  }
 
   std::unordered_map<uint64_t, bool> cache_;
+  size_t granted_ = 0;
   size_t remaining_ = 0;
 };
 
@@ -3117,10 +3131,12 @@ private:
   FontHandle clusterFace(size_t start, size_t end) const {
     const auto [entry, inserted] = clusterFaces_.try_emplace(text_.substr(start, end - start));
     if (inserted) {
-      // A backend may report `.notdef` for a joiner the face need not map.
-      entry->second = covers(run_.font, start, end) || fallback_.coverage.exhausted()
-                          ? run_.font
-                          : findFace(start, end);
+      // A backend may report `.notdef` for a joiner the face need not map. Resolving the
+      // candidates first applies the element's minimum grant before the exhaustion check.
+      entry->second =
+          covers(run_.font, start, end) || candidates().empty() || fallback_.coverage.exhausted()
+              ? run_.font
+              : findFace(start, end);
     }
     return entry->second;
   }
@@ -3172,6 +3188,8 @@ private:
     for (size_t index = 0; index < faceCount; ++index) {
       add(fontManager.faceFamilyName(index));
     }
+    // The primary face's check plus one query per candidate.
+    fallback_.coverage.ensureGrantAtLeast(candidates_.size() + 1);
     return candidates_;
   }
 
