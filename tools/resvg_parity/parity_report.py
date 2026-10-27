@@ -682,6 +682,14 @@ def _summary(cases: list[dict[str, object]], pixel_budget_sources: int) -> dict[
         "geode_golden_cases": count_exception("geode_golden"),
         "geode_pixel_budget_cases": count_exception("geode_threshold"),
         "pixel_budget_sources": pixel_budget_sources,
+        "reference_generation_budget_cases": count_active(
+            lambda case: case["primary_state"] == "compare"
+            and str(case["reason"] or "").startswith(REFERENCE_GENERATION_PREFIX)
+        ),
+        "reference_label_glyph_budget_cases": count_active(
+            lambda case: case["primary_state"] == "compare"
+            and str(case["reason"] or "").startswith(REFERENCE_LABEL_GLYPHS_PREFIX)
+        ),
         "render_only_cases": count_state("render-only"),
         "render_only_deprecated_in_svg2_cases": count_render_only_kind("deprecated-in-svg2"),
         "render_only_undefined_behavior_cases": count_render_only_kind("undefined-behavior"),
@@ -850,6 +858,92 @@ def deprecated_in_svg2_violations(
     for key in sorted(set(features) - used):
         violations.append(f"{key}: listed in DEPRECATED_IN_SVG2_FEATURES, but no active "
                           "deprecated-in-svg2 case uses it")
+    return sorted(violations)
+
+
+REFERENCE_GENERATION_PREFIX = "Reference rasterizer generation:"
+REFERENCE_LABEL_GLYPHS_PREFIX = "Reference label glyphs:"
+REFERENCE_BUDGET_PREFIXES = (REFERENCE_GENERATION_PREFIX, REFERENCE_LABEL_GLYPHS_PREFIX)
+_ANALYTIC_RESIDUAL = re.compile(r"analytic residual (\d+) px")
+_SUPERSAMPLED_RESIDUAL = re.compile(r"supersampled (\d+) px")
+_PIXEL_BUDGET = re.compile(r"\b(?:withMaxPixelsDifferent|WithMaxPixels)\s*\(\s*(\d+)")
+_REFERENCE_BUDGET_EXCEPTIONS = {"threshold", "text_full_gate", "backend_gate"}
+# Supersampled coverage at or below the suite's default pixel allowance.
+_GENERATION_SUPERSAMPLED_LIMIT = 100
+
+
+def _reference_budget_limit(analytic_residual: int) -> int:
+    """Return the largest allowed budget: the residual plus 3%, rounded up to 5 pixels."""
+
+    return -(-analytic_residual * 103 // 500) * 5
+
+
+def _reference_budget_form_violations(case: dict[str, object]) -> list[str]:
+    """Return how a reference-qualified case departs from a per-case pixel count."""
+
+    path = case["path"]
+    expression = str(case["raw_params_expression"])
+    violations: list[str] = []
+    if case["params_source"] != "override":
+        violations.append(f"{path}: comes from a category default, not a per-case override")
+    extra = sorted(set(case["exception_types"]) - _REFERENCE_BUDGET_EXCEPTIONS)
+    if extra or _contains_call(expression, {"WithGoldenOverride", "withGeodeGoldenOverride"}):
+        violations.append(f"{path}: combines the budget with {', '.join(extra) or 'a golden'}")
+    if _contains_call(expression, {"WithThreshold"}):
+        violations.append(f"{path}: widens the color threshold instead of counting pixels")
+    if _PIXEL_BUDGET.search(expression) is None:
+        violations.append(f"{path}: compared without a pixel budget")
+    return violations
+
+
+def _reference_budget_residual_violations(case: dict[str, object], prefix: str) -> list[str]:
+    """Return how a reference-qualified case's budget departs from the residuals it states."""
+
+    path = case["path"]
+    reason = str(case["reason"])
+    budget = _PIXEL_BUDGET.search(str(case["raw_params_expression"]))
+    violations: list[str] = []
+    analytic = _ANALYTIC_RESIDUAL.search(reason)
+    if analytic is None:
+        violations.append(f"{path}: reason does not state the analytic residual")
+    elif budget is not None:
+        limit = _reference_budget_limit(int(analytic.group(1)))
+        if int(budget.group(1)) > limit:
+            violations.append(f"{path}: budget {budget.group(1)} exceeds the analytic residual "
+                              f"{analytic.group(1)} plus 3% ({limit})")
+    supersampled = _SUPERSAMPLED_RESIDUAL.search(reason)
+    if supersampled is None:
+        violations.append(f"{path}: reason does not state the supersampled residual")
+    elif prefix == REFERENCE_GENERATION_PREFIX and int(supersampled.group(1)) > (
+        _GENERATION_SUPERSAMPLED_LIMIT
+    ):
+        violations.append(f"{path}: supersampled residual {supersampled.group(1)} px is above the "
+                          "default allowance, so the difference is not only the rasterizer "
+                          "generation")
+    return violations
+
+
+def reference_budget_violations(report: dict[str, object]) -> list[str]:
+    """Return reference-qualified pixel budgets that do not follow the evidence rule.
+
+    Vendored references come from more than one resvg rasterizer generation: newer ones cover edges
+    with 4x4 supersampling, older ones match Donner's analytic coverage. A compared case whose only
+    measured difference is that generation (`Reference rasterizer generation:`), or the heavier
+    label glyphs of one reference set (`Reference label glyphs:`), may carry a pixel budget. The
+    budget is a per-case pixel count at the default color threshold with no other exception, no
+    larger than the stated analytic residual plus 3% rounded up to 5 pixels, and the reason states
+    the residual under 4x4 supersampled coverage too, which must fit the default allowance for the
+    generation class.
+    """
+
+    violations: list[str] = []
+    for case in report["cases"]:  # type: ignore[union-attr]
+        reason = str(case["reason"] or "")
+        prefix = next((p for p in REFERENCE_BUDGET_PREFIXES if reason.startswith(p)), None)
+        if case["registration"] != "active" or prefix is None or case["primary_state"] != "compare":
+            continue
+        violations += _reference_budget_form_violations(case)
+        violations += _reference_budget_residual_violations(case, prefix)
     return sorted(violations)
 
 
