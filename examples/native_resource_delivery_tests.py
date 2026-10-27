@@ -32,7 +32,7 @@ class ResourceDeliveryFixture(unittest.TestCase):
     def install_assets(self, name="svg_text_interaction.assets", parent=None):
         self.assertIsNotNone(self.assets)
         destination = (parent or self.install) / name
-        shutil.copytree(self.assets, destination)
+        shutil.copytree(self.assets, destination, copy_function=shutil.copyfile)
         return destination
 
     def run_example(self):
