@@ -515,6 +515,8 @@ TEST(RendererSnapshotTests, FontPayloadLimitRejectsLaterFontWithoutRetainingItsB
       TextRun run;
       run.font = font;
       run.glyphs.push_back(TextGlyph{.glyphIndex = 1});
+      // A fallback glyph whose face exceeds the payload limit has no face on replay.
+      run.glyphs.push_back(TextGlyph{.glyphIndex = 2, .font = second});
       prepared->runs.push_back(std::move(run));
       TextParams params;
       params.preparedTextDraw = std::move(prepared);
@@ -532,6 +534,13 @@ TEST(RendererSnapshotTests, FontPayloadLimitRejectsLaterFontWithoutRetainingItsB
         const auto& fonts = registry.ctx().get<FontManager>();
         const auto bytes = fonts.fontData(params.preparedTextDraw->runs.front().font);
         EXPECT_EQ(bytes.empty(), drawCount == 1);
+        // The glyph whose face was not retained is skipped like `.notdef` instead of drawing its
+        // glyph id in the run's face.
+        std::vector<int> glyphIndices;
+        for (const TextGlyph& glyph : params.preparedTextDraw->runs.front().glyphs) {
+          glyphIndices.push_back(glyph.glyphIndex);
+        }
+        EXPECT_THAT(glyphIndices, testing::ElementsAre(1, 0));
         ++drawCount;
       });
   snapshot.replay(renderer);

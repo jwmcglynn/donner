@@ -437,7 +437,8 @@ TEST(FontSelection, PerClusterFallbackMovesACombiningMarkWithItsBase) {
   EXPECT_THAT(faces.front(), Eq(GlyphFace{U'a', "Yellowtail-Regular.ttf"}));
   EXPECT_THAT(faces.back(), Eq(GlyphFace{U'b', "Yellowtail-Regular.ttf"}));
   EXPECT_THAT(std::vector<GlyphFace>(faces.begin() + 1, faces.end() - 1),
-              Each(Field("source", &GlyphFace::source, Eq("NotoSerif-Regular.ttf"))));
+              Each(AllOf(Field("source", &GlyphFace::source, Eq("NotoSerif-Regular.ttf")),
+                         Field("drawn", &GlyphFace::drawn, Eq(true)))));
 }
 
 TEST(FontSelection, PerClusterFallbackKeepsAnIndicSyllableInOneFace) {
@@ -451,6 +452,87 @@ TEST(FontSelection, PerClusterFallbackKeepsAnIndicSyllableInOneFace) {
   EXPECT_THAT(std::vector<GlyphFace>(faces.begin() + 1, faces.end()),
               Each(AllOf(Field("source", &GlyphFace::source, Eq("NotoSansDevanagari-Regular.ttf")),
                          Field("drawn", &GlyphFace::drawn, Eq(true)))));
+}
+
+/// A font manager with a face that covers no Latin letters as "Primary", \p decoys more such faces,
+/// and Yellowtail as "Covering". Spans list the families in that order, so a Latin cluster's
+/// fallback search tries every decoy before the covering face.
+class FallbackBudgetFontSet {
+public:
+  explicit FallbackBudgetFontSet(int decoys) : fontManager_(registry_) {
+    add("NotoEmoji-Regular.ttf", "Primary");
+    for (int index = 0; index < decoys; ++index) {
+      // Distinct trailing padding keeps identical font bytes from sharing one loaded face.
+      add("NotoEmoji-Regular.ttf", "Decoy" + std::to_string(index),
+          4u * static_cast<size_t>(index + 1));
+    }
+    add("Yellowtail-Regular.ttf", "Covering");
+  }
+
+  /// Lays out \p utf8 in "Primary" and reports the face that draws each glyph.
+  std::vector<GlyphFace> layOut(std::string_view utf8) {
+    TextEngine engine(fontManager_, registry_);
+    components::ComputedTextComponent text;
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString(utf8);
+    span.start = 0;
+    span.end = span.text.size();
+    span.startsNewChunk = true;
+    text.spans.push_back(span);
+    TextLayoutParams params;
+    params.fontFamilies = families_;
+    params.fontSize = Lengthd(32, Lengthd::Unit::Px);
+    params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+    params.fontMetrics = FontMetrics();
+    const std::vector<TextRun> runs = engine.layout(text, params);
+    EXPECT_THAT(runs, SizeIs(1));
+    std::vector<GlyphFace> result;
+    for (const TextRun& run : runs) {
+      for (const TextGlyph& glyph : run.glyphs) {
+        result.push_back({std::get<0>(Utf8::NextCodepoint(utf8.substr(glyph.cluster))),
+                          DescribeFace(fontManager_, GlyphFont(run, glyph)).source,
+                          glyph.glyphIndex != 0});
+      }
+    }
+    return result;
+  }
+
+private:
+  void add(const std::string& file, const std::string& family, size_t padding = 0) {
+    std::vector<uint8_t> bytes = ReadFile(TestFontsDir() / file);
+    bytes.resize(bytes.size() + padding, 0);
+    css::FontFaceSource source;
+    source.kind = css::FontFaceSource::Kind::Data;
+    source.payload = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
+    source.trusted = true;
+    css::FontFace face;
+    face.familyName = RcString(family);
+    face.sources.push_back(std::move(source));
+    fontManager_.addFontFace(face);
+    families_.emplace_back(RcString(family));
+  }
+
+  Registry registry_;
+  FontManager fontManager_;
+  SmallVector<RcString, 1> families_;
+};
+
+TEST(FontSelection, FallbackSearchesEveryCandidateFaceForAShortSpan) {
+  // One Latin letter must reach the covering face after 40 faces that lack it, even though that
+  // takes more coverage queries than a one-byte span's per-byte grant.
+  FallbackBudgetFontSet fonts(40);
+  EXPECT_THAT(fonts.layOut("B"), ElementsAre(GlyphFace{U'B', "Yellowtail-Regular.ttf", true}));
+}
+
+TEST(FontSelection, FallbackStopsSearchingOnceTheQueryGrantIsSpent) {
+  // Each distinct Latin letter costs about 42 coverage queries (the primary face, 40 decoys and
+  // the covering face) against a grant of 32 per byte, so early letters fall back and the last
+  // ones stay `.notdef` on the primary face.
+  FallbackBudgetFontSet fonts(40);
+  const std::vector<GlyphFace> faces = fonts.layOut("BCDEFGHIJKLMNOPQ");
+  ASSERT_THAT(faces, SizeIs(16));
+  EXPECT_THAT(faces.front(), Eq(GlyphFace{U'B', "Yellowtail-Regular.ttf", true}));
+  EXPECT_THAT(faces.back(), Eq(GlyphFace{U'Q', "NotoEmoji-Regular.ttf", false}));
 }
 
 }  // namespace

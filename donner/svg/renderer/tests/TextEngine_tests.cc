@@ -930,6 +930,93 @@ TEST(TextEngineTest, SidewaysVerticalGlyphCentersOnAscentDescentMidpoint) {
 // first glyph's drawn position. Middle anchoring shifts every glyph of the start-anchored layout
 // back by half the pen extent; with the chunk starting at y=0 and ending on a sideways glyph, that
 // extent is the last glyph's end.
+// Lays out one horizontal span with the full text backend and the given families.
+std::vector<TextRun> LayOutFull(Registry& registry, FontManager& fontManager, std::string_view utf8,
+                                SmallVector<RcString, 1> families,
+                                WritingMode mode = WritingMode::HorizontalTb) {
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendFull>(fontManager, registry));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(std::string(utf8));
+  span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.fontFamilies = std::move(families);
+  params.writingMode = mode;
+  return engine.layout(text, params);
+}
+
+// A fallback item is one part of its chunk: in a right-to-left chunk the neutral parentheses
+// around an Arabic word that falls back to another face still take the chunk's direction, so they
+// mirror, and the items keep visual order.
+TEST(TextEngineTest, FallbackItemsInRightToLeftChunkMirrorNeutralsInVisualOrder) {
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri")));
+
+  const auto glyphIndexOf = [&](std::string_view utf8) {
+    const auto runs = LayOutFull(registry, fontManager, utf8, {RcString("Noto Sans")});
+    return runs.empty() || runs[0].glyphs.empty() ? 0 : runs[0].glyphs[0].glyphIndex;
+  };
+  const int openParen = glyphIndexOf("(");
+  const int closeParen = glyphIndexOf(")");
+  ASSERT_THAT(openParen, Gt(0));
+  ASSERT_THAT(closeParen, Gt(0));
+
+  // "(" at byte 0, Arabic meem at 1, reh at 3, ")" at 5.
+  const auto runs =
+      LayOutFull(registry, fontManager, "(\xD9\x85\xD8\xB1)", {RcString("Noto Sans")});
+  ASSERT_THAT(runs, SizeIs(1));
+  std::vector<uint32_t> clusters;
+  for (const TextGlyph& glyph : runs[0].glyphs) {
+    clusters.push_back(glyph.cluster);
+  }
+  EXPECT_THAT(clusters, ElementsAre(5u, 3u, 1u, 0u));
+  // Visually leftmost is the logical ")" drawn mirrored, rightmost the logical "(" mirrored.
+  EXPECT_THAT(runs[0].glyphs, ElementsAre(GlyphIndexIs(openParen), _, _, GlyphIndexIs(closeParen)));
+}
+
+// A fallback item inside a vertical chunk that contains upright CJK is shaped the way its chunk
+// is: vertically, with sideways Latin advanced by its unkerned horizontal advance.
+TEST(TextEngineTest, FallbackLatinItemInVerticalChunkUsesTheChunkVerticalShaping) {
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoEmoji-Regular.ttf", "Noto Emoji")));
+  const FontHandle yellowtail = LoadResvgFont(fontManager, "Yellowtail-Regular.ttf", "Yellowtail");
+  ASSERT_TRUE(static_cast<bool>(yellowtail));
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "Mplus 1p")));
+
+  // Noto Emoji has neither; Yellowtail has the Latin but no CJK, so the chunk splits in two items.
+  const std::string text =
+      "\xE6\x97\xA5\xE6\x9C\xAC"
+      "AVATAR";
+  const auto runs =
+      LayOutFull(registry, fontManager, text,
+                 {RcString("Noto Emoji"), RcString("Yellowtail"), RcString("Mplus 1p")},
+                 WritingMode::VerticalRl);
+  ASSERT_THAT(runs, SizeIs(1));
+
+  TextBackendFull backend(fontManager, registry);
+  const auto oracle = backend.shapeRun(yellowtail, runs[0].usedFontSizePx, text, 0, text.size(),
+                                       true, TextOrientation::Mixed, FontVariant::Normal, false);
+  std::vector<double> expected;
+  for (const auto& glyph : oracle.glyphs) {
+    if (glyph.cluster >= 6) {
+      expected.push_back(glyph.xAdvance);
+    }
+  }
+  std::vector<double> actual;
+  for (const TextGlyph& glyph : runs[0].glyphs) {
+    if (glyph.cluster >= 6) {
+      EXPECT_THAT(glyph.font, testing::Eq(yellowtail));
+      actual.push_back(glyph.yAdvance);
+    }
+  }
+  EXPECT_THAT(actual, testing::Pointwise(DoubleNear(1e-9), expected));
+}
+
 TEST(TextEngineTest, VerticalMiddleAnchorCentersPenExtentOfMixedOrientationChunk) {
   for (const bool fullBackend : {false, true}) {
     SCOPED_TRACE(fullBackend ? "full backend" : "simple backend");
