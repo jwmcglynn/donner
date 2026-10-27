@@ -924,13 +924,7 @@ TEST(TextEngineTest, SidewaysVerticalGlyphCentersOnAscentDescentMidpoint) {
   }
 }
 
-// A vertical chunk's anchor length runs from the pen position before its first glyph to the pen
-// position after its last. Upright CJK glyphs sit below their pen position by the face's vertical
-// origin while sideways Latin glyphs sit on it, so a chunk mixing them must not measure from the
-// first glyph's drawn position. Middle anchoring shifts every glyph of the start-anchored layout
-// back by half the pen extent; with the chunk starting at y=0 and ending on a sideways glyph, that
-// extent is the last glyph's end.
-// Lays out one horizontal span with the full text backend and the given families.
+// Lays out one span at (100, 100) with the full text backend, the given families and writing mode.
 std::vector<TextRun> LayOutFull(Registry& registry, FontManager& fontManager, std::string_view utf8,
                                 SmallVector<RcString, 1> families,
                                 WritingMode mode = WritingMode::HorizontalTb) {
@@ -1136,6 +1130,12 @@ TEST(TextEngineTest, FallbackLatinItemInVerticalChunkUsesTheChunkVerticalShaping
   EXPECT_THAT(actual, testing::Pointwise(DoubleNear(1e-9), expected));
 }
 
+// A vertical chunk's anchor length runs from the pen position before its first glyph to the pen
+// position after its last. Upright CJK glyphs sit below their pen position by the face's vertical
+// origin while sideways Latin glyphs sit on it, so a chunk mixing them must not measure from the
+// first glyph's drawn position. Middle anchoring shifts every glyph of the start-anchored layout
+// back by half the pen extent; with the chunk starting at y=0 and ending on a sideways glyph, that
+// extent is the last glyph's end.
 TEST(TextEngineTest, VerticalMiddleAnchorCentersPenExtentOfMixedOrientationChunk) {
   for (const bool fullBackend : {false, true}) {
     SCOPED_TRACE(fullBackend ? "full backend" : "simple backend");

@@ -1516,15 +1516,6 @@ void ApplyPostTextPathTranslations(std::vector<TextRun>& runs,
   }
 }
 
-/**
- * Stretches a glyph's outline by \p scale along the inline axis for
- * `lengthAdjust="spacingAndGlyphs"`. The outline is stretched before the glyph's rotation, so a
- * sideways glyph in vertical text stretches its own x axis.
- *
- * @param glyph Glyph to stretch.
- * @param scale Inline-axis scale factor.
- * @param vertical True for vertical writing modes.
- */
 /// A glyph's pen position on the inline axis. An upright vertical glyph is drawn past its pen
 /// position by its face's vertical origin.
 double InlinePenPosition(const TextGlyph& glyph, bool vertical) {
@@ -1546,6 +1537,15 @@ void PlaceStretchedGlyph(TextGlyph& glyph, double pen, double scale, bool vertic
   }
 }
 
+/**
+ * Stretches a glyph's outline by \p scale along the inline axis for
+ * `lengthAdjust="spacingAndGlyphs"`. The outline is stretched before the glyph's rotation, so a
+ * sideways glyph in vertical text stretches its own x axis.
+ *
+ * @param glyph Glyph to stretch.
+ * @param scale Inline-axis scale factor.
+ * @param vertical True for vertical writing modes.
+ */
 void StretchGlyphAlongInlineAxis(TextGlyph& glyph, double scale, bool vertical) {
   if (vertical && !glyph.sideways) {
     glyph.stretchScaleY *= NarrowToFloat(scale);
