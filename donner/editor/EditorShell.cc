@@ -6533,12 +6533,6 @@ void EditorShell::advanceFontPreviewGeneration() {
   }
   std::string family = std::move(pendingFontPreviews_.front());
   pendingFontPreviews_.pop_front();
-  if (!samples[*next].source.request()) {
-    if (samples[*next].source.resource.failed()) {
-      finishedSamplePreviewIndices_.insert(*next);
-    }
-    return;
-  }
   const auto store = fontCatalog_.encodedStore();
   SampleThumbnailRenderRequest request{
       .kind = AuxiliaryPreviewKind::FontFamily,
