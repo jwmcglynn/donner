@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/PackagedResourcePaths.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "gmock/gmock.h"
@@ -179,6 +180,72 @@ TEST(PackagedResource, ProviderPayloadRemainsUntrusted) {
   EXPECT_EQ(session.load(kFixture), nullptr);
   EXPECT_EQ(session.failed(kFixture), true);
   EXPECT_EQ(session.retainedBytes(), 0u);
+}
+
+void WriteInstalledFixture(const std::filesystem::path& root) {
+  std::filesystem::create_directories(root / "assets");
+  std::ofstream(root / "manifest.json") << DonnerPackagedResourceManifest();
+  std::ofstream(root / kFixture.path, std::ios::binary) << "abc";
+}
+
+TEST(PackagedResource, InstalledRootPrefersExecutableSpecificCompleteData) {
+  const auto directory = TestTempDir() / "executable-specific-complete";
+  const auto shared = directory / "donner-assets";
+  const auto named = directory / "svg_viewer.assets";
+  const auto executable = directory / "svg_viewer";
+  WriteInstalledFixture(shared);
+  EXPECT_EQ(detail::InstalledResourceRootForExecutable(executable), shared.string());
+  PackagedResourceSession ordinary(
+      PackagedResourceDirectoryProvider(detail::InstalledResourceRootForExecutable(executable)));
+  ASSERT_THAT(ordinary.load(kFixture), NotNull());
+
+  WriteInstalledFixture(named);
+  std::ofstream(shared / "manifest.json") << "a different executable's asset set";
+  EXPECT_EQ(detail::InstalledResourceRootForExecutable(executable), named.string());
+  PackagedResourceSession specific(
+      PackagedResourceDirectoryProvider(detail::InstalledResourceRootForExecutable(executable)));
+  ASSERT_THAT(specific.load(kFixture), NotNull());
+}
+
+TEST(PackagedResource, InvalidExecutableSpecificEntriesNeverFallBackToSharedData) {
+  for (const std::string kind : {"file", "symlink", "dangling", "manifest"}) {
+    SCOPED_TRACE(kind);
+    const auto directory = TestTempDir() / ("executable-specific-" + kind);
+    const auto shared = directory / "donner-assets";
+    const auto named = directory / "renderer.assets";
+    WriteInstalledFixture(shared);
+    if (kind == "file") {
+      std::ofstream(named) << "not a directory";
+    } else if (kind == "symlink") {
+      std::filesystem::create_directory_symlink(shared, named);
+    } else if (kind == "dangling") {
+      std::filesystem::create_directory_symlink(directory / "absent", named);
+    } else {
+      WriteInstalledFixture(named);
+      std::ofstream(named / "manifest.json") << "invalid manifest";
+    }
+    const auto selected = detail::InstalledResourceRootForExecutable(directory / "renderer");
+    EXPECT_EQ(selected, named.string());
+    PackagedResourceSession session(PackagedResourceDirectoryProvider(selected));
+    EXPECT_EQ(session.load(kFixture), nullptr);
+  }
+}
+
+TEST(PackagedResource, MacAppRootPrecedesExecutableSpecificData) {
+  const auto contents = TestTempDir() / "Example.app" / "Contents";
+  const auto executable = contents / "MacOS" / "Example";
+  const auto expected = contents / "Resources" / "donner-assets";
+  WriteInstalledFixture(expected);
+  WriteInstalledFixture(contents / "MacOS" / "Example.assets");
+  EXPECT_EQ(detail::InstalledResourceRootForExecutable(executable), expected.string());
+  PackagedResourceSession session(
+      PackagedResourceDirectoryProvider(detail::InstalledResourceRootForExecutable(executable)));
+  ASSERT_THAT(session.load(kFixture), NotNull());
+}
+
+TEST(PackagedResource, MissingCanonicalExecutableCannotSelectWorkingDirectoryData) {
+  EXPECT_EQ(detail::InstalledResourceRootForExecutable({}), "");
+  EXPECT_EQ(detail::InstalledResourceRootForExecutable("renderer"), "");
 }
 
 TEST(PackagedResource, DirectoryProviderRejectsSymlinksAndRelocatesCompleteSet) {

@@ -354,7 +354,10 @@ donner_cc_fuzzer(
 
 donner_cc_library(
     name = "packaged_resource",
-    srcs = ["PackagedResource.cc"],
+    srcs = [
+        "PackagedResource.cc",
+        "PackagedResourcePaths.h",
+    ],
     hdrs = ["PackagedResource.h"],
     visibility = ["//visibility:public"],
     deps = [":base"],
@@ -362,7 +365,10 @@ donner_cc_library(
 
 donner_cc_test(
     name = "packaged_resource_tests",
-    srcs = ["tests/PackagedResource_tests.cc"],
+    srcs = [
+        "PackagedResourcePaths.h",
+        "tests/PackagedResource_tests.cc",
+    ],
     data = ["//build_defs:packaged_resource_manifest_fixture"],
     deps = [
         ":base_test_utils",

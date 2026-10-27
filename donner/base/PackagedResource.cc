@@ -9,6 +9,8 @@
 #include <mutex>
 #include <set>
 #include <sstream>
+
+#include "donner/base/PackagedResourcePaths.h"
 #ifndef __EMSCRIPTEN__
 #include <dirent.h>
 #include <fcntl.h>
@@ -31,6 +33,28 @@
 #endif
 
 namespace donner {
+namespace detail {
+
+std::string InstalledResourceRootForExecutable(const std::filesystem::path& executable) {
+  if (!executable.is_absolute() || !executable.has_filename()) {
+    return {};
+  }
+  const auto directory = executable.parent_path();
+  if (directory.filename() == "MacOS" && directory.parent_path().filename() == "Contents") {
+    return (directory.parent_path() / "Resources" / "donner-assets").string();
+  }
+  const auto named = directory / (executable.filename().string() + ".assets");
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(named, error);
+  if (status.type() == std::filesystem::file_type::not_found &&
+      (!error || error == std::errc::no_such_file_or_directory)) {
+    return (directory / "donner-assets").string();
+  }
+  // A symlink, malformed entry or inspection error must not select another asset set.
+  return named.string();
+}
+
+}  // namespace detail
 namespace {
 std::vector<const PackagedResource*>& Registry() {
   static std::vector<const PackagedResource*> resources;
@@ -74,15 +98,16 @@ std::string InstalledRoot() {
   if (length <= 0 || static_cast<size_t>(length) == buffer.size()) {
     return {};
   }
-  executable = std::string(buffer.data(), static_cast<size_t>(length));
+  std::error_code ec;
+  executable =
+      std::filesystem::canonical(std::string(buffer.data(), static_cast<size_t>(length)), ec);
+  if (ec) {
+    return {};
+  }
 #else
   return {};
 #endif
-  const auto directory = executable.parent_path();
-  if (directory.filename() == "MacOS" && directory.parent_path().filename() == "Contents") {
-    return (directory.parent_path() / "Resources" / "donner-assets").string();
-  }
-  return (directory / "donner-assets").string();
+  return detail::InstalledResourceRootForExecutable(executable);
 }
 
 bool ValidIdentity(const PackagedResource& resource) {
