@@ -197,7 +197,7 @@ playwright_bin.playwright_test(
         "test",
         "$(rootpath :smoke.spec.ts)",
         "--config=$(rootpath :playwright.bazel.config.js)",
-        "--grep=catalog.font.loading|welcome.picker.paints.before|WGPU.diagnostics.do.not.block",
+        "--grep=catalog.font.loading|welcome.picker.paints.before|WGPU.diagnostics.do.not.block|required.resource.failure.stays.readable.and.prevents.application.startup|code-only.updates.transfer.no.unchanged.essential.resource.bodies",
     ],
     copy_data_to_bin = False,
     data = [
