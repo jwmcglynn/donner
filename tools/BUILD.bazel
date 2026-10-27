@@ -55,9 +55,16 @@ genrule(
     visibility = ["//visibility:private"],  # Only used by the test in this file
 )
 
+filegroup(
+    name = "embedded_resource_test_golden_input",
+    srcs = ["//third_party/public-sans:PublicSans-Medium.otf"],
+    testonly = True,
+    visibility = ["//visibility:private"],
+)
+
 embed_resources(
     name = "embedded_resource_test_golden",
-    resources = {"kPublicSansMediumOtf": "//third_party/public-sans:PublicSans-Medium.otf"},
+    resources = {"kPublicSansMediumOtf": ":embedded_resource_test_golden_input"},
     header_output = "embedded_resource_test_golden.h",
     testonly = True,
     visibility = ["//visibility:private"],
@@ -77,11 +84,11 @@ py_test(
         "--golden_header_path",
         "$(location :embedded_resource_test_golden.h)",
         "--golden_cpp_path",
-        "$(location :__third_party_public_sans_PublicSans_Medium_otf.cpp)",
+        "$(location :_embedded_resource_test_golden_input.cpp)",
     ],
     data = [
         ":generate_embedded_test_resources",
-        ":__third_party_public_sans_PublicSans_Medium_otf.cpp",
+        ":_embedded_resource_test_golden_input.cpp",
         ":embedded_resource_test_golden.h",
     ],
     deps = ["@rules_python//python/runfiles"],
