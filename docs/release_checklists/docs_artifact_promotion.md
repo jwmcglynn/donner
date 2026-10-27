@@ -12,7 +12,9 @@ section when they exist in the target version, with an explained index fallback 
 
 ## One-time setup
 
-Configure the existing `github-pages` environment with required maintainer approval. All writes
+Configure the existing `github-pages` environment with required maintainer approval, no
+administrator bypass, and exactly one deployment branch policy for `main` (not tags). The writer
+reads these protections before every data-branch update and blocks until setup is complete. All writes
 are manual dispatches on `main`; the publication request approves the named candidate and
 recovery to the verified prior composition if the candidate cuts over and fails health checks.
 Do not approve a request whose candidate or prior identity has changed.

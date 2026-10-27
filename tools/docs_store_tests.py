@@ -68,6 +68,29 @@ class StoreTest(unittest.TestCase):
              self.assertRaisesRegex(ValueError, "outcome is unknown"):
             store.GitHub().call("repos/jwmcglynn/donner/pages/deployments", "POST", {"artifact_id": 1})
 
+    def test_writer_requires_complete_live_branch_and_environment_protection(self):
+        rules = [{"type": "deletion"}, {"type": "non_fast_forward"}]
+        env = {"can_admins_bypass": False, "protection_rules": [
+            {"type": "required_reviewers", "reviewers": [{"type": "User"}]}],
+            "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
+        branches = {"total_count": 1, "branch_policies": [{"name": "main", "type": "branch"}]}
+        api = store.GitHub()
+        with mock.patch.object(api, "call", side_effect=[rules, env, branches]): api.require_protection()
+        for changed in ({**env, "can_admins_bypass": True}, {**env, "protection_rules": []}):
+            with mock.patch.object(api, "call", side_effect=[rules, changed]), self.assertRaisesRegex(ValueError, "required reviewers"):
+                api.require_protection()
+        with mock.patch.object(api, "call", side_effect=[rules, env,
+            {"total_count": 1, "branch_policies": [{"name": "*", "type": "branch"}]}]), \
+            self.assertRaisesRegex(ValueError, "only the main"):
+            api.require_protection()
+
+    def test_unconfigured_snapshot_rules_block_the_writer(self):
+        api = store.GitHub()
+        with mock.patch.object(api, "call", return_value=[]) as call, \
+             self.assertRaisesRegex(ValueError, "deletion and non-fast-forward"):
+            api.require_protection()
+        self.assertEqual(call.call_count, 1)
+
     def test_noncanonical_index_and_composition_ids_are_rejected(self):
         api = mock.Mock(); api.tip.return_value = "a" * 40
         api.file.return_value = site.canonical({"schema": 1, "releases": {}, "current": "../x", "previous": None})

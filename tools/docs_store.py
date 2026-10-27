@@ -55,6 +55,19 @@ class GitHub:
         site.require(isinstance(rules, list) and {"deletion", "non_fast_forward"}
                      <= {rule.get("type") for rule in rules},
                      "docs-snapshots needs active deletion and non-fast-forward protection")
+        environment = self.call(REPO + "/environments/github-pages")
+        reviewers = [rule for rule in environment.get("protection_rules", [])
+                     if rule.get("type") == "required_reviewers" and rule.get("reviewers")]
+        site.require(environment.get("can_admins_bypass") is False and bool(reviewers),
+                     "github-pages needs required reviewers and no administrator bypass")
+        policy = environment.get("deployment_branch_policy") or {}
+        site.require(policy == {"protected_branches": False, "custom_branch_policies": True},
+                     "github-pages needs an explicit main-only branch policy")
+        branches = self.call(REPO + "/environments/github-pages/deployment-branch-policies")
+        selected = branches.get("branch_policies", [])
+        site.require(branches.get("total_count") == 1 and len(selected) == 1
+                     and selected[0].get("name") == "main" and selected[0].get("type") == "branch",
+                     "github-pages must allow only the main branch")
 
     def file(self, commit: str, name: str) -> bytes:
         site.require(site.SHA.fullmatch(commit), "invalid snapshot commit")
