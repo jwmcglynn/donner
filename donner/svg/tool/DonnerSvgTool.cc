@@ -423,8 +423,7 @@ std::optional<std::string> ReadFile(std::string_view filename) {
   return std::move(std::get<std::string>(result));
 }
 
-/** Parse SVG data into an SVGDocument. */
-/// Read the requested input and validate the installation before parsing or rendering.
+/// Read the input and validate the resource installation when text rendering is enabled.
 std::optional<std::string> ReadInputWithPackagedResources(const CliOptions& options,
                                                           std::ostream& err) {
   auto fileData = ReadFile(options.inputFile);
@@ -432,11 +431,13 @@ std::optional<std::string> ReadInputWithPackagedResources(const CliOptions& opti
     err << "Failed to read input SVG: " << EscapeTerminalText(options.inputFile) << "\n";
     return std::nullopt;
   }
+#ifdef DONNER_TEXT_ENABLED
   std::string resourceError;
   if (!donner::PreparePackagedResources(&resourceError)) {
     err << "Failed to load packaged resources: " << resourceError << "\n";
     return std::nullopt;
   }
+#endif
   return fileData;
 }
 
