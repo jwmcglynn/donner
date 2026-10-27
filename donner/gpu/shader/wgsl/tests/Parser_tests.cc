@@ -1,5 +1,6 @@
 #include "donner/gpu/shader/wgsl/Parser.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -37,7 +38,7 @@ TEST(Parser, ParsesGaussianBlurIntoTheExpectedTypedArenas) {
   }
   ASSERT_LT(entry, parsed.module.functionCount) << "cs_main is not among the parsed functions";
   EXPECT_EQ(parsed.module.functions[entry].stage, Stage::Compute);
-  EXPECT_EQ(parsed.module.functions[entry].workgroupSize, (std::array<uint32_t, 3>{8, 8, 1}));
+  EXPECT_THAT(parsed.module.functions[entry].workgroupSize, testing::ElementsAre(8u, 8u, 1u));
 }
 
 TEST(Parser, RejectsSourceAndArenaBudgetViolations) {
