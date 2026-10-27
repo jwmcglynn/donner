@@ -68,8 +68,8 @@ def read_regular_bounded(path, limit):
         os.close(descriptor)
 
 
-def validated_record(record):
-    """Validate shape and canonical path before any path can select a disk read."""
+def validate_record_shape(record):
+    """Require exact field names and primitive types before inspecting identity values."""
     fields = {"id", "sha256", "encodedSize", "decodedSize", "mediaType", "group", "path"}
     if not isinstance(record, dict) or record.keys() != fields:
         raise ValueError("Malformed packaged resource record")
@@ -84,6 +84,11 @@ def validated_record(record):
         raise ValueError("Invalid packaged resource size type")
     if not 0 < record["encodedSize"] <= MAX_ENCODED or not 0 < record["decodedSize"] <= 64 * 1024 * 1024:
         raise ValueError("Invalid packaged resource size")
+
+
+def validated_record(record):
+    """Validate a canonical content address before it can select a disk read."""
+    validate_record_shape(record)
     extension = record["path"].rsplit(".", 1)[-1]
     if extension not in MEDIA or record["path"] != f"assets/{record['sha256']}.{extension}":
         raise ValueError("Noncanonical packaged resource path")
@@ -103,11 +108,8 @@ def unique_object(pairs):
     return result
 
 
-def verified_set(directory):
-    """Validate the schema, exact inventory and every bounded content identity."""
-    directory = Path(directory)
-    if directory.is_symlink() or (directory / "assets").is_symlink():
-        raise ValueError("Packaged resource directory is a symlink")
+def read_manifest(directory):
+    """Read a small no-follow manifest and reject ambiguous or unknown schemas."""
     manifest = json.loads(read_regular_bounded(directory / "manifest.json", 128 * 1024),
                           object_pairs_hook=unique_object)
     if not isinstance(manifest, dict) or manifest.keys() != {"schemaVersion", "assets"}:
@@ -117,13 +119,19 @@ def verified_set(directory):
     if not isinstance(manifest["assets"], list) or not 0 < len(manifest["assets"]) <= 128:
         raise ValueError("Invalid packaged resource record count")
     identities = set()
-    expected = {"manifest.json"}
     for record in manifest["assets"]:
         validated_record(record)
         if record["id"] in identities:
             raise ValueError("Duplicate logical resource ID")
         identities.add(record["id"])
-        expected.add(record["path"])
+    return manifest
+
+
+def verify_inventory(directory, records):
+    """Reject missing, extra, special, and symlinked installation paths."""
+    if directory.is_symlink() or (directory / "assets").is_symlink():
+        raise ValueError("Packaged resource directory is a symlink")
+    expected = {"manifest.json"} | {record["path"] for record in records}
     inventory = set()
     for path in directory.rglob("*"):
         if path.is_symlink():
@@ -134,6 +142,15 @@ def verified_set(directory):
             raise ValueError("Unexpected packaged resource directory")
     if inventory != expected:
         raise ValueError("Packaged resource inventory mismatch")
+
+
+def verified_set(directory):
+    """Validate schema and complete inventory before any resource content read."""
+    directory = Path(directory)
+    if directory.is_symlink():
+        raise ValueError("Packaged resource directory is a symlink")
+    manifest = read_manifest(directory)
+    verify_inventory(directory, manifest["assets"])
     for record in manifest["assets"]:
         payload = read_regular_bounded(directory / record["path"], record["encodedSize"])
         if len(payload) != record["encodedSize"] or hashlib.sha256(payload).hexdigest() != record["sha256"]:

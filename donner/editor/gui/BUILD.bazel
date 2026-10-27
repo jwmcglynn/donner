@@ -128,7 +128,6 @@ donner_cc_library(
         ":imgui_runtime_renderer",
         ":ui_texture_registry",
         "//donner/base",
-        "//donner/base:packaged_resource",
         "//donner/editor:imgui_headers",
         "//donner/gpu",
         "//donner/svg/renderer:renderer_geode",
