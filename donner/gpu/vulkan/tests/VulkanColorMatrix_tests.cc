@@ -279,6 +279,12 @@ TEST_F(VulkanColorMatrixTest, GaussianAndBoxBlurPreservePixelsAndFoldedClip) {
             kind == 0 ? 0.5f : 0.0f, kind == 1 ? 1u : 0u, axis, edgeMode, &gaussian);
       }
     }
+    SCOPED_TRACE(testing::Message() << "axis=" << axis << " cascade");
+    gpu::tests::CheckBlurStorage(
+        *device_, descriptor,
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, 2.0f,
+        shader::programs::kGaussianBlurKernelBoxCascade, axis,
+        shader::programs::kGaussianBlurEdgeTransparent, &gaussian);
   }
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }

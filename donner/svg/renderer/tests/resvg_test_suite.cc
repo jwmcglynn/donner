@@ -577,29 +577,39 @@ INSTANTIATE_TEST_SUITE_P(
                               "Sans Regular; invalid negative declarations are rejected (#1167, "
                               "#1169)")},
                 {"drop-shadow-function-color-last.svg",
-                 Params::Skip("Bug #1170: offset/blur sampling differs from reference; color "
-                              "order and rounded-offset contracts compare independently (#1169)")},
+                 Params::Skip("Reference disagreement: the specified device offset is (10, 12.5); "
+                              "the reference truncates it to (10, 12), Donner rounds to (10, 13) "
+                              "(CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels); Donner "
+                              "at (10, 12) matches the reference within the default allowance")},
                 {"drop-shadow-function-em-values.svg",
-                 Params::Skip("Bug #1170: fractional offset/blur sampling differs from "
-                              "reference; resolved em lengths match px (#1169)")},
+                 Params::Skip("Reference disagreement: 0.2em 0.3em at font-size 64 is 12.8 19.2 "
+                              "user units, device (32, 48); the reference shadow sits at (30, 47), "
+                              "which needs the user lengths truncated to 12 19 (a hypothesis the "
+                              "usvg source does not show) and the scaled offset truncated as "
+                              "resvg's apply_drop_shadow does (dx as i32) "
+                              "(CssFilterContractEmShadowUsesComputedNondefaultFontSize)")},
                 {"drop-shadow-function-mm-values.svg",
-                 Params::Skip("Bug #1170: fractional offset/blur sampling differs from "
-                              "reference; resolved mm lengths match px (#1169)")},
+                 Params::Skip("Reference disagreement: 3mm 4mm is 11.34 15.12 user units, device "
+                              "(28.35, 37.80), which Donner rounds to (28, 38); the reference "
+                              "shadow sits at (27, 37), which needs the user lengths truncated to "
+                              "11 15 (a hypothesis the usvg source does not show) and the scaled "
+                              "offset truncated as resvg's apply_drop_shadow does (dx as i32) "
+                              "(CssFilterContractShadowUnitsColorsAndDefaultMatch)")},
                 {"drop-shadow-function-no-color.svg",
-                 Params::Skip("Bug #1170: fractional offset/blur sampling differs from "
-                              "reference; omitted color resolves to currentColor (#1169)")},
+                 Params::Skip("Reference disagreement: the specified device offset is (10, 12.5); "
+                              "the reference truncates it to (10, 12), Donner rounds to (10, 13) "
+                              "(CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels); Donner "
+                              "at (10, 12) matches the reference within the default allowance")},
                 {"drop-shadow-function.svg",
-                 Params::Skip("Bug #1170: offset/blur sampling differs from reference; "
-                              "rounded-offset and alpha contracts compare independently (#1169)")},
+                 Params::Skip("Reference disagreement: the specified device offset is (10, 12.5); "
+                              "the reference truncates it to (10, 12), Donner rounds to (10, 13) "
+                              "(CssFilterContractShadowHalfPixelOffsetsUseRoundedPixels); Donner "
+                              "at (10, 12) matches the reference within the default allowance")},
                 {"two-exact-urls.svg",
                  Params::UndefinedBehavior(
                      "reference is the resvg UB marker image; the valid "
                      "repeated filter URL has an independent equivalent-graph "
                      "comparison (#1169)")},
-                {"two-urls.svg",
-                 Params::Skip("Bug #1170: chained flood/blur differs at the filter-region "
-                              "boundary; the equivalent primitive graph is the independent oracle "
-                              "(#1169)")},
                 {"url-and-grayscale.svg",
                  Params::Skip("Reference disagreement: CSS grayscale must use sRGB (center "
                               "115); the historical mixed-chain reference uses linearRGB-like "

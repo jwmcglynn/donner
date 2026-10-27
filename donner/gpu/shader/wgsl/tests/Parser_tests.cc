@@ -1,8 +1,10 @@
 #include "donner/gpu/shader/wgsl/Parser.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstddef>
 #include <string>
 #include <string_view>
 
@@ -18,13 +20,25 @@ TEST(Parser, ParsesGaussianBlurIntoTheExpectedTypedArenas) {
 
   EXPECT_EQ(parsed.module.structCount, 1u);
   EXPECT_EQ(parsed.module.bindingCount, 3u);
-  EXPECT_EQ(parsed.module.symbolCount, 22u);
-  EXPECT_EQ(parsed.module.expressionCount, 261u);
-  EXPECT_EQ(parsed.module.statementCount, 43u);
-  EXPECT_EQ(parsed.module.functionCount, 3u);
-  EXPECT_EQ(parsed.module.name(parsed.module.functions[2].name), "cs_main");
-  EXPECT_EQ(parsed.module.functions[2].stage, Stage::Compute);
-  EXPECT_EQ(parsed.module.functions[2].workgroupSize, (std::array<uint32_t, 3>{8, 8, 1}));
+  EXPECT_EQ(parsed.module.symbolCount, 53u);
+  EXPECT_EQ(parsed.module.expressionCount, 514u);
+  EXPECT_EQ(parsed.module.statementCount, 81u);
+  EXPECT_EQ(parsed.module.functionCount, 5u);
+  // The shader keeps at least half of every parser arena free.
+  EXPECT_LE(parsed.module.symbolCount * 2, ModuleLimits::kMaxSymbols);
+  EXPECT_LE(parsed.module.expressionCount * 2, ModuleLimits::kMaxExpressions);
+  EXPECT_LE(parsed.module.statementCount * 2, ModuleLimits::kMaxStatements);
+  EXPECT_LE(parsed.module.functionCount * 2, ModuleLimits::kMaxFunctions);
+
+  size_t entry = parsed.module.functionCount;
+  for (size_t index = 0; index < parsed.module.functionCount; ++index) {
+    if (parsed.module.name(parsed.module.functions[index].name) == "cs_main") {
+      entry = index;
+    }
+  }
+  ASSERT_LT(entry, parsed.module.functionCount) << "cs_main is not among the parsed functions";
+  EXPECT_EQ(parsed.module.functions[entry].stage, Stage::Compute);
+  EXPECT_THAT(parsed.module.functions[entry].workgroupSize, testing::ElementsAre(8u, 8u, 1u));
 }
 
 TEST(Parser, RejectsSourceAndArenaBudgetViolations) {

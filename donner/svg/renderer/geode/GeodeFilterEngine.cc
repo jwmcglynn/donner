@@ -788,11 +788,11 @@ using ColorSpaceConvertParams = gpu::shader::programs::ColorSpaceConvertParams;
 uint32_t toShaderEdgeMode(svg::components::filter_primitive::GaussianBlur::EdgeMode mode) {
   using EM = svg::components::filter_primitive::GaussianBlur::EdgeMode;
   switch (mode) {
-    case EM::None: return 0;
-    case EM::Duplicate: return 1;
-    case EM::Wrap: return 2;
+    case EM::None: return gpu::shader::programs::kGaussianBlurEdgeTransparent;
+    case EM::Duplicate: return gpu::shader::programs::kGaussianBlurEdgeDuplicate;
+    case EM::Wrap: return gpu::shader::programs::kGaussianBlurEdgeWrap;
   }
-  return 0;
+  return gpu::shader::programs::kGaussianBlurEdgeTransparent;
 }
 
 /// Create a texture usable as both a compute output (storage) and a
@@ -2211,6 +2211,8 @@ struct BlurDispatch {
   uint32_t axis = 0;
   float deviation = 0;
   std::optional<BoxPass> box;
+  /// Nonzero for one pass that evaluates all three box passes of this window at once.
+  int32_t cascadeWindow = 0;
 };
 
 struct BlurDispatchPlan {
@@ -2218,7 +2220,11 @@ struct BlurDispatchPlan {
   size_t count = 0;
 };
 
-BlurDispatchPlan CreateBlurDispatchPlan(double stdDeviationX, double stdDeviationY) {
+/// With transparent edges, every box pass after the first reads what the earlier passes spread
+/// past the texture edge, so the three passes run as one cascade kernel that samples the input
+/// directly. Other edge modes resolve the edge on each pass's input.
+BlurDispatchPlan CreateBlurDispatchPlan(double stdDeviationX, double stdDeviationY,
+                                        uint32_t edgeMode) {
   BlurDispatchPlan result;
   const std::array<double, 2> deviations{stdDeviationX, stdDeviationY};
   for (uint32_t axis = 0; axis < deviations.size(); ++axis) {
@@ -2230,6 +2236,10 @@ BlurDispatchPlan CreateBlurDispatchPlan(double stdDeviationX, double stdDeviatio
     if (boxes.numPasses == 0) {
       result.passes[result.count++] =
           BlurDispatch{axis, static_cast<float>(deviation), std::nullopt};
+    } else if (edgeMode == gpu::shader::programs::kGaussianBlurEdgeTransparent) {
+      const BoxPass& first = boxes.passes[0];
+      result.passes[result.count++] =
+          BlurDispatch{axis, 0, std::nullopt, first.left + first.right + 1};
     } else {
       for (int i = 0; i < boxes.numPasses; ++i) {
         result.passes[result.count++] = BlurDispatch{axis, 0, boxes.passes[i]};
@@ -2250,7 +2260,7 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
 
   const uint32_t width = input.width();
   const uint32_t height = input.height();
-  const BlurDispatchPlan plan = CreateBlurDispatchPlan(stdDeviationX, stdDeviationY);
+  const BlurDispatchPlan plan = CreateBlurDispatchPlan(stdDeviationX, stdDeviationY, edgeMode);
   std::array<FilterTexture, 2> scratch{};
   FilterTexture current = input;
   for (size_t i = 0; i < plan.count; ++i) {
@@ -2260,9 +2270,14 @@ FilterTexture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena, F
     }
     const BlurDispatch& pass = plan.passes[i];
     const Box2d* clip = i + 1 == plan.count ? outputClip : nullptr;
-    if (pass.box) {
-      current = runBoxBlurPass(arena, current, output, width, height, pass.box->left,
-                               pass.box->right, pass.axis, edgeMode, clip);
+    if (pass.cascadeWindow != 0) {
+      current =
+          runBoxBlurPass(arena, current, output, width, height, pass.cascadeWindow, 0, pass.axis,
+                         edgeMode, clip, gpu::shader::programs::kGaussianBlurKernelBoxCascade);
+    } else if (pass.box) {
+      current =
+          runBoxBlurPass(arena, current, output, width, height, pass.box->left, pass.box->right,
+                         pass.axis, edgeMode, clip, gpu::shader::programs::kGaussianBlurKernelBox);
     } else {
       current = runBlurPass(arena, current, output, width, height, pass.deviation, pass.axis,
                             edgeMode, clip);
@@ -2286,7 +2301,7 @@ FilterTexture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, FilterT
   params.stdDeviation = stdDeviation;
   params.axis = axis;
   params.edgeMode = edgeMode;
-  params.kernelType = 0;
+  params.kernelType = gpu::shader::programs::kGaussianBlurKernelGaussian;
   params.boxLeft = 0;
   params.boxRight = 0;
   if (clip != nullptr) {
@@ -2308,8 +2323,8 @@ FilterTexture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, FilterT
 FilterTexture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena, FilterTexture input,
                                                 FilterTexture output, uint32_t width,
                                                 uint32_t height, int32_t boxLeft, int32_t boxRight,
-                                                uint32_t axis, uint32_t edgeMode,
-                                                const Box2d* clip) {
+                                                uint32_t axis, uint32_t edgeMode, const Box2d* clip,
+                                                uint32_t kernelType) {
   if (!input || !output) {
     return {};
   }
@@ -2318,7 +2333,7 @@ FilterTexture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena, Filt
   params.stdDeviation = 0.0f;
   params.axis = axis;
   params.edgeMode = edgeMode;
-  params.kernelType = 1;
+  params.kernelType = kernelType;
   params.boxLeft = boxLeft;
   params.boxRight = boxRight;
   if (clip != nullptr) {
@@ -3121,8 +3136,8 @@ FilterTexture GeodeFilterEngine::applyDropShadow(
   // Blur the input first (if any deviation). The compose shader reads the
   // blurred texture's alpha at (coord - offset); blurring RGB at the same
   // time is free because we already have to walk the taps.
-  FilterTexture blurred =
-      applyGaussianBlur(arena, input, pixelStdDevX, pixelStdDevY, /*edgeMode=*/0);
+  FilterTexture blurred = applyGaussianBlur(arena, input, pixelStdDevX, pixelStdDevY,
+                                            gpu::shader::programs::kGaussianBlurEdgeTransparent);
   if (!blurred) {
     return {};
   }

@@ -796,6 +796,32 @@ TEST_F(GeodeFilterEngineTest, GpuPreflightCoversTheTexturesActuallyRetained) {
   EXPECT_THAT(estimatedBytes, testing::Ge(allocator_->retainedTextureBytes));
 }
 
+// A blur's box passes run in the textures the preflight counts, with no larger working layout,
+// so the preflight stays an upper bound on a source large enough for the passes to spread.
+TEST_F(GeodeFilterEngineTest, WideBlurOnLargerSourceStaysWithinPreflight) {
+  using namespace svg::components;
+  setSource(gpu::TextureDescriptor{"blur source",
+                                   {64, 64},
+                                   gpu::TextureFormat::RGBA8Unorm,
+                                   gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  for (const FilterPrimitive& primitive :
+       {FilterPrimitive(filter_primitive::GaussianBlur{.stdDeviationX = 20, .stdDeviationY = 20}),
+        FilterPrimitive(filter_primitive::DropShadow{.stdDeviationX = 20, .stdDeviationY = 20})}) {
+    FilterGraph graph;
+    FilterNode node;
+    node.primitive = primitive;
+    graph.nodes.push_back(node);
+    const uint64_t retainedBefore = engine_->retainedBufferBytes();
+    runGraph(graph, "");
+    uint64_t work = 0;
+    uint64_t estimated = 0;
+    ASSERT_TRUE(
+        FilterGraphExecutionCost(graph, 64 * 64, FilterMemoryModel::GpuAllNodes, work, estimated));
+    EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
+    EXPECT_EQ(engine_->lastExecutionMemory().textures, allocator_->retainedTextureBytes);
+  }
+}
+
 TEST_F(GeodeFilterEngineTest, RepeatedMergeInputReusesItsColorConversion) {
   using namespace svg::components;
   FilterGraph graph;

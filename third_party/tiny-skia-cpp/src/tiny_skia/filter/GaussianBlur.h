@@ -20,6 +20,11 @@ enum class BlurEdgeMode {
 /// Uses a discrete Gaussian kernel for sigma < 2.0, and a 3-pass box blur approximation
 /// (matching Skia's behavior) for larger sigma values.
 ///
+/// Each box pass writes only inside the pixmap, so with \ref BlurEdgeMode::None a pass discards
+/// what the earlier passes spread past the edge. Only the benchmarks call this overload; the filter
+/// graph uses the float overload, which keeps that spill, so the benchmarks' float-over-uint8
+/// ratio compares two different edge behaviors.
+///
 /// @param pixmap Pixmap to blur (modified in-place).
 /// @param sigmaX Standard deviation of the blur in the X direction. 0 = no horizontal blur.
 /// @param sigmaY Standard deviation of the blur in the Y direction. 0 = no vertical blur.
@@ -27,7 +32,8 @@ enum class BlurEdgeMode {
 void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY,
                   BlurEdgeMode edgeMode = BlurEdgeMode::None);
 
-/// Float-precision version of gaussianBlur.
+/// Float-precision version of gaussianBlur. With \ref BlurEdgeMode::None, the box passes run on
+/// zero-padded lines, so content near the edge blurs as it would with room around the pixmap.
 void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY,
                   BlurEdgeMode edgeMode = BlurEdgeMode::None);
 
