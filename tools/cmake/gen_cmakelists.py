@@ -391,7 +391,7 @@ _CMAKE_LEAF_TARGET_PATTERNS = (
 )
 _CMAKE_LEAF_TARGET_EXPRESSION = "(" + " + ".join(_CMAKE_LEAF_TARGET_PATTERNS) + ")"
 _CQUERY_TARGET_EXPRESSION = (
-    'kind(".*cc_.*|embed_resources_generate_header", '
+    'kind(".*cc_.*|embed_resources_generate_header|packaged_resources_generate", '
     f"deps({_CMAKE_LEAF_TARGET_EXPRESSION}))"
 )
 
@@ -418,13 +418,18 @@ class CMakeTarget:
     kind: str
     configs: Set[str]
     values: Dict[str, Dict[str, Set[str]]]
+    resource_attrs: Optional[Dict[str, Any]] = None
 
+
+_RESOURCE_KINDS = {"embed_resources", "packaged_resources"}
 
 _cmake_targets_cache: Optional[Dict[str, CMakeTarget]] = None
 
 
 def _normalize_rule_kind(rule_class: str) -> Optional[str]:
     """Map a Bazel rule class from cquery output to the generator's target kind."""
+    if rule_class.endswith("packaged_resources_generate"):
+        return "packaged_resources"
     if rule_class.endswith("embed_resources_generate_header"):
         return "embed_resources"
     if rule_class.endswith("cc_library"):
@@ -523,6 +528,8 @@ def _parse_cquery_build_output(output: str, workspace: Path) -> List[ConfiguredT
 
         if kind == "embed_resources":
             name = str(attrs.get("generator_name", name.removesuffix("_header_gen")))
+        elif kind == "packaged_resources":
+            name = str(attrs.get("resource_name", name.removesuffix("_resource_gen")))
 
         label = f"//{package}:{name}" if package else f"//:{name}"
         result.append(
@@ -622,148 +629,115 @@ def _intersect_target_values_with_configs(target: CMakeTarget) -> None:
                 value_map.pop(value)
 
 
+def _is_root_or_resource(target: CMakeTarget) -> bool:
+    return target.label == "//:donner" or target.kind in _RESOURCE_KINDS
+
+
+def _allowed_dependency_configs(target: CMakeTarget, targets: Dict[str, CMakeTarget]) -> Set[str]:
+    allowed = set(target.configs)
+    for dep, dep_configs in target.values["deps"].items():
+        dep_target = targets.get(dep)
+        if dep_target is not None:
+            allowed -= (set(dep_configs) & target.configs) - dep_target.configs
+    return allowed
+
+
 def _constrain_target_configs_by_dependency_compatibility(
     targets: Dict[str, CMakeTarget],
 ) -> None:
-    """Constrain targets that directly require deps unavailable in some configs.
-
-    Bazel `cquery --output=build` can report an unconditional dep edge even when
-    the referenced target is incompatible in part of the sampled config matrix.
-    Such a target cannot be emitted in CMake for those configs unless its source
-    files are also split by config. Constrain it to the configs where all direct
-    internal deps exist, then propagate that restriction through dependents.
-    """
+    """Propagate missing configured dependencies without changing resource generation."""
     changed = True
     while changed:
         changed = False
-        for label, target in targets.items():
-            if label == "//:donner" or target.kind == "embed_resources" or not target.configs:
+        for target in targets.values():
+            if _is_root_or_resource(target) or not target.configs:
                 continue
-
-            allowed_configs = set(target.configs)
-            for dep, dep_configs in target.values["deps"].items():
-                dep_target = targets.get(dep)
-                if dep_target is None:
-                    continue
-
-                relevant_dep_configs = set(dep_configs) & target.configs
-                missing_configs = relevant_dep_configs - dep_target.configs
-                if missing_configs:
-                    allowed_configs -= missing_configs
-
-            if allowed_configs != target.configs:
-                print(
-                    f"Constraining target {label}: direct deps are unavailable in "
-                    f"{sorted(target.configs - allowed_configs)}"
-                )
-                target.configs = allowed_configs
+            allowed = _allowed_dependency_configs(target, targets)
+            if allowed != target.configs:
+                print(f"Constraining target {target.label}: direct deps are unavailable in "
+                      f"{sorted(target.configs - allowed)}")
+                target.configs = allowed
                 _intersect_target_values_with_configs(target)
                 changed = True
 
 
-def _aggregate_configured_targets() -> Dict[str, CMakeTarget]:
-    """Merge configured Bazel attrs into CMake target metadata."""
-    targets: Dict[str, CMakeTarget] = {}
+def _record_resource_attrs(target: CMakeTarget, info: ConfiguredTargetInfo) -> None:
+    if info.kind != "packaged_resources":
+        return
+    attrs = {key: info.attrs.get(key) for key in ("header_output", "ids", "srcs", "group")}
+    if target.resource_attrs is not None and target.resource_attrs != attrs:
+        raise RuntimeError(f"Packaged resource metadata differs across configs: {info.label}")
+    target.resource_attrs = attrs
 
+
+def _record_cpp_attrs(target: CMakeTarget, info: ConfiguredTargetInfo, config_name: str) -> None:
+    for attr in ("srcs", "hdrs"):
+        paths = [_label_to_pkg_relative_path(label, info.package) for label in _list_attr(info.attrs, attr)]
+        _record_values(target, attr, (path for path in paths if path is not None), config_name)
+    copts = [opt for opt in _list_attr(info.attrs, "copts")
+             if not opt.startswith("-I") and not opt.startswith("-isystem")]
+    _record_values(target, "copts", copts, config_name)
+    _record_values(target, "deps", map(_normalize_dep_label, _list_attr(info.attrs, "deps")), config_name)
+    for attr in ("defines", "includes", "tags"):
+        _record_values(target, attr, _list_attr(info.attrs, attr), config_name)
+
+
+def _merge_configured_target(targets: Dict[str, CMakeTarget], info: ConfiguredTargetInfo,
+                             config_name: str) -> None:
+    existing = targets.get(info.label)
+    if existing is not None and existing.kind in _RESOURCE_KINDS:
+        if info.kind not in _RESOURCE_KINDS:
+            return
+        if existing.kind != info.kind:
+            raise RuntimeError(f"Resource kind differs across configs: {info.label}")
+    elif info.kind in _RESOURCE_KINDS:
+        existing = None
+    if existing is None:
+        existing = CMakeTarget(info.label, info.package, info.name, info.kind, set(), _target_value_map())
+        targets[info.label] = existing
+    existing.configs.add(config_name)
+    if info.kind in _RESOURCE_KINDS:
+        _record_resource_attrs(existing, info)
+    else:
+        _record_cpp_attrs(existing, info, config_name)
+
+
+def _unsupported_cmake_dep(dep: str, targets: Dict[str, CMakeTarget]) -> bool:
+    if not dep.startswith("//"):
+        return False
+    package = dep.removeprefix("//").split(":", 1)[0]
+    return (_is_skipped_package(package) or dep not in targets) and _resolve_external_dep(dep) is None
+
+
+def _prune_unsupported_targets(targets: Dict[str, CMakeTarget]) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for label, target in list(targets.items()):
+            if _is_root_or_resource(target):
+                continue
+            if any(_unsupported_cmake_dep(dep, targets) for dep in target.values["deps"]):
+                print(f"Skipping target {label}: depends on unsupported CMake package")
+                targets.pop(label)
+                changed = True
+
+
+def _aggregate_configured_targets() -> Dict[str, CMakeTarget]:
+    """Merge configured Bazel attrs while preserving each resource generation contract."""
+    targets: Dict[str, CMakeTarget] = {}
     for config in CMAKE_CONFIGS:
         print(f"Querying configured Bazel graph for CMake config: {config.name}")
         for info in _query_configured_targets(config):
-            if info.label != "//:donner" and _is_skipped_package(info.package):
+            if not info.compatible or (info.label != "//:donner" and _is_skipped_package(info.package)):
                 continue
-            if not info.compatible:
-                continue
-
-            existing = targets.get(info.label)
-            if existing is not None and existing.kind == "embed_resources" and info.kind != "embed_resources":
-                continue
-            if existing is not None and info.kind == "embed_resources" and existing.kind != "embed_resources":
-                existing = None
-
-            if existing is None:
-                existing = CMakeTarget(
-                    label=info.label,
-                    package=info.package,
-                    name=info.name,
-                    kind=info.kind,
-                    configs=set(),
-                    values=_target_value_map(),
-                )
-                targets[info.label] = existing
-
-            existing.configs.add(config.name)
-            if info.kind == "embed_resources":
-                continue
-
-            srcs = [
-                rel
-                for label in _list_attr(info.attrs, "srcs")
-                if (rel := _label_to_pkg_relative_path(label, info.package)) is not None
-            ]
-            hdrs = [
-                rel
-                for label in _list_attr(info.attrs, "hdrs")
-                if (rel := _label_to_pkg_relative_path(label, info.package)) is not None
-            ]
-            copts = [
-                opt
-                for opt in _list_attr(info.attrs, "copts")
-                if not opt.startswith("-I") and not opt.startswith("-isystem")
-            ]
-
-            _record_values(existing, "srcs", srcs, config.name)
-            _record_values(existing, "hdrs", hdrs, config.name)
-            _record_values(existing, "deps", map(_normalize_dep_label, _list_attr(info.attrs, "deps")), config.name)
-            _record_values(existing, "copts", copts, config.name)
-            _record_values(existing, "defines", _list_attr(info.attrs, "defines"), config.name)
-            _record_values(existing, "includes", _list_attr(info.attrs, "includes"), config.name)
-            _record_values(existing, "tags", _list_attr(info.attrs, "tags"), config.name)
-
-    # Drop targets that only exist to reach unsupported CMake packages.
-    changed = True
-    while changed:
-        changed = False
-        for label, target in list(targets.items()):
-            if label == "//:donner" or target.kind == "embed_resources":
-                continue
-            unsupported = False
-            for dep in target.values["deps"]:
-                if dep.startswith("//"):
-                    dep_pkg = dep.removeprefix("//").split(":", 1)[0]
-                    if _is_skipped_package(dep_pkg) or dep not in targets:
-                        if _resolve_external_dep(dep) is None:
-                            unsupported = True
-                            break
-            if unsupported:
-                print(f"Skipping target {label}: depends on unsupported CMake package")
-                targets.pop(label)
-                changed = True
-
+            _merge_configured_target(targets, info, config.name)
+    _prune_unsupported_targets(targets)
     _constrain_target_configs_by_dependency_compatibility(targets)
-
     for label, target in list(targets.items()):
-        if label != "//:donner" and target.kind != "embed_resources" and not target.configs:
+        if not _is_root_or_resource(target) and not target.configs:
             print(f"Skipping target {label}: no supported CMake configs remain")
             targets.pop(label)
-
-    changed = True
-    while changed:
-        changed = False
-        for label, target in list(targets.items()):
-            if label == "//:donner" or target.kind == "embed_resources":
-                continue
-            unsupported = False
-            for dep in target.values["deps"]:
-                if dep.startswith("//"):
-                    dep_pkg = dep.removeprefix("//").split(":", 1)[0]
-                    if _is_skipped_package(dep_pkg) or dep not in targets:
-                        if _resolve_external_dep(dep) is None:
-                            unsupported = True
-                            break
-            if unsupported:
-                print(f"Skipping target {label}: depends on unsupported CMake package")
-                targets.pop(label)
-                changed = True
-
+    _prune_unsupported_targets(targets)
     return targets
 
 
@@ -1221,11 +1195,11 @@ def generate_root() -> None:
         discovered_pkgs = {
             target.package
             for label, target in get_cmake_targets().items()
-            if label != "//:donner" and target.kind != "embed_resources"
+            if label != "//:donner" and target.kind not in _RESOURCE_KINDS
         } | {
             target.package
             for label, target in get_cmake_targets().items()
-            if label != "//:donner" and target.kind == "embed_resources"
+            if label != "//:donner" and target.kind in _RESOURCE_KINDS
         }
 
         # Skip third‑party packages that are handled manually elsewhere.
@@ -1290,6 +1264,61 @@ def _emit_embed_resources(f, pkg: str, info: EmbedInfo) -> None:
 #
 # Step 2: Generate per-package CMakeLists.txt
 #
+
+def _resource_relative_path(value: str) -> str:
+    """Validate a source-controlled resource path before emitting build commands."""
+    if not isinstance(value, str) or not value or value.startswith("/"):
+        raise RuntimeError("Invalid packaged resource path")
+    if any(part in ("", ".", "..") for part in value.split("/")):
+        raise RuntimeError("Invalid packaged resource path")
+    if any(char in value for char in '\\;"${}\n\r'):
+        raise RuntimeError("Invalid packaged resource path")
+    return value
+
+
+def _emit_packaged_resources(f, target: CMakeTarget) -> None:
+    """Generate metadata and deployable external data without compiling payload arrays."""
+    attrs = target.resource_attrs or {}
+    header = _resource_relative_path(attrs.get("header_output"))
+    ids, sources, group = attrs.get("ids"), attrs.get("srcs"), attrs.get("group")
+    if (not isinstance(ids, list) or not isinstance(sources, list) or not ids
+            or len(ids) != len(sources) or len(set(ids)) != len(ids)
+            or not isinstance(group, str) or not re.fullmatch(r"[a-z-]+", group)):
+        raise RuntimeError("Invalid packaged resource metadata")
+    resources = []
+    for identity, source in zip(ids, sources):
+        match = re.fullmatch(r"//([^:]*):(.+)", source) if isinstance(source, str) else None
+        if not isinstance(identity, str) or not re.fullmatch(r"k[A-Za-z0-9]+", identity) or not match:
+            raise RuntimeError("Invalid packaged resource source")
+        source_path = "/".join(part for part in match.groups() if part)
+        resources.append({"id": identity, "source": "${PROJECT_SOURCE_DIR}/" +
+                          _resource_relative_path(source_path)})
+    request = json.dumps(dict(group=group, runfilesRoot="", resources=resources), sort_keys=True)
+    request = request.replace("\\", "\\\\").replace('"', '\\"')
+    prefix = _sanitize(target.name).upper() + "_RESOURCE"
+    include_dir = "${" + prefix + "_DIR}"
+    tree = include_dir + "/donner-assets"
+    header_path = include_dir + "/" + header
+    manifest = tree + "/manifest.json"
+    request_path = include_dir + "/request.json"
+    cmake_name = cmake_target_name(target.package, target.name)
+    generator = "${PROJECT_SOURCE_DIR}/build_defs/packaged_resources.py"
+    f.write(f'set({prefix}_DIR "${{CMAKE_CURRENT_BINARY_DIR}}/{target.name}")\n')
+    f.write(f'file(MAKE_DIRECTORY "{include_dir}/{Path(header).parent}")\n')
+    f.write(f'file(GENERATE OUTPUT "{request_path}" CONTENT "{request}")\n')
+    f.write(f'add_custom_command(OUTPUT "{header_path}" "{manifest}"\n')
+    f.write(f'  COMMAND ${{CMAKE_COMMAND}} -E rm -rf "{tree}"\n')
+    f.write(f'  COMMAND ${{Python3_EXECUTABLE}} "{generator}" --request "{request_path}" '
+            f'--header "{header_path}" --output "{tree}"\n')
+    dependencies = " ".join('"' + resource["source"] + '"' for resource in resources)
+    f.write(f'  DEPENDS {dependencies} "{request_path}" "{generator}"\n  VERBATIM)\n')
+    f.write(f'add_custom_target({cmake_name}_resource_data DEPENDS "{header_path}" "{manifest}")\n')
+    f.write(f'add_library({cmake_name} INTERFACE)\n')
+    f.write(f'add_dependencies({cmake_name} {cmake_name}_resource_data)\n')
+    f.write(f'target_include_directories({cmake_name} INTERFACE "{include_dir}")\n')
+    f.write(f'target_link_libraries({cmake_name} INTERFACE donner_base_packaged_resource)\n')
+    f.write(f'set_property(TARGET {cmake_name} PROPERTY DONNER_RESOURCE_DIRECTORY "{tree}")\n\n')
+
 
 def _scope_for_target(kind: str, has_concrete_sources: bool) -> str:
     if kind in {"cc_binary", "cc_test"}:
@@ -1487,6 +1516,9 @@ def _handle_special_target(f, pkg: str, target: CMakeTarget) -> bool:
         # that must not silently reintroduce an unexecuted test
         # set (issue #1212).
         print(f"Skipping test {bazel_label}: not in the CMake mirror")
+        return True
+    if kind == "packaged_resources":
+        _emit_packaged_resources(f, target)
         return True
     if kind == "embed_resources":
         cmake_name = cmake_target_name(pkg, target.name)
