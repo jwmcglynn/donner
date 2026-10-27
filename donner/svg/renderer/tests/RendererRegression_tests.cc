@@ -861,8 +861,8 @@ TEST_F(RendererRegressionTests, FilterConvolveKernelLimit) {
     return ShiftedPrimitiveFilter(R"svg(<feConvolveMatrix order=")svg" + std::string(order) +
                                   R"svg(" kernelMatrix=")svg" + kernel + R"svg("/>)svg");
   };
-  // Geode executes kernels of at most 25 values and outputs transparent black for larger ones, so
-  // only the CPU backend can show a full-size kernel applying.
+  // Geode executes kernels of at most 25 values and outputs transparent black for larger ones
+  // (bug #2101), so only the CPU backend can show a full-size kernel applying.
   if (ActiveRendererBackend() != RendererBackend::Geode) {
     const RendererBitmap shifted = RenderPrimitiveLimitOracle({"36"});
     editor::tests::CompareBitmapToBitmap(
