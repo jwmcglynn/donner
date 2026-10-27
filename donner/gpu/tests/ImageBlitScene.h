@@ -119,53 +119,61 @@ inline float MitchellWeight(float t) {
   return 0.0f;
 }
 
-/// Samples the independently expanded CPU image, with clamp-to-edge addressing.
-inline FloatPixel Sample(const Scenario& scenario, float u, float v) {
+/// Source pixels expanded for the scenario, read with clamp-to-edge addressing.
+struct ExpandedImage {
+  std::vector<Pixel> pixels;
+  int width = 0;
+  int height = 0;
+
+  Pixel texel(int x, int y) const {
+    return pixels[std::clamp(y, 0, height - 1) * width + std::clamp(x, 0, width - 1)];
+  }
+};
+
+inline ExpandedImage ExpandSource(const Scenario& scenario) {
   const uint32_t repeatX = scenario.kind == Case::Pixelated ? 4u : 1u;
   const uint32_t repeatY = scenario.kind == Case::Pixelated ? 3u : 1u;
-  const int width = 2 * repeatX, height = 2 * repeatY;
-  std::vector<Pixel> expanded(width * height);
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      expanded[y * width + x] = SourcePixel(scenario, x / repeatX, y / repeatY);
+  ExpandedImage image{{}, int(2 * repeatX), int(2 * repeatY)};
+  image.pixels.resize(image.width * image.height);
+  for (int y = 0; y < image.height; ++y) {
+    for (int x = 0; x < image.width; ++x) {
+      image.pixels[y * image.width + x] = SourcePixel(scenario, x / repeatX, y / repeatY);
     }
   }
-  const auto texel = [&](int x, int y) {
-    return expanded[std::clamp(y, 0, height - 1) * width + std::clamp(x, 0, width - 1)];
-  };
-  FloatPixel result{};
-  if (scenario.kind == Case::Nearest) {
-    const Pixel value = texel(int(std::floor(u * width)), int(std::floor(v * height)));
-    for (size_t c = 0; c < 4; ++c) {
-      result[c] = value[c] / 255.0f;
-    }
-    return result;
-  }
-  const float x = u * width - 0.5f, y = v * height - 0.5f;
+  return image;
+}
+
+/// Mitchell cubic at texel-space position (\p x, \p y), clamped to [0, 1] and to alpha.
+inline FloatPixel SampleCubic(const ExpandedImage& image, float x, float y) {
   const int left = int(std::floor(x)), top = int(std::floor(y));
-  if (scenario.kind == Case::Cubic) {
-    for (int row = -1; row <= 2; ++row) {
-      for (int column = -1; column <= 2; ++column) {
-        const Pixel value = texel(left + column, top + row);
-        const float weight =
-            MitchellWeight(x - float(left + column)) * MitchellWeight(y - float(top + row));
-        for (size_t c = 0; c < 4; ++c) {
-          result[c] += value[c] / 255.0f * weight;
-        }
+  FloatPixel result{};
+  for (int row = -1; row <= 2; ++row) {
+    for (int column = -1; column <= 2; ++column) {
+      const Pixel value = image.texel(left + column, top + row);
+      const float weight =
+          MitchellWeight(x - float(left + column)) * MitchellWeight(y - float(top + row));
+      for (size_t c = 0; c < 4; ++c) {
+        result[c] += value[c] / 255.0f * weight;
       }
     }
-    for (float& component : result) {
-      component = std::clamp(component, 0.0f, 1.0f);
-    }
-    for (size_t c = 0; c < 3; ++c) {
-      result[c] = std::min(result[c], result[3]);
-    }
-    return result;
   }
+  for (float& component : result) {
+    component = std::clamp(component, 0.0f, 1.0f);
+  }
+  for (size_t c = 0; c < 3; ++c) {
+    result[c] = std::min(result[c], result[3]);
+  }
+  return result;
+}
+
+/// Bilinear interpolation at texel-space position (\p x, \p y).
+inline FloatPixel SampleLinear(const ExpandedImage& image, float x, float y) {
+  const int left = int(std::floor(x)), top = int(std::floor(y));
   const float fx = x - left, fy = y - top;
+  FloatPixel result{};
   for (int row = 0; row < 2; ++row) {
     for (int column = 0; column < 2; ++column) {
-      const Pixel value = texel(left + column, top + row);
+      const Pixel value = image.texel(left + column, top + row);
       const float weight = (column ? fx : 1.0f - fx) * (row ? fy : 1.0f - fy);
       for (size_t c = 0; c < 4; ++c) {
         result[c] += value[c] / 255.0f * weight;
@@ -173,6 +181,22 @@ inline FloatPixel Sample(const Scenario& scenario, float u, float v) {
     }
   }
   return result;
+}
+
+/// Samples the independently expanded CPU image, with clamp-to-edge addressing.
+inline FloatPixel Sample(const Scenario& scenario, float u, float v) {
+  const ExpandedImage image = ExpandSource(scenario);
+  if (scenario.kind == Case::Nearest) {
+    const Pixel value =
+        image.texel(int(std::floor(u * image.width)), int(std::floor(v * image.height)));
+    FloatPixel result{};
+    for (size_t c = 0; c < 4; ++c) {
+      result[c] = value[c] / 255.0f;
+    }
+    return result;
+  }
+  const float x = u * image.width - 0.5f, y = v * image.height - 0.5f;
+  return scenario.kind == Case::Cubic ? SampleCubic(image, x, y) : SampleLinear(image, x, y);
 }
 
 inline bool OutsideRectangle(float x, float y, const std::array<float, 4>& rect) {
