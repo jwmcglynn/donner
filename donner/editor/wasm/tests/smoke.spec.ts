@@ -2548,16 +2548,25 @@ test("code-only updates transfer no unchanged essential resource bodies", async 
     return available.filter(Boolean).length;
   }, Array.from(new Set(critical.map((asset) => asset.sha256))))).toBe(urls.size);
   const coldBodies = bodies.length;
+  const coldBodyUrls = [...bodies];
   bodies.length = 0;
   codeRevision = 2;
   const warmErrors = await openEditor(page, { postInitializationDwellMs: 0 });
   expect(warmErrors).toEqual([]);
   expect(bodies).toEqual([]);
+  const transferPath = testInfo.outputPath("essential-resource-transfer.json");
+  const transferReport = {
+    ...packageHashes(),
+    criticalBytes: critical.reduce((total, asset) => total + asset.encodedSize, 0),
+    coldBodies,
+    warmBodies: bodies.length,
+    coldBodyUrls,
+    warmBodyUrls: [...bodies],
+  };
+  await writeFile(transferPath, JSON.stringify(transferReport, null, 2));
   await testInfo.attach("essential-resource-transfer", {
-    body: JSON.stringify({
-      criticalBytes: critical.reduce((total, asset) => total + asset.encodedSize, 0),
-      coldBodies, warmBodies: bodies.length,
-    }), contentType: "application/json",
+    path: transferPath,
+    contentType: "application/json",
   });
 });
 
