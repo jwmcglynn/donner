@@ -2074,6 +2074,39 @@ void RunShellFrame(gui::EditorWindow& window, EditorShell& shell) {
   window.endFrame();
 }
 
+/**
+ * Runs idle frames (no input, no document edit). After each one it waits until the render worker
+ * has nothing in flight, so the next frame consumes whatever the previous one posted. A final frame
+ * consumes the last result.
+ *
+ * Callers judge the frames by the coordinator's counters afterwards, so a frame that fails to post
+ * is caught at once by frame state, not by a deadline. The wait is only a hang guard, shared by
+ * every frame of one call: on a CPU-throttled or loaded runner a single render can take seconds,
+ * for example while it waits for the worker to leave background preview work.
+ *
+ * Once a wait has failed, later calls in the same case return at once, so a hang costs the case one
+ * guard window.
+ *
+ * @param window Hidden window driving the frames.
+ * @param shell Shell under test.
+ * @param frames Idle frames to run before the final consuming frame.
+ */
+void RunIdleFramesToQuiescence(gui::EditorWindow& window, EditorShell& shell, int frames) {
+  if (::testing::Test::HasFatalFailure()) {
+    return;  // An earlier call already hung; do not spend another guard window.
+  }
+  AsyncRenderer& renderer = EditorShellTestAccess::Coordinator(shell).asyncRenderer();
+  const tests::HangGuard guard;
+  for (int frame = 0; frame < frames; ++frame) {
+    RunShellFrame(window, shell);
+    ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(guard.deadline()))
+        << "idle frame " << frame << " of " << frames
+        << " still had a render in flight when the hang guard expired (request still queued: "
+        << renderer.hasPendingRenderForTesting() << ")";
+  }
+  RunShellFrame(window, shell);
+}
+
 void RunFramesUntilDisplayedSelectionBounds(gui::EditorWindow& window, EditorShell& shell) {
   for (const tests::HangGuard guard; guard.active();) {
     RunShellFrame(window, shell);
@@ -3092,8 +3125,7 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   EditorShellTestAccess::InstallFramePresentation(shell, nullptr);
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   EditorShellTestAccess::InstallFramePresentation(shell, acceptedFrame);
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
 
   const std::uint64_t blockedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
   for (int frame = 0; frame < 3; ++frame) {
@@ -3284,8 +3316,7 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
   ASSERT_TRUE(secondIdentity.has_value());
   ASSERT_EQ(*secondIdentity, firstIdentity);
   EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(second), layerRendersBefore);
-  ASSERT_TRUE(second.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(second.asyncRendererForReplay()));
 
   EditorShellTestAccess::PrepareSingleFontPreviewRequest(second, "Bebas Neue");
   ASSERT_EQ(EditorShellTestAccess::PendingFontPreviewCount(second), 1u);
@@ -3330,14 +3361,9 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
 
   // Idle frames only: no input, no document edit. The worker finishes each render before the next
-  // frame, which polls its result.
+  // frame, which polls its result, so each count below is exact however long a render takes.
   const auto runIdleFrames = [&](int frames) {
-    for (int frame = 0; frame < frames; ++frame) {
-      RunShellFrame(window, shell);
-      EXPECT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-          std::chrono::steady_clock::now() + std::chrono::seconds(10)));
-    }
-    RunShellFrame(window, shell);
+    RunIdleFramesToQuiescence(window, shell, frames);
     return coordinator.nothingToPresentResultTotalForDiagnostics();
   };
 
@@ -3382,12 +3408,7 @@ TEST(EditorShellTest, DueNothingToPresentRetryWaitsForTheSamplePickerWithoutWaki
   RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
   const auto runIdleFrames = [&](int frames) {
-    for (int frame = 0; frame < frames; ++frame) {
-      RunShellFrame(window, shell);
-      EXPECT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-          std::chrono::steady_clock::now() + std::chrono::seconds(10)));
-    }
-    RunShellFrame(window, shell);
+    RunIdleFramesToQuiescence(window, shell, frames);
     return coordinator.nothingToPresentResultTotalForDiagnostics();
   };
   const std::uint64_t settled = runIdleFrames(30);
@@ -4461,8 +4482,7 @@ TEST(EditorShellTest, NativeViewportExportRetainsChosenPathUntilRendererIsReady)
   EXPECT_FALSE(std::filesystem::exists(exportPath));
 
   renderer.cancelInFlight();
-  ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
-                                                           std::chrono::seconds(2)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(renderer));
   std::ignore = renderer.pollResult();
   renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
 
@@ -4822,8 +4842,7 @@ TEST(EditorShellTest, ValidStyleSourceEditRequestsCanvasRenderWithoutCanvasClick
   EXPECT_THAT(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell), testing::Eq(true));
 
   RunShellFrame(window, shell);
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
   RunShellFrame(window, shell);
   EXPECT_THAT(EditorShellTestAccess::DisplayedDocVersion(shell),
               testing::Eq(EditorShellTestAccess::App(shell).document().currentFrameVersion()));
@@ -4867,8 +4886,7 @@ TEST(EditorShellTest, TypingStylesheetColorKeepsSourceFocusAndReferenceRopes) {
     RunShellFrame(window, shell);
   }
 
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
   RunShellFrame(window, shell);
   EXPECT_THAT(EditorShellTestAccess::DisplayedDocVersion(shell),
               testing::Eq(EditorShellTestAccess::App(shell).document().currentFrameVersion()));
@@ -6169,9 +6187,7 @@ TEST(EditorShellTest, DragMutationWaitsForQueuedRenderToConsumeItsDocument) {
     EXPECT_THAT(app.document().hasPendingMutations(), testing::IsTrue());
   }
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
-  ASSERT_THAT(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
-                                                           std::chrono::seconds(5)),
-              testing::IsTrue());
+  ASSERT_THAT(tests::WaitForNoRenderInFlight(renderer), testing::IsTrue());
   std::ignore = renderer.pollResult();
   EXPECT_THAT(EditorShellTestAccess::MoveSelectedShapeDrag(shell, Vector2d(60.0, 40.0)),
               testing::IsTrue());
@@ -6220,8 +6236,7 @@ TEST(EditorShellTest, CoalescedFinalPointerAndReleaseCommitTheFinalPoseAndUndo) 
   EXPECT_EQ(presentation.settlingPreview->translation, Vector2d(32, 20));
   ASSERT_EQ(presentation.settlingPreview->poses.size(), 1u);
   EXPECT_EQ(presentation.settlingPreview->poses.front().documentFromElement, expected);
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
   std::ignore = app.flushFrame();
   EXPECT_EQ(target->cast<svg::SVGGraphicsElement>().transform(), expected);
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
@@ -6635,8 +6650,7 @@ TEST(EditorShellTest, PenPreviewTracksLatestPointerBeforeBusyRendererPublishes) 
   EXPECT_THAT(*EditorShellTestAccess::PenPreviewPath(shell), testing::Eq(released));
   RunShellFrame(window, shell);
   EXPECT_EQ(AsyncRenderer::releaseCompletionBarrierForTesting(), Barrier::Holding);
-  ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
-                                                           std::chrono::seconds(2)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(renderer));
   for (const tests::HangGuard guard; guard.active();) {
     RunShellFrame(window, shell);
     if (!EditorShellTestAccess::RendererBusy(shell) && !app.document().hasPendingMutations() &&
@@ -6704,8 +6718,7 @@ TEST(EditorShellTest, DeferredExistingPenEditsSettleBeforeTheNextPressAndKeepSep
   EXPECT_THAT(app.document().document().querySelector("#p")->getAttribute("d"),
               testing::Optional(testing::Eq(RcString("M10 20 L50 20"))));
   EXPECT_EQ(AsyncRenderer::releaseCompletionBarrierForTesting(), Barrier::Holding);
-  ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
-                                                           std::chrono::seconds(2)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(renderer));
   const Vector2d nextScreen = shell.viewportForReadback().documentToScreen({50, 20});
   ImGui::GetIO().AddMousePosEvent(nextScreen.x, nextScreen.y);
   ImGui::GetIO().AddMouseButtonEvent(0, true);
@@ -6871,10 +6884,10 @@ TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingF
   EditorShell shell(window, OptionsWithSource(kReferencedSvg, "referenced.svg"));
   ASSERT_TRUE(shell.valid());
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  const tests::HangGuard settleGuard;
   for (int frame = 0; frame < 40; ++frame) {
     RunShellFrame(window, shell);
-    ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(deadline));
+    ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(settleGuard.deadline()));
     if (frame >= 3 && !EditorShellTestAccess::RendererBusy(shell)) {
       break;
     }
@@ -6907,19 +6920,19 @@ TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingF
   // Drive the loop the way the browser does: a frame runs only for an outstanding wake. The
   // renderer's own completion and warmup-release wakes must carry the summary to completion.
   renderer.setReplayDocumentAccessBlockedForTesting(false);
-  const auto completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  const tests::HangGuard completionGuard;
   std::uint64_t consumedWakeSerial = blockedWakeSerial;
   for (int frame = 0; frame < 20; ++frame) {
     if (EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell) == 1u) {
       break;
     }
     while (window.wakeEventLoopRequestSerialForTesting() == consumedWakeSerial &&
-           std::chrono::steady_clock::now() < completionDeadline) {
+           completionGuard.active()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_GT(window.wakeEventLoopRequestSerialForTesting(), consumedWakeSerial)
-        << "no wake within 10 s: the demand-driven loop would park with a stale reference summary "
-        << "(renderer busy=" << EditorShellTestAccess::RendererBusy(shell) << ")";
+        << "no wake before the hang guard expired: the demand-driven loop would park with a stale "
+        << "reference summary (renderer busy=" << EditorShellTestAccess::RendererBusy(shell) << ")";
     consumedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
     RunShellFrame(window, shell);
   }
@@ -7778,9 +7791,7 @@ TEST(EditorShellTest, FillStrokeSwapAppearanceDoesNotTrackWorkerBusyState) {
     checkAppearance();
     renderer.setReplayDocumentAccessBlockedForTesting(false);
     renderer.cancelInFlight();
-    ASSERT_THAT(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
-                                                             std::chrono::seconds(2)),
-                testing::IsTrue());
+    ASSERT_THAT(tests::WaitForNoRenderInFlight(renderer), testing::IsTrue());
     std::ignore = renderer.pollResult();
     RenderToolbarFrame(window, shell, kCursor, ImVec2(-100, -100), false);
     checkAppearance();
@@ -7822,8 +7833,7 @@ TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBus
       << "A busy frame must not replace the selected fill with the authoring fill";
 
   renderer.cancelInFlight();
-  EXPECT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
-                                                           std::chrono::seconds(2)));
+  EXPECT_TRUE(tests::WaitForNoRenderInFlight(renderer));
   std::ignore = renderer.pollResult();
   renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
 }
@@ -7856,8 +7866,7 @@ TEST(EditorShellTest, ReplayCostEstimatesReadTheDocumentWhileTheWorkerRendersIt)
            std::chrono::steady_clock::now() < deadline);
 
   EXPECT_THAT(estimates, testing::Gt(0));
-  EXPECT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
-                                                           std::chrono::seconds(2)));
+  EXPECT_TRUE(tests::WaitForNoRenderInFlight(renderer));
   std::ignore = renderer.pollResult();
   renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
 }
@@ -10334,8 +10343,7 @@ TEST(EditorShellTest, IdleEyedropperArmingAndCanvasCommitWakeDispatchRender) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_THAT(shell.valid(), testing::Eq(true));
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
   EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
 
@@ -10346,8 +10354,7 @@ TEST(EditorShellTest, IdleEyedropperArmingAndCanvasCommitWakeDispatchRender) {
   ASSERT_NE(capture, nullptr) << "The idle arm did not produce a document pixel capture.";
 
   // Represent the next idle frame after the first capture request has cleared its one-shot flag.
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
   EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
   ASSERT_THAT(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell), testing::Eq(false));
   EditorShellTestAccess::SetExpiredEyedropperCanvasCommitWake(shell);
@@ -10356,8 +10363,7 @@ TEST(EditorShellTest, IdleEyedropperArmingAndCanvasCommitWakeDispatchRender) {
   EXPECT_THAT(EditorShellTestAccess::EyedropperCanvasCommitWakePending(shell), testing::Eq(false))
       << "A timer-driven idle frame must reach RenderCoordinator::maybeRequestRender.";
   shell.asyncRendererForReplay().cancelInFlight();
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
 }
 
 TEST(EditorShellTest, CancelledIdleEyedropperCaptureRepostsThroughShellFrame) {
@@ -10368,8 +10374,7 @@ TEST(EditorShellTest, CancelledIdleEyedropperCaptureRepostsThroughShellFrame) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_THAT(shell.valid(), testing::Eq(true));
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
   ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/false), testing::Eq(true));
   const DocumentPixelCapture* capture = WaitForDocumentPixelCapture(window, shell);
@@ -10383,13 +10388,11 @@ TEST(EditorShellTest, CancelledIdleEyedropperCaptureRepostsThroughShellFrame) {
   ASSERT_THAT(EditorShellTestAccess::RendererBusy(shell), testing::Eq(true));
 
   shell.asyncRendererForReplay().cancelInFlight();
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
   EXPECT_THAT(EditorShellTestAccess::RendererBusy(shell), testing::Eq(true))
       << "A cancelled same-identity capture must repost from the completion-woken shell frame.";
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
   EXPECT_NE(EditorShellTestAccess::PixelCapture(shell), nullptr);
 }
@@ -10723,8 +10726,7 @@ TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
   RunShellFrame(window, shell);
   ImGui::GetIO().AddInputCharactersUTF8("SVG");
   RunShellFrame(window, shell);
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(shell.asyncRendererForReplay()));
   RunShellFrame(window, shell);
   ASSERT_THAT(EditorShellTestAccess::App(shell).selectedElements(), testing::SizeIs(1));
   const svg::SVGElement& newText = EditorShellTestAccess::App(shell).selectedElements().front();
