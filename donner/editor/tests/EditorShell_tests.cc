@@ -6952,11 +6952,23 @@ TEST(EditorShellTest, SidebarRefreshWaitsForRendererWakeInsteadOfRequestingFrame
                                                     }));
   ASSERT_FALSE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  // An idle renderer does not prove the installed presentation was acknowledged: the frame that
+  // installs it submits it to the GPU asynchronously, and only a later observation of that
+  // submission's completion acknowledges it. Drain each frame's GPU work the way the native event
+  // loop's idle timer does before judging the frame, and settle only once both have caught up.
   const tests::HangGuard settleGuard;
   for (int frame = 0; frame < 40; ++frame) {
     RunShellFrame(window, shell);
     ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(settleGuard.deadline()));
-    if (frame >= 3 && !EditorShellTestAccess::RendererBusy(shell)) {
+    ASSERT_TRUE(tests::WaitUntil(
+        [&] {
+          window.pollIdleGpu();
+          return !window.hasIdleGpuWork();
+        },
+        settleGuard.deadline()))
+        << "the presented frame's GPU work never completed";
+    if (frame >= 3 && !EditorShellTestAccess::RendererBusy(shell) &&
+        EditorShellTestAccess::ForegroundPresentationAcknowledged(shell)) {
       break;
     }
   }
