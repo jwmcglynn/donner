@@ -3027,7 +3027,7 @@ public:
         primary.glyphs.front().cluster > primary.glyphs.back().cluster) {
       std::reverse(items.begin(), items.end());
     }
-    return shapeItems(items, faces);
+    return shapeItems(items, chunk, faces);
   }
 
 private:
@@ -3087,12 +3087,17 @@ private:
     return items;
   }
 
-  /// Shapes each item with its face, recording fallback faces per glyph in \p faces.
-  TextBackend::ShapedRun shapeItems(const std::vector<Item>& items,
+  /// Shapes each item with its face as one part of \p chunk, recording fallback faces per glyph
+  /// in \p faces. The chunk supplies each item's shaping context, so joining continues across
+  /// faces and script-neutral items take the chunk's direction.
+  TextBackend::ShapedRun shapeItems(const std::vector<Item>& items, const ChunkRange& chunk,
                                     std::vector<FontHandle>& faces) const {
+    const TextBackend::ShapingContext context{chunk.byteStart, chunk.byteEnd - chunk.byteStart};
     TextBackend::ShapedRun result;
     for (const Item& item : items) {
-      const TextBackend::ShapedRun shaped = shapeWith(item.face, item.range);
+      const TextBackend::ShapedRun shaped = backend_.shapeRunInContext(
+          item.face, run_.usedFontSizePx, text_, context, item.range.byteStart,
+          item.range.byteEnd - item.range.byteStart, vertical_, orientation_, variant_, kerning_);
       result.glyphs.insert(result.glyphs.end(), shaped.glyphs.begin(), shaped.glyphs.end());
       faces.resize(result.glyphs.size(), item.face == run_.font ? FontHandle() : item.face);
     }

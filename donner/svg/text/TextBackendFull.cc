@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <string>
@@ -888,6 +889,14 @@ TextBackend::ShapedRun TextBackendFull::shapeRunNoKerning(
                       textOrientation, fontVariant, false, forceLogicalOrder);
 }
 
+TextBackend::ShapedRun TextBackendFull::shapeRunInContext(
+    FontHandle font, float fontSizePx, std::string_view spanText, const ShapingContext& context,
+    size_t byteOffset, size_t byteLength, bool isVertical, TextOrientation textOrientation,
+    FontVariant fontVariant, bool kerning) const {
+  return shapeRunImpl(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                      textOrientation, fontVariant, kerning, false, &context);
+}
+
 namespace {
 
 struct RunScriptProperties {
@@ -937,6 +946,81 @@ RunScriptProperties DetectRunScript(const char* chunkData, size_t byteLength, bo
   hb_buffer_destroy(detectBuf);
 
   return {useVerticalShaping, detectedDirection, detectedScript, detectedLanguage};
+}
+
+/**
+ * Detects the shaping properties of one range of a context. A script-neutral range, such as
+ * punctuation or spaces, takes the context's direction, script and language, so it mirrors and
+ * orders like its neighbors. A strong left-to-right range inside a vertically shaped context is
+ * shaped vertically like it. A strong right-to-left range keeps its own horizontal direction.
+ */
+RunScriptProperties DetectRangeScriptInContext(std::string_view spanText,
+                                               const TextBackend::ShapingContext& context,
+                                               size_t byteOffset, size_t byteLength,
+                                               bool isVertical, TextOrientation textOrientation) {
+  const RunScriptProperties contextProperties = DetectRunScript(
+      spanText.data() + context.byteOffset, context.byteLength, isVertical, textOrientation);
+  RunScriptProperties range =
+      DetectRunScript(spanText.data() + byteOffset, byteLength, isVertical, textOrientation);
+  // Guessing leaves the script invalid when every character is common or inherited.
+  if (range.script == HB_SCRIPT_INVALID || range.script == HB_SCRIPT_COMMON ||
+      range.script == HB_SCRIPT_INHERITED || range.script == HB_SCRIPT_UNKNOWN) {
+    return contextProperties;
+  }
+  if (contextProperties.vertical && !range.vertical && range.direction == HB_DIRECTION_LTR) {
+    range.vertical = true;
+    range.direction = HB_DIRECTION_TTB;
+  }
+  return range;
+}
+
+/// Detects the shaping properties of a range, in its context when it has one.
+RunScriptProperties DetectShapingScript(std::string_view spanText,
+                                        const TextBackend::ShapingContext* context,
+                                        size_t byteOffset, size_t byteLength, bool isVertical,
+                                        TextOrientation textOrientation) {
+  if (context) {
+    return DetectRangeScriptInContext(spanText, *context, byteOffset, byteLength, isVertical,
+                                      textOrientation);
+  }
+  return DetectRunScript(spanText.data() + byteOffset, byteLength, isVertical, textOrientation);
+}
+
+/**
+ * The direction to shape one buffer with. A horizontal single-codepoint buffer without context is
+ * shaped left to right regardless of its script: when per-character coordinates split right-to-left
+ * text into individual characters, each is shaped independently to avoid right-to-left GPOS
+ * adjustments that differ from the connected-text advances. A range shaped in context keeps its
+ * detected direction.
+ */
+hb_direction_t ShapingDirection(hb_direction_t detected, bool verticalShaping,
+                                unsigned int bufferLength, bool inContext) {
+  if (verticalShaping || bufferLength > 1 || inContext) {
+    return detected;
+  }
+  return HB_DIRECTION_LTR;
+}
+
+/**
+ * Adds [\p rangeStart, \p rangeEnd) of \p text, which starts at \p byteOffset of \p spanText, to
+ * \p buf. With a context, the context's other characters become the buffer's pre- and
+ * post-context.
+ *
+ * @return The value to add to the buffer's cluster values to make them relative to \p text.
+ */
+int64_t AddShapingRange(hb_buffer_t* buf, const char* text, size_t rangeStart, size_t rangeEnd,
+                        std::string_view spanText, size_t byteOffset,
+                        const TextBackend::ShapingContext* context) {
+  const int length = static_cast<int>(rangeEnd - rangeStart);
+  if (!context) {
+    hb_buffer_add_utf8(buf, text + rangeStart, length, 0, length);
+    return static_cast<int64_t>(rangeStart);
+  }
+  const size_t rangeInContext = byteOffset - context->byteOffset;
+  hb_buffer_add_utf8(buf, spanText.data() + context->byteOffset,
+                     static_cast<int>(context->byteLength),
+                     static_cast<unsigned int>(rangeInContext + rangeStart), length);
+  return -static_cast<int64_t>(rangeInContext);
 }
 
 struct SmallCapsPreparation {
@@ -1133,12 +1217,10 @@ bool ShapeVariantRanges(FT_Face ftFace, hb_font_t* hbFont, float fontSizePx, con
 
 }  // namespace
 
-TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float fontSizePx,
-                                                     std::string_view spanText, size_t byteOffset,
-                                                     size_t byteLength, bool isVertical,
-                                                     TextOrientation textOrientation,
-                                                     FontVariant fontVariant, bool enableKerning,
-                                                     bool forceLogicalOrder) const {
+TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
+    FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
+    size_t byteLength, bool isVertical, TextOrientation textOrientation, FontVariant fontVariant,
+    bool enableKerning, bool forceLogicalOrder, const ShapingContext* context) const {
   hb_font_t* hbFont = getOrCreateHbFont(font);
   if (!hbFont) {
     return {};
@@ -1157,7 +1239,8 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
 
   // Detect direction and script from the text chunk.
   const char* chunkData = spanText.data() + byteOffset;
-  const auto scriptProperties = DetectRunScript(chunkData, byteLength, isVertical, textOrientation);
+  const auto scriptProperties =
+      DetectShapingScript(spanText, context, byteOffset, byteLength, isVertical, textOrientation);
   const bool useVerticalShaping = scriptProperties.vertical;
   const auto detectedDirection = scriptProperties.direction;
   const auto detectedScript = scriptProperties.script;
@@ -1165,6 +1248,8 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
 
   const auto smallCaps = PrepareSmallCaps(hbFont, chunkData, byteLength, fontVariant);
   const bool useSmcpFeature = smallCaps.useFeature;
+  // Synthesized small caps shape an uppercased copy of the range, which has no context.
+  const ShapingContext* const shapingContext = smallCaps.text.empty() ? context : nullptr;
 
   // Lambda to shape a byte range and collect results.
   // rangeStart/rangeEnd are byte offsets relative to the start of `text`.
@@ -1173,16 +1258,12 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
   auto shapeRange = [&](const char* text, size_t rangeStart, size_t rangeEnd, bool isSmallCapRange,
                         hb_feature_t* features, unsigned int numFeatures) {
     hb_buffer_t* buf = hb_buffer_create();
-    hb_buffer_add_utf8(buf, text + rangeStart, static_cast<int>(rangeEnd - rangeStart), 0,
-                       static_cast<int>(rangeEnd - rangeStart));
+    const int64_t clusterOffset =
+        AddShapingRange(buf, text, rangeStart, rangeEnd, spanText, byteOffset, shapingContext);
 
-    // For single-codepoint buffers, force LTR direction regardless of detected script.
-    // This matches the old TextShaper's layoutLTR behavior: when per-character coordinates
-    // split RTL text into individual characters, each is shaped independently in LTR to
-    // avoid RTL-specific GPOS adjustments that differ from the connected-text advances.
-    const unsigned int bufLen = hb_buffer_get_length(buf);
     hb_buffer_set_direction(
-        buf, (!useVerticalShaping && bufLen <= 1) ? HB_DIRECTION_LTR : detectedDirection);
+        buf, ShapingDirection(detectedDirection, useVerticalShaping, hb_buffer_get_length(buf),
+                              shapingContext != nullptr));
     hb_buffer_set_script(buf, detectedScript);
     hb_buffer_set_language(buf, detectedLanguage);
     hb_shape(hbFont, buf, features, numFeatures);
@@ -1192,7 +1273,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(FontHandle font, float font
     const hb_glyph_position_t* positions = hb_buffer_get_glyph_positions(buf, &count);
     for (unsigned int i = 0; i < count; ++i) {
       hb_glyph_info_t info = infos[i];
-      info.cluster += static_cast<unsigned int>(rangeStart);
+      info.cluster = static_cast<unsigned int>(static_cast<int64_t>(info.cluster) + clusterOffset);
       allGlyphs.push_back({info, positions[i], isSmallCapRange});
     }
     hb_buffer_destroy(buf);

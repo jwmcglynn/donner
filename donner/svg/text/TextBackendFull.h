@@ -54,6 +54,10 @@ public:
                               size_t byteOffset, size_t byteLength, bool isVertical,
                               TextOrientation textOrientation, FontVariant fontVariant,
                               bool forceLogicalOrder) const override;
+  ShapedRun shapeRunInContext(FontHandle font, float fontSizePx, std::string_view spanText,
+                              const ShapingContext& context, size_t byteOffset, size_t byteLength,
+                              bool isVertical, TextOrientation textOrientation,
+                              FontVariant fontVariant, bool kerning) const override;
   double crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont, float curSizePx,
                        uint32_t prevCodepoint, uint32_t curCodepoint,
                        bool isVertical) const override;
@@ -71,7 +75,8 @@ private:
   ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
                          size_t byteOffset, size_t byteLength, bool isVertical,
                          TextOrientation textOrientation, FontVariant fontVariant,
-                         bool enableKerning, bool forceLogicalOrder) const;
+                         bool enableKerning, bool forceLogicalOrder,
+                         const ShapingContext* context = nullptr) const;
   /// Decode a previously validated current glyph slot without another metrics-only load.
   std::optional<BitmapGlyph> decodeBitmapGlyph(const BitmapGlyphMetrics& metrics) const;
 

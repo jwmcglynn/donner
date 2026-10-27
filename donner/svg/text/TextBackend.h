@@ -235,6 +235,42 @@ public:
                              fontVariant, forceLogicalOrder);
   }
 
+  /// A byte range of the span text that surrounds a shaped range.
+  struct ShapingContext {
+    size_t byteOffset = 0;  ///< Start of the context within the span text.
+    size_t byteLength = 0;  ///< Length of the context.
+  };
+
+  /**
+   * Shape [\p byteOffset, \p byteOffset + \p byteLength) as one part of \p context, such as one
+   * face's share of a chunk drawn with several faces. A context-aware backend shapes the range
+   * with the surrounding characters as pre- and post-context, and takes the context's direction,
+   * script and language when the range itself is script-neutral. Other backends shape the range
+   * alone. Glyph clusters are byte offsets into \p spanText, as for \ref shapeRun.
+   *
+   * @param font Font to shape with.
+   * @param fontSizePx Font size in pixels.
+   * @param spanText Full span text (UTF-8).
+   * @param context Range of \p spanText that contains the shaped range.
+   * @param byteOffset Start of the range to shape within \p spanText.
+   * @param byteLength Length of the range to shape.
+   * @param isVertical True for vertical writing mode.
+   * @param textOrientation Resolved vertical text orientation.
+   * @param fontVariant Font variant (Normal or SmallCaps).
+   * @param kerning False to shape with kerning disabled.
+   */
+  virtual ShapedRun shapeRunInContext(FontHandle font, float fontSizePx, std::string_view spanText,
+                                      const ShapingContext& context, size_t byteOffset,
+                                      size_t byteLength, bool isVertical,
+                                      TextOrientation textOrientation, FontVariant fontVariant,
+                                      bool kerning) const {
+    (void)context;
+    return kerning ? shapeRun(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
+                              textOrientation, fontVariant, false)
+                   : shapeRunNoKerning(font, fontSizePx, spanText, byteOffset, byteLength,
+                                       isVertical, textOrientation, fontVariant, false);
+  }
+
   /// Compute cross-span kerning between the last codepoint of the previous span
   /// and the first codepoint of the current span.
   /// @return Kern adjustment in pixels (added to pen position).
