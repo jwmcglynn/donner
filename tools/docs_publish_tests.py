@@ -273,7 +273,7 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish, "deploy", return_value="91"), \
              mock.patch.object(publish, "_verify_live", side_effect=[ValueError("old site"), None]), \
              mock.patch.object(publish.time, "sleep") as pause, \
-             mock.patch.object(publish, "_recover") as recover:
+             mock.patch.object(publish, "_recover", return_value={"status": "recovery-required"}) as recover:
             result = publish._retain_and_deploy(record, plan, 9, work, self.api)
         self.assertEqual(result["status"], "published")
         pause.assert_called_once_with(5)

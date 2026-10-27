@@ -420,6 +420,19 @@ def _live_identity(expected: dict) -> bool:
     return site.digest(data) == expected["index_sha256"] and live_marker() is None
 
 
+def _wait_for_live(expected: dict, wait=None) -> None:
+    pause = wait or time.sleep
+    for attempt in range(24):
+        try:
+            if _live_identity(expected):
+                return
+        except (ValueError, OSError, urllib.error.URLError):
+            pass
+        if attempt < 23:
+            pause(5)
+    raise ValueError("public site did not converge within the bounded propagation window")
+
+
 def preflight(reference: str, expected: str, prior: str, work: Path, api=None) -> None:
     api = api or store.GitHub()
     site.empty(work)
@@ -491,7 +504,7 @@ def _retain_and_deploy(record, plan, previous_id, work, api):
     try:
         result["deployment_id"] = deploy(record["artifact_id"], record["workflow_commit"], api,
                                          receipt=work / "candidate-deployment.json")
-        _verify_live(record["manifest_sha256"], site.read_json(work / "site/docs-site.json"))
+        _wait_for_live({"kind": "composition", "marker": site.read_json(work / "site/docs-site.json")})
     except (ValueError, OSError, urllib.error.URLError, subprocess.SubprocessError) as error:
         result.update(_recover(record, plan["prior_identity"], previous_id, api, str(error),
                                tip, _deployment_id(work)))
@@ -589,7 +602,7 @@ def rollback(work: Path, candidate_id: int, previous_id: int, api=None) -> dict:
     try:
         result["deployment_id"] = deploy(candidate_id, os.environ["GITHUB_SHA"], api,
                                          receipt=work / "candidate-deployment.json")
-        _verify_live(record["manifest_sha256"], site.read_json(work / "site/docs-site.json"))
+        _wait_for_live({"kind": "composition", "marker": site.read_json(work / "site/docs-site.json")})
     except (ValueError, OSError, urllib.error.URLError, subprocess.SubprocessError) as error:
         result.update(_recover(record, plan["prior_identity"], previous_id, api, str(error),
                                plan["snapshot"], _deployment_id(work)))
@@ -640,7 +653,7 @@ def _recover(record, prior_identity, previous_id, api, error, expected_tip=None,
             return {"status": "recovery-required", "error": error, "observed": observed}
         site.require(api.tip() == expected_tip, "snapshot branch advanced before recovery")
         deployment_id = deploy(previous_id, record["workflow_commit"], api)
-        site.require(_live_identity(prior_identity), "restoration could not be confirmed")
+        _wait_for_live(prior_identity)
         return {"status": "restored", "error": error, "recovery_deployment_id": deployment_id}
     except (ValueError, OSError, urllib.error.URLError, subprocess.SubprocessError) as failure:
         return {"status": "recovery-required", "error": error, "recovery_error": str(failure)}
