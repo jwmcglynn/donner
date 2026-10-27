@@ -366,7 +366,8 @@ const completionCheckEnforcement = completionCheckMode();
 
 /**
  * Run one tracked completion check's assertion and record whether it held. A miss fails the test
- * unless the run only reports completion checks and the miss is in the check's tracked browser.
+ * unless the run only reports completion checks and the miss is in the check's tracked browser
+ * and, when the check names them, its tracked phases.
  */
 async function completionCheck(
   check: keyof typeof kCompletionChecks,

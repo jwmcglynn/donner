@@ -1277,6 +1277,19 @@ test("completion checks enforce by default and report only tracked misses", asyn
       log: () => {},
     }).then((result) => ({ result }), (error) => ({ error }));
   assert.equal((await runHeld("chromium", "geode-crown")).result?.mode, "report");
+  const enforcedHeld = await gates.runCompletionCheck(
+    "heldDragPositions",
+    () => Promise.reject(heldMiss),
+    {
+      browserName: "chromium",
+      project: "chromium",
+      phase: "geode-crown",
+      detail: "1 held positions completed",
+      mode: "enforce",
+      log: () => {},
+    },
+  ).then((result) => ({ result }), (error) => ({ error }));
+  assert.equal(enforcedHeld.error, heldMiss, "an enforcing run rethrows a tracked miss");
   for (const [browserName, phase] of [
     ["chromium", "first-drag-193"],
     ["chromium", "second-drag-193"],
@@ -1333,6 +1346,11 @@ test("only the tracked responsiveness checks go through the completion check hel
     ["heldDragPositions", "dragInputsComplete", "coldZoomPresents"],
   );
   const [held, drag, coldZoom] = calls.map(({ index }) => index);
+  assert.equal(
+    spec.split('"geode-crown"').length,
+    2,
+    "only the masked crown drag may use the phase whose held-position miss is reported",
+  );
   const heldMessage = "held drag must complete multiple represented positions";
   assert.equal(spec.split(heldMessage).length, 2, "the held-position check must appear once");
   const heldMessageAt = spec.indexOf(heldMessage);
