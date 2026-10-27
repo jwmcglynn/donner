@@ -1609,10 +1609,12 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/lengthAdjust",
                 {
-                    {"vertical.svg",
-                     Params::Skip("Not impl: lengthAdjust attribute (parented to textLength)")},
-                    {"with-underline.svg",
-                     Params::Skip("Not impl: lengthAdjust attribute (parented to textLength)")},
+                    // Both references are resvg v0.49.0's 300x300 renderings. The superseded
+                    // vertical image sat 0.28 units across the line from Donner and resvg v0.49.0,
+                    // consistent with an older sideways baseline, and the superseded underline was
+                    // twice the font's 0.05em underline thickness.
+                    {"vertical.svg", Params().setCanvasSize(300, 300)},
+                    {"with-underline.svg", Params().setCanvasSize(300, 300)},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1747,9 +1749,9 @@ INSTANTIATE_TEST_SUITE_P(
                 {"indirect-with-multiple-colors.svg",
                  Params::Skip(
                      "Not impl: text-decoration full SVG2 support (line/style/color independent)")},
-                {"with-textLength-on-a-single-character.svg",
-                 Params::Skip(
-                     "Not impl: text-decoration full SVG2 support (line/style/color independent)")},
+                // The reference is resvg v0.49.0's 300x300 rendering; the superseded underline was
+                // twice the font's 0.05em underline thickness.
+                {"with-textLength-on-a-single-character.svg", Params().setCanvasSize(300, 300)},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1768,9 +1770,13 @@ INSTANTIATE_TEST_SUITE_P(
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                     {"arabic.svg",
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
+                    // resvg v0.49.0's zero.png is not a replacement: its glyphs sit about 17.3
+                    // units right (1834 differing pixels).
                     {"zero.svg",
-                     Params::Skip("Triage: zero-length spacing is applied; 397px overlapping-glyph "
-                                  "raster residual remains against the resvg golden")},
+                     Params::Skip("Outlier reference: the glyph layout matches; all 396 differing "
+                                  "pixels are the x=100 crosshair, which this PNG draws at alpha "
+                                  "128/192 where sibling textLength references and Donner draw "
+                                  "160/160")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
