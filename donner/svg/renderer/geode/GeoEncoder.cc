@@ -14,6 +14,7 @@
 #include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/gpu/shader/programs/SlugGradient.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
+#include "donner/svg/renderer/ImageSampling.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -3455,14 +3456,11 @@ bool IsValidImageDraw(const svg::ImageResource& image, const Box2d& destRect,
 
 /// Maps the resolved CSS image-rendering value to the Geode sampler policy.
 GeodeTextureEncoder::Filter ImageFilter(svg::ImageRendering imageRendering) {
-  switch (imageRendering) {
-    case svg::ImageRendering::CrispEdges:
-    case svg::ImageRendering::OptimizeSpeed: return GeodeTextureEncoder::Filter::Nearest;
-    case svg::ImageRendering::Pixelated: return GeodeTextureEncoder::Filter::Pixelated;
-    case svg::ImageRendering::Auto:
-    case svg::ImageRendering::Smooth:
-    case svg::ImageRendering::HighQuality:
-    case svg::ImageRendering::OptimizeQuality: return GeodeTextureEncoder::Filter::Linear;
+  switch (svg::ImageSamplingKernelFor(imageRendering)) {
+    case svg::ImageSamplingKernel::Nearest: return GeodeTextureEncoder::Filter::Nearest;
+    case svg::ImageSamplingKernel::PixelatedSmooth: return GeodeTextureEncoder::Filter::Pixelated;
+    case svg::ImageSamplingKernel::Bilinear: return GeodeTextureEncoder::Filter::Linear;
+    case svg::ImageSamplingKernel::MitchellCubic: return GeodeTextureEncoder::Filter::Cubic;
   }
 
   return GeodeTextureEncoder::Filter::Linear;
@@ -3487,6 +3485,14 @@ GeodeTextureEncoder::QuadParams MakeImageQuadParams(const svg::ImageResource& im
       Transform2d::Translate(destRect.topLeft) * deviceFromLocalTransform;
   params.pixelatedScaleX = deviceFromImage.transformVector(Vector2d(1.0, 0.0)).length();
   params.pixelatedScaleY = deviceFromImage.transformVector(Vector2d(0.0, 1.0)).length();
+  // tiny-skia samples the nearest texel whenever the image transform is a pure translation,
+  // fractional ones included, whatever the requested filter.
+  const bool translationOnly = deviceFromImage.data[0] == 1.0 && deviceFromImage.data[1] == 0.0 &&
+                               deviceFromImage.data[2] == 0.0 && deviceFromImage.data[3] == 1.0;
+  if (translationOnly && (params.filter == GeodeTextureEncoder::Filter::Linear ||
+                          params.filter == GeodeTextureEncoder::Filter::Cubic)) {
+    params.filter = GeodeTextureEncoder::Filter::Nearest;
+  }
   params.clipMaskView = clipMaskView;
   return params;
 }

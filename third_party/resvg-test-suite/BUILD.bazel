@@ -71,6 +71,44 @@ draws. Their SVG inputs are byte-identical at both revisions.
   tests/text/lengthAdjust/vertical.png
   tests/text/lengthAdjust/with-underline.png
   tests/text/text-decoration/with-textLength-on-a-single-character.png
+
+From the same revision and license, these raster-image PNGs were replaced with their 300x300
+versions. The snapshot's references mixed several historical upscalers: a browser's bilinear
+filter with 4-bit subpixel weights, an older resvg that resampled each image to its user-space
+size before the canvas transform, and the Mitchell cubic that resvg v0.49.0 applies to
+`image-rendering: auto`. At v0.49.0 every one of them is drawn with that cubic, except
+optimizeSpeed.png, which uses tiny-skia's nearest-neighbor sampling. Their SVG inputs
+are byte-identical at both revisions, except no-height.svg and no-width.svg, which upstream
+redrew on a 200x200 viewBox and which were replaced as well.
+
+  tests/masking/mask/with-image.png
+  tests/painting/image-rendering/optimizeSpeed.png
+  tests/structure/image/embedded-16bit-png.png
+  tests/structure/image/embedded-gif.png
+  tests/structure/image/embedded-jpeg-as-image-jpeg.png
+  tests/structure/image/embedded-jpeg-as-image-jpg.png
+  tests/structure/image/embedded-jpeg-without-mime.png
+  tests/structure/image/embedded-png.png
+  tests/structure/image/external-gif.png
+  tests/structure/image/external-jpeg.png
+  tests/structure/image/external-png.png
+  tests/structure/image/image-with-float-size-scaling.png
+  tests/structure/image/no-height-non-square.png
+  tests/structure/image/no-height.png
+  tests/structure/image/no-height.svg
+  tests/structure/image/no-width-and-height.png
+  tests/structure/image/no-width.png
+  tests/structure/image/no-width.svg
+  tests/structure/image/preserveAspectRatio=none.png
+  tests/structure/image/preserveAspectRatio=xMaxYMax-meet.png
+  tests/structure/image/preserveAspectRatio=xMaxYMax-slice.png
+  tests/structure/image/preserveAspectRatio=xMidYMid-meet.png
+  tests/structure/image/preserveAspectRatio=xMidYMid-slice.png
+  tests/structure/image/preserveAspectRatio=xMinYMin-meet.png
+  tests/structure/image/preserveAspectRatio=xMinYMin-slice.png
+  tests/structure/image/raster-image-and-size-with-odd-numbers.png
+  tests/structure/image/width-and-height-set-to-auto.png
+  tests/structure/image/with-transform.png
 """
 
 package(default_visibility = ["//visibility:public"])

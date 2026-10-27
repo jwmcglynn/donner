@@ -96,6 +96,12 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
   return testPlan;
 }
 
+/// Params for a reference replaced by its 300x300 rendering from resvg release v0.49.0; the
+/// provenance is recorded in third_party/resvg-test-suite/BUILD.bazel.
+ImageComparisonParams ResvgV049Reference() {
+  return ImageComparisonParams().setCanvasSize(300, 300);
+}
+
 }  // namespace
 
 TEST_P(ImageComparisonTestFixture, ResvgTest) {
@@ -690,9 +696,9 @@ INSTANTIATE_TEST_SUITE_P(
                 "masking/mask",
                 {
                     {"recursive-on-child.svg", Params::UndefinedBehavior("Recursive on child")},
-                    {"with-image.svg",
-                     Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
-                                           "Mask with <image> (bilinear edge diffs)")},
+                    // The 300x300 resvg v0.49.0 rendering, which upscales the masked image with
+                    // the Mitchell cubic as Donner does.
+                    {"with-image.svg", ResvgV049Reference()},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -859,18 +865,25 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/image-rendering",
                 {
-                    // Both files use the deprecated `optimizeSpeed` alias, which CSS Images maps to
-                    // `crisp-edges`. Donner uses an allowed nearest-neighbor policy, but the resvg
-                    // golden chooses a different pixel-center grid under the root viewport scale.
-                    // The reference uses an allowed destination-pixel-center nearest grid.
+                    // Uses the deprecated `optimizeSpeed` alias, which CSS Images maps to
+                    // `crisp-edges`. The resvg golden chooses a different pixel-center grid under
+                    // the root viewport scale; this reference uses an allowed
+                    // destination-pixel-center nearest grid.
                     {"on-feImage.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-on-feImage.png")
                          .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
                          .withReason("Nearest sampling at destination pixel centers")},
+                    // The 300x300 resvg v0.49.0 rendering; the superseded reference was flattened
+                    // onto white and resolved nearest-neighbor ties toward the lower texel.
                     {"optimizeSpeed.svg",
-                     Params::Skip("Reference oracle: allowed crisp-edges nearest grid differs from "
-                                  "the resvg pixel-center convention under viewport scaling")},
+                     ResvgV049Reference().disableBackend(
+                         RendererBackend::Geode,
+                         "Bug: at 3.75 device pixels per texel, every second texel boundary falls "
+                         "on a pixel center; Geode's interpolated texture coordinate lands just "
+                         "below it where tiny-skia's float inverse transform lands on it, so "
+                         "nearest sampling picks the previous texel (564 px against resvg "
+                         "v0.49.0, all inside the image; TinySkia matches)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1116,109 +1129,49 @@ INSTANTIATE_TEST_SUITE_P(StructureG, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     StructureImage, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "structure/image",
-            {
-                // Pixelmatch 2.0 OKLab thresholds; retain the existing 100-pixel allowance.
-                {"embedded-jpeg-as-image-jpeg.svg",
-                 Params::WithThreshold(
-                     0.04f, kDefaultMismatchedPixels,
-                     "OKLab sensitivity to raster-image color and edge differences")},
-                {"embedded-jpeg-as-image-jpg.svg",
-                 Params::WithThreshold(
-                     0.04f, kDefaultMismatchedPixels,
-                     "OKLab sensitivity to raster-image color and edge differences")},
-                {"embedded-png.svg",
-                 Params::WithThreshold(
-                     0.03f, kDefaultMismatchedPixels,
-                     "OKLab sensitivity to raster-image color and edge differences")},
-                {"external-jpeg.svg",
-                 Params::WithThreshold(
-                     0.04f, kDefaultMismatchedPixels,
-                     "OKLab sensitivity to raster-image color and edge differences")},
-                {"external-png.svg",
-                 Params::WithThreshold(
-                     0.03f, kDefaultMismatchedPixels,
-                     "OKLab sensitivity to raster-image color and edge differences")},
-                {"preserveAspectRatio=xMaxYMax-slice.svg",
-                 Params::WithThreshold(
-                     0.04f, kDefaultMismatchedPixels,
-                     "OKLab sensitivity to raster-image color and edge differences")},
-                {"preserveAspectRatio=xMidYMid-slice.svg",
-                 Params::WithThreshold(
-                     0.03f, kDefaultMismatchedPixels,
-                     "OKLab sensitivity to raster-image color and edge differences")},
-                {"preserveAspectRatio=xMinYMin-slice.svg",
-                 Params::WithThreshold(
-                     0.04f, kDefaultMismatchedPixels,
-                     "OKLab sensitivity to raster-image color and edge differences")},
-                {"raster-image-and-size-with-odd-numbers.svg",
-                 Params::WithThreshold(
-                     0.03f, kDefaultMismatchedPixels,
-                     "OKLab sensitivity to raster-image color and edge differences")},
-                {"float-size.svg", Params::UndefinedBehavior("Float size")},
-                {"no-height-on-svg.svg", Params::UndefinedBehavior("No height")},
-                {"no-width-and-height-on-svg.svg",
-                 Params::UndefinedBehavior("No width and height")},
-                {"no-width-on-svg.svg", Params::UndefinedBehavior("No width")},
-
-                // Golden kernel mismatch (0021 B3): these vendored goldens were generated by a
-                // resvg whose <image> upscale kernel matches neither tiny-skia Bilinear nor
-                // Bicubic (Mitchell). Donner's placement/sizing is verified correct (see the
-                // LayoutSystem/RenderingContext unit tests); the residual is upscale-kernel-only.
-                // Blocked on a vendored-golden refresh, not a Donner code change.
-                {"embedded-gif.svg",
-                 Params::Skip("Golden kernel mismatch: vendored golden matches neither tiny-skia "
-                              "Bilinear nor Bicubic <image> upscaling (0021 B3)")},
-                {"embedded-jpeg-without-mime.svg",
-                 Params::Skip("Golden kernel mismatch: vendored golden matches neither tiny-skia "
-                              "Bilinear nor Bicubic <image> upscaling (0021 B3)")},
-                {"external-gif.svg",
-                 Params::Skip("Golden kernel mismatch: vendored golden matches neither tiny-skia "
-                              "Bilinear nor Bicubic <image> upscaling (0021 B3)")},
-                {"no-height.svg",
-                 Params::Skip("Golden kernel mismatch: vendored golden matches neither tiny-skia "
-                              "Bilinear nor Bicubic <image> upscaling (0021 B3)")},
-                {"no-width-and-height.svg",
-                 Params::Skip("Golden kernel mismatch: vendored golden matches neither tiny-skia "
-                              "Bilinear nor Bicubic <image> upscaling (0021 B3)")},
-                {"no-width.svg",
-                 Params::Skip("Golden kernel mismatch: vendored golden matches neither tiny-skia "
-                              "Bilinear nor Bicubic <image> upscaling (0021 B3)")},
-                {"preserveAspectRatio=none.svg",
-                 Params::Skip("Golden kernel mismatch: vendored golden matches neither tiny-skia "
-                              "Bilinear nor Bicubic <image> upscaling (0021 B3)")},
-                {"preserveAspectRatio=xMaxYMax-meet.svg",
-                 Params::Skip("Golden kernel mismatch: vendored golden matches neither tiny-skia "
-                              "Bilinear nor Bicubic <image> upscaling (0021 B3)")},
-                {"preserveAspectRatio=xMidYMid-meet.svg",
-                 Params::Skip("Golden kernel mismatch: vendored golden matches neither tiny-skia "
-                              "Bilinear nor Bicubic <image> upscaling (0021 B3)")},
-                {"preserveAspectRatio=xMinYMin-meet.svg",
-                 Params::Skip("Golden kernel mismatch: vendored golden matches neither tiny-skia "
-                              "Bilinear nor Bicubic <image> upscaling (0021 B3)")},
-
-                // Golden kernel mismatch, current-resvg flavor (0021 B3): these two goldens match
-                // current resvg's Mitchell-bicubic <image> upscaling (verified: they pass when
-                // Donner's drawImage uses tiny-skia FilterQuality::Bicubic). Donner upscales with
-                // Bilinear, which the majority of this category's goldens require. Blocked on the
-                // category-wide kernel decision + golden refresh.
-                {"no-height-non-square.svg",
-                 Params::Skip("Golden kernel mismatch: golden requires Mitchell-bicubic <image> "
-                              "upscaling (current resvg); Donner uses bilinear (0021 B3)")},
-                {"width-and-height-set-to-auto.svg",
-                 Params::Skip("Golden kernel mismatch: golden requires Mitchell-bicubic <image> "
-                              "upscaling (current resvg); Donner uses bilinear (0021 B3)")},
-
-                {"embedded-svg-with-text.svg",
-                 Params::Skip(
-                     "Reference disagreement: the vendored reference omits the embedded SVG's "
-                     "text. Donner renders it with the document font catalog; the authored "
-                     "embedded-versus-direct identity test EmbeddedSvgUsesDocumentFontContext "
-                     "pins that policy (0021 B3)")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "structure/image",
+                {
+                    // Raster-image references are the 300x300 renderings from resvg v0.49.0, which
+                    // resamples `image-rendering: auto` with the Mitchell cubic as Donner does. The
+                    // superseded references mixed several historical upscalers.
+                    {"embedded-16bit-png.svg", ResvgV049Reference()},
+                    {"embedded-gif.svg", ResvgV049Reference()},
+                    {"embedded-jpeg-as-image-jpeg.svg", ResvgV049Reference()},
+                    {"embedded-jpeg-as-image-jpg.svg", ResvgV049Reference()},
+                    {"embedded-jpeg-without-mime.svg", ResvgV049Reference()},
+                    {"embedded-png.svg", ResvgV049Reference()},
+                    {"external-gif.svg", ResvgV049Reference()},
+                    {"external-jpeg.svg", ResvgV049Reference()},
+                    {"external-png.svg", ResvgV049Reference()},
+                    {"image-with-float-size-scaling.svg", ResvgV049Reference()},
+                    {"no-height-non-square.svg", ResvgV049Reference()},
+                    {"no-height.svg", ResvgV049Reference()},
+                    {"no-width-and-height.svg", ResvgV049Reference()},
+                    {"no-width.svg", ResvgV049Reference()},
+                    {"preserveAspectRatio=none.svg", ResvgV049Reference()},
+                    {"preserveAspectRatio=xMaxYMax-meet.svg", ResvgV049Reference()},
+                    {"preserveAspectRatio=xMaxYMax-slice.svg", ResvgV049Reference()},
+                    {"preserveAspectRatio=xMidYMid-meet.svg", ResvgV049Reference()},
+                    {"preserveAspectRatio=xMidYMid-slice.svg", ResvgV049Reference()},
+                    {"preserveAspectRatio=xMinYMin-meet.svg", ResvgV049Reference()},
+                    {"preserveAspectRatio=xMinYMin-slice.svg", ResvgV049Reference()},
+                    {"raster-image-and-size-with-odd-numbers.svg", ResvgV049Reference()},
+                    {"width-and-height-set-to-auto.svg", ResvgV049Reference()},
+                    {"with-transform.svg", ResvgV049Reference()},
+                    {"float-size.svg", Params::UndefinedBehavior("Float size")},
+                    {"no-height-on-svg.svg", Params::UndefinedBehavior("No height")},
+                    {"no-width-and-height-on-svg.svg",
+                     Params::UndefinedBehavior("No width and height")},
+                    {"no-width-on-svg.svg", Params::UndefinedBehavior("No width")},
+                    {"embedded-svg-with-text.svg",
+                     Params::Skip(
+                         "Reference disagreement: the vendored reference omits the embedded SVG's "
+                         "text. Donner renders it with the document font catalog; the authored "
+                         "embedded-versus-direct identity test EmbeddedSvgUsesDocumentFontContext "
+                         "pins that policy")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(

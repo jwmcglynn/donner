@@ -101,6 +101,11 @@ Uniforms BuildQuadUniforms(const float mvp[16], uint32_t targetWidth, uint32_t t
   u.maskBounds[3] = static_cast<float>(params.maskBounds.bottomRight.y);
   u.blendMode = params.blendMode;
   u.hasClipMask = params.clipMaskView != nullptr ? 1u : 0u;
+  static_assert(static_cast<uint32_t>(GeodeTextureEncoder::Filter::Linear) == 0u &&
+                    static_cast<uint32_t>(GeodeTextureEncoder::Filter::Nearest) == 1u &&
+                    static_cast<uint32_t>(GeodeTextureEncoder::Filter::Pixelated) == 2u &&
+                    static_cast<uint32_t>(GeodeTextureEncoder::Filter::Cubic) == 3u,
+                "Filter values are the image-blit shader's samplingMode values");
   u.samplingMode = static_cast<uint32_t>(params.filter);
   u.pixelatedScale[0] = static_cast<float>(params.pixelatedScaleX);
   u.pixelatedScale[1] = static_cast<float>(params.pixelatedScaleY);

@@ -95,12 +95,16 @@ public:
 
   /// Filtering mode for `drawTexturedQuad`.
   enum class Filter : uint8_t {
-    /// Bilinear filtering. Default for SVG `image-rendering: auto`.
+    /// Bilinear filtering, for `image-rendering: smooth` and layer or pattern composites.
     Linear,
-    /// Nearest-neighbor filtering for `crisp-edges` and explicit pattern sampling.
+    /// The texel containing each sample, for `crisp-edges`, translation-only image draws and
+    /// explicit pattern sampling.
     Nearest,
     /// Integer nearest-neighbor scaling followed by smooth scaling.
     Pixelated,
+    /// Mitchell-Netravali cubic (B = C = 1/3) over premultiplied texels, for `<image>` quality
+    /// rendering. Uses the linear sampler only for mask and backdrop reads.
+    Cubic,
   };
 
   /**

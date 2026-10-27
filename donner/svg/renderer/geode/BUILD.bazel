@@ -797,6 +797,7 @@ donner_cc_library(
                "//donner/css",
                "//donner/gpu/shader:linked_projection",
                "//donner/svg/core",
+               "//donner/svg/renderer:image_sampling",
                "//donner/svg/renderer:pixel_format_utils",
                "//donner/svg/resources:image_resource",
            ] + shader_apis(GEODE_ENCODER_SHADER_FAMILIES) +
