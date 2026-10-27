@@ -81,6 +81,9 @@ struct TextGlyph {
   uint32_t cluster = 0;      ///< Byte offset into the span text for the glyph's source cluster.
   /// Byte offset of the SVG positioning group; absent uses the source cluster.
   std::optional<uint32_t> positioningCluster;
+  /// Inline-axis distance from the pen position to an upright vertical glyph's origin, already
+  /// included in \ref yPosition. Zero for horizontal and sideways glyphs.
+  double verticalOriginOffset = 0;
   float fontSizeScale = 1.0f;            ///< Per-glyph font size multiplier (< 1.0 for small-caps).
   float stretchScaleX = 1.0f;            ///< Additional X-axis glyph stretch from lengthAdjust.
   float stretchScaleY = 1.0f;            ///< Additional Y-axis glyph stretch from lengthAdjust.

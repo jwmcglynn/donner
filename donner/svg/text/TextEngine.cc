@@ -2265,7 +2265,8 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
       const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
       for (size_t gi = gStart; gi < gEnd; ++gi) {
         const auto& g = runs[ri].glyphs[gi];
-        const double pos = vertical ? g.yPosition : g.xPosition;
+        // Measure from pen positions: an upright glyph is drawn past its pen by its origin.
+        const double pos = vertical ? g.yPosition - g.verticalOriginOffset : g.xPosition;
         const double adv = vertical ? g.yAdvance : g.xAdvance;
         if (!foundFirst) {
           chunkStartPos = pos;
@@ -3761,6 +3762,7 @@ private:
                          : (shapedGlyph.xAdvance == 0 ? 0.0 : state.fontSizePx);
     glyph.xPosition = state.penX + shapedGlyph.xOffset;
     glyph.yPosition = state.penY + shapedGlyph.yOffset;
+    glyph.verticalOriginOffset = shapedGlyph.yOffset;
     glyph.rotateDegrees = rotationFor(*state.span, charIndex, 0.0);
   }
 

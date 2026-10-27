@@ -2011,13 +2011,13 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Bug #1172: per-cluster fallback draws every glyph, but without "
                               "bidi runs the Arabic word shares the left-to-right Amiri run with "
                               "`Hi!` and is shaped unjoined in logical order, and the vertical "
-                              "underline is not drawn (2870 px)")
+                              "underline is not drawn (3180 px)")
                      .onlyTextFull()},
                 {"mixed-languages-with-tb.svg",
-                 Params::Skip("Bug #1172: per-cluster fallback draws the Arabic word in Amiri as "
-                              "the reference does, but the middle anchor measures the chunk from "
-                              "the first upright glyph's vertical origin rather than its pen "
-                              "position, shifting the column 9 user units down (1178 px)")
+                 Params::Skip("Bug #1172: the Arabic word falls back to Amiri and the column is "
+                              "anchored like the reference, but upright CJK sits 0.026em lower "
+                              "than resvg (vhea ascender vertical origin vs resvg centering on "
+                              "hhea ascent/descent), 173 px")
                      .setCanvasSize(300, 300)
                      .onlyTextFull()},
                 {"tb-and-punctuation.svg",
