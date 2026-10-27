@@ -1050,7 +1050,13 @@ test("latency gates enforce by default and only record a miss when set to report
         limitMs,
       ]),
     ),
-    { settledClick: 100, inputP95: 50, inputStall: 250, completedStall: 250 },
+    {
+      settledClick: 100,
+      inputP95: 50,
+      inputStall: 250,
+      completedStall: 250,
+      completedResultHandoff: 1000,
+    },
     "the gate limits are the targets, not a hosted-runner allowance",
   );
   for (const mode of ["enforce", "report"]) {

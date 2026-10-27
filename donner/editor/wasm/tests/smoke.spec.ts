@@ -2071,10 +2071,9 @@ async function waitForPipelineCompilesToSettle(page: Page) {
 // Delays the GPU owner's pipeline compiles from the editor's first instruction, as a cold shader
 // cache does. Every context loads the editor script, so the fault rides in front of it. The compile
 // delay must outlast boot to the first presented frame, completions included, so the readiness
-// wait still finds compiles pending; the completion delay alone exceeds the nominal handoff bound,
-// so a click that did not wait would fail it.
-// A pipeline created at its first use occupies the timeline long enough on its own to exceed the
-// bound, so an interaction that compiled one would fail it.
+// wait still finds compiles pending. The case asserts that the click waited for them and that the
+// interaction created no pipeline at its first use; the completion delay and the first-use compile
+// time each exceed the nominal handoff bound that the performance lane measures.
 const kPipelineCompileFault = { compileDelayMs: 8000, completionDelayMs: 1200, firstUseCompileMs: 1200 };
 
 async function readOwnerPipelineCompileFault(page: Page) {
@@ -2129,7 +2128,9 @@ for (
       (delayedControl || compileFaultControl) && browserName !== "chromium",
       "controlled Chromium scheduling fault",
     );
-    let presentationFault: { delayMs: number; requested: number; flushed: number } | undefined;
+    let presentationFault:
+      | { delayMs: number; requested: number; flushed: number; releaseRequestedAtMs: number }
+      | undefined;
     if (compileFaultControl) {
       // The fault adds up to its compile delay before the measured click.
       testInfo.setTimeout(testInfo.timeout + kPipelineCompileFault.compileDelayMs);
@@ -2223,7 +2224,7 @@ for (
           return false;
         }, completionBarrierStates.indexOf("holding")), {
         message: `expected ${sample.name} to activate and finish its render from driven frames`,
-        timeout: scaledMs(3000),
+        timeout: kStallGuardMs,
         intervals: [8, 16, 25, 50],
       }).toBe(true);
       // A tick called just before the poll saw the hold can still be queued or running. Let every
@@ -2237,7 +2238,7 @@ for (
           ),
         {
           message: "every driven tick has finished before the held render is released",
-          timeout: scaledMs(3000),
+          timeout: kStallGuardMs,
         },
       ).toBe(0);
       // A draining tick may have superseded the held render; the barrier then holds the render
@@ -2245,7 +2246,7 @@ for (
       // before the release.
       await expect.poll(() => completionBarrier(page, "read"), {
         message: "the sample's finished render is held once driven ticks have drained",
-        timeout: scaledMs(3000),
+        timeout: kStallGuardMs,
       }).toBe("holding");
       if (delayedControl) {
         const owner = await boundBrowserDiagnostic(Promise.any(page.workers().map(async (worker) => {
@@ -2260,8 +2261,10 @@ for (
             { message: "the completed result must request a held event task" }).toBeGreaterThan(0);
           await page.waitForTimeout(1500);
         } finally {
+          // Page clock just before the release: the held event frame cannot present before it.
+          const releaseRequestedAtMs = await page.evaluate(() => performance.now());
           const released = await owner.evaluate(releaseOwnerEventTimerHold);
-          presentationFault = { delayMs: 1500, ...released };
+          presentationFault = { delayMs: 1500, releaseRequestedAtMs, ...released };
         }
         expect(presentationFault.flushed).toBeGreaterThan(0);
       } else {
@@ -2269,8 +2272,11 @@ for (
           .toBe("holding");
       }
     }
-    // Ordering and the separately named nominal performance gate retain the raw GPU backlog.
-    // A controlled negative case delays owner event tasks only after its render is finished.
+    // This case asserts ordering only: which frame presents the result and that it carries the
+    // completed document. The completion-to-presentation time is reported here and bounded in the
+    // performance lane (browser-responsiveness.perf.ts), because the presenting frame's GPU work
+    // can retire behind other GPU work on a shared runner. A controlled negative case delays owner
+    // event tasks only after its render is finished.
     const phaseTimings: {
       activatedMs?: number;
       submittedMs?: number;
@@ -2335,7 +2341,7 @@ for (
     try {
       await expect.poll(presentationReady, {
         message: `expected ${sample.name} to present a document frame in the editor canvas`,
-        timeout: scaledMs(3000),
+        timeout: kStallGuardMs,
         intervals: [8, 16, 25, 50],
       }).toBe(true);
       firstUseCreationsAtPresentation = await readPipelinesCreatedAtFirstUse(page);
@@ -2463,10 +2469,12 @@ for (
       if (delayedControl) {
         expect(presentationFault!.requested).toBeGreaterThan(0);
         expect(presentationFault!.flushed).toBeGreaterThan(0);
-        expect(handoff.handoffMs).toBeGreaterThan(handoff.limitMs);
-      } else {
-        expect(handoff.withinLimit, `nominal completed-result handoff: ${JSON.stringify(report)}`)
-          .toBe(true);
+        // The held event tasks carried the presentation: the presenting frame retired only after
+        // they were released.
+        expect(
+          completedWorkerStats!.resultFrameCompletedAtMs!,
+          `the result presented before the held event tasks were released: ${JSON.stringify(report)}`,
+        ).toBeGreaterThan(presentationFault!.releaseRequestedAtMs);
       }
       // The pipelines this interaction draws with were built ahead of use, so it creates none at
       // first use, in order with its own GPU work. Checked where it is verified, in Chromium;
