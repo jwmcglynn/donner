@@ -334,7 +334,10 @@ ResourceLease PanCursorSvgBytes(PanCursorKind kind) {
 #if defined(__EMSCRIPTEN__)
 std::string BrowserCursorSvg(EditorCursor cursor, SelectionTransformCorner corner) {
   switch (cursor) {
-    case EditorCursor::Select: return std::string(ResourceLease(embedded::kSelectCursorSvg).text());
+    case EditorCursor::Select: {
+      const ResourceLease source(embedded::kSelectCursorSvg);
+      return std::string(source.text());
+    }
     case EditorCursor::Pen:
     case EditorCursor::PenAdd:
     case EditorCursor::PenRemove:

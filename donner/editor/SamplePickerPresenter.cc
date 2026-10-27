@@ -108,6 +108,51 @@ void DrawSampleButton(const EditorSample& sample, std::string_view description,
   ImGui::PopID();
 }
 
+void DrawSamplePickerHeader(const SamplePickerState& state, const EditorTheme& theme,
+                            float availableWidth, SamplePickerActions* actions) {
+  const float dismissSize = kSamplePickerMinTouchTarget;
+  ImGui::SetCursorPosX(std::max(0.0f, availableWidth - dismissSize));
+  if (ImGui::Button("X##dismiss_samples", ImVec2(dismissSize, dismissSize))) {
+    ApplySamplePickerCommand(true, SamplePickerCommand::Dismiss, {}, actions);
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Close samples");
+  }
+  ImGui::TextUnformatted("Donner");
+  ImGui::Spacing();
+  ImGui::TextWrapped("Edit SVG graphics and source together.");
+  if (state.loading) {
+    ImGui::TextUnformatted("Loading sample...");
+  }
+  if (!state.error.empty()) {
+    ImGui::TextWrapped("%.*s", static_cast<int>(state.error.size()), state.error.data());
+  }
+  ImGui::Dummy(ImVec2(0.0f, kHeadingSpacing));
+
+  const float newWidth = std::max(96.0f, ImGui::CalcTextSize("New SVG").x + 2.0f * theme.space4);
+  if (ImGui::Button("New SVG", ImVec2(newWidth, kSamplePickerMinTouchTarget))) {
+    ApplySamplePickerCommand(true, SamplePickerCommand::NewDocument, {}, actions);
+  }
+  ImGui::SameLine(0.0f, theme.space2);
+  const float openWidth = std::max(112.0f, ImGui::CalcTextSize("Open SVG").x + 2.0f * theme.space4);
+  if (ImGui::Button("Open SVG", ImVec2(openWidth, kSamplePickerMinTouchTarget))) {
+    ApplySamplePickerCommand(true, SamplePickerCommand::OpenFile, {}, actions);
+  }
+  ImGui::SameLine(0.0f, theme.space2);
+  // The GitHub action reads as a hyperlink (underlined, link-colored, hand
+  // cursor) and reports the same edge-triggered action the old button did.
+  const float linkY =
+      ImGui::GetCursorPosY() + (kSamplePickerMinTouchTarget - ImGui::GetTextLineHeight()) * 0.5f;
+  ImGui::SetCursorPosY(linkY);
+  if (ImGui::TextLink(ExternalUrlValue(ExternalUrlTarget::DonnerRepository).data())) {
+    ApplySamplePickerCommand(true, SamplePickerCommand::OpenGitHub, {}, actions);
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Open on GitHub");
+  }
+  ImGui::Dummy(ImVec2(0.0f, theme.space3));
+}
+
 }  // namespace
 
 SamplePickerLayout ComputeSamplePickerLayout(float availableWidth,
@@ -191,47 +236,7 @@ SamplePickerActions SamplePickerPresenter::render(
   SamplePickerLayout layout = ComputeSamplePickerLayout(availableWidth, samples.size());
   layout.cardHeight = SampleCardHeight(samples, layout.cardWidth);
 
-  const float dismissSize = kSamplePickerMinTouchTarget;
-  ImGui::SetCursorPosX(std::max(0.0f, availableWidth - dismissSize));
-  if (ImGui::Button("X##dismiss_samples", ImVec2(dismissSize, dismissSize))) {
-    ApplySamplePickerCommand(true, SamplePickerCommand::Dismiss, {}, &actions);
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Close samples");
-  }
-  ImGui::TextUnformatted("Donner");
-  ImGui::Spacing();
-  ImGui::TextWrapped("Edit SVG graphics and source together.");
-  if (state.loading) {
-    ImGui::TextUnformatted("Loading sample...");
-  }
-  if (!state.error.empty()) {
-    ImGui::TextWrapped("%.*s", static_cast<int>(state.error.size()), state.error.data());
-  }
-  ImGui::Dummy(ImVec2(0.0f, kHeadingSpacing));
-
-  const float newWidth = std::max(96.0f, ImGui::CalcTextSize("New SVG").x + 2.0f * theme.space4);
-  if (ImGui::Button("New SVG", ImVec2(newWidth, kSamplePickerMinTouchTarget))) {
-    ApplySamplePickerCommand(true, SamplePickerCommand::NewDocument, {}, &actions);
-  }
-  ImGui::SameLine(0.0f, theme.space2);
-  const float openWidth = std::max(112.0f, ImGui::CalcTextSize("Open SVG").x + 2.0f * theme.space4);
-  if (ImGui::Button("Open SVG", ImVec2(openWidth, kSamplePickerMinTouchTarget))) {
-    ApplySamplePickerCommand(true, SamplePickerCommand::OpenFile, {}, &actions);
-  }
-  ImGui::SameLine(0.0f, theme.space2);
-  // The GitHub action reads as a hyperlink (underlined, link-colored, hand
-  // cursor) and reports the same edge-triggered action the old button did.
-  const float linkY =
-      ImGui::GetCursorPosY() + (kSamplePickerMinTouchTarget - ImGui::GetTextLineHeight()) * 0.5f;
-  ImGui::SetCursorPosY(linkY);
-  if (ImGui::TextLink(ExternalUrlValue(ExternalUrlTarget::DonnerRepository).data())) {
-    ApplySamplePickerCommand(true, SamplePickerCommand::OpenGitHub, {}, &actions);
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Open on GitHub");
-  }
-  ImGui::Dummy(ImVec2(0.0f, theme.space3));
+  DrawSamplePickerHeader(state, theme, availableWidth, &actions);
 
   for (std::size_t index = 0; index < layout.rows * layout.columns; ++index) {
     if (index >= samples.size() || index >= kSamplePickerMaxVisibleSamples) {

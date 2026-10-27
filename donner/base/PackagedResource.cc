@@ -193,6 +193,33 @@ bool ExactDirectoryEntries(int directory, const std::set<std::string>& expected)
   return readComplete && actual == expected;
 }
 
+bool ResourceFileHasExpectedSize(int assets, const std::string& name,
+                                 const PackagedResource& resource) {
+  struct stat status{};
+  return fstatat(assets, name.c_str(), &status, AT_SYMLINK_NOFOLLOW) == 0 &&
+         S_ISREG(status.st_mode) && status.st_size >= 0 &&
+         static_cast<uint64_t>(status.st_size) == resource.encodedSize;
+}
+
+bool VerifyAssetInventory(int assets, const std::vector<const PackagedResource*>& resources) {
+  std::set<std::string> names;
+  size_t total = 0;
+  for (const auto* resource : resources) {
+    if (!ValidIdentity(*resource)) {
+      return false;
+    }
+    const std::string name = std::filesystem::path(resource->path).filename().string();
+    if (names.insert(name).second) {
+      total += resource->encodedSize;
+    }
+    if (total > PackagedResourceSession::kMaximumEncodedBytes ||
+        !ResourceFileHasExpectedSize(assets, name, *resource)) {
+      return false;
+    }
+  }
+  return ExactDirectoryEntries(assets, names);
+}
+
 bool VerifyInstalledDirectory(int root) {
   const auto resources = PackagedResources();
   if (resources.empty() || resources.size() > 128) {
@@ -212,28 +239,7 @@ bool VerifyInstalledDirectory(int root) {
   if (assets < 0) {
     return false;
   }
-  std::set<std::string> names;
-  size_t total = 0;
-  bool valid = true;
-  for (const auto* resource : resources) {
-    if (!ValidIdentity(*resource)) {
-      valid = false;
-      break;
-    }
-    const std::string name = std::filesystem::path(resource->path).filename().string();
-    if (names.insert(name).second) {
-      total += resource->encodedSize;
-    }
-    struct stat status{};
-    if (total > PackagedResourceSession::kMaximumEncodedBytes ||
-        fstatat(assets, name.c_str(), &status, AT_SYMLINK_NOFOLLOW) != 0 ||
-        !S_ISREG(status.st_mode) || status.st_size < 0 ||
-        static_cast<uint64_t>(status.st_size) != resource->encodedSize) {
-      valid = false;
-      break;
-    }
-  }
-  valid = valid && ExactDirectoryEntries(assets, names);
+  const bool valid = VerifyAssetInventory(assets, resources);
   close(assets);
   return valid;
 }

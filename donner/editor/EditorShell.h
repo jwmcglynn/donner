@@ -426,6 +426,9 @@ private:
   void queuePendingSampleLoad(std::string sampleId);
   void cancelPendingSampleLoad();
   void confirmPendingSampleLoadDiscard();
+  bool pendingSampleResourceReady();
+  void createPendingNewDocument();
+  void applyPendingSampleDocument();
   void processPendingSampleLoad();
   /// Apply Group or Ungroup only while the render worker releases DOM ownership.
   bool tryApplyGroupOperation(bool ungroup);
@@ -785,6 +788,7 @@ private:
   void retryCatalogFont(std::string_view family);
   void rememberOutputFontDemand(std::span<const svg::FontFaceDependency> dependencies);
   void drainOutputFontDemand();
+  std::optional<std::size_t> nextEligibleSampleThumbnail(std::size_t sampleCount) const;
   void ensureSampleThumbnails();
   void publishSampleThumbnailStats() const;
   [[nodiscard]] bool sampleThumbnailLaneDrained(const SampleThumbnailRenderStats& stats) const;

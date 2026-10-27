@@ -2502,72 +2502,55 @@ void EditorShell::confirmPendingSampleLoadDiscard() {
   window_.wakeEventLoop();
 }
 
-void EditorShell::processPendingSampleLoad() {
-  if (pendingSampleLoadId_.empty() && !pendingNewDocument_) {
-    return;
-  }
+bool EditorShell::pendingSampleResourceReady() {
   const EditorSample* requestedSample = FindEditorSample(pendingSampleLoadId_);
-  if (requestedSample && !requestedSample->source.request()) {
-    if (requestedSample->source.resource.failed()) {
-      std::fprintf(stderr, "[editor] built-in sample unavailable: %s\n",
-                   pendingSampleLoadId_.c_str());
-      cancelPendingSampleLoad();
+  if (!requestedSample || requestedSample->source.request()) {
+    return true;
+  }
+  if (requestedSample->source.resource.failed()) {
+    std::fprintf(stderr, "[editor] built-in sample unavailable: %s\n",
+                 pendingSampleLoadId_.c_str());
+    cancelPendingSampleLoad();
 #ifdef __EMSCRIPTEN__
-      sampleLoadError_ =
-          "This sample could not be loaded. Check your connection and reopen the editor to try "
-          "again.";
+    sampleLoadError_ =
+        "This sample could not be loaded. Check your connection and reopen the editor to try "
+        "again.";
 #else
-      sampleLoadError_ = "This sample is unavailable. Reinstall the complete application package.";
+    sampleLoadError_ = "This sample is unavailable. Reinstall the complete application package.";
 #endif
-      showSamplePicker_ = true;
-    }
-    return;
-  }
-
-  const bool hasDocument = app_.hasDocument();
-  std::optional<svg::DocumentWriteAccess> documentAccess =
-      hasDocument ? app_.document().document().tryWriteAccess() : std::nullopt;
-  const bool documentWriteAvailable = !hasDocument || documentAccess.has_value();
-  if (!internal::PendingDocumentReplacementCanProcess(
-          !pendingSampleLoadId_.empty() || pendingNewDocument_, documentWriteAvailable,
-          app_.document().hasPendingMutations())) {
-    return;
-  }
-
-  if (!pendingSampleLoadDiscardConfirmed_ && (app_.isDirty() || textEditor_.isTextChanged())) {
-    pendingSampleLoadNeedsConfirmation_ = true;
     showSamplePicker_ = true;
-    return;
   }
+  return false;
+}
 
-  if (pendingNewDocument_) {
-    pendingNewDocument_ = false;
-    pendingSampleLoadNeedsConfirmation_ = false;
-    pendingSampleLoadDiscardConfirmed_ = false;
+void EditorShell::createPendingNewDocument() {
+  pendingNewDocument_ = false;
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = false;
 #ifdef DONNER_EDITOR_WGPU
-    // The previous frame's direct callback has run, but remains installed until the next
-    // render-pane submission. Detach it before releasing presentation resources for the old
-    // document.
-    window_.setWgpuDirectRenderCallback({});
+  // The previous frame's direct callback has run, but remains installed until the next
+  // render-pane submission. Detach it before releasing presentation resources for the old
+  // document.
+  window_.setWgpuDirectRenderCallback({});
 #endif
-    // If the previous render is packaging a result after releasing the DOM, ensure that result is
-    // dropped instead of landing over the replacement document.
-    renderCoordinator_.asyncRenderer().cancelInFlight();
-    std::string error;
-    if (tryLoadSource(kNewDocumentSvg, std::nullopt, &error)) {
-      activeSampleId_.clear();
+  // If the previous render is packaging a result after releasing the DOM, ensure that result is
+  // dropped instead of landing over the replacement document.
+  renderCoordinator_.asyncRenderer().cancelInFlight();
+  std::string error;
+  if (tryLoadSource(kNewDocumentSvg, std::nullopt, &error)) {
+    activeSampleId_.clear();
 #ifdef __EMSCRIPTEN__
-      PublishActiveSampleId("");
+    PublishActiveSampleId("");
 #endif
-      welcomePlaceholderActive_ = false;
-      showSamplePicker_ = false;
-      requestRenderAtEndOfFrame_ = true;
-    } else {
-      std::fprintf(stderr, "[editor] failed to create new document: %s\n", error.c_str());
-    }
-    return;
+    welcomePlaceholderActive_ = false;
+    showSamplePicker_ = false;
+    requestRenderAtEndOfFrame_ = true;
+  } else {
+    std::fprintf(stderr, "[editor] failed to create new document: %s\n", error.c_str());
   }
+}
 
+void EditorShell::applyPendingSampleDocument() {
   const std::string sampleId = std::exchange(pendingSampleLoadId_, {});
   pendingSampleLoadNeedsConfirmation_ = false;
   pendingSampleLoadDiscardConfirmed_ = false;
@@ -2605,6 +2588,37 @@ void EditorShell::processPendingSampleLoad() {
     std::fprintf(stderr, "[editor] failed to load built-in sample %s: %s\n", sampleId.c_str(),
                  error.c_str());
   }
+}
+
+void EditorShell::processPendingSampleLoad() {
+  if (pendingSampleLoadId_.empty() && !pendingNewDocument_) {
+    return;
+  }
+  if (!pendingSampleResourceReady()) {
+    return;
+  }
+
+  const bool hasDocument = app_.hasDocument();
+  std::optional<svg::DocumentWriteAccess> documentAccess =
+      hasDocument ? app_.document().document().tryWriteAccess() : std::nullopt;
+  const bool documentWriteAvailable = !hasDocument || documentAccess.has_value();
+  if (!internal::PendingDocumentReplacementCanProcess(
+          !pendingSampleLoadId_.empty() || pendingNewDocument_, documentWriteAvailable,
+          app_.document().hasPendingMutations())) {
+    return;
+  }
+
+  if (!pendingSampleLoadDiscardConfirmed_ && (app_.isDirty() || textEditor_.isTextChanged())) {
+    pendingSampleLoadNeedsConfirmation_ = true;
+    showSamplePicker_ = true;
+    return;
+  }
+
+  if (pendingNewDocument_) {
+    createPendingNewDocument();
+    return;
+  }
+  applyPendingSampleDocument();
 }
 
 bool EditorShell::tryApplyGroupOperation(bool ungroup) {
@@ -6396,6 +6410,16 @@ void EditorShell::advanceVisiblePreviews() {
   }
 }
 
+std::optional<std::size_t> EditorShell::nextEligibleSampleThumbnail(std::size_t sampleCount) const {
+  for (std::size_t index = 0; index < sampleCount; ++index) {
+    if (visibleSamplePreviewIndices_.contains(index) &&
+        !finishedSamplePreviewIndices_.contains(index) && !waitingSamplePreviews_.contains(index)) {
+      return index;
+    }
+  }
+  return std::nullopt;
+}
+
 void EditorShell::ensureSampleThumbnails() {
   const std::span<const EditorSample> samples = GetEditorSampleCatalog();
   if (sampleThumbnailBitmaps_.empty()) {
@@ -6414,14 +6438,7 @@ void EditorShell::ensureSampleThumbnails() {
     publishSampleThumbnailStats();
     return;
   }
-  std::optional<std::size_t> next;
-  for (std::size_t index = 0; index < samples.size(); ++index) {
-    if (visibleSamplePreviewIndices_.contains(index) &&
-        !finishedSamplePreviewIndices_.contains(index) && !waitingSamplePreviews_.contains(index)) {
-      next = index;
-      break;
-    }
-  }
+  const auto next = nextEligibleSampleThumbnail(samples.size());
   if (!next) {
     sampleThumbnailRetryPending_ = false;
     publishSampleThumbnailStats();
