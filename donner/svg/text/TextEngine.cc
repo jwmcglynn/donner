@@ -2952,6 +2952,9 @@ public:
   /// codepoint count.
   void grant(size_t textBytes) { remaining_ += textBytes * kQueriesPerCodepoint; }
 
+  /// Whether the element's query grant is spent, after which no new coverage can be learned.
+  bool exhausted() const { return remaining_ == 0; }
+
   /// Whether \p font maps \p codepoint, from the cache or one budgeted backend query.
   bool covers(const TextBackend& backend, FontHandle font, float sizePx, uint32_t codepoint) {
     const uint64_t key =
@@ -3010,46 +3013,11 @@ public:
       return ShapeAddressableZeroSizeText(text_, chunk.byteStart, chunk.byteEnd - chunk.byteStart);
     }
     TextBackend::ShapedRun primary = shapeWith(run_.font, chunk);
-    // A shaper merges a syllable or a base with its marks into one cluster and reports every
-    // glyph of it at the cluster's first byte, so fallback never splits a backend cluster.
-    std::vector<bool> notdef(chunk.byteEnd - chunk.byteStart, false);
-    std::vector<bool> clusterStart(chunk.byteEnd - chunk.byteStart, false);
-    bool anyNotdef = false;
-    for (const TextBackend::ShapedGlyph& glyph : primary.glyphs) {
-      if (glyph.cluster >= chunk.byteStart && glyph.cluster < chunk.byteEnd) {
-        clusterStart[glyph.cluster - chunk.byteStart] = true;
-        if (glyph.glyphIndex == 0) {
-          notdef[glyph.cluster - chunk.byteStart] = true;
-          anyNotdef = true;
-        }
-      }
-    }
-    if (!anyNotdef) {
+    PrimaryClusters clusters = primaryClusters(primary, chunk);
+    if (!clusters.anyNotdef) {
       return primary;
     }
-
-    struct Item {
-      ChunkRange range;
-      FontHandle face;
-    };
-    std::vector<Item> items;
-    for (size_t start = chunk.byteStart; start < chunk.byteEnd;) {
-      size_t end = ClusterEnd(text_, start, chunk.byteEnd);
-      while (end < chunk.byteEnd && !clusterStart[end - chunk.byteStart]) {
-        end = ClusterEnd(text_, end, chunk.byteEnd);
-      }
-      bool missing = false;
-      for (size_t byte = start; byte < end; ++byte) {
-        missing = missing || notdef[byte - chunk.byteStart];
-      }
-      const FontHandle face = missing ? clusterFace(start, end) : run_.font;
-      if (!items.empty() && items.back().face == face) {
-        items.back().range.byteEnd = end;
-      } else {
-        items.push_back({{start, end}, face});
-      }
-      start = end;
-    }
+    std::vector<Item> items = itemize(chunk, clusters);
     if (items.size() == 1 && items.front().face == run_.font) {
       return primary;
     }
@@ -3058,7 +3026,69 @@ public:
         primary.glyphs.front().cluster > primary.glyphs.back().cluster) {
       std::reverse(items.begin(), items.end());
     }
+    return shapeItems(items, faces);
+  }
 
+private:
+  /// A run of adjacent clusters drawn with one face.
+  struct Item {
+    ChunkRange range;
+    FontHandle face;
+  };
+
+  /// Per-byte flags from the primary shaping of one chunk.
+  struct PrimaryClusters {
+    std::vector<bool> notdef;        ///< A `.notdef` glyph starts its cluster at this byte.
+    std::vector<bool> clusterStart;  ///< The backend starts a cluster at this byte.
+    bool anyNotdef = false;
+  };
+
+  /// A shaper merges a syllable or a base with its marks into one cluster and reports every glyph
+  /// of it at the cluster's first byte, so fallback never splits a backend cluster.
+  static PrimaryClusters primaryClusters(const TextBackend::ShapedRun& primary,
+                                         const ChunkRange& chunk) {
+    PrimaryClusters result{std::vector<bool>(chunk.byteEnd - chunk.byteStart, false),
+                           std::vector<bool>(chunk.byteEnd - chunk.byteStart, false)};
+    for (const TextBackend::ShapedGlyph& glyph : primary.glyphs) {
+      if (glyph.cluster < chunk.byteStart || glyph.cluster >= chunk.byteEnd) {
+        continue;
+      }
+      result.clusterStart[glyph.cluster - chunk.byteStart] = true;
+      if (glyph.glyphIndex == 0) {
+        result.notdef[glyph.cluster - chunk.byteStart] = true;
+        result.anyNotdef = true;
+      }
+    }
+    return result;
+  }
+
+  /// Splits \p chunk into runs of clusters that share a face, in logical order.
+  std::vector<Item> itemize(const ChunkRange& chunk, const PrimaryClusters& clusters) const {
+    std::vector<Item> items;
+    for (size_t start = chunk.byteStart; start < chunk.byteEnd;) {
+      size_t end = ClusterEnd(text_, start, chunk.byteEnd);
+      while (end < chunk.byteEnd && !clusters.clusterStart[end - chunk.byteStart]) {
+        end = ClusterEnd(text_, end, chunk.byteEnd);
+      }
+      const auto first =
+          clusters.notdef.begin() + static_cast<std::ptrdiff_t>(start - chunk.byteStart);
+      const auto last =
+          clusters.notdef.begin() + static_cast<std::ptrdiff_t>(end - chunk.byteStart);
+      const FontHandle face =
+          std::find(first, last, true) != last ? clusterFace(start, end) : run_.font;
+      if (!items.empty() && items.back().face == face) {
+        items.back().range.byteEnd = end;
+      } else {
+        items.push_back({{start, end}, face});
+      }
+      start = end;
+    }
+    return items;
+  }
+
+  /// Shapes each item with its face, recording fallback faces per glyph in \p faces.
+  TextBackend::ShapedRun shapeItems(const std::vector<Item>& items,
+                                    std::vector<FontHandle>& faces) const {
     TextBackend::ShapedRun result;
     for (const Item& item : items) {
       const TextBackend::ShapedRun shaped = shapeWith(item.face, item.range);
@@ -3068,7 +3098,6 @@ public:
     return result;
   }
 
-private:
   TextBackend::ShapedRun shapeWith(FontHandle font, const ChunkRange& chunk) const {
     const size_t length = chunk.byteEnd - chunk.byteStart;
     return kerning_ ? backend_.shapeRun(font, run_.usedFontSizePx, text_, chunk.byteStart, length,
@@ -3083,7 +3112,9 @@ private:
     const auto [entry, inserted] = clusterFaces_.try_emplace(text_.substr(start, end - start));
     if (inserted) {
       // A backend may report `.notdef` for a joiner the face need not map.
-      entry->second = covers(run_.font, start, end) ? run_.font : findFace(start, end);
+      entry->second = covers(run_.font, start, end) || fallback_.coverage.exhausted()
+                          ? run_.font
+                          : findFace(start, end);
     }
     return entry->second;
   }

@@ -421,6 +421,25 @@ FontHandle LoadSnapshotFont(FontManager& manager, const SnapshotFont& font,
   }
   return it->second;
 }
+
+/// Replaces recorded prepared-run and fallback-glyph fonts with faces loaded into \p manager.
+void LoadPreparedTextFonts(PreparedTextDraw& prepared, const DrawTextCommand& command,
+                           FontManager& manager, SnapshotReplayFontState::Domain& domain) {
+  auto glyphFont = command.preparedGlyphFonts.begin();
+  size_t glyphOrdinal = 0;
+  for (size_t i = 0; i < prepared.runs.size(); ++i) {
+    prepared.runs[i].font = i < command.preparedFonts.size()
+                                ? LoadSnapshotFont(manager, command.preparedFonts[i], domain)
+                                : FontHandle();
+    for (TextGlyph& glyph : prepared.runs[i].glyphs) {
+      if (glyphFont != command.preparedGlyphFonts.end() && glyphFont->first == glyphOrdinal) {
+        glyph.font = LoadSnapshotFont(manager, glyphFont->second, domain);
+        ++glyphFont;
+      }
+      ++glyphOrdinal;
+    }
+  }
+}
 #endif
 
 void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
@@ -485,22 +504,7 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
 #ifdef DONNER_TEXT_ENABLED
             if (params.preparedTextDraw) {
               auto prepared = std::make_shared<PreparedTextDraw>(*params.preparedTextDraw);
-              auto glyphFont = value.preparedGlyphFonts.begin();
-              size_t glyphOrdinal = 0;
-              for (size_t i = 0; i < prepared->runs.size(); ++i) {
-                prepared->runs[i].font =
-                    i < value.preparedFonts.size()
-                        ? LoadSnapshotFont(fontManager, value.preparedFonts[i], domain)
-                        : FontHandle();
-                for (TextGlyph& glyph : prepared->runs[i].glyphs) {
-                  if (glyphFont != value.preparedGlyphFonts.end() &&
-                      glyphFont->first == glyphOrdinal) {
-                    glyph.font = LoadSnapshotFont(fontManager, glyphFont->second, domain);
-                    ++glyphFont;
-                  }
-                  ++glyphOrdinal;
-                }
-              }
+              LoadPreparedTextFonts(*prepared, value, fontManager, domain);
               params.preparedTextDraw = std::move(prepared);
             }
             components::ComputedTextComponent text = value.text;

@@ -3032,10 +3032,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         continue;  // .notdef glyph, skip.
       }
       ++frameCounters_.textGlyphMaterializations;
-      const FontHandle glyphFont = GlyphFont(run, glyph);
-      const float glyphScale =
-          glyph.font ? textEngine.scaleForPixelHeight(glyphFont, spanFontSizePx) : scale;
-      const bool glyphIsBitmap = glyph.font ? textEngine.isBitmapOnly(glyphFont) : isBitmapFont;
+      const GlyphFaceScale face = ResolveGlyphFace(textEngine, run, glyph, scale, isBitmapFont);
 
       // Placed outline in document space (outline -> stretch -> translate ->
       // rotate). Shared with RendererGeode via PlacedTextGeometry so the two
@@ -3043,14 +3040,14 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       // / outline-less glyphs, which fall through to the bitmap branch below
       // exactly as before.
       Path glyphPath;
-      if (!glyphIsBitmap) {
+      if (!face.bitmapOnly) {
         bool hasComplexity = false;
-        if (!admitGlyphPredecode(fontManager, glyphFont, glyph.glyphIndex,
+        if (!admitGlyphPredecode(fontManager, face.font, glyph.glyphIndex,
                                  static_cast<bool>(run.stretchedTextPath), hasComplexity)) {
           drawBudget_->reject();
           return;
         }
-        glyphPath = PlacedGlyphOutline(textEngine, glyphFont, run, glyph, glyphScale,
+        glyphPath = PlacedGlyphOutline(textEngine, face.font, run, glyph, face.scale,
                                        TextWarpToleranceFor(deviceFromLocalTransform_));
         if (!admitPlacedGlyph(hasComplexity, glyphPath)) {
           drawBudget_->reject();
@@ -3060,7 +3057,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
       if (glyphPath.empty()) {
-        auto bitmap = AdmitBitmapGlyph(textEngine, glyphFont, glyph.glyphIndex, glyphScale,
+        auto bitmap = AdmitBitmapGlyph(textEngine, face.font, glyph.glyphIndex, face.scale,
                                        *textMaterializationBudget_, *drawBudget_);
         if (drawBudget_->rejected()) {
           return;

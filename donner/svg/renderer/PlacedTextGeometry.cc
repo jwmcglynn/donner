@@ -211,6 +211,15 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
   return TransformPath(glyphPath, glyphFromLocal);
 }
 
+GlyphFaceScale ResolveGlyphFace(const TextEngine& textEngine, const TextRun& run,
+                                const TextGlyph& glyph, float runScale, bool runBitmapOnly) {
+  if (!glyph.font) {
+    return {run.font, runScale, runBitmapOnly};
+  }
+  return {glyph.font, textEngine.scaleForPixelHeight(glyph.font, run.usedFontSizePx),
+          textEngine.isBitmapOnly(glyph.font)};
+}
+
 void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
                               entt::entity spanEffectOwner, std::vector<TextRun>& runs) {
   const size_t count = std::min(runs.size(), text.spans.size());
