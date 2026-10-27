@@ -51,6 +51,16 @@ class DocsSiteTest(unittest.TestCase):
         self.assertEqual(site.Page((output / "0.8.0/index.html").read_text()).versions, ["0.8.0"])
         self.assertIn('Documentation version', (output / "api/type.html").read_text())
 
+    def test_recovery_composition_labels_main_as_a_release_snapshot(self):
+        source = self.source()
+        output = self.root / "recovery-site"
+        site.compose({"0.8.0": source, "main": source}, "0.8.0", output)
+        self.assertEqual(site.read_json(output / "_docs/versions.json")["recovery_release"], "0.8.0")
+        for name in ("index.html", "main/index.html", "0.8.0/api/type.html"):
+            text = (output / name).read_text()
+            self.assertIn("main (recovery snapshot from 0.8.0)", text)
+            self.assertNotIn("main (development)", text)
+
     def test_absolute_report_links_stay_with_the_selected_version(self):
         text = '<a href="https://jwmcglynn.github.io/donner/reports/coverage/index.html">Coverage</a>'
         text += '<a href="/donner/0.8.0/index.html">Explicit release</a>'

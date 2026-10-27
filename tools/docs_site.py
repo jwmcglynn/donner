@@ -165,10 +165,12 @@ def read_source(archive: Path, identity: dict, output: Path) -> None:
                 "recorded docs version differs from selected source")
 
 
-def _navigation(versions: list[str], current: str, base: str, identity: dict) -> str:
+def _navigation(versions: list[str], current: str, base: str, identity: dict,
+                recovery_release: str | None = None) -> str:
     options = "".join('<option value="%s"%s>%s</option>' % (
         key, ' selected="selected"' if key == current else "",
-        "main (development)" if key == "main" else key + " (stable)" if key == versions[0] else key)
+        ("main (recovery snapshot from " + recovery_release + ")" if recovery_release else "main (development)")
+        if key == "main" else key + " (stable)" if key == versions[0] else key)
         for key in versions)
     links = " ".join('<a href="%s%s/index.html">%s</a>' % (base, key, key) for key in versions)
     return ('<div class="docs-version"><label for="docs-version-select">Documentation version</label>'
@@ -191,7 +193,8 @@ def version_links(text: str, current: str, versions: list[str], base: str) -> st
     return re.sub(r'((?:href|src)=["\'])(.*?)(["\'])', replace, text)
 
 
-def decorate(root: Path, current: str, identity: dict, versions: list[str], base: str) -> dict:
+def decorate(root: Path, current: str, identity: dict, versions: list[str], base: str,
+             recovery_release: str | None = None) -> dict:
     pages = {}
     for path in sorted(root.rglob("*.html")):
         relative = path.relative_to(root).as_posix()
@@ -211,7 +214,7 @@ def decorate(root: Path, current: str, identity: dict, versions: list[str], base
         number = NUMBER.search(text)
         require(number is not None, "Doxygen version span is malformed")
         text = NUMBER.sub(lambda m: m[1] + "&#160;" + label + m[3]
-                          + _navigation(versions, current, base, identity), text, count=1)
+                          + _navigation(versions, current, base, identity, recovery_release), text, count=1)
         metadata = ('<link rel="stylesheet" href="' + base + '_docs/selector.css" />'
                     '<script defer="defer" src="' + base + '_docs/selector.js"'
                     ' data-docs-current="' + current + '" data-docs-base="' + base + '"'
@@ -250,6 +253,7 @@ def compose(sources: dict[str, tuple[Path, dict]], stable: str, output: Path,
     require(re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", base), "invalid site base")
     empty(output)
     versions = [stable, "main", *sorted(k for k in sources if k not in {stable, "main"})]
+    recovery_release = stable if sources["main"][1] == sources[stable][1] else None
     records = {}
     originals = {}
     for key in versions:
@@ -257,7 +261,7 @@ def compose(sources: dict[str, tuple[Path, dict]], stable: str, output: Path,
         require(key == "main" or identity["version"] == key, "release route differs from module version")
         read_source(archive, identity, output / key)
         originals[key] = digest(canonical(inventory(output / key)))
-        records[key] = decorate(output / key, key, identity, versions, base)
+        records[key] = decorate(output / key, key, identity, versions, base, recovery_release)
     shutil.copytree(output / stable, output, dirs_exist_ok=True)
     for path in output.rglob("*.html"):
         relative = path.relative_to(output)
@@ -274,6 +278,8 @@ def compose(sources: dict[str, tuple[Path, dict]], stable: str, output: Path,
         chrome[name] = digest(data)
     manifest = {"schema": SCHEMA, "stable": stable, "base": base, "versions": records,
                 "original_content": originals, "chrome": chrome}
+    if recovery_release:
+        manifest["recovery_release"] = recovery_release
     (output / "_docs/versions.json").write_bytes(canonical(manifest))
     files = inventory(output)
     marker = {"schema": SCHEMA, "manifest_sha256": digest(canonical(manifest)), "files": files}

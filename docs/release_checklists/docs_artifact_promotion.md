@@ -38,33 +38,53 @@ source for composition, never a standalone deployment that could erase other ver
 
 ## Bootstrap a pre-versioned site
 
-If the existing public site predates `docs-site.json`, first preserve its exact retained Pages
-artifact as an explicitly approved legacy rollback seed. Obtain the successful main docs build's
-run/attempt, Pages artifact ID, GitHub ZIP digest and inner `artifact.tar` digest. The seed checks
-its source-run metadata, module version, safe archive and exact live landing-page bytes. It is
-allowed only before `docs-snapshots` exists and does not deploy anything. The pre-marker
-legacy backup remains an explicit exception: its original retained GitHub artifact is independently
-reverified before the first migration uses it. If that source expires before migration, stop and
-review a new bootstrap plan. Complete modern compositions use stored signed proofs and do not
-depend on Actions retention.
+A site without `docs-site.json` has no modern composition identity. If its original retained
+artifact has expired, the initializer uses a separately approved recovery destination. It does
+not claim a landing-page fingerprint is a backup of that historical site.
 
-Dispatch `deploy_docs.yaml` on `main`, `selection: seed`, with this JSON in `request`:
+First assemble a complete recovery composition with `snapshot_commit: "none"`, `bootstrap: null`,
+and the same signed stable-release source for both routes: select that release's docs build as
+`main_run` and its signed release-candidate record. The resulting selector explicitly labels
+`main` as a recovery snapshot from that release, rather than current development documentation.
+Review the whole recovery site and retain its assembly run/attempt, composition record digest
+and inner Pages archive digest. Independently record the current public `index.html` SHA-256 and
+confirm that `docs-site.json` is absent. This fingerprint is only an observed-site guard.
+
+The one-time environment approval must explicitly accept that a failed initial cutover can
+recover to this complete release-based site, which differs from the old prerelease site.
+Dispatch `selection: seed` with:
 
 ```json
 {
-  "legacy_run": "RUN_ID/ATTEMPT",
-  "legacy_artifact_id": "ARTIFACT_ID",
-  "legacy_zip_sha256": "64_LOWERCASE_HEX",
-  "legacy_archive_sha256": "64_LOWERCASE_HEX",
-  "approve_legacy_rollback_seed": true
+  "composition_run": "RECOVERY_ASSEMBLY_RUN_ID/ATTEMPT",
+  "composition_sha256": "RECOVERY_COMPOSITION_RECORD_SHA256",
+  "bootstrap": {
+    "recovery_archive_sha256": "RECOVERY_PAGES_ARCHIVE_SHA256",
+    "observed_index_sha256": "OBSERVED_OLD_PUBLIC_INDEX_SHA256",
+    "approve_initial_release_recovery": true
+  }
 }
 ```
 
-This is an exception for a historical artifact without a modern source marker. Confirm its
-provenance limitations before approving the environment job. If no matching retained backup
-exists, stop and obtain a separately reviewed bootstrap plan. Never rebuild old source and call
-it the previously published artifact. Record the resulting snapshot commit and current legacy
-composition ID (its archive digest).
+The protected seed accepts only an uninitialized archive branch. It verifies both composition
+attestations and the original signed release source, checks the current pre-marker landing page,
+and stores the complete recovery site and its proofs durably. It does not publish anything:
+`current` and `previous` remain null. Record the returned snapshot commit.
+
+Compose the desired current-main/release site against that exact snapshot tip, copying the same
+`bootstrap` object into its request. The signed candidate binds that object and the snapshot tip.
+For the first publication, set `prior_composition: "none"` and provide that identical `bootstrap`
+object. A boolean alone does not select recovery authority. The publisher independently restores
+and re-verifies the recovery composition and release source before cutover, uploads and verifies
+its exact archive, and checks the observed old landing page still matches and has no modern marker.
+
+Successful initial publication activates the desired site with `previous: null`; the recovery
+site is retained but was never live. If a known unhealthy candidate requires recovery, the job
+verifies the distinct full recovery site's marker and assets, then activates its pointer and
+reports `recovered-to-bootstrap`. It never reports that as restoration of the old site. Unknown
+cutover or activation outcomes remain `recovery-required`. Once either site activates, the
+bootstrap exception is rejected; further publication requires a verified exact prior composition.
+Do not proceed if proofs, approval, observed identity or the pinned snapshot have changed.
 
 ## Compose a candidate
 
@@ -81,13 +101,14 @@ Dispatch `deploy_docs.yaml` on `main`, `selection: compose`, with:
   "snapshot_commit": "FULL_SNAPSHOT_BRANCH_SHA",
   "main_run": "RUN_ID/ATTEMPT",
   "release_record_run": "RUN_ID/ATTEMPT",
-  "release_record_sha256": "64_LOWERCASE_HEX"
+  "release_record_sha256": "64_LOWERCASE_HEX",
+  "bootstrap": null
 }
 ```
 
 Use empty strings for both release-record fields when retaining the existing release set. A
 first offline composition can use `snapshot_commit: "none"`, but publication still requires a
-verified prior backup and a fresh composition bound to the seeded branch tip.
+verified recovery selection and a fresh composition bound to the seeded branch tip.
 
 The read-only assembly job combines all versions, adds common navigation and inventories, keeps
 the stable root compatibility tree, verifies the exact archive uploaded to Pages storage, and
@@ -107,7 +128,8 @@ After maintainer publication approval, dispatch `selection: publish` with:
 {
   "composition_run": "RUN_ID/ATTEMPT",
   "composition_sha256": "APPROVED_COMPOSITION_RECORD_SHA256",
-  "prior_composition": "CURRENT_DURABLE_ARCHIVE_SHA256"
+  "prior_composition": "CURRENT_DURABLE_ARCHIVE_SHA256",
+  "bootstrap": null
 }
 ```
 
@@ -125,7 +147,8 @@ recovery allowance around both ten-minute Pages waits; it does not guarantee arb
 transfers finish. Socket timeouts are cooperative and do not bound platform DNS resolution. Successful activation records the new current/prior pair in
 `docs-snapshots`. `docs-promotion-evidence-ATTEMPT` retains the preflight and result receipts.
 
-A failure receipt distinguishes `published`, `unchanged`, `restored` and `recovery-required`.
+A failure receipt distinguishes `published`, `unchanged`, `restored`, `recovered-to-bootstrap`
+and `recovery-required`.
 Automatic recovery is limited to the named verified prior artifact, an unchanged snapshot tip,
 a known terminal candidate Pages request and the candidate's live marker. Unknown or in-flight
 requests, unrelated branch advances and ambiguous live identity stop mutation. A healthy cutover

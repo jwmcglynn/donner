@@ -157,20 +157,6 @@ def require_preserved_releases(manifest: dict, releases: dict) -> None:
                      "snapshot index changed an existing release")
 
 
-def _verify_legacy_origin(legacy: dict, archive: Path, work: Path) -> None:
-    selected = legacy["selection"]
-    site.require(selected["archive_sha256"] == legacy["archive_sha256"] == bcr_source.digest(archive),
-                 "legacy archive differs from its approved source")
-    metadata = github_json(f"{store.REPO}/actions/artifacts/{selected['artifact_id']}")
-    run = github_json(f"{store.REPO}/actions/runs/{selected['run_id']}/attempts/{selected['attempt']}")
-    pages_artifact.verify_metadata(metadata, run, selected)
-    site.empty(work)
-    candidate._download_checked(selected["artifact_id"], selected["artifact_digest"].removeprefix("sha256:"),
-                                work / "origin.zip", download, "legacy origin")
-    candidate._extract_verified(work / "origin.zip", {"artifact.tar": selected["archive_sha256"]},
-                                work / "origin")
-
-
 def _verify_current_roster(api, snapshot, state, work):
     composition_id = state["current"]
     if composition_id is None:
@@ -181,11 +167,6 @@ def _verify_current_roster(api, snapshot, state, work):
     archive = work / "current.tar"
     store.restore(archive_record, archive, lambda name: api.file(snapshot, name))
     site.unpack(archive, work / "current-site")
-    if not (work / "current-site/docs-site.json").exists():
-        legacy = json.loads(api.file(snapshot, prefix + "legacy.json"))
-        site.require(legacy["archive_sha256"] == composition_id, "legacy content address differs")
-        _verify_legacy_origin(legacy, archive, work / "current-origin")
-        return
     record_bytes = api.file(snapshot, prefix + "composition.json")
     path = work / "current-composition.json"
     path.write_bytes(record_bytes)
@@ -199,11 +180,16 @@ def _verify_current_roster(api, snapshot, state, work):
 
 
 def prepare(work: Path, main_run: str, release_run: str, record_sha256: str,
-            snapshot: str | None, api=None) -> None:
+            snapshot: str | None, api=None, bootstrap: dict | None = None) -> None:
     api = api or store.GitHub()
     site.empty(work)
     state = store.index(api, snapshot)
     _verify_current_roster(api, snapshot, state, work)
+    if bootstrap is not None:
+        _bootstrap_recovery(api, snapshot, state, bootstrap, work / "bootstrap")
+    else:
+        site.require(state["current"] is not None or not state["releases"],
+                     "unactivated seed requires its approved bootstrap selection")
     payload = work / "payload"
     payload.mkdir()
     sources = {}
@@ -235,7 +221,7 @@ def prepare(work: Path, main_run: str, release_run: str, record_sha256: str,
     site.compose(sources, stable, work / "site")
     (payload / "selection.json").write_bytes(site.canonical({"base_snapshot_commit": snapshot,
         "previous_composition": state["current"], "releases": state["releases"],
-        "source_inputs": {k: v[1] for k, v in sources.items()}}))
+        "source_inputs": {k: v[1] for k, v in sources.items()}, "bootstrap": bootstrap}))
     # Selection and validation evidence stay in the retained payload, never the public site.
     evidence = payload / "evidence"
     evidence.mkdir()
@@ -258,7 +244,7 @@ def finalize(work: Path, archive: Path, artifact_id: int) -> None:
         "artifact_digest": metadata["digest"], "run_id": int(os.environ["GITHUB_RUN_ID"]),
         "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "workflow_commit": os.environ["GITHUB_SHA"],
         "base_snapshot_commit": selected["base_snapshot_commit"],
-        "previous_composition": selected["previous_composition"],
+        "previous_composition": selected["previous_composition"], "bootstrap": selected["bootstrap"],
         "manifest_sha256": marker["manifest_sha256"], "payload_files": site.inventory(payload, store.CHUNK)}
     (payload / "composition.json").write_bytes(site.canonical(record))
 
@@ -387,25 +373,84 @@ def _oidc_token() -> str:
         return json.load(response)["value"]
 
 
-def _previous(api, snapshot: str, prior: str, work: Path) -> tuple[dict, dict]:
-    prefix = f"compositions/{prior}/"
+def _restore_composition(api, snapshot: str, target: str, work: Path) -> tuple[dict, dict]:
+    site.require(bool(site.DIGEST.fullmatch(target)), "invalid composition content address")
+    site.empty(work)
+    prefix = f"compositions/{target}/"
+    record_bytes = api.file(snapshot, prefix + "composition.json")
+    record = json.loads(record_bytes)
+    site.require(record["archive_sha256"] == target, "stored composition content address differs")
+    path = work / "composition.json"
+    path.write_bytes(record_bytes)
+    _offline_attestation(path, api.file(snapshot, prefix + "composition-attestation.json"),
+                         record["workflow_commit"], work)
+    selected_bytes = api.file(snapshot, prefix + "selection.json")
+    site.require(site.digest(selected_bytes) == record["payload_files"]["selection.json"],
+                 "stored signed selection changed")
     descriptor = json.loads(api.file(snapshot, prefix + "archive.json"))
-    site.require(descriptor["sha256"] == prior, "prior archive differs from approved content address")
-    previous = work / "previous-pages"
-    previous.mkdir()
-    store.restore(descriptor, previous / "artifact.tar", lambda path: api.file(snapshot, path))
-    site.unpack(previous / "artifact.tar", work / "previous")
-    try:
-        legacy = json.loads(api.file(snapshot, prefix + "legacy.json"))
-    except ValueError as error:
-        site.require(str(error).endswith("(404)"), "cannot inspect rollback evidence")
-        marker = site.verify_site(work / "previous")
-        return marker, {"kind": "composition", "marker": marker}
-    site.require(legacy["archive_sha256"] == prior, "legacy backup identity changed")
-    _verify_legacy_origin(legacy, previous / "artifact.tar", work / "prior-origin")
-    actual = bcr_source.digest(work / "previous/index.html")
-    site.require(actual == legacy["index_sha256"], "legacy backup index differs")
-    return {}, {"kind": "legacy", "index_sha256": actual}
+    site.require(descriptor["sha256"] == target, "prior archive differs from approved content address")
+    pages = work / "pages"
+    pages.mkdir()
+    store.restore(descriptor, pages / "artifact.tar", lambda name: api.file(snapshot, name))
+    _offline_attestation(pages / "artifact.tar", api.file(snapshot, prefix + "pages-attestation.json"),
+                         record["workflow_commit"], work)
+    site.unpack(pages / "artifact.tar", work / "site")
+    site.verify_site(work / "site", record["manifest_sha256"])
+    return record, json.loads(selected_bytes)
+
+
+def _previous(api, snapshot: str, prior: str, work: Path) -> tuple[dict, dict]:
+    _restore_composition(api, snapshot, prior, work / "prior-proof")
+    shutil.copytree(work / "prior-proof/pages", work / "previous-pages")
+    marker = site.verify_site(work / "prior-proof/site")
+    return marker, {"kind": "composition", "marker": marker}
+
+
+def validate_bootstrap(value: dict | None) -> None:
+    if value is None:
+        return
+    site.require(isinstance(value, dict) and set(value) == {
+        "recovery_archive_sha256", "observed_index_sha256", "approve_initial_release_recovery"}
+        and value["approve_initial_release_recovery"] is True,
+        "bootstrap needs an explicit initial release recovery approval")
+    for key in ("recovery_archive_sha256", "observed_index_sha256"):
+        site.require(isinstance(value[key], str) and bool(site.DIGEST.fullmatch(value[key])),
+                     "bootstrap needs exact recovery and observed index digests")
+
+
+def _recovery_sources(record, selected, work, api, snapshot) -> None:
+    site.require(record.get("bootstrap") is None and selected.get("bootstrap") is None,
+                 "recovery composition cannot itself depend on bootstrap")
+    releases = selected["releases"]
+    site.require(len(releases) == 1, "initial recovery needs exactly one stable release")
+    version = next(iter(releases))
+    site.require(bool(site.VERSION.fullmatch(version)), "initial recovery needs a stable release")
+    value = releases[version]["identity"]
+    site.require(selected["source_inputs"] == {version: value, "main": value},
+                 "both recovery routes must use the same signed release source")
+    manifest = site.read_json(work / "site/_docs/versions.json")
+    site.require(set(manifest["versions"]) == {version, "main"} and manifest["stable"] == version
+                 and manifest.get("recovery_release") == version
+                 and all(entry["identity"] == value for entry in manifest["versions"].values()),
+                 "recovery site must label and bind both routes to its release snapshot")
+    _verify_retained_release(api, snapshot, version, releases[version], work)
+    source = work / "release-source.tar"
+    store.restore(releases[version]["archive"], source, lambda name: api.file(snapshot, name))
+    site.read_source(source, value, work / "release-source")
+
+
+def _bootstrap_recovery(api, snapshot, current, approved, work):
+    validate_bootstrap(approved)
+    site.require(approved is not None and snapshot is not None
+                 and current["current"] is None and current["previous"] is None,
+                 "bootstrap is allowed only before a composition is activated")
+    target = approved["recovery_archive_sha256"]
+    metadata = json.loads(api.file(snapshot, f"compositions/{target}/bootstrap.json"))
+    site.require(metadata == approved, "bootstrap selection differs from the immutable seed")
+    record, selected = _restore_composition(api, snapshot, target, work)
+    _recovery_sources(record, selected, work, api, snapshot)
+    site.require(current["releases"] == selected["releases"], "bootstrap release roster changed")
+    return {"kind": "composition", "marker": site.verify_site(work / "site")}
 
 
 def _live_identity(expected: dict, *, deadline: float | None = None) -> bool:
@@ -439,18 +484,29 @@ def _wait_for_live(expected: dict, wait=None) -> None:
     raise ValueError("public site did not converge within the bounded propagation window")
 
 
-def preflight(reference: str, expected: str, prior: str, work: Path, api=None) -> None:
+def preflight(reference: str, expected: str, prior: str | None, work: Path, api=None,
+              bootstrap: dict | None = None) -> None:
     api = api or store.GitHub()
     site.empty(work)
     record = fetch_composition(reference, expected, work)
     current = store.index(api, record["base_snapshot_commit"])
     site.require(prior == current["current"] and record["previous_composition"] == prior,
                  "approved prior composition differs")
-    site.require(prior is not None, "bootstrap needs an explicitly approved legacy rollback seed")
-    _, prior_identity = _previous(api, record["base_snapshot_commit"], prior, work)
+    site.require(record.get("bootstrap") == bootstrap, "publication differs from signed bootstrap selection")
+    if bootstrap is None:
+        site.require(prior is not None, "bootstrap needs an explicitly approved recovery seed")
+        _, prior_identity = _previous(api, record["base_snapshot_commit"], prior, work)
+        recovery_identity = prior_identity
+    else:
+        recovery_identity = _bootstrap_recovery(api, record["base_snapshot_commit"], current,
+                                                bootstrap, work / "bootstrap")
+        site.require(record["archive_sha256"] != bootstrap["recovery_archive_sha256"],
+                     "initial candidate must differ from its recovery selection")
+        shutil.copytree(work / "bootstrap/pages", work / "previous-pages")
+        prior_identity = {"kind": "legacy", "index_sha256": bootstrap["observed_index_sha256"]}
     site.require(_live_identity(prior_identity), "live site differs from the approved prior")
     plan = {"record": record, "current": current, "prior": prior,
-            "prior_identity": prior_identity,
+            "prior_identity": prior_identity, "recovery_identity": recovery_identity,
             "previous_archive_sha256": bcr_source.digest(work / "previous-pages/artifact.tar")}
     (work / "preflight.json").write_bytes(site.canonical(plan))
 
@@ -481,9 +537,8 @@ def promote(work: Path, previous_id: int, api=None) -> dict:
     return _retain_and_deploy(record, plan, previous_id, work, api)
 
 
-def _retain_and_deploy(record, plan, previous_id, work, api):
+def _retain_composition(record, work):
     payload = work / "payload"
-    selected = site.read_json(payload / "selection.json")
     data = site.inventory(payload, store.CHUNK)
     data.pop("composition.json")
     site.require(data == record["payload_files"], "selected payload changed after preflight")
@@ -503,7 +558,15 @@ def _retain_and_deploy(record, plan, previous_id, work, api):
         shutil.copyfile(work / name, prefix / name)
     if (payload / "evidence").exists():
         shutil.copytree(payload / "evidence", prefix / "evidence")
-    new_index = {**plan["current"], "releases": selected["releases"]}
+    return durable, archive_record
+
+
+def _retain_and_deploy(record, plan, previous_id, work, api):
+    selected = site.read_json(work / "payload/selection.json")
+    composition_id = record["archive_sha256"]
+    durable, archive_record = _retain_composition(record, work)
+    new_index = {**plan["current"], "releases": (plan["current"]["releases"]
+                 if record.get("bootstrap") is not None else selected["releases"])}
     tip = store.commit(api, record["base_snapshot_commit"], durable, new_index)
     store.restore(archive_record, work / "retained.tar", lambda path: api.file(tip, path))
     result = {"candidate": composition_id, "prior": plan["prior"], "snapshot_commit": tip}
@@ -513,11 +576,21 @@ def _retain_and_deploy(record, plan, previous_id, work, api):
         _wait_for_live({"kind": "composition", "marker": site.read_json(work / "site/docs-site.json")})
     except (ValueError, OSError, urllib.error.URLError, subprocess.SubprocessError) as error:
         result.update(_recover(record, plan["prior_identity"], previous_id, api, str(error),
-                               tip, _deployment_id(work)))
+                               tip, _deployment_id(work), recovery_identity=plan.get("recovery_identity")))
+        if result["status"] == "restored" and record.get("bootstrap") is not None:
+            activation = work / "recovery-activation"
+            activation.mkdir()
+            new_index.update(current=record["bootstrap"]["recovery_archive_sha256"], previous=None)
+            try:
+                result["snapshot_commit"] = store.commit(api, tip, activation, new_index)
+                result["status"] = "recovered-to-bootstrap"
+            except (ValueError, OSError, subprocess.SubprocessError) as failure:
+                result.update(status="recovery-required", recovery_error=
+                              "Healthy bootstrap recovery; snapshot activation unconfirmed: " + str(failure))
     else:
         activation = work / "activation"
         activation.mkdir()
-        new_index.update(current=composition_id, previous=plan["prior"])
+        new_index.update(current=composition_id, previous=plan["prior"], releases=selected["releases"])
         try:
             result["snapshot_commit"] = store.commit(api, tip, activation, new_index)
             result["status"] = "published"
@@ -594,22 +667,9 @@ def rollback_preflight(target: str, snapshot: str, prior: str, work: Path, api=N
     site.empty(work)
     current = store.index(api, snapshot)
     site.require(current["current"] == prior, "prior composition differs")
-    prefix = f"compositions/{target}/"
-    record_bytes = api.file(snapshot, prefix + "composition.json")
-    record = json.loads(record_bytes)
-    site.require(record["archive_sha256"] == target, "stored rollback record differs")
-    path = work / "composition.json"
-    path.write_bytes(record_bytes)
-    _offline_attestation(path, api.file(snapshot, prefix + "composition-attestation.json"),
-                         record["workflow_commit"], work)
-    pages = work / "pages"
-    pages.mkdir()
-    descriptor = json.loads(api.file(snapshot, prefix + "archive.json"))
-    store.restore(descriptor, pages / "artifact.tar", lambda name: api.file(snapshot, name))
-    _offline_attestation(pages / "artifact.tar", api.file(snapshot, prefix + "pages-attestation.json"),
-                         record["workflow_commit"], work)
-    site.unpack(pages / "artifact.tar", work / "site")
-    site.verify_site(work / "site", record["manifest_sha256"])
+    record, _ = _restore_composition(api, snapshot, target, work / "target")
+    shutil.copytree(work / "target/pages", work / "pages")
+    shutil.copytree(work / "target/site", work / "site")
     _, prior_identity = _previous(api, snapshot, prior, work)
     site.require(_live_identity(prior_identity), "live site differs from prior")
     plan = {"record": record, "current": current, "snapshot": snapshot, "prior": prior,
@@ -665,7 +725,8 @@ def _deployment_id(work: Path) -> str | None:
     return site.read_json(path)["deployment_id"] if path.exists() else None
 
 
-def _recover(record, prior_identity, previous_id, api, error, expected_tip=None, deployment_id=None):
+def _recover(record, prior_identity, previous_id, api, error, expected_tip=None, deployment_id=None,
+             recovery_identity=None):
     try:
         site.require(expected_tip is not None and api.tip() == expected_tip,
                      "snapshot branch advanced or recovery scope is unknown")
@@ -682,50 +743,43 @@ def _recover(record, prior_identity, previous_id, api, error, expected_tip=None,
             return {"status": "recovery-required", "error": error, "observed": observed}
         site.require(api.tip() == expected_tip, "snapshot branch advanced before recovery")
         deployment_id = deploy(previous_id, record["workflow_commit"], api)
-        _wait_for_live(prior_identity)
+        _wait_for_live(recovery_identity or prior_identity)
         return {"status": "restored", "error": error, "recovery_deployment_id": deployment_id}
     except (ValueError, OSError, urllib.error.URLError, subprocess.SubprocessError) as failure:
         return {"status": "recovery-required", "error": error, "recovery_error": str(failure)}
 
 
-def seed_legacy(reference: str, artifact_id: int, zip_sha: str, archive_sha: str,
-                work: Path, api=None) -> str:
+def seed_recovery(reference: str, expected: str, approved: dict, work: Path, api=None) -> str:
     api = api or store.GitHub()
-    site.require(os.environ.get("APPROVE_LEGACY_ROLLBACK_SEED") == "true",
-                 "legacy bootstrap exception must be explicitly approved")
-    site.require(api.tip() is None, "legacy seed is only allowed before the snapshot branch exists")
-    run_id, attempt = candidate._run_reference(reference, "legacy docs run")
-    run = github_json(f"{store.REPO}/actions/runs/{run_id}/attempts/{attempt}")
-    selected = {"artifact_id": artifact_id, "run_id": run_id, "attempt": attempt,
-                "source_commit": run["head_sha"], "artifact_digest": "sha256:" + zip_sha,
-                "archive_sha256": archive_sha}
-    pages_artifact.verify_metadata(github_json(f"{store.REPO}/actions/artifacts/{artifact_id}"), run, selected)
+    validate_bootstrap(approved)
+    site.require(approved is not None, "seed needs explicit initial release recovery approval")
+    site.require(api.tip() is None, "recovery seed is only allowed before the snapshot branch exists")
     site.empty(work)
-    candidate._download_checked(artifact_id, zip_sha, work / "legacy.zip", download, "legacy backup")
-    candidate._extract_verified(work / "legacy.zip", {"artifact.tar": archive_sha}, work / "legacy")
-    site.unpack(work / "legacy/artifact.tar", work / "legacy-site")
-    version = bcr_source.module_values(source_file(run["head_sha"], "MODULE.bazel"))["version"]
-    site.check_version(work / "legacy-site", version)
-    legacy = {"kind": "legacy", "archive_sha256": archive_sha,
-              "index_sha256": bcr_source.digest(work / "legacy-site/index.html"), "selection": selected}
-    site.require(_live_identity(legacy), "legacy backup is not the current public site")
-    payload = work / "seed"
-    payload.mkdir()
-    archive = store.split_archive(work / "legacy/artifact.tar", payload)
-    prefix = payload / "compositions" / archive_sha
-    prefix.mkdir(parents=True)
-    (prefix / "archive.json").write_bytes(site.canonical(archive))
-    (prefix / "legacy.json").write_bytes(site.canonical(legacy))
-    state = {"schema": 1, "releases": {}, "current": archive_sha, "previous": None}
-    return store.commit(api, None, payload, state)
+    record = fetch_composition(reference, expected, work)
+    site.require(record["base_snapshot_commit"] is None and record["previous_composition"] is None
+                 and record["archive_sha256"] == approved["recovery_archive_sha256"],
+                 "seed differs from approved standalone recovery composition")
+    selected = site.read_json(work / "payload/selection.json")
+    class Payload:
+        def file(self, commit, name):
+            return (work / "payload" / site.safe_path(name)).read_bytes()
+    _recovery_sources(record, selected, work, Payload(), None)
+    before = {"kind": "legacy", "index_sha256": approved["observed_index_sha256"]}
+    site.require(_live_identity(before), "observed pre-marker site has changed")
+    durable, archive = _retain_composition(record, work)
+    prefix = durable / "compositions" / record["archive_sha256"]
+    (prefix / "bootstrap.json").write_bytes(site.canonical(approved))
+    state = {"schema": 1, "releases": selected["releases"], "current": None, "previous": None}
+    tip = store.commit(api, None, durable, state)
+    store.restore(archive, work / "retained.tar", lambda name: api.file(tip, name))
+    return tip
 
 
 REQUEST_FIELDS = {
-    "compose": {"snapshot_commit", "main_run", "release_record_run", "release_record_sha256"},
-    "publish": {"composition_run", "composition_sha256", "prior_composition"},
+    "compose": {"snapshot_commit", "main_run", "release_record_run", "release_record_sha256", "bootstrap"},
+    "publish": {"composition_run", "composition_sha256", "prior_composition", "bootstrap"},
     "rollback": {"target_composition", "snapshot_commit", "prior_composition"},
-    "seed": {"legacy_run", "legacy_artifact_id", "legacy_zip_sha256", "legacy_archive_sha256",
-             "approve_legacy_rollback_seed"},
+    "seed": {"composition_run", "composition_sha256", "bootstrap"},
 }
 
 
@@ -735,9 +789,10 @@ def workflow_request(mode: str) -> dict:
     value = json.loads(raw)
     site.require(isinstance(value, dict) and set(value) == REQUEST_FIELDS[mode], "unexpected docs request fields")
     for key, item in value.items():
-        site.require((key == "approve_legacy_rollback_seed" and item is True)
-                     or (key != "approve_legacy_rollback_seed" and isinstance(item, str)),
-                     "invalid docs request value")
+        if key == "bootstrap":
+            validate_bootstrap(item)
+        else:
+            site.require(isinstance(item, str), "invalid docs request value")
     return value
 
 
@@ -753,13 +808,15 @@ def command_prepare(args):
     value = request["snapshot_commit"]
     site.require(value == "none" or site.SHA.fullmatch(value), "snapshot commit must be pinned")
     prepare(args.work, request["main_run"], request["release_record_run"],
-            request["release_record_sha256"], None if value == "none" else value)
+            request["release_record_sha256"], None if value == "none" else value,
+            bootstrap=request["bootstrap"])
 
 
 def command_preflight(args):
     request = workflow_request("publish")
     preflight(request["composition_run"], request["composition_sha256"],
-              request["prior_composition"], args.work)
+              None if request["prior_composition"] == "none" else request["prior_composition"],
+              args.work, bootstrap=request["bootstrap"])
 
 
 def command_rollback_preflight(args):
@@ -770,9 +827,8 @@ def command_rollback_preflight(args):
 
 def command_seed(args):
     request = workflow_request("seed")
-    os.environ["APPROVE_LEGACY_ROLLBACK_SEED"] = "true"
-    seed_legacy(request["legacy_run"], pages_artifact.positive_id(request["legacy_artifact_id"], "legacy asset"),
-                request["legacy_zip_sha256"], request["legacy_archive_sha256"], args.work)
+    seed_recovery(request["composition_run"], request["composition_sha256"],
+                  request["bootstrap"], args.work)
 
 
 def command_finalize(args):

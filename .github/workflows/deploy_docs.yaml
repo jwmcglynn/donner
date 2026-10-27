@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       selection:
-        description: "Compose, publish, roll back a complete site, or approve the one-time legacy backup"
+        description: "Compose, publish, roll back a complete site, or retain an approved initial release recovery site"
         required: true
         type: choice
         options: [compose, publish, rollback, seed]
@@ -142,6 +142,7 @@ jobs:
     permissions:
       contents: write
       actions: read
+      attestations: read
     concurrency:
       group: pages-publish
       cancel-in-progress: false
@@ -150,7 +151,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - name: Preserve only the explicitly approved current legacy site
+      - name: Retain the approved initial release recovery composition
         env:
           GH_TOKEN: ${{ github.token }}
           DOCS_REQUEST: ${{ inputs.request }}
@@ -159,7 +160,7 @@ jobs:
         if: always()
         with:
           name: docs-seed-evidence-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/docs-seed/seed/
+          path: ${{ runner.temp }}/docs-seed/durable/
           if-no-files-found: ignore
           retention-days: 90
 

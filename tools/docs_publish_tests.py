@@ -22,7 +22,7 @@ class DocsPublishTest(unittest.TestCase):
         self.api.call.return_value = {"status": "succeed"}
 
     def test_request_cannot_override_workflow_context_or_smuggle_extra_fields(self):
-        request = {"composition_run": "123/1", "composition_sha256": "a" * 64, "prior_composition": "b" * 64}
+        request = {"composition_run": "123/1", "composition_sha256": "a" * 64, "prior_composition": "b" * 64, "bootstrap": None}
         with mock.patch.dict(os.environ, {"DOCS_REQUEST": json.dumps(request)}):
             self.assertEqual(publish.workflow_request("publish"), request)
         for key, value in (("GH_TOKEN", "secret"), ("source_commit", "c" * 40)):
@@ -37,16 +37,25 @@ class DocsPublishTest(unittest.TestCase):
             with mock.patch.dict(os.environ, {**good, key: value}), self.assertRaisesRegex(ValueError, "trusted-main"):
                 publish.workflow_context()
 
-    def test_legacy_seed_needs_literal_approval_and_uninitialized_store(self):
-        request = {"legacy_run": "1/1", "legacy_artifact_id": "2", "legacy_zip_sha256": "a" * 64,
-                   "legacy_archive_sha256": "b" * 64, "approve_legacy_rollback_seed": False}
-        with mock.patch.dict(os.environ, {"DOCS_REQUEST": json.dumps(request)}), self.assertRaisesRegex(ValueError, "invalid docs request"):
-            publish.workflow_request("seed")
-        api = mock.Mock()
-        api.tip.return_value = "a" * 40
-        with mock.patch.dict(os.environ, {"APPROVE_LEGACY_ROLLBACK_SEED": "true"}), self.assertRaisesRegex(ValueError, "before the snapshot"):
-            publish.seed_legacy("1/1", 2, "a" * 64, "b" * 64, self.root / "seed", api)
-        api.call.assert_not_called()
+    def approval(self):
+        return {"recovery_archive_sha256": "a" * 64, "observed_index_sha256": "b" * 64,
+                "approve_initial_release_recovery": True}
+
+    def test_bootstrap_requires_exact_digests_and_literal_approval(self):
+        good = self.approval()
+        publish.validate_bootstrap(good)
+        for change in ({"approve_initial_release_recovery": False},
+                       {"approve_initial_release_recovery": "true"},
+                       {"recovery_archive_sha256": "latest"}, {"observed_index_sha256": ""},
+                       {"extra": "unreviewed"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                publish.validate_bootstrap({**good, **change})
+
+    def test_seed_is_only_allowed_before_the_snapshot_branch_exists(self):
+        with mock.patch.object(publish, "fetch_composition") as fetch, self.assertRaisesRegex(ValueError, "before the snapshot"):
+            publish.seed_recovery("1/1", "c" * 64, self.approval(), self.root / "seed", self.api)
+        fetch.assert_not_called()
+        self.api.call.assert_not_called()
 
     def test_preflight_branch_advance_and_prior_mismatch_block_before_publication(self):
         record = {**self.record, "base_snapshot_commit": "a" * 40, "previous_composition": "d" * 64}
@@ -229,27 +238,9 @@ class DocsPublishTest(unittest.TestCase):
 
     def test_prior_archive_cannot_be_replaced_under_an_approved_content_address(self):
         api = mock.Mock()
-        api.file.return_value = site.canonical({"sha256": "b" * 64})
-        with self.assertRaisesRegex(ValueError, "approved content address"):
+        api.file.return_value = site.canonical({"archive_sha256": "b" * 64})
+        with self.assertRaisesRegex(ValueError, "content address differs"):
             publish._previous(api, "a" * 40, "c" * 64, self.root)
-
-    def test_forged_legacy_backup_cannot_change_the_independent_origin_zip(self):
-        import zipfile
-        import shutil
-        authentic = self.root / "authentic.zip"
-        with zipfile.ZipFile(authentic, "w") as archive:
-            archive.writestr("artifact.tar", b"authentic legacy source")
-        forged = self.root / "forged.tar"
-        forged.write_bytes(b"forged assets with the same index")
-        selected = {"artifact_id": 7, "run_id": 123, "attempt": 1,
-                    "artifact_digest": "sha256:" + publish.bcr_source.digest(authentic),
-                    "archive_sha256": publish.bcr_source.digest(forged)}
-        legacy = {"selection": selected, "archive_sha256": selected["archive_sha256"]}
-        with mock.patch.object(publish, "github_json", return_value={}), \
-             mock.patch.object(publish.pages_artifact, "verify_metadata"), \
-             mock.patch.object(publish, "download", side_effect=lambda number, path: shutil.copyfile(authentic, path)), \
-             self.assertRaises(ValueError):
-            publish._verify_legacy_origin(legacy, forged, self.root / "origin")
 
     def test_retained_release_proof_authenticates_the_release_candidate_workflow(self):
         record = {"source": {"version": "0.8.0", "commit": "a" * 40},
@@ -265,6 +256,158 @@ class DocsPublishTest(unittest.TestCase):
              mock.patch.object(publish, "github_json", side_effect=responses):
             publish._verify_retained_release(api, "c" * 40, "0.8.0", entry, self.root)
         self.assertEqual(verify.call_args.kwargs["workflow"], ".github/workflows/release_candidate.yml")
+
+    def recovery_fixture(self):
+        from tools import docs_fixture
+        work = self.root / "recovery"
+        work.mkdir()
+        source = docs_fixture.source(work, "release")
+        site.compose({"0.8.0": source, "main": source}, "0.8.0", work / "site")
+        (work / "pages").mkdir()
+        site.pack(work / "site", work / "pages/artifact.tar")
+        payload = work / "payload"
+        payload.mkdir()
+        entry = {"identity": source[1], "archive": publish.store.split_archive(source[0], payload)}
+        selected = {"releases": {"0.8.0": entry}, "bootstrap": None,
+                    "source_inputs": {"0.8.0": source[1], "main": source[1]}}
+        (payload / "selection.json").write_bytes(site.canonical(selected))
+        record = {"archive_sha256": publish.bcr_source.digest(work / "pages/artifact.tar"),
+                  "manifest_sha256": site.verify_site(work / "site")["manifest_sha256"],
+                  "workflow_commit": "c" * 40, "base_snapshot_commit": None,
+                  "previous_composition": None, "bootstrap": None, "payload_files": site.inventory(payload)}
+        (payload / "composition.json").write_bytes(site.canonical(record))
+        for name in ("composition-attestation.json", "pages-attestation.json"):
+            (work / name).write_text('[]')
+        durable, _ = publish._retain_composition(record, work)
+        approved = {**self.approval(), "recovery_archive_sha256": record["archive_sha256"]}
+        (durable / "compositions" / record["archive_sha256"] / "bootstrap.json").write_bytes(site.canonical(approved))
+        api = mock.Mock()
+        api.file.side_effect = lambda commit, name: (durable / name).read_bytes()
+        current = {"schema": 1, "releases": selected["releases"], "current": None, "previous": None}
+        return work, record, selected, durable, approved, api, current
+
+    def test_bootstrap_restores_both_attested_bytes_and_revalidates_release_source(self):
+        work, record, selected, durable, approved, api, current = self.recovery_fixture()
+        with mock.patch.object(publish, "_offline_attestation") as attest, \
+             mock.patch.object(publish, "_verify_retained_release") as source:
+            identity = publish._bootstrap_recovery(api, "e" * 40, current, approved, self.root / "verified")
+        self.assertEqual(identity["marker"], site.verify_site(work / "site"))
+        self.assertEqual(attest.call_count, 2)
+        self.assertEqual(source.call_count, 1)
+        api.call.assert_not_called()
+
+    def test_bootstrap_cannot_be_reused_after_either_activation(self):
+        for active in ("a" * 64, "c" * 64):
+            with self.subTest(active=active), self.assertRaisesRegex(ValueError, "before a composition is activated"):
+                publish._bootstrap_recovery(self.api, "d" * 40,
+                    {"current": active, "previous": None}, self.approval(), self.root / "unused")
+        self.api.file.assert_not_called()
+
+    def test_bootstrap_rejects_seed_drift_forged_selection_and_corrupt_stored_bytes(self):
+        work, record, selected, durable, approved, api, current = self.recovery_fixture()
+        with self.assertRaisesRegex(ValueError, "immutable seed"):
+            publish._bootstrap_recovery(api, "e" * 40, current,
+                {**approved, "observed_index_sha256": "f" * 64}, self.root / "drift")
+        prefix = durable / "compositions" / record["archive_sha256"]
+        selection = prefix / "selection.json"
+        original = selection.read_bytes()
+        selection.write_bytes(site.canonical({**selected, "bootstrap": approved}))
+        with mock.patch.object(publish, "_offline_attestation"), self.assertRaisesRegex(ValueError, "signed selection changed"):
+            publish._bootstrap_recovery(api, "e" * 40, current, approved, self.root / "forged")
+        selection.write_bytes(original)
+        chunk = next((durable / "objects").rglob("*.part"))
+        chunk.write_bytes(b"corrupt")
+        with mock.patch.object(publish, "_offline_attestation"), \
+             mock.patch.object(publish, "_verify_retained_release"), self.assertRaisesRegex(ValueError, "stored chunk changed"):
+            publish._bootstrap_recovery(api, "e" * 40, current, approved, self.root / "corrupt")
+
+    def test_recovery_main_must_equal_its_independently_signed_release(self):
+        work, record, selected, durable, approved, api, current = self.recovery_fixture()
+        forged = {**selected, "source_inputs": {**selected["source_inputs"], "main": {}}}
+        with mock.patch.object(publish, "_verify_retained_release") as verify, \
+             self.assertRaisesRegex(ValueError, "same signed release source"):
+            publish._recovery_sources(record, forged, work, api, "e" * 40)
+        verify.assert_not_called()
+
+    def test_first_publication_request_must_match_the_signed_bootstrap_selection(self):
+        record = {**self.record, "base_snapshot_commit": "c" * 40, "previous_composition": None,
+                  "bootstrap": self.approval()}
+        with mock.patch.object(publish, "fetch_composition", return_value=record), \
+             mock.patch.object(publish.store, "index", return_value={"current": None}), \
+             mock.patch.object(publish, "_bootstrap_recovery") as recovery, \
+             self.assertRaisesRegex(ValueError, "signed bootstrap selection"):
+            publish.preflight("1/1", "e" * 64, None, self.root / "preflight", self.api)
+        recovery.assert_not_called()
+
+    def test_seed_never_claims_recovery_site_is_already_live(self):
+        work, record, selected, durable, approved, api, current = self.recovery_fixture()
+        api.tip.return_value = None
+        target = self.root / "seed"
+        def fetch(reference, expected, output):
+            import shutil
+            for name in ("site", "pages", "payload"):
+                shutil.copytree(work / name, output / name)
+            for name in ("composition-attestation.json", "pages-attestation.json"):
+                shutil.copyfile(work / name, output / name)
+            return record
+        with mock.patch.object(publish, "fetch_composition", side_effect=fetch), \
+             mock.patch.object(publish, "_verify_retained_release"), \
+             mock.patch.object(publish, "_live_identity", return_value=True), \
+             mock.patch.object(publish.store, "commit", return_value="e" * 40) as commit, \
+             mock.patch.object(publish, "deploy") as deploy:
+            publish.seed_recovery("1/1", "d" * 64, approved, target, api)
+        self.assertIsNone(commit.call_args.args[3]["current"])
+        self.assertIsNone(commit.call_args.args[3]["previous"])
+        deploy.assert_not_called()
+
+    def test_bootstrap_recovery_verifies_its_distinct_destination(self):
+        fallback = {"kind": "composition", "marker": {"manifest_sha256": "f" * 64}}
+        with mock.patch.object(publish, "_live_identity", return_value=False), \
+             mock.patch.object(publish, "live_marker", return_value={"manifest_sha256": "a" * 64}), \
+             mock.patch.object(publish, "deploy", return_value="92"), \
+             mock.patch.object(publish, "_wait_for_live") as verify:
+            result = publish._recover(self.record, {"kind": "legacy", "index_sha256": "e" * 64},
+                7, self.api, "unhealthy", "e" * 40, "91", recovery_identity=fallback)
+        self.assertEqual(result["status"], "restored")
+        verify.assert_called_once_with(fallback)
+
+    def test_failed_first_cutover_preserves_seed_roster_for_a_retry(self):
+        work, record, plan, commit, restore = self.transaction()
+        record["bootstrap"] = self.approval()
+        selected = {"releases": {"0.9.0": {"identity": "newly retained source"}}}
+        (work / "payload/selection.json").write_bytes(site.canonical(selected))
+        record["payload_files"] = site.inventory(work / "payload")
+        record["payload_files"].pop("composition.json")
+        (work / "payload/composition.json").write_bytes(site.canonical(record))
+        with mock.patch.object(publish.store, "commit", side_effect=commit) as save, \
+             mock.patch.object(publish.store, "restore", side_effect=restore), \
+             mock.patch.object(publish, "deploy", side_effect=ValueError("rejected before cutover")), \
+             mock.patch.object(publish, "_recover", return_value={"status": "unchanged"}), \
+             self.assertRaisesRegex(ValueError, "inspect result.json"):
+            publish._retain_and_deploy(record, plan, 9, work, self.api)
+        self.assertEqual(save.call_count, 1)
+        self.assertEqual(save.call_args.args[3]["releases"], plan["current"]["releases"])
+        self.assertEqual(site.read_json(work / "result.json")["status"], "unchanged")
+
+    def test_only_healthy_bootstrap_recovery_activates_its_pointer_truthfully(self):
+        for failed_activation in (False, True):
+            with self.subTest(failed_activation=failed_activation):
+                work, record, plan, commit, restore = self.transaction()
+                record["bootstrap"] = self.approval()
+                (work / "payload/composition.json").write_bytes(site.canonical(record))
+                commits = ["e" * 40, ValueError("lost response") if failed_activation else "f" * 40]
+                with mock.patch.object(publish.store, "commit", side_effect=commits) as save, \
+                     mock.patch.object(publish.store, "restore", side_effect=restore), \
+                     mock.patch.object(publish, "deploy", side_effect=ValueError("unhealthy")), \
+                     mock.patch.object(publish, "_recover", return_value={"status": "restored"}), \
+                     self.assertRaisesRegex(ValueError, "inspect result.json"):
+                    publish._retain_and_deploy(record, plan, 9, work, self.api)
+                result = site.read_json(work / "result.json")
+                self.assertEqual(result["status"], "recovery-required" if failed_activation else "recovered-to-bootstrap")
+                self.assertEqual(save.call_args.args[3]["current"], "a" * 64)
+                self.assertIsNone(save.call_args.args[3]["previous"])
+                import shutil
+                shutil.rmtree(work)
 
     def test_health_wait_allows_public_propagation_without_entering_recovery(self):
         work, record, plan, commit, restore = self.transaction()

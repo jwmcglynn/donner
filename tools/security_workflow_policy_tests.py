@@ -1963,7 +1963,7 @@ def _docs_deploy_violations(workflow):
          and "actions/attest-build-provenance@" in assemble,
          "composition must bind and attest the selected uploaded bytes"),
         ("tools.docs_publish seed" in seed and "environment: github-pages" in seed,
-         "legacy bootstrap must be explicitly protected"),
+         "initial recovery seed must be explicitly protected"),
         (all(not _ignored_failures(job) and "|| true" not in job for job in (deploy, assemble, seed)), "docs ignores a failure"),
         (_docs_runs_quoted((deploy, assemble, seed)),
          "docs run blocks must use quoted environment values"),
