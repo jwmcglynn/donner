@@ -160,6 +160,11 @@ protected:
     };
   }
 
+  ColorIndex FirstLineSyntaxColor(std::size_t index) {
+    editor.core_.colorizeRange(0, 1);
+    return editor.core_.buffer().getLineGlyphs(0)[index].colorIndex;
+  }
+
   void TearDown() override {
     if (imguiContext_ != nullptr) {
       ImGui::DestroyContext(imguiContext_);
@@ -4822,6 +4827,30 @@ TEST_F(TextEditorTests, BuildSuggestionsAcceptsUppercaseWords) {
   EXPECT_TRUE(AutocompleteOpened());
   ASSERT_EQ(AutocompleteSuggestionCount(), 1);
   EXPECT_EQ(AutocompleteSuggestion(0).first, RcString("upper"));
+}
+
+TEST_F(TextEditorTests, DefaultSvgSetupHighlightsAndEditsWithoutChangingPublicLanguageRules) {
+  EXPECT_EQ(editor.getLanguageDefinition().name, RcString("SVG"));
+  EXPECT_TRUE(editor.getLanguageDefinition().tokenRegexStrings.empty());
+  editor.setText("<rect/>");
+  EXPECT_EQ(FirstLineSyntaxColor(1), ColorIndex::Keyword);
+  editor.setCursorPosition(Coordinates(0, 7));
+  editor.enterCharacter(' ', false);
+  EXPECT_EQ(editor.getText(), "<rect/> ");
+  editor.undo();
+  EXPECT_EQ(editor.getText(), "<rect/>");
+}
+
+TEST_F(TextEditorTests, LegacyRegexLanguageRemainsAvailableBeforeSwitchingBackToSvg) {
+  TextEditor::LanguageDefinition language;
+  language.tokenRegexStrings = {{R"([0-9]+)", ColorIndex::Number}, {R"(@)", ColorIndex::UserType}};
+  editor.setLanguageDefinition(language);
+  editor.setText("12@");
+  EXPECT_EQ(FirstLineSyntaxColor(0), ColorIndex::Number);
+  EXPECT_EQ(FirstLineSyntaxColor(1), ColorIndex::Number);
+  EXPECT_EQ(FirstLineSyntaxColor(2), ColorIndex::UserType);
+  editor.setSvgLanguageDefinition();
+  EXPECT_EQ(FirstLineSyntaxColor(2), ColorIndex::Default);
 }
 
 TEST_F(TextEditorTests, BuildSuggestionsIncludesLanguageKeywords) {
