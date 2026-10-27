@@ -82,7 +82,9 @@ resolved bidi levels. The text stack it changes is described in
 
 Each milestone is one or two atomic pull requests. Sizes are rough line counts including tests.
 Every behavior change lands with a regression test committed red first. Milestone 1 preserves
-today's behavior exactly; every change of semantics belongs to a later milestone.
+today's behavior exactly, including today's chunk boundaries inside right-to-left shaped chunks and
+the post-textPath translation; every change of semantics, including fixes of today's defects,
+belongs to a later milestone (1b, 1c, or 2).
 
 - [ ] Milestone 1: Logical character table and visual pen pass, no behavior change (large, about
       1,200 lines)
@@ -93,7 +95,12 @@ today's behavior exactly; every change of semantics belongs to a later milestone
         `dx`, `dy`, `rotate`, and `textLength` from the table. Inside a chunk that HarfBuzz shapes
         right to left, `dx` and `dy` keep today's accumulation in shaped glyph order across all
         of the chunk's items, not per item.
-  - [ ] Replace sequential `(runIndex, glyphIndex)` chunk boundaries with chunk ids on the table.
+  - [ ] Replace sequential `(runIndex, glyphIndex)` chunk boundaries with chunk ids on the table
+        that reproduce today's boundaries exactly: inside a right-to-left shaped chunk that is not
+        first in its span, the boundary is the stored glyph where the chunk's first logical
+        character appears, and an absolute `x` applies only from that glyph on. Logical chunk
+        membership is Milestone 1c.
+  - [ ] Apply `ApplyPostTextPathTranslations` last, as today.
   - [ ] Compute decoration segments per span in the engine with today's renderer rules, in run
         storage order; TinySkia and Geode draw them.
   - [ ] Keep today's `textLength` carry, including the trailing gap of
@@ -109,7 +116,11 @@ today's behavior exactly; every change of semantics belongs to a later milestone
       `<text textLength="300"><tspan>abc</tspan><tspan y="50">def</tspan></text>`, under `start`
       and under `middle`;
     - a right-to-left shaped chunk containing a left-to-right digit item, with `dx` on its first
-      Arabic character, which pins glyph-order accumulation across items.
+      Arabic character, which pins glyph-order accumulation across items;
+    - `<text x="10 100">` over the Hebrew letters alef, bet, space, gimel, dalet, which pins today's
+      split of the second chunk (Milestone 1c replaces this expectation);
+    - `dx` inside a `textPath` followed by plain text, and `dx` on the first character after the
+      path, which pin the post-textPath translation.
   - [ ] Measure the editor package against every gate, including the 46,000 byte function body
         and 12,880,000 byte total raw limits, since the restructured layout adds code before
         SheenBidi does.
@@ -125,6 +136,20 @@ today's behavior exactly; every change of semantics belongs to a later milestone
         changes in the pull request, with an independently authored regression for each cause.
         The pull request is accepted only if every listed change is one of the intended
         differences in [Anchoring](#anchoring) and no row gains a budget, golden, or skip.
+- [ ] Milestone 1c: Logical chunk boundaries for right-to-left shaped chunks (small, about 300
+      lines)
+  - [ ] Assign every glyph of a chunk to that chunk by its logical character, and apply a chunk's
+        absolute `x` before its pen pass rather than at the glyph where its first logical character
+        is stored, as `chunkYOverride` already does for `y`.
+  - [ ] Red first: `<text x="10 100">` over the Hebrew letters alef, bet, space, gimel, dalet, and a
+        `middle`-anchored Arabic chunk with an `x` and `y` list. The Milestone 1 pin test changes
+        its expectation in the same pull request.
+  - [ ] Run the same old-versus-new comparison as Milestone 1b and accept only changes caused by
+        the corrected boundaries. Expected changes: none among compared resvg rows, because the
+        affected rows are `start`-anchored or start their right-to-left text at a span boundary
+        (`text/text/x-and-y-with-multiple-values-and-arabic-text` shows today's split but is
+        `start`-anchored, and its `y` values already apply up front); the run decides, and any
+        golden it moves is listed and re-reviewed.
 - [ ] Milestone 2: SheenBidi, `direction`, and paragraph analysis (large, about 1,000 lines plus
       pinned test data)
   - [ ] Add `bazel_dep(name = "sheenbidi", version = "3.0.0")`, its `license()` and notice
@@ -193,6 +218,22 @@ order there (`PositionForGroup` and the pen updates in `applyHorizontalPosition`
 runs before anchoring: `ApplyTextLengthOwnerPlan` carries an owner's trailing advance into the
 following items until one has an absolute inline position (`absoluteReset` comes from `x` in
 horizontal text), so the carry crosses chunk boundaries that have only `y`.
+
+Two more details of today's code matter for exact preservation:
+
+- **Chunk boundaries inside right-to-left shaped chunks.** `recordChunkBoundary` and
+  `PositionForGroup` run per glyph in shaped order. In a right-to-left shaped chunk that is not the
+  first chunk of its span, the chunk's first logical character is stored last, so the chunk
+  boundary lands on that glyph, the chunk's absolute `x` applies only from that glyph on, and the
+  glyphs stored before it stay at the previous pen and anchor with the previous chunk. Only `y` has
+  an up-front fix, `chunkYOverride`. For `<text x="10 100">` over five Hebrew characters, the
+  second chunk is split this way.
+- **Post-textPath translation.** After `applyFinalAdjustments`, `ApplyPostTextPathTranslations`
+  (through `TranslateAfterTextPathRun`) translates the flat text that follows a `textPath`, up to
+  the next absolutely positioned cluster, so that its logically first glyph's final position lands
+  on the path's end point. Whatever positioned that glyph, the running `dx` and `dy` shift
+  including its own, a `textLength` carry, and the anchoring of its chunk, is cancelled for it; the
+  following glyphs keep their offsets relative to it.
 
 With [#2098](https://github.com/jwmcglynn/donner/pull/2098), `ChunkShaper` shapes each chunk with
 the span's primary face and, when that produces `.notdef`, splits it into per-face items shaped with
@@ -374,9 +415,12 @@ runs leftward from its anchor point, so the next chunk continues to the left. Bl
 `textLength` carry at the end of the chunk; adopting that would be a separate later change with its
 own red-first test, not part of this design. Blink differs for unpositioned `rtl` chunks: its
 anchoring uses the first logical character's left edge as the anchor point, so it is not a pixel
-oracle there. After a `textPath`, the current text position stays the existing end-of-path position.
-`text/text/x-and-y-with-multiple-values-and-arabic-text` exercises the `ltr` case and stays
-unchanged.
+oracle there. After a `textPath`, the running shift resets and the pen continues from the existing
+end-of-path position; model (a) does not carry `dx` through the path. A third mechanism then runs
+last, as today: `ApplyPostTextPathTranslations` translates the following flat text onto the path's
+end point, absorbing the running shift, the carry, and the anchoring of that text as described in
+[Current behavior](#current-behavior). `text/text/x-and-y-with-multiple-values-and-arabic-text`
+exercises the `ltr` case and stays unchanged.
 
 ### Properties
 
@@ -532,7 +576,12 @@ plus letter and word spacing, except the spacing of the character at the chunk's
 `P` be the anchor point, defined as today's effective anchor: the pre-anchor `xPosition` of the
 chunk's first glyph in run storage order, after all relative shifts and all `textLength`
 displacement (including an owner that began before the chunk and spans into it), with the glyph's
-x offset included. For an `rtl` paragraph in Milestone 2, `P` is the corresponding right edge where
+x offset included. Until Milestone 1c, a chunk's glyphs are those from today's boundary glyph on,
+so for a right-to-left shaped chunk that is not first in its span, `P` is the `xPosition` of the
+stored glyph where its first logical character appears, as today. In vertical modes `P` is the
+first stored glyph's inline pen position (`yPosition` minus `verticalOriginOffset`, the
+`InlinePenPosition` of #2098), and the conditions below apply on that axis. For an `rtl` paragraph
+in Milestone 2, `P` is the corresponding right edge where
 the leftward pen pass began, after the same shifts. With the `direction` and `text-anchor` of the
 element containing the chunk's first logical character, `start` with `ltr` or `end` with `rtl`
 moves `a` to `P`, `start` with `rtl` or `end` with `ltr` moves `b` to `P`, and `middle` moves
@@ -546,16 +595,18 @@ and the new one share `P`, so they agree exactly when two equalities hold: the m
 last stored glyph's `xPosition` plus x advance. Every intended difference is a way to break one of
 them:
 
-- **A character left of `P`.** A later character's left edge lies left of the first glyph, through
-  a negative `dx`, negative letter or word spacing, or `textLength` compression. `start` chunks then
+- **A character left of `P`.** A later character's left edge lies left of the first glyph, for
+  example through a negative `dx`, negative letter or word spacing, negative kerning, a glyph x
+  offset (such as a mark wider than a narrow base), or `textLength` compression. `start` chunks then
   move by `P - a` (today they never move), and `middle` and `end` measure a wider extent.
-- **A trailing zero-advance glyph.** The last stored glyph has zero x advance: a combining mark, a
-  default-ignorable such as ZWJ or a variation selector, or zero-size text. Today `b` is that
-  glyph's `xPosition`; the new `b` is the right edge of the last typographic character, which is at
-  least as far right.
-- **An inner character past the end.** A shift moves an inner character's right edge past the last
-  glyph's right edge, or the last glyph's right edge left of an inner character's, through `dx`,
-  negative spacing, or `textLength` compression. `middle` and `end` then measure a different `b`.
+- **A trailing zero-advance glyph.** The last stored glyph has zero x advance, for example a
+  combining mark, a default-ignorable such as ZWJ or a variation selector, or zero-size text. Today
+  `b` is that glyph's `xPosition`; the new `b` is the right edge of the last typographic character,
+  which is at least as far right.
+- **An inner character past the end.** An inner character's right edge lies past the last glyph's
+  right edge, or the last glyph's right edge left of an inner character's, for example through `dx`,
+  negative spacing, negative kerning, a glyph x offset, or `textLength` compression. `middle` and
+  `end` then measure a different `b`.
 
 Spacing is not a difference: today's `b` uses the last glyph's x advance without its spacing, and
 the new rule excludes the spacing at the visual end edge, which in `ltr` is the same glyph. Without
@@ -872,12 +923,11 @@ ceiling decision before publication.
 
 ## Rollout Plan
 
-There is no flag. Milestone 1 preserves today's behavior exactly, pixels included. Milestone 1b
-changes only the cases it lists.
-Milestone 2 changes output only for paragraphs that contain right-to-left characters, bidi controls,
-or `direction="rtl"`, which the fast path guarantees. Each milestone reverts independently:
-reverting Milestone 2 removes the dependency, adapter, `direction` property, and conformance data
-together.
+There is no flag. Milestone 1 preserves today's behavior exactly, pixels included. Milestones 1b and
+1c change only the cases they list. Milestone 2 changes output only for paragraphs that contain
+right-to-left characters, bidi controls, or `direction="rtl"`, which the fast path guarantees. Each
+milestone reverts independently: reverting Milestone 2 removes the dependency, adapter, `direction`
+property, and conformance data together.
 
 ## Alternatives Considered
 
