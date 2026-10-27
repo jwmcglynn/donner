@@ -344,6 +344,14 @@ bool ApplyFilterPair(Registry& registry, Entity entity, std::string_view name,
   return true;
 }
 
+/// An feConvolveMatrix order together with its over-limit flag, overridden as one value.
+struct ConvolveOrder {
+  Vector2i order;             //!< Order on each axis.
+  bool exceedsLimit = false;  //!< Whether the authored order exceeded the limit.
+
+  bool operator==(const ConvolveOrder&) const = default;
+};
+
 std::optional<int> AnimationInteger(double value, int minimum, int maximum) {
   if (!std::isfinite(value) || value < minimum || value > maximum) {
     return std::nullopt;
@@ -367,12 +375,17 @@ bool ApplyFilterInteger(Registry& registry, Entity entity, std::string_view name
     const auto x = AnimationInteger(numbers->front(), 1, kMaximumFilterConvolveOrder);
     const auto y = AnimationInteger(numbers->back(), 1, kMaximumFilterConvolveOrder);
     if (x && y) {
+      // The over-limit flag belongs to the order, so it is overridden and restored with it.
       (void)OverrideField<FEConvolveMatrixComponent>(
-          registry, entity, name, Vector2i(*x, *y),
-          [](const auto& component) { return Vector2i(component.orderX, component.orderY); },
-          [](auto& component, Vector2i value) {
-            component.orderX = value.x;
-            component.orderY = value.y;
+          registry, entity, name, ConvolveOrder{Vector2i(*x, *y), false},
+          [](const auto& component) {
+            return ConvolveOrder{Vector2i(component.orderX, component.orderY),
+                                 component.orderExceedsLimit};
+          },
+          [](auto& component, const ConvolveOrder& value) {
+            component.orderX = value.order.x;
+            component.orderY = value.order.y;
+            component.orderExceedsLimit = value.exceedsLimit;
           });
     }
     return true;

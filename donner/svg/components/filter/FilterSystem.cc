@@ -2,11 +2,15 @@
 
 #include <array>
 #include <limits>
+#include <optional>
+#include <string>
+#include <string_view>
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/ReferenceResolutionBudget.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/filter/ComputedFilterResourceBudget.h"
@@ -374,13 +378,6 @@ std::vector<EntityHandle> getInheritanceChain(EntityHandle handle, ParseWarningS
   return inheritanceChain;
 }
 
-Entity NextFilterChild(Registry& registry, Entity current, std::size_t retainedNodeCount) {
-  if (retainedNodeCount >= kMaximumFilterGraphNodes) {
-    return entt::null;
-  }
-  return registry.get<donner::components::TreeComponent>(current).nextSibling();
-}
-
 void AppendColorMatrixNode(FilterGraph& graph, const FEColorMatrixComponent& component,
                            const FilterPrimitiveComponent& attributes,
                            std::optional<ColorInterpolationFilters> colorInterpolation) {
@@ -392,7 +389,9 @@ void AppendColorMatrixNode(FilterGraph& graph, const FEColorMatrixComponent& com
   graph.nodes.push_back(makeFilterNode(std::move(primitive), attributes, colorInterpolation));
 }
 
-void AppendComponentTransferNode(Registry& registry, Entity current, FilterGraph& graph,
+/// Appends an feComponentTransfer node. @return False, appending nothing, when a channel table
+/// exceeds \ref kMaximumFilterTableValues.
+bool AppendComponentTransferNode(Registry& registry, Entity current, FilterGraph& graph,
                                  const FilterPrimitiveComponent& attributes,
                                  std::optional<ColorInterpolationFilters> colorInterpolation) {
   filter_primitive::ComponentTransfer primitive;
@@ -400,8 +399,11 @@ void AppendComponentTransferNode(Registry& registry, Entity current, FilterGraph
   for (Entity child = tree.firstChild(); child != entt::null;
        child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
     const auto* function = ActiveFilterComponent<FEFuncComponent>(registry, child);
-    if (!function || function->tableValues.size() > kMaximumFilterTableValues) {
+    if (!function) {
       continue;
+    }
+    if (function->tableValues.size() > kMaximumFilterTableValues) {
+      return false;
     }
     filter_primitive::ComponentTransfer::Func value;
     value.type = static_cast<filter_primitive::ComponentTransfer::FuncType>(function->type);
@@ -419,9 +421,12 @@ void AppendComponentTransferNode(Registry& registry, Entity current, FilterGraph
     }
   }
   graph.nodes.push_back(makeFilterNode(std::move(primitive), attributes, colorInterpolation));
+  return true;
 }
 
-void AppendMergeNode(Registry& registry, Entity current, FilterGraph& graph,
+/// Appends an feMerge node. @return False, appending nothing, when it has more than
+/// \ref kMaximumFilterMergeInputs inputs.
+bool AppendMergeNode(Registry& registry, Entity current, FilterGraph& graph,
                      const FilterPrimitiveComponent& attributes,
                      std::optional<ColorInterpolationFilters> colorInterpolation) {
   FilterNode node;
@@ -433,23 +438,32 @@ void AppendMergeNode(Registry& registry, Entity current, FilterGraph& graph,
   node.height = attributes.height;
   node.colorInterpolationFilters = colorInterpolation;
   const auto& tree = registry.get<donner::components::TreeComponent>(current);
-  for (Entity child = tree.firstChild();
-       child != entt::null && node.inputs.size() < kMaximumFilterMergeInputs;
+  for (Entity child = tree.firstChild(); child != entt::null;
        child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
     if (const auto* mergeNode = ActiveFilterComponent<FEMergeNodeComponent>(registry, child)) {
+      if (node.inputs.size() == kMaximumFilterMergeInputs) {
+        return false;
+      }
       node.inputs.push_back(mergeNode->in.value_or(FilterInput{FilterInput::Previous{}}));
     }
   }
   graph.nodes.push_back(std::move(node));
+  return true;
 }
 
+/// Whether an feConvolveMatrix exceeds the order or kernel value limits.
+bool ConvolveExceedsLimits(const FEConvolveMatrixComponent& component) {
+  return component.orderExceedsLimit || component.orderX > kMaximumFilterConvolveOrder ||
+         component.orderY > kMaximumFilterConvolveOrder ||
+         component.kernelMatrix.size() > kMaximumFilterKernelValues;
+}
+
+/// Appends an feConvolveMatrix node. An order of 0 or less, which the parser and animation never
+/// produce but a component built in code can hold, appends nothing.
 void AppendConvolveNode(FilterGraph& graph, const FEConvolveMatrixComponent& component,
                         const FilterPrimitiveComponent& attributes,
                         std::optional<ColorInterpolationFilters> colorInterpolation) {
-  if (component.orderX <= 0 || component.orderY <= 0 ||
-      component.orderX > kMaximumFilterConvolveOrder ||
-      component.orderY > kMaximumFilterConvolveOrder ||
-      component.kernelMatrix.size() > kMaximumFilterKernelValues) {
+  if (component.orderX <= 0 || component.orderY <= 0) {
     return;
   }
   filter_primitive::ConvolveMatrix primitive;
@@ -501,6 +515,27 @@ void AppendImageNode(Registry& registry, Entity current, FilterGraph& graph,
   node.height = attributes.height;
   node.colorInterpolationFilters = colorInterpolation;
   graph.nodes.push_back(std::move(node));
+}
+
+/// Whether an active primitive adds a graph node. An feConvolveMatrix with an order of 0 or less,
+/// possible only for a component built in code, adds none; one over the kernel limits counts,
+/// since it rejects the filter.
+bool PrimitiveAddsNode(const Registry& registry, Entity entity) {
+  const auto* convolve = registry.try_get<FEConvolveMatrixComponent>(entity);
+  return !convolve || ConvolveExceedsLimits(*convolve) ||
+         (convolve->orderX > 0 && convolve->orderY > 0);
+}
+
+/// Fails a filter over a resource limit closed instead of truncating or partially applying it, so
+/// the element referencing it is not rendered.
+void RejectFilterOverLimit(EntityHandle handle, std::string_view reason,
+                           ParseWarningSink& warningSink) {
+  std::string message(reason);
+  if (const auto* id = handle.try_get<IdComponent>()) {
+    message += " in filter \"" + std::string(id->id().str()) + "\"";
+  }
+  warningSink.add(ParseDiagnostic::Warning(RcString(message), FileOffset::Offset(0)));
+  RemoveComputedFilter(handle);
 }
 
 void AttachAnimatedRegion(Registry& registry, Entity primitive, FilterGraph& graph,
@@ -556,6 +591,8 @@ struct PrimitiveBuildContext {
   std::optional<ColorInterpolationFilters> colorInterpolation;
   ComputedFilterResourceBudget& budget;
   ParseWarningSink& warnings;
+  /// Set to the reason when the primitive exceeds a per-primitive resource limit.
+  std::optional<std::string_view>& limitExceeded;
 };
 
 std::optional<filter_primitive::LightSource> FindLightSource(const Registry& registry,
@@ -637,13 +674,17 @@ void AppendPrimitive(const PrimitiveBuildContext& context, const FEBlendComponen
 }
 
 void AppendPrimitive(const PrimitiveBuildContext& context, const FEComponentTransferComponent&) {
-  AppendComponentTransferNode(context.registry, context.entity, context.graph, context.attributes,
-                              context.colorInterpolation);
+  if (!AppendComponentTransferNode(context.registry, context.entity, context.graph,
+                                   context.attributes, context.colorInterpolation)) {
+    context.limitExceeded = "Filter transfer table limit exceeded";
+  }
 }
 
 void AppendPrimitive(const PrimitiveBuildContext& context, const FEMergeComponent&) {
-  AppendMergeNode(context.registry, context.entity, context.graph, context.attributes,
-                  context.colorInterpolation);
+  if (!AppendMergeNode(context.registry, context.entity, context.graph, context.attributes,
+                       context.colorInterpolation)) {
+    context.limitExceeded = "Filter merge input limit exceeded";
+  }
 }
 
 void AppendPrimitive(const PrimitiveBuildContext& context, const FEDropShadowComponent& component) {
@@ -671,6 +712,10 @@ void AppendPrimitive(const PrimitiveBuildContext& context, const FEMorphologyCom
 
 void AppendPrimitive(const PrimitiveBuildContext& context,
                      const FEConvolveMatrixComponent& component) {
+  if (ConvolveExceedsLimits(component)) {
+    context.limitExceeded = "Filter convolution kernel limit exceeded";
+    return;
+  }
   AppendConvolveNode(context.graph, component, context.attributes, context.colorInterpolation);
 }
 
@@ -828,7 +873,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
   const donner::components::TreeComponent& tree =
       primitiveSource.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
-       cur = NextFilterChild(registry, cur, filterGraph.nodes.size())) {
+       cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
     const auto* primitive = ActiveFilterComponent<FilterPrimitiveComponent>(registry, cur);
     if (!primitive) {
       continue;
@@ -837,10 +882,21 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
     // Resolve per-primitive color-interpolation-filters (overrides filter-level default).
     const auto primitiveCIF = resolveColorInterpolationFilters(registry, cur);
 
+    // Checked before building, so an extra feImage never copies its pixels.
+    if (filterGraph.nodes.size() >= kMaximumFilterGraphNodes && PrimitiveAddsNode(registry, cur)) {
+      RejectFilterOverLimit(handle, "Filter primitive limit exceeded", warningSink);
+      return;
+    }
+
     const std::size_t previousNodeCount = filterGraph.nodes.size();
+    std::optional<std::string_view> limitExceeded;
     // Determine which filter primitive we have.
     AppendPrimitiveNode({registry, cur, filterGraph, effectChain, *primitive, primitiveCIF,
-                         computedBudget, warningSink});
+                         computedBudget, warningSink, limitExceeded});
+    if (limitExceeded) {
+      RejectFilterOverLimit(handle, *limitExceeded, warningSink);
+      return;
+    }
     AttachAnimatedRegion(registry, cur, filterGraph, previousNodeCount);
   }
 
