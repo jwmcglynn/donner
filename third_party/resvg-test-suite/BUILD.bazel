@@ -80,6 +80,7 @@ size before the canvas transform, and the Mitchell cubic that resvg v0.49.0 appl
 are byte-identical at both revisions, except no-height.svg and no-width.svg, which upstream
 redrew on a 200x200 viewBox and which were replaced as well.
 
+  tests/masking/mask/with-image.png
   tests/painting/image-rendering/optimizeSpeed.png
   tests/structure/image/embedded-16bit-png.png
   tests/structure/image/embedded-gif.png

@@ -490,8 +490,8 @@ TEST_F(RendererGeodeGoldenTests, ImageDataUrlPixelated) {
                          "donner/svg/renderer/testdata/golden/geode/image_data_url_pixelated.png");
 }
 
-/// Same 2x2 PNG over an opaque white background at 50% opacity using the
-/// default (bilinear) sampling filter. Exercises the isolated-layer composite
+/// Same 2x2 PNG over an opaque white background at 50% opacity using
+/// `image-rendering: smooth` (bilinear) sampling. Exercises the isolated-layer composite
 /// and premultiplied-source-over blend path.
 TEST_F(RendererGeodeGoldenTests, ImageDataUrlOpacity) {
 #if defined(__linux__)

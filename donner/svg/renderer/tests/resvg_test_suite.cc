@@ -696,6 +696,9 @@ INSTANTIATE_TEST_SUITE_P(
                 "masking/mask",
                 {
                     {"recursive-on-child.svg", Params::UndefinedBehavior("Recursive on child")},
+                    // The 300x300 resvg v0.49.0 rendering, which upscales the masked image with
+                    // the Mitchell cubic as Donner does.
+                    {"with-image.svg", ResvgV049Reference()},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
