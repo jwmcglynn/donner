@@ -55,6 +55,14 @@ genrule(
     visibility = ["//visibility:private"],  # Only used by the test in this file
 )
 
+embed_resources(
+    name = "embedded_resource_test_golden",
+    resources = {"kPublicSansMediumOtf": "//third_party/public-sans:PublicSans-Medium.otf"},
+    header_output = "embedded_resource_test_golden.h",
+    testonly = True,
+    visibility = ["//visibility:private"],
+)
+
 py_test(
     name = "embed_resources_tests",
     size = "small",
@@ -67,14 +75,14 @@ py_test(
         "--generated_files_subdir",
         "donner/tools/py_embedded_dir",
         "--golden_header_path",
-        "$(location //third_party/public-sans:embedded_header)",
+        "$(location :embedded_resource_test_golden.h)",
         "--golden_cpp_path",
-        "$(location //third_party/public-sans:embedded_cpp)",
+        "$(location :__third_party_public_sans_PublicSans_Medium_otf.cpp)",
     ],
     data = [
         ":generate_embedded_test_resources",
-        "//third_party/public-sans:embedded_cpp",
-        "//third_party/public-sans:embedded_header",
+        ":__third_party_public_sans_PublicSans_Medium_otf.cpp",
+        ":embedded_resource_test_golden.h",
     ],
     deps = ["@rules_python//python/runfiles"],
 )
