@@ -71,7 +71,19 @@ type ProbeGlobal = typeof globalThis & {
     claimed: boolean;
   };
   __donnerSurfaceFrameProbeGpuDelay?: CanvasGpuDelayState;
+  /** Waits until the GPU has run every canvas write, with none submitted meanwhile. */
+  __donnerSurfaceFrameProbeSettle?: () => Promise<CanvasSettleResult>;
 };
+
+/** One wait for the GPU to finish the canvas writes submitted so far. */
+export interface CanvasSettleResult {
+  /** Canvas-writing submissions counted when the GPU had run all of them. */
+  canvasSubmits: number;
+  /** Canvas frames acquired by then. */
+  frames: number;
+  /** Queue completions awaited: more than one when a frame was submitted during a wait. */
+  rounds: number;
+}
 
 /**
  * Test-only fault injection: after the first command buffer that writes every Nth canvas frame,
@@ -103,6 +115,7 @@ function installInWorker(): boolean {
   scope.__donnerSurfaceFrameProbe = state;
   if (
     typeof GPUCanvasContext === "undefined" || typeof GPUCommandEncoder === "undefined"
+    || typeof GPUDevice === "undefined"
     || typeof GPUQueue === "undefined" || typeof GPUTexture === "undefined"
   ) {
     return false;
@@ -318,6 +331,21 @@ function installInWorker(): boolean {
     });
   };
 
+  scope.__donnerSurfaceFrameProbeSettle = async () => {
+    // A round that saw a new canvas frame or write cannot vouch for that write's GPU work, so wait again.
+    for (let rounds = 1; rounds <= 16; ++rounds) {
+      const queue = scope.__donnerSurfaceFrameProbeQueue;
+      if (queue === undefined) throw new Error("the probe has not observed a canvas write");
+      const submits = state.canvasSubmits;
+      const frames = state.frames;
+      await onSubmittedWorkDone.call(queue);
+      if (state.canvasSubmits === submits && state.frames === frames) {
+        return { canvasSubmits: submits, frames, rounds };
+      }
+    }
+    throw new Error("canvas writes kept arriving while waiting for the GPU to finish them");
+  };
+
   let pendingCanvasSubmit = 0;
   const onSubmittedWorkDone = GPUQueue.prototype.onSubmittedWorkDone;
   GPUQueue.prototype.onSubmittedWorkDone = function(this: GPUQueue) {
@@ -465,23 +493,6 @@ function waitForCanvasGpuWorkInWorker(): Promise<number> {
 
 export function waitForSubmittedCanvasGpuWork(owner: Worker): Promise<number> {
   return owner.evaluate(waitForCanvasGpuWorkInWorker);
-}
-
-/** Diagnostic timing for the same existing canvas completion promise; submits no GPU work. */
-export async function observeSubmittedCanvasGpuWork(owner: Worker) {
-  const dispatchedEpochMs = Date.now();
-  const observed = await owner.evaluate(async () => {
-    const enteredEpochMs = Date.now();
-    const completion = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletion;
-    if (completion === undefined) {
-      throw new Error("the probe has not observed a canvas completion promise");
-    }
-    const hold = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold;
-    if (hold !== undefined) ++hold.waits;
-    await completion.promise;
-    return { enteredEpochMs, resolvedEpochMs: Date.now(), submissions: completion.submissions };
-  });
-  return { dispatchedEpochMs, ...observed, repliedEpochMs: Date.now() };
 }
 
 // Bound each observation without treating a slow reply as proof of nonownership.
@@ -719,6 +730,59 @@ export async function armCanvasGpuDelayForTest(
         const delay = scope.__donnerSurfaceFrameProbeGpuDelay;
         delete scope.__donnerSurfaceFrameProbeGpuDelay;
         return delay === undefined ? null : { injected: delay.injected, jobMs: [...delay.jobMs] };
+      });
+    },
+  };
+}
+
+/**
+ * Wait in \p owner until the GPU has finished every canvas write submitted so far, with no new
+ * canvas write submitted while waiting. Uses the browser's own queue completion, not the app's
+ * (possibly held) completion promise.
+ */
+export function settleCanvasWrites(owner: Worker): Promise<CanvasSettleResult> {
+  return owner.evaluate(async () => {
+    const settle = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeSettle;
+    if (settle === undefined) throw new Error("the surface frame probe is not installed");
+    return settle();
+  });
+}
+
+/** Canvas-writing submissions and canvas frames \p owner has made since the probe was installed. */
+export function readCanvasActivity(owner: Worker): Promise<{ canvasSubmits: number; frames: number }> {
+  return owner.evaluate(() => {
+    const state = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbe;
+    if (!state?.installed) throw new Error("the surface frame probe is not installed");
+    return { canvasSubmits: state.canvasSubmits, frames: state.frames };
+  });
+}
+
+/**
+ * Hold the app's canvas completions in \p owner until released, so its presentation queue stops
+ * admitting new frames once three are pending. The GPU work itself is not delayed; only the
+ * completion promises the app awaits are.
+ */
+export async function holdCanvasCompletions(owner: Worker): Promise<{ release: () => Promise<void> }> {
+  const armed = await owner.evaluate(() => {
+    const scope = globalThis as ProbeGlobal;
+    if (!scope.__donnerSurfaceFrameProbe?.installed) return false;
+    if (scope.__donnerSurfaceFrameProbeCompletionHold !== undefined) return false;
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0, waits: 0 };
+    return true;
+  });
+  if (armed !== true) {
+    throw new Error("could not hold the canvas completions");
+  }
+  return {
+    release: async () => {
+      await owner.evaluate(() => {
+        const scope = globalThis as ProbeGlobal;
+        scope.__donnerSurfaceFrameProbeCompletionHold?.release();
+        delete scope.__donnerSurfaceFrameProbeCompletionHold;
       });
     },
   };
