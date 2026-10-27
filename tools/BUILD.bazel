@@ -1064,7 +1064,10 @@ py_library(
 py_test(
     name = "docs_publish_tests",
     size = "small",
-    srcs = ["docs_fixture.py", "docs_publish_tests.py"],
+    srcs = [
+        "docs_fixture.py",
+        "docs_publish_tests.py",
+    ],
     main = "docs_publish_tests.py",
     deps = [":docs_publish"],
 )
