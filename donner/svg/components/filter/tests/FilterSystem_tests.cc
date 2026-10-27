@@ -7,8 +7,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -1220,6 +1222,59 @@ TEST_F(FilterSystemTest, FilterChainMultiplePrimitives) {
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
   EXPECT_THAT(computed->filterGraph.nodes, SizeIs(3));
+}
+
+// --- Primitive count limit ---
+
+/// A document whose filter `f` holds \p offsets one-pixel feOffset primitives, then \p blurs
+/// feGaussianBlur primitives.
+std::string PrimitiveCountDocument(std::size_t offsets, std::size_t blurs) {
+  std::string markup = R"(<svg xmlns="http://www.w3.org/2000/svg"><defs><filter id="f">)";
+  for (std::size_t i = 0; i < offsets; ++i) {
+    markup += R"(<feOffset dx="1"/>)";
+  }
+  for (std::size_t i = 0; i < blurs; ++i) {
+    markup += R"(<feGaussianBlur stdDeviation="1"/>)";
+  }
+  return markup + "</filter></defs></svg>";
+}
+
+TEST_F(FilterSystemTest, FilterAtPrimitiveLimitRetainsEveryPrimitive) {
+  ASSERT_EQ(kMaximumFilterGraphNodes, 32u);
+  auto document = ParseSVG(PrimitiveCountDocument(31, 1));
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(document.registry(), warningSink);
+  filterSystem.instantiateAllComputedComponents(document.registry(), warningSink);
+
+  auto element = document.querySelector("#f");
+  ASSERT_TRUE(element.has_value());
+  const auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
+  ASSERT_THAT(computed, NotNull());
+  ASSERT_THAT(computed->filterGraph.nodes, SizeIs(32));
+  EXPECT_TRUE(std::holds_alternative<filter_primitive::GaussianBlur>(
+      computed->filterGraph.nodes.back().primitive));
+  EXPECT_THAT(warningSink.warnings(), IsEmpty());
+}
+
+// A filter with more primitives than the limit is rejected as a whole, never truncated to its
+// first primitives, so the element referencing it is not rendered.
+TEST_F(FilterSystemTest, FilterOverPrimitiveLimitIsRejectedWithoutTruncation) {
+  for (const auto& [offsets, blurs] :
+       {std::pair<std::size_t, std::size_t>{32, 1}, {33, 0}, {4096, 0}}) {
+    SCOPED_TRACE(testing::Message() << offsets << " offsets, " << blurs << " blurs");
+    auto document = ParseSVG(PrimitiveCountDocument(offsets, blurs));
+    ParseWarningSink warningSink;
+    StyleSystem().computeAllStyles(document.registry(), warningSink);
+    filterSystem.instantiateAllComputedComponents(document.registry(), warningSink);
+
+    auto element = document.querySelector("#f");
+    ASSERT_TRUE(element.has_value());
+    EXPECT_THAT(element->entityHandle().try_get<ComputedFilterComponent>(), testing::IsNull());
+    EXPECT_THAT(
+        warningSink.warnings(),
+        ElementsAre(testing::Field(&ParseDiagnostic::reason,
+                                   testing::Eq(RcString("Filter primitive limit exceeded")))));
+  }
 }
 
 // --- Filter attributes ---

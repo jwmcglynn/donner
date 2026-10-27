@@ -621,6 +621,149 @@ TEST_F(RendererRegressionTests, CssFilterContractMixedUrlGrayscaleUsesSrgb) {
                          "mixed_url_grayscale_srgb");
 }
 
+// Filter primitive limit: a filter graph holds at most 32 primitives. A filter over the limit is a
+// valid filter whose preparation fails closed, so the element it applies to is not rendered, while
+// independent content still renders. It is never truncated to its first 32 primitives.
+
+/// Filter `id` covering the whole 84x16 canvas, holding \p offsets one-pixel feOffset primitives
+/// and then \p blurs feGaussianBlur primitives.
+std::string PrimitiveLimitFilter(std::string_view id, std::size_t offsets, std::size_t blurs = 0) {
+  std::string markup = std::string(R"svg(<filter id=")svg") + std::string(id) +
+                       R"svg(" filterUnits="userSpaceOnUse" x="0" y="0" width="84" height="16"
+                       color-interpolation-filters="sRGB">)svg";
+  for (std::size_t i = 0; i < offsets; ++i) {
+    markup += R"svg(<feOffset dx="1"/>)svg";
+  }
+  for (std::size_t i = 0; i < blurs; ++i) {
+    markup += R"svg(<feGaussianBlur stdDeviation="1"/>)svg";
+  }
+  return markup + "</filter>";
+}
+
+/// Renders \p definitions, then a seagreen square at x=4 carrying \p filter, then an unfiltered
+/// lime control square at x=72.
+RendererBitmap RenderPrimitiveLimitCase(std::string_view definitions, std::string_view filter) {
+  SVGDocument document = instantiateSubtree(
+      std::string(definitions) +
+          R"svg(<rect x="4" y="4" width="8" height="8" fill="seagreen" filter=")svg" +
+          std::string(filter) + R"svg("/>
+          <rect x="72" y="4" width="8" height="8" fill="lime"/>)svg",
+      {}, Vector2i(84, 16));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// The unfiltered oracle: the seagreen square drawn at \p squareX, or omitted when it is empty, and
+/// the lime control square.
+RendererBitmap RenderPrimitiveLimitOracle(std::string_view squareX) {
+  std::string body;
+  if (!squareX.empty()) {
+    body = std::string(R"svg(<rect x=")svg") + std::string(squareX) +
+           R"svg(" y="4" width="8" height="8" fill="seagreen"/>)svg";
+  }
+  SVGDocument document =
+      instantiateSubtree(body + R"svg(<rect x="72" y="4" width="8" height="8" fill="lime"/>)svg",
+                         {}, Vector2i(84, 16));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, FilterPrimitiveLimitAppliesEveryPrimitiveAtTheLimit) {
+  const RendererBitmap shifted = RenderPrimitiveLimitOracle("36");
+  AssertVisibleFixture(shifted, "primitive_limit_shifted_oracle");
+  editor::tests::CompareBitmapToBitmap(
+      RenderPrimitiveLimitCase(PrimitiveLimitFilter("f", 32), "url(#f)"), shifted,
+      "primitive_limit_32_offsets", editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(
+      RenderPrimitiveLimitCase(PrimitiveLimitFilter("a", 16) + PrimitiveLimitFilter("b", 16),
+                               "url(#a) url(#b)"),
+      shifted, "primitive_limit_32_offsets_url_chain", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, FilterPrimitiveLimitRefusesElementOverTheLimit) {
+  const RendererBitmap refused = RenderPrimitiveLimitOracle("");
+  AssertVisibleFixture(refused, "primitive_limit_refused_oracle");
+  struct Case {
+    std::string_view name;
+    std::string definitions;
+    std::string_view filter;
+  };
+  const std::array<Case, 4> cases = {{
+      {"offsets_32_blur_1", PrimitiveLimitFilter("f", 32, 1), "url(#f)"},
+      {"offsets_33", PrimitiveLimitFilter("f", 33), "url(#f)"},
+      {"offsets_4096", PrimitiveLimitFilter("f", 4096), "url(#f)"},
+      {"url_chain_16_17", PrimitiveLimitFilter("a", 16) + PrimitiveLimitFilter("b", 17),
+       "url(#a) url(#b)"},
+  }};
+  for (const Case& item : cases) {
+    SCOPED_TRACE(item.name);
+    editor::tests::CompareBitmapToBitmap(RenderPrimitiveLimitCase(item.definitions, item.filter),
+                                         refused, "primitive_limit_" + std::string(item.name),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// \p count `opacity(1)` filter functions.
+std::string IdentityFilterFunctions(std::size_t count) {
+  std::string functions;
+  for (std::size_t i = 0; i < count; ++i) {
+    functions += i == 0 ? "opacity(1)" : " opacity(1)";
+  }
+  return functions;
+}
+
+TEST_F(RendererRegressionTests, FilterPrimitiveLimitAppliesToCssFilterFunctions) {
+  const RendererBitmap unshifted = RenderPrimitiveLimitOracle("4");
+  AssertVisibleFixture(unshifted, "primitive_limit_unshifted_oracle");
+  editor::tests::CompareBitmapToBitmap(RenderPrimitiveLimitCase("", IdentityFilterFunctions(32)),
+                                       unshifted, "primitive_limit_32_functions",
+                                       editor::tests::PixelmatchIdentityParams());
+  const RendererBitmap refused = RenderPrimitiveLimitOracle("");
+  for (const std::size_t count : {std::size_t{33}, std::size_t{1024}}) {
+    SCOPED_TRACE(count);
+    editor::tests::CompareBitmapToBitmap(
+        RenderPrimitiveLimitCase("", IdentityFilterFunctions(count)), refused,
+        "primitive_limit_" + std::to_string(count) + "_functions",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+/// Renders a host whose filter is an feImage of the seagreen square, which itself carries
+/// `url(#inner)` defined by \p innerFilter, beside the lime control square.
+RendererBitmap RenderPrimitiveLimitFeImageCase(const std::string& innerFilter) {
+  SVGDocument document = instantiateSubtree(
+      R"svg(<defs>
+        <filter id="image" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="16"
+                color-interpolation-filters="sRGB">
+          <feImage href="#source"/>
+        </filter>)svg" +
+          innerFilter + R"svg(
+        <rect id="source" x="4" y="4" width="8" height="8" fill="seagreen" filter="url(#inner)"/>
+      </defs>
+      <rect width="64" height="16" fill="red" filter="url(#image)"/>
+      <rect x="72" y="4" width="8" height="8" fill="lime"/>)svg",
+      {}, Vector2i(84, 16));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+// The at-limit oracle is the same feImage of the square under one 32-pixel feOffset, so the
+// comparison isolates the primitive count from how feImage resamples filtered content.
+TEST_F(RendererRegressionTests, FilterPrimitiveLimitAppliesInsideFeImageContent) {
+  const RendererBitmap shifted = RenderPrimitiveLimitFeImageCase(
+      R"svg(<filter id="inner" filterUnits="userSpaceOnUse" x="0" y="0" width="84" height="16"
+          color-interpolation-filters="sRGB"><feOffset dx="32"/></filter>)svg");
+  AssertVisibleFixture(shifted, "primitive_limit_fe_image_shifted_oracle");
+  editor::tests::CompareBitmapToBitmap(
+      RenderPrimitiveLimitFeImageCase(PrimitiveLimitFilter("inner", 32)), shifted,
+      "primitive_limit_fe_image_32_offsets", editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(
+      RenderPrimitiveLimitFeImageCase(PrimitiveLimitFilter("inner", 4096)),
+      RenderPrimitiveLimitOracle(""), "primitive_limit_fe_image_4096_offsets",
+      editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(
+      RenderPrimitiveLimitFeImageCase(PrimitiveLimitFilter("inner", 32, 1)),
+      RenderPrimitiveLimitOracle(""), "primitive_limit_fe_image_33_primitives",
+      editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererRegressionTests, UnitlessPresentationAttributeBlurUsesUserUnits) {
   const auto render = [](std::string_view filter) {
     const std::string markup =
