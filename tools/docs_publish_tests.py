@@ -266,6 +266,34 @@ class DocsPublishTest(unittest.TestCase):
             publish._verify_retained_release(api, "c" * 40, "0.8.0", entry, self.root)
         self.assertEqual(verify.call_args.kwargs["workflow"], ".github/workflows/release_candidate.yml")
 
+    def test_health_wait_allows_public_propagation_without_entering_recovery(self):
+        work, record, plan, commit, restore = self.transaction()
+        with mock.patch.object(publish.store, "commit", side_effect=commit), \
+             mock.patch.object(publish.store, "restore", side_effect=restore), \
+             mock.patch.object(publish, "deploy", return_value="91"), \
+             mock.patch.object(publish, "_verify_live", side_effect=[ValueError("old site"), None]), \
+             mock.patch.object(publish.time, "sleep") as pause, \
+             mock.patch.object(publish, "_recover") as recover:
+            result = publish._retain_and_deploy(record, plan, 9, work, self.api)
+        self.assertEqual(result["status"], "published")
+        pause.assert_called_once_with(5)
+        recover.assert_not_called()
+
+    def test_health_wait_handles_temporary_network_errors(self):
+        pause = mock.Mock()
+        with mock.patch.object(publish, "_live_identity", side_effect=[OSError("offline"), False, True]) as check:
+            publish._wait_for_live(self.prior, wait=pause)
+        self.assertEqual(check.call_count, 3)
+        self.assertEqual(pause.call_count, 2)
+
+    def test_health_wait_stops_at_the_bounded_propagation_limit(self):
+        pause = mock.Mock()
+        with mock.patch.object(publish, "_live_identity", return_value=False) as check, \
+             self.assertRaisesRegex(ValueError, "public site did not converge"):
+            publish._wait_for_live(self.prior, wait=pause)
+        self.assertEqual(check.call_count, 24)
+        self.assertEqual(pause.call_count, 23)
+
     def test_network_requests_reject_other_schemes_and_embedded_credentials(self):
         for url in ("file:///secret", "http://example.test/", "https://user:secret@example.test/",
                     "https://example.test:444/", "https://example.test/#fragment"):
