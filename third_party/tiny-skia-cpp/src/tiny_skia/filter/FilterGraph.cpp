@@ -730,33 +730,38 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             output = NodeOutput{std::move(fpOut), nodeLinearRGB, /*spaceInvariant=*/!lit};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::DropShadow>) {
-            // Decomposed into flood + composite-in + offset + blur + merge, all run in the
-            // node's own interpolation space. Only the flood color needs converting, because it
-            // is authored as premultiplied sRGB; the alpha the shadow is cut from carries no
-            // color.
+            // Filter Effects defines feDropShadow as blur of the input alpha, offset, flood
+            // composited into that alpha, and merge under the input, all in the node's own
+            // interpolation space. Blurring before the offset keeps the spread of content the
+            // offset carries past the raster edge. Only the flood color needs converting,
+            // because it is authored as premultiplied sRGB; the alpha the shadow is cut from
+            // carries no color.
+            //
+            // The shadow is cut from the alpha of this node's own input. An unspecified input is
+            // the previous primitive's result, which is SourceGraphic only for the first
+            // primitive in the filter, so reading SourceGraphic unconditionally casts a shadow of
+            // the wrong shape everywhere else in a chain.
+            //
+            // The blur treats each channel independently and CompositeOp::In reads only the
+            // alpha of its second operand, which neither transfer function touches, so the
+            // stored pixels serve whichever space they are tagged with and no conversion pass
+            // belongs here. The merge below still asks the input for this node's space, because
+            // that layer does carry color.
+            FloatPixmap blurredAlpha(input->spaceAgnostic());
+            gaussianBlur(blurredAlpha, primitive.sigmaX, primitive.sigmaY);
+
+            auto offsetAlpha = createTransparentFloat(w, h);
+            filter::offset(blurredAlpha, offsetAlpha, primitive.dx, primitive.dy);
+
             auto floodBuf = createTransparentFloat(w, h);
             floodInSpace(floodBuf, primitive.r, primitive.g, primitive.b, primitive.a,
                          nodeLinearRGB);
 
-            // The shadow is the flood color masked by the alpha of this node's own input. An
-            // unspecified input is the previous primitive's result, which is SourceGraphic only
-            // for the first primitive in the filter, so reading SourceGraphic unconditionally
-            // casts a shadow of the wrong shape everywhere else in a chain.
-            //
-            // CompositeOp::In reads nothing from its second operand but the alpha channel, and
-            // neither transfer function touches alpha, so the stored pixels serve whichever
-            // space they are tagged with and no conversion pass belongs here. The merge below
-            // still asks the input for this node's space, because that layer does carry color.
-            auto compositeBuf = createTransparentFloat(w, h);
-            composite(floodBuf, input->spaceAgnostic(), compositeBuf, CompositeOp::In);
-
-            auto offsetBuf = createTransparentFloat(w, h);
-            filter::offset(compositeBuf, offsetBuf, primitive.dx, primitive.dy);
-
-            gaussianBlur(offsetBuf, primitive.sigmaX, primitive.sigmaY);
+            auto shadowBuf = createTransparentFloat(w, h);
+            composite(floodBuf, offsetAlpha, shadowBuf, CompositeOp::In);
 
             auto fpOut = createTransparentFloat(w, h);
-            const std::vector<const FloatPixmap*> layers = {&offsetBuf, &input->in(nodeLinearRGB)};
+            const std::vector<const FloatPixmap*> layers = {&shadowBuf, &input->in(nodeLinearRGB)};
             merge(std::span<const FloatPixmap* const>(layers), fpOut);
             output = NodeOutput{std::move(fpOut), nodeLinearRGB};
 

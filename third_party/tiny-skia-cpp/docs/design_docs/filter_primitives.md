@@ -35,7 +35,7 @@ was written for the C++ port to support SVG `<filter>` rendering in donner.
 | DisplacementMap | `feDisplacementMap` | Channel-based displacement |
 | DiffuseLighting | `feDiffuseLighting` | Lambertian with point/distant/spot lights |
 | SpecularLighting | `feSpecularLighting` | Phong with point/distant/spot lights |
-| DropShadow | `feDropShadow` | Composite primitive (flood+offset+blur+merge) |
+| DropShadow | `feDropShadow` | Composite primitive (alpha blur+offset+flood+merge) |
 | Image | `feImage` | Pre-loaded pixel data injection (see Design Decisions) |
 
 ### Architecture

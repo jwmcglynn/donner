@@ -565,9 +565,9 @@ TEST(FilterGraphColorSpace, TurbulenceGeneratesDirectlyInTheNodeSpace) {
   EXPECT_TRUE(PixmapsEqual(actual, fp.toPixmap()));
 }
 
-// feDropShadow decomposes into flood, composite-in, offset, blur, and merge. Running all of them
-// in the primitive's space, and converting the flood color rather than the flood buffer, has to
-// reproduce the old decomposition byte for byte.
+// feDropShadow is defined as blur of the input alpha, offset, flood composited into that alpha,
+// and merge. Running all of them in the primitive's space, and converting the flood color rather
+// than the flood buffer, has to reproduce that decomposition byte for byte.
 TEST(FilterGraphColorSpace, DropShadowInLinearMatchesTheDecomposedSchedule) {
   const Pixmap source = makeSourceGraphic();
   constexpr int kDx = 4;
@@ -598,12 +598,12 @@ TEST(FilterGraphColorSpace, DropShadowInLinearMatchesTheDecomposedSchedule) {
     sourceAlphaData[i * 4 + 2] = 0.0f;
   }
 
-  FloatPixmap shadowLayer = blankFloat();
-  composite(floodLayer, sourceAlpha, shadowLayer, CompositeOp::In);
+  gaussianBlur(sourceAlpha, kSigma, kSigma);
+  FloatPixmap offsetAlpha = blankFloat();
+  filter::offset(sourceAlpha, offsetAlpha, kDx, kDy);
 
   FloatPixmap offsetShadow = blankFloat();
-  filter::offset(shadowLayer, offsetShadow, kDx, kDy);
-  gaussianBlur(offsetShadow, kSigma, kSigma);
+  composite(floodLayer, offsetAlpha, offsetShadow, CompositeOp::In);
 
   FloatPixmap sourceLinear = FloatPixmap::fromPixmap(source);
   srgbToLinear(sourceLinear);

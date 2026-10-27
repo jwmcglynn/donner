@@ -665,6 +665,22 @@ float srgbToLinearChannel(float c) {
   return std::pow((c + 0.055f) / 1.055f, 2.4f);
 }
 
+/**
+ * Premultiplied sRGB flood color in [0, 1]. Authored flood colors enter both renderers as
+ * premultiplied bytes, so feFlood and feDropShadow quantize identically.
+ *
+ * @param floodColor The resolved `flood-color`.
+ * @param floodOpacity The resolved `flood-opacity`.
+ */
+std::array<float, 4> PremultipliedFloodColor(const css::Color& floodColor, double floodOpacity) {
+  const css::RGBA rgba = floodColor.asRGBA();
+  const double alpha = (rgba.a / 255.0) * std::clamp(floodOpacity, 0.0, 1.0);
+  return {static_cast<float>(std::round(rgba.r * alpha)) / 255.0f,
+          static_cast<float>(std::round(rgba.g * alpha)) / 255.0f,
+          static_cast<float>(std::round(rgba.b * alpha)) / 255.0f,
+          static_cast<float>(std::round(255.0 * alpha)) / 255.0f};
+}
+
 /// Generate permutation + gradient tables from seed, matching tiny-skia exactly.
 void generateTurbulenceTables(double seedVal, TurbulenceTables& tables) {
   // Seed clamping matching resvg.
@@ -2458,14 +2474,10 @@ FilterTexture GeodeFilterEngine::applyFlood(
     return {};
   }
 
-  // Authored flood colors enter both renderers as premultiplied bytes; subsequent math stays float.
-  const css::RGBA rgba = primitive.floodColor.asRGBA();
-  const double alpha = (rgba.a / 255.0) * std::clamp(primitive.floodOpacity, 0.0, 1.0);
   FloodParams params{};
-  params.color[0] = static_cast<float>(std::round(rgba.r * alpha)) / 255.0f;
-  params.color[1] = static_cast<float>(std::round(rgba.g * alpha)) / 255.0f;
-  params.color[2] = static_cast<float>(std::round(rgba.b * alpha)) / 255.0f;
-  params.color[3] = static_cast<float>(std::round(255.0 * alpha)) / 255.0f;
+  const std::array<float, 4> color =
+      PremultipliedFloodColor(primitive.floodColor, primitive.floodOpacity);
+  std::copy(color.begin(), color.end(), params.color);
 
   const gpu::TextureView* outputView =
       arena.createRuntimeTextureView(*output.texture, "FilterFloodOutputView");
@@ -3151,22 +3163,16 @@ FilterTexture GeodeFilterEngine::applyDropShadow(
     return {};
   }
 
-  const css::RGBA rgba = primitive.floodColor.asRGBA();
-  const float floodA = (static_cast<float>(rgba.a) / 255.0f) *
-                       static_cast<float>(std::clamp(primitive.floodOpacity, 0.0, 1.0));
-
+  // The shader takes a straight color and premultiplies it, so unpremultiply the same quantized
+  // flood that feFlood produces.
+  const std::array<float, 4> flood =
+      PremultipliedFloodColor(primitive.floodColor, primitive.floodOpacity);
   DropShadowParams params{};
-  // Straight-alpha flood color; the shader premultiplies by the blurred
-  // source's alpha per-pixel rather than baking it in here.
-  params.color[0] = static_cast<float>(rgba.r) / 255.0f;
-  params.color[1] = static_cast<float>(rgba.g) / 255.0f;
-  params.color[2] = static_cast<float>(rgba.b) / 255.0f;
-  if (arena.isLinearRgb(input)) {
-    for (size_t channel = 0; channel < 3; ++channel) {
-      params.color[channel] = srgbToLinearChannel(params.color[channel]);
-    }
+  for (size_t channel = 0; channel < 3; ++channel) {
+    const float straight = flood[3] > 0.0f ? flood[channel] / flood[3] : 0.0f;
+    params.color[channel] = arena.isLinearRgb(input) ? srgbToLinearChannel(straight) : straight;
   }
-  params.color[3] = floodA;
+  params.color[3] = flood[3];
   // Keep the software path's rounding boundary before converting the uniform to float.
   params.dx = static_cast<float>(std::round(pixelDx));
   params.dy = static_cast<float>(std::round(pixelDy));
