@@ -1145,6 +1145,66 @@ TEST(TextEngineTest, VerticalAnchorsMeasurePenExtentForEndSidewaysFirstAndUprigh
               DoubleNear(60.0, 1e-9));
 }
 
+// Vertical spacingAndGlyphs stretches upright glyphs along the inline axis, so the distance from
+// each glyph's pen position to its drawn origin stretches with it. With the chunk starting at
+// y=0, every inline coordinate of the stretched layout is the natural one times the factor.
+TEST(TextEngineTest, VerticalSpacingAndGlyphsScalesUprightGlyphsFromTheirPenPositions) {
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "Mplus 1p")));
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendFull>(fontManager, registry));
+
+  constexpr double kScale = 2.0;
+  const auto layOut = [&](std::optional<double> spanLength, std::optional<double> elementLength) {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E");  // three upright CJK glyphs
+    span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+    if (spanLength) {
+      span.textLength = Lengthd(*spanLength, Lengthd::Unit::None);
+      span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+    }
+    text.spans.push_back(std::move(span));
+    TextLayoutParams params = MakeTextParams(20.0);
+    params.fontFamilies = {RcString("Mplus 1p")};
+    params.writingMode = WritingMode::VerticalRl;
+    if (elementLength) {
+      params.textLength = Lengthd(*elementLength, Lengthd::Unit::None);
+      params.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+    }
+    return engine.layout(text, params);
+  };
+
+  const std::vector<TextRun> natural = layOut(std::nullopt, std::nullopt);
+  ASSERT_THAT(natural, ElementsAre(RunGlyphsAre(SizeIs(3))));
+  // The upright glyphs sit below their pen positions, so a scale about the first drawn origin
+  // would differ from a scale about the pen.
+  ASSERT_THAT(natural[0].glyphs.front(), GlyphYPositionIs(Gt(0.0)));
+  const double naturalLength = natural[0].glyphs.back().yPosition +
+                               natural[0].glyphs.back().yAdvance -
+                               natural[0].glyphs.front().yPosition;
+  std::vector<double> expected;
+  for (const TextGlyph& glyph : natural[0].glyphs) {
+    expected.push_back(glyph.yPosition * kScale);
+  }
+
+  for (const bool onSpan : {true, false}) {
+    SCOPED_TRACE(onSpan ? "span textLength" : "element textLength");
+    const std::optional<double> length = naturalLength * kScale;
+    const std::vector<TextRun> stretched =
+        onSpan ? layOut(length, std::nullopt) : layOut(std::nullopt, length);
+    ASSERT_THAT(stretched, ElementsAre(RunGlyphsAre(SizeIs(3))));
+    std::vector<double> actual;
+    for (const TextGlyph& glyph : stretched[0].glyphs) {
+      actual.push_back(glyph.yPosition);
+    }
+    EXPECT_THAT(actual, testing::Pointwise(DoubleNear(1e-6), expected));
+    EXPECT_THAT(stretched[0].glyphs,
+                Each(GlyphStretchScaleYIs(FloatEq(static_cast<float>(kScale)))));
+  }
+}
+
 TEST(TextEngineTest, ScriptedRtlChunkYOverrideKeepsVisualGlyphsOnSameBaseline) {
   Registry registry;
   FontManager fontManager(registry);
