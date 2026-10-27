@@ -4078,7 +4078,7 @@ TEST(SidebarPathOperationIcons, EveryInspectorOperationMapsToItsOwnIconAndTextur
 // has to carry every button's artwork; a button missing from it pays a GPU
 // readback on the first selection instead.
 TEST(SidebarPathOperationIcons, PrewarmRequestsCoverEveryInspectorButton) {
-  const std::span<const EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
+  const std::vector<EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
   for (const PathOperationKind operation : kInspectorPathOperations) {
     const ResourceLease svg = PathOperationIconSvg(operation);
     const bool present =
@@ -4139,7 +4139,7 @@ TEST(SidebarStrokePreviewIcons, WidthPresetSpriteUsesOnePixelPerUserUnitAtActual
 }
 
 TEST(SidebarStrokePreviewIcons, PrewarmRequestsIncludeEveryStrokeSvg) {
-  const std::span<const EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
+  const std::vector<EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
   for (const StrokePreviewIcon icon : kStrokePreviewIcons) {
     const ResourceLease source = StrokePreviewIconSvg(icon);
     const bool present =

@@ -228,8 +228,8 @@ ImU32 ToImU32(const css::RGBA& rgba) {
 
 }  // namespace
 
-std::span<const EmbeddedSvgIconRequest> LayersPanelIconPrewarmRequests() {
-  static const std::array<EmbeddedSvgIconRequest, kLayerAffordanceIcons.size()> kRequests = {{
+std::vector<EmbeddedSvgIconRequest> LayersPanelIconPrewarmRequests() {
+  return {
       {BootstrapSvgForIcon(LayerAffordanceIcon::Visible), kAffordanceIconRasterSizePx,
        /*tintableMask=*/true},
       {BootstrapSvgForIcon(LayerAffordanceIcon::Hidden), kAffordanceIconRasterSizePx,
@@ -238,8 +238,7 @@ std::span<const EmbeddedSvgIconRequest> LayersPanelIconPrewarmRequests() {
        /*tintableMask=*/true},
       {BootstrapSvgForIcon(LayerAffordanceIcon::Unlocked), kAffordanceIconRasterSizePx,
        /*tintableMask=*/true},
-  }};
-  return kRequests;
+  };
 }
 
 void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,

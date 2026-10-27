@@ -843,8 +843,8 @@ std::uint64_t PathOperationIconTextureKey(PathOperationKind operation) {
   return kIconTextureKeyBase;
 }
 
-std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
-  static const std::array<EmbeddedSvgIconRequest, 12> kRequests = {{
+std::vector<EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
+  return {
       {PathOperationIconSvg(PathOperationKind::Union), kPathOperationIconRasterSizePx,
        /*tintableMask=*/true},
       {PathOperationIconSvg(PathOperationKind::Intersect), kPathOperationIconRasterSizePx,
@@ -868,8 +868,7 @@ std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
       {StrokePreviewIconSvg(StrokePreviewIcon::BevelJoin), kStrokePreviewRasterSizePx,
        /*tintableMask=*/false},
       {StrokeWidthPresetSvg(), kStrokeWidthPresetRasterSizePx, /*tintableMask=*/false},
-  }};
-  return kRequests;
+  };
 }
 
 std::optional<DecomposedTransform> DecomposeTransform(const Transform2d& transform) {

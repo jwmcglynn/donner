@@ -1484,9 +1484,8 @@ void ConfigureNativeGpuIdleMaintenance(AsyncRenderer& worker,
 /// starts drawing; the per-icon calls then hit the prewarmed cache.
 void PrewarmEditorIcons() {
   std::vector<EmbeddedSvgIconRequest> requests;
-  for (const std::span<const EmbeddedSvgIconRequest> group :
-       {ToolbarIconPrewarmRequests(), DisclosureChevronPrewarmRequests(),
-        LayersPanelIconPrewarmRequests(), SidebarIconPrewarmRequests()}) {
+  for (const auto& group : {ToolbarIconPrewarmRequests(), DisclosureChevronPrewarmRequests(),
+                            LayersPanelIconPrewarmRequests(), SidebarIconPrewarmRequests()}) {
     requests.insert(requests.end(), group.begin(), group.end());
   }
   PrewarmEmbeddedSvgIcons(requests);

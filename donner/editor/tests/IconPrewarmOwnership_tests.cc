@@ -9,6 +9,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/PackagedResource.h"

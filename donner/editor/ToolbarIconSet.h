@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
-#include <span>
+#include <vector>
 
 #include "donner/base/Vector2.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
@@ -63,7 +63,7 @@ using ToolbarIconTextureProvider =
 /// Every toolbar icon rasterization, for the shell's startup prewarm batch.
 /// The palette is on screen from the first frame, so all of these are paid
 /// during boot whether or not they are prewarmed.
-[[nodiscard]] std::span<const EmbeddedSvgIconRequest> ToolbarIconPrewarmRequests();
+[[nodiscard]] std::vector<EmbeddedSvgIconRequest> ToolbarIconPrewarmRequests();
 
 /// Draw @p icon centered within the button rect `[min, max]`, tinted with
 /// @p tintColor. No-op when @p provider is null or the icon can't be uploaded

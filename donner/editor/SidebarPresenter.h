@@ -755,7 +755,7 @@ private:
 /// batch. These first appear when a selection makes the boolean-op row
 /// available, so batching them with the boot icons keeps that first selection
 /// from stalling on a run of GPU readbacks.
-[[nodiscard]] std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests();
+[[nodiscard]] std::vector<EmbeddedSvgIconRequest> SidebarIconPrewarmRequests();
 
 /// Stroke-cap and stroke-join previews drawn by the SVG renderer, in button order.
 enum class StrokePreviewIcon : std::uint8_t {
