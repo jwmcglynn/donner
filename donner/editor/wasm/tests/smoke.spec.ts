@@ -46,11 +46,15 @@ import { quarantineStillSkips } from "./quarantine-report.mjs";
 import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
+  armCanvasGpuDelayForTest,
+  type CanvasSettleResult,
   expectSurfaceFrameProbeReady,
   findCanvasOwnerWorker,
   findProbedCanvasApplicationWorker,
   holdCanvasCompletionForTest,
-  observeSubmittedCanvasGpuWork,
+  holdCanvasCompletions,
+  readCanvasActivity,
+  settleCanvasWrites,
 } from "./surface-frame-probe";
 import { kStallGuardMs, scaledMs } from "./test-timing";
 
@@ -4314,12 +4318,69 @@ type AnimationRegionCaptureFn = (
   deadlineAtMs?: number,
 ) => Promise<AnimationRegionCapture>;
 
-function createAnimationRegionCapture(page: Page, browserName: string, testInfo: TestInfo) {
-  let owner: Worker | null = null;
+/**
+ * Upper bound on screenshot passes under one completion hold. While the hold is in place the app's
+ * held frames never retire, so at most three new frames are admitted and every rejected pass saw
+ * at least one of them; a few frames submitted before the hold can also still retire and free
+ * slots, so seven is a conservative bound.
+ */
+const kMaxCanvasQuiescencePasses = 7;
+
+/**
+ * Longest a capture holds the app's canvas completions at once, from arming the hold to the end
+ * of the screenshot. The app declares its presentation device lost once its oldest frame has
+ * waited 5 s without observed progress (`PresentationSubmissionQueue::kCompletionDeadline`), so a
+ * hold must end well before that. A capture whose GPU work or screenshot would take longer
+ * releases the hold, lets the held frames retire and holds again. This bounds the hold only; it is
+ * not a deadline for the capture.
+ */
+const kMaxCanvasCompletionHoldMs = 3500;
+
+/** Part of the hold the settle wait may use, leaving the rest for the screenshot. */
+const kMaxCanvasSettleHoldMs = 2000;
+
+/** Shortest screenshot timeout worth starting under a hold; less than this re-holds instead. */
+const kMinHeldScreenshotMs = 250;
+
+/**
+ * Settle \p owner's canvas writes, or return null once \p untilMs passes first. A settle failure
+ * still propagates.
+ */
+async function settleCanvasWritesUntil(
+  owner: Worker,
+  untilMs: number,
+): Promise<CanvasSettleResult | null> {
+  const settle = settleCanvasWrites(owner);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), Math.max(0, untilMs - performance.now()));
+  });
+  try {
+    return await Promise.race([settle, expired]);
+  } finally {
+    clearTimeout(timer);
+    // A settle abandoned at the bound may still reject later, for example when the page closes.
+    settle.catch(() => {});
+  }
+}
+
+/**
+ * Page captures of the animation sample, each of a canvas frame whose GPU work has finished.
+ *
+ * A Firefox page capture can show a canvas frame whose submitted GPU work has not run yet: only
+ * the frame's clear, or nothing at all. Waiting for submitted work before the screenshot is not
+ * enough while the animation keeps presenting, because a newer frame can be presented during the
+ * screenshot. Each capture therefore holds the app's canvas completions, so it stops admitting new
+ * frames after at most three, waits for the GPU to finish every canvas write, and accepts the
+ * screenshot only when no canvas write was submitted from that wait until the screenshot ended.
+ */
+function createAnimationRegionCapture(
+  page: Page,
+  owner: Worker,
+  browserName: string,
+  testInfo: TestInfo,
+): AnimationRegionCaptureFn {
   let flatCaptureSequence = 0;
-  const setOwner = (next: Worker) => {
-    owner = next;
-  };
   const capture = async (
     region: CssRegion,
     deadlineAtMs?: number,
@@ -4336,34 +4397,81 @@ function createAnimationRegionCapture(page: Page, browserName: string, testInfo:
       });
     const deadline = deadlineAtMs ?? (performance.now() + scaledMs(5000));
     let captureTiming: { startedEpochMs: number; finishedEpochMs: number };
-    let completionObserved = false;
-    let completion: Awaited<ReturnType<typeof observeSubmittedCanvasGpuWork>> | null = null;
     const captureAttempts: Record<string, unknown>[] = [];
     const sequence = flatCaptureSequence++;
     const captureCompleted = async () => {
       const startedEpochMs = Date.now();
       const attempt: Record<string, unknown> = { startedEpochMs };
       captureAttempts.push(attempt);
+      const passes: Record<string, unknown>[] = [];
+      attempt.passes = passes;
       try {
-        // Both captures belong to one observation. Do not wait for newer animation
-        // submissions again when retaking an exact-background screenshot.
-        if (owner !== null && !completionObserved) {
-          attempt.completionDispatchEpochMs = Date.now();
-          completion = await awaitBeforeBlueDeadline(
-            observeSubmittedCanvasGpuWork(owner),
-            deadline,
-          );
-          completionObserved = true;
+        // Only a pass in which no canvas frame was acquired or written between settling and the
+        // end of the screenshot is accepted. The hold bounds how many frames can arrive meanwhile;
+        // the capture deadline bounds how often a slow GPU makes it hold again.
+        for (;;) {
+          const heldAt = performance.now();
+          // Not raced against the deadline: a hold armed after the capture gave up would never be
+          // released.
+          const hold = await holdCanvasCompletions(owner);
+          let holdSpent = false;
+          try {
+            for (let pass = 1; pass <= kMaxCanvasQuiescencePasses && !holdSpent; ++pass) {
+              const record: Record<string, unknown> = { pass, settleDispatchEpochMs: Date.now() };
+              passes.push(record);
+              const settled = await settleCanvasWritesUntil(
+                owner,
+                Math.min(deadline, heldAt + kMaxCanvasSettleHoldMs),
+              );
+              if (performance.now() >= deadline) {
+                throw new Error("animation capture deadline exceeded");
+              }
+              const holdRemaining = heldAt + kMaxCanvasCompletionHoldMs - performance.now();
+              if (settled === null || holdRemaining < kMinHeldScreenshotMs) {
+                // The GPU is slow enough that holding on would approach the app's own completion
+                // deadline. Let the held frames retire, then hold again.
+                record.holdBudgetSpent = true;
+                holdSpent = true;
+                break;
+              }
+              record.settled = settled;
+              record.settledEpochMs = Date.now();
+              const remaining = deadline - performance.now();
+              const screenshotTimeout = Math.min(remaining, holdRemaining);
+              record.screenshotStartedEpochMs = Date.now();
+              let image: Buffer;
+              try {
+                image = await screenshot(screenshotTimeout);
+              } catch (error) {
+                if (screenshotTimeout >= remaining || !(error instanceof errors.TimeoutError)) {
+                  throw error;
+                }
+                record.holdBudgetSpent = true;
+                holdSpent = true;
+                break;
+              }
+              record.screenshotFinishedEpochMs = Date.now();
+              const after = await awaitBeforeBlueDeadline(readCanvasActivity(owner), deadline);
+              record.canvasActivityAfterScreenshot = after;
+              if (performance.now() >= deadline) {
+                throw new Error("animation capture deadline exceeded");
+              }
+              if (after.canvasSubmits === settled.canvasSubmits && after.frames === settled.frames) {
+                captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
+                return image;
+              }
+            }
+          } finally {
+            await hold.release().catch((error: unknown) => {
+              attempt.holdReleaseError = String(error);
+            });
+          }
+          if (!holdSpent) {
+            throw new Error(
+              "the canvas kept presenting new frames under the capture's completion hold",
+            );
+          }
         }
-        attempt.completion = completion;
-        const remaining = deadline - performance.now();
-        if (remaining < 1) throw new Error("animation capture deadline exceeded");
-        attempt.screenshotStartedEpochMs = Date.now();
-        const image = await screenshot(remaining);
-        attempt.screenshotFinishedEpochMs = Date.now();
-        captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
-        if (performance.now() >= deadline) throw new Error("animation capture deadline exceeded");
-        return image;
       } catch (error) {
         attempt.error = String(error);
         throw error;
@@ -4440,7 +4548,7 @@ function createAnimationRegionCapture(page: Page, browserName: string, testInfo:
     };
     return { png, read, viewport };
   };
-  return { capture, setOwner };
+  return capture;
 }
 
 function createAnimationOrbProbe(
@@ -5303,6 +5411,34 @@ async function injectAnimationFirstBootDelay(page: Page, browserName: string) {
   await page.waitForTimeout(kAnimationFirstBootDelayMs);
 }
 
+/**
+ * Fault injection, off unless `DONNER_ANIMATION_CANVAS_GPU_DELAY` is `<everyFrames>:<iterations>`:
+ * while openAnimatedPreview opens the sample and starts the Preview, postpones GPU execution of
+ * the rest of every Nth canvas frame behind fixed fragment work. A capture taken before that
+ * frame's GPU work completes can observe a partially executed canvas.
+ */
+async function armAnimationCanvasGpuDelay(owner: Worker, testInfo: TestInfo) {
+  const spec = process.env.DONNER_ANIMATION_CANVAS_GPU_DELAY;
+  if (spec === undefined || spec === "") return null;
+  const match = /^(\d+):(\d+)$/.exec(spec);
+  const everyFrames = match ? Number(match[1]) : 0;
+  const iterations = match ? Number(match[2]) : 0;
+  if (!match || everyFrames < 1 || everyFrames > 1000 || iterations < 1 || iterations > 1_000_000) {
+    throw new Error(
+      "DONNER_ANIMATION_CANVAS_GPU_DELAY must be <everyFrames 1-1000>:<iterations 1-1000000>",
+    );
+  }
+  const delay = await armCanvasGpuDelayForTest(owner, everyFrames, iterations);
+  return {
+    // Ends the injection after the captures that open the Preview, so later probes run without it.
+    finish: async () => {
+      const path = testInfo.outputPath("animation-canvas-gpu-delay.json");
+      await writeFile(path, JSON.stringify({ spec, ...(await delay.disarm()) }, null, 2));
+      await testInfo.attach("animation-canvas-gpu-delay", { path, contentType: "application/json" });
+    },
+  };
+}
+
 async function openAnimatedPreview(page: Page, browserName: string, testInfo: TestInfo) {
   await injectAnimationFirstBootDelay(page, browserName);
   const rafControls = process.env.DONNER_ANIMATION_RAF_CONTROLS === "1";
@@ -5339,9 +5475,29 @@ async function openAnimatedPreview(page: Page, browserName: string, testInfo: Te
   const canvas = page.locator("canvas#canvas");
   const box = await canvas.boundingBox();
   if (!box) throw new Error("the editor canvas has no bounds");
+  // Firefox page captures can show a canvas frame whose submitted GPU work has not finished: only
+  // part of the frame, such as its clear, or nothing at all. Every capture below holds the canvas
+  // owner's frames and waits for their GPU work (see createAnimationRegionCapture), so install the
+  // completion probe before the sample opens.
+  await expectSurfaceFrameProbeReady(page);
+  const probedOwner = await findProbedCanvasApplicationWorker(page);
+  if (!probedOwner) throw new Error("the application canvas owner is unavailable");
+  const gpuDelay = await armAnimationCanvasGpuDelay(probedOwner, testInfo);
   await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
-  const animationCapture = createAnimationRegionCapture(page, browserName, testInfo);
-  const captureAnimationRegion = animationCapture.capture;
+  const ownerSlot: { worker: Worker | null } = { worker: null };
+  await expect.poll(async () => {
+    ownerSlot.worker = await findCanvasOwnerWorker(page);
+    return ownerSlot.worker !== null;
+  }, { message: "animation captures observe the canvas GPU owner" }).toBe(true);
+  const canvasOwner = ownerSlot.worker;
+  if (!canvasOwner) throw new Error("the canvas GPU owner is unavailable");
+  expect(canvasOwner, "the canvas owner is the probed application owner").toBe(probedOwner);
+  const captureAnimationRegion = createAnimationRegionCapture(
+    page,
+    canvasOwner,
+    browserName,
+    testInfo,
+  );
   const documentRegion = { minX: 150, minY: 150, maxX: box.width - 430, maxY: box.height * 0.58 };
   let initial: PixelBounds | null = null;
   let mode: PixelBounds | null = null;
@@ -5407,15 +5563,19 @@ async function openAnimatedPreview(page: Page, browserName: string, testInfo: Te
   const start = await orb();
   if (rafControls) await captureRafControl("editState");
   await page.mouse.click(editCenter.x + edit.maxX - edit.minX + 1, editCenter.y);
-  await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
-    timeout: scaledMs(10000),
-    message: "Preview moves the rendered orb",
-  }).toBeGreaterThan(8 * scale);
+  try {
+    await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
+      timeout: scaledMs(10000),
+      message: "Preview moves the rendered orb",
+    }).toBeGreaterThan(8 * scale);
+  } finally {
+    await gpuDelay?.finish();
+  }
 
   return {
-    animationCapture,
     box,
     browserGpuInfo,
+    canvasOwner,
     captureAnimationRegion,
     captureRafControl,
     editCenter,
@@ -5475,8 +5635,8 @@ test(
   "animation preview plays and dispatches mouse events",
   async ({ page, browserName }, testInfo) => {
     const {
-      animationCapture,
       box,
+      canvasOwner: interactionCaptureOwner,
       captureAnimationRegion,
       editCenter,
       fatalMessages,
@@ -5487,13 +5647,6 @@ test(
       scale,
       start,
     } = await openAnimatedPreview(page, browserName, testInfo);
-    await expectSurfaceFrameProbeReady(page);
-    let interactionCaptureOwner: Worker | null = null;
-    await expect.poll(async () => {
-      interactionCaptureOwner = await findCanvasOwnerWorker(page);
-      if (interactionCaptureOwner) animationCapture.setOwner(interactionCaptureOwner);
-      return interactionCaptureOwner !== null;
-    }, { message: "interaction captures observe the canvas GPU owner" }).toBe(true);
     const previewCapture = await captureAnimationRegion(box);
     await writeFile(testInfo.outputPath("animation-preview.png"), previewCapture.png);
 
@@ -5523,8 +5676,9 @@ test(
 test(
   "animation preview plays through cancellation and shutdown while raster task yields are held",
   async ({ page, browserName }, testInfo) => {
+    // Exercise the fault-injected lifecycle in a fresh Preview instead of inheriting the pointer
+    // pulse case's test deadline.
     const {
-      animationCapture,
       captureRafControl,
       editCenter,
       editWidth,
@@ -5534,15 +5688,6 @@ test(
       scale,
       start,
     } = await openAnimatedPreview(page, browserName, testInfo);
-
-    // Exercise the fault-injected lifecycle in a fresh Preview instead of inheriting the pointer
-    // pulse case's test deadline.
-    await expectSurfaceFrameProbeReady(page);
-    await expect.poll(async () => {
-      const owner = await findCanvasOwnerWorker(page);
-      if (owner) animationCapture.setOwner(owner);
-      return owner !== null;
-    }, { message: "interaction captures observe the canvas GPU owner" }).toBe(true);
     await finishAnimationPreview({
       page,
       editCenter,
