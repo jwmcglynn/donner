@@ -588,21 +588,38 @@ TEST(SVGTextElementCacheTests, SetTextLengthInvalidatesCache) {
   EXPECT_GT(std::abs(posAfter.x - posBefore.x), 10.0);
 }
 
+// With the default `lengthAdjust="spacing"`, the per-gap adjustment also accrues after the span's
+// last character. SVG 2 does not define how following text moves; Chrome shifts it by the accrued
+// amount, and the resvg references agree.
 TEST(SVGTextElementPublicApiTests, TSpanTextLengthAdvancesFollowingText) {
-  SVGDocument doc = instantiateSubtree(R"(
+  const auto layout = [](std::string_view spanAttributes) {
+    return instantiateSubtree(std::string(R"(
     <svg viewBox="0 0 200 40">
       <text id="root" x="20" y="20" font-family="fallback-font" font-size="12px">Some<tspan
-        id="span" textLength="80">long</tspan>text</text>
+        id="span" )") + std::string(spanAttributes) +
+                              R"(>long</tspan>text</text>
     </svg>
   )");
+  };
+  SVGDocument natural = layout("");
+  SVGDocument adjusted = layout(R"(textLength="80")");
 
-  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
-  auto span = doc.querySelector("#span")->cast<SVGTSpanElement>();
+  auto naturalRoot = natural.querySelector("#root")->cast<SVGTextElement>();
+  auto naturalSpan = natural.querySelector("#span")->cast<SVGTSpanElement>();
+  auto root = adjusted.querySelector("#root")->cast<SVGTextElement>();
+  auto span = adjusted.querySelector("#span")->cast<SVGTSpanElement>();
   const double adjustedStart = span.getStartPositionOfChar(0).x;
   const double adjustedEnd = span.getEndPositionOfChar(3).x;
+  const double gapAdjustment =
+      (span.getStartPositionOfChar(1).x - adjustedStart) -
+      (naturalSpan.getStartPositionOfChar(1).x - naturalSpan.getStartPositionOfChar(0).x);
+  const double naturalFollowingGap =
+      naturalRoot.getStartPositionOfChar(8).x - naturalSpan.getEndPositionOfChar(3).x;
 
   EXPECT_NEAR(adjustedEnd - adjustedStart, 80.0, 0.5);
-  EXPECT_NEAR(root.getStartPositionOfChar(8).x, adjustedEnd, 1.0);
+  EXPECT_THAT(gapAdjustment, testing::Gt(1.0));
+  EXPECT_NEAR(root.getStartPositionOfChar(8).x - adjustedEnd, naturalFollowingGap + gapAdjustment,
+              1e-6);
 }
 
 TEST(SVGTextElementCacheTests, SetPositionInvalidatesCache) {
