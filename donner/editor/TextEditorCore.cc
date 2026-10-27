@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
-#include <regex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -139,16 +138,15 @@ TextEditorCore::~TextEditorCore() = default;
 // Language definition + palette
 // ---------------------------------------------------------------------------
 
-void TextEditorCore::setLanguageDefinition(const LanguageDefinition& langDef) {
+void TextEditorCore::installPreparedLanguage(const LanguageDefinition& langDef,
+                                             LanguageDefinition::TokenizeCallback fallback) {
   languageDefinition_ = langDef;
-  regexList_.clear();
-
-  // Build optimized regex list for syntax highlighting
-  for (const auto& regex : languageDefinition_.tokenRegexStrings) {
-    regexList_.emplace_back(std::regex(regex.first, std::regex_constants::optimize), regex.second);
-  }
-
+  regexFallback_ = std::move(fallback);
   colorize();
+}
+
+void TextEditorCore::setSvgLanguageDefinition() {
+  installPreparedLanguage(LanguageDefinition::SVG(), {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1854,7 +1852,6 @@ void TextEditorCore::colorizeRange(int fromLine, int toLine) {
   }
 
   std::string buffer;
-  std::cmatch results;
   std::string_view identifier;
 
   const int endLine = std::max(0, std::min(text_.getTotalLines(), toLine));
@@ -1888,19 +1885,8 @@ void TextEditorCore::colorizeRange(int fromLine, int toLine) {
         }
       }
 
-      // Try regex matching if no custom token found
-      if (!hasToken) {
-        for (const auto& [regex, color] : regexList_) {
-          if (std::regex_search(current, end, results, regex,
-                                std::regex_constants::match_continuous)) {
-            const auto& match = *results.begin();
-            tokenBegin = match.first;
-            tokenEnd = match.second;
-            tokenColor = color;
-            hasToken = true;
-            break;
-          }
-        }
+      if (!hasToken && regexFallback_) {
+        hasToken = regexFallback_(current, end, tokenBegin, tokenEnd, tokenColor);
       }
 
       if (!hasToken) {

@@ -28,11 +28,11 @@
 #include <cstdint>
 #include <functional>
 #include <map>
-#include <regex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -176,9 +176,8 @@ struct LanguageDefinition {
  * Headless editing substrate - the text buffer, cursor, undo history and
  * syntax colorizer with no ImGui dependency.
  *
- * `TextEditor` wraps this class and adds the ImGui rendering and input
- * layer. Direct consumers should go through `TextEditor`; tests (once C3
- * migrates them) will construct `TextEditorCore` directly.
+ * `TextEditor` wraps this class with ImGui rendering and input. Headless
+ * consumers can construct this core directly.
  */
 class TextEditorCore {
 public:
@@ -387,6 +386,8 @@ public:
   /// Set the syntax rules and schedule the buffer for recoloring.
   /// @param langDef Language definition to use.
   void setLanguageDefinition(const LanguageDefinition& langDef);
+  /// Use the built-in SVG syntax rules.
+  void setSvgLanguageDefinition();
   /// Return the active syntax language definition.
   const LanguageDefinition& getLanguageDefinition() const { return languageDefinition_; }
 
@@ -701,7 +702,8 @@ public:
       sourceEditIntentHook;  //!< Notify the shell when a byte-level source edit intent is queued.
 
 private:
-  using RegexList = std::vector<std::pair<std::regex, ColorIndex>>;
+  void installPreparedLanguage(const LanguageDefinition& langDef,
+                               LanguageDefinition::TokenizeCallback fallback);
 
   // ---------------------------------------------------------------------
   // State
@@ -765,7 +767,7 @@ private:
   Palette paletteBase_{};
   Palette palette_{};
   LanguageDefinition languageDefinition_;
-  RegexList regexList_;
+  LanguageDefinition::TokenizeCallback regexFallback_;
   bool colorizerEnabled_ = true;
   int colorRangeMin_ = 0;
   int colorRangeMax_ = 0;
