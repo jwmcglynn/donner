@@ -218,6 +218,107 @@ inline constexpr std::string_view kReservedDeclarationNames[] = {
     "select",
 };
 
+// The parser runs inside the C++ constant evaluator. Clang charges every executed statement and
+// function call against the step budget of the constant being initialized. The tables below let
+// per-byte and per-name work be one array lookup instead of a helper call or a scan of every entry.
+// They are built once per translation unit in their own constant evaluation and indexed as built-in
+// arrays, which cost no evaluator steps.
+
+/// Lexical classes of each byte, plus the token kind of each single-character punctuator.
+struct LexicalTable {
+  static constexpr uint8_t kSpace = 1;            //!< Whitespace between tokens.
+  static constexpr uint8_t kIdentifierStart = 2;  //!< ASCII letter or `_`.
+  static constexpr uint8_t kDigit = 4;            //!< ASCII decimal digit.
+  /// A byte that continues an identifier.
+  static constexpr uint8_t kIdentifierContinue = kIdentifierStart | kDigit;
+
+  uint8_t classes[256] = {};        //!< Class bits for each byte value.
+  TokenKind punctuation[256] = {};  //!< Single-character punctuator kind, or End.
+};
+
+/// Returns whether byte \p ch separates tokens.
+constexpr bool IsSpaceByte(int ch) {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
+
+/// Returns whether byte \p ch can start an identifier.
+constexpr bool IsIdentifierStartByte(int ch) {
+  return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+}
+
+/// Returns the \ref LexicalTable class bits of byte \p ch.
+constexpr uint8_t ByteClasses(int ch) {
+  const bool digit = ch >= '0' && ch <= '9';
+  return static_cast<uint8_t>((IsSpaceByte(ch) ? LexicalTable::kSpace : 0) |
+                              (IsIdentifierStartByte(ch) ? LexicalTable::kIdentifierStart : 0) |
+                              (digit ? LexicalTable::kDigit : 0));
+}
+
+/// Builds \ref LexicalTable from the character classes and \ref kSingleCharacterPunctuation.
+constexpr LexicalTable MakeLexicalTable() {
+  LexicalTable table;
+  for (int ch = 0; ch < 256; ++ch) {
+    table.classes[ch] = ByteClasses(ch);
+    table.punctuation[ch] = TokenKind::End;
+  }
+  for (const PunctuationEntry& entry : kSingleCharacterPunctuation) {
+    table.punctuation[static_cast<unsigned char>(entry.character)] = entry.kind;
+  }
+  return table;
+}
+
+/// Byte classes and punctuators for the lexer.
+inline constexpr LexicalTable kLexicalTable = MakeLexicalTable();
+
+/// Indices of a name table grouped by first byte, so a lookup compares only the names that share
+/// the candidate's first byte.
+template <size_t N>
+struct NameBuckets {
+  static_assert(N < 256, "Name bucket indices are stored in 8 bits");
+  uint8_t order[N] = {};    //!< Table indices, grouped by first byte in table order.
+  uint8_t begin[257] = {};  //!< Names starting with byte `c` are `order[begin[c]..begin[c+1])`.
+};
+
+/// Groups the names of \p entries by first byte, keeping table order within each group.
+/// @param entries Name table.
+/// @param name Returns the name of one entry; names are non-empty.
+template <typename Entry, size_t N, typename NameOf>
+constexpr NameBuckets<N> BucketNames(const Entry (&entries)[N], NameOf name) {
+  NameBuckets<N> buckets;
+  for (size_t i = 0; i < N; ++i) {
+    ++buckets.begin[static_cast<unsigned char>(name(entries[i])[0]) + 1];
+  }
+  uint8_t cursor[256] = {};
+  for (int ch = 0; ch < 256; ++ch) {
+    buckets.begin[ch + 1] += buckets.begin[ch];
+    cursor[ch] = buckets.begin[ch];
+  }
+  for (size_t i = 0; i < N; ++i) {
+    buckets.order[cursor[static_cast<unsigned char>(name(entries[i])[0])]++] =
+        static_cast<uint8_t>(i);
+  }
+  return buckets;
+}
+
+/// Returns whether every name in \p entries is non-empty, as \ref BucketNames requires.
+template <typename Entry, size_t N, typename NameOf>
+constexpr bool NamesNonEmpty(const Entry (&entries)[N], NameOf name) {
+  for (const Entry& entry : entries) {
+    if (name(entry).empty()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Returns a string table entry itself as its name.
+inline constexpr auto kSelfName = [](std::string_view entry) { return entry; };
+
+/// \ref kReservedDeclarationNames grouped by first byte.
+static_assert(NamesNonEmpty(kReservedDeclarationNames, kSelfName));
+inline constexpr auto kReservedDeclarationBuckets =
+    BucketNames(kReservedDeclarationNames, kSelfName);
+
 /// Private parser state. All storage is fixed-size and constexpr-compatible.
 class Parser {
 public:
@@ -357,13 +458,14 @@ private:
     }
     module_.sourceByteCount = static_cast<uint32_t>(sourceSize_);
     char* destination = module_.sourceBytes.data();
-    for (uint32_t i = 0; i < module_.sourceByteCount; ++i) {
-      const unsigned char ch = static_cast<unsigned char>(sourceData_[i]);
-      if (ch > 0x7f) {
-        Fail(ErrorCode::NonAsciiSource, SourceSpan{i, i + 1});
-        return;
-      }
-      destination[i] = static_cast<char>(ch);
+    // This loop runs over every source byte in the constant evaluator, so it keeps the check in
+    // its header and one statement in its body.
+    uint32_t i = 0;
+    for (; i < module_.sourceByteCount && static_cast<unsigned char>(sourceData_[i]) <= 0x7f; ++i) {
+      destination[i] = sourceData_[i];
+    }
+    if (i < module_.sourceByteCount) {
+      Fail(ErrorCode::NonAsciiSource, SourceSpan{i, i + 1});
     }
   }
 
@@ -397,29 +499,27 @@ private:
     }
   }
 
-  constexpr bool IsIdentifierStart(char ch) const {
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+  /// Returns whether \p ch has any of the \ref LexicalTable class bits in \p classes.
+  static constexpr bool HasClass(char ch, uint8_t classes) {
+    return (kLexicalTable.classes[static_cast<unsigned char>(ch)] & classes) != 0;
   }
 
-  constexpr bool IsIdentifierContinue(char ch) const {
-    return IsIdentifierStart(ch) || (ch >= '0' && ch <= '9');
-  }
-
+  /// Skips whitespace and line comments. Its loops test bytes inline in their headers: an
+  /// empty-bodied loop costs the constant evaluator one step per byte, where a helper call or a
+  /// multi-statement body costs several.
   constexpr void SkipTrivia() {
-    while (cursor_ < sourceSize_) {
-      const char ch = sourceData_[cursor_];
-      if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
-        ++cursor_;
-        continue;
-      }
-      if (ch == '/' && cursor_ + 1 < sourceSize_ && sourceData_[cursor_ + 1] == '/') {
+    while (true) {
+      for (; cursor_ < sourceSize_ &&
+             (kLexicalTable.classes[static_cast<unsigned char>(sourceData_[cursor_])] &
+              LexicalTable::kSpace);
+           ++cursor_) {}
+      if (cursor_ + 1 < sourceSize_ && sourceData_[cursor_] == '/' &&
+          sourceData_[cursor_ + 1] == '/') {
         cursor_ += 2;
-        while (cursor_ < sourceSize_ && sourceData_[cursor_] != '\n') {
-          ++cursor_;
-        }
+        for (; cursor_ < sourceSize_ && sourceData_[cursor_] != '\n'; ++cursor_) {}
         continue;
       }
-      break;
+      return;
     }
   }
 
@@ -448,7 +548,7 @@ private:
       return;
     }
     const char ch = sourceData_[cursor_++];
-    if (IsIdentifierStart(ch)) {
+    if (HasClass(ch, LexicalTable::kIdentifierStart)) {
       return ScanIdentifier(begin);
     }
     if (StartsNumber(ch)) {
@@ -470,9 +570,10 @@ private:
   }
 
   constexpr void ScanIdentifier(uint32_t begin) {
-    while (cursor_ < sourceSize_ && IsIdentifierContinue(sourceData_[cursor_])) {
-      ++cursor_;
-    }
+    for (; cursor_ < sourceSize_ &&
+           (kLexicalTable.classes[static_cast<unsigned char>(sourceData_[cursor_])] &
+            LexicalTable::kIdentifierContinue);
+         ++cursor_) {}
     token_ = MakeToken(TokenKind::Identifier, begin);
   }
 
@@ -481,7 +582,7 @@ private:
                      (sourceData_[begin + 1] == 'x' || sourceData_[begin + 1] == 'X');
     while (cursor_ < sourceSize_) {
       const char ch = sourceData_[cursor_];
-      if (IsIdentifierContinue(ch) || ch == '.') {
+      if (HasClass(ch, LexicalTable::kIdentifierContinue) || ch == '.') {
         ++cursor_;
         continue;
       }
@@ -504,12 +605,7 @@ private:
   }
 
   constexpr TokenKind SingleCharacterPunctuation(char ch) const {
-    for (PunctuationEntry entry : kSingleCharacterPunctuation) {
-      if (entry.character == ch) {
-        return entry.kind;
-      }
-    }
-    return TokenKind::End;
+    return kLexicalTable.punctuation[static_cast<unsigned char>(ch)];
   }
 
   constexpr TokenKind TwoCharacterPunctuation(char ch) {
@@ -893,6 +989,27 @@ private:
     return true;
   }
 
+  /// Returns the index of \p text in \p entries, or N when absent, comparing only the names in
+  /// the bucket of its first byte.
+  /// @param text Candidate spelling.
+  /// @param entries Name table.
+  /// @param buckets The table's \ref BucketNames.
+  /// @param name Returns the name of one entry.
+  template <typename Entry, size_t N, typename NameOf>
+  static constexpr size_t FindName(std::string_view text, const Entry (&entries)[N],
+                                   const NameBuckets<N>& buckets, NameOf name) {
+    if (text.empty()) {
+      return N;
+    }
+    const unsigned char first = static_cast<unsigned char>(text[0]);
+    for (uint8_t i = buckets.begin[first]; i < buckets.begin[first + 1]; ++i) {
+      if (TextEquals(text, name(entries[buckets.order[i]]))) {
+        return buckets.order[i];
+      }
+    }
+    return N;
+  }
+
   constexpr bool SameName(NameRef name, Token token) const {
     if (name.length != token.text.size()) {
       return false;
@@ -912,18 +1029,13 @@ private:
     if (BuiltinNamed(name, &builtin)) {
       return false;
     }
-    for (std::string_view reserved : kReservedDeclarationNames) {
-      if (TextEquals(name.text, reserved)) {
-        return false;
-      }
-    }
-    return true;
+    return FindName(name.text, kReservedDeclarationNames, kReservedDeclarationBuckets, kSelfName) ==
+           std::size(kReservedDeclarationNames);
   }
 
   constexpr bool ModuleNameInUse(Token name) const {
-    for (uint16_t i = 0; i < module_.symbolCount; ++i) {
-      if (module_.symbols[i].kind == SymbolKind::Constant &&
-          SameName(module_.symbols[i].name, name)) {
+    for (uint16_t i = 0; i < constantCount_; ++i) {
+      if (SameName(module_.symbols[constantSymbols_[i]].name, name)) {
         return true;
       }
     }
@@ -1899,16 +2011,19 @@ private:
       return kInvalidArenaId;
     }
     for (uint16_t i = 0; i < activeCount_; ++i) {
-      const ArenaId existing = activeSymbols_[i];
-      if (kind != SymbolKind::Binding && module_.symbols[existing].kind == SymbolKind::Binding &&
-          SameName(module_.symbols[existing].name, name)) {
-        Fail(ErrorCode::DuplicateName, name.span);
+      const Symbol& existing = module_.symbols[activeSymbols_[i]];
+      if (!SameName(existing.name, name)) {
+        continue;
       }
-      if (SameName(module_.symbols[existing].name, name) && i >= scopeStarts_[scopeDepth_ - 1]) {
+      if ((kind != SymbolKind::Binding && existing.kind == SymbolKind::Binding) ||
+          i >= scopeStarts_[scopeDepth_ - 1]) {
         Fail(ErrorCode::DuplicateName, name.span);
       }
     }
     const ArenaId id = module_.symbolCount++;
+    if (kind == SymbolKind::Constant) {
+      constantSymbols_[constantCount_++] = id;
+    }
     module_.symbols[id] = Symbol{kind, type, AddName(name), name.span, mutableValue};
     activeSymbols_[activeCount_++] = id;
     symbolUpperBounds_[id] = std::numeric_limits<int32_t>::max();
@@ -3230,14 +3345,17 @@ private:
       {"fwidth", Builtin::Fwidth},
       {"textureLoad", Builtin::TextureLoad},
       {"textureDimensions", Builtin::TextureDimensions}};
+  static constexpr auto kBuiltinName = [](const BuiltinEntry& entry) { return entry.name; };
+  static_assert(NamesNonEmpty(kBuiltinEntries, kBuiltinName));
+  static constexpr auto kBuiltinBuckets = BucketNames(kBuiltinEntries, kBuiltinName);
+
   constexpr bool BuiltinNamed(Token name, Builtin* builtin) const {
-    for (const BuiltinEntry& entry : kBuiltinEntries) {
-      if (TextEquals(name.text, entry.name)) {
-        *builtin = entry.kind;
-        return true;
-      }
+    const size_t index = FindName(name.text, kBuiltinEntries, kBuiltinBuckets, kBuiltinName);
+    if (index == std::size(kBuiltinEntries)) {
+      return false;
     }
-    return false;
+    *builtin = kBuiltinEntries[index].kind;
+    return true;
   }
 
   constexpr bool IsUnaryFloatBuiltin(Builtin builtin) const {
@@ -4661,6 +4779,9 @@ private:
   uint32_t cursor_ = 0;
   uint16_t tokenCount_ = 0;
   std::array<ArenaId, ModuleLimits::kMaxSymbols> activeSymbols_ = {};
+  /// Module constants, the only symbols \ref ModuleNameInUse compares by name.
+  std::array<ArenaId, ModuleLimits::kMaxSymbols> constantSymbols_ = {};
+  uint16_t constantCount_ = 0;
   std::array<uint16_t, ModuleLimits::kMaxNesting> scopeStarts_ = {};
   std::array<int32_t, ModuleLimits::kMaxSymbols> symbolUpperBounds_ = {};
   std::array<ArenaId, ModuleLimits::kMaxExpressions> expressionRoots_ = {};
