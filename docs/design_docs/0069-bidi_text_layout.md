@@ -74,9 +74,9 @@ resolved bidi levels. The text stack it changes is described in
 
 - Maintainer decisions on the [Open Questions](#open-questions): dependency scope and the Wasm
   ceilings.
-- Publish this design stacked on [#2098](https://github.com/jwmcglynn/donner/pull/2098), since it
-  describes and replaces code that exists only on that branch. Milestone 1 starts after #2098
-  merges.
+- This design depends on [#2098](https://github.com/jwmcglynn/donner/pull/2098), whose code it
+  describes and replaces. The design itself is published as an ordinary pull request against `main`;
+  Milestone 1 starts after #2098 merges.
 
 ## Implementation Plan
 
@@ -91,7 +91,17 @@ Every behavior change lands with a regression test committed red first.
   - [ ] Split layout into a visual pen pass over shaping items and a positioning pass that applies
         `dx`, `dy`, `rotate`, and `textLength` from the table in logical order.
   - [ ] Replace sequential `(runIndex, glyphIndex)` chunk boundaries with chunk ids on the table.
-  - [ ] Compute decoration segments per span in the engine; TinySkia and Geode draw them.
+  - [ ] Compute decoration segments per span in the engine with today's renderer rules; TinySkia
+        and Geode draw them.
+  - [ ] Keep the textLength carry semantics of
+        [#2095](https://github.com/jwmcglynn/donner/pull/2095) (trailing advance carried to the
+        following content) unchanged.
+  - [ ] Add `text_span_positioning_tests` cases that pin the current text position: an `ltr`
+        `middle`-anchored chunk followed by a `y`-only chunk, `dx` followed by a `y`-only chunk, and
+        `dy` followed by an `x`-only chunk.
+  - [ ] Measure the editor package against every gate, including the 46,000 byte function body
+        and 12,880,000 byte total raw limits, since the restructured layout adds code before
+        SheenBidi does.
   - [ ] Prove pixel identity: `text_engine_tests`, `text_engine_scripted_tests`,
         `text_span_positioning_tests`, `renderer_tests`, `renderer_geode_golden_tests`, and
         `resvg_test_suite` in the default, `text_full`, and Geode lanes, with no golden, budget, or
@@ -100,6 +110,10 @@ Every behavior change lands with a regression test committed red first.
   - [ ] Anchor by the SVG 2 extent, defined in [Anchoring](#anchoring).
   - [ ] Run every compared `text/*` row with the old and new rule and list each row whose output
         changes in the pull request, with an independently authored regression for each cause.
+        The pull request is accepted only if every listed change follows from the rule and no row
+        gains a budget, golden, or skip.
+  - [ ] Apply direction-aware `textLength` carry for partial-chunk owners and list any row it
+        changes.
 - [ ] Milestone 2: SheenBidi, `direction`, and paragraph analysis (large, about 1,000 lines plus
       pinned test data)
   - [ ] Add `bazel_dep(name = "sheenbidi", version = "3.0.0")`, its `license()` and notice
@@ -265,7 +279,7 @@ The vendored corpus records per-renderer results in `third_party/resvg-test-suit
   hostile documents.
 - Editor Geode package: compressed ceiling 3,540,000 bytes, measured 3,523,487 with #2098 (16,513
   bytes headroom); raw ceiling 10,800,000 bytes, measured 10,771,745 (28,255 bytes headroom); also
-  capped at 64 data segments. SheenBidi with mirroring alone adds about 26,098 raw bytes in the size
+  capped at 64 data segments, 46,000 bytes per function body, and 12,880,000 total raw bytes. SheenBidi with mirroring alone adds about 26,098 raw bytes in the size
   probe below, so the raw ceiling is likely the binding limit.
 - Standalone renderer module: 872,000 byte compressed ceiling at 871,295 bytes (705 bytes headroom).
   It links no text engine but does link the property registry.
@@ -314,11 +328,18 @@ direction, which is this design's base level; and per-chunk anchoring is only we
 chunk's glyphs cannot interleave with another's. A paragraph can span several spans, so it is built
 across spans, which is new: today each span is shaped alone.
 
+**Paragraph boundaries** are therefore absolute `x` or `y` values and `textPath` starts; wrapped
+line starts are line boundaries inside one paragraph.
+
 **Current text position.** A chunk without an absolute `x` (for example one started by `y` only)
-continues from the previous chunk. In an `ltr` text element it starts at the previous chunk's right
-extent and in an `rtl` element at its left extent, then anchors normally, so a `start`-anchored
-`rtl` chunk ends where the previous one began, as the chunk isolates of Blink's single paragraph
-order them. After a `textPath`, the current text position stays the existing end-of-path position.
+starts its pen pass at the current text position: the pen end of the previous chunk in the
+paragraph direction, taken from the CSS positions, before relative shifts, `textLength`, and
+anchoring. In an `ltr` element the pen runs rightward from that point; in an `rtl` element the pen
+of a chunk runs leftward from its anchor point, so the next chunk continues to the left. This is
+today's pen carry for left-to-right text, which the new `text_span_positioning_tests` cases pin.
+Blink differs for unpositioned `rtl` chunks: its anchoring uses the first logical character's left
+edge as the anchor point, so it is not a pixel oracle there. After a `textPath`, the current text
+position stays the existing end-of-path position.
 `text/text/x-and-y-with-multiple-values-and-arabic-text` exercises the `ltr` case and stays
 unchanged.
 
@@ -370,8 +391,9 @@ public:
 
 - **Input.** The adapter builds a UTF-32 analysis buffer from Donner's own `decodeUtf8` output, so
   the analysis and the layout agree on every malformed sequence; it never passes UTF-8 to SheenBidi.
-  Source bidi controls stay in the buffer, so they still affect levels, but are non-addressable in
-  the character table. `BidiControl` entries are the injected CSS controls with the logical position
+  Source bidi controls, the Unicode Bidi_Control set (ALM U+061C, LRM U+200E, RLM U+200F, LRE
+  to RLO U+202A to U+202E, and LRI to PDI U+2066 to U+2069), stay in the buffer, so they still
+  affect levels, but are non-addressable in the character table. `BidiControl` entries are the injected CSS controls with the logical position
   before which they appear; injected controls occupy buffer slots but never logical characters.
 - **Base level.** `ltr` and `rtl` map to explicit levels 0 and 1; `plaintext` on the root maps to
   P2 and P3.
@@ -380,7 +402,9 @@ public:
   boundaries.
 - **Fast path.** When the base level is 0, no injected control exists, and no character has bidi
   class R, AL, AN, or an explicit formatting class, every level is 0 and the visual order is
-  logical. The adapter returns that result without creating SheenBidi objects. A fast-path line
+  logical. The adapter returns that result without creating SheenBidi objects; the character
+  table still applies the addressability filter, since LRM is class L and passes the fast-path
+  test. A fast-path line
   counts as one visual run against the run budget, so budgets do not depend on the path taken.
   `bidi_paragraph_tests` compares the fast path with the full analysis over generated inputs.
 - **Lifetime.** All SheenBidi objects are released on every return path through a small owning
@@ -427,16 +451,26 @@ The layout follows the SVG 2 split between CSS layout and positioning:
    glyphs adjacent both logically and visually in one level run. Each character's CSS position is
    its left edge and its advance is its cell width.
 2. **Relative shifts in logical order.** Walk the character table in logical order, accumulating
-   `dx` and `dy` into a running shift that resets at an absolute `x` or `y` and at a `textPath`
-   start, and add each character's shift to its glyphs. This is the SVG 2 step, resvg's
-   `resolve_relative_shifts`, and Blink's `AdjustPositionsDxDy`; for left-to-right text it equals
-   today's pen behavior. `rotate` is per logical character.
-3. **`textLength`.** Per owner node, measure the extent of its addressable characters, distribute
-   the difference in visual order as Blink does, and carry the final shift to the remaining
-   characters of the chunk. For `spacing`, the node's left extent stays fixed and the right edge
-   moves by delta, in both directions; anchoring then pins the edge `direction` selects, so in an
-   `rtl` chunk with `start` the right edge returns to the anchor. `spacingAndGlyphs` scales about
-   the left extent. The existing Arabic `textLength` rows stay compared.
+   `dx` and `dy` into a running shift, and add each character's shift to its glyphs. The shift
+   resets per axis: the x shift at an absolute `x`, the y shift at an absolute `y`, and both at a
+   `textPath` start. The SVG 2 step itself does not reset; the per-axis reset is Blink's fix for
+   SVG WG [issue 846](https://github.com/w3c/svgwg/issues/846) and matches today's pen behavior, so
+   `<tspan dy="10">a</tspan><tspan x="50">b</tspan>` keeps `b` 10 units down, as it is today.
+   Logical accumulation is resvg's `resolve_relative_shifts` and Blink's `AdjustPositionsDxDy`; for
+   left-to-right text it equals today's pen behavior. `rotate` is per logical character.
+3. **`textLength`.** Per owner node, measure the extent of its addressable characters and
+   distribute the difference between its visually adjacent characters. **Decision:** the behavior
+   is direction-aware. The owner's start edge in the inline direction stays fixed (the left edge for
+   `ltr`, the right edge for `rtl`), the end edge moves by delta, and the final shift carries to the
+   chunk's following characters in the inline direction. `spacingAndGlyphs` scales about the same
+   start edge. A `textLength` owner that covers only part of an `rtl` chunk thus leaves the content
+   before it in place and pushes later content further left. Blink's literal alternative keeps the
+   left edge fixed and carries rightward in every direction, which shifts an `rtl` owner's
+   preceding content when the owner is partial; anchoring hides the difference only for whole
+   chunks. Milestone 1 keeps [#2095](https://github.com/jwmcglynn/donner/pull/2095)'s trailing-gap
+   carry exactly; the direction-aware carry lands in Milestone 1b with a `text_engine_tests` case for
+   a partial `rtl` owner and any row it changes listed. The existing Arabic `textLength` rows stay
+   compared.
 4. **Anchoring.** See below.
 
 Values are looked up through the character table, never by glyph order, so reordering cannot detach
@@ -446,33 +480,52 @@ scope.
 ### Anchoring
 
 For each anchored chunk, let `a` be the minimum of each addressable character's left edge and `b`
-the maximum of its right edge, after relative shifts and `textLength`. Let `P` be the anchor point:
-the chunk's resolved `x` (or the current text position), plus the shift of the chunk's first
-logical character. With the `direction` and `text-anchor` of the element containing that first
+the maximum of its right edge, after relative shifts and `textLength`. A character's left edge is
+its glyph position including the glyph's x offset, as today; its extent is its glyph advance plus
+letter and word spacing, except that spacing after the chunk's last character is excluded, as today
+and in resvg (Blink includes it). Let `P` be the anchor point: the chunk's resolved `x` (or the
+current text position), plus the relative `dx` and `dy` shift of the chunk's first logical
+character; the `textLength` shift is not added. With the `direction` and `text-anchor` of the element containing that first
 character, `start` with `ltr` or `end` with `rtl` moves `a` to `P`, `start` with `rtl` or `end` with
 `ltr` moves `b` to `P`, and `middle` moves `(a + b) / 2` to `P`. Vertical modes use the same rule on
 the vertical axis, measured between pen positions as #2098 does.
 
-This is the SVG 2 rule as Blink implements it and, apart from direction, as resvg does. For
-left-to-right chunks whose characters advance monotonically it equals today's rule, because then
-`a` is the first glyph's pen and `b` the last glyph's pen plus advance. It differs only when a later
-character's shift places it before the first or past the last. A scan of the corpus for negative
-`dx` or `dx` combined with `middle` or `end` anchors finds two compared rows,
-`text/writing-mode/tb-with-dx-on-second-tspan` and `text/textPath/tspan-with-relative-position`; in
-both the negative shift sits on the chunk's first character, which moves `P` and `a` together, so
-neither should change. Milestone 1b confirms this by running every compared row under both rules.
+This is the SVG 2 rule as Blink implements it and, apart from direction and trailing spacing, as
+resvg does. For left-to-right chunks whose characters advance monotonically it equals today's rule,
+because then `a` is the first glyph's pen and `b` the last glyph's pen plus advance. It differs only
+when a later character's shift places it before the first or past the last.
 
-Within a `textPath`, anchoring is scoped to the path's characters, as in Blink.
+A static scan of the corpus for negative `dx` or for `dx` combined with `middle` or `end` anchors
+finds two compared rows, and neither is a clear difference: in
+`text/writing-mode/tb-with-dx-on-second-tspan` the `dx="-50"` is cross-axis in vertical text, so it
+does not move the inline extent; in `text/textPath/tspan-with-relative-position` the `dx="-5"` is
+on the second span's first character, not the chunk's, and anchoring is scoped to the path, so the
+outcome depends on whether that character lands before the chunk's first. Milestone 1b also checks
+the spacing rule explicitly against `text/letter-spacing/non-ASCII-character` (`middle`) and
+`text/text-anchor/end-with-letter-spacing` (`end`), both compared today. The scan is a guide, not
+evidence; the run under both rules is.
+
+Within a `textPath`, anchoring is scoped to the path's characters, as in Blink. Wrapped
+`inline-size` text skips anchoring and `textLength` today (`applyFinalAdjustments` returns early);
+Milestone 1b leaves that path alone, and Milestone 5 only starts each wrapped line at its start edge
+in the paragraph direction.
 
 ### Run and decoration geometry
 
 `TextRun` stays one per span, and glyphs keep absolute positions, so renderer painting is unchanged.
-The engine adds `TextRun::decorationSegments`: maximal runs of the span's rendered glyphs that are
-consecutive in the line's visual order, further split exactly where today's renderers split (per
-glyph when a glyph is rotated, and at baseline changes), stored as inline start and end pen
-positions on one baseline. TinySkia and Geode draw those segments instead of computing extents
-themselves; for left-to-right text the segments equal today's bars, keeping Milestone 1
-pixel-neutral. This is the narrow precursor of the shared decoration geometry planned in Milestone
+The engine adds `TextRun::decorationSegments`, computed with today's renderer rules so Milestone 1
+stays pixel-neutral:
+
+- A rendered glyph is one whose glyph index is not 0 and whose advance is positive; other glyphs
+  contribute nothing.
+- When any glyph of the run is rotated, or the rendered glyphs do not share one baseline, every
+  rendered glyph gets its own bar, starting at the glyph's x position (which includes its offset)
+  and clamped to the next rendered glyph's x position; rotated bars carry the glyph's rotation.
+- Otherwise the run's rendered glyphs form maximal groups that are consecutive in the line's visual
+  order, and each group gets one bar from its first glyph's x position to its last glyph's x
+  position plus advance. For left-to-right text there is one group, today's bar.
+
+TinySkia and Geode draw those segments instead of computing extents themselves. This is the narrow precursor of the shared decoration geometry planned in Milestone
 11 of [0062-svg_parity_completion](0062-svg_parity_completion.md), which extends the same field.
 Paint-server object bounding boxes keep using the union of the span's glyph cells.
 
@@ -511,7 +564,8 @@ Paint-server object bounding boxes keep using the union of the span's glyph cell
 - A `textPath` starts a chunk, so it is its own paragraph. Glyphs are reordered in pen space before
   path placement, and anchoring with direction shifts the chunk along the path.
 - Under `inline-size`, the whole `<text>` is one paragraph, lines are broken in logical order as
-  today, and each line gets L1 and L2 separately.
+  today, each line gets L1 and L2 separately, and each line starts at its start edge in the
+  paragraph direction. Wrapped text keeps skipping `text-anchor` and `textLength`, as today.
 
 ### Performance
 
@@ -533,6 +587,14 @@ Performance sections change as follows; Milestone 6 edits that document:
   already guesses script per item, and the script locator doubles SheenBidi's footprint.
 - **Caching.** 0062 caches bidi analysis separately. This design relies on the existing geometry
   cache.
+- **Dependency packaging.** 0062 pins the release archive and compiles only the sources Donner
+  calls. This design uses the Bazel Central Registry module, which is the same release archive by
+  integrity and compiles SheenBidi in its unity mode; unused entry points are removed by the linker.
+- **Fuzzer.** 0062 plans `//donner/svg/text:text_layout_fuzzer` over the whole text layout. This
+  design adds the narrower `//donner/svg/text:bidi_paragraph_fuzzer` for the analysis boundary;
+  the layout-wide fuzzer stays with 0062.
+- **Budget.** 0062's `TextLayoutResourceBudget` also limits placed glyphs to 1,000,000. This design
+  adopts all three limits (code points, visual runs, placed glyphs) when it lands the budget.
 - **Ordering.** 0062 lands bidi last in its text milestones; this design depends only on #2098.
 
 ## Security / Privacy
@@ -541,7 +603,7 @@ All text, control characters, nesting, and property values are untrusted.
 
 - **Budgets.** `TextLayoutResourceBudget`, planned in
   [0062-svg_parity_completion](0062-svg_parity_completion.md), lands with Milestone 2 and limits one
-  text subtree to 1,000,000 code points and 65,536 visual runs. Injected controls count against the
+  text subtree to 1,000,000 code points, 65,536 visual runs, and 1,000,000 placed glyphs. Injected controls count against the
   code point budget; fast-path lines count as one run each. The explicit depth limit is UAX #9's
   125; deeper nesting is resolved by the algorithm's overflow counters, never by recursion.
   Exceeding a budget returns the existing text-preparation resource error.
@@ -631,11 +693,14 @@ does not matter; shaped cases are full-text only.
   an embedded RTL run, an RTL paragraph with an embedded LTR run and digits, brackets resolved by
   N0, `dx` and `rotate` on characters inside an RTL run (logical accumulation), `x` and `y` lists
   that split a mixed run into chunks, a `y`-only chunk after an `rtl` chunk (current text position),
-  `text-anchor` start, middle, and end under both directions, `textLength` in an `rtl` chunk, each
-  `unicode-bidi` value on nested `tspan` elements, `isolate-override` against `isolate` plus
-  `bidi-override` on content whose first strong character is opposite to `direction` (FSI resolves
-  by content, RLI does not), a `unicode-bidi` element crossing a chunk boundary, and source bidi
-  controls taking no positioning values.
+  `text-anchor` start, middle, and end under both directions, `textLength` on a whole and a partial
+  `rtl` chunk, each `unicode-bidi` value on nested `tspan` elements, a `unicode-bidi` element
+  crossing a chunk boundary, and source bidi controls taking no positioning values.
+- `bidi_paragraph_tests`: the span-marker-to-control translation for every `unicode-bidi` value and
+  direction, and `levels()` for `isolate-override` against `isolate` plus `bidi-override` on content
+  whose first strong character is opposite to `direction`, which distinguishes FSI from RLI at the
+  level the difference is observable; optionally a nesting of depth 124 plus injected controls that
+  reaches the overflow counters.
 - `text_engine_scripted_tests`: budget exhaustion for code points and runs with small injected
   budgets, depth beyond 125, and malformed UTF-8 inside right-to-left runs.
 - `renderer_regression_tests`: an underlined span split by an RTL run draws two decoration
@@ -683,16 +748,18 @@ the experimental text API off. This confirms the library choice of
 **Decision: both text tiers get bidi.** The simple tier is the default and the only tier that Bazel
 Central Registry consumers can build, and unpointed Hebrew, which needs only ordering and
 mirroring, renders correctly in it once bidi exists. Neither gated Wasm artifact links the simple
-tier, so the cost lands only in native builds with text enabled. `sheenbidi` is therefore a
-regular, not dev-only, `bazel_dep`, linked only by `//donner/svg/text:text_engine`.
+tier, so the simple-tier code lands only in native builds; SheenBidi itself also lands in the
+full-tier editor package, which the size budget below covers. `sheenbidi` is therefore a regular,
+not dev-only, `bazel_dep`, linked only by `//donner/svg/text:text_engine`.
 
 ### Size budget
 
 After #2098 the editor Geode package has 16,513 compressed and 28,255 raw bytes of headroom.
 SheenBidi with mirroring measures about 8,150 compressed and 26,098 raw bytes before any Donner
 code, so the adapter, the restructured layout, and the properties likely exceed the raw ceiling.
-Milestone 2 measures the real package (compressed, raw, and data segments) and asks for a ceiling
-decision before publication.
+Milestone 1 measures the restructured layout alone against every gate (compressed, raw, function
+body, total raw, and data segments); Milestone 2 measures the real package again and asks for a
+ceiling decision before publication.
 
 ### Integration checklist
 
