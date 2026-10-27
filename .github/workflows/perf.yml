@@ -43,8 +43,8 @@ jobs:
             # The interaction latency gates miss their targets on this hosted runner (#1666), so
             # this job records them without failing on a miss. Every other run enforces them.
             latency_gates: report
-            # Likewise two tracked checks of the same case, each only in the browser it fails in,
-            # until their fixes (#1675, #1676).
+            # Likewise the tracked completion checks, each only in the browser (and phase) it fails
+            # in, until their fixes (#1675, #1676, #2106).
             completion_checks: report
           - os: ubuntu-24.04
             target_tag: perf_linux
