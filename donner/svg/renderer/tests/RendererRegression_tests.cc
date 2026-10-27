@@ -604,6 +604,83 @@ TEST_F(RendererRegressionTests, FilterBlurNearCanvasEdgeMatchesBlurWithRoom) {
       "blur_canvas_edge_spill", editor::tests::PixelmatchIdentityParams());
 }
 
+/// A drop shadow whose offset carries its source toward or past the edge of the filter raster.
+/// Shapes are pixel-aligned rectangles, which both backends rasterize to identical coverage.
+struct EdgeDropShadowCase {
+  std::string_view name;   //!< Label for the comparison outputs.
+  std::string_view shape;  //!< Filtered shape markup, open for the `fill` and `filter` attributes.
+  int dx;                  //!< Shadow offset along x, in user units.
+  int dy;                  //!< Shadow offset along y, in user units.
+};
+
+constexpr std::array<EdgeDropShadowCase, 6> kEdgeDropShadowCases = {{
+    {"past_right_edge", R"svg(<rect x="44" y="20" width="16" height="24")svg", 14, 0},
+    {"past_left_edge", R"svg(<rect x="4" y="20" width="16" height="24")svg", -14, 0},
+    {"past_bottom_edge", R"svg(<rect x="20" y="44" width="24" height="16")svg", 0, 14},
+    {"past_top_edge", R"svg(<rect x="20" y="4" width="24" height="16")svg", 0, -14},
+    // Blur spill beyond the left edge is carried back into view by the positive offset.
+    {"into_view_from_left_edge", R"svg(<rect x="1" y="26" width="8" height="12")svg", 14, 0},
+    {"past_top_right_corner", R"svg(<rect x="48" y="2" width="14" height="14")svg", 12, -12},
+}};
+
+/// Renders the case's shape filtered by \p primitives over a filter region that is exactly the
+/// 64x64 canvas, so the filter raster edge is the canvas edge.
+RendererBitmap RenderEdgeDropShadow(const EdgeDropShadowCase& shadowCase,
+                                    std::string_view primitives, RendererBackend backend) {
+  SVGDocument document = instantiateSubtree(
+      std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64"
+                               height="64">)svg") +
+          std::string(primitives) + "</filter>" + std::string(shadowCase.shape) +
+          R"svg( fill="seagreen" filter="url(#f)"/>)svg",
+      {}, Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, backend);
+}
+
+std::string EdgeDropShadowPrimitive(const EdgeDropShadowCase& shadowCase) {
+  return "<feDropShadow dx=\"" + std::to_string(shadowCase.dx) + "\" dy=\"" +
+         std::to_string(shadowCase.dy) +
+         R"svg(" stdDeviation="3" flood-color="blue" flood-opacity="0.75"/>)svg";
+}
+
+/// The Filter Effects definition of feDropShadow as an explicit primitive chain: blur the alpha,
+/// offset it, color it with the flood, and merge the source over it.
+std::string EdgeDropShadowChain(const EdgeDropShadowCase& shadowCase) {
+  return R"svg(<feGaussianBlur in="SourceAlpha" stdDeviation="3"/><feOffset dx=")svg" +
+         std::to_string(shadowCase.dx) + "\" dy=\"" + std::to_string(shadowCase.dy) +
+         R"svg(" result="offsetBlur"/><feFlood flood-color="blue" flood-opacity="0.75"/>
+           <feComposite in2="offsetBlur" operator="in"/>
+           <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>)svg";
+}
+
+TEST_F(RendererRegressionTests, DropShadowNearRasterEdgeMatchesBlurThenOffsetChain) {
+  for (const EdgeDropShadowCase& shadowCase : kEdgeDropShadowCases) {
+    SCOPED_TRACE(shadowCase.name);
+    const RendererBitmap expected =
+        RenderEdgeDropShadow(shadowCase, EdgeDropShadowChain(shadowCase), ActiveRendererBackend());
+    AssertVisibleFixture(expected, "edge_drop_shadow_chain_" + std::string(shadowCase.name));
+    editor::tests::CompareBitmapToBitmap(
+        RenderEdgeDropShadow(shadowCase, EdgeDropShadowPrimitive(shadowCase),
+                             ActiveRendererBackend()),
+        expected, "edge_drop_shadow_" + std::string(shadowCase.name),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, DropShadowNearRasterEdgeMatchesAcrossBackends) {
+  if (!IsRendererBackendAvailable(RendererBackend::Geode)) {
+    GTEST_SKIP() << "Requires the Geode backend";
+  }
+  for (const EdgeDropShadowCase& shadowCase : kEdgeDropShadowCases) {
+    SCOPED_TRACE(shadowCase.name);
+    const std::string primitive = EdgeDropShadowPrimitive(shadowCase);
+    editor::tests::CompareBitmapToBitmap(
+        RenderEdgeDropShadow(shadowCase, primitive, RendererBackend::TinySkia),
+        RenderEdgeDropShadow(shadowCase, primitive, RendererBackend::Geode),
+        "edge_drop_shadow_cpu_vs_geode_" + std::string(shadowCase.name),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererRegressionTests, CssFilterContractMixedUrlGrayscaleUsesSrgb) {
   SVGDocument actualDocument = instantiateSubtree(R"svg(
     <filter id="identity"><feOffset/></filter>
