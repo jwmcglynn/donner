@@ -46,7 +46,6 @@ import { quarantineStillSkips } from "./quarantine-report.mjs";
 import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
-  armCanvasGpuDelayForTest,
   armCanvasGpuDelayFromEnv,
   type CanvasActivity,
   canvasGpuDelayFromEnv,
@@ -56,6 +55,7 @@ import {
   captureQuiescentCanvasFrame,
   holdCanvasCompletionForTest,
   readCanvasActivity,
+  submitFrameWithDelayedGpuWork,
 } from "./surface-frame-probe";
 import { kStallGuardMs, scaledMs } from "./test-timing";
 
@@ -2822,10 +2822,6 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   expect(fatalMessages).toEqual([]);
 });
 
-// Fixed fragment iterations queued after each canvas frame's first write in the held-canvas case,
-// enough that the frame's remaining writes run on the GPU well after its CPU task has ended.
-const kHeldCanvasGpuDelayIterations = 8000;
-
 test(
   "production Geode wasm presents visible editor pixels after held canvas GPU completion",
   async ({ browserName, page }, testInfo) => {
@@ -2878,55 +2874,42 @@ test(
     if (!readyState) throw new Error("the completed Basic Shapes frame was not observed");
     expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
 
-    // Hold the canvas's GPU work itself: fixed GPU work queued after the first canvas write of
-    // every frame from here on keeps that frame's remaining writes running on the GPU after its CPU
-    // task, its host counters and its submission have all advanced. A gate that trusted any of
-    // those would capture now.
-    const gpuDelay = await armCanvasGpuDelayForTest(
+    // Hold the canvas's GPU work itself: fixed GPU work queued after the frame's first canvas write
+    // keeps its remaining writes running on the GPU after its CPU task, its host counters and its
+    // submission have all advanced. A gate that trusted any of those would capture now.
+    const { frame: heldFrame, delay: delayReport } = await submitFrameWithDelayedGpuWork(
+      page,
       applicationOwner,
-      1,
-      kHeldCanvasGpuDelayIterations,
     );
-    let delayReport: Awaited<ReturnType<typeof gpuDelay.disarm>> | undefined;
     let requiredOwner: Worker | null = null;
     let screenshots = 0;
     let atScreenshot: CanvasActivity | null = null;
-    let capture: Awaited<ReturnType<typeof captureEditorPage>> | null;
-    let heldFrame: CanvasActivity;
-    try {
-      const beforeHeldFrame = await readCanvasActivity(applicationOwner);
-      await page.evaluate(() => {
-        window.__donnerEditorFrameRequested = true;
-      });
-      await expect.poll(async () => (await readCanvasActivity(applicationOwner)).canvasSubmits, {
-        message: "a document frame is submitted with its GPU work delayed",
-        timeout: kStallGuardMs,
-      }).toBeGreaterThan(beforeHeldFrame.canvasSubmits);
-      heldFrame = await readCanvasActivity(applicationOwner);
-      capture = await captureReadyBasicShapesFrame(
-        page,
-        readyState,
-        before.results,
-        async (timeoutMs) => {
-          ++screenshots;
-          atScreenshot = await readCanvasActivity(applicationOwner);
-          return captureEditorPage(page, timeoutMs);
+    const capture = await captureReadyBasicShapesFrame(
+      page,
+      readyState,
+      before.results,
+      async (timeoutMs) => {
+        ++screenshots;
+        atScreenshot = await readCanvasActivity(applicationOwner);
+        return captureEditorPage(page, timeoutMs);
+      },
+      {
+        onOwner: (owner) => {
+          requiredOwner = owner;
         },
-        {
-          onOwner: (owner) => {
-            requiredOwner = owner;
-          },
-          timedOut: (result) => result.timedOutCaptures > 0,
-        },
-      );
-    } finally {
-      delayReport = await gpuDelay.disarm();
-    }
+        timedOut: (result) => result.timedOutCaptures > 0,
+      },
+    );
     const delayPath = testInfo.outputPath("held-canvas-gpu-delay.json");
     await writeFile(delayPath, JSON.stringify({ heldFrame, atScreenshot, delayReport }, null, 2));
     await testInfo.attach("held-canvas-gpu-delay", { path: delayPath, contentType: "application/json" });
     expect(requiredOwner).toBe(applicationOwner);
     expect(delayReport?.injected ?? 0, "the held frame's GPU work was delayed").toBeGreaterThan(0);
+    // The delayed frame's GPU work was still running when the gate began, so a gate that did not
+    // wait for it could not have passed the check below.
+    expect(heldFrame.canvasRetired, JSON.stringify({ heldFrame, delayReport })).toBeLessThan(
+      heldFrame.canvasSubmits,
+    );
     expect(capture).not.toBeNull();
     if (capture === null || atScreenshot === null) {
       throw new Error("the held canvas capture is unavailable");
@@ -3083,6 +3066,8 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   let probeRegion: ProbeRegion | null = null;
   let blueCss: PixelBounds | null = null;
   let screenshotTimeouts = 0;
+  // The blue capture and its retries share one stall guard; none of them is a latency budget.
+  const stallGuardEndsAtMs = performance.now() + kStallGuardMs;
   let lastBlueProbe:
     | {
       shot: Buffer;
@@ -3131,7 +3116,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
         state,
         beforeSample,
         (timeoutMs) => captureEditorPage(page, timeoutMs),
-        { timedOut: (result) => result.timedOutCaptures > 0 },
+        { timedOut: (result) => result.timedOutCaptures > 0, untilMs: stallGuardEndsAtMs },
       );
       if (capture === null) return 0;
       screenshotTimeouts += capture.timedOutCaptures;
@@ -3172,7 +3157,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       return 0;
     }, {
       message: "the resize target must be visibly blue in the artboard capture",
-      timeout: kStallGuardMs,
+      timeout: Math.max(1, stallGuardEndsAtMs - performance.now()),
       intervals: [250, 400, 600],
     }).toBeGreaterThan(500);
   } catch (error) {
@@ -4327,22 +4312,25 @@ function createAnimationRegionCapture(
         ...(unclipped ? {} : { clip: region }),
         timeout,
       });
-    const deadline = deadlineAtMs ?? (performance.now() + scaledMs(5000));
+    // A caller's own end, or the stall guard: no capture deadline shorter than that.
+    const deadline = deadlineAtMs ?? (performance.now() + kStallGuardMs);
     let captureTiming: { startedEpochMs: number; finishedEpochMs: number };
     const captureAttempts: Record<string, unknown>[] = [];
     const sequence = flatCaptureSequence++;
     const captureCompleted = async () => {
       const startedEpochMs = Date.now();
-      const attempt: Record<string, unknown> = { startedEpochMs };
+      const passes: Record<string, unknown>[] = [];
+      const attempt: Record<string, unknown> = { startedEpochMs, passes };
       captureAttempts.push(attempt);
       try {
         // The shared gate holds the app's canvas completions, settles their GPU work, and accepts
-        // only a screenshot during which no canvas frame was acquired or written. The capture
-        // deadline is its time bound here.
-        const { result, passes } = await captureQuiescentCanvasFrame(owner, screenshot, {
+        // only a screenshot during which no canvas frame was acquired or written. The animation
+        // never stops presenting, so every screenshot stays under a hold.
+        const { result } = await captureQuiescentCanvasFrame(owner, screenshot, {
           untilMs: deadline,
+          retakeUnheld: false,
+          passes,
         });
-        attempt.passes = passes;
         captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
         return result;
       } catch (error) {

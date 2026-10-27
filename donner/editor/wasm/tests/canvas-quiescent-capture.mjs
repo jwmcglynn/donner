@@ -36,6 +36,12 @@ export const kMaxCanvasSettleHoldMs = 2000;
 export const kMinHeldScreenshotMs = 250;
 
 /**
+ * Part of the hold kept back from the screenshot for the worker round trips that still run under
+ * it: the caller's own reads around its screenshot, the activity read and the release.
+ */
+export const kHeldRoundTripReserveMs = 500;
+
+/**
  * Race \p work against \p untilMs on \p now's clock; null when the bound passes first. A rejection
  * of abandoned work is ignored, since it can arrive after the caller has moved on.
  * @template T
@@ -73,9 +79,13 @@ async function raceUntil(work, untilMs, now) {
  *   now?: () => number,
  *   timedOut?: (result: T) => boolean,
  *   isTimeoutError?: (error: unknown) => boolean,
- * }} options `untilMs` is the stall guard's end on `now`'s clock (default `performance.now`).
- *   `timedOut` recognizes a capture result that ran out of time, and `isTimeoutError` a thrown one;
- *   any other failure of `capture` or of the probe propagates.
+ *   retakeUnheld?: boolean,
+ *   passes?: Array<Record<string, unknown>>,
+ * }} options `untilMs` is the capture's time bound on `now`'s clock (default `performance.now`),
+ *   normally the stall guard. `timedOut` recognizes a capture result that ran out of time, and
+ *   `isTimeoutError` a thrown one; any other failure of `capture` or of the probe propagates.
+ *   `retakeUnheld: false` keeps every screenshot under a hold, for a canvas that never stops
+ *   presenting. Each pass is appended to `passes` when given, so a caller keeps them on failure.
  * @returns {Promise<{ result: T, passes: Array<Record<string, unknown>> }>} The accepted capture
  *   and a record of every pass.
  */
@@ -83,11 +93,14 @@ export async function captureQuiescentCanvas(probe, capture, options) {
   const now = options.now ?? (() => performance.now());
   const timedOut = options.timedOut ?? (() => false);
   const isTimeoutError = options.isTimeoutError ?? (() => false);
+  const retakeUnheld = options.retakeUnheld ?? true;
   const { untilMs } = options;
-  const passes = [];
+  const passes = options.passes ?? [];
   const stalled = () =>
     new Error(
-      `no quiescent canvas screenshot before the stall guard: ${JSON.stringify(passes.slice(-8))}`,
+      `no quiescent canvas screenshot within the capture's time bound: ${
+        JSON.stringify(passes.slice(-8))
+      }`,
     );
 
   // One pass: settle, screenshot, compare activity. Its outcome is "accepted", "activity" (a
@@ -142,21 +155,32 @@ export async function captureQuiescentCanvas(probe, capture, options) {
     const heldAtMs = now();
     const hold = await probe.hold();
     let outcome = "activity";
+    let accepted;
     try {
       for (let index = 1; index <= kMaxCanvasQuiescencePasses; ++index) {
         const heldPass = await pass(
           { held: true, pass: index },
           Math.min(untilMs, heldAtMs + kMaxCanvasSettleHoldMs),
-          Math.min(untilMs, heldAtMs + kMaxCanvasCompletionHoldMs),
+          Math.min(untilMs, heldAtMs + kMaxCanvasCompletionHoldMs - kHeldRoundTripReserveMs),
           kMinHeldScreenshotMs,
         );
         outcome = heldPass.outcome;
-        if (outcome === "accepted") return { result: heldPass.result, passes };
+        if (outcome === "accepted") {
+          accepted = heldPass.result;
+          break;
+        }
         if (outcome !== "activity") break;
       }
-    } finally {
-      await hold.release();
+    } catch (error) {
+      // Release on every path. A release failure is recorded, but never replaces the pass's own
+      // failure.
+      await hold.release().catch((releaseError) => {
+        passes.push({ holdReleaseError: String(releaseError) });
+      });
+      throw error;
     }
+    await hold.release();
+    if (outcome === "accepted") return { result: accepted, passes };
     if (outcome === "activity") {
       throw new Error(
         `the canvas kept presenting new frames under the capture's completion hold: ${
@@ -166,6 +190,6 @@ export async function captureQuiescentCanvas(probe, capture, options) {
     }
     // The GPU or the screenshot is slow enough that holding on would approach the app's own
     // completion deadline. The hold is released; hold again, or retake the screenshot unheld.
-    unheld = outcome === "screenshot";
+    unheld = retakeUnheld && outcome === "screenshot";
   }
 }

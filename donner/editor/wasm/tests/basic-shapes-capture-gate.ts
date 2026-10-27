@@ -3,27 +3,23 @@ import { armCanvasCaptureFault } from "./canvas-capture-fault";
 import { captureQuiescentCanvasFrame, findCanvasOwnerWorker } from "./surface-frame-probe";
 
 /**
- * Bound \p work by an absolute deadline, failing with the blue-pixel deadline message once it
- * passes. The capture gate below has no such deadline; this remains for callers that bound their
- * own diagnostics.
+ * Bound \p work by an absolute end on the `performance.now()` clock, failing with \p message once
+ * it passes. The capture gate below does not use it.
  */
 export async function awaitBeforeBlueDeadline<T>(
   work: Promise<T>,
   deadlineAtMs: number,
+  message = "Basic Shapes canvas GPU completion exceeded the blue-pixel deadline",
 ): Promise<T> {
   const remainingMs = deadlineAtMs - performance.now();
   if (remainingMs <= 0) {
-    throw new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline");
+    throw new Error(message);
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     work,
     new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () =>
-          reject(new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline")),
-        remainingMs,
-      );
+      timer = setTimeout(() => reject(new Error(message)), remainingMs);
     }),
   ]).finally(() => clearTimeout(timer));
 }
@@ -31,20 +27,21 @@ export async function awaitBeforeBlueDeadline<T>(
 /**
  * Take one scored screenshot of \p owner's canvas through the hold/settle/activity gate
  * (\ref captureQuiescentCanvasFrame): it starts only once the GPU has run every canvas write, and
- * is accepted only if no canvas frame was acquired or written until it ended. The stall guard is
- * its only time bound. Applies the env-gated faults of canvas-capture-fault.ts when they are set.
+ * is accepted only if no canvas frame was acquired or written until it ended. Its only time bound
+ * is the stall guard, or the caller's own stall guard end `untilMs` on the `performance.now()`
+ * clock. Applies the env-gated faults of canvas-capture-fault.ts when they are set.
  */
 export async function captureSettledCanvas<T>(
   page: Page,
   owner: Worker,
   capture: (timeoutMs: number) => Promise<T>,
-  timedOut?: (result: T) => boolean,
+  options: { timedOut?: (result: T) => boolean; untilMs?: number } = {},
 ): Promise<T> {
   const fault = await armCanvasCaptureFault(page, owner);
-  if (fault === null) return (await captureQuiescentCanvasFrame(owner, capture, { timedOut })).result;
+  if (fault === null) return (await captureQuiescentCanvasFrame(owner, capture, options)).result;
   let result: T;
   try {
-    result = (await captureQuiescentCanvasFrame(owner, fault.wrap(capture), { timedOut })).result;
+    result = (await captureQuiescentCanvasFrame(owner, fault.wrap(capture), options)).result;
   } catch (error) {
     // The capture's own failure is the result; a failed cleanup must not replace it.
     await fault.finish(false).catch(() => {});
@@ -91,11 +88,18 @@ export async function captureReadyBasicShapesFrame<T>(
   state: InitialBlueFrameState,
   beforeSample: number,
   capture: (timeoutMs: number) => Promise<T>,
-  options: { onOwner?: (owner: Worker) => void; timedOut?: (result: T) => boolean } = {},
+  options: {
+    onOwner?: (owner: Worker) => void;
+    timedOut?: (result: T) => boolean;
+    untilMs?: number;
+  } = {},
 ): Promise<T | null> {
   if (!hasPresentedBasicShapesHostFrame(state, beforeSample)) return null;
   const owner = await findCanvasOwnerWorker(page);
   if (owner === null) return null;
   options.onOwner?.(owner);
-  return captureSettledCanvas(page, owner, capture, options.timedOut);
+  return captureSettledCanvas(page, owner, capture, {
+    timedOut: options.timedOut,
+    untilMs: options.untilMs,
+  });
 }

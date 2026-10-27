@@ -413,8 +413,10 @@ function installInWorker(): boolean {
       pendingCanvasSubmit = serial;
       // The probe's own completion request, apart from the app's: it records when the GPU has run
       // this canvas write without changing any promise the app awaits.
-      void onSubmittedWorkDone.call(this).then(() => {
+      onSubmittedWorkDone.call(this).then(() => {
         state.canvasRetired = Math.max(state.canvasRetired, serial);
+      }).catch(() => {
+        // A lost or destroyed device never retires the write; the counter then stays behind.
       });
     }
     return result;
@@ -839,7 +841,12 @@ export async function holdCanvasCompletions(owner: Worker): Promise<{ release: (
 export async function captureQuiescentCanvasFrame<T>(
   owner: Worker,
   capture: (timeoutMs: number) => Promise<T>,
-  options: { timedOut?: (result: T) => boolean; untilMs?: number } = {},
+  options: {
+    timedOut?: (result: T) => boolean;
+    untilMs?: number;
+    retakeUnheld?: boolean;
+    passes?: Array<Record<string, unknown>>;
+  } = {},
 ): Promise<{ result: T; passes: Array<Record<string, unknown>> }> {
   return captureQuiescentCanvas(
     {
@@ -851,7 +858,44 @@ export async function captureQuiescentCanvasFrame<T>(
     {
       untilMs: options.untilMs ?? performance.now() + kStallGuardMs,
       timedOut: options.timedOut,
+      retakeUnheld: options.retakeUnheld,
+      passes: options.passes,
       isTimeoutError: (error: unknown) => error instanceof errors.TimeoutError,
     },
   );
+}
+
+/**
+ * Fixed fragment iterations for \ref submitFrameWithDelayedGpuWork: a few hundred milliseconds of
+ * GPU work on Apple Silicon, well inside the app's 5 s completion deadline.
+ */
+export const kSingleFrameGpuDelayIterations = 60000;
+
+/**
+ * Request one editor frame of \p owner's canvas and postpone its GPU work behind fixed fragment
+ * work queued after its first canvas write, then stop injecting. Returns the canvas activity once
+ * that frame was submitted, while its GPU work is normally still running, and what was injected.
+ */
+export async function submitFrameWithDelayedGpuWork(
+  page: Page,
+  owner: Worker,
+): Promise<{ frame: CanvasActivity; delay: { injected: number; jobMs: number[] } | null }> {
+  const delay = await armCanvasGpuDelayForTest(owner, 1, kSingleFrameGpuDelayIterations);
+  let report: { injected: number; jobMs: number[] } | null;
+  try {
+    const before = await readCanvasActivity(owner);
+    await page.evaluate(() => {
+      (window as Window & { __donnerEditorFrameRequested?: boolean })
+        .__donnerEditorFrameRequested = true;
+    });
+    await expect.poll(async () => (await readCanvasActivity(owner)).canvasSubmits, {
+      message: "a frame is submitted with its GPU work delayed",
+      timeout: kStallGuardMs,
+      intervals: [4, 8, 16],
+    }).toBeGreaterThan(before.canvasSubmits);
+  } finally {
+    // Only the requested frame is delayed; later frames run at their normal cost.
+    report = await delay.disarm();
+  }
+  return { frame: await readCanvasActivity(owner), delay: report };
 }
