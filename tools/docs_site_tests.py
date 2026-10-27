@@ -57,6 +57,17 @@ class DocsSiteTest(unittest.TestCase):
         self.assertIn('href="/donner/main/reports/coverage/index.html"', changed)
         self.assertIn('href="/donner/0.8.0/index.html"', changed)
 
+    def test_hostile_filename_cannot_inject_markup_into_root_canonical_link(self):
+        name = 'bad"><script>alert(1)</script>.html'
+        page = b'<html><head></head><body><span id="projectnumber">0.8.0</span></body></html>'
+        sources = {"0.8.0": self.source(extra={name: page}), "main": self.source("main")}
+        output = self.root / "site"
+        site.compose(sources, "0.8.0", output)
+        text = (output / name).read_text()
+        self.assertNotIn('<script>alert(1)</script>', text)
+        self.assertIn('%22%3E%3Cscript%3E', text)
+        self.assertEqual(site.Page(text).versions, ["0.8.0"])
+
     def test_page_and_anchor_inventory_describes_real_nested_pages(self):
         output, _ = self.compose()
         pages = json.loads((output / "0.8.0/_docs/pages.json").read_bytes())["pages"]

@@ -70,6 +70,9 @@ def release_source(reference: str, expected_digest: str, work: Path) -> tuple[Pa
                              record_sha256=expected_digest, work=work / "record-selection")
     version = record["source"]["version"]
     site.require(site.VERSION.fullmatch(version), "release needs a stable module version")
+    release = github_json(f"{store.REPO}/releases/tags/v{version}")
+    site.require(release.get("tag_name") == "v" + version and release.get("draft") is False
+                 and release.get("prerelease") is False, "release docs need a published stable release")
     tag = github_json(f"{store.REPO}/git/ref/tags/v{version}")["object"]
     if tag["type"] == "tag":
         tag = github_json(f"{store.REPO}/git/tags/{tag['sha']}")["object"]
@@ -103,6 +106,7 @@ def main_source(reference: str, work: Path) -> tuple[Path, dict]:
     pages_artifact.verify_metadata(github_json(f"{store.REPO}/actions/artifacts/{roles['docs']['artifact_id']}"),
                                    run, {**value, "artifact_id": roles["docs"]["artifact_id"],
                                          "artifact_digest": "sha256:" + roles["docs"]["zip_sha256"]})
+    (work / "main-selection.json").write_bytes(site.canonical({"identity": value, "artifacts": roles}))
     return archive, value
 
 
@@ -143,6 +147,8 @@ def prepare(work: Path, main_run: str, release_run: str, record_sha256: str,
     evidence.mkdir()
     for path in work.rglob("provenance.json"):
         shutil.copyfile(path, evidence / (str(len(list(evidence.iterdir()))) + "-provenance.json"))
+    if (work / "main-selection.json").exists():
+        shutil.copyfile(work / "main-selection.json", evidence / "main-selection.json")
     if (work / "record-attestation.json").exists():
         shutil.copyfile(work / "record-attestation.json", evidence / "release-attestation.json")
         shutil.copyfile(work / "release-candidate.json", evidence / "candidate.json")
@@ -363,6 +369,7 @@ def _retain_and_deploy(record, plan, previous_id, work, api):
     prefix.mkdir(parents=True)
     (prefix / "archive.json").write_bytes(site.canonical(archive_record))
     shutil.copyfile(payload / "composition.json", prefix / "composition.json")
+    shutil.copyfile(payload / "selection.json", prefix / "selection.json")
     for name in ("composition-attestation.json", "pages-attestation.json"):
         shutil.copyfile(work / name, prefix / name)
     if (payload / "evidence").exists():

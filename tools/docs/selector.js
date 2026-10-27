@@ -7,8 +7,9 @@
   const base = new URL(script.dataset.docsBase, location.origin);
   if (base.origin !== location.origin || !/^\/(?:[A-Za-z0-9_-]+\/)*$/.test(base.pathname)) return;
   const safePage = value => typeof value === "string" && value.length < 4096 &&
-    !/[\\\s%?#:\x00-\x1f\x7f]/.test(value) && !value.startsWith("/") &&
-    value.split("/").every(part => part && part !== "." && part !== "..");
+    !/[\\\s%?#:]/.test(value) && !value.startsWith("/") &&
+    value.split("/").every(part => part && part !== "." && part !== "..") &&
+    Array.from(value).every(character => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127);
   const hex = bytes => Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, "0")).join("");
   const sha = text => crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)).then(hex);
   async function read(path, limit, expected) {

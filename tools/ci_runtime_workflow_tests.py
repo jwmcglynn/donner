@@ -406,6 +406,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "browser_presentation_regression_test",
             "catalog_font_loading_test",
             "chromium_remote_smoke",
+            "docs_selector_browser_tests",
             "linux_browser_archive_tests",
             "mac_browser_archive_tests",
             "slug_endpoint_chromium_tests",

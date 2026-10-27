@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import tarfile
+from urllib.parse import quote
 
 from tools import bcr_source
 from tools import pages_artifact
@@ -263,7 +264,8 @@ def compose(sources: dict[str, tuple[Path, dict]], stable: str, output: Path,
         if relative.parts[0] in sources:
             continue
         text = path.read_text(encoding="utf-8")
-        canonical_link = '<link rel="canonical" href="' + base + stable + '/' + relative.as_posix() + '" />'
+        canonical_url = base + stable + '/' + quote(relative.as_posix(), safe="/")
+        canonical_link = '<link rel="canonical" href="' + html.escape(canonical_url, quote=True) + '" />'
         path.write_text(text.replace("</head>", canonical_link + "</head>", 1), encoding="utf-8")
     chrome = {}
     for name in ("selector.js", "selector.css"):
