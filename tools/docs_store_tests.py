@@ -12,10 +12,13 @@ from tools import docs_store as store
 
 class StoreTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.archive = self.root / "site.tar"; self.archive.write_bytes(b"independent main and release bytes" * 500)
-        self.payload = self.root / "payload"; self.payload.mkdir()
+        self.archive = self.root / "site.tar"
+        self.archive.write_bytes(b"independent main and release bytes" * 500)
+        self.payload = self.root / "payload"
+        self.payload.mkdir()
 
     def test_roundtrip_survives_actions_expiry_without_github_artifacts(self):
         record = store.split_archive(self.archive, self.payload)
@@ -43,21 +46,28 @@ class StoreTest(unittest.TestCase):
             store.validate_archive(record)
 
     def test_pinned_branch_advance_blocks_before_any_blob_write(self):
-        api = mock.Mock(); api.tip.return_value = "b" * 40
+        api = mock.Mock()
+        api.tip.return_value = "b" * 40
         with self.assertRaisesRegex(ValueError, "advanced"):
             store.commit(api, "a" * 40, self.payload, {})
         api.call.assert_not_called()
 
     def test_existing_immutable_entry_cannot_be_replaced(self):
-        (self.payload / "objects").mkdir(); (self.payload / "objects/x").write_bytes(b"new")
-        api = mock.Mock(); api.tip.return_value = "a" * 40; api.file.return_value = b"old"
+        (self.payload / "objects").mkdir()
+        (self.payload / "objects/x").write_bytes(b"new")
+        api = mock.Mock()
+        api.tip.return_value = "a" * 40
+        api.file.return_value = b"old"
         with self.assertRaisesRegex(ValueError, "immutable storage entry"):
             store.commit(api, "a" * 40, self.payload, {})
         api.call.assert_not_called()
 
     def test_failure_reading_old_entry_does_not_create_or_overwrite_it(self):
-        (self.payload / "objects").mkdir(); (self.payload / "objects/x").write_bytes(b"new")
-        api = mock.Mock(); api.tip.return_value = "a" * 40; api.file.side_effect = ValueError("permission denied")
+        (self.payload / "objects").mkdir()
+        (self.payload / "objects/x").write_bytes(b"new")
+        api = mock.Mock()
+        api.tip.return_value = "a" * 40
+        api.file.side_effect = ValueError("permission denied")
         with self.assertRaisesRegex(ValueError, "cannot inspect"):
             store.commit(api, "a" * 40, self.payload, {})
         api.call.assert_not_called()
@@ -75,7 +85,8 @@ class StoreTest(unittest.TestCase):
             "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
         branches = {"total_count": 1, "branch_policies": [{"name": "main", "type": "branch"}]}
         api = store.GitHub()
-        with mock.patch.object(api, "call", side_effect=[rules, env, branches]): api.require_protection()
+        with mock.patch.object(api, "call", side_effect=[rules, env, branches]):
+            api.require_protection()
         for changed in ({**env, "can_admins_bypass": True}, {**env, "protection_rules": []}):
             with mock.patch.object(api, "call", side_effect=[rules, changed]), self.assertRaisesRegex(ValueError, "required reviewers"):
                 api.require_protection()
@@ -92,10 +103,12 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(call.call_count, 1)
 
     def test_noncanonical_index_and_composition_ids_are_rejected(self):
-        api = mock.Mock(); api.tip.return_value = "a" * 40
+        api = mock.Mock()
+        api.tip.return_value = "a" * 40
         api.file.return_value = site.canonical({"schema": 1, "releases": {}, "current": "../x", "previous": None})
         with self.assertRaisesRegex(ValueError, "composition ID"):
             store.index(api, "a" * 40)
 
 
-if __name__ == "__main__": unittest.main()
+if __name__ == "__main__":
+    unittest.main()

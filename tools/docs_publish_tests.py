@@ -12,11 +12,13 @@ from tools import docs_site as site
 
 class DocsPublishTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.record = {"manifest_sha256": "a" * 64, "workflow_commit": "b" * 40}
         self.prior = {"kind": "composition", "manifest_sha256": "c" * 64}
-        self.api = mock.Mock(); self.api.tip.return_value = "e" * 40
+        self.api = mock.Mock()
+        self.api.tip.return_value = "e" * 40
         self.api.call.return_value = {"status": "succeed"}
 
     def test_request_cannot_override_workflow_context_or_smuggle_extra_fields(self):
@@ -29,7 +31,8 @@ class DocsPublishTest(unittest.TestCase):
 
     def test_context_requires_exact_repository_manual_main(self):
         good = {"GITHUB_REPOSITORY": "jwmcglynn/donner", "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_dispatch"}
-        with mock.patch.dict(os.environ, good): publish.workflow_context()
+        with mock.patch.dict(os.environ, good):
+            publish.workflow_context()
         for key, value in (("GITHUB_REF", "refs/heads/feature"), ("GITHUB_EVENT_NAME", "push"), ("GITHUB_REPOSITORY", "fork/donner")):
             with mock.patch.dict(os.environ, {**good, key: value}), self.assertRaisesRegex(ValueError, "trusted-main"):
                 publish.workflow_context()
@@ -39,7 +42,8 @@ class DocsPublishTest(unittest.TestCase):
                    "legacy_archive_sha256": "b" * 64, "approve_legacy_rollback_seed": False}
         with mock.patch.dict(os.environ, {"DOCS_REQUEST": json.dumps(request)}), self.assertRaisesRegex(ValueError, "invalid docs request"):
             publish.workflow_request("seed")
-        api = mock.Mock(); api.tip.return_value = "a" * 40
+        api = mock.Mock()
+        api.tip.return_value = "a" * 40
         with mock.patch.dict(os.environ, {"APPROVE_LEGACY_ROLLBACK_SEED": "true"}), self.assertRaisesRegex(ValueError, "before the snapshot"):
             publish.seed_legacy("1/1", 2, "a" * 64, "b" * 64, self.root / "seed", api)
         api.call.assert_not_called()
@@ -152,11 +156,14 @@ class DocsPublishTest(unittest.TestCase):
     def transaction(self):
         from tools import docs_fixture
         import shutil
-        work = self.root / "transaction"; work.mkdir()
+        work = self.root / "transaction"
+        work.mkdir()
         sources = {"0.8.0": docs_fixture.source(work, "release"), "main": docs_fixture.source(work, "main")}
         site.compose(sources, "0.8.0", work / "site")
-        (work / "pages").mkdir(); site.pack(work / "site", work / "pages/artifact.tar")
-        payload = work / "payload"; payload.mkdir()
+        (work / "pages").mkdir()
+        site.pack(work / "site", work / "pages/artifact.tar")
+        payload = work / "payload"
+        payload.mkdir()
         (payload / "selection.json").write_bytes(site.canonical({"releases": {}}))
         record = {"archive_sha256": publish.bcr_source.digest(work / "pages/artifact.tar"),
                   "manifest_sha256": site.read_json(work / "site/docs-site.json")["manifest_sha256"],
@@ -196,7 +203,8 @@ class DocsPublishTest(unittest.TestCase):
         self.assertEqual(deploy.call_count, 1)
 
     def test_all_pages_posts_require_live_protections_before_requesting_oidc(self):
-        api = mock.Mock(); api.require_protection.side_effect = ValueError("missing approval protection")
+        api = mock.Mock()
+        api.require_protection.side_effect = ValueError("missing approval protection")
         with mock.patch.object(publish, "_oidc_token") as token, self.assertRaisesRegex(ValueError, "missing approval"):
             publish.deploy(7, "a" * 40, api)
         token.assert_not_called()
@@ -220,7 +228,8 @@ class DocsPublishTest(unittest.TestCase):
                 publish.require_preserved_releases(manifest, releases)
 
     def test_prior_archive_cannot_be_replaced_under_an_approved_content_address(self):
-        api = mock.Mock(); api.file.return_value = site.canonical({"sha256": "b" * 64})
+        api = mock.Mock()
+        api.file.return_value = site.canonical({"sha256": "b" * 64})
         with self.assertRaisesRegex(ValueError, "approved content address"):
             publish._previous(api, "a" * 40, "c" * 64, self.root)
 
@@ -230,7 +239,8 @@ class DocsPublishTest(unittest.TestCase):
         authentic = self.root / "authentic.zip"
         with zipfile.ZipFile(authentic, "w") as archive:
             archive.writestr("artifact.tar", b"authentic legacy source")
-        forged = self.root / "forged.tar"; forged.write_bytes(b"forged assets with the same index")
+        forged = self.root / "forged.tar"
+        forged.write_bytes(b"forged assets with the same index")
         selected = {"artifact_id": 7, "run_id": 123, "attempt": 1,
                     "artifact_digest": "sha256:" + publish.bcr_source.digest(authentic),
                     "archive_sha256": publish.bcr_source.digest(forged)}
@@ -245,7 +255,8 @@ class DocsPublishTest(unittest.TestCase):
         record = {"source": {"version": "0.8.0", "commit": "a" * 40},
                   "artifacts": {"docs": {"run_id": 123, "attempt": 1,
                                           "files": {"artifact.tar": "b" * 64}}}}
-        api = mock.Mock(); api.file.return_value = b'{}'
+        api = mock.Mock()
+        api.file.return_value = b'{}'
         entry = {"identity": publish.release_identity(record, "0.8.0"), "archive": {"sha256": "b" * 64}}
         responses = [{"tag_name": "v0.8.0", "draft": False, "prerelease": False},
                      {"object": {"type": "commit", "sha": "a" * 40}}]
@@ -255,6 +266,24 @@ class DocsPublishTest(unittest.TestCase):
             publish._verify_retained_release(api, "c" * 40, "0.8.0", entry, self.root)
         self.assertEqual(verify.call_args.kwargs["workflow"], ".github/workflows/release_candidate.yml")
 
+    def test_network_requests_reject_other_schemes_and_embedded_credentials(self):
+        for url in ("file:///secret", "http://example.test/", "https://user:secret@example.test/",
+                    "https://example.test:444/", "https://example.test/#fragment"):
+            with self.subTest(url=url), mock.patch.object(publish.urllib.request, "build_opener") as opener:
+                with self.assertRaisesRegex(ValueError, "direct HTTPS"):
+                    publish._https_response(url, {})
+                opener.assert_not_called()
+
+    def test_network_requests_refuse_redirects_and_keep_authorization_at_origin(self):
+        with self.assertRaisesRegex(ValueError, "redirects"):
+            publish._NoRedirects().redirect_request(None, None, 302, "Found", {}, "https://other.test/")
+        opener = mock.Mock()
+        with mock.patch.object(publish.urllib.request, "build_opener", return_value=opener) as build:
+            publish._https_response("https://example.test/path?audience=pages", {"Authorization": "Bearer token"})
+        self.assertIsInstance(build.call_args.args[0], publish._NoRedirects)
+        self.assertEqual(opener.open.call_args.args[0].full_url, "https://example.test/path?audience=pages")
+        self.assertEqual(opener.open.call_args.kwargs, {"timeout": 30})
+
     def test_pages_health_checks_detect_changed_version_index(self):
         marker = {"manifest_sha256": "a" * 64}
         with mock.patch.object(publish, "live_marker", return_value=marker), \
@@ -262,4 +291,5 @@ class DocsPublishTest(unittest.TestCase):
             publish._verify_live("a" * 64, marker)
 
 
-if __name__ == "__main__": unittest.main()
+if __name__ == "__main__":
+    unittest.main()

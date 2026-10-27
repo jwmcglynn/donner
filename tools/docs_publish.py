@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from tools import bcr_source
@@ -328,10 +329,23 @@ def _fetch_pages(record: dict, work: Path) -> None:
     site.verify_site(work / "site", record["manifest_sha256"])
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError("HTTPS redirects are not allowed")
+
+
+def _https_response(url: str, headers: dict):
+    parsed = urllib.parse.urlsplit(url)
+    site.require(parsed.scheme == "https" and bool(parsed.hostname)
+                 and not parsed.username and not parsed.password and not parsed.fragment
+                 and parsed.port in (None, 443), "request requires a direct HTTPS URL")
+    request = urllib.request.Request(url, headers=headers)
+    return urllib.request.build_opener(_NoRedirects()).open(request, timeout=30)
+
+
 def live_marker(url: str = SITE_URL) -> dict | None:
     try:
-        request = urllib.request.Request(url + "docs-site.json", headers={"Cache-Control": "no-cache"})
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with _https_response(url + "docs-site.json", {"Cache-Control": "no-cache"}) as response:
             data = response.read(site.MAX_FILE + 1)
         site.require(len(data) <= site.MAX_FILE, "live marker is oversized")
         return json.loads(data)
@@ -367,9 +381,8 @@ def deploy(artifact_id: int, commit: str, api, wait=time.sleep, receipt: Path | 
 def _oidc_token() -> str:
     # The token travels only to GitHub Pages; it is never persisted or printed.
     url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
-    request = urllib.request.Request(url, headers={
-        "Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]})
-    with urllib.request.urlopen(request, timeout=30) as response:
+    headers = {"Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]}
+    with _https_response(url, headers) as response:
         return json.load(response)["value"]
 
 
@@ -401,7 +414,7 @@ def _live_identity(expected: dict) -> bool:
             return True
         except ValueError:
             return False
-    with urllib.request.urlopen(SITE_URL + "index.html", timeout=30) as response:
+    with _https_response(SITE_URL + "index.html", {"Cache-Control": "no-cache"}) as response:
         data = response.read(site.MAX_FILE + 1)
     site.require(len(data) <= site.MAX_FILE, "live index is oversized")
     return site.digest(data) == expected["index_sha256"] and live_marker() is None
@@ -498,8 +511,7 @@ def _retain_and_deploy(record, plan, previous_id, work, api):
 
 def _live_file(name: str, limit=site.MAX_FILE) -> bytes:
     site.safe_path(name)
-    request = urllib.request.Request(SITE_URL + name, headers={"Cache-Control": "no-cache"})
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with _https_response(SITE_URL + name, {"Cache-Control": "no-cache"}) as response:
         site.require(response.geturl().startswith(SITE_URL), "live file redirected outside docs")
         data = response.read(limit + 1)
     site.require(len(data) <= limit, "live file is oversized")

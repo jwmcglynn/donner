@@ -29,7 +29,8 @@ class DocsSiteTest(unittest.TestCase):
         path = self.root / (name + ".tar")
         with tarfile.open(path, "w:") as tar:
             for key, data in files.items():
-                info = tarfile.TarInfo(key); info.size = len(data)
+                info = tarfile.TarInfo(key)
+                info.size = len(data)
                 tar.addfile(info, io.BytesIO(data))
         identity["archive_sha256"] = site.bcr_source.digest(path)
         return path, identity
@@ -96,13 +97,15 @@ class DocsSiteTest(unittest.TestCase):
     def test_version_validation_rejects_blank_or_stale_output(self):
         for label in ("", "0.8.0-pre", "0.9.0"):
             with self.subTest(label=label):
-                folder = self.root / (label or "blank"); folder.mkdir()
+                folder = self.root / (label or "blank")
+                folder.mkdir()
                 (folder / "index.html").write_text('<span id="projectnumber">' + label + '</span>')
                 with self.assertRaisesRegex(ValueError, "version differs"):
                     site.check_version(folder, "0.8.0")
 
     def test_source_archive_build_does_not_inherit_a_parent_git_identity(self):
-        output = self.root / "html"; output.mkdir()
+        output = self.root / "html"
+        output.mkdir()
         (output / "index.html").write_text('<span id="projectnumber">0.8.0</span>')
         with mock.patch.object(site.bcr_source, "git") as git:
             self.assertEqual(site.write_version_record(output, "0.8.0", self.root), 1)
@@ -117,7 +120,8 @@ class DocsSiteTest(unittest.TestCase):
             site.read_source(archive, identity, self.root / "wrong")
 
     def test_legacy_marker_is_accepted_but_wrong_source_is_rejected(self):
-        archive, identity = self.source(); identity["source_commit"] = "b" * 40
+        archive, identity = self.source()
+        identity["source_commit"] = "b" * 40
         with self.assertRaisesRegex(ValueError, "marker does not match"):
             site.read_source(archive, identity, self.root / "wrong")
 
@@ -136,9 +140,12 @@ class DocsSiteTest(unittest.TestCase):
             path = self.root / (kind + ".tar")
             with tarfile.open(path, "w:") as tar:
                 member = tarfile.TarInfo("../escape" if kind == "traversal" else "index.html")
-                if kind == "link": member.type = tarfile.SYMTYPE; member.linkname = "/tmp/file"
+                if kind == "link":
+                    member.type = tarfile.SYMTYPE
+                    member.linkname = str(self.root / "link-target")
                 tar.addfile(member)
-                if kind == "duplicate": tar.addfile(member)
+                if kind == "duplicate":
+                    tar.addfile(member)
             with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "unsafe|duplicate"):
                 site.unpack(path, self.root / kind)
 
@@ -156,8 +163,10 @@ class DocsSiteTest(unittest.TestCase):
 
     def test_navigation_inputs_cannot_escape_the_site(self):
         for path in ("../x", "/x", "a//b", "a/./b", "%2e%2e/x", "x?next=y", "x\\y", "x#y"):
-            with self.subTest(path=path), self.assertRaises(ValueError): site.safe_path(path)
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                site.safe_path(path)
         self.assertEqual(site.safe_path("api/type.html"), "api/type.html")
 
 
-if __name__ == "__main__": unittest.main()
+if __name__ == "__main__":
+    unittest.main()

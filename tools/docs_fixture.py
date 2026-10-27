@@ -24,14 +24,17 @@ def source(root: Path, channel: str) -> tuple[Path, dict]:
     archive = root / (channel + ".tar")
     with tarfile.open(archive, "w:") as tar:
         for name, value in files.items():
-            data = value.encode(); info = tarfile.TarInfo(name); info.size = len(data)
+            data = value.encode()
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
     return archive, {"version": version, "source_commit": "a" * 40, "run_id": 123, "attempt": 1,
                      "archive_sha256": site.bcr_source.digest(archive)}
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--output", type=Path, required=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -40,4 +43,5 @@ def main():
         args.output.write_bytes(site.canonical({"files": values}))
 
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
