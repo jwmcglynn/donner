@@ -138,6 +138,9 @@ def _verify_retained_release(api, snapshot, version, entry, work):
     _offline_attestation(path, api.file(snapshot, prefix + "record-attestation.json"),
                          record["source"]["commit"], proof)
     require_release_binding(record, version, entry["identity"], entry["archive"]["sha256"])
+    release = github_json(f"{store.REPO}/releases/tags/v{version}")
+    site.require(release.get("tag_name") == "v" + version and release.get("draft") is False
+                 and release.get("prerelease") is False, "retained release is not a published stable release")
     tag = github_json(f"{store.REPO}/git/ref/tags/v{version}")["object"]
     if tag["type"] == "tag":
         tag = github_json(f"{store.REPO}/git/tags/{tag['sha']}")["object"]
