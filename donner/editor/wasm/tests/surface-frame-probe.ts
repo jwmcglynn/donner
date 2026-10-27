@@ -70,7 +70,21 @@ type ProbeGlobal = typeof globalThis & {
     release: () => void;
     claimed: boolean;
   };
+  __donnerSurfaceFrameProbeGpuDelay?: CanvasGpuDelayState;
 };
+
+/**
+ * Test-only fault injection: after the first command buffer that writes every Nth canvas frame,
+ * queue GPU work of a fixed size before the frame's remaining submissions. The frame's CPU task
+ * and submission order are unchanged; only GPU execution of the rest of that frame is postponed.
+ */
+interface CanvasGpuDelayState {
+  everyFrames: number;
+  fragmentIterations: number;
+  injected: number;
+  /** Submit-to-completion wall time of each injected job, in worker milliseconds. */
+  jobMs: number[];
+}
 
 // Runs inside each worker. Everything it needs is defined in the body because
 // Playwright serializes the function source into the worker's scope.
@@ -246,6 +260,64 @@ function installInWorker(): boolean {
     return buffer;
   };
 
+  // The queue a submission goes to names its device only through the encoders made from it.
+  const queueDevices = new WeakMap<GPUQueue, GPUDevice>();
+  const createCommandEncoder = GPUDevice.prototype.createCommandEncoder;
+  GPUDevice.prototype.createCommandEncoder = function(
+    this: GPUDevice,
+    descriptor?: GPUCommandEncoderDescriptor,
+  ) {
+    queueDevices.set(this.queue, this);
+    return createCommandEncoder.call(this, descriptor);
+  };
+  const delayJobs = new WeakMap<GPUDevice, { pipeline: GPURenderPipeline; view: GPUTextureView }>();
+  const submitDelayJob = (queue: GPUQueue, delay: CanvasGpuDelayState) => {
+    const device = queueDevices.get(queue);
+    if (device === undefined) return;
+    let job = delayJobs.get(device);
+    if (job === undefined) {
+      const module = device.createShaderModule({
+        code: `
+          @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+            var p = array(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+            return vec4f(p[i], 0.0, 1.0);
+          }
+          @fragment fn fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+            var v = position.x * 0.001 + position.y;
+            for (var k = 0u; k < ${Math.max(1, Math.floor(delay.fragmentIterations))}u; k++) {
+              v = fract(sin(v) * 43758.5453 + position.y * 0.0001);
+            }
+            return vec4f(v, 0.0, 0.0, 1.0);
+          }`,
+      });
+      const pipeline = device.createRenderPipeline({
+        layout: "auto",
+        vertex: { module, entryPoint: "vs" },
+        fragment: { module, entryPoint: "fs", targets: [{ format: "rgba8unorm" }] },
+      });
+      const texture = device.createTexture({
+        size: [1024, 1024],
+        format: "rgba8unorm",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+      job = { pipeline, view: texture.createView() };
+      delayJobs.set(device, job);
+    }
+    const encoder = createCommandEncoder.call(device, undefined);
+    const pass = beginRenderPass.call(encoder, {
+      colorAttachments: [{ view: job.view, loadOp: "clear", storeOp: "store" }],
+    });
+    pass.setPipeline(job.pipeline);
+    pass.draw(3);
+    pass.end();
+    const startedAtMs = performance.now();
+    submit.call(queue, [finish.call(encoder, undefined)]);
+    ++delay.injected;
+    void onSubmittedWorkDone.call(queue).then(() => {
+      if (delay.jobMs.length < 256) delay.jobMs.push(performance.now() - startedAtMs);
+    });
+  };
+
   let pendingCanvasSubmit = 0;
   const onSubmittedWorkDone = GPUQueue.prototype.onSubmittedWorkDone;
   GPUQueue.prototype.onSubmittedWorkDone = function(this: GPUQueue) {
@@ -280,6 +352,7 @@ function installInWorker(): boolean {
     const list = [...buffers];
     const submittedAtMs = performance.now();
     let writesCanvas = false;
+    let delayFrame = false;
     for (const buffer of list) {
       for (const texture of bufferFrames.get(buffer) ?? []) {
         writesCanvas = true;
@@ -287,6 +360,9 @@ function installInWorker(): boolean {
         if (!record.taskEnded) {
           ++record.submitsBeforeTaskEnd;
           ++state.inTaskSubmits;
+          const delay = scope.__donnerSurfaceFrameProbeGpuDelay;
+          delayFrame ||= delay !== undefined && record.submitsBeforeTaskEnd === 1
+            && record.frame % delay.everyFrames === 0;
           continue;
         }
         state.lateSubmits.push({
@@ -300,6 +376,10 @@ function installInWorker(): boolean {
       }
     }
     const result = submit.call(this, list);
+    const delay = scope.__donnerSurfaceFrameProbeGpuDelay;
+    if (delayFrame && delay !== undefined) {
+      submitDelayJob(this, delay);
+    }
     if (writesCanvas) {
       scope.__donnerSurfaceFrameProbeQueue = this;
       pendingCanvasSubmit = ++state.canvasSubmits;
@@ -601,5 +681,45 @@ function summarizeProbeStates(answers: Array<WorkerProbeState | null>): SurfaceF
     frames: states.reduce((sum, state) => sum + state.frames, 0),
     inTaskSubmits: states.reduce((sum, state) => sum + state.inTaskSubmits, 0),
     lateSubmits: states.flatMap((state) => state.lateSubmits),
+  };
+}
+
+/**
+ * Fault injection for presentation-capture races: postpone GPU execution of the rest of every
+ * \p everyFrames-th canvas frame in \p owner behind a fixed-size fragment job submitted right after
+ * that frame's first canvas write. CPU frame timing and task boundaries are unchanged. Disarming
+ * stops further injection and returns what was injected.
+ */
+export async function armCanvasGpuDelayForTest(
+  owner: Worker,
+  everyFrames: number,
+  fragmentIterations: number,
+): Promise<{ disarm: () => Promise<{ injected: number; jobMs: number[] } | null> }> {
+  if (!Number.isInteger(everyFrames) || everyFrames < 1) {
+    throw new Error("the canvas GPU delay needs a positive frame interval");
+  }
+  const armed = await owner.evaluate(([frames, iterations]) => {
+    const scope = globalThis as ProbeGlobal;
+    if (!scope.__donnerSurfaceFrameProbe?.installed) return false;
+    scope.__donnerSurfaceFrameProbeGpuDelay = {
+      everyFrames: frames,
+      fragmentIterations: iterations,
+      injected: 0,
+      jobMs: [],
+    };
+    return true;
+  }, [everyFrames, fragmentIterations]);
+  if (armed !== true) {
+    throw new Error("could not arm the canvas GPU delay");
+  }
+  return {
+    disarm: async () => {
+      return owner.evaluate(() => {
+        const scope = globalThis as ProbeGlobal;
+        const delay = scope.__donnerSurfaceFrameProbeGpuDelay;
+        delete scope.__donnerSurfaceFrameProbeGpuDelay;
+        return delay === undefined ? null : { injected: delay.injected, jobMs: [...delay.jobMs] };
+      });
+    },
   };
 }

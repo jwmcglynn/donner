@@ -46,6 +46,7 @@ import { quarantineStillSkips } from "./quarantine-report.mjs";
 import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
+  armCanvasGpuDelayForTest,
   expectSurfaceFrameProbeReady,
   findCanvasOwnerWorker,
   findProbedCanvasApplicationWorker,
@@ -5303,6 +5304,31 @@ async function injectAnimationFirstBootDelay(page: Page, browserName: string) {
   await page.waitForTimeout(kAnimationFirstBootDelayMs);
 }
 
+/**
+ * Fault injection, off unless `DONNER_ANIMATION_CANVAS_GPU_DELAY` is `<everyFrames>:<iterations>`:
+ * while openAnimatedPreview opens the sample and starts the Preview, postpones GPU execution of
+ * the rest of every Nth canvas frame behind fixed fragment work. A capture taken before that
+ * frame's GPU work completes can observe a partially executed canvas.
+ */
+async function armAnimationCanvasGpuDelay(page: Page, testInfo: TestInfo) {
+  const spec = process.env.DONNER_ANIMATION_CANVAS_GPU_DELAY;
+  if (spec === undefined || spec === "") return null;
+  const match = /^(\d+):(\d+)$/.exec(spec);
+  if (!match) throw new Error("DONNER_ANIMATION_CANVAS_GPU_DELAY must be <everyFrames>:<iterations>");
+  await expectSurfaceFrameProbeReady(page);
+  const owner = await findProbedCanvasApplicationWorker(page);
+  if (!owner) throw new Error("the canvas GPU delay needs the application canvas owner");
+  const delay = await armCanvasGpuDelayForTest(owner, Number(match[1]), Number(match[2]));
+  return {
+    // Ends the injection after the captures that open the Preview, so later probes run without it.
+    finish: async () => {
+      const path = testInfo.outputPath("animation-canvas-gpu-delay.json");
+      await writeFile(path, JSON.stringify({ spec, ...(await delay.disarm()) }, null, 2));
+      await testInfo.attach("animation-canvas-gpu-delay", { path, contentType: "application/json" });
+    },
+  };
+}
+
 async function openAnimatedPreview(page: Page, browserName: string, testInfo: TestInfo) {
   await injectAnimationFirstBootDelay(page, browserName);
   const rafControls = process.env.DONNER_ANIMATION_RAF_CONTROLS === "1";
@@ -5339,6 +5365,7 @@ async function openAnimatedPreview(page: Page, browserName: string, testInfo: Te
   const canvas = page.locator("canvas#canvas");
   const box = await canvas.boundingBox();
   if (!box) throw new Error("the editor canvas has no bounds");
+  const gpuDelay = await armAnimationCanvasGpuDelay(page, testInfo);
   await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
   const animationCapture = createAnimationRegionCapture(page, browserName, testInfo);
   const captureAnimationRegion = animationCapture.capture;
@@ -5407,10 +5434,14 @@ async function openAnimatedPreview(page: Page, browserName: string, testInfo: Te
   const start = await orb();
   if (rafControls) await captureRafControl("editState");
   await page.mouse.click(editCenter.x + edit.maxX - edit.minX + 1, editCenter.y);
-  await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
-    timeout: scaledMs(10000),
-    message: "Preview moves the rendered orb",
-  }).toBeGreaterThan(8 * scale);
+  try {
+    await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
+      timeout: scaledMs(10000),
+      message: "Preview moves the rendered orb",
+    }).toBeGreaterThan(8 * scale);
+  } finally {
+    await gpuDelay?.finish();
+  }
 
   return {
     animationCapture,
