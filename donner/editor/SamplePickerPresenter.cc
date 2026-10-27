@@ -202,6 +202,12 @@ SamplePickerActions SamplePickerPresenter::render(
   ImGui::TextUnformatted("Donner");
   ImGui::Spacing();
   ImGui::TextWrapped("Edit SVG graphics and source together.");
+  if (state.loading) {
+    ImGui::TextUnformatted("Loading sample...");
+  }
+  if (!state.error.empty()) {
+    ImGui::TextWrapped("%.*s", static_cast<int>(state.error.size()), state.error.data());
+  }
   ImGui::Dummy(ImVec2(0.0f, kHeadingSpacing));
 
   const float newWidth = std::max(96.0f, ImGui::CalcTextSize("New SVG").x + 2.0f * theme.space4);

@@ -57,6 +57,10 @@ struct SamplePickerState {
   bool visible = true;
   /// Stable catalog ID of the currently selected sample, if any.
   std::string_view selectedSampleId;
+  /// A selected sample is loading while the current document remains intact.
+  bool loading = false;
+  /// Bounded user-facing delivery failure, independent of SVG parsing diagnostics.
+  std::string_view error;
 };
 
 /// Edge-triggered requests emitted by one rendered picker frame.

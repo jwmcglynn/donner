@@ -854,6 +854,7 @@ donner_cc_library(
     hdrs = ["EmbeddedSvgIcon.h"],
     deps = [
         "//donner/base",
+        "//donner/base:packaged_resource",
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer",

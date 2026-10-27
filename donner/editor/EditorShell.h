@@ -1259,6 +1259,7 @@ private:
   bool samplePresentationPending_ = false;
   std::string activeSampleId_;
   std::string pendingSampleLoadId_;
+  std::string sampleLoadError_;
   bool pendingNewDocument_ = false;
   bool pendingSampleLoadNeedsConfirmation_ = false;
   bool pendingSampleLoadDiscardConfirmed_ = false;

@@ -793,7 +793,7 @@ Lengthd FirstSelectedStrokeWidth(const EditorApp& app) {
 
 }  // namespace
 
-std::span<const unsigned char> StrokeWidthPresetSvg() {
+ResourceLease StrokeWidthPresetSvg() {
   return embedded::kStrokeWidthPresetsSvg;
 }
 
@@ -801,7 +801,7 @@ std::uint64_t StrokeWidthPresetTextureKey() {
   return 0xf800000000000008ull;
 }
 
-std::span<const unsigned char> StrokePreviewIconSvg(StrokePreviewIcon icon) {
+ResourceLease StrokePreviewIconSvg(StrokePreviewIcon icon) {
   switch (icon) {
     case StrokePreviewIcon::ButtCap: return embedded::kStrokeCapButtSvg;
     case StrokePreviewIcon::RoundCap: return embedded::kStrokeCapRoundSvg;
@@ -818,7 +818,7 @@ std::uint64_t StrokePreviewIconTextureKey(StrokePreviewIcon icon) {
   return kIconTextureKeyBase + static_cast<std::uint64_t>(icon) + 1u;
 }
 
-std::span<const unsigned char> PathOperationIconSvg(PathOperationKind operation) {
+ResourceLease PathOperationIconSvg(PathOperationKind operation) {
   switch (operation) {
     case PathOperationKind::Union: return embedded::kBootstrapUnionSvg;
     case PathOperationKind::Intersect: return embedded::kBootstrapIntersectSvg;

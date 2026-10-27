@@ -12,6 +12,7 @@ namespace donner::editor {
 struct EditorSampleSource {
   const PackagedResource& resource;
   std::string_view view() const;
+  ResourceLease lease() const { return ResourceLease(resource); }
   operator std::string_view() const { return view(); }
   bool empty() const { return view().empty(); }
   /// Request bytes outside document access. Browser completion is polled by the owning frame.

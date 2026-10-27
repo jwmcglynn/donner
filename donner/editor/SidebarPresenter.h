@@ -778,13 +778,13 @@ inline constexpr std::array<float, 8> kStrokeWidthPresetValues = {0.5f, 1.0f, 2.
                                                                   4.0f, 6.0f, 8.0f, 12.0f};
 
 /// One SVG sprite with one true-scale stroke sample for each quick-width preset.
-[[nodiscard]] std::span<const unsigned char> StrokeWidthPresetSvg();
+[[nodiscard]] ResourceLease StrokeWidthPresetSvg();
 
 /// Stable uploaded texture key for the stroke-width preset sprite.
 [[nodiscard]] std::uint64_t StrokeWidthPresetTextureKey();
 
 /// Embedded SVG source whose actual stroke property produces this preview.
-[[nodiscard]] std::span<const unsigned char> StrokePreviewIconSvg(StrokePreviewIcon icon);
+[[nodiscard]] ResourceLease StrokePreviewIconSvg(StrokePreviewIcon icon);
 
 /// Unique UI texture key for a rendered stroke preview.
 [[nodiscard]] std::uint64_t StrokePreviewIconTextureKey(StrokePreviewIcon icon);
@@ -803,7 +803,7 @@ inline constexpr std::array<PathOperationKind, 4> kInspectorPathOperations = {
 /// glyph.
 ///
 /// @param operation Path operation whose icon artwork is wanted.
-[[nodiscard]] std::span<const unsigned char> PathOperationIconSvg(PathOperationKind operation);
+[[nodiscard]] ResourceLease PathOperationIconSvg(PathOperationKind operation);
 
 /// Presentation-texture cache key for @p operation's button icon. Distinct per
 /// operation so two buttons never share an uploaded texture.

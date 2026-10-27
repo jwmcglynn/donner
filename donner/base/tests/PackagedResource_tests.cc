@@ -1,5 +1,6 @@
 #include "donner/base/PackagedResource.h"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -51,6 +52,37 @@ TEST(PackagedResource, OwnsInstalledBytesAndLeaseSurvivesSessionTeardown) {
   EXPECT_EQ(session->retainedBytes(), 3u);
   session.reset();
   EXPECT_THAT(*lease, ElementsAre('a', 'b', 'c'));
+}
+
+TEST(PackagedResource, OwningLeaseAllowsSessionSwitchWithoutDangling) {
+  const auto previous = GetPackagedResourceSession();
+  auto first = std::make_shared<PackagedResourceSession>();
+  ASSERT_EQ(first->install(kFixture, std::vector<uint8_t>{'a', 'b', 'c'}), true);
+  ASSERT_EQ(SetPackagedResourceSession(first), true);
+  ResourceLease lease(kFixture);
+  auto second = std::make_shared<PackagedResourceSession>();
+  EXPECT_EQ(SetPackagedResourceSession(second), true);
+  first.reset();
+  EXPECT_THAT(lease, ElementsAre('a', 'b', 'c'));
+  EXPECT_EQ(SetPackagedResourceSession(previous), true);
+}
+
+TEST(PackagedResource, LegacyBorrowedSpanPreventsSessionReplacement) {
+  EXPECT_EXIT(
+      {
+        auto session = std::make_shared<PackagedResourceSession>();
+        if (!session->install(kFixture, std::vector<uint8_t>{'a', 'b', 'c'}) ||
+            !SetPackagedResourceSession(session)) {
+          std::_Exit(1);
+        }
+        const auto borrowed = kFixture.view();
+        if (SetPackagedResourceSession(std::make_shared<PackagedResourceSession>()) ||
+            GetPackagedResourceSession() != session || borrowed.size() != 3 || borrowed[0] != 'a') {
+          std::_Exit(2);
+        }
+        std::_Exit(0);
+      },
+      testing::ExitedWithCode(0), "");
 }
 
 TEST(PackagedResource, RejectsTruncatedCorruptOversizedAndUnknownBytes) {

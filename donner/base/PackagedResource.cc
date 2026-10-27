@@ -42,6 +42,15 @@ std::shared_ptr<PackagedResourceSession>& ApplicationSession() {
   return session;
 }
 
+std::shared_ptr<PackagedResourceSession> BorrowingSession() {
+  std::lock_guard lock(SessionMutex());
+  if (!ApplicationSession()) {
+    ApplicationSession() = std::make_shared<PackagedResourceSession>();
+  }
+  ApplicationSession()->markBorrowed();
+  return ApplicationSession();
+}
+
 std::string InstalledRoot() {
   std::filesystem::path executable;
 #ifdef __APPLE__
@@ -197,8 +206,8 @@ PackagedResourceProvider PackagedResourceDirectoryProvider(std::string root) {
       }
       directory = next;
     }
-    const int file =
-        openat(directory, relative.filename().c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    const int file = openat(directory, relative.filename().c_str(),
+                            O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     close(directory);
     if (file < 0) {
       return {};
@@ -234,6 +243,7 @@ struct PackagedResourceSession::Impl {
   std::map<std::string, ResourceBytes> bytes;
   std::set<std::string> failures;
   size_t retained = 0;
+  bool borrowed = false;
   std::string error;
 };
 PackagedResourceSession::PackagedResourceSession(PackagedResourceProvider provider)
@@ -257,6 +267,7 @@ bool PackagedResourceSession::install(const PackagedResource& resource,
   }
   if (bytes.size() > kMaximumEncodedBytes - impl_->retained) {
     impl_->error = "Packaged resource retention budget exceeded";
+    impl_->failures.insert(resource.sha256);
     return false;
   }
   impl_->failures.erase(resource.sha256);
@@ -273,6 +284,10 @@ ResourceBytes PackagedResourceSession::load(const PackagedResource& resource) {
   {
     std::lock_guard lock(impl_->mutex);
     if (const auto found = impl_->bytes.find(resource.sha256); found != impl_->bytes.end()) {
+      if (found->second->size() != resource.encodedSize) {
+        impl_->error = std::string("Invalid packaged resource length: ") + resource.id;
+        return {};
+      }
       return found->second;
     }
   }
@@ -290,6 +305,14 @@ ResourceBytes PackagedResourceSession::load(const PackagedResource& resource) {
   }
   std::lock_guard lock(impl_->mutex);
   return impl_->bytes.at(resource.sha256);
+}
+void PackagedResourceSession::markBorrowed() {
+  std::lock_guard lock(impl_->mutex);
+  impl_->borrowed = true;
+}
+bool PackagedResourceSession::hasBorrowedViews() const {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->borrowed;
 }
 bool PackagedResourceSession::ready(const PackagedResource& resource) const {
   std::lock_guard lock(impl_->mutex);
@@ -328,9 +351,14 @@ std::string PackagedResourceSession::error() const {
   std::lock_guard lock(impl_->mutex);
   return impl_->error;
 }
-void SetPackagedResourceSession(std::shared_ptr<PackagedResourceSession> session) {
+bool SetPackagedResourceSession(std::shared_ptr<PackagedResourceSession> session) {
   std::lock_guard lock(SessionMutex());
+  if (ApplicationSession() && ApplicationSession() != session &&
+      ApplicationSession()->hasBorrowedViews()) {
+    return false;
+  }
   ApplicationSession() = std::move(session);
+  return true;
 }
 std::shared_ptr<PackagedResourceSession> GetPackagedResourceSession() {
   std::lock_guard lock(SessionMutex());
@@ -365,8 +393,10 @@ bool PackagedResource::failed() const {
 ResourceBytes PackagedResource::load() const {
   return GetPackagedResourceSession()->load(*this);
 }
+ResourceLease::ResourceLease(const PackagedResource& resource) : bytes_(resource.load()) {}
 std::span<const uint8_t> PackagedResource::view() const {
-  const auto bytes = load();
+  const auto session = BorrowingSession();
+  const auto bytes = session->load(*this);
   return bytes ? std::span<const uint8_t>(*bytes) : std::span<const uint8_t>();
 }
 std::vector<const PackagedResource*> PackagedResources() {

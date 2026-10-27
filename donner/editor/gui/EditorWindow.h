@@ -39,6 +39,7 @@
 #include "donner/gpu/Handles.h"
 #endif
 
+#include "donner/base/PackagedResource.h"
 #include "donner/base/Vector2.h"
 #include "donner/gpu/DeviceLost.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -759,6 +760,8 @@ struct EditorWindowFrameTiming {
 
 /// Fonts loaded into this window's ImGui context for the editor shell.
 struct EditorWindowFonts {
+  std::array<ResourceLease, 3>
+      resourceLeases;           //!< Owned font inputs retained for the atlas lifetime.
   ImFont* uiRegular = nullptr;  //!< Regular UI font owned by the ImGui font atlas.
   ImFont* uiBold = nullptr;     //!< Bold UI font owned by the ImGui font atlas.
   ImFont* code = nullptr;       //!< Monospaced source font owned by the ImGui font atlas.

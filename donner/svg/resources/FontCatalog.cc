@@ -45,12 +45,12 @@ public:
     (void)request;
     // Reuse the renderer's existing fallback face. The full text backend synthesizes missing
     // bold and oblique on this upright font without adding another web font payload.
-    const std::span<const unsigned char> bytes = embedded::kPublicSansMediumOtf;
+    const ResourceLease bytes = embedded::kPublicSansMediumOtf;
 #else
-    const std::span<const unsigned char> bytes = request.weight >= 600 ? embedded::kNotoSansBoldTtf
-                                                 : request.style != FontStyle::Normal
-                                                     ? embedded::kNotoSansItalicTtf
-                                                     : embedded::kNotoSansRegularTtf;
+    const ResourceLease bytes = request.weight >= 600 ? embedded::kNotoSansBoldTtf
+                                : request.style != FontStyle::Normal
+                                    ? embedded::kNotoSansItalicTtf
+                                    : embedded::kNotoSansRegularTtf;
 #endif
     return {bytes.begin(), bytes.end()};
   }

@@ -8,12 +8,38 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace donner {
 
 /// Immutable encoded resource bytes. An owning lease remains valid across session teardown.
 using ResourceBytes = std::shared_ptr<const std::vector<uint8_t>>;
+
+struct PackagedResource;
+
+/// An owning immutable view; retaining a view keeps its encoded bytes alive across sessions.
+class ResourceLease {
+public:
+  ResourceLease() = default;
+  ResourceLease(const PackagedResource& resource);
+  ResourceLease(ResourceBytes bytes) : bytes_(std::move(bytes)) {}
+  ResourceLease(std::span<const uint8_t> bytes)
+      : bytes_(std::make_shared<const std::vector<uint8_t>>(bytes.begin(), bytes.end())) {}
+  const uint8_t* data() const { return bytes_ ? bytes_->data() : nullptr; }
+  size_t size() const { return bytes_ ? bytes_->size() : 0; }
+  bool empty() const { return size() == 0; }
+  const uint8_t* begin() const { return data(); }
+  const uint8_t* end() const { return empty() ? data() : data() + size(); }
+  operator std::span<const uint8_t>() const { return {data(), size()}; }
+  std::string_view text() const {
+    return empty() ? std::string_view()
+                   : std::string_view(reinterpret_cast<const char*>(data()), size());
+  }
+
+private:
+  ResourceBytes bytes_;
+};
 
 /// Authenticated identity of a packaged asset; this type contains no payload bytes.
 struct PackagedResource {
@@ -69,6 +95,8 @@ public:
   PackagedResourceSession& operator=(const PackagedResourceSession&) = delete;
   ResourceBytes load(const PackagedResource& resource);
   bool install(const PackagedResource& resource, std::span<const uint8_t> bytes);
+  void markBorrowed();
+  bool hasBorrowedViews() const;
   bool ready(const PackagedResource& resource) const;
   bool failed(const PackagedResource& resource) const;
   void fail(const PackagedResource& resource);
@@ -83,7 +111,10 @@ private:
 
 /// Set the application session before creating resource consumers; end it after their teardown.
 /// A null session restores the default installed-package provider for subsequent applications.
-void SetPackagedResourceSession(std::shared_ptr<PackagedResourceSession> session);
+/// Reject replacement after an unowned legacy span was returned; use ResourceLease to permit
+/// teardown. On failure the old session remains installed, so an outstanding borrowed view cannot
+/// dangle.
+bool SetPackagedResourceSession(std::shared_ptr<PackagedResourceSession> session);
 std::shared_ptr<PackagedResourceSession> GetPackagedResourceSession();
 
 /// Registered compiled identities. Enumeration does not read any payload.

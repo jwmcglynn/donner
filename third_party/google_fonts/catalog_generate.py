@@ -141,21 +141,6 @@ def write_text(path, text):
     destination.write_text(text, encoding="utf-8", newline="\n")
 
 
-def native_source(symbol, data):
-    """Generate immutable arrays; metadata-only consumers never link this file."""
-    lines = [
-        "// Generated catalog font bytes. Do not edit.",
-        '#include "third_party/google_fonts/embed_resources/GoogleFontsData.h"',
-        "",
-        "namespace donner::embedded {",
-        f"const unsigned char {symbol}Data[{len(data)}] = {{",
-    ]
-    for offset in range(0, len(data), 16):
-        lines.append("  " + ", ".join(f"0x{byte:02x}" for byte in data[offset:offset + 16]) + ",")
-    lines.extend(["};", "}  // namespace donner::embedded", ""])
-    return "\n".join(lines)
-
-
 def read_catalog_request(args):
     """Validate the fixed catalog and ordered action inputs before invoking tools."""
     request = json.loads(Path(args.request).read_text(encoding="utf-8"))

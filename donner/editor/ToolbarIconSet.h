@@ -51,7 +51,7 @@ using ToolbarIconTextureProvider =
     std::function<ToolbarIconTexture(std::uint64_t stableId, const svg::RendererBitmap& bitmap)>;
 
 /// Embedded SVG source bytes for @p icon.
-[[nodiscard]] std::span<const unsigned char> ToolbarIconSvg(ToolbarIcon icon);
+[[nodiscard]] ResourceLease ToolbarIconSvg(ToolbarIcon icon);
 
 /// Stable texture-cache key for @p icon.
 [[nodiscard]] std::uint64_t ToolbarIconTextureKey(ToolbarIcon icon);

@@ -4,7 +4,6 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import shutil
 
 MAX_ENCODED = 16 * 1024 * 1024
 MEDIA = {"ttf": "font/ttf", "otf": "font/otf", "woff2": "font/woff2", "svg": "image/svg+xml"}
@@ -51,27 +50,112 @@ def generate(request, header_path, output):
     Path(header_path).write_text('\n'.join(lines))
 
 
+def read_regular_bounded(path, limit):
+    """Read one immutable-size regular file without following a final symlink."""
+    import os
+    import stat
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
+            raise ValueError("Invalid or oversized packaged resource file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            payload = stream.read(limit + 1)
+        if len(payload) != metadata.st_size or len(payload) > limit:
+            raise ValueError("Packaged resource changed while reading")
+        return payload
+    finally:
+        os.close(descriptor)
+
+
+def validated_record(record):
+    """Validate shape and canonical path before any path can select a disk read."""
+    fields = {"id", "sha256", "encodedSize", "decodedSize", "mediaType", "group", "path"}
+    if not isinstance(record, dict) or record.keys() != fields:
+        raise ValueError("Malformed packaged resource record")
+    if any(type(record[key]) is not str for key in
+           ("id", "sha256", "mediaType", "group", "path")):
+        raise ValueError("Malformed packaged resource strings")
+    if not re.fullmatch(r"k[A-Za-z0-9]+", record["id"]):
+        raise ValueError("Invalid logical resource ID")
+    if not re.fullmatch(r"[0-9a-f]{64}", record["sha256"]):
+        raise ValueError("Invalid packaged resource digest")
+    if any(type(record[key]) is not int for key in ("encodedSize", "decodedSize")):
+        raise ValueError("Invalid packaged resource size type")
+    if not 0 < record["encodedSize"] <= MAX_ENCODED or not 0 < record["decodedSize"] <= 64 * 1024 * 1024:
+        raise ValueError("Invalid packaged resource size")
+    extension = record["path"].rsplit(".", 1)[-1]
+    if extension not in MEDIA or record["path"] != f"assets/{record['sha256']}.{extension}":
+        raise ValueError("Noncanonical packaged resource path")
+    if record["mediaType"] != MEDIA[extension] or record["group"] not in {
+            "ui-font", "fallback-font", "chrome", "sample", "catalog-font", "generic-font"}:
+        raise ValueError("Invalid packaged resource media type or group")
+    return extension
+
+
+def unique_object(pairs):
+    """Reject duplicate JSON members rather than choosing a parser-specific value."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON member")
+        result[key] = value
+    return result
+
+
+def verified_set(directory):
+    """Validate the schema, exact inventory and every bounded content identity."""
+    directory = Path(directory)
+    if directory.is_symlink() or (directory / "assets").is_symlink():
+        raise ValueError("Packaged resource directory is a symlink")
+    manifest = json.loads(read_regular_bounded(directory / "manifest.json", 128 * 1024),
+                          object_pairs_hook=unique_object)
+    if not isinstance(manifest, dict) or manifest.keys() != {"schemaVersion", "assets"}:
+        raise ValueError("Malformed resource schema")
+    if type(manifest["schemaVersion"]) is not int or manifest["schemaVersion"] != 1:
+        raise ValueError("Unsupported resource schema")
+    if not isinstance(manifest["assets"], list) or not 0 < len(manifest["assets"]) <= 128:
+        raise ValueError("Invalid packaged resource record count")
+    identities = set()
+    expected = {"manifest.json"}
+    for record in manifest["assets"]:
+        validated_record(record)
+        if record["id"] in identities:
+            raise ValueError("Duplicate logical resource ID")
+        identities.add(record["id"])
+        expected.add(record["path"])
+    inventory = set()
+    for path in directory.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("Packaged resource inventory contains a symlink")
+        if path.is_file():
+            inventory.add(path.relative_to(directory).as_posix())
+        elif path != directory / "assets":
+            raise ValueError("Unexpected packaged resource directory")
+    if inventory != expected:
+        raise ValueError("Packaged resource inventory mismatch")
+    for record in manifest["assets"]:
+        payload = read_regular_bounded(directory / record["path"], record["encodedSize"])
+        if len(payload) != record["encodedSize"] or hashlib.sha256(payload).hexdigest() != record["sha256"]:
+            raise ValueError("Resource identity does not match delivered bytes")
+        yield record, payload
+
+
 def merge(inputs, output):
-    """Merge generated sets, verifying their entire identity and inventory."""
+    """Merge generated sets, verifying their entire identity and exact inventory."""
     output = Path(output)
     (output / "assets").mkdir(parents=True)
     records = {}
+    retained = {}
     for directory in inputs:
-        directory = Path(directory)
-        manifest = json.loads((directory / "manifest.json").read_text())
-        if manifest.get("schemaVersion") != 1:
-            raise ValueError("Unsupported resource schema")
-        for record in manifest["assets"]:
-            source = directory / record["path"]
-            payload = source.read_bytes()
-            expected = resource_record(record["id"], payload, source.suffix[1:], record["group"],
-                                       record["decodedSize"])
-            if record != expected:
-                raise ValueError("Resource identity does not match delivered bytes")
+        for record, payload in verified_set(directory):
             if record["id"] in records and record != records[record["id"]]:
                 raise ValueError("Conflicting logical resource IDs")
+            retained[record["sha256"]] = record["encodedSize"]
+            if sum(retained.values()) > MAX_ENCODED:
+                raise ValueError("Installed resource set exceeds encoded retention budget")
             records[record["id"]] = record
-            shutil.copyfile(source, output / record["path"])
+            (output / record["path"]).write_bytes(payload)
     assets = sorted(records.values(), key=lambda record: record["id"])
     if sum({record["sha256"]: record["encodedSize"] for record in assets}.values()) > MAX_ENCODED:
         raise ValueError("Installed resource set exceeds encoded retention budget")

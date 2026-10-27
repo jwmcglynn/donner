@@ -33,7 +33,7 @@ const CatalogFontAsset* FindAsset(std::string_view family) {
 }
 
 #ifndef __EMSCRIPTEN__
-std::span<const unsigned char> EmbeddedData(std::string_view family) {
+ResourceLease EmbeddedData(std::string_view family) {
 #define DONNER_GF_ENTRY(familyName, category, id, path, encoded, decoded, symbol)                \
   if (StringUtils::Equals<StringComparison::IgnoreCase>(std::string_view(familyName), family)) { \
     return ::donner::embedded::symbol;                                                           \

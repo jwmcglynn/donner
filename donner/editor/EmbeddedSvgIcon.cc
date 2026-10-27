@@ -81,8 +81,7 @@ std::optional<svg::SVGDocument> ParseEmbeddedSvgIcon(std::span<const unsigned ch
   return document;
 }
 
-/// Identifies a prewarmed rasterization. Embedded resources are static arrays,
-/// so the source pointer and length identify the asset without hashing bytes.
+/// Identifies immutable owned source bytes retained alongside the cached rasterization.
 struct PrewarmedIconKey {
   const unsigned char* data = nullptr;
   std::size_t size = 0;
@@ -106,8 +105,11 @@ PrewarmedIconKey KeyForRequest(const EmbeddedSvgIconRequest& request) {
                           request.tintableMask};
 }
 
-using PrewarmedIconMap =
-    std::unordered_map<PrewarmedIconKey, svg::RendererBitmap, PrewarmedIconKeyHash>;
+struct PrewarmedIcon {
+  svg::RendererBitmap bitmap;
+  ResourceLease source;
+};
+using PrewarmedIconMap = std::unordered_map<PrewarmedIconKey, PrewarmedIcon, PrewarmedIconKeyHash>;
 
 PrewarmedIconMap& PrewarmedIcons() {
   static PrewarmedIconMap icons;
@@ -168,7 +170,7 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsig
   if (const auto it = prewarmed.find(PrewarmedIconKey{svgBytes.data(), svgBytes.size(),
                                                       outputSizePx, normalizeToTintableMask});
       it != prewarmed.end()) {
-    return it->second;
+    return it->second.bitmap;
   }
 
   std::optional<svg::SVGDocument> document = ParseEmbeddedSvgIcon(svgBytes, outputSizePx);
@@ -285,6 +287,7 @@ void ResetEmbeddedSvgIconRenderer(const svg::RendererInterface& expectedRenderer
   SharedIconRendererState& state = SharedIconRendererStateInstance();
   if (state.configuredRenderer == &expectedRenderer) {
     state.configuredRenderer = nullptr;
+    PrewarmedIcons().clear();
   }
 }
 
@@ -332,7 +335,8 @@ void PrewarmEmbeddedSvgIcons(std::span<const EmbeddedSvgIconRequest> requests) {
       RenderEmbeddedSvgIconBatch(uniqueRequests);
   for (std::size_t i = 0; i < bitmaps.size(); ++i) {
     if (bitmaps[i].has_value()) {
-      prewarmed.insert_or_assign(uniqueKeys[i], std::move(*bitmaps[i]));
+      prewarmed.insert_or_assign(uniqueKeys[i],
+                                 PrewarmedIcon{std::move(*bitmaps[i]), uniqueRequests[i].svgBytes});
     }
   }
 }

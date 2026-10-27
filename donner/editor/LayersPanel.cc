@@ -56,7 +56,7 @@ std::uint64_t LayerAffordanceIconTextureKey(LayerAffordanceIcon icon) {
   return kIconTextureKeyBase;
 }
 
-std::span<const unsigned char> BootstrapSvgForIcon(LayerAffordanceIcon icon) {
+ResourceLease BootstrapSvgForIcon(LayerAffordanceIcon icon) {
   switch (icon) {
     case LayerAffordanceIcon::Visible: return embedded::kBootstrapEyeSvg;
     case LayerAffordanceIcon::Hidden: return embedded::kBootstrapEyeSlashSvg;

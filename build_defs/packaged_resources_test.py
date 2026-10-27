@@ -49,6 +49,44 @@ class PackagedResourcesTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "identity"):
                 merge([root / "first"], root / "corrupt")
 
+    def test_rejects_paths_schema_symlinks_and_extra_inventory_before_reading(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "icon.svg"
+            source.write_bytes(b"svg-bytes")
+            request = dict(group="chrome", runfilesRoot="_main/pkg/set.assets",
+                           resources=[dict(id="kIconSvg", source=str(source))])
+            generate(request, root / "Icon.h", root / "valid")
+            manifest_path = root / "valid/manifest.json"
+            original = json.loads(manifest_path.read_text())
+            for key, value, reason in [
+                    ("path", "../outside.svg", "Noncanonical"),
+                    ("encodedSize", True, "size type"),
+                    ("encodedSize", 17 * 1024 * 1024, "size"),
+                    ("sha256", "bad", "digest"),
+                    ("mediaType", "text/javascript", "media type")]:
+                with self.subTest(key=key, value=value):
+                    altered = json.loads(json.dumps(original))
+                    altered["assets"][0][key] = value
+                    manifest_path.write_text(json.dumps(altered))
+                    with self.assertRaisesRegex(ValueError, reason):
+                        merge([root / "valid"], root / ("bad-" + key + str(value)))
+            duplicate = json.loads(json.dumps(original))
+            duplicate["assets"].append(duplicate["assets"][0])
+            manifest_path.write_text(json.dumps(duplicate))
+            with self.assertRaisesRegex(ValueError, "Duplicate"):
+                merge([root / "valid"], root / "duplicate")
+            manifest_path.write_text(json.dumps(original))
+            (root / "valid/extra.txt").write_text("unexpected")
+            with self.assertRaisesRegex(ValueError, "inventory mismatch"):
+                merge([root / "valid"], root / "extra")
+            (root / "valid/extra.txt").unlink()
+            asset = root / "valid" / original["assets"][0]["path"]
+            asset.unlink()
+            asset.symlink_to(source)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                merge([root / "valid"], root / "symlink")
+
     def test_bounds_and_disallowed_types(self):
         for identity, extension, payload in [("../escape", "svg", b"x"),
                                              ("kSvg", "js", b"x"), ("kSvg", "svg", b"")]:

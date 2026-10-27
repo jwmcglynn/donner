@@ -1584,28 +1584,28 @@ void EditorShell::configureEditorFonts() {
     uiFontBold_ = existingFonts.uiBold;
     codeFont_ = existingFonts.code;
   } else {
+    const ResourceLease regular(embedded::kRobotoRegularTtf);
+    const ResourceLease bold(embedded::kRobotoBoldTtf);
+    const ResourceLease code(embedded::kFiraCodeRegularTtf);
     ImFontConfig fontCfg;
     fontCfg.FontDataOwnedByAtlas = false;
     const double displayScale = window_.displayScale();
     ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-        static_cast<int>(embedded::kRobotoRegularTtf.size()),
+        const_cast<unsigned char*>(regular.data()), static_cast<int>(regular.size()),
         static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
     uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
-        static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
-        &fontCfg, kEditorGlyphRanges);
+        const_cast<unsigned char*>(bold.data()), static_cast<int>(bold.size()),
+        static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
     codeFont_ = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
-        static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
+        const_cast<unsigned char*>(code.data()), static_cast<int>(code.size()),
         static_cast<float>(14.0 * displayScale), &fontCfg, kEditorGlyphRanges);
     ImFontConfig codeSymbolFontCfg = fontCfg;
     codeSymbolFontCfg.MergeMode = true;
     std::ignore = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-        static_cast<int>(embedded::kRobotoRegularTtf.size()),
+        const_cast<unsigned char*>(regular.data()), static_cast<int>(regular.size()),
         static_cast<float>(14.0 * displayScale), &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
     window_.setEditorFonts({
+        .resourceLeases = {regular, bold, code},
         .uiRegular = uiFontRegular,
         .uiBold = uiFontBold_,
         .code = codeFont_,
@@ -2476,6 +2476,7 @@ void EditorShell::requestNewDocument() {
 
 void EditorShell::queuePendingSampleLoad(std::string sampleId) {
   pendingSampleLoadId_ = std::move(sampleId);
+  sampleLoadError_.clear();
   pendingNewDocument_ = false;
   pendingSampleLoadNeedsConfirmation_ = false;
   pendingSampleLoadDiscardConfirmed_ = false;
@@ -2511,6 +2512,13 @@ void EditorShell::processPendingSampleLoad() {
       std::fprintf(stderr, "[editor] built-in sample unavailable: %s\n",
                    pendingSampleLoadId_.c_str());
       cancelPendingSampleLoad();
+#ifdef __EMSCRIPTEN__
+      sampleLoadError_ =
+          "This sample could not be loaded. Check your connection and reopen the editor to try "
+          "again.";
+#else
+      sampleLoadError_ = "This sample is unavailable. Reinstall the complete application package.";
+#endif
       showSamplePicker_ = true;
     }
     return;
@@ -2578,7 +2586,8 @@ void EditorShell::processPendingSampleLoad() {
   // dropped instead of landing over the replacement document.
   renderCoordinator_.asyncRenderer().cancelInFlight();
   std::string error;
-  if (tryLoadSource(sample->source, std::nullopt, &error)) {
+  const auto sampleSource = sample->source.lease();
+  if (tryLoadSource(sampleSource.text(), std::nullopt, &error)) {
     activeSampleId_ = sampleId;
     // Test-only: a completion barrier a test requested holds only this sample's renders. The
     // previous document's render was cancelled above, so it cannot be the one held.
@@ -6425,11 +6434,12 @@ void EditorShell::ensureSampleThumbnails() {
     return;
   }
   const auto store = fontCatalog_.encodedStore();
+  const auto sourceLease = samples[*next].source.lease();
   SampleThumbnailRenderRequest request{
       .key = *next,
       .taskGeneration = previewTaskGeneration_,
       .fontWakeRevision = store ? store->wakeRevision() : 0,
-      .source = std::string(samples[*next].source),
+      .source = std::string(sourceLease.text()),
       .dimensions = Vector2i(192, 120),
   };
 #ifndef __EMSCRIPTEN__
@@ -6646,8 +6656,12 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
                        static_cast<float>(sampleThumbnailBitmaps_[index]->dimensions.y),
     };
   };
-  const SamplePickerActions actions = samplePickerPresenter_.render(
-      SamplePickerState{.visible = true, .selectedSampleId = activeSampleId_}, thumbnailProvider);
+  const SamplePickerActions actions =
+      samplePickerPresenter_.render(SamplePickerState{.visible = true,
+                                                      .selectedSampleId = activeSampleId_,
+                                                      .loading = !pendingSampleLoadId_.empty(),
+                                                      .error = sampleLoadError_},
+                                    thumbnailProvider);
   visibleSamplePreviewIndices_.insert(actions.visibleSampleIndices.begin(),
                                       actions.visibleSampleIndices.end());
   ImGui::EndChild();

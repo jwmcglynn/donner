@@ -15,7 +15,7 @@ constexpr float kToolbarIconDisplaySize = 20.0f;
 
 }  // namespace
 
-std::span<const unsigned char> ToolbarIconSvg(ToolbarIcon icon) {
+ResourceLease ToolbarIconSvg(ToolbarIcon icon) {
   switch (icon) {
     case ToolbarIcon::Select: return embedded::kToolSelectIconSvg;
     case ToolbarIcon::Pen: return embedded::kToolPenIconSvg;

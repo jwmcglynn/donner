@@ -5,6 +5,7 @@
 #include <span>
 #include <vector>
 
+#include "donner/base/PackagedResource.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {
@@ -15,10 +16,8 @@ namespace donner::editor {
  * @see RenderEmbeddedSvgIconBatch
  */
 struct EmbeddedSvgIconRequest {
-  /// Embedded SVG source bytes. Must point at storage that outlives the call
-  /// and, for \ref PrewarmEmbeddedSvgIcons, the cached entry - embedded
-  /// resource arrays qualify.
-  std::span<const unsigned char> svgBytes;
+  /// Owns source bytes through rendering and any retained prewarm-cache entry.
+  ResourceLease svgBytes;
   /// Square output bitmap size in device pixels.
   int outputSizePx = 0;
   /// True to normalize to a tintable white alpha mask (\ref donner::editor::RenderEmbeddedSvgIcon
@@ -57,6 +56,14 @@ void ResetEmbeddedSvgIconRenderer(const svg::RendererInterface& expectedRenderer
  */
 [[nodiscard]] std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(
     std::span<const unsigned char> svgBytes, int outputSizePx);
+[[nodiscard]] inline std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(ResourceLease bytes,
+                                                                              int outputSizePx) {
+  return RenderEmbeddedSvgIcon(static_cast<std::span<const uint8_t>>(bytes), outputSizePx);
+}
+[[nodiscard]] inline std::optional<svg::RendererBitmap> RenderEmbeddedSvgIcon(
+    const PackagedResource& resource, int outputSizePx) {
+  return RenderEmbeddedSvgIcon(ResourceLease(resource), outputSizePx);
+}
 
 /**
  * Render embedded SVG artwork while preserving its authored RGBA colors.
@@ -72,6 +79,14 @@ void ResetEmbeddedSvgIconRenderer(const svg::RendererInterface& expectedRenderer
  */
 [[nodiscard]] std::optional<svg::RendererBitmap> RenderEmbeddedSvgArtwork(
     std::span<const unsigned char> svgBytes, int outputSizePx);
+[[nodiscard]] inline std::optional<svg::RendererBitmap> RenderEmbeddedSvgArtwork(
+    ResourceLease bytes, int outputSizePx) {
+  return RenderEmbeddedSvgArtwork(static_cast<std::span<const uint8_t>>(bytes), outputSizePx);
+}
+[[nodiscard]] inline std::optional<svg::RendererBitmap> RenderEmbeddedSvgArtwork(
+    const PackagedResource& resource, int outputSizePx) {
+  return RenderEmbeddedSvgArtwork(ResourceLease(resource), outputSizePx);
+}
 
 /**
  * Rasterize a set of embedded icons in one render pass and one GPU readback.
