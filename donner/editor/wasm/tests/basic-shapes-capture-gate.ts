@@ -1,4 +1,5 @@
 import type { Page, Worker } from "@playwright/test";
+import { armCanvasCaptureFault } from "./canvas-capture-fault";
 import { findCanvasOwnerWorker, waitForSubmittedCanvasGpuWork } from "./surface-frame-probe";
 
 // The app already requests queue completion after each canvas-writing submit.
@@ -87,5 +88,16 @@ export async function captureReadyBasicShapesFrame<T>(
   const owner = await awaitBeforeBlueDeadline(findCanvasOwnerWorker(page), deadlineAtMs);
   if (owner === null) return null;
   onOwner?.(owner);
-  return captureAfterCanvasGpuCompletion(owner, deadlineAtMs, capture);
+  const fault = await armCanvasCaptureFault(page, owner);
+  if (fault === null) return captureAfterCanvasGpuCompletion(owner, deadlineAtMs, capture);
+  let result: T;
+  try {
+    result = await captureAfterCanvasGpuCompletion(owner, deadlineAtMs, fault.wrap(capture));
+  } catch (error) {
+    // The capture's own failure is the result; a failed cleanup must not replace it.
+    await fault.finish(false).catch(() => {});
+    throw error;
+  }
+  await fault.finish(true);
+  return result;
 }

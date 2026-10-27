@@ -50,6 +50,8 @@ interface WorkerProbeState {
   frames: number;
   inTaskSubmits: number;
   canvasSubmits: number;
+  /** Highest canvas-writing submission whose GPU work the browser queue reports finished. */
+  canvasRetired: number;
   lateSubmits: LateCanvasSubmit[];
 }
 
@@ -110,6 +112,7 @@ function installInWorker(): boolean {
     frames: 0,
     inTaskSubmits: 0,
     canvasSubmits: 0,
+    canvasRetired: 0,
     lateSubmits: [],
   };
   scope.__donnerSurfaceFrameProbe = state;
@@ -410,7 +413,13 @@ function installInWorker(): boolean {
     }
     if (writesCanvas) {
       scope.__donnerSurfaceFrameProbeQueue = this;
-      pendingCanvasSubmit = ++state.canvasSubmits;
+      const serial = ++state.canvasSubmits;
+      pendingCanvasSubmit = serial;
+      // The probe's own completion request, apart from the app's: it records when the GPU has run
+      // this canvas write without changing any promise the app awaits.
+      void onSubmittedWorkDone.call(this).then(() => {
+        state.canvasRetired = Math.max(state.canvasRetired, serial);
+      });
     }
     return result;
   };
@@ -794,12 +803,26 @@ export function settleCanvasWrites(owner: Worker): Promise<CanvasSettleResult> {
   });
 }
 
+/** Canvas activity of one worker since the probe was installed. */
+export interface CanvasActivity {
+  /** Canvas-writing submissions. */
+  canvasSubmits: number;
+  /** Canvas frames acquired. */
+  frames: number;
+  /** Highest canvas-writing submission the GPU had finished when this was read. */
+  canvasRetired: number;
+}
+
 /** Canvas-writing submissions and canvas frames \p owner has made since the probe was installed. */
-export function readCanvasActivity(owner: Worker): Promise<{ canvasSubmits: number; frames: number }> {
+export function readCanvasActivity(owner: Worker): Promise<CanvasActivity> {
   return owner.evaluate(() => {
     const state = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbe;
     if (!state?.installed) throw new Error("the surface frame probe is not installed");
-    return { canvasSubmits: state.canvasSubmits, frames: state.frames };
+    return {
+      canvasSubmits: state.canvasSubmits,
+      frames: state.frames,
+      canvasRetired: state.canvasRetired,
+    };
   });
 }
 
