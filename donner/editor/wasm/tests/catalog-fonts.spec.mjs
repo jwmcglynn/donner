@@ -822,6 +822,20 @@ function resourceModule(manifest, accept = true) {
   };
 }
 
+test("generic loader exposes an owned bounded compiled manifest from a shared heap", () => {
+  const manifest = { schemaVersion: 1, assets: [resourceFixture("kStandalone").asset] };
+  const module = resourceModule(manifest);
+  const actual = ResourceLoader.compiledManifest(module);
+  assert.deepEqual(JSON.parse(JSON.stringify(actual)), manifest);
+  module.HEAPU8.fill(0);
+  assert.deepEqual(JSON.parse(JSON.stringify(actual)), manifest);
+  module._DonnerPackagedResourceManifest = () => module.HEAPU8.length;
+  assert.throws(() => ResourceLoader.compiledManifest(module), /Missing compiled/);
+  module._DonnerPackagedResourceManifest = () => 16;
+  module.HEAPU8.fill(32, 16);
+  assert.throws(() => ResourceLoader.compiledManifest(module), /Invalid compiled/);
+});
+
 function resourceLoader(t, resources, overrides = {}) {
   const calls = [];
   const manifest = { schemaVersion: 1, assets: resources.map((resource) => resource.asset) };

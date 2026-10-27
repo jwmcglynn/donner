@@ -34,6 +34,10 @@
   }
 
   class PackagedResourceLoader {
+    static compiledManifest(module) {
+      return readManifest(module);
+    }
+
     constructor({ baseUrl, manifest, brokerOptions = {} }) {
       canonicalManifest(manifest);
       this.manifest = manifest;
