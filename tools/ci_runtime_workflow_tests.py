@@ -27,7 +27,7 @@ ENFORCED_PAYLOAD_CEILINGS = {
     "--max-total-raw-bytes": 12880000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
-    "--max-wasm-gzip-bytes": 3520000,
+    "--max-wasm-gzip-bytes": 3540000,
     "--max-wasm-raw-bytes": 10800000,
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"

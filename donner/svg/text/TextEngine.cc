@@ -175,18 +175,6 @@ uint32_t GetPositioningCluster(const TextGlyph& glyph) {
   return glyph.positioningCluster.value_or(glyph.cluster);
 }
 
-/// Returns the first non-ASCII codepoint in \p str, or 0 if none exists.
-uint32_t firstNonAsciiCodepoint(const std::string_view str) {
-  for (size_t i = 0; i < str.size();) {
-    const uint32_t cp = decodeUtf8(str, i);
-    if (cp > 0x7F) {
-      return cp;
-    }
-  }
-
-  return 0;
-}
-
 /// Encode a single Unicode codepoint as UTF-8.
 std::string encodeUtf8(uint32_t cp) {
   std::string result;
@@ -205,25 +193,6 @@ bool fontSupportsCodepoint(const TextBackend& backend, FontHandle font, float fo
   const auto shaped =
       backend.shapeRun(font, fontSizePx, utf8, 0, utf8.size(), false, FontVariant::Normal, false);
   return !shaped.glyphs.empty() && shaped.glyphs.front().glyphIndex != 0;
-}
-
-/// Finds a registered font that covers \p cp, preserving \p currentFont when it already does.
-FontHandle findCoverageFallbackFont(const TextBackend& backend, FontManager& fontManager,
-                                    FontHandle currentFont, float fontSizePx, uint32_t cp) {
-  if (fontSizePx <= 0.0f || cp == 0 ||
-      fontSupportsCodepoint(backend, currentFont, fontSizePx, cp)) {
-    return currentFont;
-  }
-
-  for (size_t i = 0; i < fontManager.numFaces(); ++i) {
-    FontHandle candidate = fontManager.findFont(fontManager.faceFamilyName(i));
-    if (candidate && candidate != currentFont &&
-        fontSupportsCodepoint(backend, candidate, fontSizePx, cp)) {
-      return candidate;
-    }
-  }
-
-  return currentFont;
 }
 
 /**
@@ -1547,6 +1516,27 @@ void ApplyPostTextPathTranslations(std::vector<TextRun>& runs,
   }
 }
 
+/// A glyph's pen position on the inline axis. An upright vertical glyph is drawn past its pen
+/// position by its face's vertical origin.
+double InlinePenPosition(const TextGlyph& glyph, bool vertical) {
+  return vertical ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
+}
+
+/**
+ * Moves a glyph's pen position to \p pen and scales its inline advance by \p scale. The stretch
+ * of an upright vertical glyph along the inline axis also stretches its offset from the pen.
+ */
+void PlaceStretchedGlyph(TextGlyph& glyph, double pen, double scale, bool vertical) {
+  if (vertical) {
+    glyph.verticalOriginOffset *= scale;
+    glyph.yPosition = pen + glyph.verticalOriginOffset;
+    glyph.yAdvance *= scale;
+  } else {
+    glyph.xPosition = pen;
+    glyph.xAdvance *= scale;
+  }
+}
+
 /**
  * Stretches a glyph's outline by \p scale along the inline axis for
  * `lengthAdjust="spacingAndGlyphs"`. The outline is stretched before the glyph's rotation, so a
@@ -1814,23 +1804,21 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
         const size_t glyphEnd = boundaries[segment + 1];
         const auto& firstGlyph = runs[runIndex].glyphs[glyphBegin];
         const auto& lastGlyph = runs[runIndex].glyphs[glyphEnd - 1];
-        const double start = glyphBegin == 0
-                                 ? (vertical ? extent.startY : extent.startX)
-                                 : (vertical ? firstGlyph.yPosition : firstGlyph.xPosition);
+        const double start = glyphBegin == 0 ? (vertical ? extent.startY : extent.startX)
+                                             : InlinePenPosition(firstGlyph, vertical);
         const double end = glyphEnd == runs[runIndex].glyphs.size()
                                ? (vertical ? extent.endY : extent.endX)
-                               : (vertical ? lastGlyph.yPosition + lastGlyph.yAdvance
-                                           : lastGlyph.xPosition + lastGlyph.xAdvance);
+                               : InlinePenPosition(lastGlyph, vertical) +
+                                     (vertical ? lastGlyph.yAdvance : lastGlyph.xAdvance);
         const bool absoluteReset =
             segment > 0 || (!inlinePositions.empty() && inlinePositions.front());
-        scopes[owner].items.push_back(
-            {.index = runIndex,
-             .absoluteReset = absoluteReset,
-             .glyphBegin = glyphBegin,
-             .glyphEnd = glyphEnd,
-             .start = start,
-             .end = end,
-             .glyphOrigin = vertical ? firstGlyph.yPosition : firstGlyph.xPosition});
+        scopes[owner].items.push_back({.index = runIndex,
+                                       .absoluteReset = absoluteReset,
+                                       .glyphBegin = glyphBegin,
+                                       .glyphEnd = glyphEnd,
+                                       .start = start,
+                                       .end = end,
+                                       .glyphOrigin = InlinePenPosition(firstGlyph, vertical)});
         logicalEnd = end;
       }
       hasLogicalEnd = true;
@@ -1991,15 +1979,10 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
       const double glyphBase = position + item.glyphOrigin - item.start;
       for (size_t glyphIndex = item.glyphBegin; glyphIndex < item.glyphEnd; ++glyphIndex) {
         auto& glyph = run.glyphs[glyphIndex];
-        if (vertical) {
-          glyph.yPosition = glyphBase + (glyph.yPosition - item.glyphOrigin) * scope.scale +
-                            scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
-          glyph.yAdvance *= scope.scale;
-        } else {
-          glyph.xPosition = glyphBase + (glyph.xPosition - item.glyphOrigin) * scope.scale +
-                            scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
-          glyph.xAdvance *= scope.scale;
-        }
+        const double pen = glyphBase +
+                           (InlinePenPosition(glyph, vertical) - item.glyphOrigin) * scope.scale +
+                           scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
+        PlaceStretchedGlyph(glyph, pen, scope.scale, vertical);
         StretchGlyphAlongInlineAxis(glyph, scope.scale, vertical);
       }
     }
@@ -2141,7 +2124,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
         continue;
       }
 
-      const double runStartPos = vertical ? run.glyphs[0].yPosition : run.glyphs[0].xPosition;
+      const double runStartPos = InlinePenPosition(run.glyphs[0], vertical);
       const auto& extent = runExtents[i];
       double naturalLength =
           vertical ? (extent.endY - extent.startY) : (extent.endX - extent.startX);
@@ -2176,13 +2159,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
           if (traversalStats) {
             ++traversalStats->glyphVisits;
           }
-          if (vertical) {
-            g.yPosition = runStartPos + (g.yPosition - runStartPos) * scaleFactor;
-            g.yAdvance *= scaleFactor;
-          } else {
-            g.xPosition = runStartPos + (g.xPosition - runStartPos) * scaleFactor;
-            g.xAdvance *= scaleFactor;
-          }
+          PlaceStretchedGlyph(
+              g, runStartPos + (InlinePenPosition(g, vertical) - runStartPos) * scaleFactor,
+              scaleFactor, vertical);
           StretchGlyphAlongInlineAxis(g, scaleFactor, vertical);
         }
       }
@@ -2205,7 +2184,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
   for (const auto& r : runs) {
     if (!r.glyphs.empty()) {
       globalStartX = r.glyphs[0].xPosition;
-      globalStartY = r.glyphs[0].yPosition;
+      globalStartY = InlinePenPosition(r.glyphs[0], true);
       break;
     }
   }
@@ -2242,13 +2221,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
         const double scaleFactor = targetLength / globalNaturalLength;
         for (auto& r : runs) {
           for (auto& g : r.glyphs) {
-            if (vertical) {
-              g.yPosition = globalStartY + (g.yPosition - globalStartY) * scaleFactor;
-              g.yAdvance *= scaleFactor;
-            } else {
-              g.xPosition = globalStartX + (g.xPosition - globalStartX) * scaleFactor;
-              g.xAdvance *= scaleFactor;
-            }
+            const double start = vertical ? globalStartY : globalStartX;
+            PlaceStretchedGlyph(g, start + (InlinePenPosition(g, vertical) - start) * scaleFactor,
+                                scaleFactor, vertical);
             StretchGlyphAlongInlineAxis(g, scaleFactor, vertical);
           }
         }
@@ -2296,7 +2271,8 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
       const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
       for (size_t gi = gStart; gi < gEnd; ++gi) {
         const auto& g = runs[ri].glyphs[gi];
-        const double pos = vertical ? g.yPosition : g.xPosition;
+        // Measure from pen positions: an upright glyph is drawn past its pen by its origin.
+        const double pos = vertical ? g.yPosition - g.verticalOriginOffset : g.xPosition;
         const double adv = vertical ? g.yAdvance : g.xAdvance;
         if (!foundFirst) {
           chunkStartPos = pos;
@@ -2893,13 +2869,15 @@ float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
 }
 
 /// Preserve same-family boundary shaping across size/face changes, using the preceding face's kern.
-bool CompatibleKerningRuns(const FontManager& fontManager, const TextRun& current,
-                           FontVariant currentVariant, FontHandle previousFont,
+/// \p currentFont and \p previousFont are the faces that draw the glyphs on each side of the
+/// boundary, which may be fallback faces rather than the spans' primary faces.
+bool CompatibleKerningRuns(const FontManager& fontManager, FontHandle currentFont,
+                           float currentSizePx, FontVariant currentVariant, FontHandle previousFont,
                            float previousSizePx, FontVariant previousVariant, bool currentKerning,
                            bool previousKerning) {
   return currentKerning && previousKerning && currentVariant == previousVariant &&
-         current.usedFontSizePx > 0.0f && previousSizePx > 0.0f &&
-         fontManager.fontsShareFamily(current.font, previousFont);
+         currentSizePx > 0.0f && previousSizePx > 0.0f &&
+         fontManager.fontsShareFamily(currentFont, previousFont);
 }
 
 /// Only adjacent flat runs or runs owned by the same textPath share a pair predecessor.
@@ -2947,26 +2925,320 @@ TextBackend::ShapedRun ShapeAddressableZeroSizeText(std::string_view text, size_
   return result;
 }
 
-/// Select zero-advance character records or the normal kerning-aware shaping path.
-TextBackend::ShapedRun ShapeSpanChunk(const TextBackend& backend, const TextRun& run,
-                                      std::string_view text, const ChunkRange& chunk, bool vertical,
-                                      TextOrientation orientation, FontVariant variant,
-                                      bool kerning) {
-  if (run.usedFontSizePx == 0.0f) {
-    return ShapeAddressableZeroSizeText(text, chunk.byteStart, chunk.byteEnd - chunk.byteStart);
-  }
-  return kerning ? backend.shapeRun(run.font, run.usedFontSizePx, text, chunk.byteStart,
-                                    chunk.byteEnd - chunk.byteStart, vertical, orientation, variant,
-                                    false)
-                 : backend.shapeRunNoKerning(run.font, run.usedFontSizePx, text, chunk.byteStart,
-                                             chunk.byteEnd - chunk.byteStart, vertical, orientation,
-                                             variant, false);
+/// Joiners and selectors that fonts need not map; they never make a cluster fall back.
+bool IsClusterJoiner(uint32_t cp) {
+  return cp == 0x200C || cp == 0x200D || cp == 0x034F || (cp >= 0xFE00 && cp <= 0xFE0F) ||
+         (cp >= 0xE0100 && cp <= 0xE01EF);
 }
+
+/// Returns the end of the cluster starting at \p start: its base codepoint, the nonspacing
+/// codepoints that follow it, and each codepoint a zero-width joiner attaches.
+size_t ClusterEnd(std::string_view text, size_t start, size_t end) {
+  size_t position = start;
+  uint32_t previous = decodeUtf8(text, position);
+  while (position < end) {
+    size_t next = position;
+    const uint32_t codepoint = decodeUtf8(text, next);
+    if (!isNonSpacing(codepoint) && previous != 0x200D) {
+      break;
+    }
+    previous = codepoint;
+    position = next;
+  }
+  return position;
+}
+
+/**
+ * Memoizes and bounds the codepoint coverage queries that cluster fallback makes for one text
+ * element. Each query shapes one codepoint, so a document with many faces and many distinct
+ * unmapped codepoints could otherwise demand faces times codepoints shaping calls. Each span grants
+ * a fixed number of queries per byte of its text; once the grant is spent, unknown pairs report no
+ * coverage and their clusters stay `.notdef`. At most
+ * \ref TextEngine::kMaximumFallbackCoverageEntries answers are retained, so memory does not grow
+ * with text length times face count.
+ */
+class FallbackCoverage {
+public:
+  /// Adds the query allowance for a span of \p textBytes UTF-8 bytes, which bounds its
+  /// codepoint count.
+  void grant(size_t textBytes) { add(textBytes * kQueriesPerByte); }
+
+  /// Raises the element's total grant to at least \p queries, so a short span can still try each
+  /// of its fallback candidates once.
+  void ensureGrantAtLeast(size_t queries) {
+    if (granted_ < queries) {
+      add(queries - granted_);
+    }
+  }
+
+  /// Whether the element's query grant is spent, after which no new coverage can be learned.
+  bool exhausted() const { return remaining_ == 0; }
+
+  /// Number of retained coverage answers.
+  std::size_t entries() const { return cache_.size(); }
+
+  /// Whether \p font maps \p codepoint, from the cache or one budgeted backend query.
+  bool covers(const TextBackend& backend, FontHandle font, float sizePx, uint32_t codepoint) {
+    const uint64_t key =
+        (static_cast<uint64_t>(static_cast<uint32_t>(font.entity())) << 32) | codepoint;
+    if (const auto cached = cache_.find(key); cached != cache_.end()) {
+      return cached->second;
+    }
+    if (remaining_ == 0) {
+      return false;
+    }
+    --remaining_;
+    const bool covered = fontSupportsCodepoint(backend, font, sizePx, codepoint);
+    // Answers past the bound are recomputed when asked again, still charged to the grant, so
+    // memory stays fixed while results stay the same.
+    if (cache_.size() < TextEngine::kMaximumFallbackCoverageEntries) {
+      cache_.emplace(key, covered);
+    }
+    return covered;
+  }
+
+private:
+  /// Enough to try every face of a typical fallback chain for each codepoint.
+  static constexpr size_t kQueriesPerByte = 32;
+
+  void add(size_t queries) {
+    granted_ += queries;
+    remaining_ += queries;
+  }
+
+  std::unordered_map<uint64_t, bool> cache_;
+  size_t granted_ = 0;
+  size_t remaining_ = 0;
+};
+
+/// Where a span's clusters may fall back, in priority order after the span's own face: its
+/// remaining font families, then every registered face, matched at the span's weight and style.
+struct ClusterFallback {
+  FontManager& fontManager;
+  FallbackCoverage& coverage;
+  std::span<const RcString> families;
+  int weight = 400;
+  int style = 0;
+  int stretch = 5;
+};
+
+/// Shapes one span's chunks with its primary face, except clusters that face cannot render, which
+/// take the first fallback face that can, as CSS per-character font fallback does.
+class ChunkShaper {
+public:
+  ChunkShaper(const TextBackend& backend, const TextRun& run, std::string_view text, bool vertical,
+              TextOrientation orientation, FontVariant variant, bool kerning,
+              const ClusterFallback& fallback)
+      : backend_(backend),
+        run_(run),
+        text_(text),
+        vertical_(vertical),
+        orientation_(orientation),
+        variant_(variant),
+        kerning_(kerning),
+        fallback_(fallback) {}
+
+  /// Shapes \p chunk, recording each glyph's fallback face in \p faces, which stays empty when the
+  /// primary face draws every glyph.
+  TextBackend::ShapedRun shape(const ChunkRange& chunk, std::vector<FontHandle>& faces) const {
+    if (run_.usedFontSizePx == 0.0f) {
+      return ShapeAddressableZeroSizeText(text_, chunk.byteStart, chunk.byteEnd - chunk.byteStart);
+    }
+    TextBackend::ShapedRun primary = shapeWith(run_.font, chunk);
+    PrimaryClusters clusters = primaryClusters(primary, chunk);
+    if (!clusters.anyNotdef) {
+      return primary;
+    }
+    std::vector<Item> items = itemize(chunk, clusters);
+    if (items.size() == 1 && items.front().face == run_.font) {
+      return primary;
+    }
+    // A chunk the backend laid out right to left keeps its items in visual order.
+    if (primary.glyphs.size() > 1 &&
+        primary.glyphs.front().cluster > primary.glyphs.back().cluster) {
+      std::reverse(items.begin(), items.end());
+    }
+    return shapeItems(items, chunk, faces);
+  }
+
+private:
+  /// A run of adjacent clusters drawn with one face.
+  struct Item {
+    ChunkRange range;
+    FontHandle face;
+  };
+
+  /// Per-byte flags from the primary shaping of one chunk.
+  struct PrimaryClusters {
+    std::vector<bool> notdef;        ///< A `.notdef` glyph starts its cluster at this byte.
+    std::vector<bool> clusterStart;  ///< The backend starts a cluster at this byte.
+    bool anyNotdef = false;
+  };
+
+  /// A shaper merges a syllable or a base with its marks into one cluster and reports every glyph
+  /// of it at the cluster's first byte, so fallback never splits a backend cluster.
+  static PrimaryClusters primaryClusters(const TextBackend::ShapedRun& primary,
+                                         const ChunkRange& chunk) {
+    PrimaryClusters result{std::vector<bool>(chunk.byteEnd - chunk.byteStart, false),
+                           std::vector<bool>(chunk.byteEnd - chunk.byteStart, false)};
+    for (const TextBackend::ShapedGlyph& glyph : primary.glyphs) {
+      if (glyph.cluster < chunk.byteStart || glyph.cluster >= chunk.byteEnd) {
+        continue;
+      }
+      result.clusterStart[glyph.cluster - chunk.byteStart] = true;
+      if (glyph.glyphIndex == 0) {
+        result.notdef[glyph.cluster - chunk.byteStart] = true;
+        result.anyNotdef = true;
+      }
+    }
+    return result;
+  }
+
+  /// Splits \p chunk into runs of clusters that share a face, in logical order.
+  std::vector<Item> itemize(const ChunkRange& chunk, const PrimaryClusters& clusters) const {
+    std::vector<Item> items;
+    for (size_t start = chunk.byteStart; start < chunk.byteEnd;) {
+      size_t end = ClusterEnd(text_, start, chunk.byteEnd);
+      while (end < chunk.byteEnd && !clusters.clusterStart[end - chunk.byteStart]) {
+        end = ClusterEnd(text_, end, chunk.byteEnd);
+      }
+      const auto first =
+          clusters.notdef.begin() + static_cast<std::ptrdiff_t>(start - chunk.byteStart);
+      const auto last =
+          clusters.notdef.begin() + static_cast<std::ptrdiff_t>(end - chunk.byteStart);
+      const FontHandle face =
+          std::find(first, last, true) != last ? clusterFace(start, end) : run_.font;
+      if (!items.empty() && items.back().face == face) {
+        items.back().range.byteEnd = end;
+      } else {
+        items.push_back({{start, end}, face});
+      }
+      start = end;
+    }
+    return items;
+  }
+
+  /// Shapes each item with its face as one part of \p chunk, recording fallback faces per glyph
+  /// in \p faces. The chunk supplies each item's shaping context, so joining continues across
+  /// faces and script-neutral items take the chunk's direction.
+  TextBackend::ShapedRun shapeItems(const std::vector<Item>& items, const ChunkRange& chunk,
+                                    std::vector<FontHandle>& faces) const {
+    const TextBackend::ShapingContext context{chunk.byteStart, chunk.byteEnd - chunk.byteStart};
+    TextBackend::ShapedRun result;
+    for (const Item& item : items) {
+      const TextBackend::ShapedRun shaped = backend_.shapeRunInContext(
+          item.face, run_.usedFontSizePx, text_, context, item.range.byteStart,
+          item.range.byteEnd - item.range.byteStart, vertical_, orientation_, variant_, kerning_);
+      result.glyphs.insert(result.glyphs.end(), shaped.glyphs.begin(), shaped.glyphs.end());
+      faces.resize(result.glyphs.size(), item.face == run_.font ? FontHandle() : item.face);
+    }
+    return result;
+  }
+
+  TextBackend::ShapedRun shapeWith(FontHandle font, const ChunkRange& chunk) const {
+    const size_t length = chunk.byteEnd - chunk.byteStart;
+    return kerning_ ? backend_.shapeRun(font, run_.usedFontSizePx, text_, chunk.byteStart, length,
+                                        vertical_, orientation_, variant_, false)
+                    : backend_.shapeRunNoKerning(font, run_.usedFontSizePx, text_, chunk.byteStart,
+                                                 length, vertical_, orientation_, variant_, false);
+  }
+
+  /// The face for a cluster whose primary glyphs include `.notdef`. Repeated clusters reuse the
+  /// first answer, bounding the coverage queries per span by its distinct missing clusters.
+  FontHandle clusterFace(size_t start, size_t end) const {
+    const auto [entry, inserted] = clusterFaces_.try_emplace(text_.substr(start, end - start));
+    if (inserted) {
+      // A backend may report `.notdef` for a joiner the face need not map. Resolving the
+      // candidates first applies the element's minimum grant before the exhaustion check.
+      entry->second =
+          covers(run_.font, start, end) || candidates().empty() || fallback_.coverage.exhausted()
+              ? run_.font
+              : findFace(start, end);
+    }
+    return entry->second;
+  }
+
+  /// Whether \p font maps every codepoint of the cluster at [start, end) except joiners.
+  bool covers(FontHandle font, size_t start, size_t end) const {
+    for (size_t position = start; position < end;) {
+      const uint32_t codepoint = decodeUtf8(text_, position);
+      if (!IsClusterJoiner(codepoint) &&
+          !fallback_.coverage.covers(backend_, font, run_.usedFontSizePx, codepoint)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// The first fallback face covering the cluster at [start, end), or the primary face when none
+  /// does, which leaves the cluster's glyphs `.notdef`.
+  FontHandle findFace(size_t start, size_t end) const {
+    for (const FontHandle face : candidates()) {
+      if (covers(face, start, end)) {
+        return face;
+      }
+    }
+    return run_.font;
+  }
+
+  /// The distinct fallback faces in priority order, resolved once per span.
+  const std::vector<FontHandle>& candidates() const {
+    if (candidatesResolved_) {
+      return candidates_;
+    }
+    candidatesResolved_ = true;
+    FontManager& fontManager = fallback_.fontManager;
+    const auto add = [&](std::string_view family) {
+      const FontHandle face =
+          fontManager.findFont(family, fallback_.weight, fallback_.style, fallback_.stretch);
+      if (face && face != run_.font &&
+          std::find(candidates_.begin(), candidates_.end(), face) == candidates_.end()) {
+        candidates_.push_back(face);
+      }
+    };
+    for (const RcString& family : fallback_.families) {
+      if (fontManager.hasFamily(family)) {
+        add(family);
+      }
+    }
+    const size_t faceCount = fontManager.numFaces();
+    for (size_t index = 0; index < faceCount; ++index) {
+      add(fontManager.faceFamilyName(index));
+    }
+    // The primary face's check plus one query per candidate.
+    fallback_.coverage.ensureGrantAtLeast(candidates_.size() + 1);
+    return candidates_;
+  }
+
+  const TextBackend& backend_;
+  const TextRun& run_;
+  std::string_view text_;
+  bool vertical_;
+  TextOrientation orientation_;
+  FontVariant variant_;
+  bool kerning_;
+  const ClusterFallback& fallback_;
+  /// Resolved faces keyed by cluster text, which views the span text.
+  mutable std::unordered_map<std::string_view, FontHandle> clusterFaces_;
+  mutable std::vector<FontHandle> candidates_;
+  mutable bool candidatesResolved_ = false;
+};
 
 /// A shaped chunk retains backend source clusters and separate SVG positioning groups.
 struct PreparedSpanChunk {
   TextBackend::ShapedRun shaped;
   std::vector<uint32_t> positioningClusters;
+  /// Per-glyph fallback faces, null where the run's face draws the glyph; empty when it draws all.
+  std::vector<FontHandle> faces;
+
+  /// The fallback face of glyph \p index, or null when the run's face draws it.
+  FontHandle face(size_t index) const { return faces.empty() ? FontHandle() : faces[index]; }
+
+  /// The face that draws glyph \p index, given the run's face \p primary.
+  FontHandle drawingFace(size_t index, FontHandle primary) const {
+    const FontHandle fallback = face(index);
+    return fallback ? fallback : primary;
+  }
 };
 
 /// Reuses one shaping result per existing chunk and records its positioning group starts.
@@ -2975,10 +3247,8 @@ struct PreparedSpanShaping {
   std::vector<bool> groupStarts;
 };
 
-PreparedSpanShaping PrepareSpanShaping(const TextBackend& backend, const TextRun& run,
-                                       std::string_view text, const std::vector<ChunkRange>& ranges,
-                                       bool vertical, TextOrientation orientation,
-                                       FontVariant variant, bool kerning,
+PreparedSpanShaping PrepareSpanShaping(const ChunkShaper& shaper, std::string_view text,
+                                       const std::vector<ChunkRange>& ranges,
                                        const ByteIndexMappings& mappings) {
   PreparedSpanShaping result;
   result.chunks.reserve(ranges.size());
@@ -2989,8 +3259,7 @@ PreparedSpanShaping PrepareSpanShaping(const TextBackend& backend, const TextRun
   result.groupStarts.resize(codepointCount, false);
   for (const auto& range : ranges) {
     PreparedSpanChunk prepared;
-    prepared.shaped =
-        ShapeSpanChunk(backend, run, text, range, vertical, orientation, variant, kerning);
+    prepared.shaped = shaper.shape(range, prepared.faces);
     prepared.positioningClusters.reserve(prepared.shaped.glyphs.size());
     for (size_t index = 0; index < prepared.shaped.glyphs.size(); ++index) {
       const auto& glyph = prepared.shaped.glyphs[index];
@@ -3100,13 +3369,15 @@ class TextLayoutInvocation {
 public:
   TextLayoutInvocation(Registry& registry, FontManager& fontManager, TextBackend& backend,
                        const components::ComputedTextComponent& text,
-                       const TextLayoutParams& params, bool* resourceRejected = nullptr)
+                       const TextLayoutParams& params, bool* resourceRejected = nullptr,
+                       std::size_t* fallbackCoverageEntries = nullptr)
       : registry_(registry),
         fontManager_(fontManager),
         backend_(backend),
         text_(text),
         params_(params),
-        resourceRejected_(resourceRejected) {}
+        resourceRejected_(resourceRejected),
+        fallbackCoverageEntries_(fallbackCoverageEntries) {}
 
   std::vector<TextRun> run() {
     resolveBaseFont();
@@ -3117,6 +3388,9 @@ public:
     applyInlineWrap();
     applyFinalAdjustments();
     ApplyPostTextPathTranslations(runs_, text_, postPathBoundaries_);
+    if (fallbackCoverageEntries_) {
+      *fallbackCoverageEntries_ = fallbackCoverage_.entries();
+    }
     return std::move(runs_);
   }
 
@@ -3149,6 +3423,7 @@ private:
     ByteIndexMappings indexMappings;
     PreparedSpanShaping shaping;
     uint32_t lastCodepoint = 0;
+    FontHandle lastFont;  ///< Face of the last laid-out glyph.
     double pathBoundaryKern = 0.0;
     uint32_t previousChunkCodepoint = 0;
     FontHandle previousChunkFont;
@@ -3219,8 +3494,6 @@ private:
     state.specifiedFontSizePx = ResolvedSpanFontSizePx(span, params_);
     state.fontSizePx = CheckedFontSizePx(state.specifiedFontSizePx);
     state.font = selectBackendSafeFont(backend_, fontManager_, state.font);
-    state.font = findCoverageFallbackFont(backend_, fontManager_, state.font, state.fontSizePx,
-                                          firstNonAsciiCodepoint(state.text));
     state.fontSizeAdjust = span.fontSizeAdjust.value_or(params_.fontSizeAdjust);
     state.fontSizePx = AdjustFontSize(backend_, state.font, state.fontSizePx, state.fontSizeAdjust);
     state.run.font = state.font;
@@ -3240,8 +3513,10 @@ private:
   /// Distance from the alphabetic to the central baseline, which CSS Inline 3 Appendix A.2 places
   /// halfway between ideographic-over and -under. Without those metrics this uses the unnormalized
   /// ascent/descent midpoint, the A.2 CJK fallback that Chromium and resvg also use.
-  double verticalCentralOriginOffset(const SpanState& state, const FontVMetrics& metrics) const {
-    return computeBaselineShift(DominantBaseline::Central, metrics, state.scale);
+  /// @param metrics Vertical metrics of the face drawing the glyph.
+  /// @param scale Em-to-pixel scale of that face.
+  double verticalCentralOriginOffset(const FontVMetrics& metrics, float scale) const {
+    return computeBaselineShift(DominantBaseline::Central, metrics, scale);
   }
 
   double resolveVerticalBaselineOffset(const SpanState& state, double baselineShift) const {
@@ -3256,7 +3531,7 @@ private:
         baseline == DominantBaseline::NoChange;
     const double alignmentShift = usesCentralOrigin
                                       ? 0.0
-                                      : verticalCentralOriginOffset(state, metrics) -
+                                      : verticalCentralOriginOffset(metrics, state.scale) -
                                             computeBaselineShift(baseline, metrics, state.scale);
     // Baseline alignment is transversal to the inline axis. In both vertical writing modes,
     // line-over is right and line-under is left, so a positive horizontal baseline distance
@@ -3331,9 +3606,18 @@ private:
     state.runPenStartY = state.penY;
     state.chunkRanges = findChunkRanges(state.text, state.xList, state.yList);
     state.indexMappings = buildByteIndexMappings(state.text);
-    state.shaping = PrepareSpanShaping(backend_, state.run, state.text, state.chunkRanges,
-                                       state.vertical, state.orientation, state.span->fontVariant,
-                                       state.fontKerning, state.indexMappings);
+    const TextSpan& span = *state.span;
+    fallbackCoverage_.grant(state.text.size());
+    const ClusterFallback fallback{
+        fontManager_,
+        fallbackCoverage_,
+        span.fontFamilies.empty() ? params_.fontFamilies : span.fontFamilies,
+        span.fontWeight,
+        static_cast<int>(span.fontStyle),
+        static_cast<int>(span.fontStretch)};
+    const ChunkShaper shaper(backend_, state.run, state.text, state.vertical, state.orientation,
+                             span.fontVariant, state.fontKerning, fallback);
+    state.shaping = PrepareSpanShaping(shaper, state.text, state.chunkRanges, state.indexMappings);
     state.dxList = ResolveGroupDisplacements(
         state.span->pathSpline ? state.span->dxList : state.dxList, state.shaping.groupStarts,
         Lengthd::Extent::X, params_, pendingDx_);
@@ -3400,8 +3684,9 @@ private:
     const double value =
         state.fontKerning && state.previousChunkKerning
             ? backend_.crossSpanKern(state.previousChunkFont, state.previousChunkFontSizePx,
-                                     state.font, state.fontSizePx, state.previousChunkCodepoint,
-                                     firstCodepoint, state.vertical, state.orientation)
+                                     state.shaping.chunks[chunkIndex].drawingFace(0, state.font),
+                                     state.fontSizePx, state.previousChunkCodepoint, firstCodepoint,
+                                     state.vertical, state.orientation)
             : 0.0;
     return {value, true};
   }
@@ -3413,13 +3698,14 @@ private:
     }
     size_t firstByte = state.chunkRanges.front().byteStart;
     const uint32_t firstCodepoint = decodeUtf8(state.text, firstByte);
+    const FontHandle firstFace = state.shaping.chunks.front().drawingFace(0, state.font);
     const bool compatible =
         previousSpanOrientation_ == state.orientation &&
-        CompatibleKerningRuns(fontManager_, state.run, state.span->fontVariant, previousSpanFont_,
-                              previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning,
-                              previousSpanKerning_);
+        CompatibleKerningRuns(fontManager_, firstFace, state.run.usedFontSizePx,
+                              state.span->fontVariant, previousSpanFont_, previousSpanFontSizePx_,
+                              previousSpanFontVariant_, state.fontKerning, previousSpanKerning_);
     const double value =
-        compatible ? backend_.crossSpanKern(previousSpanFont_, previousSpanFontSizePx_, state.font,
+        compatible ? backend_.crossSpanKern(previousSpanFont_, previousSpanFontSizePx_, firstFace,
                                             state.fontSizePx, previousSpanCodepoint_,
                                             firstCodepoint, state.vertical, state.orientation)
                    : 0.0;
@@ -3450,6 +3736,7 @@ private:
                             groupX, groupY, groupDx, groupDy, yOverride, crossKern);
     }
     state.lastCodepoint = codepoint;
+    state.lastFont = prepared.drawingFace(glyphIndex, state.font);
   }
 
   void recordChunkBoundary(const SpanState& state, size_t chunkIndex, size_t glyphIndex,
@@ -3505,8 +3792,11 @@ private:
       glyph.yAdvance = shapedGlyph.xAdvance > 0 ? shapedGlyph.xAdvance : shapedGlyph.yAdvance;
       glyph.xPosition -= shapedGlyph.yOffset;
       glyph.yPosition += shapedGlyph.xOffset;
-      const FontVMetrics metrics = backend_.fontVMetrics(state.font);
-      glyph.xPosition -= verticalCentralOriginOffset(state, metrics);
+      // A fallback glyph centers on its own face's central baseline.
+      const FontHandle face = glyph.font ? glyph.font : state.font;
+      const float scale =
+          glyph.font ? UsedSpanEmScale(backend_, face, state.fontSizePx) : state.scale;
+      glyph.xPosition -= verticalCentralOriginOffset(backend_.fontVMetrics(face), scale);
       glyph.rotateDegrees = rotationFor(*state.span, charIndex, 90.0);
       glyph.sideways = true;
       return;
@@ -3517,6 +3807,7 @@ private:
                          : (shapedGlyph.xAdvance == 0 ? 0.0 : state.fontSizePx);
     glyph.xPosition = state.penX + shapedGlyph.xOffset;
     glyph.yPosition = state.penY + shapedGlyph.yOffset;
+    glyph.verticalOriginOffset = shapedGlyph.yOffset;
     glyph.rotateDegrees = rotationFor(*state.span, charIndex, 0.0);
   }
 
@@ -3550,6 +3841,7 @@ private:
     glyph.fontSizeScale = shapedGlyph.fontSizeScale;
     glyph.cluster = shapedGlyph.cluster;
     glyph.positioningCluster = positioningCluster;
+    glyph.font = prepared.face(glyphIndex);
     orientVerticalGlyph(state, shapedGlyph, codepoint, charIndex, glyph);
     glyph.xPosition += state.verticalBaselineOffset;
     state.run.glyphs.push_back(glyph);
@@ -3656,6 +3948,7 @@ private:
     applyHorizontalKerning(state, glyphIndex, shapedGlyph, hasAbsoluteX, hasAbsoluteY, crossKern);
     applyHorizontalPosition(state, groupX, groupY, groupDx, groupDy, yOverride);
     TextGlyph glyph = makeHorizontalGlyph(state, shapedGlyph, positioningCluster, charIndex);
+    glyph.font = prepared.face(glyphIndex);
     rotateDetachedMark(state, hasAbsoluteX, hasAbsoluteY, glyph);
     state.run.glyphs.push_back(glyph);
     advanceHorizontalPen(state, prepared, glyphIndex, codepoint, shapedGlyph);
@@ -3667,14 +3960,14 @@ private:
     }
     size_t lastCluster = prepared.positioningClusters.back();
     state.previousChunkCodepoint = decodeUtf8(state.text, lastCluster);
-    state.previousChunkFont = state.font;
+    state.previousChunkFont = prepared.drawingFace(prepared.shaped.glyphs.size() - 1, state.font);
     state.previousChunkFontSizePx = state.fontSizePx;
     state.previousChunkKerning = state.fontKerning;
   }
 
   void updateSpanPredecessor(const SpanState& state) {
     previousSpanCodepoint_ = state.lastCodepoint;
-    previousSpanFont_ = state.font;
+    previousSpanFont_ = state.lastFont ? state.lastFont : state.font;
     previousSpanFontSizePx_ = state.fontSizePx;
     previousSpanKerning_ = state.fontKerning;
     previousSpanFontVariant_ = state.span->fontVariant;
@@ -3857,6 +4150,8 @@ private:
   std::vector<RunPenExtent> runExtents_;
   bool wrapped_ = false;
   bool* resourceRejected_ = nullptr;
+  std::size_t* fallbackCoverageEntries_ = nullptr;
+  FallbackCoverage fallbackCoverage_;
 };
 
 }  // namespace
@@ -3872,7 +4167,8 @@ std::vector<TextRun> TextEngine::layoutWithResourceStatus(
     bool& resourceRejected) {
   ++layoutCallCount_;
   resourceRejected = false;
-  return TextLayoutInvocation(registry_, fontManager_, *backend_, text, params, &resourceRejected)
+  return TextLayoutInvocation(registry_, fontManager_, *backend_, text, params, &resourceRejected,
+                              &fallbackCoverageEntries_)
       .run();
 }
 
@@ -4050,14 +4346,15 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
     return;
   }
 
-  const float emScale = run.font ? engine.scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
+  const FontHandle font = GlyphFont(run, glyph);
+  const float emScale = font ? engine.scaleForEmToPixels(font, runFontSizePx) : 0.0f;
   const bool outlineAdmitted =
       !run.stretchedTextPath ||
-      ReserveStretchedCacheOutline(registry, fontManager, textRootEntity, run.font,
-                                   glyph.glyphIndex, stretchedCacheReservation);
-  Path glyphPath = outlineAdmitted ? engine.glyphOutline(run.font, glyph.glyphIndex,
-                                                         emScale * glyph.fontSizeScale)
-                                   : Path();
+      ReserveStretchedCacheOutline(registry, fontManager, textRootEntity, font, glyph.glyphIndex,
+                                   stretchedCacheReservation);
+  Path glyphPath = outlineAdmitted
+                       ? engine.glyphOutline(font, glyph.glyphIndex, emScale * glyph.fontSizeScale)
+                       : Path();
   if (!glyphPath.empty()) {
     Path transformed = PlaceCachedGlyphOutline(std::move(glyphPath), run, glyph);
     if (transformed.empty()) {
@@ -4068,7 +4365,7 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
     addBox(cache.inkBounds, hasInkBounds, extent);
     addBox(charGeom.extent, charGeom.hasExtent, extent);
   } else if (const auto extent = BitmapGlyphExtent(
-                 glyph, engine.bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale))) {
+                 glyph, engine.bitmapGlyphMetrics(font, glyph.glyphIndex, emScale))) {
     addBox(cache.inkBounds, hasInkBounds, *extent);
     addBox(charGeom.extent, charGeom.hasExtent, *extent);
   }
@@ -4264,15 +4561,16 @@ bool AdmitReferenceOutline(FontManager& manager, FontHandle font, int glyphIndex
 bool AppendReferenceOutline(const TextEngine& engine, FontManager& manager, const TextRun& run,
                             const TextGlyph& glyph, Entity source,
                             TextEngine::ReferenceGeometry& result, TextReferenceWork& work) {
-  if (engine.isBitmapOnly(run.font)) {
+  const FontHandle font = GlyphFont(run, glyph);
+  if (engine.isBitmapOnly(font)) {
     return true;
   }
-  if (!AdmitReferenceOutline(manager, run.font, glyph.glyphIndex,
+  if (!AdmitReferenceOutline(manager, font, glyph.glyphIndex,
                              static_cast<bool>(run.stretchedTextPath), work)) {
     return false;
   }
-  const float scale = engine.scaleForEmToPixels(run.font, run.usedFontSizePx) * glyph.fontSizeScale;
-  Path raw = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
+  const float scale = engine.scaleForEmToPixels(font, run.usedFontSizePx) * glyph.fontSizeScale;
+  Path raw = engine.glyphOutline(font, glyph.glyphIndex, scale);
   if (raw.empty()) {
     return true;
   }

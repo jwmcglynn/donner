@@ -446,6 +446,55 @@ TEST(RendererSnapshotTests, PreparedFontsFromDistinctSourceRegistriesKeepSeparat
   EXPECT_EQ(drawCount, 2u);
 }
 
+TEST(RendererSnapshotTests, PreparedFallbackGlyphFontsUseFontsFromReplayRegistry) {
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RenderSnapshot snapshot;
+  {
+    Registry source;
+    auto& manager = source.ctx().emplace<FontManager>(source);
+    const FontHandle primary =
+        manager.loadFontData(embedded::kPublicSansMediumOtf, FontDataTrust::Trusted);
+    const FontHandle fallback =
+        manager.loadFontData(embedded::kRobotoRegularTtf, FontDataTrust::Trusted);
+    ASSERT_TRUE(static_cast<bool>(primary));
+    ASSERT_TRUE(static_cast<bool>(fallback));
+
+    RenderSnapshotRecorder recorder(snapshot, renderer);
+    const components::ComputedTextComponent text;
+    auto prepared = std::make_shared<PreparedTextDraw>();
+    TextRun run;
+    run.font = primary;
+    run.glyphs.push_back(TextGlyph{.glyphIndex = 1});
+    run.glyphs.push_back(TextGlyph{.glyphIndex = 2, .font = fallback});
+    prepared->runs.push_back(std::move(run));
+    TextParams params;
+    params.preparedTextDraw = std::move(prepared);
+    recorder.drawText(source, text, params);
+  }
+
+  using Bytes = std::vector<uint8_t>;
+  std::vector<Bytes> glyphFaces;
+  EXPECT_CALL(renderer, drawText(_, _, _))
+      .WillRepeatedly([&](Registry& registry, const components::ComputedTextComponent&,
+                          const TextParams& params) {
+        ASSERT_TRUE(params.preparedTextDraw);
+        const auto& fonts = registry.ctx().get<FontManager>();
+        for (const TextRun& run : params.preparedTextDraw->runs) {
+          for (const TextGlyph& glyph : run.glyphs) {
+            const auto bytes = fonts.fontData(GlyphFont(run, glyph));
+            glyphFaces.emplace_back(bytes.begin(), bytes.end());
+          }
+        }
+      });
+
+  snapshot.replay(renderer);
+  EXPECT_THAT(
+      glyphFaces,
+      testing::ElementsAre(
+          Bytes(embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end()),
+          Bytes(embedded::kRobotoRegularTtf.begin(), embedded::kRobotoRegularTtf.end())));
+}
+
 TEST(RendererSnapshotTests, FontPayloadLimitRejectsLaterFontWithoutRetainingItsBytes) {
   ::testing::NiceMock<MockRendererInterface> renderer;
   RenderSnapshot snapshot;
@@ -466,6 +515,8 @@ TEST(RendererSnapshotTests, FontPayloadLimitRejectsLaterFontWithoutRetainingItsB
       TextRun run;
       run.font = font;
       run.glyphs.push_back(TextGlyph{.glyphIndex = 1});
+      // A fallback glyph whose face exceeds the payload limit has no face on replay.
+      run.glyphs.push_back(TextGlyph{.glyphIndex = 2, .font = second});
       prepared->runs.push_back(std::move(run));
       TextParams params;
       params.preparedTextDraw = std::move(prepared);
@@ -483,6 +534,13 @@ TEST(RendererSnapshotTests, FontPayloadLimitRejectsLaterFontWithoutRetainingItsB
         const auto& fonts = registry.ctx().get<FontManager>();
         const auto bytes = fonts.fontData(params.preparedTextDraw->runs.front().font);
         EXPECT_EQ(bytes.empty(), drawCount == 1);
+        // The glyph whose face was not retained is skipped like `.notdef` instead of drawing its
+        // glyph id in the run's face.
+        std::vector<int> glyphIndices;
+        for (const TextGlyph& glyph : params.preparedTextDraw->runs.front().glyphs) {
+          glyphIndices.push_back(glyph.glyphIndex);
+        }
+        EXPECT_THAT(glyphIndices, testing::ElementsAre(1, 0));
         ++drawCount;
       });
   snapshot.replay(renderer);

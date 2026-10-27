@@ -146,6 +146,8 @@ struct DrawTextCommand {
   size_t fontDomain = 0;
 #ifdef DONNER_TEXT_ENABLED
   std::vector<SnapshotFont> preparedFonts;
+  /// Fallback faces of prepared glyphs, keyed by the glyph's ordinal across all prepared runs.
+  std::vector<std::pair<size_t, SnapshotFont>> preparedGlyphFonts;
   std::vector<SnapshotFont> decorationFonts;
 #endif
 };
@@ -419,6 +421,29 @@ FontHandle LoadSnapshotFont(FontManager& manager, const SnapshotFont& font,
   }
   return it->second;
 }
+
+/// Replaces recorded prepared-run and fallback-glyph fonts with faces loaded into \p manager.
+void LoadPreparedTextFonts(PreparedTextDraw& prepared, const DrawTextCommand& command,
+                           FontManager& manager, SnapshotReplayFontState::Domain& domain) {
+  auto glyphFont = command.preparedGlyphFonts.begin();
+  size_t glyphOrdinal = 0;
+  for (size_t i = 0; i < prepared.runs.size(); ++i) {
+    prepared.runs[i].font = i < command.preparedFonts.size()
+                                ? LoadSnapshotFont(manager, command.preparedFonts[i], domain)
+                                : FontHandle();
+    for (TextGlyph& glyph : prepared.runs[i].glyphs) {
+      if (glyphFont != command.preparedGlyphFonts.end() && glyphFont->first == glyphOrdinal) {
+        glyph.font = LoadSnapshotFont(manager, glyphFont->second, domain);
+        if (!glyph.font) {
+          // Without its own face, the glyph id would select an unrelated glyph of the run's face.
+          glyph.glyphIndex = 0;
+        }
+        ++glyphFont;
+      }
+      ++glyphOrdinal;
+    }
+  }
+}
 #endif
 
 void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
@@ -483,12 +508,7 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
 #ifdef DONNER_TEXT_ENABLED
             if (params.preparedTextDraw) {
               auto prepared = std::make_shared<PreparedTextDraw>(*params.preparedTextDraw);
-              for (size_t i = 0; i < prepared->runs.size(); ++i) {
-                prepared->runs[i].font =
-                    i < value.preparedFonts.size()
-                        ? LoadSnapshotFont(fontManager, value.preparedFonts[i], domain)
-                        : FontHandle();
-              }
+              LoadPreparedTextFonts(*prepared, value, fontManager, domain);
               params.preparedTextDraw = std::move(prepared);
             }
             components::ComputedTextComponent text = value.text;
@@ -720,10 +740,20 @@ void RenderSnapshotRecorder::drawText(Registry& sourceRegistry,
     // Keep the placed glyphs, but replace every source-registry font handle on replay.
     auto prepared = std::make_shared<PreparedTextDraw>(*params.preparedTextDraw);
     command.preparedFonts.reserve(prepared->runs.size());
+    size_t glyphOrdinal = 0;
     for (TextRun& run : prepared->runs) {
       command.preparedFonts.push_back(
           snapshot_.impl_->resourceMapper.captureFont(sourceRegistry, run.font));
       run.font = FontHandle();
+      for (TextGlyph& glyph : run.glyphs) {
+        if (glyph.font) {
+          command.preparedGlyphFonts.emplace_back(
+              glyphOrdinal,
+              snapshot_.impl_->resourceMapper.captureFont(sourceRegistry, glyph.font));
+          glyph.font = FontHandle();
+        }
+        ++glyphOrdinal;
+      }
     }
     command.params.preparedTextDraw = std::move(prepared);
   }

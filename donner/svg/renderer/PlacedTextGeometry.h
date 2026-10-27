@@ -148,6 +148,26 @@ GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, Font
 Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextRun& run,
                         const TextGlyph& glyph, float scale, double warpTolerance);
 
+/// The face that draws one glyph, with its outline scale and whether it has only bitmap glyphs.
+struct GlyphFaceScale {
+  FontHandle font;          ///< Face that draws the glyph.
+  float scale = 0.0f;       ///< `scaleForPixelHeight` of \ref font at the run's used size.
+  bool bitmapOnly = false;  ///< True when \ref font has no vector outlines.
+};
+
+/**
+ * Resolves the face that draws \p glyph. A glyph without a fallback face reuses the run's
+ * already computed values; a fallback glyph queries its own face.
+ *
+ * @param textEngine Engine providing font metrics.
+ * @param run Run that contains \p glyph.
+ * @param glyph Glyph to resolve.
+ * @param runScale `scaleForPixelHeight` of the run's face at its used size.
+ * @param runBitmapOnly Whether the run's face has only bitmap glyphs.
+ */
+GlyphFaceScale ResolveGlyphFace(const TextEngine& textEngine, const TextRun& run,
+                                const TextGlyph& glyph, float runScale, bool runBitmapOnly);
+
 /// Warp a glyph-local outline onto the perpendicular vectors of a stretched text path.
 Path WarpGlyphOutline(const Path& outline, const StretchedTextPath& mapping, const TextGlyph& glyph,
                       double tolerance = Path::kLocalFlattenTolerance);

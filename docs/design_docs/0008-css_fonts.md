@@ -107,19 +107,38 @@ Requires FreeType's `FT_Set_Var_Design_Coordinates` API.
 
 ### Current Implementation
 
-Per-script font fallback: when the primary font lacks glyphs for a script (checked via
-`FT_Get_Char_Index`), iterates all registered `@font-face` rules to find one with
-coverage. This handles cases like "Noto Sans" requested for Arabic text falling back
-to Amiri.
+Per-cluster font fallback, following CSS per-character font matching. Each text chunk is shaped
+with the span's primary face (its first available family) first. Only when that produces
+`.notdef` glyphs is the chunk split into clusters: a base codepoint with its nonspacing marks and
+joined codepoints, never splitting a cluster the shaper merged, such as an Indic syllable. Each
+cluster the primary face cannot render takes the first face that covers every codepoint in it,
+trying the span's remaining families and then every registered face at the span's weight, style
+and stretch. Coverage is checked by shaping single codepoints, memoized per face and codepoint for
+each text element and bounded by a grant of 32 queries per byte of text, raised for each element to
+at least one query per fallback candidate plus one, so a short span can try every face once.
+Joiners and variation selectors never force a fallback. Adjacent clusters that share a face are
+shaped together, each as one part of its chunk: the chunk is HarfBuzz's pre- and post-context, so
+joining continues across faces. A range with no script of its own takes the chunk's direction,
+script and language, except that one containing decimal digits in horizontal text runs left to
+right; a strong left-to-right range in a vertically shaped chunk is shaped vertically; a strong
+right-to-left range keeps its own horizontal direction. A chunk's direction and script are detected
+once for all its ranges. The run keeps the primary face for its em box, baseline tables and
+decorations, and each fallback glyph records its face in `TextGlyph::font`.
+
+Known differences from CSS per-character matching: an emoji with VS16 does not prefer an emoji
+presentation face, `font-size-adjust` is computed from the primary face for every glyph, no
+canonically equivalent sequence is tried, the simple text tier groups clusters only by nonspacing
+marks and zero-width joiners, Geode drops vector fallback glyphs when the primary face has only
+bitmap glyphs, and without a bidi algorithm a chunk keeps one base direction, so mixed-direction
+text within one face's range is not reordered.
 
 ### Planned Improvements
 
 1. **`unicode-range` matching** — CSS Fonts 4 `@font-face` `unicode-range` descriptor
    enables per-codepoint font selection without probing each font's cmap.
 
-2. **Per-glyph fallback** — Currently fallback is per-span (entire span uses the
-   fallback font). Per-glyph fallback would allow mixed-script text within a single
-   span, splitting into font runs.
+2. **Coverage by cmap lookup:** Checking coverage through each face's character map instead of
+   shaping one codepoint per query.
 
 3. **System font access** — Currently only `@font-face` registered fonts are available.
    System font enumeration would enable `local()` font sources.

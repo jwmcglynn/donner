@@ -1953,14 +1953,16 @@ INSTANTIATE_TEST_SUITE_P(
                      "Bug #1172: upright CJK sits 0.026em lower than resvg (vhea ascender "
                      "vertical origin vs resvg centering on hhea ascent/descent)")},
                 {"mixed-languages-with-tb-and-underline.svg",
-                 Params::Skip("Bug #1172: one face per span, so the CJK fallback chosen for the "
-                              "first non-ASCII character drops the Arabic word, and vertical "
-                              "underline segments sized from x positions collapse (1572 px)")
+                 Params::Skip("Bug #1172: per-cluster fallback draws every glyph, but without "
+                              "bidi runs the Arabic word shares the left-to-right Amiri run with "
+                              "`Hi!` and is shaped unjoined in logical order, and the vertical "
+                              "underline is not drawn (3180 px)")
                      .onlyTextFull()},
                 {"mixed-languages-with-tb.svg",
-                 Params::Skip("Bug #1172: one face per span, so the Mplus 1p face chosen for the "
-                              "CJK text has no Arabic glyphs and the Arabic word is dropped "
-                              "(1095 px)")
+                 Params::Skip("Bug #1172: the Arabic word falls back to Amiri and the column is "
+                              "anchored like the reference, but upright CJK sits 0.026em lower "
+                              "than resvg (vhea ascender vertical origin vs resvg centering on "
+                              "hhea ascent/descent), 173 px")
                      .setCanvasSize(300, 300)
                      .onlyTextFull()},
                 {"tb-and-punctuation.svg",

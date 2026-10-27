@@ -54,6 +54,10 @@ public:
                               size_t byteOffset, size_t byteLength, bool isVertical,
                               TextOrientation textOrientation, FontVariant fontVariant,
                               bool forceLogicalOrder) const override;
+  ShapedRun shapeRunInContext(FontHandle font, float fontSizePx, std::string_view spanText,
+                              const ShapingContext& context, size_t byteOffset, size_t byteLength,
+                              bool isVertical, TextOrientation textOrientation,
+                              FontVariant fontVariant, bool kerning) const override;
   double crossSpanKern(FontHandle prevFont, float prevSizePx, FontHandle curFont, float curSizePx,
                        uint32_t prevCodepoint, uint32_t curCodepoint,
                        bool isVertical) const override;
@@ -67,16 +71,23 @@ public:
   /// callbacks decode embedded bitmap strikes.
   [[nodiscard]] bool embeddedBitmapLoadingDisabledForTesting(FontHandle font) const;
 
+  /// Total bytes of shaping context scanned to detect direction and script, a test seam that
+  /// bounds the work shaping a chunk's ranges in context does.
+  [[nodiscard]] std::size_t detectedContextBytesForTesting() const { return detectedContextBytes_; }
+
 private:
   ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
                          size_t byteOffset, size_t byteLength, bool isVertical,
                          TextOrientation textOrientation, FontVariant fontVariant,
-                         bool enableKerning, bool forceLogicalOrder) const;
+                         bool enableKerning, bool forceLogicalOrder,
+                         const ShapingContext* context = nullptr) const;
   /// Decode a previously validated current glyph slot without another metrics-only load.
   std::optional<BitmapGlyph> decodeBitmapGlyph(const BitmapGlyphMetrics& metrics) const;
 
   FontManager& fontManager_;
   Registry& registry_;
+  /// See \ref detectedContextBytesForTesting.
+  mutable std::size_t detectedContextBytes_ = 0;
 
   /// Cache entry stored on the font entity.
   struct HbFontEntry;

@@ -290,6 +290,12 @@ bool IsBgraTextureFormat(gpu::TextureFormat format) {
 // DONNER_TEXT_ENABLED region.
 
 #ifdef DONNER_TEXT_ENABLED
+/// Whether \p glyph has a vector outline for Geode to draw: it is not `.notdef` and its face is
+/// not bitmap-only.
+bool HasVectorGlyph(const TextGlyph& glyph, const GlyphFaceScale& face) {
+  return glyph.glyphIndex != 0 && !face.bitmapOnly;
+}
+
 std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
     const FontManager::GlyphOutlineComplexity& complexity, std::size_t expansion = 1u) {
   const std::size_t kCommandCopiesPerVertex = 6u * expansion;
@@ -4070,11 +4076,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                          const TextEngine& textEngine, const TextRun& run, const TextGlyph& glyph,
                          float scale, double tolerance) {
     bool hasComplexity = false;
-    if (!admitGlyphMiss(fontManager, run.font, glyph.glyphIndex, hasComplexity,
+    const FontHandle font = GlyphFont(run, glyph);
+    if (!admitGlyphMiss(fontManager, font, glyph.glyphIndex, hasComplexity,
                         kMaximumTextPathWarpExpansion)) {
       return false;
     }
-    Path placed = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale, tolerance);
+    Path placed = PlacedGlyphOutline(textEngine, font, run, glyph, scale, tolerance);
     if (placed.empty()) {
       return true;
     }
@@ -7514,13 +7521,17 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const bool runNeedsGlyphGeometry = glyphModes.residentFill || glyphModes.placedPaths;
     for (const auto& glyph : runNeedsGlyphGeometry ? std::span<const TextGlyph>(run.glyphs)
                                                    : std::span<const TextGlyph>()) {
-      if (glyph.glyphIndex == 0) {
-        continue;  // `.notdef` -- skip to match tiny-skia.
+      // The run's face is not bitmap-only here, so only a fallback face can be.
+      const GlyphFaceScale face = ResolveGlyphFace(textEngine, run, glyph, scale, false);
+      if (!HasVectorGlyph(glyph, face)) {
+        // `.notdef` is skipped to match tiny-skia. A bitmap-only fallback face has no outline
+        // budget, so it is skipped before glyph admission like a bitmap-only run.
+        continue;
       }
 
       if (glyphModes.warped) {
         if (!impl_->appendWarpedGlyph(
-                runGlyphPaths, fontManager, textEngine, run, glyph, scale,
+                runGlyphPaths, fontManager, textEngine, run, glyph, face.scale,
                 geode::FillCubicToleranceFor(impl_->deviceFromLocalTransform))) {
           runs.clear();
           return;
@@ -7537,20 +7548,20 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       // The font handle's entity id, versioned by entt, so a font that is
       // unloaded and a different one loaded into the same slot cannot be
       // mistaken for the original.
-      key.fontId = static_cast<uint64_t>(static_cast<uint32_t>(run.font.entity()));
+      key.fontId = static_cast<uint64_t>(static_cast<uint32_t>(face.font.entity()));
       key.glyphIndex = static_cast<uint32_t>(glyph.glyphIndex);
-      key.outlineScale = scale * glyph.fontSizeScale;
+      key.outlineScale = face.scale * glyph.fontSizeScale;
       key.stretchScaleX = glyph.stretchScaleX;
       key.stretchScaleY = glyph.stretchScaleY;
       key.rotateDegrees = glyph.rotateDegrees;
       key.fillTolerance = geode::FillCubicToleranceFor(impl_->deviceFromLocalTransform);
 
       geode::GeodeGlyphResidentEntry* entry = impl_->residentGlyphEntry(
-          registry, fontManager, run.font, glyph.glyphIndex, key, [&]() -> Path {
-            return UnplacedGlyphOutline(textEngine, run.font, glyph, scale).outline;
+          registry, fontManager, face.font, glyph.glyphIndex, key, [&]() -> Path {
+            return UnplacedGlyphOutline(textEngine, face.font, glyph, face.scale).outline;
           });
       if (entry == nullptr || entry->outline.empty()) {
-        continue;  // No vector outline; bitmap-only fonts were skipped above.
+        continue;  // No vector outline.
       }
 
       const Transform2d glyphFromLocal = GlyphPlacementTransform(glyph);

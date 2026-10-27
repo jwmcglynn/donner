@@ -924,6 +924,406 @@ TEST(TextEngineTest, SidewaysVerticalGlyphCentersOnAscentDescentMidpoint) {
   }
 }
 
+// Lays out one span at (100, 100) with the full text backend, the given families and writing mode.
+std::vector<TextRun> LayOutFull(Registry& registry, FontManager& fontManager, std::string_view utf8,
+                                SmallVector<RcString, 1> families,
+                                WritingMode mode = WritingMode::HorizontalTb) {
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendFull>(fontManager, registry));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(std::string(utf8));
+  span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.fontFamilies = std::move(families);
+  params.writingMode = mode;
+  return engine.layout(text, params);
+}
+
+// A fallback item is one part of its chunk: in a right-to-left chunk the neutral parentheses
+// around an Arabic word that falls back to another face still take the chunk's direction, so they
+// mirror, and the items keep visual order.
+TEST(TextEngineTest, FallbackItemsInRightToLeftChunkMirrorNeutralsInVisualOrder) {
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri")));
+
+  const auto glyphIndexOf = [&](std::string_view utf8) {
+    const auto runs = LayOutFull(registry, fontManager, utf8, {RcString("Noto Sans")});
+    return runs.empty() || runs[0].glyphs.empty() ? 0 : runs[0].glyphs[0].glyphIndex;
+  };
+  const int openParen = glyphIndexOf("(");
+  const int closeParen = glyphIndexOf(")");
+  ASSERT_THAT(openParen, Gt(0));
+  ASSERT_THAT(closeParen, Gt(0));
+
+  // "(" at byte 0, Arabic meem at 1, reh at 3, ")" at 5.
+  const auto runs =
+      LayOutFull(registry, fontManager, "(\xD9\x85\xD8\xB1)", {RcString("Noto Sans")});
+  ASSERT_THAT(runs, SizeIs(1));
+  std::vector<uint32_t> clusters;
+  for (const TextGlyph& glyph : runs[0].glyphs) {
+    clusters.push_back(glyph.cluster);
+  }
+  EXPECT_THAT(clusters, ElementsAre(5u, 3u, 1u, 0u));
+  // Visually leftmost is the logical ")" drawn mirrored, rightmost the logical "(" mirrored.
+  EXPECT_THAT(runs[0].glyphs, ElementsAre(GlyphIndexIs(openParen), _, _, GlyphIndexIs(closeParen)));
+}
+
+// Shaping each fallback item in its chunk's context must not rescan the whole chunk per item: a
+// chunk that alternates faces on every character detects its context's direction and script once.
+TEST(TextEngineTest, AlternatingFallbackChunkDetectsItsContextOnce) {
+  for (const int repeats : {50, 200}) {
+    SCOPED_TRACE(testing::Message() << "repeats=" << repeats);
+    Registry registry;
+    FontManager fontManager(registry);
+    ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+    ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "Mplus 1p")));
+    auto backend = std::make_unique<TextBackendFull>(fontManager, registry);
+    const TextBackendFull& probe = *backend;
+    TextEngine engine(fontManager, registry, std::move(backend));
+
+    std::string text;
+    for (int index = 0; index < repeats; ++index) {
+      text += "a\xE6\x97\xA5";  // a, then a CJK character only the fallback face covers
+    }
+    components::ComputedTextComponent computed;
+    computed.spans.push_back(MakeSpan(text));
+    TextLayoutParams params = MakeTextParams(20.0);
+    params.fontFamilies = {RcString("Noto Sans")};
+    const auto runs = engine.layout(computed, params);
+    ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(static_cast<size_t>(2 * repeats)))));
+    EXPECT_THAT(probe.detectedContextBytesForTesting(), testing::Le(text.size()));
+  }
+}
+
+// European digits in a right-to-left chunk keep their left-to-right order when they fall in a
+// different face's item than the Arabic word.
+TEST(TextEngineTest, DigitsInRightToLeftFallbackChunkKeepLeftToRightOrder) {
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri")));
+
+  // Meem at byte 0, reh at 2, space at 4, "1" at 5, "2" at 6.
+  const auto runs =
+      LayOutFull(registry, fontManager, "\xD9\x85\xD8\xB1 12", {RcString("Noto Sans")});
+  ASSERT_THAT(runs, SizeIs(1));
+  std::optional<double> one;
+  std::optional<double> two;
+  for (const TextGlyph& glyph : runs[0].glyphs) {
+    if (glyph.cluster == 5) {
+      one = glyph.xPosition;
+    } else if (glyph.cluster == 6) {
+      two = glyph.xPosition;
+    }
+  }
+  ASSERT_THAT(one, testing::Optional(_));
+  ASSERT_THAT(two, testing::Optional(_));
+  EXPECT_THAT(*one, Lt(*two));
+}
+
+// Per-character positions split right-to-left text into one-codepoint chunks, each shaped left to
+// right on its own. A chunk that falls back whole to another face is shaped the same way as when
+// that face is the span's own.
+TEST(TextEngineTest, OneCodepointFallbackChunkShapesLikeThePrimaryFace) {
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri")));
+
+  const auto layOut = [&](const char* family) {
+    TextEngine engine(fontManager, registry,
+                      std::make_unique<TextBackendFull>(fontManager, registry));
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("\xD9\x87\xD8\xA7\xD9\x84\xD9\x88");  // four Arabic letters
+    for (const double x : {10.0, 50.0, 90.0, 130.0}) {
+      span.xList.push_back(Lengthd(x, Lengthd::Unit::None));
+    }
+    span.yList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    text.spans.push_back(std::move(span));
+    TextLayoutParams params = MakeTextParams(40.0);
+    params.fontFamilies = {RcString(family)};
+    std::vector<std::tuple<int, double, double>> glyphs;
+    for (const TextRun& run : engine.layout(text, params)) {
+      for (const TextGlyph& glyph : run.glyphs) {
+        glyphs.emplace_back(glyph.glyphIndex, glyph.xPosition, glyph.xAdvance);
+      }
+    }
+    return glyphs;
+  };
+
+  const auto primary = layOut("Amiri");
+  ASSERT_THAT(primary, SizeIs(4));
+  EXPECT_THAT(layOut("Noto Sans"), testing::ContainerEq(primary));
+}
+
+// A range shaped in context joins with its neighbors: the middle seen of three takes the same
+// medial glyph as when the whole word is shaped at once, not its isolated form.
+TEST(TextEngineTest, RangeShapedInContextJoinsWithItsNeighbors) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle amiri = LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri");
+  ASSERT_TRUE(static_cast<bool>(amiri));
+  TextBackendFull backend(fontManager, registry);
+
+  const std::string word = "\xD8\xB3\xD8\xB3\xD8\xB3";  // seen seen seen, at bytes 0, 2 and 4
+  const auto whole = backend.shapeRun(amiri, 40.0f, word, 0, word.size(), false,
+                                      TextOrientation::Mixed, FontVariant::Normal, false);
+  int wholeMiddle = 0;
+  for (const auto& glyph : whole.glyphs) {
+    if (glyph.cluster == 2) {
+      wholeMiddle = glyph.glyphIndex;
+    }
+  }
+  ASSERT_THAT(wholeMiddle, Gt(0));
+
+  const TextBackend::ShapingContext context{0, word.size()};
+  const auto middle = backend.shapeRunInContext(amiri, 40.0f, word, context, 2, 2, false,
+                                                TextOrientation::Mixed, FontVariant::Normal, true);
+  const auto alone = backend.shapeRun(amiri, 40.0f, word, 2, 2, false, TextOrientation::Mixed,
+                                      FontVariant::Normal, false);
+  ASSERT_THAT(alone.glyphs, SizeIs(1));
+  ASSERT_THAT(alone.glyphs[0].glyphIndex, Not(wholeMiddle));  // the isolated form differs
+  EXPECT_THAT(middle.glyphs,
+              ElementsAre(Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, wholeMiddle)));
+}
+
+// A fallback item inside a vertical chunk that contains upright CJK is shaped the way its chunk
+// is: vertically, with sideways Latin advanced by its unkerned horizontal advance.
+TEST(TextEngineTest, FallbackLatinItemInVerticalChunkUsesTheChunkVerticalShaping) {
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoEmoji-Regular.ttf", "Noto Emoji")));
+  const FontHandle yellowtail = LoadResvgFont(fontManager, "Yellowtail-Regular.ttf", "Yellowtail");
+  ASSERT_TRUE(static_cast<bool>(yellowtail));
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "Mplus 1p")));
+
+  // Noto Emoji has neither; Yellowtail has the Latin but no CJK, so the chunk splits in two items.
+  const std::string text =
+      "\xE6\x97\xA5\xE6\x9C\xAC"
+      "AVATAR";
+  const auto runs =
+      LayOutFull(registry, fontManager, text,
+                 {RcString("Noto Emoji"), RcString("Yellowtail"), RcString("Mplus 1p")},
+                 WritingMode::VerticalRl);
+  ASSERT_THAT(runs, SizeIs(1));
+
+  TextBackendFull backend(fontManager, registry);
+  const auto oracle = backend.shapeRun(yellowtail, runs[0].usedFontSizePx, text, 0, text.size(),
+                                       true, TextOrientation::Mixed, FontVariant::Normal, false);
+  std::vector<double> expected;
+  for (const auto& glyph : oracle.glyphs) {
+    if (glyph.cluster >= 6) {
+      expected.push_back(glyph.xAdvance);
+    }
+  }
+  std::vector<double> actual;
+  for (const TextGlyph& glyph : runs[0].glyphs) {
+    if (glyph.cluster >= 6) {
+      EXPECT_THAT(glyph.font, testing::Eq(yellowtail));
+      actual.push_back(glyph.yAdvance);
+    }
+  }
+  EXPECT_THAT(actual, testing::Pointwise(DoubleNear(1e-9), expected));
+}
+
+// A vertical chunk's anchor length runs from the pen position before its first glyph to the pen
+// position after its last. Upright CJK glyphs sit below their pen position by the face's vertical
+// origin while sideways Latin glyphs sit on it, so a chunk mixing them must not measure from the
+// first glyph's drawn position. Middle anchoring shifts every glyph of the start-anchored layout
+// back by half the pen extent; with the chunk starting at y=0 and ending on a sideways glyph, that
+// extent is the last glyph's end.
+TEST(TextEngineTest, VerticalMiddleAnchorCentersPenExtentOfMixedOrientationChunk) {
+  for (const bool fullBackend : {false, true}) {
+    SCOPED_TRACE(fullBackend ? "full backend" : "simple backend");
+    Registry registry;
+    FontManager fontManager(registry);
+    ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "Mplus 1p")));
+    std::unique_ptr<TextBackend> backend;
+    if (fullBackend) {
+      backend = std::make_unique<TextBackendFull>(fontManager, registry);
+    } else {
+      backend = std::make_unique<TextBackendSimple>(fontManager, registry);
+    }
+    TextEngine engine(fontManager, registry, std::move(backend));
+
+    const auto layOut = [&](TextAnchor anchor) {
+      components::ComputedTextComponent text;
+      auto span = MakeSpan("\xE6\x97\xA5\xE6\x9C\xAC Ab");  // 日本 Ab
+      span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+      span.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+      span.textAnchor = anchor;
+      text.spans.push_back(std::move(span));
+      TextLayoutParams params = MakeTextParams(20.0);
+      params.fontFamilies = {RcString("Mplus 1p")};
+      params.writingMode = WritingMode::VerticalRl;
+      return engine.layout(text, params);
+    };
+
+    const std::vector<TextRun> start = layOut(TextAnchor::Start);
+    ASSERT_THAT(start, ElementsAre(RunGlyphsAre(SizeIs(5))));
+    // The first glyph is upright and the last sideways at its pen position. The full backend draws
+    // the upright glyph below its pen by the face's vertical origin; the simple backend's origin
+    // for this face coincides with the pen, so only the full backend exercises the offset.
+    ASSERT_THAT(start[0].glyphs.front(), GlyphRotateDegreesIs(DoubleEq(0.0)));
+    ASSERT_THAT(start[0].glyphs.back(), GlyphRotateDegreesIs(DoubleEq(90.0)));
+    if (fullBackend) {
+      ASSERT_THAT(start[0].glyphs.front(), GlyphYPositionIs(Gt(0.0)));
+    }
+    const double penExtent = start[0].glyphs.back().yPosition + start[0].glyphs.back().yAdvance;
+
+    std::vector<double> expected;
+    for (const TextGlyph& glyph : start[0].glyphs) {
+      expected.push_back(glyph.yPosition - penExtent / 2.0);
+    }
+    const std::vector<TextRun> middle = layOut(TextAnchor::Middle);
+    ASSERT_THAT(middle, SizeIs(1));
+    std::vector<double> actual;
+    for (const TextGlyph& glyph : middle[0].glyphs) {
+      actual.push_back(glyph.yPosition);
+    }
+    EXPECT_THAT(actual, testing::Pointwise(DoubleNear(1e-9), expected));
+  }
+}
+
+// Further vertical anchor cases in the full backend: an end anchor, a chunk that starts sideways
+// and ends upright, and an all-upright control whose glyph offsets cancel. Each anchored layout is
+// the start-anchored layout shifted back by the anchor's share of the pen extent, which runs from
+// y=0 to the last glyph's pen position plus its advance.
+TEST(TextEngineTest, VerticalAnchorsMeasurePenExtentForEndSidewaysFirstAndUprightChunks) {
+  struct AnchorCase {
+    const char* label;
+    std::string text;
+    TextAnchor anchor;
+    double share;
+  };
+  const AnchorCase cases[] = {
+      {"end, upright first", "\xE6\x97\xA5\xE6\x9C\xAC Ab", TextAnchor::End, 1.0},
+      {"middle, sideways first", "Ab \xE6\x97\xA5\xE6\x9C\xAC", TextAnchor::Middle, 0.5},
+      {"middle, all upright", "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E", TextAnchor::Middle, 0.5},
+  };
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "Mplus 1p")));
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendFull>(fontManager, registry));
+
+  for (const AnchorCase& testCase : cases) {
+    SCOPED_TRACE(testCase.label);
+    const auto layOut = [&](TextAnchor anchor) {
+      components::ComputedTextComponent text;
+      auto span = MakeSpan(testCase.text);
+      span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+      span.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+      span.textAnchor = anchor;
+      text.spans.push_back(std::move(span));
+      TextLayoutParams params = MakeTextParams(20.0);
+      params.fontFamilies = {RcString("Mplus 1p")};
+      params.writingMode = WritingMode::VerticalRl;
+      return engine.layout(text, params);
+    };
+
+    const std::vector<TextRun> start = layOut(TextAnchor::Start);
+    ASSERT_THAT(start, SizeIs(1));
+    ASSERT_THAT(start[0].glyphs, Not(IsEmpty()));
+    const TextGlyph& last = start[0].glyphs.back();
+    const double penExtent = last.yPosition - last.verticalOriginOffset + last.yAdvance;
+
+    std::vector<double> expected;
+    for (const TextGlyph& glyph : start[0].glyphs) {
+      expected.push_back(glyph.yPosition - penExtent * testCase.share);
+    }
+    const std::vector<TextRun> anchored = layOut(testCase.anchor);
+    ASSERT_THAT(anchored, SizeIs(1));
+    std::vector<double> actual;
+    for (const TextGlyph& glyph : anchored[0].glyphs) {
+      actual.push_back(glyph.yPosition);
+    }
+    EXPECT_THAT(actual, testing::Pointwise(DoubleNear(1e-9), expected));
+  }
+
+  // The all-upright control checks the same length from drawn positions alone: the first and last
+  // glyphs carry the same origin offset, which cancels.
+  const auto uprightStart = [&] {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan(cases[2].text);
+    span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+    text.spans.push_back(std::move(span));
+    TextLayoutParams params = MakeTextParams(20.0);
+    params.fontFamilies = {RcString("Mplus 1p")};
+    params.writingMode = WritingMode::VerticalRl;
+    return engine.layout(text, params);
+  }();
+  ASSERT_THAT(uprightStart, ElementsAre(RunGlyphsAre(SizeIs(3))));
+  const auto& upright = uprightStart[0].glyphs;
+  EXPECT_THAT(upright.back().yPosition + upright.back().yAdvance - upright.front().yPosition,
+              DoubleNear(60.0, 1e-9));
+}
+
+// Vertical spacingAndGlyphs stretches upright glyphs along the inline axis, so the distance from
+// each glyph's pen position to its drawn origin stretches with it. With the chunk starting at
+// y=0, every inline coordinate of the stretched layout is the natural one times the factor.
+TEST(TextEngineTest, VerticalSpacingAndGlyphsScalesUprightGlyphsFromTheirPenPositions) {
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "Mplus 1p")));
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendFull>(fontManager, registry));
+
+  constexpr double kScale = 2.0;
+  const auto layOut = [&](std::optional<double> spanLength, std::optional<double> elementLength) {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E");  // three upright CJK glyphs
+    span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+    if (spanLength) {
+      span.textLength = Lengthd(*spanLength, Lengthd::Unit::None);
+      span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+    }
+    text.spans.push_back(std::move(span));
+    TextLayoutParams params = MakeTextParams(20.0);
+    params.fontFamilies = {RcString("Mplus 1p")};
+    params.writingMode = WritingMode::VerticalRl;
+    if (elementLength) {
+      params.textLength = Lengthd(*elementLength, Lengthd::Unit::None);
+      params.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+    }
+    return engine.layout(text, params);
+  };
+
+  const std::vector<TextRun> natural = layOut(std::nullopt, std::nullopt);
+  ASSERT_THAT(natural, ElementsAre(RunGlyphsAre(SizeIs(3))));
+  // The upright glyphs sit below their pen positions, so a scale about the first drawn origin
+  // would differ from a scale about the pen.
+  ASSERT_THAT(natural[0].glyphs.front(), GlyphYPositionIs(Gt(0.0)));
+  const double naturalLength = natural[0].glyphs.back().yPosition +
+                               natural[0].glyphs.back().yAdvance -
+                               natural[0].glyphs.front().yPosition;
+  std::vector<double> expected;
+  for (const TextGlyph& glyph : natural[0].glyphs) {
+    expected.push_back(glyph.yPosition * kScale);
+  }
+
+  for (const bool onSpan : {true, false}) {
+    SCOPED_TRACE(onSpan ? "span textLength" : "element textLength");
+    const std::optional<double> length = naturalLength * kScale;
+    const std::vector<TextRun> stretched =
+        onSpan ? layOut(length, std::nullopt) : layOut(std::nullopt, length);
+    ASSERT_THAT(stretched, ElementsAre(RunGlyphsAre(SizeIs(3))));
+    std::vector<double> actual;
+    for (const TextGlyph& glyph : stretched[0].glyphs) {
+      actual.push_back(glyph.yPosition);
+    }
+    EXPECT_THAT(actual, testing::Pointwise(DoubleNear(1e-6), expected));
+    EXPECT_THAT(stretched[0].glyphs,
+                Each(GlyphStretchScaleYIs(FloatEq(static_cast<float>(kScale)))));
+  }
+}
+
 TEST(TextEngineTest, ScriptedRtlChunkYOverrideKeepsVisualGlyphsOnSameBaseline) {
   Registry registry;
   FontManager fontManager(registry);
@@ -948,7 +1348,8 @@ TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
   FontManager fontManager(registry);
   TextEngine engine(fontManager, registry);
 
-  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+  const FontHandle notoSans = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_TRUE(static_cast<bool>(notoSans));
   const FontHandle amiri = LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri");
   ASSERT_TRUE(static_cast<bool>(amiri));
 
@@ -963,9 +1364,12 @@ TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
   params.fontFamilies = {RcString("Noto Sans")};
   const auto runs = engine.layout(text, params);
 
-  EXPECT_THAT(runs,
-              ElementsAre(AllOf(RunFontIs(amiri),
-                                RunGlyphsAre(AllOf(Not(IsEmpty()), Each(GlyphIndexIs(Gt(0))))))));
+  // The run keeps the span's face; each Arabic glyph falls back to the face that covers it.
+  EXPECT_THAT(runs, ElementsAre(AllOf(
+                        RunFontIs(notoSans),
+                        RunGlyphsAre(AllOf(Not(IsEmpty()),
+                                           Each(AllOf(GlyphIndexIs(Gt(0)),
+                                                      Field("font", &TextGlyph::font, amiri))))))));
 }
 
 TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
