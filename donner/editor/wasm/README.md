@@ -3,8 +3,8 @@
 The editor uses full text support on native and Wasm. The complete Wasm package includes
 `editor.wasm`, JavaScript/bootstrap files, `assets/` with content-addressed UI fonts,
 fallback fonts, chrome SVGs and samples, and `fonts/` with the twelve deferred catalog faces.
-Font and SVG payloads are external to the shipping module. Native packages carry their own
-verified offline resources.
+Application fonts and static SVG payloads are external to the shipping module. ImGui retains
+its small built-in default font. Native packages carry their own verified offline resources.
 
 File > Open uses the browser's native file picker. Save and Save As use a native
 save picker when the browser supports writable file handles; other browsers download
