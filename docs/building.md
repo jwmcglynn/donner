@@ -325,7 +325,10 @@ trusted maintainer pull request.
 
 **Bazel settings.** `--remote_timeout=60s`, `--remote_cache_compression`, and
 `--remote_download_outputs=minimal` for lanes that only need test results (`toplevel` for the
-Editor WASM lane, which stages its package from `bazel-bin`). If the cache cannot be reached when a
+Editor WASM lane, which stages its package from `bazel-bin`). Cached Playwright browser trees are
+always downloaded in full (`--remote_download_regex`, also set under `build:macos` in `.bazelrc` so
+runs with only a disk cache get it): their macOS bundles contain directory symlinks, and fetching
+such a tree lazily for a local test loses files beneath them. If the cache cannot be reached when a
 job starts, the action leaves it off and the job builds locally. An outage later in the job also
 degrades to local execution. Each Bazel command first asks the cache for its capabilities, and when
 that query fails, Bazel ends the build with exit code 34 ("Failed to query remote execution
