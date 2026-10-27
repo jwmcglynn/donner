@@ -692,6 +692,7 @@ async function captureCatalogFontDiagnostics(
 ) {
   const diagnostic = await page.evaluate(() => {
     const state = window as Window & {
+      Module?: Record<string, unknown>;
       __donnerCatalogBrokers?: Map<number, {
         broker: {
           enabled: boolean;
@@ -703,6 +704,18 @@ async function captureCatalogFontDiagnostics(
       }>;
     };
     return {
+      resourceStartup: {
+        error: document.getElementById("capability-error-detail")?.textContent?.slice(0, 2000),
+        exports: Object.fromEntries([
+          "callMain",
+          "HEAPU8",
+          "_malloc",
+          "_free",
+          "_DonnerPackagedResourceManifest",
+          "_DonnerInstallPackagedResource",
+          "_DonnerFailPackagedResource",
+        ].map((name) => [name, typeof state.Module?.[name]])),
+      },
       firstFrame: state.__donnerFirstFramePresented,
       frameCount: state.__donnerMainLoopRenderedFrames,
       activeSample: document.querySelector("canvas")?.getAttribute("data-active-sample-id"),
@@ -2492,6 +2505,7 @@ test("required resource failure stays readable and prevents application startup"
   });
   await expect(page.locator("#capability-error")).toBeVisible();
   await expect(page.locator("#capability-error-detail")).toContainText("required editor resources");
+  await expect(page.locator("#capability-error-detail")).toContainText("font-http");
   expect(await page.evaluate(() => ({
     installed: window.__donnerResourcesInstalledAtMs ?? null,
     firstFrame: window.__donnerFirstFramePresented ?? false,

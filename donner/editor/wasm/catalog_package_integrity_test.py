@@ -90,6 +90,20 @@ def validate_resources(package: Path, module: bytes) -> dict:
     return {"packaged_resource_count": len(identities), "packaged_resource_bytes": total}
 
 
+def _validate_browser_bridge_exports(package: Path) -> None:
+    path = package / "editor.js"
+    if path.stat().st_size > 1024 * 1024:
+        raise ValueError("Browser glue exceeds inspection bound")
+    glue = path.read_text()
+    for name in ("callMain", "HEAPU8", "_malloc", "_free",
+                 "_DonnerPackagedResourceManifest", "_DonnerInstallPackagedResource",
+                 "_DonnerFailPackagedResource"):
+        quoted = re.escape(name)
+        binding = r"\bModule(?:\." + quoted + r"|\[['\"]" + quoted + r"['\"]\])\s*="
+        if re.search(binding, glue) is None:
+            raise ValueError(f"Missing public resource bridge export: {name}")
+
+
 def validate_package(package: Path, native_notices: Path | None = None) -> dict:
     manifest = json.loads((package / "catalog-fonts.json").read_text())
     fonts = manifest["fonts"]
@@ -99,6 +113,7 @@ def validate_package(package: Path, native_notices: Path | None = None) -> dict:
     if len(modules) != 1:
         raise ValueError("Expected exactly one Wasm module")
     module = modules[0].read_bytes()
+    _validate_browser_bridge_exports(package)
     resources = validate_resources(package, module)
     expected_paths = set()
     total = 0

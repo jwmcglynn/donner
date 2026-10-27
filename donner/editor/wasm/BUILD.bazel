@@ -82,7 +82,8 @@ _EDITOR_FIXED_MEMORY_BYTES = 402653184  # 384 MiB
 # Linker flags for the Geode-only editor WebAssembly binary.
 _EDITOR_LINKOPTS = [
     "--closure=1",
-    "-sEXPORTED_RUNTIME_METHODS=['callMain']",
+    "-sEXPORTED_RUNTIME_METHODS=['callMain','HEAPU8']",
+    "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free']",
     # SIMPLE keeps DOM, Emscripten, and WebGPU property names intact while
     # still compressing local glue. ADVANCED rewrites cross-language contracts
     # such as the input bridge and can leave the editor unresponsive.
