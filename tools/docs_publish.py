@@ -249,6 +249,7 @@ def live_marker(url: str = SITE_URL) -> dict | None:
 
 
 def deploy(artifact_id: int, commit: str, api, wait=time.sleep, receipt: Path | None = None) -> str:
+    api.require_protection()
     token = _oidc_token()
     value = api.call(store.REPO + "/pages/deployments", "POST", {
         "artifact_id": artifact_id, "pages_build_version": commit + "-" + str(artifact_id),

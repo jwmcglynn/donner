@@ -195,6 +195,13 @@ class DocsPublishTest(unittest.TestCase):
         self.assertEqual(site.read_json(work / "result.json")["status"], "recovery-required")
         self.assertEqual(deploy.call_count, 1)
 
+    def test_all_pages_posts_require_live_protections_before_requesting_oidc(self):
+        api = mock.Mock(); api.require_protection.side_effect = ValueError("missing approval protection")
+        with mock.patch.object(publish, "_oidc_token") as token, self.assertRaisesRegex(ValueError, "missing approval"):
+            publish.deploy(7, "a" * 40, api)
+        token.assert_not_called()
+        api.call.assert_not_called()
+
     def test_pages_health_checks_detect_changed_version_index(self):
         marker = {"manifest_sha256": "a" * 64}
         with mock.patch.object(publish, "live_marker", return_value=marker), \
