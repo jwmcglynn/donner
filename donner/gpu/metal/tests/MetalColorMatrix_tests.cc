@@ -705,6 +705,12 @@ TEST_F(MetalColorMatrixTest, ImageBlitPixelated) {
                              {gpu::tests::image_blit_scene::Case::Pixelated});
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
+TEST_F(MetalColorMatrixTest, ImageBlitCubic) {
+  gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
+                             [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                             {gpu::tests::image_blit_scene::Case::Cubic});
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
 TEST_F(MetalColorMatrixTest, ImageBlitCropped) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },

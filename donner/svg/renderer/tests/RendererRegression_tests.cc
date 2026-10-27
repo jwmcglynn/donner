@@ -1521,6 +1521,56 @@ TEST_F(RendererRegressionTests, ImageOpacityAppliesOnceLikeGroupOpacity) {
   ExpectBitmapsIdentical(imageOpacity, groupOpacity, "image_opacity_matches_group_opacity");
 }
 
+/// A 4x4 checkerboard of two opaque colors, as a PNG data URI. Upscaled twelvefold, every
+/// destination pixel lands between source texel centers, so the sampling kernel decides each one.
+constexpr std::string_view kCheckerImageDataUri =
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAGklEQVR42mM4oRElt+oOhGSAs05oRDHglAEAXzIXcULo"
+    "C6MAAAAASUVORK5CYII=";
+
+/// Renders the checkerboard as an `<image>` at 48x48 on a 64x64 canvas with the given
+/// `image-rendering` attribute, omitted when empty.
+RendererBitmap RenderCheckerImage(std::string_view imageRendering) {
+  std::string body = R"svg(<image x="8" y="8" width="48" height="48")svg";
+  if (!imageRendering.empty()) {
+    body += " image-rendering=\"" + std::string(imageRendering) + "\"";
+  }
+  body += " href=\"" + std::string(kCheckerImageDataUri) + "\"/>";
+  SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// Renders the same placement through `feImage`, whose smooth sampling is the Mitchell-Netravali
+/// cubic (B = C = 1/3) on both backends. This is the oracle for the `<image>` quality kernel.
+RendererBitmap RenderCheckerFeImage() {
+  const std::string body =
+      R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+              <feImage x="8" y="8" width="48" height="48" href=")svg" +
+      std::string(kCheckerImageDataUri) + R"svg("/>
+            </filter>
+            <rect width="64" height="64" filter="url(#f)"/>)svg";
+  SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+TEST_F(RendererRegressionTests, ImageQualityRenderingUsesMitchellCubicSampling) {
+  const RendererBitmap mitchell = RenderCheckerFeImage();
+  AssertVisibleFixture(mitchell, "image_mitchell_oracle_visible");
+  for (std::string_view imageRendering : {"", "auto", "optimizeQuality", "high-quality"}) {
+    SCOPED_TRACE(testing::Message() << "image-rendering=\"" << imageRendering << "\"");
+    editor::tests::CompareBitmapToBitmap(
+        RenderCheckerImage(imageRendering), mitchell,
+        "image_quality_mitchell_" +
+            std::string(imageRendering.empty() ? "unspecified" : imageRendering),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, ImageSmoothRenderingKeepsBilinearSampling) {
+  ExpectBitmapsDiffer(RenderCheckerImage("smooth"), RenderCheckerFeImage(),
+                      "image_smooth_is_not_mitchell");
+}
+
 TEST_F(RendererRegressionTests, EffectSpanLayoutRunsOncePerTextElement) {
   std::string body =
       R"svg(<defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>

@@ -38,6 +38,7 @@ enum class Case {
   Nearest,
   Linear,
   Pixelated,
+  Cubic,
   Cropped,
   Straight,
   Premultiplied,
@@ -81,6 +82,7 @@ inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
   result.sourceIsPremult = scenario.kind != Case::Straight;
   result.samplingMode = scenario.kind == Case::Nearest     ? 1u
                         : scenario.kind == Case::Pixelated ? 2u
+                        : scenario.kind == Case::Cubic     ? 3u
                                                            : 0u;
   result.pixelatedScale[0] = scenario.width() / 2.0f;
   result.pixelatedScale[1] = scenario.height() / 2.0f;
@@ -100,6 +102,21 @@ inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
     std::copy(src.begin(), src.end(), result.srcRect);
   }
   return result;
+}
+
+/// Mitchell-Netravali cubic filter weight (B = C = 1/3) at signed texel distance \p t.
+inline float MitchellWeight(float t) {
+  constexpr float b = 1.0f / 3.0f, c = 1.0f / 3.0f;
+  const float x = std::abs(t);
+  if (x < 1.0f) {
+    return ((12 - 9 * b - 6 * c) * x * x * x + (-18 + 12 * b + 6 * c) * x * x + (6 - 2 * b)) / 6;
+  }
+  if (x < 2.0f) {
+    return ((-b - 6 * c) * x * x * x + (6 * b + 30 * c) * x * x + (-12 * b - 48 * c) * x +
+            (8 * b + 24 * c)) /
+           6;
+  }
+  return 0.0f;
 }
 
 /// Samples the independently expanded CPU image, with clamp-to-edge addressing.
@@ -126,6 +143,25 @@ inline FloatPixel Sample(const Scenario& scenario, float u, float v) {
   }
   const float x = u * width - 0.5f, y = v * height - 0.5f;
   const int left = int(std::floor(x)), top = int(std::floor(y));
+  if (scenario.kind == Case::Cubic) {
+    for (int row = -1; row <= 2; ++row) {
+      for (int column = -1; column <= 2; ++column) {
+        const Pixel value = texel(left + column, top + row);
+        const float weight =
+            MitchellWeight(x - float(left + column)) * MitchellWeight(y - float(top + row));
+        for (size_t c = 0; c < 4; ++c) {
+          result[c] += value[c] / 255.0f * weight;
+        }
+      }
+    }
+    for (float& component : result) {
+      component = std::clamp(component, 0.0f, 1.0f);
+    }
+    for (size_t c = 0; c < 3; ++c) {
+      result[c] = std::min(result[c], result[3]);
+    }
+    return result;
+  }
   const float fx = x - left, fy = y - top;
   for (int row = 0; row < 2; ++row) {
     for (int column = 0; column < 2; ++column) {
