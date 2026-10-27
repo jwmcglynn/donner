@@ -4099,9 +4099,9 @@ TEST(SidebarStrokePreviewIcons, SvgStrokesRenderDistinctCapsAndJoins) {
   std::array<std::uint64_t, kStrokePreviewIcons.size()> textureKeys;
   for (std::size_t index = 0; index < kStrokePreviewIcons.size(); ++index) {
     const StrokePreviewIcon icon = kStrokePreviewIcons[index];
-    const std::span<const unsigned char> source = StrokePreviewIconSvg(icon);
+    const ResourceLease source = StrokePreviewIconSvg(icon);
     ASSERT_FALSE(source.empty());
-    const std::string_view svg(reinterpret_cast<const char*>(source.data()), source.size());
+    const std::string_view svg = source.text();
     EXPECT_NE(svg.find(kAttributes[index]), std::string_view::npos);
     const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgArtwork(source, 96);
     ASSERT_TRUE(bitmap.has_value());
@@ -4141,7 +4141,7 @@ TEST(SidebarStrokePreviewIcons, WidthPresetSpriteUsesOnePixelPerUserUnitAtActual
 TEST(SidebarStrokePreviewIcons, PrewarmRequestsIncludeEveryStrokeSvg) {
   const std::span<const EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
   for (const StrokePreviewIcon icon : kStrokePreviewIcons) {
-    const std::span<const unsigned char> source = StrokePreviewIconSvg(icon);
+    const ResourceLease source = StrokePreviewIconSvg(icon);
     const bool present =
         std::any_of(requests.begin(), requests.end(), [&](const EmbeddedSvgIconRequest& request) {
           return request.svgBytes.data() == source.data() && request.outputSizePx == 96 &&
