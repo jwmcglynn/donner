@@ -11,7 +11,7 @@ namespace donner::svg {
 /**
  * Curated bundled fonts, sharing one generated WOFF2 catalog on native and Wasm.
  *
- * Native uses compiled compressed spans and stays self-contained. Wasm links only the manifest
+ * Native reads verified compressed installation resources. Wasm links only the manifest
  * and obtains verified encoded bytes from the session store. Enumeration never requests bytes.
  * Each family retains its existing single variable/static file and face-selection behavior.
  */
@@ -31,7 +31,7 @@ public:
   std::vector<uint8_t> loadFamilyData(std::string_view family,
                                       const FontFaceRequest& request) const override;
 
-  /// Session-owned delivery/admission state. Native needs no copied encoded cache.
+  /// Session-owned delivery/admission state.
   std::shared_ptr<CatalogEncodedFontStore> encodedStore() const { return store_; }
 
 private:

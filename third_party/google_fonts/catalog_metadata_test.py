@@ -9,7 +9,7 @@ import unittest
 
 
 class CatalogMetadataTest(unittest.TestCase):
-    def test_metadata_native_payloads_and_web_package_match(self):
+    def test_metadata_external_native_resources_and_web_package_match(self):
         manifest = json.loads(Path(ARGS.manifest).read_text(encoding="utf-8"))
         pins = json.loads(Path(ARGS.pins).read_text(encoding="utf-8"))
         assets = Path(ARGS.assets)
@@ -47,7 +47,7 @@ class CatalogMetadataTest(unittest.TestCase):
                     pin["var"],
                 ]) + ")")
                 self.assertIn(
-                    f'extern const unsigned char {pin["var"]}Data[{len(data)}];', header,
+                    f'inline const PackagedResource {pin["var"]}{{', header,
                 )
                 self.assertIn(pin["family"], notices)
                 self.assertIn(pin["url"], notices)
@@ -57,6 +57,7 @@ class CatalogMetadataTest(unittest.TestCase):
             [line for line in metadata.splitlines() if line.startswith("DONNER_GF_ENTRY(")],
             entries,
         )
+        self.assertNotIn("extern const unsigned char", header)
         self.assertEqual(manifest["encoded_bytes"], total_encoded)
         self.assertLessEqual(total_encoded, 4 * 1024 * 1024)
         self.assertLessEqual(manifest["memory_budget"]["calculated_transient_bytes"], 32 * 1024 * 1024)

@@ -47,6 +47,7 @@ void PublishWasmPinchZoomPolicy(double wheelDeltaPerLnScale) {
 #include "donner/base/FailureSignalHandler.h"
 #endif
 
+#include "donner/base/PackagedResource.h"
 #include "donner/editor/EditorBuildInfo.h"
 #include "donner/editor/EditorShell.h"
 #include "donner/editor/Notice.h"
@@ -345,6 +346,20 @@ void RunWasmEditorFrame(void* userdata, bool forceFrame) {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifndef __EMSCRIPTEN__
+  struct ResourceLifetime {
+    ResourceLifetime() {
+      donner::SetPackagedResourceSession(std::make_shared<donner::PackagedResourceSession>());
+    }
+    ~ResourceLifetime() { donner::SetPackagedResourceSession(nullptr); }
+  } resources;
+#endif
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::cerr << "Cannot start Donner: " << resourceError << "\n";
+    return 1;
+  }
+
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
   // Must precede every other line: `main()` runs on a pthread here, and the
   // first editor `EM_JS` body that touches `window` would otherwise throw

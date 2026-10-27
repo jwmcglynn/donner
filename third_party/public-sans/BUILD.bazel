@@ -1,7 +1,8 @@
-load("//build_defs:embed_resources.bzl", "embed_resources")
+load("//build_defs:packaged_resources.bzl", "packaged_resources")
 
-embed_resources(
+packaged_resources(
     name = "public-sans",
+    group = "fallback-font",
     header_output = "embed_resources/PublicSansFont.h",
     resources = {
         "kPublicSansMediumOtf": "PublicSans-Medium.otf",
@@ -26,12 +27,6 @@ exports_files(
 
 filegroup(
     name = "embedded_header",
-    srcs = [":public-sans_header_gen"],
-    visibility = ["//tools:__pkg__"],
-)
-
-filegroup(
-    name = "embedded_cpp",
-    srcs = [":public-sans_embedded_PublicSans_Medium_otf"],
+    srcs = [":public-sans_resource_gen"],
     visibility = ["//tools:__pkg__"],
 )

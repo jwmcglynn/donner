@@ -1,4 +1,4 @@
-load("//build_defs:embed_resources.bzl", "embed_resources")
+load("//build_defs:packaged_resources.bzl", "packaged_resources")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
@@ -129,8 +129,9 @@ donner_cc_library(
     }),
 )
 
-embed_resources(
+packaged_resources(
     name = "generic_sans_faces",
+    group = "generic-font",
     header_output = "embed_resources/NotoSansGenericFaces.h",
     resources = {
         "kNotoSansBoldTtf": "//third_party/resvg-test-suite:fonts/NotoSans-Bold.ttf",
@@ -141,7 +142,7 @@ embed_resources(
 
 # Concrete font catalog: curated bundled fonts plus platform system fonts. The editor installs
 # this provider on FontManager. Wasm reuses the renderer's existing Public Sans fallback face
-# for generic sans-serif; the larger native-only Noto faces and compiled catalog stay out of Wasm.
+# for generic sans-serif; the larger native-only Noto faces and catalog resources stay out of Wasm.
 donner_cc_library(
     name = "font_catalog",
     srcs = [
@@ -165,7 +166,7 @@ donner_cc_library(
         ],
         "//conditions:default": [],
     }),
-    # The embedded font bytes come from dev-only http_file repos; BCR consumers
+    # Catalog resource inputs come from dev-only http_file repos; BCR consumers
     # skip this target (and, transitively, the editor targets that consume it).
     target_compatible_with = select({
         "//third_party/google_fonts:google_fonts_enabled": [],

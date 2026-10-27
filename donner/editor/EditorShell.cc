@@ -2505,6 +2505,17 @@ void EditorShell::processPendingSampleLoad() {
   if (pendingSampleLoadId_.empty() && !pendingNewDocument_) {
     return;
   }
+  const EditorSample* requestedSample = FindEditorSample(pendingSampleLoadId_);
+  if (requestedSample && !requestedSample->source.request()) {
+    if (requestedSample->source.resource.failed()) {
+      std::fprintf(stderr, "[editor] built-in sample unavailable: %s\n",
+                   pendingSampleLoadId_.c_str());
+      cancelPendingSampleLoad();
+      showSamplePicker_ = true;
+    }
+    return;
+  }
+
   const bool hasDocument = app_.hasDocument();
   std::optional<svg::DocumentWriteAccess> documentAccess =
       hasDocument ? app_.document().document().tryWriteAccess() : std::nullopt;
@@ -6407,6 +6418,12 @@ void EditorShell::ensureSampleThumbnails() {
     publishSampleThumbnailStats();
     return;
   }
+  if (!samples[*next].source.request()) {
+    if (samples[*next].source.resource.failed()) {
+      finishedSamplePreviewIndices_.insert(*next);
+    }
+    return;
+  }
   const auto store = fontCatalog_.encodedStore();
   SampleThumbnailRenderRequest request{
       .key = *next,
@@ -6506,6 +6523,12 @@ void EditorShell::advanceFontPreviewGeneration() {
   }
   std::string family = std::move(pendingFontPreviews_.front());
   pendingFontPreviews_.pop_front();
+  if (!samples[*next].source.request()) {
+    if (samples[*next].source.resource.failed()) {
+      finishedSamplePreviewIndices_.insert(*next);
+    }
+    return;
+  }
   const auto store = fontCatalog_.encodedStore();
   SampleThumbnailRenderRequest request{
       .kind = AuxiliaryPreviewKind::FontFamily,

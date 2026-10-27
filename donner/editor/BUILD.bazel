@@ -14,6 +14,7 @@ graphs via `dev_dependency = True` in `MODULE.bazel`.
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle", "packaged_resources")
 load("//build_defs:editor_build_info.bzl", "donner_editor_build_info")
 load("//build_defs:macos_app_bundle.bzl", "donner_macos_app_bundle")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary", "identical_code_folding_linkopts")
@@ -861,10 +862,8 @@ donner_cc_library(
 )
 
 # Editor-authored SVG icon assets (Donner-rendered through EmbeddedSvgIcon).
-# W6's cursor/icon suite folds these into the shared icon family; see
-# donner/editor/icons/. Keep new editor icons here rather than reusing the
-# third-party Bootstrap set.
-embed_resources(
+# Keep editor-authored icons in the shared family rather than reusing the third-party set.
+packaged_resources(
     name = "editor_icons",
     header_output = "embed_resources/EditorIcons.h",
     resources = {
@@ -954,7 +953,6 @@ donner_cc_library(
     hdrs = ["SidebarPresenter.h"],
     deps = [
         ":attached_numeric_stepper",
-        ":inspector_numeric_input",
         ":attribute_writeback",
         ":command_queue",
         ":disclosure_chevron",
@@ -963,6 +961,7 @@ donner_cc_library(
         ":editor_theme",
         ":embedded_svg_icon",
         ":imgui_headers",
+        ":inspector_numeric_input",
         ":lock_state",
         ":selection_aabb",
         ":stroke_marker_prefabs",
@@ -1497,7 +1496,7 @@ filegroup(
 #exposes `donner::embedded::kEditorNoticeText` as a
 # `std::span<const unsigned char>`.The editor's Help → About dialog
 #displays this.
-embed_resources(
+packaged_resources(
     name = "pan_closed_cursor_svg",
     header_output = "donner/editor/PanClosedCursorSvg.h",
     resources = {
@@ -1505,7 +1504,7 @@ embed_resources(
     },
 )
 
-embed_resources(
+packaged_resources(
     name = "pan_cursor_svg",
     header_output = "donner/editor/PanCursorSvg.h",
     resources = {
@@ -1513,7 +1512,7 @@ embed_resources(
     },
 )
 
-embed_resources(
+packaged_resources(
     name = "pen_cursor_svg",
     header_output = "donner/editor/PenCursorSvg.h",
     resources = {
@@ -1524,7 +1523,7 @@ embed_resources(
     },
 )
 
-embed_resources(
+packaged_resources(
     name = "rotate_cursor_svg",
     header_output = "donner/editor/RotateCursorSvg.h",
     resources = {
@@ -1532,7 +1531,7 @@ embed_resources(
     },
 )
 
-embed_resources(
+packaged_resources(
     name = "select_cursor_svg",
     header_output = "donner/editor/SelectCursorSvg.h",
     resources = {
@@ -1540,7 +1539,7 @@ embed_resources(
     },
 )
 
-embed_resources(
+packaged_resources(
     name = "scale_cursor_svg",
     header_output = "donner/editor/ScaleCursorSvg.h",
     resources = {
@@ -1548,7 +1547,7 @@ embed_resources(
     },
 )
 
-embed_resources(
+packaged_resources(
     name = "path_modify_cursor_svg",
     header_output = "donner/editor/PathModifyCursorSvg.h",
     resources = {
@@ -1556,7 +1555,7 @@ embed_resources(
     },
 )
 
-embed_resources(
+packaged_resources(
     name = "tool_icons_svg",
     header_output = "donner/editor/ToolIconsSvg.h",
     resources = {
@@ -1578,9 +1577,9 @@ embed_resources(
 # Explicit release identity participates in the action key; ordinary builds use local Git.
 donner_editor_build_info(
     name = "editor_build_info_txt",
+    out = "editor_build_info.txt",
     module = "//:MODULE.bazel",
     script = "write_build_info.sh",
-    out = "editor_build_info.txt",
 )
 
 embed_resources(
@@ -1591,12 +1590,25 @@ embed_resources(
     },
 )
 
-embed_resources(
+packaged_resources(
     name = "editor_splash",
+    group = "sample",
     header_output = "donner/editor/EditorSplash.h",
     resources = {
         "kEditorSplashSvg": "//:donner_splash.svg",
         "kEditorGeodeSplashSvg": "//:geode_splash.svg",
+    },
+)
+
+packaged_resources(
+    name = "editor_samples",
+    group = "sample",
+    header_output = "donner/editor/EditorSamples.h",
+    resources = {
+        "kBasicShapesSvg": "art/samples/basic-shapes.svg",
+        "kTextStyleSvg": "art/samples/text-style.svg",
+        "kGradientsClipSvg": "art/samples/gradients-clip.svg",
+        "kAnimationSvg": "art/samples/animation.svg",
     },
 )
 
@@ -1605,8 +1617,10 @@ donner_cc_library(
     srcs = ["EditorSampleCatalog.cc"],
     hdrs = ["EditorSampleCatalog.h"],
     deps = [
+        ":editor_samples",
         ":editor_splash",
         "//donner/base",
+        "//donner/base:packaged_resource",
     ],
 )
 
@@ -1654,6 +1668,7 @@ donner_cc_library(
 donner_cc_binary(
     name = "editor_impl",
     srcs = ["main.cc"],
+    data = [":editor_resource_bundle"],
     linkopts = select({
         "@platforms//os:macos": ["-Wl,-rpath,@executable_path/../Frameworks"],
         "//conditions:default": [],
@@ -1674,6 +1689,7 @@ donner_cc_binary(
         ":tracy_wrapper",
         "//donner/base",
         "//donner/base:failure_signal_handler",
+        "//donner/base:packaged_resource",
         "//donner/editor/gui:editor_window",
     ],
 )
@@ -1704,6 +1720,7 @@ donner_macos_app_bundle(
     binary = ":editor_binary",
     icon = "art/Donner.icns",
     plist = "art/Info.plist",
+    resources = ":editor_resource_bundle",
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -1884,4 +1901,43 @@ filegroup(
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
 
-exports_files(["art/Info.plist", "write_build_info.sh"], visibility = ["//tools:__pkg__"])
+exports_files(
+    [
+        "art/Info.plist",
+        "write_build_info.sh",
+    ],
+    visibility = ["//tools:__pkg__"],
+)
+
+packaged_resource_bundle(
+    name = "editor_web_resource_bundle",
+    resources = [
+        ":editor_icons_resource_files",
+        ":editor_samples_resource_files",
+        ":editor_splash_resource_files",
+        ":pan_closed_cursor_svg_resource_files",
+        ":pan_cursor_svg_resource_files",
+        ":path_modify_cursor_svg_resource_files",
+        ":pen_cursor_svg_resource_files",
+        ":rotate_cursor_svg_resource_files",
+        ":scale_cursor_svg_resource_files",
+        ":select_cursor_svg_resource_files",
+        ":tool_icons_svg_resource_files",
+        "//third_party/bootstrap-icons:bootstrap_icons_resource_files",
+        "//third_party/fira-code:fira-code_resource_files",
+        "//third_party/public-sans:public-sans_resource_files",
+        "//third_party/roboto:roboto_resource_files",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+packaged_resource_bundle(
+    name = "editor_resource_bundle",
+    output_name = "donner-assets",
+    resources = [
+        ":editor_web_resource_bundle",
+        "//donner/svg/resources:generic_sans_faces_resource_files",
+        "//third_party/google_fonts:catalog_resource_files",
+    ],
+    visibility = ["//visibility:public"],
+)

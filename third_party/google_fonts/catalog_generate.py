@@ -343,14 +343,17 @@ def catalog_memory_budget(fonts):
 
 
 def generate(args):
-    """Generate metadata, native sources, notices and the complete web asset tree."""
+    """Generate metadata, external native resources, notices and the complete web asset tree."""
     request, pins = read_catalog_request(args)
 
     assets = Path(args.assets)
     (assets / "fonts").mkdir(parents=True, exist_ok=True)
+    resource_assets = Path(getattr(args, "resource_assets", None) or str(assets) + ".resources")
+    (resource_assets / "assets").mkdir(parents=True, exist_ok=True)
+    resource_records = []
     metadata = ["// Generated catalog metadata. Do not edit."]
     header = [
-        "#pragma once", "/// @file", "", "#include <span>", "",
+        "#pragma once", "/// @file", "", '#include "donner/base/PackagedResource.h"', "",
         "namespace donner::embedded {",
     ]
     manifest = {
@@ -379,12 +382,20 @@ def generate(args):
             manifest["fonts"].append(record)
             metadata.append(metadata_entry(record))
             symbol = font["var"]
-            header.extend([
-                f"extern const unsigned char {symbol}Data[{len(encoded)}];",
-                "/// Encoded WOFF2 bytes in immutable program storage.",
-                f"inline constexpr std::span<const unsigned char> {symbol}({symbol}Data);",
-            ])
-            write_text(request["native_sources"][index], native_source(symbol, encoded))
+            resource = dict(id=symbol, sha256=record["sha256"],
+                            encodedSize=len(encoded), decodedSize=record["decoded_bytes"],
+                            mediaType="font/woff2", group="catalog-font",
+                            path=f"assets/{record['sha256']}.woff2")
+            resource_records.append(resource)
+            (resource_assets / resource["path"]).write_bytes(encoded)
+            values = [json.dumps(resource[key]) for key in
+                      ("id", "sha256", "encodedSize", "decodedSize", "mediaType", "group", "path")]
+            values.append(json.dumps("_main/third_party/google_fonts/catalog_gen.resources"))
+            header.append(f"inline const PackagedResource {symbol}{{" + ", ".join(values) + "};")
+            write_text(request["native_sources"][index],
+                       '#include "third_party/google_fonts/embed_resources/GoogleFontsData.h"\n')
+    write_text(resource_assets / "manifest.json",
+               json.dumps(dict(schemaVersion=1, assets=resource_records), sort_keys=True, indent=2) + "\n")
     header.extend(["}  // namespace donner::embedded", ""])
     manifest["encoded_bytes"] = total_encoded
     manifest["memory_budget"] = catalog_memory_budget(manifest["fonts"])
@@ -405,6 +416,7 @@ def main():
         "assets", "metadata", "header", "manifest", "notices",
     ):
         parser.add_argument("--" + name, required=True)
+    parser.add_argument("--resource-assets")
     generate(parser.parse_args())
 
 

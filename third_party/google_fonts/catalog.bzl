@@ -1,9 +1,10 @@
-"""Generate one WOFF2 catalog for native embedding and deferred web delivery."""
+"""Generate one WOFF2 catalog for installed native resources and deferred web delivery."""
 
 load(":fonts.bzl", "GOOGLE_FONTS")
 
 def _catalog_impl(ctx):
     assets = ctx.actions.declare_directory(ctx.label.name + ".assets")
+    resource_assets = ctx.actions.declare_directory(ctx.label.name + ".resources")
     metadata = ctx.actions.declare_file("embed_resources/GoogleFontsCatalog.inc")
     header = ctx.actions.declare_file("embed_resources/GoogleFontsData.h")
     manifest = ctx.actions.declare_file("catalog-fonts.json")
@@ -32,6 +33,8 @@ def _catalog_impl(ctx):
         ctx.file.module.path,
         "--assets",
         assets.path,
+        "--resource-assets",
+        resource_assets.path,
         "--metadata",
         metadata.path,
         "--header",
@@ -54,7 +57,7 @@ def _catalog_impl(ctx):
             ],
         ),
         tools = [ctx.attr.encoder[DefaultInfo].files_to_run],
-        outputs = native_sources + [assets, metadata, header, manifest, notices],
+        outputs = native_sources + [assets, resource_assets, metadata, header, manifest, notices],
         mnemonic = "CatalogWoff2",
         progress_message = "Encoding pinned catalog fonts as WOFF2",
     )
@@ -62,6 +65,7 @@ def _catalog_impl(ctx):
         DefaultInfo(files = depset([assets])),
         OutputGroupInfo(
             metadata = depset([metadata]),
+            resources = depset([resource_assets]),
             native_header = depset([header]),
             native_sources = depset(native_sources),
             manifest = depset([manifest]),
