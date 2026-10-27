@@ -1,4 +1,5 @@
 import { installOwnerEventTimerHold, readOwnerEventTimerHold, releaseOwnerEventTimerHold } from "./event-presentation-delay.mjs";
+import { kCarouselSamples } from "./carousel-samples.mjs";
 import { completedResultHandoff } from "./completed-result-handoff.mjs";
 import { packageHashes } from "./package-identity.mjs";
 import {
@@ -2089,37 +2090,29 @@ async function armPipelineCompileFault(page: Page) {
   });
 }
 
+const kBasicShapesTile = kCarouselSamples.find((sample) => sample.id === "basic-shapes")!;
+const kDonnerSplashTile = kCarouselSamples.find((sample) => sample.id === "donner-splash")!;
+
 for (
   const sample of [
-    { id: "donner-splash", name: "Donner Splash", xFraction: 0.24, y: 282 },
-    { id: "geode-splash", name: "Geode Splash", xFraction: 0.5, y: 282 },
-    { id: "basic-shapes", name: "Basic Shapes", xFraction: 0.76, y: 282 },
-    { id: "text-style", name: "Text and Style", xFraction: 0.24, y: 390 },
-    { id: "gradients-clip", name: "Gradients and Clip", xFraction: 0.5, y: 390 },
-    { id: "animation", name: "Animation", xFraction: 0.76, y: 390 },
+    ...kCarouselSamples,
     {
-      id: "basic-shapes",
+      ...kBasicShapesTile,
       name: "Basic Shapes with withheld animation frames",
-      xFraction: 0.76,
-      y: 282,
       holdWorkerRaf: true,
     },
     {
-      id: "basic-shapes",
+      ...kBasicShapesTile,
       name: "Basic Shapes with delayed presentation control",
-      xFraction: 0.76,
-      y: 282,
       holdWorkerRaf: true,
       delayPresentation: true,
     },
     {
-      id: "donner-splash",
+      ...kDonnerSplashTile,
       name: "Donner Splash after delayed pipeline compiles",
-      xFraction: 0.24,
-      y: 282,
       delayPipelineCompiles: true,
     },
-  ] as const
+  ]
 ) {
   test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page, browserName }, testInfo) => {
     const delayedControl = "delayPresentation" in sample;
@@ -2167,7 +2160,7 @@ for (
     let pipelineCompileFault: ReturnType<typeof readPipelineCompileFault> = null;
     if (compileFaultControl) {
       // The fault must have reached the GPU owner and still held its compiles when the wait began,
-      // or this case would not show that the wait is what keeps the handoff nominal.
+      // or this case would not show that the click waited for them.
       pipelineCompileFault = await readOwnerPipelineCompileFault(page);
       expect(pipelineCompileFault?.compilesDelayed ?? 0, "the GPU owner's compiles were delayed")
         .toBeGreaterThan(0);
@@ -2261,8 +2254,10 @@ for (
             { message: "the completed result must request a held event task" }).toBeGreaterThan(0);
           await page.waitForTimeout(1500);
         } finally {
-          // Page clock just before the release: the held event frame cannot present before it.
-          const releaseRequestedAtMs = await page.evaluate(() => performance.now());
+          // Page clock just before the release: the held event frame cannot present before it. A
+          // failed read must not skip the release below.
+          const releaseRequestedAtMs = await page.evaluate(() => performance.now())
+            .catch(() => Number.NaN);
           const released = await owner.evaluate(releaseOwnerEventTimerHold);
           presentationFault = { delayMs: 1500, releaseRequestedAtMs, ...released };
         }

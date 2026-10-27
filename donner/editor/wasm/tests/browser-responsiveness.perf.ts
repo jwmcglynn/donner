@@ -1,3 +1,4 @@
+import { kCarouselSamples, kCarouselViewport } from "./carousel-samples.mjs";
 import { completedResultHandoff } from "./completed-result-handoff.mjs";
 import { packageHashes } from "./package-identity.mjs";
 import { sumPipelineCompilesPending } from "./pipeline-compile-readiness.mjs";
@@ -1706,17 +1707,8 @@ test("first sample click after boot", async ({ page, browser }, info) => {
 // DONNER_CAROUSEL_CANVAS_GPU_DELAY=<everyFrames>:<iterations> queues fixed GPU work after the first
 // canvas write of every Nth frame from the click on, as the negative control of this gate.
 test.describe("nominal completed-result handoff", () => {
-  test.use({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
-  for (
-    const sample of [
-      { id: "donner-splash", xFraction: 0.24, y: 282 },
-      { id: "geode-splash", xFraction: 0.5, y: 282 },
-      { id: "basic-shapes", xFraction: 0.76, y: 282 },
-      { id: "text-style", xFraction: 0.24, y: 390 },
-      { id: "gradients-clip", xFraction: 0.5, y: 390 },
-      { id: "animation", xFraction: 0.76, y: 390 },
-    ] as const
-  ) {
+  test.use({ viewport: kCarouselViewport, deviceScaleFactor: 1 });
+  for (const sample of kCarouselSamples) {
     test(`carousel ${sample.id}`, async ({ page, browserName }, info) => {
       test.skip(browserName !== "chromium", "the bound is calibrated for Chromium");
       const failures: string[] = [];
@@ -1754,37 +1746,43 @@ test.describe("nominal completed-result handoff", () => {
       const canvas = await page.locator("canvas#canvas").boundingBox();
       expect(canvas).not.toBeNull();
       if (canvas === null) throw new Error("missing editor canvas");
-      const before = await page.evaluate(() => ({
-        results: (window as Diagnostics).__donnerWorkerStats?.completedResults ?? 0,
-        frames: (window as Diagnostics & { __donnerMainLoopRenderedFrames?: number })
-          .__donnerMainLoopRenderedFrames ?? 0,
-      }));
-      await page.mouse.click(canvas.x + canvas.width * sample.xFraction, canvas.y + sample.y);
-      await expect(page.locator("canvas#canvas")).toHaveAttribute(
-        "data-active-sample-id",
-        sample.id,
-        { timeout: kStallGuardMs },
-      );
+      let injected: Awaited<ReturnType<NonNullable<typeof gpuDelay>["finish"]>> | undefined;
       let worker: Diagnostics["__donnerWorkerStats"];
-      await expect.poll(async () => {
-        const state = await page.evaluate(() => ({
+      try {
+        const before = await page.evaluate(() => ({
+          results: (window as Diagnostics).__donnerWorkerStats?.completedResults ?? 0,
           frames: (window as Diagnostics & { __donnerMainLoopRenderedFrames?: number })
             .__donnerMainLoopRenderedFrames ?? 0,
-          worker: (window as Diagnostics).__donnerWorkerStats,
-          presentation: (window as Diagnostics).__donnerPresentedDocumentStats,
         }));
-        worker = state.worker;
-        return (worker?.completedResults ?? 0) > before.results && state.frames > before.frames
-          && worker?.resultFramePresented === true
-          && state.presentation?.documentGeneration === worker.documentGeneration
-          && state.presentation?.frameVersion === worker.frameVersion
-          && Number.isFinite(worker?.resultFrameCompletedAtMs);
-      }, {
-        timeout: kStallGuardMs,
-        intervals: [8, 16, 25, 50],
-        message: "the clicked document must reach the canvas",
-      }).toBe(true);
-      const injected = await gpuDelay?.finish();
+        await page.mouse.click(canvas.x + canvas.width * sample.xFraction, canvas.y + sample.y);
+        await expect(page.locator("canvas#canvas")).toHaveAttribute(
+          "data-active-sample-id",
+          sample.id,
+          { timeout: kStallGuardMs },
+        );
+        await expect.poll(async () => {
+          const state = await page.evaluate(() => ({
+            frames: (window as Diagnostics & { __donnerMainLoopRenderedFrames?: number })
+              .__donnerMainLoopRenderedFrames ?? 0,
+            worker: (window as Diagnostics).__donnerWorkerStats,
+            presentation: (window as Diagnostics).__donnerPresentedDocumentStats,
+          }));
+          worker = state.worker;
+          return (worker?.completedResults ?? 0) > before.results && state.frames > before.frames
+            && worker?.resultFramePresented === true
+            && state.presentation?.documentGeneration === worker.documentGeneration
+            && state.presentation?.frameVersion === worker.frameVersion
+            && Number.isFinite(worker?.resultFrameCompletedAtMs);
+        }, {
+          timeout: kStallGuardMs,
+          intervals: [8, 16, 25, 50],
+          message: "the clicked document must reach the canvas",
+        }).toBe(true);
+      } finally {
+        // Retain what was injected even when the click never presented.
+        injected = await gpuDelay?.finish();
+        if (injected) console.log(`carousel-canvas-gpu-delay ${JSON.stringify(injected)}`);
+      }
       const handoff = completedResultHandoff(
         worker!.publishedAtMs - worker!.pollDelayMs,
         worker!.resultFrameCompletedAtMs!,
