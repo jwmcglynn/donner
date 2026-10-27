@@ -42,7 +42,11 @@ If the existing public site predates `docs-site.json`, first preserve its exact 
 artifact as an explicitly approved legacy rollback seed. Obtain the successful main docs build's
 run/attempt, Pages artifact ID, GitHub ZIP digest and inner `artifact.tar` digest. The seed checks
 its source-run metadata, module version, safe archive and exact live landing-page bytes. It is
-allowed only before `docs-snapshots` exists and does not deploy anything.
+allowed only before `docs-snapshots` exists and does not deploy anything. The pre-marker
+legacy backup remains an explicit exception: its original retained GitHub artifact is independently
+reverified before the first migration uses it. If that source expires before migration, stop and
+review a new bootstrap plan. Complete modern compositions use stored signed proofs and do not
+depend on Actions retention.
 
 Dispatch `deploy_docs.yaml` on `main`, `selection: seed`, with this JSON in `request`:
 

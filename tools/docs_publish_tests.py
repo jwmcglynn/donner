@@ -224,6 +224,23 @@ class DocsPublishTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "approved content address"):
             publish._previous(api, "a" * 40, "c" * 64, self.root)
 
+    def test_forged_legacy_backup_cannot_change_the_independent_origin_zip(self):
+        import zipfile
+        import shutil
+        authentic = self.root / "authentic.zip"
+        with zipfile.ZipFile(authentic, "w") as archive:
+            archive.writestr("artifact.tar", b"authentic legacy source")
+        forged = self.root / "forged.tar"; forged.write_bytes(b"forged assets with the same index")
+        selected = {"artifact_id": 7, "run_id": 123, "attempt": 1,
+                    "artifact_digest": "sha256:" + publish.bcr_source.digest(authentic),
+                    "archive_sha256": publish.bcr_source.digest(forged)}
+        legacy = {"selection": selected, "archive_sha256": selected["archive_sha256"]}
+        with mock.patch.object(publish, "github_json", return_value={}), \
+             mock.patch.object(publish.pages_artifact, "verify_metadata"), \
+             mock.patch.object(publish, "download", side_effect=lambda number, path: shutil.copyfile(authentic, path)), \
+             self.assertRaises(ValueError):
+            publish._verify_legacy_origin(legacy, forged, self.root / "origin")
+
     def test_pages_health_checks_detect_changed_version_index(self):
         marker = {"manifest_sha256": "a" * 64}
         with mock.patch.object(publish, "live_marker", return_value=marker), \

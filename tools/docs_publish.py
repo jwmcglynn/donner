@@ -153,6 +153,20 @@ def require_preserved_releases(manifest: dict, releases: dict) -> None:
                      "snapshot index changed an existing release")
 
 
+def _verify_legacy_origin(legacy: dict, archive: Path, work: Path) -> None:
+    selected = legacy["selection"]
+    site.require(selected["archive_sha256"] == legacy["archive_sha256"] == bcr_source.digest(archive),
+                 "legacy archive differs from its approved source")
+    metadata = github_json(f"{store.REPO}/actions/artifacts/{selected['artifact_id']}")
+    run = github_json(f"{store.REPO}/actions/runs/{selected['run_id']}/attempts/{selected['attempt']}")
+    pages_artifact.verify_metadata(metadata, run, selected)
+    site.empty(work)
+    candidate._download_checked(selected["artifact_id"], selected["artifact_digest"].removeprefix("sha256:"),
+                                work / "origin.zip", download, "legacy origin")
+    candidate._extract_verified(work / "origin.zip", {"artifact.tar": selected["archive_sha256"]},
+                                work / "origin")
+
+
 def _verify_current_roster(api, snapshot, state, work):
     composition_id = state["current"]
     if composition_id is None:
@@ -166,6 +180,7 @@ def _verify_current_roster(api, snapshot, state, work):
     if not (work / "current-site/docs-site.json").exists():
         legacy = json.loads(api.file(snapshot, prefix + "legacy.json"))
         site.require(legacy["archive_sha256"] == composition_id, "legacy content address differs")
+        _verify_legacy_origin(legacy, archive, work / "current-origin")
         return
     record_bytes = api.file(snapshot, prefix + "composition.json")
     path = work / "current-composition.json"
@@ -370,6 +385,7 @@ def _previous(api, snapshot: str, prior: str, work: Path) -> tuple[dict, dict]:
         marker = site.verify_site(work / "previous")
         return marker, {"kind": "composition", "marker": marker}
     site.require(legacy["archive_sha256"] == prior, "legacy backup identity changed")
+    _verify_legacy_origin(legacy, previous / "artifact.tar", work / "prior-origin")
     actual = bcr_source.digest(work / "previous/index.html")
     site.require(actual == legacy["index_sha256"], "legacy backup index differs")
     return {}, {"kind": "legacy", "index_sha256": actual}
