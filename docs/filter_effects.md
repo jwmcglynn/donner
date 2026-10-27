@@ -162,6 +162,10 @@ Shorthand functions map to equivalent filter graph nodes internally.
 
 - **Resource exhaustion:** Filter region size is bounded (4096px expansion limit). Extreme blur
   radii and convolution kernels are capped.
+- **Primitive count:** A filter graph holds at most 32 primitives, counting every stage of a
+  `filter` property together (each `url()` filter's primitives plus shorthand functions). A
+  filter over the limit is never truncated: it fails closed, the element it applies to is not
+  rendered, and independent content still renders.
 - **`feImage` fetching:** Same-document fragment references use a recursion guard.
   External `href` follows the existing resource loading policy.
 - **`feDisplacementMap`:** Cross-origin `in2` produces transparent black per spec.

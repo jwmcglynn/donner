@@ -374,13 +374,6 @@ std::vector<EntityHandle> getInheritanceChain(EntityHandle handle, ParseWarningS
   return inheritanceChain;
 }
 
-Entity NextFilterChild(Registry& registry, Entity current, std::size_t retainedNodeCount) {
-  if (retainedNodeCount >= kMaximumFilterGraphNodes) {
-    return entt::null;
-  }
-  return registry.get<donner::components::TreeComponent>(current).nextSibling();
-}
-
 void AppendColorMatrixNode(FilterGraph& graph, const FEColorMatrixComponent& component,
                            const FilterPrimitiveComponent& attributes,
                            std::optional<ColorInterpolationFilters> colorInterpolation) {
@@ -828,7 +821,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
   const donner::components::TreeComponent& tree =
       primitiveSource.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
-       cur = NextFilterChild(registry, cur, filterGraph.nodes.size())) {
+       cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
     const auto* primitive = ActiveFilterComponent<FilterPrimitiveComponent>(registry, cur);
     if (!primitive) {
       continue;
@@ -842,6 +835,14 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
     AppendPrimitiveNode({registry, cur, filterGraph, effectChain, *primitive, primitiveCIF,
                          computedBudget, warningSink});
     AttachAnimatedRegion(registry, cur, filterGraph, previousNodeCount);
+    if (filterGraph.nodes.size() > kMaximumFilterGraphNodes) {
+      // Truncating would apply a different filter than the document describes, so the whole
+      // filter fails closed and the element referencing it is not rendered.
+      warningSink.add(
+          ParseDiagnostic::Warning("Filter primitive limit exceeded", FileOffset::Offset(0)));
+      RemoveComputedFilter(handle);
+      return;
+    }
   }
 
   StoreComputedFilter(handle, computedBudget, std::move(effectChain), std::move(filterGraph),
