@@ -9,6 +9,16 @@ from packaged_resources import generate, merge, resource_record
 
 
 class PackagedResourcesTest(unittest.TestCase):
+    def test_canonical_serialization_matches_compiled_manifest_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "fixture.svg"
+            source.write_bytes(b"abc")
+            generate(dict(group="sample", runfilesRoot="unused", resources=[
+                dict(id="kFixture", source=str(source))]), root / "Fixture.h", root / "set")
+            expected = Path(__file__).with_name("testdata") / "packaged-resource-manifest.json"
+            self.assertEqual((root / "set/manifest.json").read_bytes(), expected.read_bytes())
+
     def test_exact_payload_metadata_and_reuse_across_code_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -367,6 +367,14 @@ py_test(
         "packaged_resources.py",
         "packaged_resources_test.py",
     ],
+    data = [":packaged_resource_manifest_fixture"],
     imports = ["."],
     main = "packaged_resources_test.py",
+)
+
+filegroup(
+    name = "packaged_resource_manifest_fixture",
+    testonly = True,
+    srcs = ["testdata/packaged-resource-manifest.json"],
+    visibility = ["//donner/base:__pkg__"],
 )

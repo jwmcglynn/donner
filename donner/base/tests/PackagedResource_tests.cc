@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/tests/Runfiles.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -83,6 +84,15 @@ TEST(PackagedResource, InvalidDeferredCompletionEndsPendingAndAllowsExplicitRetr
   EXPECT_EQ(session.request(kFixture, [&] { ++dispatches; }), true);
   EXPECT_EQ(dispatches, 2u);
   session.fail(kFixture);
+}
+
+TEST(PackagedResource, CanonicalSerializationMatchesGeneratorFixture) {
+  std::ifstream stream(
+      Runfiles::instance().Rlocation("build_defs/testdata/packaged-resource-manifest.json"));
+  ASSERT_EQ(stream.is_open(), true);
+  const std::string expected{std::istreambuf_iterator<char>(stream),
+                             std::istreambuf_iterator<char>()};
+  EXPECT_EQ(DonnerPackagedResourceManifest(), expected);
 }
 
 TEST(PackagedResource, HashKnownVectorsAndBlockBoundaries) {
