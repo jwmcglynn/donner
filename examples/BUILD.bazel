@@ -1,7 +1,57 @@
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:native_binary.bzl", "native_test")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
+load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_multi_transitioned_test", "identical_code_folding_linkopts")
 load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
+
+config_setting(
+    name = "native_macos",
+    constraint_values = ["@platforms//os:macos"],
+)
+
+config_setting(
+    name = "native_linux",
+    constraint_values = ["@platforms//os:linux"],
+)
+
+selects.config_setting_group(
+    name = "native_platform",
+    match_any = [
+        ":native_macos",
+        ":native_linux",
+    ],
+)
+
+selects.config_setting_group(
+    name = "native_text_enabled",
+    match_all = [
+        ":native_platform",
+        "//donner/svg/renderer:text_enabled",
+    ],
+)
+
+# These examples render supplied SVGs or their own text; shape-only and DOM demos need no fonts.
+_NATIVE_TEXT_EXAMPLES = [
+    "svg_to_png",
+    "svg_text_interaction",
+    "svg_viewer",
+    "geode_embed",
+]
+
+[
+    packaged_resource_bundle(
+        name = name + "_resources",
+        output_name = name + ".assets",
+        resources = select({
+            ":native_text_enabled": ["//third_party/public-sans:public-sans_resource_files"],
+            "//conditions:default": [],
+        }),
+    )
+    for name in _NATIVE_TEXT_EXAMPLES
+]
 
 donner_cc_binary(
     name = "custom_css_parser",
@@ -16,6 +66,14 @@ donner_cc_binary(
 donner_cc_binary(
     name = "svg_to_png",
     srcs = ["svg_to_png.cc"],
+    data = select({
+        ":native_text_enabled": [":svg_to_png_resources"],
+        "//conditions:default": [],
+    }),
+    defines = select({
+        ":native_text_enabled": ["DONNER_EXAMPLE_NATIVE_TEXT"],
+        "//conditions:default": [],
+    }),
     linkopts = identical_code_folding_linkopts(),
     tags = [
         "codeql_default",
@@ -23,7 +81,10 @@ donner_cc_binary(
     ],
     # The shipped-configuration size budget measures this tool as the GPU command-line product.
     visibility = ["//tools/ci:__pkg__"],
-    deps = [
+    deps = select({
+        ":native_text_enabled": ["//donner/base:packaged_resource"],
+        "//conditions:default": [],
+    }) + [
         "//donner/base",
         "@donner",
     ],
@@ -67,7 +128,18 @@ donner_cc_binary(
 donner_cc_binary(
     name = "svg_text_interaction",
     srcs = ["svg_text_interaction.cc"],
-    deps = [
+    data = select({
+        ":native_text_enabled": [":svg_text_interaction_resources"],
+        "//conditions:default": [],
+    }),
+    defines = select({
+        ":native_text_enabled": ["DONNER_EXAMPLE_NATIVE_TEXT"],
+        "//conditions:default": [],
+    }),
+    deps = select({
+        ":native_text_enabled": ["//donner/base:packaged_resource"],
+        "//conditions:default": [],
+    }) + [
         "@donner",
     ],
 )
@@ -150,13 +222,24 @@ wasm_cc_binary(
 donner_cc_binary(
     name = "svg_viewer",
     srcs = ["svg_viewer.cc"],
+    data = select({
+        ":native_text_enabled": [":svg_viewer_resources"],
+        "//conditions:default": [],
+    }),
+    defines = select({
+        ":native_text_enabled": ["DONNER_EXAMPLE_NATIVE_TEXT"],
+        "//conditions:default": [],
+    }),
     tags = ["codeql_default"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = [
+    deps = select({
+        ":native_text_enabled": ["//donner/base:packaged_resource"],
+        "//conditions:default": [],
+    }) + [
         "//:donner",
         "//donner/base",
         # The viewer is intentionally minimal: donner core for the DOM,
@@ -237,6 +320,14 @@ cc_library(
 donner_cc_binary(
     name = "geode_embed",
     srcs = ["geode_embed.cc"],
+    data = select({
+        ":native_text_enabled": [":geode_embed_resources"],
+        "//conditions:default": [],
+    }),
+    defines = select({
+        ":native_text_enabled": ["DONNER_EXAMPLE_NATIVE_TEXT"],
+        "//conditions:default": [],
+    }),
     tags = ["codeql_geode"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
@@ -246,7 +337,10 @@ donner_cc_binary(
         "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = [
+    deps = select({
+        ":native_text_enabled": ["//donner/base:packaged_resource"],
+        "//conditions:default": [],
+    }) + [
         ":geode_embed_surface",
         "//:donner",
         "//donner/base",
@@ -308,3 +402,113 @@ exports_files(
     ["svg_viewer_test.mjs"],
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
+
+# Configured audits include data/resource edges, so a no-text product cannot carry font payloads.
+[
+    configured_dependency_audit_test(
+        name = name + "_" + tier + "_resources_test",
+        forbidden = [
+            "//examples:" + name + "_resources",
+            "//third_party/public-sans:public-sans_resource_files",
+        ] if tier == "none" else [],
+        required = ["//examples:" + name] + ([
+            "//examples:" + name + "_resources",
+            "//third_party/public-sans:public-sans_resource_files",
+        ] if tier == "basic" else []),
+        target = "//examples:" + name,
+        text_configuration = tier,
+    )
+    for name in [
+        "svg_to_png",
+        "svg_text_interaction",
+        "svg_viewer",
+    ]
+    for tier in [
+        "none",
+        "basic",
+    ]
+]
+
+py_test(
+    name = "native_resource_delivery_tests_impl",
+    size = "small",
+    srcs = ["native_resource_delivery_tests.py"],
+    data = [
+        ":svg_text_interaction",
+        ":svg_text_interaction_resources",
+    ],
+    tags = ["manual"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+donner_multi_transitioned_test(
+    name = "native_resource_delivery_tests",
+    dep = ":native_resource_delivery_tests_impl",
+    renderer_backend = "tiny_skia",
+    target_compatible_with = select({
+        ":native_platform": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    text = "true",
+    text_full = "false",
+)
+
+py_test(
+    name = "native_no_text_resource_delivery_tests_impl",
+    size = "small",
+    srcs = [
+        "native_no_text_resource_delivery_tests.py",
+        "native_resource_delivery_tests.py",
+    ],
+    data = [":svg_text_interaction"],
+    main = "native_no_text_resource_delivery_tests.py",
+    tags = ["manual"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+donner_multi_transitioned_test(
+    name = "native_no_text_resource_delivery_tests",
+    dep = ":native_no_text_resource_delivery_tests_impl",
+    renderer_backend = "tiny_skia",
+    target_compatible_with = select({
+        ":native_platform": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    text = "false",
+    text_full = "false",
+)
+
+[
+    configured_dependency_audit_test(
+        name = "geode_embed_" + tier + "_resources_impl",
+        forbidden = [
+            "//examples:geode_embed_resources",
+            "//third_party/public-sans:public-sans_resource_files",
+        ] if tier == "none" else [],
+        required = ["//examples:geode_embed"] + ([
+            "//examples:geode_embed_resources",
+            "//third_party/public-sans:public-sans_resource_files",
+        ] if tier == "basic" else []),
+        tags = ["manual"],
+        target = "//examples:geode_embed",
+        text_configuration = tier,
+    )
+    for tier in [
+        "none",
+        "basic",
+    ]
+]
+
+[
+    donner_multi_transitioned_test(
+        name = "geode_embed_" + tier + "_resources_test",
+        dep = ":geode_embed_" + tier + "_resources_impl",
+        renderer_backend = "geode",
+        text = "true" if tier == "basic" else "false",
+        text_full = "false",
+    )
+    for tier in [
+        "none",
+        "basic",
+    ]
+]

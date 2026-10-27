@@ -49,7 +49,10 @@ import sys
 # matches `/`.
 RELEASE_PATHS = (
     "LICENSE", "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion", ".bazelrc", ".bcr/*",
-    "examples/bazel_consumer/*", "third_party/licenses/*", "third_party/bazel/*",
+    "examples/bazel_consumer/*", "examples/BUILD.bazel", "examples/svg_to_png.cc",
+    "examples/svg_text_interaction.cc", "examples/svg_viewer.cc", "examples/geode_embed.cc",
+    "examples/native_resource_delivery_tests.py", "examples/native_no_text_resource_delivery_tests.py",
+    "third_party/licenses/*", "third_party/bazel/*",
     "third_party/BUILD*", "third_party/*.BUILD", "third_party/*.bzl",
     "third_party/patches/*", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
     "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/native_delivery.py", "tools/notice*",

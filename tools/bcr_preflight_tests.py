@@ -352,6 +352,21 @@ class BcrPreflightTest(unittest.TestCase):
                 self.assertEqual(output, expected)
         self.assertIn(b"Full preflight matrix selected by .bcr/\xfe.yml\n", result.stdout)
 
+    def test_native_example_delivery_selects_full_scope_with_negative_controls(self):
+        positive = ["examples/BUILD.bazel", "examples/svg_to_png.cc",
+                    "examples/svg_text_interaction.cc", "examples/svg_viewer.cc",
+                    "examples/geode_embed.cc", "examples/native_resource_delivery_tests.py",
+                    "examples/native_no_text_resource_delivery_tests.py"]
+        negative = ["examples/svg_tree_interaction.cc", "examples/svg_quickstart.cc",
+                    "examples/README.md", "examples/svg_viewer.cc.orig"]
+        for path, expected in [(path, True) for path in positive] + [
+                (path, False) for path in negative]:
+            with self.subTest(path=path):
+                shutil.rmtree(self.work / "repo", ignore_errors=True)
+                result, output = self._scope_with_changed_paths([path.encode()])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, "full_matrix=" + str(expected).lower() + "\n")
+
     def test_release_paths_match_like_shell_case_patterns(self):
         # `*` crosses directories, as in the shell `case` the workflow used.
         for path in ("tools/bcr_preflight.py", "tools/native_delivery.py", ".bcr/nested/presubmit.yml",

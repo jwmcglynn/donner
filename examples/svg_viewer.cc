@@ -32,6 +32,9 @@
 #include "donner/base/FileUtils.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#ifdef DONNER_EXAMPLE_NATIVE_TEXT
+#include "donner/base/PackagedResource.h"
+#endif
 #include "donner/base/TerminalEscape.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/xml/XMLNode.h"
@@ -67,6 +70,13 @@ void GlfwErrorCallback(int error, const char* description) {
 }
 
 std::string LoadFile(const std::string& filename) {
+#ifdef DONNER_EXAMPLE_NATIVE_TEXT
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::cerr << "Packaged resources unavailable: " << resourceError << "\n";
+    return {};
+  }
+#endif
   auto result =
       donner::ReadFileBounded(filename, donner::svg::parser::SVGParser::kDefaultMaximumInputSize);
   if (const auto* contents = std::get_if<std::string>(&result)) {
@@ -287,7 +297,7 @@ int main(int argc, char** argv) {
   state.loadFromString(initialSource);
 
   donner::editor::TextEditor textEditor;
-  textEditor.setLanguageDefinition(donner::editor::TextEditor::LanguageDefinition::SVG());
+  textEditor.setSvgLanguageDefinition();
   textEditor.setText(initialSource);
 
   // Track the current source-pane error marker so we only push into

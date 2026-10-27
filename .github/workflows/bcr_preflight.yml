@@ -26,6 +26,13 @@ on:
       - config/**
       - donner/**
       - examples/bazel_consumer/**
+      - examples/BUILD.bazel
+      - examples/svg_to_png.cc
+      - examples/svg_text_interaction.cc
+      - examples/svg_viewer.cc
+      - examples/geode_embed.cc
+      - examples/native_resource_delivery_tests.py
+      - examples/native_no_text_resource_delivery_tests.py
       - third_party/**
       - tools/BUILD.bazel
       - tools/bcr_*.py

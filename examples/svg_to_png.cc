@@ -19,6 +19,9 @@
 
 #include "donner/base/FileUtils.h"
 #include "donner/base/ParseWarningSink.h"
+#ifdef DONNER_EXAMPLE_NATIVE_TEXT
+#include "donner/base/PackagedResource.h"
+#endif
 #include "donner/base/TerminalEscape.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -42,6 +45,14 @@ int main(int argc, char* argv[]) {
     std::cerr << "USAGE: svg_to_png <filename>\n";
     return 1;
   }
+
+#ifdef DONNER_EXAMPLE_NATIVE_TEXT
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::cerr << "Packaged resources unavailable: " << resourceError << "\n";
+    return 1;
+  }
+#endif
 
   //! [load_file]
   auto fileResult = ReadFileBounded(argv[1], SVGParser::kDefaultMaximumInputSize);
