@@ -44,6 +44,12 @@ export const kMinHeldScreenshotMs = 250;
 export const kHeldRoundTripReserveMs = 500;
 
 /**
+ * Longest the gate waits for the canvas owner to release a hold. A release that does not answer
+ * fails the capture instead of leaving the app's completions held without notice.
+ */
+export const kHoldReleaseBoundMs = 1000;
+
+/**
  * Race \p work against \p untilMs on \p now's clock; null when the bound passes first. A rejection
  * of abandoned work is ignored, since it can arrive after the caller has moved on.
  * @template T
@@ -111,7 +117,7 @@ export async function captureQuiescentCanvas(probe, capture, options) {
 
   // One pass: settle, screenshot, compare activity. Its outcome is "accepted", "activity" (a
   // canvas frame arrived meanwhile), or the stage that ran out of time: "settle" or "screenshot".
-  const pass = async (record, settleUntilMs, captureUntilMs, minCaptureMs) => {
+  const pass = async (record, settleUntilMs, captureUntilMs, minCaptureMs, activityUntilMs) => {
     record.startedEpochMs = Date.now();
     passes.push(record);
     let settled;
@@ -139,12 +145,29 @@ export async function captureQuiescentCanvas(probe, capture, options) {
     }
     record.screenshotFinishedEpochMs = Date.now();
     if (timedOut(result)) return { outcome: "screenshot" };
-    const after = await probe.activity();
+    // Bounded like the rest of the pass: an owner that stops answering ends this hold, and a read
+    // that answers only after the bound is never used to accept the screenshot.
+    const after = await raceUntil(probe.activity(), activityUntilMs, now);
+    if (after === null) {
+      record.activityUnanswered = true;
+      return { outcome: "settle" };
+    }
     record.after = after;
     if (after.canvasSubmits !== settled.canvasSubmits || after.frames !== settled.frames) {
       return { outcome: "activity" };
     }
     return { outcome: "accepted", result };
+  };
+
+  const release = async (hold) => {
+    const released = await raceUntil(
+      hold.release().then(() => true),
+      now() + kHoldReleaseBoundMs,
+      now,
+    );
+    if (released === null) {
+      throw new Error("the canvas owner did not release the capture's completion hold");
+    }
   };
 
   let unheld = false;
@@ -155,7 +178,7 @@ export async function captureQuiescentCanvas(probe, capture, options) {
       // The previous held screenshot outlasted the hold. Retake it without one; a canvas frame
       // during it still rejects it, and the next attempt holds again.
       unheld = false;
-      const unheldPass = await pass({ held: false }, untilMs, untilMs, 1);
+      const unheldPass = await pass({ held: false }, untilMs, untilMs, 1, untilMs);
       if (unheldPass.outcome === "accepted") return { result: unheldPass.result, passes };
       continue;
     }
@@ -171,6 +194,7 @@ export async function captureQuiescentCanvas(probe, capture, options) {
           Math.min(untilMs, heldAtMs + kMaxCanvasSettleHoldMs),
           Math.min(untilMs, heldAtMs + kMaxCanvasCompletionHoldMs - kHeldRoundTripReserveMs),
           kMinHeldScreenshotMs,
+          Math.min(untilMs, heldAtMs + kMaxCanvasCompletionHoldMs),
         );
         outcome = heldPass.outcome;
         if (outcome === "accepted") {
@@ -182,12 +206,12 @@ export async function captureQuiescentCanvas(probe, capture, options) {
     } catch (error) {
       // Release on every path. A release failure is recorded, but never replaces the pass's own
       // failure.
-      await hold.release().catch((releaseError) => {
+      await release(hold).catch((releaseError) => {
         passes.push({ holdReleaseError: String(releaseError) });
       });
       throw error;
     }
-    await hold.release();
+    await release(hold);
     if (outcome === "accepted") return { result: accepted, passes };
     if (outcome === "activity") {
       // More frames arrived under this hold than it can admit, for example frames whose

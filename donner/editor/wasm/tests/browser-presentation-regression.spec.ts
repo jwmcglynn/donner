@@ -51,6 +51,7 @@ import {
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   type CanvasActivity,
+  captureAfterDelayedFrame,
   delayNextCanvasCompletionForTest,
   expectSurfaceFrameProbeReady,
   findCanvasOwnerWorker,
@@ -60,7 +61,6 @@ import {
   readCanvasOwnerSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
-  submitFrameWithDelayedGpuWork,
   surfaceFrameProbeInstalled,
   type SurfaceFrameProbeReport,
 } from "./surface-frame-probe";
@@ -3241,21 +3241,24 @@ test("canvas GPU completion gate waits after the CPU host frame advances", async
   // GPU after its CPU task and the host frame counter have advanced. A CPU-only gate would capture
   // as soon as the counter moved.
   const before = await readSurfaceFrameSnapshot(page);
-  const { frame: delayedFrame, delay: injected } = await submitFrameWithDelayedGpuWork(page, owner);
-  await expect.poll(async () => (await readSurfaceFrameSnapshot(page)).renderedFrames)
-    .toBeGreaterThan(before.renderedFrames);
   let atScreenshot: CanvasActivity | null = null;
   let screenshots = 0;
-  await captureSettledCanvas(page, owner, async (timeoutMs) => {
-    ++screenshots;
-    atScreenshot = await readCanvasActivity(owner);
-    return captureEditorPage(page, timeoutMs);
-  }, { timedOut: (capture) => capture.timedOutCaptures > 0 });
-  expect(injected?.injected ?? 0, "the delayed frame's GPU work was postponed").toBeGreaterThan(0);
-  // The frame's GPU work was still running when the gate began.
-  expect(delayedFrame.canvasRetired, JSON.stringify({ delayedFrame, injected })).toBeLessThan(
-    delayedFrame.canvasSubmits,
+  const { frame: delayedFrame, delay: injected } = await captureAfterDelayedFrame(
+    page,
+    owner,
+    async () => {
+      await expect.poll(async () => (await readSurfaceFrameSnapshot(page)).renderedFrames)
+        .toBeGreaterThan(before.renderedFrames);
+      return captureSettledCanvas(page, owner, async (timeoutMs) => {
+        ++screenshots;
+        atScreenshot = await readCanvasActivity(owner);
+        return captureEditorPage(page, timeoutMs);
+      }, { timedOut: (capture) => capture.timedOutCaptures > 0 });
+    },
   );
+  // The gate's settle wait began while the delayed frame's GPU work was still running.
+  expect(injected.injected, "the delayed frame's GPU work was postponed").toBe(1);
+  expect(injected.settleSawPending).toBe(true);
   expect(screenshots).toBeGreaterThanOrEqual(1);
   expect(atScreenshot).not.toBeNull();
   const scored = atScreenshot as unknown as CanvasActivity;

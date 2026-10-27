@@ -47,6 +47,7 @@ import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs"
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   armCanvasGpuDelayFromEnv,
+  captureAfterDelayedFrame,
   type CanvasActivity,
   canvasGpuDelayFromEnv,
   expectSurfaceFrameProbeReady,
@@ -55,7 +56,6 @@ import {
   captureQuiescentCanvasFrame,
   holdCanvasCompletionForTest,
   readCanvasActivity,
-  submitFrameWithDelayedGpuWork,
 } from "./surface-frame-probe";
 import { kStallGuardMs, scaledMs } from "./test-timing";
 
@@ -2877,39 +2877,38 @@ test(
     // Hold the canvas's GPU work itself: fixed GPU work queued after the frame's first canvas write
     // keeps its remaining writes running on the GPU after its CPU task, its host counters and its
     // submission have all advanced. A gate that trusted any of those would capture now.
-    const { frame: heldFrame, delay: delayReport } = await submitFrameWithDelayedGpuWork(
-      page,
-      applicationOwner,
-    );
     let requiredOwner: Worker | null = null;
     let screenshots = 0;
     let atScreenshot: CanvasActivity | null = null;
-    const capture = await captureReadyBasicShapesFrame(
+    const { result: capture, frame: heldFrame, delay: delayReport } = await captureAfterDelayedFrame(
       page,
-      readyState,
-      before.results,
-      async (timeoutMs) => {
-        ++screenshots;
-        atScreenshot = await readCanvasActivity(applicationOwner);
-        return captureEditorPage(page, timeoutMs);
-      },
-      {
-        onOwner: (owner) => {
-          requiredOwner = owner;
-        },
-        timedOut: (result) => result.timedOutCaptures > 0,
-      },
+      applicationOwner,
+      () =>
+        captureReadyBasicShapesFrame(
+          page,
+          readyState!,
+          before.results,
+          async (timeoutMs) => {
+            ++screenshots;
+            atScreenshot = await readCanvasActivity(applicationOwner);
+            return captureEditorPage(page, timeoutMs);
+          },
+          {
+            onOwner: (owner) => {
+              requiredOwner = owner;
+            },
+            timedOut: (result) => result.timedOutCaptures > 0,
+          },
+        ),
     );
     const delayPath = testInfo.outputPath("held-canvas-gpu-delay.json");
     await writeFile(delayPath, JSON.stringify({ heldFrame, atScreenshot, delayReport }, null, 2));
     await testInfo.attach("held-canvas-gpu-delay", { path: delayPath, contentType: "application/json" });
     expect(requiredOwner).toBe(applicationOwner);
-    expect(delayReport?.injected ?? 0, "the held frame's GPU work was delayed").toBeGreaterThan(0);
-    // The delayed frame's GPU work was still running when the gate began, so a gate that did not
-    // wait for it could not have passed the check below.
-    expect(heldFrame.canvasRetired, JSON.stringify({ heldFrame, delayReport })).toBeLessThan(
-      heldFrame.canvasSubmits,
-    );
+    // captureAfterDelayedFrame returns only once the gate's settle wait began while the delayed
+    // frame's GPU work was still running, so a gate that did not wait for it fails below.
+    expect(delayReport.injected, "the held frame's GPU work was delayed").toBe(1);
+    expect(delayReport.settleSawPending).toBe(true);
     expect(capture).not.toBeNull();
     if (capture === null || atScreenshot === null) {
       throw new Error("the held canvas capture is unavailable");

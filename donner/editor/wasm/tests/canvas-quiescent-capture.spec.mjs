@@ -209,3 +209,30 @@ test("a failed release never replaces the capture's own failure", async () => {
     /release failed/,
   );
 });
+
+test("an owner that stops answering after the screenshot ends the hold instead of extending it", async () => {
+  // The activity read never answers on the first pass: the gate gives up at the hold's end (a real
+  // timer), releases, and accepts only a later pass whose read did answer.
+  const owner = fakeOwner([{}]);
+  let reads = 0;
+  const activity = owner.probe.activity;
+  owner.probe.activity = () => (++reads === 1 ? new Promise(() => {}) : activity());
+  const { result, passes } = await captureQuiescentCanvas(owner.probe, owner.capture, owner.options);
+  assert.equal(result, "image 2");
+  assert.equal(passes[0].activityUnanswered, true);
+  assert.deepEqual(owner.log.filter((line) => !line.startsWith("shot")), [
+    "hold 1",
+    "release 1",
+    "hold 2",
+    "release 2",
+  ]);
+});
+
+test("a release that never answers fails the capture", async () => {
+  const owner = fakeOwner([{}]);
+  owner.probe.hold = async () => ({ release: () => new Promise(() => {}) });
+  await assert.rejects(
+    captureQuiescentCanvas(owner.probe, owner.capture, owner.options),
+    /did not release the capture's completion hold/,
+  );
+});

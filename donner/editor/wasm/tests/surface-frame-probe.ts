@@ -96,6 +96,12 @@ interface CanvasGpuDelayState {
   everyFrames: number;
   fragmentIterations: number;
   injected: number;
+  /** Most jobs to inject, or -1 for no limit. */
+  maxInjections: number;
+  /** Injected jobs the GPU has not finished yet. */
+  pending: number;
+  /** Whether a settle wait began while an injected job was still running on the GPU. */
+  settleSawPending: boolean;
   /** Submit-to-completion wall time of each injected job, in worker milliseconds. */
   jobMs: number[];
 }
@@ -329,12 +335,18 @@ function installInWorker(): boolean {
     const startedAtMs = performance.now();
     submit.call(queue, [finish.call(encoder, undefined)]);
     ++delay.injected;
-    void onSubmittedWorkDone.call(queue).then(() => {
+    ++delay.pending;
+    onSubmittedWorkDone.call(queue).then(() => {
       if (delay.jobMs.length < 256) delay.jobMs.push(performance.now() - startedAtMs);
-    });
+    }).finally(() => {
+      --delay.pending;
+    }).catch(() => {});
   };
 
   scope.__donnerSurfaceFrameProbeSettle = async () => {
+    // Recorded in the worker as the wait begins, with no round trip that a fast GPU could outrun.
+    const armedDelay = scope.__donnerSurfaceFrameProbeGpuDelay;
+    if (armedDelay !== undefined && armedDelay.pending > 0) armedDelay.settleSawPending = true;
     // A round that saw a new canvas frame or write cannot vouch for that write's GPU work, so wait again.
     for (let rounds = 1; rounds <= 16; ++rounds) {
       const queue = scope.__donnerSurfaceFrameProbeQueue;
@@ -389,7 +401,8 @@ function installInWorker(): boolean {
           ++state.inTaskSubmits;
           const delay = scope.__donnerSurfaceFrameProbeGpuDelay;
           delayFrame ||= delay !== undefined && record.submitsBeforeTaskEnd === 1
-            && record.frame % delay.everyFrames === 0;
+            && record.frame % delay.everyFrames === 0
+            && (delay.maxInjections < 0 || delay.injected < delay.maxInjections);
           continue;
         }
         state.lateSubmits.push({
@@ -688,21 +701,25 @@ export async function armCanvasGpuDelayForTest(
   owner: Worker,
   everyFrames: number,
   fragmentIterations: number,
-): Promise<{ disarm: () => Promise<{ injected: number; jobMs: number[] } | null> }> {
+  maxInjections = -1,
+): Promise<{ disarm: () => Promise<CanvasGpuDelayResult | null> }> {
   if (!Number.isInteger(everyFrames) || everyFrames < 1) {
     throw new Error("the canvas GPU delay needs a positive frame interval");
   }
-  const armed = await owner.evaluate(([frames, iterations]) => {
+  const armed = await owner.evaluate(([frames, iterations, most]) => {
     const scope = globalThis as ProbeGlobal;
     if (!scope.__donnerSurfaceFrameProbe?.installed) return false;
     scope.__donnerSurfaceFrameProbeGpuDelay = {
       everyFrames: frames,
       fragmentIterations: iterations,
       injected: 0,
+      maxInjections: most,
+      pending: 0,
+      settleSawPending: false,
       jobMs: [],
     };
     return true;
-  }, [everyFrames, fragmentIterations]);
+  }, [everyFrames, fragmentIterations, maxInjections]);
   if (armed !== true) {
     throw new Error("could not arm the canvas GPU delay");
   }
@@ -712,10 +729,22 @@ export async function armCanvasGpuDelayForTest(
         const scope = globalThis as ProbeGlobal;
         const delay = scope.__donnerSurfaceFrameProbeGpuDelay;
         delete scope.__donnerSurfaceFrameProbeGpuDelay;
-        return delay === undefined ? null : { injected: delay.injected, jobMs: [...delay.jobMs] };
+        return delay === undefined ? null : {
+          injected: delay.injected,
+          settleSawPending: delay.settleSawPending,
+          jobMs: [...delay.jobMs],
+        };
       });
     },
   };
+}
+
+/** What \ref armCanvasGpuDelayForTest injected. */
+export interface CanvasGpuDelayResult {
+  injected: number;
+  /** Whether a settle wait began while an injected job was still running on the GPU. */
+  settleSawPending: boolean;
+  jobMs: number[];
 }
 
 /** A `<everyFrames>:<iterations>` canvas GPU delay read from the environment. */
@@ -866,42 +895,62 @@ export async function captureQuiescentCanvasFrame<T>(
 }
 
 /**
- * Fixed fragment iterations for \ref submitFrameWithDelayedGpuWork: about 100-400 ms of GPU work
- * on Apple Silicon, leaving a slower GPU a wide margin inside the app's 5 s completion deadline.
+ * Fixed fragment iterations of the first attempt of \ref captureAfterDelayedFrame: about 100-400 ms
+ * of GPU work on Apple Silicon, leaving a slower GPU a wide margin inside the app's 5 s completion
+ * deadline. Each later attempt doubles it.
  */
 export const kSingleFrameGpuDelayIterations = 20000;
 
+/** Attempts \ref captureAfterDelayedFrame makes before giving up on a GPU too fast to delay. */
+const kDelayedFrameAttempts = 3;
+
 /**
- * Request one editor frame of \p owner's canvas and postpone its GPU work behind fixed fragment
- * work queued after its first canvas write, then stop injecting. Returns the canvas activity read
- * in the same worker evaluation that first saw that frame submitted, so whether its GPU work was
- * still running is judged at the earliest point, and what was injected.
+ * Request one editor frame of \p owner's canvas with its GPU work postponed behind fixed fragment
+ * work queued after its first canvas write, then run \p gate. Succeeds once the gate's settle wait
+ * began while that work was still running, as the probe records in the worker itself; a GPU that
+ * finished first proves nothing, so the frame is requested again with twice the work. Returns the
+ * gate's result, the canvas activity when the frame was submitted, and what was injected.
  */
-export async function submitFrameWithDelayedGpuWork(
+export async function captureAfterDelayedFrame<T>(
   page: Page,
   owner: Worker,
-): Promise<{ frame: CanvasActivity; delay: { injected: number; jobMs: number[] } | null }> {
-  const delay = await armCanvasGpuDelayForTest(owner, 1, kSingleFrameGpuDelayIterations);
-  let report: { injected: number; jobMs: number[] } | null;
-  let frame: CanvasActivity | null = null;
-  try {
-    const before = await readCanvasActivity(owner);
-    await page.evaluate(() => {
-      (window as Window & { __donnerEditorFrameRequested?: boolean })
-        .__donnerEditorFrameRequested = true;
-    });
-    await expect.poll(async () => {
-      const activity = await readCanvasActivity(owner);
-      if (activity.canvasSubmits > before.canvasSubmits) frame ??= activity;
-      return activity.canvasSubmits;
-    }, {
-      message: "a frame is submitted with its GPU work delayed",
-      timeout: kStallGuardMs,
-      intervals: [4, 8, 16],
-    }).toBeGreaterThan(before.canvasSubmits);
-  } finally {
-    // Only the requested frame is delayed; later frames run at their normal cost.
-    report = await delay.disarm();
+  gate: () => Promise<T>,
+): Promise<{ result: T; frame: CanvasActivity; delay: CanvasGpuDelayResult }> {
+  const attempts: Array<{ frame: CanvasActivity | null; delay: CanvasGpuDelayResult | null }> = [];
+  for (let attempt = 0; attempt < kDelayedFrameAttempts; ++attempt) {
+    const delay = await armCanvasGpuDelayForTest(
+      owner,
+      1,
+      kSingleFrameGpuDelayIterations * 2 ** attempt,
+      1,
+    );
+    let frame: CanvasActivity | null = null;
+    let result: T;
+    let report: CanvasGpuDelayResult | null;
+    try {
+      const before = await readCanvasActivity(owner);
+      await page.evaluate(() => {
+        (window as Window & { __donnerEditorFrameRequested?: boolean })
+          .__donnerEditorFrameRequested = true;
+      });
+      await expect.poll(async () => {
+        const activity = await readCanvasActivity(owner);
+        if (activity.canvasSubmits > before.canvasSubmits) frame ??= activity;
+        return activity.canvasSubmits;
+      }, {
+        message: "a frame is submitted with its GPU work delayed",
+        timeout: kStallGuardMs,
+      }).toBeGreaterThan(before.canvasSubmits);
+      result = await gate();
+    } finally {
+      report = await delay.disarm();
+    }
+    attempts.push({ frame, delay: report });
+    if (report !== null && report.injected > 0 && report.settleSawPending && frame !== null) {
+      return { result, frame, delay: report };
+    }
   }
-  return { frame: frame!, delay: report };
+  throw new Error(
+    `the delayed frame's GPU work finished before the gate began: ${JSON.stringify(attempts)}`,
+  );
 }
