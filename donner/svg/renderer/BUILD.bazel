@@ -389,6 +389,8 @@ donner_perf_sensitive_cc_library(
     # builds under every config. Linked into the geode test binary (via the
     # tiny-skia backend) for parity; never reached by production geode —
     # enforced by //donner/svg/renderer:geode_excludes_tiny_skia_audit.
+    # Renderer tests use it directly as the sampling reference.
+    visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         # Follow the workspace-level @tiny-skia-cpp//bazel/config:simd_mode
         # flag (default native) instead of pinning the native transition.

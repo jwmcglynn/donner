@@ -30,6 +30,8 @@
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 #include "donner/svg/text/TextEngine.h"
+#include "tiny_skia/Painter.h"
+#include "tiny_skia/Pixmap.h"
 
 namespace donner::svg {
 namespace {
@@ -1566,9 +1568,144 @@ TEST_F(RendererRegressionTests, ImageQualityRenderingUsesMitchellCubicSampling) 
   }
 }
 
-TEST_F(RendererRegressionTests, ImageSmoothRenderingKeepsBilinearSampling) {
-  ExpectBitmapsDiffer(RenderCheckerImage("smooth"), RenderCheckerFeImage(),
-                      "image_smooth_is_not_mitchell");
+/// Straight RGBA pixels of a \p width x \p height image, row-major.
+using StraightImage = std::vector<std::uint8_t>;
+
+/// The 4x4 checkerboard decoded from \ref kCheckerImageDataUri.
+StraightImage CheckerPixels() {
+  StraightImage pixels;
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 4; ++x) {
+      const bool even = (x + y) % 2 == 0;
+      pixels.insert(pixels.end(), {std::uint8_t(even ? 200 : 30), std::uint8_t(even ? 40 : 170),
+                                   std::uint8_t(even ? 90 : 220), 255});
+    }
+  }
+  return pixels;
+}
+
+/// A 4x4 checkerboard of opaque black and half-transparent white, as a PNG data URI. Cubic
+/// overshoot next to the opaque black texels pushes premultiplied color above alpha.
+constexpr std::string_view kTranslucentCheckerDataUri =
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAG0lEQVR42mNgYGD4/////wY4jcJhYPjPQFAFAL5AI+Eh"
+    "uRmVAAAAAElFTkSuQmCC";
+
+/// The pixels decoded from \ref kTranslucentCheckerDataUri.
+StraightImage TranslucentCheckerPixels() {
+  StraightImage pixels;
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 4; ++x) {
+      const bool even = (x + y) % 2 == 0;
+      pixels.insert(pixels.end(), {std::uint8_t(even ? 0 : 255), std::uint8_t(even ? 0 : 255),
+                                   std::uint8_t(even ? 0 : 255), std::uint8_t(even ? 255 : 128)});
+    }
+  }
+  return pixels;
+}
+
+/// An 8x8 opaque image whose every texel differs from its neighbors, as a PNG data URI.
+constexpr std::string_view kGradientImageDataUri =
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAJ0lEQVR42mNkYGBQYPivwMCIRrIwKPxnYGBkYEAnWRgU"
+    "sIgyDLAOAGXeId0ohAJHAAAAAElFTkSuQmCC";
+
+/// The pixels decoded from \ref kGradientImageDataUri.
+StraightImage GradientPixels() {
+  StraightImage pixels;
+  for (int y = 0; y < 8; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      pixels.insert(pixels.end(), {std::uint8_t(x * 32), std::uint8_t(y * 32),
+                                   std::uint8_t((x + y) % 2 == 0 ? 0 : 255), 255});
+    }
+  }
+  return pixels;
+}
+
+/// Opaque gray canvas fill; under it, premultiplied color above alpha brightens the result.
+constexpr std::uint8_t kReferenceGray = 128;
+
+/// Renders `<image>` markup over an opaque gray 64x64 canvas with the active backend.
+RendererBitmap RenderImageOverGray(std::string_view imageMarkup) {
+  const std::string body =
+      R"svg(<rect width="64" height="64" fill="rgb(128,128,128)"/>)svg" + std::string(imageMarkup);
+  SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
+/// Draws \p pixels (\p width x \p height, straight alpha) into \p destRect of an opaque gray
+/// 64x64 canvas with tiny-skia directly, the sampling reference resvg and TinySkia share. Its
+/// pipeline also picks nearest sampling for a translation-only transform.
+RendererBitmap TinySkiaImageReference(const StraightImage& pixels, int width, int height,
+                                      const Box2d& destRect, tiny_skia::FilterQuality quality) {
+  constexpr int kSize = 64;
+  std::vector<std::uint8_t> canvas(kSize * kSize * 4, kReferenceGray);
+  for (std::size_t i = 3; i < canvas.size(); i += 4) {
+    canvas[i] = 255;
+  }
+  std::optional<tiny_skia::Pixmap> target =
+      tiny_skia::Pixmap::fromVec(std::move(canvas), tiny_skia::IntSize(kSize, kSize));
+  const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(pixels);
+  const std::optional<tiny_skia::PixmapView> source = tiny_skia::PixmapView::fromBytes(
+      premultiplied, static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
+  if (!target.has_value() || !source.has_value()) {
+    ADD_FAILURE() << "could not build the tiny-skia reference pixmaps";
+    return RendererBitmap{};
+  }
+  tiny_skia::PixmapPaint paint;
+  paint.quality = quality;
+  const tiny_skia::Transform targetFromImage = tiny_skia::Transform::fromRow(
+      static_cast<float>(destRect.width() / width), 0.0f, 0.0f,
+      static_cast<float>(destRect.height() / height), static_cast<float>(destRect.topLeft.x),
+      static_cast<float>(destRect.topLeft.y));
+  tiny_skia::MutablePixmapView targetView = target->mutableView();
+  tiny_skia::Painter::drawPixmap(targetView, 0, 0, *source, paint, targetFromImage);
+  const std::span<const std::uint8_t> data = target->data();
+  RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(kSize, kSize);
+  bitmap.rowBytes = kSize * 4;
+  bitmap.alphaType = AlphaType::Premultiplied;
+  bitmap.pixels.assign(data.begin(), data.end());
+  return bitmap;
+}
+
+TEST_F(RendererRegressionTests, ImageSmoothRenderingUsesBilinearSampling) {
+  // GPU texture filtering interpolates with reduced subtexel precision (684 pixels differ by
+  // low bits from tiny-skia on Metal), so Geode is held to the canonical default comparison.
+  const editor::tests::BitmapGoldenCompareParams params =
+      ActiveRendererBackend() == RendererBackend::Geode ? editor::tests::BitmapGoldenCompareParams{}
+                                                        : editor::tests::PixelmatchIdentityParams();
+  editor::tests::CompareBitmapToBitmap(
+      RenderImageOverGray(
+          R"svg(<image x="8" y="8" width="48" height="48" image-rendering="smooth" href=")svg" +
+          std::string(kCheckerImageDataUri) + "\"/>"),
+      TinySkiaImageReference(CheckerPixels(), 4, 4, Box2d::FromXYWH(8, 8, 48, 48),
+                             tiny_skia::FilterQuality::Bilinear),
+      "image_smooth_bilinear", params);
+}
+
+TEST_F(RendererRegressionTests, ImageCubicClampsChannelsOnlyToOne) {
+  editor::tests::CompareBitmapToBitmap(
+      RenderImageOverGray(R"svg(<image x="8" y="8" width="48" height="48" href=")svg" +
+                          std::string(kTranslucentCheckerDataUri) + "\"/>"),
+      TinySkiaImageReference(TranslucentCheckerPixels(), 4, 4, Box2d::FromXYWH(8, 8, 48, 48),
+                             tiny_skia::FilterQuality::Bicubic),
+      "image_cubic_translucent", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, ImageTranslatedAtIntrinsicSizeSamplesNearest) {
+  // The interior excludes the edge pixels the fractional translation covers partially.
+  const Vector2i interiorOrigin(11, 21);
+  const Vector2i interiorSize(7, 7);
+  editor::tests::CompareBitmapToBitmap(
+      editor::tests::CropBitmap(RenderImageOverGray(R"svg(<image x="10.25" y="20.75" href=")svg" +
+                                                    std::string(kGradientImageDataUri) + "\"/>"),
+                                interiorOrigin, interiorSize),
+      editor::tests::CropBitmap(
+          TinySkiaImageReference(GradientPixels(), 8, 8, Box2d::FromXYWH(10.25, 20.75, 8, 8),
+                                 tiny_skia::FilterQuality::Bicubic),
+          interiorOrigin, interiorSize),
+      "image_translated_nearest", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, EffectSpanLayoutRunsOncePerTextElement) {

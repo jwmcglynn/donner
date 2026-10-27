@@ -599,6 +599,11 @@ TEST_F(VulkanColorMatrixTest, ImageBlitCubic) {
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
                              {gpu::tests::image_blit_scene::Case::Cubic});
 }
+TEST_F(VulkanColorMatrixTest, ImageBlitCubicTranslucent) {
+  gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
+                             [this](const Buffer& b) { return device_->readBackBuffer(b); },
+                             {gpu::tests::image_blit_scene::Case::CubicTranslucent});
+}
 TEST_F(VulkanColorMatrixTest, ImageBlitCropped) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },

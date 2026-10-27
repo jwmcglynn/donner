@@ -4772,6 +4772,38 @@ TEST(RendererPublicApiTest, BitmapBlitImageParamsResolvesOnlyUnpixelatedAuto) {
               ImageRendering::OptimizeQuality);
 }
 
+/// Draws the 2x2 bitmap upscaled to 16x16 through `RendererTinySkia::drawBitmap`.
+RendererBitmap DrawScaledTinySkiaBitmap(ImageRendering imageRendering) {
+  RendererTinySkia renderer;
+  renderer.beginFrame(RenderViewport{.size = Vector2d(16.0, 16.0), .devicePixelRatio = 1.0});
+  ImageParams params;
+  params.targetRect = Box2d(Vector2d::Zero(), Vector2d(16, 16));
+  params.imageRendering = imageRendering;
+  renderer.drawBitmap(MakePaddedTwoByTwoBitmap(), params);
+  renderer.endFrame();
+  return NormalizeSnapshot(renderer.takeSnapshot());
+}
+
+TEST(RendererPublicApiTest, TinySkiaDrawBitmapBlitsAutoBilinearly) {
+  const RendererBitmap autoBlit = DrawScaledTinySkiaBitmap(ImageRendering::Auto);
+  editor::tests::CompareBitmapToBitmap(autoBlit, DrawScaledTinySkiaBitmap(ImageRendering::Smooth),
+                                       "draw_bitmap_auto_is_smooth",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  // The cubic kernel draws this upscale differently, so the identity above is not vacuous.
+  int cubicDifferences = -1;
+  testing::TestPartResultArray failures;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &failures);
+    editor::tests::CompareBitmapToBitmap(
+        autoBlit, DrawScaledTinySkiaBitmap(ImageRendering::HighQuality),
+        "draw_bitmap_auto_is_not_cubic", editor::tests::PixelmatchIdentityParams(),
+        &cubicDifferences);
+  }
+  EXPECT_THAT(cubicDifferences, Gt(0));
+}
+
 TEST(RendererPublicApiTest, RendererInterfaceDefaultMethodsRejectUnsupportedTexturePaths) {
   DefaultMethodRenderer renderer;
   DefaultTextureSnapshot texture;
