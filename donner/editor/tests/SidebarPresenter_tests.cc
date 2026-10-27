@@ -4056,8 +4056,8 @@ TEST(SidebarPathOperationIcons, EveryInspectorOperationMapsToItsOwnIconAndTextur
   std::vector<std::pair<PathOperationKind, const unsigned char*>> iconSources;
   std::vector<std::uint64_t> textureKeys;
   for (const PathOperationKind operation : kInspectorPathOperations) {
-    const std::span<const unsigned char> svg = PathOperationIconSvg(operation);
-    ASSERT_THAT(svg, Not(IsEmpty())) << "operation " << static_cast<int>(operation);
+    const ResourceLease svg = PathOperationIconSvg(operation);
+    ASSERT_THAT(svg.bytes(), Not(IsEmpty())) << "operation " << static_cast<int>(operation);
     iconSources.emplace_back(operation, svg.data());
     textureKeys.push_back(PathOperationIconTextureKey(operation));
   }
@@ -4080,7 +4080,7 @@ TEST(SidebarPathOperationIcons, EveryInspectorOperationMapsToItsOwnIconAndTextur
 TEST(SidebarPathOperationIcons, PrewarmRequestsCoverEveryInspectorButton) {
   const std::span<const EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
   for (const PathOperationKind operation : kInspectorPathOperations) {
-    const std::span<const unsigned char> svg = PathOperationIconSvg(operation);
+    const ResourceLease svg = PathOperationIconSvg(operation);
     const bool present =
         std::any_of(requests.begin(), requests.end(), [&](const EmbeddedSvgIconRequest& request) {
           return request.svgBytes.data() == svg.data() && request.tintableMask;
