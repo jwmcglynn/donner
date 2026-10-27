@@ -899,6 +899,26 @@ TEST_F(RendererRegressionTests, FilterConvolveOrderRemovalClearsLimitRejection) 
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+// A valid animated order replaces an over-limit base order while it runs, and the base order is
+// rejected again once the animation ends.
+TEST_F(RendererRegressionTests, FilterConvolveAnimatedOrderOverridesLimitRejection) {
+  SVGDocument document = instantiateSubtree(
+      ShiftedPrimitiveFilter(R"svg(<feConvolveMatrix order="65" kernelMatrix="1">
+            <set attributeName="order" to="1" dur="1s"/></feConvolveMatrix>)svg") +
+          R"svg(<rect x="4" y="4" width="8" height="8" fill="seagreen" filter="url(#f)"/>
+          <rect x="72" y="4" width="8" height="8" fill="lime"/>)svg",
+      {}, Vector2i(84, 16));
+  document.setTime(0.5);
+  editor::tests::CompareBitmapToBitmap(RenderDocumentWithBackend(document, ActiveRendererBackend()),
+                                       RenderPrimitiveLimitOracle({"36"}),
+                                       "convolve_animated_order_active",
+                                       editor::tests::PixelmatchIdentityParams());
+  document.setTime(2);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithBackend(document, ActiveRendererBackend()), RenderPrimitiveLimitOracle({}),
+      "convolve_animated_order_ended", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererRegressionTests, UnitlessPresentationAttributeBlurUsesUserUnits) {
   const auto render = [](std::string_view filter) {
     const std::string markup =
