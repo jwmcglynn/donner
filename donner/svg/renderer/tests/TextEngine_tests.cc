@@ -1070,6 +1070,81 @@ TEST(TextEngineTest, VerticalMiddleAnchorCentersPenExtentOfMixedOrientationChunk
   }
 }
 
+// Further vertical anchor cases in the full backend: an end anchor, a chunk that starts sideways
+// and ends upright, and an all-upright control whose glyph offsets cancel. Each anchored layout is
+// the start-anchored layout shifted back by the anchor's share of the pen extent, which runs from
+// y=0 to the last glyph's pen position plus its advance.
+TEST(TextEngineTest, VerticalAnchorsMeasurePenExtentForEndSidewaysFirstAndUprightChunks) {
+  struct AnchorCase {
+    const char* label;
+    std::string text;
+    TextAnchor anchor;
+    double share;
+  };
+  const AnchorCase cases[] = {
+      {"end, upright first", "\xE6\x97\xA5\xE6\x9C\xAC Ab", TextAnchor::End, 1.0},
+      {"middle, sideways first", "Ab \xE6\x97\xA5\xE6\x9C\xAC", TextAnchor::Middle, 0.5},
+      {"middle, all upright", "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E", TextAnchor::Middle, 0.5},
+  };
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "Mplus 1p")));
+  TextEngine engine(fontManager, registry,
+                    std::make_unique<TextBackendFull>(fontManager, registry));
+
+  for (const AnchorCase& testCase : cases) {
+    SCOPED_TRACE(testCase.label);
+    const auto layOut = [&](TextAnchor anchor) {
+      components::ComputedTextComponent text;
+      auto span = MakeSpan(testCase.text);
+      span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+      span.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+      span.textAnchor = anchor;
+      text.spans.push_back(std::move(span));
+      TextLayoutParams params = MakeTextParams(20.0);
+      params.fontFamilies = {RcString("Mplus 1p")};
+      params.writingMode = WritingMode::VerticalRl;
+      return engine.layout(text, params);
+    };
+
+    const std::vector<TextRun> start = layOut(TextAnchor::Start);
+    ASSERT_THAT(start, SizeIs(1));
+    ASSERT_THAT(start[0].glyphs, Not(IsEmpty()));
+    const TextGlyph& last = start[0].glyphs.back();
+    const double penExtent = last.yPosition - last.verticalOriginOffset + last.yAdvance;
+
+    std::vector<double> expected;
+    for (const TextGlyph& glyph : start[0].glyphs) {
+      expected.push_back(glyph.yPosition - penExtent * testCase.share);
+    }
+    const std::vector<TextRun> anchored = layOut(testCase.anchor);
+    ASSERT_THAT(anchored, SizeIs(1));
+    std::vector<double> actual;
+    for (const TextGlyph& glyph : anchored[0].glyphs) {
+      actual.push_back(glyph.yPosition);
+    }
+    EXPECT_THAT(actual, testing::Pointwise(DoubleNear(1e-9), expected));
+  }
+
+  // The all-upright control checks the same length from drawn positions alone: the first and last
+  // glyphs carry the same origin offset, which cancels.
+  const auto uprightStart = [&] {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan(cases[2].text);
+    span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+    text.spans.push_back(std::move(span));
+    TextLayoutParams params = MakeTextParams(20.0);
+    params.fontFamilies = {RcString("Mplus 1p")};
+    params.writingMode = WritingMode::VerticalRl;
+    return engine.layout(text, params);
+  }();
+  ASSERT_THAT(uprightStart, ElementsAre(RunGlyphsAre(SizeIs(3))));
+  const auto& upright = uprightStart[0].glyphs;
+  EXPECT_THAT(upright.back().yPosition + upright.back().yAdvance - upright.front().yPosition,
+              DoubleNear(60.0, 1e-9));
+}
+
 TEST(TextEngineTest, ScriptedRtlChunkYOverrideKeepsVisualGlyphsOnSameBaseline) {
   Registry registry;
   FontManager fontManager(registry);
