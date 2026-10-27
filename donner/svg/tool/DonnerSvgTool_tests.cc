@@ -47,7 +47,7 @@ void ExpectFrameIdentical(const DecodedGif& gif, size_t frameIndex,
 int RunTool(const std::vector<std::string>& args, std::ostringstream* out,
             std::ostringstream* err) {
   std::vector<std::string> storage;
-  storage.emplace_back("donner-svg");
+  storage.emplace_back("donner-cli");
   storage.insert(storage.end(), args.begin(), args.end());
 
   std::vector<char*> argv;
@@ -167,7 +167,7 @@ constexpr std::string_view kSimpleSvg =
        </svg>)";
 
 TEST(DonnerSvgTool, HelpFlagPrintsPreviewAndReturnsZero) {
-  char arg0[] = "donner-svg";
+  char arg0[] = "donner-cli";
   char arg1[] = "--help";
   char* argv[] = {arg0, arg1};
 
@@ -179,7 +179,7 @@ TEST(DonnerSvgTool, HelpFlagPrintsPreviewAndReturnsZero) {
 }
 
 TEST(DonnerSvgTool, UnknownFlagReturnsOne) {
-  char arg0[] = "donner-svg";
+  char arg0[] = "donner-cli";
   char arg1[] = "--bogus";
   char* argv[] = {arg0, arg1};
 
@@ -212,7 +212,7 @@ TEST(DonnerSvgTool, MissingInputFileReturnsUsageError) {
 }
 
 TEST(DonnerSvgTool, PreviewFlagParsesAndThenFailsOnMissingInputFile) {
-  char arg0[] = "donner-svg";
+  char arg0[] = "donner-cli";
   char arg1[] = "--preview";
   char arg2[] = "does_not_exist.svg";
   char* argv[] = {arg0, arg1, arg2};

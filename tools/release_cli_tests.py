@@ -43,11 +43,22 @@ class ReleaseCliFixture:
             "registry": "https://bcr.bazel.build/modules/donner/0.8.0/MODULE.bazel",
         }) + "\n"
         (self.root / release_cli.LOCKFILE).write_text(self.lock_contents)
-        self.binary = Path(self.temporary.name) / "donner-svg"
+        (self.root / "LICENSE").write_text("MIT License fixture\n")
+        self.resources = Path(self.temporary.name) / "resources"
+        (self.resources / "assets").mkdir(parents=True)
+        payload = b"font fixture"
+        checksum = release_cli.sha256(payload).hexdigest()
+        asset_path = f"assets/{checksum}.ttf"
+        (self.resources / asset_path).write_bytes(payload)
+        (self.resources / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "assets": [{
+            "id": "fixture.font", "sha256": checksum, "encodedSize": len(payload),
+            "decodedSize": len(payload), "mediaType": "font/ttf", "group": "fallback",
+            "path": asset_path}]}))
+        self.binary = Path(self.temporary.name) / "donner-cli"
         self.binary.write_bytes(b"retained CLI bytes\n")
         self.notice = Path(self.temporary.name) / "notice_cli.txt"
         self.notice_contents = (
-            release_cli.NOTICE_HEADER + "donner-svg\n" + "=" * 72 + "\n\n" + "-" * 72 +
+            release_cli.NOTICE_HEADER + "donner-cli\n" + "=" * 72 + "\n\n" + "-" * 72 +
             "\nPackage: tiny-skia-cpp\nLicense: BSD-3-Clause\n\nCopyright fixture\n"
         )
         self.notice.write_text(self.notice_contents, encoding="utf-8")
@@ -75,7 +86,7 @@ class ReleaseCliFixture:
         ):
             return release_cli.package(
                 root=self.root, binary=self.binary, notice=self.notice,
-                compiler_probe=self.probe, output=self.artifacts,
+                compiler_probe=self.probe, resources=self.resources, output=self.artifacts,
                 platform=platform, commit=self.commit, run_id="123", attempt="2",
             )
 
@@ -95,12 +106,13 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
                 self.assertEqual(expected["compiler_version"], PROBE_COMPILER)
                 self.assertEqual(self._verify(platform), expected)
                 binary_name = release_cli.PLATFORMS[platform]
-                self.assertEqual((self.artifacts / binary_name).read_bytes(), self.binary.read_bytes())
+                self.assertEqual(release_cli._read_archive(self.artifacts / binary_name)["donner-cli"],
+                                 self.binary.read_bytes())
                 self.assertEqual(
                     (self.artifacts / f"{binary_name}.NOTICE.txt").read_bytes(),
                     self.notice.read_bytes(),
                 )
-                self.assertEqual(expected["schema"], 3)
+                self.assertEqual(expected["schema"], 4)
                 self.assertEqual(expected["notice_sha256"], release_cli.digest(self.notice))
                 self.assertEqual(
                     json.loads((self.artifacts / f"{binary_name}.provenance").read_text()),
@@ -108,6 +120,88 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
                 )
                 for path in self.artifacts.iterdir():
                     path.unlink()
+
+    def test_resource_manifest_negative_controls(self) -> None:
+        original = json.loads((self.resources / "manifest.json").read_text())
+        mutations = {
+            "wrong schema": lambda item: item.update(schemaVersion=2),
+            "boolean schema": lambda item: item.update(schemaVersion=True),
+            "traversal": lambda item: item["assets"][0].update(path="../font.ttf"),
+            "wrong digest": lambda item: item["assets"][0].update(sha256="0" * 64),
+            "wrong length": lambda item: item["assets"][0].update(encodedSize=1),
+            "decoded overflow": lambda item: item["assets"][0].update(decodedSize=2**32),
+            "boolean size": lambda item: item["assets"][0].update(encodedSize=True),
+            "duplicate identity": lambda item: item["assets"].append(item["assets"][0]),
+        }
+        for case, mutate in mutations.items():
+            with self.subTest(case=case):
+                document = json.loads(json.dumps(original))
+                mutate(document)
+                (self.resources / "manifest.json").write_text(json.dumps(document))
+                with self.assertRaises(ValueError):
+                    release_cli._resource_files(self.resources)
+        (self.resources / "manifest.json").write_text(json.dumps(original))
+        self.assertTrue(release_cli._resource_files(self.resources))
+
+    def test_resource_links_extra_files_and_corruption_fail_closed(self) -> None:
+        asset = next((self.resources / "assets").iterdir())
+        original = asset.read_bytes()
+        asset.write_bytes(b"corrupted")
+        with self.assertRaisesRegex(ValueError, "digest or length"):
+            release_cli._resource_files(self.resources)
+        asset.write_bytes(original)
+        extra = self.resources / "unbound.ttf"
+        extra.write_bytes(b"extra")
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            release_cli._resource_files(self.resources)
+        extra.unlink()
+        extra.symlink_to(asset)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            release_cli._resource_files(self.resources)
+
+    def test_archive_member_names_links_modes_and_duplicates_fail_closed(self) -> None:
+        import tarfile
+        import zipfile
+        for extension in ("zip", "tar.gz"):
+            archive = Path(self.temporary.name) / f"invalid.{extension}"
+            for name in ("../escape", "/absolute", "donner-svg", "binary.debug"):
+                with self.subTest(extension=extension, name=name):
+                    release_cli._write_archive(archive, {name: b"unbound"})
+                    with self.assertRaisesRegex(ValueError, "invalid or duplicate member"):
+                        release_cli._read_archive(archive)
+        archive = Path(self.temporary.name) / "invalid.tar.gz"
+        with tarfile.open(archive, "w:gz") as output:
+            link = tarfile.TarInfo("donner-cli")
+            link.type, link.linkname = tarfile.SYMTYPE, "outside"
+            output.addfile(link)
+        with self.assertRaisesRegex(ValueError, "invalid or duplicate member"):
+            release_cli._read_archive(archive)
+        archive = Path(self.temporary.name) / "invalid.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            member = zipfile.ZipInfo("donner-cli")
+            member.create_system = 3
+            member.external_attr = (stat.S_IFREG | 0o644) << 16
+            output.writestr(member, b"not executable")
+        with self.assertRaisesRegex(ValueError, "not executable"):
+            release_cli._read_archive(archive)
+        with zipfile.ZipFile(archive, "w") as output:
+            member.external_attr = (stat.S_IFREG | 0o755) << 16
+            output.writestr(member, b"first")
+            output.writestr(member, b"second")
+        with self.assertRaisesRegex(ValueError, "invalid or duplicate member"):
+            release_cli._read_archive(archive)
+
+    def test_rehashed_archive_cannot_change_executable_or_manifest_provenance(self) -> None:
+        self._package()
+        archive_name = release_cli.PLATFORMS["linux-x86-64"]
+        archive = self.artifacts / archive_name
+        files = release_cli._read_archive(archive)
+        files["donner-cli"] = b"changed executable"
+        release_cli._write_archive(archive, files)
+        (self.artifacts / (archive_name + ".sha256")).write_text(
+            f"{release_cli.digest(archive)}  {archive_name}\n")
+        with self.assertRaisesRegex(ValueError, "provenance"):
+            self._verify()
 
     def test_provenance_records_the_bazel_built_compiler_not_the_runner_cxx(self) -> None:
         # Bazel builds with CC=clang/CXX=clang++ (.bazelrc), so the runner's default `c++` (GCC on
@@ -153,7 +247,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
 
     def test_previous_schema_with_runner_compiler_is_rejected(self) -> None:
         self._package()
-        path = self.artifacts / "donner-svg_linux_x86_64.provenance"
+        path = self.artifacts / "donner-cli_linux_x86_64.tar.gz.provenance"
         provenance = json.loads(path.read_text())
         provenance["schema"] = 2
         provenance["host_cxx_version"] = provenance.pop("compiler_version")
@@ -168,10 +262,11 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
     def test_tampered_binary_and_mismatched_run_fail_closed(self) -> None:
         self._package()
         binary = self.artifacts / release_cli.PLATFORMS["linux-x86-64"]
+        original = binary.read_bytes()
         binary.write_bytes(b"different bytes")
         with self.assertRaisesRegex(ValueError, "checksum"):
             self._verify()
-        binary.write_bytes(self.binary.read_bytes())
+        binary.write_bytes(original)
         with self.assertRaisesRegex(ValueError, "provenance"):
             release_cli.verify(
                 root=self.root, artifacts=self.artifacts, platform="linux-x86-64",
@@ -180,7 +275,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
 
     def test_changed_lockfile_and_missing_or_extra_assets_fail_closed(self) -> None:
         self._package()
-        lock = self.artifacts / "donner-svg_linux_x86_64.bazel.lock"
+        lock = self.artifacts / "donner-cli_linux_x86_64.tar.gz.bazel.lock"
         lock.write_text(json.dumps({"registry": "https://bcr.bazel.build/modules/other/1.0/MODULE.bazel"}))
         with self.assertRaisesRegex(ValueError, "provenance"):
             self._verify()
@@ -190,13 +285,13 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unexpected files"):
             self._verify()
         extra.unlink()
-        (self.artifacts / "donner-svg_linux_x86_64.sha256").unlink()
+        (self.artifacts / "donner-cli_linux_x86_64.tar.gz.sha256").unlink()
         with self.assertRaisesRegex(ValueError, "incomplete"):
             self._verify()
 
     def test_changed_missing_or_replaced_notice_fails_closed(self) -> None:
         self._package()
-        notice = self.artifacts / "donner-svg_linux_x86_64.NOTICE.txt"
+        notice = self.artifacts / "donner-cli_linux_x86_64.tar.gz.NOTICE.txt"
         notice.write_text(self.notice_contents.replace("tiny-skia-cpp", "other"), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "provenance"):
             self._verify()
@@ -214,7 +309,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
             "missing": None,
             "empty": b"",
             "not a notice": b"MIT License\n",
-            "no packages": release_cli.NOTICE_HEADER.encode() + b"donner-svg\n",
+            "no packages": release_cli.NOTICE_HEADER.encode() + b"donner-cli\n",
             "not UTF-8": release_cli.NOTICE_HEADER.encode() + b"\nPackage: \xff\n",
             "NUL": release_cli.NOTICE_HEADER.encode() + b"\nPackage: x\n\x00",
             "too large": release_cli.NOTICE_HEADER.encode() + b"\nPackage: x\n" +
@@ -237,7 +332,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "checkout"):
             release_cli.package(
                 root=self.root, binary=self.binary, notice=self.notice,
-                compiler_probe=self.probe, output=self.artifacts,
+                compiler_probe=self.probe, resources=self.resources, output=self.artifacts,
                 platform="linux-x86-64", commit="a" * 40, run_id="123", attempt="2",
             )
         self._package()
@@ -299,7 +394,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         with mock.patch.object(release_cli.shutil, "copyfile", side_effect=copy_with_changed_lock):
             with self.assertRaisesRegex(ValueError, "non-public"):
                 self._package()
-        self.assertFalse((self.artifacts / "donner-svg_linux_x86_64.provenance").exists())
+        self.assertFalse((self.artifacts / "donner-cli_linux_x86_64.tar.gz.provenance").exists())
 
     def test_lockfile_check_for_other_artifacts_returns_digest_or_fails_closed(self) -> None:
         # The editor package and docs build retain their generated lockfiles through this check.
@@ -355,7 +450,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         with mock.patch.object(release_cli.shutil, "copyfile", side_effect=copy_with_truncated_notice):
             with self.assertRaisesRegex(ValueError, "license notice"):
                 self._package()
-        self.assertFalse((self.artifacts / "donner-svg_linux_x86_64.provenance").exists())
+        self.assertFalse((self.artifacts / "donner-cli_linux_x86_64.tar.gz.provenance").exists())
 
 
 class VerifyReleaseTest(ReleaseCliFixture, unittest.TestCase):

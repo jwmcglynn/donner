@@ -262,7 +262,7 @@ banned_deps_test(
     # targets cover the main dependency tree.
     scope = [
         "//:donner",
-        "//donner/svg/tool:donner-svg",
+        "//donner/svg/tool:donner-cli",
         "//examples:svg_to_png",
         "//third_party:zlib",
         "//third_party:freetype",

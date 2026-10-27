@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * Run the donner-svg command line tool.
+ * Run the donner-cli command line tool.
  *
  * @param argc Number of command line arguments.
  * @param argv Command line arguments.

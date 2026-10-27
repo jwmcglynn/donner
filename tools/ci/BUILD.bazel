@@ -1,5 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load(":shipped_product.bzl", "shipped_product")
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -207,14 +208,28 @@ filegroup(
     testonly = True,
     srcs = [
         "//donner/svg/renderer/tests:filter_graph_executor_tests",
-        "//donner/svg/tool:donner-svg",
+        "//donner/svg/tool:donner-cli",
     ],
     tags = ["manual"],
 )
 
+packaged_resource_bundle(
+    name = "release_cli_resources",
+    resources = ["//third_party/public-sans:public-sans_resource_files"],
+    tags = ["manual"],
+)
+
+cc_binary(
+    name = "release_crash_probe",
+    testonly = True,
+    srcs = ["release_crash_probe.cc"],
+    tags = ["manual"],
+    deps = ["//donner/base:failure_signal_handler"],
+)
+
 alias(
     name = "release_svg",
-    actual = "//donner/svg/tool:donner-svg",
+    actual = "//donner/svg/tool:donner-cli",
     tags = ["manual"],
 )
 
@@ -365,9 +380,9 @@ py_test(
     size = "small",
     srcs = ["editor_wasm_lane_tests.py"],
     data = [
-        "//donner/editor/wasm:wasm_package_size_tests.py",
         "editor_wasm_lane.sh",
         "lane.sh",
+        "//donner/editor/wasm:wasm_package_size_tests.py",
     ],
     deps = [
         "//tools:test_executable_fixtures",
@@ -459,12 +474,12 @@ shipped_product(
     tags = ["manual"],
 )
 
-# The released `donner-svg` CLI. It links the CPU renderer under every configuration, so the
+# The released `donner-cli` CLI. It links the CPU renderer under every configuration, so the
 # shipped configuration builds the same program as the release build (`-c opt`).
 shipped_product(
     name = "shipped_donner_svg",
     testonly = True,
-    product = "//donner/svg/tool:donner-svg",
+    product = "//donner/svg/tool:donner-cli",
     tags = ["manual"],
 )
 

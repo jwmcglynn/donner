@@ -212,7 +212,7 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
   stop and obtain operator approval instead of adding channel loops, private comparators, or a
   parallel tolerance API.
 - **Render SVGs with Donner, even from the terminal.** For local SVG previews or PNG
-  generation, use `bazel run //donner/svg/tool:donner-svg -- <input.svg> --output <out.png>` or
+  generation, use `bazel run //donner/svg/tool:donner-cli -- <input.svg> --output <out.png>` or
   Donner renderer test utilities. Do not use external SVG renderers such as `rsvg-convert`,
   ImageMagick, browser screenshots, or resvg unless the task explicitly compares Donner against
   another engine.

@@ -1,4 +1,5 @@
 load("//build_defs:dep_audit.bzl", "forbidden_transitive_dep_test")
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load(
     "//build_defs:rules.bzl",
     "donner_cc_binary",
@@ -11,7 +12,13 @@ load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_tes
 
 alias(
     name = "tool",
-    actual = ":donner-svg",
+    actual = ":donner-cli",
+)
+
+alias(
+    name = "donner-svg",
+    actual = ":donner-cli",
+    deprecation = "Use :donner-cli; this alias will be removed at the next breaking version.",
 )
 
 donner_cc_library(
@@ -26,9 +33,16 @@ donner_cc_library(
     ],
 )
 
+packaged_resource_bundle(
+    name = "cli_resource_bundle",
+    output_name = "donner-assets",
+    resources = ["//third_party/public-sans:public-sans_resource_files"],
+)
+
 donner_cc_binary(
-    name = "donner-svg",
+    name = "donner-cli",
     srcs = ["donner_svg_tool.cc"],
+    data = [":cli_resource_bundle"],
     linkopts = identical_code_folding_linkopts(),
     tags = [
         "codeql_default",
@@ -45,7 +59,7 @@ no_rust_dependency_audit_test(
     name = "donner_svg_no_rust_dependency_audit_test",
     size = "small",
     required = ["//donner/svg/renderer:renderer_tiny_skia"],
-    target = ":donner-svg",
+    target = ":donner-cli",
 )
 
 donner_cc_library(
@@ -56,6 +70,7 @@ donner_cc_library(
     deps = [
         ":donner_svg_tool_utils",
         "//donner/base:diagnostic_renderer",
+        "//donner/base:packaged_resource",
         "//donner/base/parser",
         "//donner/css:core",
         "//donner/css/parser",
@@ -116,5 +131,5 @@ forbidden_transitive_dep_test(
         "audit",
         "deps",
     ],
-    target = "//donner/svg/tool:donner-svg",
+    target = "//donner/svg/tool:donner-cli",
 )

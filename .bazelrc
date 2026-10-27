@@ -307,6 +307,14 @@ build:time-trace --experimental_output_paths=off
 build:time-trace --strategy=CppCompile=standalone --spawn_strategy=standalone
 build:time-trace --remote_executor= --remote_cache= --noremote_upload_local_results
 
+# Native release inputs retain line tables for paired diagnostics. Packaging strips a fresh
+# delivery copy before signing/hashing; attribution presets are separate from release policy.
+build:native-release -c opt --copt=-gline-tables-only --strip=never
+build:native-release --copt=-fdebug-compilation-dir=. --copt=-ffile-compilation-dir=.
+build:native-release --//build_defs:enable_tracy=false
+build:native-release-macos --config=native-release --apple_generate_dsym
+build:native-release-linux --config=native-release --linkopt=-Wl,--build-id=sha1
+
 # Binary-size builds: optimized for size while preserving debug attribution.
 build:binary-size -c opt --copt=-Os --copt=-g --strip=never
 build:binary-size --copt=-ffunction-sections --copt=-fdata-sections
@@ -323,7 +331,7 @@ build:linux-binary-size --linkopt=-Wl,--gc-sections
 # and offered as a separate shipped-size config. tools/binary_size.sh reports
 # both: the non-LTO build (with per-compile-unit attribution) and this LTO
 # build (headline shipped size, no attribution). Usage:
-#   bazel build --config=macos-binary-size-lto //donner/svg/tool:donner-svg.stripped
+#   bazel build --config=macos-binary-size-lto //donner/svg/tool:donner-cli.stripped
 build:binary-size-lto --config=binary-size
 build:binary-size-lto --copt=-flto=thin --linkopt=-flto=thin
 build:macos-binary-size-lto --config=macos-binary-size

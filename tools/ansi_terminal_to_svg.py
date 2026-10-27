@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Convert ANSI truecolor terminal output into a terminal-screenshot SVG.
 
-donner-svg's ``--preview`` mode renders an SVG to the terminal using Unicode
+donner-cli's ``--preview`` mode renders an SVG to the terminal using Unicode
 block/quadrant characters with 24-bit foreground/background colors. Each
 character cell is a 2×2 sub-pixel grid (upper-left, upper-right, lower-left,
 lower-right). A full character cell is thus 2 columns × 2 rows of sub-pixels,
@@ -293,7 +293,7 @@ def main() -> int:
     parser.add_argument("output", help="Path to the output SVG file")
     parser.add_argument(
         "--prompt",
-        default="$ tools/donner-svg donner_icon.svg --preview",
+        default="$ tools/donner-cli donner_icon.svg --preview",
         help="Prompt line to display above the preview grid",
     )
     parser.add_argument(
@@ -316,7 +316,7 @@ def main() -> int:
         with open(args.input, "r", encoding="utf-8", errors="replace") as f:
             text = f.read()
 
-    # Strip donner-svg's "Rendered size: WxH" banner so it doesn't pollute
+    # Strip donner-cli's "Rendered size: WxH" banner so it doesn't pollute
     # the preview grid.
     text = re.sub(r"^Rendered size: \d+x\d+\n", "", text)
 

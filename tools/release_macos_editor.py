@@ -19,7 +19,7 @@ import zipfile
 from tools import bcr_source, release_cli
 
 
-SCHEMA = 1
+SCHEMA = 2
 INPUTS = (*release_cli.INPUTS, "donner/editor/art/Info.plist", "tools/ci_macos_xcode.txt",
           "build_defs/editor_build_info.bzl", "build_defs/BUILD.bazel",
           "donner/editor/write_build_info.sh")
@@ -32,7 +32,9 @@ MAX_TOTAL_BYTES = 1024 * 1024 * 1024
 MAX_FILES = 2048
 MAX_CONTROL_BYTES = 1024 * 1024
 BUNDLE = "Donner SVG Editor.app"
-REQUIRED = {"LICENSE", "NOTICE.txt", "Donner SVG Editor.app/Contents/Info.plist",
+RESOURCE_ROOT = BUNDLE + "/Contents/Resources/donner-assets/"
+RESOURCE_MANIFEST = RESOURCE_ROOT + "manifest.json"
+REQUIRED = {"LICENSE", "NOTICE.txt", RESOURCE_MANIFEST, "Donner SVG Editor.app/Contents/Info.plist",
             "Donner SVG Editor.app/Contents/MacOS/Donner", "Donner SVG Editor.app/Contents/Resources/Donner.icns",
             "Donner SVG Editor.app/Contents/_CodeSignature/CodeResources"}
 NATIVE_CHECKS = {"architecture": "arm64", "signature": "ad-hoc",
@@ -125,6 +127,17 @@ def _member_digest(archive: zipfile.ZipFile, name: str, size: int) -> str:
     return checksum.hexdigest()
 
 
+def _check_resources(archive: zipfile.ZipFile, files: dict) -> None:
+    resources = {name: record for name, record in files.items() if name.startswith(RESOURCE_ROOT)}
+    if (sum(record["size"] for record in resources.values()) > release_cli.MAX_PACKAGE_BYTES
+            or any(record["size"] > release_cli.MAX_RESOURCE_BYTES for record in resources.values())
+            or files[RESOURCE_MANIFEST]["size"] > release_cli.MAX_MANIFEST_BYTES):
+        raise ValueError("native editor resources exceed their byte budget")
+    release_cli._validate_resources({
+        "donner-assets/" + name.removeprefix(RESOURCE_ROOT): archive.read(name)
+        for name in resources})
+
+
 def inspect_archive(path: Path) -> dict:
     """Validate bounded ZIP contents and return each retained file's digest and mode."""
     if path.is_symlink() or not path.is_file() or not 22 <= path.stat().st_size <= MAX_ARCHIVE_BYTES:
@@ -136,6 +149,7 @@ def inspect_archive(path: Path) -> dict:
             record["sha256"] = _member_digest(archive, name, record["size"])
         if files["Donner SVG Editor.app/Contents/MacOS/Donner"]["mode"] != 0o755:
             raise ValueError("native editor executable has lost its executable mode")
+        _check_resources(archive, files)
         if files["Donner SVG Editor.app/Contents/Info.plist"]["size"] > MAX_CONTROL_BYTES:
             raise ValueError("native editor Info.plist is too large")
     return files
@@ -417,7 +431,8 @@ def package(*, root: Path, app: Path, notice: Path, compiler_probe: Path, build_
                   "notice_sha256": release_cli.digest(output / NAMES[4]),
                   "license_sha256": release_cli.digest(root / "LICENSE"),
                   "native_validation": NATIVE_CHECKS, "files": files, "toolchain": toolchain,
-                  "build_info_sha256": build_info_digest}
+                  "build_info_sha256": build_info_digest,
+                  "resource_manifest_sha256": files[RESOURCE_MANIFEST]["sha256"]}
     (output / NAMES[2]).write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n")
     return provenance
 
@@ -454,7 +469,8 @@ def verify(*, root: Path, artifacts: Path, commit: str, run_id: str, attempt: st
                 "license_sha256": release_cli.digest(root / "LICENSE"),
                 "native_validation": NATIVE_CHECKS, "files": files,
                 "toolchain": provenance["toolchain"],
-                "build_info_sha256": hashlib.sha256(_expected_build_info(root, commit)).hexdigest()}
+                "build_info_sha256": hashlib.sha256(_expected_build_info(root, commit)).hexdigest(),
+                "resource_manifest_sha256": files[RESOURCE_MANIFEST]["sha256"]}
     result = release_cli._check_provenance(provenance, expected)
     for name, digest in (("LICENSE", expected["license_sha256"]),
                          ("NOTICE.txt", expected["notice_sha256"])):

@@ -1,5 +1,6 @@
 """Contracts for a retained native editor artifact, separate from the Wasm editor."""
 
+import json
 import unittest
 
 from tools import bcr_preflight, release_candidate
@@ -72,6 +73,16 @@ class MacosEditorPackageTest(unittest.TestCase):
             "CFBundleExecutable": "Donner", "CFBundleIdentifier": "dev.donner.editor",
             "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "0.8",
             "CFBundleVersion": "1"}))
+        resources = self.app / "Contents/Resources/donner-assets"
+        (resources / "assets").mkdir(parents=True)
+        payload = b"native font fixture"
+        checksum = native.release_cli.sha256(payload).hexdigest()
+        resource_path = f"assets/{checksum}.ttf"
+        (resources / resource_path).write_bytes(payload)
+        (resources / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "assets": [{
+            "id": "fixture.font", "sha256": checksum, "encodedSize": len(payload),
+            "decodedSize": len(payload), "mediaType": "font/ttf", "group": "fallback",
+            "path": resource_path}]}))
         (self.app / "Contents/MacOS/Donner").chmod(0o755)
         self.notice = self.base / "notice.txt"
         self.notice.write_text(native.release_cli.NOTICE_HEADER + "editor\n\nPackage: fixture\n")
@@ -160,12 +171,28 @@ class MacosEditorPackageTest(unittest.TestCase):
         expected = self.package()
         self.assertEqual(self.verify(), expected)
         self.assertEqual(expected["native_validation"]["signature"], "ad-hoc")
+        self.assertEqual(expected["resource_manifest_sha256"], self.native.release_cli.digest(
+            self.app / "Contents/Resources/donner-assets/manifest.json"))
         with zipfile.ZipFile(self.output / self.native.ARCHIVE) as archive:
             self.assertEqual(archive.read("Donner SVG Editor.app/Contents/MacOS/Donner"), before)
             self.assertEqual(archive.read("LICENSE"), (self.root / "LICENSE").read_bytes())
             self.assertEqual(archive.read("NOTICE.txt"), self.notice.read_bytes())
             self.assertEqual((archive.getinfo("Donner SVG Editor.app/Contents/MacOS/Donner").external_attr
                               >> 16) & 0o777, 0o755)
+
+    def test_missing_or_corrupt_resources_cannot_be_packaged(self):
+        manifest = self.app / "Contents/Resources/donner-assets/manifest.json"
+        original = manifest.read_bytes()
+        manifest.unlink()
+        with self.assertRaisesRegex(ValueError, "missing required"):
+            self.package()
+        manifest.write_bytes(original)
+        import shutil
+        shutil.rmtree(self.output)
+        asset = next((manifest.parent / "assets").iterdir())
+        asset.write_bytes(b"corrupted")
+        with self.assertRaisesRegex(ValueError, "digest or length"):
+            self.package()
 
     def test_other_attempt_or_commit_is_refused(self):
         self.package()

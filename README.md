@@ -39,15 +39,18 @@ See the [SVG element reference](https://jwmcglynn.github.io/donner/SvgElementRef
 per-element detail and the [issue tracker](https://github.com/jwmcglynn/donner/issues) for known
 gaps.
 
-## CLI Tool: donner-svg
+## CLI Tool: donner-cli
 
 ```sh
-bazel run //donner/svg/tool:donner-svg -- donner_splash.svg --output output.png  # Render to PNG
-bazel run //donner/svg/tool:donner-svg -- donner_splash.svg --preview  # Terminal preview
-bazel run //donner/svg/tool:donner-svg -- donner_splash.svg --interactive  # Mouse selection
+bazel run //donner/svg/tool:donner-cli -- donner_splash.svg --output output.png  # Render to PNG
+bazel run //donner/svg/tool:donner-cli -- donner_splash.svg --preview  # Terminal preview
+bazel run //donner/svg/tool:donner-cli -- donner_splash.svg --interactive  # Mouse selection
 ```
 
-See the [donner-svg CLI docs](https://jwmcglynn.github.io/donner/DonnerSvgTool.html) for all
+The deprecated Bazel label `//donner/svg/tool:donner-svg` resolves to the same executable
+and will be removed at the next breaking version. `:tool` remains a convenience alias.
+
+See the [donner-cli CLI docs](https://jwmcglynn.github.io/donner/DonnerSvgTool.html) for all
 options, including animated GIF export.
 
 ## C++ API examples

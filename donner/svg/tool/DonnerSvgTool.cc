@@ -27,6 +27,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/DiagnosticRenderer.h"
 #include "donner/base/FileUtils.h"
+#include "donner/base/PackagedResource.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
@@ -48,7 +49,7 @@
 namespace donner::svg {
 namespace {
 
-/** Parsed command line options for donner-svg. */
+/** Parsed command line options for donner-cli. */
 struct CliOptions {
   std::string inputFile;
   std::string outputFile = "output.png";
@@ -128,11 +129,11 @@ private:
  * @param out Stream to write usage text to.
  */
 void PrintUsage(std::ostream& out) {
-  out << "donner-svg: Render SVG files to PNG and terminal previews\n\n"
+  out << "donner-cli: Render SVG files to PNG and terminal previews\n\n"
       << "USAGE:\n"
-      << "  donner-svg <input.svg> [--output <file.png>] [--width <px>] [--height <px>]\n"
+      << "  donner-cli <input.svg> [--output <file.png>] [--width <px>] [--height <px>]\n"
       << "             [--preview] [--interactive] [--quiet] [--verbose] [--experimental]\n"
-      << "  donner-svg <input.svg> --gif <file.gif> --end <s> [--start <s>] [--fps <n>]\n"
+      << "  donner-cli <input.svg> --gif <file.gif> --end <s> [--start <s>] [--fps <n>]\n"
       << "             [--scale <factor> | --width <px> --height <px>] [--background <color>]\n\n"
       << "FLAGS:\n"
       << "  --output <png>    Output PNG filename (default: output.png)\n"
@@ -423,6 +424,22 @@ std::optional<std::string> ReadFile(std::string_view filename) {
 }
 
 /** Parse SVG data into an SVGDocument. */
+/// Read the requested input and validate the installation before parsing or rendering.
+std::optional<std::string> ReadInputWithPackagedResources(const CliOptions& options,
+                                                          std::ostream& err) {
+  auto fileData = ReadFile(options.inputFile);
+  if (!fileData) {
+    err << "Failed to read input SVG: " << EscapeTerminalText(options.inputFile) << "\n";
+    return std::nullopt;
+  }
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    err << "Failed to load packaged resources: " << resourceError << "\n";
+    return std::nullopt;
+  }
+  return fileData;
+}
+
 std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::string& fileData,
                                          std::ostream& out, std::ostream& err) {
   ParseWarningSink warningSink = options.quiet ? ParseWarningSink::Disabled() : ParseWarningSink();
@@ -510,7 +527,7 @@ SampledImageInfo RenderPreview(const RendererBitmap& bitmap, bool interactive, s
   if (interactive) {
     viewerConfig.enableITermInlineImages = false;
   }
-  viewerConfig.imageName = "donner-svg preview";
+  viewerConfig.imageName = "donner-cli preview";
 
   const TerminalImageView view = MakeView(bitmap);
   const TerminalImage sampled = viewer.sampleImage(view, viewerConfig);
@@ -690,7 +707,7 @@ void RunInteractiveSelection(SVGDocument document, RendererTinySkia& renderer,
   TerminalImageViewerConfig viewerConfig = TerminalImageViewer::DetectConfigFromEnvironment();
   viewerConfig.autoScale = true;
   viewerConfig.enableITermInlineImages = false;
-  viewerConfig.imageName = "donner-svg preview";
+  viewerConfig.imageName = "donner-cli preview";
 
   // Map mouse terminal cell coordinates to image pixel coordinates using the actual sampled
   // image dimensions, not the full terminal size.
@@ -924,9 +941,8 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
     return 1;
   }
 
-  const auto fileData = ReadFile(options.inputFile);
+  const auto fileData = ReadInputWithPackagedResources(options, err);
   if (!fileData) {
-    err << "Failed to read input SVG: " << EscapeTerminalText(options.inputFile) << "\n";
     return 2;
   }
 
@@ -937,7 +953,7 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
 
   SVGDocument document = std::move(*maybeDocument);
 
-  // donner-svg always renders on the CPU (tiny-skia) backend. A one-shot
+  // donner-cli always renders on the CPU (tiny-skia) backend. A one-shot
   // command-line render cannot amortize the GPU backend's fixed device and
   // shader setup cost, so the CPU raster path is strictly faster for
   // single-frame output. The GPU backend serves interactive, multi-frame

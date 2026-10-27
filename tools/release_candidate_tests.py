@@ -113,6 +113,23 @@ class ZipValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "publishable role"):
             candidate._verify_role_files("editor", legacy | dialogs | {"site/extra.js"}, "0.8.0")
 
+    def test_editor_resource_inventory_requires_complete_paired_metadata_and_safe_assets(self):
+        names = {"provenance.json", "SHA256SUMS", "MODULE.bazel.lock", "site/editor.wasm",
+                 "deploy/editor.wasm.gz"}
+        names.update(f"{prefix}/{name}" for prefix in ("site", "deploy")
+                     for name in candidate.EDITOR_COMMON_FILES)
+        assets = {f"{prefix}/assets/{'a' * 64}.ttf" for prefix in ("site", "deploy")}
+        metadata = candidate.EDITOR_RESOURCE_FILES
+        candidate._verify_role_files("editor", names | assets | metadata, "0.8.0")
+        for incomplete in (assets, metadata - {next(iter(metadata))},
+                           assets - {next(iter(assets))}):
+            with self.subTest(incomplete=incomplete), self.assertRaises(ValueError):
+                candidate._verify_role_files("editor", names | incomplete, "0.8.0")
+        for unsafe in ("assets/../font.ttf", "assets/name.ttf", f"assets/{'a' * 64}.exe"):
+            invalid = {f"{prefix}/{unsafe}" for prefix in ("site", "deploy")}
+            with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
+                candidate._verify_role_files("editor", names | metadata | invalid, "0.8.0")
+
     def test_private_shaped_or_control_character_names_are_rejected_without_echo(self):
         with self.assertRaisesRegex(ValueError, "publishable role"):
             candidate._verify_role_files("source", {"home/user/private.txt"}, "0.8.0")

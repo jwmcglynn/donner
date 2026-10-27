@@ -207,7 +207,7 @@ jobs:
         run: python3 -B -m tools.bcr_preflight cli --platform linux-x86-64
       - uses: actions/upload-artifact@v7
         with:
-          name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          name: donner-cli-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-cli-linux/
           if-no-files-found: error
           retention-days: 90
@@ -242,7 +242,7 @@ jobs:
         run: python3 -B -m tools.bcr_preflight cli --platform darwin-arm64
       - uses: actions/upload-artifact@v7
         with:
-          name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          name: donner-cli-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-cli-macos/
           if-no-files-found: error
           retention-days: 90
@@ -278,12 +278,12 @@ jobs:
       - id: cli-linux-artifact
         uses: actions/download-artifact@v8
         with:
-          name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          name: donner-cli-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-linux
       - id: cli-macos-artifact
         uses: actions/download-artifact@v8
         with:
-          name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          name: donner-cli-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-macos
       - id: editor-macos-artifact
         uses: actions/download-artifact@v8
@@ -303,12 +303,12 @@ jobs:
             ${{ runner.temp }}/donner-bcr/editor-macos/donner-editor_darwin_arm64.zip.bazel.lock
             ${{ runner.temp }}/donner-bcr/editor-macos/donner-editor_darwin_arm64.zip.NOTICE.txt
             ${{ runner.temp }}/donner-bcr/source/*.tar.gz
-            ${{ runner.temp }}/donner-bcr/cli-linux/donner-svg_linux_x86_64
-            ${{ runner.temp }}/donner-bcr/cli-linux/donner-svg_linux_x86_64.bazel.lock
-            ${{ runner.temp }}/donner-bcr/cli-linux/donner-svg_linux_x86_64.NOTICE.txt
-            ${{ runner.temp }}/donner-bcr/cli-macos/donner-svg_darwin_arm64
-            ${{ runner.temp }}/donner-bcr/cli-macos/donner-svg_darwin_arm64.bazel.lock
-            ${{ runner.temp }}/donner-bcr/cli-macos/donner-svg_darwin_arm64.NOTICE.txt
+            ${{ runner.temp }}/donner-bcr/cli-linux/donner-cli_linux_x86_64.tar.gz
+            ${{ runner.temp }}/donner-bcr/cli-linux/donner-cli_linux_x86_64.tar.gz.bazel.lock
+            ${{ runner.temp }}/donner-bcr/cli-linux/donner-cli_linux_x86_64.tar.gz.NOTICE.txt
+            ${{ runner.temp }}/donner-bcr/cli-macos/donner-cli_darwin_arm64.zip
+            ${{ runner.temp }}/donner-bcr/cli-macos/donner-cli_darwin_arm64.zip.bazel.lock
+            ${{ runner.temp }}/donner-bcr/cli-macos/donner-cli_darwin_arm64.zip.NOTICE.txt
 
   qualify:
     needs: [prepare, consumer, cli-linux, cli-macos]
@@ -328,12 +328,12 @@ jobs:
       - id: cli-linux-artifact
         uses: actions/download-artifact@v8
         with:
-          name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          name: donner-cli-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-linux
       - id: cli-macos-artifact
         uses: actions/download-artifact@v8
         with:
-          name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          name: donner-cli-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-macos
       - id: editor-macos-artifact
         uses: actions/download-artifact@v8

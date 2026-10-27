@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Package and verify CLI binaries built before a GitHub release is published."""
+"""Package and verify offline CLI distributions before a GitHub release is published."""
 
 from __future__ import annotations
 
 import argparse
 from hashlib import sha256
+import gzip
+import io
 import ipaddress
 import json
+import stat
+import tarfile
+import zipfile
 from pathlib import Path
 import re
 import shutil
@@ -15,8 +20,8 @@ from urllib.parse import urlsplit
 
 
 PLATFORMS = {
-    "linux-x86-64": "donner-svg_linux_x86_64",
-    "darwin-arm64": "donner-svg_darwin_arm64",
+    "linux-x86-64": "donner-cli_linux_x86_64.tar.gz",
+    "darwin-arm64": "donner-cli_darwin_arm64.zip",
 }
 # The directory the release stages each platform's CLI files in, named by its candidate record
 # role, in the order the release verifies them.
@@ -31,7 +36,13 @@ LOCKFILE = "MODULE.bazel.lock"
 # Provenance schema 2 added the third-party license NOTICE that ships beside each binary.
 # Schema 3 replaced `host_cxx_version` (the runner's `c++ --version`, which was not the compiler
 # Bazel used) with `compiler_version`, reported by a probe built with the CLI.
-SCHEMA = 3
+# Schema 4 binds an offline archive, its executable, resource manifest and licenses.
+SCHEMA = 4
+MAX_RESOURCE_BYTES = 32 * 1024 * 1024
+MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_PACKAGE_BYTES = 128 * 1024 * 1024
+MAX_RESOURCE_COUNT = 4096
+MANIFEST = "donner-assets/manifest.json"
 NOTICE_HEADER = "Third-party licenses for build variant: "
 MAX_NOTICE_BYTES = 1024 * 1024
 PUBLIC_LOCK_HOSTS = frozenset({
@@ -216,8 +227,149 @@ def _run_identity(run_id: str, attempt: str) -> None:
         raise ValueError("release CLI producer run and attempt must be positive integers")
 
 
+def _resource_files(resources: Path) -> dict[str, bytes]:
+    """Read a generated tree, rejecting links, extraneous files and mismatched content."""
+    if resources.is_symlink() or not resources.is_dir():
+        raise ValueError("release CLI resources must be a generated resource directory")
+    files = {}
+    total = 0
+    for path in resources.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("release CLI resources contain a symlink")
+        if path.is_file():
+            size = path.stat().st_size
+            total += size
+            if (size > MAX_RESOURCE_BYTES or total > MAX_PACKAGE_BYTES
+                    or len(files) >= MAX_RESOURCE_COUNT + 1):
+                raise ValueError("release CLI resource exceeds its byte limit")
+            files[f"donner-assets/{path.relative_to(resources).as_posix()}"] = path.read_bytes()
+        elif not path.is_dir():
+            raise ValueError("release CLI resources contain a special file")
+    _validate_resources(files)
+    return files
+
+
+def _validate_resources(files: dict[str, bytes]) -> str:
+    """Validate resource metadata and the exact content-addressed package inventory."""
+    manifest = files.get(MANIFEST, b"")
+    if not 0 < len(manifest) <= MAX_MANIFEST_BYTES:
+        raise ValueError("release CLI resource manifest is missing or too large")
+    document = json.loads(manifest)
+    if (not isinstance(document, dict) or set(document) != {"schemaVersion", "assets"}
+            or type(document["schemaVersion"]) is not int or document["schemaVersion"] != 1 or not isinstance(document["assets"], list)
+            or not 0 < len(document["assets"]) <= MAX_RESOURCE_COUNT):
+        raise ValueError("release CLI resource manifest schema is invalid")
+    expected = {MANIFEST}
+    identities = set()
+    for asset in document["assets"]:
+        _validate_asset(asset, files, expected, identities)
+    if set(files) != expected or sum(map(len, files.values())) > MAX_PACKAGE_BYTES:
+        raise ValueError("release CLI resource inventory or aggregate byte limit is invalid")
+    return sha256(manifest).hexdigest()
+
+
+def _validate_asset(asset: object, files: dict[str, bytes], expected: set[str],
+                    identities: set[str]) -> None:
+    fields = {"id", "sha256", "encodedSize", "decodedSize", "mediaType", "group", "path"}
+    if not isinstance(asset, dict) or set(asset) != fields:
+        raise ValueError("release CLI resource entry is invalid")
+    identity = asset["id"]
+    checksum = asset["sha256"]
+    path = asset["path"]
+    if (not isinstance(identity, str) or not identity or identity in identities
+            or not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum)
+            or not isinstance(path, str)
+            or not re.fullmatch(r"assets/" + checksum + r"\.[a-z0-9]+", path)):
+        raise ValueError("release CLI resource identity or path is invalid")
+    for size in (asset["encodedSize"], asset["decodedSize"]):
+        if type(size) is not int or not 0 < size <= MAX_RESOURCE_BYTES:
+            raise ValueError("release CLI resource size is invalid")
+    if not all(isinstance(asset[key], str) and asset[key] for key in ("mediaType", "group")):
+        raise ValueError("release CLI resource type or group is invalid")
+    name = f"donner-assets/{path}"
+    payload = files.get(name, b"")
+    if (len(payload) != asset["encodedSize"] or asset["decodedSize"] != len(payload)
+            or sha256(payload).hexdigest() != checksum):
+        raise ValueError("release CLI resource digest or length does not match")
+    identities.add(identity)
+    expected.add(name)
+
+
+def _write_archive(destination: Path, files: dict[str, bytes]) -> None:
+    if destination.suffix == ".zip":
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, content in sorted(files.items()):
+                entry = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+                entry.create_system = 3
+                entry.external_attr = (stat.S_IFREG | (0o755 if name == "donner-cli" else 0o644)) << 16
+                entry.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(entry, content)
+    else:
+        with destination.open("wb") as output, gzip.GzipFile(fileobj=output, mode="wb", mtime=0,
+                                                           filename="") as compressed:
+            with tarfile.open(fileobj=compressed, mode="w") as archive:
+                for name, content in sorted(files.items()):
+                    entry = tarfile.TarInfo(name)
+                    entry.size = len(content)
+                    entry.mode = 0o755 if name == "donner-cli" else 0o644
+                    archive.addfile(entry, io.BytesIO(content))
+
+
+def _read_archive(path: Path) -> dict[str, bytes]:
+    """Inspect bytes in memory without extracting untrusted member paths."""
+    files = {}
+    if path.stat().st_size > MAX_PACKAGE_BYTES:
+        raise ValueError("release CLI archive exceeds byte limit")
+    if path.suffix == ".zip":
+        files = _read_zip(path)
+    else:
+        files = _read_tar(path)
+    if "donner-cli" not in files or "LICENSE" not in files or "NOTICE.txt" not in files:
+        raise ValueError("release CLI archive is missing its executable or licenses")
+    _validate_resources({name: data for name, data in files.items()
+                         if name.startswith("donner-assets/")})
+    return files
+
+
+def _read_zip(path: Path) -> dict[str, bytes]:
+    files = {}
+    with zipfile.ZipFile(path) as archive:
+        for member in archive.infolist():
+            mode = member.external_attr >> 16
+            _check_member(member.filename, member.file_size, stat.S_ISREG(mode), files)
+            if member.flag_bits & 1 or member.compress_type not in (
+                    zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                raise ValueError("release CLI archive has unsupported encoding")
+            if member.filename == "donner-cli" and not mode & stat.S_IXUSR:
+                raise ValueError("release CLI archive executable is not executable")
+            files[member.filename] = archive.read(member)
+    return files
+
+
+def _read_tar(path: Path) -> dict[str, bytes]:
+    files = {}
+    with tarfile.open(path, "r:gz") as archive:
+        for member in archive:
+            _check_member(member.name, member.size, member.isfile(), files)
+            if member.name == "donner-cli" and not member.mode & stat.S_IXUSR:
+                raise ValueError("release CLI archive executable is not executable")
+            files[member.name] = archive.extractfile(member).read()
+    return files
+
+
+def _check_member(name: str, size: int, regular: bool, files: dict[str, bytes]) -> None:
+    if (name in files or not regular or not 0 < size <= MAX_RESOURCE_BYTES
+            or name == MANIFEST and size > MAX_MANIFEST_BYTES
+            or len(files) >= MAX_RESOURCE_COUNT + 4
+            or sum(map(len, files.values())) + size > MAX_PACKAGE_BYTES
+            or name not in {"donner-cli", "LICENSE", "NOTICE.txt", MANIFEST}
+            and not re.fullmatch(r"donner-assets/assets/[0-9a-f]{64}\.[a-z0-9]+", name)):
+        raise ValueError("release CLI archive has an invalid or duplicate member")
+
+
 def package(
-    *, root: Path, binary: Path, notice: Path, compiler_probe: Path, output: Path, platform: str,
+    *, root: Path, binary: Path, notice: Path, compiler_probe: Path, resources: Path,
+    output: Path, platform: str,
     commit: str, run_id: str, attempt: str,
 ) -> dict[str, object]:
     _run_identity(run_id, attempt)
@@ -231,11 +383,17 @@ def package(
     if lockfile.is_symlink() or not lockfile.is_file() or lockfile.stat().st_size == 0:
         raise ValueError("generated Bazel lockfile is missing or empty")
     _validate_public_lockfile(lockfile)
+    if output.is_symlink():
+        raise ValueError("release CLI output directory must not be linked")
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         raise ValueError("release CLI output directory must be empty")
+    files = _resource_files(resources)
+    files.update({"donner-cli": binary.read_bytes(), "NOTICE.txt": notice.read_bytes(),
+                  "LICENSE": (root / "LICENSE").read_bytes()})
     destination = output / binary_name
-    shutil.copyfile(binary, destination)
+    _write_archive(destination, files)
+    packaged = _read_archive(destination)
     shutil.copyfile(lockfile, output / lock_name)
     _validate_public_lockfile(output / lock_name)
     shutil.copyfile(notice, output / notice_name)
@@ -254,8 +412,12 @@ def package(
         "compiler_version": compiler,
         "inputs_sha256": _input_digests(root),
         "generated_lock_sha256": lock_checksum,
-        "binary_sha256": checksum,
-        "binary_size": destination.stat().st_size,
+        "archive_sha256": checksum,
+        "archive_size": destination.stat().st_size,
+        "binary_sha256": sha256(packaged["donner-cli"]).hexdigest(),
+        "binary_size": len(packaged["donner-cli"]),
+        "resource_manifest_sha256": sha256(packaged[MANIFEST]).hexdigest(),
+        "license_sha256": sha256(packaged["LICENSE"]).hexdigest(),
         "notice_sha256": digest(output / notice_name),
     }
     (output / provenance_name).write_text(json.dumps(provenance, indent=2) + "\n")
@@ -298,8 +460,17 @@ def verify(
     retained_notice = artifacts / notice_name
     _check_notice(retained_notice)
     checksum = digest(binary)
+    if (artifacts / checksum_name).stat().st_size > 1024:
+        raise ValueError("release CLI checksum exceeds its byte limit")
     if (artifacts / checksum_name).read_text(encoding="ascii") != f"{checksum}  {binary_name}\n":
         raise ValueError("release CLI checksum does not match retained bytes")
+    packaged = _read_archive(binary)
+    if packaged["NOTICE.txt"] != retained_notice.read_bytes():
+        raise ValueError("release CLI notice provenance does not match packaged bytes")
+    if packaged["LICENSE"] != (root / "LICENSE").read_bytes():
+        raise ValueError("release CLI packaged license differs from committed source")
+    if (artifacts / provenance_name).stat().st_size > MAX_MANIFEST_BYTES:
+        raise ValueError("release CLI provenance exceeds its byte limit")
     provenance = json.loads((artifacts / provenance_name).read_text(encoding="utf-8"))
     expected = {
         "schema": SCHEMA,
@@ -311,8 +482,12 @@ def verify(
         "bazel_version": (root / ".bazelversion").read_text(encoding="utf-8").strip(),
         "inputs_sha256": _input_digests(root),
         "generated_lock_sha256": digest(retained_lock),
-        "binary_sha256": checksum,
-        "binary_size": binary.stat().st_size,
+        "archive_sha256": checksum,
+        "archive_size": binary.stat().st_size,
+        "binary_sha256": sha256(packaged["donner-cli"]).hexdigest(),
+        "binary_size": len(packaged["donner-cli"]),
+        "resource_manifest_sha256": sha256(packaged[MANIFEST]).hexdigest(),
+        "license_sha256": sha256(packaged["LICENSE"]).hexdigest(),
         "notice_sha256": digest(retained_notice),
     }
     return _check_provenance(provenance, expected)
@@ -344,6 +519,7 @@ def main() -> None:
         if name == "package":
             command.add_argument("--binary", type=Path, required=True)
             command.add_argument("--notice", type=Path, required=True)
+            command.add_argument("--resources", type=Path, required=True)
             command.add_argument("--compiler-probe", type=Path, required=True,
                                  help="//tools/ci:release_compiler_identity from the same build")
             command.add_argument("--output", type=Path, required=True)
@@ -374,6 +550,7 @@ def main() -> None:
                    run_id=args.run_id, attempt=args.attempt)
     if args.command == "package":
         package(binary=args.binary, notice=args.notice, compiler_probe=args.compiler_probe,
+                resources=args.resources,
                 output=args.output, **options)
     else:
         verify(artifacts=args.artifacts, **options)

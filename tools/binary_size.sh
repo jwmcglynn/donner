@@ -58,16 +58,16 @@ function run_bloaty() {
 bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${BAZEL_CONFIGS[@]}" //donner/svg/parser:svg_parser_tool //donner/svg/parser:svg_parser_tool.stripped
 cp -f bazel-bin/donner/svg/parser/svg_parser_tool.stripped build-binary-size/svg_parser_tool
 
-bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${BAZEL_CONFIGS[@]}" //donner/svg/tool:donner-svg.stripped
-cp -f bazel-bin/donner/svg/tool/donner-svg.stripped build-binary-size/donner-svg
+bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${BAZEL_CONFIGS[@]}" //donner/svg/tool:donner-cli.stripped
+cp -f bazel-bin/donner/svg/tool/donner-cli.stripped build-binary-size/donner-cli
 
-# Print human-readable binary size of svg_parser_tool.stripped and donner-svg.stripped
+# Print human-readable binary size of svg_parser_tool.stripped and donner-cli.stripped
 echo '```'
 echo "Total binary size of svg_parser_tool"
 du -h build-binary-size/svg_parser_tool
 echo ""
-echo "Total binary size of donner-svg"
-du -h build-binary-size/donner-svg
+echo "Total binary size of donner-cli"
+du -h build-binary-size/donner-cli
 echo '```'
 echo ""
 
@@ -129,13 +129,13 @@ if [[ -z "$SKIP_LTO" ]]; then
 
   bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${LTO_CONFIGS[@]}" //donner/svg/parser:svg_parser_tool.stripped
   cp -f bazel-bin/donner/svg/parser/svg_parser_tool.stripped build-binary-size/svg_parser_tool.lto
-  bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${LTO_CONFIGS[@]}" //donner/svg/tool:donner-svg.stripped
-  cp -f bazel-bin/donner/svg/tool/donner-svg.stripped build-binary-size/donner-svg.lto
+  bazel build "${BAZEL_QUIET_OPTIONS[@]}" "${BAZEL_LOCAL_OPTIONS[@]}" "${LTO_CONFIGS[@]}" //donner/svg/tool:donner-cli.stripped
+  cp -f bazel-bin/donner/svg/tool/donner-cli.stripped build-binary-size/donner-cli.lto
 
   parser_base=$(wc -c < build-binary-size/svg_parser_tool)
   parser_lto=$(wc -c < build-binary-size/svg_parser_tool.lto)
-  donnersvg_base=$(wc -c < build-binary-size/donner-svg)
-  donnersvg_lto=$(wc -c < build-binary-size/donner-svg.lto)
+  donnersvg_base=$(wc -c < build-binary-size/donner-cli)
+  donnersvg_lto=$(wc -c < build-binary-size/donner-cli.lto)
 
   parser_delta=$(awk "BEGIN{printf \"%.1f\", ($parser_lto-$parser_base)*100.0/$parser_base}")
   donnersvg_delta=$(awk "BEGIN{printf \"%.1f\", ($donnersvg_lto-$donnersvg_base)*100.0/$donnersvg_base}")
@@ -143,7 +143,7 @@ if [[ -z "$SKIP_LTO" ]]; then
   echo '```'
   printf '%-16s %14s %14s %10s\n' "target" "non-LTO" "ThinLTO" "delta"
   printf '%-16s %14s %14s %9s%%\n' "svg_parser_tool" "$parser_base" "$parser_lto" "$parser_delta"
-  printf '%-16s %14s %14s %9s%%\n' "donner-svg" "$donnersvg_base" "$donnersvg_lto" "$donnersvg_delta"
+  printf '%-16s %14s %14s %9s%%\n' "donner-cli" "$donnersvg_base" "$donnersvg_lto" "$donnersvg_delta"
   echo '```'
 fi
 ##
