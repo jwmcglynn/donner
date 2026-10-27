@@ -18,12 +18,16 @@ class WasmTextRenderTest(unittest.TestCase):
         self.assertTrue(node.startswith("external/"))
         node = resolver.Rlocation(node[len("external/"):])
         base = "donner/donner/svg/renderer/wasm/"
-        glue = resolver.Rlocation(base + "donner_wasm_bin.js")
-        wasm = resolver.Rlocation(base + "donner_wasm_bin.wasm")
+        package = Path(resolver.Rlocation(base + "test_page"))
+        glue = package / "donner_wasm_bin.js"
+        wasm = str(package / "donner_wasm_bin.wasm")
         driver = resolver.Rlocation(base + "render_text_test_driver.mjs")
-        assets = resolver.Rlocation("donner/third_party/public-sans/public-sans_resource_gen.assets")
-        broker = resolver.Rlocation("donner/donner/editor/wasm/catalog-fonts.js")
-        loader = resolver.Rlocation("donner/donner/editor/wasm/packaged-resource-loader.js")
+        assets = str(package)
+        broker = str(package / "catalog-fonts.js")
+        loader = str(package / "packaged-resource-loader.js")
+        notice = (package / "fallback_font_notice.txt").read_text()
+        self.assertIn("Public Sans", notice)
+        self.assertIn("SIL OPEN FONT LICENSE", notice)
         env = dict(os.environ)
         options = [value for value in shlex.split(env.get("NODE_OPTIONS", "")) if value != "--jitless"]
         env["NODE_OPTIONS"] = shlex.join(options)

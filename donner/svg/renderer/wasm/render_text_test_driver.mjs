@@ -57,22 +57,44 @@ if (mode === "installed" || mode === "corrupt") {
 assert.equal(typeof module._donner_prepare_resources, "function");
 assert.equal(module._donner_prepare_resources(), mode === "installed" ? 1 : 0);
 module.ccall("donner_init", null, [], []);
-const pointer = render(svg, 128, 64);
-if (mode === "installed") {
-  assert.notEqual(pointer, 0, error());
-  let red = 0;
-  const pixels = module.HEAPU8.subarray(pointer, pointer + 128 * 64 * 4);
-  for (let index = 0; index < pixels.length; index += 4) {
-    if (
-      pixels[index] > 128 && pixels[index + 1] < 64 && pixels[index + 2] < 64
-      && pixels[index + 3] > 128
-    ) ++red;
+const renderLength = module.cwrap("donner_render_svg_len", "number", [
+  "number",
+  "number",
+  "number",
+  "number",
+]);
+const bytes = new TextEncoder().encode(svg);
+const input = module._malloc(bytes.byteLength);
+assert.notEqual(input, 0);
+module.HEAPU8.set(bytes, input);
+try {
+  // Both original public entry points must enforce the resource barrier independently.
+  for (
+    const invoke of [
+      () => render(svg, 128, 64),
+      () => renderLength(input, bytes.byteLength, 128, 64),
+    ]
+  ) {
+    const pointer = invoke();
+    if (mode === "installed") {
+      assert.notEqual(pointer, 0, error());
+      let red = 0;
+      const pixels = module.HEAPU8.subarray(pointer, pointer + 128 * 64 * 4);
+      for (let index = 0; index < pixels.length; index += 4) {
+        if (
+          pixels[index] > 128 && pixels[index + 1] < 64 && pixels[index + 2] < 64
+          && pixels[index + 3] > 128
+        ) ++red;
+      }
+      freePixels(pointer);
+      assert.ok(red > 20, `Missing text pixels: ${red}`);
+    } else {
+      if (pointer) freePixels(pointer);
+      assert.equal(pointer, 0, "Missing resources must not produce a successful blank bitmap");
+      assert.match(error(), /packaged resources/i);
+    }
   }
-  freePixels(pointer);
-  assert.ok(red > 20, `Missing text pixels: ${red}`);
-} else {
-  if (pointer) freePixels(pointer);
-  assert.equal(pointer, 0, "Missing resources must not produce a successful blank bitmap");
-  assert.match(error(), /packaged resources/i);
+} finally {
+  module._free(input);
 }
 console.log(`PASS=${mode}`);

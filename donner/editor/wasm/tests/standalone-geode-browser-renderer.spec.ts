@@ -533,3 +533,50 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
 
   expect(pageErrorCount, `browser page error categories: ${pageErrorCategories.join(",")}`).toBe(0);
 });
+
+test("standalone basic-text fixture paints fallback glyphs beyond its fontless reference", async ({ page }) => {
+  test.setTimeout(90000);
+  await page.goto(`${baseUrl}/test-geode.html`, { waitUntil: "domcontentloaded" });
+  const render = page.locator("#render-btn");
+  await expect(render).toBeEnabled({ timeout: 45000 });
+  await page.locator("#w").fill("128");
+  await page.locator("#h").fill("64");
+  const prefix = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"128\" height=\"64\">"
+    + "<rect width=\"1\" height=\"1\" fill=\"blue\"/>";
+  async function capture(source: string) {
+    await page.locator("#svg-input").fill(source);
+    await render.click();
+    await expect(page.locator("#status")).toContainText("Rendered 128x64 via Geode", {
+      timeout: 45000,
+    });
+    return await page.evaluate(() => {
+      const image = (window as Window & {
+        __donnerLastRender?: { width: number; height: number; rgba: Uint8ClampedArray };
+      }).__donnerLastRender;
+      if (!image) throw new Error("Missing standalone renderer pixels");
+      let red = 0;
+      for (let index = 0; index < image.rgba.length; index += 4) {
+        if (
+          image.rgba[index] > 128 && image.rgba[index + 1] < 64
+          && image.rgba[index + 2] < 64 && image.rgba[index + 3] > 128
+        ) ++red;
+      }
+      return { width: image.width, height: image.height, red };
+    });
+  }
+  const fontless = await capture(prefix + "</svg>");
+  const text = await capture(
+    prefix
+      + "<text x=\"4\" y=\"42\" font-family=\"UninstalledFixtureFamily\" font-size=\"32\" fill=\"red\">Hi</text></svg>",
+  );
+  expect(fontless).toEqual({ width: 128, height: 64, red: 0 });
+  expect(text.width).toBe(128);
+  expect(text.height).toBe(64);
+  expect(text.red).toBeGreaterThan(20);
+  const outputs = process.env.TEST_UNDECLARED_OUTPUTS_DIR;
+  expect(outputs, "Bazel must retain the text comparison receipt").toBeTruthy();
+  writeFileSync(
+    join(outputs!, "standalone_text_resource_comparison.json"),
+    JSON.stringify({ fontless, text }) + "\n",
+  );
+});

@@ -56,6 +56,9 @@
 </div>
 
 <script type="module">
+  import { prepareRendererResources } from './renderer-resources.js';
+  const resourceLifetime = new AbortController();
+  window.addEventListener('pagehide', () => resourceLifetime.abort(), { once: true });
   // Load the Emscripten-generated ES6 module.
   // Adjust the path if serving from a different location.
   import createModule from './donner_wasm_bin.js';
@@ -77,6 +80,7 @@
   async function boot() {
     try {
       Module = await createModule();
+      await prepareRendererResources(Module, { signal: resourceLifetime.signal });
 
       // Wrap exported C functions.
       donnerInit       = Module.cwrap('donner_init', null, []);

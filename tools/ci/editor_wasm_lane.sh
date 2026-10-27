@@ -49,6 +49,8 @@ prefetch() {
     bazelisk fetch //tools/ci:editor_wasm_audits
   lane_phase "Fetch renderer Wasm size tests (wasm-size)" \
     bazelisk fetch --config=wasm-size //tools/ci:wasm_size_tests
+  lane_phase "Fetch standalone text resources (wasm-size with text)" \
+    bazelisk fetch --config=wasm-size --//donner/svg/renderer:text=true //tools/ci:wasm_text_resource_tests
   lane_phase "Fetch editor Wasm size tests (editor-wasm)" \
     bazelisk fetch --config=editor-wasm ${source_args[@]+"${source_args[@]}"} //tools/ci:editor_wasm_size_tests
   lane_phase "Fetch browser GPU bridge (wasm-geode)" \
@@ -73,6 +75,9 @@ build() {
     //tools/ci:editor_wasm_shipped_browser_audit
   lane_phase "Renderer Wasm pixel test (wasm-size)" \
     bazelisk test --config=wasm-size --test_output=errors //donner/svg/renderer/wasm:render_test
+  lane_phase "Renderer text resource cases (wasm-size with text)" \
+    bazelisk test --config=wasm-size --//donner/svg/renderer:text=true --test_output=errors \
+    //tools/ci:wasm_text_resource_tests
   lane_phase "Renderer Wasm size tests (wasm-size)" \
     bazelisk test --config=wasm-size --test_output="${budget_test_output}" "${budget_args[@]}" \
     //donner/svg/renderer/wasm:wasm_size_tests

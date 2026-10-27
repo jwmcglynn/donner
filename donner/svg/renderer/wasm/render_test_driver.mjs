@@ -79,6 +79,10 @@ for (const name of ["cwrap", "HEAPU8", "_malloc", "_free"]) {
   }
 }
 
+if (Module._donner_prepare_resources !== undefined) {
+  fail("the named wasm-size profile unexpectedly enabled text resources");
+}
+
 const donnerInit = Module.cwrap("donner_init", null, []);
 const donnerRenderSvg = Module.cwrap("donner_render_svg", "number", ["string", "number", "number"]);
 const donnerRenderSvgLen = Module.cwrap(

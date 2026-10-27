@@ -124,6 +124,16 @@ test_suite(
 )
 
 test_suite(
+    name = "wasm_text_resource_tests",
+    tags = ["manual"],
+    tests = [
+        "//donner/svg/renderer/wasm:geode_browser_test_transition_test",
+        "//donner/svg/renderer/wasm:render_text_test",
+        "//donner/svg/renderer/wasm:renderer_resource_bootstrap_test",
+    ],
+)
+
+test_suite(
     name = "editor_wasm_size_tests",
     tags = ["manual"],
     tests = ["//donner/editor/wasm:wasm_geode_package_size_tests"],

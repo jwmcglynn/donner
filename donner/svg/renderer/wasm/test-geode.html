@@ -54,6 +54,9 @@
 </div>
 
 <script type="module">
+  import { prepareRendererResources } from './renderer-resources.js';
+  const resourceLifetime = new AbortController();
+  window.addEventListener('pagehide', () => resourceLifetime.abort(), { once: true });
   const status  = document.getElementById('status');
   const gpuInfo = document.getElementById('gpu-info');
   const btn     = document.getElementById('render-btn');
@@ -118,6 +121,7 @@
     try {
       const { default: createModule } = await import('./donner_wasm_geode_bin.js');
       Module = await createModule();
+      await prepareRendererResources(Module, { signal: resourceLifetime.signal });
     } catch (err) {
       status.textContent = 'Failed to load WASM module: ' + err.message;
       status.classList.add('error');

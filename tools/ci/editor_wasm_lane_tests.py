@@ -21,6 +21,8 @@ _COMMANDS = {
     "prefetch": [
         ["bazelisk", "fetch", "//tools/ci:editor_wasm_audits"],
         ["bazelisk", "fetch", "--config=wasm-size", "//tools/ci:wasm_size_tests"],
+        ["bazelisk", "fetch", "--config=wasm-size", "--//donner/svg/renderer:text=true",
+         "//tools/ci:wasm_text_resource_tests"],
         ["bazelisk", "fetch", "--config=editor-wasm", "//tools/ci:editor_wasm_size_tests"],
         ["bazelisk", "fetch", "--config=wasm-geode", *_GEODE_MODULE_TARGETS],
     ],
@@ -30,6 +32,8 @@ _COMMANDS = {
          "//tools/ci:editor_wasm_shipped_browser_audit"],
         ["bazelisk", "test", "--config=wasm-size", "--test_output=errors",
          "//donner/svg/renderer/wasm:render_test"],
+        ["bazelisk", "test", "--config=wasm-size", "--//donner/svg/renderer:text=true",
+         "--test_output=errors", "//tools/ci:wasm_text_resource_tests"],
         ["bazelisk", "test", "--config=wasm-size", "--test_output=errors",
          "--test_arg=--payload-budget-mode=enforce", "//donner/svg/renderer/wasm:wasm_size_tests"],
         ["bazelisk", "test", "--config=editor-wasm", "--test_output=errors",
