@@ -2876,6 +2876,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             with self.subTest(changed=changed):
                 self.assertEqual("false", self._bcr_scope(changed))
 
+    def test_native_delivery_module_triggers_the_full_package_preflight(self):
+        workflow = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        trigger = workflow.split("permissions:", 1)[0]
+        self.assertIn("      - tools/native_delivery.py\n", trigger)
+        self.assertEqual("true", self._bcr_scope(["tools/native_delivery.py"]))
+
     def test_bcr_release_path_pull_requests_run_the_full_matrix(self):
         for changed in (["MODULE.bazel"], ["MODULE.bazel.lock"], [".bazelversion"],
                         [".bazelrc"], [".bcr/presubmit.yml"], ["examples/bazel_consumer/main.cc"],

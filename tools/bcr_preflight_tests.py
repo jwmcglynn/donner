@@ -354,7 +354,7 @@ class BcrPreflightTest(unittest.TestCase):
 
     def test_release_paths_match_like_shell_case_patterns(self):
         # `*` crosses directories, as in the shell `case` the workflow used.
-        for path in ("tools/bcr_preflight.py", ".bcr/nested/presubmit.yml",
+        for path in ("tools/bcr_preflight.py", "tools/native_delivery.py", ".bcr/nested/presubmit.yml",
                      "third_party/licenses/a/b.txt", "third_party/BUILD.harfbuzz",
                      "tools/ci/release_compiler_identity.cc"):
             self.assertTrue(bcr_preflight.is_release_path(path), path)

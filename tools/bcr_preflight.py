@@ -52,7 +52,7 @@ RELEASE_PATHS = (
     "examples/bazel_consumer/*", "third_party/licenses/*", "third_party/bazel/*",
     "third_party/BUILD*", "third_party/*.BUILD", "third_party/*.bzl",
     "third_party/patches/*", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
-    "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/notice*",
+    "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/native_delivery.py", "tools/notice*",
     "tools/render_notice*", "tools/default_notice*", "tools/macos_editor_test_bundle*", "tools/ci/BUILD.bazel",
     "tools/ci/release_*", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl",
     "build_defs/editor_build_info.bzl", "build_defs/BUILD.bazel", "build_defs/packaged_resources*",
