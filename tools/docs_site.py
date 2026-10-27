@@ -299,6 +299,19 @@ def verify_site(root: Path, expected_manifest: str | None = None) -> dict:
     return marker
 
 
+def write_version_record(output: Path, version: str, root: Path) -> int:
+    checked = check_version(output, version)
+    commit = None
+    if (root / ".git").exists():
+        require(Path(bcr_source.git("rev-parse", "--show-toplevel")).resolve() == root.resolve(),
+                "documentation checkout does not match its Git root")
+        commit = bcr_source.git("rev-parse", "HEAD")
+        require(SHA.fullmatch(commit), "documentation source commit is invalid")
+    (output / "docs-version.json").write_bytes(canonical({"schema": 1,
+            "semantic_version": version, "source_commit": commit}))
+    return checked
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("check-version", "compose", "verify"))
@@ -309,9 +322,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.operation == "check-version":
         version = bcr_source.module_values(args.module.read_text())["version"]
-        print("Validated", check_version(args.site, version), "Doxygen pages at", version)
-        (args.site / "docs-version.json").write_bytes(canonical({"schema": 1, "semantic_version": version,
-                                                              "source_commit": bcr_source.git("rev-parse", "HEAD")}))
+        print("Validated", write_version_record(args.site, version, Path.cwd()), "Doxygen pages at", version)
     elif args.operation == "verify":
         verify_site(args.site)
     else:

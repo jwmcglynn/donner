@@ -101,6 +101,15 @@ class DocsSiteTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "version differs"):
                     site.check_version(folder, "0.8.0")
 
+    def test_source_archive_build_does_not_inherit_a_parent_git_identity(self):
+        output = self.root / "html"; output.mkdir()
+        (output / "index.html").write_text('<span id="projectnumber">0.8.0</span>')
+        with mock.patch.object(site.bcr_source, "git") as git:
+            self.assertEqual(site.write_version_record(output, "0.8.0", self.root), 1)
+        git.assert_not_called()
+        self.assertEqual(site.read_json(output / "docs-version.json"),
+                         {"schema": 1, "semantic_version": "0.8.0", "source_commit": None})
+
     def test_source_identity_and_optional_version_record_are_bound(self):
         archive, identity = self.source(extra={"docs-version.json": site.canonical({"schema": 1,
             "semantic_version": "0.8.0-pre", "source_commit": "a" * 40})})
