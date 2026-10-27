@@ -1,5 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load(":shipped_product.bzl", "shipped_product")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 
 package(default_visibility = ["//visibility:public"])
@@ -215,9 +216,23 @@ filegroup(
 
 packaged_resource_bundle(
     name = "release_cli_resources",
-    resources = ["//third_party/public-sans:public-sans_resource_files"],
+    resources = select({
+        "//donner/svg/renderer:text_enabled": ["//third_party/public-sans:public-sans_resource_files"],
+        "//conditions:default": [],
+    }),
     tags = ["manual"],
 )
+
+[
+    configured_dependency_audit_test(
+        name = "release_cli_" + tier + "_resources_audit",
+        forbidden = ["//third_party/public-sans:public-sans_resource_files"] if tier == "none" else [],
+        required = [":release_cli_resources"] + (["//third_party/public-sans:public-sans_resource_files"] if tier != "none" else []),
+        target = ":release_cli_resources",
+        text_configuration = tier,
+    )
+    for tier in ("none", "basic", "full")
+]
 
 cc_binary(
     name = "release_crash_probe",

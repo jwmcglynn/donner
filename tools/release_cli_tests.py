@@ -122,6 +122,27 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
                 for path in self.artifacts.iterdir():
                     path.unlink()
 
+    def test_no_text_packages_allow_an_empty_resource_manifest_on_both_platforms(self) -> None:
+        for path in (self.resources / "assets").iterdir():
+            path.unlink()
+        manifest = {"schemaVersion": 1, "assets": []}
+        (self.resources / "manifest.json").write_text(json.dumps(manifest))
+        for platform in release_cli.PLATFORMS:
+            with self.subTest(platform=platform):
+                expected = self._package(platform)
+                self.assertEqual(self._verify(platform), expected)
+                files = release_cli._read_archive(self.artifacts / release_cli.PLATFORMS[platform])
+                self.assertEqual({name for name in files if name.startswith("donner-assets/")},
+                                 {release_cli.MANIFEST})
+                self.assertEqual(json.loads(files[release_cli.MANIFEST]), manifest)
+                for path in self.artifacts.iterdir():
+                    path.unlink()
+
+    def test_empty_manifest_rejects_unbound_font_payloads(self) -> None:
+        (self.resources / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "assets": []}))
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            release_cli._resource_files(self.resources)
+
     def test_resource_manifest_negative_controls(self) -> None:
         original = json.loads((self.resources / "manifest.json").read_text())
         mutations = {

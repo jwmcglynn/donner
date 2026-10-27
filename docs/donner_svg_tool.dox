@@ -15,9 +15,11 @@
  *
  * @section DonnerSvgToolBackend Rendering backend
  *
- * Published native packages contain `donner-cli`, its executable-adjacent `donner-assets`
+ * Text-enabled native packages contain `donner-cli`, its executable-adjacent `donner-assets`
  * directory, and licenses. Keep these files together when relocating an installation; rendering
- * works offline and reports an error if a required resource is missing or corrupt.
+ * works offline and reports an error if a required resource is missing or corrupt. Builds with
+ * `--config=no-text` or `--config=tiny` do not require font resources; a no-text archive may
+ * retain an empty resource manifest.
  *
  * `donner-cli` always renders with Donner's CPU (tiny-skia) backend, under
  * every build configuration. A one-shot command-line render cannot amortize

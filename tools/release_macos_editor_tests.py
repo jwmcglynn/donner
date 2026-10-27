@@ -189,6 +189,14 @@ class MacosEditorPackageTest(unittest.TestCase):
             self.assertEqual((archive.getinfo("Donner SVG Editor.app/Contents/MacOS/Donner").external_attr
                               >> 16) & 0o777, 0o755)
 
+    def test_full_text_editor_rejects_an_empty_resource_manifest(self):
+        resources = self.app / "Contents/Resources/donner-assets"
+        for path in (resources / "assets").iterdir():
+            path.unlink()
+        (resources / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "assets": []}))
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            self.package()
+
     def test_missing_or_corrupt_resources_cannot_be_packaged(self):
         manifest = self.app / "Contents/Resources/donner-assets/manifest.json"
         original = manifest.read_bytes()

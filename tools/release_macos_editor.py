@@ -136,6 +136,8 @@ def _check_resources(archive: zipfile.ZipFile, files: dict) -> None:
     release_cli._validate_resources({
         "donner-assets/" + name.removeprefix(RESOURCE_ROOT): archive.read(name)
         for name in resources})
+    if not json.loads(archive.read(RESOURCE_MANIFEST))["assets"]:
+        raise ValueError("native editor resource manifest must not be empty")
 
 
 def inspect_archive(path: Path) -> dict:

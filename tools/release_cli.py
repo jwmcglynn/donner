@@ -262,7 +262,7 @@ def _validate_resources(files: dict[str, bytes]) -> str:
     document = json.loads(manifest)
     if (not isinstance(document, dict) or set(document) != {"schemaVersion", "assets"}
             or type(document["schemaVersion"]) is not int or document["schemaVersion"] != 1 or not isinstance(document["assets"], list)
-            or not 0 < len(document["assets"]) <= MAX_RESOURCE_COUNT):
+            or len(document["assets"]) > MAX_RESOURCE_COUNT):
         raise ValueError("release CLI resource manifest schema is invalid")
     expected = {MANIFEST}
     identities = set()
