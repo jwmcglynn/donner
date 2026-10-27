@@ -2869,13 +2869,15 @@ float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
 }
 
 /// Preserve same-family boundary shaping across size/face changes, using the preceding face's kern.
-bool CompatibleKerningRuns(const FontManager& fontManager, const TextRun& current,
-                           FontVariant currentVariant, FontHandle previousFont,
+/// \p currentFont and \p previousFont are the faces that draw the glyphs on each side of the
+/// boundary, which may be fallback faces rather than the spans' primary faces.
+bool CompatibleKerningRuns(const FontManager& fontManager, FontHandle currentFont,
+                           float currentSizePx, FontVariant currentVariant, FontHandle previousFont,
                            float previousSizePx, FontVariant previousVariant, bool currentKerning,
                            bool previousKerning) {
   return currentKerning && previousKerning && currentVariant == previousVariant &&
-         current.usedFontSizePx > 0.0f && previousSizePx > 0.0f &&
-         fontManager.fontsShareFamily(current.font, previousFont);
+         currentSizePx > 0.0f && previousSizePx > 0.0f &&
+         fontManager.fontsShareFamily(currentFont, previousFont);
 }
 
 /// Only adjacent flat runs or runs owned by the same textPath share a pair predecessor.
@@ -2951,7 +2953,9 @@ size_t ClusterEnd(std::string_view text, size_t start, size_t end) {
  * element. Each query shapes one codepoint, so a document with many faces and many distinct
  * unmapped codepoints could otherwise demand faces times codepoints shaping calls. Each span grants
  * a fixed number of queries per byte of its text; once the grant is spent, unknown pairs report no
- * coverage and their clusters stay `.notdef`.
+ * coverage and their clusters stay `.notdef`. At most
+ * \ref TextEngine::kMaximumFallbackCoverageEntries answers are retained, so memory does not grow
+ * with text length times face count.
  */
 class FallbackCoverage {
 public:
@@ -2985,7 +2989,11 @@ public:
     }
     --remaining_;
     const bool covered = fontSupportsCodepoint(backend, font, sizePx, codepoint);
-    cache_.emplace(key, covered);
+    // Answers past the bound are recomputed when asked again, still charged to the grant, so
+    // memory stays fixed while results stay the same.
+    if (cache_.size() < TextEngine::kMaximumFallbackCoverageEntries) {
+      cache_.emplace(key, covered);
+    }
     return covered;
   }
 
@@ -3690,14 +3698,14 @@ private:
     }
     size_t firstByte = state.chunkRanges.front().byteStart;
     const uint32_t firstCodepoint = decodeUtf8(state.text, firstByte);
+    const FontHandle firstFace = state.shaping.chunks.front().drawingFace(0, state.font);
     const bool compatible =
         previousSpanOrientation_ == state.orientation &&
-        CompatibleKerningRuns(fontManager_, state.run, state.span->fontVariant, previousSpanFont_,
-                              previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning,
-                              previousSpanKerning_);
+        CompatibleKerningRuns(fontManager_, firstFace, state.run.usedFontSizePx,
+                              state.span->fontVariant, previousSpanFont_, previousSpanFontSizePx_,
+                              previousSpanFontVariant_, state.fontKerning, previousSpanKerning_);
     const double value =
-        compatible ? backend_.crossSpanKern(previousSpanFont_, previousSpanFontSizePx_,
-                                            state.shaping.chunks.front().drawingFace(0, state.font),
+        compatible ? backend_.crossSpanKern(previousSpanFont_, previousSpanFontSizePx_, firstFace,
                                             state.fontSizePx, previousSpanCodepoint_,
                                             firstCodepoint, state.vertical, state.orientation)
                    : 0.0;
