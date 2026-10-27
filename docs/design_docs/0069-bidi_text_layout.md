@@ -432,20 +432,21 @@ oracle there.
 Around a `textPath`, Milestone 1 keeps today's two shifts exactly. On-path characters use a
 path-local shift: `StageTextPathRun` accumulates each character's `dx` into the path pen
 (`pathStaging_.advance`) and its `dy` into `pathStaging_.dy`, each glyph sits at that pen minus its
-cluster's path offset, and `resetTextPathState` zeroes both at every path, so the path-local shift
-starts at zero on both axes at each `textPath` start and accumulates across that path's spans. The
-flat pen's shift is separate: the flat pen and its running shift continue through and after the
-path, in-path `dx` included, and nothing resets them at the path's start or end. A preceding `dx`
-therefore never moves on-path glyphs: in `<tspan dx="7">a</tspan><textPath ...>bc</textPath>`, `b`
-and `c` are not moved by the 7. The third mechanism, `ApplyPostTextPathTranslations`, runs last and
-repositions only the leading plain text after the path, up to the first cluster with an absolute `x`
-or `y`, onto the path's end point, as described in [Current behavior](#current-behavior); a later
-`y`-only chunk is not translated and keeps the flat pen position. Pin tests cover a `textPath` with
-`dx="5"` over `ab` followed by `<tspan y="50">c</tspan>`, the same with plain text between the path
-and the `y`-only `tspan`, and the preceding-`dx` case above. Resetting the flat pen's running shift
-at a path boundary, as Blink does, would be a separate red-first change; it is a possible follow-up,
-not planned work. `text/text/x-and-y-with-multiple-values-and-arabic-text` exercises the `ltr` case
-and stays unchanged.
+cluster's path offset plus its own x offset, and `resetTextPathState` zeroes both at every path, so
+the path-local shift starts at zero on both axes at each `textPath` start and accumulates across
+that path's spans. The flat pen's shift is separate: the flat pen and its running shift continue
+through and after the path, in-path `dx` included, and nothing resets them at the path's start or
+end. A preceding `dx` therefore never moves on-path glyphs: in
+`<tspan dx="7">a</tspan><textPath ...>bc</textPath>`, `b` and `c` are not moved by the 7. The third
+mechanism, `ApplyPostTextPathTranslations`, runs last and repositions only the leading plain text
+after the path, up to the first cluster with an absolute `x` or `y`, onto the path's end point, as
+described in [Current behavior](#current-behavior); a later `y`-only chunk is not translated and
+keeps the flat pen position. Pin tests cover a `textPath` with `dx="5"` over `ab` followed by
+`<tspan y="50">c</tspan>`, the same with plain text between the path and the `y`-only `tspan`, and
+the preceding-`dx` case above. Resetting the flat pen's running shift at a path boundary, as Blink
+does, would be a separate red-first change; it is a possible follow-up, not planned work.
+`text/text/x-and-y-with-multiple-values-and-arabic-text` exercises the `ltr` case and stays
+unchanged.
 
 ### Properties
 
