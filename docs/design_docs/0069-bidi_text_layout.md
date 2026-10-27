@@ -120,7 +120,11 @@ belongs to a later milestone (1b, 1c, or 2).
     - `<text x="10 100">` over the Hebrew letters alef, bet, space, gimel, dalet, which pins today's
       split of the second chunk (Milestone 1c replaces this expectation);
     - `dx` inside a `textPath` followed by plain text, and `dx` on the first character after the
-      path, which pin the post-textPath translation.
+      path, which pin the post-textPath translation;
+    - `<textPath dx="5">ab</textPath><tspan y="50">c</tspan>`, and the same with plain text between
+      the path and the `y`-only `tspan`, which pin the flat pen and running shift through a path;
+    - optionally, with a kerning font, cross-span kerning into a right-to-left shaped chunk that is
+      not first in its span and has an absolute `x`.
   - [ ] Measure the editor package against every gate, including the 46,000 byte function body
         and 12,880,000 byte total raw limits, since the restructured layout adds code before
         SheenBidi does.
@@ -142,8 +146,10 @@ belongs to a later milestone (1b, 1c, or 2).
         absolute `x` before its pen pass rather than at the glyph where its first logical character
         is stored, as `chunkYOverride` already does for `y`.
   - [ ] Red first: `<text x="10 100">` over the Hebrew letters alef, bet, space, gimel, dalet, and a
-        `middle`-anchored Arabic chunk with an `x` and `y` list. The Milestone 1 pin test changes
-        its expectation in the same pull request.
+        `middle`-anchored Arabic chunk with an `x` and `y` list, whose expected visible effect is
+        that the glyphs stored before the boundary leave the previous chunk's anchoring and center
+        with their own chunk. The Milestone 1 pin test changes its expectation in the same pull
+        request, and any change to cross-chunk kerning at that boundary is listed.
   - [ ] Run the same old-versus-new comparison as Milestone 1b and accept only changes caused by
         the corrected boundaries. Expected changes: none among compared resvg rows, because the
         affected rows are `start`-anchored or start their right-to-left text at a span boundary
@@ -355,6 +361,9 @@ The vendored corpus records per-renderer results in `third_party/resvg-test-suit
 
 ## Proposed Architecture
 
+The data flow and the units of work show the end state after Milestone 5. Each section below
+names the milestone that introduces its rules; until then, today's behavior holds.
+
 ### Data flow
 
 ```mermaid
@@ -384,14 +393,14 @@ flowchart TD
 | Shaping item      | Level run split at span boundaries, then at fallback faces    | `ChunkShaper`   |
 | Visual item order | L2 over level runs, per line                                  | `BidiParagraph` |
 
-**Decision: a bidi paragraph is the text between absolute-position chunk boundaries.** Without
-`inline-size` that is one anchored chunk; under `inline-size`, where SVG 2 ignores descendant
-absolute positions, it is the whole `<text>` broken into lines in logical order. Evidence: SVG 2
-11.1.1 confines bidi reordering and ligatures to a text chunk; resvg analyzes per chunk; Blink's
-chunk isolates give every chunk the same internal levels as a paragraph with the text element's
-direction, which is this design's base level; and per-chunk anchoring is only well defined when one
-chunk's glyphs cannot interleave with another's. A paragraph can span several spans, so it is built
-across spans, which is new: today each span is shaped alone.
+**Decision (Milestone 2): a bidi paragraph is the text between absolute-position chunk boundaries.**
+Without `inline-size` that is one anchored chunk; under `inline-size`, where SVG 2 ignores
+descendant absolute positions, it is the whole `<text>` broken into lines in logical order.
+Evidence: SVG 2 11.1.1 confines bidi reordering and ligatures to a text chunk; resvg analyzes per
+chunk; Blink's chunk isolates give every chunk the same internal levels as a paragraph with the text
+element's direction, which is this design's base level; and per-chunk anchoring is only well defined
+when one chunk's glyphs cannot interleave with another's. A paragraph can span several spans, so it
+is built across spans, which is new: today each span is shaped alone.
 
 **Paragraph boundaries** are therefore absolute `x` or `y` values and `textPath` starts; wrapped
 line starts are line boundaries inside one paragraph.
@@ -415,14 +424,23 @@ runs leftward from its anchor point, so the next chunk continues to the left. Bl
 `textLength` carry at the end of the chunk; adopting that would be a separate later change with its
 own red-first test, not part of this design. Blink differs for unpositioned `rtl` chunks: its
 anchoring uses the first logical character's left edge as the anchor point, so it is not a pixel
-oracle there. After a `textPath`, the running shift resets and the pen continues from the existing
-end-of-path position; model (a) does not carry `dx` through the path. A third mechanism then runs
-last, as today: `ApplyPostTextPathTranslations` translates the following flat text onto the path's
-end point, absorbing the running shift, the carry, and the anchoring of that text as described in
-[Current behavior](#current-behavior). `text/text/x-and-y-with-multiple-values-and-arabic-text`
-exercises the `ltr` case and stays unchanged.
+oracle there.
+
+Around a `textPath`, Milestone 1 keeps today's behavior exactly: nothing resets at the path's end.
+The flat pen and the running shift continue through and after the path exactly as today's flat pen
+does, in-path `dx` included (`resetTextPathState` clears only path staging). The third mechanism,
+`ApplyPostTextPathTranslations`, runs last and repositions only the leading plain text after the
+path, up to the first cluster with an absolute `x` or `y`, onto the path's end point, as described
+in [Current behavior](#current-behavior); a later `y`-only chunk is not translated and keeps the
+flat pen position. Pin tests cover `<textPath dx="5">ab</textPath><tspan y="50">c</tspan>` and the
+same with plain text between the path and the `y`-only `tspan`. Resetting the running shift at a
+path boundary, as Blink does, would be a separate red-first change; it is a possible follow-up, not
+planned work. `text/text/x-and-y-with-multiple-values-and-arabic-text` exercises the `ltr` case and
+stays unchanged.
 
 ### Properties
+
+The properties land in Milestone 2 (`direction`) and Milestone 3 (`unicode-bidi`).
 
 - `direction`: typed enum `Direction { Ltr, Rtl }`, inherited, initial `ltr`, presentation attribute
   and CSS declaration.
@@ -442,6 +460,8 @@ compressed headroom. Milestone 2 measures them; the alternative is to compile th
 properties only when text is enabled (see [Open Questions](#open-questions)).
 
 ### BidiParagraph adapter
+
+The adapter lands in Milestone 2; injected controls arrive with Milestone 3.
 
 `donner/svg/text/BidiParagraph.{h,cc}` owns every SheenBidi call. No SheenBidi type crosses its
 interface.
@@ -492,6 +512,9 @@ public:
 
 ### Shaping
 
+Explicit-direction shaping lands in Milestone 2 and cross-span context in Milestone 3. Until then,
+shaping is today's, including the #2098 heuristics.
+
 - Items are the intersection of level runs, span boundaries, and the fallback face items of
   `ChunkShaper`. Bidi runs split first; `ChunkShaper` then shapes each level run with the primary
   face and itemizes fallback faces within it.
@@ -525,18 +548,27 @@ public:
 
 The layout follows the SVG 2 split between CSS layout and positioning:
 
-1. **Visual pen pass (CSS positions).** Walk shaping items of each line in L2 order. Glyphs of a
-   right-to-left item are already in visual order. Each glyph gets a pen position; letter spacing,
-   word spacing, kerning, and font metrics apply as today. Cross-span kerning applies only between
-   glyphs adjacent both logically and visually in one level run. Each character's CSS position is
-   its left edge and its advance is its cell width.
+1. **Visual pen pass (CSS positions).** In Milestone 1 the pen walks shaped glyph order, as today.
+   From Milestone 2 it walks shaping items of each line in L2 order; glyphs of a right-to-left item
+   are already in visual order. Each glyph gets a pen position; letter spacing, word spacing,
+   kerning, and font metrics apply as today. Milestone 1 keeps today's cross-span and cross-chunk
+   kerning (`resolveCrossKern` and `resolveCrossChunkKern`): the kern of the previous chunk's or
+   span's last character against this chunk's first logical character, added at stored glyph 0
+   unless that glyph has an absolute position. In a right-to-left shaped chunk that is not first in
+   its span, stored glyph 0 is not the boundary glyph, so the kern still applies there despite the
+   chunk's absolute `x`; Milestone 1c lists any change its boundary fix makes to this. From
+   Milestone 2, cross-span kerning applies only between glyphs adjacent both logically and visually
+   in one level run. Each character's CSS position is its left edge and its advance is its cell
+   width.
 2. **Relative shifts in logical order (Milestone 2).** Walk the character table in logical order,
    accumulating `dx` and `dy` into a running shift, and add each character's shift to its glyphs.
-   The shift resets per axis: the x shift at an absolute `x`, the y shift at an absolute `y`, and
-   both at a `textPath` start. The SVG 2 step itself does not reset; the per-axis reset is Blink's
-   fix for SVG WG [issue 846](https://github.com/w3c/svgwg/issues/846) and matches today's pen
-   behavior, so `<tspan dy="10">a</tspan><tspan x="50">b</tspan>` keeps `b` 10 units down, as it is
-   today. Logical accumulation is resvg's `resolve_relative_shifts` and Blink's
+   The shift resets per axis: the x shift at an absolute `x` and the y shift at an absolute `y`. It
+   does not reset at a `textPath` start or end, as today's flat pen does not (see the current text
+   position under [Units of work](#units-of-work)); Blink's reset there is a possible follow-up. The
+   SVG 2 step itself does not reset; the per-axis reset is Blink's fix for
+   [svgwg#846](https://github.com/w3c/svgwg/issues/846) and matches today's pen behavior, so a span
+   with `dy="10"` followed by a span with an absolute `x` keeps the second span 10 units down, as it
+   is today. Logical accumulation is resvg's `resolve_relative_shifts` and Blink's
    `AdjustPositionsDxDy`. For left-to-right text it equals today's pen behavior; inside
    right-to-left shaped chunks it differs from today, which accumulates in glyph order, so Milestone
    1 keeps glyph order there and Milestone 2 switches with a red-first test. `rotate` is per logical
@@ -662,6 +694,9 @@ Paint-server object bounding boxes keep using the union of the span's glyph cell
 
 ### DOM geometry and the editor
 
+Direction-aware edges and the editor changes land in Milestone 4; non-addressable bidi controls land
+in Milestone 2.
+
 - `CharacterGeometry` gains the character's resolved level. `startPosition` is the edge where the
   character begins in its own direction: the left edge for even levels and the right edge for odd
   levels. `endPosition` is the opposite edge.
@@ -682,6 +717,9 @@ Paint-server object bounding boxes keep using the union of the span's glyph cell
   can be visually discontiguous.
 
 ### Vertical text, textPath, and wrapping
+
+These rules land in Milestone 5, except the `UndefinedBehavior` classification, which lands in
+Milestone 2.
 
 - In vertical modes, right-to-left level runs are set sideways by the existing orientation rules and
   ordered against the inline axis, so they read correctly when the page is turned, as the
