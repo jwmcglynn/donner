@@ -3032,6 +3032,10 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         continue;  // .notdef glyph, skip.
       }
       ++frameCounters_.textGlyphMaterializations;
+      const FontHandle glyphFont = GlyphFont(run, glyph);
+      const float glyphScale =
+          glyph.font ? textEngine.scaleForPixelHeight(glyphFont, spanFontSizePx) : scale;
+      const bool glyphIsBitmap = glyph.font ? textEngine.isBitmapOnly(glyphFont) : isBitmapFont;
 
       // Placed outline in document space (outline -> stretch -> translate ->
       // rotate). Shared with RendererGeode via PlacedTextGeometry so the two
@@ -3039,14 +3043,14 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       // / outline-less glyphs, which fall through to the bitmap branch below
       // exactly as before.
       Path glyphPath;
-      if (!isBitmapFont) {
+      if (!glyphIsBitmap) {
         bool hasComplexity = false;
-        if (!admitGlyphPredecode(fontManager, run.font, glyph.glyphIndex,
+        if (!admitGlyphPredecode(fontManager, glyphFont, glyph.glyphIndex,
                                  static_cast<bool>(run.stretchedTextPath), hasComplexity)) {
           drawBudget_->reject();
           return;
         }
-        glyphPath = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale,
+        glyphPath = PlacedGlyphOutline(textEngine, glyphFont, run, glyph, glyphScale,
                                        TextWarpToleranceFor(deviceFromLocalTransform_));
         if (!admitPlacedGlyph(hasComplexity, glyphPath)) {
           drawBudget_->reject();
@@ -3056,7 +3060,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
       if (glyphPath.empty()) {
-        auto bitmap = AdmitBitmapGlyph(textEngine, run.font, glyph.glyphIndex, scale,
+        auto bitmap = AdmitBitmapGlyph(textEngine, glyphFont, glyph.glyphIndex, glyphScale,
                                        *textMaterializationBudget_, *drawBudget_);
         if (drawBudget_->rejected()) {
           return;

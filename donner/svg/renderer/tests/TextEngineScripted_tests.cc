@@ -2678,8 +2678,10 @@ TEST(TextEngineScriptedTest, CoverageFallbackSwitchesToRegisteredFaceThatCoversC
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
   ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(1))));
-  EXPECT_EQ(runs[0].font, altFace);
-  EXPECT_THAT(runs[0].glyphs, ElementsAre(GlyphIndexIs(Gt(0))));
+  // The run keeps the span's face; the glyph it cannot render carries the covering face.
+  EXPECT_EQ(runs[0].font, fontManager.fallbackFont());
+  EXPECT_THAT(runs[0].glyphs,
+              ElementsAre(AllOf(GlyphIndexIs(Gt(0)), Field("font", &TextGlyph::font, altFace))));
 }
 
 TEST(TextEngineScriptedTest, CoverageFallbackKeepsFontWhenNoRegisteredFaceCovers) {

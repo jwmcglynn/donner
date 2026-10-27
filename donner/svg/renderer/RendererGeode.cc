@@ -4070,11 +4070,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                          const TextEngine& textEngine, const TextRun& run, const TextGlyph& glyph,
                          float scale, double tolerance) {
     bool hasComplexity = false;
-    if (!admitGlyphMiss(fontManager, run.font, glyph.glyphIndex, hasComplexity,
+    const FontHandle font = GlyphFont(run, glyph);
+    if (!admitGlyphMiss(fontManager, font, glyph.glyphIndex, hasComplexity,
                         kMaximumTextPathWarpExpansion)) {
       return false;
     }
-    Path placed = PlacedGlyphOutline(textEngine, run.font, run, glyph, scale, tolerance);
+    Path placed = PlacedGlyphOutline(textEngine, font, run, glyph, scale, tolerance);
     if (placed.empty()) {
       return true;
     }
@@ -7517,10 +7518,16 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       if (glyph.glyphIndex == 0) {
         continue;  // `.notdef` -- skip to match tiny-skia.
       }
+      const FontHandle glyphFont = GlyphFont(run, glyph);
+      if (glyph.font && textEngine.isBitmapOnly(glyphFont)) {
+        continue;  // Bitmap-only fallback glyphs are skipped like bitmap-only runs above.
+      }
+      const float glyphScale =
+          glyph.font ? textEngine.scaleForPixelHeight(glyphFont, spanFontSizePx) : scale;
 
       if (glyphModes.warped) {
         if (!impl_->appendWarpedGlyph(
-                runGlyphPaths, fontManager, textEngine, run, glyph, scale,
+                runGlyphPaths, fontManager, textEngine, run, glyph, glyphScale,
                 geode::FillCubicToleranceFor(impl_->deviceFromLocalTransform))) {
           runs.clear();
           return;
@@ -7537,17 +7544,17 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       // The font handle's entity id, versioned by entt, so a font that is
       // unloaded and a different one loaded into the same slot cannot be
       // mistaken for the original.
-      key.fontId = static_cast<uint64_t>(static_cast<uint32_t>(run.font.entity()));
+      key.fontId = static_cast<uint64_t>(static_cast<uint32_t>(glyphFont.entity()));
       key.glyphIndex = static_cast<uint32_t>(glyph.glyphIndex);
-      key.outlineScale = scale * glyph.fontSizeScale;
+      key.outlineScale = glyphScale * glyph.fontSizeScale;
       key.stretchScaleX = glyph.stretchScaleX;
       key.stretchScaleY = glyph.stretchScaleY;
       key.rotateDegrees = glyph.rotateDegrees;
       key.fillTolerance = geode::FillCubicToleranceFor(impl_->deviceFromLocalTransform);
 
       geode::GeodeGlyphResidentEntry* entry = impl_->residentGlyphEntry(
-          registry, fontManager, run.font, glyph.glyphIndex, key, [&]() -> Path {
-            return UnplacedGlyphOutline(textEngine, run.font, glyph, scale).outline;
+          registry, fontManager, glyphFont, glyph.glyphIndex, key, [&]() -> Path {
+            return UnplacedGlyphOutline(textEngine, glyphFont, glyph, glyphScale).outline;
           });
       if (entry == nullptr || entry->outline.empty()) {
         continue;  // No vector outline; bitmap-only fonts were skipped above.

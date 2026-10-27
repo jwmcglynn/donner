@@ -948,7 +948,8 @@ TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
   FontManager fontManager(registry);
   TextEngine engine(fontManager, registry);
 
-  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+  const FontHandle notoSans = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_TRUE(static_cast<bool>(notoSans));
   const FontHandle amiri = LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri");
   ASSERT_TRUE(static_cast<bool>(amiri));
 
@@ -963,9 +964,12 @@ TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
   params.fontFamilies = {RcString("Noto Sans")};
   const auto runs = engine.layout(text, params);
 
-  EXPECT_THAT(runs,
-              ElementsAre(AllOf(RunFontIs(amiri),
-                                RunGlyphsAre(AllOf(Not(IsEmpty()), Each(GlyphIndexIs(Gt(0))))))));
+  // The run keeps the span's face; each Arabic glyph falls back to the face that covers it.
+  EXPECT_THAT(runs, ElementsAre(AllOf(
+                        RunFontIs(notoSans),
+                        RunGlyphsAre(AllOf(Not(IsEmpty()),
+                                           Each(AllOf(GlyphIndexIs(Gt(0)),
+                                                      Field("font", &TextGlyph::font, amiri))))))));
 }
 
 TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {

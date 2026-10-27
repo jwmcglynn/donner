@@ -339,7 +339,11 @@ TEST(FontSelection, CoverageFallbackSelectsAFaceSupportingTheCodepoint) {
 
   const std::vector<TextRun> runs = engine.layout(text, params);
   ASSERT_THAT(runs, SizeIs(1));
-  EXPECT_THAT(DescribeFace(fonts.fontManager(), runs[0].font), FaceFrom("MPLUS1p-Regular.ttf"));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(1));
+  // The run keeps the span's face; the glyph it cannot render carries the covering face.
+  EXPECT_THAT(DescribeFace(fonts.fontManager(), runs[0].font), FaceFrom("NotoSans-Regular.ttf"));
+  EXPECT_THAT(DescribeFace(fonts.fontManager(), GlyphFont(runs[0], runs[0].glyphs[0])),
+              FaceFrom("MPLUS1p-Regular.ttf"));
 }
 
 /// The face that draws one laid-out glyph, identified by the source codepoint it starts at.
