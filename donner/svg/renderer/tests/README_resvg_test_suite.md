@@ -284,6 +284,19 @@ INSTANTIATE_TEST_SUITE_P(
 - `Bug: <description>` - Known bug
 - `Params::WithThreshold(t, maxPx)` - only after a root-cause investigation, with the reason. Never
   widen a threshold to absorb a diff you haven't explained (see CLAUDE.md / `AGENTS.md`).
+- `Reference rasterizer generation: <cause>; analytic residual N px, supersampled M px` - a
+  per-case pixel budget (`withMaxPixelsDifferent` or `WithMaxPixels`, default color threshold, no
+  other exception) for a reference drawn with 4x4 supersampled edge coverage where Donner's
+  analytic coverage differs, typically on the 1.25 px crosshair. Allowed only when a 4x4
+  supersampled render of the case compares within the default allowance (M <= 100), the residual
+  is edge coverage with matching layout, and the budget is the largest residual on macOS and Linux
+  for both CPU text tiers (and Geode where it runs) plus 3% rounded up to 5 pixels. Record what a
+  1 px text shift does against the budget.
+- `Reference label glyphs: <cause>; analytic residual N px, supersampled M px` - the same form for
+  a reference set whose label glyphs differ beyond coverage (the color-adjust-functions cases),
+  where the residual is confined to the labels and deliberate filter regressions are shown to
+  exceed the budget. `parity_report_tests` checks the form of both classes; the evidence and
+  per-case numbers are in design doc 0021.
 
 ### 6. Group Related Failures
 
