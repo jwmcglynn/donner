@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
+#include <initializer_list>
 #include <iostream>
 #include <memory>
 #include <source_location>
@@ -19,6 +20,7 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGFEOffsetElement.h"
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
@@ -652,13 +654,14 @@ RendererBitmap RenderPrimitiveLimitCase(std::string_view definitions, std::strin
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
-/// The unfiltered oracle: the seagreen square drawn at \p squareX, or omitted when it is empty, and
-/// the lime control square.
-RendererBitmap RenderPrimitiveLimitOracle(std::string_view squareX) {
+/// The unfiltered oracle: a square filled with \p fill at each of \p squareXs, and the lime control
+/// square.
+RendererBitmap RenderPrimitiveLimitOracle(std::initializer_list<std::string_view> squareXs,
+                                          std::string_view fill = "seagreen") {
   std::string body;
-  if (!squareX.empty()) {
-    body = std::string(R"svg(<rect x=")svg") + std::string(squareX) +
-           R"svg(" y="4" width="8" height="8" fill="seagreen"/>)svg";
+  for (std::string_view squareX : squareXs) {
+    body += std::string(R"svg(<rect x=")svg") + std::string(squareX) +
+            R"svg(" y="4" width="8" height="8" fill=")svg" + std::string(fill) + R"svg("/>)svg";
   }
   SVGDocument document =
       instantiateSubtree(body + R"svg(<rect x="72" y="4" width="8" height="8" fill="lime"/>)svg",
@@ -667,7 +670,7 @@ RendererBitmap RenderPrimitiveLimitOracle(std::string_view squareX) {
 }
 
 TEST_F(RendererRegressionTests, FilterPrimitiveLimitAppliesEveryPrimitiveAtTheLimit) {
-  const RendererBitmap shifted = RenderPrimitiveLimitOracle("36");
+  const RendererBitmap shifted = RenderPrimitiveLimitOracle({"36"});
   AssertVisibleFixture(shifted, "primitive_limit_shifted_oracle");
   editor::tests::CompareBitmapToBitmap(
       RenderPrimitiveLimitCase(PrimitiveLimitFilter("f", 32), "url(#f)"), shifted,
@@ -679,7 +682,7 @@ TEST_F(RendererRegressionTests, FilterPrimitiveLimitAppliesEveryPrimitiveAtTheLi
 }
 
 TEST_F(RendererRegressionTests, FilterPrimitiveLimitRefusesElementOverTheLimit) {
-  const RendererBitmap refused = RenderPrimitiveLimitOracle("");
+  const RendererBitmap refused = RenderPrimitiveLimitOracle({});
   AssertVisibleFixture(refused, "primitive_limit_refused_oracle");
   struct Case {
     std::string_view name;
@@ -711,12 +714,12 @@ std::string IdentityFilterFunctions(std::size_t count) {
 }
 
 TEST_F(RendererRegressionTests, FilterPrimitiveLimitAppliesToCssFilterFunctions) {
-  const RendererBitmap unshifted = RenderPrimitiveLimitOracle("4");
+  const RendererBitmap unshifted = RenderPrimitiveLimitOracle({"4"});
   AssertVisibleFixture(unshifted, "primitive_limit_unshifted_oracle");
   editor::tests::CompareBitmapToBitmap(RenderPrimitiveLimitCase("", IdentityFilterFunctions(32)),
                                        unshifted, "primitive_limit_32_functions",
                                        editor::tests::PixelmatchIdentityParams());
-  const RendererBitmap refused = RenderPrimitiveLimitOracle("");
+  const RendererBitmap refused = RenderPrimitiveLimitOracle({});
   for (const std::size_t count : {std::size_t{33}, std::size_t{1024}}) {
     SCOPED_TRACE(count);
     editor::tests::CompareBitmapToBitmap(
@@ -756,12 +759,123 @@ TEST_F(RendererRegressionTests, FilterPrimitiveLimitAppliesInsideFeImageContent)
       "primitive_limit_fe_image_32_offsets", editor::tests::PixelmatchIdentityParams());
   editor::tests::CompareBitmapToBitmap(
       RenderPrimitiveLimitFeImageCase(PrimitiveLimitFilter("inner", 4096)),
-      RenderPrimitiveLimitOracle(""), "primitive_limit_fe_image_4096_offsets",
+      RenderPrimitiveLimitOracle({}), "primitive_limit_fe_image_4096_offsets",
       editor::tests::PixelmatchIdentityParams());
   editor::tests::CompareBitmapToBitmap(
       RenderPrimitiveLimitFeImageCase(PrimitiveLimitFilter("inner", 32, 1)),
-      RenderPrimitiveLimitOracle(""), "primitive_limit_fe_image_33_primitives",
+      RenderPrimitiveLimitOracle({}), "primitive_limit_fe_image_33_primitives",
       editor::tests::PixelmatchIdentityParams());
+}
+
+// Appending a 33rd primitive to a rendered filter refuses its element; removing it renders again.
+TEST_F(RendererRegressionTests, FilterPrimitiveLimitFollowsDomMutation) {
+  SVGDocument document = instantiateSubtree(
+      PrimitiveLimitFilter("f", 32) +
+          R"svg(<rect x="4" y="4" width="8" height="8" fill="seagreen" filter="url(#f)"/>
+          <rect x="72" y="4" width="8" height="8" fill="lime"/>)svg",
+      {}, Vector2i(84, 16));
+  const RendererBitmap shifted = RenderPrimitiveLimitOracle({"36"});
+  editor::tests::CompareBitmapToBitmap(RenderDocumentWithBackend(document, ActiveRendererBackend()),
+                                       shifted, "primitive_limit_mutation_before",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  auto filter = document.querySelector("#f");
+  ASSERT_TRUE(filter.has_value());
+  SVGFEOffsetElement extra = SVGFEOffsetElement::Create(document);
+  filter->appendChild(extra);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithBackend(document, ActiveRendererBackend()), RenderPrimitiveLimitOracle({}),
+      "primitive_limit_mutation_appended", editor::tests::PixelmatchIdentityParams());
+
+  filter->removeChild(extra);
+  editor::tests::CompareBitmapToBitmap(RenderDocumentWithBackend(document, ActiveRendererBackend()),
+                                       shifted, "primitive_limit_mutation_removed",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Per-primitive resource limits fail closed like the primitive limit: at the limit the primitive
+// applies in full, and one over refuses the element instead of dropping or ignoring the excess.
+
+/// Filter `f` covering the canvas: a 32-pixel feOffset with result `s`, then \p primitive.
+std::string ShiftedPrimitiveFilter(std::string_view primitive) {
+  return std::string(R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="84"
+      height="16" color-interpolation-filters="sRGB"><feOffset dx="32" result="s"/>)svg") +
+         std::string(primitive) + "</filter>";
+}
+
+/// Repeats \p item \p count times, separated by \p separator.
+std::string RepeatJoined(std::string_view item, std::size_t count, std::string_view separator) {
+  std::string result;
+  for (std::size_t i = 0; i < count; ++i) {
+    if (i != 0) {
+      result += separator;
+    }
+    result += item;
+  }
+  return result;
+}
+
+TEST_F(RendererRegressionTests, FilterMergeInputLimit) {
+  const auto merge = [](std::size_t shiftedInputs) {
+    return ShiftedPrimitiveFilter(
+        "<feMerge>" + RepeatJoined(R"svg(<feMergeNode in="s"/>)svg", shiftedInputs, "") +
+        R"svg(<feMergeNode in="SourceGraphic"/></feMerge>)svg");
+  };
+  const RendererBitmap both = RenderPrimitiveLimitOracle({"4", "36"});
+  AssertVisibleFixture(both, "merge_limit_both_oracle");
+  editor::tests::CompareBitmapToBitmap(RenderPrimitiveLimitCase(merge(15), "url(#f)"), both,
+                                       "merge_limit_16_inputs",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(RenderPrimitiveLimitCase(merge(16), "url(#f)"),
+                                       RenderPrimitiveLimitOracle({}), "merge_limit_17_inputs",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, FilterTransferTableLimit) {
+  const auto transfer = [](std::size_t values) {
+    return ShiftedPrimitiveFilter(
+        R"svg(<feComponentTransfer in="SourceGraphic"><feFuncR type="table" tableValues=")svg" +
+        RepeatJoined("0", values, " ") + R"svg("/></feComponentTransfer>)svg");
+  };
+  const RendererBitmap noRed = RenderPrimitiveLimitOracle({"4"}, "rgb(0 139 87)");
+  AssertVisibleFixture(noRed, "transfer_limit_no_red_oracle");
+  editor::tests::CompareBitmapToBitmap(RenderPrimitiveLimitCase(transfer(1024), "url(#f)"), noRed,
+                                       "transfer_limit_1024_values",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(RenderPrimitiveLimitCase(transfer(1025), "url(#f)"),
+                                       RenderPrimitiveLimitOracle({}), "transfer_limit_1025_values",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, FilterConvolveKernelLimit) {
+  // An identity kernel. The kernel is applied rotated 180 degrees, so the one sits at
+  // order - 1 - floor(order / 2) on each axis to land on the default target.
+  const auto convolve = [](std::string_view order, int columns, std::size_t values) {
+    const auto flipped = static_cast<std::size_t>(columns - 1 - columns / 2);
+    const std::size_t target = flipped * static_cast<std::size_t>(columns) + flipped;
+    std::string kernel;
+    for (std::size_t i = 0; i < values; ++i) {
+      kernel += i == 0 ? "" : " ";
+      kernel += i == target ? "1" : "0";
+    }
+    return ShiftedPrimitiveFilter(R"svg(<feConvolveMatrix order=")svg" + std::string(order) +
+                                  R"svg(" kernelMatrix=")svg" + kernel + R"svg("/>)svg");
+  };
+  // Geode executes kernels of at most 25 values and outputs transparent black for larger ones, so
+  // only the CPU backend can show a full-size kernel applying.
+  if (ActiveRendererBackend() != RendererBackend::Geode) {
+    const RendererBitmap shifted = RenderPrimitiveLimitOracle({"36"});
+    editor::tests::CompareBitmapToBitmap(
+        RenderPrimitiveLimitCase(convolve("64", 64, 4096), "url(#f)"), shifted,
+        "convolve_limit_order_64", editor::tests::PixelmatchIdentityParams());
+  }
+  const RendererBitmap refused = RenderPrimitiveLimitOracle({});
+  editor::tests::CompareBitmapToBitmap(
+      RenderPrimitiveLimitCase(convolve("65", 65, 4225), "url(#f)"), refused,
+      "convolve_limit_order_65", editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(
+      RenderPrimitiveLimitCase(convolve("64", 64, 4097), "url(#f)"), refused,
+      "convolve_limit_4097_values", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, UnitlessPresentationAttributeBlurUsesUserUnits) {
