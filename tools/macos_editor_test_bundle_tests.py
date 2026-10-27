@@ -2,7 +2,7 @@
 
 import io
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import tarfile
 import tempfile
 import unittest
@@ -20,14 +20,18 @@ class NativeTestBundleTest(unittest.TestCase):
         self.destination = self.root / "Donner.app"
 
     def members(self):
-        directories = ("Contents", "Contents/MacOS", "Contents/Resources", "Contents/_CodeSignature")
+        files = sorted(name.split("/", 1)[1]
+                       for name in bundle.native.REQUIRED - {"LICENSE", "NOTICE.txt"})
+        directories = sorted({str(parent) for name in files
+                              for parent in PurePosixPath(name).parents if str(parent) != "."},
+                             key=lambda name: (name.count("/"), name))
         result = []
         for name in directories:
             member = tarfile.TarInfo(name)
             member.type, member.mode = tarfile.DIRTYPE, 0o755
             result.append((member, b""))
-        for name in sorted(bundle.native.REQUIRED - {"LICENSE", "NOTICE.txt"}):
-            member = tarfile.TarInfo(name.split("/", 1)[1])
+        for name in files:
+            member = tarfile.TarInfo(name)
             member.mode = 0o755 if "/MacOS/" in name else 0o644
             result.append((member, b"signed producer bytes"))
         return result
@@ -62,6 +66,13 @@ class NativeTestBundleTest(unittest.TestCase):
         self.assertEqual(self.destination.stat().st_mode & 0o777, 0o755)
         for member, _ in members:
             self.assertEqual((self.destination / member.name).stat().st_mode & 0o777, member.mode)
+
+    def test_missing_resource_parent_is_rejected_before_extraction(self):
+        parent = str(PurePosixPath(bundle.native.RESOURCE_MANIFEST.split("/", 1)[1]).parent)
+        self.write([(member, data) for member, data in self.members() if member.name != parent])
+        with self.assertRaisesRegex(ValueError, "missing or conflicting parent"):
+            bundle.extract_bundle(self.archive, self.destination)
+        self.assertFalse(self.destination.exists())
 
     def test_links_special_members_traversal_and_duplicates_are_refused_before_extraction(self):
         for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE, tarfile.CHRTYPE):

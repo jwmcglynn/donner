@@ -144,16 +144,16 @@ forbidden_transitive_dep_test(
     configured_dependency_audit_test(
         name = "donner_cli_" + tier + "_resources_audit",
         forbidden = [
-            ":cli_resource_bundle",
+            "//donner/svg/tool:cli_resource_bundle",
             "//donner/svg/resources:generic_sans_faces_resource_files",
             "//third_party/google_fonts:catalog_resource_files",
             "//third_party/public-sans:public-sans_resource_files",
         ] if tier == "none" else [],
         required = [
-            ":donner-cli",
+            "//donner/svg/tool:donner-cli",
             "//donner/svg/renderer:renderer_tiny_skia",
         ] + ([
-            ":cli_resource_bundle",
+            "//donner/svg/tool:cli_resource_bundle",
             "//donner/svg/resources:font_manager",
             "//third_party/public-sans:public-sans_resource_files",
         ] if tier != "none" else []),

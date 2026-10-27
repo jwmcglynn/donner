@@ -272,10 +272,10 @@ def configured_dependency_audit_test(name, target, forbidden = [], forbidden_pac
     Args:
       name: Test name.
       target: Product root, including any platform-transition wrappers.
-      forbidden: Labels that must not be reachable through binary dependencies.
+      forbidden: Fully qualified labels that must not be reachable through binary dependencies.
       forbidden_packages: Packages (and subpackages) that must not be reachable through dependencies,
                           linker inputs, or linker options.
-      required: Labels that must be visited, guarding traversal through wrappers.
+      required: Fully qualified labels that must be visited, guarding traversal through wrappers.
       text_configuration: Ambient core text tier applied before product transitions.
       disable_backend_transitions: Exercise the backend-transition bypass flag.
       **kwargs: Standard sh_test attributes.
