@@ -995,3 +995,93 @@ test("a resource completion wakes the normal guarded application event frame", a
   await new Promise(setImmediate);
   assert.deepEqual(calls, ["wake"]);
 });
+
+test("many slow resource callers share one complete installation and retain no completed work", async (t) => {
+  const icon = resourceFixture("kIcon");
+  const sample = resourceFixture("kSlowSample", "sample", 2);
+  const reply = deferred();
+  const fetches = [];
+  const { loader, manifest } = resourceLoader(t, [icon, sample], {
+    fetchImpl: async (url) => {
+      fetches.push(url);
+      if (url.endsWith(sample.asset.path)) return reply.promise;
+      return new Response(icon.bytes, { headers: { "content-type": "image/svg+xml" } });
+    },
+  });
+  const module = resourceModule(manifest);
+  await loader.install(module);
+  const operations = Array.from({ length: 128 }, () => loader.request(sample.asset.sha256));
+  await new Promise(setImmediate);
+  reply.resolve(new Response(sample.bytes, { headers: { "content-type": "image/svg+xml" } }));
+  await Promise.all(operations);
+  assert.equal(module.installed.length, 2, "one critical install and one shared deferred install");
+  assert.equal(module.freed.length, 2, "many callers must not allocate duplicate staging copies");
+  assert.equal(operations.every((operation) => operation === operations[0]), true);
+  assert.equal(loader.installing.size, 0, "completed operation promises are released");
+  await Promise.all(Array.from({ length: 128 }, () => loader.request(sample.asset.sha256)));
+  assert.equal(module.installed.length, 2, "an installed identity never needs another copy");
+  assert.equal(fetches.length, 2, "an installed identity never needs another body");
+});
+
+test("failed shared resource demand clears admission and allows only explicit cooled-down retry", async (t) => {
+  const icon = resourceFixture("kIcon");
+  const sample = resourceFixture("kRetrySample", "sample", 2);
+  let now = 100000;
+  let sampleFetches = 0;
+  const { loader, manifest } = resourceLoader(t, [icon, sample], {
+    now: () => now,
+    fetchImpl: async (url) => {
+      if (!url.endsWith(sample.asset.path)) {
+        return new Response(icon.bytes, { headers: { "content-type": "image/svg+xml" } });
+      }
+      ++sampleFetches;
+      const bytes = sample.bytes.slice();
+      if (sampleFetches === 1) bytes[0] ^= 1;
+      return new Response(bytes, { headers: { "content-type": "image/svg+xml" } });
+    },
+  });
+  const module = resourceModule(manifest);
+  await loader.install(module);
+  const results = await Promise.allSettled(
+    Array.from({ length: 64 }, () => loader.request(sample.asset.sha256)),
+  );
+  assert.deepEqual(results.map((result) => result.status), Array(64).fill("rejected"));
+  assert.equal(module.installed.length, 1, "failed bytes never enter the application");
+  assert.equal(loader.installing.size, 0);
+  await assert.rejects(loader.request(sample.asset.sha256));
+  await assert.rejects(loader.request(sample.asset.sha256, true));
+  assert.equal(
+    sampleFetches,
+    1,
+    "normal demand and premature retry cannot restart failed transport",
+  );
+  now += 30000;
+  await loader.request(sample.asset.sha256, true);
+  assert.equal(sampleFetches, 2);
+  assert.equal(module.installed.length, 2);
+  assert.equal(loader.installing.size, 0);
+});
+
+test("close rejects every shared waiter and forbids late install or retry", async (t) => {
+  const icon = resourceFixture("kIcon");
+  const sample = resourceFixture("kClosedSample", "sample", 2);
+  const reply = deferred();
+  const { loader, manifest } = resourceLoader(t, [icon, sample], {
+    fetchImpl: async (url) =>
+      url.endsWith(sample.asset.path)
+        ? reply.promise
+        : new Response(icon.bytes, { headers: { "content-type": "image/svg+xml" } }),
+  });
+  const module = resourceModule(manifest);
+  await loader.install(module);
+  const results = Promise.allSettled(
+    Array.from({ length: 64 }, () => loader.request(sample.asset.sha256)),
+  );
+  loader.close();
+  reply.resolve(new Response(sample.bytes, { headers: { "content-type": "image/svg+xml" } }));
+  assert.deepEqual((await results).map((result) => result.status), Array(64).fill("rejected"));
+  await new Promise(setImmediate);
+  assert.equal(module.installed.length, 1);
+  assert.equal(loader.installing.size, 0);
+  await assert.rejects(loader.request(sample.asset.sha256, true), /not initialized/);
+});
