@@ -21,6 +21,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/TreeMutation.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/StopComponent.h"
@@ -144,6 +145,23 @@ bool RemoveLineCoordinateAttribute(EntityHandle handle, const xml::XMLQualifiedN
   handle.get_or_emplace<components::LineComponent>().*field = Lengthd();
   handle.remove<components::ComputedPathComponent>();
   markDirty(handle, components::DirtyFlagsComponent::Shape);
+  markNeedsFullStyleRecompute(handle);
+  return true;
+}
+
+/// Restores an feConvolveMatrix `order` to its default when the attribute is removed, including
+/// clearing an over-limit rejection.
+bool RemoveConvolveOrderAttribute(EntityHandle handle, const xml::XMLQualifiedNameRef& name) {
+  const auto* type = handle.try_get<components::ElementTypeComponent>();
+  if (!type || type->type() != ElementType::FeConvolveMatrix ||
+      name != xml::XMLQualifiedNameRef("order")) {
+    return false;
+  }
+  auto& convolve = handle.get_or_emplace<components::FEConvolveMatrixComponent>();
+  const components::FEConvolveMatrixComponent defaults;
+  convolve.orderX = defaults.orderX;
+  convolve.orderY = defaults.orderY;
+  convolve.orderExceedsLimit = defaults.orderExceedsLimit;
   markNeedsFullStyleRecompute(handle);
   return true;
 }
@@ -797,7 +815,8 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
       }
     }
     markConditionalProcessingChanged(handle_);
-  } else if (RemoveLineCoordinateAttribute(handle_, name)) {
+  } else if (RemoveLineCoordinateAttribute(handle_, name) ||
+             RemoveConvolveOrderAttribute(handle_, name)) {
   } else {
     // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
     // Only parse empty namespaces for now.
