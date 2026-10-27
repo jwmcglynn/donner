@@ -878,6 +878,27 @@ TEST_F(RendererRegressionTests, FilterConvolveKernelLimit) {
       "convolve_limit_4097_values", editor::tests::PixelmatchIdentityParams());
 }
 
+// Removing an over-limit `order` restores the default 3x3 order, so the filter renders again.
+TEST_F(RendererRegressionTests, FilterConvolveOrderRemovalClearsLimitRejection) {
+  SVGDocument document = instantiateSubtree(
+      ShiftedPrimitiveFilter(
+          R"svg(<feConvolveMatrix id="k" order="65" kernelMatrix="0 0 0 0 1 0 0 0 0"/>)svg") +
+          R"svg(<rect x="4" y="4" width="8" height="8" fill="seagreen" filter="url(#f)"/>
+          <rect x="72" y="4" width="8" height="8" fill="lime"/>)svg",
+      {}, Vector2i(84, 16));
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithBackend(document, ActiveRendererBackend()), RenderPrimitiveLimitOracle({}),
+      "convolve_order_removal_before", editor::tests::PixelmatchIdentityParams());
+
+  auto convolve = document.querySelector("#k");
+  ASSERT_TRUE(convolve.has_value());
+  convolve->removeAttribute(xml::XMLQualifiedNameRef("order"));
+  editor::tests::CompareBitmapToBitmap(RenderDocumentWithBackend(document, ActiveRendererBackend()),
+                                       RenderPrimitiveLimitOracle({"36"}),
+                                       "convolve_order_removal_after",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererRegressionTests, UnitlessPresentationAttributeBlurUsesUserUnits) {
   const auto render = [](std::string_view filter) {
     const std::string markup =
