@@ -1218,7 +1218,18 @@ test("completion checks enforce by default and report only tracked misses", asyn
     Object.fromEntries(
       Object.entries(gates.kCompletionChecks).map(([check, { browser }]) => [check, browser]),
     ),
-    { coldZoomPresents: "chromium", dragInputsComplete: "firefox" },
+    { coldZoomPresents: "chromium", dragInputsComplete: "firefox", heldDragPositions: "chromium" },
+  );
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(gates.kCompletionChecks).map(([check, { phases }]) => [check, phases]),
+    ),
+    {
+      coldZoomPresents: undefined,
+      dragInputsComplete: undefined,
+      heldDragPositions: ["geode-crown"],
+    },
+    "only the masked crown drag phase may report the held-position check",
   );
   const miss = new Error("every dispatched input must complete\n\nExpected: 60");
   const run = async (mode, browserName, assertion) => {
@@ -1255,6 +1266,47 @@ test("completion checks enforce by default and report only tracked misses", asyn
     assert.match(enforced.lines[0], /"mode":"enforce"/);
   }
   assert.equal((await run("enforce", "firefox", () => {})).result.met, true);
+  const heldMiss = new Error("held drag must complete multiple represented positions");
+  const runHeld = (browserName, phase) =>
+    gates.runCompletionCheck("heldDragPositions", () => Promise.reject(heldMiss), {
+      browserName,
+      project: browserName,
+      phase,
+      detail: "1 held positions completed",
+      mode: "report",
+      log: () => {},
+    }).then((result) => ({ result }), (error) => ({ error }));
+  assert.equal((await runHeld("chromium", "geode-crown")).result?.mode, "report");
+  const enforcedHeld = await gates.runCompletionCheck(
+    "heldDragPositions",
+    () => Promise.reject(heldMiss),
+    {
+      browserName: "chromium",
+      project: "chromium",
+      phase: "geode-crown",
+      detail: "1 held positions completed",
+      mode: "enforce",
+      log: () => {},
+    },
+  ).then((result) => ({ result }), (error) => ({ error }));
+  assert.equal(enforcedHeld.error, heldMiss, "an enforcing run rethrows a tracked miss");
+  for (const [browserName, phase] of [
+    ["chromium", "first-drag-193"],
+    ["chromium", "second-drag-193"],
+    ["firefox", "geode-crown"],
+  ]) {
+    assert.equal(
+      (await runHeld(browserName, phase)).error,
+      heldMiss,
+      `a held-position miss in ${browserName} ${phase} stays enforced in report mode`,
+    );
+  }
+  assert.equal(gates.completionCheckTracks("dragInputsComplete", "firefox", "any-phase"), true);
+  assert.equal(gates.completionCheckTracks("heldDragPositions", "chromium", "geode-crown"), true);
+  assert.equal(
+    gates.completionCheckTracks("heldDragPositions", "chromium", "first-drag-193"),
+    false,
+  );
   await assert.rejects(
     gates.runCompletionCheck("anyOtherCheck", () => {}, {
       browserName: "firefox",
@@ -1285,12 +1337,27 @@ test("only the hosted macOS Perf job reports the completion checks without enfor
   );
 });
 
-test("only the two tracked responsiveness checks go through the completion check helper", () => {
+test("only the tracked responsiveness checks go through the completion check helper", () => {
   const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
   assert.match(spec, /completionCheckMode\(\)/, "the mode must come from the run's environment");
   const calls = [...spec.matchAll(/completionCheck\(\s*"(\w+)"/g)];
-  assert.deepEqual(calls.map(([, check]) => check), ["dragInputsComplete", "coldZoomPresents"]);
-  const [drag, coldZoom] = calls.map(({ index }) => index);
+  assert.deepEqual(
+    calls.map(([, check]) => check),
+    ["heldDragPositions", "dragInputsComplete", "coldZoomPresents"],
+  );
+  const [held, drag, coldZoom] = calls.map(({ index }) => index);
+  assert.equal(
+    spec.split('"geode-crown"').length,
+    2,
+    "only the masked crown drag may use the phase whose held-position miss is reported",
+  );
+  const heldMessage = "held drag must complete multiple represented positions";
+  assert.equal(spec.split(heldMessage).length, 2, "the held-position check must appear once");
+  const heldMessageAt = spec.indexOf(heldMessage);
+  assert.ok(
+    heldMessageAt > held && heldMessageAt - held < 300,
+    "the held-position check must run through the helper",
+  );
   assert.match(
     spec.slice(coldZoom - 80, coldZoom),
     /if \(phase === "cold-zoom"\) \{\s*await $/,

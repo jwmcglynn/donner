@@ -3,9 +3,9 @@
 // Every run records each gate's measured value and each completion check's result. A gate miss
 // fails the run unless the run sets DONNER_BROWSER_LATENCY_GATES=report, and a completion check
 // miss fails it unless the run sets DONNER_BROWSER_COMPLETION_CHECKS=report and the miss is in the
-// browser that check is tracked for. Only the GitHub-hosted macOS Perf job sets either: the gates
-// miss their targets on that runner (#1666), and the completion checks fail there intermittently
-// (#1675, #1676).
+// browser (and, when the check names them, the phases) that check is tracked for. Only the
+// GitHub-hosted macOS Perf job sets either: the gates miss their targets on that runner (#1666),
+// and the completion checks fail there (#1675, #1676, #2106).
 
 /** Environment variable that selects whether a gate miss fails the run. */
 export const kLatencyGatesEnv = "DONNER_BROWSER_LATENCY_GATES";
@@ -26,12 +26,29 @@ export const kCompletionChecksEnv = "DONNER_BROWSER_COMPLETION_CHECKS";
 
 /**
  * Hard checks of this lane that the hosted macOS Perf job only reports, each in the one browser
- * whose misses its issue tracks; the fix restores enforcement.
+ * whose misses its issue tracks and, when `phases` is set, only in those phases; every other
+ * browser and phase keeps enforcing the check. The fix restores enforcement: remove the entry once
+ * its issue is fixed.
  */
 export const kCompletionChecks = {
   coldZoomPresents: { browser: "chromium", issue: "#1675" },
   dragInputsComplete: { browser: "firefox", issue: "#1676" },
+  // Masked-child drags render too slowly on the hosted runner to complete a second held position
+  // (#2106). Re-enforce once #2106 is fixed.
+  heldDragPositions: { browser: "chromium", phases: ["geode-crown"], issue: "#2106" },
 };
+
+/**
+ * Whether a completion check miss in this browser and phase is tracked by the check's issue.
+ * @param {keyof typeof kCompletionChecks} check Check that missed.
+ * @param {string} browserName Playwright browser name, such as "chromium".
+ * @param {string} phase Measured phase of the miss.
+ * @returns {boolean}
+ */
+export function completionCheckTracks(check, browserName, phase) {
+  const { browser, phases } = kCompletionChecks[check];
+  return browserName === browser && (phases === undefined || phases.includes(phase));
+}
 
 /** Line prefix of a recorded completion check result in the test log. */
 export const kCompletionCheckRecordPrefix = "completion-check ";
@@ -69,8 +86,8 @@ export function completionCheckMode(env = process.env) {
 
 /**
  * Run one completion check's assertion and record whether it held. A miss rethrows the assertion's
- * error unless the run reports completion checks and the miss is in the browser the check is
- * tracked for.
+ * error unless the run reports completion checks and the miss is in the browser and phase the check
+ * is tracked for.
  * @param {keyof typeof kCompletionChecks} check Check to run.
  * @param {() => unknown} assertion Throws, or returns a promise that rejects, on a miss.
  * @param {{
@@ -100,7 +117,8 @@ export async function runCompletionCheck(check, assertion, options) {
     phase: options.phase,
     detail: options.detail,
     met: failure === undefined,
-    mode: options.mode === "report" && options.browserName === kCompletionChecks[check].browser
+    mode: options.mode === "report"
+        && completionCheckTracks(check, options.browserName, options.phase)
       ? "report"
       : "enforce",
   };
