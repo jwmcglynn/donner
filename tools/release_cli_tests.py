@@ -17,6 +17,15 @@ from tools import release_cli
 PROBE_COMPILER = "Ubuntu Clang 18.1.3 (1ubuntu1)"
 RUNNER_CXX = "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
 
+# Header-only fixtures from valid ELF64 little-endian and arm64 Mach-O images.
+LINUX_HEADER = bytes.fromhex(
+    "7f454c4602010103000000000000000003003e0001000000403e020000000000"
+    "4000000000000000d8dd01000000000000000000400038000a0040000b000a00")
+DARWIN_HEADER = bytes.fromhex(
+    "cffaedfe0c000001000000000200000015000000100700008580a10000000000"
+    "19000000480000005f5f504147455a45524f0000000000000000000000000000")
+
+
 
 class ReleaseCliFixture:
     """A committed source checkout, a CLI binary, its notice and a compiler probe."""
@@ -56,7 +65,9 @@ class ReleaseCliFixture:
             "decodedSize": len(payload), "mediaType": "font/ttf", "group": "fallback",
             "path": asset_path}]}))
         self.binary = Path(self.temporary.name) / "donner-cli"
-        self.binary.write_bytes(b"retained CLI bytes\n")
+        self.binary.write_bytes(LINUX_HEADER + b"retained CLI bytes\n")
+        self.macos_binary = Path(self.temporary.name) / "donner-cli-macos"
+        self.macos_binary.write_bytes(DARWIN_HEADER + b"retained CLI bytes\n")
         self.notice = Path(self.temporary.name) / "notice_cli.txt"
         self.notice_contents = (
             release_cli.NOTICE_HEADER + "donner-cli\n" + "=" * 72 + "\n\n" + "-" * 72 +
@@ -86,7 +97,8 @@ class ReleaseCliFixture:
             release_cli.subprocess, "check_output", side_effect=fixture_check_output
         ):
             return release_cli.package(
-                root=self.root, binary=self.binary, notice=self.notice,
+                root=self.root, binary=self.macos_binary if platform == "darwin-arm64" else self.binary,
+                notice=self.notice,
                 compiler_probe=self.probe, resources=self.resources, output=self.artifacts,
                 platform=platform, commit=self.commit, run_id="123", attempt="2",
             )
@@ -108,7 +120,8 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
                 self.assertEqual(self._verify(platform), expected)
                 binary_name = release_cli.PLATFORMS[platform]
                 self.assertEqual(release_cli._read_archive(self.artifacts / binary_name)["donner-cli"],
-                                 self.binary.read_bytes())
+                                 (self.macos_binary if platform == "darwin-arm64"
+                                  else self.binary).read_bytes())
                 self.assertEqual(
                     (self.artifacts / f"{binary_name}.NOTICE.txt").read_bytes(),
                     self.notice.read_bytes(),
@@ -316,11 +329,37 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         archive_name = release_cli.PLATFORMS["linux-x86-64"]
         archive = self.artifacts / archive_name
         files = release_cli._read_archive(archive)
-        files["donner-cli"] = b"changed executable"
+        files["donner-cli"] += b"changed executable"
         release_cli._write_archive(archive, files)
         (self.artifacts / (archive_name + ".sha256")).write_text(
             f"{release_cli.digest(archive)}  {archive_name}\n")
         with self.assertRaisesRegex(ValueError, "provenance"):
+            self._verify()
+
+    def test_source_architecture_must_match_declared_package_platform(self) -> None:
+        image = bytearray(LINUX_HEADER)
+        struct.pack_into("<H", image, 18, 183)
+        self.binary.write_bytes(image)
+        with self.assertRaisesRegex(ValueError, "architecture"):
+            self._package()
+        self.assertFalse(self.artifacts.exists())
+        self.macos_binary.write_bytes(LINUX_HEADER)
+        with self.assertRaisesRegex(ValueError, "architecture"):
+            self._package("darwin-arm64")
+        self.assertFalse(self.artifacts.exists())
+
+    def test_rehashed_archive_cannot_relabel_an_arm_elf_as_x86(self) -> None:
+        self._package()
+        archive_name = release_cli.PLATFORMS["linux-x86-64"]
+        archive = self.artifacts / archive_name
+        files = release_cli._read_archive(archive)
+        image = bytearray(files["donner-cli"])
+        struct.pack_into("<H", image, 18, 183)
+        files["donner-cli"] = bytes(image)
+        release_cli._write_archive(archive, files)
+        (self.artifacts / (archive_name + ".sha256")).write_text(
+            f"{release_cli.digest(archive)}  {archive_name}\n")
+        with self.assertRaisesRegex(ValueError, "architecture"):
             self._verify()
 
     def test_provenance_records_the_bazel_built_compiler_not_the_runner_cxx(self) -> None:

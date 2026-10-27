@@ -674,6 +674,7 @@ py_binary(
 py_library(
     name = "release_cli",
     srcs = ["release_cli.py"],
+    deps = [":native_delivery_lib"],
 )
 
 py_test(

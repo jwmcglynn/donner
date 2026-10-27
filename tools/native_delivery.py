@@ -8,6 +8,7 @@ from hashlib import sha256
 import json
 import os
 import stat
+import struct
 from pathlib import Path
 import re
 import shutil
@@ -29,6 +30,40 @@ def _tool(*arguments: str) -> str:
 
 def _digest(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
+
+
+def validate_image_header(header: bytes, platform: str) -> None:
+    """Require the executable header to match the declared shipping architecture."""
+    if platform == "linux-x86-64":
+        valid = _linux_x86_64_header(header)
+    elif platform == "darwin-arm64":
+        valid = _darwin_arm64_header(header)
+    else:
+        raise ValueError("unsupported native image platform")
+    if not valid:
+        raise ValueError("native image architecture or executable header does not match declared platform")
+
+
+def _linux_x86_64_header(header: bytes) -> bool:
+    if len(header) < 64 or header[:7] != b"\x7fELF\x02\x01\x01":
+        return False
+    kind, machine, version, entry = struct.unpack_from("<HHIQ", header, 16)
+    header_size = struct.unpack_from("<H", header, 52)[0]
+    return kind in (2, 3) and machine == 62 and version == 1 and entry != 0 and header_size == 64
+
+
+def _darwin_arm64_header(header: bytes) -> bool:
+    if len(header) < 32 or header[:4] != b"\xcf\xfa\xed\xfe":
+        return False
+    cpu, subtype, kind, commands, command_bytes, _, reserved = struct.unpack_from("<7I", header, 4)
+    return (cpu == 0x0100000C and subtype == 0 and kind == 2 and commands > 0
+            and command_bytes >= commands * 8 and reserved == 0)
+
+
+def validate_image(path: Path, platform: str) -> None:
+    """Inspect bounded header bytes without executing the input program."""
+    with path.open("rb") as image:
+        validate_image_header(image.read(64), platform)
 
 
 def _uuid(path: Path) -> str:
@@ -111,6 +146,7 @@ def _check_inputs(binary: Path, output: Path, symbols: Path, platform: str,
         raise ValueError("native delivery symbols require an existing private evidence directory")
     if not binary.is_file() or os.path.lexists(output) or os.path.lexists(symbols):
         raise ValueError("native delivery needs an input and fresh owned output paths")
+    validate_image(binary, platform)
 
 
 def _prepare_macos(binary: Path, output: Path, symbols: Path, dsym: Path,
@@ -155,10 +191,12 @@ def prepare(*, binary: Path, output: Path, symbols: Path, platform: str,
     output.parent.mkdir(parents=True, exist_ok=True)
     symbols.mkdir(mode=0o700)
     _copy_fresh_executable(binary, output)
+    validate_image(output, platform)
     if platform == "darwin-arm64":
         identity, unwind, debug = _prepare_macos(binary, output, symbols, dsym, sign)
     else:
         identity, unwind, debug = _prepare_linux(binary, output, symbols)
+    validate_image(output, platform)
     if re.search(rb"/(?:Users|home)/[^/\x00]+/", debug.read_bytes()):
         raise ValueError("native delivery symbols contain an absolute private build path")
     metadata = {"schema": 1, "platform": platform, "identity": identity,

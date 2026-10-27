@@ -20,6 +20,8 @@ import shutil
 import subprocess
 from urllib.parse import urlsplit
 
+from tools import native_delivery
+
 
 PLATFORMS = {
     "linux-x86-64": "donner-cli_linux_x86_64.tar.gz",
@@ -435,6 +437,7 @@ def package(
     binary_name, checksum_name, provenance_name, lock_name, notice_name = _names(platform)
     if not binary.is_file() or binary.stat().st_size == 0:
         raise ValueError("release CLI binary is missing or empty")
+    native_delivery.validate_image(binary, platform)
     _check_notice(notice)
     compiler = compiler_version(compiler_probe)
     lockfile = root / LOCKFILE
@@ -452,6 +455,7 @@ def package(
     destination = output / binary_name
     _write_archive(destination, files)
     packaged = _read_archive(destination)
+    native_delivery.validate_image_header(packaged["donner-cli"][:64], platform)
     shutil.copyfile(lockfile, output / lock_name)
     _validate_public_lockfile(output / lock_name)
     shutil.copyfile(notice, output / notice_name)
@@ -523,6 +527,7 @@ def verify(
     if (artifacts / checksum_name).read_text(encoding="ascii") != f"{checksum}  {binary_name}\n":
         raise ValueError("release CLI checksum does not match retained bytes")
     packaged = _read_archive(binary)
+    native_delivery.validate_image_header(packaged["donner-cli"][:64], platform)
     if packaged["NOTICE.txt"] != retained_notice.read_bytes():
         raise ValueError("release CLI notice provenance does not match packaged bytes")
     if packaged["LICENSE"] != (root / "LICENSE").read_bytes():
