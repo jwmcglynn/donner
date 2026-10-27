@@ -402,27 +402,6 @@ largest residuals are:
 
 Geode also passes with hardware Vulkan on Linux.
 
---- | ---: | ---: | ---: |
-| `text/font/font-shorthand` | 386 | 400 | 422 |
-| `text/text/real-text-height` | 397 | 410 | 441 |
-| `text/textLength/zero` | 396 | 410 | 433 |
-| `text/text/ligatures-handling-in-mixed-fonts-1` (full text) | 399 | 415 | 507 |
-| `text/text/ligatures-handling-in-mixed-fonts-2` (full text) | 343 | 355 | 435 |
-| `text/baseline-shift/nested-with-baseline-1`, `-2` | 384 | 400 | 408 |
-| `text/tspan/nested-whitespaces` | 387 | 400 | 416 |
-| `text/text/zalgo` (full text) | 257 | 265 | 468 |
-| Seven `filters/filter-functions/color-adjust-functions-*` | 375 | 390 | 1508 |
-
-`nested-with-baseline-1` and `-2` previously carried a 0.1 color threshold, under which the 1 px
-shift counted only 22 to 39 pixels. `text/dominant-baseline/hanging` meets the first two
-conditions (337 analytic pixels, 0 supersampled), but a 1 px shift adds only 7 pixels, so no budget
-can separate it; it keeps its existing allowance.
-
-Budgets that already passed at default settings were removed from 39 cases, including the
-`structure/transform-origin` category default (0.13 threshold, 300 pixels), `text/text/xml-space`
-(1400 pixels) and `painting/fill/pattern-on-text` (2100 pixels). Their largest measured residual is
-54 pixels on the CPU tiers and 14 on Geode.
-
 ---
 
 ## High-leverage bugs (one root cause, many tests)
