@@ -287,6 +287,18 @@ inline std::vector<uint8_t> Expected(const Scenario& scenario) {
   return {pixels.data().begin(), pixels.data().end()};
 }
 
+/// Pixelmatch policy for a scenario's readback.
+inline editor::tests::BitmapGoldenCompareParams ComparisonParams(
+    const shader::programs::ImageBlitParams& params) {
+  if (params.samplingMode == 3u) {
+    // Sixteen float taps can land one 8-bit step from the CPU reference on some GPUs (measured:
+    // one channel of one pixel on a Vulkan device); the same two-pixel, one-step allowance as the
+    // native blur cascade check keeps every other pixel exact.
+    return editor::tests::ApprovedPixelToleranceParams(0.0f, 2, /*includeAntiAliasing=*/true);
+  }
+  return editor::tests::PixelmatchIdentityParams();
+}
+
 }  // namespace image_blit_scene
 
 /// Renders a textured quad and compares every pixel with independent CPU references.
@@ -418,12 +430,7 @@ void CheckImageBlit(DeviceType& device, const shader::CompiledShaderView& shader
                           scenario.width() * 4},
       "image_blit_" + std::to_string(static_cast<unsigned>(scenario.kind)) + "_" +
           std::to_string(scenario.blendMode),
-      params.samplingMode == 3u
-          // Sixteen float taps can land one 8-bit step from the CPU reference on some GPUs
-          // (measured: one channel of one pixel on a Vulkan device); the same two-pixel,
-          // one-step allowance as the native blur cascade check keeps every other pixel exact.
-          ? editor::tests::ApprovedPixelToleranceParams(0.0f, 2, /*includeAntiAliasing=*/true)
-          : editor::tests::PixelmatchIdentityParams());
+      ComparisonParams(params));
 }
 
 }  // namespace donner::gpu::tests
