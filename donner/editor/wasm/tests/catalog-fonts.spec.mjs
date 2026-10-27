@@ -11,7 +11,15 @@ const context = vm.createContext({
   DataView,
   Response,
   AbortController,
-  TextDecoder,
+  // Node accepts shared views, while browsers require an owned non-shared decode input.
+  TextDecoder: class extends TextDecoder {
+    decode(input, options) {
+      if (input instanceof SharedArrayBuffer || input?.buffer instanceof SharedArrayBuffer) {
+        throw new TypeError("TextDecoder input must not be shared");
+      }
+      return super.decode(input, options);
+    }
+  },
   console,
   setTimeout,
   clearTimeout,
@@ -793,7 +801,7 @@ function resourceFixture(name, group = "chrome", seed = 1) {
 }
 
 function resourceModule(manifest, accept = true) {
-  const heap = new Uint8Array(128 * 1024);
+  const heap = new Uint8Array(new SharedArrayBuffer(128 * 1024));
   heap.set(new TextEncoder().encode(JSON.stringify(manifest)), 16);
   const installed = [];
   const freed = [];
@@ -855,6 +863,20 @@ test("essential assets download alongside compilation; samples remain demand loa
   assert.equal(calls.length, 2);
   assert.equal(module.installed[1].digest, sample.asset.sha256);
   assert.equal(module.freed.length, 2, "every transfer allocation is released after installation");
+});
+
+test("pthread manifest decoding snapshots shared memory without changing its identity", async (t) => {
+  const critical = resourceFixture("kSharedIcon");
+  const { loader, manifest } = resourceLoader(t, [critical]);
+  const module = resourceModule(manifest);
+  assert.ok(module.HEAPU8.buffer instanceof SharedArrayBuffer);
+  const original = module.HEAPU8.slice();
+  await loader.install(module);
+  assert.equal(module.installed[0].digest, critical.asset.sha256);
+  assert.deepEqual(
+    module.HEAPU8.subarray(16, 16 + JSON.stringify(manifest).length),
+    original.subarray(16, 16 + JSON.stringify(manifest).length),
+  );
 });
 
 test("mixed package metadata fails before any bytes can enter the application", async (t) => {

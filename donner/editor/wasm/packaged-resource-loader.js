@@ -28,7 +28,8 @@
     while (end < limit && heap[end] !== 0) ++end;
     if (end === limit) throw new Error("Invalid compiled resource manifest");
     return JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(heap.subarray(pointer, end)),
+      // Browser decoders require a non-shared snapshot of the bounded pthread heap range.
+      new TextDecoder("utf-8", { fatal: true }).decode(heap.slice(pointer, end)),
     );
   }
 
