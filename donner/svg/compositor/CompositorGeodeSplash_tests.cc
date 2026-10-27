@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -513,7 +514,8 @@ TEST(CompositorGeodeSplashTest, MaskedCrystalFaceDragRepaintsOwningTileBeforeRel
   const donner::tests::RequiredRunfile source =
       donner::tests::ReadRequiredRunfile("geode_splash.svg");
   DONNER_REQUIRE_RUNFILE(source);
-  for (const char* selector : {"#central-crown-face-2", "#central-silhouette"}) {
+  for (const char* selector :
+       {"#central-crown-face-2", "#central-crown-face-3", "#central-silhouette"}) {
     ParseWarningSink warnings = ParseWarningSink::Disabled();
     auto parsed = parser::SVGParser::ParseSVG(source.contents, warnings);
     ASSERT_FALSE(parsed.hasError());
@@ -548,17 +550,27 @@ TEST(CompositorGeodeSplashTest, MaskedCrystalFaceDragRepaintsOwningTileBeforeRel
         << "The masked cavity must use conservative source bounds, not a full-canvas tile";
     const std::uint64_t ownerGeneration = ownerLayer->generation();
     // These faces sit inside clipped crystals, so a held drag cannot rebuild the cavity from
-    // pieces (see `MaskedChildDragKeepsSlowPathWhenSplitWouldChangeCompositing`) and patches only
+    // pieces (see `MaskedChildDragSkipsPiecesWhenSplitWouldChangeCompositing`) and patches only
     // its damage in the owner.
     EXPECT_EQ(compositor.promoteEntity(target->unsafeEntityHandle().entity(),
                                        InteractionHint::ActiveDrag),
               CompositorController::PromoteResult::OwningTilesRequired)
         << selector << " stays inside the shared cavity mask";
 
-    target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12, 0)));
+    // Several held moves, each patched from the previous one, must track a full re-raster of the
+    // final position without rebuilding the document's render tree.
+    for (const double x : {4.0, 8.0, 12.0}) {
+      target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(x, 0)));
+      const CompositorController::FastPathCounters before = compositor.fastPathCountersForTesting();
+      compositor.renderFrame(viewport);
+      const CompositorController::FastPathCounters& after = compositor.fastPathCountersForTesting();
+      EXPECT_EQ(after.fastPathFrames, before.fastPathFrames + 1)
+          << selector << " held move to x=" << x << " must not rebuild the render tree";
+      EXPECT_EQ(after.slowPathFramesWithDirty, before.slowPathFramesWithDirty) << selector;
+      EXPECT_EQ(compositor.lastRenderFrameStats().damagePatchTileCount, 1) << selector;
+    }
     referenceTarget->cast<SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(12, 0)));
-    compositor.renderFrame(viewport);
     ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation()) << selector;
     ownerLayer = compositor.findLayerForTest(ownerEntity);
     ASSERT_NE(ownerLayer, nullptr);
@@ -765,11 +777,17 @@ TEST(CompositorGeodeSplashTest, SoftMaskOverlapHeldDragMatchesFullOwner) {
                                        kRecomposedOwnerParams);
 }
 
-TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChangeCompositing) {
+TEST(CompositorGeodeSplashTest, MaskedChildDragSkipsPiecesWhenSplitWouldChangeCompositing) {
   // An owner with opacity, or a non-plain group between the owner and the dragged shape, cannot
-  // be rebuilt from separately drawn pieces: those contexts composite their whole subtree.
-  for (const std::string_view source : {
-           std::string_view(R"svg(
+  // be rebuilt from separately drawn pieces: those contexts composite their whole subtree. Each
+  // case is paired with whether the owner is instead patched over the shape's old and new coverage
+  // without rebuilding the render tree; the rest prepare the document and render the owner.
+  struct Case {
+    std::string_view source;
+    bool patchesWithoutRebuild;
+  };
+  for (const auto& [source, patchesWithoutRebuild] : std::initializer_list<Case>{
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
@@ -781,7 +799,8 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
                </g>
              </svg>)svg"),
-           std::string_view(R"svg(
+            true},
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
@@ -795,9 +814,10 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  </g>
                </g>
              </svg>)svg"),
+            false},
            // A clip-path on a group between the owner and the target stays put while the target
            // moves, like the geode splash's crystal faces inside their clipped crystals.
-           std::string_view(R"svg(
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
@@ -814,8 +834,9 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  </g>
                </g>
              </svg>)svg"),
+            false},
            // An owner with a clip-path, a filter or a blend mode composites its whole content.
-           std::string_view(R"svg(
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -828,7 +849,8 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
                </g>
              </svg>)svg"),
-           std::string_view(R"svg(
+            true},
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -841,7 +863,8 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
                </g>
              </svg>)svg"),
-           std::string_view(R"svg(
+            false},
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -854,8 +877,9 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
                </g>
              </svg>)svg"),
+            false},
            // A filtered group between the owner and the target is a layer of its own.
-           std::string_view(R"svg(
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -870,8 +894,9 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  </g>
                </g>
              </svg>)svg"),
+            false},
            // Part of the target lies outside the canvas when the pieces would be drawn.
-           std::string_view(R"svg(
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -883,8 +908,9 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  <rect id="target" x="-20" y="20" width="40" height="30" fill="#c00"/>
                </g>
              </svg>)svg"),
+            true},
            // Markers and pattern tiles render content instantiated after their host.
-           std::string_view(R"svg(
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -900,7 +926,8 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                        marker-end="url(#dot)"/>
                </g>
              </svg>)svg"),
-           std::string_view(R"svg(
+            false},
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -918,8 +945,9 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  </g>
                </g>
              </svg>)svg"),
+            false},
            // A `use` copy of the target would keep its old position in the other pieces.
-           std::string_view(R"svg(
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -932,8 +960,9 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  <use href="#target" x="30" y="30"/>
                </g>
              </svg>)svg"),
+            false},
            // A `use` copy of the target inside the owner's mask would keep the mask in place.
-           std::string_view(R"svg(
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -946,8 +975,9 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  <rect id="target" x="20" y="20" width="20" height="20" fill="#c00"/>
                </g>
              </svg>)svg"),
+            false},
            // An feImage of the target draws its live instances into another element's filter.
-           std::string_view(R"svg(
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -963,8 +993,9 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  <rect x="50" y="50" width="30" height="30" fill="#00c" filter="url(#f)"/>
                </g>
              </svg>)svg"),
+            false},
            // Text has no tight bounds to check against the owner tile.
-           std::string_view(R"svg(
+           {std::string_view(R"svg(
              <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
                <defs>
                  <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
@@ -976,12 +1007,14 @@ TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChange
                  <text id="target" x="20" y="44" font-size="20" fill="#c00">Ab</text>
                </g>
              </svg>)svg"),
+            false},
        }) {
     const RenderViewport viewport{Vector2d(96, 96)};
+    SCOPED_TRACE(source);
     const HeldMaskedDragResult held =
         RunHeldMaskedDrag(source, "#owner", "#target", Vector2d(6, 0), 1, viewport);
-    EXPECT_EQ(held.fastPathFrames, 0u);
-    EXPECT_EQ(held.slowPathFrames, 1u);
+    EXPECT_EQ(held.fastPathFrames, patchesWithoutRebuild ? 1u : 0u);
+    EXPECT_EQ(held.slowPathFrames, patchesWithoutRebuild ? 0u : 1u);
     EXPECT_EQ(held.maskedChildComposeTiles, 0);
     Vector2d referenceOffset;
     const RendererBitmap reference =
