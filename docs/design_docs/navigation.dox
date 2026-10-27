@@ -62,6 +62,7 @@ investigations.
 - \subpage md_docs_2design__docs_20008-css__fonts
 - \subpage md_docs_2design__docs_20010-text__rendering
 - \subpage md_docs_2design__docs_20038-geode__tinyskia__text__parity
+- \subpage md_docs_2design__docs_20069-bidi__text__layout
 - \subpage md_docs_2design__docs_2text_20052-overview
 - \subpage md_docs_2design__docs_2text_20052-2-architecture
 - \subpage md_docs_2design__docs_2text_20052-3-rtl__and__complex__scripts
