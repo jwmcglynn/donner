@@ -2939,10 +2939,48 @@ size_t ClusterEnd(std::string_view text, size_t start, size_t end) {
   return position;
 }
 
+/**
+ * Memoizes and bounds the codepoint coverage queries that cluster fallback makes for one text
+ * element. Each query shapes one codepoint, so a document with many faces and many distinct
+ * unmapped codepoints could otherwise demand faces times codepoints shaping calls. Each span grants
+ * a fixed number of queries per byte of its text; once the grant is spent, unknown pairs report no
+ * coverage and their clusters stay `.notdef`.
+ */
+class FallbackCoverage {
+public:
+  /// Adds the query allowance for a span of \p textBytes UTF-8 bytes, which bounds its
+  /// codepoint count.
+  void grant(size_t textBytes) { remaining_ += textBytes * kQueriesPerCodepoint; }
+
+  /// Whether \p font maps \p codepoint, from the cache or one budgeted backend query.
+  bool covers(const TextBackend& backend, FontHandle font, float sizePx, uint32_t codepoint) {
+    const uint64_t key =
+        (static_cast<uint64_t>(static_cast<uint32_t>(font.entity())) << 32) | codepoint;
+    if (const auto cached = cache_.find(key); cached != cache_.end()) {
+      return cached->second;
+    }
+    if (remaining_ == 0) {
+      return false;
+    }
+    --remaining_;
+    const bool covered = fontSupportsCodepoint(backend, font, sizePx, codepoint);
+    cache_.emplace(key, covered);
+    return covered;
+  }
+
+private:
+  /// Enough to try every face of a typical fallback chain for each codepoint.
+  static constexpr size_t kQueriesPerCodepoint = 32;
+
+  std::unordered_map<uint64_t, bool> cache_;
+  size_t remaining_ = 0;
+};
+
 /// Where a span's clusters may fall back, in priority order after the span's own face: its
 /// remaining font families, then every registered face, matched at the span's weight and style.
 struct ClusterFallback {
   FontManager& fontManager;
+  FallbackCoverage& coverage;
   std::span<const RcString> families;
   int weight = 400;
   int style = 0;
@@ -2972,13 +3010,18 @@ public:
       return ShapeAddressableZeroSizeText(text_, chunk.byteStart, chunk.byteEnd - chunk.byteStart);
     }
     TextBackend::ShapedRun primary = shapeWith(run_.font, chunk);
+    // A shaper merges a syllable or a base with its marks into one cluster and reports every
+    // glyph of it at the cluster's first byte, so fallback never splits a backend cluster.
     std::vector<bool> notdef(chunk.byteEnd - chunk.byteStart, false);
+    std::vector<bool> clusterStart(chunk.byteEnd - chunk.byteStart, false);
     bool anyNotdef = false;
     for (const TextBackend::ShapedGlyph& glyph : primary.glyphs) {
-      if (glyph.glyphIndex == 0 && glyph.cluster >= chunk.byteStart &&
-          glyph.cluster < chunk.byteEnd) {
-        notdef[glyph.cluster - chunk.byteStart] = true;
-        anyNotdef = true;
+      if (glyph.cluster >= chunk.byteStart && glyph.cluster < chunk.byteEnd) {
+        clusterStart[glyph.cluster - chunk.byteStart] = true;
+        if (glyph.glyphIndex == 0) {
+          notdef[glyph.cluster - chunk.byteStart] = true;
+          anyNotdef = true;
+        }
       }
     }
     if (!anyNotdef) {
@@ -2991,7 +3034,10 @@ public:
     };
     std::vector<Item> items;
     for (size_t start = chunk.byteStart; start < chunk.byteEnd;) {
-      const size_t end = ClusterEnd(text_, start, chunk.byteEnd);
+      size_t end = ClusterEnd(text_, start, chunk.byteEnd);
+      while (end < chunk.byteEnd && !clusterStart[end - chunk.byteStart]) {
+        end = ClusterEnd(text_, end, chunk.byteEnd);
+      }
       bool missing = false;
       for (size_t byte = start; byte < end; ++byte) {
         missing = missing || notdef[byte - chunk.byteStart];
@@ -3047,7 +3093,7 @@ private:
     for (size_t position = start; position < end;) {
       const uint32_t codepoint = decodeUtf8(text_, position);
       if (!IsClusterJoiner(codepoint) &&
-          !fontSupportsCodepoint(backend_, font, run_.usedFontSizePx, codepoint)) {
+          !fallback_.coverage.covers(backend_, font, run_.usedFontSizePx, codepoint)) {
         return false;
       }
     }
@@ -3057,25 +3103,39 @@ private:
   /// The first fallback face covering the cluster at [start, end), or the primary face when none
   /// does, which leaves the cluster's glyphs `.notdef`.
   FontHandle findFace(size_t start, size_t end) const {
-    FontManager& fontManager = fallback_.fontManager;
-    const auto candidate = [&](std::string_view family) {
-      const FontHandle face =
-          fontManager.findFont(family, fallback_.weight, fallback_.style, fallback_.stretch);
-      return face && face != run_.font && covers(face, start, end) ? face : FontHandle();
-    };
-    for (const RcString& family : fallback_.families) {
-      if (fontManager.hasFamily(family)) {
-        if (const FontHandle face = candidate(family)) {
-          return face;
-        }
-      }
-    }
-    for (size_t index = 0; index < fontManager.numFaces(); ++index) {
-      if (const FontHandle face = candidate(fontManager.faceFamilyName(index))) {
+    for (const FontHandle face : candidates()) {
+      if (covers(face, start, end)) {
         return face;
       }
     }
     return run_.font;
+  }
+
+  /// The distinct fallback faces in priority order, resolved once per span.
+  const std::vector<FontHandle>& candidates() const {
+    if (candidatesResolved_) {
+      return candidates_;
+    }
+    candidatesResolved_ = true;
+    FontManager& fontManager = fallback_.fontManager;
+    const auto add = [&](std::string_view family) {
+      const FontHandle face =
+          fontManager.findFont(family, fallback_.weight, fallback_.style, fallback_.stretch);
+      if (face && face != run_.font &&
+          std::find(candidates_.begin(), candidates_.end(), face) == candidates_.end()) {
+        candidates_.push_back(face);
+      }
+    };
+    for (const RcString& family : fallback_.families) {
+      if (fontManager.hasFamily(family)) {
+        add(family);
+      }
+    }
+    const size_t faceCount = fontManager.numFaces();
+    for (size_t index = 0; index < faceCount; ++index) {
+      add(fontManager.faceFamilyName(index));
+    }
+    return candidates_;
   }
 
   const TextBackend& backend_;
@@ -3088,6 +3148,8 @@ private:
   const ClusterFallback& fallback_;
   /// Resolved faces keyed by cluster text, which views the span text.
   mutable std::unordered_map<std::string_view, FontHandle> clusterFaces_;
+  mutable std::vector<FontHandle> candidates_;
+  mutable bool candidatesResolved_ = false;
 };
 
 /// A shaped chunk retains backend source clusters and separate SVG positioning groups.
@@ -3468,9 +3530,14 @@ private:
     state.chunkRanges = findChunkRanges(state.text, state.xList, state.yList);
     state.indexMappings = buildByteIndexMappings(state.text);
     const TextSpan& span = *state.span;
+    fallbackCoverage_.grant(state.text.size());
     const ClusterFallback fallback{
-        fontManager_, span.fontFamilies.empty() ? params_.fontFamilies : span.fontFamilies,
-        span.fontWeight, static_cast<int>(span.fontStyle), static_cast<int>(span.fontStretch)};
+        fontManager_,
+        fallbackCoverage_,
+        span.fontFamilies.empty() ? params_.fontFamilies : span.fontFamilies,
+        span.fontWeight,
+        static_cast<int>(span.fontStyle),
+        static_cast<int>(span.fontStretch)};
     const ChunkShaper shaper(backend_, state.run, state.text, state.vertical, state.orientation,
                              span.fontVariant, state.fontKerning, fallback);
     state.shaping = PrepareSpanShaping(shaper, state.text, state.chunkRanges, state.indexMappings);
@@ -4005,6 +4072,7 @@ private:
   std::vector<RunPenExtent> runExtents_;
   bool wrapped_ = false;
   bool* resourceRejected_ = nullptr;
+  FallbackCoverage fallbackCoverage_;
 };
 
 }  // namespace
