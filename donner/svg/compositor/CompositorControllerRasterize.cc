@@ -239,33 +239,6 @@ bool HasSubtreePaint(const components::ResolvedPaintServer& paint) {
   return reference != nullptr && reference->subtreeInfo.has_value();
 }
 
-// True when the document draws `target` or its content a second time, anywhere: in the owner's
-// content, in its mask or outside the owner. An instantiated copy, such as a `use` copy, draws from
-// its own instances, which a held drag of `target` leaves in place. An `feImage` reference to the
-// target, one of its ancestors or one of its content elements draws the live instances into
-// another element's filter result, which the pieces would not update.
-bool DrawsCopyOf(Registry& registry, Entity target) {
-  for (const auto& [entity, shadow] : registry.view<components::ShadowEntityComponent>().each()) {
-    if (shadow.lightEntity == target || IsDomDescendantOf(registry, shadow.lightEntity, target)) {
-      return true;
-    }
-  }
-  for (const auto& [entity, image] : registry.view<components::FEImageComponent>().each()) {
-    const std::string_view href(image.href);
-    if (href.size() < 2 || href[0] != '#') {
-      continue;
-    }
-    const Entity referenced =
-        components::FindAttachedEntityById(registry, RcString(href.substr(1)));
-    if (referenced != entt::null &&
-        (referenced == target || IsDomDescendantOf(registry, referenced, target) ||
-         IsDomDescendantOf(registry, target, referenced))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // True when @p instance renders content instantiated after its host entity, past the end of its
 // own range: a mask, markers or a pattern tile.
 bool RendersAfterItself(const components::RenderingInstanceComponent& instance) {
@@ -419,6 +392,28 @@ bool IsWholePixelOffset(const Vector2d& offsetPx) {
 }
 
 }  // namespace
+
+bool DrawsCopyOf(Registry& registry, Entity target) {
+  for (const auto& [entity, shadow] : registry.view<components::ShadowEntityComponent>().each()) {
+    if (shadow.lightEntity == target || IsDomDescendantOf(registry, shadow.lightEntity, target)) {
+      return true;
+    }
+  }
+  for (const auto& [entity, image] : registry.view<components::FEImageComponent>().each()) {
+    const std::string_view href(image.href);
+    if (href.size() < 2 || href[0] != '#') {
+      continue;
+    }
+    const Entity referenced =
+        components::FindAttachedEntityById(registry, RcString(href.substr(1)));
+    if (referenced != entt::null &&
+        (referenced == target || IsDomDescendantOf(registry, referenced, target) ||
+         IsDomDescendantOf(registry, target, referenced))) {
+      return true;
+    }
+  }
+  return false;
+}
 
 std::unique_ptr<RendererInterface> CompositorController::acquireOffscreen() {
   if (pooledOffscreen_ != nullptr) {
