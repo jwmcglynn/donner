@@ -37,6 +37,8 @@
       canonicalManifest(manifest);
       this.manifest = manifest;
       this.pending = new Map();
+      this.installing = new Map();
+      this.installed = new Set();
       this.nextToken = 1;
       this.closed = false;
       this.module = null;
@@ -66,7 +68,7 @@
       void this.critical.catch(() => {});
     }
 
-    load(digest) {
+    load(digest, explicitRetry = false) {
       if (this.closed) return Promise.reject(new Error("Application resources closed"));
       const prior = this.pending.get(digest);
       if (prior) return prior.promise;
@@ -78,9 +80,12 @@
         reject = no;
       });
       this.pending.set(digest, { token, promise, resolve, reject });
-      if (!this.broker.request(digest, token)) {
+      const accepted = explicitRetry
+        ? this.broker.retry(digest, token)
+        : this.broker.request(digest, token);
+      if (!accepted) {
         this.pending.delete(digest);
-        reject(new Error("Unknown application resource"));
+        reject(new Error("Application resource request unavailable"));
       }
       return promise;
     }
@@ -97,6 +102,7 @@
         if (module._DonnerInstallPackagedResource(pointer, pointer + 65, bytes.byteLength) !== 1) {
           throw new Error("Application resource installation failed");
         }
+        this.installed.add(digest);
       } finally {
         module._free(pointer);
       }
@@ -118,9 +124,24 @@
       }
     }
 
-    async request(digest) {
-      if (!this.module || this.closed) throw new Error("Application resources not initialized");
-      this.installBytes(this.module, digest, await this.load(digest));
+    request(digest, explicitRetry = false) {
+      const module = this.module;
+      if (!module || this.closed) {
+        return Promise.reject(new Error("Application resources not initialized"));
+      }
+      if (!this.broker.assets.has(digest)) {
+        return Promise.reject(new Error("Unknown application resource"));
+      }
+      if (this.installed.has(digest)) return Promise.resolve();
+      const prior = this.installing.get(digest);
+      if (prior) return prior;
+      const operation = this.load(digest, explicitRetry).then((bytes) => {
+        this.installBytes(module, digest, bytes);
+      }).finally(() => {
+        if (this.installing.get(digest) === operation) this.installing.delete(digest);
+      });
+      this.installing.set(digest, operation);
+      return operation;
     }
 
     close() {
@@ -132,6 +153,8 @@
         pending.reject(new Error("Application resources closed"));
       }
       this.pending.clear();
+      this.installing.clear();
+      this.installed.clear();
       this.critical = null;
     }
   }
