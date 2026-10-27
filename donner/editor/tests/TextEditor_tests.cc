@@ -4835,7 +4835,7 @@ TEST_F(TextEditorTests, DefaultSvgSetupHighlightsAndEditsWithoutChangingPublicLa
   editor.setText("<rect/>");
   EXPECT_EQ(FirstLineSyntaxColor(1), ColorIndex::Keyword);
   editor.setCursorPosition(Coordinates(0, 7));
-  editor.enterCharacter(' ', false);
+  EnterCharacter(' ');
   EXPECT_EQ(editor.getText(), "<rect/> ");
   editor.undo();
   EXPECT_EQ(editor.getText(), "<rect/>");
