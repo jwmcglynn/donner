@@ -1525,6 +1525,27 @@ void ApplyPostTextPathTranslations(std::vector<TextRun>& runs,
  * @param scale Inline-axis scale factor.
  * @param vertical True for vertical writing modes.
  */
+/// A glyph's pen position on the inline axis. An upright vertical glyph is drawn past its pen
+/// position by its face's vertical origin.
+double InlinePenPosition(const TextGlyph& glyph, bool vertical) {
+  return vertical ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
+}
+
+/**
+ * Moves a glyph's pen position to \p pen and scales its inline advance by \p scale. The stretch
+ * of an upright vertical glyph along the inline axis also stretches its offset from the pen.
+ */
+void PlaceStretchedGlyph(TextGlyph& glyph, double pen, double scale, bool vertical) {
+  if (vertical) {
+    glyph.verticalOriginOffset *= scale;
+    glyph.yPosition = pen + glyph.verticalOriginOffset;
+    glyph.yAdvance *= scale;
+  } else {
+    glyph.xPosition = pen;
+    glyph.xAdvance *= scale;
+  }
+}
+
 void StretchGlyphAlongInlineAxis(TextGlyph& glyph, double scale, bool vertical) {
   if (vertical && !glyph.sideways) {
     glyph.stretchScaleY *= NarrowToFloat(scale);
@@ -1783,23 +1804,21 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
         const size_t glyphEnd = boundaries[segment + 1];
         const auto& firstGlyph = runs[runIndex].glyphs[glyphBegin];
         const auto& lastGlyph = runs[runIndex].glyphs[glyphEnd - 1];
-        const double start = glyphBegin == 0
-                                 ? (vertical ? extent.startY : extent.startX)
-                                 : (vertical ? firstGlyph.yPosition : firstGlyph.xPosition);
+        const double start = glyphBegin == 0 ? (vertical ? extent.startY : extent.startX)
+                                             : InlinePenPosition(firstGlyph, vertical);
         const double end = glyphEnd == runs[runIndex].glyphs.size()
                                ? (vertical ? extent.endY : extent.endX)
-                               : (vertical ? lastGlyph.yPosition + lastGlyph.yAdvance
-                                           : lastGlyph.xPosition + lastGlyph.xAdvance);
+                               : InlinePenPosition(lastGlyph, vertical) +
+                                     (vertical ? lastGlyph.yAdvance : lastGlyph.xAdvance);
         const bool absoluteReset =
             segment > 0 || (!inlinePositions.empty() && inlinePositions.front());
-        scopes[owner].items.push_back(
-            {.index = runIndex,
-             .absoluteReset = absoluteReset,
-             .glyphBegin = glyphBegin,
-             .glyphEnd = glyphEnd,
-             .start = start,
-             .end = end,
-             .glyphOrigin = vertical ? firstGlyph.yPosition : firstGlyph.xPosition});
+        scopes[owner].items.push_back({.index = runIndex,
+                                       .absoluteReset = absoluteReset,
+                                       .glyphBegin = glyphBegin,
+                                       .glyphEnd = glyphEnd,
+                                       .start = start,
+                                       .end = end,
+                                       .glyphOrigin = InlinePenPosition(firstGlyph, vertical)});
         logicalEnd = end;
       }
       hasLogicalEnd = true;
@@ -1960,15 +1979,10 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
       const double glyphBase = position + item.glyphOrigin - item.start;
       for (size_t glyphIndex = item.glyphBegin; glyphIndex < item.glyphEnd; ++glyphIndex) {
         auto& glyph = run.glyphs[glyphIndex];
-        if (vertical) {
-          glyph.yPosition = glyphBase + (glyph.yPosition - item.glyphOrigin) * scope.scale +
-                            scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
-          glyph.yAdvance *= scope.scale;
-        } else {
-          glyph.xPosition = glyphBase + (glyph.xPosition - item.glyphOrigin) * scope.scale +
-                            scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
-          glyph.xAdvance *= scope.scale;
-        }
+        const double pen = glyphBase +
+                           (InlinePenPosition(glyph, vertical) - item.glyphOrigin) * scope.scale +
+                           scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
+        PlaceStretchedGlyph(glyph, pen, scope.scale, vertical);
         StretchGlyphAlongInlineAxis(glyph, scope.scale, vertical);
       }
     }
@@ -2110,7 +2124,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
         continue;
       }
 
-      const double runStartPos = vertical ? run.glyphs[0].yPosition : run.glyphs[0].xPosition;
+      const double runStartPos = InlinePenPosition(run.glyphs[0], vertical);
       const auto& extent = runExtents[i];
       double naturalLength =
           vertical ? (extent.endY - extent.startY) : (extent.endX - extent.startX);
@@ -2145,13 +2159,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
           if (traversalStats) {
             ++traversalStats->glyphVisits;
           }
-          if (vertical) {
-            g.yPosition = runStartPos + (g.yPosition - runStartPos) * scaleFactor;
-            g.yAdvance *= scaleFactor;
-          } else {
-            g.xPosition = runStartPos + (g.xPosition - runStartPos) * scaleFactor;
-            g.xAdvance *= scaleFactor;
-          }
+          PlaceStretchedGlyph(
+              g, runStartPos + (InlinePenPosition(g, vertical) - runStartPos) * scaleFactor,
+              scaleFactor, vertical);
           StretchGlyphAlongInlineAxis(g, scaleFactor, vertical);
         }
       }
@@ -2174,7 +2184,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
   for (const auto& r : runs) {
     if (!r.glyphs.empty()) {
       globalStartX = r.glyphs[0].xPosition;
-      globalStartY = r.glyphs[0].yPosition;
+      globalStartY = InlinePenPosition(r.glyphs[0], true);
       break;
     }
   }
@@ -2211,13 +2221,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
         const double scaleFactor = targetLength / globalNaturalLength;
         for (auto& r : runs) {
           for (auto& g : r.glyphs) {
-            if (vertical) {
-              g.yPosition = globalStartY + (g.yPosition - globalStartY) * scaleFactor;
-              g.yAdvance *= scaleFactor;
-            } else {
-              g.xPosition = globalStartX + (g.xPosition - globalStartX) * scaleFactor;
-              g.xAdvance *= scaleFactor;
-            }
+            const double start = vertical ? globalStartY : globalStartX;
+            PlaceStretchedGlyph(g, start + (InlinePenPosition(g, vertical) - start) * scaleFactor,
+                                scaleFactor, vertical);
             StretchGlyphAlongInlineAxis(g, scaleFactor, vertical);
           }
         }

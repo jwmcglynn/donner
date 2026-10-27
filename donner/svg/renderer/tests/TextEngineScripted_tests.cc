@@ -1863,14 +1863,14 @@ TEST(TextEngineScriptedTest, VerticalSpacingAndGlyphsStretchesEachGlyphAlongTheI
     const auto natural = LayoutVerticalSpan(test.value, std::nullopt);
     ASSERT_THAT(natural, SizeIs(2));
     const double naturalLength = natural[1].yPosition + natural[1].yAdvance - natural[0].yPosition;
+    // The span starts at pen position 0, and an upright glyph's offset from its pen stretches
+    // with its outline, so every inline coordinate doubles.
     const auto glyphMatches = [&](const TextGlyph& glyph) {
-      return AllOf(
-          GlyphYPositionIs(DoubleNear(
-              natural[0].yPosition + 2.0 * (glyph.yPosition - natural[0].yPosition), 1e-9)),
-          GlyphYAdvanceIs(DoubleEq(2.0 * glyph.yAdvance)),
-          GlyphRotateDegreesIs(DoubleEq(test.rotateDegrees)),
-          GlyphStretchScaleXIs(FloatEq(test.stretchX)),
-          GlyphStretchScaleYIs(FloatEq(test.stretchY)));
+      return AllOf(GlyphYPositionIs(DoubleNear(2.0 * glyph.yPosition, 1e-9)),
+                   GlyphYAdvanceIs(DoubleEq(2.0 * glyph.yAdvance)),
+                   GlyphRotateDegreesIs(DoubleEq(test.rotateDegrees)),
+                   GlyphStretchScaleXIs(FloatEq(test.stretchX)),
+                   GlyphStretchScaleYIs(FloatEq(test.stretchY)));
     };
 
     EXPECT_THAT(LayoutVerticalSpan(test.value, 2.0 * naturalLength),
