@@ -1,6 +1,8 @@
 """Regression coverage for immutable font bundle paths and collision rejection."""
 
 from pathlib import Path
+import hashlib
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -127,6 +129,52 @@ class PackageFilesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "output must not be a symlink"):
             package_files(self.output, [], [("fonts/a.woff2", source)])
         self.assertEqual(list(outside.iterdir()), [])
+
+    def resource(self, name="kIcon", payload=b"<svg id='resource-fixture'/>"):
+        digest = hashlib.sha256(payload).hexdigest()
+        relative = f"assets/{digest}.svg"
+        source = self.file("resources/" + relative, payload)
+        asset = {"id": name, "sha256": digest, "encodedSize": len(payload),
+                 "decodedSize": len(payload), "mediaType": "image/svg+xml", "group": "chrome",
+                 "path": relative}
+        manifest = self.file("resources/manifest.json", json.dumps({
+            "schemaVersion": 1, "assets": [asset],
+        }).encode())
+        return [(relative, source), ("manifest.json", manifest)], asset
+
+    def test_resource_manifests_generate_metadata_without_payload_strings(self):
+        assets, descriptor = self.resource()
+        package_files(self.output, [], assets)
+        manifest = json.loads((self.output / "packaged-resources.json").read_text())
+        self.assertEqual(manifest, {"schemaVersion": 1, "assets": [descriptor]})
+        self.assertEqual((self.output / descriptor["path"]).read_bytes(), assets[0][1].read_bytes())
+        self.assertNotIn("<svg", (self.output / "packaged-resources.js").read_text())
+        serialized = json.dumps(manifest, separators=(",", ":"), sort_keys=True)
+        self.assertEqual((self.output / "packaged-resources.js").read_text(),
+                         "globalThis.DonnerPackagedResources = " + serialized + ";\n")
+
+    def test_equal_resource_trees_share_one_immutable_payload(self):
+        assets, descriptor = self.resource()
+        package_files(self.output, [], assets + assets)
+        self.assertEqual(len(list((self.output / "assets").iterdir())), 1)
+        self.assertEqual(len(json.loads((self.output / "packaged-resources.json").read_text())["assets"]), 1)
+
+    def test_resource_digest_is_verified_before_any_output(self):
+        assets, _ = self.resource()
+        assets[0][1].write_bytes(b"X" * assets[0][1].stat().st_size)
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            package_files(self.output, [], assets)
+        self.assertFalse(self.output.exists())
+
+    def test_resource_manifest_cannot_traverse_or_replace_the_bootstrap(self):
+        assets, descriptor = self.resource()
+        for invalid_path in ["../escape", "editor-bootstrap.js", "assets/wrong.svg"]:
+            with self.subTest(path=invalid_path):
+                descriptor["path"] = invalid_path
+                assets[1][1].write_text(json.dumps({"schemaVersion": 1, "assets": [descriptor]}))
+                with self.assertRaisesRegex(ValueError, "Invalid resource descriptor"):
+                    package_files(self.output, [], assets)
+                self.assertFalse(self.output.exists())
 
 
 if __name__ == "__main__":

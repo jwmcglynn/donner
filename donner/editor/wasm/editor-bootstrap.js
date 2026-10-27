@@ -318,7 +318,10 @@ if (!window.__donnerCanStartWasm) {
   ShowCapabilityError(`${reason} The editor cannot start.`);
 }
 
+let packagedResources;
+
 var Module = {
+  noInitialRun: true,
   preRun: [],
   postRun: [],
   print: function(text) {
@@ -349,7 +352,17 @@ var Module = {
       );
     }
   },
-  onRuntimeInitialized: function() {
+  onRuntimeInitialized: async function() {
+    try {
+      await packagedResources.install(Module);
+      window.__donnerRequestPackagedResource = (digest) => packagedResources.request(digest);
+      window.__donnerResourcesInstalledAtMs = performance.now();
+      Module.callMain([]);
+    } catch (error) {
+      window.__donnerClosePackagedResources?.();
+      ShowCapabilityError(`Unable to load required editor resources. ${error.message}`);
+      return;
+    }
     window.__donnerRuntimeInitializedAtMs = performance.now();
     SetLoadingPhase("Opening your workspace…", 96, "Drawing the first editor frame");
     if (window.__donnerFirstFramePresented) {
@@ -371,6 +384,26 @@ var Module = {
 canvas.addEventListener("contextmenu", function(event) {
   event.preventDefault();
 });
+
+if (window.__donnerCanStartWasm) {
+  try {
+    packagedResources = new window.DonnerPackagedResourceLoader({
+      baseUrl: window.__donnerCatalogPackageUrl,
+      manifest: window.DonnerPackagedResources,
+    });
+    const resourceSession = { active: true };
+    window.__donnerPackagedResourceSession = resourceSession;
+    window.__donnerClosePackagedResources = () => {
+      resourceSession.active = false;
+      packagedResources.close();
+      window.__donnerRequestPackagedResource = null;
+    };
+    window.addEventListener("pagehide", window.__donnerClosePackagedResources, { once: true });
+  } catch (error) {
+    window.__donnerCanStartWasm = false;
+    ShowCapabilityError(`Unable to load required editor resources. ${error.message}`);
+  }
+}
 
 if (window.__donnerCanStartWasm) {
   SetLoadingPhase(

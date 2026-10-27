@@ -33,6 +33,63 @@ def _validate_font(package: Path, font: dict, module: bytes) -> tuple[str, int]:
     return path, len(payload)
 
 
+def _validate_resource_identity(asset: dict) -> None:
+    extensions = {"font/woff2": "woff2", "font/ttf": "ttf", "font/otf": "otf",
+                  "image/svg+xml": "svg"}
+    digest = asset.get("sha256", "")
+    media = asset.get("mediaType")
+    if (not re.fullmatch(r"[a-f0-9]{64}", digest) or media not in extensions
+            or asset.get("path") != f"assets/{digest}.{extensions[media]}"
+            or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,127}", asset.get("id", ""))
+            or asset.get("group") not in {"ui-font", "fallback-font", "chrome", "sample", "catalog-font"}
+            or type(asset.get("encodedSize")) is not int
+            or not 0 < asset["encodedSize"] <= 8 * 1024 * 1024
+            or type(asset.get("decodedSize")) is not int
+            or not 0 < asset["decodedSize"] <= 8 * 1024 * 1024):
+        raise ValueError("Invalid packaged resource identity")
+
+
+def _validate_resource_payload(package: Path, asset: dict, module: bytes) -> int:
+    payload_path = package / asset["path"]
+    if payload_path.is_symlink() or payload_path.stat().st_size != asset["encodedSize"]:
+        raise ValueError("Invalid packaged resource file")
+    payload = payload_path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != asset["sha256"]:
+        raise ValueError("Packaged resource digest mismatch")
+    if payload in module:
+        raise ValueError(f"Resource payload was linked into Wasm: {asset['id']}")
+    return len(payload)
+
+
+def validate_resources(package: Path, module: bytes) -> dict:
+    manifest_path = package / "packaged-resources.json"
+    if manifest_path.stat().st_size > 128 * 1024:
+        raise ValueError("Resource metadata exceeds its limit")
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("schemaVersion") != 1 or not isinstance(manifest.get("assets"), list):
+        raise ValueError("Invalid packaged resource manifest")
+    expected = set()
+    identities = set()
+    total = 0
+    for asset in manifest["assets"]:
+        _validate_resource_identity(asset)
+        if asset["id"] in identities:
+            raise ValueError("Duplicate packaged resource identity")
+        payload_size = _validate_resource_payload(package, asset, module)
+        expected.add(asset["path"])
+        identities.add(asset["id"])
+        total += payload_size
+    actual = {path.relative_to(package).as_posix() for path in (package / "assets").rglob("*")
+              if path.is_file()}
+    if actual != expected or len(identities) > 128 or total > 16 * 1024 * 1024:
+        raise ValueError("Packaged resource file set or budget mismatch")
+    serialized = json.dumps(manifest, separators=(",", ":"), sort_keys=True)
+    if (package / "packaged-resources.js").read_text() != (
+            "globalThis.DonnerPackagedResources = " + serialized + ";\n"):
+        raise ValueError("Resource bootstrap metadata differs from audit manifest")
+    return {"packaged_resource_count": len(identities), "packaged_resource_bytes": total}
+
+
 def validate_package(package: Path, native_notices: Path | None = None) -> dict:
     manifest = json.loads((package / "catalog-fonts.json").read_text())
     fonts = manifest["fonts"]
@@ -42,6 +99,7 @@ def validate_package(package: Path, native_notices: Path | None = None) -> dict:
     if len(modules) != 1:
         raise ValueError("Expected exactly one Wasm module")
     module = modules[0].read_bytes()
+    resources = validate_resources(package, module)
     expected_paths = set()
     total = 0
     for font in fonts:
@@ -59,7 +117,7 @@ def validate_package(package: Path, native_notices: Path | None = None) -> dict:
         raise ValueError("Native and deferred catalog notices differ")
     if b"SIL OPEN FONT LICENSE" not in notices:
         raise ValueError("Catalog font license text is missing")
-    return {"families": len(fonts), "deferred_font_bytes": total, "notice_bytes": len(notices)}
+    return {"families": len(fonts), "deferred_font_bytes": total, "notice_bytes": len(notices), **resources}
 
 
 class CatalogPackageValidationTest(unittest.TestCase):
@@ -68,6 +126,20 @@ class CatalogPackageValidationTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.package = Path(temporary.name)
         (self.package / "fonts").mkdir()
+        (self.package / "assets").mkdir()
+        resource = b"<svg id='packaged-icon'/>"
+        resource_hash = hashlib.sha256(resource).hexdigest()
+        resource_path = f"assets/{resource_hash}.svg"
+        (self.package / resource_path).write_bytes(resource)
+        self.resources = {"schemaVersion": 1, "assets": [{
+            "id": "kIcon", "sha256": resource_hash, "encodedSize": len(resource),
+            "decodedSize": len(resource), "mediaType": "image/svg+xml", "group": "chrome",
+            "path": resource_path,
+        }]}
+        serialized = json.dumps(self.resources, separators=(",", ":"), sort_keys=True)
+        (self.package / "packaged-resources.json").write_text(serialized + "\n")
+        (self.package / "packaged-resources.js").write_text(
+            "globalThis.DonnerPackagedResources = " + serialized + ";\n")
         (self.package / "editor.wasm").write_bytes(b"\0asm\1\0\0\0")
         fonts = []
         for index, family in enumerate(sorted(FAMILIES)):
@@ -100,6 +172,22 @@ class CatalogPackageValidationTest(unittest.TestCase):
     def test_unmanifested_payload_is_rejected(self):
         (self.package / "fonts/extra.woff2").write_bytes(b"unexpected")
         with self.assertRaisesRegex(ValueError, "file set or total"):
+            validate_package(self.package)
+
+    def test_external_resource_payload_cannot_be_linked_into_module(self):
+        payload = (self.package / self.resources["assets"][0]["path"]).read_bytes()
+        (self.package / "editor.wasm").write_bytes(b"\0asm\1\0\0\0" + payload)
+        with self.assertRaisesRegex(ValueError, "Resource payload was linked"):
+            validate_package(self.package)
+
+    def test_external_resource_corruption_is_rejected(self):
+        (self.package / self.resources["assets"][0]["path"]).write_bytes(b"wrong")
+        with self.assertRaisesRegex(ValueError, "resource file"):
+            validate_package(self.package)
+
+    def test_bootstrap_resource_metadata_must_match(self):
+        (self.package / "packaged-resources.js").write_text("globalThis.DonnerPackagedResources = {};")
+        with self.assertRaisesRegex(ValueError, "bootstrap metadata differs"):
             validate_package(self.package)
 
 

@@ -11,6 +11,7 @@ const context = vm.createContext({
   DataView,
   Response,
   AbortController,
+  TextDecoder,
   console,
   setTimeout,
   clearTimeout,
@@ -351,12 +352,12 @@ test("a stalled cache cannot stall a network load", async (t) => {
 
 test("persistent retention is shared across versions and evicts least-recently used bodies", async (t) => {
   const stored = new Map();
-  const prefix = "https://editor.example/.donner-font-cache/v1/";
+  const prefix = "https://editor.example/.donner-asset-cache/v1/";
   for (let index = 1; index <= 3; ++index) {
     stored.set(
       prefix + String(index).repeat(64),
-      new Response(new Uint8Array(2 * 1024 * 1024), {
-        headers: { "content-length": String(2 * 1024 * 1024), "x-donner-used": String(index) },
+      new Response(new Uint8Array(8 * 1024 * 1024), {
+        headers: { "content-length": String(8 * 1024 * 1024), "x-donner-used": String(index) },
       }),
     );
   }
@@ -372,7 +373,7 @@ test("persistent retention is shared across versions and evicts least-recently u
   const { broker, asset, done } = setup(t, {
     storage: {
       open: async (name) => {
-        assert.equal(name, "donner-catalog-fonts-v1");
+        assert.equal(name, "donner-assets-v1");
         return cache;
       },
     },
@@ -387,7 +388,7 @@ test("persistent retention is shared across versions and evicts least-recently u
   broker.request(asset.id, 1);
   await done;
   await broker.cacheWork;
-  assert.deepEqual(lockNames, ["donner-catalog-fonts-v1"]);
+  assert.deepEqual(lockNames, ["donner-assets-v1"]);
   assert.equal(stored.has(prefix + "1".repeat(64)), false);
   assert.equal(stored.has(prefix + "2".repeat(64)), false);
   assert.equal(stored.has(prefix + "3".repeat(64)), true);
@@ -396,7 +397,7 @@ test("persistent retention is shared across versions and evicts least-recently u
     (sum, response) => sum + Number(response.headers.get("content-length")),
     0,
   );
-  assert.equal(retained, 2 * 1024 * 1024 + asset.encodedBytes);
+  assert.equal(retained, 8 * 1024 * 1024 + asset.encodedBytes);
 });
 
 test("cache writes require cross-tab locking and never gate font delivery", async (t) => {
@@ -767,4 +768,230 @@ test("every worker bridge JavaScript body survives whole-file C++ formatting", (
       `WholeAppWorkerBridge.cc:${line}`,
     );
   }
+});
+
+const loaderSource = await readFile(
+  new URL("../packaged-resource-loader.js", import.meta.url),
+  "utf8",
+);
+vm.runInContext(loaderSource, context, { filename: "packaged-resource-loader.js" });
+const ResourceLoader = context.DonnerPackagedResourceLoader;
+
+function resourceFixture(name, group = "chrome", seed = 1) {
+  const bytes = new TextEncoder().encode(`<svg id="${seed}"/>`);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const asset = {
+    id: name,
+    sha256,
+    encodedSize: bytes.length,
+    decodedSize: bytes.length,
+    mediaType: "image/svg+xml",
+    group,
+    path: `assets/${sha256}.svg`,
+  };
+  return { bytes, asset };
+}
+
+function resourceModule(manifest, accept = true) {
+  const heap = new Uint8Array(128 * 1024);
+  heap.set(new TextEncoder().encode(JSON.stringify(manifest)), 16);
+  const installed = [];
+  const freed = [];
+  return {
+    HEAPU8: heap,
+    installed,
+    freed,
+    _DonnerPackagedResourceManifest: () => 16,
+    _malloc: () => 64 * 1024,
+    _free: (pointer) => freed.push(pointer),
+    _DonnerInstallPackagedResource(digestPointer, pointer, size) {
+      installed.push({
+        digest: new TextDecoder().decode(heap.subarray(digestPointer, digestPointer + 64)),
+        bytes: heap.slice(pointer, pointer + size),
+      });
+      return accept ? 1 : 0;
+    },
+  };
+}
+
+function resourceLoader(t, resources, overrides = {}) {
+  const calls = [];
+  const manifest = { schemaVersion: 1, assets: resources.map((resource) => resource.asset) };
+  const loader = new ResourceLoader({
+    baseUrl: "https://editor.example/releases/a/",
+    manifest,
+    brokerOptions: {
+      storage: undefined,
+      fetchImpl: async (url) => {
+        calls.push(url);
+        const resource = resources.find((entry) => url.endsWith(entry.asset.path));
+        return new Response(resource.bytes, {
+          headers: { "content-type": resource.asset.mediaType },
+        });
+      },
+      ...overrides,
+    },
+  });
+  t.after(() => loader.close());
+  return { loader, manifest, calls };
+}
+
+async function settlePersistence(broker) {
+  while (broker.cacheWritePending) await broker.cacheWork;
+}
+
+test("essential assets download alongside compilation; samples remain demand loaded", async (t) => {
+  const critical = resourceFixture("kIcon");
+  const sample = resourceFixture("kSample", "sample", 2);
+  const { loader, manifest, calls } = resourceLoader(t, [critical, sample]);
+  await new Promise(setImmediate);
+  assert.equal(calls.length, 1, "critical transport starts before a module is supplied");
+  assert.ok(calls[0].endsWith(critical.asset.path));
+  const module = resourceModule(manifest);
+  await loader.install(module);
+  assert.deepEqual(module.installed, [{ digest: critical.asset.sha256, bytes: critical.bytes }]);
+  assert.equal(loader.critical, null, "the loader releases its critical encoded payloads");
+  await loader.request(sample.asset.sha256);
+  assert.equal(calls.length, 2);
+  assert.equal(module.installed[1].digest, sample.asset.sha256);
+  assert.equal(module.freed.length, 2, "every transfer allocation is released after installation");
+});
+
+test("mixed package metadata fails before any bytes can enter the application", async (t) => {
+  const critical = resourceFixture("kIcon");
+  const { loader } = resourceLoader(t, [critical]);
+  const module = resourceModule({ schemaVersion: 1, assets: [] });
+  await assert.rejects(loader.install(module), /different packages/);
+  assert.equal(module.installed.length, 0);
+  assert.equal(loader.closed, true);
+});
+
+test("application rejection frees the staging allocation and fails the startup barrier", async (t) => {
+  const { loader, manifest } = resourceLoader(t, [resourceFixture("kIcon")]);
+  const module = resourceModule(manifest, false);
+  await assert.rejects(loader.install(module), /installation failed/);
+  assert.equal(module.freed.length, 1);
+  assert.equal(loader.module, null);
+});
+
+test("a closed loader cannot publish late bytes or start deferred transport", async (t) => {
+  const reply = deferred();
+  const critical = resourceFixture("kIcon");
+  const { loader, manifest } = resourceLoader(t, [critical], { fetchImpl: () => reply.promise });
+  const module = resourceModule(manifest);
+  const barrier = loader.install(module);
+  loader.close();
+  reply.resolve(new Response(critical.bytes, { headers: { "content-type": "image/svg+xml" } }));
+  await assert.rejects(barrier, /closed/);
+  await assert.rejects(loader.request(critical.asset.sha256), /not initialized/);
+  assert.equal(module.installed.length, 0);
+});
+
+test("code-only upgrades reuse all unchanged body bytes and a one-asset update fetches one identity", async (t) => {
+  const stored = new Map();
+  const cache = {
+    match: async (key) => stored.get(typeof key === "string" ? key : key.url)?.clone(),
+    put: async (key, response) => stored.set(key, response.clone()),
+    keys: async () => Array.from(stored.keys()),
+    delete: async (key) => stored.delete(typeof key === "string" ? key : key.url),
+  };
+  const options = {
+    storage: { open: async () => cache },
+    lockManager: { request: async (name, mode, callback) => callback({ name }) },
+  };
+  const resources = [resourceFixture("kFirst"), resourceFixture("kSecond", "ui-font", 2)];
+  const cold = resourceLoader(t, resources, options);
+  await cold.loader.install(resourceModule(cold.manifest));
+  await settlePersistence(cold.loader.broker);
+  assert.equal(cold.calls.length, 2);
+  cold.loader.close();
+  const warm = resourceLoader(t, resources, options);
+  warm.loader.broker.base = new URL("https://editor.example/releases/b/");
+  await warm.loader.install(resourceModule(warm.manifest));
+  await settlePersistence(warm.loader.broker);
+  assert.equal(
+    warm.calls.length,
+    0,
+    "a code-only release must transfer zero unchanged asset bodies",
+  );
+  warm.loader.close();
+  const changed = resourceLoader(
+    t,
+    [resources[0], resourceFixture("kSecond", "ui-font", 3)],
+    options,
+  );
+  await changed.loader.install(resourceModule(changed.manifest));
+  assert.equal(changed.calls.length, 1);
+  assert.ok(changed.calls[0].endsWith(changed.manifest.assets[1].path));
+});
+
+test("aliased compiled resources share transport without accepting inconsistent metadata", async (t) => {
+  const icon = resourceFixture("kIcon");
+  const alias = { bytes: icon.bytes, asset: { ...icon.asset, id: "kIconAlias" } };
+  const { loader, manifest, calls } = resourceLoader(t, [icon, alias]);
+  await loader.install(resourceModule(manifest));
+  assert.equal(calls.length, 1);
+  assert.throws(() =>
+    resourceLoader(t, [icon, {
+      bytes: icon.bytes,
+      asset: { ...alias.asset, encodedSize: icon.bytes.length + 1 },
+    }]), /font-manifest/);
+  for (const mediaType of ["constructor", "__proto__", "text/html"]) {
+    assert.throws(() =>
+      resourceLoader(t, [{
+        bytes: icon.bytes,
+        asset: { ...icon.asset, mediaType },
+      }]), /font-manifest/);
+  }
+});
+
+const resourceBridgeSource = await readFile(
+  new URL("../PackagedResourceBridge.cc", import.meta.url),
+  "utf8",
+);
+const resourceBridgeBody = embeddedBodies(resourceBridgeSource)[0].body;
+
+test("resource bridge ignores stale success and failure after session replacement or shutdown", async () => {
+  for (const stop of ["shutdown", "replacement"]) {
+    for (const failure of [false, true]) {
+      const reply = deferred();
+      const session = { active: true };
+      const calls = [];
+      const window = {
+        __donnerPackagedResourceSession: session,
+        __donnerRequestPackagedResource: () => reply.promise,
+      };
+      const scope = vm.createContext({
+        window,
+        $0: 16,
+        UTF8ToString: () => "a".repeat(64),
+        _DonnerFailPackagedResource: () => calls.push("fail"),
+        _DonnerPackagedResourceWake: () => calls.push("wake"),
+      });
+      vm.runInContext(`(function() { ${resourceBridgeBody} })()`, scope);
+      if (stop === "shutdown") session.active = false;
+      else window.__donnerPackagedResourceSession = { active: true };
+      if (failure) reply.reject(new Error("transport stopped"));
+      else reply.resolve();
+      await new Promise(setImmediate);
+      assert.deepEqual(calls, [], `${stop}, failure=${failure}`);
+    }
+  }
+});
+
+test("a resource completion wakes the normal guarded application event frame", async () => {
+  const calls = [];
+  const scope = vm.createContext({
+    window: {
+      __donnerPackagedResourceSession: { active: true },
+      __donnerRequestPackagedResource: async () => {},
+    },
+    $0: 16,
+    UTF8ToString: () => "a".repeat(64),
+    _DonnerFailPackagedResource: () => calls.push("fail"),
+    _DonnerPackagedResourceWake: () => calls.push("wake"),
+  });
+  vm.runInContext(`(function() { ${resourceBridgeBody} })()`, scope);
+  await new Promise(setImmediate);
+  assert.deepEqual(calls, ["wake"]);
 });

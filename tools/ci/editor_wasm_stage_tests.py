@@ -197,7 +197,8 @@ class EditorWasmStageTest(unittest.TestCase):
         package = self.runner_temp / "editor-wasm-package-geode"
         (package / "fonts").mkdir(parents=True)
         for name in ("donner_icon.svg", "editor-bootstrap.js", "editor.css", "editor.js",
-                     "enable-threads.js", "index.html", "catalog-fonts.js", "browser-file-dialogs.js"):
+                     "enable-threads.js", "index.html", "catalog-fonts.js", "browser-file-dialogs.js",
+                     "packaged-resource-loader.js"):
             (package / name).write_text(name)
         (package / "editor.wasm").write_bytes(b"\0asm\1\0\0\0")
         (package / "CatalogFontNotices.txt").write_text("SIL OPEN FONT LICENSE Version 1.1")
@@ -214,6 +215,19 @@ class EditorWasmStageTest(unittest.TestCase):
         (package / "catalog-fonts.json").write_text(json.dumps({
             "fonts": fonts, "encoded_bytes": 64 * len(fonts),
         }))
+        payload = b"<svg id='packaged-stage-fixture'/>"
+        digest = hashlib.sha256(payload).hexdigest()
+        (package / "assets").mkdir()
+        (package / f"assets/{digest}.svg").write_bytes(payload)
+        resources = {"schemaVersion": 1, "assets": [{
+            "id": "kIcon", "sha256": digest, "encodedSize": len(payload),
+            "decodedSize": len(payload), "mediaType": "image/svg+xml", "group": "chrome",
+            "path": f"assets/{digest}.svg",
+        }]}
+        serialized = json.dumps(resources, separators=(",", ":"), sort_keys=True)
+        (package / "packaged-resources.json").write_text(serialized + "\n")
+        (package / "packaged-resources.js").write_text(
+            "globalThis.DonnerPackagedResources = " + serialized + ";\n")
         # The proved MODULE.bazel.lock that the module-graph step snapshots into RUNNER_TEMP.
         (self.runner_temp / "editor-wasm-module.lock").write_text('{"lockFileVersion": 26}\n')
         return package
@@ -294,6 +308,9 @@ class EditorWasmStageTest(unittest.TestCase):
 
         failures = {
             "corrupt-font": corrupt_font,
+            "extra-resource": lambda package: (package / "assets/extra.svg").write_bytes(b"x"),
+            "missing-resource-loader": lambda package: (package / "packaged-resource-loader.js").unlink(),
+            "mismatched-resource-metadata": lambda package: (package / "packaged-resources.js").write_text("wrong"),
             "extra-font": lambda package: (package / "fonts/extra.woff2").write_bytes(b"x"),
             "extra-root-file": lambda package: (package / "unexpected.txt").write_text("x"),
             "missing-broker": lambda package: (package / "catalog-fonts.js").unlink(),
