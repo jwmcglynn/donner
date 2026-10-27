@@ -239,14 +239,34 @@ public:
   struct ShapingContext {
     size_t byteOffset = 0;  ///< Start of the context within the span text.
     size_t byteLength = 0;  ///< Length of the context.
+
+    /// Backend-defined shaping properties detected for the whole context.
+    struct Detected {
+      bool valid = false;              ///< Whether the fields below have been filled.
+      bool vertical = false;           ///< Whether the context is shaped vertically.
+      uint32_t direction = 0;          ///< Backend direction value.
+      uint32_t script = 0;             ///< Backend script value.
+      const void* language = nullptr;  ///< Backend language value.
+    };
+    /// Filled on first use, so the ranges of one context detect its properties once.
+    mutable Detected detected;
   };
 
   /**
    * Shape [\p byteOffset, \p byteOffset + \p byteLength) as one part of \p context, such as one
    * face's share of a chunk drawn with several faces. A context-aware backend shapes the range
-   * with the surrounding characters as pre- and post-context, and takes the context's direction,
-   * script and language when the range itself is script-neutral. Other backends shape the range
-   * alone. Glyph clusters are byte offsets into \p spanText, as for \ref shapeRun.
+   * with the surrounding characters as pre- and post-context and picks its direction, script and
+   * language as follows:
+   * - A range with no script of its own (punctuation, spaces, symbols) takes the context's
+   *   direction, script and language, so neutrals mirror and order like their neighbors. When
+   *   such a range contains decimal digits in a horizontal context, it keeps the context's script
+   *   and language but runs left to right, as numbers do in right-to-left text.
+   * - A strong left-to-right range inside a vertically shaped context is shaped vertically.
+   * - A strong right-to-left range keeps its own horizontal direction.
+   *
+   * A context no longer than the range adds nothing, and the range is shaped as by
+   * \ref shapeRun. Other backends shape the range alone. Glyph clusters are byte offsets into
+   * \p spanText, as for \ref shapeRun.
    *
    * @param font Font to shape with.
    * @param fontSizePx Font size in pixels.

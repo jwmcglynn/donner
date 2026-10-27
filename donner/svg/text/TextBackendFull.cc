@@ -948,26 +948,58 @@ RunScriptProperties DetectRunScript(const char* chunkData, size_t byteLength, bo
   return {useVerticalShaping, detectedDirection, detectedScript, detectedLanguage};
 }
 
+/// Detects the context's shaping properties on first use and reuses them for its other ranges.
+RunScriptProperties DetectContextScript(std::string_view spanText,
+                                        const TextBackend::ShapingContext& context, bool isVertical,
+                                        TextOrientation textOrientation,
+                                        std::size_t& detectedContextBytes) {
+  auto& detected = context.detected;
+  if (!detected.valid) {
+    detectedContextBytes += context.byteLength;
+    const RunScriptProperties properties = DetectRunScript(
+        spanText.data() + context.byteOffset, context.byteLength, isVertical, textOrientation);
+    detected = {true, properties.vertical, static_cast<uint32_t>(properties.direction),
+                static_cast<uint32_t>(properties.script), properties.language};
+  }
+  return {detected.vertical, static_cast<hb_direction_t>(detected.direction),
+          static_cast<hb_script_t>(detected.script), static_cast<hb_language_t>(detected.language)};
+}
+
+/// Whether \p text contains a decimal digit.
+bool ContainsDecimalDigit(std::string_view text) {
+  hb_unicode_funcs_t* unicode = hb_unicode_funcs_get_default();
+  for (size_t position = 0; position < text.size();) {
+    const auto [codepoint, length] = Utf8::NextCodepoint(text.substr(position));
+    position += static_cast<size_t>(std::max(length, 1));
+    if (hb_unicode_general_category(unicode, static_cast<hb_codepoint_t>(codepoint)) ==
+        HB_UNICODE_GENERAL_CATEGORY_DECIMAL_NUMBER) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
- * Detects the shaping properties of one range of a context. A script-neutral range, such as
- * punctuation or spaces, takes the context's direction, script and language, so it mirrors and
- * orders like its neighbors. A strong left-to-right range inside a vertically shaped context is
- * shaped vertically like it. A strong right-to-left range keeps its own horizontal direction.
+ * Detects the shaping properties of one range of a context, by the rules documented on
+ * \ref TextBackend::shapeRunInContext.
  */
 RunScriptProperties DetectRangeScriptInContext(std::string_view spanText,
                                                const TextBackend::ShapingContext& context,
                                                size_t byteOffset, size_t byteLength,
                                                bool isVertical, TextOrientation textOrientation,
                                                std::size_t& detectedContextBytes) {
-  detectedContextBytes += context.byteLength;
-  const RunScriptProperties contextProperties = DetectRunScript(
-      spanText.data() + context.byteOffset, context.byteLength, isVertical, textOrientation);
+  const RunScriptProperties contextProperties =
+      DetectContextScript(spanText, context, isVertical, textOrientation, detectedContextBytes);
   RunScriptProperties range =
       DetectRunScript(spanText.data() + byteOffset, byteLength, isVertical, textOrientation);
   // Guessing leaves the script invalid when every character is common or inherited.
   if (range.script == HB_SCRIPT_INVALID || range.script == HB_SCRIPT_COMMON ||
       range.script == HB_SCRIPT_INHERITED || range.script == HB_SCRIPT_UNKNOWN) {
-    return contextProperties;
+    RunScriptProperties neutral = contextProperties;
+    if (!neutral.vertical && ContainsDecimalDigit(spanText.substr(byteOffset, byteLength))) {
+      neutral.direction = HB_DIRECTION_LTR;
+    }
+    return neutral;
   }
   if (contextProperties.vertical && !range.vertical && range.direction == HB_DIRECTION_LTR) {
     range.vertical = true;
@@ -1224,6 +1256,10 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
     size_t byteLength, bool isVertical, TextOrientation textOrientation, FontVariant fontVariant,
     bool enableKerning, bool forceLogicalOrder, const ShapingContext* context) const {
+  // A context that adds no characters leaves the range shaped as without one.
+  if (context && context->byteLength <= byteLength) {
+    context = nullptr;
+  }
   hb_font_t* hbFont = getOrCreateHbFont(font);
   if (!hbFont) {
     return {};
