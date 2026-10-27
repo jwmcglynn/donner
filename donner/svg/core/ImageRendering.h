@@ -17,7 +17,8 @@ namespace donner::svg {
 enum class ImageRendering : uint8_t {
   Auto,             ///< [DEFAULT] UA-defined; Donner uses the Mitchell cubic, like resvg.
   OptimizeSpeed,    ///< Legacy alias with the same behavior as `crisp-edges`.
-  OptimizeQuality,  ///< Legacy quality preference; Donner samples it like `auto`.
+  OptimizeQuality,  ///< CSS Images aliases this to `smooth`; Donner follows resvg, which
+                    ///< renders it with the Mitchell cubic.
   CrispEdges,       ///< Preserves contrast without blending source colors.
   Pixelated,        ///< Integer nearest-neighbor scale followed by smooth scaling.
   Smooth,           ///< Bilinear interpolation.

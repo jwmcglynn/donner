@@ -99,9 +99,12 @@ The default filter region expands the `(40, 40, 120, 120)` object box by 10% on
 each side, producing `(70, 70, 360, 360)` after the `500 / 200` viewport scale.
 All 129,600 image-region pixels follow this independent geometric construction.
 The separate `optimizeSpeed` fixture compares against its resvg v0.49.0
-rendering, which TinySkia matches. Geode stays disabled for it: its hardware
-nearest sampler can choose the adjacent source texel at exact nearest sampling
-ties, an allowed algorithm choice rather than missing SVG support.
+rendering, which TinySkia matches. Geode stays disabled for it: at 3.75 device
+pixels per texel, every second texel boundary falls on a pixel center, and
+Geode's interpolated texture coordinate lands just below it where tiny-skia's
+float inverse transform lands on it, so Geode picks the previous texel. All 564
+differing pixels are inside the image; this is a sampling-position rounding
+difference, not missing SVG support.
 
 ### Backend-difference goldens (text)
 

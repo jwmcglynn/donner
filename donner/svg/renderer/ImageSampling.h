@@ -35,7 +35,8 @@ inline std::ostream& operator<<(std::ostream& os, ImageSamplingKernel kernel) {
 
 /**
  * Selects the raster `<image>` resampling kernel for a resolved `image-rendering` value. Both
- * renderer backends map through this function, so they cannot drift apart.
+ * renderer backends map `<image>` draws through this function, so their image kernels cannot
+ * drift apart; `feImage` keeps its own sampling choice.
  *
  * `auto` is UA-defined; Donner, like resvg, uses the Mitchell cubic, which is also the kernel
  * `feImage` applies, and gives `optimizeQuality` and `high-quality` the same quality kernel.

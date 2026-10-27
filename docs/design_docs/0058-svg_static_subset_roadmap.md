@@ -85,10 +85,11 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
 - [ ] Milestone 5: Painting and structural edge cases
 - [x] Full `image-rendering` value flow for `<image>` and `<feImage>` on both backends.
       `pixelated` uses nearest scaling to the closest positive integer multiple per axis followed
-      by smooth scaling; `crisp-edges` and `optimizeSpeed` use nearest; smooth, quality, and
-      `optimizeQuality` use the smooth policy. The two skipped legacy `optimizeSpeed` resvg
-      goldens retain an allowed nearest-grid pixel-center oracle difference and stay classified
-      pending independent browser comparison.
+      by smooth scaling; `crisp-edges` and `optimizeSpeed` use nearest; `smooth` is bilinear;
+      `auto`, `optimizeQuality` and `high-quality` use the Mitchell cubic, as resvg does. The
+      `optimizeSpeed` resvg case compares against its v0.49.0 rendering on TinySkia; on Geode it
+      stays disabled because the interpolated texture coordinate lands just below texel
+      boundaries that fall exactly on pixel centers.
   - [ ] `<svg version="1.1">` compatibility handling.
   - [ ] Non-UTF-8 document encodings.
 - [ ] Milestone 6: CPU/GPU (Geode) render parity

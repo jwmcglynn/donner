@@ -3485,12 +3485,13 @@ GeodeTextureEncoder::QuadParams MakeImageQuadParams(const svg::ImageResource& im
       Transform2d::Translate(destRect.topLeft) * deviceFromLocalTransform;
   params.pixelatedScaleX = deviceFromImage.transformVector(Vector2d(1.0, 0.0)).length();
   params.pixelatedScaleY = deviceFromImage.transformVector(Vector2d(0.0, 1.0)).length();
-  // The Mitchell cubic is not interpolating, so an unscaled draw would blur; tiny-skia also
-  // skips filtering when the image transform is a pure translation.
-  const bool unscaled = deviceFromImage.data[0] == 1.0 && deviceFromImage.data[1] == 0.0 &&
-                        deviceFromImage.data[2] == 0.0 && deviceFromImage.data[3] == 1.0;
-  if (params.filter == GeodeTextureEncoder::Filter::Cubic && unscaled) {
-    params.filter = GeodeTextureEncoder::Filter::Linear;
+  // tiny-skia samples the nearest texel whenever the image transform is a pure translation,
+  // fractional ones included, whatever the requested filter.
+  const bool translationOnly = deviceFromImage.data[0] == 1.0 && deviceFromImage.data[1] == 0.0 &&
+                               deviceFromImage.data[2] == 0.0 && deviceFromImage.data[3] == 1.0;
+  if (translationOnly && (params.filter == GeodeTextureEncoder::Filter::Linear ||
+                          params.filter == GeodeTextureEncoder::Filter::Cubic)) {
+    params.filter = GeodeTextureEncoder::Filter::Nearest;
   }
   params.clipMaskView = clipMaskView;
   return params;

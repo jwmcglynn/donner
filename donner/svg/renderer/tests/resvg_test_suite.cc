@@ -879,9 +879,11 @@ INSTANTIATE_TEST_SUITE_P(
                     {"optimizeSpeed.svg",
                      ResvgV049Reference().disableBackend(
                          RendererBackend::Geode,
-                         "Bug: Geode's hardware nearest sampler resolves texel-boundary ties at "
-                         "pixel centers differently from tiny-skia (564 px against resvg "
-                         "v0.49.0; TinySkia matches)")},
+                         "Bug: at 3.75 device pixels per texel, every second texel boundary falls "
+                         "on a pixel center; Geode's interpolated texture coordinate lands just "
+                         "below it where tiny-skia's float inverse transform lands on it, so "
+                         "nearest sampling picks the previous texel (564 px against resvg "
+                         "v0.49.0, all inside the image; TinySkia matches)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1167,7 +1169,7 @@ INSTANTIATE_TEST_SUITE_P(
                          "Reference disagreement: the vendored reference omits the embedded SVG's "
                          "text. Donner renders it with the document font catalog; the authored "
                          "embedded-versus-direct identity test EmbeddedSvgUsesDocumentFontContext "
-                         "pins that policy (0021 B3)")},
+                         "pins that policy")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

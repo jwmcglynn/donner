@@ -76,7 +76,8 @@ From the same revision and license, these raster-image PNGs were replaced with t
 versions. The snapshot's references mixed several historical upscalers: a browser's bilinear
 filter with 4-bit subpixel weights, an older resvg that resampled each image to its user-space
 size before the canvas transform, and the Mitchell cubic that resvg v0.49.0 applies to
-`image-rendering: auto`. At v0.49.0 every one of them is drawn with that cubic. Their SVG inputs
+`image-rendering: auto`. At v0.49.0 every one of them is drawn with that cubic, except
+optimizeSpeed.png, which uses tiny-skia's nearest-neighbor sampling. Their SVG inputs
 are byte-identical at both revisions, except no-height.svg and no-width.svg, which upstream
 redrew on a 200x200 viewBox and which were replaced as well.
 

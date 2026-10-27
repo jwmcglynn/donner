@@ -72,7 +72,7 @@ struct Uniforms {
   // Nonzero when a path-clip mask is bound at binding 5 and
   // should gate the SOURCE content before mask/blend compositing.
   hasClipMask: u32,
-  // 0 = linear, 1 = nearest, 2 = CSS pixelated two-stage sampling,
+  // 0 = linear, 1 = nearest texel, 2 = CSS pixelated two-stage sampling,
   // 3 = Mitchell-Netravali cubic (B = C = 1/3) over the source rectangle.
   samplingMode: u32,
   _blendPad1: u32,
@@ -136,6 +136,14 @@ fn sample_pixelated(uv: vec2f) -> vec4f {
                    pixelated_texel(base + vec2i(1, 1), source_origin, source_size, multiple),
                    fraction.x);
   return mix(top, bottom, fraction.y);
+}
+
+// The texel containing `uv`, as tiny-skia's gather picks it; a hardware nearest sampler may
+// resolve sample positions on a texel boundary toward either neighbor.
+fn sample_nearest(uv: vec2f) -> vec4f {
+  let texture_size = vec2i(textureDimensions(imageTexture));
+  let texel = clamp(vec2i(floor(uv * vec2f(texture_size))), vec2i(0), texture_size - vec2i(1));
+  return textureLoad(imageTexture, texel, 0);
 }
 
 // Mitchell weights in tiny-skia's form, for texels 0.5 and 1.5 texels from the sample.
@@ -471,13 +479,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   if (uniforms.samplingMode == 2u) {
     sampled = sample_pixelated(in.uv);
   }
+  if (uniforms.samplingMode == 1u) {
+    sampled = sample_nearest(in.uv);
+  }
   if (uniforms.samplingMode == 3u) {
-    // Cubic lobes leave [0, 1]; premultiplied color must also stay within alpha.
-    let cubic = clamp(sample_cubic(in.uv), vec4f(0.0), vec4f(1.0));
-    sampled = cubic;
-    if (uniforms.sourceIsPremult != 0u) {
-      sampled = vec4f(min(cubic.rgb, vec3f(cubic.a)), cubic.a);
-    }
+    // Cubic lobes leave [0, 1]. Like tiny-skia, clamp each channel only, so premultiplied color
+    // may exceed alpha.
+    sampled = clamp(sample_cubic(in.uv), vec4f(0.0), vec4f(1.0));
   }
 
   // Base colour - premultiplied by the pipeline's blend expectations.

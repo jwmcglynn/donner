@@ -97,8 +97,8 @@ Reducing the raw totals is useful, but correctness and classification are the ac
         nearest-only `crisp-edges` and smooth or quality values in TinySkia, Geode, and both
         `<feImage>` executors.
   - [ ] Resolve pixel centers and non-integer nearest-grid behavior for `<image>` and `<feImage>` on
-        both renderers, then enable `painting/image-rendering/on-feImage.svg` and
-        `optimizeSpeed.svg` when the independent oracle agrees.
+        both renderers. `optimizeSpeed.svg` compares against resvg v0.49.0 on TinySkia; Geode
+        still picks the previous texel where a texel boundary falls exactly on a pixel center.
   - [x] Validate programmatic `ImageResource` and `<feImage>` payloads against overflow-safe exact
         `width * height * 4` byte counts before premultiplication, sampling, or upload. Reject
         hostile image-sampling axes before allocation and keep non-finite transforms transparent.
@@ -292,8 +292,9 @@ inspection changes several classifications:
 - `paint-order` is complete for shapes, markers, text, and tspans on both renderers. All 14 resvg
   category cases are active.
 - `image-rendering` carries the full CSS value set through `<image>` and `<feImage>` on both
-  renderers. `optimizeSpeed` compares against resvg v0.49.0 on TinySkia; Geode's nearest sampler
-  still resolves exact texel-boundary ties differently, so that case is disabled on Geode.
+  renderers. `optimizeSpeed` compares against resvg v0.49.0 on TinySkia; on Geode it is disabled
+  because the interpolated texture coordinate lands just below texel boundaries that fall exactly
+  on pixel centers.
 - `non-scaling-stroke` strokes path centerlines in host space, and culling inflates the centerline
   bounds in the same space the stroke is expanded in, so width and dashes are exact for
   solid- and gradient-painted path strokes under general affine transforms. Text strokes and

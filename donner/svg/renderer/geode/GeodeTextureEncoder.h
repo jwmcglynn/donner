@@ -97,7 +97,8 @@ public:
   enum class Filter : uint8_t {
     /// Bilinear filtering, for `image-rendering: smooth` and layer or pattern composites.
     Linear,
-    /// Nearest-neighbor filtering for `crisp-edges` and explicit pattern sampling.
+    /// The texel containing each sample, for `crisp-edges`, translation-only image draws and
+    /// explicit pattern sampling.
     Nearest,
     /// Integer nearest-neighbor scaling followed by smooth scaling.
     Pixelated,
