@@ -197,6 +197,7 @@ donner_cc_test(
     data = [
         "//donner/base/fonts:testdata/valid-001.woff",
         "//donner/base/fonts:testdata/valid-001.woff2",
+        "//third_party/public-sans:public-sans_resource_files",
         "//third_party/roboto:Roboto-Regular.ttf",
     ],
     defines = select({
