@@ -236,21 +236,29 @@ struct LexicalTable {
   TokenKind punctuation[256] = {};  //!< Single-character punctuator kind, or End.
 };
 
+/// Returns whether byte \p ch separates tokens.
+constexpr bool IsSpaceByte(int ch) {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
+
+/// Returns whether byte \p ch can start an identifier.
+constexpr bool IsIdentifierStartByte(int ch) {
+  return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+}
+
+/// Returns the \ref LexicalTable class bits of byte \p ch.
+constexpr uint8_t ByteClasses(int ch) {
+  const bool digit = ch >= '0' && ch <= '9';
+  return static_cast<uint8_t>((IsSpaceByte(ch) ? LexicalTable::kSpace : 0) |
+                              (IsIdentifierStartByte(ch) ? LexicalTable::kIdentifierStart : 0) |
+                              (digit ? LexicalTable::kDigit : 0));
+}
+
 /// Builds \ref LexicalTable from the character classes and \ref kSingleCharacterPunctuation.
 constexpr LexicalTable MakeLexicalTable() {
   LexicalTable table;
   for (int ch = 0; ch < 256; ++ch) {
-    uint8_t bits = 0;
-    if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
-      bits |= LexicalTable::kSpace;
-    }
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_') {
-      bits |= LexicalTable::kIdentifierStart;
-    }
-    if (ch >= '0' && ch <= '9') {
-      bits |= LexicalTable::kDigit;
-    }
-    table.classes[ch] = bits;
+    table.classes[ch] = ByteClasses(ch);
     table.punctuation[ch] = TokenKind::End;
   }
   for (const PunctuationEntry& entry : kSingleCharacterPunctuation) {
