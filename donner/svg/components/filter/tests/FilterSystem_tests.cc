@@ -1258,8 +1258,10 @@ TEST_F(FilterSystemTest, FilterAtPrimitiveLimitRetainsEveryPrimitive) {
   const auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
   ASSERT_THAT(computed->filterGraph.nodes, SizeIs(32));
-  EXPECT_TRUE(std::holds_alternative<filter_primitive::GaussianBlur>(
-      computed->filterGraph.nodes.back().primitive));
+  EXPECT_THAT(computed->filterGraph.nodes.back().primitive,
+              testing::VariantWith<filter_primitive::GaussianBlur>(testing::AllOf(
+                  testing::Field(&filter_primitive::GaussianBlur::stdDeviationX, 1.0),
+                  testing::Field(&filter_primitive::GaussianBlur::stdDeviationY, 1.0))));
   EXPECT_THAT(warningSink.warnings(), IsEmpty());
 }
 
@@ -1376,7 +1378,8 @@ TEST_F(FilterSystemTest, MergeInputLimitKeepsEveryInputAtTheLimit) {
   ASSERT_THAT(computed->filterGraph.nodes, SizeIs(1));
   const auto& inputs = computed->filterGraph.nodes[0].inputs;
   ASSERT_THAT(inputs, SizeIs(16));
-  EXPECT_TRUE(std::holds_alternative<FilterStandardInput>(inputs.back().value));
+  EXPECT_THAT(inputs.back().value,
+              testing::VariantWith<FilterStandardInput>(FilterStandardInput::SourceGraphic));
 }
 
 TEST_F(FilterSystemTest, MergeInputLimitRejectsTheFilterOverTheLimit) {
