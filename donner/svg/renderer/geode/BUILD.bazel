@@ -435,6 +435,7 @@ _GEODE_DEVICE_COMMON_DEPS = ([
                                  "//donner/gpu/shader:linked_projection",
                                  "//donner/svg/components/filter:components",
                                  "//donner/svg/renderer:filter_region_context",
+                                 "//donner/svg/renderer:image_sampling",
                                  "//donner/svg/renderer:pixel_format_utils",
                              ] + select({
                                  "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],

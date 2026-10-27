@@ -113,7 +113,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if ((params.samplingMode == 2u)) {
       sampled = samplePixelated(position, imageSize, clamp(floor((vec2<f32>(params.pixelatedScaleX, params.pixelatedScaleY) + vec2<f32>(0.5f))), vec2<f32>(1f), vec2<f32>(65536f)));
     } else {
-      sampled = sampleSmooth(position, imageSize);
+      if ((params.samplingMode == 3u)) {
+        sampled = samplePixelated(position, imageSize, vec2<f32>(1f));
+      } else {
+        sampled = sampleSmooth(position, imageSize);
+      }
     }
   }
   let clamped = clamp(sampled, vec4<f32>(0f), vec4<f32>(1f));
