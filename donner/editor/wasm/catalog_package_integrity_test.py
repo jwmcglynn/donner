@@ -178,7 +178,7 @@ class CatalogPackageValidationTest(unittest.TestCase):
         self.assertEqual(validate_package(self.package)["deferred_font_bytes"], 64 * 12)
 
     def test_compact_shipping_catalog_preserves_audit_and_payload_authentication(self):
-        from package_web_files import package_files
+        from donner.editor.wasm.package_web_files import package_files
 
         readable = json.dumps(self.manifest, indent=2).encode() + b"\n"
         (self.package / "catalog-fonts.json").write_bytes(readable)
