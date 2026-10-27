@@ -202,6 +202,28 @@ class DocsPublishTest(unittest.TestCase):
         token.assert_not_called()
         api.call.assert_not_called()
 
+    def test_self_consistent_forged_archive_and_index_fail_signed_source_binding(self):
+        signed = {"source": {"version": "0.8.0", "commit": "a" * 40},
+                  "artifacts": {"docs": {"run_id": 123, "attempt": 1,
+                                          "files": {"artifact.tar": "b" * 64}}}}
+        authentic = publish.release_identity(signed, "0.8.0")
+        forged = {**authentic, "archive_sha256": "c" * 64}
+        publish.require_release_binding(signed, "0.8.0", authentic, "b" * 64)
+        with self.assertRaisesRegex(ValueError, "independently signed source"):
+            publish.require_release_binding(signed, "0.8.0", forged, "c" * 64)
+
+    def test_current_signed_roster_rejects_removed_or_replaced_release(self):
+        identity = {"version": "0.8.0", "archive_sha256": "a" * 64}
+        manifest = {"versions": {"0.8.0": {"identity": identity}, "main": {"identity": {}}}}
+        for releases in ({}, {"0.8.0": {"identity": {**identity, "archive_sha256": "b" * 64}}}):
+            with self.subTest(releases=releases), self.assertRaisesRegex(ValueError, "existing release"):
+                publish.require_preserved_releases(manifest, releases)
+
+    def test_prior_archive_cannot_be_replaced_under_an_approved_content_address(self):
+        api = mock.Mock(); api.file.return_value = site.canonical({"sha256": "b" * 64})
+        with self.assertRaisesRegex(ValueError, "approved content address"):
+            publish._previous(api, "a" * 40, "c" * 64, self.root)
+
     def test_pages_health_checks_detect_changed_version_index(self):
         marker = {"manifest_sha256": "a" * 64}
         with mock.patch.object(publish, "live_marker", return_value=marker), \

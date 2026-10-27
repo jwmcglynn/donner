@@ -25,7 +25,10 @@ non-fast-forward updates. The storage writer checks these effective rules before
 updating that branch. The branch is a data-only store, not a Pages source or executable checkout.
 It contains compressed original release archives, complete-site archives split into chunks of
 at most 40 MiB, manifests and attestation verification evidence. Storage survives Actions expiry.
-Existing immutable objects cannot be replaced. Current and prior healthy compositions are kept;
+Every reused release archive is checked against its independently signed release-candidate
+record and canonical tag. A self-consistent forged archive/index cannot replace those signed
+source bytes. The signed prior composition also prevents removal or replacement of an existing
+release. Existing immutable objects cannot be replaced by this writer. Current and prior healthy compositions are kept;
 cleanup is a separately reviewed maintenance operation.
 
 Inventory every Pages writer and keep repository Pages settings in Actions/workflow mode. Only

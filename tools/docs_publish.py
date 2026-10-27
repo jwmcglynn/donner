@@ -110,17 +110,88 @@ def main_source(reference: str, work: Path) -> tuple[Path, dict]:
     return archive, value
 
 
+def release_identity(record: dict, version: str) -> dict:
+    source = record["source"]
+    docs = record["artifacts"]["docs"]
+    site.require(source["version"] == version, "signed record names another release version")
+    value = {"version": version, "source_commit": source["commit"], "run_id": docs["run_id"],
+             "attempt": docs["attempt"], "archive_sha256": docs["files"]["artifact.tar"]}
+    site.validate_identity(value)
+    return value
+
+
+def require_release_binding(record: dict, version: str, value: dict, archive_digest: str) -> None:
+    expected = release_identity(record, version)
+    site.require(value == expected and archive_digest == expected["archive_sha256"],
+                 "retained release differs from its independently signed source")
+
+
+def _verify_retained_release(api, snapshot, version, entry, work):
+    prefix = f"releases/{version}/"
+    record_bytes = api.file(snapshot, prefix + "candidate.json")
+    site.require(len(record_bytes) <= candidate.MAX_RECORD_BYTES, "retained candidate record is oversized")
+    record = candidate.load_record(record_bytes, site.digest(record_bytes))
+    proof = work / ("proof-" + version)
+    proof.mkdir()
+    path = proof / "candidate.json"
+    path.write_bytes(record_bytes)
+    _offline_attestation(path, api.file(snapshot, prefix + "record-attestation.json"),
+                         record["source"]["commit"], proof)
+    require_release_binding(record, version, entry["identity"], entry["archive"]["sha256"])
+    tag = github_json(f"{store.REPO}/git/ref/tags/v{version}")["object"]
+    if tag["type"] == "tag":
+        tag = github_json(f"{store.REPO}/git/tags/{tag['sha']}")["object"]
+    site.require(tag["type"] == "commit" and tag["sha"] == record["source"]["commit"],
+                 "retained release no longer matches its canonical tag")
+
+
+def require_preserved_releases(manifest: dict, releases: dict) -> None:
+    previous = {key: value["identity"] for key, value in manifest["versions"].items() if key != "main"}
+    site.require(set(previous) <= set(releases), "snapshot index removed an existing release")
+    for version, identity in previous.items():
+        site.require(releases[version]["identity"] == identity,
+                     "snapshot index changed an existing release")
+
+
+def _verify_current_roster(api, snapshot, state, work):
+    composition_id = state["current"]
+    if composition_id is None:
+        return
+    prefix = f"compositions/{composition_id}/"
+    archive_record = json.loads(api.file(snapshot, prefix + "archive.json"))
+    site.require(archive_record["sha256"] == composition_id, "current composition content address differs")
+    archive = work / "current.tar"
+    store.restore(archive_record, archive, lambda name: api.file(snapshot, name))
+    site.unpack(archive, work / "current-site")
+    if not (work / "current-site/docs-site.json").exists():
+        legacy = json.loads(api.file(snapshot, prefix + "legacy.json"))
+        site.require(legacy["archive_sha256"] == composition_id, "legacy content address differs")
+        return
+    record_bytes = api.file(snapshot, prefix + "composition.json")
+    path = work / "current-composition.json"
+    path.write_bytes(record_bytes)
+    record = json.loads(record_bytes)
+    _offline_attestation(path, api.file(snapshot, prefix + "composition-attestation.json"),
+                         record["workflow_commit"], work)
+    site.require(record["archive_sha256"] == composition_id, "signed current composition differs")
+    site.verify_site(work / "current-site", record["manifest_sha256"])
+    manifest = site.read_json(work / "current-site/_docs/versions.json")
+    require_preserved_releases(manifest, state["releases"])
+
+
 def prepare(work: Path, main_run: str, release_run: str, record_sha256: str,
             snapshot: str | None, api=None) -> None:
     api = api or store.GitHub()
     site.empty(work)
     state = store.index(api, snapshot)
+    _verify_current_roster(api, snapshot, state, work)
     payload = work / "payload"
     payload.mkdir()
     sources = {}
     for version, entry in state["releases"].items():
         site.require(site.VERSION.fullmatch(version) and set(entry) == {"identity", "archive"},
                      "invalid retained release")
+        _verify_retained_release(api, snapshot, version, entry, work)
         archive = work / (version + ".tar")
         store.restore(entry["archive"], archive, lambda path: api.file(snapshot, path))
         sources[version] = (archive, entry["identity"])
@@ -132,6 +203,10 @@ def prepare(work: Path, main_run: str, release_run: str, record_sha256: str,
         else:
             state["releases"][version] = {"identity": value,
                                            "archive": store.split_archive(archive, payload)}
+            proof = payload / "releases" / version
+            proof.mkdir(parents=True)
+            shutil.copyfile(work / "release-candidate.json", proof / "candidate.json")
+            shutil.copyfile(work / "record-attestation.json", proof / "record-attestation.json")
             sources[version] = (archive, value)
     else:
         site.require(not record_sha256, "unexpected release record digest")
@@ -283,6 +358,7 @@ def _oidc_token() -> str:
 def _previous(api, snapshot: str, prior: str, work: Path) -> tuple[dict, dict]:
     prefix = f"compositions/{prior}/"
     descriptor = json.loads(api.file(snapshot, prefix + "archive.json"))
+    site.require(descriptor["sha256"] == prior, "prior archive differs from approved content address")
     previous = work / "previous-pages"
     previous.mkdir()
     store.restore(descriptor, previous / "artifact.tar", lambda path: api.file(snapshot, path))
@@ -363,8 +439,9 @@ def _retain_and_deploy(record, plan, previous_id, work, api):
     composition_id = record["archive_sha256"]
     durable = work / "durable"
     durable.mkdir()
-    if (payload / "objects").exists():
-        shutil.copytree(payload / "objects", durable / "objects")
+    for directory in ("objects", "releases"):
+        if (payload / directory).exists():
+            shutil.copytree(payload / directory, durable / directory)
     archive_record = store.split_archive(work / "pages/artifact.tar", durable)
     prefix = durable / "compositions" / composition_id
     prefix.mkdir(parents=True)
@@ -425,6 +502,8 @@ def _verify_live(manifest: str, expected_marker: dict) -> None:
 
 
 def _offline_attestation(path: Path, raw: bytes, commit: str, work: Path) -> None:
+    site.require(isinstance(commit, str) and site.SHA.fullmatch(commit), "invalid attested source commit")
+    site.require(len(raw) <= site.MAX_FILE, "stored attestation is oversized")
     values = json.loads(raw)
     site.require(isinstance(values, list) and bool(values), "stored attestation is missing")
     bundle = work / (path.name + ".bundle.json")
