@@ -735,6 +735,52 @@ export async function armCanvasGpuDelayForTest(
   };
 }
 
+/** A `<everyFrames>:<iterations>` canvas GPU delay read from the environment. */
+export interface CanvasGpuDelaySpec {
+  spec: string;
+  everyFrames: number;
+  iterations: number;
+}
+
+/**
+ * Read the fault injection for \ref armCanvasGpuDelayForTest from environment variable \p name, as
+ * `<everyFrames>:<iterations>`. Unset or empty leaves the injection off.
+ */
+export function canvasGpuDelayFromEnv(name: string): CanvasGpuDelaySpec | null {
+  const spec = process.env[name];
+  if (spec === undefined || spec === "") return null;
+  const match = /^(\d+):(\d+)$/.exec(spec);
+  const everyFrames = match ? Number(match[1]) : 0;
+  const iterations = match ? Number(match[2]) : 0;
+  if (!match || everyFrames < 1 || everyFrames > 1000 || iterations < 1 || iterations > 1_000_000) {
+    throw new Error(`${name} must be <everyFrames 1-1000>:<iterations 1-1000000>`);
+  }
+  return { spec, everyFrames, iterations };
+}
+
+/**
+ * Arm \ref armCanvasGpuDelayForTest in \p owner when environment variable \p variable sets it.
+ * `finish()` disarms it and returns what was injected.
+ */
+export async function armCanvasGpuDelayFromEnv(
+  owner: Worker,
+  variable: string,
+): Promise<{ finish: () => Promise<CanvasGpuDelayReport> } | null> {
+  const config = canvasGpuDelayFromEnv(variable);
+  if (config === null) return null;
+  const delay = await armCanvasGpuDelayForTest(owner, config.everyFrames, config.iterations);
+  return {
+    finish: async () => ({ spec: config.spec, ...(await delay.disarm()) }),
+  };
+}
+
+/** What \ref armCanvasGpuDelayFromEnv injected: its spec, and each injected job's GPU time. */
+export interface CanvasGpuDelayReport {
+  spec: string;
+  injected?: number;
+  jobMs?: number[];
+}
+
 /**
  * Wait in \p owner until the GPU has finished every canvas write submitted so far, with no new
  * canvas write submitted while waiting. Uses the browser's own queue completion, not the app's

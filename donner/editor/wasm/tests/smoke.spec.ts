@@ -46,7 +46,8 @@ import { quarantineStillSkips } from "./quarantine-report.mjs";
 import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
-  armCanvasGpuDelayForTest,
+  armCanvasGpuDelayFromEnv,
+  canvasGpuDelayFromEnv,
   type CanvasSettleResult,
   expectSurfaceFrameProbeReady,
   findCanvasOwnerWorker,
@@ -2177,6 +2178,22 @@ for (
       const owner = await findGpuOwnerWorker(page);
       expect(owner && await owner.evaluate(armPipelineFirstUseCompiles)).toBe(true);
     }
+    // Fault injection, off unless `DONNER_CAROUSEL_CANVAS_GPU_DELAY` is `<everyFrames>:<iterations>`:
+    // queues fixed GPU work right after the first canvas write of every Nth frame from the click
+    // on, so the presenting frame retires behind it as on a slow or shared GPU. CPU frame timing,
+    // task boundaries and every ordering below are unchanged.
+    let carouselGpuDelay: Awaited<ReturnType<typeof armAttachedCanvasGpuDelay>> = null;
+    if (canvasGpuDelayFromEnv("DONNER_CAROUSEL_CANVAS_GPU_DELAY") !== null) {
+      await expectSurfaceFrameProbeReady(page);
+      const owner = await findProbedCanvasApplicationWorker(page);
+      if (owner === null) throw new Error("the application canvas owner is unavailable");
+      carouselGpuDelay = await armAttachedCanvasGpuDelay(
+        owner,
+        "DONNER_CAROUSEL_CANVAS_GPU_DELAY",
+        "carousel-canvas-gpu-delay",
+        testInfo,
+      );
+    }
     const firstUseCreationsBeforeClick = await readPipelinesCreatedAtFirstUse(page);
     let firstUseCreationsAtPresentation: number | null = null;
     const deviceCreationsBeforeClick = await page.evaluate(
@@ -2323,6 +2340,10 @@ for (
       }).toBe(true);
       firstUseCreationsAtPresentation = await readPipelinesCreatedAtFirstUse(page);
     } finally {
+      // Best-effort, like the diagnostics below: a failed disarm must not replace the real failure.
+      const injected = await carouselGpuDelay?.finish()
+        .catch((error: unknown) => ({ disarmError: String(error) }));
+      if (injected) console.log(`carousel-canvas-gpu-delay ${JSON.stringify(injected)}`);
       // Best-effort: a whole-test timeout tears the page down, and a rejection
       // here must not replace the real failure.
       const workerBusy = await page
@@ -5418,23 +5439,33 @@ async function injectAnimationFirstBootDelay(page: Page, browserName: string) {
  * frame's GPU work completes can observe a partially executed canvas.
  */
 async function armAnimationCanvasGpuDelay(owner: Worker, testInfo: TestInfo) {
-  const spec = process.env.DONNER_ANIMATION_CANVAS_GPU_DELAY;
-  if (spec === undefined || spec === "") return null;
-  const match = /^(\d+):(\d+)$/.exec(spec);
-  const everyFrames = match ? Number(match[1]) : 0;
-  const iterations = match ? Number(match[2]) : 0;
-  if (!match || everyFrames < 1 || everyFrames > 1000 || iterations < 1 || iterations > 1_000_000) {
-    throw new Error(
-      "DONNER_ANIMATION_CANVAS_GPU_DELAY must be <everyFrames 1-1000>:<iterations 1-1000000>",
-    );
-  }
-  const delay = await armCanvasGpuDelayForTest(owner, everyFrames, iterations);
+  // Ends the injection after the captures that open the Preview, so later probes run without it.
+  return armAttachedCanvasGpuDelay(
+    owner,
+    "DONNER_ANIMATION_CANVAS_GPU_DELAY",
+    "animation-canvas-gpu-delay",
+    testInfo,
+  );
+}
+
+/**
+ * \ref armCanvasGpuDelayFromEnv, attaching what was injected as `<name>.json` when it finishes.
+ */
+async function armAttachedCanvasGpuDelay(
+  owner: Worker,
+  variable: string,
+  name: string,
+  testInfo: TestInfo,
+) {
+  const delay = await armCanvasGpuDelayFromEnv(owner, variable);
+  if (delay === null) return null;
   return {
-    // Ends the injection after the captures that open the Preview, so later probes run without it.
     finish: async () => {
-      const path = testInfo.outputPath("animation-canvas-gpu-delay.json");
-      await writeFile(path, JSON.stringify({ spec, ...(await delay.disarm()) }, null, 2));
-      await testInfo.attach("animation-canvas-gpu-delay", { path, contentType: "application/json" });
+      const report = await delay.finish();
+      const path = testInfo.outputPath(`${name}.json`);
+      await writeFile(path, JSON.stringify(report, null, 2));
+      await testInfo.attach(name, { path, contentType: "application/json" });
+      return report;
     },
   };
 }
