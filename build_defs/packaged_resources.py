@@ -38,7 +38,7 @@ def generate(request, header_path, output):
     if sum(record["encodedSize"] for record in records) > MAX_ENCODED:
         raise ValueError("Resource set exceeds encoded retention budget")
     manifest = dict(schemaVersion=1, assets=records)
-    (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+    (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n")
     lines = ['#pragma once', '/// @file', '', '#include "donner/base/PackagedResource.h"', '',
              'namespace donner::embedded {']
     for record in records:
@@ -177,7 +177,7 @@ def merge(inputs, output):
     if sum({record["sha256"]: record["encodedSize"] for record in assets}.values()) > MAX_ENCODED:
         raise ValueError("Installed resource set exceeds encoded retention budget")
     (output / "manifest.json").write_text(
-        json.dumps(dict(schemaVersion=1, assets=assets), sort_keys=True, indent=2) + "\n")
+        json.dumps(dict(schemaVersion=1, assets=assets), sort_keys=True, separators=(",", ":")) + "\n")
 
 
 def main():

@@ -10,9 +10,12 @@
 #include <set>
 #include <sstream>
 #ifndef __EMSCRIPTEN__
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include <cerrno>
 #endif
 #include <utility>
 #ifdef __APPLE__
@@ -113,6 +116,142 @@ std::string JsonString(std::string_view value) {
   }
   return result + '"';
 }
+std::string CanonicalManifest() {
+  auto resources = PackagedResources();
+  std::sort(resources.begin(), resources.end(), [](const auto* a, const auto* b) {
+    return std::string_view(a->id) < std::string_view(b->id);
+  });
+  std::string result = "{\"assets\":[";
+  bool first = true;
+  for (const auto* r : resources) {
+    if (!first) {
+      result += ',';
+    }
+    first = false;
+    result += "{\"decodedSize\":" + std::to_string(r->decodedSize) +
+              ",\"encodedSize\":" + std::to_string(r->encodedSize) +
+              ",\"group\":" + JsonString(r->group) + ",\"id\":" + JsonString(r->id) +
+              ",\"mediaType\":" + JsonString(r->mediaType) + ",\"path\":" + JsonString(r->path) +
+              ",\"sha256\":" + JsonString(r->sha256) + "}";
+  }
+  return result + "],\"schemaVersion\":1}\n";
+}
+
+#ifndef __EMSCRIPTEN__
+ResourceBytes ReadRegularFileAt(int directory, const char* name, size_t expectedSize) {
+  const int file = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+  if (file < 0) {
+    return {};
+  }
+  struct stat status{};
+  if (fstat(file, &status) != 0 || !S_ISREG(status.st_mode) || status.st_size < 0 ||
+      static_cast<uint64_t>(status.st_size) != expectedSize) {
+    close(file);
+    return {};
+  }
+  auto bytes = std::make_shared<std::vector<uint8_t>>(expectedSize);
+  size_t offset = 0;
+  while (offset < bytes->size()) {
+    const auto count = read(file, bytes->data() + offset, bytes->size() - offset);
+    if (count <= 0) {
+      close(file);
+      return {};
+    }
+    offset += static_cast<size_t>(count);
+  }
+  uint8_t extra;
+  const auto trailing = read(file, &extra, 1);
+  close(file);
+  return trailing == 0 ? bytes : ResourceBytes{};
+}
+
+bool ExactDirectoryEntries(int directory, const std::set<std::string>& expected) {
+  // Open a fresh description so directory enumeration never changes another reader's offset.
+  const int copy = openat(directory, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (copy < 0) {
+    return false;
+  }
+  DIR* entries = fdopendir(copy);
+  if (!entries) {
+    close(copy);
+    return false;
+  }
+  std::set<std::string> actual;
+  errno = 0;
+  while (const auto* entry = readdir(entries)) {
+    const std::string name(entry->d_name);
+    if (name == "." || name == "..") {
+      continue;
+    }
+    if (!expected.contains(name) || !actual.insert(name).second) {
+      closedir(entries);
+      return false;
+    }
+  }
+  const bool readComplete = errno == 0;
+  closedir(entries);
+  return readComplete && actual == expected;
+}
+
+bool VerifyInstalledDirectory(int root) {
+  const auto resources = PackagedResources();
+  if (resources.empty() || resources.size() > 128) {
+    return false;
+  }
+  const auto expected = CanonicalManifest();
+  if (expected.size() > 128 * 1024) {
+    return false;
+  }
+  const auto manifest = ReadRegularFileAt(root, "manifest.json", expected.size());
+  if (!manifest ||
+      !std::equal(manifest->begin(), manifest->end(), expected.begin(), expected.end()) ||
+      !ExactDirectoryEntries(root, {"manifest.json", "assets"})) {
+    return false;
+  }
+  const int assets = openat(root, "assets", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (assets < 0) {
+    return false;
+  }
+  std::set<std::string> names;
+  size_t total = 0;
+  bool valid = true;
+  for (const auto* resource : resources) {
+    if (!ValidIdentity(*resource)) {
+      valid = false;
+      break;
+    }
+    const std::string name = std::filesystem::path(resource->path).filename().string();
+    if (names.insert(name).second) {
+      total += resource->encodedSize;
+    }
+    struct stat status{};
+    if (total > PackagedResourceSession::kMaximumEncodedBytes ||
+        fstatat(assets, name.c_str(), &status, AT_SYMLINK_NOFOLLOW) != 0 ||
+        !S_ISREG(status.st_mode) || status.st_size < 0 ||
+        static_cast<uint64_t>(status.st_size) != resource->encodedSize) {
+      valid = false;
+      break;
+    }
+  }
+  valid = valid && ExactDirectoryEntries(assets, names);
+  close(assets);
+  return valid;
+}
+
+struct InstalledDirectory {
+  explicit InstalledDirectory(std::string path) : path(std::move(path)) {}
+  ~InstalledDirectory() {
+    if (directory >= 0) {
+      close(directory);
+    }
+  }
+  std::string path;
+  std::mutex mutex;
+  int directory = -1;
+  bool checked = false;
+  bool valid = false;
+};
+#endif
 }  // namespace
 
 std::string ResourceSha256(std::span<const uint8_t> bytes) {
@@ -182,58 +321,40 @@ std::string ResourceSha256(std::span<const uint8_t> bytes) {
 }
 
 PackagedResourceProvider PackagedResourceDirectoryProvider(std::string root) {
-  return [root = std::move(root)](const PackagedResource& resource) -> ResourceBytes {
-    if (root.empty() || !ValidIdentity(resource)) {
-      return {};
-    }
 #ifdef __EMSCRIPTEN__
-    return {};
+  (void)root;
+  return [](const PackagedResource&) -> ResourceBytes { return {}; };
 #else
-    // Traverse using directory handles, refusing symlinks at each open. Keeping the parent open
-    // closes the check/use race that pathname-only symlink inspection would permit.
-    int directory = open(root.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (directory < 0) {
+  auto installation = std::make_shared<InstalledDirectory>(std::move(root));
+  return [installation](const PackagedResource& resource) -> ResourceBytes {
+    if (!ValidIdentity(resource)) {
       return {};
     }
-    const std::filesystem::path relative(resource.path);
-    const auto parent = relative.parent_path();
-    for (const auto& component : parent) {
-      const int next =
-          openat(directory, component.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-      close(directory);
-      if (next < 0) {
+    std::lock_guard lock(installation->mutex);
+    if (!installation->checked) {
+      installation->checked = true;
+      if (installation->path.empty()) {
         return {};
       }
-      directory = next;
+      installation->directory =
+          open(installation->path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      installation->valid =
+          installation->directory >= 0 && VerifyInstalledDirectory(installation->directory);
     }
-    const int file = openat(directory, relative.filename().c_str(),
-                            O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-    close(directory);
-    if (file < 0) {
+    if (!installation->valid) {
       return {};
     }
-    struct stat status{};
-    if (fstat(file, &status) != 0 || !S_ISREG(status.st_mode) || status.st_size < 0 ||
-        static_cast<uint64_t>(status.st_size) != resource.encodedSize) {
-      close(file);
+    const int assets =
+        openat(installation->directory, "assets", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (assets < 0) {
       return {};
     }
-    auto bytes = std::make_shared<std::vector<uint8_t>>(resource.encodedSize);
-    size_t offset = 0;
-    while (offset < bytes->size()) {
-      const auto count = read(file, bytes->data() + offset, bytes->size() - offset);
-      if (count <= 0) {
-        close(file);
-        return {};
-      }
-      offset += static_cast<size_t>(count);
-    }
-    uint8_t extra;
-    const auto trailing = read(file, &extra, 1);
-    close(file);
-    return trailing == 0 ? bytes : ResourceBytes{};
-#endif
+    const auto name = std::filesystem::path(resource.path).filename().string();
+    const auto bytes = ReadRegularFileAt(assets, name.c_str(), resource.encodedSize);
+    close(assets);
+    return bytes;
   };
+#endif
 }
 
 struct PackagedResourceSession::Impl {
@@ -260,6 +381,7 @@ bool PackagedResourceSession::install(const PackagedResource& resource,
     std::lock_guard lock(impl_->mutex);
     impl_->error = std::string("Invalid packaged resource: ") + resource.id;
     impl_->failures.insert(resource.sha256);
+    impl_->pending.erase(resource.sha256);
     return false;
   }
   std::lock_guard lock(impl_->mutex);
@@ -269,6 +391,7 @@ bool PackagedResourceSession::install(const PackagedResource& resource,
   if (bytes.size() > kMaximumEncodedBytes - impl_->retained) {
     impl_->error = "Packaged resource retention budget exceeded";
     impl_->failures.insert(resource.sha256);
+    impl_->pending.erase(resource.sha256);
     return false;
   }
   impl_->failures.erase(resource.sha256);
@@ -462,28 +585,7 @@ bool PreparePackagedResources(std::string* error) {
 }  // namespace donner
 
 extern "C" DONNER_RESOURCE_EXPORT const char* DonnerPackagedResourceManifest() {
-  static const std::string manifest = [] {
-    std::string result = "{\"schemaVersion\":1,\"assets\":[";
-    bool first = true;
-    auto resources = donner::PackagedResources();
-    std::sort(resources.begin(), resources.end(), [](const auto* a, const auto* b) {
-      return std::string_view(a->id) < std::string_view(b->id);
-    });
-    for (const auto* r : resources) {
-      if (!first) {
-        result += ',';
-      }
-      first = false;
-      result += "{\"id\":" + donner::JsonString(r->id) +
-                ",\"sha256\":" + donner::JsonString(r->sha256) +
-                ",\"encodedSize\":" + std::to_string(r->encodedSize) +
-                ",\"decodedSize\":" + std::to_string(r->decodedSize) +
-                ",\"mediaType\":" + donner::JsonString(r->mediaType) +
-                ",\"group\":" + donner::JsonString(r->group) +
-                ",\"path\":" + donner::JsonString(r->path) + "}";
-    }
-    return result + "]}";
-  }();
+  static const std::string manifest = donner::CanonicalManifest();
   return manifest.c_str();
 }
 extern "C" DONNER_RESOURCE_EXPORT int DonnerInstallPackagedResource(const char* sha256,

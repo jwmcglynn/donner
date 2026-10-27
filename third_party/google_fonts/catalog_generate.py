@@ -380,7 +380,7 @@ def generate(args):
             write_text(request["native_sources"][index],
                        '#include "third_party/google_fonts/embed_resources/GoogleFontsData.h"\n')
     write_text(resource_assets / "manifest.json",
-               json.dumps(dict(schemaVersion=1, assets=resource_records), sort_keys=True, indent=2) + "\n")
+               json.dumps(dict(schemaVersion=1, assets=resource_records), sort_keys=True, separators=(",", ":")) + "\n")
     header.extend(["}  // namespace donner::embedded", ""])
     manifest["encoded_bytes"] = total_encoded
     manifest["memory_budget"] = catalog_memory_budget(manifest["fonts"])

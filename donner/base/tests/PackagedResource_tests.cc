@@ -1,5 +1,6 @@
 #include "donner/base/PackagedResource.h"
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -70,6 +71,18 @@ TEST(PackagedResource, DeferredRequestsCoalesceUntilSuccessOrExplicitRetry) {
   EXPECT_EQ(session.failed(kFixture), false);
   EXPECT_EQ(session.retry(kFixture), false);
   EXPECT_EQ(session.retainedBytes(), 3u);
+}
+
+TEST(PackagedResource, InvalidDeferredCompletionEndsPendingAndAllowsExplicitRetry) {
+  PackagedResourceSession session;
+  size_t dispatches = 0;
+  EXPECT_EQ(session.request(kFixture, [&] { ++dispatches; }), true);
+  EXPECT_EQ(session.install(kFixture, std::vector<uint8_t>{'x', 'b', 'c'}), false);
+  EXPECT_EQ(session.failed(kFixture), true);
+  EXPECT_EQ(session.retry(kFixture), true);
+  EXPECT_EQ(session.request(kFixture, [&] { ++dispatches; }), true);
+  EXPECT_EQ(dispatches, 2u);
+  session.fail(kFixture);
 }
 
 TEST(PackagedResource, HashKnownVectorsAndBlockBoundaries) {
@@ -161,6 +174,10 @@ TEST(PackagedResource, ProviderPayloadRemainsUntrusted) {
 TEST(PackagedResource, DirectoryProviderRejectsSymlinksAndRelocatesCompleteSet) {
   const auto root = TestTempDir() / "packaged-resource-relocation" / "donner-assets";
   std::filesystem::create_directories(root / "assets");
+  {
+    std::ofstream stream(root / "manifest.json");
+    stream << DonnerPackagedResourceManifest();
+  }
   const auto asset = root / kFixture.path;
   {
     std::ofstream stream(asset, std::ios::binary);
@@ -179,6 +196,47 @@ TEST(PackagedResource, DirectoryProviderRejectsSymlinksAndRelocatesCompleteSet) 
   PackagedResourceSession escaped(PackagedResourceDirectoryProvider(root.string()));
   EXPECT_EQ(escaped.load(kFixture), nullptr);
   EXPECT_THAT(escaped.error(), HasSubstr("Missing packaged resource"));
+}
+
+TEST(PackagedResource, InstalledManifestAndExactInventoryAreRequired) {
+  const std::array<std::string, 7> mutations = {"missing", "corrupt", "schema", "mixed",
+                                                "extra",   "asset",   "link"};
+  for (const auto& mutation : mutations) {
+    SCOPED_TRACE(mutation);
+    const auto root = TestTempDir() / ("manifest-" + mutation);
+    std::filesystem::create_directories(root / "assets");
+    {
+      std::ofstream stream(root / "manifest.json");
+      stream << DonnerPackagedResourceManifest();
+    }
+    {
+      std::ofstream stream(root / kFixture.path);
+      stream << "abc";
+    }
+    if (mutation == "missing") {
+      std::filesystem::remove(root / "manifest.json");
+    } else if (mutation == "corrupt") {
+      std::ofstream(root / "manifest.json") << "invalid";
+    } else if (mutation == "schema" || mutation == "mixed") {
+      std::string manifest = DonnerPackagedResourceManifest();
+      if (mutation == "schema") {
+        manifest[manifest.find("schemaVersion") + 15] = '2';
+      } else {
+        manifest[manifest.find(kFixture.sha256)] = '0';
+      }
+      std::ofstream(root / "manifest.json") << manifest;
+    } else if (mutation == "extra") {
+      std::ofstream(root / "assets/extra.svg") << "extra";
+    } else if (mutation == "asset") {
+      std::filesystem::remove(root / kFixture.path);
+    } else if (mutation == "link") {
+      std::filesystem::rename(root / "manifest.json", root / "outside.json");
+      std::filesystem::create_symlink(root / "outside.json", root / "manifest.json");
+    }
+    PackagedResourceSession session(PackagedResourceDirectoryProvider(root.string()));
+    EXPECT_EQ(session.load(kFixture), nullptr);
+    EXPECT_EQ(session.retainedBytes(), 0u);
+  }
 }
 
 TEST(PackagedResource, ManifestEnumerationDoesNotLoadBytes) {
