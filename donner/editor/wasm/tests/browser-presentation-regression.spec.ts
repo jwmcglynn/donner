@@ -5,6 +5,7 @@ import { PNG } from "pngjs";
 import {
   awaitBeforeBlueDeadline,
   captureReadyBasicShapesFrame,
+  captureSettledCanvas,
   hasPresentedBasicShapesHostFrame,
   type InitialBlueFrameState,
 } from "./basic-shapes-capture-gate";
@@ -49,19 +50,21 @@ import {
 } from "./sample-thumbnail-quiescence.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
+  armCanvasGpuDelayForTest,
+  type CanvasActivity,
   delayNextCanvasCompletionForTest,
   expectSurfaceFrameProbeReady,
   findCanvasOwnerWorker,
   holdCanvasCompletionForTest,
   installSurfaceFrameProbe,
+  readCanvasActivity,
   readCanvasOwnerSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
   surfaceFrameProbeInstalled,
   type SurfaceFrameProbeReport,
-  waitForSubmittedCanvasGpuWork,
 } from "./surface-frame-probe";
-import { scaledMs } from "./test-timing";
+import { kStallGuardMs, scaledMs } from "./test-timing";
 
 installBrowserStallDiagnostics(test);
 installFailureCanvasEvidence(test);
@@ -511,7 +514,7 @@ async function captureSplashDragFrame(
   region: CssRegion,
   letterWindow: CssRegion,
   context: string,
-): Promise<SplashPresentationFrame & { renderedFrames: number }> {
+): Promise<SplashPresentationFrame & { renderedFrames: number; attempts: number }> {
   let last: SplashPresentationFrame | null = null;
   let previousUsable: SplashPresentationFrame | null = null;
   for (let attempt = 0; attempt < 4; ++attempt) {
@@ -562,7 +565,7 @@ async function captureSplashDragFrame(
       before.renderedFrames === after.renderedFrames
       || (previousUsable !== null && splashFramesAgree(previousUsable, frame))
     ) {
-      return { ...frame, renderedFrames: after.renderedFrames };
+      return { ...frame, renderedFrames: after.renderedFrames, attempts: attempt + 1 };
     }
     previousUsable = frame;
   }
@@ -736,13 +739,15 @@ test("Splash capture accepts stable pixels while frames keep advancing", async (
   expect(await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0))
     .toBeGreaterThan(framesBefore);
 
-  const startedAtMs = performance.now();
   const region = { x: 0, y: 0, width: 128, height: 128 };
   const frame = await captureSplashDragFrame(page, region, region, "continuous frame wake");
   expect(frame.letter, "the stable picture lost its yellow letter").not.toBeNull();
   expect(frame.outline, "the stable picture lost its selection outline").not.toBeNull();
   expect(frame.census.darkBackgroundPixels).toBeGreaterThan(0);
-  expect(performance.now() - startedAtMs).toBeLessThan(scaledMs(1_000));
+  // Accepted from the second of two agreeing captures, without waiting for the frame loop to park
+  // (#2008: an ordering check in place of a wall-time budget). The frames kept advancing meanwhile.
+  expect(frame.attempts).toBeLessThanOrEqual(2);
+  expect(frame.renderedFrames).toBeGreaterThan(framesBefore);
 });
 
 // The document's presentation progress. Since the single-canvas architecture there is no separate
@@ -1031,11 +1036,11 @@ async function readBasicShapesDragFrame(
   step: number,
   probeRegion: CssRegion,
   beforeScreenshot: SurfaceFrameSnapshot | null,
+  geometry: Awaited<ReturnType<typeof readEditorResizePixelBounds>>,
 ): Promise<{
   geometry: Awaited<ReturnType<typeof readEditorResizePixelBounds>>;
   state: DocumentPresentationState;
 }> {
-  const geometry = await readEditorResizePixelBounds(page, probeRegion);
   if (geometry.usableCapture && geometry.blue === null) {
     await attachScoredMissingBluePng(page, step, probeRegion, geometry, beforeScreenshot);
   }
@@ -1828,7 +1833,7 @@ async function takeBasicShapesProbe(
   gateCanvasGpu: boolean,
   pageViewport: Pick<CssRegion, "width" | "height"> | null,
   beforeSampleResults: number,
-  deadlineAtMs: number,
+  stallGuardEndsAtMs: number,
 ): Promise<BasicShapesProbe> {
   if (!gateCanvasGpu) {
     const state = await readBasicShapesProbeState(page, false);
@@ -1850,14 +1855,14 @@ async function takeBasicShapesProbe(
 
   const preGateState = await awaitBeforeBlueDeadline(
     readBasicShapesGateState(page),
-    deadlineAtMs,
+    stallGuardEndsAtMs,
   );
   const capture = await captureReadyBasicShapesFrame(
     page,
     preGateState,
     beforeSampleResults,
-    deadlineAtMs,
-    (remainingMs) => captureBasicShapesProbePage(page, fullPage, null, remainingMs),
+    (timeoutMs) => captureBasicShapesProbePage(page, fullPage, null, timeoutMs),
+    { timedOut: (result) => result.timedOutCaptures > 0 },
   );
   if (capture === null) {
     return {
@@ -1875,7 +1880,7 @@ async function takeBasicShapesProbe(
   try {
     state = await awaitBeforeBlueDeadline(
       readBasicShapesProbeState(page, fullPage),
-      deadlineAtMs,
+      stallGuardEndsAtMs,
     );
   } catch (error) {
     if (
@@ -1955,7 +1960,8 @@ async function openBasicShapes(
 
   // The picker click can remain over a layer row after it closes. The render pane builds before
   // the sidebar clears that hover, so require a second presented move after the clearing frame.
-  const blueDeadlineAtMs = performance.now() + scaledMs(5_000);
+  // These waits share one stall guard; none of them is a latency budget.
+  const stallGuardEndsAtMs = performance.now() + kStallGuardMs;
   const clearHoverAt = { x: canvasBounds.x + 8, y: canvasBounds.y + 8 };
   const confirmClearAt = { x: clearHoverAt.x + 8, y: clearHoverAt.y };
   const presentedPointerAfter = (target: { x: number; y: number }, afterSerial: number) =>
@@ -1977,7 +1983,7 @@ async function openBasicShapes(
   await page.mouse.move(clearHoverAt.x, clearHoverAt.y);
   await expect.poll(() => presentedPointerAfter(clearHoverAt, previousSerial), {
     message: "the Layers hover-clear move must reach presentation",
-    timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
+    timeout: Math.max(1, stallGuardEndsAtMs - performance.now()),
   }).toBe(true);
   previousSerial = await page.evaluate(
     () => window.__donnerPresentationQueueStats?.completedSerial || 0,
@@ -1985,7 +1991,7 @@ async function openBasicShapes(
   await page.mouse.move(confirmClearAt.x, confirmClearAt.y);
   await expect.poll(() => presentedPointerAfter(confirmClearAt, previousSerial), {
     message: "a frame built after the Layers hover clear must reach presentation",
-    timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
+    timeout: Math.max(1, stallGuardEndsAtMs - performance.now()),
   }).toBe(true);
   await waitForBrowserComposite(page);
 
@@ -2039,7 +2045,7 @@ async function openBasicShapes(
             gateCanvasGpu,
             pageViewport,
             beforeSampleResults,
-            blueDeadlineAtMs,
+            stallGuardEndsAtMs,
           );
           const { capture, documentClip: currentDocumentClip, captureClip: currentCaptureClip } =
             probe;
@@ -2073,9 +2079,6 @@ async function openBasicShapes(
             && probe.state.completedResults > beforeSampleResults
             && probe.state.presentedAtMs !== null
           ) {
-            if (performance.now() >= blueDeadlineAtMs) {
-              throw new Error("Basic Shapes blue-pixel acceptance exceeded the deadline");
-            }
             documentClip = currentDocumentClip;
             captureClip = currentCaptureClip;
             baselinePng = shot;
@@ -2086,7 +2089,7 @@ async function openBasicShapes(
         },
         {
           message: "expected the presented render pane to show the Basic Shapes blue rectangle",
-          timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
+          timeout: Math.max(1, stallGuardEndsAtMs - performance.now()),
           // Gecko's first WebGPU screenshot can be empty even after the worker publishes.
           // Closely repeated readbacks starve the next browser composite; leave a frame window.
           intervals: page.context().browser()?.browserType().name() === "firefox"
@@ -3216,6 +3219,9 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ p
   }
 });
 
+// Fixed fragment iterations queued after each canvas frame's first write in the gate's own case.
+const kGateGpuDelayIterations = 8000;
+
 test("canvas GPU completion gate waits after the CPU host frame advances", async ({ page }) => {
   const failures = await openEditor(page);
   await expectSurfaceFrameProbeReady(page);
@@ -3227,61 +3233,43 @@ test("canvas GPU completion gate waits after the CPU host frame advances", async
   expect(owner).not.toBeNull();
   if (owner === null) return;
 
-  await owner.evaluate(() => {
-    const scope = globalThis as typeof globalThis & {
-      __donnerSurfaceFrameProbeCompletionHold?: {
-        promise: Promise<void>;
-        release: () => void;
-        calls: number;
-      };
-    };
-    let release!: () => void;
-    const promise = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0 };
-  });
+  // Fixed GPU work after the first canvas write of every frame keeps that frame's writes running
+  // on the GPU after its CPU task and the host frame counter have advanced. A CPU-only gate would
+  // capture as soon as the counter moved.
+  const gpuDelay = await armCanvasGpuDelayForTest(owner, 1, kGateGpuDelayIterations);
+  let injected: Awaited<ReturnType<typeof gpuDelay.disarm>> = null;
+  let delayedFrame: CanvasActivity;
+  let atScreenshot: CanvasActivity | null = null;
+  let screenshots = 0;
   try {
     const before = await readSurfaceFrameSnapshot(page);
+    const beforeActivity = await readCanvasActivity(owner);
     await page.evaluate(() => {
       window.__donnerEditorFrameRequested = true;
     });
     await expect.poll(async () => (await readSurfaceFrameSnapshot(page)).renderedFrames)
       .toBeGreaterThan(before.renderedFrames);
-    await expect.poll(() =>
-      owner.evaluate(() =>
-        (globalThis as typeof globalThis & {
-          __donnerSurfaceFrameProbeCompletionHold?: { calls: number };
-        }).__donnerSurfaceFrameProbeCompletionHold?.calls ?? 0
-      )
-    ).toBeGreaterThan(0);
-
-    let completed = false;
-    const completion = waitForSubmittedCanvasGpuWork(owner).then((submissions) => {
-      completed = true;
-      return submissions;
-    });
-    // The worker can answer another command while the observed completion is
-    // held, and the host count has advanced. A CPU-only gate would capture now.
-    await owner.evaluate(() => 1);
-    expect(completed).toBe(false);
-    await owner.evaluate(() => {
-      const scope = globalThis as typeof globalThis & {
-        __donnerSurfaceFrameProbeCompletionHold?: { release: () => void };
-      };
-      scope.__donnerSurfaceFrameProbeCompletionHold?.release();
-      delete scope.__donnerSurfaceFrameProbeCompletionHold;
-    });
-    expect(await completion).toBeGreaterThan(0);
+    await expect.poll(async () => (await readCanvasActivity(owner)).canvasSubmits)
+      .toBeGreaterThan(beforeActivity.canvasSubmits);
+    delayedFrame = await readCanvasActivity(owner);
+    await captureSettledCanvas(page, owner, async (timeoutMs) => {
+      ++screenshots;
+      atScreenshot = await readCanvasActivity(owner);
+      return captureEditorPage(page, timeoutMs);
+    }, (capture) => capture.timedOutCaptures > 0);
   } finally {
-    await owner.evaluate(() => {
-      const scope = globalThis as typeof globalThis & {
-        __donnerSurfaceFrameProbeCompletionHold?: { release: () => void };
-      };
-      scope.__donnerSurfaceFrameProbeCompletionHold?.release();
-      delete scope.__donnerSurfaceFrameProbeCompletionHold;
-    });
+    injected = await gpuDelay.disarm();
   }
+  expect(injected?.injected ?? 0, "the delayed frame's GPU work was postponed").toBeGreaterThan(0);
+  expect(screenshots).toBeGreaterThanOrEqual(1);
+  expect(atScreenshot).not.toBeNull();
+  const scored = atScreenshot as unknown as CanvasActivity;
+  // The accepted screenshot started only after the GPU had run every canvas write submitted so
+  // far, the delayed frame's included.
+  expect(scored.canvasSubmits).toBeGreaterThanOrEqual(delayedFrame.canvasSubmits);
+  expect(scored.canvasRetired, JSON.stringify({ delayedFrame, scored, injected })).toBe(
+    scored.canvasSubmits,
+  );
   expect(failures).toEqual([]);
 });
 
@@ -3368,20 +3356,24 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThan(previousFrames);
-    // The host counter follows queue submission, while the app's existing
-    // completion promise may still be pending. Await that exact promise before
-    // the one screenshot; it does not request another frame or GPU operation.
-    await waitForSubmittedCanvasGpuWork(canvasOwner);
+    // The host counter follows queue submission, while the frame's GPU work may still be
+    // running. The capture gate takes the one scored screenshot once the GPU has run every canvas
+    // write, and accepts it only if no canvas frame was acquired or written during it.
     // The editor draws the document and selection into one canvas. A Playwright
     // screenshot captures one composited image, so both pixel bounds come from
-    // the same frame. Firefox may schedule another UI frame while taking that
-    // screenshot; requiring the frame counter to stay fixed rejects a valid
-    // image without adding any protection against mixed geometry.
+    // the same frame.
+    const dragCapture = await captureSettledCanvas(
+      page,
+      canvasOwner,
+      (timeoutMs) => readEditorResizePixelBounds(page, probeRegion, timeoutMs),
+      (capture) => capture.timedOutCaptures > 0,
+    );
     const { geometry, state } = await readBasicShapesDragFrame(
       page,
       step,
       probeRegion,
       beforeScreenshot,
+      dragCapture,
     );
     // "No teal" has two very different causes and the pixels cannot tell them
     // apart: the chrome draw ran and its pixels missed this probe window, or no

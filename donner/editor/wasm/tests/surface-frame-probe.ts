@@ -1,5 +1,7 @@
-import { expect, type Page, type Worker } from "@playwright/test";
+import { errors, expect, type Page, type Worker } from "@playwright/test";
+import { captureQuiescentCanvas } from "./canvas-quiescent-capture.mjs";
 import { createSurfaceProbeRegistry } from "./surface-probe-requests.mjs";
+import { kStallGuardMs } from "./test-timing";
 
 /**
  * A command buffer that wrote into a canvas frame in a later task than the one
@@ -60,12 +62,10 @@ type ProbeGlobal = typeof globalThis & {
   /** Resolves in a task that runs after every task boundary the probe has marked so far. */
   __donnerSurfaceFrameProbeNextTask?: () => Promise<void>;
   __donnerSurfaceFrameProbeQueue?: GPUQueue;
-  __donnerSurfaceFrameProbeCompletion?: { submissions: number; promise: Promise<void> };
   __donnerSurfaceFrameProbeCompletionHold?: {
     promise: Promise<void>;
     release: () => void;
     calls: number;
-    waits: number;
   };
   __donnerSurfaceFrameProbeLateCompletion?: {
     promise: Promise<void>;
@@ -369,10 +369,6 @@ function installInWorker(): boolean {
     }
     if (isCanvasCompletion) {
       if (hold !== undefined) ++hold.calls;
-      scope.__donnerSurfaceFrameProbeCompletion = {
-        submissions: pendingCanvasSubmit,
-        promise,
-      };
       pendingCanvasSubmit = 0;
     }
     return promise;
@@ -488,22 +484,6 @@ function readInWorker(): WorkerProbeState | null {
   return state === undefined ? null : { ...state, lateSubmits: [...state.lateSubmits] };
 }
 
-// Await the existing completion promise for the last canvas-writing submission.
-// This proves submitted GPU work finished; it does not acknowledge compositing.
-function waitForCanvasGpuWorkInWorker(): Promise<number> {
-  const completion = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletion;
-  if (completion === undefined) {
-    throw new Error("the probe has not observed a canvas completion promise");
-  }
-  const hold = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold;
-  if (hold !== undefined) ++hold.waits;
-  return completion.promise.then(() => completion.submissions);
-}
-
-export function waitForSubmittedCanvasGpuWork(owner: Worker): Promise<number> {
-  return owner.evaluate(waitForCanvasGpuWorkInWorker);
-}
-
 // Bound each observation without treating a slow reply as proof of nonownership.
 // The registry retains installation and discovery replies until they can be observed.
 const kWorkerAnswerMs = 1_000;
@@ -580,15 +560,14 @@ export async function selfCheckSurfaceFrameProbe(
   return evaluateInWorkers(probeRegistry.workers(page), selfCheckInWorker, 4 * kWorkerAnswerMs);
 }
 
-// Control only the completion signal already returned to the app. Used by a
-// browser regression to prove CPU-published sample state cannot bypass the
-// screenshot's GPU gate. No queue work is added or delayed on ordinary paths.
+// Control only the completion signal already returned to the app, for browser regressions that
+// fill the app's presentation queue with held frames. No queue work is added or delayed on
+// ordinary paths.
 export async function holdCanvasCompletionForTest(
   _page: Page,
   workersForTest: Worker[],
 ): Promise<{
   observedCalls: () => Promise<number>;
-  enteredWaits: () => Promise<number>;
   release: (owner: Worker) => Promise<void>;
 }> {
   const workers = workersForTest;
@@ -598,7 +577,7 @@ export async function holdCanvasCompletionForTest(
     const promise = new Promise<void>((resolve) => {
       release = resolve;
     });
-    scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0, waits: 0 };
+    scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0 };
     return true;
   });
   if (workers.length === 0 || armed.some((result) => result !== true)) {
@@ -609,13 +588,6 @@ export async function holdCanvasCompletionForTest(
       const counts = await evaluateInWorkers(
         workers,
         () => (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold?.calls ?? 0,
-      );
-      return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0);
-    },
-    enteredWaits: async () => {
-      const counts = await evaluateInWorkers(
-        workers,
-        () => (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold?.waits ?? 0,
       );
       return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0);
     },
@@ -840,7 +812,7 @@ export async function holdCanvasCompletions(owner: Worker): Promise<{ release: (
     const promise = new Promise<void>((resolve) => {
       release = resolve;
     });
-    scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0, waits: 0 };
+    scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0 };
     return true;
   });
   if (armed !== true) {
@@ -855,4 +827,31 @@ export async function holdCanvasCompletions(owner: Worker): Promise<{ release: (
       });
     },
   };
+}
+
+/**
+ * Take one screenshot through \p capture of \p owner's quiescent canvas: under a hold of the app's
+ * canvas completions, once the GPU has run every canvas write, accepted only if no canvas frame
+ * was acquired or written until the screenshot ended (see canvas-quiescent-capture.mjs). Its only
+ * time bound is the stall guard, unless `untilMs` names an earlier end on the `performance.now()`
+ * clock. `timedOut` recognizes a capture result that ran out of time.
+ */
+export async function captureQuiescentCanvasFrame<T>(
+  owner: Worker,
+  capture: (timeoutMs: number) => Promise<T>,
+  options: { timedOut?: (result: T) => boolean; untilMs?: number } = {},
+): Promise<{ result: T; passes: Array<Record<string, unknown>> }> {
+  return captureQuiescentCanvas(
+    {
+      hold: () => holdCanvasCompletions(owner),
+      settle: () => settleCanvasWrites(owner),
+      activity: () => readCanvasActivity(owner),
+    },
+    capture,
+    {
+      untilMs: options.untilMs ?? performance.now() + kStallGuardMs,
+      timedOut: options.timedOut,
+      isTimeoutError: (error: unknown) => error instanceof errors.TimeoutError,
+    },
+  );
 }

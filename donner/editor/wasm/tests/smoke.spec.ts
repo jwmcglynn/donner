@@ -19,7 +19,6 @@ import {
 } from "./animation-pulse-observation.mjs";
 import {
   awaitBeforeBlueDeadline,
-  captureAfterCanvasGpuCompletion,
   captureReadyBasicShapesFrame,
   hasPresentedBasicShapesHostFrame,
 } from "./basic-shapes-capture-gate";
@@ -47,16 +46,16 @@ import { quarantineStillSkips } from "./quarantine-report.mjs";
 import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
+  armCanvasGpuDelayForTest,
   armCanvasGpuDelayFromEnv,
+  type CanvasActivity,
   canvasGpuDelayFromEnv,
-  type CanvasSettleResult,
   expectSurfaceFrameProbeReady,
   findCanvasOwnerWorker,
   findProbedCanvasApplicationWorker,
+  captureQuiescentCanvasFrame,
   holdCanvasCompletionForTest,
-  holdCanvasCompletions,
   readCanvasActivity,
-  settleCanvasWrites,
 } from "./surface-frame-probe";
 import { kStallGuardMs, scaledMs } from "./test-timing";
 
@@ -2823,6 +2822,10 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   expect(fatalMessages).toEqual([]);
 });
 
+// Fixed fragment iterations queued after each canvas frame's first write in the held-canvas case,
+// enough that the frame's remaining writes run on the GPU well after its CPU task has ended.
+const kHeldCanvasGpuDelayIterations = 8000;
+
 test(
   "production Geode wasm presents visible editor pixels after held canvas GPU completion",
   async ({ browserName, page }, testInfo) => {
@@ -2836,165 +2839,146 @@ test(
     const applicationOwner = await findProbedCanvasApplicationWorker(page);
     expect(applicationOwner, "the canvas owner must have the completion probe installed").not
       .toBeNull();
-    let hold: Awaited<ReturnType<typeof holdCanvasCompletionForTest>> | null = null;
-    let requiredOwner: Worker | null = null;
-    let releaseSucceeded = false;
-    const captureErrors: unknown[] = [];
-    try {
-      const canvas = page.locator("canvas#canvas");
-      const bounds = await canvas.boundingBox();
-      expect(bounds).not.toBeNull();
-      if (bounds === null) throw new Error("the canvas bounds are unavailable");
-      const before = await page.evaluate(() => ({
-        results: window.__donnerWorkerStats?.completedResults ?? 0,
-        frames: window.__donnerMainLoopRenderedFrames ?? 0,
+    if (applicationOwner === null) throw new Error("the application canvas owner is unavailable");
+    const canvas = page.locator("canvas#canvas");
+    const bounds = await canvas.boundingBox();
+    expect(bounds).not.toBeNull();
+    if (bounds === null) throw new Error("the canvas bounds are unavailable");
+    const before = await page.evaluate(() => ({
+      results: window.__donnerWorkerStats?.completedResults ?? 0,
+      frames: window.__donnerMainLoopRenderedFrames ?? 0,
+    }));
+    await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
+    const readState = () =>
+      page.evaluate(() => ({
+        sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
+        completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+        presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+        renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+        hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
+        hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
+        frameId: window.__donnerOverlayStats?.frameId ?? 0,
+        captureId: window.__donnerOverlayStats?.captureId ?? 0,
+        completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
+        completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
+        completedInputRepresented:
+          window.__donnerPresentationQueueStats?.inputRepresented === true,
+        framesInFlight: window.__donnerPresentationQueueStats?.framesInFlight ?? null,
+        completedSerial: window.__donnerPresentationQueueStats?.completedSerial ?? null,
+        submittedSerial: window.__donnerPresentationQueueStats?.submittedSerial ?? null,
       }));
-      await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
-      const readState = () =>
-        page.evaluate(() => ({
-          sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
-          completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
-          presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
-          renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
-          hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
-          hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
-          frameId: window.__donnerOverlayStats?.frameId ?? 0,
-          captureId: window.__donnerOverlayStats?.captureId ?? 0,
-          completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
-          completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
-          completedInputRepresented:
-            window.__donnerPresentationQueueStats?.inputRepresented === true,
-          framesInFlight: window.__donnerPresentationQueueStats?.framesInFlight ?? null,
-          completedSerial: window.__donnerPresentationQueueStats?.completedSerial ?? null,
-          submittedSerial: window.__donnerPresentationQueueStats?.submittedSerial ?? null,
-        }));
-      await expect.poll(
-        async () => hasPresentedBasicShapesHostFrame(await readState(), before.results),
-        { timeout: scaledMs(5_000) },
-      ).toBe(true);
-      let readyState: Awaited<ReturnType<typeof readState>> | undefined;
-      await expect.poll(async () => {
-        const state = await readState();
-        const ready = hasPresentedBasicShapesHostFrame(state, before.results)
-          && state.framesInFlight === 0 && state.completedSerial === state.submittedSerial;
-        if (ready) readyState = state;
-        return ready;
-      }, { timeout: scaledMs(5_000) }).toBe(true);
-      if (!readyState) throw new Error("the completed Basic Shapes frame was not observed");
-      expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
-      // Hold a fresh document frame, not welcome frames that can occupy all presentation slots.
-      const completionHold = await holdCanvasCompletionForTest(page, [applicationOwner!]);
-      hold = completionHold;
+    let readyState: Awaited<ReturnType<typeof readState>> | undefined;
+    await expect.poll(async () => {
+      const state = await readState();
+      const ready = hasPresentedBasicShapesHostFrame(state, before.results)
+        && state.framesInFlight === 0 && state.completedSerial === state.submittedSerial;
+      if (ready) readyState = state;
+      return ready;
+    }, { timeout: kStallGuardMs }).toBe(true);
+    if (!readyState) throw new Error("the completed Basic Shapes frame was not observed");
+    expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
+
+    // Hold the canvas's GPU work itself: fixed GPU work queued after the first canvas write of
+    // every frame from here on keeps that frame's remaining writes running on the GPU after its CPU
+    // task, its host counters and its submission have all advanced. A gate that trusted any of
+    // those would capture now.
+    const gpuDelay = await armCanvasGpuDelayForTest(
+      applicationOwner,
+      1,
+      kHeldCanvasGpuDelayIterations,
+    );
+    let delayReport: Awaited<ReturnType<typeof gpuDelay.disarm>> | undefined;
+    let requiredOwner: Worker | null = null;
+    let screenshots = 0;
+    let atScreenshot: CanvasActivity | null = null;
+    let capture: Awaited<ReturnType<typeof captureEditorPage>> | null;
+    let heldFrame: CanvasActivity;
+    try {
+      const beforeHeldFrame = await readCanvasActivity(applicationOwner);
       await page.evaluate(() => {
         window.__donnerEditorFrameRequested = true;
       });
-      await expect.poll(completionHold.observedCalls).toBeGreaterThan(0);
-
-      let screenshots = 0;
-      let settled = false;
-      const gatedCapture = captureReadyBasicShapesFrame(
+      await expect.poll(async () => (await readCanvasActivity(applicationOwner)).canvasSubmits, {
+        message: "a document frame is submitted with its GPU work delayed",
+        timeout: kStallGuardMs,
+      }).toBeGreaterThan(beforeHeldFrame.canvasSubmits);
+      heldFrame = await readCanvasActivity(applicationOwner);
+      capture = await captureReadyBasicShapesFrame(
         page,
         readyState,
         before.results,
-        performance.now() + scaledMs(5_000),
-        (remainingMs) => {
+        async (timeoutMs) => {
           ++screenshots;
-          return captureEditorPage(page, remainingMs);
+          atScreenshot = await readCanvasActivity(applicationOwner);
+          return captureEditorPage(page, timeoutMs);
         },
-        (owner) => {
-          requiredOwner = owner;
-        },
-      ).finally(() => {
-        settled = true;
-      });
-      // Wait until this exact gate is entered, or a bypass starts the capture.
-      // A page round trip alone can finish before worker-owner discovery.
-      let lastEnteredWaits: number | null = null;
-      try {
-        await expect.poll(async () => {
-          if (screenshots > 0) return true;
-          lastEnteredWaits = await completionHold.enteredWaits();
-          return lastEnteredWaits > 0;
-        }, { timeout: scaledMs(5_000) }).toBe(true);
-      } catch (error) {
-        console.error(JSON.stringify({
-          heldCanvasCapture: {
-            readyStateValid: hasPresentedBasicShapesHostFrame(readyState, before.results),
-            screenshots,
-            settled,
-            requiredOwnerIdentified: requiredOwner !== null,
-            enteredWaits: lastEnteredWaits,
+        {
+          onOwner: (owner) => {
+            requiredOwner = owner;
           },
-        }));
-        throw error;
-      }
-      expect(screenshots).toBe(0);
-      expect(settled).toBe(false);
-      expect(requiredOwner).not.toBeNull();
-      if (requiredOwner === null) throw new Error("the held canvas owner was not identified");
-      await completionHold.release(requiredOwner);
-      releaseSucceeded = true;
-      const capture = await gatedCapture;
-      expect(capture).not.toBeNull();
-      if (capture === null) throw new Error("the held canvas capture is unavailable");
-      const scoredFramePath = testInfo.outputPath("held-canvas-scored-frame.png");
-      await writeFile(scoredFramePath, capture.png);
-      await testInfo.attach("held-canvas-scored-frame", {
-        path: scoredFramePath,
-        contentType: "image/png",
-      });
-      expect(capture.usable).toBe(true);
-      expect(screenshots).toBe(1);
-      const viewport = page.viewportSize();
-      expect(viewport).not.toBeNull();
-      if (viewport !== null) {
-        expect(
-          readEditorPixelBoundsFromPng(capture.png, "basic-blue", viewport, {
-            minX: 0,
-            minY: 0,
-            maxX: viewport.width,
-            maxY: viewport.height,
-          })?.pixels ?? 0,
-        ).toBeGreaterThan(500);
-      }
-      let staleCaptures = 0;
-      const staleCapture = async () => {
-        ++staleCaptures;
-      };
-      expect(
-        await captureReadyBasicShapesFrame(
-          page,
-          { ...readyState, hostPresented: false, completedFrameId: 0 },
-          before.results,
-          performance.now() + 100,
-          staleCapture,
-        ),
-      ).toBeNull();
-      expect(
-        await captureReadyBasicShapesFrame(
-          page,
-          { ...readyState, hostFrames: readyState.renderedFrames - 1 },
-          before.results,
-          performance.now() + 100,
-          staleCapture,
-        ),
-      ).toBeNull();
-      expect(staleCaptures).toBe(0);
-    } catch (error) {
-      captureErrors.push(error);
+          timedOut: (result) => result.timedOutCaptures > 0,
+        },
+      );
     } finally {
-      if (!releaseSucceeded && hold !== null) {
-        try {
-          await hold.release(requiredOwner ?? applicationOwner!);
-        } catch (cleanupError) {
-          captureErrors.push(cleanupError);
-        }
-      }
+      delayReport = await gpuDelay.disarm();
     }
-    if (captureErrors.length === 1) throw captureErrors[0];
-    if (captureErrors.length > 1) {
-      throw new AggregateError(captureErrors, "capture and hold cleanup failed");
+    const delayPath = testInfo.outputPath("held-canvas-gpu-delay.json");
+    await writeFile(delayPath, JSON.stringify({ heldFrame, atScreenshot, delayReport }, null, 2));
+    await testInfo.attach("held-canvas-gpu-delay", { path: delayPath, contentType: "application/json" });
+    expect(requiredOwner).toBe(applicationOwner);
+    expect(delayReport?.injected ?? 0, "the held frame's GPU work was delayed").toBeGreaterThan(0);
+    expect(capture).not.toBeNull();
+    if (capture === null || atScreenshot === null) {
+      throw new Error("the held canvas capture is unavailable");
     }
+    // The accepted screenshot started only after the GPU had run every canvas write, the delayed
+    // frame's included.
+    const scored: CanvasActivity = atScreenshot;
+    expect(scored.canvasSubmits).toBeGreaterThanOrEqual(heldFrame.canvasSubmits);
+    expect(scored.canvasRetired, JSON.stringify({ heldFrame, scored })).toBe(scored.canvasSubmits);
+    const scoredFramePath = testInfo.outputPath("held-canvas-scored-frame.png");
+    await writeFile(scoredFramePath, capture.png);
+    await testInfo.attach("held-canvas-scored-frame", {
+      path: scoredFramePath,
+      contentType: "image/png",
+    });
+    expect(capture.usable).toBe(true);
+    expect(screenshots).toBeGreaterThanOrEqual(1);
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    if (viewport !== null) {
+      expect(
+        readEditorPixelBoundsFromPng(capture.png, "basic-blue", viewport, {
+          minX: 0,
+          minY: 0,
+          maxX: viewport.width,
+          maxY: viewport.height,
+        })?.pixels ?? 0,
+      ).toBeGreaterThan(500);
+    }
+    // A frame the host never presented, or one older than the latest rendered frame, is not
+    // captured at all.
+    let staleCaptures = 0;
+    const staleCapture = async () => {
+      ++staleCaptures;
+    };
+    expect(
+      await captureReadyBasicShapesFrame(
+        page,
+        { ...readyState, hostPresented: false, completedFrameId: 0 },
+        before.results,
+        staleCapture,
+      ),
+    ).toBeNull();
+    expect(
+      await captureReadyBasicShapesFrame(
+        page,
+        { ...readyState, hostFrames: readyState.renderedFrames - 1 },
+        before.results,
+        staleCapture,
+      ),
+    ).toBeNull();
+    expect(staleCaptures).toBe(0);
     // A parked secondary worker must not turn a successful owner release into
     // a failure, while an unresponsive required owner must still fail closed.
     let ownerEvaluations = 0;
@@ -3030,21 +3014,6 @@ test(
     const requiredHold = await holdCanvasCompletionForTest(page, [unavailableOwner]);
     await expect(requiredHold.release(unavailableOwner))
       .rejects.toThrow("could not release the required canvas completion owner");
-    let forbiddenCaptures = 0;
-    const noCapture = async () => {
-      ++forbiddenCaptures;
-    };
-    await expect(captureAfterCanvasGpuCompletion(
-      { evaluate: () => Promise.reject(new Error("rejected completion")) } as unknown as Worker,
-      performance.now() + 100,
-      noCapture,
-    )).rejects.toThrow("rejected completion");
-    await expect(captureAfterCanvasGpuCompletion(
-      { evaluate: () => new Promise<never>(() => {}) } as unknown as Worker,
-      performance.now() + 10,
-      noCapture,
-    )).rejects.toThrow("exceeded the blue-pixel deadline");
-    expect(forbiddenCaptures).toBe(0);
     let boundedShots = 0;
     let forwardedTimeout: number | undefined;
     const timedOutPage = {
@@ -3058,17 +3027,6 @@ test(
     expect(boundedCapture.usable).toBe(false);
     expect(boundedShots).toBe(1);
     expect(forwardedTimeout).toBe(7);
-    let lateCaptures = 0;
-    await expect(captureAfterCanvasGpuCompletion(
-      { evaluate: () => Promise.resolve(1) } as unknown as Worker,
-      performance.now() + 200,
-      async () => {
-        ++lateCaptures;
-        await new Promise<void>((resolve) => setTimeout(resolve, 250));
-        return "late";
-      },
-    )).rejects.toThrow("exceeded the blue-pixel deadline");
-    expect(lateCaptures).toBe(1);
     expect(fatalMessages).toEqual([]);
   },
 );
@@ -3125,7 +3083,6 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   let probeRegion: ProbeRegion | null = null;
   let blueCss: PixelBounds | null = null;
   let screenshotTimeouts = 0;
-  const blueDeadlineAtMs = performance.now() + scaledMs(5_000);
   let lastBlueProbe:
     | {
       shot: Buffer;
@@ -3173,8 +3130,8 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
         page,
         state,
         beforeSample,
-        blueDeadlineAtMs,
-        (remainingMs) => captureEditorPage(page, remainingMs),
+        (timeoutMs) => captureEditorPage(page, timeoutMs),
+        { timedOut: (result) => result.timedOutCaptures > 0 },
       );
       if (capture === null) return 0;
       screenshotTimeouts += capture.timedOutCaptures;
@@ -3210,15 +3167,12 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
           maxY: blue.maxY - region.y,
           pixels: blue.pixels,
         };
-        if (performance.now() >= blueDeadlineAtMs) {
-          throw new Error("Basic Shapes blue-pixel acceptance exceeded the deadline");
-        }
         return blue.pixels;
       }
       return 0;
     }, {
       message: "the resize target must be visibly blue in the artboard capture",
-      timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
+      timeout: kStallGuardMs,
       intervals: [250, 400, 600],
     }).toBeGreaterThan(500);
   } catch (error) {
@@ -4343,52 +4297,6 @@ type AnimationRegionCaptureFn = (
 ) => Promise<AnimationRegionCapture>;
 
 /**
- * Upper bound on screenshot passes under one completion hold. While the hold is in place the app's
- * held frames never retire, so at most three new frames are admitted and every rejected pass saw
- * at least one of them; a few frames submitted before the hold can also still retire and free
- * slots, so seven is a conservative bound.
- */
-const kMaxCanvasQuiescencePasses = 7;
-
-/**
- * Longest a capture holds the app's canvas completions at once, from arming the hold to the end
- * of the screenshot. The app declares its presentation device lost once its oldest frame has
- * waited 5 s without observed progress (`PresentationSubmissionQueue::kCompletionDeadline`), so a
- * hold must end well before that. A capture whose GPU work or screenshot would take longer
- * releases the hold, lets the held frames retire and holds again. This bounds the hold only; it is
- * not a deadline for the capture.
- */
-const kMaxCanvasCompletionHoldMs = 3500;
-
-/** Part of the hold the settle wait may use, leaving the rest for the screenshot. */
-const kMaxCanvasSettleHoldMs = 2000;
-
-/** Shortest screenshot timeout worth starting under a hold; less than this re-holds instead. */
-const kMinHeldScreenshotMs = 250;
-
-/**
- * Settle \p owner's canvas writes, or return null once \p untilMs passes first. A settle failure
- * still propagates.
- */
-async function settleCanvasWritesUntil(
-  owner: Worker,
-  untilMs: number,
-): Promise<CanvasSettleResult | null> {
-  const settle = settleCanvasWrites(owner);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), Math.max(0, untilMs - performance.now()));
-  });
-  try {
-    return await Promise.race([settle, expired]);
-  } finally {
-    clearTimeout(timer);
-    // A settle abandoned at the bound may still reject later, for example when the page closes.
-    settle.catch(() => {});
-  }
-}
-
-/**
  * Page captures of the animation sample, each of a canvas frame whose GPU work has finished.
  *
  * A Firefox page capture can show a canvas frame whose submitted GPU work has not run yet: only
@@ -4427,75 +4335,16 @@ function createAnimationRegionCapture(
       const startedEpochMs = Date.now();
       const attempt: Record<string, unknown> = { startedEpochMs };
       captureAttempts.push(attempt);
-      const passes: Record<string, unknown>[] = [];
-      attempt.passes = passes;
       try {
-        // Only a pass in which no canvas frame was acquired or written between settling and the
-        // end of the screenshot is accepted. The hold bounds how many frames can arrive meanwhile;
-        // the capture deadline bounds how often a slow GPU makes it hold again.
-        for (;;) {
-          const heldAt = performance.now();
-          // Not raced against the deadline: a hold armed after the capture gave up would never be
-          // released.
-          const hold = await holdCanvasCompletions(owner);
-          let holdSpent = false;
-          try {
-            for (let pass = 1; pass <= kMaxCanvasQuiescencePasses && !holdSpent; ++pass) {
-              const record: Record<string, unknown> = { pass, settleDispatchEpochMs: Date.now() };
-              passes.push(record);
-              const settled = await settleCanvasWritesUntil(
-                owner,
-                Math.min(deadline, heldAt + kMaxCanvasSettleHoldMs),
-              );
-              if (performance.now() >= deadline) {
-                throw new Error("animation capture deadline exceeded");
-              }
-              const holdRemaining = heldAt + kMaxCanvasCompletionHoldMs - performance.now();
-              if (settled === null || holdRemaining < kMinHeldScreenshotMs) {
-                // The GPU is slow enough that holding on would approach the app's own completion
-                // deadline. Let the held frames retire, then hold again.
-                record.holdBudgetSpent = true;
-                holdSpent = true;
-                break;
-              }
-              record.settled = settled;
-              record.settledEpochMs = Date.now();
-              const remaining = deadline - performance.now();
-              const screenshotTimeout = Math.min(remaining, holdRemaining);
-              record.screenshotStartedEpochMs = Date.now();
-              let image: Buffer;
-              try {
-                image = await screenshot(screenshotTimeout);
-              } catch (error) {
-                if (screenshotTimeout >= remaining || !(error instanceof errors.TimeoutError)) {
-                  throw error;
-                }
-                record.holdBudgetSpent = true;
-                holdSpent = true;
-                break;
-              }
-              record.screenshotFinishedEpochMs = Date.now();
-              const after = await awaitBeforeBlueDeadline(readCanvasActivity(owner), deadline);
-              record.canvasActivityAfterScreenshot = after;
-              if (performance.now() >= deadline) {
-                throw new Error("animation capture deadline exceeded");
-              }
-              if (after.canvasSubmits === settled.canvasSubmits && after.frames === settled.frames) {
-                captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
-                return image;
-              }
-            }
-          } finally {
-            await hold.release().catch((error: unknown) => {
-              attempt.holdReleaseError = String(error);
-            });
-          }
-          if (!holdSpent) {
-            throw new Error(
-              "the canvas kept presenting new frames under the capture's completion hold",
-            );
-          }
-        }
+        // The shared gate holds the app's canvas completions, settles their GPU work, and accepts
+        // only a screenshot during which no canvas frame was acquired or written. The capture
+        // deadline is its time bound here.
+        const { result, passes } = await captureQuiescentCanvasFrame(owner, screenshot, {
+          untilMs: deadline,
+        });
+        attempt.passes = passes;
+        captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
+        return result;
       } catch (error) {
         attempt.error = String(error);
         throw error;

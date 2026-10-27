@@ -855,6 +855,7 @@ export async function readEditorPixelBounds(
 export async function readEditorResizePixelBounds(
   page: Page,
   region: CssRegion,
+  timeoutMs?: number,
 ): Promise<{
   blue: PixelBounds | null;
   teal: PixelBounds | null;
@@ -871,7 +872,7 @@ export async function readEditorResizePixelBounds(
   // A clipped Firefox WebGPU screenshot can omit the canvas, and even a full-
   // page screenshot can be uniformly black. Score only a capture that contains
   // the editor backdrop; the bounded helper retains the last PNG on failure.
-  const capture = await captureEditorPage(page);
+  const capture = await captureEditorPage(page, timeoutMs);
   const shot = capture.png;
   if (!capture.usable) {
     return {

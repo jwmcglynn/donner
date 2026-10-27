@@ -1,0 +1,158 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  captureQuiescentCanvas,
+  kMaxCanvasCompletionHoldMs,
+  kMaxCanvasQuiescencePasses,
+} from "./canvas-quiescent-capture.mjs";
+
+class FakeTimeout extends Error {}
+
+/**
+ * A scripted canvas owner on a manual clock. `script` lists one step per pass; each step names the
+ * frames that arrive while its screenshot runs and how long the settle and the screenshot take.
+ */
+function fakeOwner(script) {
+  const clock = { ms: 0 };
+  const counters = { canvasSubmits: 10, frames: 5 };
+  const log = [];
+  let holds = 0;
+  let step = 0;
+  const current = () => script[Math.min(step, script.length - 1)];
+  const probe = {
+    hold: async () => {
+      ++holds;
+      log.push(`hold ${holds}`);
+      return { release: async () => log.push(`release ${holds}`) };
+    },
+    settle: async () => {
+      const { settleMs = 0, settleError } = current();
+      if (settleError) throw new Error(settleError);
+      if (settleMs === Infinity) return new Promise(() => {});
+      clock.ms += settleMs;
+      return { ...counters };
+    },
+    activity: async () => ({ ...counters }),
+  };
+  const capture = async (timeoutMs) => {
+    const { screenshotMs = 10, framesDuring = 0 } = current();
+    ++step;
+    log.push(`shot timeout=${Math.round(timeoutMs)}`);
+    if (screenshotMs > timeoutMs) {
+      clock.ms += timeoutMs;
+      throw new FakeTimeout("screenshot timed out");
+    }
+    clock.ms += screenshotMs;
+    counters.frames += framesDuring;
+    counters.canvasSubmits += framesDuring;
+    return `image ${step}`;
+  };
+  const options = {
+    untilMs: 30_000,
+    now: () => clock.ms,
+    isTimeoutError: (error) => error instanceof FakeTimeout,
+  };
+  return { probe, capture, options, log, clock };
+}
+
+test("a quiescent screenshot is accepted under one hold", async () => {
+  const owner = fakeOwner([{}]);
+  const { result, passes } = await captureQuiescentCanvas(owner.probe, owner.capture, owner.options);
+  assert.equal(result, "image 1");
+  assert.equal(passes.length, 1);
+  assert.deepEqual(owner.log, ["hold 1", `shot timeout=${kMaxCanvasCompletionHoldMs}`, "release 1"]);
+});
+
+test("a screenshot during which a canvas frame arrives is retaken", async () => {
+  const owner = fakeOwner([{ framesDuring: 1 }, { framesDuring: 1 }, {}]);
+  const { result, passes } = await captureQuiescentCanvas(owner.probe, owner.capture, owner.options);
+  assert.equal(result, "image 3");
+  assert.deepEqual(passes.map((pass) => pass.held), [true, true, true]);
+  assert.equal(owner.log.filter((line) => line.startsWith("hold")).length, 1);
+});
+
+test("a canvas that keeps presenting under the hold fails instead of passing", async () => {
+  const owner = fakeOwner([{ framesDuring: 1 }]);
+  await assert.rejects(
+    captureQuiescentCanvas(owner.probe, owner.capture, owner.options),
+    /kept presenting new frames under the capture's completion hold/,
+  );
+  assert.equal(
+    owner.log.filter((line) => line.startsWith("shot")).length,
+    kMaxCanvasQuiescencePasses,
+  );
+  assert.equal(owner.log.at(-1), "release 1", "the hold is released on failure");
+});
+
+test("a screenshot slower than the hold is retaken without one, with no wall deadline", async () => {
+  // The screenshot takes far longer than a hold may last, as on a loaded runner. The first pass
+  // gives up its hold; the retake has the rest of the stall guard and is accepted on activity.
+  const owner = fakeOwner([{ screenshotMs: 12_000 }]);
+  const { result, passes } = await captureQuiescentCanvas(owner.probe, owner.capture, owner.options);
+  assert.equal(result, "image 2");
+  assert.deepEqual(passes.map((pass) => pass.held), [true, false]);
+  assert.deepEqual(owner.log.slice(0, 3), ["hold 1", "shot timeout=3500", "release 1"]);
+  assert.ok(owner.clock.ms > 15_000, "the accepted capture finished long after any old deadline");
+});
+
+test("a frame during an unheld retake sends the next attempt back under a hold", async () => {
+  const owner = fakeOwner([{ screenshotMs: 5000 }, { screenshotMs: 5000, framesDuring: 1 }, {}]);
+  const { result, passes } = await captureQuiescentCanvas(owner.probe, owner.capture, owner.options);
+  assert.equal(result, "image 3");
+  assert.deepEqual(passes.map((pass) => pass.held), [true, false, true]);
+});
+
+test("a settle that outlasts its share of the hold releases the hold and holds again", async () => {
+  // The first settle never answers; the gate stops waiting for it at the hold's settle share (a
+  // real timer of that length) instead of holding the app's completions any longer.
+  const owner = fakeOwner([{}]);
+  let settles = 0;
+  const settle = owner.probe.settle;
+  owner.probe.settle = () => (++settles === 1 ? new Promise(() => {}) : settle());
+  const { result } = await captureQuiescentCanvas(owner.probe, owner.capture, owner.options);
+  assert.equal(result, "image 1");
+  assert.equal(settles, 2);
+  assert.deepEqual(owner.log.filter((line) => !line.startsWith("shot")), [
+    "hold 1",
+    "release 1",
+    "hold 2",
+    "release 2",
+  ]);
+});
+
+test("only the stall guard ends a capture that never quiesces", async () => {
+  const owner = fakeOwner([{ screenshotMs: 40_000 }]);
+  await assert.rejects(
+    captureQuiescentCanvas(owner.probe, owner.capture, owner.options),
+    /no quiescent canvas screenshot before the stall guard/,
+  );
+  assert.ok(owner.clock.ms >= 30_000);
+});
+
+test("probe and capture failures propagate without a screenshot being scored", async () => {
+  const rejected = fakeOwner([{ settleError: "the surface frame probe is not installed" }]);
+  await assert.rejects(
+    captureQuiescentCanvas(rejected.probe, rejected.capture, rejected.options),
+    /probe is not installed/,
+  );
+  assert.equal(rejected.log.at(-1), "release 1");
+  const failing = fakeOwner([{}]);
+  await assert.rejects(
+    captureQuiescentCanvas(failing.probe, async () => {
+      throw new Error("screenshot failed");
+    }, failing.options),
+    /screenshot failed/,
+  );
+});
+
+test("a capture result that reports its own timeout counts as a timed-out screenshot", async () => {
+  const owner = fakeOwner([{}]);
+  let calls = 0;
+  const { result, passes } = await captureQuiescentCanvas(owner.probe, async (timeoutMs) => {
+    ++calls;
+    owner.clock.ms += calls === 1 ? timeoutMs : 10;
+    return { usable: calls > 1 };
+  }, { ...owner.options, timedOut: (capture) => !capture.usable });
+  assert.deepEqual(result, { usable: true });
+  assert.deepEqual(passes.map((pass) => pass.held), [true, false]);
+});
