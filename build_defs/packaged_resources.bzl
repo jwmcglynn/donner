@@ -39,8 +39,12 @@ packaged_resources_generate = rule(
     },
 )
 
-def packaged_resources(name, resources, header_output, group = "chrome", **kwargs):
-    """Keep stable resource names while moving all payload bytes into package data."""
+def packaged_resources(name, resources, header_output, group = "chrome", data = None, **kwargs):
+    """Generate resource metadata, with optional feature-selected package data.
+
+    By default the metadata target carries its complete resource tree. Callers may
+    override data when metadata types remain reachable in a feature-disabled graph.
+    """
     filename = header_output.split("/")[-1]
     prefix = "/".join(header_output.split("/")[:-1])
     packaged_resources_generate(
@@ -63,7 +67,7 @@ def packaged_resources(name, resources, header_output, group = "chrome", **kwarg
     cc_library(
         name = name,
         hdrs = [":" + name + "_resource_gen"],
-        data = [":" + name + "_resource_files"],
+        data = data if data != None else [":" + name + "_resource_files"],
         include_prefix = prefix,
         deps = ["//donner/base:packaged_resource"],
         **kwargs

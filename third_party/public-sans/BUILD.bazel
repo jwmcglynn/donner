@@ -4,6 +4,10 @@ packaged_resources(
     name = "public-sans",
     group = "fallback-font",
     header_output = "embed_resources/PublicSansFont.h",
+    data = select({
+        "//donner/svg/renderer:text_enabled": [":public-sans_resource_files"],
+        "//conditions:default": [],
+    }),
     resources = {
         "kPublicSansMediumOtf": "PublicSans-Medium.otf",
     },
