@@ -123,8 +123,11 @@ belongs to a later milestone (1b, 1c, or 2).
       path, which pin the post-textPath translation;
     - `<textPath dx="5">ab</textPath><tspan y="50">c</tspan>`, and the same with plain text between
       the path and the `y`-only `tspan`, which pin the flat pen and running shift through a path;
-    - optionally, with a kerning font, cross-span kerning into a right-to-left shaped chunk that is
-      not first in its span and has an absolute `x`.
+    - `<tspan dx="7">a</tspan><textPath ...>bc</textPath>`, where `b` and `c` are not moved by the
+      7, which pins the separate path-local shift;
+    - optionally, with a kerning font, cross-span kerning from a right-to-left shaped predecessor
+      (whose last stored glyph is its logical first character) into a following chunk, including a
+      right-to-left shaped chunk that is not first in its span and has an absolute `x`.
   - [ ] Measure the editor package against every gate, including the 46,000 byte function body
         and 12,880,000 byte total raw limits, since the restructured layout adds code before
         SheenBidi does.
@@ -426,17 +429,23 @@ own red-first test, not part of this design. Blink differs for unpositioned `rtl
 anchoring uses the first logical character's left edge as the anchor point, so it is not a pixel
 oracle there.
 
-Around a `textPath`, Milestone 1 keeps today's behavior exactly: nothing resets at the path's end.
-The flat pen and the running shift continue through and after the path exactly as today's flat pen
-does, in-path `dx` included (`resetTextPathState` clears only path staging). The third mechanism,
-`ApplyPostTextPathTranslations`, runs last and repositions only the leading plain text after the
-path, up to the first cluster with an absolute `x` or `y`, onto the path's end point, as described
-in [Current behavior](#current-behavior); a later `y`-only chunk is not translated and keeps the
-flat pen position. Pin tests cover `<textPath dx="5">ab</textPath><tspan y="50">c</tspan>` and the
-same with plain text between the path and the `y`-only `tspan`. Resetting the running shift at a
-path boundary, as Blink does, would be a separate red-first change; it is a possible follow-up, not
-planned work. `text/text/x-and-y-with-multiple-values-and-arabic-text` exercises the `ltr` case and
-stays unchanged.
+Around a `textPath`, Milestone 1 keeps today's two shifts exactly. On-path characters use a
+path-local shift: `StageTextPathRun` accumulates each character's `dx` into the path pen
+(`pathStaging_.advance`) and its `dy` into `pathStaging_.dy`, each glyph sits at that pen minus its
+cluster's path offset, and `resetTextPathState` zeroes both at every path, so the path-local shift
+starts at zero on both axes at each `textPath` start and accumulates across that path's spans. The
+flat pen's shift is separate: the flat pen and its running shift continue through and after the
+path, in-path `dx` included, and nothing resets them at the path's start or end. A preceding `dx`
+therefore never moves on-path glyphs: in `<tspan dx="7">a</tspan><textPath ...>bc</textPath>`, `b`
+and `c` are not moved by the 7. The third mechanism, `ApplyPostTextPathTranslations`, runs last and
+repositions only the leading plain text after the path, up to the first cluster with an absolute `x`
+or `y`, onto the path's end point, as described in [Current behavior](#current-behavior); a later
+`y`-only chunk is not translated and keeps the flat pen position. Pin tests cover a `textPath` with
+`dx="5"` over `ab` followed by `<tspan y="50">c</tspan>`, the same with plain text between the path
+and the `y`-only `tspan`, and the preceding-`dx` case above. Resetting the flat pen's running shift
+at a path boundary, as Blink does, would be a separate red-first change; it is a possible follow-up,
+not planned work. `text/text/x-and-y-with-multiple-values-and-arabic-text` exercises the `ltr` case
+and stays unchanged.
 
 ### Properties
 
@@ -552,24 +561,30 @@ The layout follows the SVG 2 split between CSS layout and positioning:
    From Milestone 2 it walks shaping items of each line in L2 order; glyphs of a right-to-left item
    are already in visual order. Each glyph gets a pen position; letter spacing, word spacing,
    kerning, and font metrics apply as today. Milestone 1 keeps today's cross-span and cross-chunk
-   kerning (`resolveCrossKern` and `resolveCrossChunkKern`): the kern of the previous chunk's or
-   span's last character against this chunk's first logical character, added at stored glyph 0
-   unless that glyph has an absolute position. In a right-to-left shaped chunk that is not first in
-   its span, stored glyph 0 is not the boundary glyph, so the kern still applies there despite the
-   chunk's absolute `x`; Milestone 1c lists any change its boundary fix makes to this. From
-   Milestone 2, cross-span kerning applies only between glyphs adjacent both logically and visually
-   in one level run. Each character's CSS position is its left edge and its advance is its cell
-   width.
+   kerning (`resolveCrossKern` and `resolveCrossChunkKern`): the kern of the character of the
+   previous chunk's or span's last stored glyph (`updateChunkPredecessor` decodes
+   `positioningClusters.back()`, and `previousSpanCodepoint_` takes the last glyph's character in
+   storage order) against this chunk's first logical character, added at stored glyph 0 unless that
+   glyph has an absolute position. In a right-to-left shaped chunk that is not first in its span,
+   stored glyph 0 is not the boundary glyph, so the kern still applies there despite the chunk's
+   absolute `x`. For a right-to-left shaped predecessor, its last stored glyph is its logical first
+   character, so that character, not the logically last one, is the kerning predecessor.
+   `resetTextPathState` also clears the span predecessor at each path. Milestone 1c lists any change
+   its boundary fix makes to this, and Milestone 2 lists any change from switching to logical and
+   visual adjacency. From Milestone 2, cross-span kerning applies only between glyphs adjacent both
+   logically and visually in one level run. Each character's CSS position is its left edge and its
+   advance is its cell width.
 2. **Relative shifts in logical order (Milestone 2).** Walk the character table in logical order,
    accumulating `dx` and `dy` into a running shift, and add each character's shift to its glyphs.
-   The shift resets per axis: the x shift at an absolute `x` and the y shift at an absolute `y`. It
-   does not reset at a `textPath` start or end, as today's flat pen does not (see the current text
-   position under [Units of work](#units-of-work)); Blink's reset there is a possible follow-up. The
-   SVG 2 step itself does not reset; the per-axis reset is Blink's fix for
-   [svgwg#846](https://github.com/w3c/svgwg/issues/846) and matches today's pen behavior, so a span
-   with `dy="10"` followed by a span with an absolute `x` keeps the second span 10 units down, as it
-   is today. Logical accumulation is resvg's `resolve_relative_shifts` and Blink's
-   `AdjustPositionsDxDy`. For left-to-right text it equals today's pen behavior; inside
+   The shift resets per axis: the x shift at an absolute `x` and the y shift at an absolute `y`. Two
+   shifts exist, as today: the flat pen's shift does not reset at a `textPath` start or end, while
+   on-path characters use a path-local shift that starts at zero on both axes at each `textPath`
+   start (see the current text position under [Units of work](#units-of-work)); Blink's reset of the
+   flat shift there is a possible follow-up. The SVG 2 step itself does not reset; the per-axis
+   reset is Blink's fix for [svgwg#846](https://github.com/w3c/svgwg/issues/846) and matches today's
+   pen behavior, so a span with `dy="10"` followed by a span with an absolute `x` keeps the second
+   span 10 units down, as it is today. Logical accumulation is resvg's `resolve_relative_shifts` and
+   Blink's `AdjustPositionsDxDy`. For left-to-right text it equals today's pen behavior; inside
    right-to-left shaped chunks it differs from today, which accumulates in glyph order, so Milestone
    1 keeps glyph order there and Milestone 2 switches with a red-first test. `rotate` is per logical
    character.
