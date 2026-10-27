@@ -96,12 +96,16 @@ export async function captureQuiescentCanvas(probe, capture, options) {
   const retakeUnheld = options.retakeUnheld ?? true;
   const { untilMs } = options;
   const passes = options.passes ?? [];
-  const stalled = () =>
-    new Error(
-      `no quiescent canvas screenshot within the capture's time bound: ${
-        JSON.stringify(passes.slice(-8))
-      }`,
+  const stalled = () => {
+    const exhausted = passes.filter((pass) => pass.holdExhausted).length;
+    return new Error(
+      `no quiescent canvas screenshot within the capture's time bound`
+        + (exhausted > 0
+          ? ` (the canvas kept presenting new frames under ${exhausted} completion holds)`
+          : "")
+        + `: ${JSON.stringify(passes.slice(-8))}`,
     );
+  };
 
   // One pass: settle, screenshot, compare activity. Its outcome is "accepted", "activity" (a
   // canvas frame arrived meanwhile), or the stage that ran out of time: "settle" or "screenshot".
@@ -143,7 +147,8 @@ export async function captureQuiescentCanvas(probe, capture, options) {
 
   let unheld = false;
   for (;;) {
-    if (now() >= untilMs) throw stalled();
+    // A held pass needs room for its shortest screenshot before the time bound.
+    if (now() >= untilMs - (unheld ? 0 : kMinHeldScreenshotMs)) throw stalled();
     if (unheld) {
       // The previous held screenshot outlasted the hold. Retake it without one; a canvas frame
       // during it still rejects it, and the next attempt holds again.
@@ -182,11 +187,10 @@ export async function captureQuiescentCanvas(probe, capture, options) {
     await hold.release();
     if (outcome === "accepted") return { result: accepted, passes };
     if (outcome === "activity") {
-      throw new Error(
-        `the canvas kept presenting new frames under the capture's completion hold: ${
-          JSON.stringify(passes.slice(-kMaxCanvasQuiescencePasses))
-        }`,
-      );
+      // More frames arrived under this hold than it can admit, for example frames whose
+      // completions were requested before it was armed. Hold again; the time bound still ends a
+      // canvas that never stops presenting, and no screenshot is accepted meanwhile.
+      passes.push({ holdExhausted: true });
     }
     // The GPU or the screenshot is slow enough that holding on would approach the app's own
     // completion deadline. The hold is released; hold again, or retake the screenshot unheld.

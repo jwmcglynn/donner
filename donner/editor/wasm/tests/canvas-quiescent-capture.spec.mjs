@@ -5,6 +5,7 @@ import {
   kHeldRoundTripReserveMs,
   kMaxCanvasCompletionHoldMs,
   kMaxCanvasQuiescencePasses,
+  kMinHeldScreenshotMs,
 } from "./canvas-quiescent-capture.mjs";
 
 const kHeldShotMs = kMaxCanvasCompletionHoldMs - kHeldRoundTripReserveMs;
@@ -74,17 +75,29 @@ test("a screenshot during which a canvas frame arrives is retaken", async () => 
   assert.equal(owner.log.filter((line) => line.startsWith("hold")).length, 1);
 });
 
-test("a canvas that keeps presenting under the hold fails instead of passing", async () => {
-  const owner = fakeOwner([{ framesDuring: 1 }]);
+test("a canvas that keeps presenting under the hold holds again and never passes", async () => {
+  const owner = fakeOwner([{ framesDuring: 1, screenshotMs: 100 }]);
   await assert.rejects(
     captureQuiescentCanvas(owner.probe, owner.capture, owner.options),
-    /kept presenting new frames under the capture's completion hold/,
+    /kept presenting new frames under \d+ completion holds/,
   );
+  const holds = owner.log.filter((line) => line.startsWith("hold")).length;
+  assert.ok(holds > 1, "an exhausted hold is released and armed again");
   assert.equal(
-    owner.log.filter((line) => line.startsWith("shot")).length,
-    kMaxCanvasQuiescencePasses,
+    owner.log.filter((line) => line.startsWith("release")).length,
+    holds,
+    "every hold is released",
   );
-  assert.equal(owner.log.at(-1), "release 1", "the hold is released on failure");
+  assert.ok(owner.clock.ms >= 30_000 - kMinHeldScreenshotMs, "only the time bound ends it");
+});
+
+test("frames that outrun one hold do not fail a capture that quiesces under the next", async () => {
+  const script = Array.from({ length: kMaxCanvasQuiescencePasses }, () => ({ framesDuring: 1 }));
+  const owner = fakeOwner([...script, {}]);
+  const { result, passes } = await captureQuiescentCanvas(owner.probe, owner.capture, owner.options);
+  assert.equal(result, `image ${kMaxCanvasQuiescencePasses + 1}`);
+  assert.equal(passes.filter((pass) => pass.holdExhausted).length, 1);
+  assert.equal(owner.log.filter((line) => line.startsWith("hold")).length, 2);
 });
 
 test("a screenshot slower than the hold is retaken without one, with no wall deadline", async () => {
