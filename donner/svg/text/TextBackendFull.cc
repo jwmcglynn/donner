@@ -957,7 +957,9 @@ RunScriptProperties DetectRunScript(const char* chunkData, size_t byteLength, bo
 RunScriptProperties DetectRangeScriptInContext(std::string_view spanText,
                                                const TextBackend::ShapingContext& context,
                                                size_t byteOffset, size_t byteLength,
-                                               bool isVertical, TextOrientation textOrientation) {
+                                               bool isVertical, TextOrientation textOrientation,
+                                               std::size_t& detectedContextBytes) {
+  detectedContextBytes += context.byteLength;
   const RunScriptProperties contextProperties = DetectRunScript(
       spanText.data() + context.byteOffset, context.byteLength, isVertical, textOrientation);
   RunScriptProperties range =
@@ -978,10 +980,11 @@ RunScriptProperties DetectRangeScriptInContext(std::string_view spanText,
 RunScriptProperties DetectShapingScript(std::string_view spanText,
                                         const TextBackend::ShapingContext* context,
                                         size_t byteOffset, size_t byteLength, bool isVertical,
-                                        TextOrientation textOrientation) {
+                                        TextOrientation textOrientation,
+                                        std::size_t& detectedContextBytes) {
   if (context) {
     return DetectRangeScriptInContext(spanText, *context, byteOffset, byteLength, isVertical,
-                                      textOrientation);
+                                      textOrientation, detectedContextBytes);
   }
   return DetectRunScript(spanText.data() + byteOffset, byteLength, isVertical, textOrientation);
 }
@@ -1240,7 +1243,8 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
   // Detect direction and script from the text chunk.
   const char* chunkData = spanText.data() + byteOffset;
   const auto scriptProperties =
-      DetectShapingScript(spanText, context, byteOffset, byteLength, isVertical, textOrientation);
+      DetectShapingScript(spanText, context, byteOffset, byteLength, isVertical, textOrientation,
+                          detectedContextBytes_);
   const bool useVerticalShaping = scriptProperties.vertical;
   const auto detectedDirection = scriptProperties.direction;
   const auto detectedScript = scriptProperties.script;

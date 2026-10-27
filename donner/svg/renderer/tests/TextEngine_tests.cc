@@ -978,6 +978,125 @@ TEST(TextEngineTest, FallbackItemsInRightToLeftChunkMirrorNeutralsInVisualOrder)
   EXPECT_THAT(runs[0].glyphs, ElementsAre(GlyphIndexIs(openParen), _, _, GlyphIndexIs(closeParen)));
 }
 
+// Shaping each fallback item in its chunk's context must not rescan the whole chunk per item: a
+// chunk that alternates faces on every character detects its context's direction and script once.
+TEST(TextEngineTest, AlternatingFallbackChunkDetectsItsContextOnce) {
+  for (const int repeats : {50, 200}) {
+    SCOPED_TRACE(testing::Message() << "repeats=" << repeats);
+    Registry registry;
+    FontManager fontManager(registry);
+    ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+    ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "MPLUS1p-Regular.ttf", "Mplus 1p")));
+    auto backend = std::make_unique<TextBackendFull>(fontManager, registry);
+    const TextBackendFull& probe = *backend;
+    TextEngine engine(fontManager, registry, std::move(backend));
+
+    std::string text;
+    for (int index = 0; index < repeats; ++index) {
+      text += "a\xE6\x97\xA5";  // a, then a CJK character only the fallback face covers
+    }
+    components::ComputedTextComponent computed;
+    computed.spans.push_back(MakeSpan(text));
+    TextLayoutParams params = MakeTextParams(20.0);
+    params.fontFamilies = {RcString("Noto Sans")};
+    const auto runs = engine.layout(computed, params);
+    ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(static_cast<size_t>(2 * repeats)))));
+    EXPECT_THAT(probe.detectedContextBytesForTesting(), testing::Le(text.size()));
+  }
+}
+
+// European digits in a right-to-left chunk keep their left-to-right order when they fall in a
+// different face's item than the Arabic word.
+TEST(TextEngineTest, DigitsInRightToLeftFallbackChunkKeepLeftToRightOrder) {
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri")));
+
+  // Meem at byte 0, reh at 2, space at 4, "1" at 5, "2" at 6.
+  const auto runs =
+      LayOutFull(registry, fontManager, "\xD9\x85\xD8\xB1 12", {RcString("Noto Sans")});
+  ASSERT_THAT(runs, SizeIs(1));
+  std::optional<double> one;
+  std::optional<double> two;
+  for (const TextGlyph& glyph : runs[0].glyphs) {
+    if (glyph.cluster == 5) {
+      one = glyph.xPosition;
+    } else if (glyph.cluster == 6) {
+      two = glyph.xPosition;
+    }
+  }
+  ASSERT_THAT(one, testing::Optional(_));
+  ASSERT_THAT(two, testing::Optional(_));
+  EXPECT_THAT(*one, Lt(*two));
+}
+
+// Per-character positions split right-to-left text into one-codepoint chunks, each shaped left to
+// right on its own. A chunk that falls back whole to another face is shaped the same way as when
+// that face is the span's own.
+TEST(TextEngineTest, OneCodepointFallbackChunkShapesLikeThePrimaryFace) {
+  Registry registry;
+  FontManager fontManager(registry);
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans")));
+  ASSERT_TRUE(static_cast<bool>(LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri")));
+
+  const auto layOut = [&](const char* family) {
+    TextEngine engine(fontManager, registry,
+                      std::make_unique<TextBackendFull>(fontManager, registry));
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("\xD9\x87\xD8\xA7\xD9\x84\xD9\x88");  // four Arabic letters
+    for (const double x : {10.0, 50.0, 90.0, 130.0}) {
+      span.xList.push_back(Lengthd(x, Lengthd::Unit::None));
+    }
+    span.yList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    text.spans.push_back(std::move(span));
+    TextLayoutParams params = MakeTextParams(40.0);
+    params.fontFamilies = {RcString(family)};
+    std::vector<std::tuple<int, double, double>> glyphs;
+    for (const TextRun& run : engine.layout(text, params)) {
+      for (const TextGlyph& glyph : run.glyphs) {
+        glyphs.emplace_back(glyph.glyphIndex, glyph.xPosition, glyph.xAdvance);
+      }
+    }
+    return glyphs;
+  };
+
+  const auto primary = layOut("Amiri");
+  ASSERT_THAT(primary, SizeIs(4));
+  EXPECT_THAT(layOut("Noto Sans"), testing::ContainerEq(primary));
+}
+
+// A range shaped in context joins with its neighbors: the middle seen of three takes the same
+// medial glyph as when the whole word is shaped at once, not its isolated form.
+TEST(TextEngineTest, RangeShapedInContextJoinsWithItsNeighbors) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle amiri = LoadResvgFont(fontManager, "Amiri-Regular.ttf", "Amiri");
+  ASSERT_TRUE(static_cast<bool>(amiri));
+  TextBackendFull backend(fontManager, registry);
+
+  const std::string word = "\xD8\xB3\xD8\xB3\xD8\xB3";  // seen seen seen, at bytes 0, 2 and 4
+  const auto whole = backend.shapeRun(amiri, 40.0f, word, 0, word.size(), false,
+                                      TextOrientation::Mixed, FontVariant::Normal, false);
+  int wholeMiddle = 0;
+  for (const auto& glyph : whole.glyphs) {
+    if (glyph.cluster == 2) {
+      wholeMiddle = glyph.glyphIndex;
+    }
+  }
+  ASSERT_THAT(wholeMiddle, Gt(0));
+
+  const TextBackend::ShapingContext context{0, word.size()};
+  const auto middle = backend.shapeRunInContext(amiri, 40.0f, word, context, 2, 2, false,
+                                                TextOrientation::Mixed, FontVariant::Normal, true);
+  const auto alone = backend.shapeRun(amiri, 40.0f, word, 2, 2, false, TextOrientation::Mixed,
+                                      FontVariant::Normal, false);
+  ASSERT_THAT(alone.glyphs, SizeIs(1));
+  ASSERT_THAT(alone.glyphs[0].glyphIndex, Not(wholeMiddle));  // the isolated form differs
+  EXPECT_THAT(middle.glyphs,
+              ElementsAre(Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, wholeMiddle)));
+}
+
 // A fallback item inside a vertical chunk that contains upright CJK is shaped the way its chunk
 // is: vertically, with sideways Latin advanced by its unkerned horizontal advance.
 TEST(TextEngineTest, FallbackLatinItemInVerticalChunkUsesTheChunkVerticalShaping) {

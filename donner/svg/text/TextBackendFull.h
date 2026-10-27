@@ -71,6 +71,10 @@ public:
   /// callbacks decode embedded bitmap strikes.
   [[nodiscard]] bool embeddedBitmapLoadingDisabledForTesting(FontHandle font) const;
 
+  /// Total bytes of shaping context scanned to detect direction and script, a test seam that
+  /// bounds the work shaping a chunk's ranges in context does.
+  [[nodiscard]] std::size_t detectedContextBytesForTesting() const { return detectedContextBytes_; }
+
 private:
   ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
                          size_t byteOffset, size_t byteLength, bool isVertical,
@@ -82,6 +86,8 @@ private:
 
   FontManager& fontManager_;
   Registry& registry_;
+  /// See \ref detectedContextBytesForTesting.
+  mutable std::size_t detectedContextBytes_ = 0;
 
   /// Cache entry stored on the font entity.
   struct HbFontEntry;
