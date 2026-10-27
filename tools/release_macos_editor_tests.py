@@ -1,6 +1,7 @@
 """Contracts for a retained native editor artifact, separate from the Wasm editor."""
 
 import json
+import struct
 import unittest
 
 from tools import bcr_preflight, release_candidate
@@ -79,10 +80,18 @@ class MacosEditorPackageTest(unittest.TestCase):
         checksum = native.release_cli.sha256(payload).hexdigest()
         resource_path = f"assets/{checksum}.ttf"
         (resources / resource_path).write_bytes(payload)
+        woff2 = (Path(__file__).parents[1] /
+                 "donner/base/fonts/testdata/valid-001.woff2").read_bytes()
+        woff2_checksum = native.release_cli.sha256(woff2).hexdigest()
+        woff2_path = f"assets/{woff2_checksum}.woff2"
+        (resources / woff2_path).write_bytes(woff2)
         (resources / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "assets": [{
             "id": "fixture.font", "sha256": checksum, "encodedSize": len(payload),
             "decodedSize": len(payload), "mediaType": "font/ttf", "group": "fallback",
-            "path": resource_path}]}))
+            "path": resource_path}, {
+            "id": "fixture.catalog", "sha256": woff2_checksum, "encodedSize": len(woff2),
+            "decodedSize": struct.unpack_from(">I", woff2, 16)[0], "mediaType": "font/woff2",
+            "group": "catalog", "path": woff2_path}]}))
         (self.app / "Contents/MacOS/Donner").chmod(0o755)
         self.notice = self.base / "notice.txt"
         self.notice.write_text(native.release_cli.NOTICE_HEADER + "editor\n\nPackage: fixture\n")

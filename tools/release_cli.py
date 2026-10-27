@@ -10,6 +10,7 @@ import io
 import ipaddress
 import json
 import stat
+import struct
 import tarfile
 import zipfile
 from pathlib import Path
@@ -263,7 +264,9 @@ def _validate_resources(files: dict[str, bytes]) -> str:
     identities = set()
     for asset in document["assets"]:
         _validate_asset(asset, files, expected, identities)
-    if set(files) != expected or sum(map(len, files.values())) > MAX_PACKAGE_BYTES:
+    decoded_bytes = sum(asset["decodedSize"] for asset in document["assets"])
+    if (set(files) != expected or sum(map(len, files.values())) > MAX_PACKAGE_BYTES
+            or decoded_bytes > MAX_PACKAGE_BYTES):
         raise ValueError("release CLI resource inventory or aggregate byte limit is invalid")
     return sha256(manifest).hexdigest()
 
@@ -288,11 +291,30 @@ def _validate_asset(asset: object, files: dict[str, bytes], expected: set[str],
         raise ValueError("release CLI resource type or group is invalid")
     name = f"donner-assets/{path}"
     payload = files.get(name, b"")
-    if (len(payload) != asset["encodedSize"] or asset["decodedSize"] != len(payload)
-            or sha256(payload).hexdigest() != checksum):
+    if (len(payload) != asset["encodedSize"] or sha256(payload).hexdigest() != checksum):
         raise ValueError("release CLI resource digest or length does not match")
+    _check_decoded_resource_size(asset, payload)
     identities.add(identity)
     expected.add(name)
+
+
+def _check_decoded_resource_size(asset: dict, payload: bytes) -> None:
+    is_woff2 = asset["mediaType"] == "font/woff2" or asset["path"].endswith(".woff2")
+    if not is_woff2:
+        if asset["decodedSize"] != len(payload):
+            raise ValueError("release raw resource decoded length does not match")
+        return
+    if (asset["mediaType"] != "font/woff2" or not asset["path"].endswith(".woff2")
+            or len(payload) < 48 or payload[:4] != b"wOF2"):
+        raise ValueError("release WOFF2 resource header or type is invalid")
+    encoded_size, table_count, reserved, sfnt_size, compressed_size = struct.unpack_from(
+        ">IHHII", payload, 8)
+    # totalSfntSize is a header reference, not a decoder allocation bound. Actual decoding
+    # and its workspace/output limits remain the font decoder's responsibility.
+    if (encoded_size != len(payload) or not table_count or reserved
+            or not 0 < compressed_size <= len(payload) - 48
+            or sfnt_size != asset["decodedSize"]):
+        raise ValueError("release WOFF2 resource header lengths do not match the manifest")
 
 
 def _write_archive(destination: Path, files: dict[str, bytes]) -> None:

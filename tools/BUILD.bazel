@@ -751,7 +751,10 @@ py_test(
     name = "release_macos_editor_tests",
     size = "small",
     srcs = ["release_macos_editor_tests.py"],
-    data = ["BUILD.bazel"],
+    data = [
+        "BUILD.bazel",
+        "//donner/base/fonts:testdata/valid-001.woff2",
+    ],
     deps = [
         ":bcr_preflight",
         ":release_candidate",
@@ -788,6 +791,7 @@ py_test(
     name = "release_cli_tests",
     size = "small",
     srcs = ["release_cli_tests.py"],
+    data = ["//donner/base/fonts:testdata/valid-001.woff2"],
     deps = [":release_cli"],
 )
 

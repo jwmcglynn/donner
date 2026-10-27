@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -130,6 +131,8 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
             "wrong digest": lambda item: item["assets"][0].update(sha256="0" * 64),
             "wrong length": lambda item: item["assets"][0].update(encodedSize=1),
             "decoded overflow": lambda item: item["assets"][0].update(decodedSize=2**32),
+            "raw decoded mismatch": lambda item: item["assets"][0].update(
+                decodedSize=item["assets"][0]["encodedSize"] + 1),
             "boolean size": lambda item: item["assets"][0].update(encodedSize=True),
             "duplicate identity": lambda item: item["assets"].append(item["assets"][0]),
         }
@@ -158,6 +161,74 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         extra.symlink_to(asset)
         with self.assertRaisesRegex(ValueError, "symlink"):
             release_cli._resource_files(self.resources)
+
+    def _woff2_resource(self, payload: bytes, decoded_size: int) -> dict[str, bytes]:
+        checksum = release_cli.sha256(payload).hexdigest()
+        path = f"assets/{checksum}.woff2"
+        manifest = {"schemaVersion": 1, "assets": [{
+            "id": "fixture.woff2", "sha256": checksum, "encodedSize": len(payload),
+            "decodedSize": decoded_size, "mediaType": "font/woff2", "group": "catalog",
+            "path": path}]}
+        return {release_cli.MANIFEST: json.dumps(manifest).encode(),
+                "donner-assets/" + path: payload}
+
+    def test_valid_compressed_woff2_preserves_distinct_encoded_and_decoded_sizes(self) -> None:
+        payload = (Path(__file__).parents[1] /
+                   "donner/base/fonts/testdata/valid-001.woff2").read_bytes()
+        decoded_size = struct.unpack_from(">I", payload, 16)[0]
+        self.assertGreater(decoded_size, len(payload))
+        files = self._woff2_resource(payload, decoded_size)
+        self.assertEqual(release_cli._validate_resources(files),
+                         release_cli.sha256(files[release_cli.MANIFEST]).hexdigest())
+        for name, content in files.items():
+            destination = self.resources / name.removeprefix("donner-assets/")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(content)
+        for asset in (self.resources / "assets").glob("*.ttf"):
+            asset.unlink()
+        expected = self._package("darwin-arm64")
+        self.assertEqual(self._verify("darwin-arm64"), expected)
+        archived = release_cli._read_archive(
+            self.artifacts / release_cli.PLATFORMS["darwin-arm64"])
+        self.assertEqual(archived[next(name for name in files if name.endswith(".woff2"))], payload)
+
+    def test_woff2_header_manifest_and_size_negative_controls(self) -> None:
+        original = (Path(__file__).parents[1] /
+                    "donner/base/fonts/testdata/valid-001.woff2").read_bytes()
+        decoded = struct.unpack_from(">I", original, 16)[0]
+        for label, offset, value in (("encoded length", 8, len(original) + 4),
+                                     ("decoded reference", 16, decoded + 4),
+                                     ("decoded overflow", 16, release_cli.MAX_RESOURCE_BYTES + 4),
+                                     ("compressed overflow", 20, len(original) + 4)):
+            with self.subTest(label=label):
+                payload = bytearray(original)
+                struct.pack_into(">I", payload, offset, value)
+                with self.assertRaisesRegex(ValueError, "header lengths"):
+                    release_cli._validate_resources(self._woff2_resource(bytes(payload), decoded))
+        with self.assertRaisesRegex(ValueError, "resource size"):
+            release_cli._validate_resources(self._woff2_resource(
+                original, release_cli.MAX_RESOURCE_BYTES + 4))
+        with self.assertRaisesRegex(ValueError, "header or type"):
+            release_cli._validate_resources(self._woff2_resource(original[:40], decoded))
+        with self.assertRaisesRegex(ValueError, "header lengths"):
+            release_cli._validate_resources(self._woff2_resource(original, len(original)))
+        invalid_signature = b"bad!" + original[4:]
+        with self.assertRaisesRegex(ValueError, "header or type"):
+            release_cli._validate_resources(self._woff2_resource(invalid_signature, decoded))
+
+    def test_compressed_assets_keep_a_separate_aggregate_decoded_budget(self) -> None:
+        payload = (Path(__file__).parents[1] /
+                   "donner/base/fonts/testdata/valid-001.woff2").read_bytes()
+        decoded = struct.unpack_from(">I", payload, 16)[0]
+        files = self._woff2_resource(payload, decoded)
+        document = json.loads(files[release_cli.MANIFEST])
+        document["assets"].append({**document["assets"][0], "id": "fixture.alias"})
+        files[release_cli.MANIFEST] = json.dumps(document).encode()
+        self.assertLess(sum(map(len, files.values())), 2 * decoded - 1)
+        with mock.patch.object(release_cli, "MAX_PACKAGE_BYTES", 2 * decoded - 1):
+            with self.assertRaisesRegex(ValueError, "aggregate byte limit"):
+                release_cli._validate_resources(files)
+
 
     def test_archive_member_names_links_modes_and_duplicates_fail_closed(self) -> None:
         import tarfile
