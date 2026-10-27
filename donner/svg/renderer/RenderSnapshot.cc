@@ -434,6 +434,10 @@ void LoadPreparedTextFonts(PreparedTextDraw& prepared, const DrawTextCommand& co
     for (TextGlyph& glyph : prepared.runs[i].glyphs) {
       if (glyphFont != command.preparedGlyphFonts.end() && glyphFont->first == glyphOrdinal) {
         glyph.font = LoadSnapshotFont(manager, glyphFont->second, domain);
+        if (!glyph.font) {
+          // Without its own face, the glyph id would select an unrelated glyph of the run's face.
+          glyph.glyphIndex = 0;
+        }
         ++glyphFont;
       }
       ++glyphOrdinal;
