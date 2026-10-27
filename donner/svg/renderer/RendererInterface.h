@@ -1032,6 +1032,20 @@ struct ImageParams {
 };
 
 /**
+ * Returns \p params with the sampling policy for a bitmap blit, such as a compositor layer or
+ * tile raster. `auto` resolves to `smooth` there: the quality kernel applies to `<image>`
+ * content, and bitmap blits keep bilinear sampling.
+ *
+ * @param params Placement parameters passed to `drawBitmap`.
+ */
+inline ImageParams BitmapBlitImageParams(ImageParams params) {
+  if (params.imageRendering == ImageRendering::Auto && !params.imageRenderingPixelated) {
+    params.imageRendering = ImageRendering::Smooth;
+  }
+  return params;
+}
+
+/**
  * Parameters describing how text is drawn and outlined.
  */
 struct TextParams {
@@ -1281,7 +1295,7 @@ public:
     if (image.data.empty()) {
       return;
     }
-    drawImage(image, params);
+    drawImage(image, BitmapBlitImageParams(params));
   }
 
   /**

@@ -29,6 +29,22 @@ TEST(ImageSamplingTest, ExactPayloadValidationRejectsMalformedDimensionsAndLengt
                                    std::numeric_limits<int>::max()));
 }
 
+TEST(ImageSamplingTest, ImageRenderingSelectsMitchellCubicForQualityValues) {
+  using Kernel = ImageSamplingKernel;
+  const std::vector<ImageRendering> values = {
+      ImageRendering::Auto,       ImageRendering::OptimizeSpeed, ImageRendering::OptimizeQuality,
+      ImageRendering::CrispEdges, ImageRendering::Pixelated,     ImageRendering::Smooth,
+      ImageRendering::HighQuality};
+  std::vector<ImageSamplingKernel> kernels;
+  for (ImageRendering value : values) {
+    kernels.push_back(ImageSamplingKernelFor(value));
+  }
+
+  EXPECT_THAT(kernels, ElementsAre(Kernel::MitchellCubic, Kernel::Nearest, Kernel::MitchellCubic,
+                                   Kernel::Nearest, Kernel::PixelatedSmooth, Kernel::Bilinear,
+                                   Kernel::MitchellCubic));
+}
+
 TEST(ImageSamplingTest, RejectsTrailingSourceBytes) {
   const std::vector<std::uint8_t> pixels = {255, 0, 0, 255, 17};
 

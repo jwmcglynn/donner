@@ -584,6 +584,7 @@ class ParityReportTests(unittest.TestCase):
             ".includeAntiAliasingDifferences().enableGoldenUpdateFromEnv()"
         )
         for params in (chained, "WithMaxPixels(10, \"AA\")", "Params{}", "Params()",
+                       "ResvgV049Reference()",
                        "Params::WithGoldenOverride(\"g.png\", 0.1f, \"why\")", "{}"):
             with self.subTest(params=params):
                 report = parity_report.build_report(

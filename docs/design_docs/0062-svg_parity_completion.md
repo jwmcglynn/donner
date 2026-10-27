@@ -292,7 +292,8 @@ inspection changes several classifications:
 - `paint-order` is complete for shapes, markers, text, and tspans on both renderers. All 14 resvg
   category cases are active.
 - `image-rendering` carries the full CSS value set through `<image>` and `<feImage>` on both
-  renderers. Two legacy `optimizeSpeed` reference cases retain a nearest-grid oracle disagreement.
+  renderers. `optimizeSpeed` compares against resvg v0.49.0 on TinySkia; Geode's nearest sampler
+  still resolves exact texel-boundary ties differently, so that case is disabled on Geode.
 - `non-scaling-stroke` strokes path centerlines in host space, and culling inflates the centerline
   bounds in the same space the stroke is expanded in, so width and dashes are exact for
   solid- and gradient-painted path strokes under general affine transforms. Text strokes and

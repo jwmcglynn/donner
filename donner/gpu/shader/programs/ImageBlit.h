@@ -20,7 +20,7 @@ struct alignas(16) ImageBlitParams {
   float maskBounds[4];                  //!< Half-open target-pixel mask rectangle.
   uint32_t blendMode;                   //!< Zero source-over, one through fifteen CSS blend modes.
   uint32_t hasClipMask;                 //!< Nonzero enables the path-clip texture.
-  uint32_t samplingMode;                //!< Zero linear, one nearest, two CSS pixelated.
+  uint32_t samplingMode;                //!< Zero linear, one nearest, two pixelated, three cubic.
   uint32_t blendPadding;                //!< Reserved shader padding.
   float pixelatedScale[2];              //!< Device pixels per source texel.
   uint32_t samplingPadding[2];          //!< Reserved shader padding.

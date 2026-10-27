@@ -556,9 +556,11 @@ ImageRendering ResolveImageRendering(const ImageParams& params) {
 }
 
 tiny_skia::FilterQuality FilterQualityForImageRendering(ImageRendering imageRendering) {
-  if (imageRendering == ImageRendering::CrispEdges ||
-      imageRendering == ImageRendering::OptimizeSpeed) {
-    return tiny_skia::FilterQuality::Nearest;
+  switch (ImageSamplingKernelFor(imageRendering)) {
+    case ImageSamplingKernel::Nearest: return tiny_skia::FilterQuality::Nearest;
+    case ImageSamplingKernel::MitchellCubic: return tiny_skia::FilterQuality::Bicubic;
+    case ImageSamplingKernel::Bilinear:
+    case ImageSamplingKernel::PixelatedSmooth: return tiny_skia::FilterQuality::Bilinear;
   }
 
   return tiny_skia::FilterQuality::Bilinear;
@@ -2805,7 +2807,8 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
     return;
   }
 
-  drawImagePixmap(*sourceView, bitmap.dimensions.x, bitmap.dimensions.y, params);
+  drawImagePixmap(*sourceView, bitmap.dimensions.x, bitmap.dimensions.y,
+                  BitmapBlitImageParams(params));
 }
 
 #ifdef DONNER_TEXT_ENABLED

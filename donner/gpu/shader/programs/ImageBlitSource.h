@@ -72,7 +72,8 @@ struct Uniforms {
   // Nonzero when a path-clip mask is bound at binding 5 and
   // should gate the SOURCE content before mask/blend compositing.
   hasClipMask: u32,
-  // 0 = linear, 1 = nearest, 2 = CSS pixelated two-stage sampling.
+  // 0 = linear, 1 = nearest, 2 = CSS pixelated two-stage sampling,
+  // 3 = Mitchell-Netravali cubic (B = C = 1/3) over the source rectangle.
   samplingMode: u32,
   _blendPad1: u32,
   // Device pixels per source texel after the complete image transform.
@@ -135,6 +136,49 @@ fn sample_pixelated(uv: vec2f) -> vec4f {
                    pixelated_texel(base + vec2i(1, 1), source_origin, source_size, multiple),
                    fraction.x);
   return mix(top, bottom, fraction.y);
+}
+
+// Mitchell weights in tiny-skia's form, for texels 0.5 and 1.5 texels from the sample.
+fn cubic_near(t: f32) -> f32 {
+  return ((-21.0 / 18.0 * t + 27.0 / 18.0) * t + 9.0 / 18.0) * t + 1.0 / 18.0;
+}
+
+fn cubic_far(t: f32) -> f32 {
+  return (t * t) * (7.0 / 18.0 * t - 6.0 / 18.0);
+}
+
+fn cubic_texel(coord: vec2i, source_origin: vec2i, source_size: vec2i) -> vec4f {
+  return textureLoad(imageTexture,
+                     source_origin + clamp(coord, vec2i(0), source_size - vec2i(1)), 0);
+}
+
+fn cubic_row(y: i32, base_x: i32, weights: vec4f, source_origin: vec2i,
+             source_size: vec2i) -> vec4f {
+  return cubic_texel(vec2i(base_x - 1, y), source_origin, source_size) * weights.x
+       + cubic_texel(vec2i(base_x, y), source_origin, source_size) * weights.y
+       + cubic_texel(vec2i(base_x + 1, y), source_origin, source_size) * weights.z
+       + cubic_texel(vec2i(base_x + 2, y), source_origin, source_size) * weights.w;
+}
+
+// Edge-clamped 4x4 Mitchell sample of the source rectangle at `uv`.
+fn sample_cubic(uv: vec2f) -> vec4f {
+  let texture_size = vec2i(textureDimensions(imageTexture));
+  let source_min = uniforms.srcRect.xy * vec2f(texture_size);
+  let source_max = uniforms.srcRect.zw * vec2f(texture_size);
+  let source_origin = clamp(vec2i(floor(source_min + vec2f(0.5))), vec2i(0),
+                            texture_size - vec2i(1));
+  let source_size = max(vec2i(floor(source_max - source_min + vec2f(0.5))), vec2i(1));
+  let position = uv * vec2f(texture_size) - vec2f(source_origin) - vec2f(0.5);
+  let base = vec2i(floor(position));
+  let fraction = position - floor(position);
+  let wx = vec4f(cubic_far(1.0 - fraction.x), cubic_near(1.0 - fraction.x),
+                 cubic_near(fraction.x), cubic_far(fraction.x));
+  let wy = vec4f(cubic_far(1.0 - fraction.y), cubic_near(1.0 - fraction.y),
+                 cubic_near(fraction.y), cubic_far(fraction.y));
+  return cubic_row(base.y - 1, base.x, wx, source_origin, source_size) * wy.x
+       + cubic_row(base.y, base.x, wx, source_origin, source_size) * wy.y
+       + cubic_row(base.y + 1, base.x, wx, source_origin, source_size) * wy.z
+       + cubic_row(base.y + 2, base.x, wx, source_origin, source_size) * wy.w;
 }
 
 // The vertex shader uses `@builtin(vertex_index)` to pick one of the six
@@ -426,6 +470,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   var sampled = textureSample(imageTexture, imageSampler, in.uv);
   if (uniforms.samplingMode == 2u) {
     sampled = sample_pixelated(in.uv);
+  }
+  if (uniforms.samplingMode == 3u) {
+    // Cubic lobes leave [0, 1]; premultiplied color must also stay within alpha.
+    let cubic = clamp(sample_cubic(in.uv), vec4f(0.0), vec4f(1.0));
+    sampled = cubic;
+    if (uniforms.sourceIsPremult != 0u) {
+      sampled = vec4f(min(cubic.rgb, vec3f(cubic.a)), cubic.a);
+    }
   }
 
   // Base colour - premultiplied by the pipeline's blend expectations.

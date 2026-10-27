@@ -15,13 +15,13 @@ namespace donner::svg {
  * @see https://drafts.csswg.org/css-images/#the-image-rendering
  */
 enum class ImageRendering : uint8_t {
-  Auto,             ///< [DEFAULT] UA picks the algorithm; typically bilinear/trilinear.
+  Auto,             ///< [DEFAULT] UA-defined; Donner uses the Mitchell cubic, like resvg.
   OptimizeSpeed,    ///< Legacy alias with the same behavior as `crisp-edges`.
-  OptimizeQuality,  ///< Legacy alias with the same behavior as `smooth`.
+  OptimizeQuality,  ///< Legacy quality preference; Donner samples it like `auto`.
   CrispEdges,       ///< Preserves contrast without blending source colors.
   Pixelated,        ///< Integer nearest-neighbor scale followed by smooth scaling.
-  Smooth,           ///< Bilinear/trilinear (same as `auto`).
-  HighQuality,      ///< Smooth scaling retained as a distinct author preference.
+  Smooth,           ///< Bilinear interpolation.
+  HighQuality,      ///< High-quality smooth scaling; Donner samples it like `auto`.
 };
 
 /// ostream output operator for \ref ImageRendering.

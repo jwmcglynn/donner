@@ -98,9 +98,10 @@ primitive. Inside, the decoded 64 x 64 RGBA source is sampled with
 The default filter region expands the `(40, 40, 120, 120)` object box by 10% on
 each side, producing `(70, 70, 360, 360)` after the `500 / 200` viewport scale.
 All 129,600 image-region pixels follow this independent geometric construction.
-The separate `optimizeSpeed` fixture remains classified pending reference
-qualification: CPU and GPU can choose adjacent source texels at exact nearest
-sampling ties, an allowed algorithm choice rather than missing SVG support.
+The separate `optimizeSpeed` fixture compares against its resvg v0.49.0
+rendering, which TinySkia matches. Geode stays disabled for it: its hardware
+nearest sampler can choose the adjacent source texel at exact nearest sampling
+ties, an allowed algorithm choice rather than missing SVG support.
 
 ### Backend-difference goldens (text)
 

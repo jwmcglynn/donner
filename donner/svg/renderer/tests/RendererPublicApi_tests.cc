@@ -4736,6 +4736,42 @@ TEST(RendererPublicApiTest, DrawBitmapFallbackPacksPaddedRowsBeforeDrawImage) {
   EXPECT_EQ(capturedImage.data, expectedData);
 }
 
+TEST(RendererPublicApiTest, DrawBitmapFallbackKeepsBilinearBlitSampling) {
+  tests::MockRendererInterface renderer;
+  std::vector<ImageRendering> captured;
+  EXPECT_CALL(renderer, drawImage(_, _))
+      .Times(3)
+      .WillRepeatedly([&](const ImageResource&, const ImageParams& params) {
+        captured.push_back(params.imageRendering);
+      });
+
+  ImageParams params;
+  params.targetRect = Box2d(Vector2d::Zero(), Vector2d(4, 4));
+  renderer.drawBitmap(MakePaddedTwoByTwoBitmap(), params);
+  params.imageRendering = ImageRendering::CrispEdges;
+  renderer.drawBitmap(MakePaddedTwoByTwoBitmap(), params);
+  params.imageRendering = ImageRendering::HighQuality;
+  renderer.drawBitmap(MakePaddedTwoByTwoBitmap(), params);
+
+  EXPECT_THAT(captured, testing::ElementsAre(ImageRendering::Smooth, ImageRendering::CrispEdges,
+                                             ImageRendering::HighQuality));
+}
+
+TEST(RendererPublicApiTest, BitmapBlitImageParamsResolvesOnlyUnpixelatedAuto) {
+  ImageParams autoParams;
+  ImageParams pixelatedAuto;
+  pixelatedAuto.imageRenderingPixelated = true;
+  ImageParams explicitQuality;
+  explicitQuality.imageRendering = ImageRendering::OptimizeQuality;
+
+  EXPECT_THAT(BitmapBlitImageParams(autoParams).imageRendering, ImageRendering::Smooth);
+  EXPECT_THAT(BitmapBlitImageParams(pixelatedAuto),
+              testing::AllOf(testing::Field(&ImageParams::imageRendering, ImageRendering::Auto),
+                             testing::Field(&ImageParams::imageRenderingPixelated, true)));
+  EXPECT_THAT(BitmapBlitImageParams(explicitQuality).imageRendering,
+              ImageRendering::OptimizeQuality);
+}
+
 TEST(RendererPublicApiTest, RendererInterfaceDefaultMethodsRejectUnsupportedTexturePaths) {
   DefaultMethodRenderer renderer;
   DefaultTextureSnapshot texture;

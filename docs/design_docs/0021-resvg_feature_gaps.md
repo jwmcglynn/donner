@@ -120,7 +120,7 @@ bottom for completeness.
 | ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | B2  | `filters/filter-functions` coverage                                     | **DONE** (27/43 files compare) | All cases execute; 16 reference qualifications have independent contract tests.                                                                                                                                           |
-| B3  | `structure/image` golden kernel-era mismatch                            |                             12 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
+| B3  | `structure/image` golden kernel-era mismatch                            |                       **DONE** | Mitchell cubic for quality `<image>` rendering and v0.49.0 raster references (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
 | F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
@@ -426,29 +426,29 @@ parents were broken generally). 5 tests un-skipped (70k–130k px → pass).
 
 ### B3: `structure/image` golden kernel-era mismatch
 
-**Re-triaged (2026-07-03):** the old "embedded data URLs render at wrong size"
-description was wrong. Donner's `<image>` placement, intrinsic sizing
-(no-width/no-height/auto), MIME sniffing, GIF decode, and `preserveAspectRatio`
-alignment are all correct (verified per-test against the goldens: alignment
-diffs are zero-displacement, residuals hug resampled edges only). The real gap:
-the vendored 2023 resvg-test-suite goldens were generated across several resvg
-eras with different `<image>` upscale kernels:
+**Resolved (2026-10-26).** Placement, intrinsic sizing, MIME sniffing, GIF decode and
+`preserveAspectRatio` alignment were already correct; the twelve skipped rows and
+`painting/image-rendering/optimizeSpeed` differed only in resampling. A pinned reproduction
+attributed every snapshot reference to one of four upscalers, each matched to 0 to 55 differing
+pixels at the default threshold:
 
-- **Bilinear-era goldens** (external-jpeg/png, embedded-png,
-  embedded-jpeg-as-*, slices, with-transform, odd-numbers, ...): match
-  tiny-skia `Bilinear` — these pass today (the nine former 300-px
-  "slice/on-svg" thresholds now pass at the default 100 and were removed).
-- **Mitchell-era goldens** (`no-height-non-square`,
-  `width-and-height-set-to-auto`): match current resvg, which upscales
-  `<image>` with Mitchell-bicubic (`tiny_skia::FilterQuality::Bicubic`) —
-  verified: both pass when Donner's `drawImage` is switched to `Bicubic`, and
-  current upstream resvg goldens reproduce with a Mitchell kernel to mean
-  |Δ| ≈ 0.2.
-- **Intermediate-era goldens** (no-width/no-height/no-width-and-height,
-  embedded-gif, external-gif, embedded-jpeg-without-mime,
-  preserveAspectRatio=none + the three `*-meet` variants): match **neither**
-  kernel (12.5k px vs Bilinear, 21.8k px vs Bicubic for the no-* group; the
-  deterministic-decode GIF golden rules out decoder differences).
+- `no-height-non-square`, `width-and-height-set-to-auto`: resvg's tiny-skia `Bicubic`, the
+  Mitchell-Netravali cubic (B = C = 1/3) over premultiplied sRGB texels.
+- `no-height`, `no-width`, `no-width-and-height`, `embedded-jpeg-without-mime` (one shared PNG),
+  `embedded-gif`, `external-gif` (another shared PNG): a browser rendering whose bilinear filter
+  quantizes subpixel weights to 4 bits.
+- `preserveAspectRatio=none` and the three `*-meet` cases: a pre-2019 resvg that resampled each
+  image bilinearly to its user-space size before the canvas transform.
+- `optimizeSpeed`: a 2019 nearest-neighbor rendering flattened onto white, with ties toward the
+  lower texel.
+
+At resvg v0.49.0 every raster-image reference is the Mitchell cubic (nearest for
+`optimizeSpeed`). Donner now resamples `<image>` with `image-rendering: auto`, `optimizeQuality`
+and `high-quality` through the same cubic on TinySkia (tiny-skia `FilterQuality::Bicubic`) and
+Geode (a 16-tap cubic image-blit sampling mode), matching the kernel `feImage` already used;
+`smooth` stays bilinear and compositor bitmap blits keep bilinear sampling. The raster-image
+references were replaced by their v0.49.0 renderings, with provenance in
+`third_party/resvg-test-suite/BUILD.bazel`.
 
 The `embedded-svg-with-text` policy case is independently qualified: the vendored reference omits
 the embedded SVG's text, while Donner uses the document font catalog. An authored
@@ -456,19 +456,6 @@ the embedded SVG's text, while Donner uses the document font catalog. An authore
 ink in `//donner/svg/renderer/tests:renderer_public_api_tests` and its
 `//donner/svg/renderer/tests:renderer_public_api_tests_geode` variant, so the corpus row is
 a reference-disagreement skip rather than a missing feature.
-
-**Next step (needs a maintainer decision):** refresh the whole
-`structure/image` golden set from current resvg and adopt Mitchell-bicubic in
-`RendererTinySkia::drawImage`/`drawBitmap` (+ the Geode sampler) to match
-current resvg, or keep bilinear and leave the 12 kernel-dependent tests skipped.
-Per-test threshold inflation is not an option.
-
-The kernel measurements above were introduced in `be5f999367`; reproduction metadata and raw
-output are not included with those recorded measurements. They remain historical claims rather
-than a current reproduction. Reclassification
-of the 12 kernel-dependent issue #1168 rows requires a fresh run pinned to the source, decoder,
-reference images, transforms, and compared kernels; the independent PNG intrinsic-placement test
-separately prevents a sampling-policy decision from concealing sizing or placement regressions.
 
 **B5 (feMorphology degenerate radius) is now fixed** — see
 [Recently fixed](#recently-fixed-prs-608611).
@@ -568,7 +555,7 @@ content-placement transform.
 | structure/svg             |     0 | `structure/svg/funcIRI-with-quotes.svg` compares with ordinary budgets after the [paint URL parsing fix](../../donner/svg/properties/PropertyRegistry.cc), and `structure/svg/nested-svg-one-with-rect-and-one-with-viewBox.svg` compares with ordinary budgets after the [viewport sizing fix](../../donner/svg/components/layout/LayoutSystem.cc). |
 | structure/style           |     1 | CSS `@import` / external CSS remains unsupported: imports are diagnosed and ignored, with no target requests; `UnsupportedCssImportsNeverRequestConfiguredResponses` in `//donner/svg/renderer/tests:renderer_public_api_tests` enforces that.                                                                                                                 |
 | structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                                                               |
-| painting/image-rendering  |     1 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. `on-feImage` uses an independently derived nearest reference; `optimizeSpeed` remains pending reference qualification at allowed nearest-sampling ties, rather than missing SVG support.                                                                        |
+| painting/image-rendering  |     1 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. `on-feImage` uses an independently derived nearest reference; `optimizeSpeed` compares against resvg v0.49.0 on TinySkia and is disabled on Geode, whose nearest sampler resolves exact texel-boundary ties differently.                                                                        |
 | masking/clipPath          |     1 | CSS circle shapes support fill, stroke and viewport reference boxes with bounded geometry preparation; two opaque reference images retain explicit background qualifications. The transformed-text reference remains under review. |
 | masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                                |
 | text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                          |

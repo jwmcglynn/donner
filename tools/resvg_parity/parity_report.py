@@ -286,7 +286,7 @@ def _parse_overrides(expression: str, category: str) -> dict[str, str]:
 # ImageComparisonParams (ImageComparisonTestFixture.h) or resvg_test_suite.cc gains a new one.
 PARAMS_FACTORIES = {"Skip", "UndefinedBehavior", "DeprecatedInSVG2", "WithThreshold",
                     "WithGoldenOverride", "RenderOnly"}
-PARAMS_FREE_HELPERS = {"Params", "WithMaxPixels"}
+PARAMS_FREE_HELPERS = {"Params", "WithMaxPixels", "ResvgV049Reference"}
 PARAMS_BUILDER_METHODS = {
     "withReason", "withGeodeGoldenOverride", "includeAntiAliasingDifferences",
     "enableGoldenUpdateFromEnv", "setCanvasSize", "disableBackend", "requireFeature",
