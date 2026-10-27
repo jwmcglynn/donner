@@ -1531,15 +1531,16 @@ constexpr std::string_view kCheckerImageDataUri =
     "C6MAAAAASUVORK5CYII=";
 
 /// Renders the checkerboard as an `<image>` at 48x48 on a 64x64 canvas with the given
-/// `image-rendering` attribute, omitted when empty.
-RendererBitmap RenderCheckerImage(std::string_view imageRendering) {
+/// `image-rendering` attribute, omitted when empty, with \p backend.
+RendererBitmap RenderCheckerImage(std::string_view imageRendering,
+                                  RendererBackend backend = ActiveRendererBackend()) {
   std::string body = R"svg(<image x="8" y="8" width="48" height="48")svg";
   if (!imageRendering.empty()) {
     body += " image-rendering=\"" + std::string(imageRendering) + "\"";
   }
   body += " href=\"" + std::string(kCheckerImageDataUri) + "\"/>";
   SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(64, 64));
-  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  return RenderDocumentWithBackend(document, backend);
 }
 
 /// Renders the same placement through `feImage`, with the given `image-rendering` attribute on the
@@ -1740,21 +1741,26 @@ TEST_F(RendererRegressionTests, ImageTranslatedAtIntrinsicSizeSamplesNearest) {
   }
 }
 
+// The feImage oracles are `<image>` drawn by tiny-skia, whose sampling resvg shares. Both
+// backends' feImage samplers evaluate the kernels exactly, while Geode's own `<image>` blit
+// differs from tiny-skia by one 8-bit step in places (hardware bilinear subtexel precision, and
+// the blit's cubic under rotation), so it is not an identity oracle.
 TEST_F(RendererRegressionTests, FeImageSamplesLikeImageForEachRendering) {
   for (std::string_view imageRendering : kImageRenderingValues) {
     SCOPED_TRACE(testing::Message() << "image-rendering=\"" << imageRendering << "\"");
-    const RendererBitmap expected = RenderCheckerImage(imageRendering);
+    const RendererBitmap expected = RenderCheckerImage(imageRendering, RendererBackend::TinySkia);
     AssertVisibleFixture(expected, "feimage_image_oracle_" + ImageRenderingLabel(imageRendering));
     editor::tests::CompareBitmapToBitmap(RenderCheckerFeImage(imageRendering), expected,
                                          "feimage_sampling_" + ImageRenderingLabel(imageRendering),
-                                         ImageSamplingOracleParams());
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
 /// Renders \p element on a transparent 64x64 canvas through \p filterPrimitives, or unfiltered
-/// when they are empty, inside \p groupTransform.
+/// when they are empty, inside \p groupTransform, with \p backend.
 RendererBitmap RenderSamplingCase(std::string_view groupTransform, std::string_view element,
-                                  std::string_view filterPrimitives) {
+                                  std::string_view filterPrimitives,
+                                  RendererBackend backend = ActiveRendererBackend()) {
   std::string body;
   if (!filterPrimitives.empty()) {
     body = R"svg(<filter id="f" filterUnits="userSpaceOnUse" x="-64" y="-64" width="192"
@@ -1767,7 +1773,7 @@ RendererBitmap RenderSamplingCase(std::string_view groupTransform, std::string_v
               : std::string(R"svg(<rect width="64" height="64" filter="url(#f)"/>)svg");
   body += "</g>";
   SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(64, 64));
-  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  return RenderDocumentWithBackend(document, backend);
 }
 
 TEST_F(RendererRegressionTests, FeImageTranslatedAtIntrinsicSizeSamplesLikeImage) {
@@ -1804,9 +1810,11 @@ TEST_F(RendererRegressionTests, FeImageRotatedSamplesLikeImage) {
             RenderSamplingCase("rotate(30 32 32)", "", "<feImage " + attributes + "/>"),
             interiorOrigin, interiorSize),
         editor::tests::CropBitmap(
-            RenderSamplingCase("rotate(30 32 32)", "<image " + attributes + "/>", ""),
+            RenderSamplingCase("rotate(30 32 32)", "<image " + attributes + "/>", "",
+                               RendererBackend::TinySkia),
             interiorOrigin, interiorSize),
-        "feimage_rotated_" + ImageRenderingLabel(imageRendering), ImageSamplingOracleParams());
+        "feimage_rotated_" + ImageRenderingLabel(imageRendering),
+        editor::tests::PixelmatchIdentityParams());
   }
 }
 
