@@ -328,7 +328,10 @@ py_test(
 
 py_test(
     name = "catalog_package_validation_tests",
-    srcs = ["catalog_package_integrity_test.py"],
+    srcs = [
+        "catalog_package_integrity_test.py",
+        "package_web_files.py",
+    ],
     main = "catalog_package_integrity_test.py",
 )
 

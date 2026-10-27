@@ -177,6 +177,38 @@ class CatalogPackageValidationTest(unittest.TestCase):
     def test_complete_deferred_package_passes(self):
         self.assertEqual(validate_package(self.package)["deferred_font_bytes"], 64 * 12)
 
+    def test_compact_shipping_catalog_preserves_audit_and_payload_authentication(self):
+        from package_web_files import package_files
+
+        readable = json.dumps(self.manifest, indent=2).encode() + b"\n"
+        (self.package / "catalog-fonts.json").write_bytes(readable)
+        shipping = self.package / "shipping"
+        files = [path for path in self.package.iterdir() if path.is_file()]
+        assets = [(path.relative_to(self.package).as_posix(), path)
+                  for path in self.package.rglob("*")
+                  if path.is_file() and path.parent != self.package]
+        package_files(shipping, files, assets)
+        self.assertEqual(json.loads((shipping / "catalog-fonts.json").read_text()), self.manifest)
+        self.assertLess((shipping / "catalog-fonts.json").stat().st_size, len(readable))
+        self.assertEqual((self.package / "catalog-fonts.json").read_bytes(), readable)
+        self.assertEqual(validate_package(shipping), validate_package(self.package))
+        for path in [*files, *(source for _, source in assets)]:
+            if path.name != "catalog-fonts.json":
+                self.assertEqual((shipping / path.relative_to(self.package)).read_bytes(),
+                                 path.read_bytes())
+        font = self.manifest["fonts"][0]
+        payload = shipping / font["path"]
+        original = payload.read_bytes()
+        payload.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+        with self.assertRaisesRegex(ValueError, "integrity failed"):
+            validate_package(shipping)
+        payload.write_bytes(original)
+        altered = json.loads((shipping / "catalog-fonts.json").read_text())
+        altered["fonts"][0]["path"] = "fonts/untrusted.woff2"
+        (shipping / "catalog-fonts.json").write_text(json.dumps(altered))
+        with self.assertRaisesRegex(ValueError, "Noncanonical"):
+            validate_package(shipping)
+
     def test_restored_payload_dependency_is_detected_in_actual_module(self):
         payload = (self.package / self.manifest["fonts"][0]["path"]).read_bytes()
         (self.package / "editor.wasm").write_bytes(b"\0asm\1\0\0\0" + payload)

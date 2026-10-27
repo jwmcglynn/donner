@@ -130,6 +130,28 @@ class PackageFilesTest(unittest.TestCase):
             package_files(self.output, [], [("fonts/a.woff2", source)])
         self.assertEqual(list(outside.iterdir()), [])
 
+    def test_catalog_audit_json_is_compact_without_changing_strings_or_source(self):
+        manifest = {"fonts": [{"family": "A  B \"C\"", "path": "fonts/abc.woff2"}],
+                    "encoder": {"source": "line\nnext", "unicode": "café"}}
+        readable = json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n"
+        source = self.file("tree/catalog-fonts.json", readable)
+        notice = self.file("tree/CatalogFontNotices.txt", b"license  text\n")
+        package_files(self.output, [], [("catalog-fonts.json", source),
+                                        ("CatalogFontNotices.txt", notice)])
+        shipping = (self.output / "catalog-fonts.json").read_bytes()
+        self.assertEqual(json.loads(shipping), manifest)
+        self.assertLess(len(shipping), len(readable))
+        self.assertEqual(source.read_bytes(), readable)
+        self.assertEqual((self.output / notice.name).read_bytes(), notice.read_bytes())
+
+    def test_invalid_or_oversized_catalog_json_fails_before_any_output(self):
+        for content in [b"{broken", b" " * (128 * 1024 + 1)]:
+            with self.subTest(size=len(content)):
+                source = self.file("tree/catalog-fonts.json", content)
+                with self.assertRaises(ValueError):
+                    package_files(self.output, [], [("catalog-fonts.json", source)])
+                self.assertFalse(self.output.exists())
+
     def resource(self, name="kIcon", payload=b"<svg id='resource-fixture'/>"):
         digest = hashlib.sha256(payload).hexdigest()
         relative = f"assets/{digest}.svg"

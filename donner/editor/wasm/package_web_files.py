@@ -26,7 +26,21 @@ def _add_input(inputs: dict[str, Path], relative: str, source: Path) -> None:
     inputs[relative] = source
 
 
-def _copy_inputs(output: Path, inputs: dict[str, Path]) -> None:
+def _compact_catalog_manifest(inputs: dict[str, Path]) -> bytes | None:
+    """Serialize the shipping audit copy without changing its parsed fields."""
+    source = inputs.get("catalog-fonts.json")
+    if source is None:
+        return None
+    with source.open("rb") as stream:
+        readable = stream.read(128 * 1024 + 1)
+    if len(readable) > 128 * 1024:
+        raise ValueError("Catalog manifest exceeds metadata limit")
+    manifest = json.loads(readable)
+    return (json.dumps(manifest, separators=(",", ":"), sort_keys=True, allow_nan=False)
+            + "\n").encode("utf-8")
+
+
+def _copy_inputs(output: Path, inputs: dict[str, Path], catalog: bytes | None) -> None:
     if output.is_symlink():
         raise ValueError("Web package output must not be a symlink")
     output.mkdir(parents=True, exist_ok=True)
@@ -37,7 +51,10 @@ def _copy_inputs(output: Path, inputs: dict[str, Path]) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists() or destination.is_symlink():
             raise ValueError(f"Web package output already exists: {relative}")
-        shutil.copyfile(source, destination)
+        if relative == "catalog-fonts.json" and catalog is not None:
+            destination.write_bytes(catalog)
+        else:
+            shutil.copyfile(source, destination)
 
 
 def _validate_resource_descriptor(asset: dict) -> None:
@@ -121,8 +138,9 @@ def package_files(output: Path, files: list[Path], assets: list[tuple[str, Path]
         for reserved in ("packaged-resources.json", "packaged-resources.js"):
             if reserved in inputs:
                 raise ValueError(f"Duplicate web package path: {reserved}")
+    catalog = _compact_catalog_manifest(inputs)
     _check_collisions(inputs)
-    _copy_inputs(output, inputs)
+    _copy_inputs(output, inputs, catalog)
     if manifest is not None:
         serialized = json.dumps(manifest, separators=(",", ":"), sort_keys=True)
         (output / "packaged-resources.json").write_text(serialized + "\n")
