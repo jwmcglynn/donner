@@ -49,7 +49,8 @@ import sys
 # matches `/`.
 RELEASE_PATHS = (
     "LICENSE", "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion", ".bazelrc", ".bcr/*",
-    "examples/bazel_consumer/*", "third_party/licenses/*", "third_party/bazel/*",
+    "examples/bazel_consumer/*", "examples/BUILD.bazel", "examples/svg_viewer.cc",
+    "third_party/licenses/*", "third_party/bazel/*",
     "third_party/BUILD*", "third_party/*.BUILD", "third_party/*.bzl",
     "third_party/patches/*", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
     "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/native_delivery.py", "tools/notice*",
@@ -57,7 +58,8 @@ RELEASE_PATHS = (
     "tools/ci/release_*", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl",
     "build_defs/editor_build_info.bzl", "build_defs/BUILD.bazel", "build_defs/packaged_resources*",
     "donner/base/PackagedResource*", "third_party/public-sans/*", "third_party/fira-code/*",
-    "third_party/roboto/*", "third_party/google_fonts/*", "donner/editor/art/*",
+    "third_party/roboto/*", "third_party/google_fonts/*", "third_party/imgui/*",
+    "donner/editor/gui/ImGuiDefaultFontProvider.cc", "donner/editor/art/*",
     "donner/editor/write_build_info.sh", "tools/editor_build_info_tests.py", "donner/editor/BUILD.bazel",
     "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
     ".github/workflows/bcr_preflight.yml",

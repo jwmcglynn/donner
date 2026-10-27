@@ -1,0 +1,130 @@
+Subject: [PATCH] Add a raw-resource default-font variant without changing generic ImGui
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -64,3 +64,59 @@
+         "@glfw",
+     ],
+ )
++
++
++# Headers only: this target never links an ImGui implementation.
++cc_library(
++    name = "imgui_external_font_headers",
++    hdrs = glob(["*.h", "backends/*.h", "misc/cpp/*.h"]),
++    includes = [".", "backends"],
++    visibility = ["//visibility:public"],
++)
++
++exports_files(["misc/fonts/ProggyClean.ttf"])
++
++cc_library(
++    name = "imgui_external_font",
++    srcs = [
++        "backends/imgui_impl_glfw.cpp",
++        "backends/imgui_impl_opengl3.cpp",
++        "imconfig.h",
++        "imgui.cpp",
++        "imgui_draw.cpp",
++        "imgui_tables.cpp",
++        "imgui_widgets.cpp",
++        "imstb_rectpack.h",
++        "imstb_textedit.h",
++        "imstb_truetype.h",
++        "misc/cpp/imgui_stdlib.cpp",
++    ],
++    hdrs = [
++        "backends/imgui_impl_glfw.h",
++        "backends/imgui_impl_opengl3.h",
++        "backends/imgui_impl_opengl3_loader.h",
++        "imgui.h",
++        "imgui_internal.h",
++        "misc/cpp/imgui_stdlib.h",
++    ],
++    copts = selects.with_or({
++        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
++        "//conditions:default": [
++            "-DIMGUI_IMPL_OPENGL_LOADER_CUSTOM",
++            "-include",
++            "glad/glad.h",
++        ],
++    }),
++    defines = ["IMGUI_ENABLE_OSX_DEFAULT_CLIPBOARD_FUNCTIONS"],
++    local_defines = ["IMGUI_EXTERNAL_DEFAULT_FONT"],
++    includes = ["backends"],
++    visibility = ["//visibility:public"],
++    deps = [
++        "@glfw",
++    ] + selects.with_or({
++        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
++        "//conditions:default": [
++            "@donner//third_party/glad",
++        ],
++    }),
++)
+diff --git a/imgui_draw.cpp b/imgui_draw.cpp
+--- a/imgui_draw.cpp
++++ b/imgui_draw.cpp
+@@ -2565,7 +2565,12 @@
+ // Default font TTF is compressed with stb_compress then base85 encoded (see misc/fonts/binary_to_compressed_c.cpp for encoder)
+ static unsigned int stb_decompress_length(const unsigned char* input);
+ static unsigned int stb_decompress(unsigned char* output, const unsigned char* input, unsigned int length);
++#ifdef IMGUI_EXTERNAL_DEFAULT_FONT
++// Returns an IM_ALLOC-owned complete raw TTF copy, or NULL when unavailable.
++extern "C" void* DonnerImGuiLoadDefaultFont(int* font_data_size);
++#else
+ static const char*  GetDefaultCompressedFontDataTTFBase85();
++#endif
+ static unsigned int Decode85Byte(char c)                                    { return c >= '\\' ? c-36 : c-35; }
+ static void         Decode85(const unsigned char* src, unsigned char* dst)
+ {
+@@ -2594,9 +2599,19 @@
+     font_cfg.EllipsisChar = (ImWchar)0x0085;
+     font_cfg.GlyphOffset.y = 1.0f * IM_TRUNC(font_cfg.SizePixels / 13.0f);  // Add +1 offset per 13 units
+
++    const ImWchar* glyph_ranges = font_cfg.GlyphRanges != NULL ? font_cfg.GlyphRanges : GetGlyphRangesDefault();
++#ifdef IMGUI_EXTERNAL_DEFAULT_FONT
++    int font_data_size = 0;
++    void* font_data = DonnerImGuiLoadDefaultFont(&font_data_size);
++    if (font_data == NULL)
++        return NULL;
++    // Match AddFontFromMemoryCompressedTTF's ownership, including caller templates.
++    font_cfg.FontDataOwnedByAtlas = true;
++    ImFont* font = AddFontFromMemoryTTF(font_data, font_data_size, font_cfg.SizePixels, &font_cfg, glyph_ranges);
++#else
+     const char* ttf_compressed_base85 = GetDefaultCompressedFontDataTTFBase85();
+-    const ImWchar* glyph_ranges = font_cfg.GlyphRanges != NULL ? font_cfg.GlyphRanges : GetGlyphRangesDefault();
+     ImFont* font = AddFontFromMemoryCompressedBase85TTF(ttf_compressed_base85, font_cfg.SizePixels, &font_cfg, glyph_ranges);
++#endif
+     return font;
+ }
+
+@@ -2723,7 +2738,12 @@
+
+     // Default font is none are specified
+     if (ConfigData.Size == 0)
++#ifdef IMGUI_EXTERNAL_DEFAULT_FONT
++        if (AddFontDefault() == NULL)
++            return false;
++#else
+         AddFontDefault();
++#endif
+
+     // Select builder
+     // - Note that we do not reassign to atlas->FontBuilderIO, since it is likely to point to static data which
+@@ -4597,6 +4617,7 @@
+ // Exported using misc/fonts/binary_to_compressed_c.cpp (with compression + base85 string encoding).
+ // The purpose of encoding as base85 instead of "0x00,0x01,..." style is only save on _source code_ size.
+ //-----------------------------------------------------------------------------
++#ifndef IMGUI_EXTERNAL_DEFAULT_FONT
+ static const char proggy_clean_ttf_compressed_data_base85[11980 + 1] =
+     "7])#######hV0qs'/###[),##/l:$#Q6>##5[n42>c-TH`->>#/e>11NNV=Bv(*:.F?uu#(gRU.o0XGH`$vhLG1hxt9?W`#,5LsCp#-i>.r$<$6pD>Lb';9Crc6tgXmKVeU2cD4Eo3R/"
+     "2*>]b(MC;$jPfY.;h^`IWM9<Lh2TlS+f-s$o6Q<BWH`YiU.xfLq$N;$0iR/GX:U(jcW2p/W*q?-qmnUCI;jHSAiFWM.R*kU@C=GH?a9wp8f$e.-4^Qg1)Q-GL(lf(r/7GrRgwV%MS=C#"
+@@ -4689,5 +4710,6 @@
+ {
+     return proggy_clean_ttf_compressed_data_base85;
+ }
++#endif // #ifndef IMGUI_EXTERNAL_DEFAULT_FONT
+
+ #endif // #ifndef IMGUI_DISABLE

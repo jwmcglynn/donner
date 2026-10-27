@@ -1,5 +1,6 @@
 load("@bazel_skylib//rules:native_binary.bzl", "native_test")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_multi_transitioned_test", "identical_code_folding_linkopts")
 load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 
@@ -147,9 +148,19 @@ wasm_cc_binary(
 )
 
 # --- SVG viewer (macOS/Linux only; pulls in the editor TextEditor widget) ---
+packaged_resource_bundle(
+    name = "svg_viewer_resources",
+    output_name = "svg_viewer.assets",
+    resources = ["//third_party/imgui:imgui-default-font_resource_files"] + select({
+        "//donner/svg/renderer:text_enabled": ["//third_party/public-sans:public-sans_resource_files"],
+        "//conditions:default": [],
+    }),
+)
+
 donner_cc_binary(
     name = "svg_viewer",
     srcs = ["svg_viewer.cc"],
+    data = [":svg_viewer_resources"],
     tags = ["codeql_default"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
@@ -159,6 +170,7 @@ donner_cc_binary(
     deps = [
         "//:donner",
         "//donner/base",
+        "//donner/base:packaged_resource",
         # The viewer is intentionally minimal: donner core for the DOM,
         # parser, hit-test, and renderer; glad/glfw/imgui for the ImGui
         # shell; and exactly one library from //donner/editor — the
@@ -168,7 +180,7 @@ donner_cc_binary(
         "//donner/editor:text_editor",
         "//third_party/glad",
         "@glfw",
-        "@imgui",
+        "//third_party/imgui",
     ],
 )
 

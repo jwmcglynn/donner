@@ -26,6 +26,8 @@ on:
       - config/**
       - donner/**
       - examples/bazel_consumer/**
+      - examples/BUILD.bazel
+      - examples/svg_viewer.cc
       - third_party/**
       - tools/BUILD.bazel
       - tools/bcr_*.py

@@ -1,0 +1,42 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//build_defs:packaged_resources.bzl", "packaged_resources")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# Reuse the complete font already pinned with Dear ImGui; never subset it.
+packaged_resources(
+    name = "imgui-default-font",
+    group = "ui-font",
+    header_output = "embed_resources/ImGuiDefaultFont.h",
+    resources = {"kProggyCleanTtf": "@imgui//:misc/fonts/ProggyClean.ttf"},
+)
+
+# Every editor consumer uses one implementation and its matching resource provider.
+cc_library(
+    name = "imgui",
+    deps = [
+        "//donner/editor/gui:imgui_default_font_provider",
+        "@imgui//:imgui_external_font",
+    ],
+)
+
+configured_dependency_audit_test(
+    name = "editor_imgui_excludes_embedded_default_font_test",
+    forbidden = ["@imgui//:imgui"],
+    required = [
+        "//donner/editor/gui:imgui_default_font_provider",
+        "//third_party/imgui:imgui-default-font_resource_files",
+        "@imgui//:imgui_external_font",
+    ],
+    target = "//donner/editor:editor_binary",
+)
+
+# One generated copy gives tests a stable main-repository runfile path.
+genrule(
+    name = "raw_font_fixture",
+    testonly = True,
+    srcs = ["@imgui//:misc/fonts/ProggyClean.ttf"],
+    outs = ["proggy_fixture.ttf"],
+    cmd = "cp $< $@",
+)

@@ -14,6 +14,18 @@ load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_tes
 
 package(default_visibility = ["//visibility:public"])
 
+# The strong hook is retained even though ImGui references it from a separate archive.
+donner_cc_library(
+    name = "imgui_default_font_provider",
+    srcs = ["ImGuiDefaultFontProvider.cc"],
+    deps = [
+        "//donner/base:packaged_resource",
+        "//third_party/imgui:imgui-default-font",
+        "@imgui//:imgui_external_font_headers",
+    ],
+    alwayslink = True,
+)
+
 no_rust_dependency_audit_test(
     name = "native_editor_no_wgpu_archive_audit_test",
     required = ["//donner/editor:editor_impl"],
@@ -66,7 +78,7 @@ donner_cc_library(
     deps = [
         "//donner/editor:imgui_headers",
         "//donner/gpu",
-        "@imgui",
+        "//third_party/imgui",
     ],
 )
 
@@ -89,7 +101,7 @@ donner_cc_library(
         "//donner/editor:whole_app_worker_bridge",
         "//donner/gpu",
         "//donner/svg/renderer:renderer_interface",
-        "@imgui",
+        "//third_party/imgui",
     ] + select({
         "@platforms//os:macos": [":editor_metal_layer_macos"],
         "//conditions:default": [],
@@ -132,7 +144,7 @@ donner_cc_library(
         "//donner/gpu",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer/geode:geode_device",
-        "@imgui",
+        "//third_party/imgui",
     ],
 )
 
@@ -146,7 +158,7 @@ donner_cc_library(
         "//donner/gpu",
         "//donner/gpu/shader:compiled_shader",
         "//donner/gpu/shader:linked_projection",
-        "@imgui",
+        "//third_party/imgui",
     ] + shader_apis(UI_DRAW_SHADER_FAMILIES) + linked_shader_artifacts(UI_DRAW_SHADER_FAMILIES),
 )
 
