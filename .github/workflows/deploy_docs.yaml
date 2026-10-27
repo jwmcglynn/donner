@@ -5,52 +5,21 @@ env:
   DO_NOT_TRACK: "1"
   ASPECT_TOOLS_TELEMETRY: "-all"
 
-# A main push builds and retains the site; it never deploys. A manual dispatch promotes one
-# retained build without rebuilding it. `record` deploys the docs build that a verified release
-# candidate record names. `rollback` reselects a previous healthy build whose six values the
-# release tracking issue records, because a record has no rollback slot. See
-# docs/release_checklists/docs_artifact_promotion.md.
+# Main pushes retain read-only source builds. Manual composition verifies selected source
+# artifacts; publication accepts only an attested complete site and a verified recovery archive.
 on:
   push:
     branches: ["main"]
   workflow_dispatch:
     inputs:
       selection:
-        description: "record: the docs build a candidate record names; rollback: a recorded earlier build"
+        description: "Compose, publish, roll back a complete site, or approve the one-time legacy backup"
         required: true
         type: choice
-        options: [record, rollback]
-      record_run:
-        description: "record: Assemble release candidate run ID/attempt (e.g. 123/1)"
-        required: false
-        type: string
-      record_sha256:
-        description: "record: SHA-256 of candidate.json, from its Release-Candidate-Record line"
-        required: false
-        type: string
-      artifact_id:
-        description: "rollback: retained github-pages artifact ID"
-        required: false
-        type: string
-      source_run_id:
-        description: "rollback: successful main docs build run ID"
-        required: false
-        type: string
-      source_attempt:
-        description: "rollback: successful main docs build attempt"
-        required: false
-        type: string
-      source_commit:
-        description: "rollback: full source commit SHA of the docs build"
-        required: false
-        type: string
-      artifact_digest:
-        description: "rollback: GitHub artifact digest (sha256:...)"
-        required: false
-        type: string
-      archive_sha256:
-        description: "rollback: SHA-256 of the retained artifact.tar"
-        required: false
+        options: [compose, publish, rollback, seed]
+      request:
+        description: "Reviewed JSON selection; see docs/release_checklists/docs_artifact_promotion.md"
+        required: true
         type: string
 
 permissions:
@@ -119,168 +88,158 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  assemble:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.selection == 'compose'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify sources and compose every documentation version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCS_REQUEST: ${{ inputs.request }}
+        run: python3 -B -m tools.docs_publish prepare --work "$RUNNER_TEMP/docs-site"
+      - name: Upload the complete Pages site
+        id: pages
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/docs-site/site
+          retention-days: 90
+      - name: Bind the uploaded archive and source selections
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGES_ARTIFACT_ID: ${{ steps.pages.outputs.artifact_id }}
+        run: |
+          python3 -B -m tools.docs_publish finalize --work "$RUNNER_TEMP/docs-site" \
+            --archive "$RUNNER_TEMP/artifact.tar" --artifact-id "$PAGES_ARTIFACT_ID"
+      - name: Attest the composition record and exact Pages archive
+        uses: actions/attest-build-provenance@v3.2.0
+        with:
+          subject-path: |
+            ${{ runner.temp }}/docs-site/payload/composition.json
+            ${{ runner.temp }}/artifact.tar
+      - uses: actions/upload-artifact@v7
+        with:
+          name: docs-site-payload-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/docs-site/payload/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+  seed:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.selection == 'seed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: github-pages
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: pages-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Preserve only the explicitly approved current legacy site
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCS_REQUEST: ${{ inputs.request }}
+        run: python3 -B -m tools.docs_publish seed --work "$RUNNER_TEMP/docs-seed"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: docs-seed-evidence-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/docs-seed/seed/
+          if-no-files-found: ignore
+          retention-days: 90
+
   deploy:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.selection == 'publish' || inputs.selection == 'rollback')
     concurrency:
       group: pages-publish
       cancel-in-progress: false
     permissions:
-      contents: read
+      contents: write
       actions: read
       attestations: read
       pages: write
       id-token: write
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      # Record mode first downloads only the record artifact, by ID, from the named successful
-      # manual assembly on main, and checks it against the approved digest. Its attestation is
-      # verified before anything the record names is used.
-      - name: Fetch the candidate record
-        id: record
-        if: inputs.selection == 'record'
+          ref: ${{ github.sha }}
+      - name: Verify the attested composition and durable prior site
+        if: inputs.selection == 'publish'
         env:
           GH_TOKEN: ${{ github.token }}
-          RECORD_RUN: ${{ inputs.record_run }}
-          RECORD_SHA256: ${{ inputs.record_sha256 }}
-        run: |
-          python3 -B -m tools.release_candidate docs-record \
-            --record-run "$RECORD_RUN" --record-sha256 "$RECORD_SHA256" \
-            --work "$RUNNER_TEMP/docs-record" --github-output "$GITHUB_OUTPUT"
-
-      - name: Verify the candidate record attestation
-        if: inputs.selection == 'record'
+          DOCS_REQUEST: ${{ inputs.request }}
+        run: python3 -B -m tools.docs_publish preflight --work "$RUNNER_TEMP/docs-publish"
+      - name: Restore and verify the durable rollback selection
+        if: inputs.selection == 'rollback'
         env:
           GH_TOKEN: ${{ github.token }}
-          RECORD_PATH: ${{ steps.record.outputs.record_path }}
-          RECORD_COMMIT: ${{ steps.record.outputs.record_commit }}
-        run: |
-          gh attestation verify "$RECORD_PATH" \
-            --repo jwmcglynn/donner \
-            --signer-workflow jwmcglynn/donner/.github/workflows/release_candidate.yml \
-            --source-digest "$RECORD_COMMIT" --source-ref refs/heads/main > /dev/null
-
-      # The selected IDs and digests come only from the attested record's docs entry, after its
-      # docs-provenance artifact is verified; rollback values must then be empty. In rollback
-      # mode they are the six recorded values, and the record values must be empty.
-      - name: Select the docs build to deploy
-        id: select
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SELECTION: ${{ inputs.selection }}
-          RECORD_RUN: ${{ inputs.record_run }}
-          RECORD_PATH: ${{ steps.record.outputs.record_path }}
-          RECORD_COMMIT: ${{ steps.record.outputs.record_commit }}
-          RECORD_SHA256: ${{ inputs.record_sha256 }}
-          DOC_ARTIFACT_ID: ${{ inputs.artifact_id }}
-          DOC_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          DOC_SOURCE_ATTEMPT: ${{ inputs.source_attempt }}
-          DOC_SOURCE_COMMIT: ${{ inputs.source_commit }}
-          DOC_ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
-          DOC_ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
-        run: |
-          python3 -B -m tools.release_candidate docs-selection --selection "$SELECTION" \
-            --record-run "$RECORD_RUN" --record-path "$RECORD_PATH" \
-            --record-commit "$RECORD_COMMIT" --record-sha256 "$RECORD_SHA256" \
-            --work "$RUNNER_TEMP/docs-selection" --github-output "$GITHUB_OUTPUT"
-
-      - name: Download the retained Pages artifact
-        uses: actions/download-artifact@v8
+          DOCS_REQUEST: ${{ inputs.request }}
+        run: python3 -B -m tools.docs_publish rollback-preflight --work "$RUNNER_TEMP/docs-publish"
+      - name: Retain the verified prior Pages archive for recovery
+        id: previous
+        uses: actions/upload-artifact@v7
         with:
-          artifact-ids: ${{ steps.select.outputs.artifact_id }}
-          run-id: ${{ steps.select.outputs.run_id }}
-          github-token: ${{ github.token }}
-          path: selected-docs
-
-      - name: Verify selected source, artifact, and exact archive bytes
+          name: docs-rollback-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/docs-publish/previous-pages/artifact.tar
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Upload the verified durable rollback candidate
+        id: candidate
+        if: inputs.selection == 'rollback'
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-candidate-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/docs-publish/pages/artifact.tar
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Publish the verified complete site with approved recovery
+        if: inputs.selection == 'publish'
         env:
           GH_TOKEN: ${{ github.token }}
-          DOC_ARTIFACT_ID: ${{ steps.select.outputs.artifact_id }}
-          DOC_SOURCE_RUN_ID: ${{ steps.select.outputs.run_id }}
-          DOC_SOURCE_ATTEMPT: ${{ steps.select.outputs.attempt }}
-          DOC_SOURCE_COMMIT: ${{ steps.select.outputs.source_commit }}
-          DOC_ARTIFACT_DIGEST: ${{ steps.select.outputs.artifact_digest }}
-          DOC_ARCHIVE_SHA256: ${{ steps.select.outputs.archive_sha256 }}
-        # Reads the artifact and source run attempt metadata from the Actions API itself.
-        run: python3 -B -m tools.pages_artifact verify --archive selected-docs/artifact.tar
-
-      # deploy-pages looks only in the current run; the Pages API accepts the
-      # verified artifact ID from the retained build without re-uploading it.
-      - name: Deploy the selected artifact without rebuilding
-        id: deployment
-        uses: actions/github-script@v9
+          VERIFIED_PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact-id }}
+        run: |
+          python3 -B -m tools.docs_publish promote --work "$RUNNER_TEMP/docs-publish" \
+            --artifact-id "$VERIFIED_PREVIOUS_ARTIFACT_ID"
+      - name: Roll back the complete site with approved recovery
+        if: inputs.selection == 'rollback'
         env:
-          DOC_ARTIFACT_ID: ${{ steps.select.outputs.artifact_id }}
-          DOC_SOURCE_RUN_ID: ${{ steps.select.outputs.run_id }}
-          DOC_SOURCE_ATTEMPT: ${{ steps.select.outputs.attempt }}
-          DOC_SOURCE_COMMIT: ${{ steps.select.outputs.source_commit }}
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact-id }}
+          VERIFIED_CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}
+        run: |
+          python3 -B -m tools.docs_publish rollback --work "$RUNNER_TEMP/docs-publish" \
+            --artifact-id "$VERIFIED_PREVIOUS_ARTIFACT_ID"
+      - name: Retain publication and recovery evidence
+        uses: actions/upload-artifact@v7
+        if: always()
         with:
-          script: |
-            const artifactId = Number(process.env.DOC_ARTIFACT_ID);
-            if (!Number.isSafeInteger(artifactId) || artifactId < 1) {
-              throw new Error('Invalid Pages artifact ID');
-            }
-            const buildVersion = `${process.env.DOC_SOURCE_COMMIT}-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
-            const idToken = await core.getIDToken();
-            const {data: deployment} = await github.request('POST /repos/{owner}/{repo}/pages/deployments', {
-              ...context.repo,
-              artifact_id: artifactId,
-              pages_build_version: buildVersion,
-              oidc_token: idToken,
-            });
-            const deploymentId = deployment.id || deployment.status_url?.split('/').pop();
-            if (!deploymentId) throw new Error('Pages returned no deployment ID');
-            const finalFailures = new Set([
-              'deployment_failed', 'deployment_content_failed',
-              'deployment_cancelled', 'deployment_lost',
-            ]);
-            const deadline = Date.now() + 600000;
-            let succeeded = false;
-            while (Date.now() < deadline) {
-              await new Promise(resolve => setTimeout(resolve, 5000));
-              const {data: current} = await github.request(
-                'GET /repos/{owner}/{repo}/pages/deployments/{pages_deployment_id}',
-                {...context.repo, pages_deployment_id: deploymentId},
-              );
-              if (current.status === 'succeed') {
-                succeeded = true;
-                break;
-              }
-              if (finalFailures.has(current.status)) {
-                throw new Error(`Pages deployment failed: ${current.status}`);
-              }
-            }
-            if (!succeeded) throw new Error('Pages deployment timed out');
-            if (!deployment.page_url) {
-              throw new Error('Pages deployment returned no URL');
-            }
-            const pageUrl = deployment.page_url.startsWith('https://')
-              ? deployment.page_url : `https://${deployment.page_url}`;
-            const markerUrl = new URL('docs-build.json', pageUrl.endsWith('/') ? pageUrl : `${pageUrl}/`);
-            markerUrl.searchParams.set('deploy_run', process.env.GITHUB_RUN_ID);
-            let liveMatches = false;
-            for (let attempt = 0; attempt < 24; attempt++) {
-              try {
-                const response = await fetch(markerUrl, {cache: 'no-store'});
-                if (response.ok) {
-                  const marker = await response.json();
-                  liveMatches = marker.source_commit === process.env.DOC_SOURCE_COMMIT &&
-                    String(marker.source_run_id) === process.env.DOC_SOURCE_RUN_ID &&
-                    String(marker.source_attempt) === process.env.DOC_SOURCE_ATTEMPT;
-                  if (liveMatches) break;
-                }
-              } catch (error) {
-                core.info(`Waiting for the selected docs build marker: ${error.name}`);
-              }
-              await new Promise(resolve => setTimeout(resolve, 5000));
-            }
-            if (!liveMatches) throw new Error('Live Pages site did not show the selected docs build');
-            core.setOutput('page_url', pageUrl);
-            core.summary.addRaw(`Published retained Pages artifact ${artifactId} from ${process.env.DOC_SOURCE_COMMIT} to ${pageUrl}`);
-            await core.summary.write();
+          name: docs-promotion-evidence-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/docs-publish/preflight.json
+            ${{ runner.temp }}/docs-publish/result.json
+            ${{ runner.temp }}/docs-publish/composition-attestation.json
+            ${{ runner.temp }}/docs-publish/pages-attestation.json
+          if-no-files-found: ignore
+          retention-days: 90

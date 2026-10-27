@@ -36,6 +36,7 @@ eslint_bin.eslint_test(
         "//donner/gpu/shader/browser_tests:WgslChromiumCompilation_tests.mjs",
         "//donner/svg/renderer/wasm:render_test_driver.mjs",
         "//examples:svg_viewer_test.mjs",
+        "//tools:docs/selector.js",
         "//tools:treemap.js",
         "//tools:treemap.test.js",
     ],
@@ -1257,7 +1258,6 @@ js_test(
     timeout = "short",
     args = ["--contexts=40"],
     copy_data_to_bin = False,
-    entry_point = "chromium-context-lifecycle-diagnostic.cjs",
     data = [
         "chromium-launch-env.cjs",
         "playwright.config.js",
@@ -1267,12 +1267,17 @@ js_test(
         "@playwright-firefox-mac14-arm64//file",
         "@playwright_chromium_mac_arm64//file",
     ],
+    entry_point = "chromium-context-lifecycle-diagnostic.cjs",
     env = {
         "NODE_OPTIONS": "",
         "DONNER_CHROMIUM_ARCHIVE": "$(rootpath @playwright_chromium_mac_arm64//file)",
         "DONNER_FIREFOX_ARCHIVE": "$(rootpath @playwright-firefox-mac14-arm64//file)",
     },
-    tags = ["manual", "launches-browser", "no-sandbox"],
+    tags = [
+        "launches-browser",
+        "manual",
+        "no-sandbox",
+    ],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
@@ -1284,4 +1289,34 @@ js_test(
     copy_data_to_bin = False,
     data = ["//donner/editor/wasm:browser-file-dialogs.js"],
     entry_point = "browser-file-dialogs.spec.mjs",
+)
+
+playwright_bin.playwright_test(
+    name = "docs_selector_browser_tests",
+    size = "medium",
+    timeout = "moderate",
+    args = [
+        "test",
+        "--config=$(rootpath :playwright.docs.config.js)",
+    ],
+    copy_data_to_bin = False,
+    data = [
+        "chromium-launch-env.cjs",
+        "docs-selector.spec.ts",
+        "playwright.docs.config.js",
+        ":node_modules/@playwright/test",
+        "//tools:docs_selector_fixture_json",
+        "@playwright//:chromium",
+    ],
+    env = {
+        "CI": "1",
+        "NODE_OPTIONS": "",
+        "DONNER_DOCS_FIXTURE": "$(rootpath //tools:docs_selector_fixture_json)",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    tags = ["launches-browser"],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
 )

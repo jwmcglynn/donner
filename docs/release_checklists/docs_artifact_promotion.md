@@ -1,104 +1,138 @@
-# Documentation artifact promotion and rollback
+# Versioned documentation publication and rollback
 
-Main pushes build the Doxygen site and retain a `github-pages` artifact for 90 days. A manual
-`deploy_docs.yaml` run selects one of those artifacts by ID. The deployment downloads and checks
-the retained tar for verification, then gives its original artifact ID to the GitHub Pages API.
-It does not rebuild, repack, or re-upload the site.
+`MODULE.bazel` supplies Donner's semantic version. `tools/doxygen.sh` exports it to Doxygen,
+checks the generated page headers, and records it with the source commit in `docs-version.json`.
+Main pushes retain source documentation builds; they do not publish the site.
 
-The dispatch has two selections:
+The public site contains `/0.8.0/` and `/main/`. Release documentation stays bound to its tag;
+`main` names a development channel and displays its underlying module version and source commit.
+The root is a compatibility copy of the latest stable version, preserving existing deep links.
+Each version has its own search index, assets and reports. The selector preserves a page and
+section when they exist in the target version, with an explained index fallback otherwise.
 
-- `record` deploys the docs build that a verified
-  [release candidate record](../release_candidate.md) names. Its inputs are the assembly
-  `record_run` (`RUN_ID/ATTEMPT`) and `record_sha256`.
-- `rollback` reselects a previous healthy build that no candidate record names, such as one that
-  predates records. Its inputs are the six values recorded in the release tracking issue:
-  `artifact_id`, `source_run_id`, `source_attempt`, `source_commit`, `artifact_digest` and
-  `archive_sha256`. The record has no rollback slot, so these values live in that issue, never in
-  the record.
+## One-time setup
 
-A selection's inputs must not be mixed with the other's: a record dispatch that also names
-rollback values, or a rollback dispatch that names a record, fails before anything is downloaded.
+Configure the existing `github-pages` environment with required maintainer approval. All writes
+are manual dispatches on `main`; the publication request approves the named candidate and
+recovery to the verified prior composition if the candidate cuts over and fails health checks.
+Do not approve a request whose candidate or prior identity has changed.
 
-## Record a candidate and its rollback asset
+Create an active repository ruleset matching `docs-snapshots` that prevents deletion and
+non-fast-forward updates. The storage writer checks these effective rules before creating or
+updating that branch. The branch is a data-only store, not a Pages source or executable checkout.
+It contains compressed original release archives, complete-site archives split into chunks of
+at most 40 MiB, manifests and attestation verification evidence. Storage survives Actions expiry.
+Existing immutable objects cannot be replaced. Current and prior healthy compositions are kept;
+cleanup is a separately reviewed maintenance operation.
 
-1. The `docs` role of the [release candidate record](../release_candidate.md) binds the reviewed
-   docs build, a successful **Build and manually deploy documentation** push run on `main` for
-   the candidate commit. Its `docs-provenance` role binds `donner-docs-provenance-<attempt>` from
-   the same run: the build's Doxygen and Graphviz versions, its `artifact.tar` SHA-256 and its
-   generated module lockfile, which is retained there rather than published on the site.
-   Assembly takes these from the run named by `docs_run`; nothing is copied by hand.
-2. For the previous healthy docs build, the rollback asset, copy the source commit, run ID,
-   attempt, Pages artifact ID and `artifact.tar` SHA-256 from that build's run summary. Read its
-   artifact metadata digest with
-   `gh api repos/jwmcglynn/donner/actions/artifacts/ARTIFACT_ID --jq .digest` and record the full
-   `sha256:...` value. Write these six values in the release tracking issue before any
-   promotion. Confirm the artifact is not expired and the run is a successful main push.
-3. Both builds must contain a matching `docs-build.json` marker. The previous artifact must still
-   be available for rollback; an expired or pre-marker artifact cannot be recovered by
-   rebuilding old source.
+Inventory every Pages writer and keep repository Pages settings in Actions/workflow mode. Only
+the `deploy` job in `deploy_docs.yaml` publishes, serialized by `pages-publish`. The old `record`
+and single-site `rollback` dispatch forms are retired: a release candidate record selects a
+source for composition, never a standalone deployment that could erase other versions.
 
-## Publish the reviewed candidate
+## Bootstrap a pre-versioned site
 
-After explicit release or documentation-publication approval, dispatch `deploy_docs.yaml` on
-`main` with `selection: record`, the assembly run and attempt as `record_run`, and the record
-digest from the `Release-Candidate-Record:` line as `record_sha256`. The `github-pages`
-environment gates this job. The job:
+If the existing public site predates `docs-site.json`, first preserve its exact retained Pages
+artifact as an explicitly approved legacy rollback seed. Obtain the successful main docs build's
+run/attempt, Pages artifact ID, GitHub ZIP digest and inner `artifact.tar` digest. The seed checks
+its source-run metadata, module version, safe archive and exact live landing-page bytes. It is
+allowed only before `docs-snapshots` exists and does not deploy anything.
 
-1. Requires the named attempt to be a successful manual `Assemble release candidate` run on
-   `main`, downloads its one retained record artifact by ID, checks it against GitHub's digest,
-   and requires `candidate.json` to match `record_sha256` and its checksum file.
-2. Verifies the record's attestation by the assembly workflow for the record's commit.
-3. Downloads the record's `docs-provenance` artifact by ID and verifies it against the record:
-   build run and attempt, `artifact.tar` digest, generated lockfile digest and Bazel version.
-4. Takes the Pages artifact ID, run, attempt, commit and both digests from the record's `docs`
-   entry only. It checks that the artifact came from that successful main docs build, matches
-   both digests, contains a safe site archive, and has a top-level `index.html` and an exact
-   source/run/attempt `docs-build.json` marker.
-5. Requests Pages deployment of exactly that artifact ID and waits for Pages success and the
-   selected `docs-build.json` marker at the live URL.
+Dispatch `deploy_docs.yaml` on `main`, `selection: seed`, with this JSON in `request`:
 
-Record the deploy run, Pages deployment ID, live URL, selected artifact ID, and marker contents
-in the release tracking issue. The candidate record is immutable and is never edited after it is
-assembled. A green push build alone does not publish documentation.
+```json
+{
+  "legacy_run": "RUN_ID/ATTEMPT",
+  "legacy_artifact_id": "ARTIFACT_ID",
+  "legacy_zip_sha256": "64_LOWERCASE_HEX",
+  "legacy_archive_sha256": "64_LOWERCASE_HEX",
+  "approve_legacy_rollback_seed": true
+}
+```
 
-## Roll back
+This is an exception for a historical artifact without a modern source marker. Confirm its
+provenance limitations before approving the environment job. If no matching retained backup
+exists, stop and obtain a separately reviewed bootstrap plan. Never rebuild old source and call
+it the previously published artifact. Record the resulting snapshot commit and current legacy
+composition ID (its archive digest).
 
-1. Select the last healthy, reviewed docs build. When it is the docs build of the previous
-   release, its candidate record names it: use that release's assembly run and attempt and the
-   digest in its `Release-Candidate-Record:` line. A build that predates candidate records has
-   no record; use its six values from the release tracking issue. Reconfirm that the artifact has
-   not expired and that its configuration and content remain acceptable for the current release.
-2. Obtain the maintainer's rollback approval, then manually dispatch the same workflow on `main`:
-   `selection: record` with that record, or `selection: rollback` with the six values. The
-   record path verifies the record, its attestation and its docs provenance exactly as for a
-   publication. Do not run Doxygen or upload a substitute archive.
-3. Require the deployment job to complete green. Confirm the live `docs-build.json` gives the
-   previous source commit, run ID, and attempt; check the docs landing page and key links.
-   Record the rollback deployment ID and time in the rollback issue described in the
-   [BCR runbook](../design_docs/0018-bcr_release.md).
+## Compose a candidate
 
-If selection or archive validation fails before the Pages POST, nothing has cut over; leave the
-site selected as it was. If the Pages POST succeeds but status or live-marker verification fails,
-the site may already have changed. Inspect the live marker and landing page immediately. If they
-do not show a healthy reviewed build, obtain the maintainer's rollback approval and dispatch the
-previous retained selection. If that previous artifact has expired, the release is missing a
-required rollback asset; obtain a new reviewed candidate and an explicit maintainer decision
-before publication.
+Pick the successful main-push docs build to expose at `/main/`. For a new release, select its
+successful `Assemble release candidate` run/attempt and `Release-Candidate-Record` digest.
+The composer verifies the record attestation, docs provenance, source artifact digests, tag,
+module version and generated header. Existing release versions come from the pinned data branch;
+a different archive cannot overwrite an already-retained release version.
 
-## Rehearsal evidence
+Dispatch `deploy_docs.yaml` on `main`, `selection: compose`, with:
 
-On 2026-09-23, a read-only selection rehearsal downloaded the older main docs artifact
-`10790817536` from successful run `35957126919`, attempt 1, source
-`057c4d465543d3025bf817d142ed236c624346d2`. Its GitHub metadata digest was
-`sha256:b8251dd5600d3ca547b27863df2323206e29c1364132766e2005717b41cf700e`; the
-downloaded `artifact.tar` SHA-256 was
-`986ad44505e7fc9e8b2dc0a0492c6fb2d14d00db66f8724904c5b2da30d01360`. Its exact
-source/run and archive bytes were valid, but it predates `docs-build.json`; the final predeploy
-selector correctly rejects it as a rollback asset. Synthetic marker-bearing fixtures pass and
-tests reject a wrong or missing marker, changed digest, failed/PR source run, expired artifact,
-modified tar, missing index, and symlink. No site was published or switched. A marker-bearing
-retained build and a live promotion/rollback rehearsal remain release-candidate gates.
+```json
+{
+  "snapshot_commit": "FULL_SNAPSHOT_BRANCH_SHA",
+  "main_run": "RUN_ID/ATTEMPT",
+  "release_record_run": "RUN_ID/ATTEMPT",
+  "release_record_sha256": "64_LOWERCASE_HEX"
+}
+```
 
-The [GitHub Pages deployment API](https://docs.github.com/en/rest/pages/pages) accepts an
-artifact ID from this repository. GitHub's `deploy-pages` action selects artifacts from its own
-workflow run, so the manual promotion calls the Pages API directly after exact selection.
+Use empty strings for both release-record fields when retaining the existing release set. A
+first offline composition can use `snapshot_commit: "none"`, but publication still requires a
+verified prior backup and a fresh composition bound to the seeded branch tip.
+
+The read-only assembly job combines all versions, adds common navigation and inventories, keeps
+the stable root compatibility tree, verifies the exact archive uploaded to Pages storage, and
+attests that archive plus `composition.json`. It retains `github-pages` and
+`docs-site-payload-ATTEMPT` for 90 days. The run summary records the composition record SHA-256.
+The recomposed site is a derived artifact; its manifest records original source hashes and
+common chrome hashes. It is not mislabeled as the unmodified release source artifact.
+
+Review the complete candidate and the selector, search, nested links and representative reports.
+Retain the assembly run/attempt and composition record digest as the publication selection.
+
+## Publish a complete site
+
+After maintainer publication approval, dispatch `selection: publish` with:
+
+```json
+{
+  "composition_run": "RUN_ID/ATTEMPT",
+  "composition_sha256": "APPROVED_COMPOSITION_RECORD_SHA256",
+  "prior_composition": "CURRENT_DURABLE_ARCHIVE_SHA256"
+}
+```
+
+The environment-protected job verifies both exact-workflow attestations and source bindings,
+restores and verifies the durable prior site, and confirms it is still live. It uploads that
+verified prior archive for bounded recovery, checks the returned artifact against this run and
+its exact bytes, persists the candidate and evidence to the protected branch, downloads that
+copy back, and only then requests Pages cutover. Normal publication does not build documentation.
+
+Live verification checks the composition marker, version manifest, root and per-version indexes,
+source markers and selector assets. Successful activation records the new current/prior pair in
+`docs-snapshots`. `docs-promotion-evidence-ATTEMPT` retains the preflight and result receipts.
+
+A failure receipt distinguishes `published`, `unchanged`, `restored` and `recovery-required`.
+Automatic recovery is limited to the named verified prior artifact, an unchanged snapshot tip,
+a known terminal candidate Pages request and the candidate's live marker. Unknown or in-flight
+requests, unrelated branch advances and ambiguous live identity stop mutation. A healthy cutover
+with an unconfirmed snapshot-index update is `recovery-required`; it does not blindly restore old
+content. Inspect the exact receipt and reconcile live and stored identities before continuing.
+
+## Elective rollback after publication
+
+Dispatch `selection: rollback` with:
+
+```json
+{
+  "target_composition": "PREVIOUS_DURABLE_ARCHIVE_SHA256",
+  "snapshot_commit": "FULL_CURRENT_SNAPSHOT_BRANCH_SHA",
+  "prior_composition": "CURRENT_DURABLE_ARCHIVE_SHA256"
+}
+```
+
+Rollback restores the complete selected site from the data branch, verifies its stored
+attestation bundles against the original trusted workflow commit, and uploads the exact restored
+archive for Pages. It preserves the current site as the recovery artifact, then uses the same
+approval, serialization, health and identity guards as publication. It does not need the original
+Actions artifacts to remain available. A rollback covers main content, release trees, root alias
+and selector metadata together.
