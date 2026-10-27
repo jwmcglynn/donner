@@ -113,6 +113,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.editor_wasm = _repository_text(".github/workflows/editor_wasm.yml")
         cls.editor_wasm_lane = _repository_text("tools/ci/editor_wasm_lane.sh")
         cls.lint = _repository_text(".github/workflows/lint.yml")
+        cls.sanitizers_pr = _repository_text(".github/workflows/sanitizers-pr.yml")
         cls.coverage_script = _repository_text("tools/coverage.sh")
         cls.apt_install = _repository_text(".github/actions/apt-install/action.yml")
         cls.wasm_size_test_arguments = _repository_text(
@@ -749,6 +750,26 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("run: tools/ci/cmake_consumer.sh build --ccache\n", linux)
         self.assertEqual(2, self.cmake.count("run: tools/ci/cmake_consumer.sh build --ccache\n"))
         self.assertEqual(1, self.cmake.count("run: tools/ci/cmake_consumer.sh install-tools\n"))
+
+    def test_geode_asan_pr_lane_restores_the_main_linux_external_cache(self):
+        # The lane only runs for pull requests, so it never saves an external repository manifest
+        # of its own. It reads the one main's linux job saves, which setup-bazel names after the
+        # lowercased workflow name, with spaces and slashes as hyphens, and the job id. Renaming
+        # either side would silently restore nothing and leave every run fetching the toolchain.
+        workflow_name = re.search(r"^name: (.+)$", self.main, re.MULTILINE).group(1).strip()
+        manifest = "%s-linux" % re.sub(r"[ /]", "-", workflow_name.lower())
+        linux = self._job_body("linux")
+        main_setup = self._step_body(linux, "Setup Bazel")
+        self.assertIn("          external-cache: true\n", main_setup)
+        self.assertIn("          cache-save: ${{ github.event_name != 'pull_request' && "
+                      "github.ref == 'refs/heads/main' }}\n", main_setup)
+
+        lane = self._job_body("asan-geode", self.sanitizers_pr)
+        lane_setup = self._step_body(lane, "Setup Bazel")
+        self.assertIn("          external-cache: |\n            name: %s\n" % manifest,
+                      lane_setup)
+        self.assertIn("          cache-save: false\n", lane_setup)
+        self.assertNotIn("disk-cache:", lane_setup)
 
     def test_retired_closure_scanner_is_not_invoked(self):
         self.assertNotIn("configured_rust_closure.py", self.main)
