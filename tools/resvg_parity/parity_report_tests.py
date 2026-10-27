@@ -454,6 +454,85 @@ class ParityReportTests(unittest.TestCase):
             ],
         )
 
+    def test_reference_budgets_follow_the_evidence_rule(self) -> None:
+        gen = "Reference rasterizer generation: crosshair; "
+        label = "Reference label glyphs: heavier labels; "
+        measured = "analytic residual 398 px, supersampled 0 px"
+        overrides = {
+            "ok": f'Params().withMaxPixelsDifferent(410).withReason("{gen}{measured}")',
+            "label-ok": f'WithMaxPixels(390, "{label}analytic residual 375 px, supersampled 302 px")',
+            "full-only": f'Params().withMaxPixelsDifferent(410).onlyTextFull().withReason('
+                         f'"{gen}{measured}")',
+            "skip": f'Params::Skip("{gen}not measured")',
+            "unbudgeted": f'Params().withReason("{gen}{measured}")',
+            "widened": f'Params::WithThreshold(0.1f, 410, "{gen}{measured}")',
+            "no-residual": f'Params().withMaxPixelsDifferent(410).withReason("{gen}supersampled 0 px")',
+            "no-supersampled": f'Params().withMaxPixelsDifferent(410).withReason('
+                               f'"{gen}analytic residual 398 px")',
+            "not-generation": f'Params().withMaxPixelsDifferent(410).withReason('
+                              f'"{gen}analytic residual 398 px, supersampled 297 px")',
+            "label-no-supersampled": f'WithMaxPixels(390, "{label}analytic residual 375 px")',
+            "too-large": f'Params().withMaxPixelsDifferent(415).withReason("{gen}{measured}")',
+            "simple-text": f'Params().withMaxPixelsDifferent(410).withSimpleTextMaxPixels(900)'
+                           f'.withReason("{gen}{measured}")',
+            "geode-budget": f'Params().withMaxPixelsDifferent(410).withGeodeMaxPixelsDifferent(900)'
+                            f'.withReason("{gen}{measured}")',
+            "shared-golden": f'Params::WithGoldenOverride("g.png").withMaxPixelsDifferent(410)'
+                             f'.withReason("{gen}{measured}")',
+            "geode-golden": f'Params().withMaxPixelsDifferent(410).withGeodeGoldenOverride('
+                            f'"g.png", "{gen}{measured}")',
+            "other": 'Params().withMaxPixelsDifferent(900).withReason("glyph AA")',
+        }
+        for name in overrides:
+            self.fixture.add_case(f"text/text/{name}.svg")
+        self.fixture.add_case("text/tspan/category.svg")
+        entries = ",".join(f'{{"{name}.svg", {expression}}}' for name, expression in overrides.items())
+        source = "".join((
+            _registration("TextText", f'"text/text", {{{entries}}}'),
+            _registration(
+                "TextTspan",
+                f'"text/tspan", {{}}, Params().withMaxPixelsDifferent(410).withReason('
+                f'"{gen}{measured}")',
+            ),
+        ))
+        report = parity_report.build_report(source, self.fixture.tests_root)
+
+        self.assertEqual(
+            parity_report.reference_budget_violations(report),
+            [
+                "text/text/geode-budget.svg: combines the budget with geode_threshold",
+                "text/text/geode-golden.svg: combines the budget with geode_golden",
+                "text/text/label-no-supersampled.svg: reason does not state the supersampled "
+                "residual",
+                "text/text/no-residual.svg: reason does not state the analytic residual",
+                "text/text/no-supersampled.svg: reason does not state the supersampled residual",
+                "text/text/not-generation.svg: supersampled residual 297 px is above the default "
+                "allowance, so the difference is not only the rasterizer generation",
+                "text/text/shared-golden.svg: combines the budget with shared_golden",
+                "text/text/simple-text.svg: combines the budget with simple_text_threshold",
+                "text/text/too-large.svg: budget 415 exceeds the analytic residual 398 plus 3% "
+                "(410)",
+                "text/text/unbudgeted.svg: compared without a pixel budget",
+                "text/text/widened.svg: compared without a pixel budget",
+                "text/text/widened.svg: widens the color threshold instead of counting pixels",
+                "text/tspan/category.svg: comes from a category default, not a per-case override",
+            ],
+        )
+        self.assertEqual(report["summary"]["reference_label_glyph_budget_cases"], 2)
+
+    def test_live_reference_budgets_follow_the_evidence_rule(self) -> None:
+        report = parity_report.generate_report(parity_report._default_repo_root())
+
+        violations = parity_report.reference_budget_violations(report)
+
+        self.assertEqual(
+            violations,
+            [],
+            "A reference rasterizer generation or label glyph budget is a per-case pixel count at "
+            "the default color threshold, within 3% of the analytic residual its reason states, "
+            "with the supersampled residual stated too:\n" + "\n".join(violations),
+        )
+
     def test_state_fields_cannot_bypass_the_named_factories(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
         for params in ("Params{.renderOnly = true}", "Params{.skip = true}",

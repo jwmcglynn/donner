@@ -123,10 +123,10 @@ bottom for completeness.
 | B3  | `structure/image` golden kernel-era mismatch                            |                             12 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
-| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` is a qualified crosshair raster disagreement (see [F9](#f9-textlength--lengthadjust)).                                                                  |
+| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` compares with a reference rasterizer generation budget (see [F9](#f9-textlength--lengthadjust)).                                                         |
 | F10 | Remaining `textPath` vertical, kerning, and filter cases                |                              4 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
-| B7  | text reference qualification                                            |                              9 | Allowances removed; color-adjust labels, `font/simple-case` and `fallback-1` remain skipped (see [B7](#b7-text-reference-qualification)) |
+| B7  | text reference qualification                                            |                              2 | Allowances removed; color-adjust labels compare with generation budgets; `font/simple-case` and `fallback-1` remain skipped (see [B7](#b7-text-reference-qualification)) |
 | —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
 | —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
 | F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
@@ -145,7 +145,7 @@ rendering assertions. Most use `CssFilterContract*`; the inherited invalid-URL c
 
 | Assigned cases | Disposition |
 | --- | --- |
-| Seven `color-adjust-functions-*` cases | Every canonical mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular. Across all label rows the vendored PNGs carry about 14% more ink; against resvg v0.49.0 the residual is consistent with analytic versus 4x4-supersampled edge coverage (see [B7](#b7-text-reference-qualification)). |
+| Seven `color-adjust-functions-*` cases | Compare with a 390-pixel reference label glyph budget. Every mismatch is in label glyphs: 354 pixels in default text, 370 in full text, 375 in Geode. Filtered geometry agrees. Independent endpoints, omitted/default values, percentages, clamping and invalid-negative rejection pass. The labels select Noto Sans Regular (see [B7](#b7-text-reference-qualification)). |
 | Five remaining `drop-shadow-function*` cases | Reference disagreement. Each reference shadow is the Donner shadow moved to a truncated offset: rendering Donner at that offset matches within the default allowance (21 to 72 pixels, against 2,513 to 6,582 at Donner's own offset). For the three `4 5 6` cases the device offset is (10, 12.5); the reference truncates it to (10, 12), while Donner rounds to (10, 13) under its half-pixel rounding contract, and an exact half-pixel shadow still differs from the reference by 447 pixels. For `em-values` and `mm-values` the reference shadows sit at device offsets (30, 47) and (27, 37) instead of the specified (32, 48) and (28.35, 37.80). Reproducing them needs two truncations: the resolved user lengths to whole units before scaling (12.8 19.2 to 12 19, and 11.34 15.12 to 11 15), a hypothesis the current usvg source does not show, and the scaled offset toward zero, which resvg's `apply_drop_shadow` does with `dx as i32`. Color order, currentColor, em/mm resolution and alpha compare independently. |
 | `two-exact-urls` | Valid repeated URL syntax; PNG bytes equal the corpus UB marker. Repeated bounded offsets match their explicit composed offset. Separate blur references retain intermediate clipping and sampling, so they need not equal two blur primitives in one graph. |
 | `two-urls` | Compares by default. The boundary difference was Donner's: the three box passes that approximate the Gaussian discarded what the earlier passes spread past the filter raster edge, which the later passes must read back. TinySkia now runs the passes on zero-padded lines, and Geode evaluates the three passes as one cascade kernel per axis that samples the input directly, so a blur near the raster edge equals the same blur computed with room around it. |
@@ -276,20 +276,16 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
   Noto Sans Regular and 900 with Noto Sans Bold, and Donner matches them with zero
   differing pixels. resvg v0.49.0 draws 900 with Noto Sans Black, so registering
   the other weights belongs with a refresh of those references.
-- **Remaining:** the seven `color-adjust-functions-*` labels are 8-unit Noto Sans
-  Regular, and their pixels are identical across all seven references in each
-  reference set. Against the vendored 500x500 PNGs they differ by 354 simple, 370
-  full and 375 Geode pixels; across all label rows those PNGs carry about 14% more
-  ink than Donner's Noto Sans Regular. Against resvg v0.49.0's 300x300 rendering
-  label ink agrees within 2%, and the remaining 364 simple and 377 full pixels are
-  consistent with analytic (Donner's CPU rasterizer) versus 4x4 supersampled
-  (resvg) edge coverage: 78% of resvg's partial label pixels sit on the 1/16
-  coverage steps supersampling produces, against 7 to 11% of Donner's. The 40 px
-  font-family cases reach 0 to 8 pixels with the same two rasterizers; the likely
-  reason is size, since at a 12 px em most of a glyph's pixels are edge pixels and
-  stems are only one or two pixels wide, so small per-edge coverage differences
-  cross the comparison threshold far more often. This is not yet measured
-  directly. `text/font/simple-case` disagrees on the unitless
+- **Color-adjust labels:** the seven `color-adjust-functions-*` labels are 8-unit
+  Noto Sans Regular, and their pixels are identical across all seven references in
+  each reference set. Against the vendored 500x500 PNGs they differ by 354 simple,
+  370 full and 375 Geode pixels, all inside the three label bands; those PNGs carry
+  about 14% more label ink than Donner's Noto Sans Regular. Against resvg v0.49.0's
+  300x300 rendering label ink agrees within 2%, and a 4x4 supersampled prototype of
+  Donner's rasterizer brings the residual from 364 simple and 377 full pixels to 5
+  and 52. They compare with a 390-pixel label glyph budget (see
+  [Reference label glyph budgets](#reference-label-glyph-budgets)).
+- **Remaining:** `text/font/simple-case` disagrees on the unitless
   `font` shorthand (see the reference qualification table). `fallback-1` is a
   harness mismatch: resvg's harness falls back to Noto Serif for an unknown
   family and Donner to its embedded Public Sans (445 simple, 444 full pixels).
@@ -298,6 +294,113 @@ selection for these cases is asserted directly in `FontSelection_tests.cc`.
 > feDropShadow, text-decoration rotate-lists, pattern AA) are small enough to be
 > plausible coverage-geometry differences; audit opportunistically but they are not
 > promoted bugs.
+
+### Reference rasterizer generation budgets
+
+The vendored references come from more than one resvg rasterizer generation. Newer PNGs cover
+edges with tiny-skia's 4x4 supersampling, so partial alphas fall on 1/16 steps; older ones match
+Donner's analytic coverage. The difference is largest on the 1.25-pixel crosshair most text tests
+draw at x=250: analytic coverage splits it 160/160 across two columns, 4x4 coverage 128/192, so a
+whole reference can differ by about 400 pixels with identical layout. Donner keeps analytic
+coverage on both the CPU and GPU backends, so these references cannot match exactly.
+
+A case may carry a pixel budget for this cause, with a reason starting `Reference rasterizer
+generation:`, only when all of the following hold:
+
+- A 4x4 supersampled prototype of the CPU rasterizer, measured against the same reference,
+  compares within the default allowance (0.02 threshold, 100 pixels).
+- The analytic residual sits on edge coverage (the crosshair columns or glyph edges); the layout
+  matches.
+- The budget is a per-case pixel count at the default color threshold: the largest residual
+  measured on both CPU text tiers on macOS and Linux (and Geode where it runs), plus 3% rounded up
+  to 5 pixels. The reason states the analytic and the supersampled residual.
+- The detection a deliberate regression gets is measured and recorded: shifting the text 1 pixel
+  exceeds the budget in every case except `hanging`, below.
+
+| Case | Before | Residual (px) | 4x4 (px) | Budget | 1 px text shift |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `text/font/font-shorthand` | skip | 386 | 0 | 400 | 422 |
+| `text/text/real-text-height` | skip | 397 | 0 | 410 | 441 |
+| `text/textLength/zero` | skip | 396 | 0 | 410 | 433 |
+| `text/text/ligatures-handling-in-mixed-fonts-1` (full text) | skip | 399 | 0 | 415 | 507 |
+| `text/text/ligatures-handling-in-mixed-fonts-2` (full text) | skip | 343 | 0 | 355 | 435 |
+| `text/baseline-shift/nested-with-baseline-1`, `-2` | 0.1 / 100 | 384 | 0 | 400 | 408 |
+| `text/dominant-baseline/hanging` | 0.1 / 100 | 337 | 0 | 350 | 344 |
+| `text/tspan/nested-whitespaces` | 400 | 387 | 0 | 400 | 416 |
+| `text/text/zalgo` (full text) | 300 | 257 | 1 | 265 | 468 |
+
+The two ligature cases stay gated to full text: the simple tier lacks mixed-font ligature shaping
+(1555 and 3134 pixels, #1176).
+
+Moving `nested-with-baseline` and `hanging` from a 0.1 color threshold with 100 pixels to a 0.02
+count is not tighter on both axes: the count is larger and the color threshold smaller. It is
+justified by what each setting detects:
+
+- `nested-with-baseline`: the 1 px shift counted 22 to 39 pixels under 0.1 / 100 and passed; it
+  counts 408 to 425 under the new budget and fails.
+- `hanging`, one Devanagari glyph whose glyph-edge differences pixelmatch treats as
+  anti-aliasing:
+
+  | Regression | 0.1 / 100 | 0.02 count (budget 350) | 0.02 with anti-aliased pixels |
+  | --- | ---: | ---: | ---: |
+  | none | 0 | 337 | 940 |
+  | 1 px text shift | 6 (passes) | 344 (passes) | 1235 |
+  | 2 px text shift | 225 (fails) | 562 (fails) | 1465 |
+  | `dominant-baseline="alphabetic"` | 2714 (fails) | 2997 (fails) | not recorded |
+
+  Both settings catch the baseline change the test is about and a 2 px shift; neither catches a 1
+  px shift. Counting anti-aliased pixels would catch it (940 against 1235), but makes the budget a
+  measure of glyph-edge coverage rather than of the crosshair, so it is not used.
+
+`//tools/resvg_parity:parity_report_tests` checks the form of this class and the next. Such a
+compared case:
+
+- comes from a per-case override, not a category default;
+- has a pixel budget with no other exception (no simple-text, Geode or golden override);
+- keeps the default color threshold;
+- has a budget at most its stated analytic residual plus 3%, rounded up to 5 pixels;
+- states its supersampled residual, which for this class must be within the default allowance.
+
+The parity report counts them as `reference_generation_budget_cases` and
+`reference_label_glyph_budget_cases`.
+
+### Reference label glyph budgets
+
+The seven `filters/filter-functions/color-adjust-functions-*` cases fail the first condition. They
+differ from their vendored 500x500 PNGs by 354 simple, 370 full and 375 Geode pixels, all inside
+the three label bands; the filtered squares compare exactly. Under 4x4 coverage the difference is
+still 302 and 297 pixels, because those PNGs draw the 8-unit Noto Sans labels about 14% heavier.
+Against resvg v0.49.0's rendering, 4x4 coverage brings the labels to 5 and 52 pixels.
+
+They compare with a 390-pixel budget whose reason starts `Reference label glyphs:` and states the
+analytic and supersampled residuals. Detection was measured on the residual-bearing PNGs:
+
+| Regression | Pixels (simple / full) | Budget |
+| --- | ---: | ---: |
+| none | 354 / 370 | 390 |
+| 1 px label shift | 1508 / 1524 | fails |
+| brightness 50% to 45% on one square | 10354 / 10370 | fails |
+| opacity 50% to 45% on one square | 5358 / 5374 | fails |
+| sepia 2 to 0.9 on one square | 10354 / 10370 | fails |
+| grayscale 2 to 0.9 on one square | 354 / 370 | passes: no pixel moves past the 0.02 threshold |
+
+The grayscale change is invisible to any comparison at the default color threshold, budgeted or
+not.
+
+### Removed budgets
+
+Budgets that already passed at default settings were removed from 39 cases, including the
+`structure/transform-origin` category default (0.13 threshold, 300 pixels; `on-image`,
+`on-text-path` and `on-text` still need it and keep it per case), `text/text/xml-space` (1400
+pixels) and `painting/fill/pattern-on-text` (2100 pixels). Measured at default settings, their
+largest residuals are:
+
+- 54 pixels on either CPU tier, macOS and Linux alike;
+- 14 pixels on Geode with Metal on macOS;
+- 0 to 71 pixels on Geode with software Vulkan (llvmpipe) on Linux for the `transform-origin`
+  rows, with `bBox-impact` and `tiny-pattern-upscaled` also passing at default settings there.
+
+Geode also passes with hardware Vulkan on Linux.
 
 ---
 
@@ -405,7 +508,9 @@ extents; `lengthAdjust/with-underline` and `text-decoration/with-textLength-on-a
 also compare against resvg v0.49.0, because the snapshot drew their underlines at 0.1em, twice the
 0.05em thickness in the vendored Noto Sans post table.
 
-`textLength/zero` stays skipped because its reference comes from a different rasterizer generation.
+`textLength/zero` compares with a 410-pixel budget because its reference comes from a different
+rasterizer generation (see
+[Reference rasterizer generation budgets](#reference-rasterizer-generation-budgets)).
 Its glyph layout matches the vendored reference, where the last glyph's advance ends at x=20. All
 396 differing pixels on both CPU tiers are the x=100 crosshair, which this PNG draws at alpha 128
 and 192, exactly what 4x4 supersampled coverage produces for its 1.25-pixel stroke, while the

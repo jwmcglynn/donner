@@ -153,8 +153,6 @@ INSTANTIATE_TEST_SUITE_P(
             {
                 {"type=hueRotate-without-an-angle.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "hueRotate(0) identity")},
-                {"type=hueRotate.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "hueRotate(30)")},
                 {"type=matrix-with-empty-values.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
                 {"type=matrix-with-non-normalized-values.svg",
@@ -165,8 +163,6 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
                 {"type=matrix-without-values.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
-                {"type=matrix.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "type=matrix")},
                 {"type=saturate-with-a-large-coefficient.svg",
                  Params::UndefinedBehavior("saturate 99999")},
                 {"type=saturate-with-negative-coefficient.svg",
@@ -539,43 +535,63 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Reference disagreement: PNG applies functions around a missing "
                               "URL; Filter Effects ignores the entire chain "
                               "(FilterReferenceStages.InvalidReferenceDisablesEntireChain)")},
-                // The seven color-adjust labels are 8-unit Noto Sans Regular (asserted in
-                // FontSelection_tests.cc), and their pixels are identical across all seven
-                // references in each reference set. Against these vendored 500x500 PNGs they
-                // differ by 354 simple, 370 full and 375 Geode pixels; across all label rows those
-                // PNGs carry about 14% more ink than Donner's Noto Sans Regular. Against resvg
-                // v0.49.0's 300x300 rendering label ink agrees within 2%, and the remaining 364
-                // simple and 377 full pixels are consistent with analytic (Donner's CPU
-                // rasterizer) versus 4x4 supersampled (resvg) edge coverage: 78% of resvg's
-                // partial label pixels sit on the 1/16 coverage steps supersampling produces,
-                // against 7 to 11% of Donner's.
+                // Residuals are 354 simple, 370 full and 375 Geode pixels; under 4x4
+                // supersampled coverage they are 302 and 297, so these PNGs are not only a
+                // rasterizer generation apart. Against resvg v0.49.0's rendering the labels
+                // compare at 5 (simple) and 52 (full) pixels under 4x4 coverage. A 1 px label
+                // shift reaches 1508 pixels, and a 10% change to the brightness, opacity or sepia
+                // amount reaches 5358 or more; the grayscale change stays under the 0.02 color
+                // threshold for every pixel. The registration parser reads each entry, so the
+                // identical budget is spelled out per case.
                 {"color-adjust-functions-0percent.svg",
-                 Params::Skip("Reference glyphs: the PNG draws the labels about 14% heavier than "
-                              "Noto Sans Regular (354 default-text, 370 full-text, 375 Geode "
-                              "px); filtered geometry agrees (#1167, #1169)")},
+                 WithMaxPixels(390,
+                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
+                               "labels about 14% heavier, with 4x4 supersampled coverage; "
+                               "residual confined to the three label bands; analytic residual "
+                               "375 px, supersampled 302 px; filtered squares compare exactly "
+                               "(#1167, #1169)")},
                 {"color-adjust-functions-100percent.svg",
-                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
-                              "Sans Regular; filtered geometry agrees, color contracts checked "
-                              "independently (#1167, #1169)")},
+                 WithMaxPixels(390,
+                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
+                               "labels about 14% heavier, with 4x4 supersampled coverage; "
+                               "residual confined to the three label bands; analytic residual "
+                               "375 px, supersampled 302 px; filtered squares compare exactly "
+                               "(#1167, #1169)")},
                 {"color-adjust-functions-2.svg",
-                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
-                              "Sans Regular; filtered geometry agrees, color contracts checked "
-                              "independently (#1167, #1169)")},
+                 WithMaxPixels(390,
+                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
+                               "labels about 14% heavier, with 4x4 supersampled coverage; "
+                               "residual confined to the three label bands; analytic residual "
+                               "375 px, supersampled 302 px; filtered squares compare exactly "
+                               "(#1167, #1169)")},
                 {"color-adjust-functions-200percent.svg",
-                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
-                              "Sans Regular; filtered geometry agrees, color contracts checked "
-                              "independently (#1167, #1169)")},
+                 WithMaxPixels(390,
+                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
+                               "labels about 14% heavier, with 4x4 supersampled coverage; "
+                               "residual confined to the three label bands; analytic residual "
+                               "375 px, supersampled 302 px; filtered squares compare exactly "
+                               "(#1167, #1169)")},
                 {"color-adjust-functions-50percent.svg",
-                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
-                              "Sans Regular; filtered geometry agrees, color contracts checked "
-                              "independently (#1167, #1169)")},
+                 WithMaxPixels(390,
+                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
+                               "labels about 14% heavier, with 4x4 supersampled coverage; "
+                               "residual confined to the three label bands; analytic residual "
+                               "375 px, supersampled 302 px; filtered squares compare exactly "
+                               "(#1167, #1169)")},
                 {"color-adjust-functions-default-value.svg",
-                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
-                              "Sans Regular; defaults agree with explicit amounts (#1167, #1169)")},
+                 WithMaxPixels(390,
+                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
+                               "labels about 14% heavier, with 4x4 supersampled coverage; "
+                               "residual confined to the three label bands; analytic residual "
+                               "375 px, supersampled 302 px; filtered squares compare exactly "
+                               "(#1167, #1169)")},
                 {"color-adjust-functions-negative.svg",
-                 Params::Skip("Reference glyphs: the PNG draws the labels heavier than Noto "
-                              "Sans Regular; invalid negative declarations are rejected (#1167, "
-                              "#1169)")},
+                 WithMaxPixels(390,
+                               "Reference label glyphs: the PNG draws the 8-unit Noto Sans "
+                               "labels about 14% heavier, with 4x4 supersampled coverage; "
+                               "residual confined to the three label bands; analytic residual "
+                               "375 px, supersampled 302 px; filtered squares compare exactly "
+                               "(#1167, #1169)")},
                 {"drop-shadow-function-color-last.svg",
                  Params::Skip("Reference disagreement: the specified device offset is (10, 12.5); "
                               "the reference truncates it to (10, 12), Donner rounds to (10, 13) "
@@ -674,7 +690,6 @@ INSTANTIATE_TEST_SUITE_P(
                 "masking/mask",
                 {
                     {"recursive-on-child.svg", Params::UndefinedBehavior("Recursive on child")},
-                    {"on-a-small-object.svg", WithMaxPixels(120, "Small mask edge AA")},
                     {"with-image.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                            "Mask with <image> (bilinear edge diffs)")},
@@ -702,12 +717,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"out-of-order-referencing.svg",
                      Params::WithThreshold(0.6f, 800, "Nested pattern AA (768px)")},
                     {"overflow=visible.svg", Params::UndefinedBehavior("overflow=visible")},
-                    {"pattern-on-child.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
-                                                                   "Anti-aliasing artifacts")},
                     {"patternContentUnits-with-viewBox.svg",
                      Params::WithThreshold(kDefaultThreshold, 150, "Pattern AA drift")},
-                    {"patternContentUnits=objectBoundingBox.svg",
-                     Params::WithThreshold(kDefaultThreshold, 250, "Pattern AA drift")},
                     {"recursive-on-child.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                            "Larger threshold due to recursive pattern seams.")},
@@ -719,8 +730,6 @@ INSTANTIATE_TEST_SUITE_P(
                                            "Larger threshold due to recursive pattern seams.")},
                     {"text-child.svg",
                      Params::WithThreshold(0.5f, 1150, "AA artifacts + quad glyph outlines")},
-                    {"tiny-pattern-upscaled.svg",
-                     Params::WithThreshold(0.02f, 500, "Upscaled pattern edge AA")},
                     {"transform-and-patternTransform.svg",
                      Params{}.withGeodeGoldenOverride(
                          "donner/svg/renderer/testdata/golden/geode/"
@@ -810,7 +819,6 @@ INSTANTIATE_TEST_SUITE_P(
     PaintingDisplay, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory("painting/display",
                                         {
-                                            {"bBox-impact.svg", WithMaxPixels(170, "Clip edge AA")},
                                             {"none-on-tref.svg",
                                              Params::DeprecatedInSVG2("<tref> (removed in SVG 2)")},
                                         })),
@@ -825,7 +833,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"icc-color.svg",
                      Params::DeprecatedInSVG2("SVG 1.1 icc-color() paint (removed in SVG 2); the "
                                               "reference is the resvg UB marker image")},
-                    {"pattern-on-text.svg", Params::WithThreshold(kDefaultThreshold, 2100)},
                     {"rgb-int-int-int.svg",
                      Params::UndefinedBehavior("reference is the resvg UB marker image; valid CSS "
                                                "Color 4 space-separated RGB (#1186)")},
@@ -986,9 +993,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/stroke-dasharray",
                 {
-                    {"multiple-subpaths.svg",
-                     Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Larger threshold due to anti-aliasing artifacts.")},
                     {"n-0.svg", Params::WithThreshold(0.0f, 0, "Closed-path dash seam identity")},
                 })),
             ValuesIn(ActiveComparisonModes())),
@@ -1060,38 +1064,20 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    ShapesCircle, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "shapes/circle",
-                {
-                    {"simple-case.svg",
-                     WithMaxPixels(120,
-                                   "u8 premultiplied storage quantization moves a cluster of "
-                                   "boundary edge pixels at most 1/255 on white; mean error vs "
-                                   "the resvg reference is unchanged to three decimals")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(ShapesCircle, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("shapes/circle")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(ShapesEllipse, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("shapes/ellipse")),
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    ShapesLine, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "shapes/line",
-                {
-                    {"no-x1-coordinate.svg", WithMaxPixels(120, "Line endpoint AA")},
-                    {"no-y1-coordinate.svg", WithMaxPixels(120, "Line endpoint AA")},
-                    {"simple-case.svg",
-                     Params::WithThreshold(0.02f, kDefaultMismatchedPixels,
-                                           "Larger threshold due to anti-aliasing")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(ShapesLine, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("shapes/line")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(ShapesPath, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("shapes/path")),
@@ -1283,27 +1269,15 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(0.13f, 500, "Viewport edge AA")},
                 {"preserveAspectRatio=none.svg",
                  Params::WithThreshold(0.13f, 1000, "Viewport edge AA")},
-                {"preserveAspectRatio=xMaxYMax-slice.svg",
-                 Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                       "Has anti-aliasing artifacts.")},
                 {"preserveAspectRatio=xMaxYMax.svg",
                  Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
-                {"preserveAspectRatio=xMidYMid-slice.svg",
-                 Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                       "Has anti-aliasing artifacts.")},
                 {"preserveAspectRatio=xMidYMid.svg",
                  Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
-                {"preserveAspectRatio=xMinYMin-slice.svg",
-                 Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                       "Has anti-aliasing artifacts.")},
                 {"preserveAspectRatio=xMinYMin.svg",
                  Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
                                        "Has anti-aliasing artifacts.")},
                 {"proportional-viewBox.svg", Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
                                                                    "Has anti-aliasing artifacts.")},
-                {"viewBox-not-at-zero-pos.svg",
-                 Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                       "Has anti-aliasing artifacts.")},
 
                 {"funcIRI-with-quotes.svg", Params{}},
                 {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params{}},
@@ -1326,22 +1300,20 @@ INSTANTIATE_TEST_SUITE_P(StructureSystemLanguage, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    StructureTransform, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/transform",
-                {
-                    {"rotate-at-position.svg",
-                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
-                                           "Larger threshold due to anti-aliasing artifacts.")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StructureTransform, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("structure/transform")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     StructureTransformOrigin, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("structure/transform-origin", {},
-                                        Params::WithThreshold(0.13f, 300, "Rotated edge AA"))),
+    Combine(ValuesIn(getTestsInCategory(
+                "structure/transform-origin",
+                {
+                    {"on-image.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
+                    {"on-text-path.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
+                    {"on-text.svg", Params::WithThreshold(0.13f, 300, "Rotated edge AA")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1388,15 +1360,20 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextBaselineShift, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("text/baseline-shift",
-                                        {
-                                            {"nested-with-baseline-1.svg",
-                                             Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
-                                                                   "Minor AA artifacts on axis")},
-                                            {"nested-with-baseline-2.svg",
-                                             Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
-                                                                   "Minor AA artifacts on axis")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/baseline-shift",
+                {
+                    // A 1 px text shift reaches 408 to 425 pixels; the former 0.1 color
+                    // threshold let it pass at 39.
+                    {"nested-with-baseline-1.svg",
+                     Params().withMaxPixelsDifferent(400).withReason(
+                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
+                         "crosshair; analytic residual 384 px, supersampled 0 px")},
+                    {"nested-with-baseline-2.svg",
+                     Params().withMaxPixelsDifferent(400).withReason(
+                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
+                         "crosshair; analytic residual 384 px, supersampled 0 px")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1428,12 +1405,15 @@ INSTANTIATE_TEST_SUITE_P(
                                               "removed in SVG 2); the reference is the resvg UB "
                                               "marker image")},
 
+                    // A 1 px text shift reaches 344 pixels and passes, as it did under the former
+                    // 0.1 color threshold (6 pixels); a 2 px shift (562) and the alphabetic
+                    // baseline (2997) fail.
                     {"hanging.svg",
-                     Params::WithThreshold(
-                         0.1f, kDefaultMismatchedPixels,
-                         "Golden's 0.5px crosshair hairline is rasterized with a sub-pixel x "
-                         "offset (vertical-line alpha 128/192 vs 160/160 in the sibling "
-                         "middle/central/alphabetic goldens); the glyph itself matches")},
+                     Params().withMaxPixelsDifferent(350).withReason(
+                         "Reference rasterizer generation: 4x4 supersampled coverage on the 0.5 "
+                         "unit crosshair (alpha 128/192 where Donner's analytic coverage gives "
+                         "160/160); the glyph matches; analytic residual 337 px, supersampled "
+                         "0 px")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1444,17 +1424,15 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "text/font",
             {
-                // All 388 mismatches sit on the vertical gray hairline and none on the text,
-                // so the `font` shorthand itself round-trips exactly. That hairline is 1.25
-                // device px wide centered on device x=250: Donner splits its coverage 160/160
-                // across the two pixels, the exact area split, where the reference uses
-                // 128/192. Donner emits that same 128/192 split for the geometrically
-                // identical horizontal hairline, so Donner's two axes disagree with each other
-                // and this is stroke rasterization, not font handling.
+                // The vertical crosshair is 1.25 device px wide centered on x=250. Donner's
+                // analytic coverage gives the exact area split, 160/160; this PNG's 4x4
+                // supersampled coverage gives 128/192. With 4x4 coverage the case compares at
+                // 0 pixels, and shifting the text 1 px raises the residual to 422.
                 {"font-shorthand.svg",
-                 Params::Skip("Vertical hairline coverage splits 160/160 against the "
-                              "reference's 128/192, while the horizontal hairline matches; "
-                              "the text under the shorthand is pixel-exact (#1173)")},
+                 Params().withMaxPixelsDifferent(400).withReason(
+                     "Reference rasterizer generation: 4x4 supersampled coverage on the 1.25 px "
+                     "crosshair; the text under the shorthand matches; analytic residual 386 px, "
+                     "supersampled 0 px (#1173)")},
                 // `font="bold italic 64 Noto Sans"` resolves to Noto Sans Italic, the only italic
                 // face in the test font set (FontSelection_tests.cc). The vendored 400x400 PNG
                 // draws a synthesized bold over it with wider advances, which neither CPU text
@@ -1687,19 +1665,29 @@ INSTANTIATE_TEST_SUITE_P(
                     // lines in Mplus 1p, the only face in the test font set covering these CJK
                     // codepoints. The superseded one used per-language faces outside the set.
                     {"xml-lang=ja.svg", Params().setCanvasSize(300, 300)},
-                    {"xml-space.svg", Params::WithThreshold(kDefaultThreshold, 1400)},
-                    {"zalgo.svg", Params().withMaxPixelsDifferent(300).onlyTextFull().withReason(
-                                      "Complex diacritics; vertical-axis AA diff "
-                                      "not the focus of the test")},
+                    {"zalgo.svg",
+                     Params().withMaxPixelsDifferent(265).onlyTextFull().withReason(
+                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
+                         "crosshair and diacritic edges; analytic residual 257 px, supersampled "
+                         "1 px; a 1 px text shift reaches 468")},
+                    // These three differ from their PNGs only in edge coverage: the crosshair
+                    // and glyph edges compare at 0 pixels under 4x4 supersampled coverage, and
+                    // a 1 px text shift raises each residual past its budget (507, 435 and
+                    // 441 pixels). The simple tier lacks the mixed-font ligature shaping.
                     {"ligatures-handling-in-mixed-fonts-1.svg",
-                     Params::Skip(
-                         "Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},
+                     Params().withMaxPixelsDifferent(415).onlyTextFull().withReason(
+                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
+                         "crosshair and glyph edges; analytic residual 399 px, supersampled 0 px; "
+                         "simple tier: Bug #1176, mixed-font ligature shaping")},
                     {"ligatures-handling-in-mixed-fonts-2.svg",
-                     Params::Skip(
-                         "Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},
+                     Params().withMaxPixelsDifferent(355).onlyTextFull().withReason(
+                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
+                         "crosshair and glyph edges; analytic residual 343 px, supersampled 0 px; "
+                         "simple tier: Bug #1176, mixed-font ligature shaping")},
                     {"real-text-height.svg",
-                     Params::Skip(
-                         "Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},
+                     Params().withMaxPixelsDifferent(410).withReason(
+                         "Reference rasterizer generation: 4x4 supersampled coverage on the "
+                         "crosshair and glyph edges; analytic residual 397 px, supersampled 0 px")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1773,11 +1761,12 @@ INSTANTIATE_TEST_SUITE_P(
                     // resvg v0.49.0's zero.png is not a replacement: its glyphs sit about 17.3
                     // units right (1834 differing pixels).
                     {"zero.svg",
-                     Params::Skip("Reference rasterizer generation: the glyph layout matches; all "
-                                  "396 differing pixels are the x=100 crosshair, which this PNG "
-                                  "draws at alpha 128/192, as 4x4 supersampled coverage does, "
-                                  "where sibling textLength references and Donner's analytic "
-                                  "coverage draw 160/160")},
+                     Params().withMaxPixelsDifferent(410).withReason(
+                         "Reference rasterizer generation: the glyph layout matches; this PNG "
+                         "draws the x=100 crosshair at alpha 128/192, as 4x4 supersampled "
+                         "coverage does, where Donner's analytic coverage draws 160/160; "
+                         "analytic residual 396 px, supersampled 0 px; a 1 px text shift reaches "
+                         "433")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1960,7 +1949,10 @@ INSTANTIATE_TEST_SUITE_P(
             {
                 {"bidi-reordering.svg", Params::Skip("Not impl: BIDI reordering")},
                 {"nested-whitespaces.svg",
-                 Params().withMaxPixelsDifferent(400).withReason("Vertical axis has different AA")},
+                 Params().withMaxPixelsDifferent(400).withReason(
+                     "Reference rasterizer generation: 4x4 supersampled coverage on the "
+                     "crosshair; analytic residual 387 px, supersampled 0 px; a 1 px text shift "
+                     "reaches 416")},
                 {"tspan-bbox-2.svg", Params().withMaxPixelsDifferent(900).withReason(
                                          "Crosshair thin-line AA + underline uses")},
                 // Same cause as text/textPath/with-filter.svg: the span filter applies, but
