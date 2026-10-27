@@ -87,6 +87,9 @@ struct TextGlyph {
   std::optional<double> textPathOrigin;  ///< Logical path distance for a stretched outline origin.
   double textPathNormalOffset = 0.0;     ///< Offset from the path along its left normal.
   std::optional<double> textPathLocalRotateDegrees;  ///< Authored rotation before path warping.
+  /// True when vertical layout set this glyph sideways, a quarter turn from upright, so the
+  /// glyph's own x axis runs along the inline axis.
+  bool sideways = false;
 };
 
 /**

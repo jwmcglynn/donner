@@ -1765,8 +1765,13 @@ TEST(TextEngineScriptedTest, TextPathLengthKeepsSpacingOnlyChildWidth) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" textLength="100" lengthAdjust="spacingAndGlyphs">A<tspan textLength="40">BC</tspan>D</textPath>)");
   ASSERT_THAT(glyphs, SizeIs(4));
-  EXPECT_THAT(glyphs[0].xAdvance,
-              DoubleNear(10.0 * (100.0 - 40.0) / (2.0 * 10.0 + 2.0 * 3.0), 1e-6));
+  // The child's one gap grows from its 1px kern by its trailing gap, which D inherits as fixed
+  // advance alongside the child's 40px. This follows Donner's fixed-child model for nested length
+  // owners; Chrome instead scales the child's content inside a spacingAndGlyphs parent.
+  const double childTrailingGap = 40.0 - (2.0 * 10.0 + 1.0);
+  EXPECT_THAT(
+      glyphs[0].xAdvance,
+      DoubleNear(10.0 * (100.0 - 40.0 - childTrailingGap) / (2.0 * 10.0 + 2.0 * 3.0), 1e-6));
   EXPECT_THAT(glyphs[1].xAdvance, DoubleEq(10.0));
   EXPECT_THAT(glyphs[2].xAdvance, DoubleEq(10.0));
   EXPECT_THAT(glyphs[2].xPosition + glyphs[2].xAdvance - glyphs[1].xPosition,
@@ -1815,6 +1820,108 @@ TEST(TextEngineScriptedTest, TextPathLengthKeepsThreeLevelsOfOverrides) {
       R"(<textPath href="#p" textLength="120" lengthAdjust="spacingAndGlyphs"><tspan textLength="40" lengthAdjust="spacingAndGlyphs">AB</tspan></textPath>)");
   ASSERT_THAT(allChildren, SizeIs(2));
   EXPECT_THAT(allChildren.back().xPosition + allChildren.back().xAdvance, DoubleNear(40.0, 1e-6));
+}
+
+/// Lays out \p value as one vertical span, optionally fitted to \p target with
+/// `lengthAdjust="spacingAndGlyphs"`.
+std::vector<TextGlyph> LayoutVerticalSpan(const std::string& value, std::optional<double> target) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(value);
+  if (target) {
+    span.textLength = Lengthd(*target, Lengthd::Unit::None);
+    span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  }
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+  return runs.empty() ? std::vector<TextGlyph>{} : runs.front().glyphs;
+}
+
+// A glyph's outline is stretched before its rotation is applied. A sideways glyph in vertical text
+// is turned a quarter turn, so its own x axis is the inline axis; an upright glyph keeps y inline.
+TEST(TextEngineScriptedTest, VerticalSpacingAndGlyphsStretchesEachGlyphAlongTheInlineAxis) {
+  struct Case {
+    const char* name;
+    std::string value;
+    double rotateDegrees;
+    float stretchX;
+    float stretchY;
+  };
+  std::string upright;
+  Utf8::Append(U'一', std::back_inserter(upright));
+  Utf8::Append(U'二', std::back_inserter(upright));
+  const Case cases[] = {
+      {"sideways", "AB", 90.0, 2.0f, 1.0f},
+      {"upright", upright, 0.0, 1.0f, 2.0f},
+  };
+  for (const Case& test : cases) {
+    SCOPED_TRACE(test.name);
+    const auto natural = LayoutVerticalSpan(test.value, std::nullopt);
+    ASSERT_THAT(natural, SizeIs(2));
+    const double naturalLength = natural[1].yPosition + natural[1].yAdvance - natural[0].yPosition;
+    const auto glyphMatches = [&](const TextGlyph& glyph) {
+      return AllOf(
+          GlyphYPositionIs(DoubleNear(
+              natural[0].yPosition + 2.0 * (glyph.yPosition - natural[0].yPosition), 1e-9)),
+          GlyphYAdvanceIs(DoubleEq(2.0 * glyph.yAdvance)),
+          GlyphRotateDegreesIs(DoubleEq(test.rotateDegrees)),
+          GlyphStretchScaleXIs(FloatEq(test.stretchX)),
+          GlyphStretchScaleYIs(FloatEq(test.stretchY)));
+    };
+
+    EXPECT_THAT(LayoutVerticalSpan(test.value, 2.0 * naturalLength),
+                ElementsAre(glyphMatches(natural[0]), glyphMatches(natural[1])));
+  }
+}
+
+// SVG 2's text-length loop accrues the per-gap adjustment after every character of a
+// `lengthAdjust="spacing"` owner, its last included, but does not define how following text
+// moves. Chrome shifts it by the accrued amount, one gap past the owner's target length, and the
+// resvg references agree; Donner follows them. Glyph stretching accrues no trailing gap.
+TEST(TextEngineScriptedTest, SpacingLengthOwnerCarriesItsTrailingGapToFollowingText) {
+  const auto natural = LayoutParsedTextPath("<tspan>CD</tspan>EF");
+  ASSERT_THAT(natural, SizeIs(4));
+  const double naturalLength = natural[1].xPosition + natural[1].xAdvance - natural[0].xPosition;
+  const double naturalGap = natural[2].xPosition - (natural[1].xPosition + natural[1].xAdvance);
+  const double extra = 20.0;
+
+  for (const std::string adjust : {"spacing", "spacingAndGlyphs"}) {
+    SCOPED_TRACE(adjust);
+    const auto glyphs =
+        LayoutParsedTextPath("<tspan textLength=\"" + std::to_string(naturalLength + extra) +
+                             "\" lengthAdjust=\"" + adjust + "\">CD</tspan>EF");
+    ASSERT_THAT(glyphs, SizeIs(4));
+    const double ownerEnd = glyphs[1].xPosition + glyphs[1].xAdvance;
+    const double trailingGap = adjust == "spacing" ? extra : 0.0;
+    EXPECT_THAT(std::vector<double>({ownerEnd - glyphs[0].xPosition, glyphs[2].xPosition - ownerEnd,
+                                     glyphs[3].xPosition - glyphs[2].xPosition}),
+                ElementsAre(DoubleNear(naturalLength + extra, 1e-9),
+                            DoubleNear(naturalGap + trailingGap, 1e-9),
+                            DoubleNear(natural[3].xPosition - natural[2].xPosition, 1e-9)));
+  }
+}
+
+// A nested spacing owner's trailing gap belongs to the text after it, so an enclosing owner that it
+// ends measures and fits its own length without it, and passes the gap on to its own followers.
+// This follows Donner's model of nested length owners as fixed-width children.
+TEST(TextEngineScriptedTest, NestedSpacingOwnerPassesItsTrailingGapThroughItsLastAncestor) {
+  const auto natural = LayoutParsedTextPath("<tspan>A<tspan>CD</tspan></tspan>EF");
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<tspan textLength="60" lengthAdjust="spacingAndGlyphs">A<tspan textLength="40">CD</tspan></tspan>EF)");
+  ASSERT_THAT(natural, SizeIs(5));
+  ASSERT_THAT(glyphs, SizeIs(5));
+  const double innerGap =
+      (glyphs[2].xPosition - glyphs[1].xPosition) - (natural[2].xPosition - natural[1].xPosition);
+  const double naturalGap = natural[3].xPosition - (natural[2].xPosition + natural[2].xAdvance);
+  const double ownerEnd = glyphs[2].xPosition + glyphs[2].xAdvance;
+
+  EXPECT_THAT(innerGap, Gt(0.0));
+  EXPECT_THAT(std::vector<double>({ownerEnd - glyphs[0].xPosition, glyphs[3].xPosition - ownerEnd}),
+              ElementsAre(DoubleNear(60.0, 1e-9), DoubleNear(naturalGap + innerGap, 1e-9)));
 }
 
 TEST(TextEngineScriptedTest, TextPathLengthRejectsUnrepresentableGlyphScale) {
@@ -1952,12 +2059,15 @@ TEST(TextEngineScriptedTest, TextPathClusterSpacingRespectsNestedLengthOwners) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" textLength="100">A<tspan textLength="40">q&#x301;B</tspan>C</textPath>)",
       /*scripted=*/true, "M0 0H500", /*clusterCombiningMarks=*/true);
+  // The child's 19px trailing gap after B is fixed advance that the outer owner's two gaps no
+  // longer have to supply, so each of them shrinks by 9.5px. This follows Donner's fixed-child
+  // model for nested length owners.
   EXPECT_THAT(
       glyphs,
       ElementsAre(
-          GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXPositionIs(DoubleNear(30.0, 1e-6)),
-          AllOf(GlyphXPositionIs(DoubleNear(33.0, 1e-6)), GlyphYPositionIs(DoubleNear(-4.0, 1e-6))),
-          GlyphXPositionIs(DoubleNear(60.0, 1e-6)), GlyphXPositionIs(DoubleNear(90.0, 1e-6))));
+          GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXPositionIs(DoubleNear(20.5, 1e-6)),
+          AllOf(GlyphXPositionIs(DoubleNear(23.5, 1e-6)), GlyphYPositionIs(DoubleNear(-4.0, 1e-6))),
+          GlyphXPositionIs(DoubleNear(50.5, 1e-6)), GlyphXPositionIs(DoubleNear(90.0, 1e-6))));
 }
 
 TEST(TextEngineScriptedTest, TextPathLengthAdjustsAdvancesBeforeCurvedPlacement) {
@@ -2088,10 +2198,13 @@ TEST(TextEngineScriptedTest, GlobalTextLengthSpacingAndGlyphsScalesVerticalAdvan
 
   const auto runs = engine.layout(text, params);
 
-  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
-                        AllOf(GlyphYPositionIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleEq(20.0)),
-                              GlyphStretchScaleYIs(FloatEq(2.0f))),
-                        GlyphYPositionIs(DoubleEq(24.0))))));
+  // Latin glyphs are set sideways in vertical text, so their outlines stretch along their own x
+  // axis, which the quarter turn maps onto the vertical inline axis.
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(
+                  AllOf(GlyphYPositionIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleEq(20.0)),
+                        GlyphStretchScaleXIs(FloatEq(2.0f)), GlyphStretchScaleYIs(FloatEq(1.0f))),
+                  GlyphYPositionIs(DoubleEq(24.0))))));
 }
 
 TEST(TextEngineScriptedTest, SubSuperMetricsResolveSpanAndAncestorBaselineShifts) {
@@ -2891,10 +3004,11 @@ TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAdjustsVerticalGaps) {
 
   // Natural length 22px (10px advance, 2px kern, 10px advance) stretched to 40px moves
   // the second glyph down by the 18px gap difference. The plain span starts from the adjusted
-  // 40px current position plus the 4px cross-span kern.
+  // 40px current position, plus the 18px gap that spacing accrues after the last character,
+  // plus the 4px cross-span kern.
   EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(0.0)),
                                                          GlyphYPositionIs(DoubleEq(30.0)))),
-                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(44.0))))));
+                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(62.0))))));
 }
 
 TEST(TextEngineScriptedTest, InlineSizeDoesNotWrapTextOnPath) {

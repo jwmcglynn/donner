@@ -20,6 +20,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGImageElement.h"
+#include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
@@ -1357,6 +1358,32 @@ TEST_F(RendererRegressionTests, NestedTextRotationMatchesExplicitCharacterRotati
   ASSERT_THAT(explicitRotations.empty(), testing::IsFalse());
   AssertVisibleFixture(explicitRotations, "explicit_character_rotations_visible");
   editor::tests::CompareBitmapToBitmap(inherited, explicitRotations, "nested_character_rotations",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// `lengthAdjust="spacing"` accrues one per-gap adjustment after each character of the span, the
+// last included. SVG 2 leaves the following text undefined; Chrome shifts it by the accrued amount,
+// and the resvg references agree. A span fitted to its natural length plus two gaps therefore
+// places every glyph, including the following text, where a `letter-spacing` of one gap does.
+TEST_F(RendererRegressionTests, SpacingTextLengthOnSpanPlacesFollowingTextLikeLetterSpacing) {
+  constexpr double kGap = 6.0;
+  const auto spanMarkup = [](std::string_view spanAttributes) {
+    return std::string(
+               R"svg(<text x="10" y="90" font-family="Noto Sans" font-size="24"><tspan id="span" )svg") +
+           std::string(spanAttributes) + R"svg(>nmn</tspan>uu</text>)svg";
+  };
+
+  SVGDocument fitted =
+      instantiateSubtree(spanMarkup(""), parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(fitted, ResvgResourceRoot() / "fonts");
+  auto span = fitted.querySelector("#span")->cast<SVGTSpanElement>();
+  span.setTextLength(Lengthd(span.getComputedTextLength() + 2.0 * kGap, Lengthd::Unit::None));
+  const RendererBitmap actual = RenderDocumentWithBackend(fitted, ActiveRendererBackend());
+  const RendererBitmap expected =
+      RenderTextOpacityCase(spanMarkup("letter-spacing=\"" + std::to_string(kGap) + "\""));
+
+  AssertVisibleFixture(expected, "letter_spaced_span_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "spacing_text_length_following_text",
                                        editor::tests::PixelmatchIdentityParams());
 }
 

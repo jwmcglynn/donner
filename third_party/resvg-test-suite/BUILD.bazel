@@ -60,6 +60,17 @@ revisions.
   tests/text/font-family/sans-serif.png
   tests/text/font-family/serif.png
   tests/text/text/xml-lang=ja.png
+
+From the same revision and license, these PNGs were replaced with their 300x300
+versions. The snapshot's vertical.png placed its sideways glyphs 0.28 units across
+the line from both Donner and resvg v0.49.0, consistent with a rendering from before
+the central baseline, and the snapshot's two underline references drew 0.1em lines, twice the
+0.05em underline thickness in the vendored Noto Sans post table that resvg v0.49.0
+draws. Their SVG inputs are byte-identical at both revisions.
+
+  tests/text/lengthAdjust/vertical.png
+  tests/text/lengthAdjust/with-underline.png
+  tests/text/text-decoration/with-textLength-on-a-single-character.png
 """
 
 package(default_visibility = ["//visibility:public"])

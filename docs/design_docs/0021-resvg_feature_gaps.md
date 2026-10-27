@@ -123,7 +123,7 @@ bottom for completeness.
 | B3  | `structure/image` golden kernel-era mismatch                            |                             12 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
-| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                              8 | Feature                                                                                                                                                                                             |
+| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                       **DONE** | Interaction cases compare; `textLength/zero` is a qualified crosshair raster disagreement (see [F9](#f9-textlength--lengthadjust)).                                                                  |
 | F10 | Remaining `textPath` vertical, kerning, and filter cases                |                              4 | Feature                                                                                                                                                                                             |
 | F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
 | B7  | text reference qualification                                            |                              9 | Allowances removed; color-adjust labels, `font/simple-case` and `fallback-1` remain skipped (see [B7](#b7-text-reference-qualification)) |
@@ -383,21 +383,36 @@ CPU and Geode goldens that preserve continuous shaping while still gating paint 
 
 ### F9: `textLength` + `lengthAdjust`
 
-**Impact:** ~6 (`text/textLength` 2 + `text/lengthAdjust` 3 + `text/text-decoration`
-interaction). Text stretching/compressing to a target length (`spacing` and
-`spacingAndGlyphs`). The `arabic`/`arabic-with-lengthAdjust` cases pass on
-text-full builds and are enabled with `.onlyTextFull()`.
+**Status:** done. Text stretches or compresses to a target length with `spacing` and
+`spacingAndGlyphs`. The `arabic`/`arabic-with-lengthAdjust` cases pass on text-full builds and are
+enabled with `.onlyTextFull()`.
 
-Zero target length is applied to spacing in the text engine and has focused unit coverage. The
-resvg `zero.svg` case remains disabled with a 397-pixel residual concentrated on the overlapping
-glyph raster; its layout is no longer ignored, but the remaining oracle difference still needs
-independent browser triage before the exception can be removed.
+With `spacing`, the SVG 2 resolve-text-length loop accrues the per-gap adjustment after every
+character of the owner, its last included, but never applies it to later characters; the
+specification does not define how following text moves. Chrome adds an explicit shift by the
+accrued amount, and the resvg references show the same, so the owner's length still ends at its
+last glyph and the text after it starts one gap later. Donner follows them. A nested owner that ends its
+parent passes the gap through, and an enclosing owner counts it as fixed advance. Glyph stretching
+adds no trailing gap. `textLength/on-a-single-tspan` compares at the default settings, and a
+renderer regression checks a fitted span against the same span with an equal `letter-spacing`.
 
-Per-span adjustment now updates the current text position inherited by following runs and stops at
-the first explicit inline-axis position, including a reset later inside a span. The
-`on-a-single-tspan.svg` layout is active in focused helper and DOM geometry tests; its resvg entry
-remains classified for a 499-pixel small-text raster residual. Nested-container aggregation,
-decoration extents, vertical layout, and textPath ordering remain implementation work.
+With `spacingAndGlyphs`, a glyph's outline is stretched before its rotation, so a sideways glyph in
+vertical text stretches its own x axis and an upright glyph its y axis.
+`lengthAdjust/vertical` compares against resvg v0.49.0's 300x300 rendering. The vendored snapshot
+placed the sideways glyphs 0.28 units across the line from both Donner and resvg v0.49.0, which is
+consistent with a rendering from before the central baseline. Decorations follow the adjusted glyph
+extents; `lengthAdjust/with-underline` and `text-decoration/with-textLength-on-a-single-character`
+also compare against resvg v0.49.0, because the snapshot drew their underlines at 0.1em, twice the
+0.05em thickness in the vendored Noto Sans post table.
+
+`textLength/zero` stays skipped because its reference comes from a different rasterizer generation.
+Its glyph layout matches the vendored reference, where the last glyph's advance ends at x=20. All
+396 differing pixels on both CPU tiers are the x=100 crosshair, which this PNG draws at alpha 128
+and 192, exactly what 4x4 supersampled coverage produces for its 1.25-pixel stroke, while the
+eleven sibling `textLength` references, `lengthAdjust/spacingAndGlyphs` and Donner's analytic
+coverage draw it at 160 and 160. resvg
+v0.49.0's `zero.png` is not a replacement: its glyphs sit about 17.3 units right, a 1834-pixel
+difference.
 
 ### F10: `textPath` SVG2 attributes
 
