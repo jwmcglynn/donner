@@ -18,7 +18,7 @@ import {
   queuedDispatchCaughtUp,
 } from "./animation-pulse-observation.mjs";
 import {
-  awaitBeforeBlueDeadline,
+  awaitBefore,
   captureReadyBasicShapesFrame,
   hasPresentedBasicShapesHostFrame,
 } from "./basic-shapes-capture-gate";
@@ -1479,7 +1479,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
   return {
     async awaitSuspended(deadlineAtMs: number, message = "the raster worker suspends at a yield") {
       await expect.poll(() =>
-        awaitBeforeBlueDeadline(
+        awaitBefore(
           raster.evaluate((id) => {
             const gate = (globalThis as RasterGateScope).__donnerRasterGate;
             return gate?.id === id && gate.suspended();
@@ -1492,7 +1492,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
       }).toBe(true);
     },
     isSuspended: () =>
-      awaitBeforeBlueDeadline(
+      awaitBefore(
         raster.evaluate((id) => {
           const gate = (globalThis as RasterGateScope).__donnerRasterGate;
           return gate?.id === id && gate.suspended();
@@ -1500,7 +1500,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
         performance.now() + scaledMs(1000),
       ),
     renderedTimes: (deadlineAtMs: number) =>
-      awaitBeforeBlueDeadline(
+      awaitBefore(
         raster.evaluate((id) => {
           const scope = globalThis as RasterGateScope;
           if (scope.__donnerRasterGate?.id !== id) throw new Error("the raster gate was released");
@@ -1511,7 +1511,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
         deadlineAtMs,
       ),
     step: (deadlineAtMs: number) =>
-      awaitBeforeBlueDeadline(
+      awaitBefore(
         raster.evaluate((id) => {
           const scope = globalThis as RasterGateScope & EvaluationResumeScope;
           const gate = scope.__donnerRasterGate;
@@ -1526,7 +1526,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
         deadlineAtMs,
       ),
     release: () =>
-      awaitBeforeBlueDeadline(
+      awaitBefore(
         raster.evaluate((id) => {
           const scope = globalThis as RasterGateScope & EvaluationResumeScope;
           const gate = scope.__donnerRasterGate;
@@ -1546,7 +1546,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
 type RasterGate = Awaited<ReturnType<typeof gateRasterTaskYields>>;
 
 async function readPreviewPointerTrace(owner: Worker, deadlineAtMs: number) {
-  return awaitBeforeBlueDeadline(
+  return awaitBefore(
     owner.evaluate(() => {
       const trace = (globalThis as unknown as Record<string, unknown>)
         .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
@@ -1639,7 +1639,7 @@ async function withRasterGate<T>(gate: RasterGate, body: () => Promise<T>, messa
 // opt-in, so it must be unset when the probe starts.
 async function withFramePacedPreviewClock<T>(owner: Worker, body: () => Promise<T>) {
   const setPacing = (enabled: boolean) =>
-    awaitBeforeBlueDeadline(
+    awaitBefore(
       owner.evaluate((on) => {
         const scope = globalThis as unknown as Record<string, unknown>;
         const previous = scope.__donnerFramePacedPreviewClock;
@@ -2823,7 +2823,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
 });
 
 test(
-  "production Geode wasm presents visible editor pixels after held canvas GPU completion",
+  "production Geode wasm presents visible editor pixels after delayed canvas GPU work",
   async ({ browserName, page }, testInfo) => {
     test.skip(browserName !== "chromium" || kBackend !== "geode", "controlled browser GPU gate");
     test.skip(
@@ -4357,7 +4357,7 @@ function createAnimationRegionCapture(
           await writeFile(pngPath, image);
           let presentation: unknown;
           try {
-            presentation = await awaitBeforeBlueDeadline(
+            presentation = await awaitBefore(
               page.evaluate(() => ({
                 queue: window.__donnerPresentationQueueStats,
                 worker: window.__donnerWorkerStats,
@@ -4717,12 +4717,12 @@ async function exerciseAnimationPointerPulse({
       if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
       const deadline = performance.now() + scaledMs(5000);
       const notBefore = Date.now();
-      await awaitBeforeBlueDeadline(action(), deadline);
+      await awaitBefore(action(), deadline);
       // Screenshot capture can stall Firefox's worker progress. Let the actual input
       // dispatch and its following document presentation finish before asking for pixels.
       await expect.poll(
         () =>
-          awaitBeforeBlueDeadline(
+          awaitBefore(
             interactionCaptureOwner.evaluate(({ eventType, notBefore }) => {
               const trace =
                 (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace;
@@ -4739,12 +4739,12 @@ async function exerciseAnimationPointerPulse({
           message: "the pointer event reaches the preview document",
         },
       ).toBe(true);
-      const previous = await awaitBeforeBlueDeadline(
+      const previous = await awaitBefore(
         page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? 0),
         deadline,
       );
       await expect.poll(() =>
-        awaitBeforeBlueDeadline(
+        awaitBefore(
           page.evaluate((before) => {
             const stats = window.__donnerWorkerStats;
             return (stats?.completedResults ?? 0) > before
@@ -4790,7 +4790,7 @@ async function exerciseAnimationPointerPulse({
     const initialGate = await gateRasterTaskYields(raster, scaledMs(6000));
     await withRasterGate(initialGate, () =>
       withFramePacedPreviewClock(owner, async () => {
-        await awaitBeforeBlueDeadline(
+        await awaitBefore(
           page.mouse.click(box.x + originX + 456 * scale, pad.y),
           initialPulseDeadline,
         );
@@ -4822,7 +4822,7 @@ async function exerciseAnimationPointerPulse({
     const pulseCompletionDeadline = performance.now() + scaledMs(5000);
     // Observe a post-pulse presentation before screenshots can stall worker progress.
     await expect.poll(async () => {
-      const snapshot = await awaitBeforeBlueDeadline(
+      const snapshot = await awaitBefore(
         interactionCaptureOwner.evaluate(() => {
           const trace = (globalThis as unknown as Record<string, unknown>)
             .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;

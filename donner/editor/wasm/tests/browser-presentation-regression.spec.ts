@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { PNG } from "pngjs";
 import {
-  awaitBeforeBlueDeadline,
+  awaitBefore,
   captureReadyBasicShapesFrame,
   captureSettledCanvas,
   hasPresentedBasicShapesHostFrame,
@@ -1858,7 +1858,7 @@ async function takeBasicShapesProbe(
     };
   }
 
-  const preGateState = await awaitBeforeBlueDeadline(
+  const preGateState = await awaitBefore(
     readBasicShapesGateState(page),
     stallGuardEndsAtMs,
     kBasicShapesStateStalled,
@@ -1884,7 +1884,7 @@ async function takeBasicShapesProbe(
   // the same deadline. A late state read cannot turn that image into a pass.
   let state: BasicShapesProbeState;
   try {
-    state = await awaitBeforeBlueDeadline(
+    state = await awaitBefore(
       readBasicShapesProbeState(page, fullPage),
       stallGuardEndsAtMs,
       kBasicShapesStateStalled,
@@ -3361,7 +3361,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
       page,
       canvasOwner,
       (timeoutMs) => readEditorResizePixelBounds(page, probeRegion, timeoutMs),
-      { timedOut: (capture) => capture.timedOutCaptures > 0 },
+      { timedOut: (capture) => capture.timedOutCaptures > 0, buttonDown: true },
     );
     const { geometry, state } = await readBasicShapesDragFrame(
       page,

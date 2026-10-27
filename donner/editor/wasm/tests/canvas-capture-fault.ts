@@ -11,9 +11,10 @@ import {
  * Fault injection for the scored canvas captures, off unless one of these is set:
  *
  * - `DONNER_CANVAS_CAPTURE_GPU_DELAY=<everyFrames>:<iterations>` queues fixed GPU work after the
- *   first canvas write of every Nth frame and keeps moving the pointer over the canvas while a
- *   capture runs, so the editor keeps presenting frames,
- *   so canvas GPU work is still running, or a new frame arrives, around the screenshot. It also
+ *   first canvas write of every Nth frame and, unless the caller holds a button down, keeps moving
+ *   the pointer over the canvas's top-left corner while a capture runs. The editor then keeps
+ *   presenting frames, so canvas GPU work is still running, or a new frame arrives, around the
+ *   screenshot. It also
  *   checks the capture that the gate accepted: the GPU had finished every canvas write when its
  *   screenshot started, and no canvas frame was acquired or written until the screenshot ended.
  * - `DONNER_CANVAS_CAPTURE_STALL_MS=<ms>` keeps the page's main thread busy for that long once per
@@ -48,7 +49,11 @@ let faultSequence = 0;
  * attaches what it observed and, on a successful capture, fails if the accepted screenshot
  * overlapped canvas GPU work or a new canvas frame.
  */
-export async function armCanvasCaptureFault(page: Page, owner: Worker) {
+export async function armCanvasCaptureFault(
+  page: Page,
+  owner: Worker,
+  options: { pointerChurn?: boolean } = {},
+) {
   const testInfo: TestInfo = test.info();
   const stallMs = stalledTests.has(testInfo.testId) ? 0 : captureStallMs();
   const delay = await armCanvasGpuDelayFromEnv(owner, kCanvasCaptureGpuDelayEnv);
@@ -61,7 +66,7 @@ export async function armCanvasCaptureFault(page: Page, owner: Worker) {
   // represents, so frames keep arriving while the gate waits and while the screenshot runs.
   let moving: Promise<void> | null = null;
   let stopMoving = false;
-  if (delay !== null) {
+  if (delay !== null && (options.pointerChurn ?? true)) {
     const canvas = await page.locator("canvas#canvas").boundingBox().catch(() => null);
     if (canvas !== null) {
       moving = (async () => {

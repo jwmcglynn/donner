@@ -6,7 +6,7 @@ import { captureQuiescentCanvasFrame, findCanvasOwnerWorker } from "./surface-fr
  * Bound \p work by an absolute end on the `performance.now()` clock, failing with \p message once
  * it passes. The capture gate below does not use it.
  */
-export async function awaitBeforeBlueDeadline<T>(
+export async function awaitBefore<T>(
   work: Promise<T>,
   deadlineAtMs: number,
   message = "Basic Shapes canvas GPU completion exceeded the blue-pixel deadline",
@@ -35,13 +35,15 @@ export async function captureSettledCanvas<T>(
   page: Page,
   owner: Worker,
   capture: (timeoutMs: number) => Promise<T>,
-  options: { timedOut?: (result: T) => boolean; untilMs?: number } = {},
+  options: { timedOut?: (result: T) => boolean; untilMs?: number; buttonDown?: boolean } = {},
 ): Promise<T> {
-  const fault = await armCanvasCaptureFault(page, owner);
-  if (fault === null) return (await captureQuiescentCanvasFrame(owner, capture, options)).result;
+  // A caller dragging with the button down must not have the fault move its pointer.
+  const fault = await armCanvasCaptureFault(page, owner, { pointerChurn: !options.buttonDown });
+  const gate = { timedOut: options.timedOut, untilMs: options.untilMs };
+  if (fault === null) return (await captureQuiescentCanvasFrame(owner, capture, gate)).result;
   let result: T;
   try {
-    result = (await captureQuiescentCanvasFrame(owner, fault.wrap(capture), options)).result;
+    result = (await captureQuiescentCanvasFrame(owner, fault.wrap(capture), gate)).result;
   } catch (error) {
     // The capture's own failure is the result; a failed cleanup must not replace it.
     await fault.finish(false).catch(() => {});

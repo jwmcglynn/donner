@@ -866,15 +866,16 @@ export async function captureQuiescentCanvasFrame<T>(
 }
 
 /**
- * Fixed fragment iterations for \ref submitFrameWithDelayedGpuWork: a few hundred milliseconds of
- * GPU work on Apple Silicon, well inside the app's 5 s completion deadline.
+ * Fixed fragment iterations for \ref submitFrameWithDelayedGpuWork: about 100-400 ms of GPU work
+ * on Apple Silicon, leaving a slower GPU a wide margin inside the app's 5 s completion deadline.
  */
-export const kSingleFrameGpuDelayIterations = 60000;
+export const kSingleFrameGpuDelayIterations = 20000;
 
 /**
  * Request one editor frame of \p owner's canvas and postpone its GPU work behind fixed fragment
- * work queued after its first canvas write, then stop injecting. Returns the canvas activity once
- * that frame was submitted, while its GPU work is normally still running, and what was injected.
+ * work queued after its first canvas write, then stop injecting. Returns the canvas activity read
+ * in the same worker evaluation that first saw that frame submitted, so whether its GPU work was
+ * still running is judged at the earliest point, and what was injected.
  */
 export async function submitFrameWithDelayedGpuWork(
   page: Page,
@@ -882,13 +883,18 @@ export async function submitFrameWithDelayedGpuWork(
 ): Promise<{ frame: CanvasActivity; delay: { injected: number; jobMs: number[] } | null }> {
   const delay = await armCanvasGpuDelayForTest(owner, 1, kSingleFrameGpuDelayIterations);
   let report: { injected: number; jobMs: number[] } | null;
+  let frame: CanvasActivity | null = null;
   try {
     const before = await readCanvasActivity(owner);
     await page.evaluate(() => {
       (window as Window & { __donnerEditorFrameRequested?: boolean })
         .__donnerEditorFrameRequested = true;
     });
-    await expect.poll(async () => (await readCanvasActivity(owner)).canvasSubmits, {
+    await expect.poll(async () => {
+      const activity = await readCanvasActivity(owner);
+      if (activity.canvasSubmits > before.canvasSubmits) frame ??= activity;
+      return activity.canvasSubmits;
+    }, {
       message: "a frame is submitted with its GPU work delayed",
       timeout: kStallGuardMs,
       intervals: [4, 8, 16],
@@ -897,5 +903,5 @@ export async function submitFrameWithDelayedGpuWork(
     // Only the requested frame is delayed; later frames run at their normal cost.
     report = await delay.disarm();
   }
-  return { frame: await readCanvasActivity(owner), delay: report };
+  return { frame: frame!, delay: report };
 }

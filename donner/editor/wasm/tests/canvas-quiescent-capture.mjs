@@ -9,7 +9,8 @@
 //
 // The gate bounds how long it holds the app's completions, never how long a capture may take: its
 // only time bound is the caller's stall guard. A screenshot too slow to finish under a hold is
-// retaken without one and accepted under the same canvas-activity check.
+// retaken without one (unless the caller keeps every screenshot held) and accepted under the same
+// canvas-activity check. A hold under which frames keep arriving is released and armed again.
 //
 // This module is plain logic over an injected probe, so its policy is tested without a browser.
 
@@ -17,7 +18,8 @@
  * Upper bound on screenshot passes under one completion hold. While the hold is in place the app's
  * held frames never retire, so at most three new frames are admitted and every rejected pass saw
  * at least one of them; a few frames submitted before the hold can also still retire and free
- * slots, so seven is a conservative bound.
+ * slots, so seven passes should suffice. When they do not, the gate records the hold as exhausted,
+ * with the activity it saw, and holds again.
  */
 export const kMaxCanvasQuiescencePasses = 7;
 
@@ -158,6 +160,7 @@ export async function captureQuiescentCanvas(probe, capture, options) {
       continue;
     }
     const heldAtMs = now();
+    const passesBeforeHold = passes.length;
     const hold = await probe.hold();
     let outcome = "activity";
     let accepted;
@@ -190,7 +193,18 @@ export async function captureQuiescentCanvas(probe, capture, options) {
       // More frames arrived under this hold than it can admit, for example frames whose
       // completions were requested before it was armed. Hold again; the time bound still ends a
       // canvas that never stops presenting, and no screenshot is accepted meanwhile.
-      passes.push({ holdExhausted: true });
+      // Record what this hold admitted, so a recurrence shows whether the three-frame model holds.
+      const held = passes.slice(passesBeforeHold).filter((pass) => pass.settled && pass.after);
+      const first = held[0];
+      const last = held.at(-1);
+      passes.push({
+        holdExhausted: true,
+        heldMs: Math.round(now() - heldAtMs),
+        framesAdmitted: last && first ? last.after.frames - first.settled.frames : null,
+        canvasSubmitsAdmitted: last && first
+          ? last.after.canvasSubmits - first.settled.canvasSubmits
+          : null,
+      });
     }
     // The GPU or the screenshot is slow enough that holding on would approach the app's own
     // completion deadline. The hold is released; hold again, or retake the screenshot unheld.
