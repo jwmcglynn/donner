@@ -1768,9 +1768,6 @@ INSTANTIATE_TEST_SUITE_P(
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                     {"arabic.svg",
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
-                    {"on-a-single-tspan.svg",
-                     Params::Skip("Triage: per-span textLength and following current-position "
-                                  "advance apply; 499px small-text raster residual remains")},
                     {"zero.svg",
                      Params::Skip("Triage: zero-length spacing is applied; 397px overlapping-glyph "
                                   "raster residual remains against the resvg golden")},

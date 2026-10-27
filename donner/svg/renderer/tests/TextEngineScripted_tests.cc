@@ -1765,8 +1765,13 @@ TEST(TextEngineScriptedTest, TextPathLengthKeepsSpacingOnlyChildWidth) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" textLength="100" lengthAdjust="spacingAndGlyphs">A<tspan textLength="40">BC</tspan>D</textPath>)");
   ASSERT_THAT(glyphs, SizeIs(4));
-  EXPECT_THAT(glyphs[0].xAdvance,
-              DoubleNear(10.0 * (100.0 - 40.0) / (2.0 * 10.0 + 2.0 * 3.0), 1e-6));
+  // The child's one gap grows from its 1px kern by its trailing gap, which D inherits as fixed
+  // advance alongside the child's 40px. This follows Donner's fixed-child model for nested length
+  // owners; Chrome instead scales the child's content inside a spacingAndGlyphs parent.
+  const double childTrailingGap = 40.0 - (2.0 * 10.0 + 1.0);
+  EXPECT_THAT(
+      glyphs[0].xAdvance,
+      DoubleNear(10.0 * (100.0 - 40.0 - childTrailingGap) / (2.0 * 10.0 + 2.0 * 3.0), 1e-6));
   EXPECT_THAT(glyphs[1].xAdvance, DoubleEq(10.0));
   EXPECT_THAT(glyphs[2].xAdvance, DoubleEq(10.0));
   EXPECT_THAT(glyphs[2].xPosition + glyphs[2].xAdvance - glyphs[1].xPosition,
@@ -2054,12 +2059,15 @@ TEST(TextEngineScriptedTest, TextPathClusterSpacingRespectsNestedLengthOwners) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" textLength="100">A<tspan textLength="40">q&#x301;B</tspan>C</textPath>)",
       /*scripted=*/true, "M0 0H500", /*clusterCombiningMarks=*/true);
+  // The child's 19px trailing gap after B is fixed advance that the outer owner's two gaps no
+  // longer have to supply, so each of them shrinks by 9.5px. This follows Donner's fixed-child
+  // model for nested length owners.
   EXPECT_THAT(
       glyphs,
       ElementsAre(
-          GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXPositionIs(DoubleNear(30.0, 1e-6)),
-          AllOf(GlyphXPositionIs(DoubleNear(33.0, 1e-6)), GlyphYPositionIs(DoubleNear(-4.0, 1e-6))),
-          GlyphXPositionIs(DoubleNear(60.0, 1e-6)), GlyphXPositionIs(DoubleNear(90.0, 1e-6))));
+          GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXPositionIs(DoubleNear(20.5, 1e-6)),
+          AllOf(GlyphXPositionIs(DoubleNear(23.5, 1e-6)), GlyphYPositionIs(DoubleNear(-4.0, 1e-6))),
+          GlyphXPositionIs(DoubleNear(50.5, 1e-6)), GlyphXPositionIs(DoubleNear(90.0, 1e-6))));
 }
 
 TEST(TextEngineScriptedTest, TextPathLengthAdjustsAdvancesBeforeCurvedPlacement) {
@@ -2190,10 +2198,13 @@ TEST(TextEngineScriptedTest, GlobalTextLengthSpacingAndGlyphsScalesVerticalAdvan
 
   const auto runs = engine.layout(text, params);
 
-  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
-                        AllOf(GlyphYPositionIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleEq(20.0)),
-                              GlyphStretchScaleYIs(FloatEq(2.0f))),
-                        GlyphYPositionIs(DoubleEq(24.0))))));
+  // Latin glyphs are set sideways in vertical text, so their outlines stretch along their own x
+  // axis, which the quarter turn maps onto the vertical inline axis.
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(
+                  AllOf(GlyphYPositionIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleEq(20.0)),
+                        GlyphStretchScaleXIs(FloatEq(2.0f)), GlyphStretchScaleYIs(FloatEq(1.0f))),
+                  GlyphYPositionIs(DoubleEq(24.0))))));
 }
 
 TEST(TextEngineScriptedTest, SubSuperMetricsResolveSpanAndAncestorBaselineShifts) {
@@ -2993,10 +3004,11 @@ TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAdjustsVerticalGaps) {
 
   // Natural length 22px (10px advance, 2px kern, 10px advance) stretched to 40px moves
   // the second glyph down by the 18px gap difference. The plain span starts from the adjusted
-  // 40px current position plus the 4px cross-span kern.
+  // 40px current position, plus the 18px gap that spacing accrues after the last character,
+  // plus the 4px cross-span kern.
   EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(0.0)),
                                                          GlyphYPositionIs(DoubleEq(30.0)))),
-                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(44.0))))));
+                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(62.0))))));
 }
 
 TEST(TextEngineScriptedTest, InlineSizeDoesNotWrapTextOnPath) {

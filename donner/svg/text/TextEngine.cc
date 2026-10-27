@@ -1547,6 +1547,23 @@ void ApplyPostTextPathTranslations(std::vector<TextRun>& runs,
   }
 }
 
+/**
+ * Stretches a glyph's outline by \p scale along the inline axis for
+ * `lengthAdjust="spacingAndGlyphs"`. The outline is stretched before the glyph's rotation, so a
+ * sideways glyph in vertical text stretches its own x axis.
+ *
+ * @param glyph Glyph to stretch.
+ * @param scale Inline-axis scale factor.
+ * @param vertical True for vertical writing modes.
+ */
+void StretchGlyphAlongInlineAxis(TextGlyph& glyph, double scale, bool vertical) {
+  if (vertical && !glyph.sideways) {
+    glyph.stretchScaleY *= NarrowToFloat(scale);
+  } else {
+    glyph.stretchScaleX *= NarrowToFloat(scale);
+  }
+}
+
 struct OrdinaryLengthScope {
   struct Item {
     size_t index = 0;
@@ -1573,9 +1590,20 @@ struct OrdinaryLengthScope {
   double length = 0;
   double scale = 1;
   double spacing = 0;
+  /// Advance that the text after this scope inherits past its end: a spacing scope's per-gap
+  /// adjustment, plus the trailing advance of a child scope that ends this one. SVG 2's text-length
+  /// loop accrues that adjustment after the last character but leaves following text undefined;
+  /// Chrome shifts it by the accrued amount, and the resvg references agree.
+  double trailingAdvance = 0;
   double position = 0;
   bool absoluteReset = false;
 };
+
+/// Advance that the text after \p item inherits past the item's end. Only a child scope has one.
+double TrailingAdvanceOf(const std::vector<OrdinaryLengthScope>& scopes,
+                         const OrdinaryLengthScope::Item& item) {
+  return item.scope ? scopes[item.index].trailingAdvance : 0.0;
+}
 
 template <typename Declaration>
 bool HasNegativeAbsoluteTextLength(const Declaration& declaration) {
@@ -1840,6 +1868,7 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
       scope.length = 0;
       scope.scale = 1;
       scope.spacing = 0;
+      scope.trailingAdvance = 0;
       scope.absoluteReset = false;
       if (scope.items.empty()) {
         continue;
@@ -1848,6 +1877,7 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
       double fixedLength = 0;
       double cursor = 0;
       double previousEnd = 0;
+      double previousTrailing = 0;
       size_t spacingUnits = 0;
       for (size_t itemIndex = 0; itemIndex < scope.items.size(); ++itemIndex) {
         auto& item = scope.items[itemIndex];
@@ -1862,7 +1892,8 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
         } else if (item.absoluteReset) {
           cursor = item.start - scope.start;
         } else {
-          cursor += item.start - previousEnd;
+          cursor += item.start - previousEnd + previousTrailing;
+          fixedLength += previousTrailing;
         }
         item.position = cursor;
         item.spacingIndex = spacingUnits;
@@ -1871,6 +1902,7 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
         fixedLength += item.scope ? length : 0;
         spacingUnits += item.scope || item.path ? 1 : item.glyphEnd - item.glyphBegin;
         previousEnd = item.end;
+        previousTrailing = TrailingAdvanceOf(scopes, item);
       }
       scope.end = previousEnd;
       scope.length = cursor;
@@ -1909,11 +1941,12 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
 
       cursor = 0;
       previousEnd = scope.start;
+      previousTrailing = 0;
       for (auto& item : scope.items) {
         if (item.absoluteReset) {
           cursor = item.start - scope.start;
         } else {
-          cursor += (item.start - previousEnd) * scope.scale;
+          cursor += (item.start - previousEnd) * scope.scale + previousTrailing;
         }
         item.position = cursor;
         const double length = item.scope ? scopes[item.index].length : item.end - item.start;
@@ -1923,8 +1956,10 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
         }
         cursor += scope.spacing;
         previousEnd = item.end;
+        previousTrailing = TrailingAdvanceOf(scopes, item);
       }
       scope.length = cursor - scope.spacing;
+      scope.trailingAdvance = scope.spacing + previousTrailing;
     }
   };
 
@@ -1960,13 +1995,12 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
           glyph.yPosition = glyphBase + (glyph.yPosition - item.glyphOrigin) * scope.scale +
                             scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
           glyph.yAdvance *= scope.scale;
-          glyph.stretchScaleY *= NarrowToFloat(scope.scale);
         } else {
           glyph.xPosition = glyphBase + (glyph.xPosition - item.glyphOrigin) * scope.scale +
                             scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
           glyph.xAdvance *= scope.scale;
-          glyph.stretchScaleX *= NarrowToFloat(scope.scale);
         }
+        StretchGlyphAlongInlineAxis(glyph, scope.scale, vertical);
       }
     }
   }
@@ -2145,12 +2179,11 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
           if (vertical) {
             g.yPosition = runStartPos + (g.yPosition - runStartPos) * scaleFactor;
             g.yAdvance *= scaleFactor;
-            g.stretchScaleY *= NarrowToFloat(scaleFactor);
           } else {
             g.xPosition = runStartPos + (g.xPosition - runStartPos) * scaleFactor;
             g.xAdvance *= scaleFactor;
-            g.stretchScaleX *= NarrowToFloat(scaleFactor);
           }
+          StretchGlyphAlongInlineAxis(g, scaleFactor, vertical);
         }
       }
 
@@ -2212,12 +2245,11 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
             if (vertical) {
               g.yPosition = globalStartY + (g.yPosition - globalStartY) * scaleFactor;
               g.yAdvance *= scaleFactor;
-              g.stretchScaleY *= NarrowToFloat(scaleFactor);
             } else {
               g.xPosition = globalStartX + (g.xPosition - globalStartX) * scaleFactor;
               g.xAdvance *= scaleFactor;
-              g.stretchScaleX *= NarrowToFloat(scaleFactor);
             }
+            StretchGlyphAlongInlineAxis(g, scaleFactor, vertical);
           }
         }
       }
@@ -3476,6 +3508,7 @@ private:
       const FontVMetrics metrics = backend_.fontVMetrics(state.font);
       glyph.xPosition -= verticalCentralOriginOffset(state, metrics);
       glyph.rotateDegrees = rotationFor(*state.span, charIndex, 90.0);
+      glyph.sideways = true;
       return;
     }
 
