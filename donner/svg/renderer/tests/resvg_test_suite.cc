@@ -1773,10 +1773,11 @@ INSTANTIATE_TEST_SUITE_P(
                     // resvg v0.49.0's zero.png is not a replacement: its glyphs sit about 17.3
                     // units right (1834 differing pixels).
                     {"zero.svg",
-                     Params::Skip("Outlier reference: the glyph layout matches; all 396 differing "
-                                  "pixels are the x=100 crosshair, which this PNG draws at alpha "
-                                  "128/192 where sibling textLength references and Donner draw "
-                                  "160/160")},
+                     Params::Skip("Reference rasterizer generation: the glyph layout matches; all "
+                                  "396 differing pixels are the x=100 crosshair, which this PNG "
+                                  "draws at alpha 128/192, as 4x4 supersampled coverage does, "
+                                  "where sibling textLength references and Donner's analytic "
+                                  "coverage draw 160/160")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

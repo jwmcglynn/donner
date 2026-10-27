@@ -405,10 +405,12 @@ extents; `lengthAdjust/with-underline` and `text-decoration/with-textLength-on-a
 also compare against resvg v0.49.0, because the snapshot drew their underlines at 0.1em, twice the
 0.05em thickness in the vendored Noto Sans post table.
 
-`textLength/zero` stays skipped with an outlier reference. Its glyph layout matches the vendored
-reference, where the last glyph's advance ends at x=20. All 396 differing pixels on both CPU tiers
-are the x=100 crosshair, which this PNG draws at alpha 128 and 192, while the eleven sibling
-`textLength` references, `lengthAdjust/spacingAndGlyphs` and Donner draw it at 160 and 160. resvg
+`textLength/zero` stays skipped because its reference comes from a different rasterizer generation.
+Its glyph layout matches the vendored reference, where the last glyph's advance ends at x=20. All
+396 differing pixels on both CPU tiers are the x=100 crosshair, which this PNG draws at alpha 128
+and 192, exactly what 4x4 supersampled coverage produces for its 1.25-pixel stroke, while the
+eleven sibling `textLength` references, `lengthAdjust/spacingAndGlyphs` and Donner's analytic
+coverage draw it at 160 and 160. resvg
 v0.49.0's `zero.png` is not a replacement: its glyphs sit about 17.3 units right, a 1834-pixel
 difference.
 
