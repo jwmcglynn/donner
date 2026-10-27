@@ -8,6 +8,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -16,9 +17,11 @@
 #include <ostream>
 #include <span>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Utf8.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/SVGDocument.h"
@@ -35,6 +38,8 @@
 namespace donner::svg {
 namespace {
 
+using ::testing::Each;
+using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::Field;
 using ::testing::SizeIs;
@@ -335,6 +340,97 @@ TEST(FontSelection, CoverageFallbackSelectsAFaceSupportingTheCodepoint) {
   const std::vector<TextRun> runs = engine.layout(text, params);
   ASSERT_THAT(runs, SizeIs(1));
   EXPECT_THAT(DescribeFace(fonts.fontManager(), runs[0].font), FaceFrom("MPLUS1p-Regular.ttf"));
+}
+
+/// The face that draws one laid-out glyph, identified by the source codepoint it starts at.
+struct GlyphFace {
+  char32_t codepoint = 0;  ///< First codepoint of the glyph's source cluster.
+  std::string source;      ///< Vendored font filename, or \ref kEmbeddedFallback.
+
+  bool operator==(const GlyphFace&) const = default;
+};
+
+std::ostream& operator<<(std::ostream& os, const GlyphFace& face) {
+  return os << "GlyphFace{U+" << std::hex << static_cast<uint32_t>(face.codepoint) << std::dec
+            << ", source=\"" << face.source << "\"}";
+}
+
+/**
+ * Lays out @p utf8 as one span and reports the face that draws each glyph, in source order, so a
+ * per-cluster selection error names the cluster and the face instead of a pixel count.
+ *
+ * Glyphs are sorted by source cluster because the full-text tier returns right-to-left glyphs in
+ * visual order while the simple tier keeps logical order.
+ */
+std::vector<GlyphFace> LayOutGlyphFaces(std::string_view utf8,
+                                        std::initializer_list<const char*> families) {
+  HermeticFontSet fonts;
+  TextEngine engine(fonts.fontManager(), fonts.registry());
+
+  components::ComputedTextComponent text;
+  components::ComputedTextComponent::TextSpan span;
+  span.text = RcString(utf8);
+  span.start = 0;
+  span.end = span.text.size();
+  span.startsNewChunk = true;
+  text.spans.push_back(span);
+
+  TextLayoutParams params;
+  for (const char* family : families) {
+    params.fontFamilies.emplace_back(RcString(family));
+  }
+  params.fontSize = Lengthd(32, Lengthd::Unit::Px);
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+
+  const std::vector<TextRun> runs = engine.layout(text, params);
+  EXPECT_THAT(runs, SizeIs(1));
+  if (runs.empty()) {
+    return {};
+  }
+
+  std::vector<TextGlyph> glyphs = runs[0].glyphs;
+  std::stable_sort(glyphs.begin(), glyphs.end(),
+                   [](const TextGlyph& a, const TextGlyph& b) { return a.cluster < b.cluster; });
+  std::vector<GlyphFace> result;
+  for (const TextGlyph& glyph : glyphs) {
+    const char32_t codepoint = std::get<0>(Utf8::NextCodepoint(utf8.substr(glyph.cluster)));
+    result.push_back(
+        {codepoint, DescribeFace(fonts.fontManager(), GlyphFont(runs[0], glyph)).source});
+  }
+  return result;
+}
+
+TEST(FontSelection, PerClusterFallbackKeepsThePrimaryFaceForClustersItCovers) {
+  // Mplus 1p covers the CJK, the space and nothing Arabic; only Amiri covers the Arabic word, so
+  // only those clusters fall back. A whole-span choice would either drop the Arabic glyphs or draw
+  // the CJK in a face without them.
+  EXPECT_THAT(
+      LayOutGlyphFaces("\u65e5\u672c \u062f\u0627\u0644", {"Mplus 1p"}),
+      ElementsAre(
+          GlyphFace{U'\u65e5', "MPLUS1p-Regular.ttf"}, GlyphFace{U'\u672c', "MPLUS1p-Regular.ttf"},
+          GlyphFace{U' ', "MPLUS1p-Regular.ttf"}, GlyphFace{U'\u062f', "Amiri-Regular.ttf"},
+          GlyphFace{U'\u0627', "Amiri-Regular.ttf"}, GlyphFace{U'\u0644', "Amiri-Regular.ttf"}));
+}
+
+TEST(FontSelection, PerClusterFallbackPrefersTheNextListedFamilyThatCoversTheCluster) {
+  // Noto Emoji has no Latin letters. Every vendored text face covers `A`, so the listed family
+  // must win over the registration order of the other faces.
+  EXPECT_THAT(LayOutGlyphFaces("\U0001F600A", {"Noto Emoji", "Yellowtail"}),
+              ElementsAre(GlyphFace{U'\U0001F600', "NotoEmoji-Regular.ttf"},
+                          GlyphFace{U'A', "Yellowtail-Regular.ttf"}));
+}
+
+TEST(FontSelection, PerClusterFallbackMovesACombiningMarkWithItsBase) {
+  // Yellowtail lacks U+0301, and `q` has no precomposed acute form. The base and its mark fall
+  // back together to the next listed family covering both; the neighbors keep Yellowtail. The
+  // full-text tier reports the mark glyph under its base's cluster, so only the ends are fixed.
+  const std::vector<GlyphFace> faces = LayOutGlyphFaces("aq\u0301b", {"Yellowtail", "Noto Serif"});
+  ASSERT_THAT(faces, SizeIs(4));
+  EXPECT_THAT(faces.front(), Eq(GlyphFace{U'a', "Yellowtail-Regular.ttf"}));
+  EXPECT_THAT(faces.back(), Eq(GlyphFace{U'b', "Yellowtail-Regular.ttf"}));
+  EXPECT_THAT(std::vector<GlyphFace>(faces.begin() + 1, faces.end() - 1),
+              Each(Field("source", &GlyphFace::source, Eq("NotoSerif-Regular.ttf"))));
 }
 
 }  // namespace

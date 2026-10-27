@@ -90,13 +90,17 @@ struct TextGlyph {
   /// True when vertical layout set this glyph sideways, a quarter turn from upright, so the
   /// glyph's own x axis runs along the inline axis.
   bool sideways = false;
+  /// Face for a cluster that the run's face cannot render; null when \ref TextRun::font renders
+  /// it. Use \ref GlyphFont to resolve the face that draws the glyph.
+  FontHandle font;
 };
 
 /**
- * A run of positioned glyphs sharing the same font.
+ * A run of positioned glyphs laid out with one primary face. Clusters that face cannot render
+ * carry their fallback face in \ref TextGlyph::font.
  */
 struct TextRun {
-  FontHandle font;                ///< Font handle for this run.
+  FontHandle font;                ///< Primary font handle for this run.
   float usedFontSizePx = 0.0f;    ///< Font size used for shaping, including font-size-adjust.
   std::vector<TextGlyph> glyphs;  ///< Positioned glyphs.
   bool onPath = false;            ///< True if glyphs are positioned along a textPath.
@@ -104,5 +108,15 @@ struct TextRun {
       false;  ///< True when path placement consumed this run's textLength.
   std::shared_ptr<const StretchedTextPath> stretchedTextPath;  ///< Shared nonlinear path mapping.
 };
+
+/**
+ * Returns the face that draws \p glyph: its fallback face when it has one, otherwise the run's.
+ *
+ * @param run Run that contains \p glyph.
+ * @param glyph Glyph to resolve.
+ */
+inline FontHandle GlyphFont(const TextRun& run, const TextGlyph& glyph) {
+  return glyph.font ? glyph.font : run.font;
+}
 
 }  // namespace donner::svg

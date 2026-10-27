@@ -1159,6 +1159,29 @@ TEST_F(RendererRegressionTests, FontShorthandMatchesExpandedLonghands) {
   ExpectBitmapsIdentical(actual, expected, "font_shorthand_expansion");
 }
 
+// One span whose face lacks some clusters draws each of them in the first face that covers it,
+// exactly as spans naming each face would. Mplus 1p has CJK and Latin but no Arabic; Amiri has
+// the Arabic word. Each tspan boundary here sits between faces, where no kerning applies.
+TEST_F(RendererRegressionTests, MixedScriptSpanMatchesSpansNamingEachFace) {
+  constexpr std::string_view kCjk = "&#x65E5;&#x672C; ";
+  constexpr std::string_view kArabic = "&#x62F;&#x627;&#x644;";
+  for (const std::string_view writingMode : {"horizontal-tb", "vertical-rl"}) {
+    SCOPED_TRACE(writingMode);
+    const std::string text =
+        std::string(R"svg(<text x="40" y="40" font-size="32" writing-mode=")svg") +
+        std::string(writingMode) + R"svg(" font-family="'Mplus 1p'">)svg";
+    const RendererBitmap actual =
+        RenderTextOpacityCase(text + std::string(kCjk) + std::string(kArabic) + "</text>");
+    const RendererBitmap expected = RenderTextOpacityCase(
+        text + "<tspan>" + std::string(kCjk) + R"svg(</tspan><tspan font-family="Amiri">)svg" +
+        std::string(kArabic) + "</tspan></text>");
+    AssertVisibleFixture(expected, "mixed_script_explicit_faces_visible");
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, std::string("mixed_script_span_") + std::string(writingMode),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST_F(RendererRegressionTests, ExpandedThinCrossbarMatchesReferenceStroke) {
   const Path path = PathBuilder()
                         .moveTo({30, 10})
