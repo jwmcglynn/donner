@@ -174,12 +174,23 @@ class NativeDeliveryTest(unittest.TestCase):
 
     def test_mach_section_data_uses_file_offsets_not_virtual_addresses(self):
         self.binary.write_bytes(b"header__unwind__tail")
-        load_commands = "Section\n  sectname __eh_frame\n  size 0x8\n  offset 6\n"
+        load_commands = "Load command 0\n  cmd LC_SEGMENT_64\nSection\n  sectname __eh_frame\n  size 0x8\n  offset 6\n"
         with mock.patch.object(delivery, "_tool", return_value=load_commands):
             self.assertEqual(delivery._mach_unwind(self.binary),
                              {"__eh_frame": delivery.sha256(b"__unwind").hexdigest()})
         with mock.patch.object(delivery, "_tool", return_value=""):
-            with self.assertRaisesRegex(ValueError, "no unwind"):
+            with self.assertRaisesRegex(ValueError, "load commands are invalid"):
+                delivery._mach_unwind(self.binary)
+
+    def test_valid_frame_based_mach_image_can_have_no_unwind_sections(self):
+        commands = "Load command 0\n  cmd LC_SEGMENT_64\nSection\n  sectname __text\n"
+        with mock.patch.object(delivery, "_tool", return_value=commands):
+            self.assertEqual(delivery._mach_unwind(self.binary), {})
+
+    def test_declared_unwind_section_without_file_metadata_fails_closed(self):
+        commands = "Load command 0\n  cmd LC_SEGMENT_64\nSection\n  sectname __eh_frame\n"
+        with mock.patch.object(delivery, "_tool", return_value=commands):
+            with self.assertRaisesRegex(ValueError, "section metadata is invalid"):
                 delivery._mach_unwind(self.binary)
 
     def test_elf_inspection_always_writes_a_separate_output_image(self):

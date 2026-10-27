@@ -82,19 +82,23 @@ def _build_id(path: Path) -> str:
 
 
 def _mach_unwind(path: Path) -> dict[str, str]:
+    """Hash present unwind sections; arm64 frame-based images may legitimately have none."""
     contents = path.read_bytes()
+    commands = _tool("/usr/bin/otool", "-l", str(path))
+    if re.search(r"(?m)^\s*cmd LC_SEGMENT_64\s*$", commands) is None:
+        raise ValueError("native delivery Mach-O load commands are invalid")
     result = {}
-    for section in _tool("/usr/bin/otool", "-l", str(path)).split("Section\n")[1:]:
+    for section in commands.split("Section\n")[1:]:
         name = re.search(r"sectname (__eh_frame|__unwind_info)\s", section)
         size = re.search(r"\bsize (0x[0-9a-fA-F]+)", section)
         offset = re.search(r"\boffset ([0-9]+)", section)
-        if name and size and offset:
+        if name:
+            if not size or not offset:
+                raise ValueError("native delivery unwind section metadata is invalid")
             start, length = int(offset[1]), int(size[1], 16)
             if not length or start + length > len(contents):
                 raise ValueError("native delivery unwind section is invalid")
             result[name[1]] = sha256(contents[start:start + length]).hexdigest()
-    if not result:
-        raise ValueError("native delivery Mach-O has no unwind information")
     return result
 
 
