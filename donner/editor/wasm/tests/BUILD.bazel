@@ -1297,6 +1297,7 @@ playwright_bin.playwright_test(
     timeout = "moderate",
     args = [
         "test",
+        "$(rootpath :docs-selector.spec.ts)",
         "--config=$(rootpath :playwright.docs.config.js)",
     ],
     copy_data_to_bin = False,
@@ -1304,6 +1305,7 @@ playwright_bin.playwright_test(
         "chromium-launch-env.cjs",
         "docs-selector.spec.ts",
         "playwright.docs.config.js",
+        "test-timing.cjs",
         ":node_modules/@playwright/test",
         "//tools:docs_selector_fixture_json",
         "@playwright//:chromium",
