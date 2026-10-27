@@ -241,6 +241,20 @@ class DocsPublishTest(unittest.TestCase):
              self.assertRaises(ValueError):
             publish._verify_legacy_origin(legacy, forged, self.root / "origin")
 
+    def test_retained_release_proof_authenticates_the_release_candidate_workflow(self):
+        record = {"source": {"version": "0.8.0", "commit": "a" * 40},
+                  "artifacts": {"docs": {"run_id": 123, "attempt": 1,
+                                          "files": {"artifact.tar": "b" * 64}}}}
+        api = mock.Mock(); api.file.return_value = b'{}'
+        entry = {"identity": publish.release_identity(record, "0.8.0"), "archive": {"sha256": "b" * 64}}
+        responses = [{"tag_name": "v0.8.0", "draft": False, "prerelease": False},
+                     {"object": {"type": "commit", "sha": "a" * 40}}]
+        with mock.patch.object(publish.candidate, "load_record", return_value=record), \
+             mock.patch.object(publish, "_offline_attestation") as verify, \
+             mock.patch.object(publish, "github_json", side_effect=responses):
+            publish._verify_retained_release(api, "c" * 40, "0.8.0", entry, self.root)
+        self.assertEqual(verify.call_args.kwargs["workflow"], ".github/workflows/release_candidate.yml")
+
     def test_pages_health_checks_detect_changed_version_index(self):
         marker = {"manifest_sha256": "a" * 64}
         with mock.patch.object(publish, "live_marker", return_value=marker), \

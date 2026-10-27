@@ -136,7 +136,7 @@ def _verify_retained_release(api, snapshot, version, entry, work):
     path = proof / "candidate.json"
     path.write_bytes(record_bytes)
     _offline_attestation(path, api.file(snapshot, prefix + "record-attestation.json"),
-                         record["source"]["commit"], proof)
+                         record["source"]["commit"], proof, workflow=".github/workflows/release_candidate.yml")
     require_release_binding(record, version, entry["identity"], entry["archive"]["sha256"])
     release = github_json(f"{store.REPO}/releases/tags/v{version}")
     site.require(release.get("tag_name") == "v" + version and release.get("draft") is False
@@ -520,7 +520,7 @@ def _verify_live(manifest: str, expected_marker: dict) -> None:
         site.require(site.digest(_live_file(name)) == marker["files"][name], "live content differs: " + name)
 
 
-def _offline_attestation(path: Path, raw: bytes, commit: str, work: Path) -> None:
+def _offline_attestation(path: Path, raw: bytes, commit: str, work: Path, workflow: str = WORKFLOW) -> None:
     site.require(isinstance(commit, str) and site.SHA.fullmatch(commit), "invalid attested source commit")
     site.require(len(raw) <= site.MAX_FILE, "stored attestation is oversized")
     values = json.loads(raw)
@@ -528,7 +528,7 @@ def _offline_attestation(path: Path, raw: bytes, commit: str, work: Path) -> Non
     bundle = work / (path.name + ".bundle.json")
     bundle.write_bytes(site.canonical(values[0]["attestation"]["bundle"]))
     subprocess.run(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
-                    "--repo", "jwmcglynn/donner", "--signer-workflow", "jwmcglynn/donner/" + WORKFLOW,
+                    "--repo", "jwmcglynn/donner", "--signer-workflow", "jwmcglynn/donner/" + workflow,
                     "--source-digest", commit, "--source-ref", "refs/heads/main",
                     "--deny-self-hosted-runners"], stdout=subprocess.DEVNULL,
                    stderr=subprocess.PIPE, timeout=180, check=True)
