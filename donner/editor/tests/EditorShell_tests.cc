@@ -1125,6 +1125,13 @@ public:
     RequestFontPreviews(shell, {std::move(family)});
   }
 
+  /// Drops the startup queue of background font previews, so no preview work shares the render
+  /// worker with a test's foreground renders.
+  static void DropBackgroundFontPreviews(EditorShell& shell) {
+    shell.pendingFontPreviews_.clear();
+    shell.backgroundFontPreviewFamilies_.clear();
+  }
+
   static std::size_t PendingFontPreviewCount(const EditorShell& shell) {
     return shell.pendingFontPreviews_.size();
   }
@@ -2080,9 +2087,9 @@ void RunShellFrame(gui::EditorWindow& window, EditorShell& shell) {
  * consumes the last result.
  *
  * Callers judge the frames by the coordinator's counters afterwards, so a frame that fails to post
- * is caught at once by frame state, not by a deadline. The wait is only a hang guard, shared by
- * every frame of one call: on a CPU-throttled or loaded runner a single render can take seconds,
- * for example while it waits for the worker to leave background preview work.
+ * is caught at once by frame state, not by a deadline. A caller keeps unrelated work, such as
+ * background font previews, off the worker, so each wait covers only the render its frame posted.
+ * The wait's bound, shared by every frame of one call, is a hang guard, not a latency budget.
  *
  * Once a wait has failed, later calls in the same case return at once, so a hang costs the case one
  * guard window.
@@ -3359,9 +3366,15 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
   RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
   RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  // The shell queues a background preview of every catalog font at startup. Idle frames would
+  // start them one at a time on the render worker, and a retry render posted behind one waits for
+  // it. Keep the worker to this test's own renders.
+  EditorShellTestAccess::DropBackgroundFontPreviews(shell);
+  const std::size_t previewRequestsBefore =
+      EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
 
   // Idle frames only: no input, no document edit. The worker finishes each render before the next
-  // frame, which polls its result, so each count below is exact however long a render takes.
+  // frame, which polls its result, so each count below is exact.
   const auto runIdleFrames = [&](int frames) {
     RunIdleFramesToQuiescence(window, shell, frames);
     return coordinator.nothingToPresentResultTotalForDiagnostics();
@@ -3393,6 +3406,8 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::minutes(1));
   EXPECT_EQ(runIdleFrames(10), expected) << "after the last retry, idle frames post nothing";
   EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore)
+      << "no preview work may share the render worker with the retries";
 }
 
 // A retry that falls due while the editor cannot ask for a render, here because the sample picker
@@ -3407,6 +3422,7 @@ TEST(EditorShellTest, DueNothingToPresentRetryWaitsForTheSamplePickerWithoutWaki
   RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
   RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  EditorShellTestAccess::DropBackgroundFontPreviews(shell);
   const auto runIdleFrames = [&](int frames) {
     RunIdleFramesToQuiescence(window, shell, frames);
     return coordinator.nothingToPresentResultTotalForDiagnostics();
