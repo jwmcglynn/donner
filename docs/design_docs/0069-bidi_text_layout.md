@@ -81,7 +81,8 @@ resolved bidi levels. The text stack it changes is described in
 ## Implementation Plan
 
 Each milestone is one or two atomic pull requests. Sizes are rough line counts including tests.
-Every behavior change lands with a regression test committed red first.
+Every behavior change lands with a regression test committed red first. Milestone 1 preserves
+today's behavior exactly; every change of semantics belongs to a later milestone.
 
 - [ ] Milestone 1: Logical character table and visual pen pass, no behavior change (large, about
       1,200 lines)
@@ -89,16 +90,17 @@ Every behavior change lands with a regression test committed red first.
         an anchored chunk: logical index, UTF-16 index, span, byte range, addressable and middle
         flags, and resolved position values.
   - [ ] Split layout into a visual pen pass over shaping items and a positioning pass that applies
-        `dx`, `dy`, `rotate`, and `textLength` from the table in logical order.
+        `dx`, `dy`, `rotate`, and `textLength` from the table. Inside items that HarfBuzz shapes
+        right to left, `dx` and `dy` keep today's accumulation in shaped glyph order.
   - [ ] Replace sequential `(runIndex, glyphIndex)` chunk boundaries with chunk ids on the table.
-  - [ ] Compute decoration segments per span in the engine with today's renderer rules; TinySkia
-        and Geode draw them.
-  - [ ] Keep the textLength carry semantics of
-        [#2095](https://github.com/jwmcglynn/donner/pull/2095) (trailing advance carried to the
-        following content) unchanged.
+  - [ ] Compute decoration segments per span in the engine with today's renderer rules, in run
+        storage order; TinySkia and Geode draw them.
+  - [ ] Keep today's `textLength` carry, including the trailing gap of
+        [#2095](https://github.com/jwmcglynn/donner/pull/2095), unchanged.
   - [ ] Add `text_span_positioning_tests` cases that pin the current text position: an `ltr`
-        `middle`-anchored chunk followed by a `y`-only chunk, `dx` followed by a `y`-only chunk, and
-        `dy` followed by an `x`-only chunk.
+        `middle`-anchored chunk followed by a `y`-only chunk, `dx` followed by a `y`-only chunk
+        under `start` and under `middle`, `dy` followed by an `x`-only chunk, and a partial
+        `textLength` owner followed by a `y`-only chunk under `start` and under `middle`.
   - [ ] Measure the editor package against every gate, including the 46,000 byte function body
         and 12,880,000 byte total raw limits, since the restructured layout adds code before
         SheenBidi does.
@@ -106,14 +108,13 @@ Every behavior change lands with a regression test committed red first.
         `text_span_positioning_tests`, `renderer_tests`, `renderer_geode_golden_tests`, and
         `resvg_test_suite` in the default, `text_full`, and Geode lanes, with no golden, budget, or
         skip change. Anchoring keeps today's measurement in this milestone.
-- [ ] Milestone 1b: SVG 2 anchoring extent (small, about 200 lines)
+- [ ] Milestone 1b: SVG 2 anchoring extent only (small, about 200 lines)
   - [ ] Anchor by the SVG 2 extent, defined in [Anchoring](#anchoring).
-  - [ ] Run every compared `text/*` row with the old and new rule and list each row whose output
+  - [ ] Run `text_engine_tests`, `text_span_positioning_tests`, `renderer_tests`, the Geode goldens,
+        and every compared `text/*` row with the old and new rule, and list each case whose output
         changes in the pull request, with an independently authored regression for each cause.
-        The pull request is accepted only if every listed change follows from the rule and no row
-        gains a budget, golden, or skip.
-  - [ ] Apply direction-aware `textLength` carry for partial-chunk owners and list any row it
-        changes.
+        The pull request is accepted only if every listed change is one of the intended
+        differences in [Anchoring](#anchoring) and no row gains a budget, golden, or skip.
 - [ ] Milestone 2: SheenBidi, `direction`, and paragraph analysis (large, about 1,000 lines plus
       pinned test data)
   - [ ] Add `bazel_dep(name = "sheenbidi", version = "3.0.0")`, its `license()` and notice
@@ -123,6 +124,12 @@ Every behavior change lands with a regression test committed red first.
   - [ ] Add the typed inherited `direction` property and carry it into `TextSpan`.
   - [ ] Resolve each paragraph, shape level runs with explicit direction, and remove the
         guessed-direction, digit, reversal, and single-codepoint rules of #2098.
+  - [ ] Accumulate `dx` and `dy` in logical order inside right-to-left runs, red first with
+        `<text x="10" dx="0 10">` over two Hebrew letters.
+  - [ ] Make the `textLength` carry direction-aware, red first with a partial `rtl` owner.
+  - [ ] Split decoration groups at bidi discontinuities of the visual order.
+  - [ ] Recheck `text/text-anchor/on-tspan-with-arabic` against its reference (see
+        [resvg rows](#resvg-rows)).
   - [ ] Make source bidi control characters non-addressable.
   - [ ] Add `bidi_conformance_tests`, `bidi_paragraph_tests`, and `bidi_paragraph_fuzzer` with its
         Fuzz workflow soak step.
@@ -169,8 +176,13 @@ flattened spans of `ComputedTextComponent` in order. For each span it splits the
 ranges at every character that has an absolute `x` or `y` (`findChunkRanges`), shapes each chunk,
 and walks the shaped glyphs with a pen, applying a logical character's `x`, `y`, `dx`, `dy`, and
 `rotate` when it first meets a glyph of that character. `applyTextAnchor` skips `start` chunks and
-shifts `middle` and `end` chunks by the distance from the first glyph's pen to the last glyph's pen
-plus advance, ignoring direction.
+shifts `middle` and `end` chunks by the distance from the first glyph's `xPosition` (offset
+included) to the last glyph's `xPosition` plus x advance, ignoring direction. Inside a chunk that
+HarfBuzz shapes right to left, glyphs arrive in visual order, so `dx` and `dy` accumulate in visual
+order there (`PositionForGroup` and the pen updates in `applyHorizontalPosition`). `textLength`
+runs before anchoring: `ApplyTextLengthOwnerPlan` carries an owner's trailing advance into the
+following items until one has an absolute inline position (`absoluteReset` comes from `x` in
+horizontal text), so the carry crosses chunk boundaries that have only `y`.
 
 With [#2098](https://github.com/jwmcglynn/donner/pull/2098), `ChunkShaper` shapes each chunk with
 the span's primary face and, when that produces `.notdef`, splits it into per-face items shaped with
@@ -188,9 +200,9 @@ Other relevant facts:
   not need to be visually consecutive for painting; they do for decorations, which TinySkia and
   Geode draw from the first to the last glyph of the run, split per glyph when glyphs are rotated
   or sit on different baselines.
-- `CharacterGeometry` is stored in logical order. `startPosition` is the first glyph's pen origin
-  and `endPosition` is the last glyph's pen plus advance, so a right-to-left character reports its
-  left edge as its start.
+- `CharacterGeometry` is stored in logical order. `startPosition` is the first glyph's
+  `xPosition` and `yPosition` (offset included) and `endPosition` is the last glyph's position plus
+  advance, so a right-to-left character reports its left edge as its start.
 - `TextBackendSimple` has no notion of direction or mirroring.
 - `direction` and `unicode-bidi` appear in `PropertyRegistry.cc` only in the list of recognized
   presentation attributes that have no typed property.
@@ -256,10 +268,11 @@ implement Unicode 17, and Donner stays on 17 until both move.
 The vendored corpus records per-renderer results in `third_party/resvg-test-suite/results.csv`
 (0 unknown, 1 passed, 2 failed).
 
-- **resvg** at [v0.49.0](https://github.com/linebender/resvg/blob/v0.49.0/crates/usvg/src/text/layout.rs)
-  runs UAX #9 per shaped string with a fixed left-to-right paragraph level and shapes each visual run
-  with its direction. `resolve_relative_shifts` accumulates `dx` and `dy` in logical order ("`dx` and
-  `dy` shift a character and all the characters after it in logical order") and applies each
+- **resvg** at
+  [v0.49.0](https://github.com/linebender/resvg/blob/v0.49.0/crates/usvg/src/text/layout.rs) runs
+  UAX #9 per shaped string with a fixed left-to-right paragraph level and shapes each visual run
+  with its direction. `resolve_relative_shifts` accumulates `dx` and `dy` in logical order ("`dx`
+  and `dy` shift a character and all the characters after it in logical order") and applies each
   cluster's shift to its visually placed glyphs. Anchoring measures the chunk's extent including
   those shifts but ignores `direction`. resvg therefore fails its own `direction/rtl` and
   `unicode-bidi/bidi-override` rows, which Chrome, Firefox, and Safari pass; the reference PNGs for
@@ -279,8 +292,9 @@ The vendored corpus records per-renderer results in `third_party/resvg-test-suit
   hostile documents.
 - Editor Geode package: compressed ceiling 3,540,000 bytes, measured 3,523,487 with #2098 (16,513
   bytes headroom); raw ceiling 10,800,000 bytes, measured 10,771,745 (28,255 bytes headroom); also
-  capped at 64 data segments, 46,000 bytes per function body, and 12,880,000 total raw bytes. SheenBidi with mirroring alone adds about 26,098 raw bytes in the size
-  probe below, so the raw ceiling is likely the binding limit.
+  capped at 64 data segments, 46,000 bytes per function body, and 12,880,000 total raw bytes.
+  SheenBidi with mirroring alone adds about 26,098 raw bytes in the size probe below, so the raw
+  ceiling is likely the binding limit.
 - Standalone renderer module: 872,000 byte compressed ceiling at 871,295 bytes (705 bytes headroom).
   It links no text engine but does link the property registry.
 - Dependencies are pinned to release versions with integrity hashes; `MODULE.bazel.lock` is not
@@ -333,10 +347,13 @@ line starts are line boundaries inside one paragraph.
 
 **Current text position.** A chunk without an absolute `x` (for example one started by `y` only)
 starts its pen pass at the current text position: the pen end of the previous chunk in the
-paragraph direction, taken from the CSS positions, before relative shifts, `textLength`, and
-anchoring. In an `ltr` element the pen runs rightward from that point; in an `rtl` element the pen
+paragraph direction, before anchoring. It includes the running `dx` shift, which an absolute `y`
+does not reset, and the `textLength` carry of earlier owners, which today crosses such chunk
+boundaries. In an `ltr` element the pen runs rightward from that point; in an `rtl` element the pen
 of a chunk runs leftward from its anchor point, so the next chunk continues to the left. This is
 today's pen carry for left-to-right text, which the new `text_span_positioning_tests` cases pin.
+Blink stops the `textLength` carry at the end of the chunk; adopting that would be a separate later
+change with its own red-first test, not part of this design.
 Blink differs for unpositioned `rtl` chunks: its anchoring uses the first logical character's left
 edge as the anchor point, so it is not a pixel oracle there. After a `textPath`, the current text
 position stays the existing end-of-path position.
@@ -354,8 +371,8 @@ unchanged.
   list of ancestor elements whose `unicode-bidi` is not `normal` and that open at this span's start
   or close at its end, each with that element's `direction`. `ComputedTextComponent` already
   flattens the tree, so the markers are recorded during flattening.
-- The `<text>` element's own `direction` sets the paragraph level; its `unicode-bidi` is honored only
-  for `bidi-override`, `isolate-override`, and `plaintext`, as for a CSS block container.
+- The `<text>` element's own `direction` sets the paragraph level; its `unicode-bidi` is honored
+  only for `bidi-override`, `isolate-override`, and `plaintext`, as for a CSS block container.
 - Invalid values follow the existing invalid-at-computed-value behavior.
 
 The property parsers would land in the standalone renderer module, which has 705 bytes of
@@ -391,14 +408,15 @@ public:
 
 - **Input.** The adapter builds a UTF-32 analysis buffer from Donner's own `decodeUtf8` output, so
   the analysis and the layout agree on every malformed sequence; it never passes UTF-8 to SheenBidi.
-  Source bidi controls, the Unicode Bidi_Control set (ALM U+061C, LRM U+200E, RLM U+200F, LRE
-  to RLO U+202A to U+202E, and LRI to PDI U+2066 to U+2069), stay in the buffer, so they still
-  affect levels, but are non-addressable in the character table. `BidiControl` entries are the injected CSS controls with the logical position
-  before which they appear; injected controls occupy buffer slots but never logical characters.
+  Source bidi controls, the Unicode Bidi_Control set (ALM U+061C, LRM U+200E, RLM U+200F, LRE to RLO
+  U+202A to U+202E, and LRI to PDI U+2066 to U+2069), stay in the buffer, so they still affect
+  levels, but are non-addressable in the character table. `BidiControl` entries are the injected CSS
+  controls with the logical position before which they appear; injected controls occupy buffer slots
+  but never logical characters.
 - **Base level.** `ltr` and `rtl` map to explicit levels 0 and 1; `plaintext` on the root maps to
   P2 and P3.
-- **Paragraph boundaries.** A `unicode-bidi` element that spans a paragraph boundary is closed at the
-  end of one paragraph's buffer and reopened at the start of the next, as Blink does at chunk
+- **Paragraph boundaries.** A `unicode-bidi` element that spans a paragraph boundary is closed at
+  the end of one paragraph's buffer and reopened at the start of the next, as Blink does at chunk
   boundaries.
 - **Fast path.** When the base level is 0, no injected control exists, and no character has bidi
   class R, AL, AN, or an explicit formatting class, every level is 0 and the visual order is
@@ -450,26 +468,31 @@ The layout follows the SVG 2 split between CSS layout and positioning:
    word spacing, kerning, and font metrics apply as today. Cross-span kerning applies only between
    glyphs adjacent both logically and visually in one level run. Each character's CSS position is
    its left edge and its advance is its cell width.
-2. **Relative shifts in logical order.** Walk the character table in logical order, accumulating
-   `dx` and `dy` into a running shift, and add each character's shift to its glyphs. The shift
-   resets per axis: the x shift at an absolute `x`, the y shift at an absolute `y`, and both at a
-   `textPath` start. The SVG 2 step itself does not reset; the per-axis reset is Blink's fix for
-   SVG WG [issue 846](https://github.com/w3c/svgwg/issues/846) and matches today's pen behavior, so
-   `<tspan dy="10">a</tspan><tspan x="50">b</tspan>` keeps `b` 10 units down, as it is today.
-   Logical accumulation is resvg's `resolve_relative_shifts` and Blink's `AdjustPositionsDxDy`; for
-   left-to-right text it equals today's pen behavior. `rotate` is per logical character.
+2. **Relative shifts in logical order (Milestone 2).** Walk the character table in logical order,
+   accumulating `dx` and `dy` into a running shift, and add each character's shift to its glyphs.
+   The shift resets per axis: the x shift at an absolute `x`, the y shift at an absolute `y`, and
+   both at a `textPath` start. The SVG 2 step itself does not reset; the per-axis reset is Blink's
+   fix for SVG WG [issue 846](https://github.com/w3c/svgwg/issues/846) and matches today's pen
+   behavior, so `<tspan dy="10">a</tspan><tspan x="50">b</tspan>` keeps `b` 10 units down, as it is
+   today. Logical accumulation is resvg's `resolve_relative_shifts` and Blink's
+   `AdjustPositionsDxDy`. For left-to-right text it equals today's pen behavior; inside
+   right-to-left shaped chunks it differs from today, which accumulates in glyph order, so Milestone
+   1 keeps glyph order there and Milestone 2 switches with a red-first test. `rotate` is per logical
+   character.
 3. **`textLength`.** Per owner node, measure the extent of its addressable characters and
    distribute the difference between its visually adjacent characters. **Decision:** the behavior
    is direction-aware. The owner's start edge in the inline direction stays fixed (the left edge for
    `ltr`, the right edge for `rtl`), the end edge moves by delta, and the final shift carries to the
-   chunk's following characters in the inline direction. `spacingAndGlyphs` scales about the same
+   following characters in the inline direction. `spacingAndGlyphs` scales about the same
    start edge. A `textLength` owner that covers only part of an `rtl` chunk thus leaves the content
-   before it in place and pushes later content further left. Blink's literal alternative keeps the
-   left edge fixed and carries rightward in every direction, which shifts an `rtl` owner's
-   preceding content when the owner is partial; anchoring hides the difference only for whole
-   chunks. Milestone 1 keeps [#2095](https://github.com/jwmcglynn/donner/pull/2095)'s trailing-gap
-   carry exactly; the direction-aware carry lands in Milestone 1b with a `text_engine_tests` case for
-   a partial `rtl` owner and any row it changes listed. The existing Arabic `textLength` rows stay
+   before it in place and pushes later content further left. The carry keeps today's extent: it
+   continues until an absolute inline position, across `y`-only chunk boundaries. Blink's literal
+   alternative keeps the left edge fixed and carries rightward in every direction, which shifts an
+   `rtl` owner's preceding content when the owner is partial; anchoring hides the difference only
+   for whole chunks. Milestone 1 keeps today's carry, including
+   [#2095](https://github.com/jwmcglynn/donner/pull/2095)'s trailing gap, exactly; the
+   direction-aware carry needs `direction`, so it lands in Milestone 2 with a red-first
+   `text_engine_tests` case for a partial `rtl` owner. The existing Arabic `textLength` rows stay
    compared.
 4. **Anchoring.** See below.
 
@@ -479,21 +502,38 @@ scope.
 
 ### Anchoring
 
-For each anchored chunk, let `a` be the minimum of each addressable character's left edge and `b`
-the maximum of its right edge, after relative shifts and `textLength`. A character's left edge is
-its glyph position including the glyph's x offset, as today; its extent is its glyph advance plus
-letter and word spacing, except that spacing after the chunk's last character is excluded, as today
-and in resvg (Blink includes it). Let `P` be the anchor point: the chunk's resolved `x` (or the
-current text position), plus the relative `dx` and `dy` shift of the chunk's first logical
-character; the `textLength` shift is not added. With the `direction` and `text-anchor` of the element containing that first
-character, `start` with `ltr` or `end` with `rtl` moves `a` to `P`, `start` with `rtl` or `end` with
-`ltr` moves `b` to `P`, and `middle` moves `(a + b) / 2` to `P`. Vertical modes use the same rule on
-the vertical axis, measured between pen positions as #2098 does.
+This section describes Milestone 1b. Milestone 1 keeps today's rule: `start` chunks never move,
+and `middle` and `end` measure from the first glyph's `xPosition` (offset included) to the last
+glyph's `xPosition` plus x advance.
+
+For each anchored chunk, let `a` be the minimum of each addressable typographic character's left
+edge and `b` the maximum of its right edge, after relative shifts and `textLength`. A character's
+left edge is its first glyph's `xPosition`, offset included, as today. Its extent is its x advance
+plus letter and word spacing, except the spacing of the character at the chunk's visual end edge
+(the last cluster in visual order, as in resvg), which is excluded, as today; Blink includes it. Let
+`P` be the anchor point: the chunk's resolved `x`, or the current text position, plus the
+accumulated running `dx` shift at the chunk's first logical character. A `textLength` carry that
+arrives from an earlier owner is already part of the current text position and so of `P`; the
+chunk's own `textLength` redistribution is not added. With the `direction` and `text-anchor` of the
+element containing the chunk's first logical character, `start` with `ltr` or `end` with `rtl`
+moves `a` to `P`, `start` with `rtl` or `end` with `ltr` moves `b` to `P`, and `middle` moves
+`(a + b) / 2` to `P`. Vertical modes use the same rule on the vertical axis, measured between pen
+positions as #2098 does.
 
 This is the SVG 2 rule as Blink implements it and, apart from direction and trailing spacing, as
-resvg does. For left-to-right chunks whose characters advance monotonically it equals today's rule,
-because then `a` is the first glyph's pen and `b` the last glyph's pen plus advance. It differs only
-when a later character's shift places it before the first or past the last.
+resvg does. It does not reproduce today's rule in every left-to-right case. The intended
+differences are:
+
+- A `start` chunk moves when a later character's shift places it left of `P`; today `start` chunks
+  never move.
+- A trailing zero-advance mark no longer sets `b`. Today `b` is the last glyph's `xPosition` plus
+  advance, which for a trailing mark is the mark's position; the new extent uses its base
+  character's right edge.
+- `middle` and `end` measure the extent of all characters rather than first and last glyph, which
+  differs when a shift moves an inner character past either end.
+
+Without such shifts, marks, or right-to-left text, `a` is the first glyph's `xPosition` and `b` the
+last glyph's `xPosition` plus x advance, as today.
 
 A static scan of the corpus for negative `dx` or for `dx` combined with `middle` or `end` anchors
 finds two compared rows, and neither is a clear difference: in
@@ -513,20 +553,33 @@ in the paragraph direction.
 ### Run and decoration geometry
 
 `TextRun` stays one per span, and glyphs keep absolute positions, so renderer painting is unchanged.
-The engine adds `TextRun::decorationSegments`, computed with today's renderer rules so Milestone 1
-stays pixel-neutral:
+The engine adds `TextRun::decorationSegments`, computed after `placeDeferredTextPaths` and
+`ApplyPostTextPathTranslations`. In Milestone 1 the segments reproduce today's renderer rules
+exactly:
 
-- A rendered glyph is one whose glyph index is not 0 and whose advance is positive; other glyphs
-  contribute nothing.
-- When any glyph of the run is rotated, or the rendered glyphs do not share one baseline, every
-  rendered glyph gets its own bar, starting at the glyph's x position (which includes its offset)
-  and clamped to the next rendered glyph's x position; rotated bars carry the glyph's rotation.
-- Otherwise the run's rendered glyphs form maximal groups that are consecutive in the line's visual
-  order, and each group gets one bar from its first glyph's x position to its last glyph's x
-  position plus advance. For left-to-right text there is one group, today's bar.
+- A rendered glyph is one whose glyph index is not 0 and whose x advance is positive; other glyphs
+  contribute nothing. Vertical glyphs, whose x advance is 0, therefore get no decoration, as today;
+  vertical decorations belong to [#1172](https://github.com/jwmcglynn/donner/issues/1172).
+- When any glyph of the run is rotated (checked over all glyphs), or any rendered glyph's baseline
+  differs by more than 1e-6 from the first rendered glyph's, every rendered glyph gets its own bar,
+  starting at its `xPosition` (offset included) and clamped to the `xPosition` of the next rendered
+  glyph in visual order; a bar whose clamped width is not positive is skipped, and rotated bars
+  carry the glyph's rotation.
+- Otherwise the run gets one bar from its first rendered glyph's `xPosition` to its last rendered
+  glyph's `xPosition` plus x advance, in run storage order and across chunk boundaries, gap
+  included: `<text x="10 60" text-decoration="underline">ab</text>` draws one bar from 10 to past
+  60, as today.
 
-TinySkia and Geode draw those segments instead of computing extents themselves. This is the narrow precursor of the shared decoration geometry planned in Milestone
-11 of [0062-svg_parity_completion](0062-svg_parity_completion.md), which extends the same field.
+Milestone 2 changes only the last rule: the bar splits into one segment per group of glyphs that
+are consecutive in the line's visual order. Glyph storage stays visual inside each run; if it ever
+became logical, "next rendered glyph" would have to be taken in visual order explicitly, or the
+clamp could produce negative widths. `ClearUnpaintedSpanGlyphs` in `PlacedTextGeometry.cc` clears a
+span's glyphs for effect passes; it clears `decorationSegments` with them, so a cleared run draws
+no decoration, as today's `!run.glyphs.empty()` gate ensures.
+
+TinySkia and Geode draw those segments instead of computing extents themselves. This is the narrow
+precursor of the shared decoration geometry planned in Milestone 11 of
+[0062-svg_parity_completion](0062-svg_parity_completion.md), which extends the same field.
 Paint-server object bounding boxes keep using the union of the span's glyph cells.
 
 ### DOM geometry and the editor
@@ -603,14 +656,14 @@ All text, control characters, nesting, and property values are untrusted.
 
 - **Budgets.** `TextLayoutResourceBudget`, planned in
   [0062-svg_parity_completion](0062-svg_parity_completion.md), lands with Milestone 2 and limits one
-  text subtree to 1,000,000 code points, 65,536 visual runs, and 1,000,000 placed glyphs. Injected controls count against the
-  code point budget; fast-path lines count as one run each. The explicit depth limit is UAX #9's
-  125; deeper nesting is resolved by the algorithm's overflow counters, never by recursion.
-  Exceeding a budget returns the existing text-preparation resource error.
+  text subtree to 1,000,000 code points, 65,536 visual runs, and 1,000,000 placed glyphs. Injected
+  controls count against the code point budget; fast-path lines count as one run each. The explicit
+  depth limit is UAX #9's 125; deeper nesting is resolved by the algorithm's overflow counters,
+  never by recursion. Exceeding a budget returns the existing text-preparation resource error.
 - **Decoding.** One decoder (`decodeUtf8`) feeds both analysis and layout. Malformed sequences
   become U+FFFD at the same logical index in both.
-- **Allocation.** SheenBidi allocates linear storage per paragraph; budget preflight bounds the input
-  before any SheenBidi call.
+- **Allocation.** SheenBidi allocates linear storage per paragraph; budget preflight bounds the
+  input before any SheenBidi call.
 - **Fuzzing.** `//donner/svg/text:bidi_paragraph_fuzzer` feeds arbitrary code points, random control
   injection trees, random line splits, and random base directions to `BidiParagraph`, and asserts
   that levels are at most 126, that each line's runs are a permutation of the line, and that every
@@ -665,6 +718,17 @@ default and `text_full` lanes on every milestone: `text/font-kerning/arabic-scri
 `text/writing-mode/arabic-with-rl`. The `UndefinedBehavior` rows `text/writing-mode/tb-with-rotate`
 and `tb-with-rotate-and-underline` render without comparing; they are rerun only to catch crashes.
 
+`text/text-anchor/on-tspan-with-arabic` is the one listed row that Milestone 2 could plausibly move.
+After default whitespace handling, the `middle`-anchored second chunk holds the Arabic word of the
+second `tspan` followed by one collapsed space from the `<text>` element's own text, which is the
+only collapsed whitespace that survives (the leading and trailing runs are stripped, and the first
+chunk's word abuts its `tspan`). In Milestone 2 that chunk is one `ltr` paragraph: the word is a
+level 1 run and the trailing space resets to level 0 under L1, so the space stays to the right of
+the word, as today, where the word and the space are shaped as separate spans in that order. The
+extent still includes the space's advance, so the middle anchor does not move. The prediction is
+therefore no change; Milestone 2 reruns the row against its reference, and if it moves, the row
+leaves this list and the change is examined against the reference before acceptance.
+
 Three skips are labeled "BiDi-adjacent" but contain no right-to-left text:
 `text/text/ligatures-handling-in-mixed-fonts-1`, `-2`, and `real-text-height`. Bidi does not unlock
 them; their reasons belong to [#1176](https://github.com/jwmcglynn/donner/issues/1176).
@@ -697,10 +761,12 @@ does not matter; shaped cases are full-text only.
   `rtl` chunk, each `unicode-bidi` value on nested `tspan` elements, a `unicode-bidi` element
   crossing a chunk boundary, and source bidi controls taking no positioning values.
 - `bidi_paragraph_tests`: the span-marker-to-control translation for every `unicode-bidi` value and
-  direction, and `levels()` for `isolate-override` against `isolate` plus `bidi-override` on content
-  whose first strong character is opposite to `direction`, which distinguishes FSI from RLI at the
-  level the difference is observable; optionally a nesting of depth 124 plus injected controls that
-  reaches the overflow counters.
+  direction, and `levels()` for `isolate-override` against `isolate` plus `bidi-override`. In an
+  `rtl` paragraph, an `rtl` override over content whose first strong character is L resolves to
+  level 3 with FSI and 5 with RLI; in an `ltr` paragraph, an `ltr` override over R-first content
+  resolves to 2 with FSI and 4 with LRI. The visual order is identical in both cases, so only
+  `levels()` and depth overflow can tell them apart; an optional case nests to depth 124 so that the
+  extra level overflows with one control and not the other.
 - `text_engine_scripted_tests`: budget exhaustion for code points and runs with small injected
   budgets, depth beyond 125, and malformed UTF-8 inside right-to-left runs.
 - `renderer_regression_tests`: an underlined span split by an RTL run draws two decoration
@@ -727,15 +793,21 @@ does not matter; shaped cases are full-text only.
 | Rust `unicode-bidi` | MIT/Apache-2.0 | n/a                                                                                                     | n/a                                | Used by resvg                                                             | Rejected: the Lint lane forbids Rust dependencies                                                                                                 |
 
 **Size probe.** Each figure is the growth of a one-function Emscripten module over an empty one
-exporting the same function. The probe is a `cc_binary` with
-`-sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web -sALLOW_MEMORY_GROWTH=1 -sMALLOC=emmalloc -sUSE_PTHREADS=0 --no-entry` exporting `_probe`, `_malloc`, and `_free`, wrapped in
-`wasm_cc_binary` and built with `--config=wasm-size` against temporary dev-only `bazel_dep`s on the
-BCR modules. The SheenBidi probe creates an algorithm, paragraph, and line from UTF-8 input and
-reads levels and runs; variants add the mirror and script locators. The FriBidi probe converts
-UTF-8, resolves types, brackets, and levels, reorders a line, and mirrors. Sizes are the `.wasm`
-file raw and gzip level 9, as the package size test measures them: empty 1,974 (1,027); SheenBidi
-27,563 (8,930), 28,072 (9,177), 72,344 (18,720); FriBidi 43,726 (10,278). The probes were built
-once with remote execution and discarded.
+exporting the same function. The probe is a `cc_binary` exporting `_probe`, `_malloc`, and `_free`
+with these link options, wrapped in `wasm_cc_binary` and built with `--config=wasm-size` against
+temporary dev-only `bazel_dep`s on the BCR modules:
+
+```text
+-sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web -sALLOW_MEMORY_GROWTH=1
+-sMALLOC=emmalloc -sUSE_PTHREADS=0 --no-entry
+```
+
+The SheenBidi probe creates an algorithm, paragraph, and line from UTF-8 input and reads levels and
+runs; variants add the mirror and script locators. The FriBidi probe converts UTF-8, resolves types,
+brackets, and levels, reorders a line, and mirrors. Sizes are the `.wasm` file raw and gzip level 9,
+as the package size test measures them: empty 1,974 (1,027); SheenBidi 27,563 (8,930), 28,072
+(9,177), 72,344 (18,720); FriBidi 43,726 (10,278). The probes were built once with remote execution
+and discarded.
 
 **Decision: SheenBidi 3.0.0 through the Bazel Central Registry**, without its script locator. It is
 the smallest measured option; its Apache-2.0 license is compatible with Donner's ISC license; its
@@ -772,7 +844,8 @@ ceiling decision before publication.
 
 ## Rollout Plan
 
-There is no flag. Milestone 1 is pixel-neutral. Milestone 1b changes only the rows it lists.
+There is no flag. Milestone 1 preserves today's behavior exactly, pixels included. Milestone 1b
+changes only the cases it lists.
 Milestone 2 changes output only for paragraphs that contain right-to-left characters, bidi controls,
 or `direction="rtl"`, which the fast path guarantees. Each milestone reverts independently:
 reverting Milestone 2 removes the dependency, adapter, `direction` property, and conformance data
@@ -789,9 +862,9 @@ together.
   with another's, which breaks per-chunk anchoring, and contradicts 11.1.1. Rejected.
 - **`dx` applied in visual pen order.** Matches a literal reading of 11.2.2, but neither the SVG 2
   algorithm, resvg, nor Blink does it. Rejected.
-- **Keep today's anchoring measurement.** Ignores direction and diverges from SVG 2, resvg, and Blink
-  when a shift moves a character outside the first-to-last span. Rejected; Milestone 1b lists the
-  effect.
+- **Keep today's anchoring measurement.** Ignores direction and diverges from SVG 2, resvg, and
+  Blink when a shift moves a character outside the first-to-last span. Rejected; Milestone 1b lists
+  the effect.
 - **Keep HarfBuzz direction guessing plus heuristics.** Cannot express embeddings, isolates,
   overrides, paragraph direction, or bracket pairs. Rejected, as in
   [0062-svg_parity_completion](0062-svg_parity_completion.md).
@@ -807,10 +880,10 @@ together.
 1. **Dependency scope.** Approve SheenBidi 3.0.0 from the Bazel Central Registry as a regular (not
    dev-only) dependency of the text engine in both tiers?
 2. **Editor package ceilings.** Milestone 2 likely exceeds the 28,255 raw bytes of headroom and may
-   exceed the 16,513 compressed bytes. May both ceilings rise by the measured amounts, or should bidi
-   first find offsetting savings?
-3. **Standalone renderer ceiling.** The two property parsers would land in a module with 705 bytes of
-   headroom. Raise that ceiling by the measured amount, or compile the typed `direction` and
+   exceed the 16,513 compressed bytes. May both ceilings rise by the measured amounts, or should
+   bidi first find offsetting savings?
+3. **Standalone renderer ceiling.** The two property parsers would land in a module with 705 bytes
+   of headroom. Raise that ceiling by the measured amount, or compile the typed `direction` and
    `unicode-bidi` properties only when text is enabled, so text-off builds keep treating them as
    recognized but unsupported?
 4. **`text/direction/rtl` reference.** The plan is a reviewed project-owned golden rendered with the
