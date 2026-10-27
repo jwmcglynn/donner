@@ -38,6 +38,7 @@
 namespace donner::svg {
 namespace {
 
+using ::testing::AllOf;
 using ::testing::Each;
 using ::testing::ElementsAre;
 using ::testing::Eq;
@@ -350,13 +351,14 @@ TEST(FontSelection, CoverageFallbackSelectsAFaceSupportingTheCodepoint) {
 struct GlyphFace {
   char32_t codepoint = 0;  ///< First codepoint of the glyph's source cluster.
   std::string source;      ///< Vendored font filename, or \ref kEmbeddedFallback.
+  bool drawn = true;       ///< False when the glyph is `.notdef`, which renderers skip.
 
   bool operator==(const GlyphFace&) const = default;
 };
 
 std::ostream& operator<<(std::ostream& os, const GlyphFace& face) {
   return os << "GlyphFace{U+" << std::hex << static_cast<uint32_t>(face.codepoint) << std::dec
-            << ", source=\"" << face.source << "\"}";
+            << ", source=\"" << face.source << "\", drawn=" << face.drawn << "}";
 }
 
 /**
@@ -399,8 +401,9 @@ std::vector<GlyphFace> LayOutGlyphFaces(std::string_view utf8,
   std::vector<GlyphFace> result;
   for (const TextGlyph& glyph : glyphs) {
     const char32_t codepoint = std::get<0>(Utf8::NextCodepoint(utf8.substr(glyph.cluster)));
-    result.push_back(
-        {codepoint, DescribeFace(fonts.fontManager(), GlyphFont(runs[0], glyph)).source});
+    result.push_back({codepoint,
+                      DescribeFace(fonts.fontManager(), GlyphFont(runs[0], glyph)).source,
+                      glyph.glyphIndex != 0});
   }
   return result;
 }
@@ -435,6 +438,19 @@ TEST(FontSelection, PerClusterFallbackMovesACombiningMarkWithItsBase) {
   EXPECT_THAT(faces.back(), Eq(GlyphFace{U'b', "Yellowtail-Regular.ttf"}));
   EXPECT_THAT(std::vector<GlyphFace>(faces.begin() + 1, faces.end() - 1),
               Each(Field("source", &GlyphFace::source, Eq("NotoSerif-Regular.ttf"))));
+}
+
+TEST(FontSelection, PerClusterFallbackKeepsAnIndicSyllableInOneFace) {
+  // Yellowtail has no Devanagari. Every glyph of the syllable, including the virama, the second
+  // consonant and the vowel sign that a shaper merges into the syllable's cluster, must come from
+  // the face that covers it and must not be `.notdef`.
+  const std::vector<GlyphFace> faces =
+      LayOutGlyphFaces("a\u0938\u094d\u0924\u0947", {"Yellowtail", "Noto Sans Devanagari"});
+  ASSERT_THAT(faces, SizeIs(testing::Ge(2u)));
+  EXPECT_THAT(faces.front(), Eq(GlyphFace{U'a', "Yellowtail-Regular.ttf"}));
+  EXPECT_THAT(std::vector<GlyphFace>(faces.begin() + 1, faces.end()),
+              Each(AllOf(Field("source", &GlyphFace::source, Eq("NotoSansDevanagari-Regular.ttf")),
+                         Field("drawn", &GlyphFace::drawn, Eq(true)))));
 }
 
 }  // namespace
