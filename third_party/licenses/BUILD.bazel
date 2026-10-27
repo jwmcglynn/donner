@@ -27,7 +27,6 @@ package(default_visibility = ["//visibility:public"])
 exports_files([
     "freetype.LICENSE.txt",
     "imgui.LICENSE.txt",
-    "proggy-clean.LICENSE.txt",
     "glfw.LICENSE.md",
     "tracy.LICENSE.txt",
     "roboto.LICENSE.txt",
@@ -109,16 +108,6 @@ license(
     license_text = "imgui.LICENSE.txt",
     package_url = "https://github.com/ocornut/imgui",
     # Pinned to commit ee1deccc in MODULE.bazel.
-    package_version = "ee1deccc",
-)
-
-# ProggyClean is a separate font copyright, preserved by the external default-font resource.
-license(
-    name = "imgui-default-font",
-    package_name = "ProggyClean",
-    license_kinds = ["@rules_license//licenses/spdx:MIT"],
-    license_text = "proggy-clean.LICENSE.txt",
-    package_url = "https://github.com/ocornut/imgui/blob/ee1deccc08c14ab1e6abcfa6aae11d915763cdb7/misc/fonts/ProggyClean.ttf",
     package_version = "ee1deccc",
 )
 
@@ -277,7 +266,6 @@ ALL_KNOWN_LICENSES = [
     ":harfbuzz",
     ":woff2",
     ":imgui",
-    ":imgui-default-font",
     ":glfw",
     ":tracy",
     ":emscripten-glfw",

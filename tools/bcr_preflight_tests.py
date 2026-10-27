@@ -179,8 +179,6 @@ class BcrPreflightTest(unittest.TestCase):
                      "donner/base/PackagedResource.cc", "third_party/public-sans/BUILD.bazel",
                      "third_party/fira-code/FiraCode-Regular.ttf", "third_party/roboto/Roboto.ttf",
                      "third_party/google_fonts/catalog_generate.py",
-                     "third_party/imgui/BUILD.bazel",
-                     "donner/editor/gui/ImGuiDefaultFontProvider.cc",
                      "donner/editor/art/samples/basic-shapes.svg"):
             with self.subTest(path=path):
                 self.assertTrue(bcr_preflight.is_release_path(path))
@@ -353,24 +351,6 @@ class BcrPreflightTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output, expected)
         self.assertIn(b"Full preflight matrix selected by .bcr/\xfe.yml\n", result.stdout)
-
-    def test_default_font_delivery_changes_select_full_scope_with_negative_controls(self):
-        cases = [
-            ("third_party/imgui/BUILD.bazel", True),
-            ("donner/editor/gui/ImGuiDefaultFontProvider.cc", True),
-            ("third_party/patches/imgui-external-default-font.patch", True),
-            ("examples/BUILD.bazel", True),
-            ("examples/svg_viewer.cc", True),
-            ("examples/README.md", False),
-            ("donner/editor/gui/ImGuiDefaultFontProvider.cc.orig", False),
-            ("third_party/imgui-guide/README.md", False),
-        ]
-        for path, full in cases:
-            with self.subTest(path=path):
-                shutil.rmtree(self.work / "repo", ignore_errors=True)
-                result, output = self._scope_with_changed_paths([path.encode()])
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(output, "full_matrix=" + str(full).lower() + "\n")
 
     def test_release_paths_match_like_shell_case_patterns(self):
         # `*` crosses directories, as in the shell `case` the workflow used.

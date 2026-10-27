@@ -134,8 +134,8 @@ donner_cc_test(
     srcs = ["EditorTheme_tests.cc"],
     deps = [
         "//donner/editor:editor_theme",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -253,8 +253,8 @@ donner_cc_test(
     srcs = ["MenuBarPresenter_tests.cc"],
     deps = [
         "//donner/editor:menu_bar_presenter",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -284,9 +284,9 @@ donner_cc_test(
         "//donner/editor:sample_picker_presenter",
         "//donner/editor/gui:editor_window",
         "//donner/svg/renderer:renderer_image_io",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -456,8 +456,8 @@ donner_cc_test(
         "//donner/editor:select_tool",
         "//donner/editor:text_editor",
         "//donner/svg/renderer",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -469,8 +469,8 @@ donner_cc_test(
         "//donner/editor:editor_app",
         "//donner/editor:selection_aabb",
         "//donner/editor:text_editor",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -508,8 +508,8 @@ donner_cc_test(
         "//donner/editor:editor_app",
         "//donner/editor:source_selection",
         "//donner/editor:text_editor",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -523,8 +523,8 @@ donner_cc_test(
         "//donner/editor:text_editor",
         "//donner/svg",
         "//donner/svg/parser",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -598,8 +598,8 @@ donner_cc_test(
         "//donner/editor:render_pane_presenter",
         "//donner/editor:viewport_state",
         "//donner/svg",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -623,8 +623,8 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer/tests:rgba_test_matchers",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -891,8 +891,8 @@ donner_cc_test(
         "//donner/editor:viewport_state",
         "//donner/svg",
         "//donner/svg/renderer",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -925,7 +925,7 @@ donner_cc_fuzzer(
         "//donner/editor:text_tool",
         "//donner/editor:viewport_state",
         "//donner/svg",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -1043,14 +1043,14 @@ donner_cc_test(
     deps = [
         "//donner/base",
         "//donner/editor:attached_numeric_stepper",
-        "//donner/editor:document_sync_controller",
         "//donner/editor:editor_app",
+        "//donner/editor:document_sync_controller",
+        "//donner/editor:select_tool",
+        "//donner/editor:text_editor",
         "//donner/editor:embedded_svg_icon",
         "//donner/editor:imgui_headers",
-        "//donner/editor:select_tool",
         "//donner/editor:selection_aabb",
         "//donner/editor:sidebar_presenter",
-        "//donner/editor:text_editor",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],
@@ -1070,9 +1070,9 @@ donner_cc_test(
         "//donner/editor:viewport_svg_export",
         "//donner/svg",
         "//donner/svg/parser",
+        "//donner/svg/tests:source_recovery_policy_test_utils",
         "//donner/svg/renderer",
         "//donner/svg/renderer/tests:rgba_test_matchers",
-        "//donner/svg/tests:source_recovery_policy_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -1194,8 +1194,8 @@ donner_cc_test(
     srcs = ["TextEditor_tests.cc"],
     deps = [
         "//donner/editor:text_editor",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -1206,8 +1206,8 @@ donner_cc_test(
         "//donner/editor:editor_app",
         "//donner/editor:text_inspector_panel",
         "//donner/svg",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -1220,8 +1220,8 @@ donner_cc_test(
         "//donner/editor:text_format_bar_presenter",
         "//donner/svg",
         "//donner/svg/resources:font_catalog_types",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -1444,8 +1444,8 @@ donner_cc_library(
         "//donner/editor/gui:ui_texture_registry",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest",
+        "@imgui",
     ],
 )
 
@@ -1649,8 +1649,8 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/tests:render_tree_test_utils",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -1764,8 +1764,8 @@ donner_cc_test(
         "//donner/editor:xml_autocomplete",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_interface",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -1795,38 +1795,6 @@ donner_cc_test(
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-# The same atlas/pixel cases run against both implementations in separate executables.
-[
-    donner_cc_test(
-        name = name,
-        srcs = ["ImGuiDefaultFontCompatibility_tests.cc"],
-        data = ["//third_party/imgui:raw_font_fixture"],
-        deps = [
-            dependency,
-            "//donner/base:base_test_utils",
-            "//donner/base:packaged_resource",
-            "@com_google_gtest//:gtest_main",
-        ],
-    )
-    for name, dependency in [
-        ("imgui_generic_default_font_tests", "@imgui//:imgui"),
-        ("imgui_packaged_default_font_tests", "//third_party/imgui:imgui"),
-    ]
-]
-
-donner_cc_test(
-    name = "imgui_default_font_provider_tests",
-    srcs = ["ImGuiDefaultFontProvider_tests.cc"],
-    data = ["//third_party/imgui:raw_font_fixture"],
-    deps = [
-        "//donner/base:base_test_utils",
-        "//donner/base:packaged_resource",
-        "//third_party/imgui",
-        "//third_party/imgui:imgui-default-font",
         "@com_google_gtest//:gtest_main",
     ],
 )

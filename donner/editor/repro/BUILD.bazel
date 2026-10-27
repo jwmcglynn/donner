@@ -63,7 +63,7 @@ donner_cc_library(
     deps = [
         ":repro_file",
         "//donner/editor:imgui_headers",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -85,7 +85,7 @@ donner_cc_test(
         ":repro_recorder",
         "//donner/editor:imgui_headers",
         "//donner/svg/parser",
-        "//third_party/imgui",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )

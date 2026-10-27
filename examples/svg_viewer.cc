@@ -30,7 +30,6 @@
 #include "donner/base/Box.h"
 #include "donner/base/FileOffset.h"
 #include "donner/base/FileUtils.h"
-#include "donner/base/PackagedResource.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/TerminalEscape.h"
@@ -77,20 +76,6 @@ std::string LoadFile(const std::string& filename) {
               << donner::EscapeTerminalText(filename) << "\n";
     return {};
   }
-}
-
-/// Read the source and verify installed fonts before creating any window or UI context.
-std::string LoadSourceAndPrepareResources(const std::string& filename) {
-  std::string source = LoadFile(filename);
-  if (source.empty()) {
-    return {};
-  }
-  std::string error;
-  if (!donner::PreparePackagedResources(&error)) {
-    std::cerr << "Unable to load packaged resources: " << error << "\n";
-    return {};
-  }
-  return source;
 }
 
 /// Bundles the loaded document with its hit-test controller and the
@@ -248,7 +233,7 @@ int main(int argc, char** argv) {
   }
 
   const std::string svgPath = argv[1];
-  const std::string initialSource = LoadSourceAndPrepareResources(svgPath);
+  const std::string initialSource = LoadFile(svgPath);
   if (initialSource.empty()) {
     return 1;
   }
@@ -302,7 +287,7 @@ int main(int argc, char** argv) {
   state.loadFromString(initialSource);
 
   donner::editor::TextEditor textEditor;
-  textEditor.setSvgLanguageDefinition();
+  textEditor.setLanguageDefinition(donner::editor::TextEditor::LanguageDefinition::SVG());
   textEditor.setText(initialSource);
 
   // Track the current source-pane error marker so we only push into

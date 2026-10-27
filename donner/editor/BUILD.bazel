@@ -470,7 +470,7 @@ donner_cc_library(
     deps = [
         ":imgui_headers",
         ":source_diagnostics",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -726,7 +726,7 @@ donner_cc_library(
         "ImGuiInternalIncludes.h",
     ],
     deps = [
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -739,7 +739,7 @@ donner_cc_library(
     deps = [
         ":imgui_headers",
         "//donner/css",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -805,7 +805,7 @@ donner_cc_library(
         ":tool",
         ":viewport_state",
         "//donner/base",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -823,7 +823,7 @@ donner_cc_library(
         ":composited_rendering_mode",
         ":editor_theme",
         ":imgui_headers",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -844,7 +844,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/resources:font_catalog_types",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -894,7 +894,7 @@ donner_cc_library(
         ":imgui_headers",
         "//donner/base",
         "//donner/svg/renderer:renderer_interface",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -919,7 +919,7 @@ donner_cc_library(
         ":editor_theme",
         ":imgui_headers",
         "//donner/base",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -932,7 +932,7 @@ donner_cc_library(
         ":imgui_headers",
         "//donner/base",
         "//donner/base/parser",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -974,7 +974,7 @@ donner_cc_library(
         "//donner/svg",
         "//donner/svg/renderer:renderer_interface",
         "//third_party/bootstrap-icons:bootstrap_icons",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -1006,7 +1006,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/gpu",
         "//donner/svg/compositor",
-        "//third_party/imgui",
+        "@imgui",
     ] + select({
         ":wasm_geode_enabled": [
             ":runtime_bitmap_upload",
@@ -1036,7 +1036,7 @@ donner_cc_library(
     deps = [
         ":editor_theme",
         ":imgui_headers",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -1073,7 +1073,7 @@ donner_cc_library(
         ":selection_aabb",
         ":viewport_interaction_controller",
         "//donner/base",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -1215,7 +1215,7 @@ donner_cc_library(
     hdrs = ["EditorDockLayout.h"],
     deps = [
         ":imgui_headers",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -1313,8 +1313,8 @@ donner_cc_library(
         "//donner/svg/resources:font_catalog",
         "//donner/svg/resources:font_manager",
         "//third_party/fira-code",
-        "//third_party/imgui",
         "//third_party/roboto",
+        "@imgui",
     ] + select({
         ":wasm_geode_enabled": [
             "//donner/svg/renderer:renderer_geode",
@@ -1463,7 +1463,7 @@ donner_cc_library(
         "//donner/base/xml",
         "//donner/svg",
         "//donner/svg/resources:font_catalog",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -1647,7 +1647,7 @@ donner_cc_library(
         ":editor_theme",
         ":external_url_launcher",
         ":imgui_headers",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -1772,7 +1772,7 @@ donner_cc_library(
     deps = [
         ":clipboard_interface",
         ":imgui_headers",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -1838,7 +1838,7 @@ donner_cc_library(
         ":text_buffer",
         ":text_editor_core",
         "//donner/base",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
@@ -1893,7 +1893,7 @@ donner_cc_library(
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
         "//third_party/bootstrap-icons:bootstrap_icons",
-        "//third_party/imgui",
+        "@imgui",
     ],
 )
 
