@@ -294,6 +294,38 @@ class DocsPublishTest(unittest.TestCase):
         self.assertEqual(check.call_count, 24)
         self.assertEqual(pause.call_count, 23)
 
+    def test_slow_health_check_exhausts_elapsed_budget_without_more_attempts(self):
+        clock = [0.0]
+        def slow_check(expected, **kwargs):
+            clock[0] += 121
+            return False
+        with mock.patch.object(publish.time, "monotonic", side_effect=lambda: clock[0]), \
+             mock.patch.object(publish, "_live_identity", side_effect=slow_check) as check, \
+             self.assertRaisesRegex(ValueError, "public site did not converge"):
+            pause = mock.Mock()
+            publish._wait_for_live(self.prior, wait=pause)
+        self.assertEqual(check.call_count, 1)
+        pause.assert_not_called()
+
+    def test_expired_health_budget_stops_before_a_network_request(self):
+        with mock.patch.object(publish.time, "monotonic", return_value=121), \
+             mock.patch.object(publish, "_https_response") as request, \
+             self.assertRaisesRegex(ValueError, "deadline"):
+            publish._live_file("index.html", deadline=120)
+        request.assert_not_called()
+
+    def test_live_read_checks_deadline_between_chunks(self):
+        clock = [0.0]
+        response = mock.Mock()
+        def slow_chunk(size):
+            clock[0] += 121
+            return b"partial"
+        response.read1.side_effect = slow_chunk
+        with mock.patch.object(publish.time, "monotonic", side_effect=lambda: clock[0]), \
+             self.assertRaisesRegex(ValueError, "deadline"):
+            publish._read_body(response, 100, deadline=120)
+        self.assertEqual(response.read1.call_count, 1)
+
     def test_network_requests_reject_other_schemes_and_embedded_credentials(self):
         for url in ("file:///secret", "http://example.test/", "https://user:secret@example.test/",
                     "https://example.test:444/", "https://example.test/#fragment"):
