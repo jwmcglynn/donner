@@ -1555,6 +1555,18 @@ RendererBitmap RenderCheckerFeImage() {
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
+/// Comparison for an image-sampling oracle: identity on TinySkia, which shares tiny-skia's
+/// sampling code, and the canonical default comparison on Geode. GPU sampling evaluates in float
+/// on the device and lands one 8-bit step from the reference in places: hardware bilinear
+/// filtering has reduced subtexel precision (684 pixels on Metal for the smooth case), and the
+/// shader cubic differs by at most one step in one channel (28 and 612 pixels on an Intel Vulkan
+/// device for the opaque and translucent cubic cases).
+editor::tests::BitmapGoldenCompareParams ImageSamplingOracleParams() {
+  return ActiveRendererBackend() == RendererBackend::Geode
+             ? editor::tests::BitmapGoldenCompareParams{}
+             : editor::tests::PixelmatchIdentityParams();
+}
+
 TEST_F(RendererRegressionTests, ImageQualityRenderingUsesMitchellCubicSampling) {
   const RendererBitmap mitchell = RenderCheckerFeImage();
   AssertVisibleFixture(mitchell, "image_mitchell_oracle_visible");
@@ -1564,7 +1576,7 @@ TEST_F(RendererRegressionTests, ImageQualityRenderingUsesMitchellCubicSampling) 
         RenderCheckerImage(imageRendering), mitchell,
         "image_quality_mitchell_" +
             std::string(imageRendering.empty() ? "unspecified" : imageRendering),
-        editor::tests::PixelmatchIdentityParams());
+        ImageSamplingOracleParams());
   }
 }
 
@@ -1670,18 +1682,13 @@ RendererBitmap TinySkiaImageReference(const StraightImage& pixels, int width, in
 }
 
 TEST_F(RendererRegressionTests, ImageSmoothRenderingUsesBilinearSampling) {
-  // GPU texture filtering interpolates with reduced subtexel precision (684 pixels differ by
-  // low bits from tiny-skia on Metal), so Geode is held to the canonical default comparison.
-  const editor::tests::BitmapGoldenCompareParams params =
-      ActiveRendererBackend() == RendererBackend::Geode ? editor::tests::BitmapGoldenCompareParams{}
-                                                        : editor::tests::PixelmatchIdentityParams();
   editor::tests::CompareBitmapToBitmap(
       RenderImageOverGray(
           R"svg(<image x="8" y="8" width="48" height="48" image-rendering="smooth" href=")svg" +
           std::string(kCheckerImageDataUri) + "\"/>"),
       TinySkiaImageReference(CheckerPixels(), 4, 4, Box2d::FromXYWH(8, 8, 48, 48),
                              tiny_skia::FilterQuality::Bilinear),
-      "image_smooth_bilinear", params);
+      "image_smooth_bilinear", ImageSamplingOracleParams());
 }
 
 TEST_F(RendererRegressionTests, ImageCubicClampsChannelsOnlyToOne) {
@@ -1690,7 +1697,7 @@ TEST_F(RendererRegressionTests, ImageCubicClampsChannelsOnlyToOne) {
                           std::string(kTranslucentCheckerDataUri) + "\"/>"),
       TinySkiaImageReference(TranslucentCheckerPixels(), 4, 4, Box2d::FromXYWH(8, 8, 48, 48),
                              tiny_skia::FilterQuality::Bicubic),
-      "image_cubic_translucent", editor::tests::PixelmatchIdentityParams());
+      "image_cubic_translucent", ImageSamplingOracleParams());
 }
 
 TEST_F(RendererRegressionTests, ImageTranslatedAtIntrinsicSizeSamplesNearest) {
