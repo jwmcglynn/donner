@@ -42,6 +42,29 @@ class RemoteCacheConfigTest(unittest.TestCase):
             self.bazelrc_lines,
         )
 
+    def test_macos_downloads_cached_browser_trees_in_full(self):
+        # A lazily fetched cached browser tree loses files beneath its directory
+        # symlinks before a local macOS test can stage it. This holds for a disk
+        # cache alone, so it cannot live only in the remote cache fragment.
+        flag = "build:macos --remote_download_regex="
+        patterns = [line[len(flag):] for line in self.bazelrc_lines if line.startswith(flag)]
+        pattern = r".*/rules_playwright[+][^/]*/browsers/.*"
+        self.assertIn(pattern, patterns)
+        # Bazel matches the whole exec path of each output.
+        browser_root = ("bazel-out/darwin_arm64-opt-exec-ST-d57f47055a04/bin/external/"
+                        "rules_playwright++playwright+playwright/browsers/mac14-arm64/")
+        for path in ("chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/"
+                     "Frameworks/Google Chrome for Testing Framework.framework/Versions/"
+                     "Current/Resources/en.lproj/locale.pak",
+                     "webkit_mac14-arm64_special-2370/WebCore.framework/Versions/Current/"
+                     "Resources/modern-media-controls/controls/button.js"):
+            self.assertIsNotNone(re.fullmatch(pattern, browser_root + path), path)
+        for path in ("bazel-out/darwin_arm64-fastbuild/bin/donner/editor/wasm/editor.wasm",
+                     "bazel-out/darwin_arm64-fastbuild/testlogs/donner/editor/wasm/tests/"
+                     "mac_browser_archive_tests/test.log",
+                     "external/rules_playwright+/playwright/private/unzip_browser.bzl"):
+            self.assertIsNone(re.fullmatch(pattern, path), path)
+
     def test_coverage_skips_host_incompatible_explicit_targets(self):
         self.assertIn(
             "coverage --skip_incompatible_explicit_targets",

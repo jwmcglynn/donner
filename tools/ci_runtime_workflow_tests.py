@@ -35,7 +35,7 @@ PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 RENDERER_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 2800,
     "--max-js-raw-bytes": 5700,
-    "--max-wasm-gzip-bytes": 872100,
+    "--max-wasm-gzip-bytes": 873000,
     "--max-wasm-raw-bytes": 2210000,
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"

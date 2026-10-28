@@ -199,10 +199,12 @@ struct DropShadow {
 /// Parameters for feImage. Image data is pre-loaded by the caller and stored here as premultiplied
 /// RGBA pixels.
 struct Image {
+  /// Resampling kernel for placing the image into its target rectangle.
   enum class Sampling : std::uint8_t {
-    Smooth,
-    CrispEdges,
-    Pixelated,
+    Cubic,       ///< Mitchell-Netravali cubic (B = C = 1/3).
+    Bilinear,    ///< Bilinear interpolation.
+    CrispEdges,  ///< The nearest texel.
+    Pixelated,   ///< Integer nearest-neighbor scale followed by bilinear.
   };
 
   std::vector<std::uint8_t> pixels;  ///< Premultiplied RGBA pixel data.
@@ -211,7 +213,7 @@ struct Image {
   /// Target rectangle within the filter output (pixel space). If empty, uses the full output.
   std::optional<PixelRect> targetRect;
   /// Image sampling policy selected by the source `<feImage>`.
-  Sampling sampling = Sampling::Smooth;
+  Sampling sampling = Sampling::Cubic;
 };
 
 }  // namespace graph_primitive
