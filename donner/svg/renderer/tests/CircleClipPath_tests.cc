@@ -41,6 +41,15 @@ TEST(EllipseClipPath, DefaultRadiiResolveIndependently) {
                         "ellipse_defaults");
 }
 
+TEST(EllipseClipPath, SingleExtentKeywordAppliesToBothRadii) {
+  ExpectCircleReference(
+      "ellipse(closest-side at 25% 50%) fill-box", "<ellipse cx='18' cy='28' rx='10' ry='16'/>",
+      "<rect x='8' y='12' width='40' height='32' fill='red'/>", "ellipse_single_closest_side");
+  ExpectCircleReference(
+      "ellipse(farthest-side at 25% 50%) fill-box", "<ellipse cx='18' cy='28' rx='30' ry='16'/>",
+      "<rect x='8' y='12' width='40' height='32' fill='red'/>", "ellipse_single_farthest_side");
+}
+
 TEST(EllipseClipPath, PercentRadiiUseTheirOwnAxis) {
   ExpectCircleReference("ellipse(25% 25%) fill-box", "<ellipse cx='28' cy='28' rx='10' ry='8'/>",
                         "<rect x='8' y='12' width='40' height='32' fill='red'/>",

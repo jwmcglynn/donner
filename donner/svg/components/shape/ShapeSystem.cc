@@ -560,6 +560,16 @@ bool IsFiniteCircle(const Vector2d& center, double radius) {
          std::isfinite(center.y - radius) && std::isfinite(center.y + radius);
 }
 
+bool IsFiniteEllipse(const Vector2d& center, double rx, double ry) {
+  // The path builder also adds endpoints and subtracts bounds to obtain its center and radii.
+  const std::array<double, 8> coordinates = {center.x - rx, center.x + rx, center.y - ry,
+                                             center.y + ry, center.x * 2,  center.y * 2,
+                                             rx * 2,        ry * 2};
+  return rx > 0.0 && ry > 0.0 &&
+         std::all_of(coordinates.begin(), coordinates.end(),
+                     [](double value) { return std::isfinite(value); });
+}
+
 class ReferenceBoundsAccumulator {
 public:
   ReferenceBoundsAccumulator(ShapeSystem& shapes, EntityHandle root,
@@ -914,8 +924,7 @@ Path ShapeSystem::ellipseClipPath(EntityHandle handle, const EllipseClipPath& el
   const double ry =
       EllipseRadius(ellipse.radiusYType, ellipse.radiusY, *box, metrics, Lengthd::Extent::Y, y);
   const Vector2d center = box->topLeft + Vector2d(x, y);
-  if (rx <= 0.0 || ry <= 0.0 || !std::isfinite(center.x - rx) || !std::isfinite(center.x + rx) ||
-      !std::isfinite(center.y - ry) || !std::isfinite(center.y + ry)) {
+  if (!IsFiniteEllipse(center, rx, ry)) {
     return {};
   }
   Path result = PathBuilder(32)

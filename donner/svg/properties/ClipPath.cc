@@ -195,20 +195,33 @@ bool ParseCircleArguments(const css::Function& function, CircleClipPath& circle,
                               : ParseEdgePosition(position, circle, allowUserUnits);
 }
 
+bool ParseEllipseRadii(const Arguments& args, EllipseClipPath& ellipse, std::size_t& next,
+                       bool allowUserUnits) {
+  if (args.size && !IsIdent(*args.values[0], "at")) {
+    if (!ParseRadius(*args.values[0], ellipse.radiusXType, ellipse.radiusX, allowUserUnits)) {
+      return false;
+    }
+    next = 1;
+    if (next < args.size && !IsIdent(*args.values[next], "at")) {
+      if (!ParseRadius(*args.values[next++], ellipse.radiusYType, ellipse.radiusY,
+                       allowUserUnits)) {
+        return false;
+      }
+    } else if (ellipse.radiusXType != RadialClipPath::Radius::Length) {
+      ellipse.radiusYType = ellipse.radiusXType;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ParseEllipseArguments(const css::Function& function, EllipseClipPath& ellipse,
                            bool allowUserUnits) {
   Arguments args;
-  if (!args.append(function.values)) {
-    return false;
-  }
   std::size_t next = 0;
-  if (args.size && !IsIdent(*args.values[0], "at")) {
-    if (args.size < 2 ||
-        !ParseRadius(*args.values[0], ellipse.radiusXType, ellipse.radiusX, allowUserUnits) ||
-        !ParseRadius(*args.values[1], ellipse.radiusYType, ellipse.radiusY, allowUserUnits)) {
-      return false;
-    }
-    next = 2;
+  if (!args.append(function.values) || !ParseEllipseRadii(args, ellipse, next, allowUserUnits)) {
+    return false;
   }
   if (next == args.size) {
     return true;
@@ -219,6 +232,22 @@ bool ParseEllipseArguments(const css::Function& function, EllipseClipPath& ellip
   const auto position = std::span(args.values).subspan(next, args.size - next);
   return position.size() <= 2 ? ParseSimplePosition(position, ellipse, allowUserUnits)
                               : ParseEdgePosition(position, ellipse, allowUserUnits);
+}
+
+ParseResult<ClipPath> ParseRadialFunction(const css::Function& function, RadialClipPath::Box box,
+                                          bool allowUserUnits) {
+  if (function.name.equalsLowercase("ellipse")) {
+    EllipseClipPath ellipse;
+    ellipse.box = box;
+    return ParseEllipseArguments(function, ellipse, allowUserUnits)
+               ? ParseResult<ClipPath>(ClipPath(ellipse))
+               : ParseResult<ClipPath>(InvalidShape());
+  }
+  CircleClipPath circle;
+  circle.box = box;
+  return ParseCircleArguments(function, circle, allowUserUnits)
+             ? ParseResult<ClipPath>(ClipPath(circle))
+             : ParseResult<ClipPath>(InvalidShape());
 }
 
 void PrintRadius(std::ostream& os, RadialClipPath::Radius type, const Lengthd& radius) {
@@ -256,18 +285,7 @@ ParseResult<ClipPath> ParseBasicShapeClipPath(std::span<const Component> compone
   if (!function) {
     return InvalidShape();
   }
-  if (function->name.equalsLowercase("ellipse")) {
-    EllipseClipPath ellipse;
-    ellipse.box = box;
-    return ParseEllipseArguments(*function, ellipse, allowUserUnits)
-               ? ParseResult<ClipPath>(ClipPath(ellipse))
-               : ParseResult<ClipPath>(InvalidShape());
-  }
-  CircleClipPath circle;
-  circle.box = box;
-  return ParseCircleArguments(*function, circle, allowUserUnits)
-             ? ParseResult<ClipPath>(ClipPath(circle))
-             : ParseResult<ClipPath>(InvalidShape());
+  return ParseRadialFunction(*function, box, allowUserUnits);
 }
 
 std::ostream& operator<<(std::ostream& os, const ClipPath& clip) {

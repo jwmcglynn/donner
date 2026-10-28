@@ -221,7 +221,9 @@ attributes retain user units.
 Ellipse radii resolve independently: horizontal percentages use reference width and vertical
 percentages use reference height. A zero radius on either axis produces an empty clip. The
 `circle_clip_path_tests` and `properties_tests` targets cover ellipse parsing, reference boxes,
-independent axis resolution, transformed/nested clips and invalid declaration fallback. Inset,
+independent axis resolution, transformed/nested clips and invalid declaration fallback. A single
+`closest-side` or `farthest-side` keyword selects both radii. Corner extent keywords and `calc()`
+radii are not supported; explicit radii use the two-value form. Inset,
 polygon and path CSS clipping functions remain unsupported.
 
 The plain `circle-shorthand.svg` comparison is restored. The stroke-box and view-box PNGs use an
