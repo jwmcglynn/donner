@@ -568,7 +568,10 @@ std::optional<components::TextDecorationOrigin> BuildDecorationOrigin(
 void RetainSpanDecorations(Registry& registry, components::ComputedTextComponent::TextSpan& span,
                            std::span<components::TextDecorationOrigin> origins, std::size_t count) {
   if (count != 0) {
-    auto& family = registry.ctx().get_or_emplace<components::DocumentResourceFamilyContext>();
+    if (!registry.ctx().contains<components::DocumentResourceFamilyContext>()) {
+      registry.ctx().emplace<components::DocumentResourceFamilyContext>();
+    }
+    auto& family = registry.ctx().get<components::DocumentResourceFamilyContext>();
     if (!family.budget) {
       family.budget = std::make_shared<components::DocumentResourceFamilyBudget>();
     }
