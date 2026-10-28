@@ -63,6 +63,15 @@ RendererBitmap RenderDecorationScene(std::string_view body) {
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
+TEST(TextDecorationThickness, AutomaticUnderlineControl) {
+  const auto actual = RenderDecorationScene(
+      "<text x='10' y='40' font-size='20' fill='red' text-decoration='underline'>XX</text>");
+  const auto expected =
+      RenderDecorationScene("<rect x='10' y='41.5' width='20' height='1' fill='red'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_auto_control",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(TextDecorationThickness, ExplicitThicknessAppliesToEachLine) {
   for (const auto [line, top] :
        {std::pair{"underline", 38}, std::pair{"overline", 20}, std::pair{"line-through", 30}}) {
