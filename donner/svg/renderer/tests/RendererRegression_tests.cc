@@ -3777,5 +3777,41 @@ INSTANTIATE_TEST_SUITE_P(SpreadingPrimitives, FilterInputMarginTest,
                                        : "BottomRight");
                          });
 
+class ClipContourClosureTest : public testing::TestWithParam<std::string_view> {};
+
+TEST_P(ClipContourClosureTest, OpenAndExplicitClosureProduceIdenticalMasks) {
+  const std::string data(GetParam());
+  SCOPED_TRACE(data);
+  const auto render = [](std::string_view path) {
+    auto document = instantiateSubtree(
+        "<clipPath id='clip'><path d='" + std::string(path) +
+            "'/></clipPath><rect width='64' height='64' fill='red' clip-path='url(#clip)'/>",
+        {}, Vector2i(64, 64));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+  const auto actual = render(data);
+  const auto expected = render(data + "Z");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "clip_contour_implicit_close",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+INSTANTIATE_TEST_SUITE_P(CurvesAndContours, ClipContourClosureTest,
+                         testing::Values("M8 32Q32 0 56 32T8 32",
+                                         "M8 32A24 20 0 1 1 56 32A24 20 0 1 1 8 32", "M8 8H56V56H8",
+                                         "M8 8H56V56H8 M20 20H44V44H20"));
+
+TEST(ClipContourClosure, NormalOpenStrokeKeepsItsEndpoints) {
+  auto actualDocument = instantiateSubtree(
+      "<path d='M8 8H48V48' fill='none' stroke='red' stroke-width='8'/>", {}, Vector2i(64, 64));
+  auto expectedDocument = instantiateSubtree(
+      "<rect x='8' y='4' width='44' height='8' fill='red'/>"
+      "<rect x='44' y='4' width='8' height='44' fill='red'/>",
+      {}, Vector2i(64, 64));
+  const auto actual = RenderDocumentWithBackend(actualDocument, ActiveRendererBackend());
+  const auto expected = RenderDocumentWithBackend(expectedDocument, ActiveRendererBackend());
+  editor::tests::CompareBitmapToBitmap(actual, expected, "clip_closure_preserves_open_stroke",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 }  // namespace
 }  // namespace donner::svg
