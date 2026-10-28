@@ -45,18 +45,40 @@ TEST(ImageSamplingTest, ImageRenderingSelectsMitchellCubicForQualityValues) {
                                    Kernel::MitchellCubic));
 }
 
+TEST(ImageSamplingTest, PureTranslationSamplesTheContainingTexel) {
+  using Kernel = ImageSamplingKernel;
+  const std::vector<ImageRendering> values = {
+      ImageRendering::Auto,       ImageRendering::OptimizeSpeed, ImageRendering::OptimizeQuality,
+      ImageRendering::CrispEdges, ImageRendering::Pixelated,     ImageRendering::Smooth,
+      ImageRendering::HighQuality};
+  std::vector<ImageSamplingKernel> translated;
+  std::vector<ImageSamplingKernel> scaled;
+  for (ImageRendering value : values) {
+    translated.push_back(ImageSamplingKernelFor(value, Transform2d::Translate(10.25, -3.5)));
+    scaled.push_back(ImageSamplingKernelFor(
+        value, Transform2d::Scale(2.0, 1.0) * Transform2d::Translate(10.25, -3.5)));
+  }
+
+  EXPECT_THAT(translated,
+              ElementsAre(Kernel::Nearest, Kernel::Nearest, Kernel::Nearest, Kernel::Nearest,
+                          Kernel::Nearest, Kernel::Nearest, Kernel::Nearest));
+  EXPECT_THAT(scaled, ElementsAre(Kernel::MitchellCubic, Kernel::Nearest, Kernel::MitchellCubic,
+                                  Kernel::Nearest, Kernel::PixelatedSmooth, Kernel::Bilinear,
+                                  Kernel::MitchellCubic));
+}
+
 TEST(ImageSamplingTest, RejectsTrailingSourceBytes) {
   const std::vector<std::uint8_t> pixels = {255, 0, 0, 255, 17};
 
   EXPECT_THAT(
-      RasterizeImagePremultiplied(pixels, 1, 1, Transform2d(), 1, 1, ImageRendering::Smooth),
+      RasterizeImagePremultiplied(pixels, 1, 1, Transform2d(), 1, 1, ImageSamplingKernel::Bilinear),
       IsEmpty());
 }
 
 TEST(ImageSamplingTest, RejectsOversizedOutputAxis) {
   EXPECT_THAT(
       RasterizeImagePremultiplied(kOpaqueRed, 1, 1, Transform2d(), kMaxImageSamplingDimension + 1,
-                                  1, ImageRendering::Smooth),
+                                  1, ImageSamplingKernel::Bilinear),
       IsEmpty());
 }
 
@@ -70,7 +92,7 @@ TEST(ImageSamplingTest, NonFiniteInverseProducesSizedTransparentOutput) {
   deviceFromImage.data[5] = std::numeric_limits<double>::max();
 
   EXPECT_THAT(RasterizeImagePremultiplied(kOpaqueRed, 1, 1, deviceFromImage, 1, 1,
-                                          ImageRendering::CrispEdges),
+                                          ImageSamplingKernel::Nearest),
               ElementsAre(0, 0, 0, 0));
 }
 
@@ -85,7 +107,7 @@ TEST(ImageSamplingTest, NonFiniteMappedCoordinatesStayTransparent) {
   deviceFromImage.data[5] = 0.0;
 
   const std::vector<std::uint8_t> output = RasterizeImagePremultiplied(
-      kOpaqueRed, 1, 1, deviceFromImage, 2, 2, ImageRendering::Pixelated);
+      kOpaqueRed, 1, 1, deviceFromImage, 2, 2, ImageSamplingKernel::PixelatedSmooth);
   ASSERT_EQ(output.size(), 16u);
   EXPECT_THAT(std::vector<std::uint8_t>(output.end() - 4, output.end()), ElementsAre(0, 0, 0, 0));
 }

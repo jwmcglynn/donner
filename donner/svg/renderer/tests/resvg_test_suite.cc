@@ -334,11 +334,9 @@ INSTANTIATE_TEST_SUITE_P(
                      .withReason("We render higher quality")
                      .withGeodeGoldenOverride(
                          "donner/svg/renderer/testdata/golden/geode/filters_feImage_svg.png",
-                         "feImage rasterizes the nested SVG to the same source bitmap for both "
-                         "backends (shared imageData); Geode then resamples it with GPU "
-                         "bilinear filtering, whose 1px edge band differs from tiny-skia's CPU "
-                         "resampler. Geode's content matches; only the resample edge differs.")},
-                {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
+                         "Each backend rasterizes the nested SVG at its device size and copies "
+                         "it texel for texel; Geode's golden holds Geode's own rasterization of "
+                         "that content and of the frame.")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

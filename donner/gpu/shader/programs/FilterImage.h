@@ -13,14 +13,14 @@ struct FilterImageParams {
   float m10;              //!< Output-x coefficient of image y.
   float m11;              //!< Output-y coefficient of image y.
   float m12;              //!< Constant term of image y.
-  uint32_t samplingMode;  //!< Zero smooth, one crisp edges, two pixelated.
+  uint32_t samplingMode;  //!< Zero Mitchell cubic, one nearest, two pixelated, three bilinear.
   float pixelatedScaleX;  //!< Device pixels per image texel along x.
   float pixelatedScaleY;  //!< Device pixels per image texel along y.
   uint32_t padding;       //!< Reserved layout padding.
 };
 static_assert(sizeof(FilterImageParams) == 40);
-/// Returns the WGSL image artifact: smooth, crisp or pixelated placement through an
-/// image-from-output transform.
+/// Returns the WGSL image artifact: Mitchell cubic, nearest, pixelated or bilinear placement
+/// through an image-from-output transform.
 /// @return Stable view into process-lifetime data.
 const CompiledShaderView& FilterImageShader();
 /// Returns only the platform-native FilterImage projection.
