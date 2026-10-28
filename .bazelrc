@@ -315,8 +315,8 @@ build:time-trace --experimental_output_paths=off
 build:time-trace --strategy=CppCompile=standalone --spawn_strategy=standalone
 build:time-trace --remote_executor= --remote_cache= --noremote_upload_local_results
 
-# Native release inputs retain line tables for paired diagnostics. Packaging strips a fresh
-# delivery copy before signing/hashing; attribution presets are separate from release policy.
+# Opt-in native inputs retain paired line tables. Use native_delivery for a fresh stripped
+# copy before signing/hashing; attribution presets are separate from release policy.
 build:native-release -c opt --copt=-gline-tables-only --strip=never
 build:native-release --copt=-fdebug-compilation-dir=. --copt=-ffile-compilation-dir=.
 build:native-release --//build_defs:enable_tracy=false

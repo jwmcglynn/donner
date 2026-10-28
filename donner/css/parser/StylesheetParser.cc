@@ -1,6 +1,8 @@
 #include "donner/css/parser/StylesheetParser.h"
 
+#include <array>
 #include <cctype>
+#include <cmath>
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/encoding/Base64.h"
@@ -320,6 +322,60 @@ void AppendFontFaceSources(std::span<const ComponentValue> values, FontFace& fon
   }
 }
 
+std::optional<int> ParseFontFaceWeight(const ComponentValue& value) {
+  if (const auto* ident = value.tryGetToken<Token::Ident>()) {
+    if (ident->value.equalsLowercase("normal")) {
+      return 400;
+    }
+    if (ident->value.equalsLowercase("bold")) {
+      return 700;
+    }
+  } else if (const auto* number = value.tryGetToken<Token::Number>()) {
+    if (number->value >= 1 && number->value <= 1000 && std::trunc(number->value) == number->value) {
+      return static_cast<int>(number->value);
+    }
+  }
+  return std::nullopt;
+}
+
+template <std::size_t N>
+std::optional<int> ParseFontFaceKeyword(const ComponentValue& value,
+                                        const std::array<std::string_view, N>& keywords,
+                                        int firstValue) {
+  if (const auto* ident = value.tryGetToken<Token::Ident>()) {
+    for (std::size_t i = 0; i < keywords.size(); ++i) {
+      if (ident->value.equalsLowercase(keywords[i])) {
+        return firstValue + static_cast<int>(i);
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& fontFace) {
+  if (declaration.important || declaration.values.size() != 1) {
+    return;
+  }
+  const ComponentValue& value = declaration.values.front();
+  if (declaration.name.equalsLowercase("font-weight")) {
+    if (const auto weight = ParseFontFaceWeight(value)) {
+      fontFace.fontWeight = *weight;
+    }
+  } else if (declaration.name.equalsLowercase("font-style")) {
+    constexpr std::array<std::string_view, 3> kStyles = {"normal", "italic", "oblique"};
+    if (const auto style = ParseFontFaceKeyword(value, kStyles, 0)) {
+      fontFace.fontStyle = *style;
+    }
+  } else if (declaration.name.equalsLowercase("font-stretch")) {
+    constexpr std::array<std::string_view, 9> kWidths = {
+        "ultra-condensed", "extra-condensed", "condensed",      "semi-condensed", "normal",
+        "semi-expanded",   "expanded",        "extra-expanded", "ultra-expanded"};
+    if (const auto stretch = ParseFontFaceKeyword(value, kWidths, 1)) {
+      fontFace.fontStretch = *stretch;
+    }
+  }
+}
+
 std::optional<FontFace> BuildFontFace(std::span<const Declaration> declarations) {
   FontFace fontFace;
   for (const Declaration& declaration : declarations) {
@@ -334,6 +390,8 @@ std::optional<FontFace> BuildFontFace(std::span<const Declaration> declarations)
       }
     } else if (StringUtils::EqualsLowercase(declaration.name, std::string_view("src"))) {
       AppendFontFaceSources(declaration.values, fontFace);
+    } else {
+      ApplyFontFaceMatchingDescriptor(declaration, fontFace);
     }
   }
   if (fontFace.familyName.empty() || fontFace.sources.empty()) {
