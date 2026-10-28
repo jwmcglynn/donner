@@ -161,21 +161,8 @@ def _verify_current_roster(api, snapshot, state, work):
     composition_id = state["current"]
     if composition_id is None:
         return
-    prefix = f"compositions/{composition_id}/"
-    archive_record = json.loads(api.file(snapshot, prefix + "archive.json"))
-    site.require(archive_record["sha256"] == composition_id, "current composition content address differs")
-    archive = work / "current.tar"
-    store.restore(archive_record, archive, lambda name: api.file(snapshot, name))
-    site.unpack(archive, work / "current-site")
-    record_bytes = api.file(snapshot, prefix + "composition.json")
-    path = work / "current-composition.json"
-    path.write_bytes(record_bytes)
-    record = json.loads(record_bytes)
-    _offline_attestation(path, api.file(snapshot, prefix + "composition-attestation.json"),
-                         record["workflow_commit"], work)
-    site.require(record["archive_sha256"] == composition_id, "signed current composition differs")
-    site.verify_site(work / "current-site", record["manifest_sha256"])
-    manifest = site.read_json(work / "current-site/_docs/versions.json")
+    _restore_composition(api, snapshot, composition_id, work / "current-roster")
+    manifest = site.read_json(work / "current-roster/site/_docs/versions.json")
     require_preserved_releases(manifest, state["releases"])
 
 
@@ -299,7 +286,7 @@ def _extract_payload(archive: Path, output: Path) -> None:
                 shutil.copyfileobj(source, destination, 1024 * 1024)
 
 
-def _fetch_pages(record: dict, work: Path) -> None:
+def _fetch_pages(record: dict, work: Path, bundle: Path | None = None) -> None:
     meta = github_json(f"{store.REPO}/actions/artifacts/{record['artifact_id']}")
     site.require(meta["name"] == "github-pages" and not meta["expired"]
                  and meta["digest"] == record["artifact_digest"]
@@ -310,7 +297,10 @@ def _fetch_pages(record: dict, work: Path) -> None:
                                 work / "pages.zip", download, "composed Pages artifact")
     candidate._extract_verified(work / "pages.zip", {"artifact.tar": record["archive_sha256"]}, work / "pages")
     archive = work / "pages/artifact.tar"
-    attestation(archive, WORKFLOW, record["workflow_commit"], work / "pages-attestation.json")
+    if bundle is None:
+        attestation(archive, WORKFLOW, record["workflow_commit"], work / "pages-attestation.json")
+    else:
+        _bundle_attestation(archive, bundle, record["workflow_commit"], work / "pages-attestation.json")
     site.unpack(archive, work / "site")
     site.verify_site(work / "site", record["manifest_sha256"])
 
@@ -347,13 +337,17 @@ def deploy(artifact_id: int, commit: str, api, wait=time.sleep, receipt: Path | 
     token = _oidc_token()
     value = api.call(store.REPO + "/pages/deployments", "POST", {
         "artifact_id": artifact_id, "pages_build_version": commit + "-" + str(artifact_id),
-        "oidc_token": token})
+        "oidc_token": token, "environment": store.deployment_environment()})
     site.require(isinstance(value, dict), "Pages returned no deployment identity")
     deployment_id = str(value.get("id") or str(value.get("status_url", "")).rsplit("/", 1)[-1])
     site.require(bool(__import__("re").fullmatch(r"[A-Za-z0-9-]{1,128}", deployment_id)),
                  "Pages returned an invalid deployment identity")
     if receipt is not None:
         receipt.write_bytes(site.canonical({"deployment_id": deployment_id, "artifact_id": artifact_id}))
+    page_url = value.get("page_url", "")
+    if page_url and not page_url.startswith("https://"):
+        page_url = "https://" + page_url
+    site.require(page_url.rstrip("/") == SITE_URL.rstrip("/"), "Pages returned an unexpected site URL")
     deadline = time.monotonic() + 600
     while time.monotonic() < deadline:
         status = api.call(store.REPO + "/pages/deployments/" + deployment_id)["status"]
@@ -489,6 +483,10 @@ def preflight(reference: str, expected: str, prior: str | None, work: Path, api=
     api = api or store.GitHub()
     site.empty(work)
     record = fetch_composition(reference, expected, work)
+    _preflight_record(record, prior, work, api, bootstrap)
+
+
+def _preflight_record(record, prior, work, api, bootstrap=None):
     current = store.index(api, record["base_snapshot_commit"])
     site.require(prior == current["current"] and record["previous_composition"] == prior,
                  "approved prior composition differs")
@@ -527,7 +525,7 @@ def promote(work: Path, previous_id: int, api=None) -> dict:
     api = api or store.GitHub()
     plan = site.read_json(work / "preflight.json")
     record = plan["record"]
-    site.require(store.index(api, record["base_snapshot_commit"]) == plan["current"],
+    site.require(store.index(api, plan.get("snapshot", record["base_snapshot_commit"])) == plan["current"],
                  "snapshot index changed after preflight")
     site.require(_live_identity(plan["prior_identity"]), "live site changed after preflight")
     _verified_previous(previous_id, plan, work)
@@ -564,10 +562,16 @@ def _retain_composition(record, work):
 def _retain_and_deploy(record, plan, previous_id, work, api):
     selected = site.read_json(work / "payload/selection.json")
     composition_id = record["archive_sha256"]
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_run":
+        store.automatic_context()
+        site.require(plan.get("automatic") is True, "automatic publication plan missing")
+        manifest = site.read_json(work / "prior-proof/site/_docs/versions.json")
+        _automatic_scope(record, selected, plan["current"], manifest)
+        _verify_auto_source(selected["source_inputs"]["main"])
     durable, archive_record = _retain_composition(record, work)
     new_index = {**plan["current"], "releases": (plan["current"]["releases"]
                  if record.get("bootstrap") is not None else selected["releases"])}
-    tip = store.commit(api, record["base_snapshot_commit"], durable, new_index)
+    tip = store.commit(api, plan.get("snapshot", record["base_snapshot_commit"]), durable, new_index)
     store.restore(archive_record, work / "retained.tar", lambda path: api.file(tip, path))
     result = {"candidate": composition_id, "prior": plan["prior"], "snapshot_commit": tip}
     try:
@@ -775,6 +779,166 @@ def seed_recovery(reference: str, expected: str, approved: dict, work: Path, api
     return tip
 
 
+def _automatic_trigger() -> dict:
+    store.automatic_context()
+    event = site.read_json(Path(os.environ["GITHUB_EVENT_PATH"]))
+    trigger = event.get("workflow_run") or {}
+    run_id, attempt = trigger.get("id"), trigger.get("run_attempt")
+    site.require(type(run_id) is int and 0 < run_id <= 9_007_199_254_740_991
+                 and type(attempt) is int and 0 < attempt <= 9_007_199_254_740_991,
+                 "automatic docs need a specific source attempt")
+    run = github_json(f"{store.REPO}/actions/runs/{run_id}/attempts/{attempt}")
+    source = run.get("head_sha", "")
+    site.require(bool(site.SHA.fullmatch(source))
+                 and run.get("head_repository", {}).get("full_name") == "jwmcglynn/donner",
+                 "automatic docs source repository differs")
+    pages_artifact.verify_source_run(run, {"run_id": run_id, "attempt": attempt,
+                                         "source_commit": source})
+    return {"source_commit": source, "run_id": run_id, "attempt": attempt}
+
+
+def _source_order(previous: str, incoming: str) -> bool:
+    site.require(bool(site.SHA.fullmatch(previous)) and bool(site.SHA.fullmatch(incoming)),
+                 "invalid automatic source commit")
+    if incoming == previous:
+        return False
+    compared = github_json(f"{store.REPO}/compare/{previous}...{incoming}")
+    if compared.get("status") == "behind":
+        return False
+    site.require(compared.get("status") == "ahead"
+                 and compared.get("merge_base_commit", {}).get("sha") == previous,
+                 "automatic main source does not descend from the published source")
+    return True
+
+
+def _verify_auto_source(value: dict) -> None:
+    selected = _automatic_trigger()
+    site.require(all(value[key] == selected[key] for key in selected),
+                 "automatic candidate differs from the successful triggering source")
+    head = github_json(f"{store.REPO}/git/ref/heads/main")["object"]["sha"]
+    if head != selected["source_commit"]:
+        site.require(_source_order(selected["source_commit"], head),
+                     "automatic source is no longer on main")
+
+
+def _automatic_scope(record: dict, selected: dict, current: dict, manifest: dict) -> None:
+    published = {key: value["identity"] for key, value in manifest["versions"].items() if key != "main"}
+    site.require(published == {key: value["identity"] for key, value in current["releases"].items()},
+                 "automatic publication cannot activate a pending manual release")
+    site.require(current["current"] is not None and record.get("bootstrap") is None
+                 and selected.get("bootstrap") is None and selected["releases"] == current["releases"],
+                 "automatic publication cannot bootstrap or change the release roster")
+    site.require(set(selected["source_inputs"]) == set(current["releases"]) | {"main"}
+                 and all(selected["source_inputs"][version] == entry["identity"]
+                         for version, entry in current["releases"].items()),
+                 "automatic release source differs from the current signed roster")
+    site.require(record["base_snapshot_commit"] == selected["base_snapshot_commit"]
+                 and record["previous_composition"] == selected["previous_composition"],
+                 "automatic assembly provenance differs")
+
+
+def _automatic_ready(ready: bool, reason: str) -> None:
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with open(output, "a", encoding="utf-8") as stream:
+            stream.write("ready=" + str(ready).lower() + "\n")
+    print(reason)
+
+
+def prepare_auto(work: Path, api=None) -> None:
+    api = api or store.GitHub()
+    source = _automatic_trigger()
+    snapshot = api.tip()
+    state = store.index(api, snapshot)
+    if state["current"] is None:
+        _automatic_ready(False, "Initial versioned publication has not been activated; skipping.")
+        return
+    _restore_composition(api, snapshot, state["current"], work / "current")
+    manifest = site.read_json(work / "current/site/_docs/versions.json")
+    if not _source_order(manifest["versions"]["main"]["identity"]["source_commit"], source["source_commit"]):
+        _automatic_ready(False, "The triggering source is already published or superseded; skipping.")
+        return
+    prepare(work / "candidate", f"{source['run_id']}/{source['attempt']}", "", "", snapshot, api)
+    _automatic_ready(True, "Prepared a complete site with unchanged release snapshots.")
+
+
+def _bundle_attestation(path: Path, bundle: Path, commit: str, output: Path) -> None:
+    site.require(bundle.is_file() and not bundle.is_symlink() and bundle.stat().st_size <= site.MAX_FILE,
+                 "automatic attestation bundle is missing or oversized")
+    with output.open("wb") as stream:
+        subprocess.run(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
+                        "--repo", "jwmcglynn/donner", "--signer-workflow", "jwmcglynn/donner/" + WORKFLOW,
+                        "--source-digest", commit, "--source-ref", "refs/heads/main",
+                        "--deny-self-hosted-runners", "--format", "json"], stdout=stream,
+                       stderr=subprocess.PIPE, timeout=180, check=True)
+
+
+def _auto_artifact(name: str, work: Path, output: Path) -> None:
+    run_id = int(os.environ["GITHUB_RUN_ID"])
+    artifacts = github_json(f"{store.REPO}/actions/runs/{run_id}/artifacts?per_page=100")["artifacts"]
+    selected = [value for value in artifacts if value["name"] == name and value["expired"] is False]
+    site.require(len(selected) == 1, "automatic handoff artifact is missing or ambiguous")
+    archive = work / (name + ".zip")
+    candidate._download_checked(selected[0]["id"], selected[0]["digest"].removeprefix("sha256:"),
+                                archive, download, "automatic handoff")
+    _extract_payload(archive, output)
+
+
+def _fetch_auto_composition(expected: str, work: Path) -> dict:
+    store.automatic_context()
+    site.require(bool(site.DIGEST.fullmatch(expected)), "invalid automatic composition digest")
+    run_id, attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
+    commit = os.environ["GITHUB_SHA"]
+    run = github_json(f"{store.REPO}/actions/runs/{run_id}/attempts/{attempt}")
+    site.require(run.get("id") == run_id and run.get("run_attempt") == attempt
+                 and run.get("path") == WORKFLOW and run.get("event") == "workflow_run"
+                 and run.get("head_branch") == "main" and run.get("head_sha") == commit
+                 and run.get("repository", {}).get("full_name") == "jwmcglynn/donner"
+                 and run.get("status") == "in_progress", "automatic handoff is not this trusted workflow run")
+    _auto_artifact(f"docs-site-payload-{attempt}", work, work / "payload")
+    _auto_artifact(f"docs-site-attestation-{attempt}", work, work / "proof")
+    site.require(set(site.inventory(work / "proof")) == {"bundle.json"}, "unexpected automatic proof files")
+    bundle = work / "proof/bundle.json"
+    path = work / "payload/composition.json"
+    site.require(bcr_source.digest(path) == expected, "automatic composition record differs")
+    _bundle_attestation(path, bundle, commit, work / "composition-attestation.json")
+    record = site.read_json(path)
+    site.require(record["run_id"] == run_id and record["attempt"] == attempt
+                 and record["workflow_commit"] == commit, "automatic composition identity differs")
+    files = site.inventory(work / "payload", store.CHUNK)
+    files.pop("composition.json")
+    site.require(files == record["payload_files"], "automatic handoff payload changed")
+    site.require(not (work / "payload/releases").exists() and not (work / "payload/objects").exists(),
+                 "automatic handoff cannot introduce release storage")
+    _fetch_pages(record, work, bundle)
+    return record
+
+
+def preflight_auto(expected: str, work: Path, api=None) -> None:
+    api = api or store.GitHub()
+    site.empty(work)
+    record = _fetch_auto_composition(expected, work)
+    selected = site.read_json(work / "payload/selection.json")
+    snapshot = api.tip()
+    current = store.index(api, snapshot)
+    site.require(current["current"] is not None, "automatic publication cannot initialize the site")
+    prior = current["current"]
+    _, prior_identity = _previous(api, snapshot, prior, work)
+    manifest = site.read_json(work / "prior-proof/site/_docs/versions.json")
+    _automatic_scope(record, selected, current, manifest)
+    _verify_auto_source(selected["source_inputs"]["main"])
+    if not _source_order(manifest["versions"]["main"]["identity"]["source_commit"],
+                         selected["source_inputs"]["main"]["source_commit"]):
+        _automatic_ready(False, "A later source is already published; skipping stale candidate.")
+        return
+    site.require(_live_identity(prior_identity), "current durable composition is not the live site")
+    plan = {"record": record, "current": current, "snapshot": snapshot, "prior": prior,
+            "prior_identity": prior_identity, "recovery_identity": prior_identity, "automatic": True,
+            "previous_archive_sha256": bcr_source.digest(work / "previous-pages/artifact.tar")}
+    (work / "preflight.json").write_bytes(site.canonical(plan))
+    _automatic_ready(True, "Verified the signed candidate against the current publication snapshot.")
+
+
 REQUEST_FIELDS = {
     "compose": {"snapshot_commit", "main_run", "release_record_run", "release_record_sha256", "bootstrap"},
     "publish": {"composition_run", "composition_sha256", "prior_composition", "bootstrap"},
@@ -835,6 +999,10 @@ def command_finalize(args):
     site.require(args.archive is not None and args.artifact_id is not None, "finalize inputs missing")
     finalize(args.work, args.archive, args.artifact_id)
     digest = bcr_source.digest(args.work / "payload/composition.json")
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with open(output, "a", encoding="utf-8") as stream:
+            stream.write("record_sha256=" + digest + "\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as output:
@@ -855,14 +1023,20 @@ def main() -> None:
     commands = {"prepare": command_prepare, "finalize": command_finalize,
                 "preflight": command_preflight, "promote": command_promote,
                 "seed": command_seed, "rollback-preflight": command_rollback_preflight,
-                "rollback": command_rollback}
+                "rollback": command_rollback, "prepare-auto": lambda args: prepare_auto(args.work),
+                "finalize-auto": command_finalize,
+                "preflight-auto": lambda args: preflight_auto(os.environ["COMPOSITION_SHA256"], args.work),
+                "promote-auto": command_promote}
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=commands)
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--archive", type=Path)
     parser.add_argument("--artifact-id", type=int)
     args = parser.parse_args()
-    workflow_context()
+    if args.operation.endswith("-auto"):
+        store.automatic_context()
+    else:
+        workflow_context()
     commands[args.operation](args)
 
 

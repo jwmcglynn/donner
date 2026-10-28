@@ -233,7 +233,11 @@ def decorate(root: Path, current: str, identity: dict, versions: list[str], base
 def pack(root: Path, destination: Path) -> str:
     require(not destination.exists(), "archive output already exists")
     with tarfile.open(destination, "w:", format=tarfile.PAX_FORMAT) as tar:
-        for name in inventory(root):
+        def group(name):
+            if name == "docs-site.json" or name.startswith("_docs/"):
+                return 2
+            return 1 if name.startswith("main/") else 0
+        for name in sorted(inventory(root), key=lambda name: (group(name), name)):
             path = root / name
             info = tar.gettarinfo(str(path), arcname=name)
             info.uid = info.gid = info.mtime = 0
@@ -320,7 +324,7 @@ def write_version_record(output: Path, version: str, root: Path) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("check-version", "compose", "verify"))
+    parser.add_argument("operation", choices=("check-version", "compose", "verify", "pack"))
     parser.add_argument("--site", type=Path, required=True)
     parser.add_argument("--module", type=Path, default=Path("MODULE.bazel"))
     parser.add_argument("--selection", type=Path)
@@ -331,6 +335,10 @@ def main() -> None:
         print("Validated", write_version_record(args.site, version, Path.cwd()), "Doxygen pages at", version)
     elif args.operation == "verify":
         verify_site(args.site)
+    elif args.operation == "pack":
+        require(args.archive is not None, "pack needs an archive")
+        verify_site(args.site)
+        print("Normalized Pages archive", pack(args.site, args.archive))
     else:
         require(args.selection is not None and args.archive is not None, "compose needs selection and archive")
         selection = read_json(args.selection)

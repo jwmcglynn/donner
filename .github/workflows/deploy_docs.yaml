@@ -1,15 +1,19 @@
-name: Build and manually deploy documentation
+name: Build and deploy versioned documentation
 
 # Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
 env:
   DO_NOT_TRACK: "1"
   ASPECT_TOOLS_TELEMETRY: "-all"
 
-# Main pushes retain read-only source builds. Manual composition verifies selected source
-# artifacts; publication accepts only an attested complete site and a verified recovery archive.
+# Main builds finish before automatic composition begins. Release changes, initial migration
+# and elective rollback remain explicit manual selections of complete verified sites.
 on:
   push:
     branches: ["main"]
+  workflow_run:
+    workflows: ["Build and deploy versioned documentation"]
+    branches: ["main"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       selection:
@@ -107,16 +111,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DOCS_REQUEST: ${{ inputs.request }}
         run: python3 -B -m tools.docs_publish prepare --work "$RUNNER_TEMP/docs-site"
+      - name: Pack a normalized complete Pages archive
+        run: |
+          python3 -B -m tools.docs_site pack --site "$RUNNER_TEMP/docs-site/site" \
+            --archive "$RUNNER_TEMP/artifact.tar"
       - name: Upload the complete Pages site
         id: pages
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
-          path: ${{ runner.temp }}/docs-site/site
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          if-no-files-found: error
           retention-days: 90
       - name: Bind the uploaded archive and source selections
         env:
           GH_TOKEN: ${{ github.token }}
-          PAGES_ARTIFACT_ID: ${{ steps.pages.outputs.artifact_id }}
+          PAGES_ARTIFACT_ID: ${{ steps.pages.outputs.artifact-id }}
         run: |
           python3 -B -m tools.docs_publish finalize --work "$RUNNER_TEMP/docs-site" \
             --archive "$RUNNER_TEMP/artifact.tar" --artifact-id "$PAGES_ARTIFACT_ID"
@@ -242,5 +252,149 @@ jobs:
             ${{ runner.temp }}/docs-publish/result.json
             ${{ runner.temp }}/docs-publish/composition-attestation.json
             ${{ runner.temp }}/docs-publish/pages-attestation.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  auto-assemble:
+    if: >-
+      github.event_name == 'workflow_run' && github.ref == 'refs/heads/main' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      attestations: write
+      id-token: write
+    outputs:
+      ready: ${{ steps.prepare.outputs.ready }}
+      record_sha256: ${{ steps.finalize.outputs.record_sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify the completed source and compose unchanged releases
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B -m tools.docs_publish prepare-auto --work "$RUNNER_TEMP/docs-auto"
+      - name: Pack the normalized automatic Pages archive
+        if: steps.prepare.outputs.ready == 'true'
+        run: |
+          python3 -B -m tools.docs_site pack --site "$RUNNER_TEMP/docs-auto/candidate/site" \
+            --archive "$RUNNER_TEMP/artifact.tar"
+      - name: Upload the complete automatic Pages archive
+        id: pages
+        if: steps.prepare.outputs.ready == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          if-no-files-found: error
+          retention-days: 90
+      - name: Bind the automatic composition to the uploaded archive
+        id: finalize
+        if: steps.prepare.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGES_ARTIFACT_ID: ${{ steps.pages.outputs.artifact-id }}
+        run: |
+          python3 -B -m tools.docs_publish finalize-auto --work "$RUNNER_TEMP/docs-auto/candidate" \
+            --archive "$RUNNER_TEMP/artifact.tar" --artifact-id "$PAGES_ARTIFACT_ID"
+      - name: Attest the automatic composition and exact archive
+        id: attest
+        if: steps.prepare.outputs.ready == 'true'
+        uses: actions/attest-build-provenance@v3.2.0
+        with:
+          subject-path: |
+            ${{ runner.temp }}/docs-auto/candidate/payload/composition.json
+            ${{ runner.temp }}/artifact.tar
+      - name: Retain the automatic signature bundle
+        if: steps.prepare.outputs.ready == 'true'
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          mkdir "$RUNNER_TEMP/docs-auto-proof"
+          cp "$BUNDLE_PATH" "$RUNNER_TEMP/docs-auto-proof/bundle.json"
+      - uses: actions/upload-artifact@v7
+        if: steps.prepare.outputs.ready == 'true'
+        with:
+          name: docs-site-attestation-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/docs-auto-proof/
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@v7
+        if: steps.prepare.outputs.ready == 'true'
+        with:
+          name: docs-site-payload-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/docs-auto/candidate/payload/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+  auto-deploy:
+    needs: auto-assemble
+    if: >-
+      github.event_name == 'workflow_run' && github.ref == 'refs/heads/main' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      needs.auto-assemble.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: github-pages-main
+    concurrency:
+      group: pages-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify this signed handoff against the current complete site
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMPOSITION_SHA256: ${{ needs.auto-assemble.outputs.record_sha256 }}
+        run: python3 -B -m tools.docs_publish preflight-auto --work "$RUNNER_TEMP/docs-auto-publish"
+      - name: Retain the verified automatic recovery archive
+        id: previous
+        if: steps.prepare.outputs.ready == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-rollback-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/docs-auto-publish/previous-pages/artifact.tar
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Publish only the verified development-docs update
+        if: steps.prepare.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact-id }}
+        run: |
+          python3 -B -m tools.docs_publish promote-auto --work "$RUNNER_TEMP/docs-auto-publish" \
+            --artifact-id "$VERIFIED_PREVIOUS_ARTIFACT_ID"
+      - name: Retain automatic publication and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-automatic-evidence-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/docs-auto-publish/preflight.json
+            ${{ runner.temp }}/docs-auto-publish/result.json
+            ${{ runner.temp }}/docs-auto-publish/composition-attestation.json
+            ${{ runner.temp }}/docs-auto-publish/pages-attestation.json
           if-no-files-found: ignore
           retention-days: 90

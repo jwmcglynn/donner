@@ -4,6 +4,9 @@ from __future__ import annotations
 import base64
 import gzip
 import hashlib
+import io
+import math
+import os
 import json
 from pathlib import Path
 import subprocess
@@ -16,6 +19,24 @@ REPO = "repos/jwmcglynn/donner"
 BRANCH = "docs-snapshots"
 CHUNK = 40 * 1024 * 1024
 MAX_CONTROL = 64 * 1024 * 1024
+RAW_CHUNK = 16 * 1024 * 1024
+
+
+def automatic_context() -> None:
+    site.require(os.environ.get("GITHUB_REPOSITORY") == "jwmcglynn/donner"
+                 and os.environ.get("GITHUB_REF") == "refs/heads/main"
+                 and os.environ.get("GITHUB_EVENT_NAME") == "workflow_run"
+                 and os.environ.get("GITHUB_WORKFLOW_REF") ==
+                     "jwmcglynn/donner/.github/workflows/deploy_docs.yaml@refs/heads/main"
+                 and bool(site.SHA.fullmatch(os.environ.get("GITHUB_SHA", ""))),
+                 "automatic docs require the trusted main workflow-run context")
+
+
+def deployment_environment() -> str:
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_run":
+        automatic_context()
+        return "github-pages-main"
+    return "github-pages"
 
 
 class GitHub:
@@ -55,15 +76,20 @@ class GitHub:
         site.require(isinstance(rules, list) and {"deletion", "non_fast_forward"}
                      <= {rule.get("type") for rule in rules},
                      "docs-snapshots needs active deletion and non-fast-forward protection")
-        environment = self.call(REPO + "/environments/github-pages")
+        name = deployment_environment()
+        environment = self.call(REPO + "/environments/" + name)
         reviewers = [rule for rule in environment.get("protection_rules", [])
                      if rule.get("type") == "required_reviewers" and rule.get("reviewers")]
-        site.require(environment.get("can_admins_bypass") is False and bool(reviewers),
-                     "github-pages needs required reviewers and no administrator bypass")
+        if name == "github-pages":
+            site.require(isinstance(environment.get("can_admins_bypass"), bool) and bool(reviewers),
+                         "github-pages needs required reviewers and an explicit administrator bypass setting")
+        else:
+            site.require(isinstance(environment.get("can_admins_bypass"), bool) and not reviewers,
+                         "github-pages-main needs automatic approval and an explicit administrator bypass setting")
         policy = environment.get("deployment_branch_policy") or {}
         site.require(policy == {"protected_branches": False, "custom_branch_policies": True},
                      "github-pages needs an explicit main-only branch policy")
-        branches = self.call(REPO + "/environments/github-pages/deployment-branch-policies")
+        branches = self.call(REPO + "/environments/" + name + "/deployment-branch-policies")
         selected = branches.get("branch_policies", [])
         site.require(branches.get("total_count") == 1 and len(selected) == 1
                      and selected[0].get("name") == "main" and selected[0].get("type") == "branch",
@@ -89,26 +115,27 @@ def index(api: GitHub, expected: str | None) -> dict:
 
 
 def split_archive(archive: Path, payload: Path) -> dict:
-    site.require(archive.stat().st_size <= site.MAX_SITE, "archive exceeds storage limit")
-    with tempfile.TemporaryFile() as compressed, archive.open("rb") as source:
-        with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as zipper:
-            while block := source.read(1024 * 1024):
-                zipper.write(block)
-        compressed.seek(0)
-        compressed_sha = hashlib.file_digest(compressed, "sha256").hexdigest()
-        compressed.seek(0)
-        parts = []
-        while block := compressed.read(CHUNK):
-            name = f"objects/{compressed_sha}/{len(parts):04}.part"
+    site.require(0 < archive.stat().st_size <= site.MAX_SITE, "archive exceeds storage limit")
+    parts = []
+    with archive.open("rb") as source:
+        while raw := source.read(RAW_CHUNK):
+            compressed = io.BytesIO()
+            with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as zipper:
+                zipper.write(raw)
+            data = compressed.getvalue()
+            site.require(len(data) <= CHUNK, "compressed chunk exceeds storage limit")
+            compressed_sha = site.digest(data)
+            name = f"objects/{compressed_sha}/0000.part"
             path = payload / name
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
-                site.require(path.read_bytes() == block, "stored chunk collision")
+                site.require(path.read_bytes() == data, "stored chunk collision")
             else:
-                path.write_bytes(block)
-            parts.append({"path": name, "sha256": site.digest(block), "size": len(block)})
-    return {"sha256": _file_digest(archive), "size": archive.stat().st_size,
-            "compressed_sha256": compressed_sha, "chunks": parts}
+                path.write_bytes(data)
+            parts.append({"path": name, "sha256": compressed_sha, "size": len(data),
+                          "raw_sha256": site.digest(raw), "raw_size": len(raw)})
+    return {"schema": 2, "sha256": _file_digest(archive), "size": archive.stat().st_size,
+            "chunks": parts}
 
 
 def _file_digest(path: Path) -> str:
@@ -116,7 +143,7 @@ def _file_digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def validate_archive(record: dict) -> None:
+def _validate_archive_v1(record: dict) -> None:
     site.require(set(record) == {"sha256", "size", "compressed_sha256", "chunks"},
                  "unexpected stored archive fields")
     site.require(site.DIGEST.fullmatch(record["sha256"])
@@ -133,7 +160,49 @@ def validate_archive(record: dict) -> None:
                      "invalid stored chunk")
 
 
+def validate_archive(record: dict) -> None:
+    if "schema" not in record:
+        _validate_archive_v1(record)
+        return
+    site.require(set(record) == {"schema", "sha256", "size", "chunks"} and record["schema"] == 2,
+                 "unexpected stored archive format")
+    site.require(bool(site.DIGEST.fullmatch(record["sha256"])) and type(record["size"]) is int
+                 and 0 < record["size"] <= site.MAX_SITE and isinstance(record["chunks"], list)
+                 and 0 < len(record["chunks"]) <= math.ceil(site.MAX_SITE / RAW_CHUNK),
+                 "invalid stored archive")
+    for part in record["chunks"]:
+        site.require(set(part) == {"path", "sha256", "size", "raw_sha256", "raw_size"}
+                     and bool(site.DIGEST.fullmatch(part["sha256"]))
+                     and part["path"] == f"objects/{part['sha256']}/0000.part"
+                     and bool(site.DIGEST.fullmatch(part["raw_sha256"]))
+                     and type(part["size"]) is int and 0 < part["size"] <= CHUNK
+                     and type(part["raw_size"]) is int and 0 < part["raw_size"] <= RAW_CHUNK,
+                     "invalid stored chunk")
+    site.require(sum(part["raw_size"] for part in record["chunks"]) == record["size"],
+                 "stored raw chunk sizes differ")
+
+
 def restore(record: dict, output: Path, read) -> None:
+    validate_archive(record)
+    if "schema" not in record:
+        _restore_v1(record, output, read)
+        return
+    site.require(not output.exists(), "restore output already exists")
+    with output.open("xb") as destination:
+        for part in record["chunks"]:
+            data = read(part["path"])
+            site.require(len(data) == part["size"] and site.digest(data) == part["sha256"],
+                         "stored chunk changed")
+            with gzip.GzipFile(fileobj=io.BytesIO(data)) as source:
+                raw = source.read(part["raw_size"] + 1)
+            site.require(len(raw) == part["raw_size"] and site.digest(raw) == part["raw_sha256"],
+                         "stored raw chunk changed")
+            destination.write(raw)
+    site.require(output.stat().st_size == record["size"] and _file_digest(output) == record["sha256"],
+                 "restored archive changed")
+
+
+def _restore_v1(record: dict, output: Path, read) -> None:
     validate_archive(record)
     site.require(not output.exists(), "restore output already exists")
     with tempfile.TemporaryFile() as compressed:

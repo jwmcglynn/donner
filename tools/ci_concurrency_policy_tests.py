@@ -26,8 +26,8 @@ CANCELLING_WORKFLOWS = {}
 # Concurrency groups shared between runs, keyed by (file name, group expression).
 SHARED_GROUPS = {
     ("deploy_docs.yaml", "pages-publish"):
-        "Serializes manually dispatched promotions of the one Pages site; the latest dispatch "
-        "supersedes a queued older one.",
+        "Serializes manual and automatic publication of the one complete Pages site; the latest "
+        "request supersedes a queued older one while the active transaction remains uncancelled.",
     ("publish_bcr.yml", "bcr-publication"):
         "Serializes manual BCR submissions, which push to one fork; a queued dispatch that a "
         "third one replaces is re-run by hand.",
