@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -2040,6 +2041,18 @@ TEST(PropertyRegistry, InsetAcceptsNegativePercentagesAndPresentationUnits) {
   EXPECT_THAT(std::get<InsetClipPath>(presentationClip->value).offsets[3],
               LengthValueIs(4, Lengthd::Unit::None));
   EXPECT_EQ(testing::PrintToString(*clip), "inset(-10% 2px -10% 2px) view-box");
+}
+
+TEST(PropertyRegistry, InsetRejectsUnsupportedContextualUnitsWithoutReplacingClip) {
+  for (const auto unit : {"ex", "ch", "vw", "vh", "vmin", "vmax"}) {
+    SCOPED_TRACE(unit);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:inset(1px 1" + std::string(unit) + ")");
+    EXPECT_THAT(
+        registry.clipPath.get(),
+        Optional(testing::Field(&ClipPath::value, testing::VariantWith<Reference>(
+                                                      testing::Field(&Reference::href, "#clip")))));
+  }
 }
 
 TEST(PropertyRegistry, InvalidInsetKeepsEarlierDeclaration) {

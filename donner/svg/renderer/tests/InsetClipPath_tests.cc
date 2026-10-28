@@ -121,6 +121,16 @@ TEST(InsetClipPath, NestedClipUsesChildReferenceGeometry) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(InsetClipPath, InheritedEmUsesDeclaringFontSize) {
+  const auto actual = RenderInsetScene(R"svg(
+    <g font-size="20" clip-path="inset(.2em) view-box">
+      <rect width="64" height="64" fill="red" font-size="40" clip-path="inherit"/>
+    </g>)svg");
+  const auto expected = RenderInsetScene("<rect x='4' y='4' width='56' height='56' fill='red'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "inset_inherited_em",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(InsetClipPath, RejectedRoundAndMalformedSyntaxKeepLastValidClip) {
   for (const auto value : {"inset()", "inset(1px 2px 3px 4px 5px)", "inset(1px,2px)",
                            "inset(2px round 1px)", "inset(1e999px)", "inset(calc(1px))"}) {
