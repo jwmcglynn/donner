@@ -24,6 +24,7 @@
 #include "donner/svg/core/TextOrientation.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/core/WhiteSpace.h"
+#include "donner/svg/core/TextTransform.h"
 #include "donner/svg/text/TextTypes.h"
 
 namespace donner::svg::components {
@@ -229,6 +230,10 @@ struct ComputedTextComponent {
 
     /// Whitespace policy resolved when source text is normalized.
     WhiteSpace whiteSpace = WhiteSpace::Normal;
+    /// Whether normalization preserved space characters, including legacy xml:space.
+    bool preservesSpaces = false;
+    /// Presentation-only transformation resolved from this span's computed style.
+    TextTransform textTransform = TextTransform::None;
     /// Common ancestor's whitespace policy at the boundary with the next nonempty span.
     std::optional<WhiteSpace> boundaryWhiteSpace;
 

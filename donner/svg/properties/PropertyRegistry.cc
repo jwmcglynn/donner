@@ -2194,7 +2194,7 @@ std::optional<ParseDiagnostic> ParseFontShorthand(PropertyRegistry& registry,
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAttributeEntries{{
+constexpr std::array<std::pair<std::string_view, bool>, 76> kValidPresentationAttributeEntries{{
     {"cx", true},
     {"cy", true},
     {"height", true},
@@ -2268,6 +2268,7 @@ constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAt
     {"vector-effect", true},  // Parsed into registry.vectorEffect; non-scaling-stroke is honored
                               // in stroke rendering (see toStrokeParams in RendererDriver.cc).
     {"visibility", true},
+    {"text-transform", true},
     {"white-space", true},
     {"word-spacing", true},
     {"writing-mode", true},
@@ -2411,6 +2412,22 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.fontSizeAdjust);
                  }},  //
+                {"text-transform",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(params, [](const parser::PropertyParseFnParams& value)
+                                            -> ParseResult<TextTransform> {
+                     const auto& components = value.components();
+                     if (components.size() == 1) {
+                       if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+                         if (ident->value.equalsLowercase("none")) return TextTransform::None;
+                         if (ident->value.equalsLowercase("full-width")) return TextTransform::FullWidth;
+                       }
+                     }
+                     ParseDiagnostic error;
+                     error.reason = "Unsupported text-transform; supported values: none, full-width";
+                     return error;
+                   }, &registry.textTransform);
+                 }},
                 {"white-space",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(

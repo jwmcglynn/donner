@@ -54,6 +54,8 @@ donner_cc_library(
         "TextEngine.h",
         "TextEngineHelpers.h",
         "TextPathWarp.h",
+        "TextTransform.h",
+        "FullWidthMapping.h",
     ],
     defines = select({
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],

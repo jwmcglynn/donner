@@ -35,6 +35,7 @@
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/TextOrientation.h"
+#include "donner/svg/core/TextTransform.h"
 #include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/core/VectorEffect.h"
 #include "donner/svg/core/Visibility.h"
@@ -128,6 +129,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `marker-end` | \ref markerEnd | `none` |
  * | `font-family` | \ref fontFamily | `serif` |
  * | `font-size` | \ref fontSize | `16px` |
+ * | `text-transform` | \ref textTransform | `none` |
  * | `white-space` | \ref whiteSpace | `normal` |
  * | `text-anchor` | \ref textAnchor | `start` |
  * | `text-decoration` | \ref textDecoration | `none` |
@@ -385,6 +387,10 @@ public:
       "font-size-adjust",
       []() -> std::optional<std::optional<double>> { return std::optional<double>(); }};
 
+  /// Supported inherited CSS text-transform operation; defaults to none.
+  Property<TextTransform, PropertyCascade::Inherit> textTransform{
+      "text-transform", []() -> std::optional<TextTransform> { return TextTransform::None; }};
+
   /// CSS white-space collapsing and wrapping policy, inherited by text descendants.
   Property<WhiteSpace, PropertyCascade::Inherit> whiteSpace{
       "white-space", []() -> std::optional<WhiteSpace> { return WhiteSpace::Normal; }};
@@ -500,7 +506,7 @@ public:
         vectorEffect, clipPath, clipRule, mask, maskType, colorInterpolation, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, fontKerning,
-        fontSizeAdjust, whiteSpace, textAnchor, textDecoration, dominantBaseline, writingMode,
+        fontSizeAdjust, textTransform, whiteSpace, textAnchor, textDecoration, dominantBaseline, writingMode,
         textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline,
         mixBlendMode, isolation, imageRendering, paintOrder);
   }
