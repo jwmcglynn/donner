@@ -7687,12 +7687,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
                                ? span.decorations->origins()
                                : std::span<const components::TextDecorationOrigin>(&fallback, 1);
       for (const auto& decoration : origins) {
-        // Decoration fill colour (solid): declaring element's decoration fill,
-        // falling back to the span fill. When the element uses a pattern fill and
-        // the decoration has no explicit solid fill of its own, the decoration
-        // inherits the pattern too (per CSS Text Decoration §3 + tiny-skia).
-        css::RGBA decoFill = spanFill;
-        bool decoUsesPattern = usePatternFill;
+        css::RGBA decoFill = span.decorations ? css::RGBA(0, 0, 0, 0) : spanFill;
+        bool decoUsesPattern = !span.decorations && usePatternFill;
         if (!std::holds_alternative<PaintServer::None>(decoration.fill)) {
           if (auto c = impl_->resolveSolidPaint(decoration.fill,
                                                 decoration.fillOpacity * span.opacity)) {

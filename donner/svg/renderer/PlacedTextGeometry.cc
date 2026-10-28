@@ -386,7 +386,13 @@ struct DecorationBand {
 
 std::pair<double, double> ResolveDecorationBand(const DecorationBand& band,
                                                 const Transform2d& deviceFromSegment) {
-  const double scale = std::hypot(deviceFromSegment.data[2], deviceFromSegment.data[3]);
+  const double baselineLength = std::hypot(deviceFromSegment.data[0], deviceFromSegment.data[1]);
+  double scale = 0;
+  if (baselineLength > 0 && std::isfinite(baselineLength)) {
+    // Only the normal's perpendicular component separates the transformed parallel edges.
+    scale = std::abs((deviceFromSegment.data[0] / baselineLength) * deviceFromSegment.data[3] -
+                     (deviceFromSegment.data[1] / baselineLength) * deviceFromSegment.data[2]);
+  }
   const double width =
       ResolveDecorationThickness(band.thickness, band.automatic, band.underline, scale);
   return {band.offset - width / 2 +

@@ -3172,8 +3172,8 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             decoFillPaint = paint;
           }
         }
-        if (!decoFillPaint) {
-          decoFillPaint = spanFillPaint;  // Fallback to span fill if no declaring element.
+        if (!span.decorations) {
+          decoFillPaint = spanFillPaint;
         }
 
         std::optional<tiny_skia::Paint> decoStrokePaint;

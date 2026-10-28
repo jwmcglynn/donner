@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -10,6 +11,7 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -243,6 +245,32 @@ TEST(TextDecorationThickness, ShearedMinimumUsesPerpendicularDeviceWidth) {
         "<rect x='4' y='5.5' width='20' height='1' fill='red'/></g>");
     editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_sheared_minimum",
                                          editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(TextDecorationThickness, SingularAndNonFiniteTransformsSuppressExplicitBands) {
+  auto document = DecorationDocument("");
+  const auto& engine = document.registry().ctx().get<TextEngine>();
+  TextRun run;
+  TextGlyph glyph;
+  glyph.glyphIndex = 3;
+  glyph.xAdvance = 10;
+  run.glyphs.push_back(glyph);
+  components::TextDecorationOrigin origin;
+  origin.lines = TextDecoration::Underline;
+  origin.thickness = {TextDecorationThickness::Kind::Length, Lengthd(0)};
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double maximum = std::numeric_limits<double>::max();
+  for (const auto& linear : {std::array{1.0, 0.0, 10.0, 0.0}, std::array{1.0, 1.0, 10.0, 10.0},
+                             std::array{0.0, 0.0, 1.0, 1.0}, std::array{1.0, 0.0, 0.0, infinity},
+                             std::array{maximum, maximum, 0.0, 1.0}}) {
+    Transform2d transform;
+    std::copy(linear.begin(), linear.end(), transform.data);
+    std::size_t remaining = Path::kMaximumGeometryQueryWork;
+    bool emitted = false;
+    EmitTextDecorationPaths(run, origin, 1, 20, engine, transform, remaining,
+                            [&](const Path&) { emitted = true; });
+    EXPECT_FALSE(emitted);
   }
 }
 
