@@ -118,7 +118,9 @@ and `sanitizers-pr.yml`: each groups those runs per workflow and PR number. A ca
 superseded commit is expected, not a failure, and needs no rerun. Nothing else cancels: pushes
 (including `main`), schedules, dispatches, releases, label and edit events, base-change runs and
 `pr_metadata.yml` each run in a group of their own. `tools/ci_concurrency_policy_tests.py` pins
-the setting.
+the setting. Reopening a PR restarts its head's runs in place. Never rerun a run for a commit that
+is no longer the PR's head: the rerun keeps its original event, rejoins the PR's group and cancels
+the current head's run.
 
 - **gatekeeper** — two outputs:
   - `is_duplicate_push`: a push to a branch that already has an open PR is skipped green

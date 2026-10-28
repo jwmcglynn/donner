@@ -73,8 +73,11 @@ def _pull_request_types(workflow):
         return None
     block = _block(workflow, "  pull_request:")
     for line in block:
-        match = re.match(r"^    types:\s*\[(.*)\]\s*$", line)
-        if match:
+        line = re.sub(r"\s+#.*$", "", line)
+        if re.match(r"^\s+types:", line):
+            match = re.fullmatch(r"    types:\s*\[(.*)\]\s*", line)
+            if not match:
+                raise ValueError("unsupported pull_request types: %r" % line)
             return [value.strip() for value in match.group(1).split(",")]
     return ["opened", "synchronize", "reopened"]
 

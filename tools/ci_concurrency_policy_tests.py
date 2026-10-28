@@ -112,19 +112,24 @@ def _unique_per_run(group):
 
 
 def _triggers(workflow):
-    """The `on:` block, up to the next top-level key."""
+    """The `on:` block, up to the next top-level key (a column-0 comment does not end it)."""
     block = ("\n" + workflow).split("\non:\n", 1)[1]
-    return re.split(r"\n(?=\S)", block, maxsplit=1)[0] + "\n"
+    return re.split(r"\n(?=[^\s#])", block, maxsplit=1)[0] + "\n"
 
 
 def _pull_request_types(triggers):
     """The pull_request `types` list, the default list when unset, or None without the trigger."""
-    match = re.search(r"(?m)^  pull_request:\n((?:(?:    .*)?\n)*)", triggers)
+    match = re.search(r"(?m)^  pull_request:\n((?:(?:(?:    |  #|#).*|[ \t]*)\n)*)", triggers)
     if not match:
         return None
-    types = re.search(r"(?m)^    types:\s*\[(.*)\]\s*$", match.group(1))
-    if not types:
+    lines = [re.sub(r"\s+#.*$", "", line) for line in match.group(1).splitlines()]
+    declared = [line for line in lines if re.match(r"^\s+types:", line)]
+    if not declared:
         return list(HEAD_COMMIT_ACTIONS)
+    # Fail closed on any `types` form this reader does not parse, such as a block list.
+    types = re.fullmatch(r"    types:\s*\[(.*)\]\s*", declared[0])
+    if len(declared) != 1 or not types:
+        raise ValueError("unsupported pull_request types: %r" % declared)
     return [value.strip() for value in types.group(1).split(",")]
 
 
@@ -155,8 +160,8 @@ class ConcurrencyPolicyTest(unittest.TestCase):
                               "the setting must be workflow-level, not job-level")
 
     def test_superseded_head_workflows_run_pull_requests_only_on_head_commits(self):
-        # A label, edit or other activity type would join the per-PR group as a non-cancelling
-        # run, where a newer head commit's run would still cancel it while it is queued.
+        # Other activity types already get a group of their own; restricting the triggers keeps
+        # the cancelling surface to head-commit events, so this is defense in depth.
         for name in sorted(SUPERSEDED_HEAD_WORKFLOWS):
             with self.subTest(workflow=name):
                 triggers = _triggers(self.workflows[name])
@@ -199,8 +204,16 @@ class ConcurrencyPolicyTest(unittest.TestCase):
         self.assertEqual(_pull_request_types(_triggers(
             "on:\n  pull_request:\n    paths:\n      - a\n\n    types: [edited, labeled]\n"
             "jobs:\n  x:\n    types: [opened]\n")), ["edited", "labeled"])
+        self.assertEqual(_pull_request_types(_triggers(
+            "on:\n  pull_request:\n  # Why.\n    types: [opened, labeled]  # note\n")),
+            ["opened", "labeled"])
         self.assertIsNone(_pull_request_types(_triggers("on:\n  push:\njobs:\n")))
-        self.assertRegex(_triggers("name: x\non:\n  release:\njobs:\n"), r"(?m)^  release:")
+        with self.assertRaises(ValueError):
+            _pull_request_types(_triggers("on:\n  pull_request:\n    types:\n      - labeled\n"))
+        self.assertEqual(_pull_request_types(_triggers(
+            "on:\n  pull_request:\n  \n    types: [labeled]\n")), ["labeled"])
+        self.assertRegex(_triggers("name: x\non:\n  push:\n# Note.\n  release:\njobs:\n"),
+                         r"(?m)^  release:")
 
     def test_a_conditional_group_is_not_unique_per_run(self):
         self.assertTrue(_unique_per_run("run-${{ github.workflow }}-${{ github.run_id }}"))
