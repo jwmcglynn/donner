@@ -259,6 +259,13 @@ enum class ExpressionKind : uint8_t {
 /// Maximum call arity and expression operands.
 inline constexpr uint8_t kMaxExpressionOperands = 8;
 
+/// Operand array with every slot set to \ref donner::gpu::shader::wgsl::kInvalidArenaId.
+inline constexpr std::array<ArenaId, kMaxExpressionOperands> kUnsetOperands = [] {
+  std::array<ArenaId, kMaxExpressionOperands> unset{};
+  unset.fill(kInvalidArenaId);
+  return unset;
+}();
+
 /**
  * Builds an expression operand array, filling every slot past \p ids with \ref
  * donner::gpu::shader::wgsl::kInvalidArenaId.
@@ -272,10 +279,11 @@ inline constexpr uint8_t kMaxExpressionOperands = 8;
 constexpr std::array<ArenaId, kMaxExpressionOperands> Operands(std::same_as<ArenaId> auto... ids) {
   static_assert(sizeof...(ids) <= kMaxExpressionOperands,
                 "An expression carries at most kMaxExpressionOperands operands");
-  std::array<ArenaId, kMaxExpressionOperands> result{};
-  result.fill(kInvalidArenaId);
-  uint8_t next = 0;
-  ((result[next++] = ids), ...);
+  // Copying the prebuilt sentinel array keeps this hot constructor to a few constant-evaluator
+  // steps; filling the slots one by one costs several steps per slot.
+  std::array<ArenaId, kMaxExpressionOperands> result = kUnsetOperands;
+  [[maybe_unused]] ArenaId* slot = result.data();
+  ((*slot++ = ids), ...);
   return result;
 }
 

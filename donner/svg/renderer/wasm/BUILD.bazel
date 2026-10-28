@@ -155,7 +155,7 @@ py_test(
         "--max-wasm-raw-bytes",
         "2210000",
         "--max-wasm-gzip-bytes",
-        "872000",
+        "873000",
         "--max-js-raw-bytes",
         "5700",
         "--max-js-gzip-bytes",

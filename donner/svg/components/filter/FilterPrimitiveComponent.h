@@ -218,6 +218,9 @@ struct FEConvolveMatrixComponent {
   std::optional<int> targetY;               ///< Target Y (nullopt = floor(orderY/2)).
   EdgeMode edgeMode = EdgeMode::Duplicate;  ///< Edge handling mode.
   bool preserveAlpha = false;               ///< If true, only filter RGB channels.
+  /// True when `order` named a finite value above \ref kMaximumFilterConvolveOrder. The parser
+  /// leaves \ref orderX and \ref orderY unchanged, and the filter fails closed.
+  bool orderExceedsLimit = false;
 };
 
 /**

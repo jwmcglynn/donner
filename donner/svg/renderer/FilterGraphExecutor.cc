@@ -517,17 +517,34 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::DisplacementMap& pr
   return displacementMap;
 }
 
-gp::Image::Sampling ConvertImageSampling(ImageRendering imageRendering) {
-  switch (imageRendering) {
-    case ImageRendering::CrispEdges:
-    case ImageRendering::OptimizeSpeed: return gp::Image::Sampling::CrispEdges;
-    case ImageRendering::Pixelated: return gp::Image::Sampling::Pixelated;
-    case ImageRendering::Auto:
-    case ImageRendering::Smooth:
-    case ImageRendering::HighQuality:
-    case ImageRendering::OptimizeQuality: return gp::Image::Sampling::Smooth;
+/// Selects the node sampling for placing the image through \p deviceFromImage, with the kernel
+/// `<image>` would use for the same placement.
+gp::Image::Sampling ConvertImageSampling(ImageRendering imageRendering,
+                                         const Transform2d& deviceFromImage) {
+  switch (ImageSamplingKernelFor(imageRendering, deviceFromImage)) {
+    case ImageSamplingKernel::Nearest: return gp::Image::Sampling::CrispEdges;
+    case ImageSamplingKernel::Bilinear: return gp::Image::Sampling::Bilinear;
+    case ImageSamplingKernel::MitchellCubic: return gp::Image::Sampling::Cubic;
+    case ImageSamplingKernel::PixelatedSmooth: return gp::Image::Sampling::Pixelated;
   }
-  return gp::Image::Sampling::Smooth;
+  return gp::Image::Sampling::Cubic;
+}
+
+/// Places a raster already resampled to the output grid, copying it texel for texel.
+void PopulatePrerasterizedImage(gp::Image& image, const fp::Image& primitive,
+                                const PrimitiveConversionState& state,
+                                std::span<const std::uint8_t> premultiplied,
+                                const Transform2d& deviceFromImage) {
+  image.pixels = RasterizeImagePremultiplied(
+      premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromImage,
+      state.context.outputWidth, state.context.outputHeight,
+      ImageSamplingKernelFor(primitive.imageRendering, deviceFromImage));
+  image.width = state.context.outputWidth;
+  image.height = state.context.outputHeight;
+  image.targetRect =
+      tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(state.context.outputWidth),
+                                   static_cast<double>(state.context.outputHeight)};
+  image.sampling = gp::Image::Sampling::CrispEdges;
 }
 
 Vector2d FragmentImageOrigin(const fp::Image& primitive, const PrimitiveConversionState& state) {
@@ -554,20 +571,6 @@ bool IsPositiveAxisAlignedScale(const Transform2d& deviceFromFragment) {
          deviceFromFragment.data[0] > 0.0 && deviceFromFragment.data[3] > 0.0;
 }
 
-void PopulateTransformedFragmentImage(gp::Image& image, const fp::Image& primitive,
-                                      const PrimitiveConversionState& state,
-                                      std::span<const std::uint8_t> premultiplied,
-                                      const Transform2d& deviceFromFragment) {
-  image.pixels = RasterizeImagePremultiplied(
-      premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromFragment,
-      state.context.outputWidth, state.context.outputHeight, primitive.imageRendering);
-  image.width = state.context.outputWidth;
-  image.height = state.context.outputHeight;
-  image.targetRect =
-      tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(state.context.outputWidth),
-                                   static_cast<double>(state.context.outputHeight)};
-}
-
 void PopulateAxisAlignedFragmentImage(gp::Image& image, const fp::Image& primitive,
                                       std::span<const std::uint8_t> premultiplied,
                                       const Transform2d& deviceFromFragment) {
@@ -578,6 +581,7 @@ void PopulateAxisAlignedFragmentImage(gp::Image& image, const fp::Image& primiti
       Box2d::FromXYWH(0.0, 0.0, primitive.imageWidth, primitive.imageHeight));
   image.targetRect = tiny_skia::filter::PixelRect{target.topLeft.x, target.topLeft.y,
                                                   target.width(), target.height()};
+  image.sampling = ConvertImageSampling(primitive.imageRendering, deviceFromFragment);
 }
 
 void PopulateTransformedImage(gp::Image& image, const fp::Image& primitive,
@@ -591,16 +595,8 @@ void PopulateTransformedImage(gp::Image& image, const fp::Image& primitive,
           : state.context.filterRegion.value_or(state.context.primitiveUnitsBounds);
   const Transform2d filterFromImage =
       primitive.preserveAspectRatio.elementContentFromViewBoxTransform(userSubregion, imageBox);
-  const Transform2d deviceFromImage = filterFromImage * state.context.deviceFromFilter;
-
-  image.pixels = RasterizeImagePremultiplied(
-      premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromImage,
-      state.context.outputWidth, state.context.outputHeight, primitive.imageRendering);
-  image.width = state.context.outputWidth;
-  image.height = state.context.outputHeight;
-  image.targetRect =
-      tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(state.context.outputWidth),
-                                   static_cast<double>(state.context.outputHeight)};
+  PopulatePrerasterizedImage(image, primitive, state, premultiplied,
+                             filterFromImage * state.context.deviceFromFilter);
 }
 
 tiny_skia::filter::PixelRect ResolveUntransformedImageTarget(
@@ -639,13 +635,17 @@ void PopulateUntransformedImage(gp::Image& image, const fp::Image& primitive,
   image.pixels.assign(premultiplied.begin(), premultiplied.end());
   image.width = primitive.imageWidth;
   image.height = primitive.imageHeight;
-  image.targetRect = ResolveUntransformedImageTarget(primitive, state);
+  const tiny_skia::filter::PixelRect target = ResolveUntransformedImageTarget(primitive, state);
+  image.targetRect = target;
+  image.sampling = ConvertImageSampling(
+      primitive.imageRendering,
+      Transform2d::Scale(target.w / primitive.imageWidth, target.h / primitive.imageHeight) *
+          Transform2d::Translate(target.x, target.y));
 }
 
 tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Image& primitive,
                                                    const PrimitiveConversionState& state) {
   gp::Image image;
-  image.sampling = ConvertImageSampling(primitive.imageRendering);
   const std::span<const uint8_t> imageData = primitive.imageData
                                                  ? std::span<const uint8_t>(*primitive.imageData)
                                                  : std::span<const uint8_t>();
@@ -659,7 +659,7 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Image& primitive,
     if (IsPositiveAxisAlignedScale(deviceFromFragment)) {
       PopulateAxisAlignedFragmentImage(image, primitive, premultiplied, deviceFromFragment);
     } else {
-      PopulateTransformedFragmentImage(image, primitive, state, premultiplied, deviceFromFragment);
+      PopulatePrerasterizedImage(image, primitive, state, premultiplied, deviceFromFragment);
     }
   } else if (state.graph.filterFromDevice.has_value()) {
     PopulateTransformedImage(image, primitive, state, premultiplied);

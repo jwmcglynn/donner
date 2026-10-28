@@ -1,4 +1,8 @@
-/** Provisional bound for the fixed nominal carousel workload, above its 400-560ms healthy range. */
+/**
+ * Provisional bound for the fixed nominal carousel workload, above its 400-560ms healthy range.
+ * Gated in the performance lane (`completedResultHandoff` in latency-gates.mjs); the smoke suite
+ * reports the same measurement without bounding it.
+ */
 export const kNominalCompletedResultHandoffLimitMs = 1000;
 
 /** Measure the raw completed-result handoff; retained GPU backlog is not subtracted. */

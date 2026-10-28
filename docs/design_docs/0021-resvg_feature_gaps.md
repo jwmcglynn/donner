@@ -446,7 +446,13 @@ At resvg v0.49.0 every raster-image reference is the Mitchell cubic (nearest for
 `optimizeSpeed`). Donner now resamples `<image>` with `image-rendering: auto`, `optimizeQuality`
 and `high-quality` through the same cubic on TinySkia (tiny-skia `FilterQuality::Bicubic`) and
 Geode (a 16-tap cubic image-blit sampling mode), matching the kernel `feImage` already used;
-`smooth` stays bilinear and compositor bitmap blits keep bilinear sampling. The raster-image
+`smooth` stays bilinear and compositor bitmap blits keep bilinear sampling. resvg renders an
+`feImage` raster as an image, so `feImage` placement shares the same `ImageSamplingKernelFor`
+mapping on both backends: `smooth` is bilinear there too, and a pure translation samples the
+containing texel, as tiny-skia does for `<image>`. That also removed a cubic filtering pass that
+rotated `feImage` placement and nested-SVG `feImage` rasters received at one-to-one scale, which
+re-enabled `filters/feImage/with-subregion-5` and refreshed the Donner-generated
+`filters/feImage/svg` goldens. The raster-image
 references were replaced by their v0.49.0 renderings, with provenance in
 `third_party/resvg-test-suite/BUILD.bazel`.
 

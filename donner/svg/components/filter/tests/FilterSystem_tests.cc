@@ -7,8 +7,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -1220,6 +1224,245 @@ TEST_F(FilterSystemTest, FilterChainMultiplePrimitives) {
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
   EXPECT_THAT(computed->filterGraph.nodes, SizeIs(3));
+}
+
+// --- Primitive count limit ---
+
+/// Matches a diagnostic whose reason is exactly \p reason.
+testing::Matcher<const ParseDiagnostic&> WarningReason(std::string_view reason) {
+  return testing::Field(&ParseDiagnostic::reason, testing::Eq(RcString(reason)));
+}
+
+/// A document whose filter `f` holds \p offsets one-pixel feOffset primitives, then \p blurs
+/// feGaussianBlur primitives.
+std::string PrimitiveCountDocument(std::size_t offsets, std::size_t blurs) {
+  std::string markup = R"(<svg xmlns="http://www.w3.org/2000/svg"><defs><filter id="f">)";
+  for (std::size_t i = 0; i < offsets; ++i) {
+    markup += R"(<feOffset dx="1"/>)";
+  }
+  for (std::size_t i = 0; i < blurs; ++i) {
+    markup += R"(<feGaussianBlur stdDeviation="1"/>)";
+  }
+  return markup + "</filter></defs></svg>";
+}
+
+TEST_F(FilterSystemTest, FilterAtPrimitiveLimitRetainsEveryPrimitive) {
+  ASSERT_EQ(kMaximumFilterGraphNodes, 32u);
+  auto document = ParseSVG(PrimitiveCountDocument(31, 1));
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(document.registry(), warningSink);
+  filterSystem.instantiateAllComputedComponents(document.registry(), warningSink);
+
+  auto element = document.querySelector("#f");
+  ASSERT_TRUE(element.has_value());
+  const auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
+  ASSERT_THAT(computed, NotNull());
+  ASSERT_THAT(computed->filterGraph.nodes, SizeIs(32));
+  EXPECT_THAT(computed->filterGraph.nodes.back().primitive,
+              testing::VariantWith<filter_primitive::GaussianBlur>(testing::AllOf(
+                  testing::Field(&filter_primitive::GaussianBlur::stdDeviationX, 1.0),
+                  testing::Field(&filter_primitive::GaussianBlur::stdDeviationY, 1.0))));
+  EXPECT_THAT(warningSink.warnings(), IsEmpty());
+}
+
+// A filter with more primitives than the limit is rejected as a whole, never truncated to its
+// first primitives, so the element referencing it is not rendered.
+TEST_F(FilterSystemTest, FilterOverPrimitiveLimitIsRejectedWithoutTruncation) {
+  for (const auto& [offsets, blurs] :
+       {std::pair<std::size_t, std::size_t>{32, 1}, {33, 0}, {4096, 0}}) {
+    SCOPED_TRACE(testing::Message() << offsets << " offsets, " << blurs << " blurs");
+    auto document = ParseSVG(PrimitiveCountDocument(offsets, blurs));
+    ParseWarningSink warningSink;
+    StyleSystem().computeAllStyles(document.registry(), warningSink);
+    filterSystem.instantiateAllComputedComponents(document.registry(), warningSink);
+
+    auto element = document.querySelector("#f");
+    ASSERT_TRUE(element.has_value());
+    EXPECT_THAT(element->entityHandle().try_get<ComputedFilterComponent>(), testing::IsNull());
+    EXPECT_THAT(warningSink.warnings(),
+                ElementsAre(WarningReason("Filter primitive limit exceeded in filter \"f\"")));
+  }
+}
+
+/// Parses \p markup inside an `<svg>` root, computes styles and filters, and returns the warnings.
+std::vector<ParseDiagnostic> ComputeFilterWarnings(FilterSystem& filterSystem,
+                                                   SVGDocument& document) {
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(document.registry(), warningSink);
+  filterSystem.instantiateAllComputedComponents(document.registry(), warningSink);
+  return warningSink.warnings();
+}
+
+/// The computed filter of the element with \p id, or null when it has none.
+const ComputedFilterComponent* ComputedFilterFor(SVGDocument& document, std::string_view id) {
+  auto element = document.querySelector("#" + std::string(id));
+  EXPECT_TRUE(element.has_value()) << id;
+  return element ? element->entityHandle().try_get<ComputedFilterComponent>() : nullptr;
+}
+
+/// Repeats \p item \p count times.
+std::string Repeat(std::string_view item, std::size_t count) {
+  std::string result;
+  for (std::size_t i = 0; i < count; ++i) {
+    result += item;
+  }
+  return result;
+}
+
+// Only kept primitives count toward the limit: description, comment, unknown and foreign-namespace
+// children do not.
+TEST_F(FilterSystemTest, PrimitiveLimitCountsOnlyKeptPrimitives) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg" xmlns:x="urn:other">
+    <defs><filter id="f">)" +
+                           Repeat(R"(<feOffset dx="1"/>)", 32) +
+                           R"(<desc>d</desc><!-- c --><unknown/><x:feOffset dx="1"/>
+    </filter></defs></svg>)");
+  EXPECT_THAT(ComputeFilterWarnings(filterSystem, document), IsEmpty());
+  const ComputedFilterComponent* computed = ComputedFilterFor(document, "f");
+  ASSERT_THAT(computed, NotNull());
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(32));
+}
+
+// A filter inheriting an over-limit primitive list through href is refused like its source.
+TEST_F(FilterSystemTest, PrimitiveLimitAppliesToInheritedPrimitives) {
+  auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><defs>
+    <filter id="base">)" + Repeat(R"(<feOffset dx="1"/>)", 33) +
+                           R"(</filter><filter id="derived" href="#base"/></defs></svg>)");
+  EXPECT_THAT(ComputeFilterWarnings(filterSystem, document),
+              testing::UnorderedElementsAre(
+                  WarningReason("Filter primitive limit exceeded in filter \"base\""),
+                  WarningReason("Filter primitive limit exceeded in filter \"derived\"")));
+  EXPECT_THAT(ComputedFilterFor(document, "base"), testing::IsNull());
+  EXPECT_THAT(ComputedFilterFor(document, "derived"), testing::IsNull());
+}
+
+// The limit is checked before the 33rd primitive is built, so an feImage there neither copies its
+// pixels nor trips the document's sticky image budget rejection.
+TEST_F(FilterSystemTest, PrimitiveLimitRejectsBeforeBuildingTheExtraPrimitive) {
+  for (const std::uint64_t maximumBytes : {std::uint64_t{3}, std::uint64_t{4096}}) {
+    SCOPED_TRACE(maximumBytes);
+    auto document = ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><defs><filter id="f">)" +
+                             Repeat(R"(<feOffset dx="1"/>)", 32) +
+                             R"(<feImage id="image" href="image.png"/></filter></defs></svg>)");
+    auto& registry = document.registry();
+    document.querySelector("#image")->entityHandle().emplace<LoadedImageComponent>(
+        ImageResource{{0xff, 0, 0, 0xff}, 1, 1});
+    registry.ctx().emplace<ComputedFilterResourceBudget>(
+        std::make_shared<DocumentResourceFamilyBudget>(),
+        ComputedFilterResourceBudget::Limits{.maximumBytes = maximumBytes});
+
+    EXPECT_THAT(ComputeFilterWarnings(filterSystem, document),
+                ElementsAre(WarningReason("Filter primitive limit exceeded in filter \"f\"")));
+    EXPECT_THAT(ComputedFilterFor(document, "f"), testing::IsNull());
+    const auto& budget = registry.ctx().get<ComputedFilterResourceBudget>();
+    EXPECT_EQ(budget.sharedImageMaterializations(), 0u);
+    EXPECT_FALSE(budget.rejected());
+  }
+}
+
+// --- Per-primitive resource limits ---
+
+/// A document whose filter `f` holds \p primitive.
+std::string SinglePrimitiveDocument(std::string_view primitive) {
+  return std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><defs><filter id="f">)") +
+         std::string(primitive) + "</filter></defs></svg>";
+}
+
+TEST_F(FilterSystemTest, MergeInputLimitKeepsEveryInputAtTheLimit) {
+  auto document =
+      ParseSVG(SinglePrimitiveDocument("<feMerge>" + Repeat("<feMergeNode/>", 15) +
+                                       R"(<feMergeNode in="SourceGraphic"/></feMerge>)"));
+  EXPECT_THAT(ComputeFilterWarnings(filterSystem, document), IsEmpty());
+  const ComputedFilterComponent* computed = ComputedFilterFor(document, "f");
+  ASSERT_THAT(computed, NotNull());
+  ASSERT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  const auto& inputs = computed->filterGraph.nodes[0].inputs;
+  ASSERT_THAT(inputs, SizeIs(16));
+  EXPECT_THAT(inputs.back().value,
+              testing::VariantWith<FilterStandardInput>(FilterStandardInput::SourceGraphic));
+}
+
+TEST_F(FilterSystemTest, MergeInputLimitRejectsTheFilterOverTheLimit) {
+  auto document =
+      ParseSVG(SinglePrimitiveDocument("<feMerge>" + Repeat("<feMergeNode/>", 16) +
+                                       R"(<feMergeNode in="SourceGraphic"/></feMerge>)"));
+  EXPECT_THAT(ComputeFilterWarnings(filterSystem, document),
+              ElementsAre(WarningReason("Filter merge input limit exceeded in filter \"f\"")));
+  EXPECT_THAT(ComputedFilterFor(document, "f"), testing::IsNull());
+}
+
+/// An feComponentTransfer whose red channel is a table of \p count zeros.
+std::string TransferTablePrimitive(std::size_t count) {
+  std::string values;
+  for (std::size_t i = 0; i < count; ++i) {
+    values += i == 0 ? "0" : " 0";
+  }
+  return R"(<feComponentTransfer><feFuncR type="table" tableValues=")" + values +
+         R"("/></feComponentTransfer>)";
+}
+
+TEST_F(FilterSystemTest, TransferTableLimitKeepsTheTableAtTheLimit) {
+  auto document = ParseSVG(SinglePrimitiveDocument(TransferTablePrimitive(1024)));
+  EXPECT_THAT(ComputeFilterWarnings(filterSystem, document), IsEmpty());
+  const ComputedFilterComponent* computed = ComputedFilterFor(document, "f");
+  ASSERT_THAT(computed, NotNull());
+  ASSERT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  const auto* transfer =
+      std::get_if<filter_primitive::ComponentTransfer>(&computed->filterGraph.nodes[0].primitive);
+  ASSERT_THAT(transfer, NotNull());
+  EXPECT_THAT(transfer->funcR.tableValues, SizeIs(1024));
+}
+
+TEST_F(FilterSystemTest, TransferTableLimitRejectsTheFilterOverTheLimit) {
+  auto document = ParseSVG(SinglePrimitiveDocument(TransferTablePrimitive(1025)));
+  EXPECT_THAT(ComputeFilterWarnings(filterSystem, document),
+              ElementsAre(WarningReason("Filter transfer table limit exceeded in filter \"f\"")));
+  EXPECT_THAT(ComputedFilterFor(document, "f"), testing::IsNull());
+}
+
+/// An feConvolveMatrix with \p order and a kernel of \p values values: a one, then zeros.
+std::string ConvolvePrimitive(std::string_view order, std::size_t values) {
+  std::string kernel;
+  for (std::size_t i = 0; i < values; ++i) {
+    kernel += i == 0 ? "1" : " 0";
+  }
+  return R"(<feConvolveMatrix order=")" + std::string(order) + R"(" kernelMatrix=")" + kernel +
+         R"("/>)";
+}
+
+TEST_F(FilterSystemTest, ConvolveLimitKeepsTheKernelAtTheLimit) {
+  auto document = ParseSVG(SinglePrimitiveDocument(ConvolvePrimitive("64", 4096)));
+  EXPECT_THAT(ComputeFilterWarnings(filterSystem, document), IsEmpty());
+  const ComputedFilterComponent* computed = ComputedFilterFor(document, "f");
+  ASSERT_THAT(computed, NotNull());
+  ASSERT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  const auto* convolve =
+      std::get_if<filter_primitive::ConvolveMatrix>(&computed->filterGraph.nodes[0].primitive);
+  ASSERT_THAT(convolve, NotNull());
+  EXPECT_EQ(convolve->orderX, 64);
+  EXPECT_THAT(convolve->kernelMatrix, SizeIs(4096));
+}
+
+TEST_F(FilterSystemTest, ConvolveLimitRejectsTheFilterOverTheLimit) {
+  for (const auto& [order, values] :
+       {std::pair<std::string_view, std::size_t>{"64", 4097}, {"65", 4225}, {"3 65", 195}}) {
+    SCOPED_TRACE(testing::Message() << order << ", " << values << " values");
+    auto document = ParseSVG(SinglePrimitiveDocument(ConvolvePrimitive(order, values)));
+    EXPECT_THAT(
+        ComputeFilterWarnings(filterSystem, document),
+        ElementsAre(WarningReason("Filter convolution kernel limit exceeded in filter \"f\"")));
+    EXPECT_THAT(ComputedFilterFor(document, "f"), testing::IsNull());
+  }
+}
+
+// A wrong kernel value count within the limits is a parameter error, handled when the filter
+// runs, not a resource limit: the filter is kept.
+TEST_F(FilterSystemTest, ConvolveWithWrongValueCountWithinLimitsIsKept) {
+  auto document = ParseSVG(SinglePrimitiveDocument(ConvolvePrimitive("3", 8)));
+  EXPECT_THAT(ComputeFilterWarnings(filterSystem, document), IsEmpty());
+  const ComputedFilterComponent* computed = ComputedFilterFor(document, "f");
+  ASSERT_THAT(computed, NotNull());
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- Filter attributes ---

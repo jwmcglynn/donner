@@ -37,12 +37,9 @@ struct UInt {
     if (!used) {
       return 0;
     }
-    uint32_t value = words[used - 1], count = (used - 1) * 32;
-    while (value) {
-      ++count;
-      value >>= 1;
-    }
-    return count;
+    // std::bit_width is a constant-time builtin; a bit-by-bit loop costs the constant evaluator
+    // up to 32 iterations per call.
+    return (used - 1) * 32 + static_cast<uint32_t>(std::bit_width(words[used - 1]));
   }
   /// Returns the low 64 bits; callers check the logical size before narrowing.
   constexpr uint64_t small() const { return uint64_t(words[0]) | (uint64_t(words[1]) << 32); }
