@@ -75,7 +75,8 @@ std::pair<int, double> FontWidthRank(const css::FontFace& face, int requestedWid
   }
   const bool narrower = maximum < requested;
   const bool preferred = requested <= 100 ? narrower : !narrower;
-  return {preferred ? 1 : 2, narrower ? requested - maximum : minimum - requested};
+  // Subtracting tiny endpoints from a requested width can erase their ordering.
+  return {preferred ? 1 : 2, narrower ? -maximum : minimum};
 }
 
 int FontStyleRank(int actual, int requested) {
@@ -109,11 +110,11 @@ std::pair<int, int64_t> FontWeightRank(const css::FontFace& face, int requested)
 }
 
 FontMatchScore RankFontFace(const css::FontFace& face, int weight, int style, int stretch) {
-  const auto [widthDirection, widthDistance] = FontWidthRank(face, stretch);
+  const auto [widthDirection, widthOrder] = FontWidthRank(face, stretch);
   const auto [weightDirection, weightDistance] = FontWeightRank(face, weight);
   // Filter by width before style, then by weight. Numeric weight distance cannot outweigh
   // a better width/style match, even when a declaration covers a wide weight interval.
-  return {widthDirection, widthDistance, FontStyleRank(face.fontStyle, style), weightDirection,
+  return {widthDirection, widthOrder, FontStyleRank(face.fontStyle, style), weightDirection,
           weightDistance};
 }
 
