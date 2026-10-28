@@ -292,11 +292,20 @@ function installInWorker(): boolean {
     queueDevices.set(this.queue, this);
     return createCommandEncoder.call(this, descriptor);
   };
-  const delayJobs = new WeakMap<GPUDevice, { pipeline: GPURenderPipeline; view: GPUTextureView }>();
+  // One job per device and fragment iteration count: a different count is a different workload.
+  const delayJobs = new WeakMap<
+    GPUDevice,
+    Map<number, { pipeline: GPURenderPipeline; view: GPUTextureView }>
+  >();
   const submitDelayJob = (queue: GPUQueue, delay: CanvasGpuDelayState) => {
     const device = queueDevices.get(queue);
     if (device === undefined) return;
-    let job = delayJobs.get(device);
+    let jobs = delayJobs.get(device);
+    if (jobs === undefined) {
+      jobs = new Map();
+      delayJobs.set(device, jobs);
+    }
+    let job = jobs.get(delay.fragmentIterations);
     if (job === undefined) {
       const module = device.createShaderModule({
         code: `
@@ -323,7 +332,7 @@ function installInWorker(): boolean {
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       });
       job = { pipeline, view: texture.createView() };
-      delayJobs.set(device, job);
+      jobs.set(delay.fragmentIterations, job);
     }
     const encoder = createCommandEncoder.call(device, undefined);
     const pass = beginRenderPass.call(encoder, {
