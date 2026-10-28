@@ -10,6 +10,10 @@ the results of the run it followed. The workflows therefore split the cases:
 - pr_base_change.yml triggers on `edited` and calls main.yml when the base changed, or when it
   changed earlier on the same head (so a later edit cannot hide that run's results).
 - pr_metadata.yml checks the pull request's text on every event that can change it.
+
+A new head commit (opened, synchronize, reopened) cancels the earlier head's CI runs of the same
+pull request; no other event cancels or joins them. ci_concurrency_policy_tests.py requires every
+cancelling workflow to carry main.yml's exact setting, so the scenarios below cover them all.
 """
 
 import json
@@ -236,6 +240,12 @@ MAIN_RUNS = {
     "main-push-next": _event("push", "refs/heads/main", run_id=1007),
     "branch-push": _event("push", "refs/heads/feature", run_id=1008),
     "branch-push-next": _event("push", "refs/heads/feature", run_id=1009),
+    "other-pr-push": _event("pull_request", "refs/pull/8/merge", action="synchronize",
+                            number=8, run_id=1011),
+    "pr-labeled": _event("pull_request", "refs/pull/7/merge", action="labeled", run_id=1012),
+    "schedule": _event("schedule", "refs/heads/main", run_id=1013),
+    "dispatch": _event("workflow_dispatch", "refs/heads/main", run_id=1014),
+    "release": _event("release", "refs/tags/v1.0.0", run_id=1015),
 }
 
 
@@ -323,14 +333,14 @@ class CiPullRequestEventsTest(unittest.TestCase):
         # caller group would deadlock the call.
         self.assertIsNone(_concurrency(self._workflow("pr_base_change.yml")))
 
-    def test_pushes_preserve_earlier_pull_request_runs(self):
-        groups = set()
+    def test_a_new_head_commit_cancels_the_earlier_heads_runs(self):
         for run in ("pr-opened", "pr-push", "pr-reopened"):
             with self.subTest(run=run):
                 group, cancel = self._main_concurrency(run)
-                self.assertFalse(cancel)
-                self.assertNotIn(group, groups)
-                groups.add(group)
+                self.assertEqual(group, "ci-CI-pr-7")
+                self.assertTrue(cancel)
+        other_group, _ = self._main_concurrency("other-pr-push")
+        self.assertEqual(other_group, "ci-CI-pr-8")
 
     def test_a_base_change_run_neither_cancels_nor_joins_other_runs(self):
         push_group, _ = self._main_concurrency("pr-push")
@@ -344,9 +354,11 @@ class CiPullRequestEventsTest(unittest.TestCase):
         self.assertNotEqual(again_group, base_group)
         self.assertFalse(again_cancel)
 
-    def test_main_and_branch_pushes_keep_their_own_never_cancelled_groups(self):
-        groups = set()
-        for run in ("main-push", "main-push-next", "branch-push", "branch-push-next"):
+    def test_every_other_run_keeps_its_own_never_cancelled_group(self):
+        head_group, _ = self._main_concurrency("pr-push")
+        groups = {head_group}
+        for run in ("main-push", "main-push-next", "branch-push", "branch-push-next",
+                    "pr-labeled", "schedule", "dispatch", "release"):
             with self.subTest(run=run):
                 group, cancel = self._main_concurrency(run)
                 self.assertFalse(cancel)

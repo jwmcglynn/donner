@@ -324,7 +324,7 @@ py_test(
     ],
 )
 
-# No workflow cancels a run, running or queued, to make room for a newer one.
+# Only a newer pull request head commit cancels runs, running or queued, of the earlier head.
 py_test(
     name = "ci_concurrency_policy_tests",
     size = "small",

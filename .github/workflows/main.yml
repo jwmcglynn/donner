@@ -24,10 +24,13 @@ on:
       BUILDBUDDY_API_KEY_READONLY:
         required: false
 
-# A run owns its group so later pushes and base changes preserve both running and queued jobs.
+# A new commit on a pull request cancels the runs, queued or in progress, of its previous head.
+# Only opened, synchronize and reopened events share the per-PR group. Every other run (push,
+# schedule, dispatch, or a call from an edit) has a group of its own and is never cancelled.
+# tools/ci_concurrency_policy_tests.py owns this exact setting.
 concurrency:
-  group: ${{ format('ci-{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') && format('ci-{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('ci-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') }}
 
 permissions:
   contents: read
