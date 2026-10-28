@@ -197,8 +197,21 @@ def _donner_transitioned_executable_impl(ctx):
 
     executable = ctx.actions.declare_file(ctx.label.name)
     launcher_target = "_donner_transitioned/{}/{}".format(ctx.label.package, ctx.label.name)
+    declared_data = depset(transitive = [
+        dep_default_info.default_runfiles.files,
+        dep_default_info.data_runfiles.files,
+    ]).to_list()
+    companions = [file for file in declared_data if file.is_directory and file.basename == files_to_run.executable.basename + ".assets"]
+    if not companions:
+        companions = [file for file in declared_data if file.is_directory and file.basename == "donner-assets"]
+    if len(companions) > 1:
+        fail("ambiguous packaged resource companions for {}".format(dep_target.label))
+    root_symlinks = {launcher_target: files_to_run.executable}
+    if companions:
+        # Remote runfiles may materialize the executable alias as an ordinary file.
+        root_symlinks[launcher_target + ".assets"] = companions[0]
     forwarded_runfiles = ctx.runfiles(
-        root_symlinks = {launcher_target: files_to_run.executable},
+        root_symlinks = root_symlinks,
     ).merge(dep_default_info.default_runfiles).merge(dep_default_info.data_runfiles)
 
     # Do not forward the transitioned executable as a plain symlink. Native
