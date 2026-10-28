@@ -3238,4 +3238,111 @@ TEST(TextEngineTest, WhiteSpaceTabStopsPrecedeSvgInlineDisplacement) {
   }
 }
 
+namespace {
+
+struct RtlLineCase {
+  std::string text;
+  std::vector<uint32_t> clusters;
+  std::vector<double> baselines;
+};
+
+class RtlPreservedNewlineTest : public testing::TestWithParam<std::tuple<WhiteSpace, RtlLineCase>> {
+};
+
+TEST_P(RtlPreservedNewlineTest, KeepsLogicalLinesAndVisualOrderWithinEachLine) {
+  const auto& [mode, input] = GetParam();
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts, /*reverseClusters=*/true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(input.text);
+  span.whiteSpace = mode;
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(input.text.size()))));
+  std::vector<uint32_t> clusters;
+  std::vector<double> baselines;
+  for (const auto& glyph : runs[0].glyphs) {
+    clusters.push_back(glyph.cluster);
+    baselines.push_back(glyph.yPosition);
+  }
+  if (PreservesSegmentBreaks(mode)) {
+    EXPECT_THAT(clusters, testing::ElementsAreArray(input.clusters));
+    EXPECT_THAT(baselines, testing::Pointwise(DoubleNear(1e-5), input.baselines));
+  } else {
+    std::vector<uint32_t> reversed;
+    for (size_t i = input.text.size(); i != 0; --i) {
+      reversed.push_back(static_cast<uint32_t>(i - 1));
+    }
+    EXPECT_THAT(clusters, testing::ElementsAreArray(reversed));
+    EXPECT_THAT(baselines, Each(DoubleNear(0, 1e-5)));
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllWhiteSpaceModes, RtlPreservedNewlineTest,
+    testing::Combine(testing::Values(WhiteSpace::Normal, WhiteSpace::Nowrap, WhiteSpace::Pre,
+                                     WhiteSpace::PreWrap, WhiteSpace::PreLine,
+                                     WhiteSpace::BreakSpaces),
+                     testing::Values(RtlLineCase{"AB\nCD", {1, 0, 2, 4, 3}, {0, 0, 0, 20, 20}},
+                                     RtlLineCase{"\nAB\n\nCD\n",
+                                                 {0, 2, 1, 3, 4, 6, 5, 7},
+                                                 {0, 20, 20, 20, 40, 60, 60, 60}},
+                                     RtlLineCase{"AB CD\nEF GH",
+                                                 {4, 3, 2, 1, 0, 5, 10, 9, 8, 7, 6},
+                                                 {0, 0, 0, 0, 0, 0, 20, 20, 20, 20, 20}})));
+
+TEST(TextEngineTest, RtlPreservedNewlineRetainsDisplacementsAcrossSpans) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts, /*reverseClusters=*/true);
+  components::ComputedTextComponent text;
+  auto first = MakeSpan("AB\nCD");
+  first.whiteSpace = WhiteSpace::Pre;
+  first.dxList = {std::nullopt, std::nullopt, std::nullopt, Lengthd(20)};
+  text.spans.push_back(first);
+  auto second = MakeSpan("\nEF");
+  second.whiteSpace = WhiteSpace::Pre;
+  second.startsNewChunk = false;
+  text.spans.push_back(second);
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(5)), RunGlyphsAre(SizeIs(3))));
+  EXPECT_THAT(runs[0].glyphs[0].cluster, testing::Eq(1u));
+  EXPECT_THAT(runs[0].glyphs[3].cluster, testing::Eq(4u));
+  EXPECT_THAT(runs[0].glyphs[3].yPosition, DoubleNear(20, 1e-5));
+  EXPECT_THAT(runs[0].glyphs[4].xPosition - runs[0].glyphs[3].xPosition, DoubleNear(30, 1e-5));
+  EXPECT_THAT(runs[1].glyphs[1].cluster, testing::Eq(2u));
+  EXPECT_THAT(runs[1].glyphs[1].yPosition, DoubleNear(40, 1e-5));
+}
+
+#ifdef DONNER_TEXT_FULL
+TEST(TextEngineTest, RtlPreservedNewlineKeepsHebrewLinesInSourceOrder) {
+  Registry registry;
+  FontManager fonts(registry);
+  const FontHandle font = LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Mplus Hebrew");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xD7\x90\xD7\x91\n\xD7\x92\xD7\x93");
+  span.whiteSpace = WhiteSpace::Pre;
+  text.spans.push_back(span);
+  auto params = MakeTextParams(20);
+  params.fontFamilies = {RcString("Mplus Hebrew")};
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(5))));
+  EXPECT_THAT(runs[0].font, testing::Eq(font));
+  EXPECT_THAT(runs[0].glyphs,
+              Each(AllOf(GlyphIndexIs(Gt(0)), Field(&TextGlyph::font, FontHandle()))));
+  std::vector<uint32_t> clusters;
+  for (const auto& glyph : runs[0].glyphs) {
+    clusters.push_back(glyph.cluster);
+  }
+  EXPECT_THAT(clusters, ElementsAre(2u, 0u, 4u, 7u, 5u));
+  EXPECT_THAT(runs[0].glyphs[0].yPosition, DoubleNear(0, 1e-5));
+  EXPECT_THAT(runs[0].glyphs[3].yPosition, DoubleNear(20, 1e-5));
+}
+#endif
+
+}  // namespace
+
 }  // namespace donner::svg
