@@ -766,7 +766,11 @@ py_test(
     name = "macos_editor_test_bundle_tests",
     size = "small",
     srcs = ["macos_editor_test_bundle_tests.py"],
-    deps = [":macos_editor_test_bundle"],
+    data = ["//build_defs:macos_app_bundle.bzl"],
+    deps = [
+        ":macos_editor_test_bundle",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 # Manual artifact qualification copies, compresses and signature-checks a complete app; it is
