@@ -2489,6 +2489,33 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.fontSynthesisSmallCaps);
                  }},
+                {"font-synthesis-style",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& value)
+                           -> ParseResult<FontSynthesisStyle> {
+                         const auto& components = value.components();
+                         if (components.size() == 1) {
+                           if (const auto* ident =
+                                   components.front().tryGetToken<css::Token::Ident>()) {
+                             if (ident->value.equalsLowercase("auto")) {
+                               return FontSynthesisStyle::Auto;
+                             }
+                             if (ident->value.equalsLowercase("oblique-only")) {
+                               return FontSynthesisStyle::ObliqueOnly;
+                             }
+                             if (ident->value.equalsLowercase("none")) {
+                               return FontSynthesisStyle::None;
+                             }
+                           }
+                         }
+                         ParseDiagnostic error;
+                         error.reason = "Invalid font-synthesis-style value";
+                         return error;
+                       },
+                       &registry.fontSynthesisStyle);
+                 }},
                 {"font-kerning",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(

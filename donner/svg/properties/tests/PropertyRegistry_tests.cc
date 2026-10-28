@@ -3081,4 +3081,45 @@ TEST(PropertyRegistry, SmallCapsSynthesisCascadesIndependentlyOfFontShorthand) {
   EXPECT_THAT(registry.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
 }
 
+TEST(PropertyRegistry, StyleSynthesisParsesAndInherits) {
+  PropertyRegistry parent;
+  parent.parseStyle("font-synthesis-style: ObLiQuE-OnLy");
+  EXPECT_THAT(parent.fontSynthesisStyle.get(), Optional(FontSynthesisStyle::ObliqueOnly));
+  EXPECT_THAT(PropertyRegistry().inheritFrom(parent).fontSynthesisStyle.get(),
+              Optional(FontSynthesisStyle::ObliqueOnly));
+  for (const auto& [keyword, expected] : {std::pair{"initial", FontSynthesisStyle::Auto},
+                                          {"unset", FontSynthesisStyle::ObliqueOnly},
+                                          {"inherit", FontSynthesisStyle::ObliqueOnly}}) {
+    SCOPED_TRACE(keyword);
+    PropertyRegistry child;
+    child.parseStyle(std::string("font-synthesis-style:") + keyword);
+    EXPECT_THAT(child.inheritFrom(parent).fontSynthesisStyle.get(), Optional(expected));
+  }
+}
+
+TEST(PropertyRegistry, StyleSynthesisRejectsInvalidValuesWithoutMutation) {
+  for (const char* value :
+       {"normal", "style", "weight", "0", "none auto", "none,auto", "\"none\""}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("font-synthesis-style:none");
+    registry.parseStyle(std::string("font-synthesis-style:") + value);
+    EXPECT_THAT(registry.fontSynthesisStyle.get(), Optional(FontSynthesisStyle::None));
+  }
+}
+
+TEST(PropertyRegistry, StyleSynthesisCascadesIndependentlyOfFontAndSmallCaps) {
+  PropertyRegistry registry;
+  registry.parseStyle(
+      "font-synthesis-style:none!important;font-synthesis-style:auto;"
+      "font:italic 20px serif;font-synthesis-small-caps:auto");
+  EXPECT_THAT(registry.fontSynthesisStyle.get(), Optional(FontSynthesisStyle::None));
+  EXPECT_THAT(registry.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::Auto));
+  EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Italic));
+}
+
+TEST(PropertyRegistry, StyleSynthesisIsNotAnSvgPresentationAttribute) {
+  EXPECT_THAT(PropertyRegistry::isPresentationAttributeName("font-synthesis-style"), Eq(false));
+}
+
 }  // namespace donner::svg

@@ -198,7 +198,10 @@ struct TextBackendFull::HbFontEntry {
   HbFontEntry& operator=(const HbFontEntry&) = delete;
 
   HbFontEntry(HbFontEntry&& other) noexcept
-      : font(other.font), ftFace(other.ftFace), syntheticBold(other.syntheticBold) {
+      : font(other.font),
+        ftFace(other.ftFace),
+        syntheticBold(other.syntheticBold),
+        syntheticOblique(other.syntheticOblique) {
     other.font = nullptr;
     other.ftFace = nullptr;
   }
@@ -218,6 +221,7 @@ struct TextBackendFull::HbFontEntry {
     font = other.font;
     ftFace = other.ftFace;
     syntheticBold = other.syntheticBold;
+    syntheticOblique = other.syntheticOblique;
     other.font = nullptr;
     other.ftFace = nullptr;
     return *this;
@@ -226,6 +230,7 @@ struct TextBackendFull::HbFontEntry {
   hb_font_t* font = nullptr;
   FT_Face ftFace = nullptr;
   bool syntheticBold = false;
+  bool syntheticOblique = false;
 
   ~HbFontEntry() {
     if (font) {
@@ -323,7 +328,7 @@ AppliedVariationAxes SetRequestedVariationAxes(FT_Library library, FT_Face face,
 }
 
 void ConfigureProviderFace(const FontManager& fontManager, FontHandle handle, FT_Face face,
-                           bool* syntheticBold) {
+                           bool* syntheticBold, bool* syntheticOblique) {
   const auto request = fontManager.providerFaceRequest(handle);
   if (!request.has_value()) {
     return;
@@ -338,6 +343,7 @@ void ConfigureProviderFace(const FontManager& fontManager, FontHandle handle, FT
       (catalog || generic)) {
     FT_Matrix italicFromUpright{1 << 16, static_cast<FT_Fixed>(0.22 * (1 << 16)), 0, 1 << 16};
     FT_Set_Transform(face, &italicFromUpright, nullptr);
+    *syntheticOblique = true;
   }
 }
 
@@ -377,7 +383,8 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
   if (err != 0) {
     return nullptr;
   }
-  ConfigureProviderFace(fontManager_, handle, entry.ftFace, &entry.syntheticBold);
+  ConfigureProviderFace(fontManager_, handle, entry.ftFace, &entry.syntheticBold,
+                        &entry.syntheticOblique);
 
   // Set a default size (will be overridden per shaping call).
   // For bitmap-only fonts (CBDT), use FT_Select_Size to pick the first strike;
@@ -541,7 +548,18 @@ std::optional<SubSuperMetrics> TextBackendFull::subSuperMetrics(FontHandle font)
 // Glyph outline
 // ---------------------------------------------------------------------------
 
+int TextBackendFull::outlineLoadFlags(FontHandle font, bool allowSyntheticOblique) const {
+  const auto* entry = registry_.try_get<HbFontEntry>(font.entity());
+  const bool suppressOblique = !allowSyntheticOblique && entry && entry->syntheticOblique;
+  return FreeTypeLoadFlags(fontManager_, font) | (suppressOblique ? FT_LOAD_IGNORE_TRANSFORM : 0);
+}
+
 Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
+  return glyphOutline(font, glyphIndex, scale, true);
+}
+
+Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale,
+                                   bool allowSyntheticOblique) const {
   if (!CanDecodeGlyphOutline(fontManager_, font, glyphIndex, scale)) {
     return {};
   }
@@ -568,7 +586,7 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale)
   // Hinted outlines differ from unhinted metrics, causing shape/position mismatches
   // especially for composite glyphs (precomposed accented characters like e).
   if (FT_Load_Glyph(ftFace, static_cast<FT_UInt>(glyphIndex),
-                    FreeTypeLoadFlags(fontManager_, font)) != 0) {
+                    outlineLoadFlags(font, allowSyntheticOblique)) != 0) {
     return {};
   }
 

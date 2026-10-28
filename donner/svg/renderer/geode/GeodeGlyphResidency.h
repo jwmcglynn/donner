@@ -60,19 +60,19 @@ namespace donner::geode {
  *
  * `fontId` carries the font handle's version bits, so an unloaded font whose
  * slot is later reused cannot be mistaken for the original. It is also not
- * stable across a style mutation that makes the document re-resolve its fonts:
- * the re-resolved font is a new identity and its glyphs are rebuilt. That costs
- * a rebuild on a mutating document rather than serving stale geometry, and the
- * superseded entries age out through the residency budget.
+ * stable when a different face is selected. An outline-only synthesis change
+ * can keep the same face, so its per-glyph permission is also part of the key.
+ * Superseded entries age out through the residency budget.
  */
 struct GlyphGeometryKey {
-  uint64_t fontId = 0;         ///< Versioned font handle identity.
-  uint32_t glyphIndex = 0;     ///< Glyph index within the selected font.
-  float outlineScale = 0.0f;   ///< Scale applied while extracting the outline.
-  float stretchScaleX = 1.0f;  ///< Horizontal stretch applied to the outline.
-  float stretchScaleY = 1.0f;  ///< Vertical stretch applied to the outline.
-  double rotateDegrees = 0.0;  ///< Rotation applied to the outline, in degrees.
-  double fillTolerance = 0.1;  ///< Device-derived cubic approximation tolerance.
+  uint64_t fontId = 0;                ///< Versioned font handle identity.
+  uint32_t glyphIndex = 0;            ///< Glyph index within the selected font.
+  float outlineScale = 0.0f;          ///< Scale applied while extracting the outline.
+  float stretchScaleX = 1.0f;         ///< Horizontal stretch applied to the outline.
+  float stretchScaleY = 1.0f;         ///< Vertical stretch applied to the outline.
+  double rotateDegrees = 0.0;         ///< Rotation applied to the outline, in degrees.
+  double fillTolerance = 0.1;         ///< Device-derived cubic approximation tolerance.
+  bool allowSyntheticOblique = true;  ///< Whether the outline may be synthetically obliqued.
 
   /// Compare every key field by raw bits, including signed zero and NaN payloads.
   /// @param other Geometry key to compare.
@@ -82,7 +82,8 @@ struct GlyphGeometryKey {
            bits(stretchScaleX) == bits(other.stretchScaleX) &&
            bits(stretchScaleY) == bits(other.stretchScaleY) &&
            bits(rotateDegrees) == bits(other.rotateDegrees) &&
-           bits(fillTolerance) == bits(other.fillTolerance);
+           bits(fillTolerance) == bits(other.fillTolerance) &&
+           allowSyntheticOblique == other.allowSyntheticOblique;
   }
 
   /// Raw bit pattern of a float, so `-0.0f` and NaN payloads compare and hash
@@ -115,6 +116,7 @@ struct GlyphGeometryKeyHash {
     h = mix(h ^ GlyphGeometryKey::bits(key.stretchScaleY));
     h = mix(h ^ GlyphGeometryKey::bits(key.rotateDegrees));
     h = mix(h ^ GlyphGeometryKey::bits(key.fillTolerance));
+    h = mix(h ^ static_cast<uint64_t>(key.allowSyntheticOblique));
     return static_cast<size_t>(h);
   }
 

@@ -30,6 +30,8 @@ public:
   std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle font) const override;
   std::optional<SubSuperMetrics> subSuperMetrics(FontHandle font) const override;
   Path glyphOutline(FontHandle font, int glyphIndex, float scale) const override;
+  Path glyphOutline(FontHandle font, int glyphIndex, float scale,
+                    bool allowSyntheticOblique) const override;
   bool isBitmapOnly(FontHandle font) const override;
   bool isCursive(uint32_t codepoint) const override;
   bool hasSmallCapsFeature(FontHandle font) const override;
@@ -91,6 +93,12 @@ private:
 
   /// Cache entry stored on the font entity.
   struct HbFontEntry;
+
+  /// Outline-load flags that suppress only a marked synthetic oblique transform.
+  /// @param font Face holding the cached transform classification.
+  /// @param allowSyntheticOblique Per-glyph synthesis permission.
+  /// @return FreeType glyph-load flags.
+  int outlineLoadFlags(FontHandle font, bool allowSyntheticOblique) const;
 
   /// Get or create a HarfBuzz font object for a FontHandle.
   hb_font_t* getOrCreateHbFont(FontHandle handle) const;

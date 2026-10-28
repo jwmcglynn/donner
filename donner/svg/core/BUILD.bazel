@@ -22,6 +22,7 @@ cc_library(
         "FontStretch.h",
         "FontStyle.h",
         "FontSynthesisSmallCaps.h",
+        "FontSynthesisStyle.h",
         "FontVariant.h",
         "Gradient.h",
         "HitTestMode.h",

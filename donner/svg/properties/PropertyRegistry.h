@@ -24,6 +24,7 @@
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontSynthesisSmallCaps.h"
+#include "donner/svg/core/FontSynthesisStyle.h"
 #include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/Isolation.h"
@@ -130,6 +131,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `font-family` | \ref fontFamily | `serif` |
  * | `font-size` | \ref fontSize | `16px` |
  * | `font-synthesis-small-caps` | \ref fontSynthesisSmallCaps | `auto` |
+ * | `font-synthesis-style` | \ref fontSynthesisStyle | `auto` |
  * | `white-space` | \ref whiteSpace | `normal` |
  * | `text-anchor` | \ref textAnchor | `start` |
  * | `text-decoration` | \ref textDecoration | `none` |
@@ -383,6 +385,11 @@ public:
       "font-synthesis-small-caps",
       []() -> std::optional<FontSynthesisSmallCaps> { return FontSynthesisSmallCaps::Auto; }};
 
+  /// Inherited CSS permission to synthesize an oblique face; native faces remain enabled.
+  Property<FontSynthesisStyle, PropertyCascade::Inherit> fontSynthesisStyle{
+      "font-synthesis-style",
+      []() -> std::optional<FontSynthesisStyle> { return FontSynthesisStyle::Auto; }};
+
   /// `font-kerning` property. Inherited. `auto` and `normal` enable kerning; `none` disables it.
   Property<FontKerning, PropertyCascade::Inherit> fontKerning{
       "font-kerning", []() -> std::optional<FontKerning> { return FontKerning::Auto; }};
@@ -511,10 +518,10 @@ public:
         vectorEffect, clipPath, clipRule, mask, maskType, colorInterpolation, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant,
-        fontSynthesisSmallCaps, fontKerning, fontSizeAdjust, whiteSpace, textAnchor, textDecoration,
-        textDecorationThickness, dominantBaseline, writingMode, textOrientation, inlineSize,
-        letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation,
-        imageRendering, paintOrder);
+        fontSynthesisSmallCaps, fontSynthesisStyle, fontKerning, fontSizeAdjust, whiteSpace,
+        textAnchor, textDecoration, textDecorationThickness, dominantBaseline, writingMode,
+        textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline,
+        mixBlendMode, isolation, imageRendering, paintOrder);
   }
 
   /**
