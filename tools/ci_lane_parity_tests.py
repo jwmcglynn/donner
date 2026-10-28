@@ -54,8 +54,8 @@ TRIGGER_ALLOWLIST = {
         "Publishes line-count badges for main; it runs no build or test.",
     ("codeql.yml", "push-only"):
         "Static analysis of main; its findings go to code scanning and do not gate a merge.",
-    ("deploy_docs.yaml", "push-only"):
-        "Builds the documentation site from main for a later manual deploy. Doxygen warnings "
+    ("build_docs.yaml", "push-only"):
+        "Builds the documentation site from main for verified publication. Doxygen warnings "
         "are not errors, so a pull request cannot make it fail through source changes alone.",
     ("bcr_preflight.yml", "pull-request-paths"):
         "Pull requests run the BCR preflight only when they touch its listed inputs, to save "

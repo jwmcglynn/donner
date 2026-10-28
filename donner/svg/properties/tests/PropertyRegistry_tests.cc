@@ -1997,6 +1997,38 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
   }
 }
 
+TEST(PropertyRegistry, EllipseClipParsingAndInvalidDeclarationFallback) {
+  PropertyRegistry valid;
+  valid.parseStyle("clip-path:ellipse(8px 4px at right 2px bottom 3px) fill-box");
+  EllipseClipPath expected;
+  expected.box = RadialClipPath::Box::Fill;
+  expected.radiusXType = RadialClipPath::Radius::Length;
+  expected.radiusYType = RadialClipPath::Radius::Length;
+  expected.radiusX = Lengthd(8, Lengthd::Unit::Px);
+  expected.radiusY = Lengthd(4, Lengthd::Unit::Px);
+  expected.x = {Lengthd(2, Lengthd::Unit::Px), true};
+  expected.y = {Lengthd(3, Lengthd::Unit::Px), true};
+  EXPECT_THAT(valid.clipPath.get(), Optional(ClipPath(expected)));
+
+  PropertyRegistry presentation;
+  EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "ellipse(8 4)"), NoParseError());
+  expected.box = RadialClipPath::Box::Stroke;
+  expected.radiusX = Lengthd(8);
+  expected.radiusY = Lengthd(4);
+  expected.x = {};
+  expected.y = {};
+  EXPECT_THAT(presentation.clipPath.get(), Optional(ClipPath(expected)));
+  for (const std::string_view invalid :
+       {"ellipse(4px)", "ellipse(-1px 2px)", "ellipse(1px -2px)", "ellipse(1px 2px 3px)",
+        "ellipse(1px 2px at)", "ellipse(1px 2px at left right)", "ellipse(1px 2px) garbage",
+        "ellipse(1px 2px) fill-box stroke-box", "ellipse(4 8)"}) {
+    SCOPED_TRACE(invalid);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(invalid));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
 TEST(PropertyRegistry, CircleClipStyleAndPresentationGrammarStayDistinct) {
   PropertyRegistry registry;
   registry.parseStyle("clip-path:url(#clip);clip-path:circle(4)");
@@ -2070,7 +2102,7 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
     PropertyRegistry registry;
     css::Declaration declaration = css::CSS::ParseStyleAttribute("clip-path: invalid").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
-                ParseErrorIs("Invalid circle clip-path"));
+                ParseErrorIs("Invalid basic shape clip-path"));
   }
 
   {
@@ -2989,6 +3021,40 @@ TEST(PropertyRegistry, ResolveFontStretch) {
     registry.resolveFontStretch(static_cast<int>(FontStretch::Normal));
     EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Condensed)));
   }
+}
+
+TEST(PropertyRegistry, SmallCapsSynthesisParsesAndInherits) {
+  PropertyRegistry parent;
+  parent.parseStyle("font-synthesis-small-caps: NoNe");
+  EXPECT_THAT(parent.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
+  const auto inherited = PropertyRegistry().inheritFrom(parent);
+  EXPECT_THAT(inherited.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
+  PropertyRegistry initial;
+  initial.parseStyle("font-synthesis-small-caps: initial");
+  EXPECT_THAT(initial.inheritFrom(parent).fontSynthesisSmallCaps.get(),
+              Optional(FontSynthesisSmallCaps::Auto));
+  PropertyRegistry unset;
+  unset.parseStyle("font-synthesis-small-caps: unset");
+  EXPECT_THAT(unset.inheritFrom(parent).fontSynthesisSmallCaps.get(),
+              Optional(FontSynthesisSmallCaps::None));
+}
+
+TEST(PropertyRegistry, SmallCapsSynthesisRejectsInvalidValuesWithoutMutation) {
+  for (const char* value : {"normal", "small-caps", "0", "none auto", "none,auto", "\"none\""}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("font-synthesis-small-caps: none");
+    registry.parseStyle(std::string("font-synthesis-small-caps: ") + value);
+    EXPECT_THAT(registry.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
+  }
+}
+
+TEST(PropertyRegistry, SmallCapsSynthesisCascadesIndependentlyOfFontShorthand) {
+  PropertyRegistry registry;
+  registry.parseStyle(
+      "font-synthesis-small-caps: none !important; "
+      "font-synthesis-small-caps: auto; font: 20px serif");
+  EXPECT_THAT(registry.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
 }
 
 }  // namespace donner::svg

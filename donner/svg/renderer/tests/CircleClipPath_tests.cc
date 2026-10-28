@@ -35,6 +35,114 @@ void ExpectCircleReference(std::string_view clip, std::string_view circle,
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(EllipseClipPath, DefaultRadiiResolveIndependently) {
+  {
+    const auto actual = RenderCircleScene(
+        R"svg(<g clip-path='ellipse()'><rect x='8' y='12' width='40' height='32' fill='red'/></g>)svg");
+    const auto expected = RenderCircleScene(
+        R"svg(<clipPath id='expected'><ellipse cx='28' cy='28' rx='20' ry='16'/></clipPath><g clip-path='url(#expected)'><rect x='8' y='12' width='40' height='32' fill='red'/></g>)svg");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_defaults",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(EllipseClipPath, SingleExtentKeywordAppliesToBothRadii) {
+  {
+    const auto actual = RenderCircleScene(
+        R"svg(<g clip-path='ellipse(closest-side at 25% 50%) fill-box'><rect x='8' y='12' width='40' height='32' fill='red'/></g>)svg");
+    const auto expected = RenderCircleScene(
+        R"svg(<clipPath id='expected'><ellipse cx='18' cy='28' rx='10' ry='16'/></clipPath><g clip-path='url(#expected)'><rect x='8' y='12' width='40' height='32' fill='red'/></g>)svg");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_single_closest_side",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  {
+    const auto actual = RenderCircleScene(
+        R"svg(<g clip-path='ellipse(farthest-side at 25% 50%) fill-box'><rect x='8' y='12' width='40' height='32' fill='red'/></g>)svg");
+    const auto expected = RenderCircleScene(
+        R"svg(<clipPath id='expected'><ellipse cx='18' cy='28' rx='30' ry='16'/></clipPath><g clip-path='url(#expected)'><rect x='8' y='12' width='40' height='32' fill='red'/></g>)svg");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_single_farthest_side",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(EllipseClipPath, PercentRadiiUseTheirOwnAxis) {
+  {
+    const auto actual = RenderCircleScene(
+        R"svg(<g clip-path='ellipse(25% 25%) fill-box'><rect x='8' y='12' width='40' height='32' fill='red'/></g>)svg");
+    const auto expected = RenderCircleScene(
+        R"svg(<clipPath id='expected'><ellipse cx='28' cy='28' rx='10' ry='8'/></clipPath><g clip-path='url(#expected)'><rect x='8' y='12' width='40' height='32' fill='red'/></g>)svg");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_percent_axes",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(EllipseClipPath, RadiusKeywordsAndEdgeOffsets) {
+  {
+    const auto actual = RenderCircleScene(
+        R"svg(<g clip-path='ellipse(closest-side farthest-side at right 10px bottom 6px) fill-box'><rect x='8' y='12' width='40' height='32' fill='red'/></g>)svg");
+    const auto expected = RenderCircleScene(
+        R"svg(<clipPath id='expected'><ellipse cx='38' cy='38' rx='10' ry='26'/></clipPath><g clip-path='url(#expected)'><rect x='8' y='12' width='40' height='32' fill='red'/></g>)svg");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_keywords_offsets",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(EllipseClipPath, StrokeAndViewReferenceBoxes) {
+  {
+    const auto actual = RenderCircleScene(
+        R"svg(<g clip-path='ellipse() stroke-box'><rect x='8' y='12' width='40' height='32' fill='red' stroke='blue' stroke-width='8'/></g>)svg");
+    const auto expected = RenderCircleScene(
+        R"svg(<clipPath id='expected'><ellipse cx='28' cy='28' rx='24' ry='20'/></clipPath><g clip-path='url(#expected)'><rect x='8' y='12' width='40' height='32' fill='red' stroke='blue' stroke-width='8'/></g>)svg");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_stroke_box",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  {
+    const auto actual = RenderCircleScene(
+        R"svg(<g clip-path='view-box ellipse(25% 12.5% at 50% 50%)'><rect width='64' height='64' fill='red'/></g>)svg");
+    const auto expected = RenderCircleScene(
+        R"svg(<clipPath id='expected'><ellipse cx='32' cy='32' rx='16' ry='8'/></clipPath><g clip-path='url(#expected)'><rect width='64' height='64' fill='red'/></g>)svg");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_view_box",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(EllipseClipPath, ZeroRadiusSuppressesWholeGroup) {
+  for (const auto clip : {"ellipse(0 8px)", "ellipse(8px 0)"}) {
+    const auto actual = RenderCircleScene("<g clip-path='" + std::string(clip) +
+                                          "'><rect width='64' height='64' fill='red'/></g>");
+    editor::tests::CompareBitmapToBitmap(actual, RenderCircleScene(""), "ellipse_zero_radius",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(EllipseClipPath, NestedClipChildIntersectsItsGeometry) {
+  const auto actual = RenderCircleScene(R"svg(
+      <clipPath id="clip"><rect x="8" y="12" width="40" height="32"
+          clip-path="ellipse(8px 4px at 25% 50%) fill-box"/></clipPath>
+      <rect width="64" height="64" fill="red" clip-path="url(#clip)"/>)svg");
+  const auto expected = RenderCircleScene("<ellipse cx='18' cy='28' rx='8' ry='4' fill='red'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_nested_clip_child",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(EllipseClipPath, TransformedNestedGroupAndStylesheet) {
+  const auto actual = RenderCircleScene(R"svg(
+      <style>.clip { clip-path: ellipse(12px 8px at 24px 28px) view-box; }</style>
+      <g transform="translate(8 4)" class="clip">
+        <g clip-path="circle(12px at 28px 28px) view-box">
+          <rect width="64" height="64" fill="red"/>
+        </g>
+      </g>)svg");
+  const auto expected = RenderCircleScene(R"svg(
+      <clipPath id="outer"><ellipse cx="24" cy="28" rx="12" ry="8"/></clipPath>
+      <clipPath id="inner"><circle cx="28" cy="28" r="12"/></clipPath>
+      <g transform="translate(8 4)" clip-path="url(#outer)">
+        <g clip-path="url(#inner)"><rect width="64" height="64" fill="red"/></g>
+      </g>)svg");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_transformed_nested_group",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(CircleClipPath, DefaultCircleClipsAllGroupChildren) {
   ExpectCircleReference("circle()", "<circle cx='32' cy='28' r='20'/>",
                         "<rect x='8' y='8' width='24' height='40' fill='red'/>"

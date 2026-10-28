@@ -1,6 +1,8 @@
 #include "donner/css/parser/StylesheetParser.h"
 
+#include <array>
 #include <cctype>
+#include <cmath>
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/encoding/Base64.h"
@@ -320,6 +322,133 @@ void AppendFontFaceSources(std::span<const ComponentValue> values, FontFace& fon
   }
 }
 
+std::optional<int> ParseFontFaceWeight(const ComponentValue& value) {
+  if (const auto* ident = value.tryGetToken<Token::Ident>()) {
+    if (ident->value.equalsLowercase("normal")) {
+      return 400;
+    }
+    if (ident->value.equalsLowercase("bold")) {
+      return 700;
+    }
+  } else if (const auto* number = value.tryGetToken<Token::Number>()) {
+    if (number->value >= 1 && number->value <= 1000 && std::trunc(number->value) == number->value) {
+      return static_cast<int>(number->value);
+    }
+  }
+  return std::nullopt;
+}
+
+template <std::size_t N>
+std::optional<int> ParseFontFaceKeyword(const ComponentValue& value,
+                                        const std::array<std::string_view, N>& keywords,
+                                        int firstValue) {
+  if (const auto* ident = value.tryGetToken<Token::Ident>()) {
+    for (std::size_t i = 0; i < keywords.size(); ++i) {
+      if (ident->value.equalsLowercase(keywords[i])) {
+        return firstValue + static_cast<int>(i);
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+void ApplyFontFaceWeight(std::span<const ComponentValue> values, FontFace& fontFace) {
+  std::array<const ComponentValue*, 2> endpoints{};
+  std::size_t count = 0;
+  for (const ComponentValue& value : values) {
+    if (value.isToken<Token::Whitespace>()) {
+      continue;
+    }
+    if (count == endpoints.size()) {
+      return;
+    }
+    endpoints[count++] = &value;
+  }
+  if (count == 0) {
+    return;
+  }
+  const auto first = ParseFontFaceWeight(*endpoints.front());
+  const auto last = ParseFontFaceWeight(*endpoints[count - 1]);
+  if (!first || !last) {
+    return;
+  }
+  fontFace.fontWeight = std::min(*first, *last);
+  fontFace.fontWeightMaximum = count == 2 ? std::optional(std::max(*first, *last)) : std::nullopt;
+}
+
+struct ParsedFontFaceWidth {
+  double percentage;
+  std::optional<int> keyword;
+};
+
+std::optional<ParsedFontFaceWidth> ParseFontFaceWidth(const ComponentValue& value) {
+  if (const auto* percentage = value.tryGetToken<Token::Percentage>()) {
+    if (std::isfinite(percentage->value) && percentage->value >= 0) {
+      return ParsedFontFaceWidth{percentage->value, std::nullopt};
+    }
+  }
+  constexpr std::array<std::string_view, 9> kWidths = {
+      "ultra-condensed", "extra-condensed", "condensed",      "semi-condensed", "normal",
+      "semi-expanded",   "expanded",        "extra-expanded", "ultra-expanded"};
+  if (const auto keyword = ParseFontFaceKeyword(value, kWidths, 1)) {
+    return ParsedFontFaceWidth{FontFace::FontStretchPercentage(*keyword), *keyword};
+  }
+  return std::nullopt;
+}
+
+void ApplyFontFaceWidth(std::span<const ComponentValue> values, FontFace& fontFace) {
+  std::array<const ComponentValue*, 2> endpoints{};
+  std::size_t count = 0;
+  for (const ComponentValue& value : values) {
+    if (value.isToken<Token::Whitespace>()) {
+      continue;
+    }
+    if (count == endpoints.size()) {
+      return;
+    }
+    endpoints[count++] = &value;
+  }
+  if (count == 0) {
+    return;
+  }
+  const auto first = ParseFontFaceWidth(*endpoints.front());
+  const auto last = ParseFontFaceWidth(*endpoints[count - 1]);
+  if (!first || !last) {
+    return;
+  }
+  fontFace.fontStretch = first->keyword.value_or(5);
+  fontFace.fontStretchPercentRange =
+      count == 1 && first->keyword
+          ? std::nullopt
+          : std::optional(std::pair{std::min(first->percentage, last->percentage),
+                                    std::max(first->percentage, last->percentage)});
+}
+
+void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& fontFace) {
+  if (declaration.important) {
+    return;
+  }
+  if (declaration.name.equalsLowercase("font-weight")) {
+    ApplyFontFaceWeight(declaration.values, fontFace);
+    return;
+  }
+  if (declaration.name.equalsLowercase("font-stretch") ||
+      declaration.name.equalsLowercase("font-width")) {
+    ApplyFontFaceWidth(declaration.values, fontFace);
+    return;
+  }
+  if (declaration.values.size() != 1) {
+    return;
+  }
+  const ComponentValue& value = declaration.values.front();
+  if (declaration.name.equalsLowercase("font-style")) {
+    constexpr std::array<std::string_view, 3> kStyles = {"normal", "italic", "oblique"};
+    if (const auto style = ParseFontFaceKeyword(value, kStyles, 0)) {
+      fontFace.fontStyle = *style;
+    }
+  }
+}
+
 std::optional<FontFace> BuildFontFace(std::span<const Declaration> declarations) {
   FontFace fontFace;
   for (const Declaration& declaration : declarations) {
@@ -334,6 +463,8 @@ std::optional<FontFace> BuildFontFace(std::span<const Declaration> declarations)
       }
     } else if (StringUtils::EqualsLowercase(declaration.name, std::string_view("src"))) {
       AppendFontFaceSources(declaration.values, fontFace);
+    } else {
+      ApplyFontFaceMatchingDescriptor(declaration, fontFace);
     }
   }
   if (fontFace.familyName.empty() || fontFace.sources.empty()) {
@@ -380,6 +511,21 @@ std::optional<FontFace> ParseFontFaceRule(AtRule& atRule,
   return BuildFontFace(declarations);
 }
 
+bool WarnUnsupportedAtRule(const AtRule& atRule, ParseWarningSink& warningSink) {
+  const char* reason;
+  if (atRule.name.equalsLowercase("import")) {
+    reason = "CSS @import is unsupported; imported stylesheets are not loaded";
+  } else if (atRule.name.equalsLowercase("media")) {
+    reason = "CSS @media is unsupported; conditional rules are ignored";
+  } else if (atRule.name.equalsLowercase("supports")) {
+    reason = "CSS @supports is unsupported; conditional rules are ignored";
+  } else {
+    return false;
+  }
+  warningSink.add([&] { return ParseDiagnostic::Warning(reason, atRule.sourceOffset); });
+  return true;
+}
+
 }  // namespace
 
 Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warningSink) {
@@ -405,12 +551,7 @@ Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warni
       continue;
     }
     if (AtRule* atRule = std::get_if<AtRule>(&rule.value)) {
-      if (atRule->name.equalsLowercase("import")) {
-        warningSink.add([&] {
-          return ParseDiagnostic::Warning(
-              "CSS @import is unsupported; imported stylesheets are not loaded",
-              atRule->sourceOffset);
-        });
+      if (WarnUnsupportedAtRule(*atRule, warningSink)) {
         continue;
       }
       if (auto fontFace = ParseFontFaceRule(*atRule, securityStats)) {

@@ -108,6 +108,33 @@ TEST_F(ShapeSystemTest, CircleFillReferenceAdmitsPathScanBeforeBounds) {
   EXPECT_THAT(clip.bounds(), BoxEq(Vector2d(49, 0), Vector2d(51, 2)));
 }
 
+TEST_F(ShapeSystemTest, EllipseRejectsNonFinitePathBuilderIntermediates) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <rect id="r" width="200" height="200"/>
+    </svg>)");
+  auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  EllipseClipPath ellipse;
+  ellipse.box = RadialClipPath::Box::View;
+  ellipse.radiusXType = RadialClipPath::Radius::Length;
+  ellipse.radiusYType = RadialClipPath::Radius::Length;
+  ellipse.radiusY = Lengthd(1);
+  for (const auto [center, radius] :
+       {std::pair{0.0, 1e308}, std::pair{1e308, 1.0}, std::pair{0.0, -1.0}}) {
+    ellipse.x.offset = Lengthd(center);
+    ellipse.radiusX = Lengthd(radius);
+    CircleClipGeometryBudget budget;
+    EXPECT_THAT(shapeSystem.ellipseClipPath(element->entityHandle(), ellipse, budget).commands(),
+                testing::IsEmpty());
+  }
+  ellipse.x.offset = Lengthd(10);
+  ellipse.radiusX = Lengthd(2);
+  CircleClipGeometryBudget budget;
+  EXPECT_THAT(shapeSystem.ellipseClipPath(element->entityHandle(), ellipse, budget).commands(),
+              testing::Not(testing::IsEmpty()));
+}
+
 TEST_F(ShapeSystemTest, ImageShadowReferenceUsesLightTypeAndOccurrenceTransform) {
   auto document = ParseAndComputeShapes(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
