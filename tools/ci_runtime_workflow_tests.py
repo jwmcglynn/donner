@@ -753,7 +753,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 for path in [copied, *copied.rglob("*")]:
                     self.assertFalse(path.is_symlink())
                     if path.is_dir():
-                        self.assertTrue(path.stat().st_mode & 0o200, str(path))
+                        self.assertEqual(path.stat().st_mode & 0o200, 0o200, str(path))
                 self.assertEqual(assets.stat().st_mode & 0o777, 0o555)
                 self.assertEqual((assets / "assets").stat().st_mode & 0o777, 0o555)
                 self.assertEqual((assets / "assets/font.otf").stat().st_mode & 0o777, 0o444)
