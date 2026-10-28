@@ -350,16 +350,34 @@ enum class TinyPathCloseBehavior : uint8_t {
   EndWithLine,
 };
 
-tiny_skia::Path toTinyPath(const Path& spline,
-                           TinyPathCloseBehavior closeBehavior = TinyPathCloseBehavior::Preserve) {
-  tiny_skia::PathBuilder builder(spline.commands().size(), spline.points().size());
+enum class TinyPathContourClosure : uint8_t { Authored, Implicit };
+
+tiny_skia::Path toTinyPath(
+    const Path& spline, TinyPathCloseBehavior closeBehavior = TinyPathCloseBehavior::Preserve,
+    TinyPathContourClosure contourClosure = TinyPathContourClosure::Authored) {
   const auto points = spline.points();
+  std::size_t verbsCapacity = spline.commands().size();
+  if (contourClosure == TinyPathContourClosure::Implicit) {
+    // Each implicit close has a MoveTo point. Clip copies already admit C+P work and storage.
+    static_assert(sizeof(tiny_skia::PathVerb) <= sizeof(Path::Command));
+    static_assert(sizeof(tiny_skia::Point) + sizeof(tiny_skia::PathVerb) <= sizeof(Vector2d));
+    if (points.size() > std::numeric_limits<std::size_t>::max() - verbsCapacity) {
+      return {};
+    }
+    verbsCapacity += points.size();
+  }
+  tiny_skia::PathBuilder builder(verbsCapacity, points.size());
+  bool hasOpenContour = false;
 
   for (const Path::Command& command : spline.commands()) {
     switch (command.verb) {
       case Path::Verb::MoveTo: {
+        if (contourClosure == TinyPathContourClosure::Implicit && hasOpenContour) {
+          builder.close();
+        }
         const Vector2d& point = points[command.pointIndex];
         builder.moveTo(NarrowToFloat(point.x), NarrowToFloat(point.y));
+        hasOpenContour = true;
         break;
       }
       case Path::Verb::LineTo: {
@@ -390,9 +408,13 @@ tiny_skia::Path toTinyPath(const Path& spline,
           const Vector2d& subpathStart = points[command.pointIndex];
           builder.lineTo(NarrowToFloat(subpathStart.x), NarrowToFloat(subpathStart.y));
         }
+        hasOpenContour = false;
         break;
       }
     }
+  }
+  if (contourClosure == TinyPathContourClosure::Implicit && hasOpenContour) {
+    builder.close();
   }
 
   return builder.finish().value_or(tiny_skia::Path());
@@ -1053,7 +1075,8 @@ private:
       return std::nullopt;
     }
 
-    const tiny_skia::Path path = toTinyPath(shape.path);
+    const tiny_skia::Path path =
+        toTinyPath(shape.path, TinyPathCloseBehavior::Preserve, TinyPathContourClosure::Implicit);
     if (path.empty()) {
       if (verbose_) {
         std::cout << "\n  shape layer=" << shape.layer << " empty path";
