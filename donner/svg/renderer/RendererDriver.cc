@@ -551,6 +551,17 @@ std::optional<components::TextDecorationOrigin> BuildDecorationOrigin(
     origin.strokeOpacity = props.strokeOpacity.get().value();
     origin.strokeWidth = props.strokeWidth.get().value().toPixels(viewBox, baseFm);
     origin.paintOrder = props.paintOrder.get().value();
+    origin.style =
+        declaringProperties.textDecorationStyle.get().value_or(TextDecorationStyle::Solid);
+    // SVG 2 section 11.11 paints the decoration with the fill and stroke where it is declared; an
+    // author-specified text-decoration-color (CSS Text Decoration 3) replaces that fill paint.
+    // currentcolor resolves against the declaring element's color.
+    if (const auto color = declaringProperties.textDecorationColor.get()) {
+      const css::RGBA currentColor = declaringProperties.color.get()
+                                         .value_or(css::Color(css::RGBA(0, 0, 0, 0xFF)))
+                                         .resolve(css::RGBA(0, 0, 0, 0xFF), 1.0f);
+      origin.fill = PaintServer::Solid(css::Color(color->resolve(currentColor, 1.0f)));
+    }
     origin.font = ResolveDecorationFont(registry, provider, viewBox, baseFm);
     origin.thickness = declaringProperties.textDecorationThickness.get().value();
     if (origin.thickness.kind == TextDecorationThickness::Kind::Length) {
