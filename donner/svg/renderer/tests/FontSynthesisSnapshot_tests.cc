@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <latch>
 #include <memory>
 #include <optional>
 #include <span>
@@ -400,6 +401,7 @@ TEST(FontSynthesisStyleSnapshotTest, RepeatedAndConcurrentReplayOwnTheirFontDoma
   ExpectReplayMatchesDirect(captured);
   ExpectReplayMatchesDirect(captured);
   std::barrier bothDomainsLive(2);
+  std::latch firstReplayFinished(1);
   std::array<const Registry*, 2> domains{};
   const auto replay = [&](size_t index) {
     NiceMock<tests::MockRendererInterface> inspection;
@@ -409,6 +411,13 @@ TEST(FontSynthesisStyleSnapshotTest, RepeatedAndConcurrentReplayOwnTheirFontDoma
           domains[index] = &registry;
           bothDomainsLive.arrive_and_wait();
           EXPECT_THAT(domains[0], testing::Ne(domains[1]));
+          // The domains and byte loaders overlap. The Full backend's shared FreeType library
+          // requires serialized face creation/destruction, so its first outline extraction waits
+          // for the other replay's face to retire. This tests namespace isolation, not that backend
+          // library's concurrency contract.
+          if (index != 0) {
+            firstReplayFinished.wait();
+          }
           ASSERT_THAT(params.preparedTextDraw, NotNull());
           const auto& run = params.preparedTextDraw->runs.front();
           const auto& engine = registry.ctx().get<TextEngine>();
@@ -418,6 +427,9 @@ TEST(FontSynthesisStyleSnapshotTest, RepeatedAndConcurrentReplayOwnTheirFontDoma
           EXPECT_THAT(outline.points(), ElementsAreArray(captured.directOutline.points()));
         });
     captured.snapshot.replay(inspection);
+    if (index == 0) {
+      firstReplayFinished.count_down();
+    }
   };
   std::thread first(replay, 0);
   std::thread second(replay, 1);
