@@ -194,6 +194,8 @@ donner_cc_fuzzer(
 
 donner_cc_fuzzer(
     name = "svg_parser_structured_fuzzer",
+    testonly = True,
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = [
         "tests/SVGParser_structured_fuzzer.cc",
     ],
@@ -204,6 +206,7 @@ donner_cc_fuzzer(
         "fuzz_ubsan_text_full",
     ],
     deps = [
+        "//donner/base:packaged_resource_test_fixture",
         ":parser",
         "//donner/svg/components:components_core",
         "//donner/svg/components/layout:layout_system",

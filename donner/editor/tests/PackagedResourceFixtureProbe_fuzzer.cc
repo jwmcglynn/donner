@@ -8,6 +8,7 @@
 #include <string_view>
 #include <utility>
 
+#include "donner/base/tests/PackagedResourceTestProvider.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -34,6 +35,11 @@ bool HasInk(const svg::RendererBitmap& bitmap) {
 }
 
 }  // namespace
+
+extern "C" int LLVMFuzzerInitialize(int* /*argc*/, char*** argv) {
+  donner::tests::InitializeFuzzerPackagedResourceFixtures((*argv)[0]);
+  return 0;
+}
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* /*data*/, std::size_t /*size*/) {
   constexpr std::string_view kText =

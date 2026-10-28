@@ -20,8 +20,14 @@ def runfile(path: str) -> Path:
 
 
 class PackagedResourceRawFixtureTest(unittest.TestCase):
-  def invoke(self, fixture_root: Path) -> subprocess.CompletedProcess[str]:
-    environment = dict(os.environ, DONNER_TEST_RESOURCE_ROOT=str(fixture_root))
+  def invoke(self, fixture_root: Path | str | None) -> subprocess.CompletedProcess[str]:
+    environment = dict(os.environ)
+    if fixture_root is None:
+      environment.pop("DONNER_TEST_RESOURCE_ROOT", None)
+      environment.pop("TEST_SRCDIR", None)
+      environment["RUNFILES_DIR"] = os.environ["TEST_SRCDIR"]
+    else:
+      environment["DONNER_TEST_RESOURCE_ROOT"] = str(fixture_root)
     return subprocess.run(
         [str(runfile(OPTIONS.fuzzer)), "-runs=1",
          "-artifact_prefix=" + os.environ["TEST_TMPDIR"] + "/"],
@@ -34,16 +40,20 @@ class PackagedResourceRawFixtureTest(unittest.TestCase):
     )
 
   def test_direct_raw_fuzzer_rasterizes_fallback_glyphs_and_icon(self):
-    result = self.invoke(Path(os.environ["TEST_SRCDIR"]))
-    self.assertEqual(result.returncode, 0, result.stderr)
-    self.assertNotIn("Failed to load packaged fallback", result.stderr)
+    for root in [Path(os.environ["TEST_SRCDIR"]), None]:
+      with self.subTest(explicit_root=root is not None):
+        result = self.invoke(root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Failed to load packaged fallback", result.stderr)
 
   def test_missing_fixture_is_rejected_before_fuzz_input(self):
     with tempfile.TemporaryDirectory() as temporary:
-      result = self.invoke(Path(temporary))
-    self.assertNotEqual(result.returncode, 0)
-    self.assertIn("Cannot prepare packaged test resources", result.stderr)
-    self.assertNotIn("Packaged fixture probe:", result.stderr)
+      for root in [Path(temporary), ""]:
+        with self.subTest(root=str(root)):
+          result = self.invoke(root)
+          self.assertNotEqual(result.returncode, 0)
+          self.assertIn("Cannot prepare packaged test resources", result.stderr)
+          self.assertNotIn("Packaged fixture probe:", result.stderr)
 
   def test_corrupt_fixture_is_rejected_before_fuzz_input(self):
     with tempfile.TemporaryDirectory() as temporary:

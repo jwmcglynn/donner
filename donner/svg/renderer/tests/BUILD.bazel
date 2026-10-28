@@ -1320,6 +1320,8 @@ configured_dependency_audit_test(
 
 donner_cc_fuzzer(
     name = "svg_document_render_fuzzer",
+    testonly = True,
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = [
         "SVGDocumentRender_fuzzer.cc",
     ],
@@ -1332,6 +1334,7 @@ donner_cc_fuzzer(
         "fuzz_ubsan_text_full",
     ],
     deps = [
+        "//donner/base:packaged_resource_test_fixture",
         "//donner/svg",
         "//donner/svg/renderer",
     ],
@@ -1349,12 +1352,15 @@ filegroup(
 
 donner_cc_fuzzer(
     name = "svg_document_raster_fuzzer",
+    testonly = True,
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = [
         "SVGDocumentRaster_fuzzer.cc",
     ],
     corpus = ":svg_document_raster_fuzzer_seeds",
     tags = ["fuzz_text_full"],
     deps = [
+        "//donner/base:packaged_resource_test_fixture",
         "//donner/svg",
         "//donner/svg/renderer",
     ],

@@ -110,6 +110,8 @@ _NATIVE_SHADERS_ONLY = select({
 
 donner_cc_fuzzer(
     name = "geode_svg_geometry_budget_fuzzer",
+    testonly = True,
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = ["tests/GeodeSvgGeometryBudget_fuzzer.cc"],
     corpus = "tests/geode_svg_geometry_budget_corpus",
     routing_manifest = "geode_geometry_fuzzer_routing_manifest",
@@ -119,6 +121,7 @@ donner_cc_fuzzer(
         "fuzz_geode",
     ],
     deps = [
+        "//donner/base:packaged_resource_test_fixture",
         ":geode_device",
         "//donner/svg",
         "//donner/svg/renderer:renderer_geode",

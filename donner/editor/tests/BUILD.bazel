@@ -899,9 +899,12 @@ donner_cc_test(
 
 donner_cc_fuzzer(
     name = "editor_state_machine_fuzzer",
+    testonly = True,
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = ["EditorStateMachine_fuzzer.cc"],
     corpus = "testdata/editor_state_machine_fuzzer_corpus",
     deps = [
+        "//donner/base:packaged_resource_test_fixture",
         "//donner/editor:attribute_writeback",
         "//donner/editor:editor_app",
         "//donner/editor:focus_view",
@@ -916,9 +919,12 @@ donner_cc_fuzzer(
 
 donner_cc_fuzzer(
     name = "inspector_ui_fuzzer",
+    testonly = True,
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = ["InspectorUi_fuzzer.cc"],
     corpus = "testdata/inspector_ui_fuzzer_corpus",
     deps = [
+        "//donner/base:packaged_resource_test_fixture",
         "//donner/editor:editor_app",
         "//donner/editor:editor_theme",
         "//donner/editor:imgui_headers",
@@ -1481,9 +1487,12 @@ donner_cc_test(
 
 donner_cc_fuzzer(
     name = "packaged_resource_fixture_probe_fuzzer",
+    testonly = True,
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = ["PackagedResourceFixtureProbe_fuzzer.cc"],
     corpus = "testdata/packaged_resource_fixture_corpus",
     deps = [
+        "//donner/base:packaged_resource_test_fixture",
         "//donner/editor:editor_icons",
         "//donner/editor:embedded_svg_icon",
         "//donner/svg",

@@ -103,6 +103,18 @@ donner_cc_library(
     visibility = ["//visibility:public"],
 )
 
+donner_cc_library(
+    name = "packaged_resource_test_fixture",
+    testonly = 1,
+    srcs = ["tests/PackagedResourceTestProvider.cc"],
+    hdrs = ["tests/PackagedResourceTestProvider.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":packaged_resource",
+        "@rules_cc//cc/runfiles",
+    ],
+)
+
 # Linked into every donner_cc_test so a crashing test prints a stack instead of
 # a log that stops at its `[ RUN ]` line. See tests/InstallCrashHandler.cc.
 donner_cc_library(
@@ -116,6 +128,7 @@ donner_cc_library(
     deps = [
         ":failure_signal_handler",
         ":packaged_resource",
+        ":packaged_resource_test_fixture",
     ],
     alwayslink = 1,
 )

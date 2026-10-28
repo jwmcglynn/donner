@@ -930,6 +930,7 @@ def donner_cc_fuzzer(
         routing_manifest = None,
         routing_manifest_visibility = None,
         full_text_only = False,
+        data = [],
         **kwargs):
     """
     Create a libfuzzer-based fuzz target.
@@ -938,6 +939,7 @@ def donner_cc_fuzzer(
       name: Rule name.
       corpus: Path to a corpus directory, or a filegroup rule for the corpus.
       deps: List of dependencies.
+      data: Explicit runtime fixtures shared by raw, corpus and soak entry points.
       per_input_timeout_seconds: libFuzzer `-timeout` for `{name}_soak`. This is a hang guard,
         not a latency budget: it only has to separate an input that never finishes from a slow
         one on a loaded runner, including first-input setup under sanitizers. Under
@@ -1003,6 +1005,7 @@ def donner_cc_fuzzer(
         linkopts = fuzzer_runtime_linkopts,
         linkstatic = 1,
         deps = deps + libc_compat_deps(),
+        data = data,
         target_compatible_with = fuzzer_compatible_with(),
         tags = implementation_tags,
         **kwargs
@@ -1015,6 +1018,7 @@ def donner_cc_fuzzer(
             renderer_backend = "inherit",
             full_text_only = True,
             tags = common_target_tags,
+            testonly = kwargs.get("testonly", False),
             target_compatible_with = fuzzer_compatible_with(),
         )
 
@@ -1064,7 +1068,7 @@ def donner_cc_fuzzer(
         args = ["$(locations %s)" % corpus_name],
         linkstatic = 1,
         deps = deps,
-        data = [corpus_name] + select({
+        data = data + [corpus_name] + select({
             "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
             "//conditions:default": [],
         }),
