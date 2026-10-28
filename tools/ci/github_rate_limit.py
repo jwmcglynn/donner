@@ -311,12 +311,15 @@ class ApiClient:
             body = error.read() if hasattr(error, "read") else b""
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
             raise ApiError(url, None, str(error)) from None
-        self._observe(from_headers(response_headers))
+        # Classify by this response's own headers: a refusal may carry only Retry-After, which
+        # does not replace the remembered primary budget.
+        window = from_headers(response_headers)
+        self._observe(window)
         if status == 304 and cached:
             self.not_modified += 1
             return cached[1]
-        if is_rate_limited(status, self.window, body):
-            raise RateLimited(self.window, f"GET {url.split('?')[0]}: rate limited")
+        if is_rate_limited(status, window, body):
+            raise RateLimited(window, f"GET {url.split('?')[0]}: rate limited")
         if status != 200:
             raise ApiError(url, status, body[:200].decode("utf-8", "replace"))
         try:

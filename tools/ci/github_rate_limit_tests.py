@@ -279,6 +279,19 @@ class ApiClientTests(unittest.TestCase):
             self.client.get_json("https://api.github.com/x")
         self.assertEqual(raised.exception.window.reset, _RESET)
 
+    def test_refusal_with_only_retry_after_uses_that_delay(self):
+        self.answers = [FakeResponse(200, self._budget(900), b"{}"),
+                        _http_error(403, {"Retry-After": "120"}, b'{"message": "slow down"}'),
+                        _http_error(429, {"Retry-After": "120"}, b"")]
+        self.client.get_json("https://api.github.com/x")
+        for _ in range(2):
+            with self.assertRaises(rate.RateLimited) as raised:
+                self.client.get_json("https://api.github.com/y")
+            self.assertEqual(raised.exception.window.retry_after, 120)
+            self.assertEqual(rate.delay_until_reset(raised.exception.window, 0), 120)
+        # The remembered primary budget is unchanged by a header-less refusal.
+        self.assertEqual(self.client.window.remaining, 900)
+
     def test_truncated_response_is_an_api_error(self):
         import http.client
 
