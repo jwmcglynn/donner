@@ -906,7 +906,8 @@ export async function captureQuiescentCanvasFrame<T>(
 /**
  * Fixed fragment iterations of the first attempt of \ref captureAfterDelayedFrame: about 100-400 ms
  * of GPU work on Apple Silicon, leaving a slower GPU a wide margin inside the app's 5 s completion
- * deadline. Each later attempt doubles it.
+ * deadline. Each later attempt quadruples it, since a gate can spend up to a second finding the
+ * canvas owner before it starts waiting.
  */
 export const kSingleFrameGpuDelayIterations = 20000;
 
@@ -917,8 +918,8 @@ const kDelayedFrameAttempts = 3;
  * Request one editor frame of \p owner's canvas with its GPU work postponed behind fixed fragment
  * work queued after its first canvas write, then run \p gate. Succeeds once the gate's settle wait
  * began while that work was still running, as the probe records in the worker itself; a GPU that
- * finished first proves nothing, so the frame is requested again with twice the work. Returns the
- * gate's result, the canvas activity when the frame was submitted, and what was injected.
+ * finished first proves nothing, so the frame is requested again with four times the work. Returns
+ * the gate's result, the canvas activity when the frame was submitted, and what was injected.
  */
 export async function captureAfterDelayedFrame<T>(
   page: Page,
@@ -930,7 +931,7 @@ export async function captureAfterDelayedFrame<T>(
     const delay = await armCanvasGpuDelayForTest(
       owner,
       1,
-      kSingleFrameGpuDelayIterations * 2 ** attempt,
+      kSingleFrameGpuDelayIterations * 4 ** attempt,
       1,
     );
     let frame: CanvasActivity | null = null;
