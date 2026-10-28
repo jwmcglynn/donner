@@ -2941,6 +2941,22 @@ std::string UserSpaceClipOnMiddleOf(const Box2d& box) {
   return clipPath.str();
 }
 
+/// Counts the pixels where \p actual differs from \p expected under the canonical identity
+/// comparison, without reporting the difference as a failure. Returns -1 when the two bitmaps
+/// cannot be compared, for example because their sizes differ.
+int IdentityMismatchCount(const RendererBitmap& actual, const RendererBitmap& expected,
+                          std::string_view label) {
+  int mismatchedPixels = -1;
+  testing::TestPartResultArray differences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, label, editor::tests::PixelmatchIdentityParams(), &mismatchedPixels);
+  }
+  return mismatchedPixels;
+}
+
 // An objectBoundingBox clip on text with a `transform` maps the unit square onto the text's
 // object bounding box in the text's own user space, which the transform then places on the
 // canvas. For text that box is the union of the glyph cells: each glyph's advance by the font's
@@ -2950,7 +2966,7 @@ TEST_F(RendererRegressionTests, ObjectBoundingBoxClipOnTransformedTextUsesLocalG
   const ClippedTextRender objectUnits = RenderTransformedClippedText(
       R"svg(<clipPath id="clip" clipPathUnits="objectBoundingBox">
               <rect x="0.2" y="0.2" width="0.6" height="0.6"/></clipPath>)svg");
-  ExpectVisibleBitmap(objectUnits.bitmap, "obb_clip_on_transformed_text_visible");
+  AssertVisibleFixture(objectUnits.bitmap, "obb_clip_on_transformed_text_visible");
 
   // Noto Sans Regular has a 1000-unit em, ascent 1069 and descent -293. The text sits at its
   // local origin, so its glyph cells span y from -1.069 to 0.293 em at 48px.
@@ -2967,7 +2983,10 @@ TEST_F(RendererRegressionTests, ObjectBoundingBoxClipOnTransformedTextUsesLocalG
 
   const ClippedTextRender inkUserSpace =
       RenderTransformedClippedText(UserSpaceClipOnMiddleOf(objectUnits.inkBox));
-  ExpectBitmapsDiffer(objectUnits.bitmap, inkUserSpace.bitmap, "obb_clip_differs_from_ink_clip");
+  EXPECT_THAT(
+      IdentityMismatchCount(objectUnits.bitmap, inkUserSpace.bitmap, "obb_clip_versus_ink_clip"),
+      testing::Gt(0))
+      << "a clip on the ink extents must render differently";
 }
 
 // SVG 2 applies `clip-path`, `mask`, and `filter` to text content elements, so a `tspan` that
