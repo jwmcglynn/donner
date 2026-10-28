@@ -1659,4 +1659,60 @@ TEST_F(TextSystemTest, WhitespaceGradientTspan) {
   EXPECT_EQ(concatenated, "Some long text");
 }
 
+TEST_F(TextSystemTest, CssWhiteSpaceNormalizesAllScalarModes) {
+  const std::pair<const char*, const char*> cases[] = {
+      {"normal", "A B C"},
+      {"nowrap", "A B C"},
+      {"pre", "  A  B\t\n C  "},
+      {"pre-wrap", "  A  B\t\n C  "},
+      {"break-spaces", "  A  B\t\n C  "},
+      {"pre-line", "A B\nC"},
+  };
+  for (const auto& [mode, expected] : cases) {
+    SCOPED_TRACE(mode);
+    auto document = ParseAndCompute(
+        std::string("<svg xmlns=\'http://www.w3.org/2000/svg\'><text id='t' style='white-space:") +
+        mode + "'>  A  B\t\n C  </text></svg>");
+    const auto entity = document.querySelector("#t")->unsafeEntityHandle().entity();
+    EXPECT_THAT(document.registry().get<ComputedTextComponent>(entity).spans,
+                testing::ElementsAre(TextSpanTextIs(expected)));
+  }
+}
+
+TEST_F(TextSystemTest, CssWhiteSpaceCascadeOverridesLegacySpace) {
+  auto document = ParseAndCompute(R"(<svg xmlns='http://www.w3.org/2000/svg' xml:space="preserve">
+    <style>g { white-space: pre } .collapsed { white-space: normal !important }</style>
+    <g><text id="t" xml:space="default">  A <tspan class="collapsed" style="white-space:pre">  B  </tspan> C  </text></g>
+  </svg>)");
+  const auto entity = document.querySelector("#t")->unsafeEntityHandle().entity();
+  EXPECT_THAT(
+      document.registry().get<ComputedTextComponent>(entity).spans,
+      testing::ElementsAre(TextSpanTextIs("  A "), TextSpanTextIs("B "), TextSpanTextIs(" C  ")));
+}
+
+TEST_F(TextSystemTest, CssWhiteSpaceWideKeywordsOverrideLegacySpace) {
+  for (const char* value : {"normal", "initial", "unset", "inherit"}) {
+    SCOPED_TRACE(value);
+    auto document = ParseAndCompute(
+        std::string(
+            "<svg xmlns=\'http://www.w3.org/2000/svg\'><text id='t' xml:space='preserve' ") +
+        "style='white-space:" + value + "'>  A   B  </text></svg>");
+    const auto entity = document.querySelector("#t")->unsafeEntityHandle().entity();
+    EXPECT_THAT(document.registry().get<ComputedTextComponent>(entity).spans,
+                testing::ElementsAre(TextSpanTextIs("A B")));
+  }
+}
+
+TEST_F(TextSystemTest, CssWhiteSpacePreLineTrimsAcrossSpans) {
+  auto document = ParseAndCompute(
+      "<svg xmlns=\'http://www.w3.org/2000/svg\'><text id='t' white-space='pre-line'> A <tspan> \n "
+      "</tspan> B </text></svg>");
+  const auto entity = document.querySelector("#t")->unsafeEntityHandle().entity();
+  std::string contents;
+  for (const auto& span : document.registry().get<ComputedTextComponent>(entity).spans) {
+    contents += span.text.str();
+  }
+  EXPECT_THAT(contents, Eq("A\nB"));
+}
+
 }  // namespace donner::svg::components
