@@ -2983,4 +2983,38 @@ TEST(PropertyRegistry, ResolveFontStretch) {
   }
 }
 
+TEST(PropertyRegistry, SmallCapsSynthesisParsesAndInherits) {
+  PropertyRegistry parent;
+  parent.parseStyle("font-synthesis-small-caps: NoNe");
+  EXPECT_THAT(parent.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
+  const auto inherited = PropertyRegistry().inheritFrom(parent);
+  EXPECT_THAT(inherited.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
+  PropertyRegistry initial;
+  initial.parseStyle("font-synthesis-small-caps: initial");
+  EXPECT_THAT(initial.inheritFrom(parent).fontSynthesisSmallCaps.get(),
+              Optional(FontSynthesisSmallCaps::Auto));
+  PropertyRegistry unset;
+  unset.parseStyle("font-synthesis-small-caps: unset");
+  EXPECT_THAT(unset.inheritFrom(parent).fontSynthesisSmallCaps.get(),
+              Optional(FontSynthesisSmallCaps::None));
+}
+
+TEST(PropertyRegistry, SmallCapsSynthesisRejectsInvalidValuesWithoutMutation) {
+  for (const char* value : {"normal", "small-caps", "0", "none auto", "none,auto", "\"none\""}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("font-synthesis-small-caps: none");
+    registry.parseStyle(std::string("font-synthesis-small-caps: ") + value);
+    EXPECT_THAT(registry.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
+  }
+}
+
+TEST(PropertyRegistry, SmallCapsSynthesisCascadesIndependentlyOfFontShorthand) {
+  PropertyRegistry registry;
+  registry.parseStyle(
+      "font-synthesis-small-caps: none !important; "
+      "font-synthesis-small-caps: auto; font: 20px serif");
+  EXPECT_THAT(registry.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
+}
+
 }  // namespace donner::svg
