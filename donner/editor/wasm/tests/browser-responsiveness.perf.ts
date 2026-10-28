@@ -1,4 +1,7 @@
+import { kCarouselSamples, kCarouselViewport } from "./carousel-samples.mjs";
+import { completedResultHandoff } from "./completed-result-handoff.mjs";
 import { packageHashes } from "./package-identity.mjs";
+import { sumPipelineCompilesPending } from "./pipeline-compile-readiness.mjs";
 import { dispatchCanvasPointer } from "./canvas-pointer";
 import { expect, type Page, test } from "@playwright/test";
 import fs from "node:fs";
@@ -19,6 +22,7 @@ import {
   checkLatencyGate,
   completionCheckMode,
   kCompletionChecks,
+  kLatencyGates,
   latencyGateMode,
   runCompletionCheck,
 } from "./latency-gates.mjs";
@@ -29,6 +33,13 @@ import {
   presentedDragSummary,
 } from "./presented-frame-samples.mjs";
 import { showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
+import {
+  armCanvasGpuDelayFromEnv,
+  canvasGpuDelayFromEnv,
+  expectSurfaceFrameProbeReady,
+  findProbedCanvasApplicationWorker,
+} from "./surface-frame-probe";
+import { kStallGuardMs } from "./test-timing";
 
 // Every case here opens the editor; echo its GPU acquisition trace into the test log.
 test.beforeEach(({ page }) => {
@@ -349,7 +360,7 @@ const latencyGateEnforcement = latencyGateMode();
 
 /** Record one interaction latency gate, failing the test on a miss unless the run only reports. */
 function latencyGate(
-  gate: "settledClick" | "inputP95" | "inputStall" | "completedStall",
+  gate: keyof typeof kLatencyGates,
   phase: string,
   valueMs: number | null | undefined,
 ) {
@@ -1686,6 +1697,113 @@ test("first sample click after boot", async ({ page, browser }, info) => {
   console.log(`first-click-after-boot ${JSON.stringify(report)}`);
   await attachJson(info, "first-click-after-boot.json", { ...report, timeline: gpu!.timeline });
   expect(failures).toEqual([]);
+});
+
+// The nominal completed-result handoff of each carousel sample: from the raster worker finishing
+// the clicked document to GPU retirement of the frame that presents it, on the smoke suite's
+// carousel layout. Only the raw handoff is gated; GPU work already queued ahead of the presenting
+// frame is part of it. The smoke suite asserts the ordering of the same interaction without a
+// time bound, because a shared runner's GPU can retire the presenting frame behind other work.
+// DONNER_CAROUSEL_CANVAS_GPU_DELAY=<everyFrames>:<iterations> queues fixed GPU work after the first
+// canvas write of every Nth frame from the click on, as the negative control of this gate.
+test.describe("nominal completed-result handoff", () => {
+  test.use({ viewport: kCarouselViewport, deviceScaleFactor: 1 });
+  for (const sample of kCarouselSamples) {
+    test(`carousel ${sample.id}`, async ({ page, browserName }, info) => {
+      test.skip(browserName !== "chromium", "the bound is calibrated for Chromium");
+      const failures: string[] = [];
+      page.on("pageerror", (error) => failures.push(error.message));
+      await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
+      await expect.poll(
+        () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
+        { timeout: kStallGuardMs, message: "WebGPU must present the production editor" },
+      ).toBe(true);
+      // A cold shader cache holds later GPU work behind asynchronous pipeline compiles, so the
+      // measured click starts once the GPU owner reports none in flight.
+      await expect.poll(async () => {
+        const statistics = await Promise.all(page.workers().map((worker) =>
+          worker.evaluate(() => {
+            const scope = globalThis as typeof globalThis & {
+              __donnerGpuOwner?: boolean;
+              __donnerReadGpuObjectStats?: () => Record<string, unknown>;
+            };
+            return scope.__donnerGpuOwner ? scope.__donnerReadGpuObjectStats?.() ?? null : null;
+          }).catch(() => null)
+        ));
+        const { pending, reporting } = sumPipelineCompilesPending(statistics);
+        return reporting > 0 && pending === 0;
+      }, {
+        timeout: kStallGuardMs,
+        message: "the GPU owner's pipeline compiles settle before the measured click",
+      }).toBe(true);
+      let gpuDelay: Awaited<ReturnType<typeof armCanvasGpuDelayFromEnv>> = null;
+      if (canvasGpuDelayFromEnv("DONNER_CAROUSEL_CANVAS_GPU_DELAY") !== null) {
+        await expectSurfaceFrameProbeReady(page);
+        const owner = await findProbedCanvasApplicationWorker(page);
+        if (owner === null) throw new Error("the application canvas owner is unavailable");
+        gpuDelay = await armCanvasGpuDelayFromEnv(owner, "DONNER_CAROUSEL_CANVAS_GPU_DELAY");
+      }
+      const canvas = await page.locator("canvas#canvas").boundingBox();
+      expect(canvas).not.toBeNull();
+      if (canvas === null) throw new Error("missing editor canvas");
+      let injected: Awaited<ReturnType<NonNullable<typeof gpuDelay>["finish"]>> | undefined;
+      let worker: Diagnostics["__donnerWorkerStats"];
+      try {
+        const before = await page.evaluate(() => ({
+          results: (window as Diagnostics).__donnerWorkerStats?.completedResults ?? 0,
+          frames: (window as Diagnostics & { __donnerMainLoopRenderedFrames?: number })
+            .__donnerMainLoopRenderedFrames ?? 0,
+        }));
+        await page.mouse.click(canvas.x + canvas.width * sample.xFraction, canvas.y + sample.y);
+        await expect(page.locator("canvas#canvas")).toHaveAttribute(
+          "data-active-sample-id",
+          sample.id,
+          { timeout: kStallGuardMs },
+        );
+        await expect.poll(async () => {
+          const state = await page.evaluate(() => ({
+            frames: (window as Diagnostics & { __donnerMainLoopRenderedFrames?: number })
+              .__donnerMainLoopRenderedFrames ?? 0,
+            worker: (window as Diagnostics).__donnerWorkerStats,
+            presentation: (window as Diagnostics).__donnerPresentedDocumentStats,
+          }));
+          worker = state.worker;
+          return (worker?.completedResults ?? 0) > before.results && state.frames > before.frames
+            && worker?.resultFramePresented === true
+            && state.presentation?.documentGeneration === worker.documentGeneration
+            && state.presentation?.frameVersion === worker.frameVersion
+            && Number.isFinite(worker?.resultFrameCompletedAtMs);
+        }, {
+          timeout: kStallGuardMs,
+          intervals: [8, 16, 25, 50],
+          message: "the clicked document must reach the canvas",
+        }).toBe(true);
+      } finally {
+        // Retain what was injected even when the click never presented.
+        injected = await gpuDelay?.finish();
+        if (injected) console.log(`carousel-canvas-gpu-delay ${JSON.stringify(injected)}`);
+      }
+      const handoff = completedResultHandoff(
+        worker!.publishedAtMs - worker!.pollDelayMs,
+        worker!.resultFrameCompletedAtMs!,
+      );
+      const report = {
+        workload: sample.id,
+        browser: info.project.name,
+        backend: await page.evaluate(() => (window as Diagnostics).__donnerBackend),
+        ...packageHashes(),
+        ...handoff,
+        canvasGpuDelay: injected,
+        worker,
+      };
+      console.log(`nominal-completed-result-handoff ${JSON.stringify(report)}`);
+      await attachJson(info, `nominal-completed-result-handoff-${sample.id}.json`, report);
+      expect(failures).toEqual([]);
+      expect(Number.isFinite(handoff.handoffMs)).toBe(true);
+      expect(handoff.handoffMs).toBeGreaterThanOrEqual(0);
+      latencyGate("completedResultHandoff", `carousel-${sample.id}`, handoff.handoffMs);
+    });
+  }
 });
 
 test.describe("Geode detailed interactions", () => {
