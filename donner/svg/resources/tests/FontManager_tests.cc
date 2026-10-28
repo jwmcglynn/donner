@@ -1061,6 +1061,23 @@ TEST(FontManagerTest, WidthPercentagesFollowDirectionalFallback) {
   }
 }
 
+TEST(FontManagerTest, WidthRankPreservesTinyEndpointOrdering) {
+  for (const int requested : {5, 7}) {
+    SCOPED_TRACE(requested);
+    Registry registry;
+    FontManager manager(registry);
+    css::FontFace closer = MakeEmbeddedFace("TestFont");
+    closer.fontStretchPercentRange = std::pair{1e-200, 1e-200};
+    manager.addFontFace(closer);
+    const FontHandle expected = manager.findFont("TestFont", 400, 0, requested);
+    ASSERT_THAT(static_cast<bool>(expected), testing::IsTrue());
+    css::FontFace farther = closer;
+    farther.fontStretchPercentRange = std::pair{0.0, 0.0};
+    manager.addFontFace(farther);
+    EXPECT_THAT(manager.findFont("TestFont", 400, 0, requested), testing::Eq(expected));
+  }
+}
+
 TEST(FontManagerTest, PublicWidthRequestsClampBeforeProviderLookup) {
   Registry registry;
   FontManager manager(registry);
