@@ -2,12 +2,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -19,13 +21,16 @@ namespace {
 
 class DecorationBackend : public TextBackend {
 public:
+  explicit DecorationBackend(bool underlineMetrics = true)
+      : hasUnderlineMetrics_(underlineMetrics) {}
   FontVMetrics fontVMetrics(FontHandle) const override {
     return {.ascent = 800, .descent = -200, .lineGap = 0, .xHeight = 500, .unitsPerEm = 1000};
   }
   float scaleForPixelHeight(FontHandle, float size) const override { return size / 1000; }
   float scaleForEmToPixels(FontHandle, float size) const override { return size / 1000; }
   std::optional<UnderlineMetrics> underlineMetrics(FontHandle) const override {
-    return UnderlineMetrics{.position = -100, .thickness = 50};
+    return hasUnderlineMetrics_ ? std::optional(UnderlineMetrics{.position = -100, .thickness = 50})
+                                : std::nullopt;
   }
   std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle) const override {
     return UnderlineMetrics{.position = 300, .thickness = 40};
@@ -53,13 +58,16 @@ public:
                        bool) const override {
     return 0;
   }
+
+private:
+  bool hasUnderlineMetrics_;
 };
 
-RendererBitmap RenderDecorationScene(std::string_view body) {
+RendererBitmap RenderDecorationScene(std::string_view body, bool metrics = true) {
   SVGDocument document = instantiateSubtree(body, {}, Vector2i(100, 100));
   auto& registry = document.registry();
   auto& fonts = registry.ctx().emplace<FontManager>(registry);
-  registry.ctx().emplace<TextEngine>(fonts, registry, std::make_unique<DecorationBackend>());
+  registry.ctx().emplace<TextEngine>(fonts, registry, std::make_unique<DecorationBackend>(metrics));
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
@@ -115,6 +123,56 @@ TEST(TextDecorationThickness, ChildThicknessWithoutLineDoesNotChangeParent) {
       RenderDecorationScene("<rect x='10' y='38' width='20' height='8' fill='red'/>");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_unrelated_child_thickness",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(TextDecorationThickness, PercentageUsesOriginUsedFontSize) {
+  const auto actual = RenderDecorationScene(
+      R"svg(<text x="10" y="40" font-size="20" fill="red" style="text-decoration:underline;text-decoration-thickness:10%"><tspan font-size="40">XX</tspan></text>)svg");
+  const auto expected =
+      RenderDecorationScene("<rect x='10' y='41' width='20' height='2' fill='red'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_percentage_origin",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(TextDecorationThickness, FromFontUsesUnderlineMetricForLineThrough) {
+  const auto actual = RenderDecorationScene(
+      R"svg(<text x="10" y="40" font-size="20" fill="red" style="text-decoration:line-through;text-decoration-thickness:from-font">XX</text>)svg");
+  const auto expected =
+      RenderDecorationScene("<rect x='10' y='33.5' width='20' height='1' fill='red'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_from_font",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(TextDecorationThickness, MissingUnderlineMetricFallsBackToAuto) {
+  const auto actual = RenderDecorationScene(
+      R"svg(<text x="10" y="40" font-size="20" fill="red" style="text-decoration:underline;text-decoration-thickness:from-font">XX</text>)svg",
+      false);
+  const auto expected = RenderDecorationScene(
+      R"svg(<text x="10" y="40" font-size="20" fill="red" text-decoration="underline">XX</text>)svg",
+      false);
+  editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_missing_metric",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(TextDecorationThickness, ImmutableOriginStorageRefusesAndReleasesCapacity) {
+  using components::DocumentResourceFamilyBudget;
+  using components::TextDecorationData;
+  using components::TextDecorationOrigin;
+  DocumentResourceFamilyBudget::Limits limits;
+  limits.geometryBytes = sizeof(TextDecorationData) + sizeof(TextDecorationOrigin);
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(limits);
+  const std::array<TextDecorationOrigin, 1> origins{};
+  auto data = TextDecorationData::Create(family, origins);
+  ASSERT_TRUE(data);
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::Geometry),
+            limits.geometryBytes);
+  auto shared = data;
+  EXPECT_FALSE(TextDecorationData::Create(family, origins));
+  data.reset();
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::Geometry),
+            limits.geometryBytes);
+  shared.reset();
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::Geometry), 0u);
 }
 
 }  // namespace

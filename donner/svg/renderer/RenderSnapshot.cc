@@ -23,6 +23,12 @@
 #endif
 
 namespace donner::svg {
+#ifdef DONNER_TEXT_ENABLED
+struct SnapshotFontPayload {
+  std::vector<uint8_t> bytes;
+  FontDataTrust trust = FontDataTrust::Untrusted;
+};
+#endif
 namespace {
 
 struct BeginFrameCommand {
@@ -109,10 +115,6 @@ struct DrawImageCommand {
 };
 
 #ifdef DONNER_TEXT_ENABLED
-struct SnapshotFontPayload {
-  std::vector<uint8_t> bytes;
-  FontDataTrust trust = FontDataTrust::Untrusted;
-};
 
 using SnapshotFont = std::shared_ptr<const SnapshotFontPayload>;
 #endif
@@ -148,7 +150,6 @@ struct DrawTextCommand {
   std::vector<SnapshotFont> preparedFonts;
   /// Fallback faces of prepared glyphs, keyed by the glyph's ordinal across all prepared runs.
   std::vector<std::pair<size_t, SnapshotFont>> preparedGlyphFonts;
-  std::vector<SnapshotFont> decorationFonts;
 #endif
 };
 
@@ -204,14 +205,38 @@ public:
     return paint;
   }
 
-  components::ComputedTextComponent mapComputedText(components::ComputedTextComponent text) {
+  components::ComputedTextComponent mapComputedText(Registry& sourceRegistry,
+                                                    components::ComputedTextComponent text) {
     for (auto& span : text.spans) {
       span.sourceEntity = entt::null;
       span.textPathSourceEntity = entt::null;
       span.resolvedFill = mapPaint(std::move(span.resolvedFill));
       span.resolvedStroke = mapPaint(std::move(span.resolvedStroke));
-      span.resolvedDecorationFill = mapPaint(std::move(span.resolvedDecorationFill));
-      span.resolvedDecorationStroke = mapPaint(std::move(span.resolvedDecorationStroke));
+      if (span.decorations) {
+        const auto previous = span.decorations;
+        std::array<components::TextDecorationOrigin,
+                   components::TextDecorationData::kMaximumOrigins>
+            origins;
+        std::copy(previous->origins().begin(), previous->origins().end(), origins.begin());
+        for (std::size_t index = 0; index < previous->origins().size(); ++index) {
+          auto& origin = origins[index];
+          origin.fill = mapPaint(std::move(origin.fill));
+          origin.stroke = mapPaint(std::move(origin.stroke));
+#ifdef DONNER_TEXT_ENABLED
+          if (origin.font) {
+            origin.snapshotFont = captureFont(sourceRegistry, origin.font->font);
+            origin.font->font = FontHandle();
+          }
+#else
+          (void)sourceRegistry;
+#endif
+        }
+        span.decorations = components::TextDecorationData::Create(
+            previous->family(), std::span(origins).first(previous->origins().size()));
+        if (!span.decorations) {
+          span.textDecoration = TextDecoration::None;
+        }
+      }
     }
     return text;
   }
@@ -383,8 +408,12 @@ std::size_t CountReferenceToRegistry(const components::ComputedTextComponent& te
   for (const auto& span : text.spans) {
     count += CountReferenceToRegistry(span.resolvedFill, registry);
     count += CountReferenceToRegistry(span.resolvedStroke, registry);
-    count += CountReferenceToRegistry(span.resolvedDecorationFill, registry);
-    count += CountReferenceToRegistry(span.resolvedDecorationStroke, registry);
+    if (span.decorations) {
+      for (const auto& origin : span.decorations->origins()) {
+        count += CountReferenceToRegistry(origin.fill, registry);
+        count += CountReferenceToRegistry(origin.stroke, registry);
+      }
+    }
   }
   return count;
 }
@@ -512,12 +541,24 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
               params.preparedTextDraw = std::move(prepared);
             }
             components::ComputedTextComponent text = value.text;
-            for (size_t i = 0; i < text.spans.size(); ++i) {
-              if (text.spans[i].decorationFont) {
-                text.spans[i].decorationFont->font =
-                    i < value.decorationFonts.size()
-                        ? LoadSnapshotFont(fontManager, value.decorationFonts[i], domain)
-                        : FontHandle();
+            for (auto& span : text.spans) {
+              if (span.decorations) {
+                const auto previous = span.decorations;
+                std::array<components::TextDecorationOrigin,
+                           components::TextDecorationData::kMaximumOrigins>
+                    origins;
+                std::copy(previous->origins().begin(), previous->origins().end(), origins.begin());
+                for (std::size_t index = 0; index < previous->origins().size(); ++index) {
+                  auto& origin = origins[index];
+                  if (origin.font) {
+                    origin.font->font = LoadSnapshotFont(fontManager, origin.snapshotFont, domain);
+                  }
+                }
+                span.decorations = components::TextDecorationData::Create(
+                    previous->family(), std::span(origins).first(previous->origins().size()));
+                if (!span.decorations) {
+                  span.textDecoration = TextDecoration::None;
+                }
               }
             }
             renderer.drawText(textRegistry, text, params);
@@ -729,7 +770,7 @@ void RenderSnapshotRecorder::drawText(Registry& sourceRegistry,
                                       const components::ComputedTextComponent& text,
                                       const TextParams& params) {
   DrawTextCommand command;
-  command.text = snapshot_.impl_->resourceMapper.mapComputedText(text);
+  command.text = snapshot_.impl_->resourceMapper.mapComputedText(sourceRegistry, text);
   command.params = params;
   command.params.fontFaces = {};
   command.params.textRootEntity = entt::null;
@@ -757,16 +798,7 @@ void RenderSnapshotRecorder::drawText(Registry& sourceRegistry,
     }
     command.params.preparedTextDraw = std::move(prepared);
   }
-  command.decorationFonts.reserve(command.text.spans.size());
-  for (auto& span : command.text.spans) {
-    command.decorationFonts.push_back(
-        span.decorationFont
-            ? snapshot_.impl_->resourceMapper.captureFont(sourceRegistry, span.decorationFont->font)
-            : SnapshotFont());
-    if (span.decorationFont) {
-      span.decorationFont->font = FontHandle();
-    }
-  }
+
 #endif
   snapshot_.impl_->commands.push_back(std::move(command));
 }

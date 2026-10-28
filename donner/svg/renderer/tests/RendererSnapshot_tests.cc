@@ -375,8 +375,12 @@ TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
           }
         }
         for (const auto& span : text.spans) {
-          if (span.decorationFont) {
-            EXPECT_FALSE(fonts.fontData(span.decorationFont->font).empty());
+          if (span.decorations) {
+            for (const auto& origin : span.decorations->origins()) {
+              if (origin.font) {
+                EXPECT_FALSE(fonts.fontData(origin.font->font).empty());
+              }
+            }
           }
         }
       });

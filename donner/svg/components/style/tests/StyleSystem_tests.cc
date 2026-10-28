@@ -895,6 +895,42 @@ TEST_F(StyleSystemTest, ComputeStylesForSubsetOnlyComputesRequestedEntities) {
   EXPECT_FALSE(document.registry().all_of<ComputedStyleComponent>(b));
 }
 
+TEST_F(StyleSystemTest, DecorationThicknessComputesEmBeforeExplicitInheritance) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><text id="parent" font-size="20"
+      style="text-decoration-thickness:.2em"><tspan id="child" font-size="40"
+      style="text-decoration-thickness:inherit">X</tspan><tspan id="plain">Y</tspan></text></svg>)svg");
+  const auto& registry = document.registry();
+  const auto parent = document.querySelector("#parent")->entityHandle();
+  const auto child = document.querySelector("#child")->entityHandle();
+  const auto plain = document.querySelector("#plain")->entityHandle();
+  EXPECT_EQ(registry.get<ComputedStyleComponent>(parent.entity())
+                .properties->textDecorationThickness.get()
+                ->value,
+            Lengthd(4, Lengthd::Unit::Px));
+  EXPECT_EQ(registry.get<ComputedStyleComponent>(child.entity())
+                .properties->textDecorationThickness.get()
+                ->value,
+            Lengthd(4, Lengthd::Unit::Px));
+  EXPECT_EQ(registry.get<ComputedStyleComponent>(plain.entity())
+                .properties->textDecorationThickness.get()
+                ->kind,
+            TextDecorationThickness::Kind::Auto);
+}
+
+TEST_F(StyleSystemTest, DecorationThicknessRetainsInheritedPercentage) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><text font-size="20" style="text-decoration-thickness:20%">
+      <tspan id="child" font-size="40" style="text-decoration-thickness:inherit">X</tspan>
+    </text></svg>)svg");
+  const auto child = document.querySelector("#child")->entityHandle();
+  EXPECT_EQ(document.registry()
+                .get<ComputedStyleComponent>(child.entity())
+                .properties->textDecorationThickness.get()
+                ->value,
+            Lengthd(20, Lengthd::Unit::Percent));
+}
+
 TEST(StyleResourceBudgetTest, SharesRetainedBytesAcrossDocumentFamily) {
   DocumentResourceFamilyBudget::Limits familyLimits;
   familyLimits.computedStyleBytes = 1024;

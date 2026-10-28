@@ -1535,6 +1535,7 @@ donner_cc_test(
     variants = ["geode"],
     deps = [
         ":image_comparison_test_fixture",
+        "//donner/svg/components/text:components",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/resources:font_manager",
         "//donner/svg/tests:parser_test_utils",

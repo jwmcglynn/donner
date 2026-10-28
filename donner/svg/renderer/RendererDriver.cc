@@ -532,6 +532,98 @@ Entity AuthoredTextEntity(Registry& registry, Entity styleEntity) {
   const auto* shadow = registry.try_get<components::ShadowEntityComponent>(styleEntity);
   return shadow ? shadow->lightEntity : styleEntity;
 }
+template <typename ResolvePaint>
+std::optional<components::TextDecorationOrigin> BuildDecorationOrigin(
+    Registry& registry, Entity provider, const PropertyRegistry& declaringProperties,
+    const Box2d& viewBox, const FontMetrics& baseFm, const ResolvePaint& resolveSpanPaint) {
+  const auto* providerStyle = registry.try_get<components::ComputedStyleComponent>(provider);
+  if (!providerStyle || !providerStyle->properties) {
+    return std::nullopt;
+  }
+  {
+    const auto& props = *providerStyle->properties;
+    components::TextDecorationOrigin origin;
+    origin.lines = declaringProperties.textDecoration.get().value();
+    origin.fill = resolveSpanPaint(props.fill.get().value(), providerStyle->externalFill, false);
+    origin.stroke =
+        resolveSpanPaint(props.stroke.get().value(), providerStyle->externalStroke, true);
+    origin.fillOpacity = props.fillOpacity.get().value();
+    origin.strokeOpacity = props.strokeOpacity.get().value();
+    origin.strokeWidth = props.strokeWidth.get().value().toPixels(viewBox, baseFm);
+    origin.font = ResolveDecorationFont(registry, provider, viewBox, baseFm);
+    origin.thickness = declaringProperties.textDecorationThickness.get().value();
+    if (origin.thickness.kind == TextDecorationThickness::Kind::Length) {
+      const double usedSize =
+          origin.font ? origin.font->usedSizePx : props.fontSize.get().value().value;
+      const double value = origin.thickness.value.unit == Lengthd::Unit::Percent
+                               ? origin.thickness.value.value * usedSize / 100.0
+                               : origin.thickness.value.toPixels(
+                                     viewBox, FontMetrics::DefaultsWithFontSize(usedSize));
+      origin.thickness.value = Lengthd(value, Lengthd::Unit::Px);
+    }
+    return origin;
+  }
+}
+
+void RetainSpanDecorations(Registry& registry, components::ComputedTextComponent::TextSpan& span,
+                           std::span<components::TextDecorationOrigin> origins, std::size_t count) {
+  if (count != 0) {
+    auto& family = registry.ctx().get_or_emplace<components::DocumentResourceFamilyContext>();
+    if (!family.budget) {
+      family.budget = std::make_shared<components::DocumentResourceFamilyBudget>();
+    }
+    std::reverse(origins.begin(), origins.begin() + count);
+    span.decorations =
+        components::TextDecorationData::Create(family.budget, std::span(origins).first(count));
+    if (span.decorations) {
+      for (const auto& origin : span.decorations->origins()) {
+        span.textDecoration |= origin.lines;
+      }
+    }
+  }
+}
+
+Entity DecorationProvider(Registry& registry, Entity origin, Entity nearestText) {
+  if (registry.all_of<components::TextComponent>(AuthoredTextEntity(registry, origin))) {
+    return origin;
+  }
+  return nearestText == entt::null ? origin : nearestText;
+}
+
+template <typename ResolvePaint>
+void ResolveSpanDecorations(Registry& registry, Entity styleEntity,
+                            components::ComputedTextComponent::TextSpan& span, const Box2d& viewBox,
+                            const FontMetrics& baseFm, const ResolvePaint& resolveSpanPaint) {
+  span.textDecoration = TextDecoration::None;
+  span.decorations.reset();
+  std::array<components::TextDecorationOrigin, components::TextDecorationData::kMaximumOrigins>
+      origins;
+  std::size_t count = 0;
+  Entity nearestTextStyleEntity =
+      registry.all_of<components::TextComponent>(AuthoredTextEntity(registry, styleEntity))
+          ? styleEntity
+          : entt::null;
+  for (Entity walkEntity = styleEntity; walkEntity != entt::null;) {
+    if (registry.all_of<components::TextComponent>(AuthoredTextEntity(registry, walkEntity))) {
+      nearestTextStyleEntity = walkEntity;
+    }
+    const auto* walkStyle = registry.try_get<components::ComputedStyleComponent>(walkEntity);
+    if (walkStyle && walkStyle->properties &&
+        walkStyle->properties->textDecoration.get().value() != TextDecoration::None) {
+      if (count == origins.size()) {
+        return;
+      }
+      const Entity provider = DecorationProvider(registry, walkEntity, nearestTextStyleEntity);
+      if (const auto origin = BuildDecorationOrigin(registry, provider, *walkStyle->properties,
+                                                    viewBox, baseFm, resolveSpanPaint)) {
+        origins[count++] = *origin;
+      }
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(walkEntity);
+    walkEntity = tree ? tree->parent() : entt::null;
+  }
+  RetainSpanDecorations(registry, span, origins, count);
+}
 
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
 /// Layout-facing span state is delegated to TextEngine.
@@ -621,77 +713,7 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       span.paintOrder = style->properties->paintOrder.get().value();
     }
 
-    // Resolve decoration from ancestors. Per CSS Text Decoration §3, text-decoration is NOT
-    // inherited but the visual decoration line propagates to descendants. Walk ancestors to
-    // accumulate decoration types, but source paint from the innermost text element that
-    // contributes the decorated glyphs.
-    {
-      span.textDecoration = TextDecoration::None;
-      span.resolvedDecorationFill = PaintServer::None();
-      span.resolvedDecorationStroke = PaintServer::None();
-      span.decorationFillOpacity = 1.0;
-      span.decorationStrokeOpacity = 1.0;
-      span.decorationFont.reset();
-      span.decorationStrokeWidth = 0.0;
-      span.decorationDeclarationCount = 0;
-
-      Entity decorationPaintEntity = entt::null;
-      Entity nearestTextStyleEntity =
-          registry.all_of<components::TextComponent>(AuthoredTextEntity(registry, styleEntity))
-              ? styleEntity
-              : entt::null;
-
-      Entity walkEntity = styleEntity;
-      while (walkEntity != entt::null) {
-        if (registry.all_of<components::TextComponent>(AuthoredTextEntity(registry, walkEntity))) {
-          nearestTextStyleEntity = walkEntity;
-        }
-
-        auto* walkStyle = registry.try_get<components::ComputedStyleComponent>(walkEntity);
-        if (walkStyle && walkStyle->properties) {
-          const TextDecoration ancestorDeco = walkStyle->properties->textDecoration.get().value();
-          if (ancestorDeco != TextDecoration::None) {
-            // This ancestor declares decoration - accumulate it for descendant glyphs.
-            span.textDecoration |= ancestorDeco;
-            ++span.decorationDeclarationCount;
-
-            if (decorationPaintEntity == entt::null) {
-              decorationPaintEntity = registry.all_of<components::TextComponent>(
-                                          AuthoredTextEntity(registry, walkEntity))
-                                          ? walkEntity
-                                          : nearestTextStyleEntity;
-              if (decorationPaintEntity == entt::null) {
-                decorationPaintEntity = walkEntity;
-              }
-            }
-          }
-        }
-
-        auto* tree = registry.try_get<donner::components::TreeComponent>(walkEntity);
-        if (!tree) {
-          break;
-        }
-        walkEntity = tree->parent();
-      }
-
-      if (decorationPaintEntity != entt::null) {
-        auto* decoStyle =
-            registry.try_get<components::ComputedStyleComponent>(decorationPaintEntity);
-        if (decoStyle && decoStyle->properties) {
-          const auto& decoProps = decoStyle->properties.value();
-          span.resolvedDecorationFill =
-              resolveSpanPaint(decoProps.fill.get().value(), decoStyle->externalFill, false);
-          span.resolvedDecorationStroke =
-              resolveSpanPaint(decoProps.stroke.get().value(), decoStyle->externalStroke, true);
-          span.decorationFillOpacity = decoProps.fillOpacity.get().value();
-          span.decorationStrokeOpacity = decoProps.strokeOpacity.get().value();
-          span.decorationStrokeWidth =
-              decoProps.strokeWidth.get().value().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed);
-          span.decorationFont =
-              ResolveDecorationFont(registry, decorationPaintEntity, viewBox, baseFm);
-        }
-      }
-    }
+    ResolveSpanDecorations(registry, styleEntity, span, viewBox, baseFm, resolveSpanPaint);
   }
 }
 

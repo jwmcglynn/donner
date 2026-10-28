@@ -784,3 +784,21 @@ rotated pattern case, use exact Geode goldens so the backend remains fully gated
 
 - path/to/first-test.svg
 ```
+
+## Text decoration thickness
+
+`text-decoration-thickness` accepts `auto`, `from-font`, lengths, and percentages. Explicit
+percentages use the originating decoration's used font size; font-relative lengths compute before
+explicit inheritance. The supported `text-decoration` shorthand resets omitted thickness to `auto`
+and preserves independent cascade priorities. Draft line-width keywords and the complete
+line/style/color longhands, underline offsets, shadows, and emphasis remain unsupported.
+
+Each originating declaration retains its own font, paint and thickness, including repeated
+underline declarations on nested spans. The software and GPU renderers consume the same bounded
+decoration geometry. `from-font` uses the preferred underline width for all line kinds and falls
+back to automatic metrics when unavailable. Automatic placement retains the existing behavior.
+
+Immutable decoration lists are limited to 64 originating declarations per span and charged to the
+shared geometry budget. Snapshot copies retain and remap their own font and paint resources; a
+refused list suppresses those decorations. New live-bitmap comparisons in
+`text_decoration_thickness_tests` use synthetic font metrics and the canonical exact comparator.

@@ -524,8 +524,10 @@ TEST_F(RendererDriverTest, ResolvesSpanStrokeAndDecorationPaintFromTextStyle) {
         ASSERT_NE(spanIt, text.spans.end());
         EXPECT_EQ(spanIt->textDecoration, TextDecoration::LineThrough);
         expectSolidColor(spanIt->resolvedStroke, css::RGBA(128, 128, 128, 255));
-        expectSolidColor(spanIt->resolvedDecorationFill, css::RGBA(255, 255, 0, 255));
-        expectSolidColor(spanIt->resolvedDecorationStroke, css::RGBA(0, 128, 0, 255));
+        ASSERT_TRUE(spanIt->decorations);
+        ASSERT_EQ(spanIt->decorations->origins().size(), 1u);
+        expectSolidColor(spanIt->decorations->origins()[0].fill, css::RGBA(255, 255, 0, 255));
+        expectSolidColor(spanIt->decorations->origins()[0].stroke, css::RGBA(0, 128, 0, 255));
       });
 
   driver.draw(document);

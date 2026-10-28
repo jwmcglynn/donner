@@ -2924,6 +2924,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     tinyStroke.lineJoin = toTinyLineJoin(params.strokeParams.lineJoin);
   }
 
+  std::size_t decorationWorkRemaining = Path::kMaximumGeometryQueryWork;
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
     const auto& run = runs[runIndex];
 
@@ -3145,245 +3146,75 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
     if (spanDecoration != TextDecoration::None && !run.glyphs.empty() && run.font) {
       const auto& span = text.spans[runIndex];
-
-      const ResolvedTextFont decorationFont =
-          span.decorationFont.value_or(ResolvedTextFont{run.font, spanFontSizePx});
-      const float decoScale =
-          textEngine.scaleForPixelHeight(decorationFont.font, decorationFont.usedSizePx);
-      const float decoEmScale =
-          textEngine.scaleForEmToPixels(decorationFont.font, decorationFont.usedSizePx);
-
-      const FontVMetrics vmetrics = textEngine.fontVMetrics(decorationFont.font);
-      const int ascent = vmetrics.ascent;
-      const int descent = vmetrics.descent;
-
-      double fontUnderlinePos = 0.0;
-      double fontUnderlineThick = 0.0;
-      if (auto ul = textEngine.underlineMetrics(decorationFont.font)) {
-        fontUnderlinePos = ul->position;
-        fontUnderlineThick = ul->thickness;
-      }
-      double fontStrikePos = 0.0;
-      double fontStrikeThick = 0.0;
-      if (auto strike = textEngine.strikeoutMetrics(decorationFont.font)) {
-        fontStrikePos = strike->position;
-        fontStrikeThick = strike->thickness;
-      }
-
-      const double thickness = fontUnderlineThick > 0.0
-                                   ? fontUnderlineThick * decoEmScale
-                                   : static_cast<double>(ascent - descent) * decoScale / 18.0;
-
-      // Resolve decoration fill paint from the declaring element (Category B fix).
-      std::optional<tiny_skia::Paint> decoFillPaint;
-      if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedDecorationFill)) {
-        const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
-        const float fillOpacity = NarrowToFloat(span.decorationFillOpacity);
-        decoFillPaint = makeSolidPaint(
-            css::Color(solid->color.resolve(spanCurrentColor, fillOpacity)), span.opacity);
-      } else if (const auto* ref = std::get_if<components::PaintResolvedReference>(
-                     &span.resolvedDecorationFill)) {
-        const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
-        const float combinedOpacity =
-            NarrowToFloat(span.decorationFillOpacity) * static_cast<float>(span.opacity);
-        if (auto shader = instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
-                                                    spanCurrentColor, combinedOpacity)) {
-          tiny_skia::Paint paint = makeBasePaint(antialias_);
-          paint.shader = std::move(*shader);
-          decoFillPaint = paint;
+      components::TextDecorationOrigin fallback;
+      fallback.lines = spanDecoration;
+      const auto origins = span.decorations
+                               ? span.decorations->origins()
+                               : std::span<const components::TextDecorationOrigin>(&fallback, 1);
+      for (const auto& decoration : origins) {
+        // Resolve paint from the element that originated this decoration.
+        std::optional<tiny_skia::Paint> decoFillPaint;
+        if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.fill)) {
+          const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+          const float fillOpacity = NarrowToFloat(decoration.fillOpacity);
+          decoFillPaint = makeSolidPaint(
+              css::Color(solid->color.resolve(spanCurrentColor, fillOpacity)), span.opacity);
+        } else if (const auto* ref =
+                       std::get_if<components::PaintResolvedReference>(&decoration.fill)) {
+          const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+          const float combinedOpacity =
+              NarrowToFloat(decoration.fillOpacity) * static_cast<float>(span.opacity);
+          if (auto shader =
+                  instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
+                                            spanCurrentColor, combinedOpacity)) {
+            tiny_skia::Paint paint = makeBasePaint(antialias_);
+            paint.shader = std::move(*shader);
+            decoFillPaint = paint;
+          }
         }
-      }
-      if (!decoFillPaint) {
-        decoFillPaint = spanFillPaint;  // Fallback to span fill if no declaring element.
-      }
-
-      // Resolve decoration stroke paint (Category A fix).
-      std::optional<tiny_skia::Paint> decoStrokePaint;
-      if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedDecorationStroke)) {
-        const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
-        const float strokeOpacity = NarrowToFloat(span.decorationStrokeOpacity);
-        decoStrokePaint = makeSolidPaint(
-            css::Color(solid->color.resolve(spanCurrentColor, strokeOpacity)), span.opacity);
-      } else if (const auto* ref = std::get_if<components::PaintResolvedReference>(
-                     &span.resolvedDecorationStroke)) {
-        const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
-        const float combinedOpacity =
-            NarrowToFloat(span.decorationStrokeOpacity) * static_cast<float>(span.opacity);
-        if (auto shader = instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
-                                                    spanCurrentColor, combinedOpacity)) {
-          tiny_skia::Paint paint = makeBasePaint(antialias_);
-          paint.shader = std::move(*shader);
-          decoStrokePaint = paint;
-        }
-      }
-
-      const bool hasRotation = std::any_of(run.glyphs.begin(), run.glyphs.end(),
-                                           [](const auto& g) { return g.rotateDegrees != 0.0; });
-
-      for (TextDecoration decoType :
-           {TextDecoration::Underline, TextDecoration::Overline, TextDecoration::LineThrough}) {
-        if (!hasFlag(spanDecoration, decoType)) {
-          continue;
+        if (!decoFillPaint) {
+          decoFillPaint = spanFillPaint;  // Fallback to span fill if no declaring element.
         }
 
-        double decoThickness = thickness;
-        if (decoType == TextDecoration::LineThrough && fontStrikeThick > 0.0) {
-          decoThickness = fontStrikeThick * decoEmScale;
-        }
-
-        double decoOffsetY = 0.0;
-        if (decoType == TextDecoration::Underline) {
-          decoOffsetY = fontUnderlinePos != 0.0 ? -fontUnderlinePos * decoEmScale
-                                                : -static_cast<double>(descent) * decoScale * 0.4;
-        } else if (decoType == TextDecoration::Overline) {
-          decoOffsetY = -static_cast<double>(ascent) * decoScale;
-        } else if (decoType == TextDecoration::LineThrough) {
-          decoOffsetY = fontStrikePos != 0.0 ? -fontStrikePos * decoEmScale
-                                             : -static_cast<double>(ascent) * decoScale * 0.35;
-        }
-
-        double decoTopY = decoOffsetY - decoThickness / 2.0;
-
-        const bool hasMultipleDecorationLines =
-            (hasFlag(spanDecoration, TextDecoration::Underline) ? 1 : 0) +
-                (hasFlag(spanDecoration, TextDecoration::Overline) ? 1 : 0) +
-                (hasFlag(spanDecoration, TextDecoration::LineThrough) ? 1 : 0) >
-            1;
-        if (span.decorationDeclarationCount == 1 && hasMultipleDecorationLines) {
-          if (decoType == TextDecoration::Overline) {
-            decoTopY += decoThickness * 1.5;
-          } else if (decoType == TextDecoration::LineThrough) {
-            decoTopY -= decoThickness;
+        std::optional<tiny_skia::Paint> decoStrokePaint;
+        if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.stroke)) {
+          const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+          const float strokeOpacity = NarrowToFloat(decoration.strokeOpacity);
+          decoStrokePaint = makeSolidPaint(
+              css::Color(solid->color.resolve(spanCurrentColor, strokeOpacity)), span.opacity);
+        } else if (const auto* ref =
+                       std::get_if<components::PaintResolvedReference>(&decoration.stroke)) {
+          const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+          const float combinedOpacity =
+              NarrowToFloat(decoration.strokeOpacity) * static_cast<float>(span.opacity);
+          if (auto shader =
+                  instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
+                                            spanCurrentColor, combinedOpacity)) {
+            tiny_skia::Paint paint = makeBasePaint(antialias_);
+            paint.shader = std::move(*shader);
+            decoStrokePaint = paint;
           }
         }
 
-        // Helper lambda to fill+stroke a decoration path.
-        auto drawDecoPath = [&](const tiny_skia::Path& tinyPath) {
+        auto drawDecoPath = [&](const Path& path) {
+          const tiny_skia::Path tinyPath = toTinyPath(path);
           auto pixmapView = currentPixmapView();
           if (decoFillPaint) {
             tiny_skia::Painter::fillPath(pixmapView, tinyPath, *decoFillPaint,
                                          tiny_skia::FillRule::Winding,
                                          toTinyTransform(deviceFromLocalTransform_), mask);
           }
-          if (decoStrokePaint && span.decorationStrokeWidth > 0.0) {
+          if (decoStrokePaint && decoration.strokeWidth > 0.0) {
             tiny_skia::Stroke stroke;
-            stroke.width = NarrowToFloat(span.decorationStrokeWidth);
+            stroke.width = NarrowToFloat(decoration.strokeWidth);
             tiny_skia::Painter::strokePath(pixmapView, tinyPath, *decoStrokePaint, stroke,
                                            toTinyTransform(deviceFromLocalTransform_), mask);
           }
         };
-
-        if (hasRotation) {
-          const auto isRenderedGlyph = [](const auto& glyph) {
-            return glyph.glyphIndex != 0 && glyph.xAdvance > 0.0;
-          };
-
-          for (size_t glyphIndex = 0; glyphIndex < run.glyphs.size(); ++glyphIndex) {
-            const auto& glyph = run.glyphs[glyphIndex];
-            if (glyph.glyphIndex == 0 || glyph.xAdvance <= 0.0) {
-              continue;
-            }
-
-            double segmentWidth = glyph.xAdvance;
-            for (size_t nextIndex = glyphIndex + 1; nextIndex < run.glyphs.size(); ++nextIndex) {
-              const auto& nextGlyph = run.glyphs[nextIndex];
-              if (!isRenderedGlyph(nextGlyph)) {
-                continue;
-              }
-
-              segmentWidth = std::min(segmentWidth, nextGlyph.xPosition - glyph.xPosition);
-              break;
-            }
-
-            if (segmentWidth <= 0.0) {
-              continue;
-            }
-
-            Path segPath = PathBuilder()
-                               .moveTo(Vector2d(0.0, decoTopY))
-                               .lineTo(Vector2d(segmentWidth, decoTopY))
-                               .lineTo(Vector2d(segmentWidth, decoTopY + decoThickness))
-                               .lineTo(Vector2d(0.0, decoTopY + decoThickness))
-                               .closePath()
-                               .build();
-
-            Transform2d segTransform = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-            if (glyph.rotateDegrees != 0.0) {
-              segTransform =
-                  Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
-                  segTransform;
-            }
-
-            drawDecoPath(toTinyPath(TransformPath(segPath, segTransform)));
-          }
-        } else {
-          const auto isRenderedGlyph = [](const auto& glyph) {
-            return glyph.glyphIndex != 0 && glyph.xAdvance > 0.0;
-          };
-
-          const auto firstGlyph =
-              std::find_if(run.glyphs.begin(), run.glyphs.end(), isRenderedGlyph);
-          const auto lastGlyph =
-              std::find_if(run.glyphs.rbegin(), run.glyphs.rend(), isRenderedGlyph);
-          if (firstGlyph == run.glyphs.end() || lastGlyph == run.glyphs.rend()) {
-            continue;
-          }
-
-          const double baselineY = firstGlyph->yPosition;
-          const bool sameBaseline =
-              std::all_of(run.glyphs.begin(), run.glyphs.end(), [&](const auto& glyph) {
-                return !isRenderedGlyph(glyph) || std::abs(glyph.yPosition - baselineY) < 1e-6;
-              });
-
-          if (sameBaseline) {
-            const double x0 = firstGlyph->xPosition;
-            const double x1 = lastGlyph->xPosition + lastGlyph->xAdvance;
-            const double y = baselineY + decoTopY;
-            Path decoPath = PathBuilder()
-                                .moveTo(Vector2d(x0, y))
-                                .lineTo(Vector2d(x1, y))
-                                .lineTo(Vector2d(x1, y + decoThickness))
-                                .lineTo(Vector2d(x0, y + decoThickness))
-                                .closePath()
-                                .build();
-            drawDecoPath(toTinyPath(decoPath));
-          } else {
-            PathBuilder decoBuilder;
-            for (size_t glyphIndex = 0; glyphIndex < run.glyphs.size(); ++glyphIndex) {
-              const auto& glyph = run.glyphs[glyphIndex];
-              if (!isRenderedGlyph(glyph)) {
-                continue;
-              }
-
-              const double x0 = glyph.xPosition;
-              double x1 = glyph.xPosition + glyph.xAdvance;
-              for (size_t nextIndex = glyphIndex + 1; nextIndex < run.glyphs.size(); ++nextIndex) {
-                const auto& nextGlyph = run.glyphs[nextIndex];
-                if (!isRenderedGlyph(nextGlyph)) {
-                  continue;
-                }
-
-                x1 = std::min(x1, nextGlyph.xPosition);
-                break;
-              }
-
-              if (x1 <= x0) {
-                continue;
-              }
-
-              const double y = glyph.yPosition + decoTopY;
-              decoBuilder.moveTo(Vector2d(x0, y));
-              decoBuilder.lineTo(Vector2d(x1, y));
-              decoBuilder.lineTo(Vector2d(x1, y + decoThickness));
-              decoBuilder.lineTo(Vector2d(x0, y + decoThickness));
-              decoBuilder.closePath();
-            }
-
-            if (!decoBuilder.empty()) {
-              drawDecoPath(toTinyPath(decoBuilder.build()));
-            }
-          }
-        }
+        EmitTextDecorationPaths(
+            run, decoration, origins.size(), spanFontSizePx, textEngine,
+            std::hypot(deviceFromLocalTransform_.data[2], deviceFromLocalTransform_.data[3]),
+            decorationWorkRemaining, drawDecoPath);
       }
     }
   }
