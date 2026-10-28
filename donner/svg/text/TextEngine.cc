@@ -2525,7 +2525,6 @@ size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
   size_t line = 0;
   size_t blockLine = 0;
   size_t block = flat.front().block;
-  size_t chunk = flat.front().chunk;
   double origin = flat.front().originalX;
   size_t start = 0;
   size_t index = 0;
@@ -2541,17 +2540,15 @@ size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
       width = 0.0;
       lastBreak.reset();
     }
-    if (item.chunk != chunk) {
-      chunk = item.chunk;
-      if (item.resetsBlock) {
-        blockLine = line;
-      }
-      if (item.resetsInline) {
-        origin = item.originalX;
-        start = index;
-        width = 0.0;
-        lastBreak.reset();
-      }
+    // An overflow retry visits the authored reset again on its newly assigned line.
+    if (item.resetsBlock) {
+      blockLine = line;
+    }
+    if (item.resetsInline) {
+      origin = item.originalX;
+      start = index;
+      width = 0.0;
+      lastBreak.reset();
     }
     width = PlaceWrappingGlyph(flat, index, start, width, line);
     item.origin = origin;
