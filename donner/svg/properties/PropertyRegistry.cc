@@ -3086,6 +3086,12 @@ std::size_t PropertyRegistry::complexPropertyBytes() const {
   if (const std::vector<FilterEffect>* effects = filter.getStoredValue()) {
     SaturatingAddArrayBytes(result, effects->capacity(), sizeof(FilterEffect));
   }
+  if (const ClipPath* clip = clipPath.getStoredValue()) {
+    if (const auto* polygon = std::get_if<PolygonClipPath>(&clip->value)) {
+      SaturatingAddArrayBytes(result, polygon->vertices.capacity(),
+                              sizeof(PolygonClipPath::Vertex));
+    }
+  }
   for (const auto& entry : unparsedProperties) {
     const parser::UnparsedProperty& property = entry.second;
     using MapValue = decltype(unparsedProperties)::value_type;

@@ -230,7 +230,8 @@ functions remain unsupported.
 or `evenodd` interior rules, and the same SVG reference boxes. Vertices may lie outside the
 reference box. Valid one-vertex, two-vertex and collinear polygons create empty clips; invalid
 syntax preserves the earlier declaration. Vertex storage shares the SVG point-list limit and
-render preparation admits all polygon work before constructing paths. Polygon corner rounding
+render preparation admits all polygon work before constructing paths. Retained vertex capacity is
+charged for each computed style, including explicitly inherited copies. Polygon corner rounding
 and `calc()` coordinates are unsupported. `polygon_clip_path_tests`, `properties_tests` and
 `shape_system_tests` cover rendering, nested rules, grammar and resource refusal.
 
