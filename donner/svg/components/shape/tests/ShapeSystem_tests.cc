@@ -242,6 +242,52 @@ TEST_F(ShapeSystemTest, RoundedInsetPreservesTinyCornersAcrossLargeNormalization
                              testing::Field(&Vector2d::y, testing::DoubleEq(0))));
 }
 
+TEST_F(ShapeSystemTest, RoundedInsetLargePercentageAvoidsIntermediateOverflow) {
+  auto document = ParseAndComputeShapes(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="r" width="64" height="64"
+        clip-path="inset(0 round 1e308%) view-box"/>
+    </svg>)svg");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  ParseWarningSink warnings;
+  const auto& style = StyleSystem().computeStyle(element->entityHandle(), warnings);
+  ASSERT_THAT(style.properties, testing::Optional(testing::_));
+  const auto clip = style.properties->clipPath.get();
+  ASSERT_THAT(clip, testing::Optional(testing::Field(
+                        &ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
+  CircleClipGeometryBudget budget;
+  const Path path = shapeSystem.insetClipPath(element->entityHandle(),
+                                              std::get<InsetClipPath>(clip->value), budget);
+  ASSERT_THAT(path.points(), testing::SizeIs(17));
+  EXPECT_THAT(path.points().front(),
+              testing::AllOf(testing::Field(&Vector2d::x, testing::DoubleEq(32)),
+                             testing::Field(&Vector2d::y, testing::DoubleEq(0))));
+}
+
+TEST_F(ShapeSystemTest, RoundedInsetPercentagePreservesTinyReferenceExtent) {
+  auto document = ParseAndComputeShapes(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1e-322 1e-322">
+      <rect id="r" width="1e-322" height="1e-322"
+        clip-path="inset(0 round 1e308%) view-box"/>
+    </svg>)svg");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  ParseWarningSink warnings;
+  const auto& style = StyleSystem().computeStyle(element->entityHandle(), warnings);
+  ASSERT_THAT(style.properties, testing::Optional(testing::_));
+  const auto clip = style.properties->clipPath.get();
+  ASSERT_THAT(clip, testing::Optional(testing::Field(
+                        &ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
+  CircleClipGeometryBudget budget;
+  const Path path = shapeSystem.insetClipPath(element->entityHandle(),
+                                              std::get<InsetClipPath>(clip->value), budget);
+  ASSERT_THAT(path.points(), testing::SizeIs(17));
+  EXPECT_THAT(path.points().front(),
+              testing::AllOf(testing::Field(&Vector2d::x, testing::DoubleEq(5e-323)),
+                             testing::Field(&Vector2d::y, testing::DoubleEq(0))));
+}
+
 TEST_F(ShapeSystemTest, InsetGeometryUsesAxisExtentsAndAdmitsBeforeAllocation) {
   auto document = ParseAndComputeShapes(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48">
