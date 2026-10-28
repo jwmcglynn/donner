@@ -2899,4 +2899,113 @@ TEST(TextEngineTest, RejectedAnchorChunksPreserveAlternatingValidGlyphs) {
   EXPECT_THAT(actual, testing::ElementsAreArray(expected));
 }
 
+TEST(TextEngineTest, WrappedRelativeInlineShiftSurvivesFollowingLines) {
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    for (auto anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
+      for (double delta : {20.0, -20.0}) {
+        for (int sourceLayout : {0, 1, 2}) {
+          SCOPED_TRACE(testing::Message() << mode << " " << anchor << " delta=" << delta
+                                          << " source=" << sourceLayout);
+          Registry registry;
+          FontManager fonts(registry);
+          TextEngine engine = MakeScriptedEngine(registry, fonts);
+          components::ComputedTextComponent text;
+          auto span = MakeSpan(sourceLayout == 0 ? "A\nB\nC" : "B\nC");
+          span.whiteSpace = WhiteSpace::Pre;
+          span.textOrientation = TextOrientation::Upright;
+          span.textAnchor = anchor;
+          const size_t b = sourceLayout == 0 ? 2 : 0;
+          auto& relative = isVertical(mode) ? span.dyList : span.dxList;
+          relative.resize(b + 1);
+          relative[b] = Lengthd(delta);
+          if (sourceLayout != 0) {
+            auto prefix = MakeSpan("A\n");
+            prefix.whiteSpace = WhiteSpace::Pre;
+            prefix.textOrientation = TextOrientation::Upright;
+            text.spans.push_back(prefix);
+            span.startsNewChunk = sourceLayout == 2;
+            if (sourceLayout == 2) {
+              (isVertical(mode) ? span.xList : span.yList) = {Lengthd(100)};
+            }
+          }
+          text.spans.push_back(span);
+          auto params = MakeTextParams(20);
+          params.writingMode = mode;
+          const auto runs = engine.layout(text, params);
+          const auto& glyphs = runs.back().glyphs;
+          ASSERT_THAT(glyphs, SizeIs(sourceLayout == 0 ? 5 : 3));
+          const double advance = isVertical(mode) ? 12 : 10;
+          const double factor = anchor == TextAnchor::Start    ? 0
+                                : anchor == TextAnchor::Middle ? 0.5
+                                                               : 1;
+          for (size_t i : {b, b + 2}) {
+            const auto& glyph = glyphs[i];
+            const double pen =
+                isVertical(mode) ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
+            EXPECT_THAT(pen, DoubleNear(delta - factor * advance, 1e-5));
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(TextEngineTest, SinglePreWrapLineHangsOverflowingSpacesAfterTextLength) {
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    for (auto anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
+      for (int lengthOwner : {0, 1, 2}) {
+        for (double measure : {1.0, 100.0}) {
+          SCOPED_TRACE(testing::Message() << mode << " " << anchor << " owner=" << lengthOwner
+                                          << " measure=" << measure);
+          Registry registry;
+          FontManager fonts(registry);
+          TextEngine engine = MakeScriptedEngine(registry, fonts);
+          components::ComputedTextComponent text;
+          auto span = MakeSpan("A  ");
+          span.whiteSpace = WhiteSpace::PreWrap;
+          span.textAnchor = anchor;
+          span.textOrientation = TextOrientation::Upright;
+          auto params = MakeTextParams(20);
+          params.writingMode = mode;
+          params.inlineSizePx = measure;
+          if (lengthOwner == 1) {
+            params.textLength = Lengthd(200);
+            params.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+          } else if (lengthOwner == 2) {
+            span.textLength = Lengthd(200);
+            span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+          }
+          text.spans.push_back(span);
+          const auto actual = engine.layout(text, params);
+          params.inlineSizePx = 0;
+          text.spans[0].whiteSpace = WhiteSpace::Pre;
+          const auto ordinary = engine.layout(text, params);
+          ASSERT_THAT(actual, SizeIs(1));
+          ASSERT_THAT(ordinary, SizeIs(1));
+          ASSERT_THAT(actual[0].glyphs, SizeIs(3));
+          const auto& first = actual[0].glyphs[0];
+          const auto& reference = ordinary[0].glyphs[0];
+          const double pen =
+              isVertical(mode) ? first.yPosition - first.verticalOriginOffset : first.xPosition;
+          const double referencePen = isVertical(mode)
+                                          ? reference.yPosition - reference.verticalOriginOffset
+                                          : reference.xPosition;
+          const double advance = isVertical(mode) ? reference.yAdvance : reference.xAdvance;
+          const double factor = anchor == TextAnchor::Start    ? 0
+                                : anchor == TextAnchor::Middle ? 0.5
+                                                               : 1;
+          EXPECT_THAT(pen, DoubleNear(measure == 1 ? -factor * advance : referencePen, 1e-5));
+          for (size_t i = 0; i < 3; ++i) {
+            EXPECT_THAT(
+                isVertical(mode) ? actual[0].glyphs[i].yAdvance : actual[0].glyphs[i].xAdvance,
+                DoubleNear(isVertical(mode) ? ordinary[0].glyphs[i].yAdvance
+                                            : ordinary[0].glyphs[i].xAdvance,
+                           1e-5));
+          }
+        }
+      }
+    }
+  }
+}
+
 }  // namespace donner::svg

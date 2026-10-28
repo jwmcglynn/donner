@@ -3566,4 +3566,11 @@ TEST(TextEngineScriptedTest, WrappedParsedNestedSpanOwnsAnchor) {
   EXPECT_THAT(glyphs[2].xPosition, DoubleNear(-21, 1e-5));
 }
 
+TEST(TextEngineScriptedTest, WhiteSpaceParsedNewlineRetainsRelativeInlinePosition) {
+  const auto glyphs =
+      LayoutParsedTextPath("<tspan white-space='pre'>A&#10;<tspan dx='20'>B</tspan></tspan>");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[2].xPosition, DoubleNear(20, 1e-5));
+}
+
 }  // namespace donner::svg
