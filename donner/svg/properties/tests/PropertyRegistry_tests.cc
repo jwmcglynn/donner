@@ -1997,6 +1997,16 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
   }
 }
 
+TEST(PropertyRegistry, PolygonRetainedCapacityIsCharged) {
+  PolygonClipPath polygon;
+  polygon.vertices.reserve(8);
+  polygon.vertices.push_back({Lengthd(0), Lengthd(0)});
+  const std::size_t expected = polygon.vertices.capacity() * sizeof(PolygonClipPath::Vertex);
+  PropertyRegistry registry;
+  registry.clipPath.set(ClipPath(std::move(polygon)), Specificity());
+  EXPECT_EQ(registry.complexPropertyBytes(), expected);
+}
+
 TEST(PropertyRegistry, PolygonClipParsesRuleCoordinatesAndBox) {
   PropertyRegistry registry;
   registry.parseStyle("clip-path:polygon(evenodd, -2px 0, 50% 100%, 0 5px) fill-box");
