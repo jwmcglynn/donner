@@ -1,6 +1,10 @@
 import type { Page, test as baseTest, TestInfo } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
-import { startupPhaseReport, startupWaitMessage } from "./startup-phases.mjs";
+import {
+  describePreNavigationStall,
+  startupPhaseReport,
+  startupWaitMessage,
+} from "./startup-phases.mjs";
 
 /**
  * Failure-time evidence for cases that can capture a blank editor page.
@@ -32,7 +36,9 @@ import { startupPhaseReport, startupWaitMessage } from "./startup-phases.mjs";
  * Every case of a spec that installs the hook also keeps the times its startup phases began
  * (startup-phases.mjs). A failed case prints them and an armed one keeps them in its evidence, so
  * a deadline that a stall before navigation consumed is reported as that stall, not as the wait
- * that happened to be running when the deadline arrived.
+ * that happened to be running when the deadline arrived. The startup waits name the stall in their
+ * own messages; when the deadline arrived elsewhere (inside the navigation itself, say), the hook
+ * adds one error that names it, after the evidence is kept.
  */
 
 /** Bound for each evidence step. */
@@ -426,16 +432,22 @@ export function installFailureCanvasEvidence(test: typeof baseTest): void {
     fatalRecords.delete(testInfo.testId);
     startupMarks.delete(testInfo.testId);
     if (testInfo.status === testInfo.expectedStatus) return;
-    if (marks !== undefined) {
-      console.log(`failure-startup-phases ${
-        JSON.stringify(startupPhaseReport(marks, testInfo.timeout))
-      }`);
+    const report = marks === undefined ? null : startupPhaseReport(marks, testInfo.timeout);
+    if (report !== null) console.log(`failure-startup-phases ${JSON.stringify(report)}`);
+    if (page !== undefined) {
+      try {
+        await captureFailureCanvasEvidence(page, testInfo, kFailureEvidenceStepMs, fatal, marks);
+      } catch (error) {
+        console.error(`failure canvas evidence capture failed: ${String(error)}`);
+      }
     }
-    if (page === undefined) return;
-    try {
-      await captureFailureCanvasEvidence(page, testInfo, kFailureEvidenceStepMs, fatal, marks);
-    } catch (error) {
-      console.error(`failure canvas evidence capture failed: ${String(error)}`);
+    // Only an already timed-out case gets this error, and only when no error names the stall yet.
+    const stall = report === null ? null : describePreNavigationStall(report);
+    if (
+      stall !== null && testInfo.status === "timedOut"
+      && !testInfo.errors.some((error) => error.message?.includes("pre-navigation stall"))
+    ) {
+      throw new Error(`${stall}; the test timeout above is this stall's, not the startup step's`);
     }
   });
 }

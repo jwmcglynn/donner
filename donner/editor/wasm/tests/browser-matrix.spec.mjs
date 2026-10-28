@@ -1047,6 +1047,12 @@ test("openEditor marks each startup phase before the wait it starts", () => {
     /test\.beforeEach\(\(\) => \{\n {4}startupMarks\.set\(test\.info\(\)\.testId, \{\n {6}testStart: Date\.now\(\),/,
     "the first mark must come from a hook that sets up no fixture",
   );
+  // A deadline that arrived outside the startup waits still names the stall, once, and only for a
+  // case that already timed out.
+  assert.match(
+    evidence.slice(install),
+    /stall !== null && testInfo\.status === "timedOut"\n\s*&& !testInfo\.errors\.some\(\(error\) => error\.message\?\.includes\("pre-navigation stall"\)\)/,
+  );
 });
 
 test("drag failure readbacks are archived after sampling with exact frame identities", async () => {
