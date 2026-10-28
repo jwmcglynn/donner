@@ -3,9 +3,14 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import stat
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -51,8 +56,12 @@ def _validate_resource_identity(asset: dict) -> None:
 
 def _validate_resource_payload(package: Path, asset: dict, module: bytes) -> int:
     payload_path = package / asset["path"]
-    if payload_path.is_symlink() or payload_path.stat().st_size != asset["encodedSize"]:
-        raise ValueError("Invalid packaged resource file")
+    if payload_path.is_symlink():
+        raise ValueError(f"Invalid packaged resource file: symlink (id={asset['id']})")
+    actual_size = payload_path.stat().st_size
+    if actual_size != asset["encodedSize"]:
+        raise ValueError(f"Invalid packaged resource file: size (id={asset['id']}, "
+                         f"expected={asset['encodedSize']}, actual={actual_size})")
     payload = payload_path.read_bytes()
     if hashlib.sha256(payload).hexdigest() != asset["sha256"]:
         raise ValueError("Packaged resource digest mismatch")
@@ -135,6 +144,111 @@ def validate_package(package: Path, native_notices: Path | None = None) -> dict:
     return {"families": len(fonts), "deferred_font_bytes": total, "notice_bytes": len(notices), **resources}
 
 
+# These bound build-input materialization, independently of shipping resource budgets.
+MAX_BUILD_INPUT_ENTRIES = 256
+MAX_BUILD_INPUT_FILE_BYTES = 32 * 1024 * 1024
+MAX_BUILD_INPUT_TOTAL_BYTES = 64 * 1024 * 1024
+
+
+def _build_input_size(entry: os.DirEntry, path: Path, relative: Path,
+                      canonical: Path | None) -> int | None:
+    metadata = entry.stat(follow_symlinks=False)
+    if stat.S_ISDIR(metadata.st_mode):
+        return None
+    if stat.S_ISLNK(metadata.st_mode) and canonical is not None:
+        metadata = path.resolve(strict=True).stat()
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("Declared Bazel package contains a directory link or special file")
+    if canonical is not None and path.resolve(strict=True) != canonical / relative:
+        raise ValueError("Bazel package leaf does not match its canonical tree")
+    if not 0 <= metadata.st_size <= MAX_BUILD_INPUT_FILE_BYTES:
+        raise ValueError("Declared Bazel package exceeds copy byte limit")
+    return metadata.st_size
+
+
+def _build_input_inventory(root: Path, canonical: Path | None = None) -> dict[Path, int | None]:
+    inventory = {}
+    pending = [root]
+    total = 0
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                if len(inventory) >= MAX_BUILD_INPUT_ENTRIES:
+                    raise ValueError("Declared Bazel package exceeds copy entry limit")
+                path = Path(entry.path)
+                relative = path.relative_to(root)
+                size = _build_input_size(entry, path, relative, canonical)
+                inventory[relative] = size
+                if size is None:
+                    pending.append(path)
+                    continue
+                total += size
+                if total > MAX_BUILD_INPUT_TOTAL_BYTES:
+                    raise ValueError("Declared Bazel package exceeds copy byte limit")
+    return inventory
+
+
+def _copy_build_input(source: Path, destination: Path, size: int) -> None:
+    descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != size:
+            raise ValueError("Declared Bazel package input changed before copying")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            payload = stream.read(size + 1)
+        after = os.fstat(descriptor)
+        if (len(payload) != size or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+            raise ValueError("Declared Bazel package input changed while copying")
+        with destination.open("xb") as output:
+            output.write(payload)
+    finally:
+        os.close(descriptor)
+
+
+def validate_bazel_package(package: Path, native_notices: Path | None = None) -> dict:
+    """Copy immutable Bazel-declared inputs before strict package validation.
+
+    The caller must preserve the canonical tree for the whole call. A declared
+    package-root alias is allowed; interior directory symlinks are rejected.
+    """
+    if package.is_absolute() or not package.parts or ".." in package.parts:
+        raise ValueError("Expected a relative Bazel runfiles package path")
+    visible = Path.cwd() / package
+    try:
+        anchor = (visible / "packaged-resources.json").resolve(strict=True)
+        canonical = anchor.parent
+        if anchor.name != "packaged-resources.json":
+            raise ValueError("Bazel package manifest does not identify its canonical tree")
+        if canonical != visible:
+            prefix = canonical.parts[:-len(package.parts)]
+            if (canonical.parts[-len(package.parts):] != package.parts or len(prefix) < 3
+                    or prefix[-3] != "bazel-out" or prefix[-1] != "bin"):
+                raise ValueError(
+                    "Bazel package manifest does not identify its declared output tree")
+        inventory = _build_input_inventory(canonical)
+        manifest_size = inventory.get(Path("packaged-resources.json"))
+        if manifest_size is None or manifest_size > 128 * 1024:
+            raise ValueError("Resource metadata exceeds its limit")
+        if _build_input_inventory(visible, canonical) != inventory:
+            raise ValueError("Declared Bazel package inventory differs from its canonical tree")
+        with tempfile.TemporaryDirectory() as temporary:
+            materialized = Path(temporary) / "package"
+            materialized.mkdir()
+            for relative, size in sorted(inventory.items()):
+                destination = materialized / relative
+                if size is None:
+                    destination.mkdir(parents=True, exist_ok=True)
+                else:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    _copy_build_input(canonical / relative, destination, size)
+            return validate_package(materialized, native_notices)
+    except OSError as error:
+        raise ValueError(f"Invalid declared Bazel package input (errno={error.errno})") from None
+    except RuntimeError:
+        raise ValueError("Invalid declared Bazel package link resolution") from None
+
+
 class CatalogPackageValidationTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -173,6 +287,163 @@ class CatalogPackageValidationTest(unittest.TestCase):
         self.manifest = {"fonts": fonts, "encoded_bytes": 64 * 12}
         (self.package / "catalog-fonts.json").write_text(json.dumps(self.manifest))
         (self.package / "CatalogFontNotices.txt").write_text("SIL OPEN FONT LICENSE Version 1.1")
+
+    def _package_cli(self, package, *, cwd=None, bazel_inputs=False, native_notices=None):
+        if native_notices is None:
+            native_notices = self.package / "CatalogFontNotices.txt"
+        command = [sys.executable, str(Path(__file__).resolve()), "--package", str(package),
+                   "--native-notices", str(native_notices)]
+        if bazel_inputs:
+            command.append("--bazel-inputs")
+        return subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=10,
+                              check=False)
+
+    def _tree_snapshot(self, root):
+        snapshot = {}
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root).as_posix()
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                snapshot[relative] = ("link", str(path.readlink()))
+            elif stat.S_ISREG(metadata.st_mode):
+                snapshot[relative] = ("file", stat.S_IMODE(metadata.st_mode), path.read_bytes())
+            else:
+                self.assertTrue(stat.S_ISDIR(metadata.st_mode), relative)
+                snapshot[relative] = ("directory", stat.S_IMODE(metadata.st_mode))
+        return snapshot
+
+    def _declared_input_fixture(self, *, virtual=True, mutate=None):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        relative = Path("donner/editor/wasm/wasm_web_package")
+        canonical = root / "execroot/bazel-out/wasm-transition/bin" / relative
+        shutil.copytree(self.package, canonical)
+        if mutate is not None:
+            mutate(canonical)
+        for path in canonical.rglob("*"):
+            if path.is_file():
+                path.chmod(0o444)
+        cwd = root / "sandbox/catalog_test.runfiles/_main"
+        visible = cwd / relative
+        if virtual:
+            visible.mkdir(parents=True)
+            for path in sorted(canonical.rglob("*")):
+                destination = visible / path.relative_to(canonical)
+                if path.is_dir():
+                    destination.mkdir()
+                else:
+                    destination.symlink_to(path)
+        else:
+            shutil.copytree(canonical, visible)
+        notices = cwd / "third_party/google_fonts/CatalogFontNotices.txt"
+        notices.parent.mkdir(parents=True)
+        notices.symlink_to(self.package / "CatalogFontNotices.txt")
+        return cwd, relative, canonical
+
+    def _declared_input_cli(self, cwd, relative, canonical):
+        before = self._tree_snapshot(canonical)
+        source_before = self._tree_snapshot(self.package)
+        transport_before = self._tree_snapshot(cwd)
+        result = self._package_cli(
+            relative, cwd=cwd, bazel_inputs=True,
+            native_notices=Path("third_party/google_fonts/CatalogFontNotices.txt"))
+        self.assertEqual(self._tree_snapshot(canonical), before)
+        self.assertEqual(self._tree_snapshot(self.package), source_before)
+        self.assertEqual(self._tree_snapshot(cwd), transport_before)
+        return result
+
+    def test_physical_package_cli_passes_without_changing_input(self):
+        before = self._tree_snapshot(self.package)
+        result = self._package_cli(self.package)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), validate_package(self.package))
+        self.assertEqual(self._tree_snapshot(self.package), before)
+
+    def test_bazel_input_cli_accepts_physical_and_complete_virtual_trees(self):
+        for virtual in (False, True):
+            with self.subTest(virtual=virtual):
+                cwd, relative, canonical = self._declared_input_fixture(virtual=virtual)
+                result = self._declared_input_cli(cwd, relative, canonical)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), validate_package(self.package))
+
+    def test_bazel_input_cli_accepts_declared_package_root_alias(self):
+        cwd, relative, canonical = self._declared_input_fixture()
+        visible = cwd / relative
+        shutil.rmtree(visible)
+        visible.symlink_to(canonical, target_is_directory=True)
+        self.assertTrue(visible.is_symlink())
+        result = self._declared_input_cli(cwd, relative, canonical)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), validate_package(self.package))
+        self.assertEqual(visible.readlink(), canonical)
+
+    def test_default_validation_still_rejects_resource_leaf_links(self):
+        cwd, relative, _ = self._declared_input_fixture()
+        with self.assertRaisesRegex(ValueError, "Invalid packaged resource file"):
+            validate_package(cwd / relative)
+        result = self._package_cli(relative, cwd=cwd)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Invalid packaged resource file", result.stderr)
+
+    def test_bazel_input_cli_rejects_byte_identical_wrong_tree_links(self):
+        for selected in (self.resources["assets"][0]["path"], "packaged-resources.json"):
+            with self.subTest(selected=selected):
+                cwd, relative, canonical = self._declared_input_fixture()
+                other = cwd.parent / "other-output" / relative
+                shutil.copytree(canonical, other)
+                leaf = cwd / relative / selected
+                leaf.unlink()
+                leaf.symlink_to(other / selected)
+                other_before = self._tree_snapshot(other)
+                result = self._declared_input_cli(cwd, relative, canonical)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self._tree_snapshot(other), other_before)
+
+    def test_bazel_input_cli_rejects_dangling_payload_links(self):
+        cwd, relative, canonical = self._declared_input_fixture()
+        leaf = cwd / relative / self.resources["assets"][0]["path"]
+        leaf.unlink()
+        leaf.symlink_to(canonical / "missing.svg")
+        result = self._declared_input_cli(cwd, relative, canonical)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_bazel_input_cli_rejects_linked_directories(self):
+        for directory in ("assets", "fonts"):
+            with self.subTest(directory=directory):
+                cwd, relative, canonical = self._declared_input_fixture()
+                selected = cwd / relative / directory
+                shutil.rmtree(selected)
+                selected.symlink_to(canonical / directory, target_is_directory=True)
+                result = self._declared_input_cli(cwd, relative, canonical)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_bazel_input_materialization_preserves_integrity_failures(self):
+        resource_path = self.resources["assets"][0]["path"]
+        resource = (self.package / resource_path).read_bytes()
+        cases = {
+            "size": lambda package: (package / resource_path).write_bytes(b"wrong"),
+            "digest": lambda package: (package / resource_path).write_bytes(
+                resource[:-1] + bytes([resource[-1] ^ 1])),
+            "missing": lambda package: (package / resource_path).unlink(),
+            "extra": lambda package: (package / "assets/extra.svg").write_bytes(b"extra"),
+            "embedded": lambda package: (package / "editor.wasm").write_bytes(
+                b"\0asm\1\0\0\0" + resource),
+            "bootstrap": lambda package: (package / "packaged-resources.js").write_text(
+                "globalThis.DonnerPackagedResources = {};"),
+            "notices": lambda package: (package / "CatalogFontNotices.txt").write_text(
+                "Modified SIL OPEN FONT LICENSE Version 1.1"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(mutation=name):
+                cwd, relative, canonical = self._declared_input_fixture(mutate=mutate)
+                strict = self._package_cli(canonical)
+                result = self._declared_input_cli(cwd, relative, canonical)
+                self.assertNotEqual(strict.returncode, 0)
+                self.assertNotEqual(result.returncode, 0)
+                if name == "digest":
+                    self.assertIn("Packaged resource digest mismatch", strict.stderr)
 
     def test_complete_deferred_package_passes(self):
         self.assertEqual(validate_package(self.package)["deferred_font_bytes"], 64 * 12)
@@ -256,8 +527,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", type=Path)
     parser.add_argument("--native-notices", type=Path)
+    parser.add_argument("--bazel-inputs", action="store_true",
+                        help="Materialize declared Bazel package inputs before strict validation")
     options, remaining = parser.parse_known_args()
     if options.package:
-        print(json.dumps(validate_package(options.package, options.native_notices), sort_keys=True))
+        validator = validate_bazel_package if options.bazel_inputs else validate_package
+        print(json.dumps(validator(options.package, options.native_notices), sort_keys=True))
+    elif options.bazel_inputs:
+        parser.error("--bazel-inputs requires --package")
     else:
         unittest.main(argv=[__file__, *remaining])

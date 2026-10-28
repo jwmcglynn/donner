@@ -315,6 +315,7 @@ py_test(
     name = "catalog_package_integrity_test",
     srcs = ["catalog_package_integrity_test.py"],
     args = [
+        "--bazel-inputs",
         "--package",
         "$(rootpath :_wasm_web_package_for_serve)",
         "--native-notices",
