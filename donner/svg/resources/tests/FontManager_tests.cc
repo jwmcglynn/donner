@@ -965,6 +965,58 @@ TEST(FontManagerTest, ParsedWeightRangesSelectInclusiveFacesAndKeepIdentities) {
   EXPECT_THAT(manager.findFont("TestFont", 700), testing::Eq(heavy));
 }
 
+TEST(FontManagerTest, ParsedWidthRangesSelectInclusiveFaces) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const css::Stylesheet sheet = css::parser::StylesheetParser::Parse(R"(
+    @font-face { font-family: TestFont; src: url(font.otf); font-stretch: 50% 87.5%; }
+    @font-face { font-family: TestFont; src: url(font.otf); font-stretch: 112.5% 200%; }
+  )",
+                                                                     disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(2));
+  Registry registry;
+  FontManager manager(registry);
+  const css::FontFace embedded = MakeEmbeddedFace("TestFont");
+  for (css::FontFace face : sheet.fontFaces()) {
+    face.sources = embedded.sources;
+    manager.addFontFace(face);
+  }
+  const FontHandle narrow = manager.findFont("TestFont", 400, 0, 1);
+  const FontHandle wide = manager.findFont("TestFont", 400, 0, 9);
+  ASSERT_THAT(static_cast<bool>(narrow), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(wide), testing::IsTrue());
+  EXPECT_THAT(narrow, testing::Ne(wide));
+  for (const int width : {1, 2, 3, 4}) {
+    EXPECT_THAT(manager.findFont("TestFont", 400, 0, width), testing::Eq(narrow));
+  }
+  for (const int width : {6, 7, 8, 9}) {
+    EXPECT_THAT(manager.findFont("TestFont", 400, 0, width), testing::Eq(wide));
+  }
+}
+
+TEST(FontManagerTest, NumericWidthDistancePrecedesWeight) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const css::Stylesheet sheet = css::parser::StylesheetParser::Parse(R"(
+    @font-face { font-family: TestFont; src: url(font.otf);
+      font-stretch: 140%; font-weight: 900; }
+    @font-face { font-family: TestFont; src: url(font.otf);
+      font-stretch: 145%; font-weight: 400; }
+  )",
+                                                                     disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(2));
+  Registry registry;
+  FontManager manager(registry);
+  const css::FontFace embedded = MakeEmbeddedFace("TestFont");
+  css::FontFace nearest = sheet.fontFaces()[0];
+  nearest.sources = embedded.sources;
+  manager.addFontFace(nearest);
+  const FontHandle expected = manager.findFont("TestFont", 900, 0, 7);
+  ASSERT_THAT(static_cast<bool>(expected), testing::IsTrue());
+  css::FontFace other = sheet.fontFaces()[1];
+  other.sources = embedded.sources;
+  manager.addFontFace(other);
+  EXPECT_THAT(manager.findFont("TestFont", 400, 0, 7), testing::Eq(expected));
+}
+
 TEST(FontManagerTest, MatchingFiltersWidthBeforeStyle) {
   Registry registry;
   FontManager manager(registry);

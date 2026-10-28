@@ -371,6 +371,36 @@ TEST(StylesheetParser, FontFaceWeightRangeUpdatesAreAtomic) {
   EXPECT_THAT(scalar.fontFaces().front().normalizedFontWeightRange(), testing::Pair(700, 700));
 }
 
+TEST(StylesheetParser, FontFaceWidthRangeIdentityUsesBothPercentageEndpoints) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: 50% 87.5%; }
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: 50% 90%; }
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: 87.5% 50%; }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(3));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[0]),
+              testing::Ne(FontFaceIdentityKey(sheet.fontFaces()[1])));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[0]),
+              testing::Eq(FontFaceIdentityKey(sheet.fontFaces()[2])));
+}
+
+TEST(StylesheetParser, FontFaceWidthPercentageAndKeywordShareIdentity) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: condensed; }
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: 75%; }
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: 75% 75%; }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(3));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[0]),
+              testing::Eq(FontFaceIdentityKey(sheet.fontFaces()[1])));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[0]),
+              testing::Eq(FontFaceIdentityKey(sheet.fontFaces()[2])));
+}
+
 TEST(StylesheetParser, FontFaceStretchKeywords) {
   constexpr std::array<std::string_view, 9> kWidths = {
       "ultra-condensed", "extra-condensed", "condensed",      "semi-condensed", "normal",
