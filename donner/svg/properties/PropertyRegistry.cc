@@ -2194,7 +2194,7 @@ std::optional<ParseDiagnostic> ParseFontShorthand(PropertyRegistry& registry,
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-constexpr std::array<std::pair<std::string_view, bool>, 76> kValidPresentationAttributeEntries{{
+constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAttributeEntries{{
     {"cx", true},
     {"cy", true},
     {"height", true},
@@ -2268,7 +2268,6 @@ constexpr std::array<std::pair<std::string_view, bool>, 76> kValidPresentationAt
     {"vector-effect", true},  // Parsed into registry.vectorEffect; non-scaling-stroke is honored
                               // in stroke rendering (see toStrokeParams in RendererDriver.cc).
     {"visibility", true},
-    {"text-transform", true},
     {"white-space", true},
     {"word-spacing", true},
     {"writing-mode", true},
