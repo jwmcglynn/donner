@@ -212,6 +212,14 @@ filegroup(
     tags = ["manual"],
 )
 
+cc_binary(
+    name = "release_crash_probe",
+    testonly = True,
+    srcs = ["release_crash_probe.cc"],
+    tags = ["manual"],
+    deps = ["//donner/base:failure_signal_handler"],
+)
+
 alias(
     name = "release_svg",
     actual = "//donner/svg/tool:donner-svg",
@@ -365,9 +373,9 @@ py_test(
     size = "small",
     srcs = ["editor_wasm_lane_tests.py"],
     data = [
-        "//donner/editor/wasm:wasm_package_size_tests.py",
         "editor_wasm_lane.sh",
         "lane.sh",
+        "//donner/editor/wasm:wasm_package_size_tests.py",
     ],
     deps = [
         "//tools:test_executable_fixtures",

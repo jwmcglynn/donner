@@ -7,7 +7,6 @@
 #include <functional>
 #include <map>
 #include <optional>
-#include <regex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -265,6 +264,8 @@ public:
   /// Set syntax language rules and schedule recoloring.
   /// @param langDef Language definition to use.
   void setLanguageDefinition(const LanguageDefinition& langDef);
+  /// Use the built-in SVG syntax rules.
+  void setSvgLanguageDefinition();
   /// Set the base syntax color palette.
   /// @param value Palette to store.
   void setPalette(const Palette& value);
@@ -1088,7 +1089,6 @@ private:
    */
   bool navigationAllowed(NavigationGate gate, bool editorFocused) const;
 
-  using RegexList = std::vector<std::pair<std::regex, ColorIndex>>;
   using UndoBuffer = TextEditorCore::UndoBuffer;
 
   float getTextDistanceToLineStart(const Coordinates& from) const;

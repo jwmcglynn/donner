@@ -295,11 +295,14 @@ _BANNED_CHARACTER_RE = re.compile(
 
 
 _INCLUDE_LINE_RE = re.compile(r"^\s*#\s*include\b")
-_STRING_LITERAL_RE = re.compile(r'"(?:\\.|[^"\\])*"')
+_STRING_LITERAL_RE = re.compile(
+    r"(?<![\w])(?:u8|u|U|L)?'(?:\\.|[^'\\\n])*'"
+    r'|"(?:\\.|[^"\\])*"'
+)
 
 
 def _strip_comments_and_strings(text: str) -> str:
-    """Remove comments and string literals but preserve line counts.
+    """Remove comments and quoted literals but preserve line counts.
 
     `#include "..."` directives are preserved verbatim so include-path rules
     can match against the filename - otherwise the quoted include path would

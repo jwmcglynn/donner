@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
-#include <regex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -141,14 +140,11 @@ TextEditorCore::~TextEditorCore() = default;
 
 void TextEditorCore::setLanguageDefinition(const LanguageDefinition& langDef) {
   languageDefinition_ = langDef;
-  regexList_.clear();
-
-  // Build optimized regex list for syntax highlighting
-  for (const auto& regex : languageDefinition_.tokenRegexStrings) {
-    regexList_.emplace_back(std::regex(regex.first, std::regex_constants::optimize), regex.second);
-  }
-
   colorize();
+}
+
+void TextEditorCore::setSvgLanguageDefinition() {
+  setLanguageDefinition(LanguageDefinition::SVG());
 }
 
 // ---------------------------------------------------------------------------
@@ -1854,7 +1850,6 @@ void TextEditorCore::colorizeRange(int fromLine, int toLine) {
   }
 
   std::string buffer;
-  std::cmatch results;
   std::string_view identifier;
 
   const int endLine = std::max(0, std::min(text_.getTotalLines(), toLine));
@@ -1879,31 +1874,8 @@ void TextEditorCore::colorizeRange(int fromLine, int toLine) {
       const char* tokenBegin = nullptr;
       const char* tokenEnd = nullptr;
       ColorIndex tokenColor = ColorIndex::Default;
-      bool hasToken = false;
-
-      // Try custom tokenizer if available
-      if (languageDefinition_.tokenize) {
-        if (languageDefinition_.tokenize(current, end, tokenBegin, tokenEnd, tokenColor)) {
-          hasToken = true;
-        }
-      }
-
-      // Try regex matching if no custom token found
-      if (!hasToken) {
-        for (const auto& [regex, color] : regexList_) {
-          if (std::regex_search(current, end, results, regex,
-                                std::regex_constants::match_continuous)) {
-            const auto& match = *results.begin();
-            tokenBegin = match.first;
-            tokenEnd = match.second;
-            tokenColor = color;
-            hasToken = true;
-            break;
-          }
-        }
-      }
-
-      if (!hasToken) {
+      if (!languageDefinition_.tokenize ||
+          !languageDefinition_.tokenize(current, end, tokenBegin, tokenEnd, tokenColor)) {
         ++current;
         continue;
       }

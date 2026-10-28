@@ -18,8 +18,7 @@ import {
   queuedDispatchCaughtUp,
 } from "./animation-pulse-observation.mjs";
 import {
-  awaitBeforeBlueDeadline,
-  captureAfterCanvasGpuCompletion,
+  awaitBefore,
   captureReadyBasicShapesFrame,
   hasPresentedBasicShapesHostFrame,
 } from "./basic-shapes-capture-gate";
@@ -48,15 +47,15 @@ import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs"
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   armCanvasGpuDelayFromEnv,
+  captureAfterDelayedFrame,
+  type CanvasActivity,
   canvasGpuDelayFromEnv,
-  type CanvasSettleResult,
   expectSurfaceFrameProbeReady,
   findCanvasOwnerWorker,
   findProbedCanvasApplicationWorker,
+  captureQuiescentCanvasFrame,
   holdCanvasCompletionForTest,
-  holdCanvasCompletions,
   readCanvasActivity,
-  settleCanvasWrites,
 } from "./surface-frame-probe";
 import { kStallGuardMs, scaledMs } from "./test-timing";
 
@@ -1480,7 +1479,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
   return {
     async awaitSuspended(deadlineAtMs: number, message = "the raster worker suspends at a yield") {
       await expect.poll(() =>
-        awaitBeforeBlueDeadline(
+        awaitBefore(
           raster.evaluate((id) => {
             const gate = (globalThis as RasterGateScope).__donnerRasterGate;
             return gate?.id === id && gate.suspended();
@@ -1493,7 +1492,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
       }).toBe(true);
     },
     isSuspended: () =>
-      awaitBeforeBlueDeadline(
+      awaitBefore(
         raster.evaluate((id) => {
           const gate = (globalThis as RasterGateScope).__donnerRasterGate;
           return gate?.id === id && gate.suspended();
@@ -1501,7 +1500,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
         performance.now() + scaledMs(1000),
       ),
     renderedTimes: (deadlineAtMs: number) =>
-      awaitBeforeBlueDeadline(
+      awaitBefore(
         raster.evaluate((id) => {
           const scope = globalThis as RasterGateScope;
           if (scope.__donnerRasterGate?.id !== id) throw new Error("the raster gate was released");
@@ -1512,7 +1511,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
         deadlineAtMs,
       ),
     step: (deadlineAtMs: number) =>
-      awaitBeforeBlueDeadline(
+      awaitBefore(
         raster.evaluate((id) => {
           const scope = globalThis as RasterGateScope & EvaluationResumeScope;
           const gate = scope.__donnerRasterGate;
@@ -1527,7 +1526,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
         deadlineAtMs,
       ),
     release: () =>
-      awaitBeforeBlueDeadline(
+      awaitBefore(
         raster.evaluate((id) => {
           const scope = globalThis as RasterGateScope & EvaluationResumeScope;
           const gate = scope.__donnerRasterGate;
@@ -1547,7 +1546,7 @@ async function gateRasterTaskYields(raster: Worker, leaseMs: number) {
 type RasterGate = Awaited<ReturnType<typeof gateRasterTaskYields>>;
 
 async function readPreviewPointerTrace(owner: Worker, deadlineAtMs: number) {
-  return awaitBeforeBlueDeadline(
+  return awaitBefore(
     owner.evaluate(() => {
       const trace = (globalThis as unknown as Record<string, unknown>)
         .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
@@ -1640,7 +1639,7 @@ async function withRasterGate<T>(gate: RasterGate, body: () => Promise<T>, messa
 // opt-in, so it must be unset when the probe starts.
 async function withFramePacedPreviewClock<T>(owner: Worker, body: () => Promise<T>) {
   const setPacing = (enabled: boolean) =>
-    awaitBeforeBlueDeadline(
+    awaitBefore(
       owner.evaluate((on) => {
         const scope = globalThis as unknown as Record<string, unknown>;
         const previous = scope.__donnerFramePacedPreviewClock;
@@ -2093,6 +2092,179 @@ async function armPipelineCompileFault(page: Page) {
 const kBasicShapesTile = kCarouselSamples.find((sample) => sample.id === "basic-shapes")!;
 const kDonnerSplashTile = kCarouselSamples.find((sample) => sample.id === "donner-splash")!;
 
+/**
+ * With the worker's animation frames withheld, drive the frames that apply the carousel click from
+ * the main-thread tick until the raster worker holds the finished render, let every driven tick
+ * drain, and release the render. The delayed-presentation control first holds the GPU owner's
+ * event tasks for 1500 ms after the render has finished; its record is returned.
+ */
+async function driveHeldCarouselRender(page: Page, sampleName: string, delayedControl: boolean) {
+  let presentationFault:
+    | { delayMs: number; requested: number; flushed: number; releaseRequestedAtMs: number }
+    | undefined;
+  // Input waits for a scheduled frame by design, so drive the frames that apply the click
+  // through the main-thread tick instead of the withheld worker animation frames. The frame
+  // that activates the sample arms the completion barrier and defers its render request to a
+  // following frame, so keep ticking until the raster worker holds that finished render.
+  await expect.poll(async () =>
+    page.evaluate((holding) => {
+      const module = (window as unknown as {
+        Module: {
+          _donner_render_completion_barrier_for_testing: (command: number) => number;
+          _donner_whole_app_vsync_tick: () => void;
+        };
+      }).Module;
+      if (module._donner_render_completion_barrier_for_testing(0) === holding) return true;
+      module._donner_whole_app_vsync_tick();
+      return false;
+    }, completionBarrierStates.indexOf("holding")), {
+    message: `expected ${sampleName} to activate and finish its render from driven frames`,
+    timeout: kStallGuardMs,
+    intervals: [8, 16, 25, 50],
+  }).toBe(true);
+  // A tick called just before the poll saw the hold can still be queued or running. Let every
+  // driven tick finish while the result cannot exist yet; from then on only an event frame can
+  // poll it.
+  await expect.poll(
+    () =>
+      page.evaluate(() =>
+        (window as unknown as { Module: { _donner_whole_app_vsync_pending: () => number } })
+          .Module._donner_whole_app_vsync_pending()
+      ),
+    {
+      message: "every driven tick has finished before the held render is released",
+      timeout: kStallGuardMs,
+    },
+  ).toBe(0);
+  // A draining tick may have superseded the held render; the barrier then holds the render
+  // that replaced it. No driven tick runs now, so only an event frame could supersede the hold
+  // before the release.
+  await expect.poll(() => completionBarrier(page, "read"), {
+    message: "the sample's finished render is held once driven ticks have drained",
+    timeout: kStallGuardMs,
+  }).toBe("holding");
+  if (delayedControl) {
+    const owner = await boundBrowserDiagnostic(Promise.any(page.workers().map(async (worker) => {
+      await worker.evaluate(installOwnerEventTimerHold);
+      return worker;
+    })), 2000);
+    if (!owner) throw new Error("the GPU owner did not acknowledge the event-task hold");
+    try {
+      expect(await completionBarrier(page, "release"), "the finished render was still held")
+        .toBe("holding");
+      await expect.poll(async () => (await owner.evaluate(readOwnerEventTimerHold))?.pending ?? 0,
+        { message: "the completed result must request a held event task" }).toBeGreaterThan(0);
+      await page.waitForTimeout(1500);
+    } finally {
+      // Page clock just before the release: the held event frame cannot present before it. A
+      // failed read must not skip the release below.
+      const releaseRequestedAtMs = await page.evaluate(() => performance.now())
+        .catch(() => Number.NaN);
+      const released = await owner.evaluate(releaseOwnerEventTimerHold);
+      presentationFault = { delayMs: 1500, releaseRequestedAtMs, ...released };
+    }
+    expect(presentationFault.flushed).toBeGreaterThan(0);
+  } else {
+    expect(await completionBarrier(page, "release"), "the finished render was still held")
+      .toBe("holding");
+  }
+  return presentationFault;
+}
+
+/**
+ * Fault injection, off unless `DONNER_CAROUSEL_CANVAS_GPU_DELAY` is `<everyFrames>:<iterations>`:
+ * queues fixed GPU work right after the first canvas write of every Nth frame from the click on,
+ * so the presenting frame retires behind it as on a slow or shared GPU. CPU frame timing, task
+ * boundaries and every ordering the carousel cases assert are unchanged.
+ */
+async function armCarouselCanvasGpuDelay(page: Page, testInfo: TestInfo) {
+  if (canvasGpuDelayFromEnv("DONNER_CAROUSEL_CANVAS_GPU_DELAY") === null) return null;
+  await expectSurfaceFrameProbeReady(page);
+  const owner = await findProbedCanvasApplicationWorker(page);
+  if (owner === null) throw new Error("the application canvas owner is unavailable");
+  return armAttachedCanvasGpuDelay(
+    owner,
+    "DONNER_CAROUSEL_CANVAS_GPU_DELAY",
+    "carousel-canvas-gpu-delay",
+    testInfo,
+  );
+}
+
+/**
+ * With the worker's animation frames withheld, require an event frame to have presented the
+ * completed result, then hand the withheld frames back and check the scheduler resumes.
+ */
+async function expectEventFramePresentedHeldResult(
+  page: Page,
+  completedWorkerStats: Window["__donnerWorkerStats"] | undefined,
+  phaseTimings: Record<string, number | undefined>,
+) {
+  // The frame that presented the result must be an event frame. With the worker's animation
+  // frames withheld, the only other frames are the driven ticks before the release, and every one
+  // of those finished before the result existed; a tick carrying the result would hide a
+  // completion wake that no longer requests a frame.
+  expect(
+    (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame,
+    `the completed result was presented by a ${
+      (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame
+    } frame, not an event frame: ${JSON.stringify(phaseTimings)}`,
+  ).toBe("event");
+  // Confirm the hold really was in force throughout, then hand the withheld frames back and
+  // check the scheduler resumes.
+  const held = await readHeldAnimationFrames(page);
+  expect(held, "the withheld animation frames stayed withheld until presentation").toEqual(
+    expect.objectContaining({ released: false, ranAfterRelease: 0 }),
+  );
+  expect(held!.held).toBeGreaterThan(0);
+  await releaseWorkerAnimationFrames(page);
+  await expect.poll(async () => (await readHeldAnimationFrames(page))?.ranAfterRelease ?? 0, {
+    message: "the scheduler resumes once its withheld animation frames are released",
+  }).toBeGreaterThan(0);
+}
+
+/** Geode Splash finishes its post-load layer previews and keeps applying input after them. */
+async function expectGeodeSplashPostLoad(
+  page: Page,
+  bounds: { x: number; y: number; width: number; height: number },
+) {
+  try {
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => ({
+        thumbnails: window.__donnerLayerThumbnailStats,
+        interaction: window.__donnerInteractionStats,
+        frames: window.__donnerMainLoopRenderedFrames,
+      }));
+      console.log(`geode-post-load ${JSON.stringify(state)}`);
+      return Boolean(
+        state.thumbnails && state.thumbnails.rowCount > 1
+          && state.thumbnails.deferredCount === 0
+          && state.thumbnails.textureSnapshotCount > 0,
+      );
+    }, {
+      message: "Geode splash finishes its post-load layer previews without hanging",
+      timeout: 10000,
+      intervals: [100, 250, 500],
+    }).toBe(true);
+    for (let step = 0; step < 5; ++step) {
+      const x = bounds.x + 400 + step * 10;
+      const y = bounds.y + 200;
+      await page.mouse.move(x, y);
+      await expect.poll(() =>
+        page.evaluate(() => ({
+          x: window.__donnerInteractionStats?.pointerX,
+          y: window.__donnerInteractionStats?.pointerY,
+        })), {
+        message: "Geode splash continues applying input after layer previews",
+        timeout: 3000,
+      }).toEqual({ x, y });
+    }
+  } finally {
+    console.log(
+      `geode-post-load-final ${JSON.stringify(await readCarouselFrameDiagnostics(page))}`,
+    );
+  }
+}
+
 for (
   const sample of [
     ...kCarouselSamples,
@@ -2172,22 +2344,7 @@ for (
       const owner = await findGpuOwnerWorker(page);
       expect(owner && await owner.evaluate(armPipelineFirstUseCompiles)).toBe(true);
     }
-    // Fault injection, off unless `DONNER_CAROUSEL_CANVAS_GPU_DELAY` is `<everyFrames>:<iterations>`:
-    // queues fixed GPU work right after the first canvas write of every Nth frame from the click
-    // on, so the presenting frame retires behind it as on a slow or shared GPU. CPU frame timing,
-    // task boundaries and every ordering below are unchanged.
-    let carouselGpuDelay: Awaited<ReturnType<typeof armAttachedCanvasGpuDelay>> = null;
-    if (canvasGpuDelayFromEnv("DONNER_CAROUSEL_CANVAS_GPU_DELAY") !== null) {
-      await expectSurfaceFrameProbeReady(page);
-      const owner = await findProbedCanvasApplicationWorker(page);
-      if (owner === null) throw new Error("the application canvas owner is unavailable");
-      carouselGpuDelay = await armAttachedCanvasGpuDelay(
-        owner,
-        "DONNER_CAROUSEL_CANVAS_GPU_DELAY",
-        "carousel-canvas-gpu-delay",
-        testInfo,
-      );
-    }
+    const carouselGpuDelay = await armCarouselCanvasGpuDelay(page, testInfo);
     const firstUseCreationsBeforeClick = await readPipelinesCreatedAtFirstUse(page);
     let firstUseCreationsAtPresentation: number | null = null;
     const deviceCreationsBeforeClick = await page.evaluate(
@@ -2200,72 +2357,7 @@ for (
     const clickStartedAt = await page.evaluate(() => performance.now());
     await page.mouse.click(bounds.x + bounds.width * sample.xFraction, bounds.y + sample.y);
     if (holdsScheduledFrames) {
-      // Input waits for a scheduled frame by design, so drive the frames that apply the click
-      // through the main-thread tick instead of the withheld worker animation frames. The frame
-      // that activates the sample arms the completion barrier and defers its render request to a
-      // following frame, so keep ticking until the raster worker holds that finished render.
-      await expect.poll(async () =>
-        page.evaluate((holding) => {
-          const module = (window as unknown as {
-            Module: {
-              _donner_render_completion_barrier_for_testing: (command: number) => number;
-              _donner_whole_app_vsync_tick: () => void;
-            };
-          }).Module;
-          if (module._donner_render_completion_barrier_for_testing(0) === holding) return true;
-          module._donner_whole_app_vsync_tick();
-          return false;
-        }, completionBarrierStates.indexOf("holding")), {
-        message: `expected ${sample.name} to activate and finish its render from driven frames`,
-        timeout: kStallGuardMs,
-        intervals: [8, 16, 25, 50],
-      }).toBe(true);
-      // A tick called just before the poll saw the hold can still be queued or running. Let every
-      // driven tick finish while the result cannot exist yet; from then on only an event frame can
-      // poll it.
-      await expect.poll(
-        () =>
-          page.evaluate(() =>
-            (window as unknown as { Module: { _donner_whole_app_vsync_pending: () => number } })
-              .Module._donner_whole_app_vsync_pending()
-          ),
-        {
-          message: "every driven tick has finished before the held render is released",
-          timeout: kStallGuardMs,
-        },
-      ).toBe(0);
-      // A draining tick may have superseded the held render; the barrier then holds the render
-      // that replaced it. No driven tick runs now, so only an event frame could supersede the hold
-      // before the release.
-      await expect.poll(() => completionBarrier(page, "read"), {
-        message: "the sample's finished render is held once driven ticks have drained",
-        timeout: kStallGuardMs,
-      }).toBe("holding");
-      if (delayedControl) {
-        const owner = await boundBrowserDiagnostic(Promise.any(page.workers().map(async (worker) => {
-          await worker.evaluate(installOwnerEventTimerHold);
-          return worker;
-        })), 2000);
-        if (!owner) throw new Error("the GPU owner did not acknowledge the event-task hold");
-        try {
-          expect(await completionBarrier(page, "release"), "the finished render was still held")
-            .toBe("holding");
-          await expect.poll(async () => (await owner.evaluate(readOwnerEventTimerHold))?.pending ?? 0,
-            { message: "the completed result must request a held event task" }).toBeGreaterThan(0);
-          await page.waitForTimeout(1500);
-        } finally {
-          // Page clock just before the release: the held event frame cannot present before it. A
-          // failed read must not skip the release below.
-          const releaseRequestedAtMs = await page.evaluate(() => performance.now())
-            .catch(() => Number.NaN);
-          const released = await owner.evaluate(releaseOwnerEventTimerHold);
-          presentationFault = { delayMs: 1500, releaseRequestedAtMs, ...released };
-        }
-        expect(presentationFault.flushed).toBeGreaterThan(0);
-      } else {
-        expect(await completionBarrier(page, "release"), "the finished render was still held")
-          .toBe("holding");
-      }
+      presentationFault = await driveHeldCarouselRender(page, sample.name, delayedControl);
     }
     // This case asserts ordering only: which frame presents the result and that it carries the
     // completed document. The completion-to-presentation time is reported here and bounded in the
@@ -2371,66 +2463,9 @@ for (
       );
     }
     if (holdsScheduledFrames) {
-      // The frame that presented the result must be an event frame. With the worker's animation
-      // frames withheld, the only other frames are the driven ticks above, and every one of those
-      // finished before the result existed; a tick carrying the result would hide a completion
-      // wake that no longer requests a frame.
-      expect(
-        (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame,
-        `the completed result was presented by a ${
-          (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame
-        } frame, not an event frame: ${JSON.stringify(phaseTimings)}`,
-      ).toBe("event");
-      // Confirm the hold really was in force throughout, then hand the withheld frames back and
-      // check the scheduler resumes.
-      const held = await readHeldAnimationFrames(page);
-      expect(held, "the withheld animation frames stayed withheld until presentation").toEqual(
-        expect.objectContaining({ released: false, ranAfterRelease: 0 }),
-      );
-      expect(held!.held).toBeGreaterThan(0);
-      await releaseWorkerAnimationFrames(page);
-      await expect.poll(async () => (await readHeldAnimationFrames(page))?.ranAfterRelease ?? 0, {
-        message: "the scheduler resumes once its withheld animation frames are released",
-      }).toBeGreaterThan(0);
+      await expectEventFramePresentedHeldResult(page, completedWorkerStats, phaseTimings);
     }
-    if (sample.id === "geode-splash") {
-      try {
-        await expect.poll(async () => {
-          const state = await page.evaluate(() => ({
-            thumbnails: window.__donnerLayerThumbnailStats,
-            interaction: window.__donnerInteractionStats,
-            frames: window.__donnerMainLoopRenderedFrames,
-          }));
-          console.log(`geode-post-load ${JSON.stringify(state)}`);
-          return Boolean(
-            state.thumbnails && state.thumbnails.rowCount > 1
-              && state.thumbnails.deferredCount === 0
-              && state.thumbnails.textureSnapshotCount > 0,
-          );
-        }, {
-          message: "Geode splash finishes its post-load layer previews without hanging",
-          timeout: 10000,
-          intervals: [100, 250, 500],
-        }).toBe(true);
-        for (let step = 0; step < 5; ++step) {
-          const x = bounds.x + 400 + step * 10;
-          const y = bounds.y + 200;
-          await page.mouse.move(x, y);
-          await expect.poll(() =>
-            page.evaluate(() => ({
-              x: window.__donnerInteractionStats?.pointerX,
-              y: window.__donnerInteractionStats?.pointerY,
-            })), {
-            message: "Geode splash continues applying input after layer previews",
-            timeout: 3000,
-          }).toEqual({ x, y });
-        }
-      } finally {
-        console.log(
-          `geode-post-load-final ${JSON.stringify(await readCarouselFrameDiagnostics(page))}`,
-        );
-      }
-    }
+    if (sample.id === "geode-splash") await expectGeodeSplashPostLoad(page, bounds);
     expect(phaseTimings.presentedMs).toBeDefined();
     expect(phaseTimings.completedMs).toBeDefined();
     if (browserName === "chromium" || holdsScheduledFrames) {
@@ -2824,7 +2859,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
 });
 
 test(
-  "production Geode wasm presents visible editor pixels after held canvas GPU completion",
+  "production Geode wasm presents visible editor pixels after delayed canvas GPU work",
   async ({ browserName, page }, testInfo) => {
     test.skip(browserName !== "chromium" || kBackend !== "geode", "controlled browser GPU gate");
     test.skip(
@@ -2836,165 +2871,132 @@ test(
     const applicationOwner = await findProbedCanvasApplicationWorker(page);
     expect(applicationOwner, "the canvas owner must have the completion probe installed").not
       .toBeNull();
-    let hold: Awaited<ReturnType<typeof holdCanvasCompletionForTest>> | null = null;
-    let requiredOwner: Worker | null = null;
-    let releaseSucceeded = false;
-    const captureErrors: unknown[] = [];
-    try {
-      const canvas = page.locator("canvas#canvas");
-      const bounds = await canvas.boundingBox();
-      expect(bounds).not.toBeNull();
-      if (bounds === null) throw new Error("the canvas bounds are unavailable");
-      const before = await page.evaluate(() => ({
-        results: window.__donnerWorkerStats?.completedResults ?? 0,
-        frames: window.__donnerMainLoopRenderedFrames ?? 0,
+    if (applicationOwner === null) throw new Error("the application canvas owner is unavailable");
+    const canvas = page.locator("canvas#canvas");
+    const bounds = await canvas.boundingBox();
+    expect(bounds).not.toBeNull();
+    if (bounds === null) throw new Error("the canvas bounds are unavailable");
+    const before = await page.evaluate(() => ({
+      results: window.__donnerWorkerStats?.completedResults ?? 0,
+      frames: window.__donnerMainLoopRenderedFrames ?? 0,
+    }));
+    await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
+    const readState = () =>
+      page.evaluate(() => ({
+        sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
+        completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+        presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+        renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+        hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
+        hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
+        frameId: window.__donnerOverlayStats?.frameId ?? 0,
+        captureId: window.__donnerOverlayStats?.captureId ?? 0,
+        completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
+        completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
+        completedInputRepresented:
+          window.__donnerPresentationQueueStats?.inputRepresented === true,
+        framesInFlight: window.__donnerPresentationQueueStats?.framesInFlight ?? null,
+        completedSerial: window.__donnerPresentationQueueStats?.completedSerial ?? null,
+        submittedSerial: window.__donnerPresentationQueueStats?.submittedSerial ?? null,
       }));
-      await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
-      const readState = () =>
-        page.evaluate(() => ({
-          sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
-          completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
-          presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
-          renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
-          hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
-          hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
-          frameId: window.__donnerOverlayStats?.frameId ?? 0,
-          captureId: window.__donnerOverlayStats?.captureId ?? 0,
-          completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
-          completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
-          completedInputRepresented:
-            window.__donnerPresentationQueueStats?.inputRepresented === true,
-          framesInFlight: window.__donnerPresentationQueueStats?.framesInFlight ?? null,
-          completedSerial: window.__donnerPresentationQueueStats?.completedSerial ?? null,
-          submittedSerial: window.__donnerPresentationQueueStats?.submittedSerial ?? null,
-        }));
-      await expect.poll(
-        async () => hasPresentedBasicShapesHostFrame(await readState(), before.results),
-        { timeout: scaledMs(5_000) },
-      ).toBe(true);
-      let readyState: Awaited<ReturnType<typeof readState>> | undefined;
-      await expect.poll(async () => {
-        const state = await readState();
-        const ready = hasPresentedBasicShapesHostFrame(state, before.results)
-          && state.framesInFlight === 0 && state.completedSerial === state.submittedSerial;
-        if (ready) readyState = state;
-        return ready;
-      }, { timeout: scaledMs(5_000) }).toBe(true);
-      if (!readyState) throw new Error("the completed Basic Shapes frame was not observed");
-      expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
-      // Hold a fresh document frame, not welcome frames that can occupy all presentation slots.
-      const completionHold = await holdCanvasCompletionForTest(page, [applicationOwner!]);
-      hold = completionHold;
-      await page.evaluate(() => {
-        window.__donnerEditorFrameRequested = true;
-      });
-      await expect.poll(completionHold.observedCalls).toBeGreaterThan(0);
+    let readyState: Awaited<ReturnType<typeof readState>> | undefined;
+    await expect.poll(async () => {
+      const state = await readState();
+      const ready = hasPresentedBasicShapesHostFrame(state, before.results)
+        && state.framesInFlight === 0 && state.completedSerial === state.submittedSerial;
+      if (ready) readyState = state;
+      return ready;
+    }, { timeout: kStallGuardMs }).toBe(true);
+    if (!readyState) throw new Error("the completed Basic Shapes frame was not observed");
+    expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
 
-      let screenshots = 0;
-      let settled = false;
-      const gatedCapture = captureReadyBasicShapesFrame(
-        page,
-        readyState,
-        before.results,
-        performance.now() + scaledMs(5_000),
-        (remainingMs) => {
-          ++screenshots;
-          return captureEditorPage(page, remainingMs);
-        },
-        (owner) => {
-          requiredOwner = owner;
-        },
-      ).finally(() => {
-        settled = true;
-      });
-      // Wait until this exact gate is entered, or a bypass starts the capture.
-      // A page round trip alone can finish before worker-owner discovery.
-      let lastEnteredWaits: number | null = null;
-      try {
-        await expect.poll(async () => {
-          if (screenshots > 0) return true;
-          lastEnteredWaits = await completionHold.enteredWaits();
-          return lastEnteredWaits > 0;
-        }, { timeout: scaledMs(5_000) }).toBe(true);
-      } catch (error) {
-        console.error(JSON.stringify({
-          heldCanvasCapture: {
-            readyStateValid: hasPresentedBasicShapesHostFrame(readyState, before.results),
-            screenshots,
-            settled,
-            requiredOwnerIdentified: requiredOwner !== null,
-            enteredWaits: lastEnteredWaits,
+    // Hold the canvas's GPU work itself: fixed GPU work queued after the frame's first canvas write
+    // keeps its remaining writes running on the GPU after its CPU task, its host counters and its
+    // submission have all advanced. A gate that trusted any of those would capture now.
+    let requiredOwner: Worker | null = null;
+    let screenshots = 0;
+    let atScreenshot: CanvasActivity | null = null;
+    const { result: capture, frame: heldFrame, delay: delayReport } = await captureAfterDelayedFrame(
+      page,
+      applicationOwner,
+      () =>
+        captureReadyBasicShapesFrame(
+          page,
+          readyState!,
+          before.results,
+          async (timeoutMs) => {
+            ++screenshots;
+            atScreenshot = await readCanvasActivity(applicationOwner);
+            return captureEditorPage(page, timeoutMs);
           },
-        }));
-        throw error;
-      }
-      expect(screenshots).toBe(0);
-      expect(settled).toBe(false);
-      expect(requiredOwner).not.toBeNull();
-      if (requiredOwner === null) throw new Error("the held canvas owner was not identified");
-      await completionHold.release(requiredOwner);
-      releaseSucceeded = true;
-      const capture = await gatedCapture;
-      expect(capture).not.toBeNull();
-      if (capture === null) throw new Error("the held canvas capture is unavailable");
-      const scoredFramePath = testInfo.outputPath("held-canvas-scored-frame.png");
-      await writeFile(scoredFramePath, capture.png);
-      await testInfo.attach("held-canvas-scored-frame", {
-        path: scoredFramePath,
-        contentType: "image/png",
-      });
-      expect(capture.usable).toBe(true);
-      expect(screenshots).toBe(1);
-      const viewport = page.viewportSize();
-      expect(viewport).not.toBeNull();
-      if (viewport !== null) {
-        expect(
-          readEditorPixelBoundsFromPng(capture.png, "basic-blue", viewport, {
-            minX: 0,
-            minY: 0,
-            maxX: viewport.width,
-            maxY: viewport.height,
-          })?.pixels ?? 0,
-        ).toBeGreaterThan(500);
-      }
-      let staleCaptures = 0;
-      const staleCapture = async () => {
-        ++staleCaptures;
-      };
-      expect(
-        await captureReadyBasicShapesFrame(
-          page,
-          { ...readyState, hostPresented: false, completedFrameId: 0 },
-          before.results,
-          performance.now() + 100,
-          staleCapture,
+          {
+            onOwner: (owner) => {
+              requiredOwner = owner;
+            },
+            timedOut: (result) => result.timedOutCaptures > 0,
+          },
         ),
-      ).toBeNull();
+    );
+    const delayPath = testInfo.outputPath("held-canvas-gpu-delay.json");
+    await writeFile(delayPath, JSON.stringify({ heldFrame, atScreenshot, delayReport }, null, 2));
+    await testInfo.attach("held-canvas-gpu-delay", { path: delayPath, contentType: "application/json" });
+    expect(requiredOwner).toBe(applicationOwner);
+    // captureAfterDelayedFrame returns only once the gate's settle wait began while the delayed
+    // frame's GPU work was still running, so a gate that did not wait for it fails below.
+    expect(delayReport.injected, "the held frame's GPU work was delayed").toBe(1);
+    expect(delayReport.settleSawPending).toBe(true);
+    expect(capture).not.toBeNull();
+    if (capture === null || atScreenshot === null) {
+      throw new Error("the held canvas capture is unavailable");
+    }
+    // The accepted screenshot started only after the GPU had run every canvas write, the delayed
+    // frame's included.
+    const scored: CanvasActivity = atScreenshot;
+    expect(scored.canvasSubmits).toBeGreaterThanOrEqual(heldFrame.canvasSubmits);
+    expect(scored.canvasRetired, JSON.stringify({ heldFrame, scored })).toBe(scored.canvasSubmits);
+    const scoredFramePath = testInfo.outputPath("held-canvas-scored-frame.png");
+    await writeFile(scoredFramePath, capture.png);
+    await testInfo.attach("held-canvas-scored-frame", {
+      path: scoredFramePath,
+      contentType: "image/png",
+    });
+    expect(capture.usable).toBe(true);
+    expect(screenshots).toBeGreaterThanOrEqual(1);
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    if (viewport !== null) {
       expect(
-        await captureReadyBasicShapesFrame(
-          page,
-          { ...readyState, hostFrames: readyState.renderedFrames - 1 },
-          before.results,
-          performance.now() + 100,
-          staleCapture,
-        ),
-      ).toBeNull();
-      expect(staleCaptures).toBe(0);
-    } catch (error) {
-      captureErrors.push(error);
-    } finally {
-      if (!releaseSucceeded && hold !== null) {
-        try {
-          await hold.release(requiredOwner ?? applicationOwner!);
-        } catch (cleanupError) {
-          captureErrors.push(cleanupError);
-        }
-      }
+        readEditorPixelBoundsFromPng(capture.png, "basic-blue", viewport, {
+          minX: 0,
+          minY: 0,
+          maxX: viewport.width,
+          maxY: viewport.height,
+        })?.pixels ?? 0,
+      ).toBeGreaterThan(500);
     }
-    if (captureErrors.length === 1) throw captureErrors[0];
-    if (captureErrors.length > 1) {
-      throw new AggregateError(captureErrors, "capture and hold cleanup failed");
-    }
+    // A frame the host never presented, or one older than the latest rendered frame, is not
+    // captured at all.
+    let staleCaptures = 0;
+    const staleCapture = async () => {
+      ++staleCaptures;
+    };
+    expect(
+      await captureReadyBasicShapesFrame(
+        page,
+        { ...readyState, hostPresented: false, completedFrameId: 0 },
+        before.results,
+        staleCapture,
+      ),
+    ).toBeNull();
+    expect(
+      await captureReadyBasicShapesFrame(
+        page,
+        { ...readyState, hostFrames: readyState.renderedFrames - 1 },
+        before.results,
+        staleCapture,
+      ),
+    ).toBeNull();
+    expect(staleCaptures).toBe(0);
     // A parked secondary worker must not turn a successful owner release into
     // a failure, while an unresponsive required owner must still fail closed.
     let ownerEvaluations = 0;
@@ -3030,21 +3032,6 @@ test(
     const requiredHold = await holdCanvasCompletionForTest(page, [unavailableOwner]);
     await expect(requiredHold.release(unavailableOwner))
       .rejects.toThrow("could not release the required canvas completion owner");
-    let forbiddenCaptures = 0;
-    const noCapture = async () => {
-      ++forbiddenCaptures;
-    };
-    await expect(captureAfterCanvasGpuCompletion(
-      { evaluate: () => Promise.reject(new Error("rejected completion")) } as unknown as Worker,
-      performance.now() + 100,
-      noCapture,
-    )).rejects.toThrow("rejected completion");
-    await expect(captureAfterCanvasGpuCompletion(
-      { evaluate: () => new Promise<never>(() => {}) } as unknown as Worker,
-      performance.now() + 10,
-      noCapture,
-    )).rejects.toThrow("exceeded the blue-pixel deadline");
-    expect(forbiddenCaptures).toBe(0);
     let boundedShots = 0;
     let forwardedTimeout: number | undefined;
     const timedOutPage = {
@@ -3058,17 +3045,6 @@ test(
     expect(boundedCapture.usable).toBe(false);
     expect(boundedShots).toBe(1);
     expect(forwardedTimeout).toBe(7);
-    let lateCaptures = 0;
-    await expect(captureAfterCanvasGpuCompletion(
-      { evaluate: () => Promise.resolve(1) } as unknown as Worker,
-      performance.now() + 200,
-      async () => {
-        ++lateCaptures;
-        await new Promise<void>((resolve) => setTimeout(resolve, 250));
-        return "late";
-      },
-    )).rejects.toThrow("exceeded the blue-pixel deadline");
-    expect(lateCaptures).toBe(1);
     expect(fatalMessages).toEqual([]);
   },
 );
@@ -3125,7 +3101,8 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   let probeRegion: ProbeRegion | null = null;
   let blueCss: PixelBounds | null = null;
   let screenshotTimeouts = 0;
-  const blueDeadlineAtMs = performance.now() + scaledMs(5_000);
+  // The blue capture and its retries share one stall guard; none of them is a latency budget.
+  const stallGuardEndsAtMs = performance.now() + kStallGuardMs;
   let lastBlueProbe:
     | {
       shot: Buffer;
@@ -3173,8 +3150,8 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
         page,
         state,
         beforeSample,
-        blueDeadlineAtMs,
-        (remainingMs) => captureEditorPage(page, remainingMs),
+        (timeoutMs) => captureEditorPage(page, timeoutMs),
+        { timedOut: (result) => result.timedOutCaptures > 0, untilMs: stallGuardEndsAtMs },
       );
       if (capture === null) return 0;
       screenshotTimeouts += capture.timedOutCaptures;
@@ -3210,15 +3187,12 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
           maxY: blue.maxY - region.y,
           pixels: blue.pixels,
         };
-        if (performance.now() >= blueDeadlineAtMs) {
-          throw new Error("Basic Shapes blue-pixel acceptance exceeded the deadline");
-        }
         return blue.pixels;
       }
       return 0;
     }, {
       message: "the resize target must be visibly blue in the artboard capture",
-      timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
+      timeout: Math.max(1, stallGuardEndsAtMs - performance.now()),
       intervals: [250, 400, 600],
     }).toBeGreaterThan(500);
   } catch (error) {
@@ -4343,52 +4317,6 @@ type AnimationRegionCaptureFn = (
 ) => Promise<AnimationRegionCapture>;
 
 /**
- * Upper bound on screenshot passes under one completion hold. While the hold is in place the app's
- * held frames never retire, so at most three new frames are admitted and every rejected pass saw
- * at least one of them; a few frames submitted before the hold can also still retire and free
- * slots, so seven is a conservative bound.
- */
-const kMaxCanvasQuiescencePasses = 7;
-
-/**
- * Longest a capture holds the app's canvas completions at once, from arming the hold to the end
- * of the screenshot. The app declares its presentation device lost once its oldest frame has
- * waited 5 s without observed progress (`PresentationSubmissionQueue::kCompletionDeadline`), so a
- * hold must end well before that. A capture whose GPU work or screenshot would take longer
- * releases the hold, lets the held frames retire and holds again. This bounds the hold only; it is
- * not a deadline for the capture.
- */
-const kMaxCanvasCompletionHoldMs = 3500;
-
-/** Part of the hold the settle wait may use, leaving the rest for the screenshot. */
-const kMaxCanvasSettleHoldMs = 2000;
-
-/** Shortest screenshot timeout worth starting under a hold; less than this re-holds instead. */
-const kMinHeldScreenshotMs = 250;
-
-/**
- * Settle \p owner's canvas writes, or return null once \p untilMs passes first. A settle failure
- * still propagates.
- */
-async function settleCanvasWritesUntil(
-  owner: Worker,
-  untilMs: number,
-): Promise<CanvasSettleResult | null> {
-  const settle = settleCanvasWrites(owner);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), Math.max(0, untilMs - performance.now()));
-  });
-  try {
-    return await Promise.race([settle, expired]);
-  } finally {
-    clearTimeout(timer);
-    // A settle abandoned at the bound may still reject later, for example when the page closes.
-    settle.catch(() => {});
-  }
-}
-
-/**
  * Page captures of the animation sample, each of a canvas frame whose GPU work has finished.
  *
  * A Firefox page capture can show a canvas frame whose submitted GPU work has not run yet: only
@@ -4419,83 +4347,27 @@ function createAnimationRegionCapture(
         ...(unclipped ? {} : { clip: region }),
         timeout,
       });
-    const deadline = deadlineAtMs ?? (performance.now() + scaledMs(5000));
+    // A caller's own end, or the stall guard: no capture deadline shorter than that.
+    const deadline = deadlineAtMs ?? (performance.now() + kStallGuardMs);
     let captureTiming: { startedEpochMs: number; finishedEpochMs: number };
     const captureAttempts: Record<string, unknown>[] = [];
     const sequence = flatCaptureSequence++;
     const captureCompleted = async () => {
       const startedEpochMs = Date.now();
-      const attempt: Record<string, unknown> = { startedEpochMs };
-      captureAttempts.push(attempt);
       const passes: Record<string, unknown>[] = [];
-      attempt.passes = passes;
+      const attempt: Record<string, unknown> = { startedEpochMs, passes };
+      captureAttempts.push(attempt);
       try {
-        // Only a pass in which no canvas frame was acquired or written between settling and the
-        // end of the screenshot is accepted. The hold bounds how many frames can arrive meanwhile;
-        // the capture deadline bounds how often a slow GPU makes it hold again.
-        for (;;) {
-          const heldAt = performance.now();
-          // Not raced against the deadline: a hold armed after the capture gave up would never be
-          // released.
-          const hold = await holdCanvasCompletions(owner);
-          let holdSpent = false;
-          try {
-            for (let pass = 1; pass <= kMaxCanvasQuiescencePasses && !holdSpent; ++pass) {
-              const record: Record<string, unknown> = { pass, settleDispatchEpochMs: Date.now() };
-              passes.push(record);
-              const settled = await settleCanvasWritesUntil(
-                owner,
-                Math.min(deadline, heldAt + kMaxCanvasSettleHoldMs),
-              );
-              if (performance.now() >= deadline) {
-                throw new Error("animation capture deadline exceeded");
-              }
-              const holdRemaining = heldAt + kMaxCanvasCompletionHoldMs - performance.now();
-              if (settled === null || holdRemaining < kMinHeldScreenshotMs) {
-                // The GPU is slow enough that holding on would approach the app's own completion
-                // deadline. Let the held frames retire, then hold again.
-                record.holdBudgetSpent = true;
-                holdSpent = true;
-                break;
-              }
-              record.settled = settled;
-              record.settledEpochMs = Date.now();
-              const remaining = deadline - performance.now();
-              const screenshotTimeout = Math.min(remaining, holdRemaining);
-              record.screenshotStartedEpochMs = Date.now();
-              let image: Buffer;
-              try {
-                image = await screenshot(screenshotTimeout);
-              } catch (error) {
-                if (screenshotTimeout >= remaining || !(error instanceof errors.TimeoutError)) {
-                  throw error;
-                }
-                record.holdBudgetSpent = true;
-                holdSpent = true;
-                break;
-              }
-              record.screenshotFinishedEpochMs = Date.now();
-              const after = await awaitBeforeBlueDeadline(readCanvasActivity(owner), deadline);
-              record.canvasActivityAfterScreenshot = after;
-              if (performance.now() >= deadline) {
-                throw new Error("animation capture deadline exceeded");
-              }
-              if (after.canvasSubmits === settled.canvasSubmits && after.frames === settled.frames) {
-                captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
-                return image;
-              }
-            }
-          } finally {
-            await hold.release().catch((error: unknown) => {
-              attempt.holdReleaseError = String(error);
-            });
-          }
-          if (!holdSpent) {
-            throw new Error(
-              "the canvas kept presenting new frames under the capture's completion hold",
-            );
-          }
-        }
+        // The shared gate holds the app's canvas completions, settles their GPU work, and accepts
+        // only a screenshot during which no canvas frame was acquired or written. The animation
+        // never stops presenting, so every screenshot stays under a hold.
+        const { result } = await captureQuiescentCanvasFrame(owner, screenshot, {
+          untilMs: deadline,
+          retakeUnheld: false,
+          passes,
+        });
+        captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
+        return result;
       } catch (error) {
         attempt.error = String(error);
         throw error;
@@ -4520,7 +4392,7 @@ function createAnimationRegionCapture(
           await writeFile(pngPath, image);
           let presentation: unknown;
           try {
-            presentation = await awaitBeforeBlueDeadline(
+            presentation = await awaitBefore(
               page.evaluate(() => ({
                 queue: window.__donnerPresentationQueueStats,
                 worker: window.__donnerWorkerStats,
@@ -4880,12 +4752,12 @@ async function exerciseAnimationPointerPulse({
       if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
       const deadline = performance.now() + scaledMs(5000);
       const notBefore = Date.now();
-      await awaitBeforeBlueDeadline(action(), deadline);
+      await awaitBefore(action(), deadline);
       // Screenshot capture can stall Firefox's worker progress. Let the actual input
       // dispatch and its following document presentation finish before asking for pixels.
       await expect.poll(
         () =>
-          awaitBeforeBlueDeadline(
+          awaitBefore(
             interactionCaptureOwner.evaluate(({ eventType, notBefore }) => {
               const trace =
                 (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace;
@@ -4902,12 +4774,12 @@ async function exerciseAnimationPointerPulse({
           message: "the pointer event reaches the preview document",
         },
       ).toBe(true);
-      const previous = await awaitBeforeBlueDeadline(
+      const previous = await awaitBefore(
         page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? 0),
         deadline,
       );
       await expect.poll(() =>
-        awaitBeforeBlueDeadline(
+        awaitBefore(
           page.evaluate((before) => {
             const stats = window.__donnerWorkerStats;
             return (stats?.completedResults ?? 0) > before
@@ -4953,7 +4825,7 @@ async function exerciseAnimationPointerPulse({
     const initialGate = await gateRasterTaskYields(raster, scaledMs(6000));
     await withRasterGate(initialGate, () =>
       withFramePacedPreviewClock(owner, async () => {
-        await awaitBeforeBlueDeadline(
+        await awaitBefore(
           page.mouse.click(box.x + originX + 456 * scale, pad.y),
           initialPulseDeadline,
         );
@@ -4985,7 +4857,7 @@ async function exerciseAnimationPointerPulse({
     const pulseCompletionDeadline = performance.now() + scaledMs(5000);
     // Observe a post-pulse presentation before screenshots can stall worker progress.
     await expect.poll(async () => {
-      const snapshot = await awaitBeforeBlueDeadline(
+      const snapshot = await awaitBefore(
         interactionCaptureOwner.evaluate(() => {
           const trace = (globalThis as unknown as Record<string, unknown>)
             .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;

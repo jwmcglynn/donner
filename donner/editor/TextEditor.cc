@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
-#include <regex>
 #include <span>
 #include <stack>
 #include <string>
@@ -76,7 +75,7 @@ TextEditor::TextEditor()
       interactiveEnd_(core_.interactiveEnd()) {
   // Initialize with default dark color scheme
   setPalette(getDarkPalette());
-  setLanguageDefinition(LanguageDefinition::SVG());
+  setSvgLanguageDefinition();
 
   // Set keyboard shortcuts
   shortcuts_ = getDefaultShortcuts();
@@ -194,12 +193,15 @@ std::vector<TextEditor::ShortcutBindings> TextEditor::getDefaultShortcuts() {
 }
 
 // ---------------------------------------------------------------------------
-// Forwarders to TextEditorCore. The bodies live in TextEditorCore.cc; the
-// shell keeps the public API for source-level compatibility.
+// Forwarders to the headless editing core.
 // ---------------------------------------------------------------------------
 
 void TextEditor::setLanguageDefinition(const LanguageDefinition& langDef) {
   core_.setLanguageDefinition(langDef);
+}
+
+void TextEditor::setSvgLanguageDefinition() {
+  core_.setSvgLanguageDefinition();
 }
 
 void TextEditor::setPalette(const Palette& value) {

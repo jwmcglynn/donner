@@ -1680,7 +1680,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     return;
   }
 
-  textEditor_.setLanguageDefinition(TextEditor::LanguageDefinition::SVG());
+  textEditor_.setSvgLanguageDefinition();
   textEditor_.setText(*initialSource);
   textEditor_.resetTextChanged();
   textEditor_.setActiveAutocomplete(true);
