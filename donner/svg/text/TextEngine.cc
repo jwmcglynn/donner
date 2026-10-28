@@ -2260,67 +2260,130 @@ struct TextAnchorBounds {
   }
 };
 
-/// Fix up chunk text-anchors and apply per-chunk text-anchor adjustment.
+struct TextAnchorRange {
+  ChunkBoundary begin;
+  ChunkBoundary end;
+};
+
+std::pair<size_t, size_t> AnchorRunRange(const TextAnchorRange& range, size_t runIndex,
+                                         size_t size) {
+  return {std::min(runIndex == range.begin.runIndex ? range.begin.glyphIndex : 0, size),
+          std::min(runIndex == range.end.runIndex ? range.end.glyphIndex : size, size)};
+}
+
+template <typename Fn>
+void ForEachAnchorGlyph(std::vector<TextRun>& runs, const TextAnchorRange& range, Fn&& fn) {
+  if (runs.empty() || range.begin.runIndex >= runs.size()) {
+    return;
+  }
+  for (size_t ri = range.begin.runIndex; ri <= std::min(range.end.runIndex, runs.size() - 1);
+       ++ri) {
+    if (runs[ri].onPath) {
+      continue;
+    }
+    const auto [begin, end] = AnchorRunRange(range, ri, runs[ri].glyphs.size());
+    for (size_t gi = begin; gi < end; ++gi) {
+      fn(runs[ri].glyphs[gi]);
+    }
+  }
+}
+
+void MarkRejectedAnchorRange(const std::vector<TextRun>& runs, const TextAnchorRange& range,
+                             std::vector<std::vector<bool>>& rejected) {
+  if (rejected.empty()) {
+    rejected.resize(runs.size());
+  }
+  if (runs.empty() || range.begin.runIndex >= runs.size()) {
+    return;
+  }
+  for (size_t ri = range.begin.runIndex; ri <= std::min(range.end.runIndex, runs.size() - 1);
+       ++ri) {
+    if (runs[ri].onPath) {
+      continue;
+    }
+    const auto [begin, end] = AnchorRunRange(range, ri, runs[ri].glyphs.size());
+    if (rejected[ri].empty()) {
+      rejected[ri].resize(runs[ri].glyphs.size(), false);
+    }
+    std::fill(rejected[ri].begin() + begin, rejected[ri].begin() + end, true);
+  }
+}
+
+void CompactRejectedAnchorGlyphs(std::vector<TextRun>& runs,
+                                 const std::vector<std::vector<bool>>& rejected) {
+  for (size_t ri = 0; ri < rejected.size(); ++ri) {
+    if (rejected[ri].empty()) {
+      continue;
+    }
+    auto& glyphs = runs[ri].glyphs;
+    size_t retained = 0;
+    for (size_t gi = 0; gi < glyphs.size(); ++gi) {
+      if (!rejected[ri][gi]) {
+        if (retained != gi) {
+          glyphs[retained] = std::move(glyphs[gi]);
+        }
+        ++retained;
+      }
+    }
+    glyphs.resize(retained);
+  }
+}
+
+void ShiftAnchorGlyph(TextGlyph& glyph, double shift, bool vertical) {
+  if (vertical) {
+    glyph.yPosition += shift;
+  } else {
+    glyph.xPosition += shift;
+  }
+}
+
+bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, bool vertical) {
+  TextAnchorBounds bounds;
+  bool finite = true;
+  ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph) {
+    finite &= HasFiniteFlatGlyphGeometry(glyph);
+    bounds.include(InlinePenPosition(glyph, vertical), vertical ? glyph.yAdvance : glyph.xAdvance);
+  });
+  if (!bounds.initialized) {
+    return true;
+  }
+  const double shift = bounds.shift(range.begin.textAnchor);
+  finite &= std::isfinite(shift);
+  ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph) {
+    auto translated = glyph;
+    ShiftAnchorGlyph(translated, shift, vertical);
+    finite &= HasFiniteFlatGlyphGeometry(translated);
+  });
+  if (!finite) {
+    return false;
+  }
+  ForEachAnchorGlyph(runs, range,
+                     [&](TextGlyph& glyph) { ShiftAnchorGlyph(glyph, shift, vertical); });
+  return true;
+}
+
+/// Retain original chunk indices until all groups are validated, then compact each run once.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
                      const components::ComputedTextComponent& text, bool vertical) {
-  // For each chunk, use the text-anchor from the first span that has actual glyph content.
   for (auto& chunk : chunkBoundaries) {
     for (size_t ri = chunk.runIndex; ri < runs.size(); ++ri) {
-      const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
-      if (gStart < runs[ri].glyphs.size()) {
+      const size_t begin = ri == chunk.runIndex ? chunk.glyphIndex : 0;
+      if (begin < runs[ri].glyphs.size()) {
         chunk.textAnchor = text.spans[ri].textAnchor;
         break;
       }
     }
   }
-
-  // Apply text-anchor adjustment per text chunk.
+  std::vector<std::vector<bool>> rejected;
   for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
-    const auto& chunk = chunkBoundaries[ci];
-    size_t endRunIdx = runs.size();
-    size_t endGlyphIdx = 0;
-    if (ci + 1 < chunkBoundaries.size()) {
-      endRunIdx = chunkBoundaries[ci + 1].runIndex;
-      endGlyphIdx = chunkBoundaries[ci + 1].glyphIndex;
-    }
-
-    TextAnchorBounds bounds;
-    for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
-      if (runs[ri].onPath) {
-        continue;  // On-path runs already have text-anchor applied along the path.
-      }
-      const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
-      const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
-      for (size_t gi = gStart; gi < gEnd; ++gi) {
-        const auto& g = runs[ri].glyphs[gi];
-        // Measure from pen positions: an upright glyph is drawn past its pen by its origin.
-        const double pos = vertical ? g.yPosition - g.verticalOriginOffset : g.xPosition;
-        const double adv = vertical ? g.yAdvance : g.xAdvance;
-        bounds.include(pos, adv);
-      }
-    }
-
-    if (!bounds.initialized) {
-      continue;
-    }
-
-    const double shift = bounds.shift(chunk.textAnchor);
-
-    for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
-      if (runs[ri].onPath) {
-        continue;  // On-path runs already have text-anchor applied along the path.
-      }
-      const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
-      const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
-      for (size_t gi = gStart; gi < gEnd; ++gi) {
-        if (vertical) {
-          runs[ri].glyphs[gi].yPosition += shift;
-        } else {
-          runs[ri].glyphs[gi].xPosition += shift;
-        }
-      }
+    const ChunkBoundary end =
+        ci + 1 < chunkBoundaries.size() ? chunkBoundaries[ci + 1] : ChunkBoundary{runs.size(), 0};
+    const TextAnchorRange range{chunkBoundaries[ci], end};
+    if (!AnchorTextRange(runs, range, vertical)) {
+      MarkRejectedAnchorRange(runs, range, rejected);
     }
   }
+  CompactRejectedAnchorGlyphs(runs, rejected);
 }
 
 /// Compute per-span baseline-shift in pixels, including OS/2 sub/super metrics
@@ -2646,6 +2709,46 @@ void PlaceWrappedGlyph(TextGlyph& glyph, const WrappingGlyph& item, const TextLa
   }
 }
 
+std::vector<bool> FiniteWrappingGroups(const std::vector<TextRun>& runs,
+                                       const std::vector<WrappingGlyph>& flat,
+                                       const TextLayoutParams& params,
+                                       const std::vector<double>& shifts, double lineHeightPx) {
+  std::vector<bool> finite(shifts.size(), true);
+  for (const auto& item : flat) {
+    auto translated = runs[item.run].glyphs[item.glyph];
+    PlaceWrappedGlyph(translated, item, params, shifts[item.anchorGroup], lineHeightPx);
+    finite[item.anchorGroup] = finite[item.anchorGroup] && HasFiniteFlatGlyphGeometry(translated);
+  }
+  return finite;
+}
+
+void DiscardNonfiniteWrappingGroups(std::vector<TextRun>& runs,
+                                    const std::vector<WrappingGlyph>& flat,
+                                    const std::vector<bool>& finite) {
+  size_t index = 0;
+  for (size_t ri = 0; ri < runs.size(); ++ri) {
+    if (runs[ri].onPath) {
+      continue;
+    }
+    auto& glyphs = runs[ri].glyphs;
+    size_t retained = 0;
+    for (size_t gi = 0; gi < glyphs.size(); ++gi) {
+      bool keep = true;
+      if (index < flat.size() && flat[index].run == ri && flat[index].glyph == gi) {
+        keep = finite[flat[index].anchorGroup];
+        ++index;
+      }
+      if (keep) {
+        if (retained != gi) {
+          glyphs[retained] = std::move(glyphs[gi]);
+        }
+        ++retained;
+      }
+    }
+    glyphs.resize(retained);
+  }
+}
+
 bool HasWrappingLines(const std::vector<WrappingGlyph>& flat) {
   size_t block = flat.front().block;
   size_t line = flat.front().line;
@@ -2679,9 +2782,16 @@ bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedT
     return false;
   }
   const auto shifts = WrappingAnchorShifts(flat, numLines, measurePx);
+  const auto finite = wrapped ? FiniteWrappingGroups(runs, flat, params, shifts, lineHeightPx)
+                              : std::vector<bool>(shifts.size(), true);
   for (const auto& item : flat) {
-    PlaceWrappedGlyph(runs[item.run].glyphs[item.glyph], item, params,
-                      wrapped ? shifts[item.anchorGroup] : 0.0, lineHeightPx);
+    if (finite[item.anchorGroup]) {
+      PlaceWrappedGlyph(runs[item.run].glyphs[item.glyph], item, params,
+                        wrapped ? shifts[item.anchorGroup] : 0.0, lineHeightPx);
+    }
+  }
+  if (wrapped) {
+    DiscardNonfiniteWrappingGroups(runs, flat, finite);
   }
   return wrapped;
 }
