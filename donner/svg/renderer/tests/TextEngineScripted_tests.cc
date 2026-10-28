@@ -7,6 +7,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/Utf8.h"
@@ -62,6 +63,7 @@ TextLayoutParams MakeTextParams(double fontSize) {
 class ScriptedTextBackend : public TextBackend {
 public:
   bool reverseClusters = false;
+  bool nativeSmallCaps = false;
   bool clusterCombiningMarks = false;
   std::optional<SubSuperMetrics> subSuper;
   std::shared_ptr<float> shapedFontSizePx;
@@ -111,7 +113,7 @@ public:
 
   bool isCursive(uint32_t codepoint) const override { return codepoint == U'c'; }
 
-  bool hasSmallCapsFeature(FontHandle /*font*/) const override { return false; }
+  bool hasSmallCapsFeature(FontHandle /*font*/) const override { return nativeSmallCaps; }
 
   std::optional<BitmapGlyph> bitmapGlyph(FontHandle /*font*/, int /*glyphIndex*/,
                                          float /*scale*/) const override {
@@ -309,6 +311,37 @@ TEST(TextEngineScriptedTest, ReferenceFillBoundsIncludeHiddenCellsWithoutDecodin
   EXPECT_THAT(geometry->outlines, IsEmpty());
   EXPECT_EQ(probe->outlineCalls, 0u);
   EXPECT_THAT(root.all_of<components::ComputedTextGeometryComponent>(), testing::IsFalse());
+}
+
+std::optional<FontVariant> ShapeSmallCapsWithSynthesis(std::string_view policy,
+                                                       bool nativeSmallCaps) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->nativeSmallCaps = nativeSmallCaps;
+  const ScriptedTextBackend* probe = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  const EntityHandle root = MakeReferenceTextRoot(registry, Visibility::Hidden);
+  root.get<components::TextComponent>().text = RcString("a");
+  root.get<components::ComputedTextComponent>().spans.front().text = RcString("a");
+  root.get<components::ComputedStyleComponent>().properties->parseStyle(
+      RcString("font-variant: small-caps; font-synthesis-small-caps: " + std::string(policy)));
+  std::size_t work = 100000;
+  EXPECT_TRUE(engine.referenceGeometry(root, false, work).has_value());
+  return probe->lastShapedVariant;
+}
+
+TEST(TextEngineScriptedTest, SmallCapsSynthesisNoneSuppressesOnlySyntheticCaps) {
+  EXPECT_THAT(ShapeSmallCapsWithSynthesis("none", false), testing::Optional(FontVariant::Normal));
+}
+
+TEST(TextEngineScriptedTest, SmallCapsSynthesisAutoPreservesSyntheticCaps) {
+  EXPECT_THAT(ShapeSmallCapsWithSynthesis("auto", false),
+              testing::Optional(FontVariant::SmallCaps));
+}
+
+TEST(TextEngineScriptedTest, SmallCapsSynthesisNonePreservesNativeFeature) {
+  EXPECT_THAT(ShapeSmallCapsWithSynthesis("none", true), testing::Optional(FontVariant::SmallCaps));
 }
 
 TEST(TextEngineScriptedTest, ReferenceSmallCapsCellsKeepFullFontHeight) {
