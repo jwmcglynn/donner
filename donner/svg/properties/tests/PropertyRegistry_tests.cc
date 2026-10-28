@@ -2009,11 +2009,12 @@ TEST(PropertyRegistry, InsetOffsetsExpandAndRetainInlineStorage) {
     PropertyRegistry registry;
     registry.parseStyle("clip-path:fill-box inset(" + std::string(example.value) + ")");
     const auto clip = registry.clipPath.get();
-    ASSERT_TRUE(clip.has_value());
+    ASSERT_THAT(clip, Optional(testing::Field(&ClipPath::value,
+                                              testing::VariantWith<InsetClipPath>(testing::_))));
     const auto& inset = std::get<InsetClipPath>(clip->value);
     EXPECT_EQ(inset.box, RadialClipPath::Box::Fill);
     for (std::size_t i = 0; i < example.offsets.size(); ++i) {
-      EXPECT_EQ(inset.offsets[i], Lengthd(example.offsets[i], Lengthd::Unit::Px));
+      EXPECT_THAT(inset.offsets[i], LengthValueIs(example.offsets[i], Lengthd::Unit::Px));
     }
     EXPECT_EQ(registry.complexPropertyBytes(), 0u);
   }
@@ -2023,17 +2024,22 @@ TEST(PropertyRegistry, InsetAcceptsNegativePercentagesAndPresentationUnits) {
   PropertyRegistry registry;
   registry.parseStyle("clip-path:INSET(-10% 2px) view-box");
   const auto clip = registry.clipPath.get();
-  ASSERT_TRUE(clip.has_value());
+  ASSERT_THAT(clip, Optional(testing::Field(&ClipPath::value,
+                                            testing::VariantWith<InsetClipPath>(testing::_))));
   const auto& inset = std::get<InsetClipPath>(clip->value);
-  EXPECT_EQ(inset.offsets[0], Lengthd(-10, Lengthd::Unit::Percent));
-  EXPECT_EQ(inset.offsets[2], inset.offsets[0]);
+  EXPECT_THAT(inset.offsets[0], LengthValueIs(-10, Lengthd::Unit::Percent));
+  EXPECT_THAT(inset.offsets[2], LengthValueIs(-10, Lengthd::Unit::Percent));
   EXPECT_EQ(inset.box, RadialClipPath::Box::View);
   PropertyRegistry presentation;
   EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "inset(1 2 3 4)"),
               NoParseError());
-  EXPECT_EQ(std::get<InsetClipPath>(presentation.clipPath.get()->value).offsets[3], Lengthd(4));
-  EXPECT_EQ(testing::PrintToString(registry.clipPath.get().value()),
-            "inset(-10% 2px -10% 2px) view-box");
+  const auto presentationClip = presentation.clipPath.get();
+  ASSERT_THAT(
+      presentationClip,
+      Optional(testing::Field(&ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
+  EXPECT_THAT(std::get<InsetClipPath>(presentationClip->value).offsets[3],
+              LengthValueIs(4, Lengthd::Unit::None));
+  EXPECT_EQ(testing::PrintToString(*clip), "inset(-10% 2px -10% 2px) view-box");
 }
 
 TEST(PropertyRegistry, InvalidInsetKeepsEarlierDeclaration) {
