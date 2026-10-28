@@ -2717,6 +2717,62 @@ TEST(TextEngineScriptedTest, CoverageFallbackSwitchesToRegisteredFaceThatCoversC
               ElementsAre(AllOf(GlyphIndexIs(Gt(0)), Field("font", &TextGlyph::font, altFace))));
 }
 
+class SynthesisCoverageBackend : public CoverageProbeBackend {
+public:
+  FontHandle nativeFace;
+  bool hasSmallCapsFeature(FontHandle font) const override { return font == nativeFace; }
+};
+
+TEST(TextEngineScriptedTest, SmallCapsSynthesisUsesEachFallbackFacesCapability) {
+  for (bool nativeFallback : {false, true}) {
+    SCOPED_TRACE(nativeFallback);
+    Registry registry;
+    FontManager manager(registry);
+    const FontHandle alternate = RegisterFallbackBackedFace(manager, "CapsFallback");
+    ASSERT_TRUE(static_cast<bool>(alternate));
+    auto backend = std::make_unique<SynthesisCoverageBackend>();
+    backend->coveringFont = alternate;
+    backend->nativeFace = nativeFallback ? alternate : manager.fallbackFont();
+    TextEngine engine(manager, registry, std::move(backend));
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("A\xC3\xA9");
+    span.fontVariant = FontVariant::SmallCaps;
+    span.fontSynthesisSmallCaps = FontSynthesisSmallCaps::None;
+    text.spans.push_back(std::move(span));
+    const auto runs = engine.layout(text, MakeTextParams(20));
+    ASSERT_THAT(runs, SizeIs(1));
+    ASSERT_THAT(runs.front().glyphs, SizeIs(2));
+    EXPECT_FLOAT_EQ(runs.front().glyphs[0].fontSizeScale, nativeFallback ? 1.0f : 0.8f);
+    EXPECT_FLOAT_EQ(runs.front().glyphs[1].fontSizeScale, nativeFallback ? 0.8f : 1.0f);
+    EXPECT_EQ(runs.front().glyphs[1].font, alternate);
+    EXPECT_EQ(runs.front().glyphs[0].cluster, 0u);
+    EXPECT_EQ(runs.front().glyphs[1].cluster, 1u);
+  }
+}
+
+TEST(TextEngineScriptedTest, SmallCapsSynthesisPreservesCompatibleNativeKerning) {
+  for (bool native : {false, true}) {
+    Registry registry;
+    FontManager manager(registry);
+    auto backend = std::make_unique<ScriptedTextBackend>();
+    backend->nativeSmallCaps = native;
+    TextEngine engine(manager, registry, std::move(backend));
+    components::ComputedTextComponent text;
+    auto first = MakeSpan("a");
+    first.fontVariant = FontVariant::SmallCaps;
+    auto second = MakeSpan("b");
+    second.startsNewChunk = false;
+    second.fontVariant = FontVariant::SmallCaps;
+    second.fontSynthesisSmallCaps = FontSynthesisSmallCaps::None;
+    text.spans.push_back(std::move(first));
+    text.spans.push_back(std::move(second));
+    const auto runs = engine.layout(text, MakeTextParams(20));
+    ASSERT_THAT(runs, SizeIs(2));
+    ASSERT_THAT(runs[1].glyphs, SizeIs(1));
+    EXPECT_DOUBLE_EQ(runs[1].glyphs.front().xPosition, native ? 13.0 : 10.0);
+  }
+}
+
 TEST(TextEngineScriptedTest, CoverageFallbackKeepsFontWhenNoRegisteredFaceCovers) {
   Registry registry;
   FontManager fontManager(registry);

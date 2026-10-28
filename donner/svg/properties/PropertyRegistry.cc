@@ -2360,6 +2360,30 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.fontVariant);
                  }},
+                {"font-synthesis-small-caps",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& value)
+                           -> ParseResult<FontSynthesisSmallCaps> {
+                         const auto& components = value.components();
+                         if (components.size() == 1) {
+                           if (const auto* ident =
+                                   components.front().tryGetToken<css::Token::Ident>()) {
+                             if (ident->value.equalsLowercase("auto")) {
+                               return FontSynthesisSmallCaps::Auto;
+                             }
+                             if (ident->value.equalsLowercase("none")) {
+                               return FontSynthesisSmallCaps::None;
+                             }
+                           }
+                         }
+                         ParseDiagnostic error;
+                         error.reason = "Invalid font-synthesis-small-caps value";
+                         return error;
+                       },
+                       &registry.fontSynthesisSmallCaps);
+                 }},
                 {"font-kerning",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
