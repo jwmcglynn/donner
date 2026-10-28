@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -106,7 +107,8 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
                      const components::ComputedTextComponent& text, bool vertical);
 
 /// Apply whitespace-dependent line layout along the inline axis, before text-anchor adjustment.
-/// Multiple lines receive per-line anchors and advance along the writing mode's block axis.
+/// Each line/chunk uses its first addressable character's anchor; lines advance along the block
+/// axis.
 ///
 /// Soft wrapping uses spaces and tabs according to each span's white-space policy. Preserved
 /// segment breaks force new lines even without inline-size. There is no mid-word breaking,
@@ -116,14 +118,16 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
 ///
 /// @param runs Runs produced by the single-line layout; glyph positions are rewritten.
 /// @param text Computed text tree, parallel to \p runs (span i corresponds to run i).
-/// @param params Layout params; textAnchor selects per-line anchoring.
+/// @param params Layout params, including writing mode.
 /// @param measurePx The inline-size measure in pixels, or zero to apply only forced breaks/tabs.
 /// @param lineHeightPx Advance between line baselines along the block axis, in pixels.
 /// @param backend Font metrics for the minimum tab advance (0.5ch).
+/// @param chunks Authored text chunk boundaries, retained across line breaks.
 /// @return true if multiple lines were laid out. Tab-only changes return false.
 bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
                          const TextLayoutParams& params, double measurePx, double lineHeightPx,
-                         const TextBackend* backend = nullptr);
+                         const TextBackend* backend = nullptr,
+                         std::span<const ChunkBoundary> chunks = {});
 
 /// Compute per-span baseline-shift in pixels, including OS/2 sub/super metrics
 /// and ancestor baseline-shift accumulation.

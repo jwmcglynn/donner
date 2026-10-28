@@ -2380,6 +2380,7 @@ TEST(TextEngineTest, WhiteSpacePreWrapCountsSpacesBeforeForcedBreakForAnchor) {
   components::ComputedTextComponent text;
   auto span = MakeSpan("A \nB");
   span.whiteSpace = WhiteSpace::PreWrap;
+  span.textAnchor = TextAnchor::End;
   text.spans.push_back(span);
   auto params = MakeTextParams(20.0);
   params.textAnchor = TextAnchor::End;
@@ -2495,7 +2496,7 @@ TEST(TextEngineTest, WrappedNestedSpanOwnsLineAnchors) {
       TextEngine engine = MakeScriptedEngine(registry, fonts);
       components::ComputedTextComponent text;
       text.spans.push_back(MakeSpan(""));
-      auto span = MakeSpan("A\nBB");
+      auto span = MakeSpan(isVertical(mode) ? "\xe7\x95\x8c\n\xe7\x95\x8c\xe7\x95\x8c" : "A\nBB");
       span.whiteSpace = WhiteSpace::Pre;
       span.textAnchor = anchor;
       span.textOrientation = TextOrientation::Upright;
@@ -2543,23 +2544,39 @@ TEST(TextEngineTest, WrappedLineUsesFirstSpanAnchorWithoutShearingMixedSpans) {
 }
 
 TEST(TextEngineTest, WrappedExplicitPositionStartsIndependentAnchorChunk) {
-  Registry registry;
-  FontManager fonts(registry);
-  TextEngine engine = MakeScriptedEngine(registry, fonts);
-  components::ComputedTextComponent text;
-  auto first = MakeSpan("A");
-  first.whiteSpace = WhiteSpace::Pre;
-  first.textAnchor = TextAnchor::Middle;
-  auto second = MakeSpan("BC\nD");
-  second.whiteSpace = WhiteSpace::Pre;
-  second.textAnchor = TextAnchor::End;
-  second.xList = {Lengthd(100)};
-  text.spans = {first, second};
-  const auto runs = engine.layout(text, MakeTextParams(20));
-  ASSERT_THAT(runs, SizeIs(2));
-  EXPECT_THAT(runs[0].glyphs[0].xPosition, DoubleNear(-5, 1e-5));
-  EXPECT_THAT(runs[1].glyphs[0].xPosition, DoubleNear(79, 1e-5));
-  EXPECT_THAT(runs[1].glyphs[1].xPosition, DoubleNear(90, 1e-5));
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    SCOPED_TRACE(testing::PrintToString(mode));
+    Registry registry;
+    FontManager fonts(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fonts);
+    components::ComputedTextComponent text;
+    auto first = MakeSpan("A");
+    first.whiteSpace = WhiteSpace::Pre;
+    first.textAnchor = TextAnchor::Middle;
+    first.textOrientation = TextOrientation::Upright;
+    auto second = MakeSpan("BC\nD");
+    second.whiteSpace = WhiteSpace::Pre;
+    second.textAnchor = TextAnchor::End;
+    second.textOrientation = TextOrientation::Upright;
+    if (isVertical(mode)) {
+      second.yList = {Lengthd(100)};
+    } else {
+      second.xList = {Lengthd(100)};
+    }
+    text.spans = {first, second};
+    auto params = MakeTextParams(20);
+    params.writingMode = mode;
+    const auto runs = engine.layout(text, params);
+    ASSERT_THAT(runs, SizeIs(2));
+    const auto pen = [mode](const TextGlyph& glyph) {
+      return isVertical(mode) ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
+    };
+    const double advance = isVertical(mode) ? 12 : 10;
+    const double kern = isVertical(mode) ? 2 : 1;
+    EXPECT_THAT(pen(runs[0].glyphs[0]), DoubleNear(-advance / 2, 1e-5));
+    EXPECT_THAT(pen(runs[1].glyphs[0]), DoubleNear(100 - 2 * advance - kern, 1e-5));
+    EXPECT_THAT(pen(runs[1].glyphs[1]), DoubleNear(100 - advance, 1e-5));
+  }
 }
 
 TEST(TextEngineTest, WrappedEmptyLinesDoNotSelectTheFollowingAnchor) {
@@ -2578,6 +2595,25 @@ TEST(TextEngineTest, WrappedEmptyLinesDoNotSelectTheFollowingAnchor) {
   const auto runs = engine.layout(text, MakeTextParams(20));
   ASSERT_THAT(runs, SizeIs(2));
   EXPECT_THAT(runs[1].glyphs[0].xPosition, DoubleNear(-21, 1e-5));
+}
+
+TEST(TextEngineTest, WrappedSoftLineStartsUseTheNewFirstSpanAnchor) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  components::ComputedTextComponent text;
+  auto first = MakeSpan("A ");
+  first.textAnchor = TextAnchor::End;
+  auto second = MakeSpan("BB");
+  second.startsNewChunk = false;
+  second.textAnchor = TextAnchor::Middle;
+  text.spans = {first, second};
+  auto params = MakeTextParams(20);
+  params.inlineSizePx = 30;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(2));
+  EXPECT_THAT(runs[0].glyphs[0].xPosition, DoubleNear(-10, 1e-5));
+  EXPECT_THAT(runs[1].glyphs[0].xPosition, DoubleNear(-10.5, 1e-5));
 }
 
 }  // namespace donner::svg
