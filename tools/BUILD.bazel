@@ -1,5 +1,5 @@
 load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:licenses.bzl", "donner_closure_notice_file")
 
@@ -644,6 +644,25 @@ py_test(
     size = "small",
     srcs = ["native_delivery_tests.py"],
     deps = [":native_delivery_lib"],
+)
+
+cc_binary(
+    name = "native_delivery_elf_fixture",
+    testonly = True,
+    srcs = ["native_delivery_elf_fixture.cc"],
+    copts = ["-gline-tables-only", "-fasynchronous-unwind-tables"],
+    features = ["-strip"],
+    linkopts = ["-Wl,--build-id=sha1"],
+    target_compatible_with = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+)
+
+py_test(
+    name = "native_delivery_elf_tests",
+    size = "small",
+    srcs = ["native_delivery_elf_tests.py"],
+    data = [":native_delivery_elf_fixture"],
+    target_compatible_with = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+    deps = [":native_delivery_lib", "@rules_python//python/runfiles"],
 )
 
 py_library(

@@ -140,6 +140,23 @@ class NativeDeliveryTest(unittest.TestCase):
         self.assertTrue(any(call.args[1].startswith("--add-gnu-debuglink=")
                             for call in run.call_args_list))
 
+    def test_linux_rejects_unusable_source_lines_before_strip_or_metadata(self):
+        self.binary.write_bytes(LINUX_HEADER + b"linked executable")
+        def write_debug(*arguments):
+            if "--only-keep-debug" in arguments:
+                Path(arguments[-1]).write_bytes(b"debug-free ELF")
+            return ""
+        with mock.patch.object(delivery, "_tool", side_effect=write_debug) as tool, \
+             mock.patch.object(delivery, "_build_id", return_value="a" * 40), \
+             mock.patch.object(delivery, "_elf_unwind", return_value={".eh_frame": "b" * 64}), \
+             mock.patch.object(delivery, "_require_elf_source_lines", create=True,
+                               side_effect=ValueError("no usable DWARF source lines")):
+            with self.assertRaisesRegex(ValueError, "usable DWARF source lines"):
+                delivery.prepare(binary=self.binary, output=self.output,
+                                 symbols=self.symbols, platform="linux-x86-64")
+        self.assertFalse(any("--strip-unneeded" in call.args for call in tool.call_args_list))
+        self.assertFalse((self.symbols / "delivery.json").exists())
+
     def test_public_or_absent_symbol_evidence_directory_fails_before_copy(self):
         evidence = self.root / "public"
         evidence.mkdir(mode=0o755)
