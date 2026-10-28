@@ -123,6 +123,39 @@ donner_cc_test(
     ],
 )
 
+config_setting(
+    name = "installed_cli_basic_text",
+    flag_values = {
+        "//donner/svg/renderer:text": "true",
+        "//donner/svg/renderer:text_full": "false",
+    },
+)
+
+donner_cc_test(
+    name = "donner_cli_installed_workflow_tests",
+    srcs = ["DonnerCliInstalledWorkflow_tests.cc"],
+    data = [
+        ":cli_resource_bundle",
+        ":donner-cli",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }) + select({
+        ":installed_cli_basic_text": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer/tests:gif_test_decoder",
+        "//tools/svg_suite:image_compare",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # The one-shot CLI must never link the GPU (Geode) backend: a single
 # rendered frame cannot amortize GPU device and shader setup, so the CPU
 # backend is the CLI renderer under every build config, including
