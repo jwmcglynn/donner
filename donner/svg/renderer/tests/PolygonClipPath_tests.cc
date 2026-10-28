@@ -109,6 +109,16 @@ TEST(PolygonClipPath, DegeneratePolygonsReplaceEarlierClipWithEmptyArea) {
   }
 }
 
+TEST(PolygonClipPath, NestedEvenOddRuleOverridesElementClipRule) {
+  const auto actual = RenderPolygonScene(R"svg(
+    <clipPath id="clip"><rect width="64" height="64" clip-rule="nonzero"
+      clip-path="polygon(evenodd, 8px 8px, 56px 8px, 56px 56px, 8px 56px,
+                         8px 8px, 56px 8px, 56px 56px, 8px 56px) view-box"/></clipPath>
+    <rect width="64" height="64" fill="red" clip-path="url(#clip)"/>)svg");
+  editor::tests::CompareBitmapToBitmap(actual, RenderPolygonScene(""), "polygon_nested_evenodd",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(PolygonClipPath, NestedClipChildUsesItsReferenceGeometry) {
   const auto actual = RenderPolygonScene(R"svg(
       <clipPath id="clip"><rect x="8" y="12" width="40" height="32"

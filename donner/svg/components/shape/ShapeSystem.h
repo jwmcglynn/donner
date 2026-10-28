@@ -140,6 +140,13 @@ public:
   Path ellipseClipPath(EntityHandle handle, const EllipseClipPath& ellipse,
                        CircleClipGeometryBudget& budget);
 
+  /// Resolve a polygon clipping shape in element-local coordinates.
+  /// @param handle Styled element supplying reference geometry and length metrics.
+  /// @param polygon Parsed vertices and reference-box selection.
+  /// @param budget Shared admission budget for render preparation.
+  Path polygonClipPath(EntityHandle handle, const PolygonClipPath& polygon,
+                       CircleClipGeometryBudget& budget);
+
   /**
    * Get the bounds for the given entity in world space, if it has a shape component.
    *

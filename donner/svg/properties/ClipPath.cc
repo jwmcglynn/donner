@@ -4,7 +4,9 @@
 #include <cmath>
 #include <optional>
 
+#include "donner/css/parser/DeclarationListParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
+#include "donner/svg/parser/PointsListParser.h"
 
 namespace donner::svg {
 namespace {
@@ -250,6 +252,113 @@ ParseResult<ClipPath> ParseRadialFunction(const css::Function& function, RadialC
              : ParseResult<ClipPath>(InvalidShape());
 }
 
+/// Iterate without allocating a second token list.
+class PolygonArguments {
+public:
+  explicit PolygonArguments(std::span<const Component> values) : values_(values) {}
+
+  const Component* next() {
+    while (next_ < values_.size() && values_[next_].isToken<css::Token::Whitespace>()) {
+      ++next_;
+    }
+    return next_ < values_.size() ? &values_[next_++] : nullptr;
+  }
+
+private:
+  std::span<const Component> values_;
+  std::size_t next_ = 0;
+};
+
+std::optional<PolygonClipPath::Vertex> ParsePolygonVertex(const Component& x,
+                                                          PolygonArguments& args,
+                                                          bool allowUserUnits) {
+  const Component* y = args.next();
+  if (!y) {
+    return std::nullopt;
+  }
+  const auto lengthX = FiniteLength(x, allowUserUnits);
+  const auto lengthY = FiniteLength(*y, allowUserUnits);
+  if (!lengthX || !lengthY) {
+    return std::nullopt;
+  }
+  return PolygonClipPath::Vertex{*lengthX, *lengthY};
+}
+
+bool ParsePolygonRule(PolygonArguments& args, const Component*& current, PolygonClipPath& polygon) {
+  if (current && (IsIdent(*current, "evenodd") || IsIdent(*current, "nonzero"))) {
+    polygon.rule = IsIdent(*current, "evenodd") ? ClipRule::EvenOdd : ClipRule::NonZero;
+    const Component* comma = args.next();
+    if (!comma || !comma->isToken<css::Token::Comma>()) {
+      return false;
+    }
+    current = args.next();
+  }
+  return true;
+}
+
+ParseResult<ClipPath> ParsePolygonFunction(const css::Function& function, RadialClipPath::Box box,
+                                           bool allowUserUnits) {
+  static_assert(PolygonClipPath::kMaximumVertices == parser::PointsListParser::kMaximumPoints);
+  if (function.values.size() > css::parser::DeclarationListParser::kMaximumComponentValues) {
+    return InvalidShape();
+  }
+  PolygonArguments args(function.values);
+  PolygonClipPath polygon;
+  polygon.box = box;
+  const Component* current = args.next();
+  if (!ParsePolygonRule(args, current, polygon)) {
+    return InvalidShape();
+  }
+  while (current) {
+    const auto vertex = ParsePolygonVertex(*current, args, allowUserUnits);
+    if (!vertex || polygon.vertices.size() == PolygonClipPath::kMaximumVertices) {
+      return InvalidShape();
+    }
+    polygon.vertices.push_back(*vertex);
+    const Component* comma = args.next();
+    if (!comma) {
+      return ClipPath(std::move(polygon));
+    }
+    if (!comma->isToken<css::Token::Comma>()) {
+      return InvalidShape();
+    }
+    current = args.next();
+  }
+  return InvalidShape();
+}
+
+bool IsSupportedShape(const css::Function& function) {
+  return function.name.equalsLowercase("circle") || function.name.equalsLowercase("ellipse") ||
+         function.name.equalsLowercase("polygon");
+}
+
+ParseResult<ClipPath> ParseShapeFunction(const css::Function& function, RadialClipPath::Box box,
+                                         bool allowUserUnits) {
+  return function.name.equalsLowercase("polygon")
+             ? ParsePolygonFunction(function, box, allowUserUnits)
+             : ParseRadialFunction(function, box, allowUserUnits);
+}
+
+std::ostream& PrintReferenceBox(std::ostream& os, RadialClipPath::Box box) {
+  return os << (box == RadialClipPath::Box::Fill     ? "fill-box"
+                : box == RadialClipPath::Box::Stroke ? "stroke-box"
+                                                     : "view-box");
+}
+
+std::ostream& PrintPolygon(std::ostream& os, const PolygonClipPath& polygon) {
+  os << "polygon(" << polygon.rule << ", ";
+  bool first = true;
+  for (const auto& vertex : polygon.vertices) {
+    if (!first) {
+      os << ", ";
+    }
+    os << vertex.x << ' ' << vertex.y;
+    first = false;
+  }
+  os << ") ";
+  return PrintReferenceBox(os, polygon.box);
+}
+
 void PrintRadius(std::ostream& os, RadialClipPath::Radius type, const Lengthd& radius) {
   if (type == RadialClipPath::Radius::Length) {
     os << radius;
@@ -271,8 +380,7 @@ ParseResult<ClipPath> ParseBasicShapeClipPath(std::span<const Component> compone
   for (std::size_t i = 0; i < args.size; ++i) {
     if (args.values[i]->is<css::Function>()) {
       const auto& candidate = args.values[i]->get<css::Function>();
-      if (function || (!candidate.name.equalsLowercase("circle") &&
-                       !candidate.name.equalsLowercase("ellipse"))) {
+      if (function || !IsSupportedShape(candidate)) {
         return InvalidShape();
       }
       function = &candidate;
@@ -285,12 +393,15 @@ ParseResult<ClipPath> ParseBasicShapeClipPath(std::span<const Component> compone
   if (!function) {
     return InvalidShape();
   }
-  return ParseRadialFunction(*function, box, allowUserUnits);
+  return ParseShapeFunction(*function, box, allowUserUnits);
 }
 
 std::ostream& operator<<(std::ostream& os, const ClipPath& clip) {
   if (const auto* reference = std::get_if<Reference>(&clip.value)) {
     return os << *reference;
+  }
+  if (const auto* polygon = std::get_if<PolygonClipPath>(&clip.value)) {
+    return PrintPolygon(os, *polygon);
   }
   const RadialClipPath* shape;
   if (const auto* circle = std::get_if<CircleClipPath>(&clip.value)) {
@@ -307,9 +418,7 @@ std::ostream& operator<<(std::ostream& os, const ClipPath& clip) {
   }
   os << " at " << (shape->x.fromFarEdge ? "right " : "left ") << shape->x.offset << ' '
      << (shape->y.fromFarEdge ? "bottom " : "top ") << shape->y.offset << ") ";
-  return os << (shape->box == RadialClipPath::Box::Fill     ? "fill-box"
-                : shape->box == RadialClipPath::Box::Stroke ? "stroke-box"
-                                                            : "view-box");
+  return PrintReferenceBox(os, shape->box);
 }
 
 }  // namespace donner::svg

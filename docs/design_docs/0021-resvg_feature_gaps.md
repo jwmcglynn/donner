@@ -223,8 +223,16 @@ percentages use reference height. A zero radius on either axis produces an empty
 `circle_clip_path_tests` and `properties_tests` targets cover ellipse parsing, reference boxes,
 independent axis resolution, transformed/nested clips and invalid declaration fallback. A single
 `closest-side` or `farthest-side` keyword selects both radii. Corner extent keywords and `calc()`
-radii are not supported; explicit radii use the two-value form. Inset,
-polygon and path CSS clipping functions remain unsupported.
+radii are not supported; explicit radii use the two-value form. Inset and path CSS clipping
+functions remain unsupported.
+
+`clip-path: polygon()` supports comma-separated length/percentage vertices, optional `nonzero`
+or `evenodd` interior rules, and the same SVG reference boxes. Vertices may lie outside the
+reference box. Valid one-vertex, two-vertex and collinear polygons create empty clips; invalid
+syntax preserves the earlier declaration. Vertex storage shares the SVG point-list limit and
+render preparation admits all polygon work before constructing paths. Polygon corner rounding
+and `calc()` coordinates are unsupported. `polygon_clip_path_tests`, `properties_tests` and
+`shape_system_tests` cover rendering, nested rules, grammar and resource refusal.
 
 The plain `circle-shorthand.svg` comparison is restored. The stroke-box and view-box PNGs use an
 opaque white backdrop, while Donner's RGBA API retains transparency outside painted content.

@@ -824,9 +824,12 @@ public:
                                                          : std::nullopt;
   }
 
-  Path radialClipPath(EntityHandle entity, const ClipPath& clip) {
+  Path basicShapeClipPath(EntityHandle entity, const ClipPath& clip) {
     if (const auto* circle = std::get_if<CircleClipPath>(&clip.value)) {
       return ShapeSystem().circleClipPath(entity, *circle, circleClipBudget_);
+    }
+    if (const auto* polygon = std::get_if<PolygonClipPath>(&clip.value)) {
+      return ShapeSystem().polygonClipPath(entity, *polygon, circleClipBudget_);
     }
     return ShapeSystem().ellipseClipPath(entity, std::get<EllipseClipPath>(clip.value),
                                          circleClipBudget_);
@@ -842,9 +845,9 @@ public:
     if (!std::holds_alternative<Reference>(clip->value)) {
       const Transform2d referenceFromEntity =
           LayoutSystem().getAbsoluteTransformComponent(entity).worldFromEntity;
-      collection.paths.emplace_back(radialClipPath(entity, *clip),
+      collection.paths.emplace_back(basicShapeClipPath(entity, *clip),
                                     referenceFromEntity * collection.rootClipFromReference,
-                                    ClipRule::NonZero, collection.layer + 1);
+                                    clip->clipRule(), collection.layer + 1);
       return true;
     }
     const ResolvedClipPath resolved =
@@ -1228,8 +1231,8 @@ public:
 #endif
     if (isBasicShape) {
       instance.basicClipPath = true;
-      paths.clipPaths.emplace_back(radialClipPath(EntityHandle(registry_, styleEntity), clip),
-                                   Transform2d(), ClipRule::NonZero, 0);
+      paths.clipPaths.emplace_back(basicShapeClipPath(EntityHandle(registry_, styleEntity), clip),
+                                   Transform2d(), clip.clipRule(), 0);
     } else {
       instance.clipPath = resolved;
       RecursionGuard guard;
