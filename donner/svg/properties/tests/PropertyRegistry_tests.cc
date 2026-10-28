@@ -2017,9 +2017,9 @@ TEST(PropertyRegistry, PolygonClipParsesRuleCoordinatesAndBox) {
   EXPECT_EQ(polygon.rule, ClipRule::EvenOdd);
   EXPECT_EQ(polygon.box, RadialClipPath::Box::Fill);
   ASSERT_EQ(polygon.vertices.size(), 3u);
-  EXPECT_EQ(polygon.vertices[0].x, Lengthd(-2, Lengthd::Unit::Px));
-  EXPECT_EQ(polygon.vertices[1].x, Lengthd(50, Lengthd::Unit::Percent));
-  EXPECT_EQ(polygon.vertices[1].y, Lengthd(100, Lengthd::Unit::Percent));
+  EXPECT_THAT(polygon.vertices[0].x, Eq(Lengthd(-2, Lengthd::Unit::Px)));
+  EXPECT_THAT(polygon.vertices[1].x, Eq(Lengthd(50, Lengthd::Unit::Percent)));
+  EXPECT_THAT(polygon.vertices[1].y, Eq(Lengthd(100, Lengthd::Unit::Percent)));
 
   PropertyRegistry presentation;
   EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "polygon(2 3, 4 5)"),
@@ -2058,13 +2058,15 @@ TEST(PropertyRegistry, PolygonVertexLimitIsBounded) {
     function.values.push_back(coordinate);
   }
   auto result = ParseBasicShapeClipPath(declaration.values, false);
-  ASSERT_TRUE(result.hasResult());
-  EXPECT_EQ(std::get<PolygonClipPath>(result.result().value).vertices.size(),
-            PolygonClipPath::kMaximumVertices);
+  ASSERT_THAT(result, ParseResultIs(testing::Field(
+                          "value", &ClipPath::value,
+                          testing::VariantWith<PolygonClipPath>(testing::Field(
+                              "vertices", &PolygonClipPath::vertices,
+                              testing::SizeIs(PolygonClipPath::kMaximumVertices))))));
   function.values.push_back(comma);
   function.values.push_back(coordinate);
   function.values.push_back(coordinate);
-  EXPECT_TRUE(ParseBasicShapeClipPath(declaration.values, false).hasError());
+  EXPECT_THAT(ParseBasicShapeClipPath(declaration.values, false), ParseErrorIs(testing::_));
 }
 
 TEST(PropertyRegistry, EllipseClipParsingAndInvalidDeclarationFallback) {

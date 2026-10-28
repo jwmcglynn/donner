@@ -123,7 +123,7 @@ TEST_F(ShapeSystemTest, PolygonAdmissionAndNonFiniteCoordinatesFailClosed) {
   limited.remainingWork = 6;
   EXPECT_THAT(shapeSystem.polygonClipPath(element->entityHandle(), polygon, limited).commands(),
               testing::IsEmpty());
-  EXPECT_TRUE(limited.rejected);
+  EXPECT_THAT(limited.rejected, testing::IsTrue());
   CircleClipGeometryBudget admitted;
   EXPECT_THAT(shapeSystem.polygonClipPath(element->entityHandle(), polygon, admitted).commands(),
               testing::Not(testing::IsEmpty()));
