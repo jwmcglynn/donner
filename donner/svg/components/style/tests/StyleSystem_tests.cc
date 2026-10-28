@@ -918,6 +918,43 @@ TEST_F(StyleSystemTest, DecorationThicknessComputesEmBeforeExplicitInheritance) 
             TextDecorationThickness::Kind::Auto);
 }
 
+TEST_F(StyleSystemTest, DecorationLonghandsDoNotInheritUnlessRequested) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><text id="parent" text-decoration="underline wavy blue"
+      ><tspan id="plain">X</tspan><tspan id="child"
+      style="text-decoration-style:inherit;text-decoration-color:inherit">Y</tspan><tspan id="sheet"
+      class="d">Z</tspan></text><style>.d { text-decoration-line: overline;
+      text-decoration-style: dotted; text-decoration-color: currentcolor }</style></svg>)svg");
+  const auto& registry = document.registry();
+  const auto properties = [&](const char* selector) -> const PropertyRegistry& {
+    return *registry.get<ComputedStyleComponent>(document.querySelector(selector)->entityHandle())
+                .properties;
+  };
+  // The presentation attribute sets every longhand through the shorthand.
+  EXPECT_THAT(properties("#parent").textDecoration.get(),
+              testing::Optional(TextDecoration::Underline));
+  EXPECT_THAT(properties("#parent").textDecorationStyle.get(),
+              testing::Optional(TextDecorationStyle::Wavy));
+  EXPECT_THAT(properties("#parent").textDecorationColor.get(),
+              testing::Optional(css::Color(css::RGBA(0, 0, 255, 255))));
+  // Not inherited: a child without declarations has the initial values.
+  EXPECT_THAT(properties("#plain").textDecorationStyle.get(),
+              testing::Optional(TextDecorationStyle::Solid));
+  EXPECT_EQ(properties("#plain").textDecorationColor.get(), std::nullopt);
+  // Explicit inheritance copies the parent's values.
+  EXPECT_THAT(properties("#child").textDecorationStyle.get(),
+              testing::Optional(TextDecorationStyle::Wavy));
+  EXPECT_THAT(properties("#child").textDecorationColor.get(),
+              testing::Optional(css::Color(css::RGBA(0, 0, 255, 255))));
+  // Stylesheet longhands apply like any other property.
+  EXPECT_THAT(properties("#sheet").textDecoration.get(),
+              testing::Optional(TextDecoration::Overline));
+  EXPECT_THAT(properties("#sheet").textDecorationStyle.get(),
+              testing::Optional(TextDecorationStyle::Dotted));
+  EXPECT_THAT(properties("#sheet").textDecorationColor.get(),
+              testing::Optional(css::Color(css::Color::CurrentColor())));
+}
+
 TEST_F(StyleSystemTest, DecorationThicknessRetainsInheritedPercentage) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg"><text font-size="20" style="text-decoration-thickness:20%">
