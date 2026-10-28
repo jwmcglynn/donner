@@ -2799,4 +2799,34 @@ TEST(TextEngineTest, WrappedAnchorsPreserveVisualClusterOrder) {
   }
 }
 
+TEST(TextEngineTest, WrappedBlockResetIsReappliedAfterSoftWrap) {
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    SCOPED_TRACE(testing::PrintToString(mode));
+    Registry registry;
+    FontManager fonts(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fonts);
+    components::ComputedTextComponent text;
+    auto first = MakeSpan("A ");
+    first.textOrientation = TextOrientation::Upright;
+    auto second = MakeSpan("BB");
+    second.textOrientation = TextOrientation::Upright;
+    if (isVertical(mode)) {
+      second.xList = {Lengthd(100)};
+    } else {
+      second.yList = {Lengthd(100)};
+    }
+    text.spans = {first, second};
+    auto params = MakeTextParams(20);
+    params.writingMode = mode;
+    params.inlineSizePx = 30;
+    const auto runs = engine.layout(text, params);
+    ASSERT_THAT(runs, SizeIs(2));
+    ASSERT_THAT(runs[1].glyphs, SizeIs(2));
+    const auto& glyph = runs[1].glyphs[0];
+    EXPECT_THAT(isVertical(mode) ? glyph.xPosition : glyph.yPosition, DoubleNear(100, 1e-5));
+    EXPECT_THAT(isVertical(mode) ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition,
+                DoubleNear(0, 1e-5));
+  }
+}
+
 }  // namespace donner::svg
