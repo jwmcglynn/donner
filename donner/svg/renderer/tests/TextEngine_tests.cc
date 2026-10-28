@@ -2576,6 +2576,7 @@ TEST(TextEngineTest, WrappedExplicitPositionStartsIndependentAnchorChunk) {
     EXPECT_THAT(pen(runs[0].glyphs[0]), DoubleNear(-advance / 2, 1e-5));
     EXPECT_THAT(pen(runs[1].glyphs[0]), DoubleNear(100 - 2 * advance - kern, 1e-5));
     EXPECT_THAT(pen(runs[1].glyphs[1]), DoubleNear(100 - advance, 1e-5));
+    EXPECT_THAT(pen(runs[1].glyphs[3]) + advance, DoubleNear(100, 1e-5));
   }
 }
 
@@ -2614,6 +2615,97 @@ TEST(TextEngineTest, WrappedSoftLineStartsUseTheNewFirstSpanAnchor) {
   ASSERT_THAT(runs, SizeIs(2));
   EXPECT_THAT(runs[0].glyphs[0].xPosition, DoubleNear(-10, 1e-5));
   EXPECT_THAT(runs[1].glyphs[0].xPosition, DoubleNear(-10.5, 1e-5));
+}
+
+TEST(TextEngineTest, WrappedAnchorMeasuresBothEndsOfNegativeDisplacements) {
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    for (auto anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
+      SCOPED_TRACE(testing::Message() << mode << " " << anchor);
+      Registry registry;
+      FontManager fonts(registry);
+      TextEngine engine = MakeScriptedEngine(registry, fonts);
+      components::ComputedTextComponent text;
+      auto span = MakeSpan("AB\nC");
+      span.whiteSpace = WhiteSpace::Pre;
+      span.textAnchor = anchor;
+      span.textOrientation = TextOrientation::Upright;
+      if (isVertical(mode)) {
+        span.dyList = {std::nullopt, Lengthd(-40)};
+      } else {
+        span.dxList = {std::nullopt, Lengthd(-30)};
+      }
+      text.spans.push_back(span);
+      auto params = MakeTextParams(20);
+      params.writingMode = mode;
+      const auto runs = engine.layout(text, params);
+      ASSERT_THAT(runs, SizeIs(1));
+      ASSERT_THAT(runs[0].glyphs, SizeIs(4));
+      const auto pen = [mode](const TextGlyph& glyph) {
+        return isVertical(mode) ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
+      };
+      const double minimum = isVertical(mode) ? -26 : -19;
+      const double maximum = isVertical(mode) ? 12 : 10;
+      const double expected = anchor == TextAnchor::Start ? -minimum
+                              : anchor == TextAnchor::End ? -maximum
+                                                          : -(minimum + maximum) / 2;
+      EXPECT_THAT(pen(runs[0].glyphs[0]), DoubleNear(expected, 1e-5));
+      EXPECT_THAT(pen(runs[0].glyphs[1]), DoubleNear(minimum + expected, 1e-5));
+    }
+  }
+}
+
+TEST(TextEngineTest, WrappedEmptyInitialSpanPreservesAddressedLineOrigin) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan(""));
+  auto span = MakeSpan("AB\nC");
+  span.whiteSpace = WhiteSpace::Pre;
+  span.textAnchor = TextAnchor::End;
+  span.xList = {Lengthd(100)};
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, SizeIs(2));
+  ASSERT_THAT(runs[1].glyphs, SizeIs(4));
+  EXPECT_THAT(runs[1].glyphs[3].xPosition + runs[1].glyphs[3].xAdvance, DoubleNear(100, 1e-5));
+}
+
+TEST(TextEngineTest, WrappedAndOrdinaryAnchorsSharePenExtentRules) {
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    for (auto anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
+      Registry registry;
+      FontManager fonts(registry);
+      TextEngine engine = MakeScriptedEngine(registry, fonts);
+      components::ComputedTextComponent text;
+      auto span = MakeSpan("AB");
+      span.whiteSpace = WhiteSpace::Pre;
+      span.textAnchor = anchor;
+      span.textOrientation = TextOrientation::Upright;
+      if (isVertical(mode)) {
+        span.dyList = {std::nullopt, Lengthd(-40)};
+      } else {
+        span.dxList = {std::nullopt, Lengthd(-30)};
+      }
+      text.spans.push_back(span);
+      auto params = MakeTextParams(20);
+      params.writingMode = mode;
+      const auto ordinary = engine.layout(text, params);
+      text.spans[0].text = RcString("AB\nC");
+      text.spans[0].end = 4;
+      const auto wrapped = engine.layout(text, params);
+      ASSERT_THAT(ordinary, SizeIs(1));
+      ASSERT_THAT(wrapped, SizeIs(1));
+      ASSERT_THAT(ordinary[0].glyphs, SizeIs(2));
+      ASSERT_THAT(wrapped[0].glyphs, SizeIs(4));
+      for (size_t i = 0; i < 2; ++i) {
+        EXPECT_THAT(wrapped[0].glyphs[i].xPosition,
+                    DoubleNear(ordinary[0].glyphs[i].xPosition, 1e-5));
+        EXPECT_THAT(wrapped[0].glyphs[i].yPosition,
+                    DoubleNear(ordinary[0].glyphs[i].yPosition, 1e-5));
+      }
+    }
+  }
 }
 
 }  // namespace donner::svg
