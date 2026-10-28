@@ -80,7 +80,7 @@ def _bundle_impl(ctx):
         executable = ctx.executable._generator,
         inputs = inputs,
         outputs = [output],
-        arguments = ["--output", output.path, "--merge"] + [file.path for file in inputs],
+        arguments = ["--output", output.path, "--bazel-inputs", "--merge"] + [file.path for file in inputs],
         mnemonic = "PackagedResourceBundle",
     )
     return [DefaultInfo(files = depset([output]), runfiles = ctx.runfiles(files = [output]))]

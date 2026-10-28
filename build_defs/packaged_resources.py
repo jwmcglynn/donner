@@ -158,14 +158,39 @@ def verified_set(directory):
         yield record, payload
 
 
-def merge(inputs, output):
+def verified_bazel_input(directory):
+    """Bind sandbox input links to one declared Bazel output tree before reading."""
+    directory = Path(directory)
+    if directory.is_absolute() or not directory.parts or directory.parts[0] != "bazel-out" or ".." in directory.parts:
+        raise ValueError("Expected a declared Bazel output tree")
+    canonical = (directory / "manifest.json").resolve(strict=True).parent
+    if canonical.parts[-len(directory.parts):] != directory.parts:
+        raise ValueError("Manifest link escapes its declared Bazel tree")
+    manifest = read_manifest(canonical)
+    verify_inventory(canonical, manifest["assets"])
+    expected = {"manifest.json"} | {record["path"] for record in manifest["assets"]}
+    inventory = set()
+    for path in directory.rglob("*"):
+        relative = path.relative_to(directory).as_posix()
+        if relative == "assets" and path.is_dir() and not path.is_symlink():
+            continue
+        if relative not in expected or path.resolve(strict=True) != canonical / relative or not path.is_file():
+            raise ValueError("Input link escapes its declared Bazel tree")
+        inventory.add(relative)
+    if inventory != expected:
+        raise ValueError("Declared Bazel resource inventory mismatch")
+    yield from verified_set(canonical)
+
+
+def merge(inputs, output, *, bazel_inputs=False):
     """Merge generated sets, verifying their entire identity and exact inventory."""
     output = Path(output)
     (output / "assets").mkdir(parents=True)
     records = {}
     retained = {}
+    reader = verified_bazel_input if bazel_inputs else verified_set
     for directory in inputs:
-        for record, payload in verified_set(directory):
+        for record, payload in reader(directory):
             if record["id"] in records and record != records[record["id"]]:
                 raise ValueError("Conflicting logical resource IDs")
             retained[record["sha256"]] = record["encodedSize"]
@@ -186,10 +211,14 @@ def main():
     parser.add_argument("--header")
     parser.add_argument("--output", required=True)
     parser.add_argument("--merge", nargs="*")
+    parser.add_argument("--bazel-inputs", action="store_true",
+                        help="Accept links bound to declared Bazel input trees")
     args = parser.parse_args()
     if args.merge is not None:
-        merge(args.merge, args.output)
+        merge(args.merge, args.output, bazel_inputs=args.bazel_inputs)
     else:
+        if args.bazel_inputs:
+            parser.error("--bazel-inputs requires --merge")
         generate(json.loads(Path(args.request).read_text()), args.header, args.output)
 
 
