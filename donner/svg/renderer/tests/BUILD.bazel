@@ -1527,3 +1527,19 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "text_decoration_thickness_tests",
+    srcs = ["TextDecorationThickness_tests.cc"],
+    opens_gpu_device = True,
+    variants = ["geode"],
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/tests:parser_test_utils",
+        "//donner/svg/text:text_backend",
+        "//donner/svg/text:text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
