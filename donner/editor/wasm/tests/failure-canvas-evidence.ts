@@ -192,6 +192,87 @@ async function readWorkerGpuState(page: EvidencePage, stepMs: number): Promise<u
 }
 
 /**
+ * Read `canvas#canvas` back once, attach the PNG, and return the counts for the record.
+ *
+ * @param page The failed case's page.
+ * @param testInfo The failed case's test info.
+ * @param stepMs Bound for the readback.
+ */
+async function captureCanvasReadback(
+  page: EvidencePage,
+  testInfo: TestInfo,
+  stepMs: number,
+): Promise<Record<string, unknown>> {
+  const readbackStartedAt = Date.now();
+  const readback = await bounded(
+    page.evaluate((maxEdge): CanvasReadback => {
+      const canvas = document.querySelector<HTMLCanvasElement>("canvas#canvas");
+      const empty: CanvasReadback = {
+        width: 0,
+        height: 0,
+        readbackWidth: 0,
+        readbackHeight: 0,
+        opaquePixels: 0,
+        coloredPixels: 0,
+        pngBase64: null,
+        error: null,
+      };
+      if (canvas === null) return { ...empty, error: "no canvas#canvas" };
+      const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height, 1));
+      const readbackWidth = Math.max(1, Math.round(canvas.width * scale));
+      const readbackHeight = Math.max(1, Math.round(canvas.height * scale));
+      const scratch = document.createElement("canvas");
+      scratch.width = readbackWidth;
+      scratch.height = readbackHeight;
+      const context = scratch.getContext("2d", { willReadFrequently: true });
+      if (context === null) return { ...empty, error: "no 2d context" };
+      try {
+        context.drawImage(canvas, 0, 0, readbackWidth, readbackHeight);
+        const pixels = context.getImageData(0, 0, readbackWidth, readbackHeight).data;
+        let opaquePixels = 0;
+        let coloredPixels = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          if (pixels[index + 3] < 16) continue;
+          opaquePixels += 1;
+          const r = pixels[index];
+          const g = pixels[index + 1];
+          const b = pixels[index + 2];
+          if (Math.max(r, g, b) - Math.min(r, g, b) >= 40) coloredPixels += 1;
+        }
+        const dataUrl = scratch.toDataURL("image/png");
+        return {
+          width: canvas.width,
+          height: canvas.height,
+          readbackWidth,
+          readbackHeight,
+          opaquePixels,
+          coloredPixels,
+          pngBase64: dataUrl.startsWith("data:image/png;base64,")
+            ? dataUrl.slice("data:image/png;base64,".length)
+            : null,
+          error: null,
+        };
+      } catch (error) {
+        return { ...empty, width: canvas.width, height: canvas.height, error: String(error) };
+      }
+    }, kReadbackMaxEdge).catch((error: unknown) => String(error)),
+    stepMs,
+  );
+  const afterMs = Date.now() - readbackStartedAt;
+  if (typeof readback === "string") return { error: readback, afterMs };
+  const { pngBase64, ...counts } = readback;
+  if (pngBase64 !== null) {
+    await attachFile(
+      testInfo,
+      "failure-canvas-readback",
+      Buffer.from(pngBase64, "base64"),
+      "image/png",
+    );
+  }
+  return { ...counts, afterMs };
+}
+
+/**
  * Capture the presentation state, a page screenshot and one canvas readback, and attach them.
  *
  * @param page The failed case's page.
@@ -274,79 +355,9 @@ export async function captureFailureCanvasEvidence(
     record.screenshot = { error: screenshot };
   }
 
-  if (state === "timeout") {
-    record.readback = { skipped: "the page did not answer the state read" };
-  } else {
-    const readbackStartedAt = Date.now();
-    const readback = await bounded(
-      page.evaluate((maxEdge): CanvasReadback => {
-        const canvas = document.querySelector<HTMLCanvasElement>("canvas#canvas");
-        const empty: CanvasReadback = {
-          width: 0,
-          height: 0,
-          readbackWidth: 0,
-          readbackHeight: 0,
-          opaquePixels: 0,
-          coloredPixels: 0,
-          pngBase64: null,
-          error: null,
-        };
-        if (canvas === null) return { ...empty, error: "no canvas#canvas" };
-        const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height, 1));
-        const readbackWidth = Math.max(1, Math.round(canvas.width * scale));
-        const readbackHeight = Math.max(1, Math.round(canvas.height * scale));
-        const scratch = document.createElement("canvas");
-        scratch.width = readbackWidth;
-        scratch.height = readbackHeight;
-        const context = scratch.getContext("2d", { willReadFrequently: true });
-        if (context === null) return { ...empty, error: "no 2d context" };
-        try {
-          context.drawImage(canvas, 0, 0, readbackWidth, readbackHeight);
-          const pixels = context.getImageData(0, 0, readbackWidth, readbackHeight).data;
-          let opaquePixels = 0;
-          let coloredPixels = 0;
-          for (let index = 0; index < pixels.length; index += 4) {
-            if (pixels[index + 3] < 16) continue;
-            opaquePixels += 1;
-            const r = pixels[index];
-            const g = pixels[index + 1];
-            const b = pixels[index + 2];
-            if (Math.max(r, g, b) - Math.min(r, g, b) >= 40) coloredPixels += 1;
-          }
-          const dataUrl = scratch.toDataURL("image/png");
-          return {
-            width: canvas.width,
-            height: canvas.height,
-            readbackWidth,
-            readbackHeight,
-            opaquePixels,
-            coloredPixels,
-            pngBase64: dataUrl.startsWith("data:image/png;base64,")
-              ? dataUrl.slice("data:image/png;base64,".length)
-              : null,
-            error: null,
-          };
-        } catch (error) {
-          return { ...empty, width: canvas.width, height: canvas.height, error: String(error) };
-        }
-      }, kReadbackMaxEdge).catch((error: unknown) => String(error)),
-      stepMs,
-    );
-    if (typeof readback === "string") {
-      record.readback = { error: readback, afterMs: Date.now() - readbackStartedAt };
-    } else {
-      const { pngBase64, ...counts } = readback;
-      record.readback = { ...counts, afterMs: Date.now() - readbackStartedAt };
-      if (pngBase64 !== null) {
-        await attachFile(
-          testInfo,
-          "failure-canvas-readback",
-          Buffer.from(pngBase64, "base64"),
-          "image/png",
-        );
-      }
-    }
-  }
+  record.readback = state === "timeout"
+    ? { skipped: "the page did not answer the state read" }
+    : await captureCanvasReadback(page, testInfo, stepMs);
 
   if (fatal !== undefined && fatal.messages.length > 0) {
     record.fatalMessages = fatal.messages;
