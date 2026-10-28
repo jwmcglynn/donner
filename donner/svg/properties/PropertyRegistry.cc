@@ -1154,9 +1154,8 @@ ParseResult<std::optional<ClipPath>> ParseClipPathValue(
     error.reason = "Unexpected tokens after clip-path reference";
     return error;
   }
-  return ParseCircleClipPath(components, params.allowUserUnits()).map<Result>([](ClipPath clip) {
-    return Result(std::move(clip));
-  });
+  return ParseBasicShapeClipPath(components, params.allowUserUnits())
+      .map<Result>([](ClipPath clip) { return Result(std::move(clip)); });
 }
 
 /// Parse a CSS angle value from a Dimension token, converting to degrees.
