@@ -3426,7 +3426,8 @@ TEST(TextEngineTest, RtlPreservedNewlineKeepsHebrewLinesInSourceOrder) {
   }
   EXPECT_THAT(clusters, ElementsAre(2u, 0u, 4u, 7u, 5u));
   EXPECT_THAT(runs[0].glyphs[0].yPosition, DoubleNear(0, 1e-5));
-  EXPECT_THAT(runs[0].glyphs[3].yPosition, DoubleNear(20, 1e-5));
+  // Pinned Mplus hhea: (1075 + 320 + 90) / 1000 em.
+  EXPECT_THAT(runs[0].glyphs[3].yPosition, DoubleNear(29.7, 1e-5));
 }
 
 TEST(TextEngineTest, RtlPreservedNewlineKeepsArabicFallbackLinesInSourceOrder) {
@@ -3455,7 +3456,8 @@ TEST(TextEngineTest, RtlPreservedNewlineKeepsArabicFallbackLinesInSourceOrder) {
     clusters.push_back(glyph.cluster);
   }
   EXPECT_THAT(clusters, ElementsAre(2u, 0u, 4u, 7u, 5u));
-  EXPECT_THAT(runs[0].glyphs[3].yPosition - runs[0].glyphs[0].yPosition, DoubleNear(20, 1e-5));
+  // Root Noto hhea owns the line height: (1069 + 293) / 1000 em.
+  EXPECT_THAT(runs[0].glyphs[3].yPosition - runs[0].glyphs[0].yPosition, DoubleNear(27.24, 1e-5));
 }
 
 #endif
