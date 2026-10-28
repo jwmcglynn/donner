@@ -75,6 +75,19 @@ class PagesArtifactTest(unittest.TestCase):
         pages_artifact.verify_metadata(self.artifact, self.run, self.selected)
         pages_artifact.verify_archive(self.archive, self.selected["archive_sha256"], self.selected)
 
+    def test_new_build_and_legacy_workflows_preserve_source_validation(self) -> None:
+        for workflow in pages_artifact.SOURCE_WORKFLOWS:
+            with self.subTest(workflow=workflow):
+                self.run["path"] = workflow
+                pages_artifact.verify_metadata(self.artifact, self.run, self.selected)
+                self.run["event"] = "workflow_run"
+                with self.assertRaisesRegex(ValueError, "successful main"):
+                    pages_artifact.verify_metadata(self.artifact, self.run, self.selected)
+                self.run["event"] = "push"
+        self.run["path"] = ".github/workflows/unreviewed_docs.yaml"
+        with self.assertRaisesRegex(ValueError, "successful main"):
+            pages_artifact.verify_metadata(self.artifact, self.run, self.selected)
+
     def test_rejects_wrong_run_attempt_or_branch(self) -> None:
         self.run["run_attempt"] = 2
         with self.assertRaisesRegex(ValueError, "attempt"):

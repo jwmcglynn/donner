@@ -869,6 +869,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontStyle = style->properties->fontStyle.get().value();
     span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.get().value());
     span.fontVariant = style->properties->fontVariant.get().value();
+    span.fontSynthesisSmallCaps = style->properties->fontSynthesisSmallCaps.get().value();
     span.fontKerning = style->properties->fontKerning.get().value();
     span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
     span.fontSize = style->properties->fontSize.get().value();
@@ -3269,6 +3270,15 @@ float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
   return CheckedFontSizePx(static_cast<double>(sizePx) * *fontSizeAdjust / aspect);
 }
 
+/// Apply synthesis policy to the actual face without mutating its native feature state.
+FontVariant EffectiveSmallCapsVariant(const TextBackend& backend, FontHandle font,
+                                      FontVariant variant, FontSynthesisSmallCaps synthesis) {
+  return variant == FontVariant::SmallCaps && synthesis == FontSynthesisSmallCaps::None &&
+                 !backend.hasSmallCapsFeature(font)
+             ? FontVariant::Normal
+             : variant;
+}
+
 /// Preserve same-family boundary shaping across size/face changes, using the preceding face's kern.
 /// \p currentFont and \p previousFont are the faces that draw the glyphs on each side of the
 /// boundary, which may be fallback faces rather than the spans' primary faces.
@@ -3428,14 +3438,15 @@ struct ClusterFallback {
 class ChunkShaper {
 public:
   ChunkShaper(const TextBackend& backend, const TextRun& run, std::string_view text, bool vertical,
-              TextOrientation orientation, FontVariant variant, bool kerning,
-              const ClusterFallback& fallback)
+              TextOrientation orientation, FontVariant variant, FontSynthesisSmallCaps synthesis,
+              bool kerning, const ClusterFallback& fallback)
       : backend_(backend),
         run_(run),
         text_(text),
         vertical_(vertical),
         orientation_(orientation),
         variant_(variant),
+        synthesis_(synthesis),
         kerning_(kerning),
         fallback_(fallback) {}
 
@@ -3529,7 +3540,8 @@ private:
     for (const Item& item : items) {
       const TextBackend::ShapedRun shaped = backend_.shapeRunInContext(
           item.face, run_.usedFontSizePx, text_, context, item.range.byteStart,
-          item.range.byteEnd - item.range.byteStart, vertical_, orientation_, variant_, kerning_);
+          item.range.byteEnd - item.range.byteStart, vertical_, orientation_,
+          EffectiveSmallCapsVariant(backend_, item.face, variant_, synthesis_), kerning_);
       result.glyphs.insert(result.glyphs.end(), shaped.glyphs.begin(), shaped.glyphs.end());
       faces.resize(result.glyphs.size(), item.face == run_.font ? FontHandle() : item.face);
     }
@@ -3538,10 +3550,11 @@ private:
 
   TextBackend::ShapedRun shapeWith(FontHandle font, const ChunkRange& chunk) const {
     const size_t length = chunk.byteEnd - chunk.byteStart;
+    const FontVariant variant = EffectiveSmallCapsVariant(backend_, font, variant_, synthesis_);
     return kerning_ ? backend_.shapeRun(font, run_.usedFontSizePx, text_, chunk.byteStart, length,
-                                        vertical_, orientation_, variant_, false)
+                                        vertical_, orientation_, variant, false)
                     : backend_.shapeRunNoKerning(font, run_.usedFontSizePx, text_, chunk.byteStart,
-                                                 length, vertical_, orientation_, variant_, false);
+                                                 length, vertical_, orientation_, variant, false);
   }
 
   /// The face for a cluster whose primary glyphs include `.notdef`. Repeated clusters reuse the
@@ -3617,6 +3630,7 @@ private:
   bool vertical_;
   TextOrientation orientation_;
   FontVariant variant_;
+  FontSynthesisSmallCaps synthesis_;
   bool kerning_;
   const ClusterFallback& fallback_;
   /// Resolved faces keyed by cluster text, which views the span text.
@@ -4051,7 +4065,8 @@ private:
         static_cast<int>(span.fontStyle),
         static_cast<int>(span.fontStretch)};
     const ChunkShaper shaper(backend_, state.run, state.text, state.vertical, state.orientation,
-                             span.fontVariant, state.fontKerning, fallback);
+                             span.fontVariant, span.fontSynthesisSmallCaps, state.fontKerning,
+                             fallback);
     state.shaping = PrepareSpanShaping(shaper, state.text, state.chunkRanges, state.indexMappings);
     state.dxList = ResolveGroupDisplacements(
         state.span->pathSpline ? state.span->dxList : state.dxList, state.shaping.groupStarts,
@@ -4136,9 +4151,12 @@ private:
     const FontHandle firstFace = state.shaping.chunks.front().drawingFace(0, state.font);
     const bool compatible =
         previousSpanOrientation_ == state.orientation &&
-        CompatibleKerningRuns(fontManager_, firstFace, state.run.usedFontSizePx,
-                              state.span->fontVariant, previousSpanFont_, previousSpanFontSizePx_,
-                              previousSpanFontVariant_, state.fontKerning, previousSpanKerning_);
+        CompatibleKerningRuns(
+            fontManager_, firstFace, state.run.usedFontSizePx,
+            EffectiveSmallCapsVariant(backend_, firstFace, state.span->fontVariant,
+                                      state.span->fontSynthesisSmallCaps),
+            previousSpanFont_, previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning,
+            previousSpanKerning_);
     const double value =
         compatible ? backend_.crossSpanKern(previousSpanFont_, previousSpanFontSizePx_, firstFace,
                                             state.fontSizePx, previousSpanCodepoint_,
@@ -4423,7 +4441,8 @@ private:
     previousSpanFont_ = state.lastFont ? state.lastFont : state.font;
     previousSpanFontSizePx_ = state.fontSizePx;
     previousSpanKerning_ = state.fontKerning;
-    previousSpanFontVariant_ = state.span->fontVariant;
+    previousSpanFontVariant_ = EffectiveSmallCapsVariant(
+        backend_, previousSpanFont_, state.span->fontVariant, state.span->fontSynthesisSmallCaps);
     previousSpanOrientation_ = state.orientation;
     previousSpanPathSource_ = SpanKerningPathSource(*state.span);
   }

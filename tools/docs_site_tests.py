@@ -104,6 +104,25 @@ class DocsSiteTest(unittest.TestCase):
         site.unpack(first, self.root / "restored")
         self.assertEqual(site.verify_site(self.root / "restored"), site.verify_site(output))
 
+    def test_archive_metadata_and_order_keep_stable_chunks_before_main(self):
+        import os
+        output, _ = self.compose()
+        first = self.root / "first.tar"
+        expected = site.pack(output, first)
+        for path in output.rglob("*"):
+            os.utime(path, (1000000000, 1000000000))
+        self.assertEqual(site.pack(output, self.root / "second.tar"), expected)
+        with tarfile.open(first) as archive:
+            members = archive.getmembers()
+        names = [member.name for member in members]
+        main = [i for i, name in enumerate(names) if name.startswith("main/")]
+        stable = [i for i, name in enumerate(names) if not name.startswith(("main/", "_docs/")) and name != "docs-site.json"]
+        metadata = [i for i, name in enumerate(names) if name.startswith("_docs/") or name == "docs-site.json"]
+        self.assertLess(max(stable), min(main))
+        self.assertLess(max(main), min(metadata))
+        self.assertTrue(all(member.mtime == 0 and member.uid == 0 and member.gid == 0
+                            and member.uname == "" and member.gname == "" for member in members))
+
     def test_version_validation_rejects_blank_or_stale_output(self):
         for label in ("", "0.8.0-pre", "0.9.0"):
             with self.subTest(label=label):

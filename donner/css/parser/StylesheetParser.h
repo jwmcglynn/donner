@@ -21,6 +21,9 @@ public:
    * import targets are not included in the warning and no resources are requested. A following
    * local rule is parsed after a semicolon-terminated import.
    *
+   * CSS `@media` and `@supports` are also unsupported. Their complete blocks, including nested
+   * styles and font faces, are ignored with a bounded warning at the outer `@` token.
+   *
    * @param str Input stylesheet string.
    * @param warningSink Sink to collect warnings (e.g. invalid selectors).
    * @return Parsed stylesheet.

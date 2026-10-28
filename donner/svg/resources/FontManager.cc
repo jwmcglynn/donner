@@ -10,6 +10,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 
@@ -62,6 +63,59 @@ std::string ToLowerAscii(std::string_view value) {
     }
   }
   return lowered;
+}
+
+using FontMatchScore = std::tuple<int, double, int, int, int64_t>;
+
+std::pair<int, double> FontWidthRank(const css::FontFace& face, int requestedWidth) {
+  const double requested = css::FontFace::FontStretchPercentage(requestedWidth);
+  const auto [minimum, maximum] = face.normalizedFontStretchRange();
+  if (minimum <= requested && requested <= maximum) {
+    return {0, 0};
+  }
+  const bool narrower = maximum < requested;
+  const bool preferred = requested <= 100 ? narrower : !narrower;
+  // Subtracting tiny endpoints from a requested width can erase their ordering.
+  return {preferred ? 1 : 2, narrower ? -maximum : minimum};
+}
+
+int FontStyleRank(int actual, int requested) {
+  if (actual == requested) {
+    return 0;
+  }
+  if (requested == 0) {
+    return actual == 2 ? 1 : 2;
+  }
+  return (actual == 1 && requested == 2) || (actual == 2 && requested == 1) ? 1 : 2;
+}
+
+std::pair<int, int64_t> FontWeightRank(const css::FontFace& face, int requested) {
+  const auto [minimum, maximum] = face.normalizedFontWeightRange();
+  if (minimum <= requested && requested <= maximum) {
+    return {0, 0};
+  }
+  if (requested < 400) {
+    return maximum < requested ? std::pair<int, int64_t>{1, requested - maximum}
+                               : std::pair<int, int64_t>{2, minimum - requested};
+  }
+  if (requested > 500) {
+    return minimum > requested ? std::pair<int, int64_t>{1, minimum - requested}
+                               : std::pair<int, int64_t>{2, requested - maximum};
+  }
+  if (minimum > requested && minimum <= 500) {
+    return {1, minimum - requested};
+  }
+  return maximum < requested ? std::pair<int, int64_t>{2, requested - maximum}
+                             : std::pair<int, int64_t>{3, minimum - requested};
+}
+
+FontMatchScore RankFontFace(const css::FontFace& face, int weight, int style, int stretch) {
+  const auto [widthDirection, widthOrder] = FontWidthRank(face, stretch);
+  const auto [weightDirection, weightDistance] = FontWeightRank(face, weight);
+  // Filter by width before style, then by weight. Numeric weight distance cannot outweigh
+  // a better width/style match, even when a declaration covers a wide weight interval.
+  return {widthDirection, widthOrder, FontStyleRank(face.fontStyle, style), weightDirection,
+          weightDistance};
 }
 
 /// Preserve only lossless names: the metadata decoder substitutes '?' for non-ASCII code points.
@@ -545,6 +599,8 @@ FontHandle FontManager::findFont(std::string_view family, int weight) {
 }
 
 FontHandle FontManager::findFont(std::string_view family, int weight, int style, int stretch) {
+  weight = std::clamp(weight, 1, 1000);
+  stretch = std::clamp(stretch, 1, 9);
   // Resolve CSS generic family names to real family names.
   const std::string familyLower = ToLowerAscii(family);
   if (auto it = genericFamilyMap_.find(familyLower); it != genericFamilyMap_.end()) {
@@ -568,9 +624,9 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   }
 
   // Walk @font-face rules looking for the best match.
-  // CSS font matching: style first, then stretch, then weight.
+  // CSS font matching: width first, then style, then weight.
   Entity bestEntity = entt::null;
-  int bestScore = std::numeric_limits<int>::max();
+  std::optional<FontMatchScore> bestScore;
   uint64_t bestSequence = 0;
 
   auto view = registry_.view<FontFaceComponent>();
@@ -580,41 +636,13 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
     if (!StringUtils::Equals<StringComparison::IgnoreCase>(face.familyName, family)) {
       continue;
     }
-    // Style mismatch is most costly, then stretch, then weight.
-    // CSS Fonts §5.2: oblique falls back to italic and vice versa before falling back to normal.
-    int score = 0;
-    if (face.fontStyle != style) {
-      // Oblique (2) ↔ Italic (1) is a better match than either ↔ Normal (0).
-      if ((face.fontStyle == 1 && style == 2) || (face.fontStyle == 2 && style == 1)) {
-        score += 5000;  // Partial match: italic ↔ oblique.
-      } else {
-        score += 10000;  // Full mismatch: to/from normal.
-      }
-    }
-
-    // CSS font matching for stretch: prefer faces on the correct side of the request.
-    // If requesting narrower than normal (stretch < 5), prefer narrower faces.
-    // If requesting wider than normal (stretch > 5), prefer wider faces.
-    const int stretchDelta = face.fontStretch - stretch;
-    if (stretchDelta == 0) {
-      // Exact match, no penalty.
-    } else if (stretch < 5 && stretchDelta < 0) {
-      // Request is narrow, face is even narrower - preferred direction.
-      score += (-stretchDelta) * 100;
-    } else if (stretch > 5 && stretchDelta > 0) {
-      // Request is wide, face is even wider - preferred direction.
-      score += stretchDelta * 100;
-    } else {
-      // Face is on the wrong side - heavy penalty.
-      score += std::abs(stretchDelta) * 100 + 1000;
-    }
-
-    score += std::abs(face.fontWeight - weight);
+    const FontMatchScore score = RankFontFace(face, weight, style, stretch);
 
     // Equally good faces resolve to the one declared last, per CSS. The scan runs to completion
     // rather than stopping at the first exact match, because a later declaration can tie it and
     // then has to win.
-    if (score < bestScore || (score == bestScore && component.sequence > bestSequence)) {
+    if (!bestScore || score < *bestScore ||
+        (score == *bestScore && component.sequence > bestSequence)) {
       bestScore = score;
       bestSequence = component.sequence;
       bestEntity = entity;

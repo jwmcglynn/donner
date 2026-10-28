@@ -1066,6 +1066,61 @@ std::vector<TextRun> LayOutFull(Registry& registry, FontManager& fontManager, st
   return engine.layout(text, params);
 }
 
+TEST(TextEngineTest, SmallCapsSynthesisDoesNotLeakAcrossSimpleShapingRequests) {
+  Registry registry;
+  FontManager manager(registry);
+  const FontHandle font = LoadResvgFont(manager, "NotoSans-Regular.ttf", "CapsFont");
+  ASSERT_TRUE(static_cast<bool>(font));
+  auto backend = std::make_unique<TextBackendSimple>(manager, registry);
+  TextEngine engine(manager, registry, std::move(backend));
+  for (FontSynthesisSmallCaps policy :
+       {FontSynthesisSmallCaps::Auto, FontSynthesisSmallCaps::None, FontSynthesisSmallCaps::Auto}) {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("aA");
+    span.fontVariant = FontVariant::SmallCaps;
+    span.fontSynthesisSmallCaps = policy;
+    text.spans.push_back(std::move(span));
+    auto params = MakeTextParams(40);
+    params.fontFamilies = {RcString("CapsFont")};
+    const auto runs = engine.layout(text, params);
+    ASSERT_THAT(runs, SizeIs(1));
+    ASSERT_THAT(runs.front().glyphs, SizeIs(2));
+    EXPECT_FLOAT_EQ(runs.front().glyphs[0].fontSizeScale,
+                    policy == FontSynthesisSmallCaps::None ? 1.0f : 0.8f);
+    EXPECT_FLOAT_EQ(runs.front().glyphs[1].fontSizeScale, 1.0f);
+    EXPECT_EQ(runs.front().glyphs[0].cluster, 0u);
+    EXPECT_EQ(runs.front().glyphs[1].cluster, 1u);
+  }
+}
+
+TEST(TextEngineTest, SmallCapsSynthesisNoneRetainsRealOpenTypeSmallCaps) {
+  Registry registry;
+  FontManager manager(registry);
+  const FontHandle font = LoadResvgFont(manager, "SourceSansPro-Regular.ttf", "NativeCaps");
+  ASSERT_TRUE(static_cast<bool>(font));
+  auto backend = std::make_unique<TextBackendFull>(manager, registry);
+  const TextBackendFull& probe = *backend;
+  ASSERT_TRUE(probe.hasSmallCapsFeature(font));
+  const auto native = probe.shapeRun(font, 40, "a", 0, 1, false, FontVariant::SmallCaps, false);
+  const auto normal = probe.shapeRun(font, 40, "a", 0, 1, false, FontVariant::Normal, false);
+  ASSERT_THAT(native.glyphs, SizeIs(1));
+  ASSERT_THAT(normal.glyphs, SizeIs(1));
+  ASSERT_NE(native.glyphs[0].glyphIndex, normal.glyphs[0].glyphIndex);
+  TextEngine engine(manager, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("a");
+  span.fontVariant = FontVariant::SmallCaps;
+  span.fontSynthesisSmallCaps = FontSynthesisSmallCaps::None;
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(40);
+  params.fontFamilies = {RcString("NativeCaps")};
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs.front().glyphs, SizeIs(1));
+  EXPECT_EQ(runs.front().glyphs[0].glyphIndex, native.glyphs[0].glyphIndex);
+  EXPECT_FLOAT_EQ(runs.front().glyphs[0].fontSizeScale, 1.0f);
+}
+
 // A fallback item is one part of its chunk: in a right-to-left chunk the neutral parentheses
 // around an Arabic word that falls back to another face still take the chunk's direction, so they
 // mirror, and the items keep visual order.
