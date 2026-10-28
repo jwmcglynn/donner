@@ -10,7 +10,7 @@ using testing::Eq;
 
 TEST(TextTransformTest, FullWidthRetainsOriginalByteOffsetsAcrossWidthChanges) {
   const auto mapped = MakeFullWidth("A\xc3\xa9\xef\xbd\xb6\xef\xbe\x9e\xf0\x9f\x98\x80", true);
-  ASSERT_THAT(mapped.has_value(), Eq(true));
+  ASSERT_THAT(mapped, testing::Optional(testing::_));
   EXPECT_THAT(mapped->text, Eq("\xef\xbc\xa1\xc3\xa9\xe3\x82\xab\xe3\x82\x99\xf0\x9f\x98\x80"));
   EXPECT_THAT(mapped->sourceByteOffsets, ElementsAre(0u, 1u, 3u, 6u, 9u));
 }
@@ -27,13 +27,13 @@ TEST(TextTransformTest, FullWidthPreservesAlreadyWideAndUnmappedCharacters) {
 }
 
 TEST(TextTransformTest, FullWidthBoundsEncodedTextAndIndexPayloadBeforeAllocation) {
-  EXPECT_THAT(MakeFullWidth("A", true, 6).has_value(), Eq(false));
+  EXPECT_THAT(MakeFullWidth("A", true, 6), Eq(std::nullopt));
   const auto exact = MakeFullWidth("A", true, 7);
-  ASSERT_THAT(exact.has_value(), Eq(true));
+  ASSERT_THAT(exact, testing::Optional(testing::_));
   EXPECT_THAT(exact->text, Eq("\xef\xbc\xa1"));
-  EXPECT_THAT(MakeFullWidth("AB", true, 13).has_value(), Eq(false));
-  EXPECT_THAT(MakeFullWidth("AB", true, 14).has_value(), Eq(true));
-  EXPECT_THAT(MakeFullWidth("", true, 0).has_value(), Eq(true));
+  EXPECT_THAT(MakeFullWidth("AB", true, 13), Eq(std::nullopt));
+  EXPECT_THAT(MakeFullWidth("AB", true, 14), testing::Optional(testing::_));
+  EXPECT_THAT(MakeFullWidth("", true, 0), testing::Optional(testing::_));
 }
 
 }  // namespace

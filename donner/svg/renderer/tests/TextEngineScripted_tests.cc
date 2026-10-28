@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "donner/base/Utf8.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/FontFace.h"
 #include "donner/css/Specificity.h"
@@ -19,6 +20,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextBackend.h"
@@ -3723,18 +3725,99 @@ TEST(TextEngineScriptedTest, FullWidthCharacterApisRetainOriginalUtf16Indices) {
       "style='text-transform:full-width'>" +
           sourceText + "</text></svg>",
       warnings);
-  ASSERT_THAT(parsed.hasResult(), Eq(true));
+  ASSERT_THAT(parsed, ParseResultIs(_));
   auto document = std::move(parsed).result();
   Registry& registry = document.registry();
   FontManager fonts(registry);
   TextEngine engine = MakeScriptedEngine(registry, fonts);
-  const auto handle = document.querySelector("#t")->unsafeEntityHandle();
+  const auto target = document.querySelector("#t");
+  ASSERT_THAT(target, testing::Optional(_));
+  const auto handle = target->unsafeEntityHandle();
   engine.prepareForElement(handle, warnings);
   EXPECT_THAT(engine.getNumberOfChars(handle), Eq(5));
   EXPECT_THAT(engine.getStartPositionOfChar(handle, 4).x, DoubleNear(35, 1e-9));
   EXPECT_THAT(engine.getStartPositionOfChar(handle, 2).x,
               DoubleNear(engine.getStartPositionOfChar(handle, 3).x, 1e-9));
   EXPECT_THAT(handle.get<components::TextComponent>().text.str(), Eq(sourceText));
+}
+
+TEST(TextEngineScriptedTest, FullWidthWordSpacingExcludesIdeographicSpacesOnFlatAndPathText) {
+  struct SpaceCase {
+    const char* content;
+    const char* style;
+    double addedSpacing;
+  };
+  const SpaceCase cases[] = {
+      {"A\xe3\x80\x80"
+       "B",
+       "white-space:pre", 0},
+      {"A B", "white-space:pre;text-transform:full-width", 0},
+      {"A B", "white-space:normal;text-transform:full-width", 5},
+  };
+  for (const auto& space : cases) {
+    for (bool onPath : {false, true}) {
+      SCOPED_TRACE(testing::Message() << space.style << " path=" << onPath);
+      std::array<double, 2> positions{};
+      for (size_t index = 0; index < positions.size(); ++index) {
+        const std::string tag = onPath ? "textPath" : "tspan";
+        const std::string attributes = onPath ? " href='#p'" : "";
+        const auto glyphs = LayoutParsedTextPath("<" + tag + attributes + " style='" + space.style +
+                                                 ";word-spacing:" + std::to_string(index * 5) +
+                                                 "px'>" + space.content + "</" + tag + ">");
+        ASSERT_THAT(glyphs, SizeIs(3));
+        positions[index] = glyphs.back().xPosition;
+      }
+      EXPECT_THAT(positions[1] - positions[0], DoubleNear(space.addedSpacing, 1e-9));
+    }
+  }
+}
+
+TEST(TextEngineScriptedTest, FullWidthStyleMutationInvalidatesGeometryAndPreservesSource) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><text id='t'>A</text></svg>", warnings);
+  ASSERT_THAT(parsed, ParseResultIs(_));
+  auto document = std::move(parsed).result();
+  auto target = document.querySelector("#t");
+  ASSERT_THAT(target, testing::Optional(_));
+  const auto handle = target->unsafeEntityHandle();
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  for (TextTransform transform :
+       {TextTransform::None, TextTransform::FullWidth, TextTransform::None}) {
+    SCOPED_TRACE(transform);
+    target->setStyle(transform == TextTransform::FullWidth ? "text-transform:full-width"
+                                                           : "text-transform:none");
+    engine.prepareForElement(handle, warnings);
+    const auto& geometry = engine.ensureComputedTextGeometryComponent(handle);
+    const uint32_t codepoint = transform == TextTransform::FullWidth ? 0xff21 : 'A';
+    EXPECT_THAT(geometry.runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                                   GlyphIndexIs(Eq(static_cast<int>(codepoint % 997u) + 1))))));
+    EXPECT_THAT(engine.getNumberOfChars(handle), Eq(1));
+    EXPECT_THAT(handle.get<components::TextComponent>().text.str(), Eq("A"));
+  }
+}
+
+TEST(TextEngineScriptedTest, FullWidthFallbackUsesTransformedCodepointAndOriginalCluster) {
+  Registry registry;
+  FontManager fonts(registry);
+  const FontHandle coveringFont = RegisterFallbackBackedFace(fonts, "WidthFace");
+  ASSERT_THAT(coveringFont, Not(Eq(FontHandle{})));
+  auto backend = std::make_unique<CoverageProbeBackend>();
+  backend->coveringFont = coveringFont;
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A"));
+  const auto original = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(original, ElementsAre(RunGlyphsAre(SizeIs(1))));
+  EXPECT_THAT(original[0].glyphs[0].font, Not(Eq(coveringFont)));
+  text.spans[0].textTransform = TextTransform::FullWidth;
+  const auto transformed = engine.layout(text, MakeTextParams(20));
+  EXPECT_THAT(transformed, ElementsAre(RunGlyphsAre(ElementsAre(
+                               AllOf(GlyphIndexIs(Eq(static_cast<int>(0xff21 % 997u) + 1)),
+                                     Field("font", &TextGlyph::font, Eq(coveringFont)),
+                                     Field("cluster", &TextGlyph::cluster, Eq(0u)))))));
 }
 
 }  // namespace donner::svg

@@ -784,6 +784,7 @@ donner_cc_test(
     name = "text_engine_scripted_tests",
     srcs = ["TextEngineScripted_tests.cc"],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/base/xml/components",
         "//donner/svg",
         "//donner/svg/components/layout:components",
