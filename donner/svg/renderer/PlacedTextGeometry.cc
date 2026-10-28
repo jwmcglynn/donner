@@ -347,9 +347,10 @@ bool AppendDecorationRect(PathBuilder& builder, double left, double top, double 
   return true;
 }
 
-/// Upper bound on dash, dot or half-wave elements per decoration segment, so a tiny thickness on a
-/// long run cannot expand into unbounded geometry. Longer segments emit nothing for that line.
-constexpr double kMaximumStyledDecorationElements = 4096;
+/// Sanity bound on dash, dot or half-wave elements in one segment, which keeps the integer element
+/// counts in range. The per-draw work allowance, charged point by point, is the effective limit.
+constexpr double kMaximumStyledDecorationElements =
+    static_cast<double>(Path::kMaximumGeometryQueryWork);
 
 /// Number of dashes, dots or half-waves a styled segment draws; 1 for solid and double lines.
 double StyledElementCount(TextDecorationStyle style, double length, double width) {
@@ -417,11 +418,14 @@ bool AppendDoubleDecoration(PathBuilder& builder, TextDecoration line, double le
   return appendedFirst || appendedSecond;
 }
 
-/// Dashes three thicknesses long, starting every five; the last dash ends at `right`.
+/// `count` dashes three thicknesses long, starting every five; the last dash ends at `right`. The
+/// position is computed from the index rather than accumulated, so a period below the coordinate
+/// precision cannot stall the loop or exceed the counted points.
 bool AppendDashedDecoration(PathBuilder& builder, double left, double top, double right,
-                            double width) {
+                            double width, int count) {
   bool appended = false;
-  for (double x = left; x < right; x += 5 * width) {
+  for (int i = 0; i < count; ++i) {
+    const double x = left + 5 * width * i;
     appended |= AppendDecorationRect(builder, x, top, std::min(x + 3 * width, right), top + width);
   }
   return appended;
@@ -481,7 +485,7 @@ bool AppendStyledDecoration(PathBuilder& builder, TextDecorationStyle style, Tex
     case TextDecorationStyle::Double:
       return AppendDoubleDecoration(builder, line, left, top, right, width);
     case TextDecorationStyle::Dashed:
-      return AppendDashedDecoration(builder, left, top, right, width);
+      return AppendDashedDecoration(builder, left, top, right, width, count);
     case TextDecorationStyle::Dotted:
       return AppendDottedDecoration(builder, left, top, width, count);
     case TextDecorationStyle::Wavy:

@@ -845,8 +845,9 @@ solid band of thickness `t` (CSS Text Decoration 3 leaves the proportions to the
 `double` adds a second band after a gap of `t`, away from the text (a line-through straddles its
 solid position); `dotted` draws round dots of diameter `t` every `2t`; `dashed` draws dashes `3t`
 long every `5t`; `wavy` draws a band of thickness `t` along quadratic half-waves of amplitude `t`
-whose length divides the segment into the whole count nearest `2t`. Each segment is limited to
-4096 dashes, dots or half-waves and charged to the per-draw decoration work allowance.
+whose length divides the segment into the whole count nearest `2t`. Styled geometry is charged
+point by point to the per-draw decoration work allowance. A line that would exceed it is not
+drawn, and the exhausted allowance also suppresses the later decorations of that draw.
 
 SVG 2 section 11.11 paints a decoration with the fill and stroke of the element that declares it
 and does not define `text-decoration-color`. Its initial value in CSS Text Decoration 3 is
