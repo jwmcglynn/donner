@@ -47,6 +47,19 @@ struct PaintOrder {
   std::array<PaintComponent, 3> order = {PaintComponent::Fill, PaintComponent::Stroke,
                                          PaintComponent::Markers};
 
+  /// Whether stroke paints before fill in this order.
+  bool strokeBeforeFill() const {
+    for (const PaintComponent component : order) {
+      if (component == PaintComponent::Fill) {
+        return false;
+      }
+      if (component == PaintComponent::Stroke) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Equality operator.
   bool operator==(const PaintOrder& other) const = default;
 };

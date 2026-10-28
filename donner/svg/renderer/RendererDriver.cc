@@ -550,6 +550,7 @@ std::optional<components::TextDecorationOrigin> BuildDecorationOrigin(
     origin.fillOpacity = props.fillOpacity.get().value();
     origin.strokeOpacity = props.strokeOpacity.get().value();
     origin.strokeWidth = props.strokeWidth.get().value().toPixels(viewBox, baseFm);
+    origin.paintOrder = props.paintOrder.get().value();
     origin.font = ResolveDecorationFont(registry, provider, viewBox, baseFm);
     origin.thickness = declaringProperties.textDecorationThickness.get().value();
     if (origin.thickness.kind == TextDecorationThickness::Kind::Length) {

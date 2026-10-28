@@ -464,20 +464,31 @@ void EmitStraightDecoration(const TextRun& run, double top, double width,
 }  // namespace
 
 void EmitTextDecorationPaths(const TextRun& run, const components::TextDecorationOrigin& origin,
-                             std::size_t originCount, float fontSize, const TextEngine& engine,
-                             const Transform2d& deviceFromLocal, std::size_t& remainingWork,
+                             TextDecoration emittedLines, std::size_t originCount, float fontSize,
+                             const TextEngine& engine, const Transform2d& deviceFromLocal,
+                             std::size_t& remainingWork,
                              const std::function<void(const Path&)>& emit) {
-  if (run.glyphs.size() > remainingWork / 12) {
+  const TextDecoration lines = origin.lines & emittedLines;
+  const std::size_t lineCount =
+      static_cast<std::size_t>(hasFlag(lines, TextDecoration::Underline)) +
+      static_cast<std::size_t>(hasFlag(lines, TextDecoration::Overline)) +
+      static_cast<std::size_t>(hasFlag(lines, TextDecoration::LineThrough));
+  if (lineCount == 0) {
+    return;
+  }
+  // Charge 4 work units per glyph and emitted line, so the beneath and above passes together
+  // charge an origin once for each of its lines.
+  if (run.glyphs.size() > remainingWork / (4 * lineCount)) {
     remainingWork = 0;
     return;
   }
-  remainingWork -= run.glyphs.size() * 12;
+  remainingWork -= run.glyphs.size() * 4 * lineCount;
   const DecorationMetrics metrics = GetDecorationMetrics(run, origin, fontSize, engine);
   const bool rotated = std::any_of(run.glyphs.begin(), run.glyphs.end(),
                                    [](const auto& glyph) { return glyph.rotateDegrees != 0; });
   for (const auto line :
        {TextDecoration::Underline, TextDecoration::Overline, TextDecoration::LineThrough}) {
-    if (!hasFlag(origin.lines, line)) {
+    if (!hasFlag(origin.lines, line) || !hasFlag(emittedLines, line)) {
       continue;
     }
     const double automatic = line == TextDecoration::LineThrough && metrics.strikeWidth > 0

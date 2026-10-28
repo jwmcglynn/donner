@@ -3066,6 +3066,111 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       }
     }
 
+    // Text-decoration lines. Per CSS Text Decoration 3, decoration uses the paint and font
+    // metrics of the element that declared text-decoration, not the current span's. Underlines
+    // and overlines paint beneath the run's glyphs and line-throughs above them (CSS Text
+    // Decoration 3 "Painting Order of Text Decorations", adopted by SVG 2 section 11.11).
+    const bool hasSpan = runIndex < text.spans.size();
+    const TextDecoration spanDecoration =
+        hasSpan ? text.spans[runIndex].textDecoration : TextDecoration::None;
+    const auto drawDecorations = [&](TextDecoration emittedLines) {
+      if (spanDecoration == TextDecoration::None || run.glyphs.empty() || !run.font) {
+        return;
+      }
+      const auto& span = text.spans[runIndex];
+      components::TextDecorationOrigin fallback;
+      fallback.lines = spanDecoration;
+      const auto origins = span.decorations
+                               ? span.decorations->origins()
+                               : std::span<const components::TextDecorationOrigin>(&fallback, 1);
+      // Origins with no line in this pass are skipped before their paint is resolved.
+      ForEachEmittingOrigin(
+          origins, emittedLines, [&](const components::TextDecorationOrigin& decoration) {
+            // Resolve paint from the element that originated this decoration.
+            std::optional<tiny_skia::Paint> decoFillPaint;
+            if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.fill)) {
+              const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+              const float fillOpacity = NarrowToFloat(decoration.fillOpacity);
+              decoFillPaint = makeSolidPaint(
+                  css::Color(solid->color.resolve(spanCurrentColor, fillOpacity)), span.opacity);
+            } else if (const auto* ref =
+                           std::get_if<components::PaintResolvedReference>(&decoration.fill)) {
+              const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+              const float combinedOpacity =
+                  NarrowToFloat(decoration.fillOpacity) * static_cast<float>(span.opacity);
+              if (auto shader =
+                      instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
+                                                spanCurrentColor, combinedOpacity)) {
+                tiny_skia::Paint paint = makeBasePaint(antialias_);
+                paint.shader = std::move(*shader);
+                decoFillPaint = paint;
+              } else if (patternFillPaint_ && decoration.usesPreparedFill(paint_.fill)) {
+                tiny_skia::Paint paint = makeBasePaint(antialias_);
+                paint.shader = tiny_skia::Pattern(
+                    patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
+                    tiny_skia::FilterQuality::Bilinear, combinedOpacity,
+                    toTinyTransform(patternFillPaint_->targetFromPattern));
+                decoFillPaint = paint;
+              } else if (ref->fallback) {
+                decoFillPaint =
+                    makeSolidPaint(css::Color(ref->fallback->resolve(
+                                       spanCurrentColor, NarrowToFloat(decoration.fillOpacity))),
+                                   span.opacity);
+              }
+            }
+            if (!span.decorations) {
+              decoFillPaint = spanFillPaint;
+            }
+
+            std::optional<tiny_skia::Paint> decoStrokePaint;
+            if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.stroke)) {
+              const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+              const float strokeOpacity = NarrowToFloat(decoration.strokeOpacity);
+              decoStrokePaint = makeSolidPaint(
+                  css::Color(solid->color.resolve(spanCurrentColor, strokeOpacity)), span.opacity);
+            } else if (const auto* ref =
+                           std::get_if<components::PaintResolvedReference>(&decoration.stroke)) {
+              const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+              const float combinedOpacity =
+                  NarrowToFloat(decoration.strokeOpacity) * static_cast<float>(span.opacity);
+              if (auto shader =
+                      instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
+                                                spanCurrentColor, combinedOpacity)) {
+                tiny_skia::Paint paint = makeBasePaint(antialias_);
+                paint.shader = std::move(*shader);
+                decoStrokePaint = paint;
+              }
+            }
+
+            auto drawDecoPath = [&](const Path& path) {
+              const tiny_skia::Path tinyPath = toTinyPath(path);
+              auto pixmapView = currentPixmapView();
+              const auto fillDecoration = [&]() {
+                if (decoFillPaint) {
+                  tiny_skia::Painter::fillPath(pixmapView, tinyPath, *decoFillPaint,
+                                               tiny_skia::FillRule::Winding,
+                                               toTinyTransform(deviceFromLocalTransform_), mask);
+                }
+              };
+              const auto strokeDecoration = [&]() {
+                if (decoStrokePaint && decoration.strokeWidth > 0.0) {
+                  tiny_skia::Stroke stroke;
+                  stroke.width = NarrowToFloat(decoration.strokeWidth);
+                  tiny_skia::Painter::strokePath(pixmapView, tinyPath, *decoStrokePaint, stroke,
+                                                 toTinyTransform(deviceFromLocalTransform_), mask);
+                }
+              };
+              // The decoration's own fill/stroke order is the declaring element's `paint-order`.
+              PaintFillAndStroke(decoration.paintOrder, fillDecoration, strokeDecoration);
+            };
+            EmitTextDecorationPaths(run, decoration, emittedLines, origins.size(), spanFontSizePx,
+                                    textEngine, deviceFromLocalTransform_, decorationWorkRemaining,
+                                    drawDecoPath);
+          });
+    };
+
+    drawDecorations(kDecorationLinesBeneathText);
+
     for (const auto& glyph : run.glyphs) {
       if (glyph.glyphIndex == 0) {
         continue;  // .notdef glyph, skip.
@@ -3173,95 +3278,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       }
     }
 
-    // Draw text-decoration lines. Per CSS Text Decoration §3, decoration uses the paint and
-    // font metrics of the element that declared text-decoration, not the current span's.
-    const bool hasSpan = runIndex < text.spans.size();
-    const TextDecoration spanDecoration =
-        hasSpan ? text.spans[runIndex].textDecoration : params.textDecoration;
-
-    if (spanDecoration != TextDecoration::None && !run.glyphs.empty() && run.font) {
-      const auto& span = text.spans[runIndex];
-      components::TextDecorationOrigin fallback;
-      fallback.lines = spanDecoration;
-      const auto origins = span.decorations
-                               ? span.decorations->origins()
-                               : std::span<const components::TextDecorationOrigin>(&fallback, 1);
-      for (const auto& decoration : origins) {
-        // Resolve paint from the element that originated this decoration.
-        std::optional<tiny_skia::Paint> decoFillPaint;
-        if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.fill)) {
-          const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
-          const float fillOpacity = NarrowToFloat(decoration.fillOpacity);
-          decoFillPaint = makeSolidPaint(
-              css::Color(solid->color.resolve(spanCurrentColor, fillOpacity)), span.opacity);
-        } else if (const auto* ref =
-                       std::get_if<components::PaintResolvedReference>(&decoration.fill)) {
-          const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
-          const float combinedOpacity =
-              NarrowToFloat(decoration.fillOpacity) * static_cast<float>(span.opacity);
-          if (auto shader =
-                  instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
-                                            spanCurrentColor, combinedOpacity)) {
-            tiny_skia::Paint paint = makeBasePaint(antialias_);
-            paint.shader = std::move(*shader);
-            decoFillPaint = paint;
-          } else if (patternFillPaint_ && decoration.usesPreparedFill(paint_.fill)) {
-            tiny_skia::Paint paint = makeBasePaint(antialias_);
-            paint.shader =
-                tiny_skia::Pattern(patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
-                                   tiny_skia::FilterQuality::Bilinear, combinedOpacity,
-                                   toTinyTransform(patternFillPaint_->targetFromPattern));
-            decoFillPaint = paint;
-          } else if (ref->fallback) {
-            decoFillPaint =
-                makeSolidPaint(css::Color(ref->fallback->resolve(
-                                   spanCurrentColor, NarrowToFloat(decoration.fillOpacity))),
-                               span.opacity);
-          }
-        }
-        if (!span.decorations) {
-          decoFillPaint = spanFillPaint;
-        }
-
-        std::optional<tiny_skia::Paint> decoStrokePaint;
-        if (const auto* solid = std::get_if<PaintServer::Solid>(&decoration.stroke)) {
-          const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
-          const float strokeOpacity = NarrowToFloat(decoration.strokeOpacity);
-          decoStrokePaint = makeSolidPaint(
-              css::Color(solid->color.resolve(spanCurrentColor, strokeOpacity)), span.opacity);
-        } else if (const auto* ref =
-                       std::get_if<components::PaintResolvedReference>(&decoration.stroke)) {
-          const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
-          const float combinedOpacity =
-              NarrowToFloat(decoration.strokeOpacity) * static_cast<float>(span.opacity);
-          if (auto shader =
-                  instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
-                                            spanCurrentColor, combinedOpacity)) {
-            tiny_skia::Paint paint = makeBasePaint(antialias_);
-            paint.shader = std::move(*shader);
-            decoStrokePaint = paint;
-          }
-        }
-
-        auto drawDecoPath = [&](const Path& path) {
-          const tiny_skia::Path tinyPath = toTinyPath(path);
-          auto pixmapView = currentPixmapView();
-          if (decoFillPaint) {
-            tiny_skia::Painter::fillPath(pixmapView, tinyPath, *decoFillPaint,
-                                         tiny_skia::FillRule::Winding,
-                                         toTinyTransform(deviceFromLocalTransform_), mask);
-          }
-          if (decoStrokePaint && decoration.strokeWidth > 0.0) {
-            tiny_skia::Stroke stroke;
-            stroke.width = NarrowToFloat(decoration.strokeWidth);
-            tiny_skia::Painter::strokePath(pixmapView, tinyPath, *decoStrokePaint, stroke,
-                                           toTinyTransform(deviceFromLocalTransform_), mask);
-          }
-        };
-        EmitTextDecorationPaths(run, decoration, origins.size(), spanFontSizePx, textEngine,
-                                deviceFromLocalTransform_, decorationWorkRemaining, drawDecoPath);
-      }
-    }
+    drawDecorations(TextDecoration::LineThrough);
   }
 
   // Consume pattern paints after use, matching drawPath/drawRect/drawEllipse behavior.

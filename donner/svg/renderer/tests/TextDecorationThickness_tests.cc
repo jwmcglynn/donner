@@ -25,6 +25,10 @@ using tests::RenderDecorationScene;
 constexpr std::string_view kRedGlyphs =
     "<rect x='10' y='38' width='1' height='2' fill='red'/>"
     "<rect x='20' y='38' width='1' height='2' fill='red'/>";
+/// Glyphs drawn after an underline band, which paints beneath them.
+constexpr std::string_view kBlueGlyphs =
+    "<rect x='10' y='38' width='1' height='2' fill='blue'/>"
+    "<rect x='20' y='38' width='1' height='2' fill='blue'/>";
 constexpr std::string_view kRotatedGlyphs =
     "<rect x='5' y='80' width='1' height='2' fill='red'/>"
     "<rect x='10' y='80' width='1' height='2' fill='red'/>";
@@ -58,8 +62,9 @@ TEST(TextDecorationThickness, ParentAndChildLinesKeepTheirOrigin) {
     <text x="10" y="40" font-size="20" fill="red"
           style="text-decoration:underline;text-decoration-thickness:8px"><tspan font-size="40" fill="blue"
              style="text-decoration:line-through;text-decoration-thickness:2px">XX</tspan></text>)svg");
-  const auto expected = RenderDecorationScene(std::string(kRedGlyphs) + R"svg(
-    <rect x="10" y="38" width="20" height="8" fill="red"/><rect x="10" y="27" width="20" height="2" fill="blue"/>)svg");
+  const auto expected = RenderDecorationScene(
+      R"svg(<rect x="10" y="38" width="20" height="8" fill="red"/>)svg" + std::string(kBlueGlyphs) +
+      R"svg(<rect x="10" y="27" width="20" height="2" fill="blue"/>)svg");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_independent_origins",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -68,8 +73,9 @@ TEST(TextDecorationThickness, RepeatedSameLineKeepsBothOrigins) {
   const auto actual = RenderDecorationScene(R"svg(
     <text x="10" y="40" font-size="20" fill="red"
           style="text-decoration:underline;text-decoration-thickness:8px"><tspan fill="blue" style="text-decoration:underline;text-decoration-thickness:2px">XX</tspan></text>)svg");
-  const auto expected = RenderDecorationScene(std::string(kRedGlyphs) + R"svg(
-    <rect x="10" y="38" width="20" height="8" fill="red"/><rect x="10" y="41" width="20" height="2" fill="blue"/>)svg");
+  const auto expected = RenderDecorationScene(R"svg(
+    <rect x="10" y="38" width="20" height="8" fill="red"/><rect x="10" y="41" width="20" height="2" fill="blue"/>)svg" +
+                                              std::string(kBlueGlyphs));
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_repeated_origins",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -79,7 +85,7 @@ TEST(TextDecorationThickness, ChildThicknessWithoutLineDoesNotChangeParent) {
     <text x="10" y="40" font-size="20" fill="red"
           style="text-decoration:underline;text-decoration-thickness:8px"><tspan font-size="40" fill="blue" style="text-decoration-thickness:2px">XX</tspan></text>)svg");
   const auto expected = RenderDecorationScene(
-      std::string(kRedGlyphs) + "<rect x='10' y='38' width='20' height='8' fill='red'/>");
+      "<rect x='10' y='38' width='20' height='8' fill='red'/>" + std::string(kBlueGlyphs));
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_unrelated_child_thickness",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -180,7 +186,7 @@ TEST(TextDecorationThickness, OriginReferenceFallbackDoesNotUseDescendantPaint) 
           style="text-decoration:underline;text-decoration-thickness:8px"><tspan fill="blue"
           style="text-decoration:line-through;text-decoration-thickness:2px">XX</tspan></text>)svg");
   const auto expected = RenderDecorationScene(
-      "<rect x='10' y='38' width='20' height='8' fill='red'/>"
+      "<rect x='10' y='38' width='20' height='8' fill='red'/>" + std::string(kBlueGlyphs) +
       "<rect x='10' y='33' width='20' height='2' fill='blue'/>");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_origin_reference_fallback",
                                        editor::tests::PixelmatchIdentityParams());
@@ -203,9 +209,9 @@ TEST(TextDecorationThickness, OriginPatternRemainsAvailableWithDescendantSolidPa
                               text + "</text>");
     const std::string glyphFill = child ? "lime" : "url(#p)";
     const auto expected = RenderDecorationScene(
-        std::string(pattern) + "<rect x='10' y='38' width='1' height='2' fill='" + glyphFill +
-        "'/><rect x='20' y='38' width='1' height='2' fill='" + glyphFill +
-        "'/><rect x='10' y='38' width='20' height='8' fill='url(#p)'/>" +
+        std::string(pattern) + "<rect x='10' y='38' width='20' height='8' fill='url(#p)'/>" +
+        "<rect x='10' y='38' width='1' height='2' fill='" + glyphFill +
+        "'/><rect x='20' y='38' width='1' height='2' fill='" + glyphFill + "'/>" +
         (child ? "<rect x='10' y='33' width='20' height='2' fill='lime'/>" : ""));
     editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_origin_pattern",
                                          editor::tests::PixelmatchIdentityParams());
@@ -249,7 +255,7 @@ TEST(TextDecorationThickness, SingularAndNonFiniteTransformsSuppressExplicitBand
     std::copy(linear.begin(), linear.end(), deviceFromLocal.data);
     std::size_t remaining = Path::kMaximumGeometryQueryWork;
     bool emitted = false;
-    EmitTextDecorationPaths(run, origin, 1, 20, engine, deviceFromLocal, remaining,
+    EmitTextDecorationPaths(run, origin, origin.lines, 1, 20, engine, deviceFromLocal, remaining,
                             [&](const Path&) { emitted = true; });
     EXPECT_FALSE(emitted);
   }
