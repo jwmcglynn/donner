@@ -202,8 +202,7 @@ donner_cc_test(
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
         "//conditions:default": [],
     }),
-    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
-    # wrappers run automatically under `bazel test //...`.
+    # Exercise each supported backend configuration under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
