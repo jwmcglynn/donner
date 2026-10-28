@@ -1017,7 +1017,12 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
     for (const auto& path : clipPaths->clipPaths) {
       ClipPathShape shape;
       shape.path = path.path;
-      shape.fillRule = path.clipRule == ClipRule::NonZero ? FillRule::NonZero : FillRule::EvenOdd;
+      // CSS basic shapes carry their own winding rule. Only SVG clip geometry can inherit
+      // the referencing element's clip-rule property.
+      const bool usesEvenOdd =
+          path.clipRule == ClipRule::EvenOdd ||
+          (!path.hasOwnClipRule && style.properties->clipRule.get().value() == ClipRule::EvenOdd);
+      shape.fillRule = usesEvenOdd ? FillRule::EvenOdd : FillRule::NonZero;
       shape.parentFromEntity = path.parentFromEntity;
       shape.layer = path.layer;
       shape.groupPathCount = path.groupPathCount;
@@ -1029,14 +1034,6 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
   // add an empty path to force a clip that hides everything.
   if (instance.hasClipPath() && clip.clipPaths.empty()) {
     clip.clipPaths.emplace_back();
-  }
-
-  // The computed clip rule is inherited if undefined on the clip path itself.
-  for (ClipPathShape& path : clip.clipPaths) {
-    if (path.fillRule == FillRule::NonZero &&
-        style.properties->clipRule.get().value() == ClipRule::EvenOdd) {
-      path.fillRule = FillRule::EvenOdd;
-    }
   }
 
   return clip;

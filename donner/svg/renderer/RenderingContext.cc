@@ -847,7 +847,7 @@ public:
           LayoutSystem().getAbsoluteTransformComponent(entity).worldFromEntity;
       collection.paths.emplace_back(basicShapeClipPath(entity, *clip),
                                     referenceFromEntity * collection.rootClipFromReference,
-                                    clip->clipRule(), collection.layer + 1);
+                                    clip->clipRule(), true, collection.layer + 1);
       return true;
     }
     const ResolvedClipPath resolved =
@@ -897,14 +897,15 @@ public:
       if (instanceEntity.entity() != dataEntity.entity()) {
         recordClipFontDependencies(instanceEntity);
       }
-      collection.paths.emplace_back(clipPathData->spline, rootClipFromEntity, clipRule,
+      collection.paths.emplace_back(clipPathData->spline, rootClipFromEntity, clipRule, false,
                                     collection.layer);
     }
 #ifdef DONNER_TEXT_ENABLED
     else if (auto* textEngine = registry_.ctx().find<TextEngine>()) {
       for (const Path& glyphPath : textEngine->computedGlyphPaths(textEntity)) {
         if (!glyphPath.empty()) {
-          collection.paths.emplace_back(glyphPath, rootClipFromEntity, clipRule, collection.layer);
+          collection.paths.emplace_back(glyphPath, rootClipFromEntity, clipRule, false,
+                                        collection.layer);
         }
       }
     }
@@ -992,7 +993,7 @@ public:
     if (!valid) {
       clipPaths.erase(clipPaths.begin() + pathCount, clipPaths.end());
     } else if (hasGroupClip) {
-      clipPaths.emplace_back(Path{}, Transform2d{}, ClipRule::NonZero, layer,
+      clipPaths.emplace_back(Path{}, Transform2d{}, ClipRule::NonZero, false, layer,
                              clipPaths.size() - childBegin);
     }
     return valid;
@@ -1232,7 +1233,7 @@ public:
     if (isBasicShape) {
       instance.basicClipPath = true;
       paths.clipPaths.emplace_back(basicShapeClipPath(EntityHandle(registry_, styleEntity), clip),
-                                   Transform2d(), clip.clipRule(), 0);
+                                   Transform2d(), clip.clipRule(), true, 0);
     } else {
       instance.clipPath = resolved;
       RecursionGuard guard;
