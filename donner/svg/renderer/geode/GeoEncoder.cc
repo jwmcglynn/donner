@@ -3454,9 +3454,9 @@ bool IsValidImageDraw(const svg::ImageResource& image, const Box2d& destRect,
   return svg::HasExactRgbaPayload(image.data, image.width, image.height);
 }
 
-/// Maps the resolved CSS image-rendering value to the Geode sampler policy.
-GeodeTextureEncoder::Filter ImageFilter(svg::ImageRendering imageRendering) {
-  switch (svg::ImageSamplingKernelFor(imageRendering)) {
+/// Maps a resampling kernel to the Geode sampler policy.
+GeodeTextureEncoder::Filter ImageFilter(svg::ImageSamplingKernel kernel) {
+  switch (kernel) {
     case svg::ImageSamplingKernel::Nearest: return GeodeTextureEncoder::Filter::Nearest;
     case svg::ImageSamplingKernel::PixelatedSmooth: return GeodeTextureEncoder::Filter::Pixelated;
     case svg::ImageSamplingKernel::Bilinear: return GeodeTextureEncoder::Filter::Linear;
@@ -3476,23 +3476,15 @@ GeodeTextureEncoder::QuadParams MakeImageQuadParams(const svg::ImageResource& im
   params.destRect = destRect;
   params.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
   params.opacity = opacity;
-  params.filter = ImageFilter(imageRendering);
   params.sourceIsPremultiplied = true;
 
   const Transform2d deviceFromImage =
       Transform2d::Scale(destRect.width() / static_cast<double>(image.width),
                          destRect.height() / static_cast<double>(image.height)) *
       Transform2d::Translate(destRect.topLeft) * deviceFromLocalTransform;
+  params.filter = ImageFilter(svg::ImageSamplingKernelFor(imageRendering, deviceFromImage));
   params.pixelatedScaleX = deviceFromImage.transformVector(Vector2d(1.0, 0.0)).length();
   params.pixelatedScaleY = deviceFromImage.transformVector(Vector2d(0.0, 1.0)).length();
-  // tiny-skia samples the nearest texel whenever the image transform is a pure translation,
-  // fractional ones included, whatever the requested filter.
-  const bool translationOnly = deviceFromImage.data[0] == 1.0 && deviceFromImage.data[1] == 0.0 &&
-                               deviceFromImage.data[2] == 0.0 && deviceFromImage.data[3] == 1.0;
-  if (translationOnly && (params.filter == GeodeTextureEncoder::Filter::Linear ||
-                          params.filter == GeodeTextureEncoder::Filter::Cubic)) {
-    params.filter = GeodeTextureEncoder::Filter::Nearest;
-  }
   params.clipMaskView = clipMaskView;
   return params;
 }

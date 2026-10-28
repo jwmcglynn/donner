@@ -79,7 +79,7 @@ inline double FilterImageCubicWeight(double input) {
   return 0.0;
 }
 
-/// Independently evaluates one nearest-neighbor or pixelated channel.
+/// Independently evaluates one nearest-neighbor, pixelated or bilinear channel.
 inline double FilterImageSharpSample(double imageX, double imageY, size_t channel,
                                      const FilterImageTestParams& params) {
   if (params.samplingMode == 1) {
@@ -87,10 +87,16 @@ inline double FilterImageSharpSample(double imageX, double imageY, size_t channe
                              static_cast<int32_t>(std::floor(imageY + 0.5)), channel);
   }
 
+  // Bilinear is the pixelated kernel without the integer prescale.
+  const bool bilinear = params.samplingMode == 3;
   const int32_t multipleX =
-      std::clamp(static_cast<int32_t>(std::floor(params.pixelatedScaleX + 0.5f)), 1, 65536);
+      bilinear
+          ? 1
+          : std::clamp(static_cast<int32_t>(std::floor(params.pixelatedScaleX + 0.5f)), 1, 65536);
   const int32_t multipleY =
-      std::clamp(static_cast<int32_t>(std::floor(params.pixelatedScaleY + 0.5f)), 1, 65536);
+      bilinear
+          ? 1
+          : std::clamp(static_cast<int32_t>(std::floor(params.pixelatedScaleY + 0.5f)), 1, 65536);
   const double virtualX = (imageX + 0.5) * multipleX - 0.5;
   const double virtualY = (imageY + 0.5) * multipleY - 0.5;
   const int32_t baseX = static_cast<int32_t>(std::floor(virtualX));
@@ -146,7 +152,7 @@ inline std::array<float, 4> FilterImageExpected(const FilterImageTestParams& par
 }
 
 /// Affine placement cases spanning asymmetric scale, shear, rotation, crops, and transparent
-/// borders. @param samplingMode Smooth (0), nearest (1), or pixelated (2).
+/// borders. @param samplingMode Mitchell cubic (0), nearest (1), pixelated (2), or bilinear (3).
 inline std::array<FilterImageTestParams, 3> FilterImageScenes(uint32_t samplingMode) {
   return {{{0.48f, 0.13f, -0.20f, -0.08f, 0.62f, 0.35f, samplingMode, 2.6f, 1.6f, 0},
            {0.78f, -0.22f, 0.65f, 0.27f, 0.44f, -0.35f, samplingMode, 3.4f, 2.4f, 0},
@@ -157,7 +163,7 @@ inline std::array<FilterImageTestParams, 3> FilterImageScenes(uint32_t samplingM
 /// @param device Native device with bounded wait/readback support.
 /// @param shader Selected or mutation artifact; bindings and workgroup come from reflection.
 /// @param readbackBuffer Reads a submitted buffer through the backend's host mapping API.
-/// @param samplingMode Smooth (0), nearest (1), or pixelated (2).
+/// @param samplingMode Mitchell cubic (0), nearest (1), pixelated (2), or bilinear (3).
 /// @param sceneIndex Index into FilterImageScenes.
 template <typename DeviceType, typename Readback>
 void CheckFilterImageStorage(DeviceType& device, const shader::CompiledShaderView& shader,

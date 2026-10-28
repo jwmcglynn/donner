@@ -220,8 +220,8 @@ TEST_P(VulkanFilterImageTest, NativeArtifactMatchesIndependentReference) {
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(SmoothNearestAndPixelated, VulkanFilterImageTest,
-                         testing::Values(0u, 1u, 2u));
+INSTANTIATE_TEST_SUITE_P(CubicNearestPixelatedAndBilinear, VulkanFilterImageTest,
+                         testing::Values(0u, 1u, 2u, 3u));
 
 TEST_F(VulkanColorMatrixTest, VectorCeilAndExpRunThroughNativeCompiler) {
   const auto module = shader::BuildVectorCeilExpModule();

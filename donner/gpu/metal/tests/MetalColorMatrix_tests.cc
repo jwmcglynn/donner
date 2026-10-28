@@ -328,8 +328,8 @@ TEST_P(MetalFilterImageTest, NativeArtifactMatchesIndependentReference) {
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(SmoothNearestAndPixelated, MetalFilterImageTest,
-                         testing::Values(0u, 1u, 2u));
+INSTANTIATE_TEST_SUITE_P(CubicNearestPixelatedAndBilinear, MetalFilterImageTest,
+                         testing::Values(0u, 1u, 2u, 3u));
 
 TEST_F(MetalColorMatrixTest, VectorCeilAndExpRunThroughNativeCompiler) {
   const auto module = shader::BuildVectorCeilExpModule();

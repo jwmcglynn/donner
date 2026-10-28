@@ -34,12 +34,12 @@ inline std::ostream& operator<<(std::ostream& os, ImageSamplingKernel kernel) {
 }
 
 /**
- * Selects the raster `<image>` resampling kernel for a resolved `image-rendering` value. Both
- * renderer backends map `<image>` draws through this function, so their image kernels cannot
- * drift apart; `feImage` keeps its own sampling choice.
+ * Selects the raster resampling kernel for a resolved `image-rendering` value. Both renderer
+ * backends map `<image>` draws and `feImage` raster placement through this function, so their
+ * image kernels cannot drift apart. resvg likewise renders an `feImage` raster as an image.
  *
- * `auto` is UA-defined; Donner, like resvg, uses the Mitchell cubic, which is also the kernel
- * `feImage` applies, and gives `optimizeQuality` and `high-quality` the same quality kernel.
+ * `auto` is UA-defined; Donner, like resvg, uses the Mitchell cubic, and gives `optimizeQuality`
+ * and `high-quality` the same quality kernel.
  *
  * @param imageRendering The resolved `image-rendering` value.
  */
@@ -57,6 +57,22 @@ constexpr ImageSamplingKernel ImageSamplingKernelFor(ImageRendering imageRenderi
   return ImageSamplingKernel::MitchellCubic;
 }
 
+/**
+ * Selects the resampling kernel for drawing a raster through \p deviceFromImage. tiny-skia, whose
+ * image sampling Donner's software renderer and resvg share, samples the texel containing each
+ * sample whenever the transform is a pure translation, fractional ones included, so every
+ * interpolating kernel becomes \ref ImageSamplingKernel::Nearest there.
+ *
+ * @param imageRendering The resolved `image-rendering` value.
+ * @param deviceFromImage Transform from source-pixel coordinates to output pixels.
+ */
+inline ImageSamplingKernel ImageSamplingKernelFor(ImageRendering imageRendering,
+                                                  const Transform2d& deviceFromImage) {
+  const bool translationOnly = deviceFromImage.data[0] == 1.0 && deviceFromImage.data[1] == 0.0 &&
+                               deviceFromImage.data[2] == 0.0 && deviceFromImage.data[3] == 1.0;
+  return translationOnly ? ImageSamplingKernel::Nearest : ImageSamplingKernelFor(imageRendering);
+}
+
 /// Maximum output axis of a materialized procedural image-sampling surface.
 inline constexpr std::int64_t kMaxImageSamplingDimension = 16384;
 /// Maximum pixels in one materialized image-sampling surface.
@@ -71,7 +87,7 @@ inline constexpr std::size_t kMaxImageSamplingSurfacePixels = 16 * 1024 * 1024;
  * @param deviceFromImage Transform from source-pixel coordinates to output pixels.
  * @param outputWidth Output width in pixels.
  * @param outputHeight Output height in pixels.
- * @param imageRendering Resolved image sampling policy.
+ * @param kernel Resampling kernel.
  * @return Tightly packed premultiplied RGBA8 output. Malformed payloads, invalid dimensions, and
  * over-budget surfaces return empty; invalid transforms return a correctly sized transparent
  * output.
@@ -79,6 +95,6 @@ inline constexpr std::size_t kMaxImageSamplingSurfacePixels = 16 * 1024 * 1024;
 std::vector<std::uint8_t> RasterizeImagePremultiplied(
     std::span<const std::uint8_t> premultipliedPixels, int sourceWidth, int sourceHeight,
     const Transform2d& deviceFromImage, int outputWidth, int outputHeight,
-    ImageRendering imageRendering);
+    ImageSamplingKernel kernel);
 
 }  // namespace donner::svg
