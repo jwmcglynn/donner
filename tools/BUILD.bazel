@@ -328,6 +328,7 @@ py_test(
         "//donner/svg/renderer/wasm:BUILD.bazel",
         "//tools:ci_bazel_test.sh",
         "//tools:coverage.sh",
+        "//tools:run-browser-ci.sh",
         "//tools/ci:BUILD.bazel",
         "//tools/ci:editor_wasm_lane.sh",
     ],
