@@ -27,8 +27,8 @@ export function normalizePresentationDeviceLoss(loss) {
  *    previous one along the sample interval's drag direction. Ambiguous: the represented pointer
  *    lags the input, so near one of the drag's reversals a correct editor's frames still move the
  *    old way.
- *  - `indeterminate`: the later frame represents no input, so its pointer says nothing about where
- *    its content is.
+ *  - `indeterminate`: either frame represents no input, so the pointers say nothing about where
+ *    the content is (the editor records the current pointer on every frame).
  *  - `readback-only`: the editor's completed frame held or advanced along the drag, so the
  *    read-back path returned an older image than the editor had already completed.
  *  - `no-editor-frame`: a sample has no completed frame to compare.
@@ -61,8 +61,8 @@ export function presentedFrameOrdering(samples, regression) {
     : 0;
   let verdict = "readback-only";
   if (frameIdDelta < 0) verdict = "editor-frame-went-backwards";
+  else if (!predecessor.inputRepresented || !sample.inputRepresented) verdict = "indeterminate";
   else if (representedPointerAlongDrag < 0) verdict = "editor-pointer-against-interval";
-  else if (!sample.inputRepresented) verdict = "indeterminate";
   return { predecessor, sample, frameIdDelta, representedPointerAlongDrag, verdict };
 }
 

@@ -920,10 +920,26 @@ test("drag candidates say whether the editor's completed frame or only the readb
     "editor-pointer-against-interval",
     "a represented pointer behind the last one is ambiguous, not proof of an editor bug",
   );
+  const unrepresented = (id, x, y) => ({ ...frame(id, x, y), inputRepresented: false });
   assert.equal(
-    ordering(frame(40, 100, 50), { ...frame(41, 108, 50), inputRepresented: false }).verdict,
+    ordering(frame(40, 100, 50), unrepresented(41, 108, 50)).verdict,
     "indeterminate",
     "a frame that represents no input says nothing about where its content is",
+  );
+  assert.equal(
+    ordering(unrepresented(40, 100, 50), frame(41, 108, 50)).verdict,
+    "indeterminate",
+    "an unrepresented predecessor cannot clear the editor either",
+  );
+  assert.equal(
+    ordering(frame(40, 108, 50), unrepresented(41, 100, 50)).verdict,
+    "indeterminate",
+    "validity comes before the pointer comparison",
+  );
+  assert.equal(
+    ordering(unrepresented(41, 100, 50), unrepresented(40, 100, 50)).verdict,
+    "editor-frame-went-backwards",
+    "a smaller frame id needs no pointer",
   );
   const missing = ordering(null, frame(41, 108, 50));
   assert.equal(missing.verdict, "no-editor-frame");
