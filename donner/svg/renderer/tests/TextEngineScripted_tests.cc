@@ -3573,4 +3573,51 @@ TEST(TextEngineScriptedTest, WhiteSpaceParsedNewlineRetainsRelativeInlinePositio
   EXPECT_THAT(glyphs[2].xPosition, DoubleNear(20, 1e-5));
 }
 
+TEST(TextEngineScriptedTest, FullWidthMapsUnicodeWithoutChangingSourceClusters) {
+  const auto glyphs = LayoutParsedTextPath(
+      "<tspan style='text-transform:full-width'>A1!\xef\xbd\xb6\xef\xbe\x9e"
+      "\xc3\xa9\xf0\x9f\x98\x80</tspan>");
+  const auto mapped = [](uint32_t cp, uint32_t offset) {
+    return AllOf(GlyphIndexIs(Eq(static_cast<int>(cp % 997u) + 1)),
+                 Field("cluster", &TextGlyph::cluster, Eq(offset)));
+  };
+  EXPECT_THAT(glyphs, ElementsAre(mapped(0xff21, 0), mapped(0xff11, 1), mapped(0xff01, 2),
+                                  mapped(0x30ab, 3), mapped(0x3099, 6), mapped(0xe9, 9),
+                                  mapped(0x1f600, 11)));
+}
+
+TEST(TextEngineScriptedTest, FullWidthTransformsOnlyPreservedSpaces) {
+  for (const char* mode : {"normal", "pre"}) {
+    SCOPED_TRACE(mode);
+    const auto glyphs =
+        LayoutParsedTextPath(std::string("<tspan style='text-transform:full-width;") +
+                             "white-space:" + mode + "'>A B</tspan>");
+    ASSERT_THAT(glyphs, SizeIs(3));
+    const uint32_t space = std::string_view(mode) == "pre" ? 0x3000 : 0x20;
+    EXPECT_THAT(glyphs[1], GlyphIndexIs(Eq(static_cast<int>(space % 997u) + 1)));
+  }
+}
+
+TEST(TextEngineScriptedTest, FullWidthInheritsAndLeavesSourceTextUnchanged) {
+  std::vector<ParsedPathRunDetails> details;
+  const auto glyphs = LayoutParsedTextPath(
+      "<tspan style='text-transform:full-width'>A<tspan style='text-transform:none'>b</tspan>"
+      "C</tspan>",
+      true, "M0 0H500", false, {}, &details);
+  EXPECT_THAT(glyphs, ElementsAre(GlyphIndexIs(Eq(static_cast<int>(0xff21 % 997u) + 1)),
+                                  GlyphIndexIs(Eq(static_cast<int>('b') + 1)),
+                                  GlyphIndexIs(Eq(static_cast<int>(0xff23 % 997u) + 1))));
+  EXPECT_THAT(details, ElementsAre(Field("text", &ParsedPathRunDetails::text, Eq("A")),
+                                   Field("text", &ParsedPathRunDetails::text, Eq("b")),
+                                   Field("text", &ParsedPathRunDetails::text, Eq("C"))));
+}
+
+TEST(TextEngineScriptedTest, FullWidthUsesOriginalCodepointPositions) {
+  const auto glyphs = LayoutParsedTextPath(
+      "<tspan style='text-transform:full-width' x='10 30 50'>A\xef\xbc\xa2"
+      "C</tspan>");
+  EXPECT_THAT(glyphs, ElementsAre(GlyphXPositionIs(DoubleEq(12)), GlyphXPositionIs(DoubleEq(32)),
+                                  GlyphXPositionIs(DoubleEq(52))));
+}
+
 }  // namespace donner::svg
