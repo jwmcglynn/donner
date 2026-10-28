@@ -5302,13 +5302,22 @@ function pastedSourceReady(
     && snapshot.acceptedForPresentation && snapshot.hasPresentedAtMs;
 }
 
-async function focusSourceEditor(page: Page): Promise<void> {
+// Presses the Source pane and waits until the app's live shortcut probe reports keyboard focus.
+// With `parkBeforePress`, the press waits for the demand-driven frame loop to park first, so the
+// focus wait cannot borrow frames that other editor work happens to schedule.
+async function focusSourceEditor(
+  page: Page,
+  options: { parkBeforePress?: boolean } = {},
+): Promise<void> {
   const sourcePoint = { x: 120, y: 180 };
   await page.mouse.move(sourcePoint.x, sourcePoint.y);
   await waitForAppliedPointer(page, sourcePoint, {
     message: "source editor focus point",
     timeoutMs: scaledMs(4_000),
   });
+  if (options.parkBeforePress) {
+    await waitForFrameLoopToPark(page);
+  }
   const deadline = Date.now() + scaledMs(4_000);
   const remainingMs = () => Math.max(1, deadline - Date.now());
   await expect.poll(
@@ -5332,9 +5341,13 @@ async function focusSourceEditor(page: Page): Promise<void> {
       window.__donnerEditorFrameRequested = true;
       return window.__donnerEyedropperShortcutProbe?.current.frameNumber ?? -1;
     });
-    // The shortcut probe precedes Source rendering, so focus becomes observable next frame.
+    // ImGui focuses the clicked window at the end of the press frame. The Source pane reads that
+    // focus when it renders the next frame, and the probe, which runs before the Source pane,
+    // reports it one frame later still. Nothing else has to wake an idle editor for those frames,
+    // so every poll requests one.
     await expect.poll(() =>
       page.evaluate((before) => {
+        window.__donnerEditorFrameRequested = true;
         const gate = window.__donnerEyedropperShortcutProbe?.current;
         return {
           focused: gate?.sourcePaneFocused,
@@ -5380,7 +5393,7 @@ test("source focus uses live input while the document snapshot is stale", async 
         });
   });
   try {
-    await focusSourceEditor(page);
+    await focusSourceEditor(page, { parkBeforePress: true });
     expect(
       await page.evaluate(() => ({
         staleFocus: window.__donnerEyedropperTestState?.sourcePaneFocused,
