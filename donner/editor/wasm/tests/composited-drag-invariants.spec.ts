@@ -11,6 +11,7 @@ import {
   dragRegressions,
   installCompositedPixelClassifier,
   installCompositedProbe,
+  presentedFrameOrdering,
   readDocumentArtWidth,
   readViewportStats,
   startCompositedProbe,
@@ -453,6 +454,17 @@ function confirmBlueBodyRegressions(
   });
 }
 
+/** The editor's completed frames over the first five ordering candidates (presentedFrameOrdering). */
+function editorFrameOrdering(
+  samples: readonly CompositedSample[],
+  candidates: readonly DragRegression[],
+) {
+  return candidates.slice(0, 5).map((candidate) => ({
+    sampleIndex: candidate.sampleIndex,
+    ...presentedFrameOrdering(samples, candidate),
+  }));
+}
+
 async function retainedBlueBodyPairs(
   page: Page,
   candidates: readonly DragRegression[],
@@ -729,7 +741,12 @@ test.describe("composited drag invariants", () => {
         ]),
       ];
       const readbacks = await attachCompositedReadbacks(page, test.info(), indices);
-      console.log(`drag-readback-evidence ${JSON.stringify({ baselineIndex, ...readbacks })}`);
+      // The editor's own completed frames over each candidate say whether the editor or only the
+      // readback went back to an older position; composited-probe.json keeps them per sample.
+      const editorFrames = editorFrameOrdering(result.samples, candidates);
+      console.log(
+        `drag-readback-evidence ${JSON.stringify({ baselineIndex, ...readbacks, editorFrames })}`,
+      );
     }
     const bodies = await retainedBlueBodyPairs(page, candidates);
     const violations = confirmBlueBodyRegressions(
@@ -761,7 +778,12 @@ test.describe("composited drag invariants", () => {
     ).toBeGreaterThan(2);
     expect(
       violations.slice(0, 5),
-      `${violations.length} samples presented an OLDER frame than one already shown`,
+      `${violations.length} samples presented an OLDER frame than one already shown`
+        + (violations.length === 0
+          ? ""
+          : `; editor completed frames (verdicts in composited-probe-evidence.mjs:`
+            + ` editor-frame-went-backwards is an editor bug, readback-only a stale readback):`
+            + ` ${JSON.stringify(editorFrameOrdering(result.samples, violations))}`),
     ).toEqual([]);
     expect(failures).toEqual([]);
   });
