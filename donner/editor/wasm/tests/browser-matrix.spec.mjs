@@ -320,6 +320,15 @@ function assertFontReferenceLane({ lane, tags, specFiles }) {
   );
 }
 
+function assertDocsLane({ lane, tags, specFiles }) {
+  assert.deepEqual(tags, ["launches-browser"]);
+  assert.deepEqual(specFiles, ["docs-selector.spec.ts"]);
+  assert.match(lane, /--config=\$\(rootpath :playwright\.docs\.config\.js\)/);
+  assert.ok(lane.includes('"//tools:docs_selector_fixture_json"'));
+  assert.match(lane, /"DONNER_DOCS_FIXTURE": "\$\(rootpath \/\/tools:docs_selector_fixture_json\)"/);
+  assert.doesNotMatch(lane, /wasm_web_package|DONNER_WASM_REQUIRE_WEBGPU/);
+}
+
 function assertAnimationLane({ lane, tags, specFiles }, grep) {
   assert.deepEqual(specFiles, ["smoke.spec.ts"]);
   assert.ok(tags.includes("launches-browser"));
@@ -365,6 +374,8 @@ function assertBrowserLane(lane) {
     assertAnimationLane(contract, /--grep=animation\.preview\.plays/);
   } else if (laneName === "canvas_snapshot_browser_test") {
     assertAnimationLane(contract, /--grep=page screenshots keep the canvas/);
+  } else if (laneName === "docs_selector_browser_tests") {
+    assertDocsLane(contract);
   } else if (laneName === "font_reference_probe") {
     assertFontReferenceLane(contract);
   } else {
@@ -443,6 +454,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       "catalog_font_loading_test",
       "chromium_composited_invariants_test",
       "chromium_remote_smoke",
+      "docs_selector_browser_tests",
       "firefox_composited_invariants_test",
       "font_reference_probe",
       "standalone_geode_browser_renderer_test",
@@ -519,7 +531,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       );
       continue;
     }
-    if (laneName === "font_reference_probe") {
+    if (laneName === "font_reference_probe" || laneName === "docs_selector_browser_tests") {
       continue;
     }
     assert.ok(lane.includes(`"${editorPackage}"`), `${laneName} must serve the editor package`);
@@ -2032,7 +2044,7 @@ test("Chromium context diagnostics stay bounded, manual, and independent of the 
   assert.ok(diagnostic, "expected the explicit browser-only diagnostic target");
   assert.match(diagnostic[1], /timeout = "short"/);
   assert.match(diagnostic[1], /args = \["--contexts=40"\]/);
-  assert.match(diagnostic[1], /tags = \["manual", "launches-browser", "no-sandbox"\]/);
+  assert.deepEqual(parseBrowserLane(diagnostic[1]).tags.sort(), ["launches-browser", "manual", "no-sandbox"]);
   assert.doesNotMatch(diagnostic[1], /requires_desktop_session|wasm_web_package/);
   for (const input of ["playwright.config.js", "test-timing.cjs", "prepare-browser-archives.js"]) {
     assert.ok(diagnostic[1].includes(`"${input}"`), `${input} must be a declared runfile`);

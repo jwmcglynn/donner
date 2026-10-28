@@ -1,0 +1,11 @@
+.docs-version { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .5rem 0; font: normal .875rem var(--font-family, sans-serif); }
+.docs-version label { font-size: .8rem; color: var(--page-secondary-foreground-color, #555); }
+.docs-version select { font: inherit; color: var(--page-foreground-color, #222); background: var(--page-background-color, #fff); border: 1px solid var(--separator-color, #aaa); border-radius: .35rem; padding: .3rem .5rem; max-width: 100%; }
+.docs-version select:focus-visible { outline: 2px solid var(--primary-color, #0071bc); outline-offset: 2px; }
+.docs-version-links { font-size: .8rem; display: flex; gap: .5rem; }
+.docs-version-ready .docs-version-links { display: none; }
+.docs-version-notice { padding: .75rem; margin: .5rem; border: 1px solid var(--separator-color, #aaa); border-radius: .35rem; font: normal .875rem sans-serif; }
+.docs-version-notice button { margin-left: .5rem; font: inherit; cursor: pointer; }
+@media (max-width: 600px) { .docs-version { align-items: flex-start; flex-direction: column; } }
+
+.docs-source { font-size: .8rem; color: var(--page-secondary-foreground-color, #555); }

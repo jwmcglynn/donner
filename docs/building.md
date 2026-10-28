@@ -108,13 +108,16 @@ To build the Doxygen site with the bundled reports:
 tools/build_docs.sh
 ```
 
-`tools/build_docs.sh` runs `doxygen Doxyfile`, copies
+`tools/build_docs.sh` runs `tools/doxygen.sh`, which reads the version from
+`MODULE.bazel`, generates Doxygen, and rejects mismatched page headers. It copies
 `docs/reports/binary-size/` into the generated HTML output, and
 extracts `docs/reports/coverage.zip` into `reports/coverage/` so the
 deployed docs site has both reports live. The docs site builds from the
 repository checkout; `.gitattributes` leaves `coverage.zip` out of the
 release source archive, so `tools/build_docs.sh` run from that archive
-skips the coverage report.
+skips the coverage report. A source-archive build without Git metadata records a
+null source commit rather than inheriting an enclosing repository; publication requires
+a separately verified source identity.
 
 To collect coverage without generating the local HTML report:
 

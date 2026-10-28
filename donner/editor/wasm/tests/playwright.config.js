@@ -28,6 +28,7 @@ module.exports = defineConfig({
   // machines that run the real thing at 110 fps. Both composited suites run on
   // hardware via playwright.composited-chromium.config.js instead.
   testIgnore: [
+    "docs-selector.spec.ts",
     "composited-invariants.spec.ts",
     "composited-drag-invariants.spec.ts",
     "font-reference.spec.ts",
