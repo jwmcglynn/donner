@@ -810,8 +810,8 @@ percentages. The font-metric units `ex`/`ch` and viewport units `vw`/`vh`/`vmin`
 until their computed-value context is available in the style pipeline. Explicit
 percentages use the originating decoration's used font size; font-relative lengths compute before
 explicit inheritance. The supported `text-decoration` shorthand resets omitted thickness to `auto`
-and preserves independent cascade priorities. Draft line-width keywords and the complete
-line/style/color longhands, underline offsets, shadows, and emphasis remain unsupported.
+and preserves independent cascade priorities. Draft line-width keywords, underline offsets,
+shadows, and emphasis remain unsupported.
 
 Each originating declaration retains its own font, paint and thickness, including repeated
 underline declarations on nested spans. The software and GPU renderers consume the same bounded
@@ -832,3 +832,26 @@ Both renderers make two decoration passes per run around the glyph paint, and
 `text_decoration_paint_order_tests` compares overlapping glyph and decoration colors exactly. With
 per-origin paint and this order, `text/text-decoration/indirect-with-multiple-colors` compares; its
 remaining residual is the reference rasterizer generation's coverage on the x=100 crosshair.
+
+## Text decoration line, style and color
+
+`text-decoration-line`, `text-decoration-style` and `text-decoration-color` are CSS properties; the
+`text-decoration` shorthand sets all four longhands and resets omitted components. All four are
+not inherited. SVG 2 section 6.6 lists only `text-decoration` as a presentation attribute, so the
+longhands are accepted in style sheets and `style` attributes rather than as attributes.
+
+`text-decoration-style` draws `solid`, `double`, `dotted`, `dashed` and `wavy` lines from the
+solid band of thickness `t` (CSS Text Decoration 3 leaves the proportions to the user agent):
+`double` adds a second band after a gap of `t`, away from the text (a line-through straddles its
+solid position); `dotted` draws round dots of diameter `t` every `2t`; `dashed` draws dashes `3t`
+long every `5t`; `wavy` draws a band of thickness `t` along quadratic half-waves of amplitude `t`
+whose length divides the segment into the whole count nearest `2t`. Each segment is limited to
+4096 dashes, dots or half-waves and charged to the per-draw decoration work allowance.
+
+SVG 2 section 11.11 paints a decoration with the fill and stroke of the element that declares it
+and does not define `text-decoration-color`. Its initial value in CSS Text Decoration 3 is
+`currentcolor`, which would replace that fill for every SVG decoration, so Donner treats the
+unset longhand as "use the declaring fill" and an author-specified color, including
+`currentcolor`, as the decoration's fill color. The decoration keeps the declaring element's
+stroke and fill opacity, and `currentcolor` resolves against the declaring element's `color`.
+`text_decoration_style_tests` compares each style and color rule exactly against authored scenes.
