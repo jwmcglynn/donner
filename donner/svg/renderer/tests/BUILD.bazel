@@ -1728,6 +1728,9 @@ donner_cc_test(
         ":decoration_test_scene",
         ":image_comparison_test_fixture",
         "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/components/text:components",
+        "//donner/svg/renderer:placed_text_geometry",
+        "//donner/svg/text:text_engine",
         "@com_google_gtest//:gtest_main",
     ],
 )

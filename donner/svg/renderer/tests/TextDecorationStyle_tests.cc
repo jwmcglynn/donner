@@ -3,19 +3,25 @@
 /// independently authored scenes. The proportions follow the documented Donner rules on
 /// \ref donner::svg::TextDecorationStyle.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/renderer/tests/DecorationTestScene.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 namespace {
 
+using tests::DecorationDocument;
 using tests::RenderDecorationScene;
 
 constexpr std::string_view kRedGlyphs =
@@ -117,6 +123,64 @@ TEST(TextDecorationStyle, StyleAppliesPerOrigin) {
           "<rect x='10' y='33' width='6' height='2' fill='red'/>"
           "<rect x='20' y='33' width='6' height='2' fill='red'/>",
       "decoration_style_per_origin");
+}
+
+/// Emit one origin's underline for a single-glyph run and return the emitted paths' point counts.
+std::vector<std::size_t> EmitUnderline(TextDecorationStyle style, double x, double advance,
+                                       double thickness,
+                                       const Transform2d& deviceFromLocal = Transform2d()) {
+  auto document = DecorationDocument("");
+  const auto& engine = document.registry().ctx().get<TextEngine>();
+  TextRun run;
+  TextGlyph glyph;
+  glyph.glyphIndex = 3;
+  glyph.xPosition = x;
+  glyph.xAdvance = advance;
+  run.glyphs.push_back(glyph);
+  components::TextDecorationOrigin origin;
+  origin.lines = TextDecoration::Underline;
+  origin.style = style;
+  origin.thickness = {TextDecorationThickness::Kind::Length, Lengthd(thickness)};
+  std::size_t remaining = Path::kMaximumGeometryQueryWork;
+  std::vector<std::size_t> points;
+  EmitTextDecorationPaths(run, origin, origin.lines, 1, 20, engine, deviceFromLocal, remaining,
+                          [&](const Path& path) { points.push_back(path.points().size()); });
+  return points;
+}
+
+TEST(TextDecorationStyle, DashesCoverAnExactMultipleOfThePeriod) {
+  // 20 units at a 2 unit thickness is exactly two 10 unit periods: two dashes, four points each.
+  EXPECT_THAT(EmitUnderline(TextDecorationStyle::Dashed, 10, 20, 2), testing::ElementsAre(8u));
+}
+
+TEST(TextDecorationStyle, DashesTerminateWhereThePeriodIsBelowCoordinatePrecision) {
+  // Near 1e20 adjacent doubles are 16384 apart, so adding the 8 unit dash period to a position
+  // cannot advance it. Element counts come from the segment length (16384 / 3.2 = 5120 dots or
+  // half-waves); every dash collapses to zero width and is rejected.
+  EXPECT_THAT(EmitUnderline(TextDecorationStyle::Dashed, 1e20, 16384, 1.6), testing::IsEmpty());
+  EXPECT_THAT(EmitUnderline(TextDecorationStyle::Dotted, 1e20, 16384, 1.6),
+              testing::ElementsAre(13u * 5120u));
+  EXPECT_THAT(EmitUnderline(TextDecorationStyle::Wavy, 1e20, 16384, 1.6),
+              testing::ElementsAre(2u + 4u * 5120u));
+}
+
+TEST(TextDecorationStyle, LongThinStyledLinesStillDraw) {
+  // Ten thousand dots on one baseline: bounded by the per-draw work allowance, not dropped.
+  EXPECT_THAT(EmitUnderline(TextDecorationStyle::Dotted, 0, 20000, 1),
+              testing::ElementsAre(13u * 10000u));
+  EXPECT_THAT(EmitUnderline(TextDecorationStyle::Wavy, 0, 20000, 1),
+              testing::ElementsAre(2u + 4u * 10000u));
+}
+
+TEST(TextDecorationStyle, SingularTransformsSuppressEveryStyle) {
+  Transform2d singular;
+  singular.data[0] = singular.data[1] = singular.data[2] = singular.data[3] = 0;
+  for (const auto style :
+       {TextDecorationStyle::Solid, TextDecorationStyle::Double, TextDecorationStyle::Dotted,
+        TextDecorationStyle::Dashed, TextDecorationStyle::Wavy}) {
+    SCOPED_TRACE(testing::PrintToString(style));
+    EXPECT_THAT(EmitUnderline(style, 10, 20, 0, singular), testing::IsEmpty());
+  }
 }
 
 TEST(TextDecorationColor, ReplacesTheDeclaringFill) {
