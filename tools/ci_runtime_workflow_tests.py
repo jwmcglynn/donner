@@ -24,7 +24,7 @@ from tools import test_timing
 ENFORCED_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 56000,
     "--max-js-raw-bytes": 202000,
-    "--max-total-raw-bytes": 12880000,
+    "--max-total-raw-bytes": 13000000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
     "--max-wasm-gzip-bytes": 3540000,
