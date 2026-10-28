@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_python//python:defs.bzl", "py_test")
 load(
     "//build_defs:rules.bzl",
     "donner_cc_library",
@@ -1476,6 +1477,35 @@ donner_cc_test(
         "//donner/gpu:recording_device",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_cc_fuzzer(
+    name = "packaged_resource_fixture_probe_fuzzer",
+    srcs = ["PackagedResourceFixtureProbe_fuzzer.cc"],
+    corpus = "testdata/packaged_resource_fixture_corpus",
+    deps = [
+        "//donner/editor:editor_icons",
+        "//donner/editor:embedded_svg_icon",
+        "//donner/svg/core",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_tiny_skia",
+    ],
+)
+
+py_test(
+    name = "packaged_resource_raw_fixture_tests",
+    srcs = ["PackagedResourceRawFixture_tests.py"],
+    args = [
+        "--fuzzer=$(rootpath :packaged_resource_fixture_probe_fuzzer_bin)",
+        "--font-tree=$(rootpath //third_party/public-sans:public-sans_resource_files)",
+        "--icon-tree=$(rootpath //donner/editor:editor_icons_resource_files)",
+    ],
+    data = [
+        ":packaged_resource_fixture_probe_fuzzer_bin",
+        "//donner/editor:editor_icons_resource_files",
+        "//third_party/public-sans:public-sans_resource_files",
+    ],
+    main = "PackagedResourceRawFixture_tests.py",
 )
 
 donner_cc_test(

@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Real raw-fuzzer fixture reach and fail-closed resource initialization."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+
+def runfile(path: str) -> Path:
+  root = Path(os.environ["TEST_SRCDIR"])
+  candidate = root / os.environ.get("TEST_WORKSPACE", "_main") / path
+  if not candidate.exists():
+    raise FileNotFoundError(path)
+  return candidate
+
+
+class PackagedResourceRawFixtureTest(unittest.TestCase):
+  def invoke(self, fixture_root: Path) -> subprocess.CompletedProcess[str]:
+    environment = dict(os.environ, DONNER_TEST_RESOURCE_ROOT=str(fixture_root))
+    return subprocess.run(
+        [str(runfile(OPTIONS.fuzzer)), "-runs=1"],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+  def test_direct_raw_fuzzer_rasterizes_fallback_glyphs_and_icon(self):
+    result = self.invoke(Path(os.environ["TEST_SRCDIR"]))
+    self.assertEqual(result.returncode, 0, result.stderr)
+    self.assertNotIn("Failed to load packaged fallback", result.stderr)
+
+  def test_missing_fixture_is_rejected_before_fuzz_input(self):
+    with tempfile.TemporaryDirectory() as temporary:
+      result = self.invoke(Path(temporary))
+    self.assertNotEqual(result.returncode, 0)
+    self.assertIn("Cannot prepare packaged test resources", result.stderr)
+    self.assertNotIn("Packaged fixture probe:", result.stderr)
+
+  def test_corrupt_fixture_is_rejected_before_fuzz_input(self):
+    with tempfile.TemporaryDirectory() as temporary:
+      root = Path(temporary)
+      for relative in [OPTIONS.font_tree, OPTIONS.icon_tree]:
+        shutil.copytree(runfile(relative), root / "_main" / relative,
+                        copy_function=shutil.copyfile)
+      font_tree = root / "_main" / OPTIONS.font_tree
+      manifest = json.loads((font_tree / "manifest.json").read_text())
+      font = font_tree / manifest["assets"][0]["path"]
+      data = bytearray(font.read_bytes())
+      data[0] ^= 1
+      font.write_bytes(data)
+      result = self.invoke(root)
+    self.assertNotEqual(result.returncode, 0)
+    self.assertIn("Cannot prepare packaged test resources", result.stderr)
+    self.assertNotIn("Packaged fixture probe:", result.stderr)
+
+
+if __name__ == "__main__":
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--fuzzer", required=True)
+  parser.add_argument("--font-tree", required=True)
+  parser.add_argument("--icon-tree", required=True)
+  OPTIONS, remaining = parser.parse_known_args()
+  unittest.main(argv=[__file__, *remaining])
