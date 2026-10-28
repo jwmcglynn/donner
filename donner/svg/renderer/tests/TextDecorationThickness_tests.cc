@@ -88,8 +88,8 @@ constexpr std::string_view kRotatedGlyphs =
 TEST(TextDecorationThickness, AutomaticUnderlineControl) {
   const auto actual = RenderDecorationScene(
       "<text x='10' y='40' font-size='20' fill='red' text-decoration='underline'>XX</text>");
-  const auto expected =
-      RenderDecorationScene("<rect x='10' y='41.5' width='20' height='1' fill='red'/>");
+  const auto expected = RenderDecorationScene(
+      std::string(kRedGlyphs) + "<rect x='10' y='41.5' width='20' height='1' fill='red'/>");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_auto_control",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -134,8 +134,8 @@ TEST(TextDecorationThickness, ChildThicknessWithoutLineDoesNotChangeParent) {
   const auto actual = RenderDecorationScene(R"svg(
     <text x="10" y="40" font-size="20" fill="red"
           style="text-decoration:underline;text-decoration-thickness:8px"><tspan font-size="40" fill="blue" style="text-decoration-thickness:2px">XX</tspan></text>)svg");
-  const auto expected =
-      RenderDecorationScene("<rect x='10' y='38' width='20' height='8' fill='red'/>");
+  const auto expected = RenderDecorationScene(
+      std::string(kRedGlyphs) + "<rect x='10' y='38' width='20' height='8' fill='red'/>");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_unrelated_child_thickness",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -143,8 +143,8 @@ TEST(TextDecorationThickness, ChildThicknessWithoutLineDoesNotChangeParent) {
 TEST(TextDecorationThickness, PercentageUsesOriginUsedFontSize) {
   const auto actual = RenderDecorationScene(
       R"svg(<text x="10" y="40" font-size="20" fill="red" style="text-decoration:underline;text-decoration-thickness:10%"><tspan font-size="40">XX</tspan></text>)svg");
-  const auto expected =
-      RenderDecorationScene("<rect x='10' y='41' width='20' height='2' fill='red'/>");
+  const auto expected = RenderDecorationScene(
+      std::string(kRedGlyphs) + "<rect x='10' y='41' width='20' height='2' fill='red'/>");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_percentage_origin",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -152,8 +152,8 @@ TEST(TextDecorationThickness, PercentageUsesOriginUsedFontSize) {
 TEST(TextDecorationThickness, FromFontUsesUnderlineMetricForLineThrough) {
   const auto actual = RenderDecorationScene(
       R"svg(<text x="10" y="40" font-size="20" fill="red" style="text-decoration:line-through;text-decoration-thickness:from-font">XX</text>)svg");
-  const auto expected =
-      RenderDecorationScene("<rect x='10' y='33.5' width='20' height='1' fill='red'/>");
+  const auto expected = RenderDecorationScene(
+      std::string(kRedGlyphs) + "<rect x='10' y='33.5' width='20' height='1' fill='red'/>");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_from_font",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -193,9 +193,9 @@ TEST(TextDecorationThickness, StyleMutationUpdatesThickness) {
     text->setAttribute("style", "text-decoration:underline;text-decoration-thickness:" +
                                     std::to_string(thickness) + "px");
     const auto actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
-    const auto expected =
-        RenderDecorationScene("<rect x='10' y='" + std::to_string(top) + "' width='20' height='" +
-                              std::to_string(thickness) + "' fill='red'/>");
+    const auto expected = RenderDecorationScene(std::string(kRedGlyphs) + "<rect x='10' y='" +
+                                                std::to_string(top) + "' width='20' height='" +
+                                                std::to_string(thickness) + "' fill='red'/>");
     editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_style_mutation",
                                          editor::tests::PixelmatchIdentityParams());
   }
@@ -230,6 +230,8 @@ TEST(TextDecorationThickness, ImmutableOriginStorageRefusesAndReleasesCapacity) 
   ASSERT_TRUE(data);
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::Geometry),
             limits.geometryBytes);
+  const std::array<TextDecorationOrigin, TextDecorationData::kMaximumOrigins + 1> tooMany{};
+  EXPECT_FALSE(TextDecorationData::Create(family, tooMany));
   auto shared = data;
   EXPECT_FALSE(TextDecorationData::Create(family, origins));
   data.reset();

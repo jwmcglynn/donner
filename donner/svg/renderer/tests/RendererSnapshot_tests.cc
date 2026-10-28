@@ -367,10 +367,10 @@ TEST(RendererSnapshotTests, DecorationCopyRefusalDropsOnlyDecorations) {
   ASSERT_TRUE(text.spans.back().decorations);
   ::testing::NiceMock<MockRendererInterface> renderer;
   RenderSnapshot snapshot;
-  RenderSnapshotRecorder recorder(snapshot, renderer);
+  RenderSnapshotRecorder recorder(snapshot, renderer, RenderSnapshot::kMaximumCapturedFontBytes, 0);
   Registry source;
   recorder.drawText(source, text, TextParams{});
-  EXPECT_TRUE(family->securityStats().rejected);
+  EXPECT_FALSE(family->securityStats().rejected);
   EXPECT_CALL(renderer, drawText(_, _, _))
       .WillOnce([](Registry&, const components::ComputedTextComponent& replay, const TextParams&) {
         ASSERT_EQ(replay.spans.size(), 1u);
@@ -382,6 +382,41 @@ TEST(RendererSnapshotTests, DecorationCopyRefusalDropsOnlyDecorations) {
   driver.draw(snapshot);
   text.spans.clear();
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::Geometry), 0u);
+}
+
+TEST(RendererSnapshotTests, DecorationMetadataReplaysConcurrentlyWithoutSourceBudget) {
+  auto sourceFamily = std::make_shared<components::DocumentResourceFamilyBudget>();
+  RenderSnapshot snapshot;
+  {
+    std::array<components::TextDecorationOrigin, 1> origins{};
+    origins[0].lines = TextDecoration::Underline;
+    components::ComputedTextComponent text;
+    text.spans.emplace_back();
+    text.spans.back().textDecoration = TextDecoration::Underline;
+    text.spans.back().decorations = components::TextDecorationData::Create(sourceFamily, origins);
+    ::testing::NiceMock<MockRendererInterface> renderer;
+    RenderSnapshotRecorder recorder(snapshot, renderer);
+    Registry source;
+    recorder.drawText(source, text, TextParams{});
+  }
+  EXPECT_EQ(sourceFamily->retainedBytes(components::DocumentResourceFamilyBudget::Kind::Geometry),
+            0u);
+  const auto replay = [&snapshot]() {
+    ::testing::NiceMock<MockRendererInterface> renderer;
+    std::size_t count = 0;
+    EXPECT_CALL(renderer, drawText(_, _, _))
+        .WillOnce([&](Registry&, const components::ComputedTextComponent& text, const TextParams&) {
+          ASSERT_TRUE(text.spans[0].decorations);
+          count = text.spans[0].decorations->origins().size();
+        });
+    snapshot.replay(renderer);
+    return count;
+  };
+  auto first = std::async(std::launch::async, replay);
+  auto second = std::async(std::launch::async, replay);
+  EXPECT_EQ(first.get(), 1u);
+  EXPECT_EQ(second.get(), 1u);
+  EXPECT_FALSE(sourceFamily->securityStats().rejected);
 }
 
 TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {

@@ -123,6 +123,7 @@ using SnapshotFont = std::shared_ptr<const SnapshotFontPayload>;
 struct SnapshotReplayFontState {
   struct Domain {
     Registry registry;
+    std::shared_ptr<components::DocumentResourceFamilyBudget> decorationFamily;
 #ifdef DONNER_TEXT_ENABLED
     std::unordered_map<const SnapshotFontPayload*, FontHandle> handles;
 #endif
@@ -190,6 +191,15 @@ public:
   explicit SnapshotResourceMapper(Registry& registry) : registry_(registry) {}
 
   void setMaximumCapturedFontBytes(size_t maximum) { maximumCapturedFontBytes_ = maximum; }
+  void setMaximumCapturedDecorationBytes(std::size_t maximum) {
+    maximumCapturedDecorationBytes_ = maximum;
+    if (capturedDecorationBytes_ == 0) {
+      components::DocumentResourceFamilyBudget::Limits limits;
+      limits.geometryBytes = maximum;
+      limits.maximumTotalRetainedBytes = maximum;
+      decorationFamily_ = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+    }
+  }
   bool fontPayloadLimitExceeded() const { return fontPayloadLimitExceeded_; }
 
   components::ResolvedPaintServer mapPaint(components::ResolvedPaintServer paint) {
@@ -231,8 +241,19 @@ public:
           (void)sourceRegistry;
 #endif
         }
-        span.decorations = components::TextDecorationData::Create(
-            previous->family(), std::span(origins).first(previous->origins().size()));
+        const std::size_t bytes =
+            sizeof(components::TextDecorationData) +
+            previous->origins().size() * sizeof(components::TextDecorationOrigin);
+        if (capturedDecorationBytes_ > maximumCapturedDecorationBytes_ ||
+            bytes > maximumCapturedDecorationBytes_ - capturedDecorationBytes_) {
+          span.decorations.reset();
+        } else {
+          span.decorations = components::TextDecorationData::Create(
+              decorationFamily_, std::span(origins).first(previous->origins().size()));
+          if (span.decorations) {
+            capturedDecorationBytes_ += bytes;
+          }
+        }
         if (!span.decorations) {
           span.textDecoration = TextDecoration::None;
         }
@@ -353,6 +374,10 @@ private:
     return mask;
   }
 
+  std::shared_ptr<components::DocumentResourceFamilyBudget> decorationFamily_ =
+      std::make_shared<components::DocumentResourceFamilyBudget>();
+  std::size_t maximumCapturedDecorationBytes_ = RenderSnapshot::kMaximumCapturedDecorationBytes;
+  std::size_t capturedDecorationBytes_ = 0;
   Registry& registry_;
   std::unordered_map<SourceEntityKey, Entity, SourceEntityKeyHash> mappedEntities_;
   std::unordered_map<Registry*, size_t> textDomains_;
@@ -554,8 +579,13 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
                     origin.font->font = LoadSnapshotFont(fontManager, origin.snapshotFont, domain);
                   }
                 }
+                if (!domain.decorationFamily) {
+                  domain.decorationFamily =
+                      std::make_shared<components::DocumentResourceFamilyBudget>(
+                          previous->family()->limits());
+                }
                 span.decorations = components::TextDecorationData::Create(
-                    previous->family(), std::span(origins).first(previous->origins().size()));
+                    domain.decorationFamily, std::span(origins).first(previous->origins().size()));
                 if (!span.decorations) {
                   span.textDecoration = TextDecoration::None;
                 }
@@ -645,9 +675,11 @@ void RenderSnapshot::setSourceRevision(std::uint64_t revision) {
 
 RenderSnapshotRecorder::RenderSnapshotRecorder(RenderSnapshot& snapshot,
                                                RendererInterface& offscreenFactory,
-                                               std::size_t maximumCapturedFontBytes)
+                                               std::size_t maximumCapturedFontBytes,
+                                               std::size_t maximumCapturedDecorationBytes)
     : snapshot_(snapshot), offscreenFactory_(offscreenFactory) {
   snapshot_.impl_->resourceMapper.setMaximumCapturedFontBytes(maximumCapturedFontBytes);
+  snapshot_.impl_->resourceMapper.setMaximumCapturedDecorationBytes(maximumCapturedDecorationBytes);
 }
 
 void RenderSnapshotRecorder::draw(SVGDocument&) {}

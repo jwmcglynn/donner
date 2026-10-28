@@ -309,6 +309,18 @@ ParseDiagnostic InvalidDecoration() {
   return error;
 }
 
+bool IsSupportedDecorationUnit(Lengthd::Unit unit) {
+  switch (unit) {
+    case Lengthd::Unit::Ex:
+    case Lengthd::Unit::Ch:
+    case Lengthd::Unit::Vw:
+    case Lengthd::Unit::Vh:
+    case Lengthd::Unit::Vmin:
+    case Lengthd::Unit::Vmax: return false;
+    default: return true;
+  }
+}
+
 ParseResult<TextDecorationThickness> ParseDecorationThickness(
     std::span<const css::ComponentValue> values, bool allowUserUnits) {
   if (values.size() != 1) {
@@ -326,14 +338,8 @@ ParseResult<TextDecorationThickness> ParseDecorationThickness(
   if (length.hasError() || !std::isfinite(length.result().value)) {
     return InvalidDecoration();
   }
-  switch (length.result().unit) {
-    case Lengthd::Unit::Ex:
-    case Lengthd::Unit::Ch:
-    case Lengthd::Unit::Vw:
-    case Lengthd::Unit::Vh:
-    case Lengthd::Unit::Vmin:
-    case Lengthd::Unit::Vmax: return InvalidDecoration();
-    default: break;
+  if (!IsSupportedDecorationUnit(length.result().unit)) {
+    return InvalidDecoration();
   }
   return TextDecorationThickness{TextDecorationThickness::Kind::Length, length.result()};
 }
