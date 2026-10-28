@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <memory>
+#include <vector>
+
 #include "donner/gpu/shader/wgsl/Parser.h"
 namespace donner::gpu::shader::wgsl {
 namespace {
@@ -299,6 +303,183 @@ TEST(Uniformity, WorkBudgetFailsClosed) {
       R"(@fragment fn fs_main(@builtin(position)p:vec4f)->@location(0)vec4f{return vec4f(fwidth(p.x));})");
   ASSERT_EQ(parsed.diagnostic.code, ErrorCode::None);
   EXPECT_EQ(AnalyzeUniformity(parsed.module, 1).error, UniformityError::Limit);
+}
+
+using uniformity_detail::Graph;
+using uniformity_detail::Mask;
+using uniformity_detail::NodeId;
+
+/// Dependency graph mirrored outside \ref Graph, solved by the original algorithm: whole ascending
+/// sweeps, repeated until one changes nothing. It is the oracle for the solver's fixed point and
+/// the baseline for its edge visits.
+struct ReferenceGraph {
+  std::vector<Mask> seeds;
+  std::vector<std::vector<NodeId>> dependencies;
+
+  NodeId make(Graph& graph, Mask seed) {
+    seeds.push_back(seed);
+    dependencies.emplace_back();
+    return graph.make(seed);
+  }
+  void depend(Graph& graph, NodeId node, NodeId dependency) {
+    dependencies[node].push_back(dependency);
+    graph.depend(node, dependency);
+  }
+  /// Returns each node's fixed-point mask; \p work receives the number of edge visits.
+  std::vector<Mask> solve(uint32_t& work) const {
+    std::vector<Mask> values = seeds;
+    work = 0;
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (size_t i = 0; i < values.size(); ++i) {
+        Mask next = seeds[i];
+        for (NodeId dependency : dependencies[i]) {
+          ++work;
+          next |= values[dependency];
+        }
+        if (next != values[i]) {
+          values[i] = next;
+          changed = true;
+        }
+      }
+    }
+    return values;
+  }
+};
+
+/// Starts a graph and its mirror. \ref Graph::reset creates the uniform constant node 0.
+std::unique_ptr<Graph> NewGraph(ReferenceGraph& reference) {
+  auto graph = std::make_unique<Graph>();
+  graph->reset();
+  reference.seeds = {0};
+  reference.dependencies = {{}};
+  return graph;
+}
+
+TEST(UniformityGraph, AcyclicGraphSettlesInOneSweep) {
+  ReferenceGraph reference;
+  auto graph = NewGraph(reference);
+  NodeId previous = reference.make(*graph, 1u << 3);
+  for (int i = 0; i < 100; ++i) {
+    const NodeId node = reference.make(*graph, 0);
+    reference.depend(*graph, node, previous);
+    previous = node;
+  }
+  uint32_t work = 0;
+  ASSERT_TRUE(graph->solve(work, UINT32_MAX));
+  EXPECT_EQ(graph->value(previous), 1u << 3);
+  // One visit per edge. Whole-sweep iteration needs a second, confirming sweep.
+  EXPECT_EQ(work, 100u);
+  uint32_t referenceWork = 0;
+  reference.solve(referenceWork);
+  EXPECT_EQ(referenceWork, 200u);
+}
+
+TEST(UniformityGraph, NestedLoopBackedgesReachFixedPoint) {
+  // Shape of two nested loops: each header and phi depends on a later body node.
+  ReferenceGraph reference;
+  auto graph = NewGraph(reference);
+  const NodeId outerHeader = reference.make(*graph, 0);
+  const NodeId outerPhi = reference.make(*graph, 0);
+  const NodeId innerHeader = reference.make(*graph, 0);
+  reference.depend(*graph, innerHeader, outerHeader);
+  const NodeId innerPhi = reference.make(*graph, 0);
+  reference.depend(*graph, innerPhi, outerPhi);
+  const NodeId varying = reference.make(*graph, 1u << 9);
+  const NodeId innerBody = reference.make(*graph, 0);
+  reference.depend(*graph, innerBody, innerPhi);
+  reference.depend(*graph, innerBody, varying);
+  const NodeId innerControl = reference.make(*graph, 0);
+  reference.depend(*graph, innerControl, innerBody);
+  reference.depend(*graph, innerHeader, innerControl);
+  reference.depend(*graph, innerPhi, innerBody);
+  const NodeId outerBody = reference.make(*graph, 0);
+  reference.depend(*graph, outerBody, innerPhi);
+  reference.depend(*graph, outerPhi, outerBody);
+  reference.depend(*graph, outerHeader, outerBody);
+  const NodeId use = reference.make(*graph, 0);
+  reference.depend(*graph, use, innerHeader);
+
+  uint32_t work = 0;
+  ASSERT_TRUE(graph->solve(work, UINT32_MAX));
+  uint32_t referenceWork = 0;
+  const std::vector<Mask> expected = reference.solve(referenceWork);
+  for (NodeId i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ(graph->value(i), expected[i]) << "node " << i;
+  }
+  EXPECT_EQ(graph->value(outerHeader), 1u << 9);
+  EXPECT_EQ(graph->value(use), 1u << 9);
+  EXPECT_LT(work, referenceWork);
+}
+
+TEST(UniformityGraph, MatchesFullSweepSolverOnRandomGraphs) {
+  uint64_t state = 0x9e3779b97f4a7c15ull;
+  const auto next = [&state](uint32_t bound) {
+    state = state * 6364136223846793005ull + 1442695040888963407ull;
+    return static_cast<uint32_t>(state >> 33) % bound;
+  };
+  for (int trial = 0; trial < 300; ++trial) {
+    ReferenceGraph reference;
+    auto graph = NewGraph(reference);
+    const uint32_t nodeCount = 2 + next(400);
+    for (uint32_t i = 1; i < nodeCount; ++i) {
+      const Mask seed = next(4) == 0 ? 1u << next(32) : 0;
+      const NodeId node = reference.make(*graph, seed);
+      const uint32_t dependencyCount = next(4);
+      for (uint32_t d = 0; d < dependencyCount; ++d) {
+        reference.depend(*graph, node, static_cast<NodeId>(next(node + 1)));
+      }
+    }
+    // Backedges and self-edges, as loop headers and phis receive them.
+    const uint32_t backedges = next(nodeCount / 4 + 1);
+    for (uint32_t b = 0; b < backedges; ++b) {
+      const auto node = static_cast<NodeId>(next(nodeCount));
+      const auto dependency = static_cast<NodeId>(node + next(nodeCount - node));
+      reference.depend(*graph, node, dependency);
+    }
+
+    uint32_t work = 0;
+    ASSERT_TRUE(graph->solve(work, UINT32_MAX)) << "trial " << trial;
+    uint32_t referenceWork = 0;
+    const std::vector<Mask> expected = reference.solve(referenceWork);
+    for (NodeId i = 0; i < expected.size(); ++i) {
+      ASSERT_EQ(graph->value(i), expected[i]) << "trial " << trial << " node " << i;
+    }
+    EXPECT_LE(work, referenceWork) << "trial " << trial;
+  }
+}
+
+/// Builds a backedge cycle whose solve needs a restart: node 3 feeds node 1 through a forward edge.
+std::unique_ptr<Graph> NewCycle(ReferenceGraph& reference) {
+  auto graph = NewGraph(reference);
+  const NodeId phi = reference.make(*graph, 0);
+  const NodeId varying = reference.make(*graph, 1u << 4);
+  const NodeId body = reference.make(*graph, 0);
+  reference.depend(*graph, body, phi);
+  reference.depend(*graph, body, varying);
+  reference.depend(*graph, phi, body);
+  return graph;
+}
+
+TEST(UniformityGraph, WorkLimitCountsEveryVisitAndFailsClosed) {
+  ReferenceGraph reference;
+  uint32_t needed = 0;
+  ASSERT_TRUE(NewCycle(reference)->solve(needed, UINT32_MAX));
+  // Two sweeps of three edges, the second from the phi after the body changed.
+  EXPECT_EQ(needed, 6u);
+
+  uint32_t work = 0;
+  auto exact = NewCycle(reference);
+  EXPECT_TRUE(exact->solve(work, needed));
+  EXPECT_EQ(exact->value(1), 1u << 4);
+
+  work = 0;
+  EXPECT_FALSE(NewCycle(reference)->solve(work, needed - 1));
+
+  // The count continues from the analyzer's earlier visits.
+  work = 10;
+  EXPECT_FALSE(NewCycle(reference)->solve(work, 10 + needed - 1));
 }
 }  // namespace
 }  // namespace donner::gpu::shader::wgsl

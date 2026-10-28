@@ -38,6 +38,8 @@ struct Node {
   Mask seed = 0;
   Mask value = 0;
   NodeId firstEdge = kNone;
+  /// Lowest node that depends on this one through a forward edge, or kNone.
+  NodeId lowestForwardDependent = kNone;
 };
 struct Edge {
   NodeId dependency = kNone;
@@ -45,6 +47,13 @@ struct Edge {
 };
 
 /// Forward edges represent loop-carried values; masks grow monotonically to a fixed point.
+///
+/// Nodes are created in evaluation order, so almost every edge points at a lower node and one
+/// ascending sweep settles it. Only a loop backedge (a header or phi that depends on a later node)
+/// points forward. \ref solve therefore sweeps once from the first node, then resweeps only from
+/// the lowest forward dependent of a node that changed, instead of repeating whole sweeps until
+/// one changes nothing. Both orders reach the same least fixed point; this one visits far fewer
+/// edges, which keeps compile-time shader validation within the constant evaluator's step budget.
 class Graph {
 public:
   constexpr void reset() {
@@ -58,7 +67,7 @@ public:
       return kNone;
     }
     const NodeId result = nodeCount_++;
-    nodes_[result] = {seed, seed, kNone};
+    nodes_[result] = {seed, seed, kNone, kNone};
     depend(result, first);
     depend(result, second);
     return result;
@@ -73,6 +82,9 @@ public:
     }
     edges_[edgeCount_] = {dependency, nodes_[node].firstEdge};
     nodes_[node].firstEdge = edgeCount_++;
+    if (dependency > node && node < nodes_[dependency].lowestForwardDependent) {
+      nodes_[dependency].lowestForwardDependent = node;
+    }
   }
   constexpr NodeId join(NodeId first, NodeId second) {
     if (first == kNone || first == second) {
@@ -90,23 +102,36 @@ public:
     return make(0, first, second);
   }
   constexpr Mask value(NodeId node) const { return node < nodeCount_ ? nodes_[node].value : 0; }
+  /// Propagates dependency masks to their least fixed point.
+  /// @param work Running visit count shared with the analyzer; each dependency-edge visit adds one.
+  /// @param limit Maximum total visits before the solve fails closed.
+  /// @return False when the graph overflowed or the visit limit was exceeded.
   constexpr bool solve(uint32_t& work, uint32_t limit) {
-    bool changed = true;
-    while (changed && !failed_) {
-      changed = false;
-      for (NodeId i = 0; i < nodeCount_; ++i) {
-        Mask next = nodes_[i].seed;
-        for (NodeId edge = nodes_[i].firstEdge; edge != kNone; edge = edges_[edge].next) {
+    // Raw pointers keep the hot loop free of per-subscript standard-library constexpr checks.
+    Node* const nodes = nodes_.data();
+    const Edge* const edges = edges_.data();
+    NodeId start = 0;
+    while (start != kNone && !failed_) {
+      // Every node below `start` is consistent with its dependencies: a lower dependency was
+      // settled before it, and a changed higher dependency would have lowered `start` to it.
+      NodeId restart = kNone;
+      for (NodeId i = start; i < nodeCount_; ++i) {
+        Node& node = nodes[i];
+        Mask next = node.seed;
+        for (NodeId edge = node.firstEdge; edge != kNone; edge = edges[edge].next) {
           if (++work > limit) {
             return false;
           }
-          next |= nodes_[edges_[edge].dependency].value;
+          next |= nodes[edges[edge].dependency].value;
         }
-        if (next != nodes_[i].value) {
-          nodes_[i].value = next;
-          changed = true;
+        if (next != node.value) {
+          node.value = next;
+          if (node.lowestForwardDependent < restart) {
+            restart = node.lowestForwardDependent;
+          }
         }
       }
+      start = restart;
     }
     return !failed_;
   }

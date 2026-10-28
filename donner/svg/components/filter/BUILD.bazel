@@ -72,6 +72,7 @@ donner_cc_library(
         "//donner/css/parser",
         "//donner/svg/components:components_core",
         "//donner/svg/components:reference_resolution_budget",
+        "//donner/svg/components:svg_document_context",
         "//donner/svg/components/animation:components",
         "//donner/svg/components/resources:components",
         "//donner/svg/components/style:components",

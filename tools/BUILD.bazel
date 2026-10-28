@@ -15,6 +15,7 @@ exports_files([
 
 exports_files(
     [
+        "docs/selector.js",
         "treemap.js",
         "treemap.test.js",
     ],
@@ -1051,4 +1052,75 @@ py_test(
         "ci_metal_toolchain_tests.py",
     ],
     main = "ci_metal_toolchain_tests.py",
+)
+
+py_library(
+    name = "docs_site",
+    srcs = ["docs_site.py"],
+    data = [
+        "docs/selector.css",
+        "docs/selector.js",
+    ],
+    deps = [
+        ":bcr_source",
+        ":pages_artifact",
+    ],
+)
+
+py_test(
+    name = "docs_site_tests",
+    size = "small",
+    srcs = ["docs_site_tests.py"],
+    deps = [":docs_site"],
+)
+
+py_library(
+    name = "docs_store",
+    srcs = ["docs_store.py"],
+    deps = [":docs_site"],
+)
+
+py_test(
+    name = "docs_store_tests",
+    size = "small",
+    srcs = ["docs_store_tests.py"],
+    deps = [":docs_store"],
+)
+
+py_library(
+    name = "docs_publish",
+    srcs = ["docs_publish.py"],
+    deps = [
+        ":bcr_source",
+        ":docs_site",
+        ":docs_store",
+        ":pages_artifact",
+        ":release_candidate",
+    ],
+)
+
+py_test(
+    name = "docs_publish_tests",
+    size = "small",
+    srcs = [
+        "docs_fixture.py",
+        "docs_publish_tests.py",
+    ],
+    main = "docs_publish_tests.py",
+    deps = [":docs_publish"],
+)
+
+py_binary(
+    name = "docs_selector_fixture",
+    srcs = ["docs_fixture.py"],
+    main = "docs_fixture.py",
+    deps = [":docs_site"],
+)
+
+genrule(
+    name = "docs_selector_fixture_json",
+    outs = ["docs-selector-fixture.json"],
+    cmd = "$(location :docs_selector_fixture) --output $@",
+    tools = [":docs_selector_fixture"],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )

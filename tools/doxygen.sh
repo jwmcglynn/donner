@@ -23,6 +23,7 @@ if [ -z "$DONNER_VERSION" ]; then
 fi
 export DONNER_VERSION
 
-$DOXYGEN_BIN Doxyfile
+"$DOXYGEN_BIN" Doxyfile
+python3 -B -m tools.docs_site check-version --site generated-doxygen/html
 
 echo "Documentation generated in generated-doxygen/html/index.html"

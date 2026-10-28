@@ -1,4 +1,5 @@
 import { installOwnerEventTimerHold, readOwnerEventTimerHold, releaseOwnerEventTimerHold } from "./event-presentation-delay.mjs";
+import { kCarouselSamples } from "./carousel-samples.mjs";
 import { completedResultHandoff } from "./completed-result-handoff.mjs";
 import { packageHashes } from "./package-identity.mjs";
 import {
@@ -46,7 +47,8 @@ import { quarantineStillSkips } from "./quarantine-report.mjs";
 import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
-  armCanvasGpuDelayForTest,
+  armCanvasGpuDelayFromEnv,
+  canvasGpuDelayFromEnv,
   type CanvasSettleResult,
   expectSurfaceFrameProbeReady,
   findCanvasOwnerWorker,
@@ -2084,10 +2086,9 @@ async function waitForPipelineCompilesToSettle(page: Page) {
 // Delays the GPU owner's pipeline compiles from the editor's first instruction, as a cold shader
 // cache does. Every context loads the editor script, so the fault rides in front of it. The compile
 // delay must outlast boot to the first presented frame, completions included, so the readiness
-// wait still finds compiles pending; the completion delay alone exceeds the nominal handoff bound,
-// so a click that did not wait would fail it.
-// A pipeline created at its first use occupies the timeline long enough on its own to exceed the
-// bound, so an interaction that compiled one would fail it.
+// wait still finds compiles pending. The case asserts that the click waited for them and that the
+// interaction created no pipeline at its first use; the completion delay and the first-use compile
+// time each exceed the nominal handoff bound that the performance lane measures.
 const kPipelineCompileFault = { compileDelayMs: 8000, completionDelayMs: 1200, firstUseCompileMs: 1200 };
 
 async function readOwnerPipelineCompileFault(page: Page) {
@@ -2103,37 +2104,29 @@ async function armPipelineCompileFault(page: Page) {
   });
 }
 
+const kBasicShapesTile = kCarouselSamples.find((sample) => sample.id === "basic-shapes")!;
+const kDonnerSplashTile = kCarouselSamples.find((sample) => sample.id === "donner-splash")!;
+
 for (
   const sample of [
-    { id: "donner-splash", name: "Donner Splash", xFraction: 0.24, y: 282 },
-    { id: "geode-splash", name: "Geode Splash", xFraction: 0.5, y: 282 },
-    { id: "basic-shapes", name: "Basic Shapes", xFraction: 0.76, y: 282 },
-    { id: "text-style", name: "Text and Style", xFraction: 0.24, y: 390 },
-    { id: "gradients-clip", name: "Gradients and Clip", xFraction: 0.5, y: 390 },
-    { id: "animation", name: "Animation", xFraction: 0.76, y: 390 },
+    ...kCarouselSamples,
     {
-      id: "basic-shapes",
+      ...kBasicShapesTile,
       name: "Basic Shapes with withheld animation frames",
-      xFraction: 0.76,
-      y: 282,
       holdWorkerRaf: true,
     },
     {
-      id: "basic-shapes",
+      ...kBasicShapesTile,
       name: "Basic Shapes with delayed presentation control",
-      xFraction: 0.76,
-      y: 282,
       holdWorkerRaf: true,
       delayPresentation: true,
     },
     {
-      id: "donner-splash",
+      ...kDonnerSplashTile,
       name: "Donner Splash after delayed pipeline compiles",
-      xFraction: 0.24,
-      y: 282,
       delayPipelineCompiles: true,
     },
-  ] as const
+  ]
 ) {
   test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page, browserName }, testInfo) => {
     const delayedControl = "delayPresentation" in sample;
@@ -2142,7 +2135,9 @@ for (
       (delayedControl || compileFaultControl) && browserName !== "chromium",
       "controlled Chromium scheduling fault",
     );
-    let presentationFault: { delayMs: number; requested: number; flushed: number } | undefined;
+    let presentationFault:
+      | { delayMs: number; requested: number; flushed: number; releaseRequestedAtMs: number }
+      | undefined;
     if (compileFaultControl) {
       // The fault adds up to its compile delay before the measured click.
       testInfo.setTimeout(testInfo.timeout + kPipelineCompileFault.compileDelayMs);
@@ -2179,7 +2174,7 @@ for (
     let pipelineCompileFault: ReturnType<typeof readPipelineCompileFault> = null;
     if (compileFaultControl) {
       // The fault must have reached the GPU owner and still held its compiles when the wait began,
-      // or this case would not show that the wait is what keeps the handoff nominal.
+      // or this case would not show that the click waited for them.
       pipelineCompileFault = await readOwnerPipelineCompileFault(page);
       expect(pipelineCompileFault?.compilesDelayed ?? 0, "the GPU owner's compiles were delayed")
         .toBeGreaterThan(0);
@@ -2190,6 +2185,22 @@ for (
       // compile does. Boot's own first-use creations ran before this and are not measured.
       const owner = await findGpuOwnerWorker(page);
       expect(owner && await owner.evaluate(armPipelineFirstUseCompiles)).toBe(true);
+    }
+    // Fault injection, off unless `DONNER_CAROUSEL_CANVAS_GPU_DELAY` is `<everyFrames>:<iterations>`:
+    // queues fixed GPU work right after the first canvas write of every Nth frame from the click
+    // on, so the presenting frame retires behind it as on a slow or shared GPU. CPU frame timing,
+    // task boundaries and every ordering below are unchanged.
+    let carouselGpuDelay: Awaited<ReturnType<typeof armAttachedCanvasGpuDelay>> = null;
+    if (canvasGpuDelayFromEnv("DONNER_CAROUSEL_CANVAS_GPU_DELAY") !== null) {
+      await expectSurfaceFrameProbeReady(page);
+      const owner = await findProbedCanvasApplicationWorker(page);
+      if (owner === null) throw new Error("the application canvas owner is unavailable");
+      carouselGpuDelay = await armAttachedCanvasGpuDelay(
+        owner,
+        "DONNER_CAROUSEL_CANVAS_GPU_DELAY",
+        "carousel-canvas-gpu-delay",
+        testInfo,
+      );
     }
     const firstUseCreationsBeforeClick = await readPipelinesCreatedAtFirstUse(page);
     let firstUseCreationsAtPresentation: number | null = null;
@@ -2220,7 +2231,7 @@ for (
           return false;
         }, completionBarrierStates.indexOf("holding")), {
         message: `expected ${sample.name} to activate and finish its render from driven frames`,
-        timeout: scaledMs(3000),
+        timeout: kStallGuardMs,
         intervals: [8, 16, 25, 50],
       }).toBe(true);
       // A tick called just before the poll saw the hold can still be queued or running. Let every
@@ -2234,7 +2245,7 @@ for (
           ),
         {
           message: "every driven tick has finished before the held render is released",
-          timeout: scaledMs(3000),
+          timeout: kStallGuardMs,
         },
       ).toBe(0);
       // A draining tick may have superseded the held render; the barrier then holds the render
@@ -2242,7 +2253,7 @@ for (
       // before the release.
       await expect.poll(() => completionBarrier(page, "read"), {
         message: "the sample's finished render is held once driven ticks have drained",
-        timeout: scaledMs(3000),
+        timeout: kStallGuardMs,
       }).toBe("holding");
       if (delayedControl) {
         const owner = await boundBrowserDiagnostic(Promise.any(page.workers().map(async (worker) => {
@@ -2257,8 +2268,12 @@ for (
             { message: "the completed result must request a held event task" }).toBeGreaterThan(0);
           await page.waitForTimeout(1500);
         } finally {
+          // Page clock just before the release: the held event frame cannot present before it. A
+          // failed read must not skip the release below.
+          const releaseRequestedAtMs = await page.evaluate(() => performance.now())
+            .catch(() => Number.NaN);
           const released = await owner.evaluate(releaseOwnerEventTimerHold);
-          presentationFault = { delayMs: 1500, ...released };
+          presentationFault = { delayMs: 1500, releaseRequestedAtMs, ...released };
         }
         expect(presentationFault.flushed).toBeGreaterThan(0);
       } else {
@@ -2266,8 +2281,11 @@ for (
           .toBe("holding");
       }
     }
-    // Ordering and the separately named nominal performance gate retain the raw GPU backlog.
-    // A controlled negative case delays owner event tasks only after its render is finished.
+    // This case asserts ordering only: which frame presents the result and that it carries the
+    // completed document. The completion-to-presentation time is reported here and bounded in the
+    // performance lane (browser-responsiveness.perf.ts), because the presenting frame's GPU work
+    // can retire behind other GPU work on a shared runner. A controlled negative case delays owner
+    // event tasks only after its render is finished.
     const phaseTimings: {
       activatedMs?: number;
       submittedMs?: number;
@@ -2332,11 +2350,15 @@ for (
     try {
       await expect.poll(presentationReady, {
         message: `expected ${sample.name} to present a document frame in the editor canvas`,
-        timeout: scaledMs(3000),
+        timeout: kStallGuardMs,
         intervals: [8, 16, 25, 50],
       }).toBe(true);
       firstUseCreationsAtPresentation = await readPipelinesCreatedAtFirstUse(page);
     } finally {
+      // Best-effort, like the diagnostics below: a failed disarm must not replace the real failure.
+      const injected = await carouselGpuDelay?.finish()
+        .catch((error: unknown) => ({ disarmError: String(error) }));
+      if (injected) console.log(`carousel-canvas-gpu-delay ${JSON.stringify(injected)}`);
       // Best-effort: a whole-test timeout tears the page down, and a rejection
       // here must not replace the real failure.
       const workerBusy = await page
@@ -2456,10 +2478,12 @@ for (
       if (delayedControl) {
         expect(presentationFault!.requested).toBeGreaterThan(0);
         expect(presentationFault!.flushed).toBeGreaterThan(0);
-        expect(handoff.handoffMs).toBeGreaterThan(handoff.limitMs);
-      } else {
-        expect(handoff.withinLimit, `nominal completed-result handoff: ${JSON.stringify(report)}`)
-          .toBe(true);
+        // The held event tasks carried the presentation: the presenting frame retired only after
+        // they were released.
+        expect(
+          completedWorkerStats!.resultFrameCompletedAtMs!,
+          `the result presented before the held event tasks were released: ${JSON.stringify(report)}`,
+        ).toBeGreaterThan(presentationFault!.releaseRequestedAtMs);
       }
       // The pipelines this interaction draws with were built ahead of use, so it creates none at
       // first use, in order with its own GPU work. Checked where it is verified, in Chromium;
@@ -5506,23 +5530,33 @@ async function injectAnimationFirstBootDelay(page: Page, browserName: string) {
  * frame's GPU work completes can observe a partially executed canvas.
  */
 async function armAnimationCanvasGpuDelay(owner: Worker, testInfo: TestInfo) {
-  const spec = process.env.DONNER_ANIMATION_CANVAS_GPU_DELAY;
-  if (spec === undefined || spec === "") return null;
-  const match = /^(\d+):(\d+)$/.exec(spec);
-  const everyFrames = match ? Number(match[1]) : 0;
-  const iterations = match ? Number(match[2]) : 0;
-  if (!match || everyFrames < 1 || everyFrames > 1000 || iterations < 1 || iterations > 1_000_000) {
-    throw new Error(
-      "DONNER_ANIMATION_CANVAS_GPU_DELAY must be <everyFrames 1-1000>:<iterations 1-1000000>",
-    );
-  }
-  const delay = await armCanvasGpuDelayForTest(owner, everyFrames, iterations);
+  // Ends the injection after the captures that open the Preview, so later probes run without it.
+  return armAttachedCanvasGpuDelay(
+    owner,
+    "DONNER_ANIMATION_CANVAS_GPU_DELAY",
+    "animation-canvas-gpu-delay",
+    testInfo,
+  );
+}
+
+/**
+ * \ref armCanvasGpuDelayFromEnv, attaching what was injected as `<name>.json` when it finishes.
+ */
+async function armAttachedCanvasGpuDelay(
+  owner: Worker,
+  variable: string,
+  name: string,
+  testInfo: TestInfo,
+) {
+  const delay = await armCanvasGpuDelayFromEnv(owner, variable);
+  if (delay === null) return null;
   return {
-    // Ends the injection after the captures that open the Preview, so later probes run without it.
     finish: async () => {
-      const path = testInfo.outputPath("animation-canvas-gpu-delay.json");
-      await writeFile(path, JSON.stringify({ spec, ...(await delay.disarm()) }, null, 2));
-      await testInfo.attach("animation-canvas-gpu-delay", { path, contentType: "application/json" });
+      const report = await delay.finish();
+      const path = testInfo.outputPath(`${name}.json`);
+      await writeFile(path, JSON.stringify(report, null, 2));
+      await testInfo.attach(name, { path, contentType: "application/json" });
+      return report;
     },
   };
 }

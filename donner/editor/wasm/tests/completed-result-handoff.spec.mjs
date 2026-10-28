@@ -14,15 +14,23 @@ test("the nominal bound admits the documented healthy range and rejects delayed 
   assert.equal(completedResultHandoff(100, Infinity).withinLimit, false);
 });
 
-test("actual consumers use capture completion and the negative control requires a real delay", () => {
+test("actual consumers use capture completion and the bound lives in the performance lane", () => {
   const smoke = readFileSync(new URL("./smoke.spec.ts", import.meta.url), "utf8");
   const perf = readFileSync(new URL("./browser-responsiveness.perf.ts", import.meta.url), "utf8");
+  const gates = readFileSync(new URL("./latency-gates.mjs", import.meta.url), "utf8");
   assert.match(smoke, /phaseTimings\.presentedMs \?\?= state\.worker!\.resultFrameCompletedAtMs!/);
   const firstClick = perf.slice(perf.indexOf('test("first sample click after boot"'));
   assert.match(firstClick, /presentedAt: worker!\.resultFrameCompletedAtMs!/);
   assert.doesNotMatch(firstClick, /presentedAt: presentation!\.lastPresentedAtMs/);
+  // The smoke case keeps only ordering: no time bound on the handoff.
+  assert.doesNotMatch(smoke, /withinLimit|handoff\.limitMs/);
   assert.match(smoke, /expect\(Number\.isFinite\(handoff\.handoffMs\)\)\.toBe\(true\)/);
-  assert.match(smoke, /expect\(handoff\.handoffMs\)\.toBeGreaterThan\(handoff\.limitMs\)/);
   assert.match(smoke, /expect\(presentationFault!\.requested\)\.toBeGreaterThan\(0\)/);
   assert.match(smoke, /expect\(presentationFault!\.flushed\)\.toBeGreaterThan\(0\)/);
+  assert.match(smoke, /toBeGreaterThan\(presentationFault!\.releaseRequestedAtMs\)/);
+  // The performance lane measures the same span and gates it at the same bound.
+  assert.match(gates, /limitMs: kNominalCompletedResultHandoffLimitMs/);
+  const handoff = perf.slice(perf.indexOf('test.describe("nominal completed-result handoff"'));
+  assert.match(handoff, /worker!\.publishedAtMs - worker!\.pollDelayMs,\s+worker!\.resultFrameCompletedAtMs!/);
+  assert.match(handoff, /latencyGate\("completedResultHandoff"/);
 });

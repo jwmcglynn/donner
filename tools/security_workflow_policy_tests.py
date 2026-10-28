@@ -32,7 +32,9 @@ WRITE_SCOPES = {
     (".github/workflows/sign_macos_release.yml", "attest"): {"attestations", "id-token"},
     (".github/workflows/bcr_preflight.yml", "attest-artifacts"): {"attestations", "id-token"},
     (".github/workflows/codeql.yml", "analyze"): {"security-events"},
-    (".github/workflows/deploy_docs.yaml", "deploy"): {"id-token", "pages"},
+    (".github/workflows/deploy_docs.yaml", "deploy"): {"contents", "id-token", "pages"},
+    (".github/workflows/deploy_docs.yaml", "assemble"): {"attestations", "id-token"},
+    (".github/workflows/deploy_docs.yaml", "seed"): {"contents"},
     (".github/workflows/release.yml", "publish-release-artifacts"): {"contents"},
     (".github/workflows/release_candidate.yml", "attest-record"): {"attestations", "id-token"},
     (".github/workflows/rerun_runner_loss.yml", "rerun"): {"actions"},
@@ -400,6 +402,7 @@ def _writer_step_problem(condition, inputs, gates):
 REVIEWED_ENVIRONMENTS = {
     (".github/workflows/sign_macos_release.yml", "sign"): "donner-notarization",
     (".github/workflows/deploy_docs.yaml", "deploy"): "github-pages",
+    (".github/workflows/deploy_docs.yaml", "seed"): "github-pages",
     (".github/workflows/publish_bcr.yml", "publish-fork"): "bcr-fork-preparation",
 }
 
@@ -1920,76 +1923,52 @@ def _bcr_submission_violations(workflow):
 
 
 DOCS_WORKFLOW = ".github/workflows/deploy_docs.yaml"
-DOCS_DEPLOY_STEPS = ("Fetch the candidate record",
-                     "Verify the candidate record attestation",
-                     "Select the docs build to deploy",
-                     "Download the retained Pages artifact",
-                     "Verify selected source, artifact, and exact archive bytes",
-                     "Deploy the selected artifact without rebuilding")
-DOCS_SELECTED = "${{ steps.select.outputs."
-# The exact guard line: a substring match would accept `inputs.selection == 'record' && false`.
-DOCS_RECORD_ONLY = re.compile(r"(?m)^        if: inputs\.selection == 'record'$")
-# The record the attestation step verifies is the one the selection step reads.
-DOCS_RECORD_BINDINGS = ("          RECORD_PATH: ${{ steps.record.outputs.record_path }}\n",
-                        "          RECORD_COMMIT: ${{ steps.record.outputs.record_commit }}\n")
-# Steps that may read dispatch inputs: the record fetch, the attestation guard and the selection.
-DOCS_INPUT_STEPS = DOCS_DEPLOY_STEPS[:3]
+DOCS_DEPLOY_STEPS = ("Verify the attested composition and durable prior site",
+                     "Restore and verify the durable rollback selection",
+                     "Retain the verified prior Pages archive for recovery",
+                     "Upload the verified durable rollback candidate",
+                     "Publish the verified complete site with approved recovery",
+                     "Roll back the complete site with approved recovery",
+                     "Retain publication and recovery evidence")
 
 
-def _docs_record_violations(fetch, attest, select):
-    return _failed([
-        ("python3 -B -m tools.release_candidate docs-record" in fetch and
-         '--record-run "$RECORD_RUN"' in fetch and '--record-sha256 "$RECORD_SHA256"' in fetch and
-         DOCS_RECORD_ONLY.search(fetch) is not None,
-         "deploy does not fetch the named candidate record"),
-        ("gh attestation verify" in attest and
-         "--signer-workflow jwmcglynn/donner/.github/workflows/release_candidate.yml" in attest and
-         '--source-digest "$RECORD_COMMIT" --source-ref refs/heads/main' in attest and
-         DOCS_RECORD_ONLY.search(attest) is not None and
-         all(binding in attest + "\n" for binding in DOCS_RECORD_BINDINGS),
-         "deploy does not verify the candidate record attestation"),
-        ("python3 -B -m tools.release_candidate docs-selection" in select and
-         '--selection "$SELECTION"' in select and '--record-path "$RECORD_PATH"' in select and
-         '--record-sha256 "$RECORD_SHA256"' in select and
-         all(binding in select for binding in DOCS_RECORD_BINDINGS),
-         "deploy does not select from the candidate record"),
-    ])
-
-
-def _docs_selection_violations(deploy):
-    fetch, attest, select, download, verify, publish = (_named_step(deploy, name)
-                                                        for name in DOCS_DEPLOY_STEPS)
-    input_steps = [_named_step(deploy, name) for name in DOCS_INPUT_STEPS]
-    return _docs_record_violations(fetch, attest, select) + _failed([
-        ("artifact-ids: %sartifact_id }}" % DOCS_SELECTED in download and
-         "run-id: %srun_id }}" % DOCS_SELECTED in download,
-         "deploy downloads an artifact the selection did not name"),
-        ("python3 -B -m tools.pages_artifact verify" in verify and
-         "DOC_ARCHIVE_SHA256: %sarchive_sha256 }}" % DOCS_SELECTED in verify,
-         "deploy does not verify the selected archive"),
-        ("DOC_ARTIFACT_ID: %sartifact_id }}" % DOCS_SELECTED in publish,
-         "deploy promotes an artifact the selection did not name"),
-        (all("inputs." not in step for step in _steps(deploy) if step not in input_steps),
-         "deploy reads dispatch inputs outside the record and selection steps"),
-    ])
+def _docs_runs_quoted(jobs):
+    return all("${{" not in body for job in jobs for body in _run_bodies(job))
 
 
 def _docs_deploy_violations(workflow):
-    """Docs deploy promotes exactly the selected retained build and builds nothing."""
-    deploy = _jobs(workflow).get("deploy", "")
-    names = [_step_identity_value(step, "name") for step in _steps(deploy)]
+    jobs = _jobs(workflow)
+    deploy, assemble, seed = (jobs.get(key, "") for key in ("deploy", "assemble", "seed"))
+    steps = [_named_step(deploy, name) for name in DOCS_DEPLOY_STEPS]
+    preflight, rollback, previous, candidate, publish, restore, evidence = steps
     guard = "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
-    return _failed([
-        (guard in deploy, "deploy can run without a manual dispatch on main"),
-        (not _build_steps(deploy) and "upload-artifact@" not in deploy,
-         "deploy builds or uploads: %s" % _build_steps(deploy)),
-        ([name for name in names if name in DOCS_DEPLOY_STEPS] == list(DOCS_DEPLOY_STEPS) and
-         names[-1:] == [DOCS_DEPLOY_STEPS[-1]],
-         "deploy does not select and verify before its final Pages step"),
-        (not any("${{" in body for body in _run_bodies(deploy)),
-         "deploy run blocks must use quoted environment values"),
-        (not _ignored_failures(deploy), "deploy ignores a failure: %s" % _ignored_failures(deploy)),
-    ]) + _docs_selection_violations(deploy)
+    failures = _failed([
+        (all(guard in job for job in (deploy, assemble, seed)), "manual dispatch on main required"),
+        ("timeout-minutes: 45" in deploy, "deploy must reserve preparation and recovery time"),
+        ("tools/build_docs.sh" not in deploy and "upload-pages-artifact@" not in deploy,
+         "deploy builds an unreviewed site"),
+        ("tools.docs_publish preflight" in preflight and "tools.docs_publish rollback-preflight" in rollback,
+         "deploy must verify both whole-site selections"),
+        ("id: previous" in previous and "previous-pages/artifact.tar" in previous,
+         "deploy must retain the verified recovery archive"),
+        ("id: candidate" in candidate and "docs-publish/pages/artifact.tar" in candidate,
+         "rollback must upload its verified durable candidate"),
+        ("tools.docs_publish promote" in publish and '"$VERIFIED_PREVIOUS_ARTIFACT_ID"' in publish
+         and "${{ steps.previous.outputs.artifact-id }}" in publish,
+         "publication must bind the verified recovery artifact"),
+        ("tools.docs_publish rollback" in restore and "${{ steps.candidate.outputs.artifact-id }}" in restore,
+         "rollback must bind the verified candidate artifact"),
+        ("if: always()" in evidence and "result.json" in evidence, "publication evidence must survive failures"),
+        ("tools.docs_publish prepare" in assemble and "tools.docs_publish finalize" in assemble
+         and "actions/attest-build-provenance@" in assemble,
+         "composition must bind and attest the selected uploaded bytes"),
+        ("tools.docs_publish seed" in seed and "environment: github-pages" in seed,
+         "initial recovery seed must be explicitly protected"),
+        (all(not _ignored_failures(job) and "|| true" not in job for job in (deploy, assemble, seed)), "docs ignores a failure"),
+        (_docs_runs_quoted((deploy, assemble, seed)),
+         "docs run blocks must use quoted environment values"),
+    ])
+    return failures
 
 
 class SecurityWorkflowPolicyTest(unittest.TestCase):
@@ -2401,8 +2380,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             with self.subTest(path=path, name=name):
                 steps = [step for step in self.supply_chain_files[path].split("\n      - ")
                          if action in step and name in step]
-                self.assertEqual(len(steps), 1)
-                self.assertRegex(steps[0], r"\n          retention-days: 90\n")
+                expected_count = 2 if path == DOCS_WORKFLOW and action == "upload-pages-artifact@" else 1
+                self.assertEqual(len(steps), expected_count)
+                for step in steps:
+                    self.assertRegex(step, r"\n          retention-days: 90(?:\n|$)")
 
     def test_release_publishes_only_the_verified_candidate_record(self):
         release = self.supply_chain_files[".github/workflows/release.yml"]
@@ -3175,82 +3156,24 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_docs_deploy_policy_rejects_builds_and_unselected_artifacts(self):
         path = DOCS_WORKFLOW
         workflow = self.supply_chain_files[path]
-        download = "      - name: Download the retained Pages artifact\n"
         self._assert_rejected(lambda files, path: _docs_deploy_violations(files[path]), {
-            "doxygen": (path, workflow.replace(
-                download, "      - name: Rebuild\n        run: tools/build_docs.sh\n" + download,
-                1), "deploy builds"),
-            "upload": (path, workflow.replace(
-                download, "      - uses: actions/upload-pages-artifact@v5\n" + download, 1),
-                "deploy builds"),
-            "input artifact": (path, workflow.replace(
-                "artifact-ids: ${{ steps.select.outputs.artifact_id }}",
-                "artifact-ids: ${{ inputs.artifact_id }}", 1), "did not name"),
-            "no record selection": (path, workflow.replace(
-                "python3 -B -m tools.release_candidate docs-selection",
-                "python3 -B -m tools.pages_artifact inputs", 1), "select from the candidate record"),
-            "no record attestation": (path, workflow.replace(
-                "          gh attestation verify", "          echo", 1),
-                "record attestation"),
-            "unpinned source digest": (path, workflow.replace(
-                '--source-digest "$RECORD_COMMIT"', '--source-digest "$GITHUB_SHA"', 1),
-                "record attestation"),
-            "unpinned source ref": (path, workflow.replace(
-                '"$RECORD_COMMIT" --source-ref refs/heads/main', '"$RECORD_COMMIT"', 1),
-                "record attestation"),
-            "unnamed record run": (path, workflow.replace(
-                '--record-run "$RECORD_RUN" --record-sha256', '--record-sha256', 1),
-                "fetch the named candidate record"),
-            "ignored attestation": (path, workflow.replace(
-                "      - name: Verify the candidate record attestation\n",
-                "      - name: Verify the candidate record attestation\n"
-                "        continue-on-error: true\n", 1), "ignores a failure"),
-            "disabled attestation": (path, workflow.replace(
-                "        if: inputs.selection == 'record'\n        env:\n"
-                "          GH_TOKEN: ${{ github.token }}\n          RECORD_PATH:",
-                "        if: inputs.selection == 'record' && false\n        env:\n"
-                "          GH_TOKEN: ${{ github.token }}\n          RECORD_PATH:", 1),
-                "record attestation"),
-            "disabled record fetch": (path, workflow.replace(
-                "        id: record\n        if: inputs.selection == 'record'\n",
-                "        id: record\n        if: inputs.selection == 'record' && false\n", 1),
-                "fetch the named candidate record"),
-            "attestation or true": (path, workflow.replace(
-                "--source-ref refs/heads/main > /dev/null",
-                "--source-ref refs/heads/main > /dev/null || true", 1), "ignores a failure"),
-            "other selected record": (path, workflow.replace(
-                "          SELECTION: ${{ inputs.selection }}\n"
-                "          RECORD_RUN: ${{ inputs.record_run }}\n"
-                "          RECORD_PATH: ${{ steps.record.outputs.record_path }}\n",
-                "          SELECTION: ${{ inputs.selection }}\n"
-                "          RECORD_RUN: ${{ inputs.record_run }}\n"
-                "          RECORD_PATH: ${{ inputs.record_run }}\n", 1),
-                "select from the candidate record"),
-            "other attested record": (path, workflow.replace(
-                "          RECORD_COMMIT: ${{ steps.record.outputs.record_commit }}\n",
-                "          RECORD_COMMIT: ${{ github.sha }}\n", 1),
-                "record attestation"),
-            "attestation after selection": (path, workflow.replace(
-                "      - name: Verify the candidate record attestation\n",
-                "      - name: Check the candidate record attestation\n", 1).replace(
-                "      - name: Download the retained Pages artifact\n",
-                "      - name: Verify the candidate record attestation\n        run: true\n"
-                "      - name: Download the retained Pages artifact\n", 1),
-                "select and verify before"),
-            "unverified archive": (path, workflow.replace(
-                "python3 -B -m tools.pages_artifact verify", "true", 1),
-                "verify the selected archive"),
-            "input promotion": (path, workflow.replace(
-                "          DOC_ARTIFACT_ID: ${{ steps.select.outputs.artifact_id }}\n"
-                "          DOC_SOURCE_RUN_ID: ${{ steps.select.outputs.run_id }}\n"
-                "          DOC_SOURCE_ATTEMPT: ${{ steps.select.outputs.attempt }}\n"
-                "          DOC_SOURCE_COMMIT: ${{ steps.select.outputs.source_commit }}\n"
-                "        with:",
-                "          DOC_ARTIFACT_ID: ${{ inputs.artifact_id }}\n        with:", 1),
-                "promotes an artifact"),
+            "insufficient recovery allowance": (path, workflow.replace("timeout-minutes: 45", "timeout-minutes: 30", 1),
+                                                "reserve preparation and recovery time"),
+            "unverified composition": (path, workflow.replace("tools.docs_publish preflight", "true", 1),
+                                       "verify both whole-site"),
+            "no durable recovery": (path, workflow.replace("previous-pages/artifact.tar", "other.tar", 1),
+                                    "verified recovery archive"),
+            "unbound recovery": (path, workflow.replace("${{ steps.previous.outputs.artifact-id }}",
+                                  "${{ inputs.request }}", 1), "bind the verified recovery"),
+            "no composition attestation": (path, workflow.replace("actions/attest-build-provenance@", "other@", 1),
+                                          "bind and attest"),
+            "single-site deployment": (path, workflow.replace("tools.docs_publish promote", "tools/build_docs.sh", 1),
+                                       "unreviewed site"),
+            "ignored failure": (path, workflow.replace('prepare --work "$RUNNER_TEMP/docs-site"',
+                                 'prepare --work "$RUNNER_TEMP/docs-site" || true', 1), "ignores a failure"),
             "push deploy": (path, workflow.replace(
                 "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
-                "if: github.ref == 'refs/heads/main'", 1), "manual dispatch on main"),
+                "if: github.ref == 'refs/heads/main'"), "manual dispatch on main"),
         })
 
     def test_git_dependencies_use_release_tags_or_explicit_commits(self):

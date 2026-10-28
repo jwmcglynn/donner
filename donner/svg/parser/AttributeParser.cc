@@ -1238,11 +1238,17 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEConvolveMatrixElement>(
     return std::nullopt;
   } else if (name == XMLQualifiedNameRef("order")) {
     auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
+    const auto exceedsLimit = [](double number) {
+      return std::isfinite(number) &&
+             number > static_cast<double>(components::kMaximumFilterConvolveOrder);
+    };
+    comp.orderExceedsLimit = false;
     const auto firstNumber = donner::parser::NumberParser::Parse(value);
     if (firstNumber.hasResult()) {
       const std::optional<int> orderX =
           CheckedInteger(firstNumber.result().number, 1, components::kMaximumFilterConvolveOrder);
       if (!orderX.has_value()) {
+        comp.orderExceedsLimit = exceedsLimit(firstNumber.result().number);
         return std::nullopt;
       }
       int orderY = *orderX;
@@ -1253,6 +1259,7 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEConvolveMatrixElement>(
       if (!remaining.empty()) {
         const auto secondNumber = donner::parser::NumberParser::Parse(remaining);
         if (secondNumber.hasResult()) {
+          comp.orderExceedsLimit = exceedsLimit(secondNumber.result().number);
           orderY = CheckedInteger(secondNumber.result().number, 1,
                                   components::kMaximumFilterConvolveOrder)
                        .value_or(orderY);

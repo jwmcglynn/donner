@@ -161,7 +161,19 @@ Shorthand functions map to equivalent filter graph nodes internally.
 ## Security and Safety
 
 - **Resource exhaustion:** Filter region size is bounded (4096px expansion limit). Extreme blur
-  radii and convolution kernels are capped.
+  radii and offsets are capped.
+- **Structural limits fail closed:** A filter graph holds at most 32 primitives, counting every
+  stage of a `filter` property together (each `url()` filter's primitives plus shorthand
+  functions). Within a filter, `feMerge` takes at most 16 inputs, the `tableValues` list of any
+  `feFunc*` element at most 1024 values whatever its `type`, and `feConvolveMatrix` an order of at
+  most 64 on each axis and at most 4096 kernel values. A filter whose authored attributes exceed
+  any of these limits is never truncated or partially applied: it fails closed with a warning
+  naming the filter, the element it applies to is not rendered, and independent content still
+  renders. An animated value over a limit, including an animated list of more than 64 numbers, is
+  ignored and the base value renders.
+- **Invalid parameters follow the specification:** Values that are wrong rather than too large,
+  such as a kernel value count that does not match its order or a color matrix with the wrong
+  number of values, keep the error handling the specification defines for that primitive.
 - **`feImage` fetching:** Same-document fragment references use a recursion guard.
   External `href` follows the existing resource loading policy.
 - **`feDisplacementMap`:** Cross-origin `in2` produces transparent black per spec.

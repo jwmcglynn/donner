@@ -7,6 +7,8 @@
 // GitHub-hosted macOS Perf job sets either: the gates miss their targets on that runner (#1666),
 // and the completion checks fail there (#1675, #1676, #2106).
 
+import { kNominalCompletedResultHandoffLimitMs } from "./completed-result-handoff.mjs";
+
 /** Environment variable that selects whether a gate miss fails the run. */
 export const kLatencyGatesEnv = "DONNER_BROWSER_LATENCY_GATES";
 
@@ -16,6 +18,10 @@ export const kLatencyGates = {
   inputP95: { limitMs: 50, message: "input-to-completed-frame p95 must meet 50 ms gate" },
   inputStall: { limitMs: 250, message: "no input can stall above 250 ms" },
   completedStall: { limitMs: 250, message: "completed interaction cannot stall above 250 ms" },
+  completedResultHandoff: {
+    limitMs: kNominalCompletedResultHandoffLimitMs,
+    message: "nominal carousel completed-result handoff must meet its 1000 ms bound",
+  },
 };
 
 /** Line prefix of a recorded gate result in the test log. */
