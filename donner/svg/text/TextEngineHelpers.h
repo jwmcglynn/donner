@@ -3,6 +3,7 @@
 /// Internal helpers for TextEngine layout. Exposed in a header for unit testing.
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -82,6 +83,17 @@ struct ChunkBoundary {
   bool absoluteY = false;  ///< This boundary applies an authored absolute y position.
 };
 
+/// An authored inline displacement consumed by one positioned glyph group.
+struct InlineDisplacement {
+  size_t runIndex = 0;    ///< Run containing the consuming group.
+  size_t glyphIndex = 0;  ///< First glyph of that group within the run.
+  double distance = 0.0;  ///< Resolved dx, or dy in vertical writing, in pixels.
+};
+
+/// Per-run masks indexed by original source-byte cluster, retaining CSS hanging decisions through
+/// SVG textLength adjustments and glyph quarantine. Empty runs have no excluded clusters.
+using AnchorExclusions = std::vector<std::vector<bool>>;
+
 /// Per-run pen start/end position for textLength calculation.
 struct RunPenExtent {
   double startX = 0.0;  ///< Pen X position at the start of the run.
@@ -106,7 +118,8 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
 
 /// Fix up chunk text-anchors and apply per-chunk text-anchor adjustment.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
-                     const components::ComputedTextComponent& text, bool vertical);
+                     const components::ComputedTextComponent& text, bool vertical,
+                     const AnchorExclusions& exclusions = {});
 
 /// Apply whitespace-dependent line layout along the inline axis, before text-anchor adjustment.
 /// Each line/chunk uses its first addressable character's anchor; lines advance along the block
@@ -125,11 +138,15 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
 /// @param lineHeightPx Advance between line baselines along the block axis, in pixels.
 /// @param backend Font metrics for the minimum tab advance (0.5ch).
 /// @param chunks Authored text chunk boundaries, retained across line breaks.
+/// @param displacements Per-group authored inline shifts, applied after CSS line layout.
+/// @param exclusions Receives source-cluster hanging decisions for final single-line anchoring.
 /// @return true if multiple lines were laid out. Tab-only changes return false.
 bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
                          const TextLayoutParams& params, double measurePx, double lineHeightPx,
                          const TextBackend* backend = nullptr,
-                         std::span<const ChunkBoundary> chunks = {});
+                         std::span<const ChunkBoundary> chunks = {},
+                         std::span<const InlineDisplacement> displacements = {},
+                         AnchorExclusions* exclusions = nullptr);
 
 /// Compute per-span baseline-shift in pixels, including OS/2 sub/super metrics
 /// and ancestor baseline-shift accumulation.
