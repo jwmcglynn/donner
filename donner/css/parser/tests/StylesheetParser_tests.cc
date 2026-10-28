@@ -98,6 +98,68 @@ TEST(StylesheetParser, ImportIsUnsupportedButFollowingRulesRemain) {
                   FileOffset::Offset(2))));
 }
 
+TEST(StylesheetParser, ConditionalRulesWarnAndPreserveFollowingRules) {
+  for (const std::string_view keyword : {"media", "supports"}) {
+    SCOPED_TRACE(keyword);
+    const std::string source = "  @" + std::string(keyword) +
+                               " (width: 100px) { circle { fill: red; } } rect { fill: green; }";
+    ParseWarningSink warnings;
+    const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+    ASSERT_THAT(sheet.rules(), testing::SizeIs(1));
+    EXPECT_EQ(SourceText(source, sheet.rules()[0].selectorSourceRange), "rect");
+    EXPECT_THAT(sheet.fontFaces(), IsEmpty());
+    EXPECT_THAT(warnings.warnings(), ElementsAre(ParseDiagnostic::Warning(
+                                         RcString("CSS @" + std::string(keyword) +
+                                                  " is unsupported; conditional rules are ignored"),
+                                         FileOffset::Offset(2))));
+  }
+}
+
+TEST(StylesheetParser, ConditionalKeywordsAreDecodedAndCaseInsensitive) {
+  const std::array<std::pair<std::string_view, std::string_view>, 4> cases = {{
+      {R"(@MeDiA all {})", "media"},
+      {R"(@m\65 dia all {})", "media"},
+      {R"(@SuPpOrTs (fill: red) {})", "supports"},
+      {R"(@supp\6f rts (fill: red) {})", "supports"},
+  }};
+  for (const auto& [source, keyword] : cases) {
+    SCOPED_TRACE(source);
+    ParseWarningSink warnings;
+    const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+    EXPECT_THAT(sheet.rules(), IsEmpty());
+    EXPECT_THAT(warnings.warnings(), ElementsAre(ParseDiagnostic::Warning(
+                                         RcString("CSS @" + std::string(keyword) +
+                                                  " is unsupported; conditional rules are ignored"),
+                                         FileOffset::Offset(0))));
+  }
+}
+
+TEST(StylesheetParser, ConditionalBlocksDoNotRegisterNestedFontFaces) {
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @supports (fill: red) {
+      @media all { circle { fill: red; } }
+      @font-face { font-family: Hidden; src: url(hidden.woff); }
+    }
+    @font-face { font-family: Visible; src: url(visible.woff); }
+  )",
+                                                   warnings);
+  EXPECT_THAT(sheet.rules(), IsEmpty());
+  EXPECT_THAT(sheet.fontFaces(),
+              ElementsAre(FontFaceIs("Visible", ElementsAre(UrlFontSourceIs("visible.woff")))));
+  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+  EXPECT_EQ(warnings.warnings()[0].reason,
+            "CSS @supports is unsupported; conditional rules are ignored");
+}
+
+TEST(StylesheetParser, ConditionalRulesCanUseDisabledWarningSink) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(
+      "@media all { circle { fill: red; } } rect { fill: green; }", warnings);
+  EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings(), IsEmpty());
+}
+
 TEST(StylesheetParser, ImportKeywordIsDecodedAndCaseInsensitive) {
   const std::array<std::string_view, 5> imports = {
       R"(@import "hidden.css";)", R"(@import url("hidden.css");)", R"(@ImPoRt url(hidden.css);)",
