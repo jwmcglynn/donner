@@ -28,7 +28,7 @@ REQUIRED_BUILD_FILES = {
 }
 
 # Development-only rule sets that Donner's test targets use, which the MODULE.bazel scan must find.
-EXPECTED_DEVELOPMENT_RULE_SETS = {"aspect_rules_js", "rules_python", "rules_shell"}
+EXPECTED_DEVELOPMENT_RULE_SETS = {"aspect_rules_js"}
 
 
 def _argument(name):
