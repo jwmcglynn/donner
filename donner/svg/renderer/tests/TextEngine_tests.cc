@@ -2831,26 +2831,72 @@ TEST(TextEngineTest, WrappedBlockResetIsReappliedAfterSoftWrap) {
 
 TEST(TextEngineTest, WrappedAnchorQuarantinesOnlyUnrepresentableGroups) {
   for (bool multiline : {false, true}) {
-    SCOPED_TRACE(multiline);
-    Registry registry;
-    FontManager fonts(registry);
-    TextEngine engine = MakeScriptedEngine(registry, fonts);
-    components::ComputedTextComponent text;
-    auto invalid = MakeSpan(multiline ? "AB\n" : "AB");
-    invalid.whiteSpace = WhiteSpace::Pre;
-    invalid.xList = {Lengthd(1e308)};
-    invalid.dxList = {std::nullopt, Lengthd(-1e308)};
-    auto valid = MakeSpan("C");
-    valid.whiteSpace = WhiteSpace::Pre;
-    valid.xList = {Lengthd(25)};
-    text.spans = {invalid, valid};
-    const auto runs = engine.layout(text, MakeTextParams(20));
-    ASSERT_THAT(runs, SizeIs(2));
-    EXPECT_THAT(runs[0].glyphs, IsEmpty());
-    ASSERT_THAT(runs[1].glyphs, SizeIs(1));
-    EXPECT_THAT(runs[1].glyphs[0].xPosition, DoubleEq(25));
-    EXPECT_THAT(runs[1].glyphs[0].yPosition, DoubleNear(multiline ? 20 : 0, 1e-5));
+    for (bool separateRuns : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << "multiline=" << multiline << " separateRuns=" << separateRuns);
+      Registry registry;
+      FontManager fonts(registry);
+      TextEngine engine = MakeScriptedEngine(registry, fonts);
+      components::ComputedTextComponent text;
+      auto invalid = MakeSpan(multiline ? "AB\n" : "AB");
+      invalid.whiteSpace = WhiteSpace::Pre;
+      invalid.xList = {Lengthd(1e308)};
+      invalid.dxList = {std::nullopt, Lengthd(-1e308)};
+      if (separateRuns) {
+        auto valid = MakeSpan("C");
+        valid.whiteSpace = WhiteSpace::Pre;
+        valid.xList = {Lengthd(25)};
+        text.spans = {invalid, valid};
+      } else {
+        invalid.text = RcString(multiline ? "AB\nC" : "ABC");
+        invalid.end = invalid.text.size();
+        invalid.xList.resize(invalid.text.size());
+        invalid.xList.back() = Lengthd(25);
+        text.spans = {invalid};
+      }
+      const auto runs = engine.layout(text, MakeTextParams(20));
+      ASSERT_THAT(runs, SizeIs(separateRuns ? 2 : 1));
+      if (separateRuns) {
+        EXPECT_THAT(runs.front().glyphs, IsEmpty());
+      }
+      ASSERT_THAT(runs.back().glyphs, SizeIs(1));
+      EXPECT_THAT(runs.back().glyphs[0].xPosition, DoubleEq(25));
+      EXPECT_THAT(runs.back().glyphs[0].yPosition, DoubleNear(multiline ? 20 : 0, 1e-5));
+      EXPECT_THAT(runs.back().glyphs[0].cluster, testing::Eq(separateRuns ? 0u
+                                                             : multiline  ? 3u
+                                                                          : 2u));
+    }
   }
+}
+
+TEST(TextEngineTest, RejectedAnchorChunksPreserveAlternatingValidGlyphs) {
+  constexpr size_t kChunks = 128;
+  std::string source;
+  for (size_t i = 0; i < kChunks; ++i) {
+    source += "ABC";
+  }
+  auto span = MakeSpan(source);
+  span.xList.resize(source.size());
+  span.dxList.resize(source.size());
+  std::vector<std::pair<uint32_t, double>> expected;
+  for (size_t i = 0; i < kChunks; ++i) {
+    span.xList[3 * i] = Lengthd(1e308);
+    span.dxList[3 * i + 1] = Lengthd(-1e308);
+    span.xList[3 * i + 2] = Lengthd(25.0 + static_cast<double>(i));
+    expected.emplace_back(static_cast<uint32_t>(3 * i + 2), 25.0 + static_cast<double>(i));
+  }
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  components::ComputedTextComponent text;
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, SizeIs(1));
+  std::vector<std::pair<uint32_t, double>> actual;
+  for (const auto& glyph : runs[0].glyphs) {
+    actual.emplace_back(glyph.cluster, glyph.xPosition);
+  }
+  EXPECT_THAT(actual, testing::ElementsAreArray(expected));
 }
 
 }  // namespace donner::svg
