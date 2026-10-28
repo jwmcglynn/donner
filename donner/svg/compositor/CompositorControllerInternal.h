@@ -59,14 +59,6 @@ struct StaticSpanPresentationCost {
 
 bool HasCompositingBreakingAncestor(Registry& registry, Entity entity);
 bool IsDomDescendantOf(Registry& registry, Entity maybeDescendant, Entity root);
-
-/// True when the document draws @p target or its content a second time, anywhere: inside its
-/// compositing owner, in that owner's mask or outside it. An instantiated copy, such as a `use`
-/// copy, draws from its own instances, which a held drag of @p target leaves in place. An
-/// `feImage` reference to the target, one of its ancestors or one of its content elements draws the
-/// live instances into another element's filter result. Either way, redrawing only the target's
-/// own coverage would leave a stale copy.
-bool DrawsCopyOf(Registry& registry, Entity target);
 bool IsEntityInLiveTree(Registry& registry, Entity entity, Entity rootEntity);
 
 Vector2i LayerPayloadDimensions(const CompositorLayer& layer);

@@ -173,16 +173,6 @@ bool HasOnlyBucketAssignedAncestors(Registry& registry, Entity entity) {
   return found;
 }
 
-// World-from-entity transform the next render-tree preparation would stamp on @p entity's
-// rendering instance, computed from the live layout state without preparing the document.
-Transform2d CurrentWorldFromEntity(Registry& registry, Entity entity) {
-  const auto& absolute =
-      components::LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry, entity));
-  const Transform2d canvasFromDocument =
-      components::LayoutSystem().getCanvasFromDocumentTransform(registry);
-  return absolute.worldFromEntity * (absolute.worldIsCanvas ? canvasFromDocument : Transform2d());
-}
-
 bool HasStableDamageMask(const components::RenderingInstanceComponent& instance) {
   if (!instance.mask.has_value() || !instance.mask->valid()) {
     return true;
@@ -1889,9 +1879,6 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   }
   bool fastPathTakenThisFrame = false;
   MaskedChildOutcome maskedChildOutcome = MaskedChildOutcome::None;
-  // A lone translated shape inside one retained owner that cannot be split into pieces (for example
-  // a crystal face inside a clipped group under the owner's mask) patches the owner instead.
-  std::optional<DirtyEntityInvalidation> patchedChild;
   if (documentPrepared_ && !needsFullRebuild && !dirtyEntitySnapshot.empty() && hintsScanned_) {
     constexpr uint16_t kTransformOnlyMask = components::DirtyFlagsComponent::Layout |
                                             components::DirtyFlagsComponent::Transform |
@@ -1920,7 +1907,12 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         return false;
       }
 
-      const Transform2d newWorldFromEntity = CurrentWorldFromEntity(registry, entity);
+      const auto& abs =
+          components::LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry, entity));
+      const Transform2d canvasFromDocument =
+          components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+      const Transform2d newWorldFromEntity =
+          abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
       // `bitmapEntityFromEntity`: takes a point in the entity's CURRENT
       // frame and returns it in the bitmap's stamp-time entity frame.
       // The compositor uses this as `canvasFromBitmap` on the layer's
@@ -2008,9 +2000,9 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         // The moved child of a held owning-tiles drag resolves through its masked owner's cached
         // pieces when the owner can be split around it. Moving the child dirties only the child,
         // so a dirty descendant is an edit of its own and keeps the full render.
-        if (claimDirtyDescendant(e, dirtyEntitySnapshot, maskedChild, patchedChild,
-                                 singleActiveDragThisFrame, viewport, surfaceFromCanvas,
-                                 kTransformOnlyMask)) {
+        if (isCarriedByDirtyPromotedRoot(e, dirtyEntitySnapshot) ||
+            claimMaskedChildDrag(maskedChild, e, singleActiveDragThisFrame, viewport,
+                                 surfaceFromCanvas, kTransformOnlyMask)) {
           continue;
         }
         eligible = false;
@@ -2096,7 +2088,6 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         }
       }
       maskedChildOutcome = applyMaskedChildDrag(registry, maskedChild, viewport, surfaceFromCanvas);
-      restampPatchedChild(registry, patchedChild);
       // Clear the dirty flags ourselves since we skipped prepare. Tell
       // the rest of renderFrame that the dirty state is fully resolved
       // - no need to re-run detectors, re-prepare, or re-resolve.
@@ -2115,7 +2106,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     ++fastPathCounters_.slowPathFramesWithDirty;
   }
   const std::vector<DirtyEntityInvalidation> dirtyInvalidationSnapshot =
-      dirtyInvalidationsForFrame(std::move(patchedChild), dirtyEntitySnapshot);
+      captureDirtyEntityInvalidations(dirtyEntitySnapshot);
 
   // On first renderFrame the `RenderingInstanceComponent` view is empty (it
   // gets built by `prepareDocumentForRendering` below), so the mandatory /
@@ -2830,7 +2821,12 @@ std::optional<Box2d> CompositorController::translatedDamageBounds(Registry& regi
   if (!oldBounds.has_value()) {
     return std::nullopt;
   }
-  const Transform2d newWorldFromEntity = CurrentWorldFromEntity(registry, entity);
+  const auto& absolute =
+      components::LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry, entity));
+  const Transform2d canvasFromDocument =
+      components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+  const Transform2d newWorldFromEntity =
+      absolute.worldFromEntity * (absolute.worldIsCanvas ? canvasFromDocument : Transform2d());
   const Transform2d oldOutput = instance.worldFromEntityTransform * lastSurfaceFromCanvas_;
   const Transform2d newOutput = newWorldFromEntity * lastSurfaceFromCanvas_;
   for (std::size_t i = 0; i < 4; ++i) {
@@ -3302,53 +3298,6 @@ bool CompositorController::claimMaskedChildDrag(std::optional<MaskedChildResolut
   resolution = resolveMaskedChildDrag(document().registry(), entity, viewport, surfaceFromCanvas,
                                       transformOnlyMask);
   return resolution.has_value();
-}
-
-bool CompositorController::claimDirtyDescendant(
-    Entity entity, const std::vector<Entity>& dirtyEntities,
-    std::optional<MaskedChildResolution>& maskedChild,
-    std::optional<DirtyEntityInvalidation>& patchedChild, bool singleActiveDrag,
-    const RenderViewport& viewport, const Transform2d& surfaceFromCanvas,
-    uint16_t transformOnlyMask) {
-  if (isCarriedByDirtyPromotedRoot(entity, dirtyEntities) ||
-      claimMaskedChildDrag(maskedChild, entity, singleActiveDrag, viewport, surfaceFromCanvas,
-                           transformOnlyMask)) {
-    return true;
-  }
-  // A shape drawn a second time elsewhere keeps the full render, which re-instantiates the copy.
-  if (dirtyEntities.size() != 1u || maskedChild.has_value() ||
-      DrawsCopyOf(document().registry(), entity)) {
-    return false;
-  }
-  patchedChild = captureDirtyEntityInvalidations(dirtyEntities).front();
-  if (!patchedChild->damageBoundsCanvas.has_value()) {
-    patchedChild.reset();
-    return false;
-  }
-  return true;
-}
-
-void CompositorController::restampPatchedChild(
-    Registry& registry, const std::optional<DirtyEntityInvalidation>& patchedChild) {
-  if (!patchedChild.has_value()) {
-    return;
-  }
-  // The damage bounds were captured from the old instance transform; restamp it so the patch
-  // draws the shape at its new position.
-  registry.get<components::RenderingInstanceComponent>(patchedChild->entity)
-      .worldFromEntityTransform = CurrentWorldFromEntity(registry, patchedChild->entity);
-}
-
-std::vector<CompositorController::DirtyEntityInvalidation>
-CompositorController::dirtyInvalidationsForFrame(
-    std::optional<DirtyEntityInvalidation> patchedChild,
-    const std::vector<Entity>& unhandledDirtyEntities) const {
-  // A patched child taken by the fast path leaves no unhandled dirty entity; its invalidation was
-  // captured before the restamp, while the instance still held the old transform.
-  if (patchedChild.has_value() && unhandledDirtyEntities.empty()) {
-    return {std::move(*patchedChild)};
-  }
-  return captureDirtyEntityInvalidations(unhandledDirtyEntities);
 }
 
 std::optional<CompositorController::MaskedChildResolution>

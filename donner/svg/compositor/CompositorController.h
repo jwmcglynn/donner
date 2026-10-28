@@ -1407,23 +1407,6 @@ private:
                                                   std::span<const Entity> containingLayers,
                                                   std::size_t dirtyEntityCount) const;
   bool canPatchDirtyEntity(Registry& registry, Entity entity, Entity owner) const;
-  /// Claim dirty @p entity, a descendant of a promoted layer, for the frame's fast path: carried by
-  /// its dirty promoted root, a held masked-child drag rebuilt from pieces, or a lone translated
-  /// shape whose retained owner is patched over its old and new coverage (@p patchedChild). False
-  /// when the entity must take the full render.
-  bool claimDirtyDescendant(Entity entity, const std::vector<Entity>& dirtyEntities,
-                            std::optional<MaskedChildResolution>& maskedChild,
-                            std::optional<DirtyEntityInvalidation>& patchedChild,
-                            bool singleActiveDrag, const RenderViewport& viewport,
-                            const Transform2d& surfaceFromCanvas, uint16_t transformOnlyMask);
-  /// Stamp the claimed patched child's current transform on its rendering instance.
-  void restampPatchedChild(Registry& registry,
-                           const std::optional<DirtyEntityInvalidation>& patchedChild);
-  /// Cache invalidations for the frame: the patched child's, captured before its restamp, or a
-  /// fresh capture for the dirty entities the fast path left unhandled.
-  std::vector<DirtyEntityInvalidation> dirtyInvalidationsForFrame(
-      std::optional<DirtyEntityInvalidation> patchedChild,
-      const std::vector<Entity>& unhandledDirtyEntities) const;
   std::optional<Box2d> translatedDamageBounds(Registry& registry, Entity entity) const;
 
   /// Check dirty flags on promoted entities and mark affected layers.
