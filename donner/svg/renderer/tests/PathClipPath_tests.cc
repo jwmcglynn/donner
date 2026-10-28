@@ -96,10 +96,10 @@ TEST(PathClipPath, ReferenceBoxesTranslateWithoutScalingPathCoordinates) {
 
 TEST(PathClipPath, NestedReferenceAndTransformedPathKeepCssWinding) {
   const auto actual = RenderPathScene(R"svg(
-    <clipPath id="clip" clip-rule="nonzero"><g transform="translate(4 8) scale(.75)">
-      <rect width="64" height="64" clip-rule="nonzero"
+    <clipPath id="clip" clip-rule="nonzero">
+      <rect width="64" height="64" clip-rule="nonzero" transform="translate(4 8) scale(.75)"
         style='clip-path:path(evenodd,"M0 0H64V64H0Z M16 16H48V48H16Z") view-box'/>
-    </g></clipPath><g clip-path="inset(4px) view-box">
+    </clipPath><g clip-path="inset(4px) view-box">
       <rect width="64" height="64" fill="red" clip-path="url(#clip)"/>
     </g>)svg");
   const auto expected = RenderPathScene(R"svg(
