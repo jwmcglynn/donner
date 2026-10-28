@@ -8,6 +8,10 @@
 #include <string>
 #include <string_view>
 
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/base/PackagedResource.h"
+#endif
+
 #include "donner/svg/renderer/tests/SvgSuiteRender.h"
 #include "nlohmann/json.hpp"
 
@@ -49,6 +53,18 @@ std::optional<int> readDimension(const nlohmann::json& value) {
     }
   }
   return std::nullopt;
+}
+
+std::optional<std::string> NormalizeFontRoot(const std::string& root) {
+  if (root.empty()) {
+    return root;
+  }
+  std::error_code error;
+  const bool empty = std::filesystem::is_empty(root, error);
+  if (error) {
+    return std::nullopt;
+  }
+  return empty ? std::string() : root;
 }
 
 int runRender(const std::string& requestPath, const std::string& responsePath) {
@@ -96,22 +112,24 @@ int runRender(const std::string& requestPath, const std::string& responsePath) {
   if (!width || !height) {
     return requestError("invalid bounded dimensions");
   }
-  if (!fontRoot.empty()) {
-    std::error_code error;
-    const bool empty = std::filesystem::is_empty(fontRoot, error);
-    if (error) {
-      return requestError("cannot inspect staged font directory");
-    }
-    if (empty) {
-      fontRoot.clear();
-    }
+  const auto normalizedFontRoot = NormalizeFontRoot(fontRoot);
+  if (!normalizedFontRoot) {
+    return requestError("cannot inspect staged font directory");
   }
 
   const std::filesystem::path resourceDir = resourceRoot.empty()
                                                 ? std::filesystem::path(inputPath).parent_path()
                                                 : std::filesystem::path(resourceRoot);
-  const auto rendered = RenderSvgSuiteCase({inputPath, resourceDir, fontRoot, *width, *height,
-                                            std::filesystem::path(requestPath).parent_path()});
+#ifdef DONNER_TEXT_ENABLED
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    return requestError("Packaged resources unavailable: " + resourceError);
+  }
+#endif
+
+  const auto rendered =
+      RenderSvgSuiteCase({inputPath, resourceDir, *normalizedFontRoot, *width, *height,
+                          std::filesystem::path(requestPath).parent_path()});
   if (!rendered.image) {
     return requestError(rendered.error);
   }

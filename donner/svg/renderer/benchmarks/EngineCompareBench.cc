@@ -41,6 +41,10 @@
 #include <mach/mach.h>
 #endif
 
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/base/PackagedResource.h"
+#endif
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -359,19 +363,26 @@ void printAllocation(std::string_view engine, std::string_view phase,
               static_cast<std::uint64_t>(snapshot.freeCalls));
 }
 
-}  // namespace
-
-int main(int argc, char* argv[]) {
-  const Config config = parseArgs(argc, argv);
+bool ValidateConfig(const Config& config) {
   if (config.input.empty()) {
     std::fprintf(stderr,
                  "usage: engine_compare_bench [--backend=geode|tiny-skia] [--iterations=N] "
                  "[--warmup=N] [--output=FILE] [--retained-spans] [--mutate=drag|pan] SVG\n");
-    return 2;
+    return false;
   }
   if (config.backend != "geode" && config.backend != "tiny-skia") {
     std::fprintf(stderr, "unknown backend: %s (expected geode or tiny-skia)\n",
                  config.backend.c_str());
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+int main(int argc, char* argv[]) {
+  const Config config = parseArgs(argc, argv);
+  if (!ValidateConfig(config)) {
     return 2;
   }
   const bool geodeMode = config.backend == "geode";
@@ -382,6 +393,14 @@ int main(int argc, char* argv[]) {
     std::fprintf(stderr, "unable to read SVG: %s\n", config.input.c_str());
     return 2;
   }
+
+#ifdef DONNER_TEXT_ENABLED
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::fprintf(stderr, "Packaged resources unavailable: %s\n", resourceError.c_str());
+    return 1;
+  }
+#endif
 
   // One-time setup, measured separately: Geode initializes a GPU device;
   // TinySkia constructs its renderer (no GPU). Setup does not recur per frame.

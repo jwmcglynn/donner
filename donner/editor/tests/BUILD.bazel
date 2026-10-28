@@ -1,8 +1,11 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_test")
 load(
     "//build_defs:rules.bzl",
     "donner_cc_library",
+    "donner_multi_transitioned_test",
 )
 load(
     "//donner/editor:editor_product_config.bzl",
@@ -1261,7 +1264,7 @@ filegroup(
 donner_cc_binary(
     name = "editor_rnr_gl_replay",
     srcs = ["EditorRnrGlReplay.cc"],
-    data = [
+    data = [":editor_rnr_gl_replay_resources"] + [
         "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
         "geode_drag_zoom_o_pop.rnr",
@@ -1277,6 +1280,7 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        "//donner/base:packaged_resource",
         "//donner/editor/repro:gl_rnr_replay",
     ],
 )
@@ -1852,4 +1856,56 @@ donner_cc_test(
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+packaged_resource_bundle(
+    name = "editor_rnr_gl_replay_resources",
+    output_name = "editor_rnr_gl_replay_impl.assets",
+    resources = ["//donner/editor:editor_resource_bundle"],
+)
+
+py_test(
+    name = "native_repl_resource_delivery_tests_impl",
+    size = "medium",
+    srcs = ["native_editor_resource_delivery_tests.py"],
+    data = ["//donner/editor/app:render_repl"],
+    main = "native_editor_resource_delivery_tests.py",
+    tags = ["manual"],
+    deps = ["//donner/svg/renderer/tests:native_resource_delivery_fixture"],
+)
+
+donner_multi_transitioned_test(
+    name = "native_repl_resource_delivery_tests",
+    size = "medium",
+    dep = ":native_repl_resource_delivery_tests_impl",
+    fixed_args = ["ReplDelivery"],
+    renderer_backend = "tiny_skia",
+    text = "true",
+    text_full = "true",
+)
+
+py_test(
+    name = "native_editor_helper_resource_delivery_tests_impl",
+    size = "medium",
+    srcs = ["native_editor_resource_delivery_tests.py"],
+    data = [
+        ":editor_rnr_gl_replay",
+        "//tools/mcp-servers/editor-control:editor_control_mcp_server",
+    ],
+    main = "native_editor_resource_delivery_tests.py",
+    tags = ["manual"],
+    deps = ["//donner/svg/renderer/tests:native_resource_delivery_fixture"],
+)
+
+donner_multi_transitioned_test(
+    name = "native_editor_helper_resource_delivery_tests",
+    size = "medium",
+    dep = ":native_editor_helper_resource_delivery_tests_impl",
+    fixed_args = [
+        "ReplayDelivery",
+        "McpDelivery",
+    ],
+    renderer_backend = "geode",
+    text = "true",
+    text_full = "true",
 )

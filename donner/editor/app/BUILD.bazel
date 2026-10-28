@@ -4,6 +4,7 @@ The `:render_session` library is fully UI-free and exhaustively testable; the
 binary target layers a stdin/stdout REPL on top.
 """
 
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("//build_defs:rules.bzl", "donner_cc_library", "renderer_backend_compatible_with")
 load(
     "//donner/editor:editor_product_config.bzl",
@@ -51,6 +52,7 @@ donner_cc_library(
 donner_cc_binary(
     name = "render_repl",
     srcs = ["donner_editor_main.cc"],
+    data = [":render_repl_resources"],
     tags = ["codeql_default"],
     target_compatible_with = renderer_backend_compatible_with([
         "tiny_skia",
@@ -60,5 +62,12 @@ donner_cc_binary(
     deps = [
         ":render_session",
         ":render_session_repl",
+        "//donner/base:packaged_resource",
     ],
+)
+
+packaged_resource_bundle(
+    name = "render_repl_resources",
+    output_name = "render_repl_impl.assets",
+    resources = ["//third_party/public-sans:public-sans_resource_files"],
 )

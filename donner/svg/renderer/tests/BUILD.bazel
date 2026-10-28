@@ -1,3 +1,5 @@
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load(
     "//build_defs:rules.bzl",
@@ -1385,8 +1387,13 @@ donner_cc_binary(
     name = "donner_svg2_render_adapter",
     testonly = 1,
     srcs = ["DonnerSvg2RenderAdapter.cc"],
+    data = select({
+        "//donner/svg/renderer:text_enabled": [":donner_svg2_render_adapter_resources"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":svg_suite_render",
+        "//donner/base:packaged_resource",
         "//tools/svg_suite:image_compare",
         "@nlohmann_json//:json",
     ],
@@ -1487,9 +1494,14 @@ donner_cc_binary(
     name = "donner_svg_suite_renderer",
     testonly = 1,
     srcs = ["DonnerSvgSuiteRenderer.cc"],
+    data = select({
+        "//donner/svg/renderer:text_enabled": [":donner_svg_suite_renderer_resources"],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:public"],
     deps = [
         ":svg_suite_render",
+        "//donner/base:packaged_resource",
         "//tools/svg_suite:image_compare",
     ],
 )
@@ -1533,4 +1545,80 @@ donner_cc_test(
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+py_library(
+    name = "native_resource_delivery_fixture",
+    testonly = True,
+    srcs = ["native_resource_delivery_fixture.py"],
+    data = [":svg2_image_compare"],
+    visibility = [
+        "//donner/editor/tests:__pkg__",
+        "//donner/svg/renderer/benchmarks:__pkg__",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
+    name = "native_suite_resource_delivery_tests_impl",
+    size = "medium",
+    srcs = ["native_suite_resource_delivery_tests.py"],
+    data = [
+        ":donner_svg2_render_adapter",
+        ":donner_svg_suite_renderer",
+    ],
+    main = "native_suite_resource_delivery_tests.py",
+    tags = ["manual"],
+    deps = [":native_resource_delivery_fixture"],
+)
+
+donner_multi_transitioned_test(
+    name = "native_suite_resource_delivery_tests",
+    size = "medium",
+    dep = ":native_suite_resource_delivery_tests_impl",
+    renderer_backend = "tiny_skia",
+    text = "true",
+    text_full = "false",
+)
+
+packaged_resource_bundle(
+    name = "donner_svg_suite_renderer_resources",
+    testonly = True,
+    output_name = "donner_svg_suite_renderer.assets",
+    resources = select({
+        "//donner/svg/renderer:text_enabled": ["//third_party/public-sans:public-sans_resource_files"],
+        "//conditions:default": [],
+    }),
+)
+
+packaged_resource_bundle(
+    name = "donner_svg2_render_adapter_resources",
+    testonly = True,
+    output_name = "donner_svg2_render_adapter.assets",
+    resources = select({
+        "//donner/svg/renderer:text_enabled": ["//third_party/public-sans:public-sans_resource_files"],
+        "//conditions:default": [],
+    }),
+)
+
+configured_dependency_audit_test(
+    name = "donner_svg_suite_renderer_no_text_resource_audit",
+    forbidden = [
+        "//donner/svg/renderer/tests:donner_svg_suite_renderer_resources",
+        "//third_party/public-sans:public-sans_resource_files",
+    ],
+    required = ["//donner/svg/renderer/tests:donner_svg_suite_renderer"],
+    target = "//donner/svg/renderer/tests:donner_svg_suite_renderer",
+    text_configuration = "none",
+)
+
+configured_dependency_audit_test(
+    name = "donner_svg2_render_adapter_no_text_resource_audit",
+    forbidden = [
+        "//donner/svg/renderer/tests:donner_svg2_render_adapter_resources",
+        "//third_party/public-sans:public-sans_resource_files",
+    ],
+    required = ["//donner/svg/renderer/tests:donner_svg2_render_adapter"],
+    target = "//donner/svg/renderer/tests:donner_svg2_render_adapter",
+    text_configuration = "none",
 )
