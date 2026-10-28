@@ -352,29 +352,43 @@ enum class TinyPathCloseBehavior : uint8_t {
 
 enum class TinyPathContourClosure : uint8_t { Authored, Implicit };
 
+std::optional<std::size_t> tinyPathVerbCapacity(const Path& spline,
+                                                TinyPathContourClosure contourClosure) {
+  const std::size_t commands = spline.commands().size();
+  if (contourClosure == TinyPathContourClosure::Authored) {
+    return commands;
+  }
+  // Each implicit close has a MoveTo point; clip copies admit C+P work and backing storage.
+  static_assert(sizeof(tiny_skia::PathVerb) <= sizeof(Path::Command));
+  static_assert(sizeof(tiny_skia::Point) + sizeof(tiny_skia::PathVerb) <= sizeof(Vector2d));
+  if (spline.points().size() > std::numeric_limits<std::size_t>::max() - commands) {
+    return std::nullopt;
+  }
+  return commands + spline.points().size();
+}
+
+void closeImplicitContour(tiny_skia::PathBuilder& builder, TinyPathContourClosure contourClosure,
+                          bool hasOpenContour) {
+  if (contourClosure == TinyPathContourClosure::Implicit && hasOpenContour) {
+    builder.close();
+  }
+}
+
 tiny_skia::Path toTinyPath(
     const Path& spline, TinyPathCloseBehavior closeBehavior = TinyPathCloseBehavior::Preserve,
     TinyPathContourClosure contourClosure = TinyPathContourClosure::Authored) {
-  const auto points = spline.points();
-  std::size_t verbsCapacity = spline.commands().size();
-  if (contourClosure == TinyPathContourClosure::Implicit) {
-    // Each implicit close has a MoveTo point. Clip copies already admit C+P work and storage.
-    static_assert(sizeof(tiny_skia::PathVerb) <= sizeof(Path::Command));
-    static_assert(sizeof(tiny_skia::Point) + sizeof(tiny_skia::PathVerb) <= sizeof(Vector2d));
-    if (points.size() > std::numeric_limits<std::size_t>::max() - verbsCapacity) {
-      return {};
-    }
-    verbsCapacity += points.size();
+  const auto verbsCapacity = tinyPathVerbCapacity(spline, contourClosure);
+  if (!verbsCapacity) {
+    return {};
   }
-  tiny_skia::PathBuilder builder(verbsCapacity, points.size());
+  const auto points = spline.points();
+  tiny_skia::PathBuilder builder(*verbsCapacity, points.size());
   bool hasOpenContour = false;
 
   for (const Path::Command& command : spline.commands()) {
     switch (command.verb) {
       case Path::Verb::MoveTo: {
-        if (contourClosure == TinyPathContourClosure::Implicit && hasOpenContour) {
-          builder.close();
-        }
+        closeImplicitContour(builder, contourClosure, hasOpenContour);
         const Vector2d& point = points[command.pointIndex];
         builder.moveTo(NarrowToFloat(point.x), NarrowToFloat(point.y));
         hasOpenContour = true;
@@ -413,9 +427,7 @@ tiny_skia::Path toTinyPath(
       }
     }
   }
-  if (contourClosure == TinyPathContourClosure::Implicit && hasOpenContour) {
-    builder.close();
-  }
+  closeImplicitContour(builder, contourClosure, hasOpenContour);
 
   return builder.finish().value_or(tiny_skia::Path());
 }
