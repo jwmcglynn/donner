@@ -351,6 +351,8 @@ ParseResult<TextDecorationThickness> ParseDecorationThickness(
 
 struct ParsedDecoration {
   TextDecoration lines = TextDecoration::None;
+  TextDecorationStyle style = TextDecorationStyle::Solid;
+  std::optional<css::Color> color;
   TextDecorationThickness thickness;
   bool lineSpecified = false;
   bool thicknessSpecified = false;
@@ -384,17 +386,37 @@ bool ParseDecorationIdent(const RcString& value, ParsedDecoration& parsed) {
   return true;
 }
 
+std::optional<TextDecorationStyle> ParseDecorationStyleKeyword(const RcString& value) {
+  if (value.equalsLowercase("solid")) {
+    return TextDecorationStyle::Solid;
+  }
+  if (value.equalsLowercase("double")) {
+    return TextDecorationStyle::Double;
+  }
+  if (value.equalsLowercase("dotted")) {
+    return TextDecorationStyle::Dotted;
+  }
+  if (value.equalsLowercase("dashed")) {
+    return TextDecorationStyle::Dashed;
+  }
+  if (value.equalsLowercase("wavy")) {
+    return TextDecorationStyle::Wavy;
+  }
+  return std::nullopt;
+}
+
 bool ParseDecorationComponent(const css::ComponentValue& component, ParsedDecoration& parsed,
                               bool allowUserUnits) {
   if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
     if (ParseDecorationIdent(ident->value, parsed)) {
       return true;
     }
-    const auto& value = ident->value;
-    if (value.equalsLowercase("solid") || value.equalsLowercase("double") ||
-        value.equalsLowercase("dotted") || value.equalsLowercase("dashed") ||
-        value.equalsLowercase("wavy")) {
-      return !std::exchange(parsed.styleSpecified, true);
+    if (const auto style = ParseDecorationStyleKeyword(ident->value)) {
+      if (std::exchange(parsed.styleSpecified, true)) {
+        return false;
+      }
+      parsed.style = *style;
+      return true;
     }
   }
   const auto single = std::span(&component, 1);
@@ -407,7 +429,11 @@ bool ParseDecorationComponent(const css::ComponentValue& component, ParsedDecora
     return true;
   }
   const auto color = css::parser::ColorParser::Parse(single);
-  return color.hasResult() && !std::exchange(parsed.colorSpecified, true);
+  if (!color.hasResult() || std::exchange(parsed.colorSpecified, true)) {
+    return false;
+  }
+  parsed.color = color.result();
+  return true;
 }
 
 ParseResult<ParsedDecoration> ParseTextDecoration(std::span<const css::ComponentValue> components,
@@ -423,36 +449,76 @@ ParseResult<ParsedDecoration> ParseTextDecoration(std::span<const css::Component
     }
     any = true;
   }
-  return any && (parsed.lineSpecified || parsed.thicknessSpecified)
-             ? ParseResult<ParsedDecoration>(parsed)
+  // Every component of the shorthand is optional, but at least one must be present.
+  return any ? ParseResult<ParsedDecoration>(parsed)
              : ParseResult<ParsedDecoration>(InvalidDecoration());
+}
+
+/// Parse `text-decoration-line`: `none | [ underline || overline || line-through ]`.
+ParseResult<TextDecoration> ParseDecorationLine(std::span<const css::ComponentValue> components) {
+  ParsedDecoration parsed;
+  bool any = false;
+  for (const auto& component : components) {
+    if (component.isToken<css::Token::Whitespace>()) {
+      continue;
+    }
+    const auto* ident = component.tryGetToken<css::Token::Ident>();
+    if (!ident || !ParseDecorationIdent(ident->value, parsed)) {
+      return InvalidDecoration();
+    }
+    any = true;
+  }
+  return any ? ParseResult<TextDecoration>(parsed.lines)
+             : ParseResult<TextDecoration>(InvalidDecoration());
+}
+
+/// Parse `text-decoration-style`: `solid | double | dotted | dashed | wavy`.
+ParseResult<TextDecorationStyle> ParseDecorationStyle(
+    std::span<const css::ComponentValue> components) {
+  std::optional<TextDecorationStyle> result;
+  for (const auto& component : components) {
+    if (component.isToken<css::Token::Whitespace>()) {
+      continue;
+    }
+    const auto* ident = component.tryGetToken<css::Token::Ident>();
+    if (result || !ident || !(result = ParseDecorationStyleKeyword(ident->value))) {
+      return InvalidDecoration();
+    }
+  }
+  return result ? ParseResult<TextDecorationStyle>(*result)
+                : ParseResult<TextDecorationStyle>(InvalidDecoration());
+}
+
+/// Set one longhand of the `text-decoration` shorthand when the declaration wins the cascade.
+template <typename T, PropertyCascade kCascade>
+void ApplyDecorationLonghand(Property<T, kCascade>& property,
+                             const parser::PropertyParseFnParams& params, std::optional<T> value) {
+  if (property.isSpecified() && params.specificity < property.specificity) {
+    return;
+  }
+  if (params.explicitState != PropertyState::NotSet) {
+    property.set(params.explicitState, params.specificity);
+  } else {
+    property.set(std::move(value), params.specificity);
+  }
 }
 
 std::optional<ParseDiagnostic> ApplyTextDecoration(PropertyRegistry& registry,
                                                    const parser::PropertyParseFnParams& params) {
-  if (params.explicitState != PropertyState::NotSet) {
-    if (!registry.textDecoration.isSpecified() ||
-        params.specificity >= registry.textDecoration.specificity) {
-      registry.textDecoration.set(params.explicitState, params.specificity);
+  // The shorthand sets every longhand; omitted components reset to their initial values.
+  ParsedDecoration values;
+  if (params.explicitState == PropertyState::NotSet) {
+    auto parsed = ParseTextDecoration(params.components(), params.allowUserUnits());
+    if (parsed.hasError()) {
+      return std::move(parsed.error());
     }
-    if (!registry.textDecorationThickness.isSpecified() ||
-        params.specificity >= registry.textDecorationThickness.specificity) {
-      registry.textDecorationThickness.set(params.explicitState, params.specificity);
-    }
-    return std::nullopt;
+    values = parsed.result();
   }
-  const auto parsed = ParseTextDecoration(params.components(), params.allowUserUnits());
-  if (parsed.hasError()) {
-    return parsed.error();
-  }
-  if (!registry.textDecoration.isSpecified() ||
-      params.specificity >= registry.textDecoration.specificity) {
-    registry.textDecoration.set(parsed.result().lines, params.specificity);
-  }
-  if (!registry.textDecorationThickness.isSpecified() ||
-      params.specificity >= registry.textDecorationThickness.specificity) {
-    registry.textDecorationThickness.set(parsed.result().thickness, params.specificity);
-  }
+  ApplyDecorationLonghand(registry.textDecoration, params, std::optional(values.lines));
+  ApplyDecorationLonghand(registry.textDecorationStyle, params, std::optional(values.style));
+  ApplyDecorationLonghand(registry.textDecorationColor, params, values.color);
+  ApplyDecorationLonghand(registry.textDecorationThickness, params,
+                          std::optional(values.thickness));
   return std::nullopt;
 }
 
@@ -2606,6 +2672,33 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        &registry.textAnchor);
                  }},  //
                 {"text-decoration", ApplyTextDecoration},
+                {"text-decoration-line",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& value) {
+                         return ParseDecorationLine(value.components());
+                       },
+                       &registry.textDecoration);
+                 }},
+                {"text-decoration-style",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& value) {
+                         return ParseDecorationStyle(value.components());
+                       },
+                       &registry.textDecorationStyle);
+                 }},
+                {"text-decoration-color",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& value) {
+                         return css::parser::ColorParser::Parse(value.components());
+                       },
+                       &registry.textDecorationColor);
+                 }},
                 {"text-decoration-thickness",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
