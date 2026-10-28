@@ -122,14 +122,15 @@ TEST_F(ShapeSystemTest, InsetGeometryUsesAxisExtentsAndAdmitsBeforeAllocation) {
                    Lengthd(25, Lengthd::Unit::Percent), Lengthd(12.5, Lengthd::Unit::Percent)};
   CircleClipGeometryBudget limited;
   limited.remainingWork = 8;
-  EXPECT_TRUE(shapeSystem.insetClipPath(element->entityHandle(), inset, limited).empty());
-  EXPECT_TRUE(limited.rejected);
+  EXPECT_THAT(shapeSystem.insetClipPath(element->entityHandle(), inset, limited).commands(),
+              testing::IsEmpty());
+  EXPECT_THAT(limited.rejected, testing::IsTrue());
   CircleClipGeometryBudget admitted;
   admitted.remainingWork = 9;
   const Path clip = shapeSystem.insetClipPath(element->entityHandle(), inset, admitted);
-  ASSERT_FALSE(clip.empty());
+  ASSERT_THAT(clip.commands(), testing::Not(testing::IsEmpty()));
   EXPECT_THAT(clip.bounds(), BoxEq(Vector2d(8, 12), Vector2d(56, 36)));
-  EXPECT_FALSE(admitted.rejected);
+  EXPECT_THAT(admitted.rejected, testing::IsFalse());
   EXPECT_EQ(admitted.remainingWork, 0u);
 }
 
@@ -147,7 +148,8 @@ TEST_F(ShapeSystemTest, InsetOversubscriptionAndUnrepresentableCoordinatesAreEmp
     inset.box = RadialClipPath::Box::View;
     inset.offsets.fill(Lengthd(value));
     CircleClipGeometryBudget budget;
-    EXPECT_TRUE(shapeSystem.insetClipPath(element->entityHandle(), inset, budget).empty());
+    EXPECT_THAT(shapeSystem.insetClipPath(element->entityHandle(), inset, budget).commands(),
+                testing::IsEmpty());
   }
 }
 
