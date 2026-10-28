@@ -669,7 +669,7 @@ cc_binary(
         "-gline-tables-only",
         "-fasynchronous-unwind-tables",
     ],
-    features = ["-strip"],
+    features = ["-strip_debug_symbols"],
     linkopts = ["-Wl,--build-id=sha1"],
     target_compatible_with = [
         "@platforms//os:linux",
