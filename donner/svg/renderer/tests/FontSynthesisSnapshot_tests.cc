@@ -61,6 +61,8 @@ struct CapturedStyleGlyph {
   Path directOutline;
   double directAdvance = 0;
   bool allowSyntheticOblique = true;
+  std::optional<FontFaceRequest> directRequest;
+  bool directGenericSans = false;
 
   CapturedStyleGlyph() = default;
   CapturedStyleGlyph(const CapturedStyleGlyph&) = delete;
@@ -71,7 +73,7 @@ struct CapturedStyleGlyph {
 
 CapturedStyleGlyph CaptureStyleGlyph(const FontFamilyProvider* provider, std::string_view family,
                                      FontFaceRequest request, FontSynthesisStyle policy,
-                                     bool rawFace = false) {
+                                     bool rawFace = false, bool requireVariation = false) {
   CapturedStyleGlyph result;
   Registry registry;
   auto& fonts = registry.ctx().emplace<FontManager>(registry);
@@ -108,6 +110,11 @@ CapturedStyleGlyph CaptureStyleGlyph(const FontFamilyProvider* provider, std::st
   const auto& glyph = run.glyphs.front();
   const float scale = engine.scaleForEmToPixels(run.font, run.usedFontSizePx);
   result.directOutline = PlacedGlyphOutline(engine, run.font, run, glyph, scale, 0.1);
+  result.directRequest = fonts.providerFaceRequest(run.font);
+  result.directGenericSans = fonts.isGenericSansProviderFont(run.font);
+  if (requireVariation) {
+    EXPECT_THAT(fonts.sfntTable(run.font, "fvar"), testing::Optional(_));
+  }
   result.directAdvance = glyph.xAdvance;
   result.allowSyntheticOblique = glyph.allowSyntheticOblique;
   auto prepared = std::make_shared<PreparedTextDraw>();
@@ -151,6 +158,9 @@ TEST(FontSynthesisStyleSnapshotTest,
     captured = CaptureStyleGlyph(&provider, "sans-serif", {400, FontStyle::Italic},
                                  FontSynthesisStyle::Auto);
   }
+  ASSERT_THAT(captured.directRequest, testing::Optional(testing::Field(
+                                          "style", &FontFaceRequest::style, FontStyle::Italic)));
+  EXPECT_THAT(captured.directGenericSans, Eq(true));
   const size_t before = *calls;
   EXPECT_THAT(before, testing::Gt(0u));
   ExpectReplayMatchesDirect(captured);
@@ -186,9 +196,11 @@ TEST(FontSynthesisStyleSnapshotTest, NativeWeightAxisSurvivesRawByteRemap) {
   CapturedStyleGlyph captured;
   {
     FontCatalog provider;
-    captured =
-        CaptureStyleGlyph(&provider, "Inter", {700, FontStyle::Normal}, FontSynthesisStyle::None);
+    captured = CaptureStyleGlyph(&provider, "Inter", {700, FontStyle::Normal},
+                                 FontSynthesisStyle::None, false, true);
   }
+  ASSERT_THAT(captured.directRequest,
+              testing::Optional(testing::Field("weight", &FontFaceRequest::weight, 700)));
   ExpectReplayMatchesDirect(captured);
 }
 #endif
