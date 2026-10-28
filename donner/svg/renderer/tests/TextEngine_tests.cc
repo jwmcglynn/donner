@@ -18,10 +18,13 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/SVG.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextBackendFull.h"
 #include "donner/svg/text/TextBackendSimple.h"
@@ -521,6 +524,49 @@ std::string ZeroLengthPenRecord(const std::vector<TextGlyph>& glyphs) {
   return record.str();
 }
 
+void CheckParsedZeroLengthAnchor(bool full, TextAnchor anchor,
+                                 const std::vector<TextGlyph>& expected) {
+  std::ostringstream source;
+  source << "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200' "
+            "font-family='Noto Sans' font-size='48'><text id='t' x='20' y='100' "
+            "textLength='0' text-anchor='"
+         << anchor << "'>Text</text></svg>";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source.str(), warnings);
+  ASSERT_THAT(parsed, ParseResultIs(_));
+  auto document = std::move(parsed).result();
+  const auto target = document.querySelector("#t");
+  ASSERT_THAT(target, testing::Optional(_));
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  const FontHandle font = LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_THAT(font, Not(testing::Eq(FontHandle{})));
+  std::unique_ptr<TextBackend> backend;
+  if (full) {
+    backend = std::make_unique<TextBackendFull>(fonts, registry);
+  } else {
+    backend = std::make_unique<TextBackendSimple>(fonts, registry);
+  }
+  TextEngine engine(fonts, registry, std::move(backend));
+  const auto handle = target->unsafeEntityHandle();
+  engine.prepareForElement(handle, warnings);
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(handle);
+  ASSERT_THAT(geometry.runs, ElementsAre(RunGlyphsAre(SizeIs(expected.size()))));
+  EXPECT_THAT(geometry.runs[0].font, testing::Eq(font));
+  EXPECT_THAT(geometry.runs[0].glyphs,
+              Each(Field("font", &TextGlyph::font,
+                         testing::AnyOf(testing::Eq(FontHandle{}), testing::Eq(font)))));
+  for (size_t index = 0; index < expected.size(); ++index) {
+    EXPECT_THAT(geometry.runs[0].glyphs[index].xPosition,
+                DoubleNear(expected[index].xPosition, 1e-8));
+    EXPECT_THAT(geometry.runs[0].glyphs[index].xAdvance,
+                DoubleNear(expected[index].xAdvance, 1e-8));
+  }
+  std::ostringstream name;
+  name << (full ? "full_" : "basic_") << anchor << "_parsed_pens_advances";
+  testing::Test::RecordProperty(name.str(), ZeroLengthPenRecord(geometry.runs[0].glyphs));
+}
+
 TEST(TextEngineTest, ZeroTextLengthAnchorsNotoSansUsingCompressedPenExtents) {
   for (bool full : {false, true}) {
     SCOPED_TRACE(full);
@@ -544,6 +590,11 @@ TEST(TextEngineTest, ZeroTextLengthAnchorsNotoSansUsingCompressedPenExtents) {
     params.fontFamilies = {RcString("Noto Sans")};
     const auto natural = engine.layout(text, params);
     ASSERT_THAT(natural, ElementsAre(RunGlyphsAre(SizeIs(4))));
+    EXPECT_THAT(natural[0].font, testing::Eq(font));
+    EXPECT_THAT(natural[0].glyphs.front().xPosition, DoubleNear(20, 1e-9));
+    EXPECT_THAT(natural[0].glyphs,
+                Each(Field("font", &TextGlyph::font,
+                           testing::AnyOf(testing::Eq(FontHandle{}), testing::Eq(font)))));
     auto compressed = natural[0].glyphs;
     const double naturalLength = compressed.back().xPosition + compressed.back().xAdvance - 20;
     const double gap = -naturalLength / 3;
@@ -579,6 +630,7 @@ TEST(TextEngineTest, ZeroTextLengthAnchorsNotoSansUsingCompressedPenExtents) {
       std::ostringstream name;
       name << prefix << anchor << "_pens_advances";
       RecordProperty(name.str(), ZeroLengthPenRecord(actual[0].glyphs));
+      CheckParsedZeroLengthAnchor(full, anchor, actual[0].glyphs);
     }
   }
 }
