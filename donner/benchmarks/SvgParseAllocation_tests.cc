@@ -1,6 +1,7 @@
 /// @file
 /// @brief C++ allocation and peak-live-requested-byte ceilings for SVG parsing.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -18,6 +19,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/benchmarks/SvgParseAllocationTracker.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 
 namespace donner::benchmarks {
 namespace {
@@ -209,6 +211,39 @@ TEST(AllocationTrackerTest, RejectsOverlappingScopes) {
         parse_allocations::Scope second;
       },
       "");
+}
+
+TEST(SvgParseAllocationTest, PathClipDrawStopsCopyingAfterGeometryRefusal) {
+  std::string data = "M0 0";
+  for (int i = 0; i < 2000; ++i) {
+    data += "H1V1H0V0";
+  }
+  std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+      "<g style='clip-path:path(\"" +
+      data + "\") view-box'>";
+  for (int i = 0; i < 128; ++i) {
+    source += "<rect width='64' height='64' clip-path='inherit'/>";
+  }
+  source += "</g></svg>";
+  svg::RendererTinySkia renderer;
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto warm = SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect width='1' height='1'/></svg>", warnings);
+  ASSERT_THAT(warm.hasResult(), testing::IsTrue());
+  auto warmDocument = std::move(warm).result();
+  warmDocument.setCanvasSize(64, 64);
+  renderer.draw(warmDocument);
+  auto parsed = SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(parsed.hasResult(), testing::IsTrue());
+  auto document = std::move(parsed).result();
+  document.setCanvasSize(64, 64);
+  parse_allocations::Scope scope;
+  renderer.draw(document);
+  const Snapshot snapshot = scope.stop();
+  PrintSnapshot("path_clip_draw", snapshot);
+  // Includes style preparation and rasterization, with headroom above admitted path storage.
+  EXPECT_LE(snapshot.allocationBytes, 64u * 1024u * 1024u);
 }
 
 TEST(SvgParseAllocationTest, RepeatedAttributes) {
