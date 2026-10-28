@@ -66,6 +66,22 @@ struct FontFace {
   /// Optional second weight endpoint. Absence means the scalar fontWeight value.
   std::optional<int> fontWeightMaximum;
 
+  /// Optional width endpoints in percent (100 means normal), overriding fontStretch when valid.
+  /// A single percentage uses equal endpoints; absence preserves the legacy named-width field.
+  std::optional<std::pair<double, double>> fontStretchPercentRange;
+
+  /**
+   * Convert a legacy named width to its CSS percentage: normal (5) becomes 100.0.
+   *
+   * @param stretch Named-width ordinal, clamped to 1 (ultra-condensed) through 9 (ultra-expanded).
+   * @return The corresponding percentage, from 50.0 through 200.0.
+   */
+  static double fontStretchPercentage(int stretch);
+
+  /// Return ordered, inclusive width percentages. Invalid programmatic ranges (negative or
+  /// non-finite endpoints) fall back to fontStretch. Zero is canonicalized to positive zero.
+  std::pair<double, double> normalizedFontStretchRange() const;
+
   /// Return ordered, inclusive endpoints. Programmatic endpoints are clamped to 1-1000;
   /// parsed out-of-range descriptors are rejected before constructing a face.
   std::pair<int, int> normalizedFontWeightRange() const;
@@ -76,14 +92,15 @@ struct FontFace {
  *
  * Two declarations produce the same key exactly when they would select the same face and resolve
  * to the same bytes: the matching descriptors (family, compared case-insensitively, plus normalized
- * weight range, style, and stretch) together with the ordered source list, including each source's
- * kind, trust, format and technology hints, and payload identity. Inline data payloads are
- * immutable and shared by pointer, so the pointer value identifies the bytes as long as something
- * holds a reference to them; the key is only meaningful while its holder keeps that reference
- * alive.
+ * weight range, style, and normalized width range) together with the ordered source list, including
+ * each source's kind, trust, format and technology hints, and payload identity. Inline data
+ * payloads are immutable and shared by pointer, so the pointer value identifies the bytes as long
+ * as something holds a reference to them; the key is only meaningful while its holder keeps that
+ * reference alive.
  *
  * Weight endpoints use their normalized values, so a scalar and the equivalent single-point
- * range share an identity. Every variable-length field is length-prefixed, so a separator character
+ * range share an identity. Width keywords and equivalent percentage ranges also share an identity.
+ * Every variable-length field is length-prefixed, so a separator character
  * appearing inside a family name, hint, or URL cannot make two different declarations produce one
  * key.
  *

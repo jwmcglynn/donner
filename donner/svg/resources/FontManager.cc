@@ -65,12 +65,17 @@ std::string ToLowerAscii(std::string_view value) {
   return lowered;
 }
 
-using FontMatchScore = std::tuple<int, int64_t, int, int, int64_t>;
+using FontMatchScore = std::tuple<int, double, int, int, int64_t>;
 
-std::pair<int, int64_t> FontWidthRank(int actual, int requested) {
-  const int64_t delta = static_cast<int64_t>(actual) - requested;
-  const bool preferred = requested <= 5 ? actual <= requested : actual >= requested;
-  return {preferred ? 0 : 1, delta < 0 ? -delta : delta};
+std::pair<int, double> FontWidthRank(const css::FontFace& face, int requestedWidth) {
+  const double requested = css::FontFace::fontStretchPercentage(requestedWidth);
+  const auto [minimum, maximum] = face.normalizedFontStretchRange();
+  if (minimum <= requested && requested <= maximum) {
+    return {0, 0};
+  }
+  const bool narrower = maximum < requested;
+  const bool preferred = requested <= 100 ? narrower : !narrower;
+  return {preferred ? 1 : 2, narrower ? requested - maximum : minimum - requested};
 }
 
 int FontStyleRank(int actual, int requested) {
@@ -104,7 +109,7 @@ std::pair<int, int64_t> FontWeightRank(const css::FontFace& face, int requested)
 }
 
 FontMatchScore RankFontFace(const css::FontFace& face, int weight, int style, int stretch) {
-  const auto [widthDirection, widthDistance] = FontWidthRank(face.fontStretch, stretch);
+  const auto [widthDirection, widthDistance] = FontWidthRank(face, stretch);
   const auto [weightDirection, weightDistance] = FontWeightRank(face, weight);
   // Filter by width before style, then by weight. Numeric weight distance cannot outweigh
   // a better width/style match, even when a declaration covers a wide weight interval.
@@ -594,6 +599,7 @@ FontHandle FontManager::findFont(std::string_view family, int weight) {
 
 FontHandle FontManager::findFont(std::string_view family, int weight, int style, int stretch) {
   weight = std::clamp(weight, 1, 1000);
+  stretch = std::clamp(stretch, 1, 9);
   // Resolve CSS generic family names to real family names.
   const std::string familyLower = ToLowerAscii(family);
   if (auto it = genericFamilyMap_.find(familyLower); it != genericFamilyMap_.end()) {

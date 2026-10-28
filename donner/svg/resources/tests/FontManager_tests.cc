@@ -1017,6 +1017,71 @@ TEST(FontManagerTest, NumericWidthDistancePrecedesWeight) {
   EXPECT_THAT(manager.findFont("TestFont", 400, 0, 7), testing::Eq(expected));
 }
 
+TEST(FontManagerTest, OverlappingWidthRangesSelectLatestAndRetainIdentity) {
+  Registry registry;
+  FontManager manager(registry);
+  css::FontFace outer = MakeEmbeddedFace("TestFont");
+  outer.fontStretchPercentRange = std::pair{50.0, 200.0};
+  manager.addFontFace(outer);
+  const FontHandle outerHandle = manager.findFont("TestFont", 400, 0, 1);
+  ASSERT_THAT(static_cast<bool>(outerHandle), testing::IsTrue());
+  css::FontFace inner = outer;
+  inner.fontStretchPercentRange = std::pair{75.0, 125.0};
+  manager.addFontFace(inner);
+  const FontHandle innerHandle = manager.findFont("TestFont", 400, 0, 5);
+  ASSERT_THAT(static_cast<bool>(innerHandle), testing::IsTrue());
+  EXPECT_THAT(innerHandle, testing::Ne(outerHandle));
+  EXPECT_THAT(manager.findFont("TestFont", 400, 0, 3), testing::Eq(innerHandle));
+  EXPECT_THAT(manager.findFont("TestFont", 400, 0, 7), testing::Eq(innerHandle));
+  EXPECT_THAT(manager.findFont("TestFont", 400, 0, 9), testing::Eq(outerHandle));
+  manager.addFontFace(inner);
+  EXPECT_THAT(manager.findFont("TestFont", 400, 0, 5), testing::Eq(innerHandle));
+}
+
+TEST(FontManagerTest, WidthPercentagesFollowDirectionalFallback) {
+  struct Case {
+    int requested;
+    double preferred;
+    double other;
+  };
+  const std::array<Case, 2> cases = {{{5, 90, 101}, {7, 150, 124}}};
+  for (const auto& value : cases) {
+    SCOPED_TRACE(value.requested);
+    Registry registry;
+    FontManager manager(registry);
+    css::FontFace preferred = MakeEmbeddedFace("TestFont");
+    preferred.fontStretchPercentRange = std::pair{value.preferred, value.preferred};
+    manager.addFontFace(preferred);
+    const FontHandle expected = manager.findFont("TestFont", 400, 0, value.requested);
+    ASSERT_THAT(static_cast<bool>(expected), testing::IsTrue());
+    css::FontFace other = preferred;
+    other.fontStretchPercentRange = std::pair{value.other, value.other};
+    manager.addFontFace(other);
+    EXPECT_THAT(manager.findFont("TestFont", 400, 0, value.requested), testing::Eq(expected));
+  }
+}
+
+TEST(FontManagerTest, PublicWidthRequestsClampBeforeProviderLookup) {
+  Registry registry;
+  FontManager manager(registry);
+  VariantFontProvider provider("ProviderFamily");
+  manager.setFontProvider(&provider);
+  const FontHandle narrow =
+      manager.findFont("ProviderFamily", 400, 0, std::numeric_limits<int>::min());
+  const FontHandle wide =
+      manager.findFont("ProviderFamily", 400, 0, std::numeric_limits<int>::max());
+  ASSERT_THAT(static_cast<bool>(narrow), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(wide), testing::IsTrue());
+  EXPECT_THAT(manager.fontData(narrow).size(),
+              testing::Eq(VariantFontProvider::SizeFor(
+                  FontFaceRequest{.stretch = FontStretch::UltraCondensed})));
+  EXPECT_THAT(manager.fontData(wide).size(),
+              testing::Eq(VariantFontProvider::SizeFor(
+                  FontFaceRequest{.stretch = FontStretch::UltraExpanded})));
+  EXPECT_THAT(manager.findFont("ProviderFamily", 400, 0, 1), testing::Eq(narrow));
+  EXPECT_THAT(manager.findFont("ProviderFamily", 400, 0, 9), testing::Eq(wide));
+}
+
 TEST(FontManagerTest, MatchingFiltersWidthBeforeStyle) {
   Registry registry;
   FontManager manager(registry);
