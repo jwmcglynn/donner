@@ -29,7 +29,7 @@ void appendField(std::string& key, std::string_view value) {
 void AppendPercentageField(std::string& key, double percentage) {
   std::array<char, 64> buffer{};
   const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), percentage);
-  assert(result.ec == std::errc{});
+  assert(result.ec == std::errc{} && "Finite percentage fits the formatting buffer");
   appendField(key, std::string_view(buffer.data(), result.ptr - buffer.data()));
 }
 
@@ -54,7 +54,7 @@ std::string toLowerAscii(std::string_view value) {
 
 }  // namespace
 
-double FontFace::fontStretchPercentage(int stretch) {
+double FontFace::FontStretchPercentage(int stretch) {
   constexpr std::array<double, 9> kWidths = {50, 62.5, 75, 87.5, 100, 112.5, 125, 150, 200};
   return kWidths[std::clamp(stretch, 1, 9) - 1];
 }
@@ -68,7 +68,7 @@ std::pair<double, double> FontFace::normalizedFontStretchRange() const {
       return {minimum == 0 ? 0.0 : minimum, maximum == 0 ? 0.0 : maximum};
     }
   }
-  const double width = fontStretchPercentage(fontStretch);
+  const double width = FontStretchPercentage(fontStretch);
   return {width, width};
 }
 

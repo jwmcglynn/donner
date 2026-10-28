@@ -159,10 +159,10 @@ TEST(FontFaceIdentityKeyTest, InvalidPublicWidthRangesFallBackToNamedWidth) {
 TEST(FontFaceIdentityKeyTest, NamedWidthPercentagesUseCssMappingAndClamp) {
   constexpr std::array<double, 9> kPercentages = {50, 62.5, 75, 87.5, 100, 112.5, 125, 150, 200};
   for (int width = 1; width <= 9; ++width) {
-    EXPECT_THAT(FontFace::fontStretchPercentage(width), testing::Eq(kPercentages[width - 1]));
+    EXPECT_THAT(FontFace::FontStretchPercentage(width), testing::Eq(kPercentages[width - 1]));
   }
-  EXPECT_THAT(FontFace::fontStretchPercentage(std::numeric_limits<int>::min()), testing::Eq(50.0));
-  EXPECT_THAT(FontFace::fontStretchPercentage(std::numeric_limits<int>::max()), testing::Eq(200.0));
+  EXPECT_THAT(FontFace::FontStretchPercentage(std::numeric_limits<int>::min()), testing::Eq(50.0));
+  EXPECT_THAT(FontFace::FontStretchPercentage(std::numeric_limits<int>::max()), testing::Eq(200.0));
 }
 
 TEST(FontFaceIdentityKeyTest, EachSourceFieldSeparatesDeclarations) {

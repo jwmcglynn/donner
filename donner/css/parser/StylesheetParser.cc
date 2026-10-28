@@ -391,7 +391,7 @@ std::optional<ParsedFontFaceWidth> ParseFontFaceWidth(const ComponentValue& valu
       "ultra-condensed", "extra-condensed", "condensed",      "semi-condensed", "normal",
       "semi-expanded",   "expanded",        "extra-expanded", "ultra-expanded"};
   if (const auto keyword = ParseFontFaceKeyword(value, kWidths, 1)) {
-    return ParsedFontFaceWidth{FontFace::fontStretchPercentage(*keyword), *keyword};
+    return ParsedFontFaceWidth{FontFace::FontStretchPercentage(*keyword), *keyword};
   }
   return std::nullopt;
 }

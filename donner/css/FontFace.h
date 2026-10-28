@@ -76,7 +76,7 @@ struct FontFace {
    * @param stretch Named-width ordinal, clamped to 1 (ultra-condensed) through 9 (ultra-expanded).
    * @return The corresponding percentage, from 50.0 through 200.0.
    */
-  static double fontStretchPercentage(int stretch);
+  static double FontStretchPercentage(int stretch);
 
   /// Return ordered, inclusive width percentages. Invalid programmatic ranges (negative or
   /// non-finite endpoints) fall back to fontStretch. Zero is canonicalized to positive zero.

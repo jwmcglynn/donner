@@ -68,7 +68,7 @@ std::string ToLowerAscii(std::string_view value) {
 using FontMatchScore = std::tuple<int, double, int, int, int64_t>;
 
 std::pair<int, double> FontWidthRank(const css::FontFace& face, int requestedWidth) {
-  const double requested = css::FontFace::fontStretchPercentage(requestedWidth);
+  const double requested = css::FontFace::FontStretchPercentage(requestedWidth);
   const auto [minimum, maximum] = face.normalizedFontStretchRange();
   if (minimum <= requested && requested <= maximum) {
     return {0, 0};
