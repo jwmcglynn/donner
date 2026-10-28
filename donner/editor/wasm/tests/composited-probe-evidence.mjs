@@ -14,6 +14,52 @@ export function normalizePresentationDeviceLoss(loss) {
 }
 
 /**
+ * What the editor's own completed presentation frames say about a drag ordering candidate.
+ *
+ * Each probe sample keeps the editor's last completed presentation frame (`presentedFrame`: frame
+ * id, represented pointer and serials). A candidate is a readback that moved against the drag. If
+ * the editor's completed frame went backwards over the same pair of samples, by frame id or by the
+ * pointer position it represents, the editor presented the older position. If the editor's frame
+ * held or advanced along the drag, only the readback went back: the read-back path returned an
+ * older image than the editor had already completed.
+ *
+ * @param {ReadonlyArray<{presentedFrame?: object | null}>} samples The probe's samples.
+ * @param {{predecessorIndex: number, sampleIndex: number, pointerDx: number,
+ *   pointerDy: number}} regression The candidate, with the drag direction over its interval.
+ * @returns {{predecessor: object | null, sample: object | null, frameIdDelta: number | null,
+ *   representedPointerAlongDrag: number | null,
+ *   verdict: "editor-frame-went-backwards" | "readback-only" | "no-editor-frame"}}
+ */
+export function presentedFrameOrdering(samples, regression) {
+  const predecessor = samples[regression.predecessorIndex]?.presentedFrame ?? null;
+  const sample = samples[regression.sampleIndex]?.presentedFrame ?? null;
+  if (predecessor === null || sample === null) {
+    return {
+      predecessor,
+      sample,
+      frameIdDelta: null,
+      representedPointerAlongDrag: null,
+      verdict: "no-editor-frame",
+    };
+  }
+  const frameIdDelta = sample.frameId - predecessor.frameId;
+  const dragLength = Math.hypot(regression.pointerDx, regression.pointerDy);
+  // How far the represented pointer moved along the drag, CSS px; negative is against it.
+  const representedPointerAlongDrag = dragLength > 0
+    ? ((sample.pointerX - predecessor.pointerX) * regression.pointerDx
+      + (sample.pointerY - predecessor.pointerY) * regression.pointerDy) / dragLength
+    : 0;
+  const wentBackwards = frameIdDelta < 0 || representedPointerAlongDrag < 0;
+  return {
+    predecessor,
+    sample,
+    frameIdDelta,
+    representedPointerAlongDrag,
+    verdict: wentBackwards ? "editor-frame-went-backwards" : "readback-only",
+  };
+}
+
+/**
  * Stop sampling and preserve the collected window before any assertion.
  * @param {import("@playwright/test").Page} page
  * @param {import("@playwright/test").TestInfo} testInfo

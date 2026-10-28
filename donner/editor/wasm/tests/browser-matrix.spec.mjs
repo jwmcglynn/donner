@@ -885,6 +885,149 @@ test("composited probe evidence retains presentation loss only when published", 
   }
 });
 
+test("drag candidates say whether the editor's completed frame or only the readback went back", async () => {
+  const { presentedFrameOrdering } = await import("./composited-probe-evidence.mjs");
+  const frame = (frameId, pointerX, pointerY) => ({
+    frameId,
+    captureId: 1,
+    pointerX,
+    pointerY,
+    inputRepresented: true,
+    completedSerial: frameId * 3,
+    submittedSerial: frameId * 3 + 1,
+    deviceCompletedSerial: frameId * 3,
+    completedAtMs: frameId * 16,
+  });
+  // The drag moves right over the candidate's interval.
+  const candidate = { predecessorIndex: 0, sampleIndex: 1, pointerDx: 10, pointerDy: 0 };
+  const ordering = (before, after) =>
+    presentedFrameOrdering([{ presentedFrame: before }, { presentedFrame: after }], candidate);
+
+  const advanced = ordering(frame(40, 100, 50), frame(41, 108, 50));
+  assert.equal(advanced.verdict, "readback-only");
+  assert.equal(advanced.frameIdDelta, 1);
+  assert.equal(advanced.representedPointerAlongDrag, 8);
+  assert.deepEqual(advanced.predecessor, frame(40, 100, 50), "serials stay with each frame");
+  assert.equal(ordering(frame(40, 100, 50), frame(40, 100, 50)).verdict, "readback-only");
+  assert.equal(
+    ordering(frame(41, 108, 50), frame(40, 100, 50)).verdict,
+    "editor-frame-went-backwards",
+    "a smaller frame id is the editor's completed frame going back",
+  );
+  assert.equal(
+    ordering(frame(40, 108, 50), frame(41, 100, 50)).verdict,
+    "editor-frame-went-backwards",
+    "a newer frame that represents a pointer behind the last one is the editor going back",
+  );
+  const missing = ordering(null, frame(41, 108, 50));
+  assert.equal(missing.verdict, "no-editor-frame");
+  assert.equal(missing.frameIdDelta, null);
+  assert.equal(
+    presentedFrameOrdering([{}, {}], candidate).verdict,
+    "no-editor-frame",
+    "samples from before the probe kept frames still classify",
+  );
+});
+
+test("composited probe samples keep the editor's completed frame for failure output", () => {
+  const probe = readFileSync(path.join(testDirectory, "composited-probe.ts"), "utf8");
+  const sampleOnce = /const sampleOnce = \(\): CapturedSample => \{[\s\S]*?\n {4}\};\n/.exec(probe)?.[0];
+  assert.ok(sampleOnce, "the probe must define sampleOnce");
+  assert.match(sampleOnce, /const presentedFrame = readPresentedFrame\(\);/);
+  // Both the failed and the measured sample carry it.
+  assert.equal(sampleOnce.match(/\n {8,10}presentedFrame,\n/g)?.length, 2);
+  assert.match(probe, /__donnerPresentationQueueStats/);
+  const spec = readFileSync(path.join(testDirectory, "composited-drag-invariants.spec.ts"), "utf8");
+  const ordering = spec.indexOf("presentedFrameOrdering(result.samples, violation)");
+  const verdict = spec.indexOf("samples presented an OLDER frame than one already shown");
+  assert.ok(ordering !== -1 && verdict > ordering, "the ordering verdict must carry the frames");
+});
+
+test("startup phases name a pre-navigation stall instead of the wait it starved", async () => {
+  const {
+    describePreNavigationStall,
+    kPreNavigationStallShare,
+    kStartupPhases,
+    startupPhaseReport,
+    startupWaitMessage,
+  } = await import("./startup-phases.mjs");
+  assert.equal(kStartupPhases[0], "testStart");
+  const wait = "expected Geode to present the editor's first frame";
+  const start = 1_000_000;
+  // The observed failure: navigation began 29.3 s into a 30 s case.
+  const stalled = {
+    testStart: start,
+    openEditor: start + 29_250,
+    gotoStart: start + 29_300,
+    gotoEnd: start + 29_420,
+    wasmStartAllowed: start + 29_450,
+    firstFrameWaitStart: start + 29_460,
+  };
+  const message = startupWaitMessage(stalled, 30_000, wait, start + 29_460);
+  assert.equal(
+    message,
+    "pre-navigation stall: 29.3 s of the 30.0 s test budget passed before navigation started"
+      + " (test start to openEditor 29.3 s, openEditor to navigation 0.1 s);"
+      + " 0.5 s of the budget was left when this wait started: " + wait,
+  );
+  const report = startupPhaseReport(stalled, 30_000, {
+    navigationTimeOrigin: start + 29_310,
+    now: start + 30_200,
+  });
+  assert.equal(report.preNavigationStall, true);
+  assert.equal(report.preNavigationMs, 29_300);
+  assert.equal(report.navigationTimeOriginMs, 29_310);
+  assert.equal(report.reportedAtMs, 30_200);
+  assert.deepEqual(Object.keys(report.sinceTestStartMs), Object.keys(stalled));
+
+  // Every passing run reached navigation 0.5-2.1 s after the previous case ended.
+  const prompt = { testStart: start, openEditor: start + 40, gotoStart: start + 2_100 };
+  assert.equal(startupWaitMessage(prompt, 30_000, wait, start + 2_500), wait);
+  assert.equal(describePreNavigationStall(startupPhaseReport(prompt, 30_000)), null);
+  const threshold = 30_000 * kPreNavigationStallShare;
+  assert.equal(
+    startupPhaseReport({ testStart: start, gotoStart: start + threshold }, 30_000)
+      .preNavigationStall,
+    true,
+  );
+
+  // A case that never navigated spent everything up to the report before navigation.
+  const never = startupPhaseReport({ testStart: start }, 30_000, { now: start + 30_100 });
+  assert.equal(never.preNavigationMs, 30_100);
+  assert.match(describePreNavigationStall(never), /\(openEditor was never reached\)$/);
+  // A case without marks (its spec does not keep them) keeps the wait's own message.
+  assert.equal(startupWaitMessage({}, 30_000, wait), wait);
+});
+
+test("openEditor marks each startup phase before the wait it starts", () => {
+  const smokeTest = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
+  const start = smokeTest.indexOf("async function openEditor(");
+  const body = smokeTest.slice(start, smokeTest.indexOf("\n}\n", start));
+  const order = [
+    "markStartupPhase(testInfo, \"openEditor\")",
+    "markStartupPhase(testInfo, \"gotoStart\")",
+    "await page.goto(",
+    "markStartupPhase(testInfo, \"gotoEnd\")",
+    "startupWait(testInfo, \"expected browser capabilities to permit Wasm startup\")",
+    "markStartupPhase(testInfo, \"wasmStartAllowed\")",
+    "markStartupPhase(testInfo, \"firstFrameWaitStart\")",
+    "startupWait(testInfo, \"expected Geode to present the editor's first frame\")",
+    "markStartupPhase(testInfo, \"firstFramePresented\")",
+  ].map((needle) => [needle, body.indexOf(needle)]);
+  for (const [needle, index] of order) assert.notEqual(index, -1, needle);
+  assert.deepEqual(
+    order.map(([needle]) => needle),
+    [...order].sort((left, right) => left[1] - right[1]).map(([needle]) => needle),
+  );
+  const evidence = readFileSync(path.join(testDirectory, "failure-canvas-evidence.ts"), "utf8");
+  const install = evidence.indexOf("export function installFailureCanvasEvidence(");
+  assert.match(
+    evidence.slice(install),
+    /test\.beforeEach\(\(\) => \{\n {4}startupMarks\.set\(test\.info\(\)\.testId, \{ testStart: Date\.now\(\) \}\);/,
+    "the first mark must come from a hook that sets up no fixture",
+  );
+});
+
 test("drag failure readbacks are archived after sampling with exact frame identities", async () => {
   const { attachCompositedReadbacks } = await import("./composited-probe-evidence.mjs");
   const temporary = mkdtempSync(path.join(tmpdir(), "donner-readback-evidence-"));

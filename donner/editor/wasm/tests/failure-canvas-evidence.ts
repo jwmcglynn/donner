@@ -1,5 +1,6 @@
 import type { Page, test as baseTest, TestInfo } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
+import { startupPhaseReport, startupWaitMessage } from "./startup-phases.mjs";
 
 /**
  * Failure-time evidence for cases that can capture a blank editor page.
@@ -27,6 +28,11 @@ import { writeFile } from "node:fs/promises";
  * An armed case also keeps the fatal console messages and uncaught page errors its page reports
  * (an Emscripten abort, a worker error), with stacks, and takes the same GPU state snapshot as the
  * first one arrives, since an abort can end the worker that would otherwise answer at capture.
+ *
+ * Every case of a spec that installs the hook also keeps the times its startup phases began
+ * (startup-phases.mjs). A failed case prints them and an armed one keeps them in its evidence, so
+ * a deadline that a stall before navigation consumed is reported as that stall, not as the wait
+ * that happened to be running when the deadline arrived.
  */
 
 /** Bound for each evidence step. */
@@ -38,6 +44,29 @@ export const kFailureEvidenceBudgetMs = 3 * kFailureEvidenceStepMs;
 const kReadbackMaxEdge = 1600;
 
 const armedPages = new Map<string, Page>();
+/** Startup phase marks of the running cases, epoch milliseconds, keyed by test id. */
+const startupMarks = new Map<string, Record<string, number>>();
+
+/**
+ * Record that the running case entered a startup phase (kStartupPhases in startup-phases.mjs).
+ *
+ * @param testInfo The case's test info.
+ * @param phase The phase that starts now.
+ */
+export function markStartupPhase(testInfo: TestInfo, phase: string): void {
+  const marks = startupMarks.get(testInfo.testId);
+  if (marks !== undefined) marks[phase] = Date.now();
+}
+
+/**
+ * A startup wait's message, led by the pre-navigation stall when one consumed the case's budget.
+ *
+ * @param testInfo The case's test info.
+ * @param waitMessage What the wait expects.
+ */
+export function startupWait(testInfo: TestInfo, waitMessage: string): string {
+  return startupWaitMessage(startupMarks.get(testInfo.testId) ?? {}, testInfo.timeout, waitMessage);
+}
 
 /** Console and page errors that signal a fatal runtime failure, as the specs' own filters do. */
 const kFatalMessage =
@@ -158,12 +187,14 @@ async function readWorkerGpuState(page: EvidencePage, stepMs: number): Promise<u
  * @param testInfo The failed case's test info.
  * @param stepMs Bound for each step.
  * @param fatal The fatal messages the armed case's page reported, if any.
+ * @param marks The case's startup phase marks, if it kept any.
  */
 export async function captureFailureCanvasEvidence(
   page: EvidencePage,
   testInfo: TestInfo,
   stepMs = kFailureEvidenceStepMs,
   fatal?: FatalRecord,
+  marks?: Record<string, number>,
 ): Promise<void> {
   const record: Record<string, unknown> = { stepMs };
   const startedAt = Date.now();
@@ -193,6 +224,16 @@ export async function captureFailureCanvasEvidence(
     stepMs,
   );
   record.presentation = state;
+  if (marks !== undefined) {
+    // Navigation's own start, on the page clock, places the page's age against the case's phases.
+    const navigationTimeOrigin = typeof state === "object" && "timeOrigin" in state
+      ? state.timeOrigin
+      : null;
+    record.startupPhases = startupPhaseReport(marks, testInfo.timeout, {
+      navigationTimeOrigin,
+      now: startedAt,
+    });
+  }
   const workers = await workersAnswer;
   record.workers = typeof state === "object" && "timeOrigin" in state
     ? workersOnPageClock(workers, state.timeOrigin)
@@ -368,15 +409,28 @@ async function snapshotGpuState(page: EvidencePage, stepMs: number): Promise<unk
  * @param test The spec's test object.
  */
 export function installFailureCanvasEvidence(test: typeof baseTest): void {
+  // Registered before the spec's own hooks, and requesting no fixtures, so it runs before the
+  // page is set up: the first mark is as close to the start of the case's budget as a hook gets.
+  test.beforeEach(() => {
+    startupMarks.set(test.info().testId, { testStart: Date.now() });
+  });
   test.afterEach(async () => {
     const testInfo = test.info();
     const page = armedPages.get(testInfo.testId);
     const fatal = fatalRecords.get(testInfo.testId);
+    const marks = startupMarks.get(testInfo.testId);
     armedPages.delete(testInfo.testId);
     fatalRecords.delete(testInfo.testId);
-    if (page === undefined || testInfo.status === testInfo.expectedStatus) return;
+    startupMarks.delete(testInfo.testId);
+    if (testInfo.status === testInfo.expectedStatus) return;
+    if (marks !== undefined) {
+      console.log(`failure-startup-phases ${
+        JSON.stringify(startupPhaseReport(marks, testInfo.timeout))
+      }`);
+    }
+    if (page === undefined) return;
     try {
-      await captureFailureCanvasEvidence(page, testInfo, kFailureEvidenceStepMs, fatal);
+      await captureFailureCanvasEvidence(page, testInfo, kFailureEvidenceStepMs, fatal, marks);
     } catch (error) {
       console.error(`failure canvas evidence capture failed: ${String(error)}`);
     }
