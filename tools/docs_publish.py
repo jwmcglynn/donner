@@ -18,28 +18,45 @@ from tools import docs_site as site
 from tools import docs_store as store
 from tools import pages_artifact
 from tools import release_candidate as candidate
+from tools.ci import github_rate_limit
 
 WORKFLOW = ".github/workflows/deploy_docs.yaml"
 SITE_URL = "https://jwmcglynn.github.io/donner/"
 
 
+def _gh(argv: list[str], stream=None, **kwargs) -> subprocess.CompletedProcess:
+    """Runs `gh`, repeating a rate-limited request after the reset (bounded, then fails).
+
+    `stream` is an output file that is rewound before each attempt.
+    """
+    def restart() -> None:
+        if stream is not None:
+            stream.seek(0)
+            stream.truncate()
+    try:
+        return github_rate_limit.run_gh(argv, runner=subprocess.run, prepare=restart,
+                                        echo_stderr=False, label="docs " + " ".join(argv[1:3]),
+                                        timeout=180, **({"stdout": stream} if stream else {}),
+                                        **kwargs)
+    except github_rate_limit.RateLimitExhausted as error:
+        raise ValueError(str(error)) from None
+
+
 def github_json(*args: str) -> dict:
-    result = subprocess.run(["gh", "api", *args], capture_output=True, text=True,
-                            timeout=180, check=True)
+    result = _gh(["gh", "api", *args], stdout=subprocess.PIPE, text=True)
     site.require(len(result.stdout) <= store.MAX_CONTROL, "GitHub JSON is oversized")
     return json.loads(result.stdout)
 
 
 def download(artifact_id: int, output: Path) -> None:
     with output.open("wb") as stream:
-        subprocess.run(["gh", "api", f"{store.REPO}/actions/artifacts/{artifact_id}/zip"],
-                       stdout=stream, stderr=subprocess.PIPE, timeout=180, check=True)
+        _gh(["gh", "api", f"{store.REPO}/actions/artifacts/{artifact_id}/zip"], stream)
     site.require(output.stat().st_size <= site.MAX_SITE, "artifact is oversized")
 
 
 def _attestation_command(args: list[str], stdout) -> None:
     try:
-        subprocess.run(args, stdout=stdout, stderr=subprocess.PIPE, timeout=180, check=True)
+        _gh(args, stdout)
     except subprocess.CalledProcessError as error:
         diagnostic = error.stderr or b""
         tokens = {os.environ.get(name, "") for name in

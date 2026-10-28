@@ -67,6 +67,7 @@ jobs:
           lfs: false
           sparse-checkout: |
             tools/ci/gatekeeper.py
+            tools/ci/github_rate_limit.py
             .github/actions/pr-trust
           sparse-checkout-cone-mode: false
 
