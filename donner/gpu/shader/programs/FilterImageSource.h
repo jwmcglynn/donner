@@ -45,7 +45,9 @@ fn cubicWeight(inputValue: f32) -> f32 {
     return (((((((12f - (9f * b)) - (6f * b)) * ((distance * distance) * distance)) + (((-18f + (12f * b)) + (6f * b)) * (distance * distance))) + (0f * distance)) + (6f - (2f * b))) / 6f);
   }
   if ((distance < 2f)) {
-    return (((((((-1f * b) - (6f * b)) * ((distance * distance) * distance)) + (((6f * b) + (30f * b)) * (distance * distance))) + (((-12f * b) - (48f * b)) * distance)) + ((8f * b) + (24f * b))) / 6f);
+    // Factoring at the support edge avoids cancellation in the expanded cubic.
+    let t = (2f - distance);
+    return ((t * t) * ((((b / 6f) + b) * t) - b));
   }
   return 0f;
 }
