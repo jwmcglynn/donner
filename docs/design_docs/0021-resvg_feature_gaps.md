@@ -203,19 +203,26 @@ content. The comparison remains gated pending background and typography referenc
 An independently authored inline-versus-external text-fragment comparison covers host style
 inheritance, fragment selection, the callback identifier and transparent canvas behavior.
 
-## CSS circle clipping
+## CSS radial clipping
 
-`clip-path: circle()` supports length, percentage and `closest-side`/`farthest-side` radii, CSS positions,
+`clip-path: circle()` and `ellipse()` support length, percentage and
+`closest-side`/`farthest-side` radii, CSS positions,
 and fill/stroke/view reference boxes. Default SVG border boxes use stroke geometry. Reference
 geometry includes image occurrences and horizontal text, including hidden glyphs for stroke bounds.
 Work admission precedes path scans and glyph outline decoding. Vertical text fill/stroke reference
 boxes are currently refused; viewport-based circles remain available. This does not claim a hard
 allocation bound inside the existing text shaper.
 
-Both renderers apply circles to entire groups and preserve them during retained masked-child drag.
+Both renderers apply radial shapes to entire groups and preserve them during retained masked-child drag.
 Independent live-bitmap comparisons cover boxes, nested clips, occurrence styles, images, text spans,
 non-scaling strokes and style mutation; CSS declaration lengths require units while presentation
 attributes retain user units.
+
+Ellipse radii resolve independently: horizontal percentages use reference width and vertical
+percentages use reference height. A zero radius on either axis produces an empty clip. The
+`circle_clip_path_tests` and `properties_tests` targets cover ellipse parsing, reference boxes,
+independent axis resolution, transformed/nested clips and invalid declaration fallback. Inset,
+polygon and path CSS clipping functions remain unsupported.
 
 The plain `circle-shorthand.svg` comparison is restored. The stroke-box and view-box PNGs use an
 opaque white backdrop, while Donner's RGBA API retains transparency outside painted content.

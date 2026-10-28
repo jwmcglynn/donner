@@ -544,6 +544,17 @@ double CircleRadius(const CircleClipPath& circle, const Box2d& box, double x, do
              : *std::max_element(distances.begin(), distances.end());
 }
 
+double EllipseRadius(RadialClipPath::Radius type, const Lengthd& radius, const Box2d& box,
+                     const FontMetrics& metrics, Lengthd::Extent axis, double position) {
+  if (type == RadialClipPath::Radius::Length) {
+    return radius.toPixels(box, metrics, axis);
+  }
+  const double size = axis == Lengthd::Extent::X ? box.width() : box.height();
+  return type == RadialClipPath::Radius::ClosestSide
+             ? std::min(std::abs(position), std::abs(size - position))
+             : std::max(std::abs(position), std::abs(size - position));
+}
+
 bool IsFiniteCircle(const Vector2d& center, double radius) {
   return radius > 0.0 && std::isfinite(center.x - radius) && std::isfinite(center.x + radius) &&
          std::isfinite(center.y - radius) && std::isfinite(center.y + radius);
@@ -877,6 +888,39 @@ Path ShapeSystem::circleClipPath(EntityHandle handle, const CircleClipPath& circ
     return {};
   }
   Path result = PathBuilder(32).addCircle(center, radius).build();
+  if (!ReservePathGeometry(&budget, result)) {
+    return {};
+  }
+  return result;
+}
+
+Path ShapeSystem::ellipseClipPath(EntityHandle handle, const EllipseClipPath& ellipse,
+                                  CircleClipGeometryBudget& budget) {
+  if (budget.rejected) {
+    return {};
+  }
+  const std::optional<Box2d> box = getCircleReferenceBox(handle, ellipse.box, budget);
+  const auto* style = handle.try_get<ComputedStyleComponent>();
+  if (!box || !style || !style->properties) {
+    return {};
+  }
+  const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
+  const double offsetX = ellipse.x.offset.toPixels(*box, metrics, Lengthd::Extent::X);
+  const double offsetY = ellipse.y.offset.toPixels(*box, metrics, Lengthd::Extent::Y);
+  const double x = ellipse.x.fromFarEdge ? box->width() - offsetX : offsetX;
+  const double y = ellipse.y.fromFarEdge ? box->height() - offsetY : offsetY;
+  const double rx =
+      EllipseRadius(ellipse.radiusXType, ellipse.radiusX, *box, metrics, Lengthd::Extent::X, x);
+  const double ry =
+      EllipseRadius(ellipse.radiusYType, ellipse.radiusY, *box, metrics, Lengthd::Extent::Y, y);
+  const Vector2d center = box->topLeft + Vector2d(x, y);
+  if (rx <= 0.0 || ry <= 0.0 || !std::isfinite(center.x - rx) || !std::isfinite(center.x + rx) ||
+      !std::isfinite(center.y - ry) || !std::isfinite(center.y + ry)) {
+    return {};
+  }
+  Path result = PathBuilder(32)
+                    .addEllipse(Box2d(center - Vector2d(rx, ry), center + Vector2d(rx, ry)))
+                    .build();
   if (!ReservePathGeometry(&budget, result)) {
     return {};
   }

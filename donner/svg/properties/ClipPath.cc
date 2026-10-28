@@ -10,11 +10,11 @@ namespace donner::svg {
 namespace {
 
 using Component = css::ComponentValue;
-using Position = CircleClipPath::Position;
+using Position = RadialClipPath::Position;
 
-ParseDiagnostic InvalidCircle() {
+ParseDiagnostic InvalidShape() {
   ParseDiagnostic error;
-  error.reason = "Invalid circle clip-path";
+  error.reason = "Invalid basic shape clip-path";
   return error;
 }
 
@@ -23,17 +23,17 @@ bool IsIdent(const Component& component, std::string_view expected) {
   return ident && ident->value.equalsLowercase(expected);
 }
 
-std::optional<CircleClipPath::Box> ReferenceBox(const Component& component) {
+std::optional<RadialClipPath::Box> ReferenceBox(const Component& component) {
   if (IsIdent(component, "fill-box") || IsIdent(component, "content-box") ||
       IsIdent(component, "padding-box")) {
-    return CircleClipPath::Box::Fill;
+    return RadialClipPath::Box::Fill;
   }
   if (IsIdent(component, "stroke-box") || IsIdent(component, "border-box") ||
       IsIdent(component, "margin-box")) {
-    return CircleClipPath::Box::Stroke;
+    return RadialClipPath::Box::Stroke;
   }
   if (IsIdent(component, "view-box")) {
-    return CircleClipPath::Box::View;
+    return RadialClipPath::Box::View;
   }
   return std::nullopt;
 }
@@ -48,7 +48,7 @@ std::optional<Lengthd> FiniteLength(const Component& component, bool allowUserUn
 
 /// Fixed storage bounds both the argument grammar and its allocation cost.
 struct Arguments {
-  std::array<const Component*, 6> values{};
+  std::array<const Component*, 7> values{};
   std::size_t size = 0;
 
   bool append(std::span<const Component> components) {
@@ -89,7 +89,7 @@ std::optional<Position> SimplePosition(const Component& component, int axis, boo
   return std::nullopt;
 }
 
-bool ParseSinglePosition(const Component& argument, CircleClipPath& circle, bool allowUserUnits) {
+bool ParseSinglePosition(const Component& argument, RadialClipPath& circle, bool allowUserUnits) {
   const int axis = PositionAxis(argument) == 1 ? 1 : 0;
   const auto position = SimplePosition(argument, axis, allowUserUnits);
   if (!position) {
@@ -99,7 +99,7 @@ bool ParseSinglePosition(const Component& argument, CircleClipPath& circle, bool
   return true;
 }
 
-bool ParseSimplePosition(std::span<const Component* const> args, CircleClipPath& circle,
+bool ParseSimplePosition(std::span<const Component* const> args, RadialClipPath& circle,
                          bool allowUserUnits) {
   if (args.size() == 1) {
     return ParseSinglePosition(*args[0], circle, allowUserUnits);
@@ -119,7 +119,7 @@ bool ParseSimplePosition(std::span<const Component* const> args, CircleClipPath&
   return true;
 }
 
-bool ParseEdgePosition(std::span<const Component* const> args, CircleClipPath& circle,
+bool ParseEdgePosition(std::span<const Component* const> args, RadialClipPath& circle,
                        bool allowUserUnits) {
   std::array<std::optional<Position>, 2> positions;
   bool center = false;
@@ -154,18 +154,19 @@ bool ParseEdgePosition(std::span<const Component* const> args, CircleClipPath& c
   return true;
 }
 
-bool ParseRadius(const Component& radius, CircleClipPath& circle, bool allowUserUnits) {
+bool ParseRadius(const Component& radius, RadialClipPath::Radius& type, Lengthd& value,
+                 bool allowUserUnits) {
   if (IsIdent(radius, "closest-side")) {
-    circle.radiusType = CircleClipPath::Radius::ClosestSide;
+    type = RadialClipPath::Radius::ClosestSide;
   } else if (IsIdent(radius, "farthest-side")) {
-    circle.radiusType = CircleClipPath::Radius::FarthestSide;
+    type = RadialClipPath::Radius::FarthestSide;
   } else {
     const auto length = FiniteLength(radius, allowUserUnits);
     if (!length || length->value < 0) {
       return false;
     }
-    circle.radiusType = CircleClipPath::Radius::Length;
-    circle.radius = *length;
+    type = RadialClipPath::Radius::Length;
+    value = *length;
   }
   return true;
 }
@@ -178,7 +179,7 @@ bool ParseCircleArguments(const css::Function& function, CircleClipPath& circle,
   }
   std::size_t next = 0;
   if (next < args.size && !IsIdent(*args.values[next], "at")) {
-    if (!ParseRadius(*args.values[next++], circle, allowUserUnits)) {
+    if (!ParseRadius(*args.values[next++], circle.radiusType, circle.radius, allowUserUnits)) {
       return false;
     }
   }
@@ -194,51 +195,102 @@ bool ParseCircleArguments(const css::Function& function, CircleClipPath& circle,
                               : ParseEdgePosition(position, circle, allowUserUnits);
 }
 
+bool ParseEllipseArguments(const css::Function& function, EllipseClipPath& ellipse,
+                           bool allowUserUnits) {
+  Arguments args;
+  if (!args.append(function.values)) {
+    return false;
+  }
+  std::size_t next = 0;
+  if (args.size && !IsIdent(*args.values[0], "at")) {
+    if (args.size < 2 ||
+        !ParseRadius(*args.values[0], ellipse.radiusXType, ellipse.radiusX, allowUserUnits) ||
+        !ParseRadius(*args.values[1], ellipse.radiusYType, ellipse.radiusY, allowUserUnits)) {
+      return false;
+    }
+    next = 2;
+  }
+  if (next == args.size) {
+    return true;
+  }
+  if (!IsIdent(*args.values[next++], "at") || next == args.size) {
+    return false;
+  }
+  const auto position = std::span(args.values).subspan(next, args.size - next);
+  return position.size() <= 2 ? ParseSimplePosition(position, ellipse, allowUserUnits)
+                              : ParseEdgePosition(position, ellipse, allowUserUnits);
+}
+
+void PrintRadius(std::ostream& os, RadialClipPath::Radius type, const Lengthd& radius) {
+  if (type == RadialClipPath::Radius::Length) {
+    os << radius;
+  } else {
+    os << (type == RadialClipPath::Radius::ClosestSide ? "closest-side" : "farthest-side");
+  }
+}
+
 }  // namespace
 
-ParseResult<ClipPath> ParseCircleClipPath(std::span<const Component> components,
-                                          bool allowUserUnits) {
+ParseResult<ClipPath> ParseBasicShapeClipPath(std::span<const Component> components,
+                                              bool allowUserUnits) {
   Arguments args;
   if (!args.append(components) || args.size == 0 || args.size > 2) {
-    return InvalidCircle();
+    return InvalidShape();
   }
-  CircleClipPath circle;
+  RadialClipPath::Box box = RadialClipPath::Box::Stroke;
   const css::Function* function = nullptr;
   for (std::size_t i = 0; i < args.size; ++i) {
     if (args.values[i]->is<css::Function>()) {
       const auto& candidate = args.values[i]->get<css::Function>();
-      if (function || !candidate.name.equalsLowercase("circle")) {
-        return InvalidCircle();
+      if (function || (!candidate.name.equalsLowercase("circle") &&
+                       !candidate.name.equalsLowercase("ellipse"))) {
+        return InvalidShape();
       }
       function = &candidate;
-    } else if (const auto box = ReferenceBox(*args.values[i])) {
-      circle.box = *box;
+    } else if (const auto referenceBox = ReferenceBox(*args.values[i])) {
+      box = *referenceBox;
     } else {
-      return InvalidCircle();
+      return InvalidShape();
     }
   }
-  if (!function || !ParseCircleArguments(*function, circle, allowUserUnits)) {
-    return InvalidCircle();
+  if (!function) {
+    return InvalidShape();
   }
-  return ClipPath(circle);
+  if (function->name.equalsLowercase("ellipse")) {
+    EllipseClipPath ellipse;
+    ellipse.box = box;
+    return ParseEllipseArguments(*function, ellipse, allowUserUnits)
+               ? ParseResult<ClipPath>(ClipPath(ellipse))
+               : ParseResult<ClipPath>(InvalidShape());
+  }
+  CircleClipPath circle;
+  circle.box = box;
+  return ParseCircleArguments(*function, circle, allowUserUnits)
+             ? ParseResult<ClipPath>(ClipPath(circle))
+             : ParseResult<ClipPath>(InvalidShape());
 }
 
 std::ostream& operator<<(std::ostream& os, const ClipPath& clip) {
   if (const auto* reference = std::get_if<Reference>(&clip.value)) {
     return os << *reference;
   }
-  const auto& circle = std::get<CircleClipPath>(clip.value);
-  os << "circle(";
-  if (circle.radiusType == CircleClipPath::Radius::Length) {
-    os << circle.radius;
+  const RadialClipPath* shape;
+  if (const auto* circle = std::get_if<CircleClipPath>(&clip.value)) {
+    shape = circle;
+    os << "circle(";
+    PrintRadius(os, circle->radiusType, circle->radius);
   } else {
-    os << (circle.radiusType == CircleClipPath::Radius::ClosestSide ? "closest-side"
-                                                                    : "farthest-side");
+    const auto& ellipse = std::get<EllipseClipPath>(clip.value);
+    shape = &ellipse;
+    os << "ellipse(";
+    PrintRadius(os, ellipse.radiusXType, ellipse.radiusX);
+    os << ' ';
+    PrintRadius(os, ellipse.radiusYType, ellipse.radiusY);
   }
-  os << " at " << (circle.x.fromFarEdge ? "right " : "left ") << circle.x.offset << ' '
-     << (circle.y.fromFarEdge ? "bottom " : "top ") << circle.y.offset << ") ";
-  return os << (circle.box == CircleClipPath::Box::Fill     ? "fill-box"
-                : circle.box == CircleClipPath::Box::Stroke ? "stroke-box"
+  os << " at " << (shape->x.fromFarEdge ? "right " : "left ") << shape->x.offset << ' '
+     << (shape->y.fromFarEdge ? "bottom " : "top ") << shape->y.offset << ") ";
+  return os << (shape->box == RadialClipPath::Box::Fill     ? "fill-box"
+                : shape->box == RadialClipPath::Box::Stroke ? "stroke-box"
                                                             : "view-box");
 }
 

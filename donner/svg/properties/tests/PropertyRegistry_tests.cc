@@ -2000,7 +2000,24 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
 TEST(PropertyRegistry, EllipseClipParsingAndInvalidDeclarationFallback) {
   PropertyRegistry valid;
   valid.parseStyle("clip-path:ellipse(8px 4px at right 2px bottom 3px) fill-box");
-  EXPECT_TRUE(valid.clipPath.get().has_value());
+  EllipseClipPath expected;
+  expected.box = RadialClipPath::Box::Fill;
+  expected.radiusXType = RadialClipPath::Radius::Length;
+  expected.radiusYType = RadialClipPath::Radius::Length;
+  expected.radiusX = Lengthd(8, Lengthd::Unit::Px);
+  expected.radiusY = Lengthd(4, Lengthd::Unit::Px);
+  expected.x = {Lengthd(2, Lengthd::Unit::Px), true};
+  expected.y = {Lengthd(3, Lengthd::Unit::Px), true};
+  EXPECT_THAT(valid.clipPath.get(), Optional(ClipPath(expected)));
+
+  PropertyRegistry presentation;
+  EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "ellipse(8 4)"), NoParseError());
+  expected.box = RadialClipPath::Box::Stroke;
+  expected.radiusX = Lengthd(8);
+  expected.radiusY = Lengthd(4);
+  expected.x = {};
+  expected.y = {};
+  EXPECT_THAT(presentation.clipPath.get(), Optional(ClipPath(expected)));
   for (const std::string_view invalid :
        {"ellipse(4px)", "ellipse(-1px 2px)", "ellipse(1px -2px)", "ellipse(1px 2px 3px)",
         "ellipse(1px 2px at)", "ellipse(1px 2px at left right)", "ellipse(1px 2px) garbage",
@@ -2085,7 +2102,7 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
     PropertyRegistry registry;
     css::Declaration declaration = css::CSS::ParseStyleAttribute("clip-path: invalid").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
-                ParseErrorIs("Invalid circle clip-path"));
+                ParseErrorIs("Invalid basic shape clip-path"));
   }
 
   {

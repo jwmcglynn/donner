@@ -57,7 +57,8 @@ TEST(EllipseClipPath, RadiusKeywordsAndEdgeOffsets) {
 TEST(EllipseClipPath, StrokeAndViewReferenceBoxes) {
   ExpectCircleReference("ellipse() stroke-box", "<ellipse cx='28' cy='28' rx='24' ry='20'/>",
                         "<rect x='8' y='12' width='40' height='32' fill='red' "
-                        "stroke='blue' stroke-width='8'/>", "ellipse_stroke_box");
+                        "stroke='blue' stroke-width='8'/>",
+                        "ellipse_stroke_box");
   ExpectCircleReference("view-box ellipse(25% 12.5% at 50% 50%)",
                         "<ellipse cx='32' cy='32' rx='16' ry='8'/>",
                         "<rect width='64' height='64' fill='red'/>", "ellipse_view_box");
@@ -66,7 +67,7 @@ TEST(EllipseClipPath, StrokeAndViewReferenceBoxes) {
 TEST(EllipseClipPath, ZeroRadiusSuppressesWholeGroup) {
   for (const auto clip : {"ellipse(0 8px)", "ellipse(8px 0)"}) {
     const auto actual = RenderCircleScene("<g clip-path='" + std::string(clip) +
-        "'><rect width='64' height='64' fill='red'/></g>");
+                                          "'><rect width='64' height='64' fill='red'/></g>");
     editor::tests::CompareBitmapToBitmap(actual, RenderCircleScene(""), "ellipse_zero_radius",
                                          editor::tests::PixelmatchIdentityParams());
   }
@@ -79,6 +80,24 @@ TEST(EllipseClipPath, NestedClipChildIntersectsItsGeometry) {
       <rect width="64" height="64" fill="red" clip-path="url(#clip)"/>)svg");
   const auto expected = RenderCircleScene("<ellipse cx='18' cy='28' rx='8' ry='4' fill='red'/>");
   editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_nested_clip_child",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(EllipseClipPath, TransformedNestedGroupAndStylesheet) {
+  const auto actual = RenderCircleScene(R"svg(
+      <style>.clip { clip-path: ellipse(12px 8px at 24px 28px) view-box; }</style>
+      <g transform="translate(8 4)" class="clip">
+        <g clip-path="circle(12px at 28px 28px) view-box">
+          <rect width="64" height="64" fill="red"/>
+        </g>
+      </g>)svg");
+  const auto expected = RenderCircleScene(R"svg(
+      <clipPath id="outer"><ellipse cx="24" cy="28" rx="12" ry="8"/></clipPath>
+      <clipPath id="inner"><circle cx="28" cy="28" r="12"/></clipPath>
+      <g transform="translate(8 4)" clip-path="url(#outer)">
+        <g clip-path="url(#inner)"><rect width="64" height="64" fill="red"/></g>
+      </g>)svg");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "ellipse_transformed_nested_group",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
