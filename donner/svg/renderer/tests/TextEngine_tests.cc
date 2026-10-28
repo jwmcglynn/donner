@@ -7,9 +7,11 @@
 #include <cmath>
 #include <cstddef>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <tuple>
 #include <vector>
 
@@ -508,6 +510,77 @@ TEST(TextEngineHelperTest, ApplyTextLengthAdjustsGlobalSpacing) {
   EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(10.0)),
                                                          GlyphXPositionIs(DoubleEq(30.0)))),
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(50.0))))));
+}
+
+std::string ZeroLengthPenRecord(const std::vector<TextGlyph>& glyphs) {
+  std::ostringstream record;
+  record << std::setprecision(17);
+  for (const auto& glyph : glyphs) {
+    record << "[" << glyph.xPosition << "," << glyph.xAdvance << "]";
+  }
+  return record.str();
+}
+
+TEST(TextEngineTest, ZeroTextLengthAnchorsNotoSansUsingCompressedPenExtents) {
+  for (bool full : {false, true}) {
+    SCOPED_TRACE(full);
+    Registry registry;
+    FontManager fonts(registry);
+    const FontHandle font = LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Noto Sans");
+    ASSERT_THAT(font, Not(testing::Eq(FontHandle{})));
+    std::unique_ptr<TextBackend> backend;
+    if (full) {
+      backend = std::make_unique<TextBackendFull>(fonts, registry);
+    } else {
+      backend = std::make_unique<TextBackendSimple>(fonts, registry);
+    }
+    TextEngine engine(fonts, registry, std::move(backend));
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("Text");
+    span.xList = {Lengthd(20)};
+    span.yList = {Lengthd(100)};
+    text.spans.push_back(span);
+    auto params = MakeTextParams(48);
+    params.fontFamilies = {RcString("Noto Sans")};
+    const auto natural = engine.layout(text, params);
+    ASSERT_THAT(natural, ElementsAre(RunGlyphsAre(SizeIs(4))));
+    auto compressed = natural[0].glyphs;
+    const double naturalLength = compressed.back().xPosition + compressed.back().xAdvance - 20;
+    const double gap = -naturalLength / 3;
+    double minimum = 20;
+    double maximum = 20;
+    for (size_t index = 0; index < compressed.size(); ++index) {
+      auto& glyph = compressed[index];
+      glyph.xPosition += gap * static_cast<double>(index);
+      minimum = std::min({minimum, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
+      maximum = std::max({maximum, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
+    }
+    EXPECT_THAT(compressed.back().xPosition + compressed.back().xAdvance, DoubleNear(20, 1e-9));
+    EXPECT_THAT(minimum, DoubleNear(compressed.back().xPosition, 1e-9));
+    EXPECT_THAT(20 - minimum, DoubleNear(compressed.back().xAdvance, 1e-9));
+    const std::string prefix = full ? "full_" : "basic_";
+    RecordProperty(prefix + "natural_pens_advances", ZeroLengthPenRecord(natural[0].glyphs));
+    RecordProperty(prefix + "compressed_pens_advances", ZeroLengthPenRecord(compressed));
+    text.spans[0].textLength = Lengthd(0);
+    for (TextAnchor anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
+      SCOPED_TRACE(anchor);
+      text.spans[0].textAnchor = anchor;
+      params.textAnchor = anchor;
+      const auto actual = engine.layout(text, params);
+      ASSERT_THAT(actual, ElementsAre(RunGlyphsAre(SizeIs(4))));
+      const double alignment = anchor == TextAnchor::Middle ? minimum / 2 + maximum / 2
+                               : anchor == TextAnchor::End  ? maximum
+                                                            : minimum;
+      for (size_t index = 0; index < compressed.size(); ++index) {
+        EXPECT_THAT(actual[0].glyphs[index].xPosition,
+                    DoubleNear(compressed[index].xPosition + 20 - alignment, 1e-9));
+        EXPECT_THAT(actual[0].glyphs[index].xAdvance, DoubleEq(compressed[index].xAdvance));
+      }
+      std::ostringstream name;
+      name << prefix << anchor << "_pens_advances";
+      RecordProperty(name.str(), ZeroLengthPenRecord(actual[0].glyphs));
+    }
+  }
 }
 
 TEST(TextEngineHelperTest, ApplyTextLengthAcceptsZeroGlobalSpacing) {
