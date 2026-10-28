@@ -461,6 +461,26 @@ export async function installCompositedProbe(
         backingHeight: surface.height,
         completedResults,
         presentedDocumentWidth,
+        // Diagnostic only: the editor's last completed presentation frame and the pointer it
+        // represents, to separate an older frame the editor presented from an older read-back.
+        presentedFrame: (() => {
+          const queue = (window as unknown as {
+            __donnerPresentationQueueStats?: {
+              frameId?: number;
+              pointerX?: number;
+              pointerY?: number;
+              completedSerial?: number;
+              completedAtMs?: number;
+            };
+          }).__donnerPresentationQueueStats;
+          return queue === undefined ? null : {
+            frameId: queue.frameId,
+            pointerX: queue.pointerX,
+            pointerY: queue.pointerY,
+            completedSerial: queue.completedSerial,
+            completedAtMs: queue.completedAtMs,
+          };
+        })(),
       };
 
       if (!(sourceWidth >= 1) || !(sourceHeight >= 1)) {

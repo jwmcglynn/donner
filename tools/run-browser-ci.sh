@@ -354,6 +354,16 @@ run_lane() {
   fi
 }
 
+# DIAGNOSTIC BRANCH ONLY: repeat the Firefox drag-ordering case and stop.
+run_lane "firefox-drag-ordering-diagnostic" \
+  bash donner/editor/wasm/tests/run_tests.sh --headed \
+  --config=playwright.composited-firefox.config.js \
+  --grep "never presents a position it already left" --repeat-each=30
+if [[ -d "${kFailureArchiveDir}" ]]; then
+  find "${kFailureArchiveDir}" -name composited-probe.json -path '*already-left*' | sort | head -100
+fi
+exit "${overall_status}"
+
 # Chromium runs every spec in the tests directory EXCEPT the composited specs,
 # which the default config ignores: their per-rAF composited sampler starves
 # under SwiftShader, so they run on the platform GPU via their own configs
