@@ -2,7 +2,8 @@
 
 `MODULE.bazel` supplies Donner's semantic version. `tools/doxygen.sh` exports it to Doxygen,
 checks the generated page headers, and records it with the source commit in `docs-version.json`.
-Main pushes retain source documentation builds; they do not publish the site.
+Main pushes retain source documentation builds. Once the first versioned site is initialized, a
+successful main build automatically composes and publishes a development-docs update.
 
 The public site contains `/0.8.0/` and `/main/`. Release documentation stays bound to its tag;
 `main` names a development channel and displays its underlying module version and source commit.
@@ -10,29 +11,63 @@ The root is a compatibility copy of the latest stable version, preserving existi
 Each version has its own search index, assets and reports. The selector preserves a page and
 section when they exist in the target version, with an explained index fallback otherwise.
 
+## Automatic development documentation
+
+`build_docs.yaml` retains main-push source builds. The separate `deploy_docs.yaml` listens for
+`Build documentation` completion and starts assembly only for a successful push build of this repository's
+`main` branch. The source attempt, workflow, repository and commit are independently checked
+through GitHub. The read-only assembly job cannot publish or write the archive branch. It retains
+one normalized complete tar, a signed composition record and the signature bundle. Packing places
+unchanged release/root content first, development content next and changing metadata last; upload
+stores those exact tar bytes without recreating the archive.
+
+The separate `github-pages-main` publisher checks that handoff belongs to its exact workflow
+run/attempt and commit, verifies both signatures and downloaded tar, then binds the current live
+composition and fresh archive-branch tip after acquiring publication serialization. Its signed
+assembly base remains provenance; the retained publication plan names the current prior/recovery
+site and the exact compare-and-swap target used for writes. The Pages API explicitly names the
+same environment as the job.
+
+Automatic publication requires an initialized current site, no bootstrap and exactly the currently
+published release roster. It cannot activate a release retained by an unfinished manual promotion.
+The incoming main source must descend from the published source; an identical or older source is
+skipped. Unknown history, changed releases, changed archive state or ambiguous deployment outcomes
+stop mutation. Recovery after an unhealthy cutover uses the verified prior complete site; elective
+rollback remains manual.
+
+The publisher listens only to the separate source-build workflow. Its own manual or automatic
+completion does not trigger another publication run. GitHub rejects workflows that listen to
+themselves; the workflow policy test rejects that invalid configuration before publication.
+
 ## One-time setup
 
-Configure the existing `github-pages` environment with required maintainer approval, no
-administrator bypass, and exactly one deployment branch policy for `main` (not tags). The writer
+Configure the existing `github-pages` environment with its sole repository-owner reviewer and exactly
+one deployment branch policy for `main` (not tags). Administrator bypass may be enabled or
+disabled; the writer requires an explicit setting and uses the normal deployment path. Configure
+`github-pages-main` separately with no required reviewers or wait timer and exactly one selected
+`main` branch rule. Neither environment needs a new secret. The writer
 reads these protections before every data-branch update and Pages POST, including rollback and
-recovery, and blocks until setup is complete. All writes
-are manual dispatches on `main`; the publication request approves the named candidate and
+recovery, and blocks until setup is complete. Manual release changes, initial migration and elective rollback
+use dispatches on `main`; their publication request approves the named candidate and
 recovery to the verified prior composition if the candidate cuts over and fails health checks.
 Do not approve a request whose candidate or prior identity has changed.
 
 Create an active repository ruleset matching `docs-snapshots` that prevents deletion and
 non-fast-forward updates. The storage writer checks these effective rules before creating or
 updating that branch. The branch is a data-only store, not a Pages source or executable checkout.
-It contains compressed original release archives, complete-site archives split into chunks of
-at most 40 MiB, manifests and attestation verification evidence. Storage survives Actions expiry.
+It contains compressed original release archives, complete-site archives, manifests and
+attestation verification evidence. New archives use independently compressed 16 MiB raw-tar chunks
+with compressed/raw hashes and a final complete-archive digest. Identical chunks are reused; old
+whole-stream archive descriptors remain readable. Each stored blob is bounded to 40 MiB. Storage survives Actions expiry.
 Every reused release archive is checked against its independently signed release-candidate
 record and canonical tag. A self-consistent forged archive/index cannot replace those signed
 source bytes. The signed prior composition also prevents removal or replacement of an existing
 release. Existing immutable objects cannot be replaced by this writer. Current and prior healthy compositions are kept;
 cleanup is a separately reviewed maintenance operation.
 
-Inventory every Pages writer and keep repository Pages settings in Actions/workflow mode. Only
-the `deploy` job in `deploy_docs.yaml` publishes, serialized by `pages-publish`. The old `record`
+Inventory every Pages writer and keep repository Pages settings in Actions/workflow mode. The manual `deploy` and automatic `auto-deploy` jobs in `deploy_docs.yaml` publish complete
+sites, serialized by the shared `pages-publish` group. Active transactions are never cancelled;
+GitHub may replace an older pending publication with a newer pending request. The old `record`
 and single-site `rollback` dispatch forms are retired: a release candidate record selects a
 source for composition, never a standalone deployment that could erase other versions.
 

@@ -2,7 +2,11 @@ import type { Page } from "@playwright/test";
 import { installCompositedPixelClassifier } from "./composited-pixel-classifier.mjs";
 
 export { installCompositedPixelClassifier } from "./composited-pixel-classifier.mjs";
-export { attachCompositedReadbacks, stopCompositedProbe } from "./composited-probe-evidence.mjs";
+export {
+  attachCompositedReadbacks,
+  presentedFrameOrdering,
+  stopCompositedProbe,
+} from "./composited-probe-evidence.mjs";
 
 /**
  * Per-frame probe over the editor's COMPOSITED output.
@@ -27,7 +31,11 @@ export { attachCompositedReadbacks, stopCompositedProbe } from "./composited-pro
  *  - `window.__donnerWorkerStats.completedResults`, which orders the samples
  *    against the render worker's own progress,
  *  - the presented document width from `window.__donnerViewportStats`, which
- *    is how a gesture proves it was applied at all.
+ *    is how a gesture proves it was applied at all,
+ *  - the editor's last completed presentation frame from
+ *    `window.__donnerPresentationQueueStats`, which separates a readback that
+ *    shows an older frame than the editor completed from an editor that
+ *    completed the older frame.
 
  *
  * Pixels plus centroid plus backing size, per frame, is what makes the
@@ -62,6 +70,33 @@ export { attachCompositedReadbacks, stopCompositedProbe } from "./composited-pro
  * comfortable stream of transparent frames.
  */
 
+/**
+ * The editor's last completed presentation frame when a sample was taken, from
+ * `window.__donnerPresentationQueueStats` (republished by `EditorWindow.cc` on
+ * every presentation completion observation; the frame fields are those of the
+ * last frame that completed).
+ *
+ * The frame id comes from a monotonically increasing counter and the pointer
+ * is the position that frame represents, so a pair of samples says whether the
+ * editor's own completed frame went backwards. When it did not and the
+ * readback did, the older image came from the read-back path, not the editor.
+ */
+export interface PresentedFrameRecord {
+  frameId: number;
+  captureId: number;
+  pointerX: number;
+  pointerY: number;
+  inputRepresented: boolean;
+  /** Presentation submission serial of the completed frame. */
+  completedSerial: number;
+  /** Last submission serial the device accepted. */
+  submittedSerial: number;
+  /** Last submission serial the device reported complete. */
+  deviceCompletedSerial: number;
+  /** `performance.now()` when the editor first published this completion. */
+  completedAtMs: number;
+}
+
 /** One composited sample, taken inside a single animation frame. */
 export interface CompositedSample {
   /** `performance.now()` at sample time. */
@@ -91,6 +126,11 @@ export interface CompositedSample {
    * themselves stay on the pixels.
    */
   presentedDocumentWidth: number;
+  /**
+   * The editor's last completed presentation frame at sample time, or null
+   * before the first one. Diagnostic only: no invariant reads it.
+   */
+  presentedFrame?: PresentedFrameRecord | null;
   /** Mean alpha over the sampled region, 0-255. */
   meanAlpha: number;
   /** Mean luma over the sampled region, 0-255, premultiplied by nothing. */
@@ -292,6 +332,24 @@ export async function installCompositedProbe(
     const diagnostics = window as unknown as {
       __donnerWorkerStats?: { completedResults?: number };
       __donnerViewportStats?: { documentWidth?: number };
+      __donnerPresentationQueueStats?: Partial<Record<keyof PresentedFrameRecord, unknown>>;
+    };
+    // A copy of the published fields: the editor replaces the object on every completion
+    // observation, and the sample must keep the frame that was current when it was taken.
+    const readPresentedFrame = (): PresentedFrameRecord | null => {
+      const queue = diagnostics.__donnerPresentationQueueStats;
+      if (queue === undefined || queue === null) return null;
+      return {
+        frameId: Number(queue.frameId),
+        captureId: Number(queue.captureId),
+        pointerX: Number(queue.pointerX),
+        pointerY: Number(queue.pointerY),
+        inputRepresented: queue.inputRepresented === true,
+        completedSerial: Number(queue.completedSerial),
+        submittedSerial: Number(queue.submittedSerial),
+        deviceCompletedSerial: Number(queue.deviceCompletedSerial),
+        completedAtMs: Number(queue.completedAtMs),
+      };
     };
     const matchesContentPixel = (window as unknown as {
       __donnerMatchesCompositedContentPixel?: (
@@ -322,6 +380,7 @@ export async function installCompositedProbe(
         | "backingHeight"
         | "completedResults"
         | "presentedDocumentWidth"
+        | "presentedFrame"
       >,
     ): CapturedSample => ({
       ...base,
@@ -423,6 +482,7 @@ export async function installCompositedProbe(
       const surface = document.querySelector<HTMLCanvasElement>("canvas#canvas");
       const completedResults = diagnostics.__donnerWorkerStats?.completedResults || 0;
       const presentedDocumentWidth = diagnostics.__donnerViewportStats?.documentWidth || 0;
+      const presentedFrame = readPresentedFrame();
       if (surface === null) {
         return failedSample({
           t: performance.now(),
@@ -435,6 +495,7 @@ export async function installCompositedProbe(
           backingHeight: 0,
           completedResults,
           presentedDocumentWidth,
+          presentedFrame,
         });
       }
 
@@ -461,6 +522,7 @@ export async function installCompositedProbe(
         backingHeight: surface.height,
         completedResults,
         presentedDocumentWidth,
+        presentedFrame,
       };
 
       if (!(sourceWidth >= 1) || !(sourceHeight >= 1)) {

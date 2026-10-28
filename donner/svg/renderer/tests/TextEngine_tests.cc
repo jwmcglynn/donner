@@ -7,19 +7,24 @@
 #include <cmath>
 #include <cstddef>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <tuple>
 #include <vector>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/SVG.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextBackendFull.h"
 #include "donner/svg/text/TextBackendSimple.h"
@@ -510,6 +515,126 @@ TEST(TextEngineHelperTest, ApplyTextLengthAdjustsGlobalSpacing) {
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(50.0))))));
 }
 
+std::string ZeroLengthPenRecord(const std::vector<TextGlyph>& glyphs) {
+  std::ostringstream record;
+  record << std::setprecision(17);
+  for (const auto& glyph : glyphs) {
+    record << "[" << glyph.xPosition << "," << glyph.xAdvance << "]";
+  }
+  return record.str();
+}
+
+void CheckParsedZeroLengthAnchor(bool full, TextAnchor anchor,
+                                 const std::vector<TextGlyph>& expected) {
+  std::ostringstream source;
+  source << "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200' "
+            "font-family='Noto Sans' font-size='48'><text id='t' x='20' y='100' "
+            "textLength='0' text-anchor='"
+         << anchor << "'>Text</text></svg>";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source.str(), warnings);
+  ASSERT_THAT(parsed, ParseResultIs(_));
+  auto document = std::move(parsed).result();
+  const auto target = document.querySelector("#t");
+  ASSERT_THAT(target, testing::Optional(_));
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  const FontHandle font = LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_THAT(font, Not(testing::Eq(FontHandle{})));
+  std::unique_ptr<TextBackend> backend;
+  if (full) {
+    backend = std::make_unique<TextBackendFull>(fonts, registry);
+  } else {
+    backend = std::make_unique<TextBackendSimple>(fonts, registry);
+  }
+  TextEngine engine(fonts, registry, std::move(backend));
+  const auto handle = target->unsafeEntityHandle();
+  engine.prepareForElement(handle, warnings);
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(handle);
+  ASSERT_THAT(geometry.runs, ElementsAre(RunGlyphsAre(SizeIs(expected.size()))));
+  EXPECT_THAT(geometry.runs[0].font, testing::Eq(font));
+  EXPECT_THAT(geometry.runs[0].glyphs,
+              Each(Field("font", &TextGlyph::font,
+                         testing::AnyOf(testing::Eq(FontHandle{}), testing::Eq(font)))));
+  for (size_t index = 0; index < expected.size(); ++index) {
+    EXPECT_THAT(geometry.runs[0].glyphs[index].xPosition,
+                DoubleNear(expected[index].xPosition, 1e-8));
+    EXPECT_THAT(geometry.runs[0].glyphs[index].xAdvance,
+                DoubleNear(expected[index].xAdvance, 1e-8));
+  }
+  std::ostringstream name;
+  name << (full ? "full_" : "basic_") << anchor << "_parsed_pens_advances";
+  testing::Test::RecordProperty(name.str(), ZeroLengthPenRecord(geometry.runs[0].glyphs));
+}
+
+TEST(TextEngineTest, ZeroTextLengthAnchorsNotoSansUsingCompressedPenExtents) {
+  for (bool full : {false, true}) {
+    SCOPED_TRACE(full);
+    Registry registry;
+    FontManager fonts(registry);
+    const FontHandle font = LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Noto Sans");
+    ASSERT_THAT(font, Not(testing::Eq(FontHandle{})));
+    std::unique_ptr<TextBackend> backend;
+    if (full) {
+      backend = std::make_unique<TextBackendFull>(fonts, registry);
+    } else {
+      backend = std::make_unique<TextBackendSimple>(fonts, registry);
+    }
+    TextEngine engine(fonts, registry, std::move(backend));
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("Text");
+    span.xList = {Lengthd(20)};
+    span.yList = {Lengthd(100)};
+    text.spans.push_back(span);
+    auto params = MakeTextParams(48);
+    params.fontFamilies = {RcString("Noto Sans")};
+    const auto natural = engine.layout(text, params);
+    ASSERT_THAT(natural, ElementsAre(RunGlyphsAre(SizeIs(4))));
+    EXPECT_THAT(natural[0].font, testing::Eq(font));
+    EXPECT_THAT(natural[0].glyphs.front().xPosition, DoubleNear(20, 1e-9));
+    EXPECT_THAT(natural[0].glyphs,
+                Each(Field("font", &TextGlyph::font,
+                           testing::AnyOf(testing::Eq(FontHandle{}), testing::Eq(font)))));
+    auto compressed = natural[0].glyphs;
+    const double naturalLength = compressed.back().xPosition + compressed.back().xAdvance - 20;
+    const double gap = -naturalLength / 3;
+    double minimum = 20;
+    double maximum = 20;
+    for (size_t index = 0; index < compressed.size(); ++index) {
+      auto& glyph = compressed[index];
+      glyph.xPosition += gap * static_cast<double>(index);
+      minimum = std::min({minimum, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
+      maximum = std::max({maximum, glyph.xPosition, glyph.xPosition + glyph.xAdvance});
+    }
+    EXPECT_THAT(compressed.back().xPosition + compressed.back().xAdvance, DoubleNear(20, 1e-9));
+    EXPECT_THAT(minimum, DoubleNear(compressed.back().xPosition, 1e-9));
+    EXPECT_THAT(20 - minimum, DoubleNear(compressed.back().xAdvance, 1e-9));
+    const std::string prefix = full ? "full_" : "basic_";
+    RecordProperty(prefix + "natural_pens_advances", ZeroLengthPenRecord(natural[0].glyphs));
+    RecordProperty(prefix + "compressed_pens_advances", ZeroLengthPenRecord(compressed));
+    text.spans[0].textLength = Lengthd(0);
+    for (TextAnchor anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
+      SCOPED_TRACE(anchor);
+      text.spans[0].textAnchor = anchor;
+      params.textAnchor = anchor;
+      const auto actual = engine.layout(text, params);
+      ASSERT_THAT(actual, ElementsAre(RunGlyphsAre(SizeIs(4))));
+      const double alignment = anchor == TextAnchor::Middle ? minimum / 2 + maximum / 2
+                               : anchor == TextAnchor::End  ? maximum
+                                                            : minimum;
+      for (size_t index = 0; index < compressed.size(); ++index) {
+        EXPECT_THAT(actual[0].glyphs[index].xPosition,
+                    DoubleNear(compressed[index].xPosition + 20 - alignment, 1e-9));
+        EXPECT_THAT(actual[0].glyphs[index].xAdvance, DoubleEq(compressed[index].xAdvance));
+      }
+      std::ostringstream name;
+      name << prefix << anchor << "_pens_advances";
+      RecordProperty(name.str(), ZeroLengthPenRecord(actual[0].glyphs));
+      CheckParsedZeroLengthAnchor(full, anchor, actual[0].glyphs);
+    }
+  }
+}
+
 TEST(TextEngineHelperTest, ApplyTextLengthAcceptsZeroGlobalSpacing) {
   std::vector<TextRun> runs = {
       {.glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}, {.xPosition = 20.0, .xAdvance = 10.0}}},
@@ -939,6 +1064,61 @@ std::vector<TextRun> LayOutFull(Registry& registry, FontManager& fontManager, st
   params.fontFamilies = std::move(families);
   params.writingMode = mode;
   return engine.layout(text, params);
+}
+
+TEST(TextEngineTest, SmallCapsSynthesisDoesNotLeakAcrossSimpleShapingRequests) {
+  Registry registry;
+  FontManager manager(registry);
+  const FontHandle font = LoadResvgFont(manager, "NotoSans-Regular.ttf", "CapsFont");
+  ASSERT_TRUE(static_cast<bool>(font));
+  auto backend = std::make_unique<TextBackendSimple>(manager, registry);
+  TextEngine engine(manager, registry, std::move(backend));
+  for (FontSynthesisSmallCaps policy :
+       {FontSynthesisSmallCaps::Auto, FontSynthesisSmallCaps::None, FontSynthesisSmallCaps::Auto}) {
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("aA");
+    span.fontVariant = FontVariant::SmallCaps;
+    span.fontSynthesisSmallCaps = policy;
+    text.spans.push_back(std::move(span));
+    auto params = MakeTextParams(40);
+    params.fontFamilies = {RcString("CapsFont")};
+    const auto runs = engine.layout(text, params);
+    ASSERT_THAT(runs, SizeIs(1));
+    ASSERT_THAT(runs.front().glyphs, SizeIs(2));
+    EXPECT_FLOAT_EQ(runs.front().glyphs[0].fontSizeScale,
+                    policy == FontSynthesisSmallCaps::None ? 1.0f : 0.8f);
+    EXPECT_FLOAT_EQ(runs.front().glyphs[1].fontSizeScale, 1.0f);
+    EXPECT_EQ(runs.front().glyphs[0].cluster, 0u);
+    EXPECT_EQ(runs.front().glyphs[1].cluster, 1u);
+  }
+}
+
+TEST(TextEngineTest, SmallCapsSynthesisNoneRetainsRealOpenTypeSmallCaps) {
+  Registry registry;
+  FontManager manager(registry);
+  const FontHandle font = LoadResvgFont(manager, "SourceSansPro-Regular.ttf", "NativeCaps");
+  ASSERT_TRUE(static_cast<bool>(font));
+  auto backend = std::make_unique<TextBackendFull>(manager, registry);
+  const TextBackendFull& probe = *backend;
+  ASSERT_TRUE(probe.hasSmallCapsFeature(font));
+  const auto native = probe.shapeRun(font, 40, "a", 0, 1, false, FontVariant::SmallCaps, false);
+  const auto normal = probe.shapeRun(font, 40, "a", 0, 1, false, FontVariant::Normal, false);
+  ASSERT_THAT(native.glyphs, SizeIs(1));
+  ASSERT_THAT(normal.glyphs, SizeIs(1));
+  ASSERT_NE(native.glyphs[0].glyphIndex, normal.glyphs[0].glyphIndex);
+  TextEngine engine(manager, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("a");
+  span.fontVariant = FontVariant::SmallCaps;
+  span.fontSynthesisSmallCaps = FontSynthesisSmallCaps::None;
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(40);
+  params.fontFamilies = {RcString("NativeCaps")};
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs.front().glyphs, SizeIs(1));
+  EXPECT_EQ(runs.front().glyphs[0].glyphIndex, native.glyphs[0].glyphIndex);
+  EXPECT_FLOAT_EQ(runs.front().glyphs[0].fontSizeScale, 1.0f);
 }
 
 // A fallback item is one part of its chunk: in a right-to-left chunk the neutral parentheses

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# docs_lane.sh - the documentation build steps of the docs workflow (deploy_docs.yaml).
+# docs_lane.sh - the documentation build steps of the docs workflow (build_docs.yaml).
 #
 #   tools/ci/docs_lane.sh install-doxygen
 #       Download the pinned Doxygen release, verify its SHA-256 before extracting it under

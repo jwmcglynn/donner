@@ -15,6 +15,7 @@
 #include "donner/svg/core/FontKerning.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
+#include "donner/svg/core/FontSynthesisSmallCaps.h"
 #include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/PaintOrder.h"
@@ -127,6 +128,9 @@ struct ComputedTextComponent {
     /// CSS font-variant for this span (normal/small-caps).
     /// Populated by RendererDriver from sourceEntity.
     FontVariant fontVariant = FontVariant::Normal;
+
+    /// Resolved policy for synthesizing small caps when the drawing face lacks them.
+    FontSynthesisSmallCaps fontSynthesisSmallCaps = FontSynthesisSmallCaps::Auto;
 
     /// Resolved kerning policy; absent values use the text root layout parameters.
     std::optional<FontKerning> fontKerning;

@@ -487,6 +487,203 @@ class DocsPublishTest(unittest.TestCase):
         self.assertEqual(opener.open.call_args.args[0].full_url, "https://example.test/path?audience=pages")
         self.assertEqual(opener.open.call_args.kwargs, {"timeout": 30})
 
+    def automatic_environment(self):
+        event = self.root / "event.json"
+        event.write_bytes(site.canonical({"workflow_run": {"id": 123, "run_attempt": 1}}))
+        return {"GITHUB_REPOSITORY": "jwmcglynn/donner", "GITHUB_REF": "refs/heads/main",
+                "GITHUB_EVENT_NAME": "workflow_run", "GITHUB_SHA": "b" * 40,
+                "GITHUB_WORKFLOW_REF": "jwmcglynn/donner/.github/workflows/deploy_docs.yaml@refs/heads/main",
+                "GITHUB_RUN_ID": "456", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_EVENT_PATH": str(event)}
+
+    def test_automatic_source_is_verified_through_github_not_webhook_claims(self):
+        run = {"id": 123, "run_attempt": 1, "repository": {"full_name": "jwmcglynn/donner"},
+               "head_repository": {"full_name": "jwmcglynn/donner"}, "path": publish.WORKFLOW,
+               "event": "push", "head_branch": "main", "head_sha": "c" * 40,
+               "status": "completed", "conclusion": "success"}
+        with mock.patch.dict(os.environ, self.automatic_environment()), \
+             mock.patch.object(publish, "github_json", return_value=run) as fetch:
+            self.assertEqual(publish._automatic_trigger()["source_commit"], "c" * 40)
+            self.assertTrue(fetch.call_args.args[0].endswith("/123/attempts/1"))
+        for change in ({"event": "pull_request"}, {"event": "workflow_run"},
+                       {"head_branch": "feature"}, {"conclusion": "failure"},
+                       {"head_repository": {"full_name": "fork/donner"}}, {"run_attempt": 2}):
+            with self.subTest(change=change), mock.patch.dict(os.environ, self.automatic_environment()), \
+                 mock.patch.object(publish, "github_json", return_value={**run, **change}), \
+                 self.assertRaises(ValueError):
+                publish._automatic_trigger()
+
+    def test_automatic_context_cannot_select_an_environment_from_another_workflow(self):
+        good = self.automatic_environment()
+        with mock.patch.dict(os.environ, good):
+            self.assertEqual(publish.store.deployment_environment(), "github-pages-main")
+        for key, value in (("GITHUB_WORKFLOW_REF", "fork/donner/evil.yml@refs/heads/main"),
+                           ("GITHUB_REF", "refs/pull/1/merge"), ("GITHUB_REPOSITORY", "fork/donner")):
+            with self.subTest(key=key), mock.patch.dict(os.environ, {**good, key: value}), self.assertRaises(ValueError):
+                publish.store.deployment_environment()
+
+    def test_automatic_source_order_requires_ancestry_and_skips_old_or_identical_sources(self):
+        old, new = "a" * 40, "b" * 40
+        with mock.patch.object(publish, "github_json") as fetch:
+            self.assertFalse(publish._source_order(old, old))
+            fetch.assert_not_called()
+        with mock.patch.object(publish, "github_json", return_value={"status": "behind"}):
+            self.assertFalse(publish._source_order(old, new))
+        with mock.patch.object(publish, "github_json", return_value={"status": "ahead", "merge_base_commit": {"sha": old}}):
+            self.assertTrue(publish._source_order(old, new))
+        for reply in ({"status": "diverged"}, {"status": "ahead", "merge_base_commit": {"sha": "c" * 40}}):
+            with mock.patch.object(publish, "github_json", return_value=reply), self.assertRaisesRegex(ValueError, "does not descend"):
+                publish._source_order(old, new)
+
+    def test_automatic_preparation_never_initializes_the_store(self):
+        self.api.tip.return_value = None
+        with mock.patch.object(publish, "_automatic_trigger", return_value={}), \
+             mock.patch.object(publish, "prepare") as prepare, \
+             mock.patch.object(publish.store, "commit") as commit:
+            publish.prepare_auto(self.root / "unused", self.api)
+        prepare.assert_not_called()
+        commit.assert_not_called()
+
+    def test_newer_automatic_source_still_assembles_if_an_earlier_publication_advances(self):
+        from tools import docs_fixture
+        inputs = self.root / "inputs"
+        inputs.mkdir()
+        release = docs_fixture.source(inputs, "release")
+        development = docs_fixture.source(inputs, "main")
+        objects = inputs / "objects-payload"
+        objects.mkdir()
+        descriptor = publish.store.split_archive(release[0], objects)
+        state = {"schema": 1, "current": "e" * 64, "previous": None,
+                 "releases": {"0.8.0": {"identity": release[1], "archive": descriptor}}}
+        self.api.tip.return_value = "a" * 40
+        self.api.file.side_effect = lambda commit, name: (site.canonical(state) if name == "index.json"
+                                                        else (objects / name).read_bytes())
+        work = self.root / "auto-interleaving"
+        def restore(api, snapshot, target, output):
+            path = output / "site/_docs"
+            path.mkdir(parents=True)
+            manifest = {"versions": {"main": {"identity": {"source_commit": "c" * 40}}}}
+            (path / "versions.json").write_bytes(site.canonical(manifest))
+            self.api.tip.return_value = "b" * 40
+            return {}, {}
+        with mock.patch.dict(os.environ, self.automatic_environment()), \
+             mock.patch.object(publish, "_automatic_trigger", return_value={"run_id": 123, "attempt": 1,
+                                                                           "source_commit": "d" * 40}), \
+             mock.patch.object(publish, "_restore_composition", side_effect=restore), \
+             mock.patch.object(publish, "_verify_current_roster"), \
+             mock.patch.object(publish, "_verify_retained_release"), \
+             mock.patch.object(publish, "_source_order", return_value=True), \
+             mock.patch.object(publish, "main_source", return_value=development):
+            publish.prepare_auto(work, self.api)
+        selected = site.read_json(work / "candidate/payload/selection.json")
+        self.assertEqual(selected["base_snapshot_commit"], "a" * 40)
+        self.assertEqual(self.api.tip.return_value, "b" * 40)
+        site.verify_site(work / "candidate/site")
+        self.api.call.assert_not_called()
+
+    def automatic_selection(self):
+        identity = {"version": "0.8.0", "source_commit": "c" * 40}
+        releases = {"0.8.0": {"identity": identity, "archive": {"sha256": "d" * 64}}}
+        current = {"schema": 1, "releases": releases, "current": "e" * 64, "previous": None}
+        selected = {"releases": releases, "bootstrap": None, "base_snapshot_commit": "a" * 40,
+                    "previous_composition": "f" * 64,
+                    "source_inputs": {"0.8.0": identity, "main": {"source_commit": "b" * 40}}}
+        record = {"bootstrap": None, "base_snapshot_commit": "a" * 40, "previous_composition": "f" * 64}
+        manifest = {"versions": {"0.8.0": {"identity": identity}, "main": {"identity": {"source_commit": "a" * 40}}}}
+        return current, selected, record, manifest
+
+    def test_automatic_scope_cannot_add_change_or_activate_a_pending_release(self):
+        import copy
+        current, selected, record, manifest = self.automatic_selection()
+        publish._automatic_scope(record, selected, current, manifest)
+        bad_selected = copy.deepcopy(selected)
+        bad_selected["releases"]["0.9.0"] = {"identity": {}}
+        with self.assertRaisesRegex(ValueError, "release roster"):
+            publish._automatic_scope(record, bad_selected, current, manifest)
+        with self.assertRaisesRegex(ValueError, "pending manual release"):
+            publish._automatic_scope(record, selected, current, {"versions": {"main": {}}})
+        with self.assertRaisesRegex(ValueError, "cannot bootstrap"):
+            publish._automatic_scope({**record, "bootstrap": self.approval()}, selected, current, manifest)
+
+    def test_automatic_handoff_cannot_fetch_a_different_inprogress_run(self):
+        with mock.patch.dict(os.environ, self.automatic_environment()), \
+             mock.patch.object(publish, "github_json", return_value={"id": 455}), \
+             mock.patch.object(publish, "_auto_artifact") as download, \
+             self.assertRaisesRegex(ValueError, "not this trusted workflow run"):
+            publish._fetch_auto_composition("a" * 64, self.root)
+        download.assert_not_called()
+
+    def test_pages_api_target_is_bound_to_the_manual_or_automatic_environment(self):
+        for event, expected in (("workflow_dispatch", "github-pages"), ("workflow_run", "github-pages-main")):
+            api = mock.Mock()
+            api.call.side_effect = [{"id": "91", "page_url": publish.SITE_URL}, {"status": "succeed"}]
+            with mock.patch.dict(os.environ, {**self.automatic_environment(), "GITHUB_EVENT_NAME": event}), \
+                 mock.patch.object(publish, "_oidc_token", return_value="fixture-token"):
+                self.assertEqual(publish.deploy(7, "b" * 40, api), "91")
+            self.assertEqual(api.call.call_args_list[0].args[2]["environment"], expected)
+            api.require_protection.assert_called_once()
+
+    def test_wrong_pages_url_preserves_the_known_request_identity_before_failure(self):
+        api = mock.Mock()
+        api.call.return_value = {"id": "91", "page_url": "https://other.test/"}
+        receipt = self.root / "receipt.json"
+        with mock.patch.object(publish, "_oidc_token", return_value="fixture-token"), \
+             self.assertRaisesRegex(ValueError, "unexpected site URL"):
+            publish.deploy(7, "b" * 40, api, receipt=receipt)
+        self.assertEqual(site.read_json(receipt)["deployment_id"], "91")
+
+    def test_automatic_preflight_rebinds_only_the_operational_plan_to_the_fresh_snapshot(self):
+        current, selected, record, manifest = self.automatic_selection()
+        work = self.root / "auto-preflight"
+        def fetch(expected, output):
+            (output / "payload").mkdir()
+            (output / "payload/selection.json").write_bytes(site.canonical(selected))
+            return record
+        def previous(api, snapshot, prior, output):
+            self.assertEqual(snapshot, "b" * 40)
+            (output / "previous-pages").mkdir()
+            (output / "previous-pages/artifact.tar").write_bytes(b"verified current complete site")
+            path = output / "prior-proof/site/_docs"
+            path.mkdir(parents=True)
+            (path / "versions.json").write_bytes(site.canonical(manifest))
+            return {}, self.prior
+        self.api.tip.return_value = "b" * 40
+        with mock.patch.object(publish, "_fetch_auto_composition", side_effect=fetch), \
+             mock.patch.object(publish.store, "index", return_value=current), \
+             mock.patch.object(publish, "_previous", side_effect=previous), \
+             mock.patch.object(publish, "_verify_auto_source"), \
+             mock.patch.object(publish, "_source_order", return_value=True), \
+             mock.patch.object(publish, "_live_identity", return_value=True):
+            publish.preflight_auto("c" * 64, work, self.api)
+        plan = site.read_json(work / "preflight.json")
+        self.assertEqual(plan["snapshot"], "b" * 40)
+        self.assertEqual(plan["prior"], current["current"])
+        self.assertEqual(plan["record"]["base_snapshot_commit"], "a" * 40)
+        self.assertEqual(plan["record"]["previous_composition"], "f" * 64)
+        self.assertTrue(plan["automatic"])
+
+    def test_retention_and_activation_use_the_fresh_automatic_plan_cas(self):
+        work, record, plan, commit, restore = self.transaction()
+        plan.update(snapshot="c" * 40, automatic=True)
+        selected = {"releases": {}, "source_inputs": {"main": {}}}
+        (work / "payload/selection.json").write_bytes(site.canonical(selected))
+        record["payload_files"] = site.inventory(work / "payload")
+        record["payload_files"].pop("composition.json")
+        (work / "payload/composition.json").write_bytes(site.canonical(record))
+        path = work / "prior-proof/site/_docs"
+        path.mkdir(parents=True)
+        (path / "versions.json").write_text('{}')
+        with mock.patch.dict(os.environ, self.automatic_environment()), \
+             mock.patch.object(publish, "_automatic_scope"), mock.patch.object(publish, "_verify_auto_source"), \
+             mock.patch.object(publish.store, "commit", side_effect=["e" * 40, "f" * 40]) as save, \
+             mock.patch.object(publish.store, "restore", side_effect=restore), \
+             mock.patch.object(publish, "deploy", return_value="91"), \
+             mock.patch.object(publish, "_verify_live"):
+            result = publish._retain_and_deploy(record, plan, 9, work, self.api)
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(save.call_args_list[0].args[1], "c" * 40)
+        self.assertEqual(save.call_args_list[1].args[1], "e" * 40)
+        self.assertEqual(save.call_args_list[1].args[3]["previous"], plan["prior"])
+
     def test_pages_health_checks_detect_changed_version_index(self):
         marker = {"manifest_sha256": "a" * 64}
         with mock.patch.object(publish, "live_marker", return_value=marker), \
