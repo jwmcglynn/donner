@@ -2716,59 +2716,119 @@ TEST(TextEngineTest, WrappedAndOrdinaryAnchorsSharePenExtentRules) {
   }
 }
 
-TEST(TextEngineTest, WrappedAbsoluteAxesRemainIndependentAfterNewline) {
-  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
-    for (int axes : {1, 2, 3, 4}) {
-      SCOPED_TRACE(testing::Message() << mode << " axes=" << axes);
-      Registry registry;
-      FontManager fonts(registry);
-      TextEngine engine = MakeScriptedEngine(registry, fonts);
-      components::ComputedTextComponent text;
-      text.spans.push_back(MakeSpan(""));
-      auto first = MakeSpan("A\n");
-      first.whiteSpace = WhiteSpace::Pre;
-      first.textOrientation = TextOrientation::Upright;
-      auto second = MakeSpan("B\nC");
-      second.whiteSpace = WhiteSpace::Pre;
-      second.textOrientation = TextOrientation::Upright;
-      const bool inlineReset = axes == 1 || axes == 3;
-      const bool blockReset = axes != 1;
-      const double blockValue = axes == 4 ? 0 : 100;
-      if (isVertical(mode)) {
-        if (inlineReset) {
-          second.yList = {Lengthd(100)};
-        }
-        if (blockReset) {
-          second.xList = {Lengthd(blockValue)};
-        }
-      } else {
-        if (inlineReset) {
-          second.xList = {Lengthd(100)};
-        }
-        if (blockReset) {
-          second.yList = {Lengthd(blockValue)};
-        }
-      }
-      text.spans.push_back(first);
-      text.spans.push_back(second);
-      auto params = MakeTextParams(20);
-      params.writingMode = mode;
-      const auto runs = engine.layout(text, params);
-      ASSERT_THAT(runs, SizeIs(3));
-      ASSERT_THAT(runs[2].glyphs, SizeIs(3));
-      const double delta = mode == WritingMode::VerticalRl ? -20 : 20;
-      const double expectedBlock = blockReset ? blockValue : delta;
-      for (size_t i : {size_t(0), size_t(2)}) {
-        const auto& glyph = runs[2].glyphs[i];
-        const double inlinePosition =
-            isVertical(mode) ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
-        const double blockPosition = isVertical(mode) ? glyph.xPosition : glyph.yPosition;
-        EXPECT_THAT(inlinePosition, DoubleNear(inlineReset ? 100 : 0, 1e-5));
-        EXPECT_THAT(blockPosition, DoubleNear(expectedBlock + (i == 2 ? delta : 0), 1e-5));
-      }
+namespace {
+
+double InlinePen(const TextGlyph& glyph, WritingMode mode) {
+  return isVertical(mode) ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
+}
+
+double InlineAdvance(const TextGlyph& glyph, WritingMode mode) {
+  return isVertical(mode) ? glyph.yAdvance : glyph.xAdvance;
+}
+
+double BlockPosition(const TextGlyph& glyph, WritingMode mode) {
+  return isVertical(mode) ? glyph.xPosition : glyph.yPosition;
+}
+
+double AnchorFraction(TextAnchor anchor) {
+  return anchor == TextAnchor::Start ? 0 : anchor == TextAnchor::Middle ? 0.5 : 1;
+}
+
+components::ComputedTextComponent MakeAxisResetText(WritingMode mode, bool inlineReset,
+                                                    bool blockReset, double blockValue) {
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan(""));
+  auto first = MakeSpan("A\n");
+  first.whiteSpace = WhiteSpace::Pre;
+  first.textOrientation = TextOrientation::Upright;
+  auto second = MakeSpan("B\nC");
+  second.whiteSpace = WhiteSpace::Pre;
+  second.textOrientation = TextOrientation::Upright;
+  auto& inlinePositions = isVertical(mode) ? second.yList : second.xList;
+  auto& blockPositions = isVertical(mode) ? second.xList : second.yList;
+  if (inlineReset) {
+    inlinePositions = {Lengthd(100)};
+  }
+  if (blockReset) {
+    blockPositions = {Lengthd(blockValue)};
+  }
+  text.spans.push_back(first);
+  text.spans.push_back(second);
+  return text;
+}
+
+components::ComputedTextComponent MakeRelativeShiftText(WritingMode mode, TextAnchor anchor,
+                                                        double delta, int sourceLayout) {
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(sourceLayout == 0 ? "A\nB\nC" : "B\nC");
+  span.whiteSpace = WhiteSpace::Pre;
+  span.textOrientation = TextOrientation::Upright;
+  span.textAnchor = anchor;
+  const size_t b = sourceLayout == 0 ? 2 : 0;
+  auto& relative = isVertical(mode) ? span.dyList : span.dxList;
+  relative.resize(b + 1);
+  relative[b] = Lengthd(delta);
+  if (sourceLayout != 0) {
+    auto prefix = MakeSpan("A\n");
+    prefix.whiteSpace = WhiteSpace::Pre;
+    prefix.textOrientation = TextOrientation::Upright;
+    text.spans.push_back(prefix);
+    span.startsNewChunk = sourceLayout == 2;
+    if (sourceLayout == 2) {
+      (isVertical(mode) ? span.xList : span.yList) = {Lengthd(100)};
     }
   }
+  text.spans.push_back(span);
+  return text;
 }
+
+void SetFixtureTextLength(components::ComputedTextComponent::TextSpan& span,
+                          TextLayoutParams& params, int owner) {
+  if (owner == 1) {
+    params.textLength = Lengthd(200);
+    params.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  } else if (owner == 2) {
+    span.textLength = Lengthd(200);
+    span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  }
+}
+
+class WrappedAbsoluteAxisTest : public testing::TestWithParam<std::tuple<WritingMode, int>> {};
+class WrappedRelativeShiftTest
+    : public testing::TestWithParam<std::tuple<WritingMode, TextAnchor, double, int>> {};
+class PreWrapAnchorTest
+    : public testing::TestWithParam<std::tuple<WritingMode, TextAnchor, int, double>> {};
+
+}  // namespace
+
+TEST_P(WrappedAbsoluteAxisTest, WrappedAbsoluteAxesRemainIndependentAfterNewline) {
+  const auto [mode, axes] = GetParam();
+  const bool inlineReset = axes == 1 || axes == 3;
+  const bool blockReset = axes != 1;
+  const double blockValue = axes == 4 ? 0 : 100;
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  const auto text = MakeAxisResetText(mode, inlineReset, blockReset, blockValue);
+  auto params = MakeTextParams(20);
+  params.writingMode = mode;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(3));
+  ASSERT_THAT(runs[2].glyphs, SizeIs(3));
+  const double delta = mode == WritingMode::VerticalRl ? -20 : 20;
+  const double expectedBlock = blockReset ? blockValue : delta;
+  for (size_t i : {size_t(0), size_t(2)}) {
+    const auto& glyph = runs[2].glyphs[i];
+    EXPECT_THAT(InlinePen(glyph, mode), DoubleNear(inlineReset ? 100 : 0, 1e-5));
+    EXPECT_THAT(BlockPosition(glyph, mode), DoubleNear(expectedBlock + (i == 2 ? delta : 0), 1e-5));
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(AllWritingModes, WrappedAbsoluteAxisTest,
+                         testing::Combine(testing::Values(WritingMode::HorizontalTb,
+                                                          WritingMode::VerticalRl,
+                                                          WritingMode::VerticalLr),
+                                          testing::Values(1, 2, 3, 4)));
 
 TEST(TextEngineTest, WrappedAnchorsPreserveVisualClusterOrder) {
   for (auto anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
@@ -2904,114 +2964,71 @@ TEST(TextEngineTest, RejectedAnchorChunksPreserveAlternatingValidGlyphs) {
   EXPECT_THAT(actual, testing::ElementsAreArray(expected));
 }
 
-TEST(TextEngineTest, WrappedRelativeInlineShiftSurvivesFollowingLines) {
-  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
-    for (auto anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
-      for (double delta : {20.0, -20.0}) {
-        for (int sourceLayout : {0, 1, 2}) {
-          SCOPED_TRACE(testing::Message() << mode << " " << anchor << " delta=" << delta
-                                          << " source=" << sourceLayout);
-          Registry registry;
-          FontManager fonts(registry);
-          TextEngine engine = MakeScriptedEngine(registry, fonts);
-          components::ComputedTextComponent text;
-          auto span = MakeSpan(sourceLayout == 0 ? "A\nB\nC" : "B\nC");
-          span.whiteSpace = WhiteSpace::Pre;
-          span.textOrientation = TextOrientation::Upright;
-          span.textAnchor = anchor;
-          const size_t b = sourceLayout == 0 ? 2 : 0;
-          auto& relative = isVertical(mode) ? span.dyList : span.dxList;
-          relative.resize(b + 1);
-          relative[b] = Lengthd(delta);
-          if (sourceLayout != 0) {
-            auto prefix = MakeSpan("A\n");
-            prefix.whiteSpace = WhiteSpace::Pre;
-            prefix.textOrientation = TextOrientation::Upright;
-            text.spans.push_back(prefix);
-            span.startsNewChunk = sourceLayout == 2;
-            if (sourceLayout == 2) {
-              (isVertical(mode) ? span.xList : span.yList) = {Lengthd(100)};
-            }
-          }
-          text.spans.push_back(span);
-          auto params = MakeTextParams(20);
-          params.writingMode = mode;
-          const auto runs = engine.layout(text, params);
-          const auto& glyphs = runs.back().glyphs;
-          ASSERT_THAT(glyphs, SizeIs(sourceLayout == 0 ? 5 : 3));
-          const double advance = isVertical(mode) ? 12 : 10;
-          const double factor = anchor == TextAnchor::Start    ? 0
-                                : anchor == TextAnchor::Middle ? 0.5
-                                                               : 1;
-          for (size_t i : {b, b + 2}) {
-            const auto& glyph = glyphs[i];
-            const double pen =
-                isVertical(mode) ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
-            EXPECT_THAT(pen, DoubleNear(delta - factor * advance, 1e-5));
-          }
-        }
-      }
-    }
+TEST_P(WrappedRelativeShiftTest, WrappedRelativeInlineShiftSurvivesFollowingLines) {
+  const auto [mode, anchor, delta, sourceLayout] = GetParam();
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  const auto text = MakeRelativeShiftText(mode, anchor, delta, sourceLayout);
+  auto params = MakeTextParams(20);
+  params.writingMode = mode;
+  const auto runs = engine.layout(text, params);
+  const auto& glyphs = runs.back().glyphs;
+  ASSERT_THAT(glyphs, SizeIs(sourceLayout == 0 ? 5 : 3));
+  const double advance = isVertical(mode) ? 12 : 10;
+  const size_t b = sourceLayout == 0 ? 2 : 0;
+  for (size_t i : {b, b + 2}) {
+    EXPECT_THAT(InlinePen(glyphs[i], mode),
+                DoubleNear(delta - AnchorFraction(anchor) * advance, 1e-5));
   }
 }
 
-TEST(TextEngineTest, SinglePreWrapLineHangsOverflowingSpacesAfterTextLength) {
-  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
-    for (auto anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
-      for (int lengthOwner : {0, 1, 2}) {
-        for (double measure : {1.0, 100.0}) {
-          SCOPED_TRACE(testing::Message() << mode << " " << anchor << " owner=" << lengthOwner
-                                          << " measure=" << measure);
-          Registry registry;
-          FontManager fonts(registry);
-          TextEngine engine = MakeScriptedEngine(registry, fonts);
-          components::ComputedTextComponent text;
-          auto span = MakeSpan("A  ");
-          span.whiteSpace = WhiteSpace::PreWrap;
-          span.textAnchor = anchor;
-          span.textOrientation = TextOrientation::Upright;
-          auto params = MakeTextParams(20);
-          params.writingMode = mode;
-          params.inlineSizePx = measure;
-          if (lengthOwner == 1) {
-            params.textLength = Lengthd(200);
-            params.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
-          } else if (lengthOwner == 2) {
-            span.textLength = Lengthd(200);
-            span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
-          }
-          text.spans.push_back(span);
-          const auto actual = engine.layout(text, params);
-          params.inlineSizePx = 0;
-          text.spans[0].whiteSpace = WhiteSpace::Pre;
-          const auto ordinary = engine.layout(text, params);
-          ASSERT_THAT(actual, SizeIs(1));
-          ASSERT_THAT(ordinary, SizeIs(1));
-          ASSERT_THAT(actual[0].glyphs, SizeIs(3));
-          const auto& first = actual[0].glyphs[0];
-          const auto& reference = ordinary[0].glyphs[0];
-          const double pen =
-              isVertical(mode) ? first.yPosition - first.verticalOriginOffset : first.xPosition;
-          const double referencePen = isVertical(mode)
-                                          ? reference.yPosition - reference.verticalOriginOffset
-                                          : reference.xPosition;
-          const double advance = isVertical(mode) ? reference.yAdvance : reference.xAdvance;
-          const double factor = anchor == TextAnchor::Start    ? 0
-                                : anchor == TextAnchor::Middle ? 0.5
-                                                               : 1;
-          EXPECT_THAT(pen, DoubleNear(measure == 1 ? -factor * advance : referencePen, 1e-5));
-          for (size_t i = 0; i < 3; ++i) {
-            EXPECT_THAT(
-                isVertical(mode) ? actual[0].glyphs[i].yAdvance : actual[0].glyphs[i].xAdvance,
-                DoubleNear(isVertical(mode) ? ordinary[0].glyphs[i].yAdvance
-                                            : ordinary[0].glyphs[i].xAdvance,
-                           1e-5));
-          }
-        }
-      }
-    }
+INSTANTIATE_TEST_SUITE_P(
+    AllWritingModes, WrappedRelativeShiftTest,
+    testing::Combine(testing::Values(WritingMode::HorizontalTb, WritingMode::VerticalRl,
+                                     WritingMode::VerticalLr),
+                     testing::Values(TextAnchor::Start, TextAnchor::Middle, TextAnchor::End),
+                     testing::Values(20.0, -20.0), testing::Values(0, 1, 2)));
+
+TEST_P(PreWrapAnchorTest, SinglePreWrapLineHangsOverflowingSpacesAfterTextLength) {
+  const auto [mode, anchor, lengthOwner, measure] = GetParam();
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A  ");
+  span.whiteSpace = WhiteSpace::PreWrap;
+  span.textAnchor = anchor;
+  span.textOrientation = TextOrientation::Upright;
+  auto params = MakeTextParams(20);
+  params.writingMode = mode;
+  params.inlineSizePx = measure;
+  SetFixtureTextLength(span, params, lengthOwner);
+  text.spans.push_back(span);
+  const auto actual = engine.layout(text, params);
+  params.inlineSizePx = 0;
+  text.spans[0].whiteSpace = WhiteSpace::Pre;
+  const auto ordinary = engine.layout(text, params);
+  ASSERT_THAT(actual, SizeIs(1));
+  ASSERT_THAT(ordinary, SizeIs(1));
+  ASSERT_THAT(actual[0].glyphs, SizeIs(3));
+  const auto& first = actual[0].glyphs[0];
+  const auto& reference = ordinary[0].glyphs[0];
+  const double expected = measure == 1 ? -AnchorFraction(anchor) * InlineAdvance(reference, mode)
+                                       : InlinePen(reference, mode);
+  EXPECT_THAT(InlinePen(first, mode), DoubleNear(expected, 1e-5));
+  for (size_t i = 0; i < 3; ++i) {
+    EXPECT_THAT(InlineAdvance(actual[0].glyphs[i], mode),
+                DoubleNear(InlineAdvance(ordinary[0].glyphs[i], mode), 1e-5));
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    AllWritingModes, PreWrapAnchorTest,
+    testing::Combine(testing::Values(WritingMode::HorizontalTb, WritingMode::VerticalRl,
+                                     WritingMode::VerticalLr),
+                     testing::Values(TextAnchor::Start, TextAnchor::Middle, TextAnchor::End),
+                     testing::Values(0, 1, 2), testing::Values(1.0, 100.0)));
 
 TEST(TextEngineTest, WhiteSpaceTabStopsPrecedeSvgInlineDisplacement) {
   for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
