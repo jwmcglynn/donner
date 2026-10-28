@@ -59,6 +59,21 @@ TEST(PathTest, ConvexClassificationRejectsRepeatedContour) {
   EXPECT_THAT(tiny_skia::Path::fromRect(*rectangle).isConvex(), testing::IsTrue());
 }
 
+TEST(PathTest, ConvexClassificationRejectsRepeatedExplicitlyClosedContour) {
+  tiny_skia::PathBuilder builder;
+  builder.moveTo(2.0f, 2.0f);
+  for (int lap = 0; lap < 2; ++lap) {
+    builder.lineTo(8.0f, 2.0f);
+    builder.lineTo(8.0f, 8.0f);
+    builder.lineTo(2.0f, 8.0f);
+    builder.lineTo(2.0f, 2.0f);
+  }
+  builder.close();
+  const auto path = builder.finish();
+  ASSERT_THAT(path, Optional(testing::_));
+  EXPECT_THAT(path->isConvex(), testing::IsFalse());
+}
+
 TEST(MaskTest, RepeatedContourRespectsWindingRule) {
   tiny_skia::PathBuilder builder;
   builder.moveTo(2.0f, 2.0f);

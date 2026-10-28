@@ -30,9 +30,9 @@ enum class PathVerb : std::uint8_t {
 
 /// Line cap style for stroke endpoints.
 enum class LineCap : std::uint8_t {
-  Butt,   ///< Flat cap, no extension.
-  Round,  ///< Semicircle cap.
-  Square, ///< Extends by half the stroke width.
+  Butt,    ///< Flat cap, no extension.
+  Round,   ///< Semicircle cap.
+  Square,  ///< Extends by half the stroke width.
 };
 
 // Forward declarations for stroke/dash.
@@ -100,7 +100,8 @@ class Path {
   /// Returns true if the path is convex. Checks the control polygon: all cross products of
   /// consecutive edge vectors must have the same sign, AND no edges self-intersect.
   [[nodiscard]] bool isConvex() const {
-    if (points_.size() < 3) return false;
+    const auto n = controlPolygonSize();
+    if (n < 3) return false;
 
     // Must be a single closed contour.
     int moveCount = 0;
@@ -110,8 +111,6 @@ class Path {
       if (v == PathVerb::Close) hasClosed = true;
     }
     if (moveCount != 1 || !hasClosed) return false;
-
-    const auto n = points_.size();
 
     // Check cross products of consecutive direction vectors on the control polygon.
     int sign = 0;  // 0 = unknown, 1 = positive, -1 = negative
@@ -158,8 +157,8 @@ class Path {
         float d2 = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x);
         float d3 = (d.x - c.x) * (a.y - c.y) - (d.y - c.y) * (a.x - c.x);
         float d4 = (d.x - c.x) * (b.y - c.y) - (d.y - c.y) * (b.x - c.x);
-        if (!std::isfinite(d1) || !std::isfinite(d2) || !std::isfinite(d3) ||
-            !std::isfinite(d4) || touchesSegment(c, a, b, d1) || touchesSegment(d, a, b, d2) ||
+        if (!std::isfinite(d1) || !std::isfinite(d2) || !std::isfinite(d3) || !std::isfinite(d4) ||
+            touchesSegment(c, a, b, d1) || touchesSegment(d, a, b, d2) ||
             touchesSegment(a, c, d, d3) || touchesSegment(b, c, d, d4) ||
             (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
              ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))) {
@@ -200,6 +199,16 @@ class Path {
   [[nodiscard]] std::optional<Path> dash(const StrokeDash& dash, float resScale) const;
 
  private:
+  [[nodiscard]] std::size_t controlPolygonSize() const {
+    auto count = points_.size();
+    // An explicit closing endpoint is adjacent to the first edge, not a self-touch.
+    // Keep interior repeats so winding multiplicity still rejects the convex fast path.
+    if (count > 1 && points_[count - 1].x == points_[0].x && points_[count - 1].y == points_[0].y) {
+      --count;
+    }
+    return count;
+  }
+
   void recomputeBounds() {
     if (points_.empty()) {
       bounds_.reset();
