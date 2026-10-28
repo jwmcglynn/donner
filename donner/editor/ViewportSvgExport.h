@@ -8,7 +8,9 @@
 /// that contains the whole image preserves the source `viewBox` and intrinsic dimensions. The
 /// export is **vector-first**: the source SVG
 /// children are copied verbatim into a clipped `<g>`, never snapshotted as a
-/// raster `<image>`. \ref donner::editor::ViewportState "ViewportState" supplies the
+/// raster `<image>`. This export is not a sanitizer: source children may contain browser-active
+/// markup, so consumers must not serve its output as a trusted browser document.
+/// \ref donner::editor::ViewportState "ViewportState" supplies the
 /// screen↔document mapping; the source root supplies the document bounds when its viewBox is
 /// available.
 ///
