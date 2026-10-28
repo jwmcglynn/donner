@@ -684,6 +684,7 @@ py_test(
     size = "small",
     srcs = ["native_delivery_elf_tests.py"],
     data = [":native_delivery_elf_fixture"],
+    tags = ["hosted_parity"],
     target_compatible_with = [
         "@platforms//os:linux",
         "@platforms//cpu:x86_64",
