@@ -608,6 +608,41 @@ TEST_F(RendererRegressionTests, FilterBlurNearCanvasEdgeMatchesBlurWithRoom) {
       "blur_canvas_edge_spill", editor::tests::PixelmatchIdentityParams());
 }
 
+// The derived filter inherits the blur and the rest of its region through href, and its own x cuts
+// through the rect. The region clips the blur's input and result, so inside it the render must
+// equal a blur of the rect's visible part rendered with room around it, and outside it nothing is
+// drawn.
+TEST_F(RendererRegressionTests, FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom) {
+  SVGDocument clippedByRegion = instantiateSubtree(R"svg(
+    <filter id="base" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <filter id="derived" x="20" width="44" href="#base"/>
+    <filter id="unused" y="10" href="#derived"/>
+    <rect x="4" y="16" width="48" height="32" fill="seagreen" filter="url(#derived)"/>)svg",
+                                                   {}, Vector2i(64, 64));
+  SVGDocument withRoom = instantiateSubtree(R"svg(
+    <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <rect x="20" y="16" width="32" height="32" fill="seagreen" filter="url(#f)"/>)svg",
+                                            {}, Vector2i(64, 64));
+  const RendererBitmap actual = RenderDocumentWithBackend(clippedByRegion, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "href_region_clip_visible");
+
+  const RendererBitmap outside =
+      editor::tests::CropBitmap(actual, Vector2i(0, 0), Vector2i(20, 64));
+  RendererBitmap transparent = outside;
+  std::fill(transparent.pixels.begin(), transparent.pixels.end(), 0);
+  editor::tests::CompareBitmapToBitmap(outside, transparent, "href_region_clip_outside",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(
+      editor::tests::CropBitmap(actual, Vector2i(20, 0), Vector2i(44, 64)),
+      editor::tests::CropBitmap(RenderDocumentWithBackend(withRoom, ActiveRendererBackend()),
+                                Vector2i(20, 0), Vector2i(44, 64)),
+      "href_region_clip_inside", editor::tests::PixelmatchIdentityParams());
+}
+
 /// A drop shadow whose offset carries its source toward or past the edge of the filter raster.
 /// Shapes are pixel-aligned rectangles, which both backends rasterize to identical coverage.
 struct EdgeDropShadowCase {

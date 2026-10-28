@@ -48,6 +48,20 @@ missing and non-filter references, including functions on both sides of a bad UR
 replacement golden or enlarged tolerance is used. Empty valid filters are covered separately and
 remain transparent.
 
+## Blur at a clipping filter region
+
+`filters/filter/complex-order-and-xlink-href.svg` filters a rect through a filter that inherits
+its blur and height through `xlink:href` and sets its own `x`, so the filter region cuts the
+blur's input at its left and bottom edges. The vendored reference now is resvg v0.49.0's
+300x300 rendering; the snapshot's reference had been flattened onto white (see
+`third_party/resvg-test-suite/BUILD.bazel`). Against it, Donner's region geometry and its free
+blur edges match. The remaining 1,275 pixels lie within 5 px of the two clipped edges: resvg
+approximates the blur with five box passes over a region-sized buffer, and each pass drops what
+spreads past the buffer, so the first column inside reads alpha 84. Donner keeps that spill, as
+a single blur of the clipped input would, and reads 143. The row is a reference-disagreement
+skip. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
+the clipped render to equal the visible part of the rect blurred with room around it.
+
 ## Active overrides (37)
 
 ### resvg golden is wrong per spec
