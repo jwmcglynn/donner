@@ -628,14 +628,29 @@ void ConstrainInsetRadii(InsetCornerRadii& radii, const Vector2d& size) {
   }
 }
 
+double InsetRadiusPixels(const Lengthd& radius, const Box2d& reference, const FontMetrics& metrics,
+                         Lengthd::Extent axis) {
+  if (radius.unit != Lengthd::Unit::Percent) {
+    return radius.toPixels(reference, metrics, axis);
+  }
+  const double extent = axis == Lengthd::Extent::X ? reference.width() : reference.height();
+  if (!std::isfinite(radius.value) || !std::isfinite(extent)) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  int radiusExponent, extentExponent;
+  const double radiusMantissa = std::frexp(radius.value, &radiusExponent);
+  const double extentMantissa = std::frexp(extent, &extentExponent);
+  return std::ldexp(radiusMantissa * extentMantissa / 100, radiusExponent + extentExponent);
+}
+
 std::optional<InsetCornerRadii> ResolveInsetRadii(const InsetClipPath& inset,
                                                   const Box2d& reference,
                                                   const FontMetrics& metrics,
                                                   const Vector2d& size) {
   InsetCornerRadii radii;
   for (std::size_t i = 0; i < radii.size(); ++i) {
-    radii[i] = Vector2d(inset.radiiX[i].toPixels(reference, metrics, Lengthd::Extent::X),
-                        inset.radiiY[i].toPixels(reference, metrics, Lengthd::Extent::Y));
+    radii[i] = Vector2d(InsetRadiusPixels(inset.radiiX[i], reference, metrics, Lengthd::Extent::X),
+                        InsetRadiusPixels(inset.radiiY[i], reference, metrics, Lengthd::Extent::Y));
     if (!std::isfinite(radii[i].x) || !std::isfinite(radii[i].y) || radii[i].x < 0 ||
         radii[i].y < 0) {
       return std::nullopt;

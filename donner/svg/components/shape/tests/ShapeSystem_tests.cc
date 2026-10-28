@@ -288,6 +288,27 @@ TEST_F(ShapeSystemTest, RoundedInsetPercentagePreservesTinyReferenceExtent) {
                              testing::Field(&Vector2d::y, testing::DoubleEq(0))));
 }
 
+TEST_F(ShapeSystemTest, RoundedInsetRejectsInvalidOrUnrepresentableUsedRadii) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1e38 1e38">
+      <rect id="r" width="1e38" height="1e38"/>
+    </svg>)");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  for (const Lengthd radius :
+       {Lengthd(-1), Lengthd(std::numeric_limits<double>::quiet_NaN()),
+        Lengthd(std::numeric_limits<double>::infinity()), Lengthd(1e308, Lengthd::Unit::Percent)}) {
+    SCOPED_TRACE(radius);
+    InsetClipPath inset;
+    inset.box = RadialClipPath::Box::View;
+    inset.radiiX.fill(radius);
+    inset.radiiY.fill(Lengthd(8, Lengthd::Unit::Px));
+    CircleClipGeometryBudget budget;
+    EXPECT_THAT(shapeSystem.insetClipPath(element->entityHandle(), inset, budget).commands(),
+                testing::IsEmpty());
+  }
+}
+
 TEST_F(ShapeSystemTest, InsetGeometryUsesAxisExtentsAndAdmitsBeforeAllocation) {
   auto document = ParseAndComputeShapes(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48">
