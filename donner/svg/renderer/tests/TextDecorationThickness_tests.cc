@@ -190,7 +190,7 @@ TEST(TextDecorationThickness, StyleMutationUpdatesThickness) {
       "<text id='t' x='10' y='40' font-size='20' fill='red' "
       "style='text-decoration:underline;text-decoration-thickness:8px'>XX</text>");
   auto text = document.querySelector("#t");
-  ASSERT_TRUE(text.has_value());
+  ASSERT_THAT(text, testing::Optional(testing::_));
   for (const auto [thickness, top] : {std::pair{8, 38}, std::pair{2, 41}}) {
     text->setAttribute("style", "text-decoration:underline;text-decoration-thickness:" +
                                     std::to_string(thickness) + "px");
@@ -303,11 +303,11 @@ TEST(TextDecorationThickness, SingularAndNonFiniteTransformsSuppressExplicitBand
   for (const auto& linear : {std::array{1.0, 0.0, 10.0, 0.0}, std::array{1.0, 1.0, 10.0, 10.0},
                              std::array{0.0, 0.0, 1.0, 1.0}, std::array{1.0, 0.0, 0.0, infinity},
                              std::array{maximum, maximum, 0.0, 1.0}}) {
-    Transform2d transform;
-    std::copy(linear.begin(), linear.end(), transform.data);
+    Transform2d deviceFromLocal;
+    std::copy(linear.begin(), linear.end(), deviceFromLocal.data);
     std::size_t remaining = Path::kMaximumGeometryQueryWork;
     bool emitted = false;
-    EmitTextDecorationPaths(run, origin, 1, 20, engine, transform, remaining,
+    EmitTextDecorationPaths(run, origin, 1, 20, engine, deviceFromLocal, remaining,
                             [&](const Path&) { emitted = true; });
     EXPECT_FALSE(emitted);
   }
@@ -322,13 +322,13 @@ TEST(TextDecorationThickness, ImmutableOriginStorageRefusesAndReleasesCapacity) 
   auto family = std::make_shared<DocumentResourceFamilyBudget>(limits);
   const std::array<TextDecorationOrigin, 1> origins{};
   auto data = TextDecorationData::Create(family, origins);
-  ASSERT_TRUE(data);
+  ASSERT_THAT(data, testing::NotNull());
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::Geometry),
             limits.geometryBytes);
   const std::array<TextDecorationOrigin, TextDecorationData::kMaximumOrigins + 1> tooMany{};
-  EXPECT_FALSE(TextDecorationData::Create(family, tooMany));
+  EXPECT_THAT(TextDecorationData::Create(family, tooMany), testing::IsNull());
   auto shared = data;
-  EXPECT_FALSE(TextDecorationData::Create(family, origins));
+  EXPECT_THAT(TextDecorationData::Create(family, origins), testing::IsNull());
   data.reset();
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::Geometry),
             limits.geometryBytes);

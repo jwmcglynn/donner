@@ -408,18 +408,19 @@ void EmitRotatedDecoration(const TextRun& run, const DecorationBand& band,
     if (!DecorationGlyphVisible(glyph)) {
       continue;
     }
-    Transform2d transform = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+    Transform2d localFromSegment = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
     if (glyph.rotateDegrees != 0) {
-      transform =
-          Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) * transform;
+      localFromSegment =
+          Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+          localFromSegment;
     }
-    const auto [top, width] = ResolveDecorationBand(band, transform * deviceFromLocal);
+    const auto [top, width] = ResolveDecorationBand(band, localFromSegment * deviceFromLocal);
     PathBuilder builder(4);
     if (!AppendDecorationRect(builder, 0, top, DecorationEnd(run, index) - glyph.xPosition,
                               top + width)) {
       continue;
     }
-    const Path path = builder.build().transformed(transform);
+    const Path path = builder.build().transformed(localFromSegment);
     if (std::all_of(path.points().begin(), path.points().end(), [](const Vector2d& point) {
           return ValidDecorationCoordinate(point.x) && ValidDecorationCoordinate(point.y);
         })) {

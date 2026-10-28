@@ -904,14 +904,14 @@ TEST_F(StyleSystemTest, DecorationThicknessComputesEmBeforeExplicitInheritance) 
   const auto parent = document.querySelector("#parent")->entityHandle();
   const auto child = document.querySelector("#child")->entityHandle();
   const auto plain = document.querySelector("#plain")->entityHandle();
-  EXPECT_EQ(registry.get<ComputedStyleComponent>(parent.entity())
-                .properties->textDecorationThickness.get()
-                ->value,
-            Lengthd(4, Lengthd::Unit::Px));
-  EXPECT_EQ(registry.get<ComputedStyleComponent>(child.entity())
-                .properties->textDecorationThickness.get()
-                ->value,
-            Lengthd(4, Lengthd::Unit::Px));
+  EXPECT_THAT(registry.get<ComputedStyleComponent>(parent.entity())
+                  .properties->textDecorationThickness.get()
+                  ->value,
+              LengthIs(testing::DoubleEq(4), Lengthd::Unit::Px));
+  EXPECT_THAT(registry.get<ComputedStyleComponent>(child.entity())
+                  .properties->textDecorationThickness.get()
+                  ->value,
+              LengthIs(testing::DoubleEq(4), Lengthd::Unit::Px));
   EXPECT_EQ(registry.get<ComputedStyleComponent>(plain.entity())
                 .properties->textDecorationThickness.get()
                 ->kind,
@@ -924,11 +924,11 @@ TEST_F(StyleSystemTest, DecorationThicknessRetainsInheritedPercentage) {
       <tspan id="child" font-size="40" style="text-decoration-thickness:inherit">X</tspan>
     </text></svg>)svg");
   const auto child = document.querySelector("#child")->entityHandle();
-  EXPECT_EQ(document.registry()
-                .get<ComputedStyleComponent>(child.entity())
-                .properties->textDecorationThickness.get()
-                ->value,
-            Lengthd(20, Lengthd::Unit::Percent));
+  EXPECT_THAT(document.registry()
+                  .get<ComputedStyleComponent>(child.entity())
+                  .properties->textDecorationThickness.get()
+                  ->value,
+              LengthIs(testing::DoubleEq(20), Lengthd::Unit::Percent));
 }
 
 TEST_F(StyleSystemTest, DecorationRemUsesComputedRootSizeAndRejectsViewportUnits) {
@@ -938,11 +938,11 @@ TEST_F(StyleSystemTest, DecorationRemUsesComputedRootSizeAndRejectsViewportUnits
       <tspan id="child" font-size="40" style="text-decoration-thickness:inherit">X</tspan>
     </text></svg>)svg");
   const auto child = document.querySelector("#child")->entityHandle();
-  EXPECT_EQ(document.registry()
-                .get<ComputedStyleComponent>(child.entity())
-                .properties->textDecorationThickness.get()
-                ->value,
-            Lengthd(30, Lengthd::Unit::Px));
+  EXPECT_THAT(document.registry()
+                  .get<ComputedStyleComponent>(child.entity())
+                  .properties->textDecorationThickness.get()
+                  ->value,
+              LengthIs(testing::DoubleEq(30), Lengthd::Unit::Px));
 }
 
 TEST_F(StyleSystemTest, RejectedDecorationUnitsPreserveNestedInheritance) {
@@ -955,11 +955,11 @@ TEST_F(StyleSystemTest, RejectedDecorationUnitsPreserveNestedInheritance) {
         "<text id='child' font-size='40' style='text-decoration-thickness:inherit'>X</text>"
         "</svg></g></svg>");
     const auto child = document.querySelector("#child")->entityHandle();
-    EXPECT_EQ(document.registry()
-                  .get<ComputedStyleComponent>(child.entity())
-                  .properties->textDecorationThickness.get()
-                  ->value,
-              Lengthd(5, Lengthd::Unit::Px));
+    EXPECT_THAT(document.registry()
+                    .get<ComputedStyleComponent>(child.entity())
+                    .properties->textDecorationThickness.get()
+                    ->value,
+                LengthIs(testing::DoubleEq(5), Lengthd::Unit::Px));
   }
 }
 

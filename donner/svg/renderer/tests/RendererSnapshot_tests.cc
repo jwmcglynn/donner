@@ -364,7 +364,7 @@ TEST(RendererSnapshotTests, DecorationCopyRefusalDropsOnlyDecorations) {
   text.spans.back().end = 1;
   text.spans.back().textDecoration = TextDecoration::Underline;
   text.spans.back().decorations = TextDecorationData::Create(family, origins);
-  ASSERT_TRUE(text.spans.back().decorations);
+  ASSERT_THAT(text.spans.back().decorations, testing::NotNull());
   ::testing::NiceMock<MockRendererInterface> renderer;
   RenderSnapshot snapshot;
   RenderSnapshotRecorder recorder(snapshot, renderer, RenderSnapshot::kMaximumCapturedFontBytes, 0);
@@ -375,7 +375,7 @@ TEST(RendererSnapshotTests, DecorationCopyRefusalDropsOnlyDecorations) {
       .WillOnce([](Registry&, const components::ComputedTextComponent& replay, const TextParams&) {
         ASSERT_EQ(replay.spans.size(), 1u);
         EXPECT_EQ(replay.spans[0].textDecoration, TextDecoration::None);
-        EXPECT_FALSE(replay.spans[0].decorations);
+        EXPECT_THAT(replay.spans[0].decorations, testing::IsNull());
         EXPECT_EQ(replay.spans[0].end, 1u);
       });
   RendererDriver driver(renderer);
@@ -406,7 +406,7 @@ TEST(RendererSnapshotTests, DecorationMetadataReplaysConcurrentlyWithoutSourceBu
     std::size_t count = 0;
     EXPECT_CALL(renderer, drawText(_, _, _))
         .WillOnce([&](Registry&, const components::ComputedTextComponent& text, const TextParams&) {
-          ASSERT_TRUE(text.spans[0].decorations);
+          ASSERT_THAT(text.spans[0].decorations, testing::NotNull());
           count = text.spans[0].decorations->origins().size();
         });
     snapshot.replay(renderer);
@@ -439,18 +439,18 @@ TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
       .WillRepeatedly([&](Registry& registry, const components::ComputedTextComponent& text,
                           const TextParams& params) {
         ++drawCount;
-        ASSERT_TRUE(params.preparedTextDraw);
+        ASSERT_THAT(params.preparedTextDraw, testing::NotNull());
         const auto& fonts = registry.ctx().get<FontManager>();
         for (const TextRun& run : params.preparedTextDraw->runs) {
           if (!run.glyphs.empty()) {
-            EXPECT_FALSE(fonts.fontData(run.font).empty());
+            EXPECT_THAT(fonts.fontData(run.font), testing::Not(testing::IsEmpty()));
           }
         }
         for (const auto& span : text.spans) {
           if (span.decorations) {
             for (const auto& origin : span.decorations->origins()) {
               if (origin.font) {
-                EXPECT_FALSE(fonts.fontData(origin.font->font).empty());
+                EXPECT_THAT(fonts.fontData(origin.font->font), testing::Not(testing::IsEmpty()));
               }
             }
           }
