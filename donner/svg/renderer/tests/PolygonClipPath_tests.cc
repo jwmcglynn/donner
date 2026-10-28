@@ -18,35 +18,61 @@ RendererBitmap RenderPolygonScene(std::string_view body) {
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
-void ExpectPolygonReference(std::string_view clip, std::string_view path,
-                            std::string_view geometry) {
-  const auto actual = RenderPolygonScene("<g clip-path='" + std::string(clip) + "'>" +
-                                         std::string(geometry) + "</g>");
-  const auto expected = RenderPolygonScene("<clipPath id='reference'>" + std::string(path) +
-                                           "</clipPath><g clip-path='url(#reference)'>" +
-                                           std::string(geometry) + "</g>");
-  editor::tests::CompareBitmapToBitmap(actual, expected, "polygon_reference",
-                                       editor::tests::PixelmatchIdentityParams());
-}
-
 TEST(PolygonClipPath, PercentCoordinatesUseFillBoxOriginAndEachAxis) {
-  ExpectPolygonReference("polygon(0 0, 100% 0, 0 100%) fill-box", "<path d='M8 12 H48 L8 44 Z'/>",
-                         "<rect x='8' y='12' width='40' height='32' fill='red'/>");
+  {
+    const auto actual = RenderPolygonScene(
+        "<g clip-path='" + std::string("polygon(0 0, 100% 0, 0 100%) fill-box") + "'>" +
+        std::string("<rect x='8' y='12' width='40' height='32' fill='red'/>") + "</g>");
+    const auto expected = RenderPolygonScene(
+        "<clipPath id='reference'>" + std::string("<path d='M8 12 H48 L8 44 Z'/>") +
+        "</clipPath><g clip-path='url(#reference)'>" +
+        std::string("<rect x='8' y='12' width='40' height='32' fill='red'/>") + "</g>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "polygon_reference",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(PolygonClipPath, ExplicitLengthsAllowCoordinatesOutsideReferenceBox) {
-  ExpectPolygonReference("polygon(-4px -4px, 24px -4px, 24px 20px) fill-box",
-                         "<path d='M4 8 H32 V32 Z'/>",
-                         "<rect x='8' y='12' width='40' height='32' fill='red'/>");
+  {
+    const auto actual = RenderPolygonScene(
+        "<g clip-path='" + std::string("polygon(-4px -4px, 24px -4px, 24px 20px) fill-box") + "'>" +
+        std::string("<rect x='8' y='12' width='40' height='32' fill='red'/>") + "</g>");
+    const auto expected = RenderPolygonScene(
+        "<clipPath id='reference'>" + std::string("<path d='M4 8 H32 V32 Z'/>") +
+        "</clipPath><g clip-path='url(#reference)'>" +
+        std::string("<rect x='8' y='12' width='40' height='32' fill='red'/>") + "</g>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "polygon_reference",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(PolygonClipPath, StrokeAndViewReferenceBoxes) {
-  ExpectPolygonReference("polygon(0 0, 100% 0, 0 100%)", "<path d='M12 16 H44 L12 40 Z'/>",
-                         "<rect x='16' y='20' width='24' height='16' fill='red' "
-                         "stroke='blue' stroke-width='8'/>");
-  ExpectPolygonReference("view-box polygon(25% 25%, 75% 25%, 25% 75%)",
-                         "<path d='M16 16 H48 L16 48 Z'/>",
-                         "<rect width='64' height='64' fill='red'/>");
+  {
+    const auto actual =
+        RenderPolygonScene("<g clip-path='" + std::string("polygon(0 0, 100% 0, 0 100%)") + "'>" +
+                           std::string("<rect x='16' y='20' width='24' height='16' fill='red' "
+                                       "stroke='blue' stroke-width='8'/>") +
+                           "</g>");
+    const auto expected = RenderPolygonScene(
+        "<clipPath id='reference'>" + std::string("<path d='M12 16 H44 L12 40 Z'/>") +
+        "</clipPath><g clip-path='url(#reference)'>" +
+        std::string("<rect x='16' y='20' width='24' height='16' fill='red' "
+                    "stroke='blue' stroke-width='8'/>") +
+        "</g>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "polygon_reference",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  {
+    const auto actual = RenderPolygonScene(
+        "<g clip-path='" + std::string("view-box polygon(25% 25%, 75% 25%, 25% 75%)") + "'>" +
+        std::string("<rect width='64' height='64' fill='red'/>") + "</g>");
+    const auto expected = RenderPolygonScene(
+        "<clipPath id='reference'>" + std::string("<path d='M16 16 H48 L16 48 Z'/>") +
+        "</clipPath><g clip-path='url(#reference)'>" +
+        std::string("<rect width='64' height='64' fill='red'/>") + "</g>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "polygon_reference",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(PolygonClipPath, FillRuleControlsDoubleWoundInterior) {
@@ -56,7 +82,17 @@ TEST(PolygonClipPath, FillRuleControlsDoubleWoundInterior) {
                              "56px, 8px 56px) view-box";
     const std::string path =
         "<path d='M8 8 H56 V56 H8 V8 H56 V56 H8 Z' clip-rule='" + std::string(rule) + "'/>";
-    ExpectPolygonReference(clip, path, "<rect width='64' height='64' fill='red'/>");
+    {
+      const auto actual =
+          RenderPolygonScene("<g clip-path='" + std::string(clip) + "'>" +
+                             std::string("<rect width='64' height='64' fill='red'/>") + "</g>");
+      const auto expected =
+          RenderPolygonScene("<clipPath id='reference'>" + std::string(path) +
+                             "</clipPath><g clip-path='url(#reference)'>" +
+                             std::string("<rect width='64' height='64' fill='red'/>") + "</g>");
+      editor::tests::CompareBitmapToBitmap(actual, expected, "polygon_reference",
+                                           editor::tests::PixelmatchIdentityParams());
+    }
   }
 }
 
