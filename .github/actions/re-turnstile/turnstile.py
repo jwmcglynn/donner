@@ -52,6 +52,11 @@ STATUSES = ("queued", "in_progress", "requested", "waiting", "pending")
 PAGE_SIZE = 100
 
 
+def _log(message: str) -> None:
+    # Flushed, so a long wait shows each poll in the live job log rather than at exit.
+    print(message, flush=True)
+
+
 class _WaitState:
     """What one wait remembers between polls."""
 
@@ -76,7 +81,7 @@ class Turnstile:
                  sleep: Callable[[float], None] = time.sleep,
                  clock: Callable[[], float] = time.time,
                  jitter: Callable[[], float] = lambda: random.uniform(0, 4),
-                 log: Callable[[str], None] = print) -> None:
+                 log: Callable[[str], None] = _log) -> None:
         self.api = environ.get("GITHUB_API_URL") or "https://api.github.com"
         self.repo = environ["GITHUB_REPOSITORY"]
         self.me = int(environ["GITHUB_RUN_ID"])
