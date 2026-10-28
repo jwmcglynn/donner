@@ -5,6 +5,7 @@ py_binary(
     srcs = ["parity_report.py"],
     data = [
         "//donner/svg/renderer/tests:resvg_test_registration_source",
+        "//third_party/resvg-test-suite:results.csv",
         "//third_party/resvg-test-suite:tests",
     ],
     imports = ["."],
@@ -22,6 +23,7 @@ py_test(
     data = [
         "//donner/svg/renderer/tests:resvg_test_registration_source",
         "//third_party/resvg-test-suite:resources/ub.png",
+        "//third_party/resvg-test-suite:results.csv",
         "//third_party/resvg-test-suite:tests",
     ],
     imports = ["."],
