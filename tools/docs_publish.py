@@ -37,13 +37,25 @@ def download(artifact_id: int, output: Path) -> None:
     site.require(output.stat().st_size <= site.MAX_SITE, "artifact is oversized")
 
 
+def _attestation_command(args: list[str], stdout) -> None:
+    try:
+        subprocess.run(args, stdout=stdout, stderr=subprocess.PIPE, timeout=180, check=True)
+    except subprocess.CalledProcessError as error:
+        diagnostic = error.stderr or b""
+        for name in ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"):
+            token = os.environ.get(name)
+            if token:
+                diagnostic = diagnostic.replace(token.encode(), b"[REDACTED]")
+        detail = json.dumps(diagnostic[:4096].decode("utf-8", errors="replace"))
+        raise ValueError(f"GitHub attestation verification failed (exit {error.returncode}): {detail}") from None
+
+
 def attestation(path: Path, workflow: str, commit: str, output: Path) -> None:
     with output.open("wb") as stream:
-        subprocess.run(["gh", "attestation", "verify", str(path), "--repo", "jwmcglynn/donner",
+        _attestation_command(["gh", "attestation", "verify", str(path), "--repo", "jwmcglynn/donner",
                         "--signer-workflow", "jwmcglynn/donner/" + workflow,
                         "--source-digest", commit, "--source-ref", "refs/heads/main",
-                        "--deny-self-hosted-runners", "--format", "json"], stdout=stream,
-                       stderr=subprocess.PIPE, timeout=180, check=True)
+                        "--deny-self-hosted-runners", "--format", "json"], stdout=stream)
 
 
 def source_file(commit: str, name: str) -> str:
@@ -663,11 +675,10 @@ def _offline_attestation(path: Path, raw: bytes, commit: str, work: Path, workfl
     site.require(isinstance(values, list) and bool(values), "stored attestation is missing")
     bundle = work / (path.name + ".bundle.json")
     bundle.write_bytes(site.canonical(values[0]["attestation"]["bundle"]))
-    subprocess.run(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
+    _attestation_command(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
                     "--repo", "jwmcglynn/donner", "--signer-workflow", "jwmcglynn/donner/" + workflow,
                     "--source-digest", commit, "--source-ref", "refs/heads/main",
-                    "--deny-self-hosted-runners"], stdout=subprocess.DEVNULL,
-                   stderr=subprocess.PIPE, timeout=180, check=True)
+                    "--deny-self-hosted-runners"], stdout=subprocess.DEVNULL)
 
 
 def rollback_preflight(target: str, snapshot: str, prior: str, work: Path, api=None) -> None:
@@ -872,11 +883,10 @@ def _bundle_attestation(path: Path, bundle: Path, commit: str, output: Path) -> 
     site.require(bundle.is_file() and not bundle.is_symlink() and bundle.stat().st_size <= site.MAX_FILE,
                  "automatic attestation bundle is missing or oversized")
     with output.open("wb") as stream:
-        subprocess.run(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
+        _attestation_command(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
                         "--repo", "jwmcglynn/donner", "--signer-workflow", "jwmcglynn/donner/" + WORKFLOW,
                         "--source-digest", commit, "--source-ref", "refs/heads/main",
-                        "--deny-self-hosted-runners", "--format", "json"], stdout=stream,
-                       stderr=subprocess.PIPE, timeout=180, check=True)
+                        "--deny-self-hosted-runners", "--format", "json"], stdout=stream)
 
 
 def _auto_artifact(name: str, work: Path, output: Path) -> None:
