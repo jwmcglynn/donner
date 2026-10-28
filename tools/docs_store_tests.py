@@ -26,6 +26,19 @@ class StoreTest(unittest.TestCase):
         store.restore(record, output, lambda name: (self.payload / name).read_bytes())
         self.assertEqual(output.read_bytes(), self.archive.read_bytes())
 
+    def test_github_raw_reads_preserve_binary_archive_chunks(self):
+        record = store.split_archive(self.archive, self.payload)
+        def run(args, *, stdout, **kwargs):
+            self.assertIn("Accept: application/vnd.github.raw", args)
+            self.assertNotIn("Accept: application/vnd.github.raw+json", args)
+            path = args[2].split("/contents/", 1)[1].split("?ref=", 1)[0]
+            stdout.write((self.payload / path).read_bytes())
+            return store.subprocess.CompletedProcess(args, 0, stderr=b"")
+        output = self.root / "downloaded.tar"
+        with mock.patch.object(store.subprocess, "run", side_effect=run):
+            store.restore(record, output, lambda name: store.GitHub().file("a" * 40, name))
+        self.assertEqual(output.read_bytes(), self.archive.read_bytes())
+
     def test_corrupted_missing_and_oversized_chunks_are_rejected(self):
         record = store.split_archive(self.archive, self.payload)
         for failure in (b"changed", b"", b"x" * (store.CHUNK + 1)):
