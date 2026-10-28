@@ -194,6 +194,21 @@ void second(int value) {
             check_banned_patterns._method_complexities(stripped),
         )
 
+    def test_quoted_literals_preserve_numeric_separators(self):
+        source = r"""int count = 1'000'000;
+char8_t brace = u8'{';
+char16_t quote = u'\'';
+wchar_t slash = L'\\';
+const char* text = "it's quoted";
+"""
+        stripped = check_banned_patterns._strip_comments_and_strings(source)
+        self.assertIn("1'000'000", stripped)
+        self.assertNotIn("u8'", stripped)
+        self.assertNotIn("u'", stripped)
+        self.assertNotIn("L'", stripped)
+        self.assertNotIn("it's quoted", stripped)
+        self.assertEqual(source.count("\n"), stripped.count("\n"))
+
     def test_blocks_methods_above_the_local_complexity_limit(self):
         branches = "\n".join(
             f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
