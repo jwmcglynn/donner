@@ -1997,6 +1997,57 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
   }
 }
 
+TEST(PropertyRegistry, InsetOffsetsExpandAndRetainInlineStorage) {
+  struct Example {
+    std::string_view value;
+    std::array<double, 4> offsets;
+  };
+  for (const auto& example :
+       {Example{"1px", {1, 1, 1, 1}}, Example{"1px 2px", {1, 2, 1, 2}},
+        Example{"1px 2px 3px", {1, 2, 3, 2}}, Example{"1px 2px 3px 4px", {1, 2, 3, 4}}}) {
+    SCOPED_TRACE(example.value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:fill-box inset(" + std::string(example.value) + ")");
+    const auto clip = registry.clipPath.get();
+    ASSERT_TRUE(clip.has_value());
+    const auto& inset = std::get<InsetClipPath>(clip->value);
+    EXPECT_EQ(inset.box, RadialClipPath::Box::Fill);
+    for (std::size_t i = 0; i < example.offsets.size(); ++i) {
+      EXPECT_EQ(inset.offsets[i], Lengthd(example.offsets[i], Lengthd::Unit::Px));
+    }
+    EXPECT_EQ(registry.complexPropertyBytes(), 0u);
+  }
+}
+
+TEST(PropertyRegistry, InsetAcceptsNegativePercentagesAndPresentationUnits) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:INSET(-10% 2px) view-box");
+  const auto clip = registry.clipPath.get();
+  ASSERT_TRUE(clip.has_value());
+  const auto& inset = std::get<InsetClipPath>(clip->value);
+  EXPECT_EQ(inset.offsets[0], Lengthd(-10, Lengthd::Unit::Percent));
+  EXPECT_EQ(inset.offsets[2], inset.offsets[0]);
+  EXPECT_EQ(inset.box, RadialClipPath::Box::View);
+  PropertyRegistry presentation;
+  EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "inset(1 2 3 4)"),
+              NoParseError());
+  EXPECT_EQ(std::get<InsetClipPath>(presentation.clipPath.get()->value).offsets[3], Lengthd(4));
+  EXPECT_EQ(testing::PrintToString(registry.clipPath.get().value()),
+            "inset(-10% 2px -10% 2px) view-box");
+}
+
+TEST(PropertyRegistry, InvalidInsetKeepsEarlierDeclaration) {
+  for (const std::string_view value :
+       {"inset()", "inset(1px 2px 3px 4px 5px)", "inset(1px, 2px)", "inset(2)", "inset(auto)",
+        "inset(1e999px)", "inset(1px round 2px)", "inset(round 2px)", "inset(calc(2px))",
+        "inset(1px) fill-box view-box", "inset(1px) garbage"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(value));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
 TEST(PropertyRegistry, PolygonRetainedCapacityIsCharged) {
   PolygonClipPath polygon;
   polygon.vertices.reserve(8);

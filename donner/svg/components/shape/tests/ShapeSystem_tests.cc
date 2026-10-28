@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <string>
 
 #include "donner/base/ParseWarningSink.h"
@@ -106,6 +107,48 @@ TEST_F(ShapeSystemTest, CircleFillReferenceAdmitsPathScanBeforeBounds) {
   ASSERT_THAT(clip.commands(), testing::Not(testing::IsEmpty()));
   EXPECT_THAT(admitted.rejected, testing::IsFalse());
   EXPECT_THAT(clip.bounds(), BoxEq(Vector2d(49, 0), Vector2d(51, 2)));
+}
+
+TEST_F(ShapeSystemTest, InsetGeometryUsesAxisExtentsAndAdmitsBeforeAllocation) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48">
+      <rect id="r" width="64" height="48"/>
+    </svg>)");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  InsetClipPath inset;
+  inset.box = RadialClipPath::Box::View;
+  inset.offsets = {Lengthd(25, Lengthd::Unit::Percent), Lengthd(12.5, Lengthd::Unit::Percent),
+                   Lengthd(25, Lengthd::Unit::Percent), Lengthd(12.5, Lengthd::Unit::Percent)};
+  CircleClipGeometryBudget limited;
+  limited.remainingWork = 8;
+  EXPECT_TRUE(shapeSystem.insetClipPath(element->entityHandle(), inset, limited).empty());
+  EXPECT_TRUE(limited.rejected);
+  CircleClipGeometryBudget admitted;
+  admitted.remainingWork = 9;
+  const Path clip = shapeSystem.insetClipPath(element->entityHandle(), inset, admitted);
+  ASSERT_FALSE(clip.empty());
+  EXPECT_THAT(clip.bounds(), BoxEq(Vector2d(8, 12), Vector2d(56, 36)));
+  EXPECT_FALSE(admitted.rejected);
+  EXPECT_EQ(admitted.remainingWork, 0u);
+}
+
+TEST_F(ShapeSystemTest, InsetOversubscriptionAndUnrepresentableCoordinatesAreEmpty) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48">
+      <rect id="r" width="64" height="48"/>
+    </svg>)");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  for (const auto value : {32.0, 1e308, -1e308, std::numeric_limits<double>::infinity(),
+                           std::numeric_limits<double>::quiet_NaN()}) {
+    SCOPED_TRACE(value);
+    InsetClipPath inset;
+    inset.box = RadialClipPath::Box::View;
+    inset.offsets.fill(Lengthd(value));
+    CircleClipGeometryBudget budget;
+    EXPECT_TRUE(shapeSystem.insetClipPath(element->entityHandle(), inset, budget).empty());
+  }
 }
 
 TEST_F(ShapeSystemTest, PolygonAdmissionAndNonFiniteCoordinatesFailClosed) {

@@ -147,6 +147,13 @@ public:
   Path polygonClipPath(EntityHandle handle, const PolygonClipPath& polygon,
                        CircleClipGeometryBudget& budget);
 
+  /// Resolve a non-rounded inset clipping shape in element-local coordinates.
+  /// @param handle Styled element supplying reference geometry and length metrics.
+  /// @param inset Parsed offsets and reference-box selection.
+  /// @param budget Shared admission budget for render preparation.
+  Path insetClipPath(EntityHandle handle, const InsetClipPath& inset,
+                     CircleClipGeometryBudget& budget);
+
   /**
    * Get the bounds for the given entity in world space, if it has a shape component.
    *
