@@ -3558,4 +3558,12 @@ TEST(TextEngineScriptedTest, MeasureChUnitFailsWhenFontCannotBeShaped) {
   EXPECT_FALSE(engine.measureChUnitInEm(families).has_value());
 }
 
+TEST(TextEngineScriptedTest, WrappedParsedNestedSpanOwnsAnchor) {
+  const auto glyphs =
+      LayoutParsedTextPath("<tspan text-anchor='end' white-space='pre'>A&#10;BB</tspan>");
+  ASSERT_THAT(glyphs, SizeIs(4));
+  EXPECT_THAT(glyphs[0].xPosition, DoubleNear(-10, 1e-5));
+  EXPECT_THAT(glyphs[2].xPosition, DoubleNear(-21, 1e-5));
+}
+
 }  // namespace donner::svg
