@@ -2357,15 +2357,38 @@ TEST(TextEngineTest, WhiteSpaceFlatForcedBreakSurvivesTextPathSibling) {
   EXPECT_THAT(runs[1].glyphs[2].xPosition, DoubleEq(runs[1].glyphs[0].xPosition));
 }
 
-TEST(TextEngineTest, WhiteSpaceTabSkipsStopCloserThanHalfSpace) {
+class TabStopTextBackend : public ScriptedTextBackend {
+public:
+  TabStopTextBackend(double leadingAdvance, double zeroAdvance)
+      : leadingAdvance_(leadingAdvance), zeroAdvance_(zeroAdvance) {}
+
+  ShapedRun shapeRun(FontHandle font, float size, std::string_view text, size_t offset,
+                     size_t length, bool vertical, FontVariant variant,
+                     bool logical) const override {
+    auto run =
+        ScriptedTextBackend::shapeRun(font, size, text, offset, length, vertical, variant, logical);
+    for (auto& glyph : run.glyphs) {
+      if (text[glyph.cluster] == 'A') {
+        glyph.xAdvance = leadingAdvance_;
+      } else if (text[glyph.cluster] == '0') {
+        glyph.xAdvance = zeroAdvance_;
+      }
+    }
+    return run;
+  }
+
+private:
+  double leadingAdvance_;
+  double zeroAdvance_;
+};
+
+TEST(TextEngineTest, WhiteSpaceTabSkipsStopCloserThanHalfCh) {
   Registry registry;
   FontManager fontManager(registry);
-  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  TextEngine engine(fontManager, registry, std::make_unique<TabStopTextBackend>(76.5, 10));
   components::ComputedTextComponent text;
   auto span = MakeSpan("A\tB");
   span.whiteSpace = WhiteSpace::Pre;
-  span.dxList.resize(3);
-  span.dxList[1] = Lengthd(66.5);
   text.spans.push_back(span);
   const auto runs = engine.layout(text, MakeTextParams(20.0));
   ASSERT_THAT(runs, SizeIs(1));
@@ -2455,31 +2478,13 @@ TEST(TextEngineTest, WhiteSpaceTabRetainsTextLengthAndAnchor) {
   }
 }
 
-class WideZeroTextBackend : public ScriptedTextBackend {
-public:
-  ShapedRun shapeRun(FontHandle font, float size, std::string_view text, size_t offset,
-                     size_t length, bool vertical, FontVariant variant,
-                     bool logical) const override {
-    auto run =
-        ScriptedTextBackend::shapeRun(font, size, text, offset, length, vertical, variant, logical);
-    for (auto& glyph : run.glyphs) {
-      if (text[glyph.cluster] == '0') {
-        glyph.xAdvance = 20.0;
-      }
-    }
-    return run;
-  }
-};
-
 TEST(TextEngineTest, WhiteSpaceTabMinimumUsesZeroAdvanceRatherThanSpace) {
   Registry registry;
   FontManager fontManager(registry);
-  TextEngine engine(fontManager, registry, std::make_unique<WideZeroTextBackend>());
+  TextEngine engine(fontManager, registry, std::make_unique<TabStopTextBackend>(72, 20));
   components::ComputedTextComponent text;
   auto span = MakeSpan("A\tB");
   span.whiteSpace = WhiteSpace::Pre;
-  span.dxList.resize(3);
-  span.dxList[1] = Lengthd(62.0);
   text.spans.push_back(span);
   const auto runs = engine.layout(text, MakeTextParams(20.0));
   ASSERT_THAT(runs, SizeIs(1));
@@ -3005,6 +3010,34 @@ TEST(TextEngineTest, SinglePreWrapLineHangsOverflowingSpacesAfterTextLength) {
         }
       }
     }
+  }
+}
+
+TEST(TextEngineTest, WhiteSpaceTabStopsPrecedeSvgInlineDisplacement) {
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    SCOPED_TRACE(testing::PrintToString(mode));
+    Registry registry;
+    FontManager fonts(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fonts);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("A\tB");
+    span.whiteSpace = WhiteSpace::Pre;
+    span.textOrientation = TextOrientation::Upright;
+    auto& relative = isVertical(mode) ? span.dyList : span.dxList;
+    relative.resize(3);
+    relative[1] = Lengthd(62);
+    text.spans.push_back(span);
+    auto params = MakeTextParams(20);
+    params.writingMode = mode;
+    const auto runs = engine.layout(text, params);
+    ASSERT_THAT(runs, SizeIs(1));
+    ASSERT_THAT(runs[0].glyphs, SizeIs(3));
+    const auto& tab = runs[0].glyphs[1];
+    const auto& b = runs[0].glyphs[2];
+    EXPECT_THAT(isVertical(mode) ? tab.yAdvance : tab.xAdvance,
+                DoubleNear(isVertical(mode) ? 82 : 69, 1e-5));
+    EXPECT_THAT(isVertical(mode) ? b.yPosition - b.verticalOriginOffset : b.xPosition,
+                DoubleNear(isVertical(mode) ? 160 : 143, 1e-5));
   }
 }
 
