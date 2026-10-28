@@ -2789,8 +2789,8 @@ TEST(TextEngineTest, WrappedAnchorsPreserveVisualClusterOrder) {
     ASSERT_THAT(wrapped, SizeIs(3));
     for (size_t run : {size_t(0), size_t(2)}) {
       ASSERT_THAT(wrapped[run].glyphs, SizeIs(2));
-      EXPECT_THAT(wrapped[run].glyphs[0].cluster, Eq(1u));
-      EXPECT_THAT(wrapped[run].glyphs[1].cluster, Eq(0u));
+      EXPECT_THAT(wrapped[run].glyphs[0].cluster, testing::Eq(1u));
+      EXPECT_THAT(wrapped[run].glyphs[1].cluster, testing::Eq(0u));
       for (size_t i = 0; i < 2; ++i) {
         EXPECT_THAT(wrapped[run].glyphs[i].xPosition,
                     DoubleNear(ordinary[0].glyphs[i].xPosition, 1e-5));
