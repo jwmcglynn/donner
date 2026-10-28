@@ -1,7 +1,6 @@
 #include "donner/editor/LayersPanel.h"
 
 #include <algorithm>
-#include <array>
 #include <cfloat>
 #include <chrono>
 #include <cstdint>
@@ -65,14 +64,6 @@ ResourceLease BootstrapSvgForIcon(LayerAffordanceIcon icon) {
   }
   return embedded::kBootstrapEyeSvg;
 }
-
-/// Every affordance icon, in enum order.
-constexpr std::array<LayerAffordanceIcon, 4> kLayerAffordanceIcons = {
-    LayerAffordanceIcon::Visible,
-    LayerAffordanceIcon::Hidden,
-    LayerAffordanceIcon::Locked,
-    LayerAffordanceIcon::Unlocked,
-};
 
 const std::optional<svg::RendererBitmap>& CachedBootstrapIconBitmap(LayerAffordanceIcon icon) {
   switch (icon) {
