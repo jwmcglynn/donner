@@ -17,9 +17,13 @@ struct FullWidthText {
 };
 
 /// Return the Unicode full-width mapping, retaining a collapsed ASCII space unchanged.
+/// @param codepoint Original Unicode codepoint.
+/// @param preserveSpaces Whether a U+0020 space was preserved by whitespace normalization.
 char32_t FullWidthCodepoint(char32_t codepoint, bool preserveSpaces);
 
 /// Whether \p text contains a character whose full-width form differs.
+/// @param text Original normalized UTF-8 text.
+/// @param preserveSpaces Whether U+0020 spaces were preserved by whitespace normalization.
 bool NeedsFullWidth(std::string_view text, bool preserveSpaces);
 
 /// Maximum transient UTF-8 and source-index payload retained for one transformed span.

@@ -15,7 +15,10 @@ normalization pass.
 
 Only preserved U+0020 spaces become U+3000 IDEOGRAPHIC SPACE. Collapsed spaces stay U+0020. This applies
 to CSS whitespace modes and to preserved legacy `xml:space`. Tabs and line breaks retain their
-whitespace behavior. Full-width spaces participate in wrapping, hanging, and word spacing.
+whitespace behavior. Full-width spaces participate in wrapping and hanging. CSS word spacing
+does not change fixed-width U+3000 spaces; collapsed U+0020 spaces still receive word spacing.
+The existing line layout breaks at separators, with no general Unicode or CJK per-character
+line-breaking support.
 
 The transformation is applied to a temporary shaping buffer. It does not change the SVG document's
 text, normalized source spans, DOM character counts, or the source indices used by SVG positioning

@@ -176,11 +176,6 @@ uint32_t GetPositioningCluster(const TextGlyph& glyph) {
   return glyph.positioningCluster.value_or(glyph.cluster);
 }
 
-/// Separators to which this engine applies CSS word spacing.
-bool IsWordSpacingCodepoint(uint32_t codepoint) {
-  return codepoint == 0x20 || codepoint == 0x3000;
-}
-
 /// Read a rendered codepoint while retaining the span's original byte addressing.
 uint32_t SpanLayoutCodepoint(const components::ComputedTextComponent::TextSpan& span, size_t byte) {
   const std::string_view text(span.text.data() + span.start, span.end - span.start);
@@ -1216,7 +1211,7 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
       if (!backend.isCursive(codepoint)) {
         state.advance += span.letterSpacingPx;
       }
-      if (IsWordSpacingCodepoint(codepoint)) {
+      if (codepoint == 0x20) {
         state.advance += span.wordSpacingPx;
       }
     }
@@ -3702,7 +3697,7 @@ PreparedSpanShaping PrepareSpanShaping(const ChunkShaper& shaper, std::string_vi
 
 /// Word spacing advances only after every glyph attached to the space group.
 bool IsWordSpacingGroupEnd(const PreparedSpanChunk& chunk, size_t index, uint32_t codepoint) {
-  return IsWordSpacingCodepoint(codepoint) &&
+  return codepoint == 0x20 &&
          (index + 1 == chunk.positioningClusters.size() ||
           chunk.positioningClusters[index] != chunk.positioningClusters[index + 1]);
 }
