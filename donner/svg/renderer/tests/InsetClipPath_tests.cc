@@ -4,7 +4,6 @@
 #include <string>
 #include <string_view>
 
-#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
@@ -141,8 +140,10 @@ TEST(InsetClipPath, RootFontMutationRecomputesInheritedRem) {
                                      {}, Vector2i(64, 64));
   for (const int fontSize : {16, 32, 16}) {
     SCOPED_TRACE(fontSize);
-    ASSERT_THAT(document.svgElement().setAttribute("font-size", std::to_string(fontSize)),
-                NoParseError());
+    const std::string fontSizeValue = std::to_string(fontSize);
+    document.svgElement().setAttribute("font-size", fontSizeValue);
+    ASSERT_THAT(document.svgElement().getAttribute("font-size"),
+                testing::Optional(RcString(fontSizeValue)));
     const auto actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
     const int inset = fontSize / 4;
     const auto expected =
