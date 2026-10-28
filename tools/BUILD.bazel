@@ -668,6 +668,8 @@ cc_binary(
     copts = [
         "-gline-tables-only",
         "-fasynchronous-unwind-tables",
+        "-fdebug-compilation-dir=.",
+        "-ffile-compilation-dir=.",
     ],
     features = ["-strip_debug_symbols"],
     linkopts = ["-Wl,--build-id=sha1"],
