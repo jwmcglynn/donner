@@ -48,6 +48,7 @@ def _attestation_command(args: list[str], stdout) -> None:
             if token:
                 diagnostic = diagnostic.replace(token.encode(), b"[REDACTED]")
         detail = json.dumps(diagnostic[:4096].decode("utf-8", errors="replace"))
+        detail = detail.replace("#", "\\u0023")
         raise ValueError(f"GitHub attestation verification failed (exit {error.returncode}): {detail}") from None
 
 
