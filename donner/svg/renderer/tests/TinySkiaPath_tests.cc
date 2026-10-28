@@ -11,6 +11,34 @@
 
 using ::testing::Optional;
 
+TEST(PathTest, ConvexClassificationAcceptsExplicitClosingVertex) {
+  tiny_skia::PathBuilder builder;
+  builder.moveTo(2.0f, 2.0f);
+  builder.lineTo(8.0f, 2.0f);
+  builder.lineTo(8.0f, 8.0f);
+  builder.lineTo(2.0f, 8.0f);
+  builder.lineTo(2.0f, 2.0f);
+  builder.close();
+  const auto path = builder.finish();
+  ASSERT_THAT(path, Optional(testing::_));
+  EXPECT_THAT(path->isConvex(), testing::IsTrue());
+}
+
+TEST(PathTest, ConvexClassificationAcceptsClosedCurveControlPolygon) {
+  constexpr float kNear = 3.34314575f;
+  constexpr float kFar = 6.65685425f;
+  tiny_skia::PathBuilder builder;
+  builder.moveTo(8.0f, 5.0f);
+  builder.cubicTo(8.0f, kFar, kFar, 8.0f, 5.0f, 8.0f);
+  builder.cubicTo(kNear, 8.0f, 2.0f, kFar, 2.0f, 5.0f);
+  builder.cubicTo(2.0f, kNear, kNear, 2.0f, 5.0f, 2.0f);
+  builder.cubicTo(kFar, 2.0f, 8.0f, kNear, 8.0f, 5.0f);
+  builder.close();
+  const auto path = builder.finish();
+  ASSERT_THAT(path, Optional(testing::_));
+  EXPECT_THAT(path->isConvex(), testing::IsTrue());
+}
+
 TEST(PathTest, ConvexClassificationRejectsRepeatedContour) {
   tiny_skia::PathBuilder builder;
   builder.moveTo(2.0f, 2.0f);
