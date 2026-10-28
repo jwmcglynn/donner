@@ -114,7 +114,7 @@ that base-change CI, so its newest run always holds real results; the next push 
 
 A new head commit (PR opened, pushed or reopened) cancels the queued and in-progress runs of the
 PR's earlier head in `main.yml`, `cmake.yml`, `lint.yml`, `bcr_preflight.yml`, `editor_wasm.yml`
-and `sanitizers-pr.yml`: each groups those runs per workflow and PR number. A cancelled run on a
+and `sanitizers-pr.yml`: each groups those runs per workflow and PR number. A cancelled run for a
 superseded commit is expected, not a failure, and needs no rerun. Nothing else cancels: pushes
 (including `main`), schedules, dispatches, releases, label and edit events, base-change runs and
 `pr_metadata.yml` each run in a group of their own. `tools/ci_concurrency_policy_tests.py` pins
