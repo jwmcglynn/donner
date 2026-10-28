@@ -880,10 +880,14 @@ public:
   GeodeCheckerboardPipeline& checkerboardUnderlayPipeline() const;
 
   /**
-   * Builds now the pipelines the browser editor's UI context otherwise builds at their first use:
-   * the batched fill variant, the clip-path mask, the replace-blend checkerboard the editor draws
-   * under each presented document, and the snapshot readback. The destination-over checkerboard
-   * stays lazy because the editor never draws it.
+   * Builds the browser editor's on-demand pipelines at startup: the batched fill variant, the
+   * clip-path mask, the replace-blend checkerboard under each presented document, and the snapshot
+   * readback. The destination-over checkerboard stays lazy because the editor never draws it.
+   *
+   * The raster worker uses RGBA8Unorm targets even when the canvas uses another format. In that
+   * case, also seeds the default and batched RGBA fill pipelines on this context's runtime device
+   * and retains them for its lifetime. An RGBA context reuses its existing fill pipelines, and
+   * repeated calls reuse every seed. No extra context or draw is needed.
    *
    * A pipeline built at its first use is created in order with the device's work, so on a cold
    * shader cache every later submission waits for its compile, the next presented frame
