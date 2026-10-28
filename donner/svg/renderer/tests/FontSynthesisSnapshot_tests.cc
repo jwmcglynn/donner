@@ -5,11 +5,15 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "donner/base/tests/Runfiles.h"
+#include "donner/css/FontFace.h"
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/renderer/RenderSnapshot.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
@@ -31,7 +35,7 @@ using ::testing::Not;
 using ::testing::NotNull;
 using ::testing::SizeIs;
 
-std::vector<uint8_t> SnapshotSynthesisFont() {
+std::vector<uint8_t> SnapshotSynthesisFont(std::string_view name = "NotoSans-Regular.ttf") {
   const std::string path =
       Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf");
   std::ifstream input(path, std::ios::binary);
@@ -189,6 +193,93 @@ TEST(FontSynthesisStyleSnapshotTest, RawLoadedFaceWithoutProviderMetadataKeepsIt
                                  FontSynthesisStyle::Auto, true);
   }
   ExpectReplayMatchesDirect(captured);
+}
+
+TEST(FontSynthesisStyleSnapshotTest, ReconstructedSourceAddressCannotAliasAnotherFontLifetime) {
+  RenderSnapshot snapshot;
+  NiceMock<tests::MockRendererInterface> factory;
+  RenderSnapshotRecorder recorder(snapshot, factory);
+  std::optional<Registry> source;
+  Registry* firstSource = nullptr;
+  FontHandle firstFont;
+  std::vector<Path> expected;
+  for (const char* filename : {"NotoSans-Regular.ttf", "NotoSans-Italic.ttf"}) {
+    source.emplace();
+    Registry& registry = *source;
+    if (firstSource) {
+      ASSERT_THAT(&registry, Eq(firstSource));
+    } else {
+      firstSource = &registry;
+    }
+    auto& fonts = registry.ctx().emplace<FontManager>(registry);
+    auto& engine = registry.ctx().emplace<TextEngine>(fonts, registry);
+    const auto bytes =
+        std::make_shared<const std::vector<uint8_t>>(SnapshotSynthesisFont(filename));
+    ASSERT_THAT(*bytes, Not(IsEmpty()));
+    css::FontFace face;
+    face.familyName = "CapturedFace";
+    face.sources.push_back({css::FontFaceSource::Kind::Data, bytes, {}, {}, true});
+    fonts.addFontFace(face);
+    components::ComputedTextComponent text;
+    components::ComputedTextComponent::TextSpan span;
+    span.text = "A";
+    span.end = 1;
+    span.startsNewChunk = true;
+    span.fontFamilies.emplace_back("CapturedFace");
+    text.spans.push_back(span);
+    TextLayoutParams layout;
+    layout.fontFamilies.emplace_back("CapturedFace");
+    layout.fontSize = Lengthd(64, Lengthd::Unit::Px);
+    layout.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+    auto runs = engine.layout(text, layout);
+    ASSERT_THAT(runs, SizeIs(1));
+    ASSERT_THAT(runs.front().glyphs, SizeIs(1));
+    if (firstFont) {
+      ASSERT_THAT(runs.front().font, Eq(firstFont));
+    } else {
+      firstFont = runs.front().font;
+    }
+    const auto& run = runs.front();
+    expected.push_back(PlacedGlyphOutline(engine, run.font, run, run.glyphs.front(),
+                                          engine.scaleForEmToPixels(run.font, run.usedFontSizePx),
+                                          0.1));
+    auto prepared = std::make_shared<PreparedTextDraw>();
+    prepared->runs = std::move(runs);
+    TextParams params;
+    params.preparedTextDraw = std::move(prepared);
+    recorder.drawText(registry, text, params);
+    EXPECT_THAT(snapshot.liveRegistryReferenceCountForTesting(registry), Eq(0u));
+    source.reset();
+  }
+  ASSERT_THAT(expected, SizeIs(2));
+  ASSERT_THAT(expected.front().points(), Not(IsEmpty()));
+  ASSERT_THAT(expected.back().points(), Not(ElementsAreArray(expected.front().points())));
+  NiceMock<tests::MockRendererInterface> inspection;
+  Registry* firstReplay = nullptr;
+  size_t index = 0;
+  EXPECT_CALL(inspection, drawText(_, _, _))
+      .Times(2)
+      .WillRepeatedly([&](Registry& registry, const components::ComputedTextComponent&,
+                          const TextParams& params) {
+        ASSERT_THAT(index, testing::Lt(expected.size()));
+        if (firstReplay) {
+          EXPECT_THAT(&registry, testing::Ne(firstReplay));
+        } else {
+          firstReplay = &registry;
+        }
+        ASSERT_THAT(params.preparedTextDraw, NotNull());
+        ASSERT_THAT(params.preparedTextDraw->runs, SizeIs(1));
+        const auto& run = params.preparedTextDraw->runs.front();
+        ASSERT_THAT(run.glyphs, SizeIs(1));
+        const auto& engine = registry.ctx().get<TextEngine>();
+        const Path outline =
+            PlacedGlyphOutline(engine, run.font, run, run.glyphs.front(),
+                               engine.scaleForEmToPixels(run.font, run.usedFontSizePx), 0.1);
+        EXPECT_THAT(outline.points(), ElementsAreArray(expected[index].points()));
+        ++index;
+      });
+  snapshot.replay(inspection);
+  EXPECT_THAT(index, Eq(2u));
 }
 
 #ifdef DONNER_TEXT_FULL
