@@ -268,6 +268,106 @@ TEST(StylesheetParser, FontFace) {
               ElementsAre(FontFaceIs("test", ElementsAre(UrlFontSourceIs("test.woff")))));
 }
 
+TEST(StylesheetParser, FontFaceMatchingDescriptors) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face {
+      font-family: Test; src: url(bold.woff);
+      font-weight: bold; font-style: italic; font-stretch: condensed;
+    }
+    @font-face {
+      font-family: Test; src: url(regular.woff);
+      font-weight: normal; font-style: normal; font-stretch: normal;
+    }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(2));
+  EXPECT_EQ(sheet.fontFaces()[0].fontWeight, 700);
+  EXPECT_EQ(sheet.fontFaces()[0].fontStyle, 1);
+  EXPECT_EQ(sheet.fontFaces()[0].fontStretch, 3);
+  EXPECT_EQ(sheet.fontFaces()[1].fontWeight, 400);
+  EXPECT_EQ(sheet.fontFaces()[1].fontStyle, 0);
+  EXPECT_EQ(sheet.fontFaces()[1].fontStretch, 5);
+  EXPECT_NE(FontFaceIdentityKey(sheet.fontFaces()[0]), FontFaceIdentityKey(sheet.fontFaces()[1]));
+}
+
+TEST(StylesheetParser, FontFaceIntegerWeights) {
+  for (const int weight : {1, 100, 400, 550, 900, 1000}) {
+    SCOPED_TRACE(weight);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    const Stylesheet sheet = StylesheetParser::Parse(
+        "@font-face { font-family: Test; src: url(font.woff); font-weight: " +
+            std::to_string(weight) + "; }",
+        disabled);
+    ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
+    EXPECT_EQ(sheet.fontFaces()[0].fontWeight, weight);
+  }
+}
+
+TEST(StylesheetParser, FontFaceStretchKeywords) {
+  constexpr std::array<std::string_view, 9> kWidths = {
+      "ultra-condensed", "extra-condensed", "condensed",      "semi-condensed", "normal",
+      "semi-expanded",   "expanded",        "extra-expanded", "ultra-expanded"};
+  for (std::size_t i = 0; i < kWidths.size(); ++i) {
+    SCOPED_TRACE(kWidths[i]);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    const Stylesheet sheet = StylesheetParser::Parse(
+        "@font-face { font-family: Test; src: url(font.woff); font-stretch: " +
+            std::string(kWidths[i]) + "; }",
+        disabled);
+    ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
+    EXPECT_EQ(sheet.fontFaces()[0].fontStretch, i + 1);
+  }
+}
+
+TEST(StylesheetParser, FontFaceDescriptorNamesAndKeywordsAreCaseInsensitive) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff);
+      FONT-WEIGHT: BoLd; FONT-STYLE: ObLiQuE; FONT-STRETCH: ExPaNdEd; }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
+  EXPECT_EQ(sheet.fontFaces()[0].fontWeight, 700);
+  EXPECT_EQ(sheet.fontFaces()[0].fontStyle, 2);
+  EXPECT_EQ(sheet.fontFaces()[0].fontStretch, 7);
+}
+
+TEST(StylesheetParser, FontFaceInvalidDescriptorsPreserveLastValidValue) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff);
+      font-weight: bold; font-weight: 500; font-weight: bolder; font-weight: lighter;
+      font-weight: 0; font-weight: -1; font-weight: 1001; font-weight: 1e999;
+      font-weight: bold garbage; font-weight: "bold"; font-weight: inherit;
+      font-weight: normal !important;
+      font-style: italic; font-style: oblique; font-style: upright;
+      font-style: italic garbage; font-style: initial; font-style: normal !important;
+      font-stretch: condensed; font-stretch: expanded; font-stretch: wider;
+      font-stretch: narrower; font-stretch: expanded garbage; font-stretch: unset;
+      font-stretch: normal !important;
+    }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
+  EXPECT_EQ(sheet.fontFaces()[0].fontWeight, 500);
+  EXPECT_EQ(sheet.fontFaces()[0].fontStyle, 2);
+  EXPECT_EQ(sheet.fontFaces()[0].fontStretch, 7);
+}
+
+TEST(StylesheetParser, FontFaceUnsupportedRangesDoNotUseFirstValue) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff);
+      font-weight: 700 900; font-style: oblique 10deg 20deg; font-stretch: 75% 125%; }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
+  EXPECT_EQ(sheet.fontFaces()[0].fontWeight, 400);
+  EXPECT_EQ(sheet.fontFaces()[0].fontStyle, 0);
+  EXPECT_EQ(sheet.fontFaces()[0].fontStretch, 5);
+}
+
 TEST(StylesheetParser, FontFaceDataUrl) {
   ParseWarningSink disabled = ParseWarningSink::Disabled();
   Stylesheet sheet = StylesheetParser::Parse(R"(
