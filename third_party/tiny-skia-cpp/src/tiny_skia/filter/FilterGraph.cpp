@@ -770,16 +770,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             // the result is tagged sRGB no matter which space this node interpolates in. A
             // linearRGB consumer converts it, exactly as it would convert any other sRGB buffer.
             //
-            // Mitchell-Netravali bicubic resampling in float.
-            //
-            // resvg (the reference renderer) resamples feImage content with the
-            // Mitchell-Netravali cubic kernel (B = C = 1/3), the standard "high quality"
-            // downscale/upscale filter. A plain bilinear kernel produces a measurably
-            // different interpolation ramp when a small image is heavily upscaled (the
-            // bilinear ramp is monotone, while the Mitchell kernel mildly overshoots near
-            // hard color edges), which is exactly what the resvg goldens encode. Matching the
-            // kernel removes the upscale-ramp pixel diffs the goldens flag (verified to be a
-            // bit-for-bit match against resvg's feImage subregion goldens).
+            // Resampling runs in float with the kernel the caller selected.
             auto fpOut = createTransparentFloat(w, h);
             if (!primitive.pixels.empty() && primitive.width > 0 && primitive.height > 0) {
               const double tx = primitive.targetRect.has_value() ? primitive.targetRect->x : 0.0;
@@ -794,14 +785,18 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               constexpr double kMaxPixelatedScale = 65536.0;
               const double pixelatedScaleX = std::floor(tw / primitive.width + 0.5);
               const double pixelatedScaleY = std::floor(th / primitive.height + 0.5);
+              // Bilinear is the pixelated kernel without the integer prescale.
+              const bool bilinear = primitive.sampling == Image::Sampling::Bilinear;
               const std::int64_t pixelatedMultipleX =
-                  std::isfinite(pixelatedScaleX) ? static_cast<std::int64_t>(std::clamp(
-                                                       pixelatedScaleX, 1.0, kMaxPixelatedScale))
-                                                 : 1;
+                  !bilinear && std::isfinite(pixelatedScaleX)
+                      ? static_cast<std::int64_t>(
+                            std::clamp(pixelatedScaleX, 1.0, kMaxPixelatedScale))
+                      : 1;
               const std::int64_t pixelatedMultipleY =
-                  std::isfinite(pixelatedScaleY) ? static_cast<std::int64_t>(std::clamp(
-                                                       pixelatedScaleY, 1.0, kMaxPixelatedScale))
-                                                 : 1;
+                  !bilinear && std::isfinite(pixelatedScaleY)
+                      ? static_cast<std::int64_t>(
+                            std::clamp(pixelatedScaleY, 1.0, kMaxPixelatedScale))
+                      : 1;
 
               auto dstData = fpOut.data();
               const auto& srcData = primitive.pixels;
@@ -859,7 +854,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                     continue;
                   }
 
-                  if (primitive.sampling == Image::Sampling::Pixelated) {
+                  if (primitive.sampling == Image::Sampling::Pixelated || bilinear) {
                     const double intermediateX =
                         (srcXf + 0.5) * static_cast<double>(pixelatedMultipleX) - 0.5;
                     const double intermediateY =

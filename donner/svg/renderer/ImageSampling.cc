@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/ImageSampling.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -72,8 +73,8 @@ bool ResolveImageFromDevice(const Transform2d& deviceFromImage, Transform2d& ima
 }
 
 bool ResolvePixelatedSampling(const Transform2d& deviceFromImage, const SourceImage& source,
-                              ImageRendering imageRendering, PixelatedSampling& sampling) {
-  if (imageRendering != ImageRendering::Pixelated) {
+                              ImageSamplingKernel kernel, PixelatedSampling& sampling) {
+  if (kernel != ImageSamplingKernel::PixelatedSmooth) {
     return true;
   }
 
@@ -140,6 +141,57 @@ void WriteBilinearPixel(const SourceImage& source, double sourceX, double source
   }
 }
 
+/// Mitchell-Netravali cubic weight (B = C = 1/3) for a tap \p distance texels from the sample.
+double MitchellWeight(double distance) {
+  constexpr double kB = 1.0 / 3.0;
+  constexpr double kC = 1.0 / 3.0;
+  distance = std::abs(distance);
+  if (distance < 1.0) {
+    return ((12.0 - 9.0 * kB - 6.0 * kC) * distance * distance * distance +
+            (-18.0 + 12.0 * kB + 6.0 * kC) * distance * distance + (6.0 - 2.0 * kB)) /
+           6.0;
+  }
+  if (distance < 2.0) {
+    return ((-kB - 6.0 * kC) * distance * distance * distance +
+            (6.0 * kB + 30.0 * kC) * distance * distance + (-12.0 * kB - 48.0 * kC) * distance +
+            (8.0 * kB + 24.0 * kC)) /
+           6.0;
+  }
+  return 0.0;
+}
+
+/// Edge-clamped 4x4 Mitchell sample. Color is clamped to alpha, so the cubic's overshoot cannot
+/// leave the premultiplied range that filter primitives consume.
+void WriteCubicPixel(const SourceImage& source, double sourceX, double sourceY,
+                     std::span<std::uint8_t> output, std::size_t outputIndex) {
+  const int x0 = static_cast<int>(std::floor(sourceX));
+  const int y0 = static_cast<int>(std::floor(sourceY));
+  std::array<double, 4> weightsX{};
+  std::array<double, 4> weightsY{};
+  for (int tap = -1; tap <= 2; ++tap) {
+    weightsX[static_cast<std::size_t>(tap + 1)] = MitchellWeight(sourceX - (x0 + tap));
+    weightsY[static_cast<std::size_t>(tap + 1)] = MitchellWeight(sourceY - (y0 + tap));
+  }
+
+  std::array<float, 4> sampled{};
+  for (int channel = 0; channel < 4; ++channel) {
+    double value = 0.0;
+    for (int row = -1; row <= 2; ++row) {
+      double rowValue = 0.0;
+      for (int column = -1; column <= 2; ++column) {
+        rowValue += SampleSource(source, x0 + column, y0 + row, channel) *
+                    weightsX[static_cast<std::size_t>(column + 1)];
+      }
+      value += rowValue * weightsY[static_cast<std::size_t>(row + 1)];
+    }
+    sampled[static_cast<std::size_t>(channel)] = std::clamp(static_cast<float>(value), 0.0f, 1.0f);
+  }
+  for (std::size_t channel = 0; channel < 4; ++channel) {
+    const float value = channel < 3 ? std::min(sampled[channel], sampled[3]) : sampled[3];
+    output[outputIndex + channel] = static_cast<std::uint8_t>(std::round(value * 255.0f));
+  }
+}
+
 void WritePixelatedPixel(const SourceImage& source, const PixelatedSampling& sampling,
                          double sourceX, double sourceY, std::span<std::uint8_t> output,
                          std::size_t outputIndex) {
@@ -171,20 +223,26 @@ void WritePixelatedPixel(const SourceImage& source, const PixelatedSampling& sam
 }
 
 void WriteSampledPixel(const SourceImage& source, const PixelatedSampling& pixelatedSampling,
-                       ImageRendering imageRendering, double sourceX, double sourceY,
+                       ImageSamplingKernel kernel, double sourceX, double sourceY,
                        std::span<std::uint8_t> output, std::size_t outputIndex) {
-  if (imageRendering == ImageRendering::CrispEdges ||
-      imageRendering == ImageRendering::OptimizeSpeed) {
-    WriteNearestPixel(source, sourceX, sourceY, output, outputIndex);
-  } else if (imageRendering == ImageRendering::Pixelated) {
-    WritePixelatedPixel(source, pixelatedSampling, sourceX, sourceY, output, outputIndex);
-  } else {
-    WriteBilinearPixel(source, sourceX, sourceY, output, outputIndex);
+  switch (kernel) {
+    case ImageSamplingKernel::Nearest:
+      WriteNearestPixel(source, sourceX, sourceY, output, outputIndex);
+      return;
+    case ImageSamplingKernel::PixelatedSmooth:
+      WritePixelatedPixel(source, pixelatedSampling, sourceX, sourceY, output, outputIndex);
+      return;
+    case ImageSamplingKernel::Bilinear:
+      WriteBilinearPixel(source, sourceX, sourceY, output, outputIndex);
+      return;
+    case ImageSamplingKernel::MitchellCubic:
+      WriteCubicPixel(source, sourceX, sourceY, output, outputIndex);
+      return;
   }
 }
 
 void RasterizePixels(const SourceImage& source, const Transform2d& imageFromDevice,
-                     const PixelatedSampling& pixelatedSampling, ImageRendering imageRendering,
+                     const PixelatedSampling& pixelatedSampling, ImageSamplingKernel kernel,
                      int outputWidth, int outputHeight, std::span<std::uint8_t> output) {
   const std::size_t sizeOutputWidth = static_cast<std::size_t>(outputWidth);
   for (int y = 0; y < outputHeight; ++y) {
@@ -197,8 +255,7 @@ void RasterizePixels(const SourceImage& source, const Transform2d& imageFromDevi
 
       const std::size_t outputIndex =
           (static_cast<std::size_t>(y) * sizeOutputWidth + static_cast<std::size_t>(x)) * 4u;
-      WriteSampledPixel(source, pixelatedSampling, imageRendering, sourceX, sourceY, output,
-                        outputIndex);
+      WriteSampledPixel(source, pixelatedSampling, kernel, sourceX, sourceY, output, outputIndex);
     }
   }
 }
@@ -208,7 +265,7 @@ void RasterizePixels(const SourceImage& source, const Transform2d& imageFromDevi
 std::vector<std::uint8_t> RasterizeImagePremultiplied(
     std::span<const std::uint8_t> premultipliedPixels, int sourceWidth, int sourceHeight,
     const Transform2d& deviceFromImage, int outputWidth, int outputHeight,
-    ImageRendering imageRendering) {
+    ImageSamplingKernel kernel) {
   std::size_t outputPixels = 0;
   if (!IsValidSamplingRequest(premultipliedPixels, sourceWidth, sourceHeight, outputWidth,
                               outputHeight, outputPixels)) {
@@ -220,12 +277,12 @@ std::vector<std::uint8_t> RasterizeImagePremultiplied(
   const SourceImage source{premultipliedPixels, sourceWidth, sourceHeight};
   PixelatedSampling pixelatedSampling;
   if (!ResolveImageFromDevice(deviceFromImage, imageFromDevice) ||
-      !ResolvePixelatedSampling(deviceFromImage, source, imageRendering, pixelatedSampling)) {
+      !ResolvePixelatedSampling(deviceFromImage, source, kernel, pixelatedSampling)) {
     return output;
   }
 
-  RasterizePixels(source, imageFromDevice, pixelatedSampling, imageRendering, outputWidth,
-                  outputHeight, output);
+  RasterizePixels(source, imageFromDevice, pixelatedSampling, kernel, outputWidth, outputHeight,
+                  output);
   return output;
 }
 
