@@ -33,19 +33,21 @@ struct ParseAllocationBudget {
 };
 
 /// Broad resource ceiling with portability headroom for standard-library layout differences.
+// Inline synthesis and decoration properties add fixed storage to each allocated style slot.
+// Keep byte headroom for that metadata while retaining the allocation-call work ceiling.
 constexpr ParseAllocationBudget kRepeatedAttributesBudget = {
     .allocationCalls = 16'500,
-    .allocationBytes = 7'500'000,
-    .liveBytes = 7'100'000,
-    .peakLiveBytes = 7'100'000,
+    .allocationBytes = 7'700'000,
+    .liveBytes = 7'300'000,
+    .peakLiveBytes = 7'300'000,
 };
 
 /// Broad resource ceiling with portability headroom for standard-library layout differences.
 constexpr ParseAllocationBudget kDonnerSplashBudget = {
     .allocationCalls = 26'500,
     .allocationBytes = 10'500'000,
-    .liveBytes = 9'500'000,
-    .peakLiveBytes = 9'500'000,
+    .liveBytes = 9'700'000,
+    .peakLiveBytes = 9'700'000,
 };
 
 std::optional<std::string> ReadFile(std::string_view path) {
