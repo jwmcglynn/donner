@@ -1997,6 +1997,21 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
   }
 }
 
+TEST(PropertyRegistry, EllipseClipParsingAndInvalidDeclarationFallback) {
+  PropertyRegistry valid;
+  valid.parseStyle("clip-path:ellipse(8px 4px at right 2px bottom 3px) fill-box");
+  EXPECT_TRUE(valid.clipPath.get().has_value());
+  for (const std::string_view invalid :
+       {"ellipse(4px)", "ellipse(-1px 2px)", "ellipse(1px -2px)", "ellipse(1px 2px 3px)",
+        "ellipse(1px 2px at)", "ellipse(1px 2px at left right)", "ellipse(1px 2px) garbage",
+        "ellipse(1px 2px) fill-box stroke-box", "ellipse(4 8)"}) {
+    SCOPED_TRACE(invalid);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(invalid));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
 TEST(PropertyRegistry, CircleClipStyleAndPresentationGrammarStayDistinct) {
   PropertyRegistry registry;
   registry.parseStyle("clip-path:url(#clip);clip-path:circle(4)");
