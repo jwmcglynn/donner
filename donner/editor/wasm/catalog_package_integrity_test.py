@@ -5,7 +5,11 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
+import stat
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -173,6 +177,152 @@ class CatalogPackageValidationTest(unittest.TestCase):
         self.manifest = {"fonts": fonts, "encoded_bytes": 64 * 12}
         (self.package / "catalog-fonts.json").write_text(json.dumps(self.manifest))
         (self.package / "CatalogFontNotices.txt").write_text("SIL OPEN FONT LICENSE Version 1.1")
+
+    def _package_cli(self, package, *, cwd=None, bazel_inputs=False, native_notices=None):
+        if native_notices is None:
+            native_notices = self.package / "CatalogFontNotices.txt"
+        command = [sys.executable, str(Path(__file__).resolve()), "--package", str(package),
+                   "--native-notices", str(native_notices)]
+        if bazel_inputs:
+            command.append("--bazel-inputs")
+        return subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=10,
+                              check=False)
+
+    def _tree_snapshot(self, root):
+        snapshot = {}
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root).as_posix()
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                snapshot[relative] = ("link", str(path.readlink()))
+            elif stat.S_ISREG(metadata.st_mode):
+                snapshot[relative] = ("file", stat.S_IMODE(metadata.st_mode), path.read_bytes())
+            else:
+                self.assertTrue(stat.S_ISDIR(metadata.st_mode), relative)
+                snapshot[relative] = ("directory", stat.S_IMODE(metadata.st_mode))
+        return snapshot
+
+    def _declared_input_fixture(self, *, virtual=True, mutate=None):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        relative = Path("donner/editor/wasm/wasm_web_package")
+        canonical = root / "execroot/bazel-out/wasm-transition/bin" / relative
+        shutil.copytree(self.package, canonical)
+        if mutate is not None:
+            mutate(canonical)
+        for path in canonical.rglob("*"):
+            if path.is_file():
+                path.chmod(0o444)
+        cwd = root / "sandbox/catalog_test.runfiles/_main"
+        visible = cwd / relative
+        if virtual:
+            visible.mkdir(parents=True)
+            for path in sorted(canonical.rglob("*")):
+                destination = visible / path.relative_to(canonical)
+                if path.is_dir():
+                    destination.mkdir()
+                else:
+                    destination.symlink_to(path)
+        else:
+            shutil.copytree(canonical, visible)
+        notices = cwd / "third_party/google_fonts/CatalogFontNotices.txt"
+        notices.parent.mkdir(parents=True)
+        notices.symlink_to(self.package / "CatalogFontNotices.txt")
+        return cwd, relative, canonical
+
+    def _declared_input_cli(self, cwd, relative, canonical):
+        before = self._tree_snapshot(canonical)
+        source_before = self._tree_snapshot(self.package)
+        transport_before = self._tree_snapshot(cwd)
+        result = self._package_cli(
+            relative, cwd=cwd, bazel_inputs=True,
+            native_notices=Path("third_party/google_fonts/CatalogFontNotices.txt"))
+        self.assertEqual(self._tree_snapshot(canonical), before)
+        self.assertEqual(self._tree_snapshot(self.package), source_before)
+        self.assertEqual(self._tree_snapshot(cwd), transport_before)
+        return result
+
+    def test_physical_package_cli_passes_without_changing_input(self):
+        before = self._tree_snapshot(self.package)
+        result = self._package_cli(self.package)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), validate_package(self.package))
+        self.assertEqual(self._tree_snapshot(self.package), before)
+
+    def test_bazel_input_cli_accepts_physical_and_complete_virtual_trees(self):
+        for virtual in (False, True):
+            with self.subTest(virtual=virtual):
+                cwd, relative, canonical = self._declared_input_fixture(virtual=virtual)
+                result = self._declared_input_cli(cwd, relative, canonical)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), validate_package(self.package))
+
+    def test_default_validation_still_rejects_resource_leaf_links(self):
+        cwd, relative, _ = self._declared_input_fixture()
+        with self.assertRaisesRegex(ValueError, "Invalid packaged resource file"):
+            validate_package(cwd / relative)
+        result = self._package_cli(relative, cwd=cwd)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Invalid packaged resource file", result.stderr)
+
+    def test_bazel_input_cli_rejects_byte_identical_wrong_tree_links(self):
+        for selected in (self.resources["assets"][0]["path"], "packaged-resources.json"):
+            with self.subTest(selected=selected):
+                cwd, relative, canonical = self._declared_input_fixture()
+                other = cwd.parent / "other-output" / relative
+                shutil.copytree(canonical, other)
+                leaf = cwd / relative / selected
+                leaf.unlink()
+                leaf.symlink_to(other / selected)
+                other_before = self._tree_snapshot(other)
+                result = self._declared_input_cli(cwd, relative, canonical)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self._tree_snapshot(other), other_before)
+
+    def test_bazel_input_cli_rejects_dangling_payload_links(self):
+        cwd, relative, canonical = self._declared_input_fixture()
+        leaf = cwd / relative / self.resources["assets"][0]["path"]
+        leaf.unlink()
+        leaf.symlink_to(canonical / "missing.svg")
+        result = self._declared_input_cli(cwd, relative, canonical)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_bazel_input_cli_rejects_linked_directories(self):
+        for directory in ("assets", "fonts"):
+            with self.subTest(directory=directory):
+                cwd, relative, canonical = self._declared_input_fixture()
+                selected = cwd / relative / directory
+                shutil.rmtree(selected)
+                selected.symlink_to(canonical / directory, target_is_directory=True)
+                result = self._declared_input_cli(cwd, relative, canonical)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_bazel_input_materialization_preserves_integrity_failures(self):
+        resource_path = self.resources["assets"][0]["path"]
+        resource = (self.package / resource_path).read_bytes()
+        cases = {
+            "size": lambda package: (package / resource_path).write_bytes(b"wrong"),
+            "digest": lambda package: (package / resource_path).write_bytes(
+                resource[:-1] + bytes([resource[-1] ^ 1])),
+            "missing": lambda package: (package / resource_path).unlink(),
+            "extra": lambda package: (package / "assets/extra.svg").write_bytes(b"extra"),
+            "embedded": lambda package: (package / "editor.wasm").write_bytes(
+                b"\0asm\1\0\0\0" + resource),
+            "bootstrap": lambda package: (package / "packaged-resources.js").write_text(
+                "globalThis.DonnerPackagedResources = {};"),
+            "notices": lambda package: (package / "CatalogFontNotices.txt").write_text(
+                "Modified SIL OPEN FONT LICENSE Version 1.1"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(mutation=name):
+                cwd, relative, canonical = self._declared_input_fixture(mutate=mutate)
+                strict = self._package_cli(canonical)
+                result = self._declared_input_cli(cwd, relative, canonical)
+                self.assertNotEqual(strict.returncode, 0)
+                self.assertNotEqual(result.returncode, 0)
+                if name == "digest":
+                    self.assertIn("Packaged resource digest mismatch", strict.stderr)
 
     def test_complete_deferred_package_passes(self):
         self.assertEqual(validate_package(self.package)["deferred_font_bytes"], 64 * 12)
