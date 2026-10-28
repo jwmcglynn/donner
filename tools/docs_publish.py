@@ -42,8 +42,9 @@ def _attestation_command(args: list[str], stdout) -> None:
         subprocess.run(args, stdout=stdout, stderr=subprocess.PIPE, timeout=180, check=True)
     except subprocess.CalledProcessError as error:
         diagnostic = error.stderr or b""
-        for name in ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"):
-            token = os.environ.get(name)
+        tokens = {os.environ.get(name, "") for name in
+                  ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")}
+        for token in sorted(tokens, key=len, reverse=True):
             if token:
                 diagnostic = diagnostic.replace(token.encode(), b"[REDACTED]")
         detail = json.dumps(diagnostic[:4096].decode("utf-8", errors="replace"))
