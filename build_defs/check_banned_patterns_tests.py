@@ -179,6 +179,21 @@ class CheckBannedPatternsTests(unittest.TestCase):
                 check_banned_patterns._iter_source_files([source_root]),
             )
 
+    def test_complexity_keeps_functions_separate_after_character_literals(self):
+        source = """void first(char value) {
+  if (value == '{') {}
+  if (value == '\"') {}
+}
+void second(int value) {
+  if (value == 1) {}
+}
+"""
+        stripped = check_banned_patterns._strip_comments_and_strings(source)
+        self.assertEqual(
+            {"first(char value)": 2, "second(int value)": 1},
+            check_banned_patterns._method_complexities(stripped),
+        )
+
     def test_blocks_methods_above_the_local_complexity_limit(self):
         branches = "\n".join(
             f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
