@@ -303,6 +303,11 @@ ParseResult<PaintOrder> ParsePaintOrder(std::span<const css::ComponentValue> com
   return result;
 }
 
+bool RequiresCssLengthUnits(std::string_view name) {
+  return name == "filter" || name == "clip-path" || name == "text-decoration" ||
+         name == "text-decoration-thickness";
+}
+
 ParseDiagnostic InvalidDecoration() {
   ParseDiagnostic error;
   error.reason = "Invalid text-decoration value";
@@ -3109,8 +3114,8 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
     const parser::PropertyParseBehavior parseBehavior =
-        name == "filter" || name == "clip-path" ? parser::PropertyParseBehavior::Default
-                                                : parser::PropertyParseBehavior::AllowUserUnits;
+        RequiresCssLengthUnits(name) ? parser::PropertyParseBehavior::Default
+                                     : parser::PropertyParseBehavior::AllowUserUnits;
     return (*parseFn)(
         *this, parser::PropertyParseFnParams::Create(declaration, specificity, parseBehavior));
   }
