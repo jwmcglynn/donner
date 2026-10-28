@@ -309,6 +309,42 @@ TEST_F(ShapeSystemTest, RoundedInsetRejectsInvalidOrUnrepresentableUsedRadii) {
   }
 }
 
+TEST_F(ShapeSystemTest, RoundedInsetRejectsNegativeRadiusBeforeConversionUnderflow) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1e-100 1e-100">
+      <rect id="r" width="1e-100" height="1e-100"/>
+    </svg>)");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  InsetClipPath inset;
+  inset.box = RadialClipPath::Box::View;
+  inset.radiiX.fill(Lengthd(-std::numeric_limits<double>::denorm_min(), Lengthd::Unit::Percent));
+  inset.radiiY.fill(Lengthd(4, Lengthd::Unit::Px));
+  CircleClipGeometryBudget budget;
+  EXPECT_THAT(shapeSystem.insetClipPath(element->entityHandle(), inset, budget).commands(),
+              testing::IsEmpty());
+}
+
+TEST_F(ShapeSystemTest, RoundedInsetPreservesPositiveSubnormalRadii) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="r" width="64" height="64"/>
+    </svg>)");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  InsetClipPath inset;
+  inset.box = RadialClipPath::Box::View;
+  const double radius = std::numeric_limits<double>::denorm_min();
+  inset.radiiX.fill(Lengthd(radius, Lengthd::Unit::Px));
+  inset.radiiY.fill(Lengthd(radius, Lengthd::Unit::Px));
+  CircleClipGeometryBudget budget;
+  const Path path = shapeSystem.insetClipPath(element->entityHandle(), inset, budget);
+  ASSERT_THAT(path.points(), testing::SizeIs(17));
+  EXPECT_THAT(path.points().front(),
+              testing::AllOf(testing::Field(&Vector2d::x, testing::Eq(radius)),
+                             testing::Field(&Vector2d::y, testing::Eq(0))));
+}
+
 TEST_F(ShapeSystemTest, InsetGeometryUsesAxisExtentsAndAdmitsBeforeAllocation) {
   auto document = ParseAndComputeShapes(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48">
