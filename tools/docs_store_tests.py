@@ -129,7 +129,8 @@ class StoreTest(unittest.TestCase):
     def test_writer_requires_complete_live_branch_and_environment_protection(self):
         rules = [{"type": "deletion"}, {"type": "non_fast_forward"}]
         env = {"can_admins_bypass": False, "protection_rules": [
-            {"type": "required_reviewers", "reviewers": [{"type": "User"}]}],
+            {"type": "required_reviewers", "prevent_self_review": False, "reviewers": [
+                {"type": "User", "reviewer": {"login": "jwmcglynn", "id": 103489}}]}],
             "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
         branches = {"total_count": 1, "branch_policies": [{"name": "main", "type": "branch"}]}
         api = store.GitHub()
@@ -144,6 +145,21 @@ class StoreTest(unittest.TestCase):
             {"total_count": 1, "branch_policies": [{"name": "*", "type": "branch"}]}]), \
             self.assertRaisesRegex(ValueError, "only the main"):
             api.require_protection()
+
+    def test_manual_environment_rejects_another_reviewer_or_team(self):
+        rules = [{"type": "deletion"}, {"type": "non_fast_forward"}]
+        reviewer = {"type": "User", "reviewer": {"login": "jwmcglynn", "id": 103489}}
+        env = {"can_admins_bypass": True, "protection_rules": [
+            {"type": "required_reviewers", "prevent_self_review": False, "reviewers": [reviewer]}],
+            "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
+        for replacement in ([{"type": "User"}], [{"type": "Team", "reviewer": {"login": "jwmcglynn", "id": 103489}}],
+                            [{"type": "User", "reviewer": {"login": "another-user", "id": 103489}}],
+                            [{"type": "User", "reviewer": {"login": "jwmcglynn", "id": 1}}], [reviewer, reviewer]):
+            changed = copy.deepcopy(env)
+            changed["protection_rules"][0]["reviewers"] = replacement
+            with self.subTest(replacement=replacement), mock.patch.object(store.GitHub, "call", side_effect=[rules, changed, {"total_count": 1, "branch_policies": [{"name": "main", "type": "branch"}]}]), \
+                 self.assertRaisesRegex(ValueError, "reviewer"):
+                store.GitHub().require_protection()
 
     def test_automatic_environment_has_its_own_exact_main_only_protection(self):
         import os
