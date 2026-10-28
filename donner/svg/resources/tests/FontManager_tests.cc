@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -1015,6 +1016,23 @@ TEST(FontManagerTest, WeightFallbackFollowsCssSearchDirection) {
     manager.addFontFace(other);
     EXPECT_THAT(manager.findFont("TestFont", value.requested), testing::Eq(expected));
   }
+}
+
+TEST(FontManagerTest, PublicWeightRequestsClampBeforeProviderLookup) {
+  Registry registry;
+  FontManager manager(registry);
+  VariantFontProvider provider("ProviderFamily");
+  manager.setFontProvider(&provider);
+  const FontHandle light = manager.findFont("ProviderFamily", std::numeric_limits<int>::min());
+  const FontHandle heavy = manager.findFont("ProviderFamily", std::numeric_limits<int>::max());
+  ASSERT_THAT(static_cast<bool>(light), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(heavy), testing::IsTrue());
+  EXPECT_THAT(manager.fontData(light).size(),
+              testing::Eq(VariantFontProvider::SizeFor(FontFaceRequest{.weight = 1})));
+  EXPECT_THAT(manager.fontData(heavy).size(),
+              testing::Eq(VariantFontProvider::SizeFor(FontFaceRequest{.weight = 1000})));
+  EXPECT_THAT(manager.findFont("ProviderFamily", 1), testing::Eq(light));
+  EXPECT_THAT(manager.findFont("ProviderFamily", 1000), testing::Eq(heavy));
 }
 
 TEST(FontManagerTest, OverlappingWeightRangesUseLatestMatchingDeclaration) {

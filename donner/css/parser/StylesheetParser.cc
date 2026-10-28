@@ -352,16 +352,43 @@ std::optional<int> ParseFontFaceKeyword(const ComponentValue& value,
   return std::nullopt;
 }
 
+void ApplyFontFaceWeight(std::span<const ComponentValue> values, FontFace& fontFace) {
+  std::array<const ComponentValue*, 2> endpoints{};
+  std::size_t count = 0;
+  for (const ComponentValue& value : values) {
+    if (value.isToken<Token::Whitespace>()) {
+      continue;
+    }
+    if (count == endpoints.size()) {
+      return;
+    }
+    endpoints[count++] = &value;
+  }
+  if (count == 0) {
+    return;
+  }
+  const auto first = ParseFontFaceWeight(*endpoints.front());
+  const auto last = ParseFontFaceWeight(*endpoints[count - 1]);
+  if (!first || !last) {
+    return;
+  }
+  fontFace.fontWeight = std::min(*first, *last);
+  fontFace.fontWeightMaximum = count == 2 ? std::optional(std::max(*first, *last)) : std::nullopt;
+}
+
 void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& fontFace) {
-  if (declaration.important || declaration.values.size() != 1) {
+  if (declaration.important) {
+    return;
+  }
+  if (declaration.name.equalsLowercase("font-weight")) {
+    ApplyFontFaceWeight(declaration.values, fontFace);
+    return;
+  }
+  if (declaration.values.size() != 1) {
     return;
   }
   const ComponentValue& value = declaration.values.front();
-  if (declaration.name.equalsLowercase("font-weight")) {
-    if (const auto weight = ParseFontFaceWeight(value)) {
-      fontFace.fontWeight = *weight;
-    }
-  } else if (declaration.name.equalsLowercase("font-style")) {
+  if (declaration.name.equalsLowercase("font-style")) {
     constexpr std::array<std::string_view, 3> kStyles = {"normal", "italic", "oblique"};
     if (const auto style = ParseFontFaceKeyword(value, kStyles, 0)) {
       fontFace.fontStyle = *style;

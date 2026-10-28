@@ -12,9 +12,11 @@
 
 #include "donner/css/FontFace.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -85,6 +87,29 @@ TEST(FontFaceIdentityKeyTest, EachMatchingDescriptorSeparatesDeclarations) {
   FontFace condensed = base;
   condensed.fontStretch = 3;
   EXPECT_NE(FontFaceIdentityKey(condensed), baseKey);
+}
+
+TEST(FontFaceIdentityKeyTest, WeightRangeNormalizationMatchesSelection) {
+  const auto payload = MakeBytes(64);
+  FontFace scalar = MakeDataFace("TestFont", payload);
+  FontFace range = scalar;
+  range.fontWeightMaximum = 400;
+  EXPECT_THAT(FontFaceIdentityKey(range), testing::Eq(FontFaceIdentityKey(scalar)));
+  range.fontWeightMaximum = 700;
+  EXPECT_THAT(FontFaceIdentityKey(range), testing::Ne(FontFaceIdentityKey(scalar)));
+  FontFace reversed = range;
+  reversed.fontWeight = 700;
+  reversed.fontWeightMaximum = 400;
+  EXPECT_THAT(reversed.normalizedFontWeightRange(), testing::Pair(400, 700));
+  EXPECT_THAT(FontFaceIdentityKey(reversed), testing::Eq(FontFaceIdentityKey(range)));
+}
+
+TEST(FontFaceIdentityKeyTest, ProgrammaticWeightBoundsClampWithoutOverflow) {
+  FontFace face;
+  face.fontWeight = std::numeric_limits<int>::max();
+  EXPECT_THAT(face.normalizedFontWeightRange(), testing::Pair(1000, 1000));
+  face.fontWeightMaximum = std::numeric_limits<int>::min();
+  EXPECT_THAT(face.normalizedFontWeightRange(), testing::Pair(1, 1000));
 }
 
 TEST(FontFaceIdentityKeyTest, EachSourceFieldSeparatesDeclarations) {

@@ -32,13 +32,16 @@ A `font-family` name is resolved by \ref donner::svg::FontManager "FontManager" 
 
 Document `@font-face` rules use their declared `font-weight`, `font-style`, and `font-stretch`
 for matching, independently of the font file's embedded metadata. Supported descriptors are
-integer weights from 1 through 1000 (plus `normal` and `bold`), `normal` / `italic` / `oblique`
-styles, and the nine named widths from `ultra-condensed` through `ultra-expanded`. An omitted
-descriptor uses its normal value. The last valid occurrence wins; invalid or `!important`
-descriptors are ignored.
+integer weights from 1 through 1000 (plus `normal` and `bold`), inclusive weight ranges,
+`normal` / `italic` / `oblique` styles, and the nine named widths from `ultra-condensed` through
+`ultra-expanded`. Reversed weight ranges are normalized, and a single weight is equivalent to a
+range with equal endpoints. An omitted descriptor uses its normal value. The last valid occurrence
+wins; invalid or `!important` descriptors are ignored.
 
-This scalar profile does not support weight or width ranges, fractional weights, percentage
-widths, oblique angles, `unicode-range`, or `font-display`.
+Face matching filters width before style and weight, follows the CSS weight search direction,
+and uses the last declared face when matching descriptors tie. Weight ranges select font faces;
+they do not instantiate variable-font axes. Width ranges, fractional weights, percentage widths,
+oblique angles, `unicode-range`, and `font-display` remain unsupported.
 
 This cascade has consequences for portability. A file that names a font the viewer lacks (not in
 the document, not embedded, not installed) renders in Public Sans, so text stays legible but

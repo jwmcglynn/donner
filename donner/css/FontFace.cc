@@ -1,5 +1,6 @@
 #include "donner/css/FontFace.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -41,10 +42,18 @@ std::string toLowerAscii(std::string_view value) {
 
 }  // namespace
 
+std::pair<int, int> FontFace::normalizedFontWeightRange() const {
+  const int first = std::clamp(fontWeight, 1, 1000);
+  const int last = std::clamp(fontWeightMaximum.value_or(fontWeight), 1, 1000);
+  return first <= last ? std::pair{first, last} : std::pair{last, first};
+}
+
 std::string FontFaceIdentityKey(const FontFace& face) {
   std::string key;
   appendField(key, toLowerAscii(std::string_view(face.familyName)));
-  appendField(key, std::to_string(face.fontWeight));
+  const auto [minimumWeight, maximumWeight] = face.normalizedFontWeightRange();
+  appendField(key, std::to_string(minimumWeight));
+  appendField(key, std::to_string(maximumWeight));
   appendField(key, std::to_string(face.fontStyle));
   appendField(key, std::to_string(face.fontStretch));
   appendField(key, std::to_string(face.sources.size()));
