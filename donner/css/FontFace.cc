@@ -1,6 +1,10 @@
 #include "donner/css/FontFace.h"
 
 #include <algorithm>
+#include <array>
+#include <cassert>
+#include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -19,6 +23,14 @@ void appendField(std::string& key, std::string_view value) {
   key += std::to_string(value.size());
   key += ':';
   key += value;
+}
+
+/// Round-trip finite percentages without locale-dependent formatting or precision loss.
+void AppendPercentageField(std::string& key, double percentage) {
+  std::array<char, 64> buffer{};
+  const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), percentage);
+  assert(result.ec == std::errc{} && "Finite percentage fits the formatting buffer");
+  appendField(key, std::string_view(buffer.data(), result.ptr - buffer.data()));
 }
 
 /// Append a field holding the raw bytes of a pointer value.
@@ -42,6 +54,24 @@ std::string toLowerAscii(std::string_view value) {
 
 }  // namespace
 
+double FontFace::FontStretchPercentage(int stretch) {
+  constexpr std::array<double, 9> kWidths = {50, 62.5, 75, 87.5, 100, 112.5, 125, 150, 200};
+  return kWidths[std::clamp(stretch, 1, 9) - 1];
+}
+
+std::pair<double, double> FontFace::normalizedFontStretchRange() const {
+  if (fontStretchPercentRange) {
+    const auto [first, last] = *fontStretchPercentRange;
+    if (std::isfinite(first) && std::isfinite(last) && first >= 0 && last >= 0) {
+      const double minimum = std::min(first, last);
+      const double maximum = std::max(first, last);
+      return {minimum == 0 ? 0.0 : minimum, maximum == 0 ? 0.0 : maximum};
+    }
+  }
+  const double width = FontStretchPercentage(fontStretch);
+  return {width, width};
+}
+
 std::pair<int, int> FontFace::normalizedFontWeightRange() const {
   const int first = std::clamp(fontWeight, 1, 1000);
   const int last = std::clamp(fontWeightMaximum.value_or(fontWeight), 1, 1000);
@@ -55,7 +85,9 @@ std::string FontFaceIdentityKey(const FontFace& face) {
   appendField(key, std::to_string(minimumWeight));
   appendField(key, std::to_string(maximumWeight));
   appendField(key, std::to_string(face.fontStyle));
-  appendField(key, std::to_string(face.fontStretch));
+  const auto [minimumWidth, maximumWidth] = face.normalizedFontStretchRange();
+  AppendPercentageField(key, minimumWidth);
+  AppendPercentageField(key, maximumWidth);
   appendField(key, std::to_string(face.sources.size()));
 
   for (const FontFaceSource& source : face.sources) {

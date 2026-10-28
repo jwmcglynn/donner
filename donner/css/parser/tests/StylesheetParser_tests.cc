@@ -434,6 +434,95 @@ TEST(StylesheetParser, FontFaceWeightRangeUpdatesAreAtomic) {
   EXPECT_THAT(scalar.fontFaces().front().normalizedFontWeightRange(), testing::Pair(700, 700));
 }
 
+TEST(StylesheetParser, FontFaceWidthRangeIdentityUsesBothPercentageEndpoints) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: 50% 87.5%; }
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: 50% 90%; }
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: 87.5% 50%; }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(3));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[0]),
+              testing::Ne(FontFaceIdentityKey(sheet.fontFaces()[1])));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[0]),
+              testing::Eq(FontFaceIdentityKey(sheet.fontFaces()[2])));
+}
+
+TEST(StylesheetParser, FontFaceWidthPercentageAndKeywordShareIdentity) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: condensed; }
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: 75%; }
+    @font-face { font-family: Test; src: url(font.woff); font-stretch: 75% 75%; }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(3));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[0]),
+              testing::Eq(FontFaceIdentityKey(sheet.fontFaces()[1])));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[0]),
+              testing::Eq(FontFaceIdentityKey(sheet.fontFaces()[2])));
+}
+
+TEST(StylesheetParser, FontFaceWidthNumericAndMixedRanges) {
+  struct Case {
+    std::string_view value;
+    double minimum;
+    double maximum;
+  };
+  const std::array<Case, 8> cases = {{{"0%", 0, 0},
+                                      {"12.5%", 12.5, 12.5},
+                                      {"125% 75%", 75, 125},
+                                      {"condensed 125%", 75, 125},
+                                      {"125% condensed", 75, 125},
+                                      {"50%/**/200%", 50, 200},
+                                      {"1e100% 200%", 200, 1e100},
+                                      {"expanded\t 150%", 125, 150}}};
+  for (const auto& value : cases) {
+    SCOPED_TRACE(value.value);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    const Stylesheet sheet = StylesheetParser::Parse(
+        "@font-face { font-family: Test; src: url(font.woff); font-stretch:" +
+            std::string(value.value) + "; }",
+        disabled);
+    ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
+    EXPECT_THAT(sheet.fontFaces().front().normalizedFontStretchRange(),
+                testing::Pair(value.minimum, value.maximum));
+  }
+}
+
+TEST(StylesheetParser, FontFaceWidthUpdatesAreAtomicAcrossAlias) {
+  for (const std::string_view invalid :
+       {"-1%", "100% -1%", "1e999%", "100 200", "100% 200% 300%", "normal inherit", "calc(100%)",
+        "auto", "75% 125%!important"}) {
+    SCOPED_TRACE(invalid);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    const Stylesheet sheet = StylesheetParser::Parse(
+        "@font-face { font-family: Test; src: url(font.woff); font-width: 50% 150%; font-stretch:" +
+            std::string(invalid) + "; }",
+        disabled);
+    ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
+    EXPECT_THAT(sheet.fontFaces().front().normalizedFontStretchRange(), testing::Pair(50.0, 150.0));
+  }
+}
+
+TEST(StylesheetParser, FontFaceWidthScalarResetsPreviousRange) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff);
+      font-stretch: 50% 150%; font-width: condensed; }
+    @font-face { font-family: Test; src: url(font.woff);
+      font-width: 50% 150%; font-stretch: 90%; }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(2));
+  EXPECT_THAT(sheet.fontFaces()[0].fontStretchPercentRange, testing::Eq(std::nullopt));
+  EXPECT_THAT(sheet.fontFaces()[0].fontStretch, testing::Eq(3));
+  EXPECT_THAT(sheet.fontFaces()[0].normalizedFontStretchRange(), testing::Pair(75.0, 75.0));
+  EXPECT_THAT(sheet.fontFaces()[1].fontStretchPercentRange,
+              testing::Optional(testing::Pair(90.0, 90.0)));
+}
+
 TEST(StylesheetParser, FontFaceStretchKeywords) {
   constexpr std::array<std::string_view, 9> kWidths = {
       "ultra-condensed", "extra-condensed", "condensed",      "semi-condensed", "normal",
@@ -485,7 +574,7 @@ TEST(StylesheetParser, FontFaceInvalidDescriptorsPreserveLastValidValue) {
   EXPECT_EQ(sheet.fontFaces()[0].fontStretch, 7);
 }
 
-TEST(StylesheetParser, FontFaceUnsupportedStyleAndStretchRangesPreserveDefaults) {
+TEST(StylesheetParser, FontFaceWidthRangeWithUnsupportedStylePreservesStyleDefault) {
   ParseWarningSink disabled = ParseWarningSink::Disabled();
   const Stylesheet sheet = StylesheetParser::Parse(R"(
     @font-face { font-family: Test; src: url(font.woff);
@@ -495,7 +584,7 @@ TEST(StylesheetParser, FontFaceUnsupportedStyleAndStretchRangesPreserveDefaults)
   ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
   EXPECT_THAT(sheet.fontFaces()[0].normalizedFontWeightRange(), testing::Pair(700, 900));
   EXPECT_EQ(sheet.fontFaces()[0].fontStyle, 0);
-  EXPECT_EQ(sheet.fontFaces()[0].fontStretch, 5);
+  EXPECT_THAT(sheet.fontFaces()[0].normalizedFontStretchRange(), testing::Pair(75.0, 125.0));
 }
 
 TEST(StylesheetParser, FontFaceDataUrl) {

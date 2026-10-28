@@ -376,12 +376,65 @@ void ApplyFontFaceWeight(std::span<const ComponentValue> values, FontFace& fontF
   fontFace.fontWeightMaximum = count == 2 ? std::optional(std::max(*first, *last)) : std::nullopt;
 }
 
+struct ParsedFontFaceWidth {
+  double percentage;
+  std::optional<int> keyword;
+};
+
+std::optional<ParsedFontFaceWidth> ParseFontFaceWidth(const ComponentValue& value) {
+  if (const auto* percentage = value.tryGetToken<Token::Percentage>()) {
+    if (std::isfinite(percentage->value) && percentage->value >= 0) {
+      return ParsedFontFaceWidth{percentage->value, std::nullopt};
+    }
+  }
+  constexpr std::array<std::string_view, 9> kWidths = {
+      "ultra-condensed", "extra-condensed", "condensed",      "semi-condensed", "normal",
+      "semi-expanded",   "expanded",        "extra-expanded", "ultra-expanded"};
+  if (const auto keyword = ParseFontFaceKeyword(value, kWidths, 1)) {
+    return ParsedFontFaceWidth{FontFace::FontStretchPercentage(*keyword), *keyword};
+  }
+  return std::nullopt;
+}
+
+void ApplyFontFaceWidth(std::span<const ComponentValue> values, FontFace& fontFace) {
+  std::array<const ComponentValue*, 2> endpoints{};
+  std::size_t count = 0;
+  for (const ComponentValue& value : values) {
+    if (value.isToken<Token::Whitespace>()) {
+      continue;
+    }
+    if (count == endpoints.size()) {
+      return;
+    }
+    endpoints[count++] = &value;
+  }
+  if (count == 0) {
+    return;
+  }
+  const auto first = ParseFontFaceWidth(*endpoints.front());
+  const auto last = ParseFontFaceWidth(*endpoints[count - 1]);
+  if (!first || !last) {
+    return;
+  }
+  fontFace.fontStretch = first->keyword.value_or(5);
+  fontFace.fontStretchPercentRange =
+      count == 1 && first->keyword
+          ? std::nullopt
+          : std::optional(std::pair{std::min(first->percentage, last->percentage),
+                                    std::max(first->percentage, last->percentage)});
+}
+
 void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& fontFace) {
   if (declaration.important) {
     return;
   }
   if (declaration.name.equalsLowercase("font-weight")) {
     ApplyFontFaceWeight(declaration.values, fontFace);
+    return;
+  }
+  if (declaration.name.equalsLowercase("font-stretch") ||
+      declaration.name.equalsLowercase("font-width")) {
+    ApplyFontFaceWidth(declaration.values, fontFace);
     return;
   }
   if (declaration.values.size() != 1) {
@@ -392,13 +445,6 @@ void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& f
     constexpr std::array<std::string_view, 3> kStyles = {"normal", "italic", "oblique"};
     if (const auto style = ParseFontFaceKeyword(value, kStyles, 0)) {
       fontFace.fontStyle = *style;
-    }
-  } else if (declaration.name.equalsLowercase("font-stretch")) {
-    constexpr std::array<std::string_view, 9> kWidths = {
-        "ultra-condensed", "extra-condensed", "condensed",      "semi-condensed", "normal",
-        "semi-expanded",   "expanded",        "extra-expanded", "ultra-expanded"};
-    if (const auto stretch = ParseFontFaceKeyword(value, kWidths, 1)) {
-      fontFace.fontStretch = *stretch;
     }
   }
 }
