@@ -304,6 +304,40 @@ TEST(StylesheetParser, FontFaceIntegerWeights) {
   }
 }
 
+TEST(StylesheetParser, FontFaceWeightRangesNormalizeInclusiveEndpoints) {
+  const std::array<std::pair<std::string_view, int>, 5> ranges = {{{"100 900", 100},
+                                                                   {"900 100", 100},
+                                                                   {"1 1000", 1},
+                                                                   {"normal bold", 400},
+                                                                   {"bold normal", 400}}};
+  for (const auto& [range, minimum] : ranges) {
+    SCOPED_TRACE(range);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    const Stylesheet sheet = StylesheetParser::Parse(
+        "@font-face { font-family: Test; src: url(font.woff); font-weight: " + std::string(range) +
+            "; }",
+        disabled);
+    ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
+    EXPECT_THAT(sheet.fontFaces().front().fontWeight, testing::Eq(minimum));
+  }
+}
+
+TEST(StylesheetParser, FontFaceRangeIdentityIncludesBothEndpoints) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff); font-weight: 100 600; }
+    @font-face { font-family: Test; src: url(font.woff); font-weight: 100 900; }
+    @font-face { font-family: Test; src: url(font.woff); font-weight: 400; }
+    @font-face { font-family: Test; src: url(font.woff); font-weight: 400 400; }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(4));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[0]),
+              testing::Ne(FontFaceIdentityKey(sheet.fontFaces()[1])));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[2]),
+              testing::Eq(FontFaceIdentityKey(sheet.fontFaces()[3])));
+}
+
 TEST(StylesheetParser, FontFaceStretchKeywords) {
   constexpr std::array<std::string_view, 9> kWidths = {
       "ultra-condensed", "extra-condensed", "condensed",      "semi-condensed", "normal",
