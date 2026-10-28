@@ -37,7 +37,7 @@ using ::testing::SizeIs;
 
 std::vector<uint8_t> SnapshotSynthesisFont(std::string_view name = "NotoSans-Regular.ttf") {
   const std::string path =
-      Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf");
+      Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts/" + std::string(name));
   std::ifstream input(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
