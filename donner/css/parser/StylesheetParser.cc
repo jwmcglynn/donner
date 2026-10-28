@@ -438,6 +438,21 @@ std::optional<FontFace> ParseFontFaceRule(AtRule& atRule,
   return BuildFontFace(declarations);
 }
 
+bool WarnUnsupportedAtRule(const AtRule& atRule, ParseWarningSink& warningSink) {
+  const char* reason;
+  if (atRule.name.equalsLowercase("import")) {
+    reason = "CSS @import is unsupported; imported stylesheets are not loaded";
+  } else if (atRule.name.equalsLowercase("media")) {
+    reason = "CSS @media is unsupported; conditional rules are ignored";
+  } else if (atRule.name.equalsLowercase("supports")) {
+    reason = "CSS @supports is unsupported; conditional rules are ignored";
+  } else {
+    return false;
+  }
+  warningSink.add([&] { return ParseDiagnostic::Warning(reason, atRule.sourceOffset); });
+  return true;
+}
+
 }  // namespace
 
 Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warningSink) {
@@ -463,12 +478,7 @@ Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warni
       continue;
     }
     if (AtRule* atRule = std::get_if<AtRule>(&rule.value)) {
-      if (atRule->name.equalsLowercase("import")) {
-        warningSink.add([&] {
-          return ParseDiagnostic::Warning(
-              "CSS @import is unsupported; imported stylesheets are not loaded",
-              atRule->sourceOffset);
-        });
+      if (WarnUnsupportedAtRule(*atRule, warningSink)) {
         continue;
       }
       if (auto fontFace = ParseFontFaceRule(*atRule, securityStats)) {
