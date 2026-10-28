@@ -356,7 +356,8 @@ TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
     SVGDocument document = MakeDocument(R"svg(
       <defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
       <text x="10" y="60" font-family="sans-serif" font-size="48"
-            text-decoration="underline">A<tspan clip-path="url(#clip)">B</tspan>C</text>
+            text-decoration="underline" style="text-decoration-thickness:4px">A<tspan clip-path="url(#clip)"
+            style="text-decoration:underline;text-decoration-thickness:2px">B</tspan>C</text>
     )svg");
     snapshot = driver.captureRenderSnapshot(document);
     EXPECT_EQ(snapshot.liveRegistryReferenceCountForTesting(document.registry()), 0u);

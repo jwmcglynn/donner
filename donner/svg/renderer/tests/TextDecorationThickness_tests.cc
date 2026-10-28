@@ -63,11 +63,16 @@ private:
   bool hasUnderlineMetrics_;
 };
 
-RendererBitmap RenderDecorationScene(std::string_view body, bool metrics = true) {
+SVGDocument DecorationDocument(std::string_view body, bool metrics = true) {
   SVGDocument document = instantiateSubtree(body, {}, Vector2i(100, 100));
   auto& registry = document.registry();
   auto& fonts = registry.ctx().emplace<FontManager>(registry);
   registry.ctx().emplace<TextEngine>(fonts, registry, std::make_unique<DecorationBackend>(metrics));
+  return document;
+}
+
+RendererBitmap RenderDecorationScene(std::string_view body, bool metrics = true) {
+  auto document = DecorationDocument(body, metrics);
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
@@ -152,6 +157,38 @@ TEST(TextDecorationThickness, MissingUnderlineMetricFallsBackToAuto) {
       false);
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_missing_metric",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(TextDecorationThickness, PercentageMatchesLengthInEveryWritingMode) {
+  for (const auto mode : {"horizontal-tb", "vertical-rl", "vertical-lr"}) {
+    SCOPED_TRACE(mode);
+    const std::string prefix =
+        "<text x='50' y='40' font-size='20' fill='red' style='writing-mode:" + std::string(mode) +
+        ";text-decoration:underline overline line-through;";
+    const auto actual = RenderDecorationScene(prefix + "text-decoration-thickness:20%'>XX</text>");
+    const auto expected =
+        RenderDecorationScene(prefix + "text-decoration-thickness:4px'>XX</text>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_writing_mode",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(TextDecorationThickness, StyleMutationUpdatesThickness) {
+  auto document = DecorationDocument(
+      "<text id='t' x='10' y='40' font-size='20' fill='red' "
+      "style='text-decoration:underline;text-decoration-thickness:8px'>XX</text>");
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  for (const auto [thickness, top] : {std::pair{8, 38}, std::pair{2, 41}}) {
+    text->setAttribute("style", "text-decoration:underline;text-decoration-thickness:" +
+                                    std::to_string(thickness) + "px");
+    const auto actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+    const auto expected =
+        RenderDecorationScene("<rect x='10' y='" + std::to_string(top) + "' width='20' height='" +
+                              std::to_string(thickness) + "' fill='red'/>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_style_mutation",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(TextDecorationThickness, ImmutableOriginStorageRefusesAndReleasesCapacity) {
