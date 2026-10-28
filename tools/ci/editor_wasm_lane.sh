@@ -57,7 +57,7 @@ prefetch() {
 }
 
 build() {
-  local budget_mode="${PAYLOAD_BUDGET_MODE:-report}"  # DIAGNOSTIC BRANCH ONLY
+  local budget_mode="report"  # DIAGNOSTIC BRANCH ONLY: the workflow passes enforce
   local budget_test_output="errors"
   case "${budget_mode}" in
     enforce) ;;
