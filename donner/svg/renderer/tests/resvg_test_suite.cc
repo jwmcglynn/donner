@@ -495,14 +495,15 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},
-                // The 300x300 resvg v0.49.0 rendering; the superseded reference was flattened
-                // onto white, encoding the opaque seagreen interior as darker translucent pixels.
+                // Reference refreshed to resvg v0.49.0; see
+                // third_party/resvg-test-suite/BUILD.bazel.
                 {"complex-order-and-xlink-href.svg",
                  Params::Skip("Reference disagreement: the region's x and height cut the blur's "
                               "input at its left and bottom edges. The reference blurs with five "
                               "box passes that each drop what spreads past the region, so the "
                               "first row and column inside read alpha 84 where Donner, which "
-                              "keeps that spill, reads 143 (1,275 px, all within 5 px of those "
+                              "keeps that spill, reads 143, close to a single Gaussian of the "
+                              "clipped input (1,275 px, all within 5 px of those "
                               "edges; Geode adds 3 frame-corner pixels); "
                               "FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom pins the "
                               "region clip")

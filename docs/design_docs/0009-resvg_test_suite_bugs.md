@@ -55,11 +55,12 @@ its blur and height through `xlink:href` and sets its own `x`, so the filter reg
 blur's input at its left and bottom edges. The vendored reference now is resvg v0.49.0's
 300x300 rendering; the snapshot's reference had been flattened onto white (see
 `third_party/resvg-test-suite/BUILD.bazel`). Against it, Donner's region geometry and its free
-blur edges match. The remaining 1,275 pixels lie within 5 px of the two clipped edges: resvg
-approximates the blur with five box passes over a region-sized buffer, and each pass drops what
-spreads past the buffer, so the first column inside reads alpha 84. Donner keeps that spill, as
-a single blur of the clipped input would, and reads 143. The row is a reference-disagreement
-skip. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
+blur edges match. The remaining pixels (1,275 on TinySkia; Geode adds 3 frame-corner pixels)
+lie within 5 px of the two clipped edges: resvg approximates the blur with five box passes over a
+region-sized buffer, and each pass drops what spreads past the buffer, so the first row and column
+inside read alpha 84. Donner keeps that spill and reads 143, close to the 144 of a single
+Gaussian of the clipped input. The row is a reference-disagreement skip; a raised pixel budget
+would keep the rest of the case compared, but needs a maintainer decision. `RendererRegressionTests.FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom` requires
 the clipped render to equal the visible part of the rect blurred with room around it.
 
 ## Active overrides (37)

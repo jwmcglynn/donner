@@ -608,13 +608,13 @@ TEST_F(RendererRegressionTests, FilterBlurNearCanvasEdgeMatchesBlurWithRoom) {
       "blur_canvas_edge_spill", editor::tests::PixelmatchIdentityParams());
 }
 
-// The derived filter inherits the blur and the rest of its region through href, and its own x cuts
-// through the rect. The region clips the blur's input and result, so inside it the render must
-// equal a blur of the rect's visible part rendered with room around it, and outside it nothing is
-// drawn.
+// The derived filter inherits the blur, y and height through href, and its own x cuts through the
+// rect's left side while the inherited height cuts its bottom. The region clips the blur's input
+// and result, so inside it the render must equal a blur of the rect's visible part rendered with
+// room around it, and outside it nothing is drawn.
 TEST_F(RendererRegressionTests, FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom) {
   SVGDocument clippedByRegion = instantiateSubtree(R"svg(
-    <filter id="base" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+    <filter id="base" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="40">
       <feGaussianBlur stdDeviation="3"/>
     </filter>
     <filter id="derived" x="20" width="44" href="#base"/>
@@ -625,21 +625,24 @@ TEST_F(RendererRegressionTests, FilterHrefRegionClipMatchesClippedSourceBlurredW
     <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
       <feGaussianBlur stdDeviation="3"/>
     </filter>
-    <rect x="20" y="16" width="32" height="32" fill="seagreen" filter="url(#f)"/>)svg",
+    <rect x="20" y="16" width="32" height="24" fill="seagreen" filter="url(#f)"/>)svg",
                                             {}, Vector2i(64, 64));
   const RendererBitmap actual = RenderDocumentWithBackend(clippedByRegion, ActiveRendererBackend());
   ExpectVisibleBitmap(actual, "href_region_clip_visible");
 
-  const RendererBitmap outside =
-      editor::tests::CropBitmap(actual, Vector2i(0, 0), Vector2i(20, 64));
-  RendererBitmap transparent = outside;
-  std::fill(transparent.pixels.begin(), transparent.pixels.end(), 0);
-  editor::tests::CompareBitmapToBitmap(outside, transparent, "href_region_clip_outside",
-                                       editor::tests::PixelmatchIdentityParams());
+  const auto expectTransparent = [&actual](Vector2i origin, Vector2i size, std::string_view label) {
+    const RendererBitmap outside = editor::tests::CropBitmap(actual, origin, size);
+    RendererBitmap transparent = outside;
+    std::fill(transparent.pixels.begin(), transparent.pixels.end(), 0);
+    editor::tests::CompareBitmapToBitmap(outside, transparent, label,
+                                         editor::tests::PixelmatchIdentityParams());
+  };
+  expectTransparent(Vector2i(0, 0), Vector2i(20, 64), "href_region_clip_outside_left");
+  expectTransparent(Vector2i(20, 40), Vector2i(44, 24), "href_region_clip_outside_bottom");
   editor::tests::CompareBitmapToBitmap(
-      editor::tests::CropBitmap(actual, Vector2i(20, 0), Vector2i(44, 64)),
+      editor::tests::CropBitmap(actual, Vector2i(20, 0), Vector2i(44, 40)),
       editor::tests::CropBitmap(RenderDocumentWithBackend(withRoom, ActiveRendererBackend()),
-                                Vector2i(20, 0), Vector2i(44, 64)),
+                                Vector2i(20, 0), Vector2i(44, 40)),
       "href_region_clip_inside", editor::tests::PixelmatchIdentityParams());
 }
 
