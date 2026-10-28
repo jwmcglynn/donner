@@ -196,6 +196,10 @@ std::vector<TextEditor::ShortcutBindings> TextEditor::getDefaultShortcuts() {
 // Forwarders to the headless editing core.
 // ---------------------------------------------------------------------------
 
+void TextEditor::setLanguageDefinition(const LanguageDefinition& langDef) {
+  core_.setLanguageDefinition(langDef);
+}
+
 void TextEditor::setSvgLanguageDefinition() {
   core_.setSvgLanguageDefinition();
 }

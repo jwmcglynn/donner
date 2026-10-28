@@ -4829,9 +4829,8 @@ TEST_F(TextEditorTests, BuildSuggestionsAcceptsUppercaseWords) {
   EXPECT_EQ(AutocompleteSuggestion(0).first, RcString("upper"));
 }
 
-TEST_F(TextEditorTests, DefaultSvgSetupHighlightsAndEditsWithoutChangingPublicLanguageRules) {
+TEST_F(TextEditorTests, DefaultSvgSetupHighlightsAndEdits) {
   EXPECT_EQ(editor.getLanguageDefinition().name, RcString("SVG"));
-  EXPECT_TRUE(editor.getLanguageDefinition().tokenRegexStrings.empty());
   editor.setText("<rect/>");
   EXPECT_EQ(FirstLineSyntaxColor(1), ColorIndex::Keyword);
   editor.setCursorPosition(Coordinates(0, 7));
@@ -4841,9 +4840,18 @@ TEST_F(TextEditorTests, DefaultSvgSetupHighlightsAndEditsWithoutChangingPublicLa
   EXPECT_EQ(editor.getText(), "<rect/>");
 }
 
-TEST_F(TextEditorTests, LegacyRegexLanguageRemainsAvailableBeforeSwitchingBackToSvg) {
+TEST_F(TextEditorTests, CustomTokenizerRemainsAvailableBeforeSwitchingBackToSvg) {
   TextEditor::LanguageDefinition language;
-  language.tokenRegexStrings = {{R"([0-9]+)", ColorIndex::Number}, {R"(@)", ColorIndex::UserType}};
+  language.tokenize = [](const char* begin, const char* end, const char*& tokenBegin,
+                         const char*& tokenEnd, ColorIndex& color) {
+    if (begin == end || (*begin != '@' && (*begin < '0' || *begin > '9'))) {
+      return false;
+    }
+    tokenBegin = begin;
+    tokenEnd = begin + 1;
+    color = *begin == '@' ? ColorIndex::UserType : ColorIndex::Number;
+    return true;
+  };
   editor.setLanguageDefinition(language);
   editor.setText("12@");
   EXPECT_EQ(FirstLineSyntaxColor(0), ColorIndex::Number);
@@ -4851,6 +4859,8 @@ TEST_F(TextEditorTests, LegacyRegexLanguageRemainsAvailableBeforeSwitchingBackTo
   EXPECT_EQ(FirstLineSyntaxColor(2), ColorIndex::UserType);
   editor.setSvgLanguageDefinition();
   EXPECT_EQ(FirstLineSyntaxColor(2), ColorIndex::Default);
+  editor.setText("<rect/>");
+  EXPECT_EQ(FirstLineSyntaxColor(1), ColorIndex::Keyword);
 }
 
 TEST_F(TextEditorTests, BuildSuggestionsIncludesLanguageKeywords) {
