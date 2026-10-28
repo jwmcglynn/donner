@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,15 +10,16 @@ async function bootstrap(t, support = true) {
   const directory = await mkdtemp(join(tmpdir(), "renderer-resources-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await writeFile(join(directory, "package.json"), "{\"type\":\"module\"}");
-  await copyFile(
-    new URL("./renderer-resources.js", import.meta.url),
+  // Copy bytes only; isolated modules do not need source ownership or timestamps.
+  await writeFile(
     join(directory, "bootstrap.js"),
+    await readFile(new URL("./renderer-resources.js", import.meta.url)),
   );
   if (support) {
     for (const name of ["catalog-fonts.js", "packaged-resource-loader.js"]) {
-      await copyFile(
-        new URL(`../../../editor/wasm/${name}`, import.meta.url),
+      await writeFile(
         join(directory, name),
+        await readFile(new URL(`../../../editor/wasm/${name}`, import.meta.url)),
       );
     }
   }
