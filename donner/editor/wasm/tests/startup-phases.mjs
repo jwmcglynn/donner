@@ -17,7 +17,8 @@
 
 /** Startup phases in the order a case passes through them. */
 export const kStartupPhases = Object.freeze([
-  // The case's first beforeEach hook, before the page fixture is set up.
+  // The case's first beforeEach hook, before the page fixture is set up. In a worker's first case
+  // this also precedes the browser launch, which Playwright does not charge to the case's budget.
   "testStart",
   // The case body reached openEditor, so its fixtures were ready.
   "openEditor",
@@ -39,11 +40,12 @@ const seconds = (ms) => `${(ms / 1000).toFixed(1)} s`;
 /**
  * Where a case's startup time went, from its phase marks.
  *
- * @param {Record<string, number>} marks Phase name to epoch milliseconds.
+ * @param {Record<string, number>} marks Phase name to epoch milliseconds; `firstCaseInWorker` is
+ *   1 when the case was the first its worker ran.
  * @param {number} budgetMs The case's timeout.
  * @param {{navigationTimeOrigin?: number | null, now?: number}} [options] The page's
  *   `performance.timeOrigin` when the page answered, and the time of the report.
- * @returns {{budgetMs: number, sinceTestStartMs: Record<string, number>,
+ * @returns {{budgetMs: number, firstCaseInWorker: boolean, sinceTestStartMs: Record<string, number>,
  *   navigationTimeOriginMs: number | null, preNavigationMs: number | null,
  *   preNavigationStall: boolean, reportedAtMs: number | null}}
  */
@@ -64,6 +66,7 @@ export function startupPhaseReport(marks, budgetMs, options = {}) {
     ?? (sinceTestStartMs.openEditor === undefined ? null : reportedAtMs);
   return {
     budgetMs,
+    firstCaseInWorker: marks.firstCaseInWorker === 1,
     sinceTestStartMs,
     navigationTimeOriginMs: since(options.navigationTimeOrigin ?? null),
     preNavigationMs,
@@ -87,8 +90,11 @@ export function describePreNavigationStall(report) {
     + (phases.gotoStart === undefined
       ? ", navigation never started"
       : `, openEditor to navigation ${seconds(phases.gotoStart - phases.openEditor)}`);
+  const launch = report.firstCaseInWorker
+    ? "; the worker's first case, so this includes the browser launch the budget does not count"
+    : "";
   return `pre-navigation stall: ${seconds(report.preNavigationMs)} of the`
-    + ` ${seconds(report.budgetMs)} test budget passed before navigation started (${split})`;
+    + ` ${seconds(report.budgetMs)} test budget passed before navigation started (${split}${launch})`;
 }
 
 /**

@@ -46,6 +46,8 @@ const kReadbackMaxEdge = 1600;
 const armedPages = new Map<string, Page>();
 /** Startup phase marks of the running cases, epoch milliseconds, keyed by test id. */
 const startupMarks = new Map<string, Record<string, number>>();
+/** Cases this worker process has started; its first case also launches the browser. */
+let startedCases = 0;
 
 /**
  * Record that the running case entered a startup phase (kStartupPhases in startup-phases.mjs).
@@ -410,7 +412,10 @@ export function installFailureCanvasEvidence(test: typeof baseTest): void {
   // Registered before the spec's own hooks, and requesting no fixtures, so it runs before the
   // page is set up: the first mark is as close to the start of the case's budget as a hook gets.
   test.beforeEach(() => {
-    startupMarks.set(test.info().testId, { testStart: Date.now() });
+    startupMarks.set(test.info().testId, {
+      testStart: Date.now(),
+      firstCaseInWorker: startedCases++ === 0 ? 1 : 0,
+    });
   });
   test.afterEach(async () => {
     const testInfo = test.info();

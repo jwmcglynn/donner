@@ -973,6 +973,10 @@ test("startup phases name a pre-navigation stall instead of the wait it starved"
     firstFrameWaitStart: start + 29_460,
   };
   const message = startupWaitMessage(stalled, 30_000, wait, start + 29_460);
+  assert.match(
+    startupWaitMessage({ ...stalled, firstCaseInWorker: 1 }, 30_000, wait, start + 29_460),
+    /openEditor to navigation 0\.1 s; the worker's first case, so this includes the browser launch/,
+  );
   assert.equal(
     message,
     "pre-navigation stall: 29.3 s of the 30.0 s test budget passed before navigation started"
@@ -1040,7 +1044,7 @@ test("openEditor marks each startup phase before the wait it starts", () => {
   const install = evidence.indexOf("export function installFailureCanvasEvidence(");
   assert.match(
     evidence.slice(install),
-    /test\.beforeEach\(\(\) => \{\n {4}startupMarks\.set\(test\.info\(\)\.testId, \{ testStart: Date\.now\(\) \}\);/,
+    /test\.beforeEach\(\(\) => \{\n {4}startupMarks\.set\(test\.info\(\)\.testId, \{\n {6}testStart: Date\.now\(\),/,
     "the first mark must come from a hook that sets up no fixture",
   );
 });
