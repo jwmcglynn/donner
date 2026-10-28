@@ -3638,7 +3638,7 @@ TEST(TextEngineScriptedTest, FullWidthMatchesLiteralUnicodeAcrossAxesAndWhitespa
       text.spans.push_back(span);
       auto params = MakeTextParams(20);
       params.writingMode = mode;
-      params.inlineSizePx = 35;
+      params.inlineSizePx = 31;
       const auto transformed = engine.layout(text, params);
       text.spans[0].textTransform = TextTransform::None;
       text.spans[0].text = RcString(
