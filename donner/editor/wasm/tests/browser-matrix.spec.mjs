@@ -914,10 +914,16 @@ test("drag candidates say whether the editor's completed frame or only the readb
     "editor-frame-went-backwards",
     "a smaller frame id is the editor's completed frame going back",
   );
+  // Just after a reversal the represented pointer, which lags the input, still moves the old way.
   assert.equal(
     ordering(frame(40, 108, 50), frame(41, 100, 50)).verdict,
-    "editor-frame-went-backwards",
-    "a newer frame that represents a pointer behind the last one is the editor going back",
+    "editor-pointer-against-interval",
+    "a represented pointer behind the last one is ambiguous, not proof of an editor bug",
+  );
+  assert.equal(
+    ordering(frame(40, 100, 50), { ...frame(41, 108, 50), inputRepresented: false }).verdict,
+    "indeterminate",
+    "a frame that represents no input says nothing about where its content is",
   );
   const missing = ordering(null, frame(41, 108, 50));
   assert.equal(missing.verdict, "no-editor-frame");
@@ -938,9 +944,12 @@ test("composited probe samples keep the editor's completed frame for failure out
   assert.equal(sampleOnce.match(/\n {8,10}presentedFrame,\n/g)?.length, 2);
   assert.match(probe, /__donnerPresentationQueueStats/);
   const spec = readFileSync(path.join(testDirectory, "composited-drag-invariants.spec.ts"), "utf8");
-  const ordering = spec.indexOf("presentedFrameOrdering(result.samples, violation)");
   const verdict = spec.indexOf("samples presented an OLDER frame than one already shown");
-  assert.ok(ordering !== -1 && verdict > ordering, "the ordering verdict must carry the frames");
+  const ordering = spec.indexOf("editorFrameOrdering(result.samples, violations)", verdict);
+  assert.ok(
+    verdict !== -1 && ordering !== -1 && ordering - verdict < 400,
+    "the ordering verdict's message must carry the editor's frames",
+  );
 });
 
 test("startup phases name a pre-navigation stall instead of the wait it starved", async () => {
@@ -991,10 +1000,18 @@ test("startup phases name a pre-navigation stall instead of the wait it starved"
     true,
   );
 
-  // A case that never navigated spent everything up to the report before navigation.
-  const never = startupPhaseReport({ testStart: start }, 30_000, { now: start + 30_100 });
+  // A case that reached openEditor but never navigated spent everything up to the report there.
+  const never = startupPhaseReport({ testStart: start, openEditor: start + 50 }, 30_000, {
+    now: start + 30_100,
+  });
   assert.equal(never.preNavigationMs, 30_100);
-  assert.match(describePreNavigationStall(never), /\(openEditor was never reached\)$/);
+  assert.match(describePreNavigationStall(never), /, navigation never started\)$/);
+  // A case that navigates without openEditor has no navigation marks to judge.
+  const elsewhere = startupPhaseReport({ testStart: start }, 30_000, { now: start + 30_100 });
+  assert.equal(elsewhere.preNavigationMs, null);
+  assert.equal(elsewhere.preNavigationStall, false);
+  // No timeout (a debugger run) has no budget to stall.
+  assert.equal(startupWaitMessage(stalled, 0, wait, start + 29_460), wait);
   // A case without marks (its spec does not keep them) keeps the wait's own message.
   assert.equal(startupWaitMessage({}, 30_000, wait), wait);
 });

@@ -17,7 +17,7 @@
 
 /** Startup phases in the order a case passes through them. */
 export const kStartupPhases = Object.freeze([
-  // The case's first beforeEach hook, before any test-scoped fixture (the page) is set up.
+  // The case's first beforeEach hook, before the page fixture is set up.
   "testStart",
   // The case body reached openEditor, so its fixtures were ready.
   "openEditor",
@@ -57,14 +57,18 @@ export function startupPhaseReport(marks, budgetMs, options = {}) {
     if (value !== null) sinceTestStartMs[phase] = value;
   }
   const reportedAtMs = since(options.now ?? Date.now());
-  // A case that never navigated spent everything up to the report before navigation.
-  const preNavigationMs = sinceTestStartMs.gotoStart ?? reportedAtMs;
+  // A case that reached openEditor but never navigated spent everything up to the report before
+  // navigation. Without an openEditor mark the case navigates by other means, which these marks
+  // do not see, so nothing is said about its navigation.
+  const preNavigationMs = sinceTestStartMs.gotoStart
+    ?? (sinceTestStartMs.openEditor === undefined ? null : reportedAtMs);
   return {
     budgetMs,
     sinceTestStartMs,
     navigationTimeOriginMs: since(options.navigationTimeOrigin ?? null),
     preNavigationMs,
-    preNavigationStall: preNavigationMs !== null
+    // A budget of zero (no timeout, as under a debugger) has no stall to name.
+    preNavigationStall: budgetMs > 0 && preNavigationMs !== null
       && preNavigationMs >= budgetMs * kPreNavigationStallShare,
     reportedAtMs,
   };
@@ -79,12 +83,10 @@ export function startupPhaseReport(marks, budgetMs, options = {}) {
 export function describePreNavigationStall(report) {
   if (!report.preNavigationStall) return null;
   const { sinceTestStartMs: phases } = report;
-  const split = phases.openEditor === undefined
-    ? "openEditor was never reached"
-    : `test start to openEditor ${seconds(phases.openEditor)}`
-      + (phases.gotoStart === undefined
-        ? ", navigation never started"
-        : `, openEditor to navigation ${seconds(phases.gotoStart - phases.openEditor)}`);
+  const split = `test start to openEditor ${seconds(phases.openEditor)}`
+    + (phases.gotoStart === undefined
+      ? ", navigation never started"
+      : `, openEditor to navigation ${seconds(phases.gotoStart - phases.openEditor)}`);
   return `pre-navigation stall: ${seconds(report.preNavigationMs)} of the`
     + ` ${seconds(report.budgetMs)} test budget passed before navigation started (${split})`;
 }

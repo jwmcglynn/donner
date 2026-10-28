@@ -19,16 +19,26 @@ export function normalizePresentationDeviceLoss(loss) {
  * Each probe sample keeps the editor's last completed presentation frame (`presentedFrame`: frame
  * id, represented pointer and serials). A candidate is a readback that moved against the drag. If
  * the editor's completed frame went backwards over the same pair of samples, by frame id or by the
- * pointer position it represents, the editor presented the older position. If the editor's frame
- * held or advanced along the drag, only the readback went back: the read-back path returned an
- * older image than the editor had already completed.
+ * The verdicts, from most to least conclusive:
+ *
+ *  - `editor-frame-went-backwards`: the completed frame id decreased. The id comes from a
+ *    monotonically increasing counter, so this is an editor bug.
+ *  - `editor-pointer-against-interval`: a newer completed frame represents a pointer behind the
+ *    previous one along the sample interval's drag direction. Ambiguous: the represented pointer
+ *    lags the input, so near one of the drag's reversals a correct editor's frames still move the
+ *    old way.
+ *  - `indeterminate`: the later frame represents no input, so its pointer says nothing about where
+ *    its content is.
+ *  - `readback-only`: the editor's completed frame held or advanced along the drag, so the
+ *    read-back path returned an older image than the editor had already completed.
+ *  - `no-editor-frame`: a sample has no completed frame to compare.
  *
  * @param {ReadonlyArray<{presentedFrame?: object | null}>} samples The probe's samples.
  * @param {{predecessorIndex: number, sampleIndex: number, pointerDx: number,
  *   pointerDy: number}} regression The candidate, with the drag direction over its interval.
  * @returns {{predecessor: object | null, sample: object | null, frameIdDelta: number | null,
- *   representedPointerAlongDrag: number | null,
- *   verdict: "editor-frame-went-backwards" | "readback-only" | "no-editor-frame"}}
+ *   representedPointerAlongDrag: number | null, verdict: "editor-frame-went-backwards"
+ *   | "editor-pointer-against-interval" | "indeterminate" | "readback-only" | "no-editor-frame"}}
  */
 export function presentedFrameOrdering(samples, regression) {
   const predecessor = samples[regression.predecessorIndex]?.presentedFrame ?? null;
@@ -49,14 +59,11 @@ export function presentedFrameOrdering(samples, regression) {
     ? ((sample.pointerX - predecessor.pointerX) * regression.pointerDx
       + (sample.pointerY - predecessor.pointerY) * regression.pointerDy) / dragLength
     : 0;
-  const wentBackwards = frameIdDelta < 0 || representedPointerAlongDrag < 0;
-  return {
-    predecessor,
-    sample,
-    frameIdDelta,
-    representedPointerAlongDrag,
-    verdict: wentBackwards ? "editor-frame-went-backwards" : "readback-only",
-  };
+  let verdict = "readback-only";
+  if (frameIdDelta < 0) verdict = "editor-frame-went-backwards";
+  else if (representedPointerAlongDrag < 0) verdict = "editor-pointer-against-interval";
+  else if (!sample.inputRepresented) verdict = "indeterminate";
+  return { predecessor, sample, frameIdDelta, representedPointerAlongDrag, verdict };
 }
 
 /**

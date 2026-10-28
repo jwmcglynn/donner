@@ -224,20 +224,18 @@ export async function captureFailureCanvasEvidence(
     stepMs,
   );
   record.presentation = state;
+  const pageTimeOrigin = typeof state === "object" && "timeOrigin" in state
+    ? state.timeOrigin
+    : null;
   if (marks !== undefined) {
     // Navigation's own start, on the page clock, places the page's age against the case's phases.
-    const navigationTimeOrigin = typeof state === "object" && "timeOrigin" in state
-      ? state.timeOrigin
-      : null;
     record.startupPhases = startupPhaseReport(marks, testInfo.timeout, {
-      navigationTimeOrigin,
+      navigationTimeOrigin: pageTimeOrigin,
       now: startedAt,
     });
   }
   const workers = await workersAnswer;
-  record.workers = typeof state === "object" && "timeOrigin" in state
-    ? workersOnPageClock(workers, state.timeOrigin)
-    : workers;
+  record.workers = pageTimeOrigin === null ? workers : workersOnPageClock(workers, pageTimeOrigin);
   // The test output carries the tail of each history; the attached record keeps all of it.
   const tail = (value: unknown, count: number) =>
     Array.isArray(value) ? value.slice(-count) : value;

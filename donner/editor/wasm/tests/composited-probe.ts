@@ -72,8 +72,9 @@ export {
 
 /**
  * The editor's last completed presentation frame when a sample was taken, from
- * `window.__donnerPresentationQueueStats` (published by `EditorWindow.cc` when
- * a submitted frame completes).
+ * `window.__donnerPresentationQueueStats` (republished by `EditorWindow.cc` on
+ * every presentation completion observation; the frame fields are those of the
+ * last frame that completed).
  *
  * The frame id comes from a monotonically increasing counter and the pointer
  * is the position that frame represents, so a pair of samples says whether the
@@ -333,8 +334,8 @@ export async function installCompositedProbe(
       __donnerViewportStats?: { documentWidth?: number };
       __donnerPresentationQueueStats?: Partial<Record<keyof PresentedFrameRecord, unknown>>;
     };
-    // A copy of the published fields: the editor replaces the object on every completion, and
-    // the sample must keep the frame that was current when it was taken.
+    // A copy of the published fields: the editor replaces the object on every completion
+    // observation, and the sample must keep the frame that was current when it was taken.
     const readPresentedFrame = (): PresentedFrameRecord | null => {
       const queue = diagnostics.__donnerPresentationQueueStats;
       if (queue === undefined || queue === null) return null;
