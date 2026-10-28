@@ -1674,19 +1674,33 @@ configured_dependency_audit_test(
     text_configuration = "none",
 )
 
+donner_cc_library(
+    name = "decoration_test_scene",
+    testonly = 1,
+    srcs = ["DecorationTestScene.cc"],
+    hdrs = ["DecorationTestScene.h"],
+    deps = [
+        ":renderer_test_backend",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/tests:parser_test_utils",
+        "//donner/svg/text:text_backend",
+        "//donner/svg/text:text_engine",
+    ],
+)
+
 donner_cc_test(
     name = "text_decoration_thickness_tests",
     srcs = ["TextDecorationThickness_tests.cc"],
     opens_gpu_device = True,
     variants = ["geode"],
     deps = [
+        ":decoration_test_scene",
         ":image_comparison_test_fixture",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/components/text:components",
         "//donner/svg/renderer:placed_text_geometry",
-        "//donner/svg/resources:font_manager",
-        "//donner/svg/tests:parser_test_utils",
-        "//donner/svg/text:text_backend",
         "//donner/svg/text:text_engine",
         "@com_google_gtest//:gtest_main",
     ],
@@ -1701,6 +1715,19 @@ donner_cc_test(
         ":image_comparison_test_fixture",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "text_decoration_paint_order_tests",
+    srcs = ["TextDecorationPaintOrder_tests.cc"],
+    opens_gpu_device = True,
+    variants = ["geode"],
+    deps = [
+        ":decoration_test_scene",
+        ":image_comparison_test_fixture",
+        "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest_main",
     ],
 )

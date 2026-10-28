@@ -12,73 +12,15 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/renderer/PlacedTextGeometry.h"
+#include "donner/svg/renderer/tests/DecorationTestScene.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
-#include "donner/svg/resources/FontManager.h"
-#include "donner/svg/tests/ParserTestUtils.h"
-#include "donner/svg/text/TextBackend.h"
 #include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 namespace {
 
-class DecorationBackend : public TextBackend {
-public:
-  explicit DecorationBackend(bool underlineMetrics = true)
-      : hasUnderlineMetrics_(underlineMetrics) {}
-  FontVMetrics fontVMetrics(FontHandle) const override {
-    return {.ascent = 800, .descent = -200, .lineGap = 0, .xHeight = 500, .unitsPerEm = 1000};
-  }
-  float scaleForPixelHeight(FontHandle, float size) const override { return size / 1000; }
-  float scaleForEmToPixels(FontHandle, float size) const override { return size / 1000; }
-  std::optional<UnderlineMetrics> underlineMetrics(FontHandle) const override {
-    return hasUnderlineMetrics_ ? std::optional(UnderlineMetrics{.position = -100, .thickness = 50})
-                                : std::nullopt;
-  }
-  std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle) const override {
-    return UnderlineMetrics{.position = 300, .thickness = 40};
-  }
-  std::optional<SubSuperMetrics> subSuperMetrics(FontHandle) const override { return std::nullopt; }
-  Path glyphOutline(FontHandle, int, float) const override {
-    return PathBuilder().addRect(Box2d::FromXYWH(0, -2, 1, 2)).build();
-  }
-  bool isBitmapOnly(FontHandle) const override { return false; }
-  bool isCursive(uint32_t) const override { return false; }
-  bool hasSmallCapsFeature(FontHandle) const override { return false; }
-  std::optional<BitmapGlyph> bitmapGlyph(FontHandle, int, float) const override {
-    return std::nullopt;
-  }
-  ShapedRun shapeRun(FontHandle, float, std::string_view text, size_t begin, size_t length, bool,
-                     FontVariant, bool) const override {
-    ShapedRun run;
-    for (size_t index = begin; index < std::min(text.size(), begin + length); ++index) {
-      run.glyphs.push_back({.glyphIndex = 3,
-                            .xAdvance = 10,
-                            .yAdvance = 10,
-                            .cluster = static_cast<uint32_t>(index)});
-    }
-    return run;
-  }
-  double crossSpanKern(FontHandle, float, FontHandle, float, uint32_t, uint32_t,
-                       bool) const override {
-    return 0;
-  }
-
-private:
-  bool hasUnderlineMetrics_;
-};
-
-SVGDocument DecorationDocument(std::string_view body, bool metrics = true) {
-  SVGDocument document = instantiateSubtree(body, {}, Vector2i(100, 100));
-  auto& registry = document.registry();
-  auto& fonts = registry.ctx().emplace<FontManager>(registry);
-  registry.ctx().emplace<TextEngine>(fonts, registry, std::make_unique<DecorationBackend>(metrics));
-  return document;
-}
-
-RendererBitmap RenderDecorationScene(std::string_view body, bool metrics = true) {
-  auto document = DecorationDocument(body, metrics);
-  return RenderDocumentWithBackend(document, ActiveRendererBackend());
-}
+using tests::DecorationDocument;
+using tests::RenderDecorationScene;
 
 constexpr std::string_view kRedGlyphs =
     "<rect x='10' y='38' width='1' height='2' fill='red'/>"
