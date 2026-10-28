@@ -2829,4 +2829,28 @@ TEST(TextEngineTest, WrappedBlockResetIsReappliedAfterSoftWrap) {
   }
 }
 
+TEST(TextEngineTest, WrappedAnchorQuarantinesOnlyUnrepresentableGroups) {
+  for (bool multiline : {false, true}) {
+    SCOPED_TRACE(multiline);
+    Registry registry;
+    FontManager fonts(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fonts);
+    components::ComputedTextComponent text;
+    auto invalid = MakeSpan(multiline ? "AB\n" : "AB");
+    invalid.whiteSpace = WhiteSpace::Pre;
+    invalid.xList = {Lengthd(1e308)};
+    invalid.dxList = {std::nullopt, Lengthd(-1e308)};
+    auto valid = MakeSpan("C");
+    valid.whiteSpace = WhiteSpace::Pre;
+    valid.xList = {Lengthd(25)};
+    text.spans = {invalid, valid};
+    const auto runs = engine.layout(text, MakeTextParams(20));
+    ASSERT_THAT(runs, SizeIs(2));
+    EXPECT_THAT(runs[0].glyphs, IsEmpty());
+    ASSERT_THAT(runs[1].glyphs, SizeIs(1));
+    EXPECT_THAT(runs[1].glyphs[0].xPosition, DoubleEq(25));
+    EXPECT_THAT(runs[1].glyphs[0].yPosition, DoubleNear(multiline ? 20 : 0, 1e-5));
+  }
+}
+
 }  // namespace donner::svg
