@@ -50,8 +50,9 @@ std::optional<Lengthd> FiniteLength(const Component& component, bool allowUserUn
 }
 
 /// Fixed storage bounds both the argument grammar and its allocation cost.
-struct Arguments {
-  std::array<const Component*, 7> values{};
+template <std::size_t Capacity>
+struct BoundedArguments {
+  std::array<const Component*, Capacity> values{};
   std::size_t size = 0;
 
   bool append(std::span<const Component> components) {
@@ -67,6 +68,8 @@ struct Arguments {
     return true;
   }
 };
+
+using Arguments = BoundedArguments<7>;
 
 /// -1 means a length or center, 0 a horizontal edge, 1 a vertical edge.
 int PositionAxis(const Component& component) {
@@ -344,29 +347,68 @@ std::optional<Lengthd> FiniteInsetLength(const Component& component, bool allowU
   }
 }
 
+bool ParseInsetLengths(std::span<const Component* const> args, std::array<Lengthd, 4>& values,
+                       bool allowUserUnits, bool nonNegative) {
+  if (args.empty() || args.size() > values.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < args.size(); ++i) {
+    const auto length = FiniteInsetLength(*args[i], allowUserUnits);
+    if (!length || (nonNegative && length->value < 0)) {
+      return false;
+    }
+    values[i] = *length;
+  }
+  if (args.size() == 1) {
+    values[1] = values[0];
+  }
+  if (args.size() < 3) {
+    values[2] = values[0];
+  }
+  if (args.size() < 4) {
+    values[3] = values[1];
+  }
+  return true;
+}
+
+bool ParseInsetRadii(std::span<const Component* const> args, InsetClipPath& inset,
+                     bool allowUserUnits) {
+  std::size_t slash = 0;
+  while (slash < args.size()) {
+    const auto* delimiter = args[slash]->tryGetToken<css::Token::Delim>();
+    if (delimiter && delimiter->value == '/') {
+      break;
+    }
+    ++slash;
+  }
+  if (!ParseInsetLengths(args.first(slash), inset.radiiX, allowUserUnits, true)) {
+    return false;
+  }
+  if (slash == args.size()) {
+    inset.radiiY = inset.radiiX;
+    return true;
+  }
+  return ParseInsetLengths(args.subspan(slash + 1), inset.radiiY, allowUserUnits, true);
+}
+
 ParseResult<ClipPath> ParseInsetFunction(const css::Function& function, RadialClipPath::Box box,
                                          bool allowUserUnits) {
-  Arguments args;
-  if (!args.append(function.values) || args.size == 0 || args.size > 4) {
+  BoundedArguments<14> args;
+  if (!args.append(function.values)) {
     return InvalidShape();
+  }
+  const std::span<const Component* const> values(args.values.data(), args.size);
+  std::size_t round = 0;
+  while (round < values.size() && !IsIdent(*values[round], "round")) {
+    ++round;
   }
   InsetClipPath inset;
   inset.box = box;
-  for (std::size_t i = 0; i < args.size; ++i) {
-    const auto offset = FiniteInsetLength(*args.values[i], allowUserUnits);
-    if (!offset) {
-      return InvalidShape();
-    }
-    inset.offsets[i] = *offset;
+  if (!ParseInsetLengths(values.first(round), inset.offsets, allowUserUnits, false)) {
+    return InvalidShape();
   }
-  if (args.size == 1) {
-    inset.offsets[1] = inset.offsets[0];
-  }
-  if (args.size < 3) {
-    inset.offsets[2] = inset.offsets[0];
-  }
-  if (args.size < 4) {
-    inset.offsets[3] = inset.offsets[1];
+  if (round < values.size() && !ParseInsetRadii(values.subspan(round + 1), inset, allowUserUnits)) {
+    return InvalidShape();
   }
   return ClipPath(std::move(inset));
 }
@@ -444,6 +486,23 @@ std::ostream& PrintPolygon(std::ostream& os, const PolygonClipPath& polygon) {
   return PrintReferenceBox(os, polygon.box);
 }
 
+std::ostream& PrintInset(std::ostream& os, const InsetClipPath& inset) {
+  os << "inset(" << inset.offsets[0] << ' ' << inset.offsets[1] << ' ' << inset.offsets[2] << ' '
+     << inset.offsets[3];
+  if (inset.hasRoundedCorners()) {
+    os << " round";
+    for (const Lengthd& radius : inset.radiiX) {
+      os << ' ' << radius;
+    }
+    os << " /";
+    for (const Lengthd& radius : inset.radiiY) {
+      os << ' ' << radius;
+    }
+  }
+  os << ") ";
+  return PrintReferenceBox(os, inset.box);
+}
+
 void PrintRadius(std::ostream& os, RadialClipPath::Radius type, const Lengthd& radius) {
   if (type == RadialClipPath::Radius::Length) {
     os << radius;
@@ -489,9 +548,7 @@ std::ostream& operator<<(std::ostream& os, const ClipPath& clip) {
     return PrintPolygon(os, *polygon);
   }
   if (const auto* inset = std::get_if<InsetClipPath>(&clip.value)) {
-    os << "inset(" << inset->offsets[0] << ' ' << inset->offsets[1] << ' ' << inset->offsets[2]
-       << ' ' << inset->offsets[3] << ") ";
-    return PrintReferenceBox(os, inset->box);
+    return PrintInset(os, *inset);
   }
   if (const auto* path = std::get_if<PathClipPath>(&clip.value)) {
     os << "path(" << path->rule << ", \"" << path->data.toSVGPathData() << "\") ";

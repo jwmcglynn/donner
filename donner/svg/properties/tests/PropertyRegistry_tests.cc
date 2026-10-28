@@ -2074,6 +2074,52 @@ TEST(PropertyRegistry, RoundedInsetAcceptsOneToFourRadiiAndIndependentAxes) {
   }
 }
 
+TEST(PropertyRegistry, RoundedInsetExpandsIndependentCornerPairs) {
+  struct Example {
+    std::string_view value;
+    std::array<double, 4> x;
+    std::array<double, 4> y;
+  };
+  for (const auto& example :
+       {Example{"1px", {1, 1, 1, 1}, {1, 1, 1, 1}}, Example{"1px 2px", {1, 2, 1, 2}, {1, 2, 1, 2}},
+        Example{"1px 2px 3px", {1, 2, 3, 2}, {1, 2, 3, 2}},
+        Example{"1px 2px 3px 4px / 4px 3px 2px 1px", {1, 2, 3, 4}, {4, 3, 2, 1}}}) {
+    SCOPED_TRACE(example.value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:inset(0 round " + std::string(example.value) + ")");
+    const auto clip = registry.clipPath.get();
+    ASSERT_THAT(clip, Optional(testing::Field(&ClipPath::value,
+                                              testing::VariantWith<InsetClipPath>(testing::_))));
+    const auto& inset = std::get<InsetClipPath>(clip->value);
+    EXPECT_THAT(inset.radiiX, testing::ElementsAre(LengthValueIs(example.x[0], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.x[1], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.x[2], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.x[3], Lengthd::Unit::Px)));
+    EXPECT_THAT(inset.radiiY, testing::ElementsAre(LengthValueIs(example.y[0], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.y[1], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.y[2], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.y[3], Lengthd::Unit::Px)));
+  }
+}
+
+TEST(PropertyRegistry, RoundedInsetComputesLengthsButRetainsPercentages) {
+  PropertyRegistry registry;
+  registry.parseStyle("font-size:20px;clip-path:inset(0 round .2em 1rem / 25%)");
+  registry.resolveInsetClipLengths(30);
+  const auto clip = registry.clipPath.get();
+  ASSERT_THAT(clip, Optional(testing::Field(&ClipPath::value,
+                                            testing::VariantWith<InsetClipPath>(testing::_))));
+  const auto& inset = std::get<InsetClipPath>(clip->value);
+  EXPECT_THAT(inset.radiiX, testing::ElementsAre(LengthValueIs(4, Lengthd::Unit::Px),
+                                                 LengthValueIs(30, Lengthd::Unit::Px),
+                                                 LengthValueIs(4, Lengthd::Unit::Px),
+                                                 LengthValueIs(30, Lengthd::Unit::Px)));
+  EXPECT_THAT(inset.radiiY, testing::Each(LengthValueIs(25, Lengthd::Unit::Percent)));
+  EXPECT_EQ(registry.complexPropertyBytes(), 0u);
+  RecordProperty("ClipPathBytes", sizeof(ClipPath));
+  RecordProperty("PropertyRegistryBytes", sizeof(PropertyRegistry));
+}
+
 TEST(PropertyRegistry, RoundedInsetRejectsMalformedOrContextualRadiusAtomically) {
   for (const auto radius : {"", "-1px", "1px -1%", "1px / -1px", "1px /", "/ 1px",
                             "1px / 2px / 3px", "1px 2px 3px 4px 5px", "1e999px", "1ex", "1ch",
