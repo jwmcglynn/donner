@@ -123,11 +123,13 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
 /// @param runs Runs produced by the flat horizontal layout; glyph positions are rewritten.
 /// @param text Computed text tree, parallel to \p runs (span i ↔ run i), used for span text.
 /// @param params Layout params; `textAnchor` selects per-line anchoring.
-/// @param measurePx The inline-size measure in pixels (must be > 0).
+/// @param measurePx The inline-size measure in pixels, or zero to apply only forced breaks/tabs.
 /// @param lineHeightPx Vertical advance between line baselines in pixels.
-/// @return true if wrapping was applied.
+/// @param backend Font metrics for the minimum tab advance (0.5ch).
+/// @return true if multiple lines were laid out. Tab-only changes return false.
 bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
-                         const TextLayoutParams& params, double measurePx, double lineHeightPx);
+                         const TextLayoutParams& params, double measurePx, double lineHeightPx,
+                         const TextBackend* backend = nullptr);
 
 /// Compute per-span baseline-shift in pixels, including OS/2 sub/super metrics
 /// and ancestor baseline-shift accumulation.

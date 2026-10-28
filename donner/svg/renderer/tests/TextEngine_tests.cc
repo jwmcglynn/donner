@@ -2409,4 +2409,81 @@ TEST(TextEngineTest, WhiteSpaceCommonAncestorControlsSpanBoundaryBreak) {
   }
 }
 
+TEST(TextEngineTest, WhiteSpaceTextPathControlsShapeAsBlanks) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A\n\tB");
+  span.whiteSpace = WhiteSpace::Pre;
+  span.pathSpline = PathBuilder().moveTo({0, 0}).lineTo({200, 0}).build();
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(4));
+  EXPECT_THAT(runs[0].glyphs[1].glyphIndex, Eq(static_cast<int>(' ') + 1));
+  EXPECT_THAT(runs[0].glyphs[2].glyphIndex, Eq(static_cast<int>(' ') + 1));
+}
+
+TEST(TextEngineTest, WhiteSpaceTabRetainsTextLengthAndAnchor) {
+  for (bool onSpan : {false, true}) {
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("A\tB");
+    span.whiteSpace = WhiteSpace::Pre;
+    span.textAnchor = TextAnchor::End;
+    auto params = MakeTextParams(20.0);
+    params.textAnchor = TextAnchor::End;
+    if (onSpan) {
+      span.textLength = Lengthd(100.0);
+      span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+    } else {
+      params.textLength = Lengthd(100.0);
+      params.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+    }
+    text.spans.push_back(span);
+    const auto runs = engine.layout(text, params);
+    ASSERT_THAT(runs, SizeIs(1));
+    ASSERT_THAT(runs[0].glyphs, SizeIs(3));
+    const auto& first = runs[0].glyphs.front();
+    const auto& last = runs[0].glyphs.back();
+    EXPECT_THAT(last.xPosition + last.xAdvance - first.xPosition, DoubleNear(100.0, 1e-5));
+    EXPECT_THAT(last.xPosition + last.xAdvance, DoubleNear(0.0, 1e-5));
+  }
+}
+
+class WideZeroTextBackend : public ScriptedTextBackend {
+public:
+  ShapedRun shapeRun(FontHandle font, float size, std::string_view text, size_t offset,
+                     size_t length, bool vertical, FontVariant variant,
+                     bool logical) const override {
+    auto run =
+        ScriptedTextBackend::shapeRun(font, size, text, offset, length, vertical, variant, logical);
+    for (auto& glyph : run.glyphs) {
+      if (text[glyph.cluster] == '0') {
+        glyph.xAdvance = 20.0;
+      }
+    }
+    return run;
+  }
+};
+
+TEST(TextEngineTest, WhiteSpaceTabMinimumUsesZeroAdvanceRatherThanSpace) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine(fontManager, registry, std::make_unique<WideZeroTextBackend>());
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A\tB");
+  span.whiteSpace = WhiteSpace::Pre;
+  span.dxList.resize(3);
+  span.dxList[1] = Lengthd(62.0);
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(3));
+  EXPECT_THAT(runs[0].glyphs[1].xAdvance, DoubleEq(87.0));
+}
+
 }  // namespace donner::svg

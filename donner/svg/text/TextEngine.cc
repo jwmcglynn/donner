@@ -2377,6 +2377,7 @@ struct WrappingGlyph {
   uint32_t codepoint;
   WhiteSpace mode;
   WhiteSpace breakMode;
+  double halfCh;
   size_t block = 0;
   size_t line = 0;
   size_t lineOffset = 0;
@@ -2388,9 +2389,22 @@ struct WrappingGlyph {
   bool isBreak() const { return codepoint == '\n' && PreservesSegmentBreaks(mode); }
 };
 
+double HalfChAdvance(const TextBackend* backend, const TextRun& run, bool vertical) {
+  if (!backend) {
+    return 0.0;
+  }
+  const auto shaped = backend->shapeRun(run.font, run.usedFontSizePx, "0", 0, 1, vertical,
+                                        FontVariant::Normal, true);
+  if (shaped.glyphs.empty()) {
+    return 0.0;
+  }
+  const auto& glyph = shaped.glyphs.front();
+  return (vertical ? glyph.yAdvance : glyph.xAdvance) * 0.5;
+}
+
 std::vector<WrappingGlyph> CollectWrappingGlyphs(const std::vector<TextRun>& runs,
                                                  const components::ComputedTextComponent& text,
-                                                 bool vertical) {
+                                                 bool vertical, const TextBackend* backend) {
   std::vector<WrappingGlyph> flat;
   size_t block = 0;
   for (size_t ri = 0; ri < runs.size() && ri < text.spans.size(); ++ri) {
@@ -2400,6 +2414,9 @@ std::vector<WrappingGlyph> CollectWrappingGlyphs(const std::vector<TextRun>& run
     }
     const auto& span = text.spans[ri];
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+    const double halfCh = spanText.find('\t') != std::string_view::npos
+                              ? HalfChAdvance(backend, runs[ri], vertical)
+                              : 0.0;
     for (size_t gi = 0; gi < runs[ri].glyphs.size(); ++gi) {
       const auto& glyph = runs[ri].glyphs[gi];
       size_t byte = GetPositioningCluster(glyph);
@@ -2410,7 +2427,7 @@ std::vector<WrappingGlyph> CollectWrappingGlyphs(const std::vector<TextRun>& run
            advance, advance, cp, span.whiteSpace,
            gi + 1 == runs[ri].glyphs.size() ? span.boundaryWhiteSpace.value_or(span.whiteSpace)
                                             : span.whiteSpace,
-           block});
+           halfCh, block});
     }
   }
   return flat;
@@ -2431,7 +2448,7 @@ double PlaceWrappingGlyph(std::vector<WrappingGlyph>& flat, size_t index, size_t
   } else if (item.codepoint == '\t' && item.originalAdvance > 0.0) {
     const double stop = item.originalAdvance * 8.0;
     item.advance = stop - std::fmod(std::max(0.0, item.x), stop);
-    if (item.advance < item.originalAdvance * 0.5) {
+    if (item.advance < item.halfCh) {
       item.advance += stop;
     }
   }
@@ -2518,10 +2535,48 @@ bool CountsForLineWidth(const WrappingGlyph& item, bool forcedEnd, double measur
          (!(measurePx > 0.0) || item.x + item.advance <= measurePx);
 }
 
+std::vector<double> WrappingLineWidths(const std::vector<WrappingGlyph>& flat, size_t numLines,
+                                       double measurePx) {
+  std::vector<bool> forcedEnds(numLines, false);
+  for (const auto& item : flat) {
+    forcedEnds[item.line] = forcedEnds[item.line] || item.isBreak();
+  }
+  forcedEnds.back() = true;
+  std::vector<double> widths(numLines, 0.0);
+  for (const auto& item : flat) {
+    if (CountsForLineWidth(item, forcedEnds[item.line], measurePx)) {
+      widths[item.line] = std::max(widths[item.line], item.x + item.advance);
+    }
+  }
+  return widths;
+}
+
+void PlaceWrappedGlyph(TextGlyph& glyph, const WrappingGlyph& item, const TextLayoutParams& params,
+                       double width, bool multiline, double lineHeightPx) {
+  double shift = 0.0;
+  if (multiline && params.textAnchor == TextAnchor::Middle) {
+    shift = -width / 2.0;
+  }
+  if (multiline && params.textAnchor == TextAnchor::End) {
+    shift = -width;
+  }
+  const double lineOffset = static_cast<double>(item.lineOffset) * lineHeightPx;
+  if (isVertical(params.writingMode)) {
+    glyph.yPosition = item.origin + item.x + shift + glyph.verticalOriginOffset;
+    glyph.xPosition =
+        item.originalY + (params.writingMode == WritingMode::VerticalRl ? -lineOffset : lineOffset);
+    glyph.yAdvance = item.advance;
+  } else {
+    glyph.xPosition = item.origin + item.x + shift;
+    glyph.yPosition = item.originalY + lineOffset;
+    glyph.xAdvance = item.advance;
+  }
+}
+
 bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
-                         const TextLayoutParams& params, double measurePx, double lineHeightPx) {
-  const bool vertical = isVertical(params.writingMode);
-  auto flat = CollectWrappingGlyphs(runs, text, vertical);
+                         const TextLayoutParams& params, double measurePx, double lineHeightPx,
+                         const TextBackend* backend) {
+  auto flat = CollectWrappingGlyphs(runs, text, isVertical(params.writingMode), backend);
   if (flat.empty()) {
     return false;
   }
@@ -2534,39 +2589,12 @@ bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedT
   if (!wrapped && !hasControls) {
     return false;
   }
-  std::vector<bool> forcedEnds(numLines, false);
+  const auto widths = WrappingLineWidths(flat, numLines, measurePx);
   for (const auto& item : flat) {
-    forcedEnds[item.line] = forcedEnds[item.line] || item.isBreak();
+    PlaceWrappedGlyph(runs[item.run].glyphs[item.glyph], item, params, widths[item.line], wrapped,
+                      lineHeightPx);
   }
-  forcedEnds.back() = true;
-  std::vector<double> widths(numLines, 0.0);
-  for (const auto& item : flat) {
-    if (CountsForLineWidth(item, forcedEnds[item.line], measurePx)) {
-      widths[item.line] = std::max(widths[item.line], item.x + item.advance);
-    }
-  }
-  for (const auto& item : flat) {
-    double shift = 0.0;
-    if (params.textAnchor == TextAnchor::Middle) {
-      shift = -widths[item.line] / 2.0;
-    }
-    if (params.textAnchor == TextAnchor::End) {
-      shift = -widths[item.line];
-    }
-    auto& glyph = runs[item.run].glyphs[item.glyph];
-    const double lineOffset = static_cast<double>(item.lineOffset) * lineHeightPx;
-    if (vertical) {
-      glyph.yPosition = item.origin + item.x + shift + glyph.verticalOriginOffset;
-      glyph.xPosition = item.originalY +
-                        (params.writingMode == WritingMode::VerticalRl ? -lineOffset : lineOffset);
-      glyph.yAdvance = item.advance;
-    } else {
-      glyph.xPosition = item.origin + item.x + shift;
-      glyph.yPosition = item.originalY + lineOffset;
-      glyph.xAdvance = item.advance;
-    }
-  }
-  return true;
+  return wrapped;
 }
 
 }  // namespace text_engine_detail
@@ -3468,8 +3496,15 @@ private:
   using TextSpan = components::ComputedTextComponent::TextSpan;
 
   struct SpanState {
+    SpanState() = default;
+    SpanState(const SpanState&) = delete;
+    SpanState& operator=(const SpanState&) = delete;
+    SpanState(SpanState&&) = delete;
+    SpanState& operator=(SpanState&&) = delete;
+
     const TextSpan* span = nullptr;
     TextRun run;
+    /// Aliases the source span or controlShapingText for this immovable stack frame.
     std::string_view text;
     std::string controlShapingText;
     FontHandle font;
@@ -3673,7 +3708,7 @@ private:
   }
 
   void prepareShaping(SpanState& state) {
-    if (!state.span->pathSpline && state.text.find_first_of("\n\t") != std::string_view::npos) {
+    if (state.text.find_first_of("\n\t") != std::string_view::npos) {
       // Shape controls as blank glyphs while keeping byte clusters for line layout and DOM APIs.
       state.controlShapingText = std::string(state.text);
       for (char& c : state.controlShapingText) {
@@ -4166,6 +4201,36 @@ private:
     resetTextPathState();
   }
 
+  std::vector<RunPenExtent> flatGlyphExtents() const {
+    std::vector<RunPenExtent> result;
+    result.reserve(runs_.size());
+    for (const auto& run : runs_) {
+      if (run.glyphs.empty() || run.onPath) {
+        result.push_back({});
+        continue;
+      }
+      const auto& first = run.glyphs.front();
+      const auto& last = run.glyphs.back();
+      result.push_back({first.xPosition, first.yPosition, last.xPosition + last.xAdvance,
+                        last.yPosition + last.yAdvance});
+    }
+    return result;
+  }
+
+  void updateControlOnlyExtents(const std::vector<RunPenExtent>& before) {
+    const auto after = flatGlyphExtents();
+    for (size_t i = 0; i < runExtents_.size(); ++i) {
+      runExtents_[i].startX += after[i].startX - before[i].startX;
+      runExtents_[i].startY += after[i].startY - before[i].startY;
+      runExtents_[i].endX += after[i].endX - before[i].endX;
+      runExtents_[i].endY += after[i].endY - before[i].endY;
+    }
+    if (!runExtents_.empty()) {
+      currentPenX_ = runExtents_.back().endX;
+      currentPenY_ = runExtents_.back().endY;
+    }
+  }
+
   void applyInlineWrap() {
     if (runs_.empty()) {
       return;
@@ -4185,7 +4250,12 @@ private:
     if (!(lineHeight > 0.0)) {
       lineHeight = static_cast<double>(baseFontSizePx_) * 1.2;
     }
-    wrapped_ = applyInlineSizeWrap(runs_, text_, params_, params_.inlineSizePx, lineHeight);
+    const auto before = flatGlyphExtents();
+    wrapped_ =
+        applyInlineSizeWrap(runs_, text_, params_, params_.inlineSizePx, lineHeight, &backend_);
+    if (!wrapped_) {
+      updateControlOnlyExtents(before);
+    }
   }
 
   void placeDeferredTextPaths() {
