@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
@@ -41,12 +42,15 @@ public:
                      FontVariant, bool) const override {
     ShapedRun run;
     for (size_t index = begin; index < std::min(text.size(), begin + length); ++index) {
-      run.glyphs.push_back({.glyphIndex = 3, .xAdvance = 10, .yAdvance = 10,
-                           .cluster = static_cast<uint32_t>(index)});
+      run.glyphs.push_back({.glyphIndex = 3,
+                            .xAdvance = 10,
+                            .yAdvance = 10,
+                            .cluster = static_cast<uint32_t>(index)});
     }
     return run;
   }
-  double crossSpanKern(FontHandle, float, FontHandle, float, uint32_t, uint32_t, bool) const override {
+  double crossSpanKern(FontHandle, float, FontHandle, float, uint32_t, uint32_t,
+                       bool) const override {
     return 0;
   }
 };
@@ -60,14 +64,14 @@ RendererBitmap RenderDecorationScene(std::string_view body) {
 }
 
 TEST(TextDecorationThickness, ExplicitThicknessAppliesToEachLine) {
-  for (const auto [line, top] : {std::pair{"underline", 38}, std::pair{"overline", 20},
-                               std::pair{"line-through", 30}}) {
+  for (const auto [line, top] :
+       {std::pair{"underline", 38}, std::pair{"overline", 20}, std::pair{"line-through", 30}}) {
     SCOPED_TRACE(line);
     const auto actual = RenderDecorationScene(
         "<text x='10' y='40' font-size='20' fill='red' style='text-decoration:" +
         std::string(line) + ";text-decoration-thickness:8px'>XX</text>");
     const auto expected = RenderDecorationScene("<rect x='10' y='" + std::to_string(top) +
-                                                 "' width='20' height='8' fill='red'/>");
+                                                "' width='20' height='8' fill='red'/>");
     editor::tests::CompareBitmapToBitmap(actual, expected, line,
                                          editor::tests::PixelmatchIdentityParams());
   }
@@ -76,13 +80,10 @@ TEST(TextDecorationThickness, ExplicitThicknessAppliesToEachLine) {
 TEST(TextDecorationThickness, ParentAndChildLinesKeepTheirOrigin) {
   const auto actual = RenderDecorationScene(R"svg(
     <text x="10" y="40" font-size="20" fill="red"
-          style="text-decoration:underline;text-decoration-thickness:8px">
-      <tspan font-size="40" fill="blue"
-             style="text-decoration:line-through;text-decoration-thickness:2px">XX</tspan>
-    </text>)svg");
+          style="text-decoration:underline;text-decoration-thickness:8px"><tspan font-size="40" fill="blue"
+             style="text-decoration:line-through;text-decoration-thickness:2px">XX</tspan></text>)svg");
   const auto expected = RenderDecorationScene(R"svg(
-    <rect x="10" y="38" width="20" height="8" fill="red"/>
-    <rect x="10" y="27" width="20" height="2" fill="blue"/>)svg");
+    <rect x="10" y="38" width="20" height="8" fill="red"/><rect x="10" y="27" width="20" height="2" fill="blue"/>)svg");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_independent_origins",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -90,12 +91,9 @@ TEST(TextDecorationThickness, ParentAndChildLinesKeepTheirOrigin) {
 TEST(TextDecorationThickness, RepeatedSameLineKeepsBothOrigins) {
   const auto actual = RenderDecorationScene(R"svg(
     <text x="10" y="40" font-size="20" fill="red"
-          style="text-decoration:underline;text-decoration-thickness:8px">
-      <tspan fill="blue" style="text-decoration:underline;text-decoration-thickness:2px">XX</tspan>
-    </text>)svg");
+          style="text-decoration:underline;text-decoration-thickness:8px"><tspan fill="blue" style="text-decoration:underline;text-decoration-thickness:2px">XX</tspan></text>)svg");
   const auto expected = RenderDecorationScene(R"svg(
-    <rect x="10" y="38" width="20" height="8" fill="red"/>
-    <rect x="10" y="41" width="20" height="2" fill="blue"/>)svg");
+    <rect x="10" y="38" width="20" height="8" fill="red"/><rect x="10" y="41" width="20" height="2" fill="blue"/>)svg");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_repeated_origins",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -103,11 +101,9 @@ TEST(TextDecorationThickness, RepeatedSameLineKeepsBothOrigins) {
 TEST(TextDecorationThickness, ChildThicknessWithoutLineDoesNotChangeParent) {
   const auto actual = RenderDecorationScene(R"svg(
     <text x="10" y="40" font-size="20" fill="red"
-          style="text-decoration:underline;text-decoration-thickness:8px">
-      <tspan font-size="40" fill="blue" style="text-decoration-thickness:2px">XX</tspan>
-    </text>)svg");
-  const auto expected = RenderDecorationScene(
-      "<rect x='10' y='38' width='20' height='8' fill='red'/>");
+          style="text-decoration:underline;text-decoration-thickness:8px"><tspan font-size="40" fill="blue" style="text-decoration-thickness:2px">XX</tspan></text>)svg");
+  const auto expected =
+      RenderDecorationScene("<rect x='10' y='38' width='20' height='8' fill='red'/>");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_unrelated_child_thickness",
                                        editor::tests::PixelmatchIdentityParams());
 }
