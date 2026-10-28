@@ -2486,4 +2486,98 @@ TEST(TextEngineTest, WhiteSpaceTabMinimumUsesZeroAdvanceRatherThanSpace) {
   EXPECT_THAT(runs[0].glyphs[1].xAdvance, DoubleEq(87.0));
 }
 
+TEST(TextEngineTest, WrappedNestedSpanOwnsLineAnchors) {
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    for (auto anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
+      SCOPED_TRACE(testing::Message() << mode << " " << anchor);
+      Registry registry;
+      FontManager fonts(registry);
+      TextEngine engine = MakeScriptedEngine(registry, fonts);
+      components::ComputedTextComponent text;
+      text.spans.push_back(MakeSpan(""));
+      auto span = MakeSpan("A\nBB");
+      span.whiteSpace = WhiteSpace::Pre;
+      span.textAnchor = anchor;
+      span.textOrientation = TextOrientation::Upright;
+      text.spans.push_back(span);
+      auto params = MakeTextParams(20);
+      params.writingMode = mode;
+      params.textAnchor = anchor == TextAnchor::Start ? TextAnchor::End : TextAnchor::Start;
+      const auto runs = engine.layout(text, params);
+      ASSERT_THAT(runs, SizeIs(2));
+      ASSERT_THAT(runs[1].glyphs, SizeIs(4));
+      const auto pen = [mode](const TextGlyph& g) {
+        return isVertical(mode) ? g.yPosition - g.verticalOriginOffset : g.xPosition;
+      };
+      const double advance = isVertical(mode) ? 12 : 10;
+      const double kern = isVertical(mode) ? 2 : 1;
+      const double factor = anchor == TextAnchor::Start    ? 0
+                            : anchor == TextAnchor::Middle ? 0.5
+                                                           : 1;
+      EXPECT_THAT(pen(runs[1].glyphs[0]), DoubleNear(-factor * advance, 1e-5));
+      EXPECT_THAT(pen(runs[1].glyphs[2]), DoubleNear(-factor * (2 * advance + kern), 1e-5));
+    }
+  }
+}
+
+TEST(TextEngineTest, WrappedLineUsesFirstSpanAnchorWithoutShearingMixedSpans) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  components::ComputedTextComponent text;
+  auto first = MakeSpan("A");
+  first.whiteSpace = WhiteSpace::Pre;
+  first.textAnchor = TextAnchor::End;
+  auto second = MakeSpan("B\nCC");
+  second.whiteSpace = WhiteSpace::Pre;
+  second.startsNewChunk = false;
+  second.textAnchor = TextAnchor::Middle;
+  text.spans = {first, second};
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, SizeIs(2));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(1));
+  ASSERT_THAT(runs[1].glyphs, SizeIs(4));
+  EXPECT_THAT(runs[0].glyphs[0].xPosition, DoubleNear(-23, 1e-5));
+  EXPECT_THAT(runs[1].glyphs[0].xPosition, DoubleNear(-10, 1e-5));
+  EXPECT_THAT(runs[1].glyphs[2].xPosition, DoubleNear(-10.5, 1e-5));
+}
+
+TEST(TextEngineTest, WrappedExplicitPositionStartsIndependentAnchorChunk) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  components::ComputedTextComponent text;
+  auto first = MakeSpan("A");
+  first.whiteSpace = WhiteSpace::Pre;
+  first.textAnchor = TextAnchor::Middle;
+  auto second = MakeSpan("BC\nD");
+  second.whiteSpace = WhiteSpace::Pre;
+  second.textAnchor = TextAnchor::End;
+  second.xList = {Lengthd(100)};
+  text.spans = {first, second};
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, SizeIs(2));
+  EXPECT_THAT(runs[0].glyphs[0].xPosition, DoubleNear(-5, 1e-5));
+  EXPECT_THAT(runs[1].glyphs[0].xPosition, DoubleNear(79, 1e-5));
+  EXPECT_THAT(runs[1].glyphs[1].xPosition, DoubleNear(90, 1e-5));
+}
+
+TEST(TextEngineTest, WrappedEmptyLinesDoNotSelectTheFollowingAnchor) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  components::ComputedTextComponent text;
+  auto breaks = MakeSpan("\n\n");
+  breaks.whiteSpace = WhiteSpace::Pre;
+  breaks.textAnchor = TextAnchor::Start;
+  auto visible = MakeSpan("BB");
+  visible.whiteSpace = WhiteSpace::Pre;
+  visible.startsNewChunk = false;
+  visible.textAnchor = TextAnchor::End;
+  text.spans = {breaks, visible};
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, SizeIs(2));
+  EXPECT_THAT(runs[1].glyphs[0].xPosition, DoubleNear(-21, 1e-5));
+}
+
 }  // namespace donner::svg
