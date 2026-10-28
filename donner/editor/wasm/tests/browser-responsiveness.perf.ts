@@ -1780,7 +1780,8 @@ test.describe("nominal completed-result handoff", () => {
         }).toBe(true);
       } finally {
         // Retain what was injected even when the click never presented.
-        injected = await gpuDelay?.finish();
+        injected = await gpuDelay?.finish()
+          .catch((error: unknown) => ({ spec: "", disarmError: String(error) }));
         if (injected) console.log(`carousel-canvas-gpu-delay ${JSON.stringify(injected)}`);
       }
       const handoff = completedResultHandoff(

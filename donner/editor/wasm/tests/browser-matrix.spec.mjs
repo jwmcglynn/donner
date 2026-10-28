@@ -1486,8 +1486,8 @@ test("hosted macOS quarantines read only the hosted job's switch and name their 
     ],
     [
       "smoke.spec.ts",
-      "production Geode wasm presents visible editor pixels after held canvas GPU"
-      + " completion",
+      "production Geode wasm presents visible editor pixels after delayed canvas GPU"
+      + " work",
       "#1691",
     ],
     [
