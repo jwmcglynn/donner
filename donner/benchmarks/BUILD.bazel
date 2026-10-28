@@ -65,6 +65,7 @@ donner_cc_test(
     data = ["//:donner_splash.svg"],
     deps = [
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_tiny_skia",

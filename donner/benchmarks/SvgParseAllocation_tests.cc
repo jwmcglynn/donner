@@ -17,7 +17,9 @@
 #include <thread>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/benchmarks/SvgParseAllocationTracker.h"
+#include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
 
@@ -228,21 +230,17 @@ TEST(SvgParseAllocationTest, PathClipDrawStopsCopyingAfterGeometryRefusal) {
   source += "</g></svg>";
   svg::RendererTinySkia renderer;
   ParseWarningSink warnings = ParseWarningSink::Disabled();
-  auto warm = SVGParser::ParseSVG(
-      "<svg xmlns='http://www.w3.org/2000/svg'><rect width='1' height='1'/></svg>", warnings);
-  ASSERT_THAT(warm.hasResult(), testing::IsTrue());
-  auto warmDocument = std::move(warm).result();
-  warmDocument.setCanvasSize(64, 64);
-  renderer.draw(warmDocument);
   auto parsed = SVGParser::ParseSVG(source, warnings);
-  ASSERT_THAT(parsed.hasResult(), testing::IsTrue());
+  ASSERT_THAT(parsed, NoParseError());
   auto document = std::move(parsed).result();
   document.setCanvasSize(64, 64);
+  renderer.draw(document);
+  document.svgElement().setTransform(Transform2d::Translate({1, 0}));
   parse_allocations::Scope scope;
   renderer.draw(document);
   const Snapshot snapshot = scope.stop();
   PrintSnapshot("path_clip_draw", snapshot);
-  // Includes style preparation and rasterization, with headroom above admitted path storage.
+  // Measures a whole transformed redraw after styles and renderer caches have been populated.
   EXPECT_LE(snapshot.allocationBytes, 64u * 1024u * 1024u);
 }
 
