@@ -18,7 +18,6 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/benchmarks/SvgParseAllocationTracker.h"
 #include "donner/svg/parser/SVGParser.h"
-#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::benchmarks {
 namespace {
@@ -91,10 +90,10 @@ std::optional<Snapshot> MeasureParse(std::string_view source, std::string& error
 void PrintSnapshot(std::string_view name, const Snapshot& snapshot) {
   std::fprintf(stderr,
                "SVG_PARSE_ALLOC name=%.*s calls=%" PRIu64 " bytes=%" PRIu64 " frees=%" PRIu64
-               " live_bytes=%" PRIu64 " peak_live_bytes=%" PRIu64 " style_registry_bytes=%zu\n",
+               " live_bytes=%" PRIu64 " peak_live_bytes=%" PRIu64 "\n",
                static_cast<int>(name.size()), name.data(), snapshot.allocationCalls,
                snapshot.allocationBytes, snapshot.freeCalls, snapshot.liveBytes,
-               snapshot.peakLiveBytes, sizeof(svg::PropertyRegistry));
+               snapshot.peakLiveBytes);
 }
 
 void ExpectWithinBudget(const Snapshot& snapshot, const ParseAllocationBudget& budget) {

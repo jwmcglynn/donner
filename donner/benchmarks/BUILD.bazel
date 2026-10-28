@@ -67,7 +67,6 @@ donner_cc_test(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/parser",
-        "//donner/svg/properties",
         "@com_google_gtest//:gtest_main",
     ],
 )
