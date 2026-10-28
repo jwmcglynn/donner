@@ -28,7 +28,6 @@
 #include <cstdint>
 #include <functional>
 #include <map>
-#include <regex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -143,26 +142,23 @@ using ErrorMarkers =
 using Palette = std::array<unsigned int, static_cast<size_t>(ColorIndex::Max)>;
 
 /**
- * Definition of a programming language's syntax for highlighting.
+ * Language configuration for callback-based syntax highlighting and editing.
+ * Characters declined by the tokenizer retain the default color; comments are colored separately.
  */
 struct LanguageDefinition {
-  using TokenRegexString =
-      std::pair<std::string, ColorIndex>;  //!< Pattern and palette color for one token class.
-  using TokenRegexStrings = std::vector<TokenRegexString>;  //!< Ordered regex token classes.
   using TokenizeCallback =  //!< Callback that identifies the next token in a character range.
       std::function<bool(const char* inBegin, const char* inEnd, const char*& outBegin,
                          const char*& outEnd, ColorIndex& paletteIndex)>;
 
-  RcString name;                        //!< Language name
-  Keywords keywords;                    //!< Language keywords
-  Identifiers identifiers;              //!< Known identifiers
-  RcString commentStart;                //!< Multi-line comment start
-  RcString commentEnd;                  //!< Multi-line comment end
-  RcString singleLineComment;           //!< Single-line comment marker
-  bool autoIndentation = true;          //!< Whether to enable auto-indentation
-  TokenizeCallback tokenize;            //!< Custom tokenization callback
-  TokenRegexStrings tokenRegexStrings;  //!< Regex patterns for syntax
-  bool caseSensitive = true;            //!< Whether keywords are case-sensitive
+  RcString name;                //!< Language name
+  Keywords keywords;            //!< Language keywords
+  Identifiers identifiers;      //!< Known identifiers
+  RcString commentStart;        //!< Multi-line comment start
+  RcString commentEnd;          //!< Multi-line comment end
+  RcString singleLineComment;   //!< Single-line comment marker
+  bool autoIndentation = true;  //!< Whether to enable auto-indentation
+  TokenizeCallback tokenize;    //!< Custom tokenization callback
+  bool caseSensitive = true;    //!< Whether keywords are case-sensitive
 
   LanguageDefinition() = default;
 
@@ -176,9 +172,8 @@ struct LanguageDefinition {
  * Headless editing substrate - the text buffer, cursor, undo history and
  * syntax colorizer with no ImGui dependency.
  *
- * `TextEditor` wraps this class and adds the ImGui rendering and input
- * layer. Direct consumers should go through `TextEditor`; tests (once C3
- * migrates them) will construct `TextEditorCore` directly.
+ * `TextEditor` wraps this class with ImGui rendering and input. Headless
+ * consumers can construct this core directly.
  */
 class TextEditorCore {
 public:
@@ -387,6 +382,8 @@ public:
   /// Set the syntax rules and schedule the buffer for recoloring.
   /// @param langDef Language definition to use.
   void setLanguageDefinition(const LanguageDefinition& langDef);
+  /// Use the built-in SVG syntax rules.
+  void setSvgLanguageDefinition();
   /// Return the active syntax language definition.
   const LanguageDefinition& getLanguageDefinition() const { return languageDefinition_; }
 
@@ -701,8 +698,6 @@ public:
       sourceEditIntentHook;  //!< Notify the shell when a byte-level source edit intent is queued.
 
 private:
-  using RegexList = std::vector<std::pair<std::regex, ColorIndex>>;
-
   // ---------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------
@@ -765,7 +760,6 @@ private:
   Palette paletteBase_{};
   Palette palette_{};
   LanguageDefinition languageDefinition_;
-  RegexList regexList_;
   bool colorizerEnabled_ = true;
   int colorRangeMin_ = 0;
   int colorRangeMax_ = 0;

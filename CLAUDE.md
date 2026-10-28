@@ -26,7 +26,7 @@
 
 ## No Private-Infra References
 
-- **Never reference the operator's private infrastructure repos or their design docs in this repository**: not in code, comments, commit messages, PR descriptions, or docs. That includes design-doc numbers (e.g. "design 0018"), private repository names (e.g. `<private-infra-repo>`), private hostnames, personal home-directory paths, and personal-notes references (zettelkasten pages, handoff notes). `tools/check_private_details.py` enforces the generic path and address parts of this rule in the Lint workflow; keep a local untracked name list (see its `--help`) to also check private names before pushing.
+- **Never reference the operator's private infrastructure repos or their design docs in this repository**: not in code, comments, commit messages, PR descriptions, or docs. That includes design-doc numbers (e.g. "design 0018"), private repository names (e.g. `<private-infra-repo>`), private hostnames, personal home-directory paths, and personal-notes references (knowledge-graph pages, handoff notes). `tools/check_private_details.py` enforces the generic path and address parts of this rule in the Lint workflow; keep a local untracked name list (see its `--help`) to also check private names before pushing.
 - Donner is public. Describe the *reason* for a change in self-contained terms ("CI baseline, 2026-07-01: this test ran ~307 s serially on the self-hosted lane") instead of pointing at a private document.
 
 ## No Design-Doc or Milestone References in Code Comments
