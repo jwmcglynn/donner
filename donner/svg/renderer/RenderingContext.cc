@@ -834,6 +834,9 @@ public:
     if (const auto* inset = std::get_if<InsetClipPath>(&clip.value)) {
       return ShapeSystem().insetClipPath(entity, *inset, circleClipBudget_);
     }
+    if (const auto* path = std::get_if<PathClipPath>(&clip.value)) {
+      return ShapeSystem().pathClipPath(entity, *path, circleClipBudget_);
+    }
     return ShapeSystem().ellipseClipPath(entity, std::get<EllipseClipPath>(clip.value),
                                          circleClipBudget_);
   }

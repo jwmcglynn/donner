@@ -62,6 +62,16 @@ TEST(PathClipPath, FillRuleIsIndependentOfElementAndAncestorClipRule) {
   }
 }
 
+TEST(PathClipPath, OpenContoursCloseIndependentlyAndAllowNegativeCoordinates) {
+  const auto actual = RenderPathScene(R"svg(<g style='clip-path:path(evenodd,
+      "M-4 8H56V56H-4 M20 20H44V44H20") view-box'>
+      <rect width="64" height="64" fill="red"/></g>)svg");
+  const auto expected =
+      RenderPathScene(PathReference("M-4 8H56V56H-4Z M20 20H44V44H20Z", kContent, "evenodd"));
+  editor::tests::CompareBitmapToBitmap(actual, expected, "path_open_contours",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(PathClipPath, ReferenceBoxesTranslateWithoutScalingPathCoordinates) {
   constexpr std::string_view content =
       "<rect x='8' y='12' width='40' height='32' fill='red' stroke='blue' stroke-width='8'/>";

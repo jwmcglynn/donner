@@ -109,6 +109,64 @@ TEST_F(ShapeSystemTest, CircleFillReferenceAdmitsPathScanBeforeBounds) {
   EXPECT_THAT(clip.bounds(), BoxEq(Vector2d(49, 0), Vector2d(51, 2)));
 }
 
+TEST_F(ShapeSystemTest, PathClipAdmitsBeforeCopyAndClosesSeparateContours) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48">
+      <rect id="r" x="8" y="12" width="40" height="32"/>
+    </svg>)");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  PathClipPath path;
+  path.box = RadialClipPath::Box::View;
+  path.data = PathBuilder()
+                  .moveTo({8, 8})
+                  .lineTo({32, 8})
+                  .lineTo({32, 32})
+                  .moveTo({16, 12})
+                  .lineTo({24, 12})
+                  .lineTo({24, 20})
+                  .build();
+  const std::size_t work = 2 * path.data.points().size() + 2 * path.data.commands().size() + 1;
+  CircleClipGeometryBudget limited;
+  limited.remainingWork = work - 1;
+  EXPECT_THAT(shapeSystem.pathClipPath(element->entityHandle(), path, limited).commands(),
+              testing::IsEmpty());
+  EXPECT_THAT(limited.rejected, testing::IsTrue());
+  CircleClipGeometryBudget admitted;
+  admitted.remainingWork = work;
+  const Path clip = shapeSystem.pathClipPath(element->entityHandle(), path, admitted);
+  EXPECT_THAT(clip.commands(),
+              testing::ElementsAre(testing::Field(&Path::Command::verb, Path::Verb::MoveTo),
+                                   testing::Field(&Path::Command::verb, Path::Verb::LineTo),
+                                   testing::Field(&Path::Command::verb, Path::Verb::LineTo),
+                                   testing::Field(&Path::Command::verb, Path::Verb::ClosePath),
+                                   testing::Field(&Path::Command::verb, Path::Verb::MoveTo),
+                                   testing::Field(&Path::Command::verb, Path::Verb::LineTo),
+                                   testing::Field(&Path::Command::verb, Path::Verb::LineTo),
+                                   testing::Field(&Path::Command::verb, Path::Verb::ClosePath)));
+  EXPECT_THAT(admitted.rejected, testing::IsFalse());
+  EXPECT_EQ(admitted.remainingWork, 0u);
+}
+
+TEST_F(ShapeSystemTest, PathClipRejectsNonFiniteTranslatedPointsAndExtents) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect id="r" width="64" height="48"/></svg>)");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  for (const double value :
+       {1e308, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+        double(std::numeric_limits<float>::max())}) {
+    SCOPED_TRACE(value);
+    PathClipPath path;
+    path.box = RadialClipPath::Box::View;
+    path.data =
+        PathBuilder().moveTo({-value, 0}).curveTo({0, value}, {value, value}, {value, 0}).build();
+    CircleClipGeometryBudget budget;
+    EXPECT_THAT(shapeSystem.pathClipPath(element->entityHandle(), path, budget).commands(),
+                testing::IsEmpty());
+  }
+}
+
 TEST_F(ShapeSystemTest, InsetGeometryUsesAxisExtentsAndAdmitsBeforeAllocation) {
   auto document = ParseAndComputeShapes(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48">

@@ -11,6 +11,7 @@
 
 #include "donner/base/Length.h"
 #include "donner/base/ParseResult.h"
+#include "donner/base/Path.h"
 #include "donner/css/ComponentValue.h"
 #include "donner/svg/core/ClipRule.h"
 #include "donner/svg/graph/Reference.h"
@@ -77,20 +78,39 @@ struct InsetClipPath {
   bool operator==(const InsetClipPath&) const = default;
 };
 
+/// A CSS path clipping shape with parsed, owned SVG geometry.
+struct PathClipPath {
+  /// Maximum decoded path-data bytes admitted before geometry parsing.
+  static constexpr std::size_t kMaximumDataBytes = 64 * 1024;
+
+  RadialClipPath::Box box = RadialClipPath::Box::Stroke;  ///< SVG reference geometry.
+  ClipRule rule = ClipRule::NonZero;                      ///< CSS interior rule.
+  Path data;                                              ///< Bounded parsed commands and points.
+  bool operator==(const PathClipPath&) const = default;
+};
+
 /// A referenced SVG clip or a supported CSS basic shape; absence is represented by the property.
 struct ClipPath {
-  std::variant<Reference, CircleClipPath, EllipseClipPath, PolygonClipPath, InsetClipPath>
+  std::variant<Reference, CircleClipPath, EllipseClipPath, PolygonClipPath, InsetClipPath,
+               PathClipPath>
       value;  ///< Owning parsed value.
   explicit ClipPath(Reference reference) : value(std::move(reference)) {}
   explicit ClipPath(CircleClipPath circle) : value(std::move(circle)) {}
   explicit ClipPath(EllipseClipPath ellipse) : value(std::move(ellipse)) {}
   explicit ClipPath(PolygonClipPath polygon) : value(std::move(polygon)) {}
   explicit ClipPath(InsetClipPath inset) : value(std::move(inset)) {}
+  /// Construct an SVG path shape. @param path Parsed path and reference box.
+  explicit ClipPath(PathClipPath path) : value(std::move(path)) {}
 
   /// Return the basic shape's interior rule; references provide their own rules.
   ClipRule clipRule() const {
-    const auto* polygon = std::get_if<PolygonClipPath>(&value);
-    return polygon ? polygon->rule : ClipRule::NonZero;
+    if (const auto* polygon = std::get_if<PolygonClipPath>(&value)) {
+      return polygon->rule;
+    }
+    if (const auto* path = std::get_if<PathClipPath>(&value)) {
+      return path->rule;
+    }
+    return ClipRule::NonZero;
   }
 
   bool operator==(const ClipPath&) const = default;
