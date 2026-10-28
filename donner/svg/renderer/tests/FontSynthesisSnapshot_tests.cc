@@ -86,6 +86,7 @@ CapturedStyleGlyph CaptureStyleGlyph(const FontFamilyProvider* provider, std::st
   components::ComputedTextComponent text;
   components::ComputedTextComponent::TextSpan span;
   span.text = "A";
+  span.start = 0;
   span.end = 1;
   span.startsNewChunk = true;
   span.fontFamilies.emplace_back(family);
@@ -223,6 +224,7 @@ TEST(FontSynthesisStyleSnapshotTest, ReconstructedSourceAddressCannotAliasAnothe
     components::ComputedTextComponent text;
     components::ComputedTextComponent::TextSpan span;
     span.text = "A";
+    span.start = 0;
     span.end = 1;
     span.startsNewChunk = true;
     span.fontFamilies.emplace_back("CapturedFace");
