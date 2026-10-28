@@ -1,0 +1,2 @@
+@font-face { font-family: Test; src: url(font.otf); font-weight: 1000; font-style: oblique; font-stretch: ultra-expanded; }
+@font-face { font-family: Test; src: url(font.otf); font-weight: 700; font-weight: 1e999; font-weight: -1; font-weight: 1001; font-weight: bold !important; font-style: italic garbage; font-stretch: wider; }

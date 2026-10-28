@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <fstream>
 #include <memory>
@@ -10,7 +11,9 @@
 #include <thread>
 #include <vector>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/fonts/SfntUtils.h"
+#include "donner/css/parser/StylesheetParser.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/resources/FontMetadata.h"
@@ -886,6 +889,43 @@ TEST(FontManagerTest, ReplacingFontFaceDataTakesANewIdentityAndLeavesTheOldBytes
   EXPECT_EQ(mgr.fontData(original).size(), originalSize)
       << "The original handle's bytes were swapped underneath it.";
   EXPECT_NE(mgr.fontData(updated).size(), originalSize);
+}
+
+TEST(FontManagerTest, ParsedDescriptorsSelectFacesInsteadOfDeclarationOrder) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const css::Stylesheet sheet = css::parser::StylesheetParser::Parse(R"(
+    @font-face { font-family: TestFont; src: url(font.otf); font-weight: bold; }
+    @font-face { font-family: TestFont; src: url(font.otf); font-style: italic; }
+    @font-face { font-family: TestFont; src: url(font.otf); font-stretch: condensed; }
+    @font-face { font-family: TestFont; src: url(font.otf); }
+  )",
+                                                                     disabled);
+  ASSERT_EQ(sheet.fontFaces().size(), 4u);
+  Registry registry;
+  FontManager manager(registry);
+  const css::FontFace embedded = MakeEmbeddedFace("TestFont");
+  for (css::FontFace face : sheet.fontFaces()) {
+    face.sources = embedded.sources;
+    manager.addFontFace(face);
+  }
+  const std::array<FontHandle, 4> handles = {
+      manager.findFont("TestFont", 700, 0, 5), manager.findFont("TestFont", 400, 1, 5),
+      manager.findFont("TestFont", 400, 0, 3), manager.findFont("TestFont", 400, 0, 5)};
+  for (std::size_t i = 0; i < handles.size(); ++i) {
+    ASSERT_TRUE(static_cast<bool>(handles[i]));
+    for (std::size_t j = 0; j < i; ++j) {
+      EXPECT_NE(handles[i], handles[j]);
+    }
+  }
+  // Re-announcing the same stylesheet must retain the selected identities.
+  for (css::FontFace face : sheet.fontFaces()) {
+    face.sources = embedded.sources;
+    manager.addFontFace(face);
+  }
+  EXPECT_EQ(manager.findFont("TestFont", 700, 0, 5), handles[0]);
+  EXPECT_EQ(manager.findFont("TestFont", 400, 1, 5), handles[1]);
+  EXPECT_EQ(manager.findFont("TestFont", 400, 0, 3), handles[2]);
+  EXPECT_EQ(manager.findFont("TestFont", 400, 0, 5), handles[3]);
 }
 
 /// A declaration that differs only in a matching descriptor selects a different face, so it must
