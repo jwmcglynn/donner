@@ -218,6 +218,34 @@ TEST(TextDecorationThickness, RotatedMinimumUsesTransformedSegmentNormal) {
   }
 }
 
+TEST(TextDecorationThickness, OriginatingFillNoneDoesNotUseDescendantPaint) {
+  const auto actual = RenderDecorationScene(R"svg(
+    <text x="10" y="40" font-size="20" fill="none"
+          style="text-decoration:underline;text-decoration-thickness:8px"><tspan fill="red"
+          style="text-decoration:underline;text-decoration-thickness:2px">XX</tspan></text>)svg");
+  const auto expected = RenderDecorationScene(
+      std::string(kRedGlyphs) + "<rect x='10' y='41' width='20' height='2' fill='red'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_origin_fill_none",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(TextDecorationThickness, ShearedMinimumUsesPerpendicularDeviceWidth) {
+  for (const auto value : {"0px", "-1px", "0.1px"}) {
+    SCOPED_TRACE(value);
+    const auto actual = RenderDecorationScene(
+        "<g transform='matrix(1 0 10 1 0 0)'><text x='4' y='4' font-size='20' fill='red' "
+        "style='text-decoration:underline;text-decoration-thickness:" +
+        std::string(value) + "'>XX</text></g>");
+    const auto expected = RenderDecorationScene(
+        "<g transform='matrix(1 0 10 1 0 0)'>"
+        "<rect x='4' y='2' width='1' height='2' fill='red'/>"
+        "<rect x='14' y='2' width='1' height='2' fill='red'/>"
+        "<rect x='4' y='5.5' width='20' height='1' fill='red'/></g>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_sheared_minimum",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(TextDecorationThickness, ImmutableOriginStorageRefusesAndReleasesCapacity) {
   using components::DocumentResourceFamilyBudget;
   using components::TextDecorationData;
