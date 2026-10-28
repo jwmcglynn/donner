@@ -215,7 +215,7 @@ TEST(AllocationTrackerTest, RejectsOverlappingScopes) {
       "");
 }
 
-TEST(SvgParseAllocationTest, PathClipDrawStopsCopyingAfterGeometryRefusal) {
+std::optional<Snapshot> MeasurePathClipRedraw(int childCount) {
   std::string data = "M0 0";
   for (int i = 0; i < 2000; ++i) {
     data += "H1V1H0V0";
@@ -224,14 +224,17 @@ TEST(SvgParseAllocationTest, PathClipDrawStopsCopyingAfterGeometryRefusal) {
       "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
       "<g style='clip-path:path(\"" +
       data + "\") view-box'>";
-  for (int i = 0; i < 128; ++i) {
+  for (int i = 0; i < childCount; ++i) {
     source += "<rect width='64' height='64' clip-path='inherit'/>";
   }
   source += "</g></svg>";
   svg::RendererTinySkia renderer;
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = SVGParser::ParseSVG(source, warnings);
-  ASSERT_THAT(parsed, NoParseError());
+  EXPECT_THAT(parsed, NoParseError());
+  if (!parsed.hasResult()) {
+    return std::nullopt;
+  }
   auto document = std::move(parsed).result();
   document.setCanvasSize(64, 64);
   renderer.draw(document);
@@ -239,9 +242,18 @@ TEST(SvgParseAllocationTest, PathClipDrawStopsCopyingAfterGeometryRefusal) {
   parse_allocations::Scope scope;
   renderer.draw(document);
   const Snapshot snapshot = scope.stop();
-  PrintSnapshot("path_clip_draw", snapshot);
-  // Measures a whole transformed redraw after styles and renderer caches have been populated.
-  EXPECT_LE(snapshot.allocationBytes, 64u * 1024u * 1024u);
+  return snapshot;
+}
+
+TEST(SvgParseAllocationTest, PathClipDrawStopsCopyingAfterGeometryRefusal) {
+  const auto smaller = MeasurePathClipRedraw(64);
+  const auto larger = MeasurePathClipRedraw(128);
+  ASSERT_THAT(smaller, testing::Optional(testing::_));
+  ASSERT_THAT(larger, testing::Optional(testing::_));
+  PrintSnapshot("path_clip_draw_64", *smaller);
+  PrintSnapshot("path_clip_draw_128", *larger);
+  // Both draws exhaust geometry work; the larger rejected tail needs only small instance records.
+  EXPECT_LE(larger->allocationBytes, smaller->allocationBytes + 1024u * 1024u);
 }
 
 TEST(SvgParseAllocationTest, RepeatedAttributes) {
