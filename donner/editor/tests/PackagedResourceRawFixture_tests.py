@@ -19,6 +19,27 @@ def runfile(path: str) -> Path:
   return candidate
 
 
+def stage_public_wrapper(directory: Path) -> Path:
+  wrapper = directory / Path(OPTIONS.fuzzer).name
+  shutil.copyfile(runfile(OPTIONS.fuzzer), wrapper)
+  wrapper.chmod(0o755)
+  fixtures = Path(str(wrapper) + ".runfiles")
+  logical_impl = Path("_donner_transitioned") / OPTIONS.fuzzer
+  implementation = fixtures / logical_impl
+  implementation.parent.mkdir(parents=True)
+  shutil.copyfile(Path(os.environ["TEST_SRCDIR"]) / logical_impl, implementation)
+  implementation.chmod(0o755)
+  for relative in [OPTIONS.font_tree, OPTIONS.icon_tree]:
+    shutil.copytree(runfile(relative), fixtures / "_main" / relative,
+                    copy_function=shutil.copyfile)
+  mapping = Path(os.environ["TEST_SRCDIR"]) / "_repo_mapping"
+  if mapping.is_file():
+    shutil.copyfile(mapping, fixtures / "_repo_mapping")
+  else:
+    (fixtures / "_repo_mapping").write_text("")
+  return wrapper
+
+
 class PackagedResourceRawFixtureTest(unittest.TestCase):
   def invoke(self, fixture_root: Path | str | None) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
@@ -45,6 +66,31 @@ class PackagedResourceRawFixtureTest(unittest.TestCase):
         result = self.invoke(root)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("Failed to load packaged fallback", result.stderr)
+
+  def test_relocated_public_wrapper_discovers_fixtures_with_no_runfiles_environment(self):
+    with tempfile.TemporaryDirectory() as temporary:
+      root = Path(temporary)
+      wrapper = stage_public_wrapper(root)
+      unrelated = root / "unrelated"
+      unrelated.mkdir()
+      findings = root / "findings"
+      findings.mkdir()
+      environment = {
+          key: value for key, value in os.environ.items()
+          if "RUNFILES" not in key and key not in (
+              "TEST_SRCDIR", "DONNER_TEST_RESOURCE_ROOT", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH")
+      }
+      result = subprocess.run(
+          [str(wrapper), "-runs=1", "-artifact_prefix=" + str(findings) + "/"],
+          cwd=unrelated,
+          env=environment,
+          check=False,
+          capture_output=True,
+          text=True,
+          timeout=30,
+      )
+    self.assertEqual(result.returncode, 0, result.stderr)
+    self.assertNotIn("Failed to load packaged fallback", result.stderr)
 
   def test_missing_fixture_is_rejected_before_fuzz_input(self):
     with tempfile.TemporaryDirectory() as temporary:
