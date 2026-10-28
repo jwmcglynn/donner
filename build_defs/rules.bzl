@@ -284,6 +284,13 @@ if [[ -n "$library_path" ]]; then
   export DYLD_LIBRARY_PATH="$library_path${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}}"
   export LD_LIBRARY_PATH="$library_path${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
 fi
+# argv[0] is the inner alias, so child libraries cannot rediscover the wrapper's tree.
+if [[ -n "$runfiles_dir" ]]; then
+  export RUNFILES_DIR="$runfiles_dir"
+fi
+if [[ -n "$manifest" ]]; then
+  export RUNFILES_MANIFEST_FILE="$manifest"
+fi
 exec "$impl" {fixed_args} "$@"
 """.format(
         logical_impl = launcher_target,
