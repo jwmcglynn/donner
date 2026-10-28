@@ -63,6 +63,17 @@ class DocsPublishTest(unittest.TestCase):
                                 "b" * 40, self.root / "overlap.json")
         self.assertTrue(str(caught.exception).endswith(json.dumps("[REDACTED] [REDACTED] [REDACTED]")))
 
+    def test_attestation_diagnostics_neutralize_legacy_actions_commands(self):
+        diagnostic = "certificate error ##[error]text ##[add-mask]value ##[stop-commands]marker"
+        error = publish.subprocess.CalledProcessError(7, ["gh"], stderr=diagnostic.encode())
+        with mock.patch.object(publish.subprocess, "run", side_effect=error), \
+             self.assertRaises(ValueError) as caught:
+            publish.attestation(self.root / "subject", publish.WORKFLOW,
+                                "b" * 40, self.root / "legacy.json")
+        message = str(caught.exception)
+        self.assertNotIn("##[", message)
+        self.assertEqual(json.loads(message.split(": ", 1)[1]), diagnostic)
+
     def test_request_cannot_override_workflow_context_or_smuggle_extra_fields(self):
         request = {"composition_run": "123/1", "composition_sha256": "a" * 64, "prior_composition": "b" * 64, "bootstrap": None}
         with mock.patch.dict(os.environ, {"DOCS_REQUEST": json.dumps(request)}):
