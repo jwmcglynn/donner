@@ -3246,6 +3246,10 @@ struct RtlLineCase {
   std::vector<double> baselines;
 };
 
+void PrintTo(const RtlLineCase& input, std::ostream* output) {
+  *output << testing::PrintToString(input.text);
+}
+
 class RtlPreservedNewlineTest : public testing::TestWithParam<std::tuple<WhiteSpace, RtlLineCase>> {
 };
 
@@ -3315,6 +3319,89 @@ TEST(TextEngineTest, RtlPreservedNewlineRetainsDisplacementsAcrossSpans) {
   EXPECT_THAT(runs[1].glyphs[1].yPosition, DoubleNear(40, 1e-5));
 }
 
+class LineKerningBackend : public ScriptedTextBackend {
+public:
+  mutable size_t calls = 0;
+
+  double crossSpanKern(FontHandle, float, FontHandle, float, uint32_t, uint32_t,
+                       bool) const override {
+    ++calls;
+    return 99;
+  }
+};
+
+TEST(TextEngineTest, RtlPreservedNewlineDoesNotKernAcrossLinesOrSpans) {
+  Registry registry;
+  FontManager fonts(registry);
+  auto backend = std::make_unique<LineKerningBackend>();
+  backend->reverseClusters = true;
+  const auto* probe = backend.get();
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto first = MakeSpan("AB\n");
+  first.whiteSpace = WhiteSpace::Pre;
+  auto second = MakeSpan("CD");
+  second.whiteSpace = WhiteSpace::Pre;
+  second.startsNewChunk = false;
+  text.spans = {first, second};
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(3)), RunGlyphsAre(SizeIs(2))));
+  EXPECT_THAT(probe->calls, testing::Eq(0u));
+  EXPECT_THAT(runs[1].glyphs[0].yPosition, DoubleNear(20, 1e-5));
+}
+
+TEST(TextEngineTest, RtlPreservedNewlineLeavesTextPathInSingleVisualFlow) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts, /*reverseClusters=*/true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB\nCD");
+  span.whiteSpace = WhiteSpace::Pre;
+  span.pathSpline = PathBuilder().moveTo({0, 0}).lineTo({200, 0}).build();
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(5))));
+  EXPECT_THAT(runs[0].onPath, testing::IsTrue());
+  std::vector<uint32_t> clusters;
+  for (const auto& glyph : runs[0].glyphs) {
+    clusters.push_back(glyph.cluster);
+  }
+  EXPECT_THAT(clusters, ElementsAre(4u, 3u, 2u, 1u, 0u));
+}
+
+class RtlPreservedNewlineAxisTest : public testing::TestWithParam<WritingMode> {};
+
+TEST_P(RtlPreservedNewlineAxisTest, KeepsInlineDisplacementAndBlockProgression) {
+  const auto mode = GetParam();
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts, /*reverseClusters=*/true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB\nCD");
+  span.whiteSpace = WhiteSpace::Pre;
+  span.textOrientation = TextOrientation::Upright;
+  auto& relative = isVertical(mode) ? span.dyList : span.dxList;
+  relative = {std::nullopt, std::nullopt, std::nullopt, Lengthd(20)};
+  text.spans.push_back(span);
+  auto params = MakeTextParams(20);
+  params.writingMode = mode;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(5))));
+  const auto& first = runs[0].glyphs[0];
+  const auto& d = runs[0].glyphs[3];
+  const auto& c = runs[0].glyphs[4];
+  EXPECT_THAT(d.cluster, testing::Eq(4u));
+  EXPECT_THAT(InlinePen(c, mode) - InlinePen(d, mode),
+              DoubleNear(isVertical(mode) ? 32 : 30, 1e-5));
+  const double blockDelta =
+      isVertical(mode) ? d.xPosition - first.xPosition : d.yPosition - first.yPosition;
+  EXPECT_THAT(blockDelta, DoubleNear(mode == WritingMode::VerticalRl ? -20 : 20, 1e-5));
+}
+
+INSTANTIATE_TEST_SUITE_P(AllAxes, RtlPreservedNewlineAxisTest,
+                         testing::Values(WritingMode::HorizontalTb, WritingMode::VerticalRl,
+                                         WritingMode::VerticalLr));
+
 #ifdef DONNER_TEXT_FULL
 TEST(TextEngineTest, RtlPreservedNewlineKeepsHebrewLinesInSourceOrder) {
   Registry registry;
@@ -3341,6 +3428,36 @@ TEST(TextEngineTest, RtlPreservedNewlineKeepsHebrewLinesInSourceOrder) {
   EXPECT_THAT(runs[0].glyphs[0].yPosition, DoubleNear(0, 1e-5));
   EXPECT_THAT(runs[0].glyphs[3].yPosition, DoubleNear(20, 1e-5));
 }
+
+TEST(TextEngineTest, RtlPreservedNewlineKeepsArabicFallbackLinesInSourceOrder) {
+  Registry registry;
+  FontManager fonts(registry);
+  const FontHandle primary = LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Latin primary");
+  const FontHandle fallback = LoadResvgFont(fonts, "Amiri-Regular.ttf", "Arabic fallback");
+  ASSERT_THAT(static_cast<bool>(primary), testing::IsTrue());
+  ASSERT_THAT(static_cast<bool>(fallback), testing::IsTrue());
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xD8\xA8\xD8\xA8\n\xD8\xAA\xD8\xAA");
+  span.whiteSpace = WhiteSpace::Pre;
+  span.fontFamilies = {RcString("Latin primary"), RcString("Arabic fallback")};
+  text.spans.push_back(span);
+  auto params = MakeTextParams(20);
+  params.fontFamilies = span.fontFamilies;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(SizeIs(5))));
+  EXPECT_THAT(runs[0].font, testing::Eq(primary));
+  EXPECT_THAT(runs[0].glyphs[0].font, testing::Eq(fallback));
+  EXPECT_THAT(runs[0].glyphs[3].font, testing::Eq(fallback));
+  std::vector<uint32_t> clusters;
+  for (const auto& glyph : runs[0].glyphs) {
+    EXPECT_THAT(glyph.glyphIndex, Gt(0));
+    clusters.push_back(glyph.cluster);
+  }
+  EXPECT_THAT(clusters, ElementsAre(2u, 0u, 4u, 7u, 5u));
+  EXPECT_THAT(runs[0].glyphs[3].yPosition - runs[0].glyphs[0].yPosition, DoubleNear(20, 1e-5));
+}
+
 #endif
 
 }  // namespace
