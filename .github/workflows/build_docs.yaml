@@ -74,4 +74,3 @@ jobs:
           path: ${{ runner.temp }}/docs-provenance/
           if-no-files-found: error
           retention-days: 90
-
