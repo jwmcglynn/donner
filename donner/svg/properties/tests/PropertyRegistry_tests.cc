@@ -2060,6 +2060,41 @@ TEST(PropertyRegistry, InvalidPathClipKeepsEarlierDeclaration) {
   }
 }
 
+TEST(PropertyRegistry, RoundedInsetAcceptsOneToFourRadiiAndIndependentAxes) {
+  for (const auto value : {"8px round 4px", "8px round 4px 8px", "8px round 4px 8px 12px",
+                           "8px round 4px 8px 12px 16px", "8px round 20% / .5em",
+                           "1px 2px 3px 4px round 1px 2px 3px 4px / 4px 3px 2px 1px"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:inset(" + std::string(value) + ") fill-box");
+    EXPECT_THAT(registry.clipPath.get(),
+                Optional(testing::Field(&ClipPath::value,
+                                        testing::VariantWith<InsetClipPath>(testing::_))));
+    EXPECT_EQ(registry.complexPropertyBytes(), 0u);
+  }
+}
+
+TEST(PropertyRegistry, RoundedInsetRejectsMalformedOrContextualRadiusAtomically) {
+  for (const auto radius : {"", "-1px", "1px -1%", "1px / -1px", "1px /", "/ 1px",
+                            "1px / 2px / 3px", "1px 2px 3px 4px 5px", "1e999px", "1ex", "1ch",
+                            "1vw", "1vh", "1vmin", "1vmax", "calc(1px)"}) {
+    SCOPED_TRACE(radius);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:inset(0 round " + std::string(radius) +
+                        ")");
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
+TEST(PropertyRegistry, RoundedInsetPresentationAcceptsUserUnits) {
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.parsePresentationAttribute("clip-path", "inset(2 round 4 / 8)"),
+              NoParseError());
+  EXPECT_THAT(
+      registry.clipPath.get(),
+      Optional(testing::Field(&ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
+}
+
 TEST(PropertyRegistry, InsetOffsetsExpandAndRetainInlineStorage) {
   struct Example {
     std::string_view value;
@@ -2143,7 +2178,7 @@ TEST(PropertyRegistry, InsetAbsoluteLengthsComputeAndOverflowRemainsClipped) {
 TEST(PropertyRegistry, InvalidInsetKeepsEarlierDeclaration) {
   for (const std::string_view value :
        {"inset()", "inset(1px 2px 3px 4px 5px)", "inset(1px, 2px)", "inset(2)", "inset(auto)",
-        "inset(1e999px)", "inset(1px round 2px)", "inset(round 2px)", "inset(calc(2px))",
+        "inset(1e999px)", "inset(1px round)", "inset(round 2px)", "inset(calc(2px))",
         "inset(1px) fill-box view-box", "inset(1px) garbage"}) {
     SCOPED_TRACE(value);
     PropertyRegistry registry;
