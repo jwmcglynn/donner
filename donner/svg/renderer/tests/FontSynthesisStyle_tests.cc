@@ -215,10 +215,10 @@ TEST_F(FontSynthesisStyleTest, AdjacentSpansKeepOneFaceAndIndependentOutlinePoli
     EXPECT_THAT(glyphs[index].xPosition, testing::DoubleNear(index * automatic.advance, 1e-9));
     EXPECT_THAT(glyphs[index].yPosition, Eq(0.0));
     EXPECT_THAT(glyphs[index].allowSyntheticOblique, Eq(index != 1));
-    const Path local = TransformPath(mixed.glyphs[index].path,
-                                     Transform2d::Translate(-glyphs[index].xPosition, 0));
-    const Path& expected = index == 1 ? regular.outline : automatic.outline;
-    EXPECT_THAT(local.points(), ElementsAreArray(expected.points()));
+    const Path& control = index == 1 ? regular.outline : automatic.outline;
+    const Path expected =
+        TransformPath(control, Transform2d::Translate(index * automatic.advance, 0));
+    EXPECT_THAT(mixed.glyphs[index].path.points(), ElementsAreArray(expected.points()));
   }
 }
 
