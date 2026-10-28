@@ -327,7 +327,7 @@ std::optional<FontVariant> ShapeSmallCapsWithSynthesis(std::string_view policy,
   root.get<components::ComputedStyleComponent>().properties->parseStyle(
       RcString("font-variant: small-caps; font-synthesis-small-caps: " + std::string(policy)));
   std::size_t work = 100000;
-  EXPECT_TRUE(engine.referenceGeometry(root, false, work).has_value());
+  EXPECT_THAT(engine.referenceGeometry(root, false, work), testing::Optional(testing::_));
   return probe->lastShapedVariant;
 }
 
