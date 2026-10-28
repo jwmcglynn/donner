@@ -3464,7 +3464,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "  lint:\n", "  lint:\n    environment:\n      name: ${{ vars.ENVIRONMENT }}\n",
                 1), "unreviewed environment"),
             "reviewed job renamed environment": (docs, files[docs].replace(
-                "      name: github-pages\n", "      name: ${{ vars.PAGES_ENV }}\n", 1),
+                "\n      name: github-pages\n", "\n      name: ${{ vars.PAGES_ENV }}\n", 1),
                 "unreviewed environment"),
             "reviewed job switched to write environment": (bcr, files[bcr].replace(
                 "    environment: bcr-fork-preparation\n",
@@ -3472,7 +3472,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "unreviewed environment"),
         })
         # Case differences in a reviewed literal name are the same environment.
-        cased = files[docs].replace("      name: github-pages\n", "      name: GitHub-Pages\n", 1)
+        cased = files[docs].replace("\n      name: github-pages\n", "\n      name: GitHub-Pages\n", 1)
         self.assertNotEqual(cased, files[docs])
         self.assertEqual([], _buildbuddy_violations({**files, docs: cased}))
 
