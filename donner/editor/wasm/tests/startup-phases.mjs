@@ -41,7 +41,8 @@ const seconds = (ms) => `${(ms / 1000).toFixed(1)} s`;
  * Where a case's startup time went, from its phase marks.
  *
  * @param {Record<string, number>} marks Phase name to epoch milliseconds; `firstCaseInWorker` is
- *   1 when the case was the first its worker ran.
+ *   1 when no case of the worker had used the page before this one, so its marks may include the
+ *   browser launch.
  * @param {number} budgetMs The case's timeout.
  * @param {{navigationTimeOrigin?: number | null, now?: number}} [options] The page's
  *   `performance.timeOrigin` when the page answered, and the time of the report.
@@ -90,10 +91,14 @@ export function describePreNavigationStall(report) {
     + (phases.gotoStart === undefined
       ? ", navigation never started"
       : `, openEditor to navigation ${seconds(phases.gotoStart - phases.openEditor)}`);
+  // Without a page case before it, the case may have launched the browser, which Playwright does
+  // not charge to its budget, so its figure is only an upper bound.
+  const bound = report.firstCaseInWorker ? "up to " : "";
   const launch = report.firstCaseInWorker
-    ? "; the worker's first case, so this includes the browser launch the budget does not count"
+    ? "; the worker's first page case, so this may include the browser launch the budget does not"
+      + " count"
     : "";
-  return `pre-navigation stall: ${seconds(report.preNavigationMs)} of the`
+  return `pre-navigation stall: ${bound}${seconds(report.preNavigationMs)} of the`
     + ` ${seconds(report.budgetMs)} test budget passed before navigation started (${split}${launch})`;
 }
 

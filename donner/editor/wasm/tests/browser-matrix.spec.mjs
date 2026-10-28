@@ -975,7 +975,7 @@ test("startup phases name a pre-navigation stall instead of the wait it starved"
   const message = startupWaitMessage(stalled, 30_000, wait, start + 29_460);
   assert.match(
     startupWaitMessage({ ...stalled, firstCaseInWorker: 1 }, 30_000, wait, start + 29_460),
-    /openEditor to navigation 0\.1 s; the worker's first case, so this includes the browser launch/,
+    /^pre-navigation stall: up to 29\.3 s of[\s\S]*openEditor to navigation 0\.1 s; the worker's first page case, so this may include the browser launch/,
   );
   assert.equal(
     message,
@@ -1053,6 +1053,9 @@ test("openEditor marks each startup phase before the wait it starts", () => {
     evidence.slice(install),
     /stall !== null && testInfo\.status === "timedOut"\n\s*&& !testInfo\.errors\.some\(\(error\) => error\.message\?\.includes\("pre-navigation stall"\)\)/,
   );
+  // Only a case armed earlier in the worker proves the browser was already up.
+  assert.match(evidence, /firstCaseInWorker: armedCases === 0 \? 1 : 0/);
+  assert.match(evidence, /report === null \|\| report\.firstCaseInWorker\n\s*\? null/);
 });
 
 test("drag failure readbacks are archived after sampling with exact frame identities", async () => {

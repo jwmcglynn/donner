@@ -52,8 +52,11 @@ const kReadbackMaxEdge = 1600;
 const armedPages = new Map<string, Page>();
 /** Startup phase marks of the running cases, epoch milliseconds, keyed by test id. */
 const startupMarks = new Map<string, Record<string, number>>();
-/** Cases this worker process has started; its first case also launches the browser. */
-let startedCases = 0;
+/**
+ * Cases this worker process has armed. Every case that opens the editor arms, and the browser is a
+ * worker fixture, so a case that starts while this is zero may be the one that launches it.
+ */
+let armedCases = 0;
 
 /**
  * Record that the running case entered a startup phase (kStartupPhases in startup-phases.mjs).
@@ -367,6 +370,7 @@ export async function captureFailureCanvasEvidence(
  * @param testInfo The case's test info.
  */
 export function armFailureCanvasEvidence(page: Page, testInfo: TestInfo): void {
+  if (!armedPages.has(testInfo.testId)) armedCases += 1;
   armedPages.set(testInfo.testId, page);
   if (listenedPages.has(page)) return;
   listenedPages.add(page);
@@ -420,7 +424,7 @@ export function installFailureCanvasEvidence(test: typeof baseTest): void {
   test.beforeEach(() => {
     startupMarks.set(test.info().testId, {
       testStart: Date.now(),
-      firstCaseInWorker: startedCases++ === 0 ? 1 : 0,
+      firstCaseInWorker: armedCases === 0 ? 1 : 0,
     });
   });
   test.afterEach(async () => {
@@ -442,12 +446,19 @@ export function installFailureCanvasEvidence(test: typeof baseTest): void {
       }
     }
     // Only an already timed-out case gets this error, and only when no error names the stall yet.
-    const stall = report === null ? null : describePreNavigationStall(report);
+    // A case that may have launched the browser keeps the stall in its log line only: its figure
+    // is an upper bound that can include time the budget did not count.
+    const stall = report === null || report.firstCaseInWorker
+      ? null
+      : describePreNavigationStall(report);
     if (
       stall !== null && testInfo.status === "timedOut"
       && !testInfo.errors.some((error) => error.message?.includes("pre-navigation stall"))
     ) {
-      throw new Error(`${stall}; the test timeout above is this stall's, not the startup step's`);
+      throw new Error(
+        `${stall}; the test timeout above was caused by this stall, not by the step that was`
+          + " running when it arrived",
+      );
     }
   });
 }
