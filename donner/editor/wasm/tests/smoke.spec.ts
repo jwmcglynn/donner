@@ -38,7 +38,12 @@ import {
   readTextStyleGlyphStats,
   type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
-import { armFailureCanvasEvidence, installFailureCanvasEvidence } from "./failure-canvas-evidence";
+import {
+  armFailureCanvasEvidence,
+  installFailureCanvasEvidence,
+  markStartupPhase,
+  startupWait,
+} from "./failure-canvas-evidence";
 import { retakeFlatCapture } from "./flat-capture-retake.mjs";
 import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
@@ -419,7 +424,9 @@ async function readLayerPreviewColorStats(page: Page): Promise<CanvasColorStats>
 }
 
 async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<string[]> {
-  armFailureCanvasEvidence(page, test.info());
+  const testInfo = test.info();
+  markStartupPhase(testInfo, "openEditor");
+  armFailureCanvasEvidence(page, testInfo);
   const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
   const url = new URL(baseUrl);
   if (options.frameDriver) {
@@ -467,7 +474,11 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
     recordFatalMessage(`[pageerror] ${error.stack || error.message}`);
   });
 
+  // Each startup wait is named by its own expectation unless a stall before navigation consumed
+  // the case's budget first; then the message names that stall (startup-phases.mjs).
+  markStartupPhase(testInfo, "gotoStart");
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
+  markStartupPhase(testInfo, "gotoEnd");
   await expect
     .poll(async () => {
       try {
@@ -476,10 +487,11 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
         return false;
       }
     }, {
-      message: "expected browser capabilities to permit Wasm startup",
+      message: startupWait(testInfo, "expected browser capabilities to permit Wasm startup"),
       timeout: 20000,
     })
     .toBe(true);
+  markStartupPhase(testInfo, "wasmStartAllowed");
   const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
   if (!hasWebGpu && kRequireWebGpu) {
     throw new Error("Geode smoke suite requires WebGPU, but navigator.gpu is unavailable");
@@ -487,16 +499,21 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   // Optional local probes may skip unsupported browsers; required CI lanes fail above.
   test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
 
-  await expect(page.locator("canvas#canvas")).toBeVisible();
+  await expect(
+    page.locator("canvas#canvas"),
+    startupWait(testInfo, "expected the editor canvas to be visible"),
+  ).toBeVisible();
   // The single canvas is the whole application, so "the editor is up" is one
   // signal: Geode presented its first frame into it.
+  markStartupPhase(testInfo, "firstFrameWaitStart");
   await expect
     .poll(async () => page.evaluate(() => window.__donnerFirstFramePresented === true), {
-      message: "expected Geode to present the editor's first frame",
+      message: startupWait(testInfo, "expected Geode to present the editor's first frame"),
       timeout: 20000,
       intervals: [16, 25, 50, 100],
     })
     .toBe(true);
+  markStartupPhase(testInfo, "firstFramePresented");
   await expect(page.locator("#status")).toBeHidden({ timeout: 20000 });
   const selectedBackend = await page.evaluate(() => window.__donnerBackend);
   expect(selectedBackend).toBe(kBackend);
