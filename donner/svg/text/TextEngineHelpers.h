@@ -105,26 +105,20 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
                      const components::ComputedTextComponent& text, bool vertical);
 
-/// Break horizontally-laid-out runs into stacked lines for SVG2 `inline-size` auto-flow, rewriting
-/// glyph positions in place. Called after the flat single-line layout and before text-anchor
-/// adjustment; when it wraps it applies text-anchor per line itself.
+/// Apply whitespace-dependent line layout along the inline axis, before text-anchor adjustment.
+/// Multiple lines receive per-line anchors and advance along the writing mode's block axis.
 ///
-/// Wrap rules (horizontal writing modes only):
-///  - Soft-wrap opportunities are whitespace (U+0020/tab/newline) between words; there is no
-///    mid-word breaking, hyphenation, or CJK per-character breaking.
-///  - Greedy line filling: a word is placed on the current line when it fits within \p measurePx,
-///    otherwise it starts a new line. The first word of a line is always placed even when it
-///    overflows the measure.
-///  - Whitespace at a soft-wrap break hangs on the previous line and is not counted toward the
-///    next line's width; intra-line spacing is preserved from the original layout.
-///  - Each line is independently anchored by `text-anchor` (from \p params) about the block origin
-///    (the first glyph's position) and stacked downward by \p lineHeightPx.
+/// Soft wrapping uses spaces and tabs according to each span's white-space policy. Preserved
+/// segment breaks force new lines even without inline-size. There is no mid-word breaking,
+/// hyphenation, or CJK per-character breaking. Collapsible trailing spaces are removed;
+/// pre-wrap spaces may hang, while break-spaces gives each preserved space a break opportunity.
+/// Text-on-path runs are excluded: their controls are shaped as blanks without creating line boxes.
 ///
-/// @param runs Runs produced by the flat horizontal layout; glyph positions are rewritten.
-/// @param text Computed text tree, parallel to \p runs (span i ↔ run i), used for span text.
-/// @param params Layout params; `textAnchor` selects per-line anchoring.
+/// @param runs Runs produced by the single-line layout; glyph positions are rewritten.
+/// @param text Computed text tree, parallel to \p runs (span i corresponds to run i).
+/// @param params Layout params; textAnchor selects per-line anchoring.
 /// @param measurePx The inline-size measure in pixels, or zero to apply only forced breaks/tabs.
-/// @param lineHeightPx Vertical advance between line baselines in pixels.
+/// @param lineHeightPx Advance between line baselines along the block axis, in pixels.
 /// @param backend Font metrics for the minimum tab advance (0.5ch).
 /// @return true if multiple lines were laid out. Tab-only changes return false.
 bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
