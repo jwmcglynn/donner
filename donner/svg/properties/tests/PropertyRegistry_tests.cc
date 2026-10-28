@@ -2011,7 +2011,8 @@ TEST(PropertyRegistry, PolygonClipParsesRuleCoordinatesAndBox) {
   PropertyRegistry registry;
   registry.parseStyle("clip-path:polygon(evenodd, -2px 0, 50% 100%, 0 5px) fill-box");
   const auto clip = registry.clipPath.get();
-  ASSERT_TRUE(clip.has_value());
+  ASSERT_THAT(clip, Optional(testing::Field("value", &ClipPath::value,
+                                            testing::VariantWith<PolygonClipPath>(testing::_))));
   const auto& polygon = std::get<PolygonClipPath>(clip->value);
   EXPECT_EQ(polygon.rule, ClipRule::EvenOdd);
   EXPECT_EQ(polygon.box, RadialClipPath::Box::Fill);
@@ -2023,7 +2024,11 @@ TEST(PropertyRegistry, PolygonClipParsesRuleCoordinatesAndBox) {
   PropertyRegistry presentation;
   EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "polygon(2 3, 4 5)"),
               NoParseError());
-  EXPECT_EQ(std::get<PolygonClipPath>(presentation.clipPath.get()->value).vertices.size(), 2u);
+  ASSERT_THAT(
+      presentation.clipPath.get(),
+      Optional(testing::Field("value", &ClipPath::value,
+                              testing::VariantWith<PolygonClipPath>(testing::Field(
+                                  "vertices", &PolygonClipPath::vertices, testing::SizeIs(2))))));
 }
 
 TEST(PropertyRegistry, InvalidPolygonKeepsEarlierDeclaration) {

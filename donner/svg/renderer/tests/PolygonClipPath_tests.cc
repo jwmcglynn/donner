@@ -96,6 +96,33 @@ TEST(PolygonClipPath, FillRuleControlsDoubleWoundInterior) {
   }
 }
 
+TEST(PolygonClipPath, CssPolygonRuleIgnoresElementRule) {
+  for (const std::string prefix : {"", "nonzero,"}) {
+    SCOPED_TRACE(prefix);
+    const auto actual = RenderPolygonScene(
+        "<g clip-rule='evenodd' clip-path='polygon(" + prefix +
+        "8px 8px,56px 8px,56px 56px,8px 56px,8px 8px,56px 8px,56px 56px,8px 56px) "
+        "view-box'><rect width='64' height='64' fill='red'/></g>");
+    const auto expected =
+        RenderPolygonScene("<rect x='8' y='8' width='48' height='48' fill='red'/>");
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, prefix.empty() ? "polygon_default_rule" : "polygon_nonzero_rule",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(PolygonClipPath, NestedCssPolygonRuleIgnoresElementRule) {
+  const auto actual = RenderPolygonScene(R"svg(
+    <clipPath id="clip"><rect width="64" height="64" clip-rule="evenodd"
+      clip-path="polygon(nonzero,8px 8px,56px 8px,56px 56px,8px 56px,
+                         8px 8px,56px 8px,56px 56px,8px 56px) view-box"/></clipPath>
+    <rect width="64" height="64" fill="red" clip-rule="evenodd"
+      clip-path="url(#clip)"/>)svg");
+  const auto expected = RenderPolygonScene("<rect x='8' y='8' width='48' height='48' fill='red'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "polygon_nested_nonzero_rule",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(PolygonClipPath, DegeneratePolygonsReplaceEarlierClipWithEmptyArea) {
   for (const auto polygon :
        {"polygon(8px 8px)", "polygon(8px 8px, 40px 40px)", "polygon(8px 8px, 24px 24px, 40px 40px)",
