@@ -2708,4 +2708,58 @@ TEST(TextEngineTest, WrappedAndOrdinaryAnchorsSharePenExtentRules) {
   }
 }
 
+TEST(TextEngineTest, WrappedAbsoluteAxesRemainIndependentAfterNewline) {
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    for (int axes : {1, 2, 3, 4}) {
+      SCOPED_TRACE(testing::Message() << mode << " axes=" << axes);
+      Registry registry;
+      FontManager fonts(registry);
+      TextEngine engine = MakeScriptedEngine(registry, fonts);
+      components::ComputedTextComponent text;
+      text.spans.push_back(MakeSpan(""));
+      auto first = MakeSpan("A\n");
+      first.whiteSpace = WhiteSpace::Pre;
+      first.textOrientation = TextOrientation::Upright;
+      auto second = MakeSpan("B\nC");
+      second.whiteSpace = WhiteSpace::Pre;
+      second.textOrientation = TextOrientation::Upright;
+      const bool inlineReset = axes == 1 || axes == 3;
+      const bool blockReset = axes != 1;
+      const double blockValue = axes == 4 ? 0 : 100;
+      if (isVertical(mode)) {
+        if (inlineReset) {
+          second.yList = {Lengthd(100)};
+        }
+        if (blockReset) {
+          second.xList = {Lengthd(blockValue)};
+        }
+      } else {
+        if (inlineReset) {
+          second.xList = {Lengthd(100)};
+        }
+        if (blockReset) {
+          second.yList = {Lengthd(blockValue)};
+        }
+      }
+      text.spans.push_back(first);
+      text.spans.push_back(second);
+      auto params = MakeTextParams(20);
+      params.writingMode = mode;
+      const auto runs = engine.layout(text, params);
+      ASSERT_THAT(runs, SizeIs(3));
+      ASSERT_THAT(runs[2].glyphs, SizeIs(3));
+      const double delta = mode == WritingMode::VerticalRl ? -20 : 20;
+      const double expectedBlock = blockReset ? blockValue : delta;
+      for (size_t i : {size_t(0), size_t(2)}) {
+        const auto& glyph = runs[2].glyphs[i];
+        const double inlinePosition =
+            isVertical(mode) ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
+        const double blockPosition = isVertical(mode) ? glyph.xPosition : glyph.yPosition;
+        EXPECT_THAT(inlinePosition, DoubleNear(inlineReset ? 100 : 0, 1e-5));
+        EXPECT_THAT(blockPosition, DoubleNear(expectedBlock + (i == 2 ? delta : 0), 1e-5));
+      }
+    }
+  }
+}
+
 }  // namespace donner::svg
