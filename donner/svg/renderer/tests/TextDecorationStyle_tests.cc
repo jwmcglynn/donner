@@ -183,6 +183,28 @@ TEST(TextDecorationStyle, SingularTransformsSuppressEveryStyle) {
   }
 }
 
+TEST(TextDecorationStyle, DecorationWorkIsSharedAcrossTheFrame) {
+  // Five offscreen texts each ask for a 1,800,002 point wavy line: 45 glyphs of 10 units at a
+  // 0.0005 unit thickness, scaled 4000x so the one device pixel minimum does not widen it. That
+  // exceeds the per-draw allowance, so each is refused before any geometry is built and spends the
+  // rest of that draw's allowance. Four such refusals use up the frame's 4 Mi work units, so the
+  // visible underline drawn after them gets no allowance, although no geometry was ever drawn.
+  std::string scene = "<g transform='scale(4000)'>";
+  for (int i = 0; i < 5; ++i) {
+    scene +=
+        "<text x='-1000' y='-1000' font-size='20' fill='red' style='text-decoration:"
+        "underline wavy;text-decoration-thickness:0.0005px'>" +
+        std::string(45, 'X') + "</text>";
+  }
+  scene += "</g>";
+  ExpectScene(scene + DecoratedText("underline"), std::string(kRedGlyphs),
+              "decoration_frame_allowance");
+  // Control: without the offscreen texts, the same underline draws.
+  ExpectScene(DecoratedText("underline"),
+              "<rect x='10' y='41' width='20' height='2' fill='red'/>" + std::string(kRedGlyphs),
+              "decoration_frame_allowance_control");
+}
+
 TEST(TextDecorationColor, ReplacesTheDeclaringFill) {
   ExpectScene(DecoratedText("underline blue"),
               "<rect x='10' y='41' width='20' height='2' fill='blue'/>" + std::string(kRedGlyphs),
