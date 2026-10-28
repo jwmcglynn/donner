@@ -2092,6 +2092,179 @@ async function armPipelineCompileFault(page: Page) {
 const kBasicShapesTile = kCarouselSamples.find((sample) => sample.id === "basic-shapes")!;
 const kDonnerSplashTile = kCarouselSamples.find((sample) => sample.id === "donner-splash")!;
 
+/**
+ * With the worker's animation frames withheld, drive the frames that apply the carousel click from
+ * the main-thread tick until the raster worker holds the finished render, let every driven tick
+ * drain, and release the render. The delayed-presentation control first holds the GPU owner's
+ * event tasks for 1500 ms after the render has finished; its record is returned.
+ */
+async function driveHeldCarouselRender(page: Page, sampleName: string, delayedControl: boolean) {
+  let presentationFault:
+    | { delayMs: number; requested: number; flushed: number; releaseRequestedAtMs: number }
+    | undefined;
+  // Input waits for a scheduled frame by design, so drive the frames that apply the click
+  // through the main-thread tick instead of the withheld worker animation frames. The frame
+  // that activates the sample arms the completion barrier and defers its render request to a
+  // following frame, so keep ticking until the raster worker holds that finished render.
+  await expect.poll(async () =>
+    page.evaluate((holding) => {
+      const module = (window as unknown as {
+        Module: {
+          _donner_render_completion_barrier_for_testing: (command: number) => number;
+          _donner_whole_app_vsync_tick: () => void;
+        };
+      }).Module;
+      if (module._donner_render_completion_barrier_for_testing(0) === holding) return true;
+      module._donner_whole_app_vsync_tick();
+      return false;
+    }, completionBarrierStates.indexOf("holding")), {
+    message: `expected ${sampleName} to activate and finish its render from driven frames`,
+    timeout: kStallGuardMs,
+    intervals: [8, 16, 25, 50],
+  }).toBe(true);
+  // A tick called just before the poll saw the hold can still be queued or running. Let every
+  // driven tick finish while the result cannot exist yet; from then on only an event frame can
+  // poll it.
+  await expect.poll(
+    () =>
+      page.evaluate(() =>
+        (window as unknown as { Module: { _donner_whole_app_vsync_pending: () => number } })
+          .Module._donner_whole_app_vsync_pending()
+      ),
+    {
+      message: "every driven tick has finished before the held render is released",
+      timeout: kStallGuardMs,
+    },
+  ).toBe(0);
+  // A draining tick may have superseded the held render; the barrier then holds the render
+  // that replaced it. No driven tick runs now, so only an event frame could supersede the hold
+  // before the release.
+  await expect.poll(() => completionBarrier(page, "read"), {
+    message: "the sample's finished render is held once driven ticks have drained",
+    timeout: kStallGuardMs,
+  }).toBe("holding");
+  if (delayedControl) {
+    const owner = await boundBrowserDiagnostic(Promise.any(page.workers().map(async (worker) => {
+      await worker.evaluate(installOwnerEventTimerHold);
+      return worker;
+    })), 2000);
+    if (!owner) throw new Error("the GPU owner did not acknowledge the event-task hold");
+    try {
+      expect(await completionBarrier(page, "release"), "the finished render was still held")
+        .toBe("holding");
+      await expect.poll(async () => (await owner.evaluate(readOwnerEventTimerHold))?.pending ?? 0,
+        { message: "the completed result must request a held event task" }).toBeGreaterThan(0);
+      await page.waitForTimeout(1500);
+    } finally {
+      // Page clock just before the release: the held event frame cannot present before it. A
+      // failed read must not skip the release below.
+      const releaseRequestedAtMs = await page.evaluate(() => performance.now())
+        .catch(() => Number.NaN);
+      const released = await owner.evaluate(releaseOwnerEventTimerHold);
+      presentationFault = { delayMs: 1500, releaseRequestedAtMs, ...released };
+    }
+    expect(presentationFault.flushed).toBeGreaterThan(0);
+  } else {
+    expect(await completionBarrier(page, "release"), "the finished render was still held")
+      .toBe("holding");
+  }
+  return presentationFault;
+}
+
+/**
+ * Fault injection, off unless `DONNER_CAROUSEL_CANVAS_GPU_DELAY` is `<everyFrames>:<iterations>`:
+ * queues fixed GPU work right after the first canvas write of every Nth frame from the click on,
+ * so the presenting frame retires behind it as on a slow or shared GPU. CPU frame timing, task
+ * boundaries and every ordering the carousel cases assert are unchanged.
+ */
+async function armCarouselCanvasGpuDelay(page: Page, testInfo: TestInfo) {
+  if (canvasGpuDelayFromEnv("DONNER_CAROUSEL_CANVAS_GPU_DELAY") === null) return null;
+  await expectSurfaceFrameProbeReady(page);
+  const owner = await findProbedCanvasApplicationWorker(page);
+  if (owner === null) throw new Error("the application canvas owner is unavailable");
+  return armAttachedCanvasGpuDelay(
+    owner,
+    "DONNER_CAROUSEL_CANVAS_GPU_DELAY",
+    "carousel-canvas-gpu-delay",
+    testInfo,
+  );
+}
+
+/**
+ * With the worker's animation frames withheld, require an event frame to have presented the
+ * completed result, then hand the withheld frames back and check the scheduler resumes.
+ */
+async function expectEventFramePresentedHeldResult(
+  page: Page,
+  completedWorkerStats: Window["__donnerWorkerStats"] | undefined,
+  phaseTimings: Record<string, number | undefined>,
+) {
+  // The frame that presented the result must be an event frame. With the worker's animation
+  // frames withheld, the only other frames are the driven ticks before the release, and every one
+  // of those finished before the result existed; a tick carrying the result would hide a
+  // completion wake that no longer requests a frame.
+  expect(
+    (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame,
+    `the completed result was presented by a ${
+      (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame
+    } frame, not an event frame: ${JSON.stringify(phaseTimings)}`,
+  ).toBe("event");
+  // Confirm the hold really was in force throughout, then hand the withheld frames back and
+  // check the scheduler resumes.
+  const held = await readHeldAnimationFrames(page);
+  expect(held, "the withheld animation frames stayed withheld until presentation").toEqual(
+    expect.objectContaining({ released: false, ranAfterRelease: 0 }),
+  );
+  expect(held!.held).toBeGreaterThan(0);
+  await releaseWorkerAnimationFrames(page);
+  await expect.poll(async () => (await readHeldAnimationFrames(page))?.ranAfterRelease ?? 0, {
+    message: "the scheduler resumes once its withheld animation frames are released",
+  }).toBeGreaterThan(0);
+}
+
+/** Geode Splash finishes its post-load layer previews and keeps applying input after them. */
+async function expectGeodeSplashPostLoad(
+  page: Page,
+  bounds: { x: number; y: number; width: number; height: number },
+) {
+  try {
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => ({
+        thumbnails: window.__donnerLayerThumbnailStats,
+        interaction: window.__donnerInteractionStats,
+        frames: window.__donnerMainLoopRenderedFrames,
+      }));
+      console.log(`geode-post-load ${JSON.stringify(state)}`);
+      return Boolean(
+        state.thumbnails && state.thumbnails.rowCount > 1
+          && state.thumbnails.deferredCount === 0
+          && state.thumbnails.textureSnapshotCount > 0,
+      );
+    }, {
+      message: "Geode splash finishes its post-load layer previews without hanging",
+      timeout: 10000,
+      intervals: [100, 250, 500],
+    }).toBe(true);
+    for (let step = 0; step < 5; ++step) {
+      const x = bounds.x + 400 + step * 10;
+      const y = bounds.y + 200;
+      await page.mouse.move(x, y);
+      await expect.poll(() =>
+        page.evaluate(() => ({
+          x: window.__donnerInteractionStats?.pointerX,
+          y: window.__donnerInteractionStats?.pointerY,
+        })), {
+        message: "Geode splash continues applying input after layer previews",
+        timeout: 3000,
+      }).toEqual({ x, y });
+    }
+  } finally {
+    console.log(
+      `geode-post-load-final ${JSON.stringify(await readCarouselFrameDiagnostics(page))}`,
+    );
+  }
+}
+
 for (
   const sample of [
     ...kCarouselSamples,
@@ -2171,22 +2344,7 @@ for (
       const owner = await findGpuOwnerWorker(page);
       expect(owner && await owner.evaluate(armPipelineFirstUseCompiles)).toBe(true);
     }
-    // Fault injection, off unless `DONNER_CAROUSEL_CANVAS_GPU_DELAY` is `<everyFrames>:<iterations>`:
-    // queues fixed GPU work right after the first canvas write of every Nth frame from the click
-    // on, so the presenting frame retires behind it as on a slow or shared GPU. CPU frame timing,
-    // task boundaries and every ordering below are unchanged.
-    let carouselGpuDelay: Awaited<ReturnType<typeof armAttachedCanvasGpuDelay>> = null;
-    if (canvasGpuDelayFromEnv("DONNER_CAROUSEL_CANVAS_GPU_DELAY") !== null) {
-      await expectSurfaceFrameProbeReady(page);
-      const owner = await findProbedCanvasApplicationWorker(page);
-      if (owner === null) throw new Error("the application canvas owner is unavailable");
-      carouselGpuDelay = await armAttachedCanvasGpuDelay(
-        owner,
-        "DONNER_CAROUSEL_CANVAS_GPU_DELAY",
-        "carousel-canvas-gpu-delay",
-        testInfo,
-      );
-    }
+    const carouselGpuDelay = await armCarouselCanvasGpuDelay(page, testInfo);
     const firstUseCreationsBeforeClick = await readPipelinesCreatedAtFirstUse(page);
     let firstUseCreationsAtPresentation: number | null = null;
     const deviceCreationsBeforeClick = await page.evaluate(
@@ -2199,72 +2357,7 @@ for (
     const clickStartedAt = await page.evaluate(() => performance.now());
     await page.mouse.click(bounds.x + bounds.width * sample.xFraction, bounds.y + sample.y);
     if (holdsScheduledFrames) {
-      // Input waits for a scheduled frame by design, so drive the frames that apply the click
-      // through the main-thread tick instead of the withheld worker animation frames. The frame
-      // that activates the sample arms the completion barrier and defers its render request to a
-      // following frame, so keep ticking until the raster worker holds that finished render.
-      await expect.poll(async () =>
-        page.evaluate((holding) => {
-          const module = (window as unknown as {
-            Module: {
-              _donner_render_completion_barrier_for_testing: (command: number) => number;
-              _donner_whole_app_vsync_tick: () => void;
-            };
-          }).Module;
-          if (module._donner_render_completion_barrier_for_testing(0) === holding) return true;
-          module._donner_whole_app_vsync_tick();
-          return false;
-        }, completionBarrierStates.indexOf("holding")), {
-        message: `expected ${sample.name} to activate and finish its render from driven frames`,
-        timeout: kStallGuardMs,
-        intervals: [8, 16, 25, 50],
-      }).toBe(true);
-      // A tick called just before the poll saw the hold can still be queued or running. Let every
-      // driven tick finish while the result cannot exist yet; from then on only an event frame can
-      // poll it.
-      await expect.poll(
-        () =>
-          page.evaluate(() =>
-            (window as unknown as { Module: { _donner_whole_app_vsync_pending: () => number } })
-              .Module._donner_whole_app_vsync_pending()
-          ),
-        {
-          message: "every driven tick has finished before the held render is released",
-          timeout: kStallGuardMs,
-        },
-      ).toBe(0);
-      // A draining tick may have superseded the held render; the barrier then holds the render
-      // that replaced it. No driven tick runs now, so only an event frame could supersede the hold
-      // before the release.
-      await expect.poll(() => completionBarrier(page, "read"), {
-        message: "the sample's finished render is held once driven ticks have drained",
-        timeout: kStallGuardMs,
-      }).toBe("holding");
-      if (delayedControl) {
-        const owner = await boundBrowserDiagnostic(Promise.any(page.workers().map(async (worker) => {
-          await worker.evaluate(installOwnerEventTimerHold);
-          return worker;
-        })), 2000);
-        if (!owner) throw new Error("the GPU owner did not acknowledge the event-task hold");
-        try {
-          expect(await completionBarrier(page, "release"), "the finished render was still held")
-            .toBe("holding");
-          await expect.poll(async () => (await owner.evaluate(readOwnerEventTimerHold))?.pending ?? 0,
-            { message: "the completed result must request a held event task" }).toBeGreaterThan(0);
-          await page.waitForTimeout(1500);
-        } finally {
-          // Page clock just before the release: the held event frame cannot present before it. A
-          // failed read must not skip the release below.
-          const releaseRequestedAtMs = await page.evaluate(() => performance.now())
-            .catch(() => Number.NaN);
-          const released = await owner.evaluate(releaseOwnerEventTimerHold);
-          presentationFault = { delayMs: 1500, releaseRequestedAtMs, ...released };
-        }
-        expect(presentationFault.flushed).toBeGreaterThan(0);
-      } else {
-        expect(await completionBarrier(page, "release"), "the finished render was still held")
-          .toBe("holding");
-      }
+      presentationFault = await driveHeldCarouselRender(page, sample.name, delayedControl);
     }
     // This case asserts ordering only: which frame presents the result and that it carries the
     // completed document. The completion-to-presentation time is reported here and bounded in the
@@ -2370,66 +2463,9 @@ for (
       );
     }
     if (holdsScheduledFrames) {
-      // The frame that presented the result must be an event frame. With the worker's animation
-      // frames withheld, the only other frames are the driven ticks above, and every one of those
-      // finished before the result existed; a tick carrying the result would hide a completion
-      // wake that no longer requests a frame.
-      expect(
-        (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame,
-        `the completed result was presented by a ${
-          (completedWorkerStats as { presentingFrame?: string } | undefined)?.presentingFrame
-        } frame, not an event frame: ${JSON.stringify(phaseTimings)}`,
-      ).toBe("event");
-      // Confirm the hold really was in force throughout, then hand the withheld frames back and
-      // check the scheduler resumes.
-      const held = await readHeldAnimationFrames(page);
-      expect(held, "the withheld animation frames stayed withheld until presentation").toEqual(
-        expect.objectContaining({ released: false, ranAfterRelease: 0 }),
-      );
-      expect(held!.held).toBeGreaterThan(0);
-      await releaseWorkerAnimationFrames(page);
-      await expect.poll(async () => (await readHeldAnimationFrames(page))?.ranAfterRelease ?? 0, {
-        message: "the scheduler resumes once its withheld animation frames are released",
-      }).toBeGreaterThan(0);
+      await expectEventFramePresentedHeldResult(page, completedWorkerStats, phaseTimings);
     }
-    if (sample.id === "geode-splash") {
-      try {
-        await expect.poll(async () => {
-          const state = await page.evaluate(() => ({
-            thumbnails: window.__donnerLayerThumbnailStats,
-            interaction: window.__donnerInteractionStats,
-            frames: window.__donnerMainLoopRenderedFrames,
-          }));
-          console.log(`geode-post-load ${JSON.stringify(state)}`);
-          return Boolean(
-            state.thumbnails && state.thumbnails.rowCount > 1
-              && state.thumbnails.deferredCount === 0
-              && state.thumbnails.textureSnapshotCount > 0,
-          );
-        }, {
-          message: "Geode splash finishes its post-load layer previews without hanging",
-          timeout: 10000,
-          intervals: [100, 250, 500],
-        }).toBe(true);
-        for (let step = 0; step < 5; ++step) {
-          const x = bounds.x + 400 + step * 10;
-          const y = bounds.y + 200;
-          await page.mouse.move(x, y);
-          await expect.poll(() =>
-            page.evaluate(() => ({
-              x: window.__donnerInteractionStats?.pointerX,
-              y: window.__donnerInteractionStats?.pointerY,
-            })), {
-            message: "Geode splash continues applying input after layer previews",
-            timeout: 3000,
-          }).toEqual({ x, y });
-        }
-      } finally {
-        console.log(
-          `geode-post-load-final ${JSON.stringify(await readCarouselFrameDiagnostics(page))}`,
-        );
-      }
-    }
+    if (sample.id === "geode-splash") await expectGeodeSplashPostLoad(page, bounds);
     expect(phaseTimings.presentedMs).toBeDefined();
     expect(phaseTimings.completedMs).toBeDefined();
     if (browserName === "chromium" || holdsScheduledFrames) {

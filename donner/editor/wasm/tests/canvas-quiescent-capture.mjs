@@ -98,140 +98,165 @@ async function raceUntil(work, untilMs, now) {
  *   and a record of every pass.
  */
 export async function captureQuiescentCanvas(probe, capture, options) {
-  const now = options.now ?? (() => performance.now());
-  const timedOut = options.timedOut ?? (() => false);
-  const isTimeoutError = options.isTimeoutError ?? (() => false);
+  const gate = {
+    probe,
+    capture,
+    now: options.now ?? (() => performance.now()),
+    timedOut: options.timedOut ?? (() => false),
+    isTimeoutError: options.isTimeoutError ?? (() => false),
+    untilMs: options.untilMs,
+    passes: options.passes ?? [],
+  };
   const retakeUnheld = options.retakeUnheld ?? true;
-  const { untilMs } = options;
-  const passes = options.passes ?? [];
-  const stalled = () => {
-    const exhausted = passes.filter((pass) => pass.holdExhausted).length;
-    return new Error(
-      `no quiescent canvas screenshot within the capture's time bound`
-        + (exhausted > 0
-          ? ` (the canvas kept presenting new frames under ${exhausted} completion holds)`
-          : "")
-        + `: ${JSON.stringify(passes.slice(-8))}`,
-    );
-  };
-
-  // One pass: settle, screenshot, compare activity. Its outcome is "accepted", "activity" (a
-  // canvas frame arrived meanwhile), or the stage that ran out of time: "settle" or "screenshot".
-  const pass = async (record, settleUntilMs, captureUntilMs, minCaptureMs, activityUntilMs) => {
-    record.startedEpochMs = Date.now();
-    passes.push(record);
-    let settled;
-    try {
-      settled = await raceUntil(probe.settle(), settleUntilMs, now);
-    } catch (error) {
-      // Without a hold, canvas writes can keep arriving for longer than the settle waits. The next
-      // attempt holds again, and a failure that is not about new frames recurs there.
-      if (record.held) throw error;
-      record.settleError = String(error);
-      return { outcome: "activity" };
-    }
-    if (settled === null) return { outcome: "settle" };
-    record.settled = settled;
-    record.settledEpochMs = Date.now();
-    const timeoutMs = captureUntilMs - now();
-    if (timeoutMs < minCaptureMs) return { outcome: "settle" };
-    record.captureTimeoutMs = Math.round(timeoutMs);
-    let result;
-    try {
-      result = await capture(timeoutMs);
-    } catch (error) {
-      if (!isTimeoutError(error)) throw error;
-      return { outcome: "screenshot" };
-    }
-    record.screenshotFinishedEpochMs = Date.now();
-    if (timedOut(result)) return { outcome: "screenshot" };
-    // Bounded like the rest of the pass: an owner that stops answering ends this hold, and a read
-    // that answers only after the bound is never used to accept the screenshot.
-    const after = await raceUntil(probe.activity(), activityUntilMs, now);
-    if (after === null) {
-      record.activityUnanswered = true;
-      return { outcome: "settle" };
-    }
-    record.after = after;
-    if (after.canvasSubmits !== settled.canvasSubmits || after.frames !== settled.frames) {
-      return { outcome: "activity" };
-    }
-    return { outcome: "accepted", result };
-  };
-
-  const release = async (hold) => {
-    const released = await raceUntil(
-      hold.release().then(() => true),
-      now() + kHoldReleaseBoundMs,
-      now,
-    );
-    if (released === null) {
-      throw new Error("the canvas owner did not release the capture's completion hold");
-    }
-  };
-
   let unheld = false;
   for (;;) {
     // A held pass needs room for its shortest screenshot before the time bound.
-    if (now() >= untilMs - (unheld ? 0 : kMinHeldScreenshotMs)) throw stalled();
-    if (unheld) {
-      // The previous held screenshot outlasted the hold. Retake it without one; a canvas frame
-      // during it still rejects it, and the next attempt holds again.
-      unheld = false;
-      const unheldPass = await pass({ held: false }, untilMs, untilMs, 1, untilMs);
-      if (unheldPass.outcome === "accepted") return { result: unheldPass.result, passes };
-      continue;
+    if (gate.now() >= gate.untilMs - (unheld ? 0 : kMinHeldScreenshotMs)) {
+      throw stalledError(gate.passes);
     }
-    const heldAtMs = now();
-    const passesBeforeHold = passes.length;
-    const hold = await probe.hold();
-    let outcome = "activity";
-    let accepted;
-    try {
-      for (let index = 1; index <= kMaxCanvasQuiescencePasses; ++index) {
-        const heldPass = await pass(
-          { held: true, pass: index },
-          Math.min(untilMs, heldAtMs + kMaxCanvasSettleHoldMs),
-          Math.min(untilMs, heldAtMs + kMaxCanvasCompletionHoldMs - kHeldRoundTripReserveMs),
-          kMinHeldScreenshotMs,
-          Math.min(untilMs, heldAtMs + kMaxCanvasCompletionHoldMs),
-        );
-        outcome = heldPass.outcome;
-        if (outcome === "accepted") {
-          accepted = heldPass.result;
-          break;
-        }
-        if (outcome !== "activity") break;
-      }
-    } catch (error) {
-      // Release on every path. A release failure is recorded, but never replaces the pass's own
-      // failure.
-      await release(hold).catch((releaseError) => {
-        passes.push({ holdReleaseError: String(releaseError) });
-      });
-      throw error;
-    }
-    await release(hold);
-    if (outcome === "accepted") return { result: accepted, passes };
-    if (outcome === "activity") {
-      // More frames arrived under this hold than it can admit, for example frames whose
-      // completions were requested before it was armed. Hold again; the time bound still ends a
-      // canvas that never stops presenting, and no screenshot is accepted meanwhile.
-      // Record what this hold admitted, so a recurrence shows whether the three-frame model holds.
-      const held = passes.slice(passesBeforeHold).filter((pass) => pass.settled && pass.after);
-      const first = held[0];
-      const last = held.at(-1);
-      passes.push({
-        holdExhausted: true,
-        heldMs: Math.round(now() - heldAtMs),
-        framesAdmitted: last && first ? last.after.frames - first.settled.frames : null,
-        canvasSubmitsAdmitted: last && first
-          ? last.after.canvasSubmits - first.settled.canvasSubmits
-          : null,
-      });
-    }
-    // The GPU or the screenshot is slow enough that holding on would approach the app's own
-    // completion deadline. The hold is released; hold again, or retake the screenshot unheld.
-    unheld = retakeUnheld && outcome === "screenshot";
+    const attempt = unheld ? await captureUnheld(gate) : await captureUnderHold(gate);
+    if (attempt.outcome === "accepted") return { result: attempt.result, passes: gate.passes };
+    // A held screenshot that outlasted its hold is retaken without one; every other outcome, and
+    // every unheld retake, holds again.
+    unheld = !unheld && retakeUnheld && attempt.outcome === "screenshot";
   }
+}
+
+/** The failure once the time bound leaves no room for another pass. */
+function stalledError(passes) {
+  const exhausted = passes.filter((pass) => pass.holdExhausted).length;
+  return new Error(
+    `no quiescent canvas screenshot within the capture's time bound`
+      + (exhausted > 0
+        ? ` (the canvas kept presenting new frames under ${exhausted} completion holds)`
+        : "")
+      + `: ${JSON.stringify(passes.slice(-8))}`,
+  );
+}
+
+/**
+ * One pass: settle, screenshot, compare activity. Its outcome is "accepted", "activity" (a canvas
+ * frame arrived meanwhile), or the stage that ran out of time: "settle" or "screenshot".
+ */
+async function runPass(gate, record, bounds) {
+  const { probe, now } = gate;
+  record.startedEpochMs = Date.now();
+  gate.passes.push(record);
+  let settled;
+  try {
+    settled = await raceUntil(probe.settle(), bounds.settleUntilMs, now);
+  } catch (error) {
+    // Without a hold, canvas writes can keep arriving for longer than the settle waits. The next
+    // attempt holds again, and a failure that is not about new frames recurs there.
+    if (record.held) throw error;
+    record.settleError = String(error);
+    return { outcome: "activity" };
+  }
+  if (settled === null) return { outcome: "settle" };
+  record.settled = settled;
+  record.settledEpochMs = Date.now();
+  const timeoutMs = bounds.captureUntilMs - now();
+  if (timeoutMs < bounds.minCaptureMs) return { outcome: "settle" };
+  record.captureTimeoutMs = Math.round(timeoutMs);
+  let result;
+  try {
+    result = await gate.capture(timeoutMs);
+  } catch (error) {
+    if (!gate.isTimeoutError(error)) throw error;
+    return { outcome: "screenshot" };
+  }
+  record.screenshotFinishedEpochMs = Date.now();
+  if (gate.timedOut(result)) return { outcome: "screenshot" };
+  // Bounded like the rest of the pass: an owner that stops answering ends this hold, and a read
+  // that answers only after the bound is never used to accept the screenshot.
+  const after = await raceUntil(probe.activity(), bounds.activityUntilMs, now);
+  if (after === null) {
+    record.activityUnanswered = true;
+    return { outcome: "settle" };
+  }
+  record.after = after;
+  if (after.canvasSubmits !== settled.canvasSubmits || after.frames !== settled.frames) {
+    return { outcome: "activity" };
+  }
+  return { outcome: "accepted", result };
+}
+
+/** Retake the screenshot without a hold, after a held one outlasted its hold. */
+function captureUnheld(gate) {
+  const { untilMs } = gate;
+  return runPass(gate, { held: false }, {
+    settleUntilMs: untilMs,
+    captureUntilMs: untilMs,
+    minCaptureMs: 1,
+    activityUntilMs: untilMs,
+  });
+}
+
+/** Release \p hold within kHoldReleaseBoundMs, or fail. */
+async function releaseHold(gate, hold) {
+  const released = await raceUntil(
+    hold.release().then(() => true),
+    gate.now() + kHoldReleaseBoundMs,
+    gate.now,
+  );
+  if (released === null) {
+    throw new Error("the canvas owner did not release the capture's completion hold");
+  }
+}
+
+/**
+ * Up to kMaxCanvasQuiescencePasses passes under one hold of the app's canvas completions, released
+ * on every path. A release failure is recorded, but never replaces a pass's own failure.
+ */
+async function captureUnderHold(gate) {
+  const { now, untilMs, passes } = gate;
+  const heldAtMs = now();
+  const passesBeforeHold = passes.length;
+  const hold = await gate.probe.hold();
+  const bounds = {
+    settleUntilMs: Math.min(untilMs, heldAtMs + kMaxCanvasSettleHoldMs),
+    captureUntilMs: Math.min(
+      untilMs,
+      heldAtMs + kMaxCanvasCompletionHoldMs - kHeldRoundTripReserveMs,
+    ),
+    minCaptureMs: kMinHeldScreenshotMs,
+    activityUntilMs: Math.min(untilMs, heldAtMs + kMaxCanvasCompletionHoldMs),
+  };
+  let attempt = { outcome: "activity" };
+  try {
+    for (let index = 1; index <= kMaxCanvasQuiescencePasses; ++index) {
+      attempt = await runPass(gate, { held: true, pass: index }, bounds);
+      if (attempt.outcome !== "activity") break;
+    }
+  } catch (error) {
+    await releaseHold(gate, hold).catch((releaseError) => {
+      passes.push({ holdReleaseError: String(releaseError) });
+    });
+    throw error;
+  }
+  await releaseHold(gate, hold);
+  if (attempt.outcome === "activity") {
+    // More frames arrived under this hold than it can admit. Hold again; the time bound still
+    // ends a canvas that never stops presenting, and no screenshot is accepted meanwhile.
+    recordExhaustedHold(gate, passesBeforeHold, heldAtMs);
+  }
+  return attempt;
+}
+
+/**
+ * Record what an exhausted hold admitted, so a recurrence shows whether the three-frame admission
+ * model holds.
+ */
+function recordExhaustedHold(gate, passesBeforeHold, heldAtMs) {
+  const held = gate.passes.slice(passesBeforeHold).filter((pass) => pass.settled && pass.after);
+  const first = held[0];
+  const last = held.at(-1);
+  gate.passes.push({
+    holdExhausted: true,
+    heldMs: Math.round(gate.now() - heldAtMs),
+    framesAdmitted: last && first ? last.after.frames - first.settled.frames : null,
+    canvasSubmitsAdmitted: last && first
+      ? last.after.canvasSubmits - first.settled.canvasSubmits
+      : null,
+  });
 }
