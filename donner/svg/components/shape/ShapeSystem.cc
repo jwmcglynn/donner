@@ -630,11 +630,14 @@ void ConstrainInsetRadii(InsetCornerRadii& radii, const Vector2d& size) {
 
 double InsetRadiusPixels(const Lengthd& radius, const Box2d& reference, const FontMetrics& metrics,
                          Lengthd::Extent axis) {
+  if (!std::isfinite(radius.value) || radius.value < 0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
   if (radius.unit != Lengthd::Unit::Percent) {
     return radius.toPixels(reference, metrics, axis);
   }
   const double extent = axis == Lengthd::Extent::X ? reference.width() : reference.height();
-  if (!std::isfinite(radius.value) || !std::isfinite(extent)) {
+  if (!std::isfinite(extent)) {
     return std::numeric_limits<double>::quiet_NaN();
   }
   int radiusExponent, extentExponent;
