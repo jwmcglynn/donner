@@ -3792,6 +3792,38 @@ TEST(TextEngineScriptedTest, FullWidthRestoresReversedVisualSourceClusters) {
                                           Field("cluster", &TextGlyph::cluster, Eq(0u))));
 }
 
+TEST(TextEngineScriptedTest, FullWidthPreservedLinesKeepVisualOrderAndOriginalIndices) {
+  class LineBoundaryBackend : public ScriptedTextBackend {
+  public:
+    mutable size_t boundaryKernCalls = 0;
+    double crossSpanKern(FontHandle, float, FontHandle, float, uint32_t, uint32_t,
+                         bool vertical) const override {
+      ++boundaryKernCalls;
+      return vertical ? 4.0 : 3.0;
+    }
+  };
+  Registry registry;
+  FontManager fonts(registry);
+  auto backend = std::make_unique<LineBoundaryBackend>();
+  backend->reverseClusters = true;
+  const auto& probe = *backend;
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB\nCD");
+  span.textTransform = TextTransform::FullWidth;
+  span.whiteSpace = WhiteSpace::Pre;
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(5));
+  EXPECT_THAT(runs[0].glyphs,
+              ElementsAre(Field(&TextGlyph::cluster, Eq(1u)), Field(&TextGlyph::cluster, Eq(0u)),
+                          Field(&TextGlyph::cluster, Eq(2u)), Field(&TextGlyph::cluster, Eq(4u)),
+                          Field(&TextGlyph::cluster, Eq(3u))));
+  EXPECT_THAT(runs[0].glyphs[3].yPosition - runs[0].glyphs[0].yPosition, DoubleNear(20.0, 1e-5));
+  EXPECT_THAT(probe.boundaryKernCalls, Eq(0u));
+}
+
 TEST(TextEngineScriptedTest, FullWidthUsesCssWithLegacySpaceAndIgnoresNonPresentationAttribute) {
   const auto preserved = LayoutParsedTextPath(
       "<tspan xml:space='preserve' style='text-transform:full-width'>A B</tspan>");
