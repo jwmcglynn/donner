@@ -39,6 +39,16 @@ def deployment_environment() -> str:
     return "github-pages"
 
 
+def _owner_review_required(environment: dict) -> bool:
+    rules = [rule for rule in environment.get("protection_rules", [])
+             if rule.get("type") == "required_reviewers"]
+    if len(rules) != 1 or rules[0].get("prevent_self_review") is not False:
+        return False
+    reviewers = [(entry.get("type"), entry.get("reviewer", {}).get("login"),
+                  entry.get("reviewer", {}).get("id")) for entry in rules[0].get("reviewers", [])]
+    return reviewers == [("User", "jwmcglynn", 103489)]
+
+
 class GitHub:
     def call(self, endpoint: str, method: str = "GET", data: dict | None = None,
              raw: bool = False, maximum: int = MAX_CONTROL) -> object:
@@ -79,10 +89,10 @@ class GitHub:
         name = deployment_environment()
         environment = self.call(REPO + "/environments/" + name)
         reviewers = [rule for rule in environment.get("protection_rules", [])
-                     if rule.get("type") == "required_reviewers" and rule.get("reviewers")]
+                     if rule.get("type") == "required_reviewers"]
         if name == "github-pages":
-            site.require(isinstance(environment.get("can_admins_bypass"), bool) and bool(reviewers),
-                         "github-pages needs required reviewers and an explicit administrator bypass setting")
+            site.require(isinstance(environment.get("can_admins_bypass"), bool) and _owner_review_required(environment),
+                         "github-pages required reviewers must name only its owner, with an explicit administrator bypass setting")
         else:
             site.require(isinstance(environment.get("can_admins_bypass"), bool) and not reviewers,
                          "github-pages-main needs automatic approval and an explicit administrator bypass setting")

@@ -40,7 +40,7 @@ GitHub also bounds workflow-run chains. This does not grant a recursive publicat
 
 ## One-time setup
 
-Configure the existing `github-pages` environment with required maintainer approval and exactly
+Configure the existing `github-pages` environment with its sole repository-owner reviewer and exactly
 one deployment branch policy for `main` (not tags). Administrator bypass may be enabled or
 disabled; the writer requires an explicit setting and uses the normal deployment path. Configure
 `github-pages-main` separately with no required reviewers or wait timer and exactly one selected
