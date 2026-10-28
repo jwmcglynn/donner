@@ -639,6 +639,24 @@ py_library(
     ],
 )
 
+py_test(
+    name = "native_delivery_tests",
+    size = "small",
+    srcs = ["native_delivery_tests.py"],
+    deps = [":native_delivery_lib"],
+)
+
+py_library(
+    name = "native_delivery_lib",
+    srcs = ["native_delivery.py"],
+)
+
+py_binary(
+    name = "native_delivery",
+    srcs = ["native_delivery.py"],
+    visibility = ["//visibility:public"],
+)
+
 py_library(
     name = "release_cli",
     srcs = ["release_cli.py"],
