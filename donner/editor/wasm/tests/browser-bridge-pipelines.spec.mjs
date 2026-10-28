@@ -28,7 +28,7 @@ function createTimelineDevice({ asyncCompiles = true, refuseAsync = false } = {}
     const name = descriptor.fragment
       ? descriptor.fragment.entryPoint
       : descriptor.compute.entryPoint;
-    const formats = descriptor.fragment?.targets.map((target) => target.format) ?? [];
+    const formats = Array.from(descriptor.fragment?.targets ?? [], (target) => target.format);
     const key = JSON.stringify([name, formats]);
     let compile = compiles.get(key);
     if (compile === undefined) {
