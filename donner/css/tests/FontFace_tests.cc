@@ -12,9 +12,13 @@
 
 #include "donner/css/FontFace.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -85,6 +89,80 @@ TEST(FontFaceIdentityKeyTest, EachMatchingDescriptorSeparatesDeclarations) {
   FontFace condensed = base;
   condensed.fontStretch = 3;
   EXPECT_NE(FontFaceIdentityKey(condensed), baseKey);
+}
+
+TEST(FontFaceIdentityKeyTest, WeightRangeNormalizationMatchesSelection) {
+  const auto payload = MakeBytes(64);
+  FontFace scalar = MakeDataFace("TestFont", payload);
+  FontFace range = scalar;
+  range.fontWeightMaximum = 400;
+  EXPECT_THAT(FontFaceIdentityKey(range), testing::Eq(FontFaceIdentityKey(scalar)));
+  range.fontWeightMaximum = 700;
+  EXPECT_THAT(FontFaceIdentityKey(range), testing::Ne(FontFaceIdentityKey(scalar)));
+  FontFace reversed = range;
+  reversed.fontWeight = 700;
+  reversed.fontWeightMaximum = 400;
+  EXPECT_THAT(reversed.normalizedFontWeightRange(), testing::Pair(400, 700));
+  EXPECT_THAT(FontFaceIdentityKey(reversed), testing::Eq(FontFaceIdentityKey(range)));
+}
+
+TEST(FontFaceIdentityKeyTest, ProgrammaticWeightBoundsClampWithoutOverflow) {
+  FontFace face;
+  face.fontWeight = std::numeric_limits<int>::max();
+  EXPECT_THAT(face.normalizedFontWeightRange(), testing::Pair(1000, 1000));
+  face.fontWeightMaximum = std::numeric_limits<int>::min();
+  EXPECT_THAT(face.normalizedFontWeightRange(), testing::Pair(1, 1000));
+}
+
+TEST(FontFaceIdentityKeyTest, WidthRangeNormalizationAndIdentity) {
+  FontFace keyword = MakeUrlFace("Test", "font.woff");
+  FontFace numeric = keyword;
+  numeric.fontStretchPercentRange = std::pair{100.0, 100.0};
+  EXPECT_THAT(FontFaceIdentityKey(numeric), testing::Eq(FontFaceIdentityKey(keyword)));
+  numeric.fontStretchPercentRange = std::pair{125.0, 75.0};
+  EXPECT_THAT(numeric.normalizedFontStretchRange(), testing::Pair(75.0, 125.0));
+  FontFace ordered = numeric;
+  ordered.fontStretchPercentRange = std::pair{75.0, 125.0};
+  EXPECT_THAT(FontFaceIdentityKey(numeric), testing::Eq(FontFaceIdentityKey(ordered)));
+  ordered.fontStretchPercentRange = std::pair{75.0, 126.0};
+  EXPECT_THAT(FontFaceIdentityKey(numeric), testing::Ne(FontFaceIdentityKey(ordered)));
+}
+
+TEST(FontFaceIdentityKeyTest, WidthPercentageIdentityPreservesPrecisionAndCanonicalZero) {
+  FontFace first = MakeUrlFace("Test", "font.woff");
+  first.fontStretchPercentRange = std::pair{0.0, 100.0};
+  FontFace second = first;
+  second.fontStretchPercentRange = std::pair{-0.0, 100.0};
+  EXPECT_THAT(FontFaceIdentityKey(first), testing::Eq(FontFaceIdentityKey(second)));
+  EXPECT_THAT(std::signbit(second.normalizedFontStretchRange().first), testing::IsFalse());
+  second.fontStretchPercentRange = std::pair{0.0, std::nextafter(100.0, 101.0)};
+  EXPECT_THAT(FontFaceIdentityKey(first), testing::Ne(FontFaceIdentityKey(second)));
+}
+
+TEST(FontFaceIdentityKeyTest, InvalidPublicWidthRangesFallBackToNamedWidth) {
+  FontFace face = MakeUrlFace("Test", "font.woff");
+  face.fontStretch = 3;
+  const std::string expectedKey = FontFaceIdentityKey(face);
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  for (const auto& range : std::array<std::pair<double, double>, 5>{
+           {{-1, 100}, {100, -1}, {infinity, 100}, {100, infinity}, {nan, 100}}}) {
+    face.fontStretchPercentRange = range;
+    EXPECT_THAT(face.normalizedFontStretchRange(), testing::Pair(75.0, 75.0));
+    EXPECT_THAT(FontFaceIdentityKey(face), testing::Eq(expectedKey));
+  }
+  face.fontStretchPercentRange = std::pair{0.0, std::numeric_limits<double>::max()};
+  EXPECT_THAT(face.normalizedFontStretchRange(),
+              testing::Pair(0.0, std::numeric_limits<double>::max()));
+}
+
+TEST(FontFaceIdentityKeyTest, NamedWidthPercentagesUseCssMappingAndClamp) {
+  constexpr std::array<double, 9> kPercentages = {50, 62.5, 75, 87.5, 100, 112.5, 125, 150, 200};
+  for (int width = 1; width <= 9; ++width) {
+    EXPECT_THAT(FontFace::FontStretchPercentage(width), testing::Eq(kPercentages[width - 1]));
+  }
+  EXPECT_THAT(FontFace::FontStretchPercentage(std::numeric_limits<int>::min()), testing::Eq(50.0));
+  EXPECT_THAT(FontFace::FontStretchPercentage(std::numeric_limits<int>::max()), testing::Eq(200.0));
 }
 
 TEST(FontFaceIdentityKeyTest, EachSourceFieldSeparatesDeclarations) {
