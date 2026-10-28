@@ -487,10 +487,7 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},
-                {"with-subregion-1.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
+                {"with-subregion-1.svg", ResvgV049Reference()},
                 {"with-subregion-2.svg",
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
