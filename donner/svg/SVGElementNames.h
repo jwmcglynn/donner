@@ -27,7 +27,7 @@ inline constexpr auto kSVGElementNames = detail::extractTagNames(AllSVGElements{
 
 /// Compile-time array of SVG presentation attributes and geometry attributes.
 /// Each entry is an attribute name string (e.g. "fill", "stroke", "transform").
-inline constexpr std::array<std::string_view, 72> kSVGPresentationAttributeNames{{
+inline constexpr std::array<std::string_view, 71> kSVGPresentationAttributeNames{{
     "cx",
     "cy",
     "height",
@@ -96,7 +96,6 @@ inline constexpr std::array<std::string_view, 72> kSVGPresentationAttributeNames
     "unicode-bidi",
     "vector-effect",
     "visibility",
-    "text-transform",
     "white-space",
     "word-spacing",
     "writing-mode",

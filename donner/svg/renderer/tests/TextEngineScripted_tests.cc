@@ -3701,11 +3701,13 @@ TEST(TextEngineScriptedTest, FullWidthRestoresReversedVisualSourceClusters) {
                                           Field("cluster", &TextGlyph::cluster, Eq(0u))));
 }
 
-TEST(TextEngineScriptedTest, FullWidthHonorsLegacySpaceAndCssPrecedence) {
-  const auto preserved =
-      LayoutParsedTextPath("<tspan xml:space='preserve' text-transform='full-width'>A B</tspan>");
+TEST(TextEngineScriptedTest, FullWidthUsesCssWithLegacySpaceAndIgnoresNonPresentationAttribute) {
+  const auto preserved = LayoutParsedTextPath(
+      "<tspan xml:space='preserve' style='text-transform:full-width'>A B</tspan>");
   ASSERT_THAT(preserved, SizeIs(3));
   EXPECT_THAT(preserved[1], GlyphIndexIs(Eq(static_cast<int>(0x3000 % 997u) + 1)));
+  const auto attributeOnly = LayoutParsedTextPath("<tspan text-transform='full-width'>A</tspan>");
+  EXPECT_THAT(attributeOnly, ElementsAre(GlyphIndexIs(Eq(static_cast<int>('A') + 1))));
   const auto overridden = LayoutParsedTextPath(
       "<tspan text-transform='full-width' style='text-transform:none'>A</tspan>");
   EXPECT_THAT(overridden, ElementsAre(GlyphIndexIs(Eq(static_cast<int>('A') + 1))));

@@ -1,8 +1,9 @@
 # Text transformation
 
 Donner supports `text-transform: none` and `text-transform: full-width` on SVG text in both text
-backends. The property inherits and participates in the CSS cascade, including presentation
-attributes and CSS-wide keywords. A nested `text-transform: none` restores that element's original
+backends. The property inherits and participates in the CSS cascade through inline styles and
+stylesheets, including CSS-wide keywords. SVG2 does not define a `text-transform` presentation
+attribute, so a same-named attribute does not affect text styling. A nested `text-transform: none` restores that element's original
 characters.
 
 `full-width` follows the [CSS Text 3 mapping rules](https://www.w3.org/TR/css-text-3/#text-transform):

@@ -2978,10 +2978,11 @@ TEST(PropertyRegistry, WhiteSpaceKeywordsAndInvalidDeclarations) {
 TEST(PropertyRegistry, TextTransformSupportedSubsetRejectsUnsupportedOperations) {
   PropertyRegistry properties;
   EXPECT_THAT(properties.textTransform.get(), Optional(TextTransform::None));
-  EXPECT_THAT(properties.parsePresentationAttribute("text-transform", "FULL-WIDTH"),
-              ParseResultIs(true));
+  EXPECT_THAT(properties.parsePresentationAttribute("text-transform", "full-width"),
+              ParseResultIs(false));
+  EXPECT_THAT(PropertyRegistry::isPresentationAttributeName("text-transform"), Eq(false));
+  properties.parseStyle("text-transform: FULL-WIDTH");
   EXPECT_THAT(properties.textTransform.get(), Optional(TextTransform::FullWidth));
-  EXPECT_THAT(PropertyRegistry::isPresentationAttributeInherited("text-transform"), Eq(true));
   for (const char* invalid : {"uppercase", "lowercase", "capitalize", "full-size-kana",
                               "full-width uppercase", "none full-width", "1", ""}) {
     SCOPED_TRACE(invalid);
