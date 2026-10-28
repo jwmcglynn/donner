@@ -117,6 +117,7 @@ exports_files([
     "LICENSE",
     "fonts/Noto-LICENSE-OFL.txt",
     "resources/ub.png",
+    "results.csv",
 ])
 
 filegroup(
