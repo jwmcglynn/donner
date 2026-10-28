@@ -806,6 +806,17 @@ class AssemblyAndReleaseTest(unittest.TestCase):
                 "issue_url": f"https://api.github.com/repos/{candidate.REPOSITORY}/issues/1422",
                 "body": f"# {kind} review\r\n\r\nReviewed {self.commit}: no open findings.\r\n"}
 
+    def test_documentation_workflow_split_preserves_exact_run_binding(self):
+        for path in candidate.pages_artifact.SOURCE_WORKFLOWS:
+            run = self.fixture_run(103, 1, candidate.ARTIFACT_WORKFLOWS["docs"])
+            run["path"] = path
+            candidate._verify_run(run, 103, 1, self.commit, candidate.ARTIFACT_WORKFLOWS["docs"])
+            for change in ({"event": "workflow_run"}, {"head_branch": "feature"},
+                           {"path": ".github/workflows/unreviewed_docs.yaml"}):
+                with self.subTest(path=path, change=change), self.assertRaises(ValueError):
+                    candidate._verify_run(run | change, 103, 1, self.commit,
+                                          candidate.ARTIFACT_WORKFLOWS["docs"])
+
     def fixture_run(self, run_id, attempt, workflow):
         # Docs builds run only on main pushes; the other qualifying runs were dispatched.
         event = "push" if workflow == candidate.ARTIFACT_WORKFLOWS["docs"] else "workflow_dispatch"

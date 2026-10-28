@@ -35,6 +35,8 @@ WRITE_SCOPES = {
     (".github/workflows/deploy_docs.yaml", "deploy"): {"contents", "id-token", "pages"},
     (".github/workflows/deploy_docs.yaml", "assemble"): {"attestations", "id-token"},
     (".github/workflows/deploy_docs.yaml", "seed"): {"contents"},
+    (".github/workflows/deploy_docs.yaml", "auto-assemble"): {"attestations", "id-token"},
+    (".github/workflows/deploy_docs.yaml", "auto-deploy"): {"contents", "pages", "id-token"},
     (".github/workflows/release.yml", "publish-release-artifacts"): {"contents"},
     (".github/workflows/release_candidate.yml", "attest-record"): {"attestations", "id-token"},
     (".github/workflows/rerun_runner_loss.yml", "rerun"): {"actions"},
@@ -403,6 +405,7 @@ REVIEWED_ENVIRONMENTS = {
     (".github/workflows/sign_macos_release.yml", "sign"): "donner-notarization",
     (".github/workflows/deploy_docs.yaml", "deploy"): "github-pages",
     (".github/workflows/deploy_docs.yaml", "seed"): "github-pages",
+    (".github/workflows/deploy_docs.yaml", "auto-deploy"): "github-pages-main",
     (".github/workflows/publish_bcr.yml", "publish-fork"): "bcr-fork-preparation",
 }
 
@@ -717,6 +720,8 @@ def _privileged_trigger_violations(path, workflow):
     events = _triggers(workflow) & PRIVILEGED_TRIGGERS
     if path == RUNNER_LOSS_WORKFLOW and events == {"workflow_run"}:
         return _runner_loss_violations(workflow)
+    if path == DOCS_WORKFLOW and events == {"workflow_run"}:
+        return _docs_automatic_violations(workflow)
     return sorted(events)
 
 
@@ -1923,6 +1928,7 @@ def _bcr_submission_violations(workflow):
 
 
 DOCS_WORKFLOW = ".github/workflows/deploy_docs.yaml"
+DOCS_BUILD_WORKFLOW = ".github/workflows/build_docs.yaml"
 DOCS_DEPLOY_STEPS = ("Verify the attested composition and durable prior site",
                      "Restore and verify the durable rollback selection",
                      "Retain the verified prior Pages archive for recovery",
@@ -1934,6 +1940,71 @@ DOCS_DEPLOY_STEPS = ("Verify the attested composition and durable prior site",
 
 def _docs_runs_quoted(jobs):
     return all("${{" not in body for job in jobs for body in _run_bodies(job))
+
+
+DOCS_AUTO_GUARD = ("github.event_name == 'workflow_run' && github.ref == 'refs/heads/main' && "
+    "github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && "
+    "github.event.workflow_run.conclusion == 'success' && "
+    "github.event.workflow_run.head_repository.full_name == github.repository")
+
+
+def _docs_automatic_violations(workflow):
+    jobs = _jobs(workflow)
+    assemble, deploy = (jobs.get(name, "") for name in ("auto-assemble", "auto-deploy"))
+    failures = _failed([
+        (_triggers(workflow) == {"workflow_dispatch", "workflow_run"}, "docs automatic triggers changed"),
+        ('    workflows: ["Build documentation"]\n    branches: ["main"]\n'
+         '    types: [completed]' in workflow, "docs source workflow filter changed"),
+        (set(jobs) == {"assemble", "seed", "deploy", "auto-assemble", "auto-deploy"},
+         "docs job inventory changed"),
+        (_permissions(assemble, 4) == {"contents": "read", "actions": "read",
+            "attestations": "write", "id-token": "write"}, "docs assembly must not hold publishing credentials"),
+        ("    needs: auto-assemble\n" in deploy and "    environment: github-pages-main\n" in deploy,
+         "automatic publisher must bind its verified assembly and main environment"),
+        ("      group: pages-publish\n      cancel-in-progress: false" in deploy,
+         "automatic publisher must serialize with manual publication"),
+        ('"$RUNNER_TEMP/artifact.tar"' in assemble and "actions/upload-pages-artifact@" not in assemble,
+         "automatic composition must upload normalized tar bytes"),
+        ("actions/attest-build-provenance@" in assemble and "docs-site-attestation-" in assemble,
+         "automatic composition must retain the signature bundle"),
+        ("docs-rollback-" in deploy and "previous-pages/artifact.tar" in deploy,
+         "automatic publication must retain exact recovery bytes"),
+        (all("ref: ${{ github.sha }}" in body and "persist-credentials: false" in body
+             and "github.event.workflow_run.head_sha" not in body for body in (assemble, deploy)),
+         "automatic code must come only from trusted main"),
+    ])
+    return failures + _docs_automatic_gates(assemble, deploy) + _docs_automatic_commands(assemble, deploy)
+
+
+def _docs_automatic_gates(assemble, deploy):
+    failures = []
+    for name, body in (("auto-assemble", assemble), ("auto-deploy", deploy)):
+        gate = re.search(r"(?ms)^    if: >-\n(.*?)^    runs-on:", body)
+        expected = DOCS_AUTO_GUARD + (" && needs.auto-assemble.outputs.ready == 'true'" if name == "auto-deploy" else "")
+        if not gate or " ".join(gate.group(1).split()) != expected:
+            failures.append(name + " source gate changed")
+        if any("${{" in command for command in _script_bodies(body)) or _ignored_failures(body):
+            failures.append(name + " runs untrusted expressions or ignores failures")
+    return failures
+
+
+def _docs_automatic_commands(assemble, deploy):
+    failures = []
+    def commands(body):
+        return [" ".join(command.replace("\\\n", " ").split()) for command in _script_bodies(body)]
+    expected_assembly = [
+        'python3 -B -m tools.docs_publish prepare-auto --work "$RUNNER_TEMP/docs-auto"',
+        'python3 -B -m tools.docs_site pack --site "$RUNNER_TEMP/docs-auto/candidate/site" --archive "$RUNNER_TEMP/artifact.tar"',
+        'python3 -B -m tools.docs_publish finalize-auto --work "$RUNNER_TEMP/docs-auto/candidate" --archive "$RUNNER_TEMP/artifact.tar" --artifact-id "$PAGES_ARTIFACT_ID"',
+        'mkdir "$RUNNER_TEMP/docs-auto-proof" cp "$BUNDLE_PATH" "$RUNNER_TEMP/docs-auto-proof/bundle.json"',
+    ]
+    expected_publisher = [
+        'python3 -B -m tools.docs_publish preflight-auto --work "$RUNNER_TEMP/docs-auto-publish"',
+        'python3 -B -m tools.docs_publish promote-auto --work "$RUNNER_TEMP/docs-auto-publish" --artifact-id "$VERIFIED_PREVIOUS_ARTIFACT_ID"',
+    ]
+    if commands(assemble) != expected_assembly or commands(deploy) != expected_publisher:
+        failures.append("docs automatic commands differ from the reviewed helpers")
+    return failures
 
 
 def _docs_deploy_violations(workflow):
@@ -2311,7 +2382,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_downloaded_tools_are_verified_before_extraction(self):
         badges = ".github/workflows/badges.yaml"
         docs_lane = _read("tools/ci/docs_lane.sh")
-        self.assertEqual(_step_body(self.supply_chain_files[DOCS_WORKFLOW], "Install Doxygen").strip(),
+        self.assertEqual(_step_body(self.supply_chain_files[DOCS_BUILD_WORKFLOW], "Install Doxygen").strip(),
                          "run: tools/ci/docs_lane.sh install-doxygen")
         self.assertIn('readonly DOXYGEN_SHA256="%s"\n' % DOXYGEN_SHA256, docs_lane)
         # //tools/ci:docs_lane_tests runs the script's exact download, check and extraction.
@@ -2327,7 +2398,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIn(verification, body)
                 self.assertLess(body.index(verification), body.index("tar "))
 
-    def test_documentation_publication_requires_a_manual_request(self):
+    def test_release_docs_publication_requires_a_manual_request(self):
         workflow = self.supply_chain_files[".github/workflows/deploy_docs.yaml"]
         deploy = workflow.split("\n  deploy:\n", 1)[1]
         self.assertIn("if: github.event_name == 'workflow_dispatch'", deploy)
@@ -2336,7 +2407,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_docs_build_steps_run_their_tested_tools(self):
         # The docs build job keeps one command per step; //tools/ci:docs_lane_tests and
         # //tools:pages_artifact_tests pin what each command runs and writes.
-        build = self.supply_chain_files[DOCS_WORKFLOW].split("\n  deploy:\n", 1)[0]
+        build = self.supply_chain_files[DOCS_BUILD_WORKFLOW]
         steps = {
             "Install graphviz": "uses: ./.github/actions/apt-install\n        with:\n"
                                 "          packages: graphviz\n"
@@ -2371,8 +2442,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
              "name: donner-cli-darwin-arm64-"),
             (".github/workflows/editor_wasm.yml", "upload-artifact@",
              "name: donner-editor-wasm-geode-"),
-            (".github/workflows/deploy_docs.yaml", "upload-pages-artifact@", "retention-days:"),
-            (".github/workflows/deploy_docs.yaml", "upload-artifact@",
+            (".github/workflows/build_docs.yaml", "upload-pages-artifact@", "retention-days:"),
+            (".github/workflows/build_docs.yaml", "upload-artifact@",
              "name: donner-docs-provenance-"),
             (CANDIDATE_WORKFLOW, "upload-artifact@", "name: donner-release-candidate-"),
         )
@@ -2380,7 +2451,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             with self.subTest(path=path, name=name):
                 steps = [step for step in self.supply_chain_files[path].split("\n      - ")
                          if action in step and name in step]
-                expected_count = 2 if path == DOCS_WORKFLOW and action == "upload-pages-artifact@" else 1
+                expected_count = 1
                 self.assertEqual(len(steps), expected_count)
                 for step in steps:
                     self.assertRegex(step, r"\n          retention-days: 90(?:\n|$)")
@@ -2534,7 +2605,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("generated_lock_sha256 = _sha256(module_lock)", stage)
         self.assertIn('"generated_lock_sha256":"%s"', stage)
 
-        docs = self.supply_chain_files[".github/workflows/deploy_docs.yaml"]
+        docs = self.supply_chain_files[DOCS_BUILD_WORKFLOW]
         build = docs.split("\n  deploy:\n", 1)[0]
         self.assertEqual(_step_body(build, "Record the docs build dependency state").strip(),
                          "run: tools/ci/docs_lane.sh record-dependencies")
@@ -2551,7 +2622,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         retain = _step_body(build, "Retain the docs build provenance")
         self.assertIn("name: donner-docs-provenance-${{ github.run_attempt }}", retain)
         self.assertIn("path: ${{ runner.temp }}/docs-provenance/", retain)
-        deploy = docs.split("\n  deploy:\n", 1)[1]
+        deploy = self.supply_chain_files[DOCS_WORKFLOW].split("\n  deploy:\n", 1)[1]
         self.assertEqual([], _build_steps(deploy.replace("bazel-contrib", "")))
 
     def test_bcr_preflight_has_no_publication_credentials(self):
@@ -3176,6 +3247,35 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "if: github.ref == 'refs/heads/main'"), "manual dispatch on main"),
         })
 
+    def test_workflow_run_sources_are_distinct_workflows(self):
+        for path, workflow in self.supply_chain_files.items():
+            name = re.search(r"(?m)^name: (.+)$", workflow)
+            if not name:
+                continue
+            name = name.group(1).strip().strip("\"'")
+            for sources in re.findall(r"(?m)^    workflows: \[(.+)\]$", workflow):
+                with self.subTest(workflow=path):
+                    self.assertNotIn(name, [value.strip().strip("\"'")
+                                            for value in sources.split(",")],
+                                     "GitHub rejects workflow_run listeners that name themselves")
+
+    def test_automatic_docs_policy_rejects_privilege_recursion_and_handoff_changes(self):
+        path = DOCS_WORKFLOW
+        workflow = self.supply_chain_files[path]
+        self.assertEqual([], _docs_automatic_violations(workflow))
+        self._assert_rejected(lambda files, path: _docs_automatic_violations(files[path]), {
+            "recursive source": (path, workflow.replace("github.event.workflow_run.event == 'push'", "github.event.workflow_run.event == 'workflow_run'", 1), "source gate changed"),
+            "failed source": (path, workflow.replace("github.event.workflow_run.conclusion == 'success'", "github.event.workflow_run.conclusion != 'cancelled'", 1), "source gate changed"),
+            "fork source": (path, workflow.replace("      github.event.workflow_run.head_repository.full_name == github.repository\n", "      true\n", 1), "source gate changed"),
+            "untrusted checkout": (path, workflow.replace(
+                "          ref: ${{ github.sha }}\n      - name: Verify the completed source", "          ref: ${{ github.event.workflow_run.head_sha }}\n      - name: Verify the completed source", 1), "trusted main"),
+            "unreviewed command": (path, workflow.replace('prepare-auto --work "$RUNNER_TEMP/docs-auto"', 'prepare-auto --work "$RUNNER_TEMP/docs-auto"; echo unreviewed', 1), "reviewed helpers"),
+            "wrong environment": (path, workflow.replace("environment: github-pages-main", "environment: github-pages", 1), "main environment"),
+            "no recovery": (path, workflow.replace("docs-auto-publish/previous-pages/artifact.tar", "docs-auto-publish/unknown.tar", 1), "exact recovery"),
+            "assembly holds pages": (path, workflow.replace(
+                "      id-token: write\n    outputs:", "      id-token: write\n      pages: write\n    outputs:", 1), "publishing credentials"),
+        })
+
     def test_git_dependencies_use_release_tags_or_explicit_commits(self):
         deps = _read("third_party/bazel/non_bcr_deps.bzl")
         for block in re.findall(r"(?:new_)?git_repository\((.*?)\n\s*\)", deps, re.DOTALL):
@@ -3384,7 +3484,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "  lint:\n", "  lint:\n    environment:\n      name: ${{ vars.ENVIRONMENT }}\n",
                 1), "unreviewed environment"),
             "reviewed job renamed environment": (docs, files[docs].replace(
-                "      name: github-pages\n", "      name: ${{ vars.PAGES_ENV }}\n", 1),
+                "\n      name: github-pages\n", "\n      name: ${{ vars.PAGES_ENV }}\n", 1),
                 "unreviewed environment"),
             "reviewed job switched to write environment": (bcr, files[bcr].replace(
                 "    environment: bcr-fork-preparation\n",
@@ -3392,7 +3492,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "unreviewed environment"),
         })
         # Case differences in a reviewed literal name are the same environment.
-        cased = files[docs].replace("      name: github-pages\n", "      name: GitHub-Pages\n", 1)
+        cased = files[docs].replace("\n      name: github-pages\n", "\n      name: GitHub-Pages\n", 1)
         self.assertNotEqual(cased, files[docs])
         self.assertEqual([], _buildbuddy_violations({**files, docs: cased}))
 
