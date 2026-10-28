@@ -13,7 +13,8 @@ section when they exist in the target version, with an explained index fallback 
 
 ## Automatic development documentation
 
-A `workflow_run` completion starts assembly only for a successful push build of this repository's
+`build_docs.yaml` retains main-push source builds. The separate `deploy_docs.yaml` listens for
+`Build documentation` completion and starts assembly only for a successful push build of this repository's
 `main` branch. The source attempt, workflow, repository and commit are independently checked
 through GitHub. The read-only assembly job cannot publish or write the archive branch. It retains
 one normalized complete tar, a signed composition record and the signature bundle. Packing places
@@ -34,9 +35,9 @@ skipped. Unknown history, changed releases, changed archive state or ambiguous d
 stop mutation. Recovery after an unhealthy cutover uses the verified prior complete site; elective
 rollback remains manual.
 
-The workflow listens to its own completion, so manual and automatic completions can create skipped
-descendant runs. Their source event is not `push`, so no job or publication starts from them;
-GitHub also bounds workflow-run chains. This does not grant a recursive publication path.
+The publisher listens only to the separate source-build workflow. Its own manual or automatic
+completion does not trigger another publication run. GitHub rejects workflows that listen to
+themselves; the workflow policy test rejects that invalid configuration before publication.
 
 ## One-time setup
 

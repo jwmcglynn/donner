@@ -1,0 +1,77 @@
+name: Build documentation
+
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Recommended packages stay installed: Graphviz recommends the fonts its diagrams use.
+      - name: Install graphviz
+        uses: ./.github/actions/apt-install
+        with:
+          packages: graphviz
+          install-recommends: "true"
+
+      # Downloads the pinned release and checks its SHA-256 before extracting it.
+      - name: Install Doxygen
+        run: tools/ci/docs_lane.sh install-doxygen
+
+      - name: Generate Doxygen documentation
+        run: tools/build_docs.sh
+
+      - name: Bind the docs site to this source run
+        run: python3 -B -m tools.pages_artifact marker --output generated-doxygen/html/docs-build.json
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+      - name: Upload retained Pages artifact
+        id: pages
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: "./generated-doxygen/html"
+          retention-days: 90
+
+      - name: Record the immutable docs selection
+        env:
+          ARTIFACT_ID: ${{ steps.pages.outputs.artifact_id }}
+        run: python3 -B -m tools.pages_artifact summary --archive "$RUNNER_TEMP/artifact.tar"
+
+      - name: Setup Bazel for the module graph record
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+
+      # Doxygen and Graphviz, not Bazel, generate the site, so their versions are recorded. The
+      # module graph recorded is the production graph of the documented `donner` module,
+      # resolved by this build: development-only modules are ignored, because their extensions
+      # never run here. Error mode proves the generated lockfile complete for that graph, and
+      # the lockfile is retained beside the Pages artifact rather than published on the site.
+      - name: Record the docs build dependency state
+        run: tools/ci/docs_lane.sh record-dependencies
+
+      - name: Retain the docs build provenance
+        uses: actions/upload-artifact@v7
+        with:
+          name: donner-docs-provenance-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/docs-provenance/
+          if-no-files-found: error
+          retention-days: 90
+

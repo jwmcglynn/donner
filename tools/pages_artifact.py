@@ -17,6 +17,8 @@ from tools import release_cli
 
 REPOSITORY = "jwmcglynn/donner"
 WORKFLOW = ".github/workflows/deploy_docs.yaml"
+BUILD_WORKFLOW = ".github/workflows/build_docs.yaml"
+SOURCE_WORKFLOWS = (WORKFLOW, BUILD_WORKFLOW)
 ARTIFACT_NAME = "github-pages"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -77,7 +79,7 @@ def verify_source_run(run: dict, selected: dict[str, object]) -> None:
     if run.get("id") != selected["run_id"] or run.get("run_attempt") != selected["attempt"]:
         raise ValueError("source run ID or attempt does not match")
     if (
-        run.get("path") != WORKFLOW
+        run.get("path") not in SOURCE_WORKFLOWS
         or run.get("event") != "push"
         or run.get("head_branch") != "main"
         or run.get("head_sha") != selected["source_commit"]

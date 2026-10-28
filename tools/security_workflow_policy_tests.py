@@ -1928,6 +1928,7 @@ def _bcr_submission_violations(workflow):
 
 
 DOCS_WORKFLOW = ".github/workflows/deploy_docs.yaml"
+DOCS_BUILD_WORKFLOW = ".github/workflows/build_docs.yaml"
 DOCS_DEPLOY_STEPS = ("Verify the attested composition and durable prior site",
                      "Restore and verify the durable rollback selection",
                      "Retain the verified prior Pages archive for recovery",
@@ -1951,10 +1952,10 @@ def _docs_automatic_violations(workflow):
     jobs = _jobs(workflow)
     assemble, deploy = (jobs.get(name, "") for name in ("auto-assemble", "auto-deploy"))
     failures = _failed([
-        (_triggers(workflow) == {"push", "workflow_dispatch", "workflow_run"}, "docs automatic triggers changed"),
-        ('    workflows: ["Build and deploy versioned documentation"]\n    branches: ["main"]\n'
+        (_triggers(workflow) == {"workflow_dispatch", "workflow_run"}, "docs automatic triggers changed"),
+        ('    workflows: ["Build documentation"]\n    branches: ["main"]\n'
          '    types: [completed]' in workflow, "docs source workflow filter changed"),
-        (set(jobs) == {"build", "assemble", "seed", "deploy", "auto-assemble", "auto-deploy"},
+        (set(jobs) == {"assemble", "seed", "deploy", "auto-assemble", "auto-deploy"},
          "docs job inventory changed"),
         (_permissions(assemble, 4) == {"contents": "read", "actions": "read",
             "attestations": "write", "id-token": "write"}, "docs assembly must not hold publishing credentials"),
@@ -2381,7 +2382,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_downloaded_tools_are_verified_before_extraction(self):
         badges = ".github/workflows/badges.yaml"
         docs_lane = _read("tools/ci/docs_lane.sh")
-        self.assertEqual(_step_body(self.supply_chain_files[DOCS_WORKFLOW], "Install Doxygen").strip(),
+        self.assertEqual(_step_body(self.supply_chain_files[DOCS_BUILD_WORKFLOW], "Install Doxygen").strip(),
                          "run: tools/ci/docs_lane.sh install-doxygen")
         self.assertIn('readonly DOXYGEN_SHA256="%s"\n' % DOXYGEN_SHA256, docs_lane)
         # //tools/ci:docs_lane_tests runs the script's exact download, check and extraction.
@@ -2406,7 +2407,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_docs_build_steps_run_their_tested_tools(self):
         # The docs build job keeps one command per step; //tools/ci:docs_lane_tests and
         # //tools:pages_artifact_tests pin what each command runs and writes.
-        build = self.supply_chain_files[DOCS_WORKFLOW].split("\n  deploy:\n", 1)[0]
+        build = self.supply_chain_files[DOCS_BUILD_WORKFLOW]
         steps = {
             "Install graphviz": "uses: ./.github/actions/apt-install\n        with:\n"
                                 "          packages: graphviz\n"
@@ -2441,8 +2442,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
              "name: donner-svg-darwin-arm64-"),
             (".github/workflows/editor_wasm.yml", "upload-artifact@",
              "name: donner-editor-wasm-geode-"),
-            (".github/workflows/deploy_docs.yaml", "upload-pages-artifact@", "retention-days:"),
-            (".github/workflows/deploy_docs.yaml", "upload-artifact@",
+            (".github/workflows/build_docs.yaml", "upload-pages-artifact@", "retention-days:"),
+            (".github/workflows/build_docs.yaml", "upload-artifact@",
              "name: donner-docs-provenance-"),
             (CANDIDATE_WORKFLOW, "upload-artifact@", "name: donner-release-candidate-"),
         )
@@ -2604,7 +2605,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("generated_lock_sha256 = _sha256(module_lock)", stage)
         self.assertIn('"generated_lock_sha256":"%s"', stage)
 
-        docs = self.supply_chain_files[".github/workflows/deploy_docs.yaml"]
+        docs = self.supply_chain_files[DOCS_BUILD_WORKFLOW]
         build = docs.split("\n  deploy:\n", 1)[0]
         self.assertEqual(_step_body(build, "Record the docs build dependency state").strip(),
                          "run: tools/ci/docs_lane.sh record-dependencies")
@@ -2621,7 +2622,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         retain = _step_body(build, "Retain the docs build provenance")
         self.assertIn("name: donner-docs-provenance-${{ github.run_attempt }}", retain)
         self.assertIn("path: ${{ runner.temp }}/docs-provenance/", retain)
-        deploy = docs.split("\n  deploy:\n", 1)[1]
+        deploy = self.supply_chain_files[DOCS_WORKFLOW].split("\n  deploy:\n", 1)[1]
         self.assertEqual([], _build_steps(deploy.replace("bazel-contrib", "")))
 
     def test_bcr_preflight_has_no_publication_credentials(self):

@@ -191,9 +191,10 @@ def _github_json(*args: str) -> dict:
 
 
 def _verify_run(run: dict, run_id: int, attempt: int, commit: str, workflow: str) -> None:
+    paths = pages_artifact.SOURCE_WORKFLOWS if workflow == ARTIFACT_WORKFLOWS["docs"] else (workflow,)
     if (run.get("id") != run_id or run.get("run_attempt") != attempt or
             run.get("repository", {}).get("full_name") != REPOSITORY or
-            run.get("path") != workflow or run.get("head_sha") != commit or
+            run.get("path") not in paths or run.get("head_sha") != commit or
             run.get("head_branch") != "main" or
             run.get("event") not in ("push", "workflow_dispatch", "schedule") or
             run.get("status") != "completed" or run.get("conclusion") != "success"):
