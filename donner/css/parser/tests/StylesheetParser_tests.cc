@@ -367,6 +367,73 @@ TEST(StylesheetParser, FontFaceIntegerWeights) {
   }
 }
 
+TEST(StylesheetParser, FontFaceWeightRangesNormalizeInclusiveEndpoints) {
+  struct Case {
+    std::string_view declaration;
+    int minimum;
+    int maximum;
+  };
+  const std::array<Case, 7> ranges = {{{"100 900", 100, 900},
+                                       {"900 100", 100, 900},
+                                       {"1 1000", 1, 1000},
+                                       {"normal bold", 400, 700},
+                                       {"bold normal", 400, 700},
+                                       {"100\t \t900", 100, 900},
+                                       {"900/**/100", 100, 900}}};
+  for (const auto& range : ranges) {
+    SCOPED_TRACE(range.declaration);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    const Stylesheet sheet = StylesheetParser::Parse(
+        "@font-face { font-family: Test; src: url(font.woff); font-weight: " +
+            std::string(range.declaration) + "; }",
+        disabled);
+    ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
+    EXPECT_THAT(sheet.fontFaces().front().fontWeight, testing::Eq(range.minimum));
+    EXPECT_THAT(sheet.fontFaces().front().fontWeightMaximum, testing::Optional(range.maximum));
+    EXPECT_THAT(sheet.fontFaces().front().normalizedFontWeightRange(),
+                testing::Pair(range.minimum, range.maximum));
+  }
+}
+
+TEST(StylesheetParser, FontFaceRangeIdentityIncludesBothEndpoints) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff); font-weight: 100 600; }
+    @font-face { font-family: Test; src: url(font.woff); font-weight: 100 900; }
+    @font-face { font-family: Test; src: url(font.woff); font-weight: 400; }
+    @font-face { font-family: Test; src: url(font.woff); font-weight: 400 400; }
+  )",
+                                                   disabled);
+  ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(4));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[0]),
+              testing::Ne(FontFaceIdentityKey(sheet.fontFaces()[1])));
+  EXPECT_THAT(FontFaceIdentityKey(sheet.fontFaces()[2]),
+              testing::Eq(FontFaceIdentityKey(sheet.fontFaces()[3])));
+}
+
+TEST(StylesheetParser, FontFaceWeightRangeUpdatesAreAtomic) {
+  for (const std::string_view invalid :
+       {"0 800", "100 1001", "100.5 700", "100 700 garbage", "100 700 900", "100,700",
+        "normal inherit", "100 900!important"}) {
+    SCOPED_TRACE(invalid);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    const Stylesheet sheet = StylesheetParser::Parse(
+        "@font-face { font-family: Test; src: url(font.woff); font-weight:200 600; font-weight:" +
+            std::string(invalid) + "; }",
+        disabled);
+    ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
+    EXPECT_THAT(sheet.fontFaces().front().normalizedFontWeightRange(), testing::Pair(200, 600));
+  }
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet scalar = StylesheetParser::Parse(R"(
+    @font-face { font-family: Test; src: url(font.woff); font-weight:200 600; font-weight:bold; }
+  )",
+                                                    disabled);
+  ASSERT_THAT(scalar.fontFaces(), testing::SizeIs(1));
+  EXPECT_THAT(scalar.fontFaces().front().fontWeightMaximum, testing::Eq(std::nullopt));
+  EXPECT_THAT(scalar.fontFaces().front().normalizedFontWeightRange(), testing::Pair(700, 700));
+}
+
 TEST(StylesheetParser, FontFaceStretchKeywords) {
   constexpr std::array<std::string_view, 9> kWidths = {
       "ultra-condensed", "extra-condensed", "condensed",      "semi-condensed", "normal",
@@ -418,7 +485,7 @@ TEST(StylesheetParser, FontFaceInvalidDescriptorsPreserveLastValidValue) {
   EXPECT_EQ(sheet.fontFaces()[0].fontStretch, 7);
 }
 
-TEST(StylesheetParser, FontFaceUnsupportedRangesDoNotUseFirstValue) {
+TEST(StylesheetParser, FontFaceUnsupportedStyleAndStretchRangesPreserveDefaults) {
   ParseWarningSink disabled = ParseWarningSink::Disabled();
   const Stylesheet sheet = StylesheetParser::Parse(R"(
     @font-face { font-family: Test; src: url(font.woff);
@@ -426,7 +493,7 @@ TEST(StylesheetParser, FontFaceUnsupportedRangesDoNotUseFirstValue) {
   )",
                                                    disabled);
   ASSERT_THAT(sheet.fontFaces(), testing::SizeIs(1));
-  EXPECT_EQ(sheet.fontFaces()[0].fontWeight, 400);
+  EXPECT_THAT(sheet.fontFaces()[0].normalizedFontWeightRange(), testing::Pair(700, 900));
   EXPECT_EQ(sheet.fontFaces()[0].fontStyle, 0);
   EXPECT_EQ(sheet.fontFaces()[0].fontStretch, 5);
 }
