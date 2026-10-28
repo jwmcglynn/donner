@@ -125,6 +125,14 @@ v0.49.0 renderings drop the box-blur spill there, which Donner keeps.
   tests/filters/filter/negative-subregion.png
   tests/filters/filter/with-subregion-1.png
   tests/filters/filter/with-subregion-2.png
+
+From the same revision and license, these PNGs were replaced with their 300x300
+versions. The snapshot's references mapped objectBoundingBox units on text through the
+glyph ink extents, while resvg v0.49.0 uses each glyph's cell: its advance by the font's
+ascent and descent. Their SVG inputs are byte-identical at both revisions.
+
+  tests/masking/clipPath/clip-path-with-transform-on-text.png
+  tests/painting/visibility/bbox-impact-3.png
 """
 
 package(default_visibility = ["//visibility:public"])
