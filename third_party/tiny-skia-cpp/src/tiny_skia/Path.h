@@ -126,6 +126,7 @@ class Path {
       float dy2 = p2.y - p1.y;
 
       float cross = dx1 * dy2 - dy1 * dx2;
+      if (!std::isfinite(cross)) return false;
       if (cross > 0.0f) {
         if (sign < 0) return false;
         sign = 1;
@@ -136,9 +137,15 @@ class Path {
     }
     if (sign == 0) return false;
 
-    // Check no non-adjacent edges intersect (simple polygon check).
-    // Stroked path outlines can be self-intersecting single contours that pass the
-    // cross-product check above; this O(n²) check catches them.
+    // The convex walker ignores winding multiplicity, so even endpoint touches and
+    // overlapping edges must use the general walker. Keep the simple-polygon check
+    // conservative: false negatives affect only the fast-path choice.
+    const auto touchesSegment = [](const Point& p, const Point& start, const Point& end,
+                                   float orientation) {
+      return orientation == 0.0f && p.x >= std::min(start.x, end.x) &&
+             p.x <= std::max(start.x, end.x) && p.y >= std::min(start.y, end.y) &&
+             p.y <= std::max(start.y, end.y);
+    };
     for (std::size_t i = 0; i < n; i++) {
       const auto& a = points_[i];
       const auto& b = points_[(i + 1) % n];
@@ -151,8 +158,11 @@ class Path {
         float d2 = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x);
         float d3 = (d.x - c.x) * (a.y - c.y) - (d.y - c.y) * (a.x - c.x);
         float d4 = (d.x - c.x) * (b.y - c.y) - (d.y - c.y) * (b.x - c.x);
-        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+        if (!std::isfinite(d1) || !std::isfinite(d2) || !std::isfinite(d3) ||
+            !std::isfinite(d4) || touchesSegment(c, a, b, d1) || touchesSegment(d, a, b, d2) ||
+            touchesSegment(a, c, d, d3) || touchesSegment(b, c, d, d4) ||
+            (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+             ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))) {
           return false;
         }
       }

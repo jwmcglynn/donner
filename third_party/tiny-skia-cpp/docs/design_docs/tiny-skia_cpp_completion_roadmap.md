@@ -124,6 +124,8 @@ inputs. These should be treated as untrusted. Production hardening includes:
   - [x] Audit and eliminate temporary references to partial-port decisions.
 
 - [ ] Milestone 6: Security and Reliability Hardening
+  - [x] Reject repeated or touching contours from the convex rasterizer fast path.
+  - [ ] Validate winding-rule regression controls for the convex admission repair.
   - [ ] Add fuzzing targets for input-heavy rendering/path APIs.
   - [ ] Add negative tests for malformed/extreme inputs and overflow boundaries.
   - [ ] Introduce dependency/license/vulnerability checks in CI.

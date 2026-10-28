@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "tiny_skia/Mask.h"
@@ -61,5 +62,38 @@ TEST(MaskTest, RepeatedContourRespectsWindingRule) {
       }
       EXPECT_THAT(mask->data(), testing::ElementsAreArray(expected));
     }
+  }
+}
+
+TEST(PathTest, ConvexClassificationRejectsOverlapsAndTouches) {
+  const std::vector<std::vector<tiny_skia::Point>> contours = {
+      {{0, 0}, {4, 0}, {4, 4}, {0, 4}, {0, 2}, {4, 2}, {4, 6}, {0, 6}},
+      {{0, 0}, {4, 0}, {2, 4}, {0, 0}, {3, 1}, {2, 3}},
+  };
+  for (const auto& points : contours) {
+    SCOPED_TRACE(testing::PrintToString(points));
+    tiny_skia::PathBuilder builder;
+    builder.moveTo(points.front().x, points.front().y);
+    for (std::size_t i = 1; i < points.size(); ++i) {
+      builder.lineTo(points[i].x, points[i].y);
+    }
+    builder.close();
+    const auto path = builder.finish();
+    ASSERT_THAT(path, Optional(testing::_));
+    EXPECT_THAT(path->isConvex(), testing::IsFalse());
+  }
+}
+
+TEST(PathTest, ConvexClassificationRequiresFiniteTurns) {
+  for (const float scale : {1.0f, std::numeric_limits<float>::max() / 4.0f}) {
+    SCOPED_TRACE(scale);
+    tiny_skia::PathBuilder builder;
+    builder.moveTo(-scale, -scale);
+    builder.lineTo(scale, -scale);
+    builder.lineTo(0, scale);
+    builder.close();
+    const auto path = builder.finish();
+    ASSERT_THAT(path, Optional(testing::_));
+    EXPECT_THAT(path->isConvex(), testing::Eq(scale == 1.0f));
   }
 }
