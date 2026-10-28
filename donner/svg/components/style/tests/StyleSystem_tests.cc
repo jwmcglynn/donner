@@ -966,6 +966,62 @@ TEST_F(StyleSystemTest, RejectedDecorationUnitsPreserveNestedInheritance) {
   }
 }
 
+TEST_F(StyleSystemTest, PathClipInheritanceChargesAndReleasesRetainedStorage) {
+  constexpr std::string_view value = "clip-path:path('M0 0H10V10H0Z')";
+  PropertyRegistry authored;
+  authored.parseStyle(value);
+  const PropertyRegistry copied = authored;
+  const std::size_t pathBytes = copied.complexPropertyBytes();
+  ASSERT_GT(pathBytes, 0u);
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent" style="clip-path:path('M0 0H10V10H0Z')">
+        <rect id="first" style="clip-path:inherit"/>
+        <rect id="second" style="clip-path:inherit"/>
+      </g>
+    </svg>)svg");
+  const auto parentElement = document.querySelector("#parent");
+  const auto firstElement = document.querySelector("#first");
+  const auto secondElement = document.querySelector("#second");
+  ASSERT_THAT(parentElement, testing::Optional(testing::_));
+  ASSERT_THAT(firstElement, testing::Optional(testing::_));
+  ASSERT_THAT(secondElement, testing::Optional(testing::_));
+  auto parent = parentElement->entityHandle();
+  auto first = firstElement->entityHandle();
+  auto second = secondElement->entityHandle();
+  DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.computedStyleBytes = 2 * pathBytes;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(familyLimits);
+  StyleResourceBudget::Limits limits;
+  limits.complexPropertyBytes = 2 * pathBytes;
+  auto& budget = document.registry().ctx().emplace<StyleResourceBudget>(limits, family);
+  ParseWarningSink warnings;
+  ASSERT_THAT(styleSystem.computeStyle(parent, warnings).properties->clipPath.get(),
+              testing::Optional(testing::_));
+  EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
+  ASSERT_THAT(styleSystem.computeStyle(first, warnings).properties->clipPath.get(),
+              testing::Optional(testing::_));
+  EXPECT_EQ(budget.complexPropertyBytes(), 2 * pathBytes);
+  EXPECT_THAT(styleSystem.computeStyle(second, warnings).properties->clipPath.get(),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(budget.rejected(), testing::IsTrue());
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle),
+            2 * pathBytes);
+  styleSystem.invalidateComputed(first);
+  EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
+  budget.reset();
+  first.get<StyleComponent>().properties.parseStyle("clip-path:none");
+  EXPECT_THAT(styleSystem.computeStyle(first, warnings).properties->clipPath.get(),
+              testing::Eq(std::nullopt));
+  EXPECT_EQ(budget.complexPropertyBytes(), pathBytes);
+  styleSystem.invalidateComputed(parent);
+  parent.get<StyleComponent>().properties.parseStyle("clip-path:none");
+  EXPECT_THAT(styleSystem.computeStyle(parent, warnings).properties->clipPath.get(),
+              testing::Eq(std::nullopt));
+  EXPECT_EQ(budget.complexPropertyBytes(), 0u);
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 0u);
+}
+
 TEST_F(StyleSystemTest, PolygonInheritanceChargesAndReleasesRetainedStorage) {
   auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg">
