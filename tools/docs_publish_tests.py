@@ -543,6 +543,43 @@ class DocsPublishTest(unittest.TestCase):
         prepare.assert_not_called()
         commit.assert_not_called()
 
+    def test_newer_automatic_source_still_assembles_if_an_earlier_publication_advances(self):
+        from tools import docs_fixture
+        inputs = self.root / "inputs"
+        inputs.mkdir()
+        release = docs_fixture.source(inputs, "release")
+        development = docs_fixture.source(inputs, "main")
+        objects = inputs / "objects-payload"
+        objects.mkdir()
+        descriptor = publish.store.split_archive(release[0], objects)
+        state = {"schema": 1, "current": "e" * 64, "previous": None,
+                 "releases": {"0.8.0": {"identity": release[1], "archive": descriptor}}}
+        self.api.tip.return_value = "a" * 40
+        self.api.file.side_effect = lambda commit, name: (site.canonical(state) if name == "index.json"
+                                                        else (objects / name).read_bytes())
+        work = self.root / "auto-interleaving"
+        def restore(api, snapshot, target, output):
+            path = output / "site/_docs"
+            path.mkdir(parents=True)
+            manifest = {"versions": {"main": {"identity": {"source_commit": "c" * 40}}}}
+            (path / "versions.json").write_bytes(site.canonical(manifest))
+            self.api.tip.return_value = "b" * 40
+            return {}, {}
+        with mock.patch.dict(os.environ, self.automatic_environment()), \
+             mock.patch.object(publish, "_automatic_trigger", return_value={"run_id": 123, "attempt": 1,
+                                                                           "source_commit": "d" * 40}), \
+             mock.patch.object(publish, "_restore_composition", side_effect=restore), \
+             mock.patch.object(publish, "_verify_current_roster"), \
+             mock.patch.object(publish, "_verify_retained_release"), \
+             mock.patch.object(publish, "_source_order", return_value=True), \
+             mock.patch.object(publish, "main_source", return_value=development):
+            publish.prepare_auto(work, self.api)
+        selected = site.read_json(work / "candidate/payload/selection.json")
+        self.assertEqual(selected["base_snapshot_commit"], "a" * 40)
+        self.assertEqual(self.api.tip.return_value, "b" * 40)
+        site.verify_site(work / "candidate/site")
+        self.api.call.assert_not_called()
+
     def automatic_selection(self):
         identity = {"version": "0.8.0", "source_commit": "c" * 40}
         releases = {"0.8.0": {"identity": identity, "archive": {"sha256": "d" * 64}}}
