@@ -176,6 +176,21 @@ uint32_t GetPositioningCluster(const TextGlyph& glyph) {
   return glyph.positioningCluster.value_or(glyph.cluster);
 }
 
+/// Separators to which this engine applies CSS word spacing.
+bool IsWordSpacingCodepoint(uint32_t codepoint) {
+  return codepoint == 0x20 || codepoint == 0x3000;
+}
+
+/// Read a rendered codepoint while retaining the span's original byte addressing.
+uint32_t SpanLayoutCodepoint(const components::ComputedTextComponent::TextSpan& span, size_t byte) {
+  const std::string_view text(span.text.data() + span.start, span.end - span.start);
+  const uint32_t codepoint = byte < text.size() ? decodeUtf8(text, byte) : 0;
+  return span.textTransform == TextTransform::FullWidth
+             ? text_transform::FullWidthCodepoint(
+                   codepoint, span.preservesSpaces || PreservesSpaces(span.whiteSpace))
+             : codepoint;
+}
+
 /// Encode a single Unicode codepoint as UTF-8.
 std::string encodeUtf8(uint32_t cp) {
   std::string result;
@@ -1201,7 +1216,7 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
       if (!backend.isCursive(codepoint)) {
         state.advance += span.letterSpacingPx;
       }
-      if (codepoint == 0x20 || codepoint == 0x3000) {
+      if (IsWordSpacingCodepoint(codepoint)) {
         state.advance += span.wordSpacingPx;
       }
     }
@@ -2542,11 +2557,7 @@ std::vector<WrappingGlyph> CollectWrappingGlyphs(const std::vector<TextRun>& run
       chunk = boundary.index;
       const auto [resetsInline, resetsBlock] = WrappingAxisResets(boundary, vertical);
       size_t byte = GetPositioningCluster(glyph);
-      uint32_t cp = byte < spanText.size() ? decodeUtf8(spanText, byte) : 0;
-      if (span.textTransform == TextTransform::FullWidth) {
-        cp = text_transform::FullWidthCodepoint(
-            cp, span.preservesSpaces || PreservesSpaces(span.whiteSpace));
-      }
+      const uint32_t cp = SpanLayoutCodepoint(span, byte);
       const double advance = vertical ? glyph.yAdvance : glyph.xAdvance;
       flat.push_back(
           {ri, gi, InlinePenPosition(glyph, vertical), vertical ? glyph.xPosition : glyph.yPosition,
@@ -3691,7 +3702,7 @@ PreparedSpanShaping PrepareSpanShaping(const ChunkShaper& shaper, std::string_vi
 
 /// Word spacing advances only after every glyph attached to the space group.
 bool IsWordSpacingGroupEnd(const PreparedSpanChunk& chunk, size_t index, uint32_t codepoint) {
-  return (codepoint == 0x20 || codepoint == 0x3000) &&
+  return IsWordSpacingCodepoint(codepoint) &&
          (index + 1 == chunk.positioningClusters.size() ||
           chunk.positioningClusters[index] != chunk.positioningClusters[index + 1]);
 }
@@ -4036,7 +4047,7 @@ private:
     runs_.push_back(std::move(state.run));
   }
 
-  bool prepareShaping(SpanState& state) {
+  bool prepareFullWidthShapingText(SpanState& state) {
     if (state.span->textTransform == TextTransform::FullWidth) {
       const bool preserveSpaces =
           state.span->preservesSpaces || PreservesSpaces(state.span->whiteSpace);
@@ -4047,6 +4058,13 @@ private:
         }
         state.text = state.fullWidthText->text;
       }
+    }
+    return true;
+  }
+
+  bool prepareShaping(SpanState& state) {
+    if (!prepareFullWidthShapingText(state)) {
+      return false;
     }
     if (state.text.find_first_of("\n\t") != std::string_view::npos) {
       // Shape controls as blank glyphs while keeping byte clusters for line layout and DOM APIs.

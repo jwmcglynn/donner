@@ -3650,9 +3650,10 @@ TEST(TextEngineScriptedTest, FullWidthMatchesLiteralUnicodeAcrossAxesAndWhitespa
       const auto& firstB = transformed[0].glyphs[2];
       const double block = isVertical(mode) ? firstB.xPosition : firstB.yPosition;
       const double offset = isVertical(mode) ? 2 : 3;
+      const double lineHeight = 1200.0 * static_cast<double>(20.0f / 1200.0f);
       const double line = whiteSpace == WhiteSpace::Pre     ? 0
-                          : mode == WritingMode::VerticalRl ? -20
-                                                            : 20;
+                          : mode == WritingMode::VerticalRl ? -lineHeight
+                                                            : lineHeight;
       EXPECT_THAT(block, DoubleNear(offset + line, 1e-9));
       for (size_t i = 0; i < literal[0].glyphs.size(); ++i) {
         const auto& expected = literal[0].glyphs[i];
