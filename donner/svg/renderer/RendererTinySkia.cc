@@ -352,7 +352,7 @@ enum class TinyPathCloseBehavior : uint8_t {
 
 enum class TinyPathContourClosure : uint8_t { Authored, Implicit };
 
-std::optional<std::size_t> tinyPathVerbCapacity(const Path& spline,
+std::optional<std::size_t> TinyPathVerbCapacity(const Path& spline,
                                                 TinyPathContourClosure contourClosure) {
   const std::size_t commands = spline.commands().size();
   if (contourClosure == TinyPathContourClosure::Authored) {
@@ -367,7 +367,7 @@ std::optional<std::size_t> tinyPathVerbCapacity(const Path& spline,
   return commands + spline.points().size();
 }
 
-void closeImplicitContour(tiny_skia::PathBuilder& builder, TinyPathContourClosure contourClosure,
+void CloseImplicitContour(tiny_skia::PathBuilder& builder, TinyPathContourClosure contourClosure,
                           bool hasOpenContour) {
   if (contourClosure == TinyPathContourClosure::Implicit && hasOpenContour) {
     builder.close();
@@ -377,7 +377,7 @@ void closeImplicitContour(tiny_skia::PathBuilder& builder, TinyPathContourClosur
 tiny_skia::Path toTinyPath(
     const Path& spline, TinyPathCloseBehavior closeBehavior = TinyPathCloseBehavior::Preserve,
     TinyPathContourClosure contourClosure = TinyPathContourClosure::Authored) {
-  const auto verbsCapacity = tinyPathVerbCapacity(spline, contourClosure);
+  const auto verbsCapacity = TinyPathVerbCapacity(spline, contourClosure);
   if (!verbsCapacity) {
     return {};
   }
@@ -388,7 +388,7 @@ tiny_skia::Path toTinyPath(
   for (const Path::Command& command : spline.commands()) {
     switch (command.verb) {
       case Path::Verb::MoveTo: {
-        closeImplicitContour(builder, contourClosure, hasOpenContour);
+        CloseImplicitContour(builder, contourClosure, hasOpenContour);
         const Vector2d& point = points[command.pointIndex];
         builder.moveTo(NarrowToFloat(point.x), NarrowToFloat(point.y));
         hasOpenContour = true;
@@ -427,7 +427,7 @@ tiny_skia::Path toTinyPath(
       }
     }
   }
-  closeImplicitContour(builder, contourClosure, hasOpenContour);
+  CloseImplicitContour(builder, contourClosure, hasOpenContour);
 
   return builder.finish().value_or(tiny_skia::Path());
 }
