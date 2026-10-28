@@ -467,6 +467,9 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Reference disagreement: PNG hides an invalid URL; Filter Effects "
                               "ignores the chain, covered by independent visible-geometry tests "
                               "(FilterReferenceStages_tests)")},
+                {"negative-subregion.svg", ResvgV049Reference()},
+                {"with-subregion-1.svg", ResvgV049Reference()},
+                {"with-subregion-2.svg", ResvgV049Reference()},
                 // Pixelmatch 2.0 checkerboard exposes pre-existing filter-region
                 // compositing alpha deltas vs resvg that white-blending masked. Each
                 // threshold is the measured minimal passing hundredth at the
@@ -475,20 +478,11 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},
-                {"negative-subregion.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
                 {"some-attributes-via-xlink-href.svg",
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},
                 {"with-region-and-subregion.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
-                {"with-subregion-1.svg", ResvgV049Reference()},
-                {"with-subregion-2.svg",
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},

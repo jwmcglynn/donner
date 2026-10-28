@@ -116,10 +116,15 @@ snapshot's references were flattened onto white: their opaque seagreen interiors
 byte-identical at both revisions. The snapshot's subregion-and-primitiveUnits=objectBoundingBox-1
 and -2 references are flattened the same way but are kept: the v0.49.0 renderings end their
 0.5-wide objectBoundingBox subregion at 98 user units instead of the 84 that the element's
-bounding box gives, which the snapshot and Donner both draw.
+bounding box gives, which the snapshot and Donner both draw. The snapshot's
+everything-via-xlink-href, some-attributes-via-xlink-href and with-region-and-subregion
+references are flattened too but are kept: their filter regions cut the blur's input, and the
+v0.49.0 renderings drop the box-blur spill there (docs/design_docs/0009-resvg_test_suite_bugs.md).
 
   tests/filters/filter/complex-order-and-xlink-href.png
+  tests/filters/filter/negative-subregion.png
   tests/filters/filter/with-subregion-1.png
+  tests/filters/filter/with-subregion-2.png
 """
 
 package(default_visibility = ["//visibility:public"])
