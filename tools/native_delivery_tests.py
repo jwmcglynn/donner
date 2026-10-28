@@ -3,6 +3,8 @@
 from pathlib import Path
 import os
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -132,11 +134,15 @@ class NativeDeliveryTest(unittest.TestCase):
             return ""
         with mock.patch.object(delivery, "_tool", side_effect=tool) as run, \
              mock.patch.object(delivery, "_build_id", return_value="a" * 40), \
-             mock.patch.object(delivery, "_elf_unwind", return_value={".eh_frame": "b" * 64}):
+             mock.patch.object(delivery, "_elf_unwind", return_value={".eh_frame": "b" * 64}), \
+             mock.patch.object(delivery, "_require_elf_source_lines") as lines:
             result = delivery.prepare(binary=self.binary, output=self.output,
                                       symbols=self.symbols, platform="linux-x86-64")
         self.assertEqual(self.binary.read_bytes(), LINUX_HEADER + b"linked executable")
         self.assertEqual(result["identity"], "a" * 40)
+        lines.assert_called_once_with(self.symbols / "binary.debug")
+        self.assertEqual(self.output.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(self.symbols.stat().st_mode & 0o777, 0o700)
         self.assertTrue(any(call.args[1].startswith("--add-gnu-debuglink=")
                             for call in run.call_args_list))
 
@@ -156,6 +162,32 @@ class NativeDeliveryTest(unittest.TestCase):
                                  symbols=self.symbols, platform="linux-x86-64")
         self.assertFalse(any("--strip-unneeded" in call.args for call in tool.call_args_list))
         self.assertFalse((self.symbols / "delivery.json").exists())
+
+    def test_source_rows_require_real_line_number_and_address(self):
+        for row in (b"fixture.cc 7 0x1234 x", b"fixture.cc 7 0x1234 1 x"):
+            self.assertTrue(delivery._usable_source_row(row), row)
+        for row in (b"fixture.cc - 0x1234", b"fixture.cc 0 0x1234", b"fixture.cc 7 0x0",
+                    b"File name Line number Starting address View Stmt", b"fixture.cc:"):
+            self.assertFalse(delivery._usable_source_row(row), row)
+
+    def test_decoded_lines_larger_than_generic_tool_cap_are_streamed(self):
+        program = ("import sys; "
+                   "sys.stdout.buffer.write(b'fixture.cc 7 0x1234 x\\n' * 100000)")
+        self.assertTrue(delivery._has_decoded_source_lines((sys.executable, "-c", program)))
+
+    def test_decoded_tool_failure_cannot_be_hidden_by_a_valid_row(self):
+        program = "print('fixture.cc 7 0x1234 x'); raise SystemExit(1)"
+        with self.assertRaises(subprocess.CalledProcessError):
+            delivery._has_decoded_source_lines((sys.executable, "-c", program))
+
+    def test_decoded_tool_timeout_is_bounded_and_reaped(self):
+        with self.assertRaises(subprocess.TimeoutExpired):
+            delivery._has_decoded_source_lines(
+                (sys.executable, "-c", "import time; time.sleep(10)"), timeout_seconds=0.05)
+
+    def test_single_oversized_decoded_row_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "source line exceeds"):
+            delivery._decoded_line_chunk(b"x" * delivery.MAX_TOOL_BYTES, b"x")
 
     def test_public_or_absent_symbol_evidence_directory_fails_before_copy(self):
         evidence = self.root / "public"

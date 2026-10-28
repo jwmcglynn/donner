@@ -11,9 +11,11 @@ import stat
 import struct
 from pathlib import Path
 import re
+import selectors
 import shutil
 import subprocess
 import tempfile
+import time
 
 
 MAX_TOOL_BYTES = 1024 * 1024
@@ -118,6 +120,63 @@ def _elf_unwind(path: Path) -> dict[str, str]:
     return result
 
 
+def _usable_source_row(line: bytes) -> bool:
+    fields = line.rsplit(None, 4)
+    if fields and fields[-1] == b"x":
+        fields.pop()
+    if len(fields) >= 4 and fields[-1].isdigit():
+        fields.pop()
+    if len(fields) < 3:
+        return False
+    number, address = fields[-2:]
+    return (len(number) <= 10 and number.isdigit() and int(number) > 0
+            and re.fullmatch(rb"0x[0-9a-fA-F]{1,16}", address) is not None
+            and int(address, 16) > 0)
+
+
+def _decoded_line_chunk(pending: bytes, chunk: bytes) -> tuple[bytes, bool]:
+    lines = (pending + chunk).split(b"\n")
+    if any(len(line) > MAX_TOOL_BYTES for line in lines):
+        raise ValueError("native delivery decoded source line exceeds its limit")
+    return lines[-1], any(_usable_source_row(line) for line in lines[:-1])
+
+
+def _read_decoded_lines(pipe, deadline: float) -> bool:
+    pending, found = b"", False
+    with selectors.DefaultSelector() as selected:
+        selected.register(pipe, selectors.EVENT_READ)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selected.select(remaining):
+                raise subprocess.TimeoutExpired("readelf decoded source lines", 120)
+            chunk = os.read(pipe.fileno(), 65536)
+            if not chunk:
+                return found or _usable_source_row(pending)
+            pending, usable = _decoded_line_chunk(pending, chunk)
+            found = found or usable
+
+
+def _has_decoded_source_lines(arguments: tuple[str, ...], timeout_seconds: float = 120) -> bool:
+    """Drain decoded rows with bounded memory, even when a real image exceeds 1 MiB of rows."""
+    deadline = time.monotonic() + timeout_seconds
+    with subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
+        try:
+            found = _read_decoded_lines(process.stdout, deadline)
+            result = process.wait(timeout=max(0, deadline - time.monotonic()))
+            if result:
+                raise subprocess.CalledProcessError(result, arguments)
+            return found
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+
+def _require_elf_source_lines(path: Path) -> None:
+    if not _has_decoded_source_lines(("readelf", "--wide", "--debug-dump=decodedline", str(path))):
+        raise ValueError("native delivery ELF has no usable DWARF source lines")
+
+
 def _copy_dsym(source: Path, symbols: Path, identity: str) -> Path:
     if source.is_symlink() or not source.is_dir():
         raise ValueError("native delivery requires a Bazel-generated dSYM")
@@ -172,6 +231,7 @@ def _prepare_linux(binary: Path, output: Path, symbols: Path) -> tuple[str, dict
     _tool("objcopy", "--only-keep-debug", str(binary), str(debug))
     if _build_id(debug) != identity:
         raise ValueError("native delivery debug build ID does not match the executable")
+    _require_elf_source_lines(debug)
     _tool("strip", "--strip-unneeded", str(output))
     _tool("objcopy", f"--add-gnu-debuglink={debug}", str(output))
     if identity != _build_id(output) or before != _elf_unwind(output):
@@ -184,7 +244,7 @@ def _copy_fresh_executable(binary: Path, output: Path) -> None:
     with binary.open("rb") as source:
         descriptor = os.open(output, flags, 0o755)
         with os.fdopen(descriptor, "wb") as destination:
-            os.fchmod(destination.fileno(), 0o755)
+            os.fchmod(destination.fileno(), 0o755)  # nosec B103: Owner writes; public read/execute.
             shutil.copyfileobj(source, destination)
 
 

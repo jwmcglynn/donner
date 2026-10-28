@@ -665,10 +665,16 @@ cc_binary(
     name = "native_delivery_elf_fixture",
     testonly = True,
     srcs = ["native_delivery_elf_fixture.cc"],
-    copts = ["-gline-tables-only", "-fasynchronous-unwind-tables"],
+    copts = [
+        "-gline-tables-only",
+        "-fasynchronous-unwind-tables",
+    ],
     features = ["-strip"],
     linkopts = ["-Wl,--build-id=sha1"],
-    target_compatible_with = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
 )
 
 py_test(
@@ -676,8 +682,14 @@ py_test(
     size = "small",
     srcs = ["native_delivery_elf_tests.py"],
     data = [":native_delivery_elf_fixture"],
-    target_compatible_with = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
-    deps = [":native_delivery_lib", "@rules_python//python/runfiles"],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    deps = [
+        ":native_delivery_lib",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_library(
