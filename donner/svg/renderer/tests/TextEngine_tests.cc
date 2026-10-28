@@ -2421,8 +2421,8 @@ TEST(TextEngineTest, WhiteSpaceTextPathControlsShapeAsBlanks) {
   const auto runs = engine.layout(text, MakeTextParams(20.0));
   ASSERT_THAT(runs, SizeIs(1));
   ASSERT_THAT(runs[0].glyphs, SizeIs(4));
-  EXPECT_THAT(runs[0].glyphs[1].glyphIndex, Eq(static_cast<int>(' ') + 1));
-  EXPECT_THAT(runs[0].glyphs[2].glyphIndex, Eq(static_cast<int>(' ') + 1));
+  EXPECT_THAT(runs[0].glyphs[1].glyphIndex, testing::Eq(static_cast<int>(' ') + 1));
+  EXPECT_THAT(runs[0].glyphs[2].glyphIndex, testing::Eq(static_cast<int>(' ') + 1));
 }
 
 TEST(TextEngineTest, WhiteSpaceTabRetainsTextLengthAndAnchor) {
