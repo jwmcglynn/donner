@@ -194,6 +194,9 @@ HOSTED_PARITY_TESTS = {
         "content scale, so trusted PRs retain the hosted configuration's coverage.",
     ("tools/BUILD.bazel", "macos_cache_key_parity_tests"):
         "Runs the Xcode selection probe against host tools (#1895).",
+    ("tools/BUILD.bazel", "native_delivery_elf_tests"):
+        "Inspects real x86-64 ELF source lines with host binutils; the ARM64 lane skips this "
+        "architecture-specific regression, so trusted PRs retain the hosted x86 execution.",
 }
 
 # Differences between a main step and the hosted subset's copy of it. Keyed by (workflow, main
