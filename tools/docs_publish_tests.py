@@ -51,6 +51,18 @@ class DocsPublishTest(unittest.TestCase):
                 for token in tokens.values():
                     self.assertNotIn(token, message)
 
+    def test_attestation_diagnostic_redacts_overlapping_tokens_longest_first(self):
+        tokens = {"GH_TOKEN": "example-token", "GITHUB_TOKEN": "example-token-extended",
+                  "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "example-token-extended-longest"}
+        error = publish.subprocess.CalledProcessError(7, ["gh"],
+            stderr=" ".join(tokens.values()).encode())
+        with mock.patch.dict(os.environ, tokens), \
+             mock.patch.object(publish.subprocess, "run", side_effect=error), \
+             self.assertRaises(ValueError) as caught:
+            publish.attestation(self.root / "subject", publish.WORKFLOW,
+                                "b" * 40, self.root / "overlap.json")
+        self.assertTrue(str(caught.exception).endswith(json.dumps("[REDACTED] [REDACTED] [REDACTED]")))
+
     def test_request_cannot_override_workflow_context_or_smuggle_extra_fields(self):
         request = {"composition_run": "123/1", "composition_sha256": "a" * 64, "prior_composition": "b" * 64, "bootstrap": None}
         with mock.patch.dict(os.environ, {"DOCS_REQUEST": json.dumps(request)}):
