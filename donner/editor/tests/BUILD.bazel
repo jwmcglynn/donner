@@ -1486,7 +1486,7 @@ donner_cc_fuzzer(
     deps = [
         "//donner/editor:editor_icons",
         "//donner/editor:embedded_svg_icon",
-        "//donner/svg/core",
+        "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_tiny_skia",
     ],

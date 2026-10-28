@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
+#include <utility>
 
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/svg/SVGTextElement.h"

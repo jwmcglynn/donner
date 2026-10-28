@@ -23,7 +23,9 @@ class PackagedResourceRawFixtureTest(unittest.TestCase):
   def invoke(self, fixture_root: Path) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ, DONNER_TEST_RESOURCE_ROOT=str(fixture_root))
     return subprocess.run(
-        [str(runfile(OPTIONS.fuzzer)), "-runs=1"],
+        [str(runfile(OPTIONS.fuzzer)), "-runs=1",
+         "-artifact_prefix=" + os.environ["TEST_TMPDIR"] + "/"],
+        cwd=os.environ["TEST_TMPDIR"],
         env=environment,
         check=False,
         capture_output=True,
