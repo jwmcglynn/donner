@@ -1,11 +1,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -67,6 +70,7 @@ protected:
   void SetUp() override {
     ASSERT_THAT(provider_.regular, Not(IsEmpty()));
     ASSERT_THAT(provider_.italic, Not(IsEmpty()));
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
     auto parsed = parser::SVGParser::ParseSVG(R"(
       <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
         <g font-family="sans-serif" font-size="64">
@@ -77,7 +81,8 @@ protected:
           <text id="only-oblique" font-style="oblique" style="font-synthesis-style:oblique-only">A</text>
           <text id="document" font-family="DocumentFace" font-style="italic">A</text>
         </g>
-      </svg>)");
+      </svg>)",
+                                              warnings);
     ASSERT_THAT(parsed, ParseResultIs(_));
     document_.emplace(std::move(parsed.result()));
     auto& registry = document_->registry();
