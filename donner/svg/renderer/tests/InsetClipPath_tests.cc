@@ -239,9 +239,9 @@ TEST(RoundedInsetClipPath, InheritedEmUsesDeclaringFont) {
     <g font-size="20" clip-path="inset(8px round .4em) view-box">
       <rect width="64" height="64" fill="red" font-size="40" clip-path="inherit"/>
     </g>)svg");
-  const auto expected =
-      RenderInsetScene(ReferenceScene("<rect x='8' y='8' width='48' height='48' rx='8'/>",
-                                      "<rect width='64' height='64' fill='red'/>"));
+  const auto expected = RenderInsetScene(
+      ReferenceScene("<rect x='8' y='8' width='48' height='48' rx='8'/>",
+                     "<rect width='64' height='64' fill='red' clip-path='url(#reference)'/>"));
   editor::tests::CompareBitmapToBitmap(actual, expected, "rounded_inset_inherited_em",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -261,7 +261,7 @@ TEST(RoundedInsetClipPath, RootFontMutationRecomputesRemRadii) {
     const auto actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
     const auto expected = RenderInsetScene(ReferenceScene(
         "<rect x='8' y='8' width='48' height='48' rx='" + std::to_string(fontSize / 2) + "'/>",
-        "<rect width='64' height='64' fill='red'/>"));
+        "<rect width='64' height='64' fill='red' clip-path='url(#reference)'/>"));
     editor::tests::CompareBitmapToBitmap(actual, expected, "rounded_inset_root_mutation",
                                          editor::tests::PixelmatchIdentityParams());
   }
