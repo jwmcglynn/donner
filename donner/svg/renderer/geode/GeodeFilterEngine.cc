@@ -45,6 +45,7 @@
 #include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/FilterRegionContext.h"
+#include "donner/svg/renderer/ImageSampling.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
@@ -781,15 +782,13 @@ using DropShadowParams = gpu::shader::programs::DropShadowParams;
 /// Row-major 2x3 transform: src = M * (dst_pixel + 0.5, 1).
 using ImageParams = gpu::shader::programs::FilterImageParams;
 
-uint32_t ImageSamplingMode(svg::ImageRendering imageRendering) {
-  switch (imageRendering) {
-    case svg::ImageRendering::CrispEdges:
-    case svg::ImageRendering::OptimizeSpeed: return 1u;
-    case svg::ImageRendering::Pixelated: return 2u;
-    case svg::ImageRendering::Auto:
-    case svg::ImageRendering::Smooth:
-    case svg::ImageRendering::HighQuality:
-    case svg::ImageRendering::OptimizeQuality: return 0u;
+/// The feImage shader's `samplingMode` for \p kernel.
+uint32_t ImageSamplingMode(svg::ImageSamplingKernel kernel) {
+  switch (kernel) {
+    case svg::ImageSamplingKernel::MitchellCubic: return 0u;
+    case svg::ImageSamplingKernel::Nearest: return 1u;
+    case svg::ImageSamplingKernel::PixelatedSmooth: return 2u;
+    case svg::ImageSamplingKernel::Bilinear: return 3u;
   }
   return 0u;
 }
@@ -3245,7 +3244,8 @@ std::optional<ImageParams> ImageParamsFromTransform(
   params.m10 = static_cast<float>(imageValues[3]);
   params.m11 = static_cast<float>(imageValues[4]);
   params.m12 = static_cast<float>(imageValues[5]);
-  params.samplingMode = ImageSamplingMode(primitive.imageRendering);
+  params.samplingMode =
+      ImageSamplingMode(svg::ImageSamplingKernelFor(primitive.imageRendering, deviceFromImage));
   params.pixelatedScaleX = static_cast<float>(imageValues[6]);
   params.pixelatedScaleY = static_cast<float>(imageValues[7]);
   return params;

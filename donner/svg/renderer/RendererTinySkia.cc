@@ -659,7 +659,7 @@ void DrawProceduralPixelatedImage(const tiny_skia::PixmapView& source, int sourc
   std::vector<std::uint8_t> proceduralPixels = RasterizeImagePremultiplied(
       source.data(), sourceWidth, sourceHeight, destFromSource,
       static_cast<int>(destination.width()), static_cast<int>(destination.height()),
-      ImageRendering::Pixelated);
+      ImageSamplingKernel::PixelatedSmooth);
   std::optional<tiny_skia::Pixmap> procedural = tiny_skia::Pixmap::fromVec(
       std::move(proceduralPixels), tiny_skia::IntSize(destination.width(), destination.height()));
   if (!procedural.has_value()) {
