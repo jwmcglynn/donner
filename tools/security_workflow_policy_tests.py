@@ -3239,6 +3239,18 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "if: github.ref == 'refs/heads/main'"), "manual dispatch on main"),
         })
 
+    def test_workflow_run_sources_are_distinct_workflows(self):
+        for path, workflow in self.supply_chain_files.items():
+            name = re.search(r"(?m)^name: (.+)$", workflow)
+            if not name:
+                continue
+            name = name.group(1).strip().strip("\"'")
+            for sources in re.findall(r"(?m)^    workflows: \[(.+)\]$", workflow):
+                with self.subTest(workflow=path):
+                    self.assertNotIn(name, [value.strip().strip("\"'")
+                                            for value in sources.split(",")],
+                                     "GitHub rejects workflow_run listeners that name themselves")
+
     def test_automatic_docs_policy_rejects_privilege_recursion_and_handoff_changes(self):
         path = DOCS_WORKFLOW
         workflow = self.supply_chain_files[path]
