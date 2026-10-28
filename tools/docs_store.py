@@ -105,7 +105,12 @@ def index(api: GitHub, expected: str | None) -> dict:
     site.require(api.tip() == expected, "snapshot branch advanced")
     if expected is None:
         return {"schema": 1, "releases": {}, "current": None, "previous": None}
-    value = json.loads(api.file(expected, "index.json"))
+    return read_index(api, expected)
+
+
+def read_index(api: GitHub, commit: str) -> dict:
+    site.require(bool(site.SHA.fullmatch(commit)), "invalid pinned snapshot commit")
+    value = json.loads(api.file(commit, "index.json"))
     site.require(set(value) == {"schema", "releases", "current", "previous"}
                  and value["schema"] == 1 and isinstance(value["releases"], dict)
                  and len(value["releases"]) <= site.MAX_VERSIONS, "invalid snapshot index")

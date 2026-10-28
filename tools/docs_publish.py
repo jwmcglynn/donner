@@ -167,10 +167,15 @@ def _verify_current_roster(api, snapshot, state, work):
 
 
 def prepare(work: Path, main_run: str, release_run: str, record_sha256: str,
-            snapshot: str | None, api=None, bootstrap: dict | None = None) -> None:
+            snapshot: str | None, api=None, bootstrap: dict | None = None,
+            pinned_snapshot: bool = False) -> None:
     api = api or store.GitHub()
     site.empty(work)
-    state = store.index(api, snapshot)
+    if pinned_snapshot:
+        store.automatic_context()
+        state = store.read_index(api, snapshot)
+    else:
+        state = store.index(api, snapshot)
     _verify_current_roster(api, snapshot, state, work)
     if bootstrap is not None:
         _bootstrap_recovery(api, snapshot, state, bootstrap, work / "bootstrap")
@@ -849,7 +854,7 @@ def prepare_auto(work: Path, api=None) -> None:
     api = api or store.GitHub()
     source = _automatic_trigger()
     snapshot = api.tip()
-    state = store.index(api, snapshot)
+    state = store.read_index(api, snapshot) if snapshot is not None else {"current": None}
     if state["current"] is None:
         _automatic_ready(False, "Initial versioned publication has not been activated; skipping.")
         return
@@ -858,7 +863,8 @@ def prepare_auto(work: Path, api=None) -> None:
     if not _source_order(manifest["versions"]["main"]["identity"]["source_commit"], source["source_commit"]):
         _automatic_ready(False, "The triggering source is already published or superseded; skipping.")
         return
-    prepare(work / "candidate", f"{source['run_id']}/{source['attempt']}", "", "", snapshot, api)
+    prepare(work / "candidate", f"{source['run_id']}/{source['attempt']}", "", "", snapshot, api,
+            pinned_snapshot=True)
     _automatic_ready(True, "Prepared a complete site with unchanged release snapshots.")
 
 

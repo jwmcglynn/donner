@@ -535,8 +535,8 @@ class DocsPublishTest(unittest.TestCase):
                 publish._source_order(old, new)
 
     def test_automatic_preparation_never_initializes_the_store(self):
+        self.api.tip.return_value = None
         with mock.patch.object(publish, "_automatic_trigger", return_value={}), \
-             mock.patch.object(publish.store, "index", return_value={"current": None}), \
              mock.patch.object(publish, "prepare") as prepare, \
              mock.patch.object(publish.store, "commit") as commit:
             publish.prepare_auto(self.root / "unused", self.api)
