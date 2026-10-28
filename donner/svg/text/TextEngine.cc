@@ -3656,6 +3656,57 @@ struct PreparedSpanChunk {
   }
 };
 
+/// Keep forced lines in source order while each line shapes into its own visual order.
+std::vector<ChunkRange> SplitShapingRangesAtLineBreaks(std::string_view text,
+                                                       const std::vector<ChunkRange>& ranges) {
+  std::vector<ChunkRange> result;
+  result.reserve(ranges.size());
+  for (const auto& range : ranges) {
+    const auto chunk = text.substr(range.byteStart, range.byteEnd - range.byteStart);
+    size_t start = 0;
+    for (size_t position = chunk.find('\n'); position != std::string_view::npos;
+         position = chunk.find('\n', position + 1)) {
+      if (position != start) {
+        result.push_back({range.byteStart + start, range.byteStart + position});
+      }
+      result.push_back({range.byteStart + position, range.byteStart + position + 1});
+      start = position + 1;
+    }
+    if (start != chunk.size()) {
+      result.push_back({range.byteStart + start, range.byteEnd});
+    }
+  }
+  return result;
+}
+
+std::vector<ChunkRange> FindSpanShapingRanges(
+    const components::ComputedTextComponent::TextSpan& span, std::string_view text,
+    const SmallVector<std::optional<Lengthd>, 1>& xList,
+    const SmallVector<std::optional<Lengthd>, 1>& yList) {
+  auto ranges = findChunkRanges(text, xList, yList);
+  if (!span.pathSpline && PreservesSegmentBreaks(span.whiteSpace) &&
+      text.find('\n') != std::string_view::npos) {
+    return SplitShapingRangesAtLineBreaks(text, ranges);
+  }
+  return ranges;
+}
+
+/// Record control roles before shaping copies or replacements change their byte representation.
+std::vector<bool> FindForcedShapingSeparators(
+    const components::ComputedTextComponent::TextSpan& span, std::string_view text,
+    const std::vector<ChunkRange>& ranges) {
+  if (span.pathSpline || !PreservesSegmentBreaks(span.whiteSpace) ||
+      text.find('\n') == std::string_view::npos) {
+    return {};
+  }
+  std::vector<bool> result;
+  result.reserve(ranges.size());
+  for (const auto& range : ranges) {
+    result.push_back(range.byteStart < text.size() && text[range.byteStart] == '\n');
+  }
+  return result;
+}
+
 /// Reuses one shaping result per existing chunk and records its positioning group starts.
 struct PreparedSpanShaping {
   std::vector<PreparedSpanChunk> chunks;
@@ -3848,6 +3899,7 @@ private:
     SmallVector<std::optional<Lengthd>, 1> dxList;
     SmallVector<std::optional<Lengthd>, 1> dyList;
     std::vector<ChunkRange> chunkRanges;
+    std::vector<bool> forcedSeparators;
     ByteIndexMappings indexMappings;
     PreparedSpanShaping shaping;
     uint32_t lastCodepoint = 0;
@@ -4041,6 +4093,9 @@ private:
   }
 
   void prepareShaping(SpanState& state) {
+    state.chunkRanges = FindSpanShapingRanges(*state.span, state.text, state.xList, state.yList);
+    state.forcedSeparators =
+        FindForcedShapingSeparators(*state.span, state.text, state.chunkRanges);
     if (state.text.find_first_of("\n\t") != std::string_view::npos) {
       // Shape controls as blank glyphs while keeping byte clusters for line layout and DOM APIs.
       state.controlShapingText = std::string(state.text);
@@ -4053,7 +4108,6 @@ private:
     }
     state.runPenStartX = state.penX;
     state.runPenStartY = state.penY;
-    state.chunkRanges = findChunkRanges(state.text, state.xList, state.yList);
     state.indexMappings = buildByteIndexMappings(state.text);
     const TextSpan& span = *state.span;
     fallbackCoverage_.grant(state.text.size());
@@ -4117,7 +4171,14 @@ private:
            state.defaultY;
   }
 
+  bool isForcedSeparator(const SpanState& state, size_t chunkIndex) const {
+    return chunkIndex < state.forcedSeparators.size() && state.forcedSeparators[chunkIndex];
+  }
+
   KernAdjustment resolveCrossKern(const SpanState& state, size_t chunkIndex) const {
+    if (isForcedSeparator(state, chunkIndex)) {
+      return {};
+    }
     if (chunkIndex > 0) {
       return resolveCrossChunkKern(state, chunkIndex);
     }
@@ -4189,7 +4250,7 @@ private:
       layoutHorizontalGlyph(state, chunkIndex, glyphIndex, codepoint, charIndex, positioningCluster,
                             groupX, groupY, groupDx, groupDy, yOverride, crossKern);
     }
-    state.lastCodepoint = codepoint;
+    state.lastCodepoint = isForcedSeparator(state, chunkIndex) ? 0 : codepoint;
     state.lastFont = prepared.drawingFace(glyphIndex, state.font);
   }
 
@@ -4429,8 +4490,7 @@ private:
     if (prepared.shaped.glyphs.empty()) {
       return;
     }
-    size_t lastCluster = prepared.positioningClusters.back();
-    state.previousChunkCodepoint = decodeUtf8(state.text, lastCluster);
+    state.previousChunkCodepoint = state.lastCodepoint;
     state.previousChunkFont = prepared.drawingFace(prepared.shaped.glyphs.size() - 1, state.font);
     state.previousChunkFontSizePx = state.fontSizePx;
     state.previousChunkKerning = state.fontKerning;
