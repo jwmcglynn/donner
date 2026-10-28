@@ -8,6 +8,7 @@
 #include <string>
 #include <system_error>
 
+#include "donner/base/PackagedResource.h"
 #include "donner/editor/tools/GenerateShowcaseAsset.h"
 
 namespace {
@@ -47,6 +48,12 @@ int Run(const std::string& inputPath, const std::string& outputPath) {
   const std::string source = ReadFile(inputPath, readOk);
   if (!readOk) {
     std::cerr << "error: could not open input " << inputPath << "\n";
+    return 1;
+  }
+
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::cerr << "error: packaged resources unavailable: " << resourceError << "\n";
     return 1;
   }
 

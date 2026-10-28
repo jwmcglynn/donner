@@ -89,7 +89,10 @@ donner_cc_test(
         "SVGUnknownElement_tests.cc",
         "SVGUseElement_tests.cc",
     ],
-    data = ["//third_party/resvg-test-suite:fonts"],
+    data = [
+        "//third_party/public-sans:public-sans_resource_files",
+        "//third_party/resvg-test-suite:fonts",
+    ],
     opens_gpu_device = True,
     shard_count = 10,
     # Run these wrappers with the ordinary suite so `bazel test //...` exercises
