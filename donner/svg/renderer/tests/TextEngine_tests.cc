@@ -2568,6 +2568,8 @@ TEST(TextEngineTest, WrappedExplicitPositionStartsIndependentAnchorChunk) {
     params.writingMode = mode;
     const auto runs = engine.layout(text, params);
     ASSERT_THAT(runs, SizeIs(2));
+    ASSERT_THAT(runs[0].glyphs, SizeIs(1));
+    ASSERT_THAT(runs[1].glyphs, SizeIs(4));
     const auto pen = [mode](const TextGlyph& glyph) {
       return isVertical(mode) ? glyph.yPosition - glyph.verticalOriginOffset : glyph.xPosition;
     };
@@ -2595,6 +2597,7 @@ TEST(TextEngineTest, WrappedEmptyLinesDoNotSelectTheFollowingAnchor) {
   text.spans = {breaks, visible};
   const auto runs = engine.layout(text, MakeTextParams(20));
   ASSERT_THAT(runs, SizeIs(2));
+  ASSERT_THAT(runs[1].glyphs, SizeIs(2));
   EXPECT_THAT(runs[1].glyphs[0].xPosition, DoubleNear(-21, 1e-5));
 }
 
@@ -2757,6 +2760,40 @@ TEST(TextEngineTest, WrappedAbsoluteAxesRemainIndependentAfterNewline) {
         const double blockPosition = isVertical(mode) ? glyph.xPosition : glyph.yPosition;
         EXPECT_THAT(inlinePosition, DoubleNear(inlineReset ? 100 : 0, 1e-5));
         EXPECT_THAT(blockPosition, DoubleNear(expectedBlock + (i == 2 ? delta : 0), 1e-5));
+      }
+    }
+  }
+}
+
+TEST(TextEngineTest, WrappedAnchorsPreserveVisualClusterOrder) {
+  for (auto anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
+    SCOPED_TRACE(testing::PrintToString(anchor));
+    Registry registry;
+    FontManager fonts(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fonts, true);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("AB");
+    span.whiteSpace = WhiteSpace::Pre;
+    span.textAnchor = anchor;
+    text.spans.push_back(span);
+    const auto ordinary = engine.layout(text, MakeTextParams(20));
+    auto lineBreak = MakeSpan("\n");
+    lineBreak.whiteSpace = WhiteSpace::Pre;
+    lineBreak.startsNewChunk = false;
+    text.spans.push_back(lineBreak);
+    span.startsNewChunk = false;
+    text.spans.push_back(span);
+    const auto wrapped = engine.layout(text, MakeTextParams(20));
+    ASSERT_THAT(ordinary, SizeIs(1));
+    ASSERT_THAT(ordinary[0].glyphs, SizeIs(2));
+    ASSERT_THAT(wrapped, SizeIs(3));
+    for (size_t run : {size_t(0), size_t(2)}) {
+      ASSERT_THAT(wrapped[run].glyphs, SizeIs(2));
+      EXPECT_THAT(wrapped[run].glyphs[0].cluster, Eq(1u));
+      EXPECT_THAT(wrapped[run].glyphs[1].cluster, Eq(0u));
+      for (size_t i = 0; i < 2; ++i) {
+        EXPECT_THAT(wrapped[run].glyphs[i].xPosition,
+                    DoubleNear(ordinary[0].glyphs[i].xPosition, 1e-5));
       }
     }
   }
