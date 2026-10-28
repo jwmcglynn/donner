@@ -1998,6 +1998,28 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
   }
 }
 
+TEST(PropertyRegistry, PathClipAcceptsQuotedDataAndFillRule) {
+  for (const auto value : {"path(\"M8 8H32V32H8Z\")", "path(evenodd, 'M8 8H32V32H8Z') fill-box",
+                           "view-box PATH(nonzero, \"M8 8L32 32\")", "path('M8 8')"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:" + std::string(value));
+    EXPECT_THAT(registry.clipPath.get(), Optional(testing::_));
+  }
+}
+
+TEST(PropertyRegistry, InvalidPathClipKeepsEarlierDeclaration) {
+  for (const auto value :
+       {"path()", "path('')", "path(' ')", "path(M0 0)", "path(evenodd 'M0 0')", "path(, 'M0 0')",
+        "path(unknown, 'M0 0')", "path('M0 0', 'M1 1')", "path('M0 0L')",
+        "path('M0 0L1 1 garbage')", "path('M0 0') fill-box view-box"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(value));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
 TEST(PropertyRegistry, InsetOffsetsExpandAndRetainInlineStorage) {
   struct Example {
     std::string_view value;
