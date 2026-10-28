@@ -1788,10 +1788,7 @@ donner_cc_library(
 
 donner_cc_library(
     name = "text_editor_core",
-    srcs = [
-        "TextEditorCore.cc",
-        "TextEditorCoreRegex.cc",
-    ],
+    srcs = ["TextEditorCore.cc"],
     hdrs = ["TextEditorCore.h"],
     deps = [
         ":source_edit_intent",
@@ -1802,10 +1799,7 @@ donner_cc_library(
 
 donner_cc_library(
     name = "text_editor",
-    srcs = [
-        "TextEditor.cc",
-        "TextEditorRegex.cc",
-    ],
+    srcs = ["TextEditor.cc"],
     hdrs = ["TextEditor.h"],
     deps = [
         ":editor_symbol_glyphs",

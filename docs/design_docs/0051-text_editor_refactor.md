@@ -139,7 +139,7 @@ testable on its own.
     `interactiveEnd_`, `selectionMode_`)
   - Undo/redo stack (`undoBuffer_`, `undoIndex_`)
   - Colorize state (`colorRangeMin_`, `colorRangeMax_`,
-    `checkComments_`, `regexList_`, `languageDefinition_`)
+    `checkComments_`, `languageDefinition_`)
   - Change tracking (`textChanged_`)
   - Indent settings (`tabSize_`, `insertSpaces_`, `indentMode_`)
 - [x] Move the following methods (copy, then remove from

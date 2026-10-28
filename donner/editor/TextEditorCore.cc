@@ -138,15 +138,13 @@ TextEditorCore::~TextEditorCore() = default;
 // Language definition + palette
 // ---------------------------------------------------------------------------
 
-void TextEditorCore::installPreparedLanguage(const LanguageDefinition& langDef,
-                                             LanguageDefinition::TokenizeCallback fallback) {
+void TextEditorCore::setLanguageDefinition(const LanguageDefinition& langDef) {
   languageDefinition_ = langDef;
-  regexFallback_ = std::move(fallback);
   colorize();
 }
 
 void TextEditorCore::setSvgLanguageDefinition() {
-  installPreparedLanguage(LanguageDefinition::SVG(), {});
+  setLanguageDefinition(LanguageDefinition::SVG());
 }
 
 // ---------------------------------------------------------------------------
@@ -1876,20 +1874,8 @@ void TextEditorCore::colorizeRange(int fromLine, int toLine) {
       const char* tokenBegin = nullptr;
       const char* tokenEnd = nullptr;
       ColorIndex tokenColor = ColorIndex::Default;
-      bool hasToken = false;
-
-      // Try custom tokenizer if available
-      if (languageDefinition_.tokenize) {
-        if (languageDefinition_.tokenize(current, end, tokenBegin, tokenEnd, tokenColor)) {
-          hasToken = true;
-        }
-      }
-
-      if (!hasToken && regexFallback_) {
-        hasToken = regexFallback_(current, end, tokenBegin, tokenEnd, tokenColor);
-      }
-
-      if (!hasToken) {
+      if (!languageDefinition_.tokenize ||
+          !languageDefinition_.tokenize(current, end, tokenBegin, tokenEnd, tokenColor)) {
         ++current;
         continue;
       }

@@ -634,8 +634,19 @@ TEST_F(TextEditorCoreTests, IsOnWordBoundaryHandlesDisabledAndColorizedModes) {
   EXPECT_TRUE(editor_.isOnWordBoundary(Coordinates(99, 0)));
 
   LanguageDefinition language;
-  language.tokenRegexStrings.push_back({R"(a+)", ColorIndex::Keyword});
-  language.tokenRegexStrings.push_back({R"(b+)", ColorIndex::Identifier});
+  language.tokenize = [](const char* begin, const char* end, const char*& tokenBegin,
+                         const char*& tokenEnd, ColorIndex& color) {
+    if (begin == end || (*begin != 'a' && *begin != 'b')) {
+      return false;
+    }
+    tokenBegin = begin;
+    tokenEnd = begin + 1;
+    while (tokenEnd != end && *tokenEnd == *begin) {
+      ++tokenEnd;
+    }
+    color = *begin == 'a' ? ColorIndex::Keyword : ColorIndex::Identifier;
+    return true;
+  };
   editor_.setColorizerEnabled(true);
   editor_.setLanguageDefinition(language);
   editor_.colorizeInternal();
@@ -2297,7 +2308,22 @@ TEST_F(TextEditorCoreTests, CustomLanguageColorizesCaseInsensitiveIdentifiers) {
   language.keywords.insert("FOO");
   language.identifiers.emplace("BAR", Identifier("BAR"));
   language.caseSensitive = false;
-  language.tokenRegexStrings.push_back({R"([A-Za-z_]+)", ColorIndex::Identifier});
+  language.tokenize = [](const char* begin, const char* end, const char*& tokenBegin,
+                         const char*& tokenEnd, ColorIndex& color) {
+    const auto isIdentifier = [](char ch) {
+      return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+    };
+    if (begin == end || !isIdentifier(*begin)) {
+      return false;
+    }
+    tokenBegin = begin;
+    tokenEnd = begin + 1;
+    while (tokenEnd != end && isIdentifier(*tokenEnd)) {
+      ++tokenEnd;
+    }
+    color = ColorIndex::Identifier;
+    return true;
+  };
 
   editor_.setText("foo bar baz");
   editor_.setLanguageDefinition(language);
@@ -2310,26 +2336,25 @@ TEST_F(TextEditorCoreTests, CustomLanguageColorizesCaseInsensitiveIdentifiers) {
                           Optional(ColorIndex::Identifier)));
 }
 
-TEST_F(TextEditorCoreTests, OrderedRegexFallbackColorsTheEntireMatchIncludingCaptures) {
+TEST_F(TextEditorCoreTests, LanguageWithoutTokenizerLeavesCharactersDefault) {
   LanguageDefinition language;
-  language.tokenRegexStrings = {
-      {R"(([A-Z]+)([0-9]+))", ColorIndex::UserType},
-      {R"([A-Z]+)", ColorIndex::Keyword},
-      {R"([0-9]+)", ColorIndex::Number},
-  };
+  language.keywords.insert("paint");
+  language.identifiers.emplace("server", Identifier("server"));
+  editor_.setSvgLanguageDefinition();
+  editor_.setText("<rect/>");
+  editor_.colorizeRange(0, 1);
+  ASSERT_THAT(ColorIndexesAt(editor_.buffer().getLineGlyphs(0), {1}),
+              ElementsAre(Optional(ColorIndex::Keyword)));
+
   editor_.setLanguageDefinition(language);
-  editor_.setText("AB12 34");
+  editor_.setText("paint server 42");
   editor_.colorizeRange(0, 1);
 
-  const Line& line = editor_.buffer().getLineGlyphs(0);
-  EXPECT_THAT(ColorIndexesAt(line, {0, 1, 2, 3, 4, 5, 6}),
-              ElementsAre(Optional(ColorIndex::UserType), Optional(ColorIndex::UserType),
-                          Optional(ColorIndex::UserType), Optional(ColorIndex::UserType),
-                          Optional(ColorIndex::Default), Optional(ColorIndex::Number),
-                          Optional(ColorIndex::Number)));
+  EXPECT_THAT(editor_.buffer().getLineGlyphs(0),
+              Each(Field("colorIndex", &Glyph::colorIndex, ColorIndex::Default)));
 }
 
-TEST_F(TextEditorCoreTests, CustomTokenizerFallsBackToRegexForUnrecognizedTokens) {
+TEST_F(TextEditorCoreTests, CustomTokenizerLeavesUnrecognizedCharactersDefault) {
   LanguageDefinition language;
   language.keywords.insert("paint");
   language.tokenize = [](const char* begin, const char* end, const char*& tokenBegin,
@@ -2342,28 +2367,33 @@ TEST_F(TextEditorCoreTests, CustomTokenizerFallsBackToRegexForUnrecognizedTokens
     }
     return false;
   };
-  language.tokenRegexStrings = {
-      {R"(@paint)", ColorIndex::Punctuation},
-      {R"([A-Za-z]+)", ColorIndex::Identifier},
-      {R"([0-9]+)", ColorIndex::Number},
-  };
   editor_.setLanguageDefinition(language);
   editor_.setText("@paint 42");
   editor_.colorizeRange(0, 1);
 
   const Line& line = editor_.buffer().getLineGlyphs(0);
   EXPECT_THAT(ColorIndexesAt(line, {0, 1, 5, 6, 7, 8}),
-              ElementsAre(Optional(ColorIndex::UserFunction), Optional(ColorIndex::Keyword),
-                          Optional(ColorIndex::Keyword), Optional(ColorIndex::Default),
-                          Optional(ColorIndex::Number), Optional(ColorIndex::Number)));
+              ElementsAre(Optional(ColorIndex::UserFunction), Optional(ColorIndex::Default),
+                          Optional(ColorIndex::Default), Optional(ColorIndex::Default),
+                          Optional(ColorIndex::Default), Optional(ColorIndex::Default)));
 }
 
-TEST_F(TextEditorCoreTests, RegexDefinitionOwnsCompiledRulesAfterCallerLifetimeEnds) {
+TEST_F(TextEditorCoreTests, LanguageDefinitionOwnsTokenizerAfterCallerLifetimeEnds) {
   {
     LanguageDefinition language;
-    language.tokenRegexStrings = {{R"([A-Z]+)", ColorIndex::UserType}};
+    language.tokenize = [token = std::string("ABC")](const char* begin, const char* end,
+                                                     const char*& tokenBegin, const char*& tokenEnd,
+                                                     ColorIndex& color) {
+      if (std::string_view(begin, end - begin).starts_with(token)) {
+        tokenBegin = begin;
+        tokenEnd = begin + token.size();
+        color = ColorIndex::UserType;
+        return true;
+      }
+      return false;
+    };
     editor_.setLanguageDefinition(language);
-    language.tokenRegexStrings.clear();
+    language.tokenize = {};
   }
   editor_.setText("ABC");
   editor_.colorizeRange(0, 1);
@@ -2371,15 +2401,26 @@ TEST_F(TextEditorCoreTests, RegexDefinitionOwnsCompiledRulesAfterCallerLifetimeE
               Each(Field("colorIndex", &Glyph::colorIndex, ColorIndex::UserType)));
 }
 
-TEST_F(TextEditorCoreTests, BuiltInSvgSetupClearsPreviousRegexAndPreservesEditing) {
+TEST_F(TextEditorCoreTests, BuiltInSvgSetupReplacesCustomTokenizerAndPreservesEditing) {
   LanguageDefinition custom;
-  custom.tokenRegexStrings = {{R"(@)", ColorIndex::Keyword}};
+  custom.tokenize = [](const char* begin, const char* end, const char*& tokenBegin,
+                       const char*& tokenEnd, ColorIndex& color) {
+    if (begin == end || *begin != '@') {
+      return false;
+    }
+    tokenBegin = begin;
+    tokenEnd = begin + 1;
+    color = ColorIndex::UserType;
+    return true;
+  };
   editor_.setLanguageDefinition(custom);
   editor_.setText("<rect/>@");
+  editor_.colorizeRange(0, 1);
+  EXPECT_THAT(ColorIndexesAt(editor_.buffer().getLineGlyphs(0), {1, 7}),
+              ElementsAre(Optional(ColorIndex::Default), Optional(ColorIndex::UserType)));
   editor_.setSvgLanguageDefinition();
   editor_.colorizeRange(0, 1);
   EXPECT_EQ(editor_.getLanguageDefinition().name, RcString("SVG"));
-  EXPECT_TRUE(editor_.getLanguageDefinition().tokenRegexStrings.empty());
   EXPECT_THAT(ColorIndexesAt(editor_.buffer().getLineGlyphs(0), {1, 7}),
               ElementsAre(Optional(ColorIndex::Keyword), Optional(ColorIndex::Default)));
 
@@ -2390,28 +2431,6 @@ TEST_F(TextEditorCoreTests, BuiltInSvgSetupClearsPreviousRegexAndPreservesEditin
   EXPECT_EQ(editor_.getText(), "<rect/>@");
   editor_.redo();
   EXPECT_EQ(editor_.getText(), "<rect/>x@");
-}
-
-TEST_F(TextEditorCoreTests, CustomTokenizerTakesPrecedenceOverRegexRules) {
-  LanguageDefinition language;
-  language.tokenize = [](const char* inBegin, const char* inEnd, const char*& outBegin,
-                         const char*& outEnd, ColorIndex& paletteIndex) {
-    if (inBegin != inEnd && *inBegin == '@') {
-      outBegin = inBegin;
-      outEnd = inBegin + 1;
-      paletteIndex = ColorIndex::UserFunction;
-      return true;
-    }
-    return false;
-  };
-  language.tokenRegexStrings.push_back({R"(@)", ColorIndex::Punctuation});
-
-  editor_.setText("@");
-  editor_.setLanguageDefinition(language);
-  editor_.colorizeInternal();
-
-  const Line& line = editor_.buffer().getLineGlyphs(0);
-  EXPECT_THAT(ColorIndexesAt(line, {0}), ElementsAre(Optional(ColorIndex::UserFunction)));
 }
 
 namespace {

@@ -30,7 +30,9 @@ The Donner `TextEditor` widget (1296 lines of header, 4130 lines of implementati
 The TextEditor is a core Donner widget used by the editor application for SVG text editing. It supports:
 - **Basic text operations**: insertion, deletion, selection, copy/paste.
 - **Undo/redo**: per-keystroke granularity with EditorState snapshots.
-- **Syntax highlighting**: regex-based colorization with custom language definitions.
+- **Syntax highlighting**: callback-based colorization with custom language definitions.
+  Custom languages provide `LanguageDefinition::tokenize`; unrecognized characters keep the default
+  color, while language keywords, identifiers, comments, and indentation settings remain configurable.
 - **Code folding**: collapsible code regions.
 - **Keyboard shortcuts**: customizable via Shortcut struct, wired via ShortcutId enum.
 - **Mouse interaction**: single/double/triple-click, drag selection, wheel scroll.
@@ -191,7 +193,7 @@ These form the foundation of any text editor and must work reliably.
   - [ ] Test: Insertion of multi-byte UTF-8 character (e.g., emoji) is handled correctly.
   - [ ] Test: Arrow keys navigate UTF-8 boundaries correctly (lines 426, 459 check `(c & 0xC0) != 0x80`).
   - [ ] Test: Backspace / Delete correctly handle multi-byte sequences.
-  - [ ] Test: Regex word boundaries work with non-ASCII characters.
+  - [ ] Test: Word boundaries work with non-ASCII characters.
 
 - [ ] **Horizontal Scrolling**
   - [ ] Test: Long lines scroll horizontally when cursor moves beyond view.

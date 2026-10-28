@@ -32,7 +32,6 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -143,26 +142,23 @@ using ErrorMarkers =
 using Palette = std::array<unsigned int, static_cast<size_t>(ColorIndex::Max)>;
 
 /**
- * Definition of a programming language's syntax for highlighting.
+ * Language configuration for callback-based syntax highlighting and editing.
+ * Characters declined by the tokenizer retain the default color; comments are colored separately.
  */
 struct LanguageDefinition {
-  using TokenRegexString =
-      std::pair<std::string, ColorIndex>;  //!< Pattern and palette color for one token class.
-  using TokenRegexStrings = std::vector<TokenRegexString>;  //!< Ordered regex token classes.
   using TokenizeCallback =  //!< Callback that identifies the next token in a character range.
       std::function<bool(const char* inBegin, const char* inEnd, const char*& outBegin,
                          const char*& outEnd, ColorIndex& paletteIndex)>;
 
-  RcString name;                        //!< Language name
-  Keywords keywords;                    //!< Language keywords
-  Identifiers identifiers;              //!< Known identifiers
-  RcString commentStart;                //!< Multi-line comment start
-  RcString commentEnd;                  //!< Multi-line comment end
-  RcString singleLineComment;           //!< Single-line comment marker
-  bool autoIndentation = true;          //!< Whether to enable auto-indentation
-  TokenizeCallback tokenize;            //!< Custom tokenization callback
-  TokenRegexStrings tokenRegexStrings;  //!< Regex patterns for syntax
-  bool caseSensitive = true;            //!< Whether keywords are case-sensitive
+  RcString name;                //!< Language name
+  Keywords keywords;            //!< Language keywords
+  Identifiers identifiers;      //!< Known identifiers
+  RcString commentStart;        //!< Multi-line comment start
+  RcString commentEnd;          //!< Multi-line comment end
+  RcString singleLineComment;   //!< Single-line comment marker
+  bool autoIndentation = true;  //!< Whether to enable auto-indentation
+  TokenizeCallback tokenize;    //!< Custom tokenization callback
+  bool caseSensitive = true;    //!< Whether keywords are case-sensitive
 
   LanguageDefinition() = default;
 
@@ -702,9 +698,6 @@ public:
       sourceEditIntentHook;  //!< Notify the shell when a byte-level source edit intent is queued.
 
 private:
-  void installPreparedLanguage(const LanguageDefinition& langDef,
-                               LanguageDefinition::TokenizeCallback fallback);
-
   // ---------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------
@@ -767,7 +760,6 @@ private:
   Palette paletteBase_{};
   Palette palette_{};
   LanguageDefinition languageDefinition_;
-  LanguageDefinition::TokenizeCallback regexFallback_;
   bool colorizerEnabled_ = true;
   int colorRangeMin_ = 0;
   int colorRangeMax_ = 0;
