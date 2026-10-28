@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/css/parser/RuleParser.h"
