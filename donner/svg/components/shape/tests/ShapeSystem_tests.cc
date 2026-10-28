@@ -196,6 +196,29 @@ TEST_F(ShapeSystemTest, RoundedInsetAdmitsFullCornerWorkBeforeAllocation) {
   EXPECT_EQ(admitted.remainingWork, 0u);
 }
 
+TEST_F(ShapeSystemTest, RoundedInsetHugeRadiiRetainRepresentableTinyUsedCorners) {
+  auto document = ParseAndComputeShapes(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1e-100 1e-100">
+      <rect id="r" width="1e-100" height="1e-100"
+        clip-path="inset(0 round 1e308px) view-box"/>
+    </svg>)svg");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  ParseWarningSink warnings;
+  const auto& style = StyleSystem().computeStyle(element->entityHandle(), warnings);
+  ASSERT_THAT(style.properties, testing::Optional(testing::_));
+  const auto clip = style.properties->clipPath.get();
+  ASSERT_THAT(clip, testing::Optional(testing::Field(
+                        &ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
+  CircleClipGeometryBudget budget;
+  const Path path = shapeSystem.insetClipPath(element->entityHandle(),
+                                              std::get<InsetClipPath>(clip->value), budget);
+  ASSERT_THAT(path.points(), testing::SizeIs(17));
+  EXPECT_THAT(path.points().front(),
+              testing::AllOf(testing::Field(&Vector2d::x, testing::DoubleEq(5e-101)),
+                             testing::Field(&Vector2d::y, testing::DoubleEq(0))));
+}
+
 TEST_F(ShapeSystemTest, InsetGeometryUsesAxisExtentsAndAdmitsBeforeAllocation) {
   auto document = ParseAndComputeShapes(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48">

@@ -335,5 +335,37 @@ TEST(RoundedInsetClipPath, InvalidRadiusKeepsLastValidDeclaration) {
   }
 }
 
+TEST(RoundedInsetClipPath, PercentageRadiiUseSelectedFillAndStrokeBoxes) {
+  struct Example {
+    std::string_view box;
+    std::string_view reference;
+  };
+  for (const auto& example : {
+           Example{"fill-box", "<rect x='12' y='16' width='32' height='24' rx='10' ry='8'/>"},
+           Example{"stroke-box", "<rect x='8' y='12' width='40' height='32' rx='12' ry='10'/>"},
+           Example{"", "<rect x='8' y='12' width='40' height='32' rx='12' ry='10'/>"},
+       }) {
+    SCOPED_TRACE(example.box);
+    const auto actual =
+        RenderInsetScene("<g clip-path='inset(4px round 25%) " + std::string(example.box) + "'>" +
+                         std::string(kStrokeContent) + "</g>");
+    const auto expected = RenderInsetScene(ReferenceScene(example.reference, kStrokeContent));
+    editor::tests::CompareBitmapToBitmap(actual, expected, "rounded_inset_selected_box",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RoundedInsetClipPath, OversubscribedOffsetsAndComputedOverflowRemainEmpty) {
+  for (const auto value :
+       {"50% round 8px", "75% 0 50% round 8px", "0 round 1e308em", "0 round 1e308rem"}) {
+    SCOPED_TRACE(value);
+    const auto actual =
+        RenderInsetScene("<g clip-path='inset(" + std::string(value) +
+                         ") view-box'><rect width='64' height='64' fill='red'/></g>");
+    editor::tests::CompareBitmapToBitmap(actual, RenderInsetScene(""), "rounded_inset_empty",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
