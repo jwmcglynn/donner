@@ -84,7 +84,6 @@ donner_cc_test(
     srcs = ["tests/FontFace_tests.cc"],
     deps = [
         ":core",
-        "@com_google_gtest//:gmock",
         "@com_google_gtest//:gtest_main",
     ],
 )
