@@ -235,9 +235,13 @@ charged for each computed style, including explicitly inherited copies. Polygon 
 and `calc()` coordinates are unsupported. `polygon_clip_path_tests`, `properties_tests` and
 `shape_system_tests` cover rendering, nested rules, grammar and resource refusal.
 
-`clip-path: inset()` supports one to four length/percentage offsets with margin-style expansion,
-negative offsets, and the same SVG reference boxes. Horizontal percentages use reference width;
-vertical percentages use reference height. Oversized opposing insets reduce to zero area, which
+`clip-path: inset()` supports one to four offsets with margin-style expansion, negative offsets,
+and the same SVG reference boxes. Accepted units are absolute lengths, `em`, `rem`, and percentages.
+Lengths compute to pixels using the declaring element's computed font size and actual root font
+size before explicit inheritance. Horizontal percentages use reference width; vertical percentages
+use reference height. The font-metric units `ex`/`ch` and viewport units `vw`/`vh`/`vmin`/`vmax` are
+rejected until their computed-value context is available. Unrepresentable computed lengths produce
+an empty clip. Oversized opposing insets reduce to zero area, which
 produces an empty clipping region rather than preserving an earlier declaration. The fixed-size
 value needs no additional retained allocation, and rectangle construction shares the bounded
 reference-geometry walk and path-work budget. Rounded corners (`round`) and `calc()` offsets remain

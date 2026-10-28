@@ -327,6 +327,22 @@ ParseResult<ClipPath> ParsePolygonFunction(const css::Function& function, Radial
   return InvalidShape();
 }
 
+std::optional<Lengthd> FiniteInsetLength(const Component& component, bool allowUserUnits) {
+  const auto length = FiniteLength(component, allowUserUnits);
+  if (!length) {
+    return std::nullopt;
+  }
+  switch (length->unit) {
+    case Lengthd::Unit::Ex:
+    case Lengthd::Unit::Ch:
+    case Lengthd::Unit::Vw:
+    case Lengthd::Unit::Vh:
+    case Lengthd::Unit::Vmin:
+    case Lengthd::Unit::Vmax: return std::nullopt;
+    default: return length;
+  }
+}
+
 ParseResult<ClipPath> ParseInsetFunction(const css::Function& function, RadialClipPath::Box box,
                                          bool allowUserUnits) {
   Arguments args;
@@ -336,7 +352,7 @@ ParseResult<ClipPath> ParseInsetFunction(const css::Function& function, RadialCl
   InsetClipPath inset;
   inset.box = box;
   for (std::size_t i = 0; i < args.size; ++i) {
-    const auto offset = FiniteLength(*args.values[i], allowUserUnits);
+    const auto offset = FiniteInsetLength(*args.values[i], allowUserUnits);
     if (!offset) {
       return InvalidShape();
     }

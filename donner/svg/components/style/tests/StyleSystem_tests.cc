@@ -11,6 +11,7 @@
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
@@ -21,6 +22,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
@@ -1043,6 +1045,50 @@ TEST_F(StyleSystemTest, InsetLengthsComputeBeforeInheritanceAndKeepPercentages) 
                                     LengthIs(testing::DoubleEq(25), Lengthd::Unit::Percent),
                                     LengthIs(testing::DoubleEq(2), Lengthd::Unit::Px)))))));
   }
+}
+
+TEST_F(StyleSystemTest, InsetRootOwnRemUsesAlreadyComputedRootFont) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" font-size="30" clip-path="inset(.25rem)"/>)svg");
+  const auto& properties = document.registry()
+                               .get<ComputedStyleComponent>(document.rootEntityHandle().entity())
+                               .properties;
+  ASSERT_THAT(properties, testing::Optional(testing::_));
+  EXPECT_THAT(properties->clipPath.get(),
+              testing::Optional(
+                  Field(&ClipPath::value,
+                        testing::VariantWith<InsetClipPath>(Field(
+                            &InsetClipPath::offsets,
+                            testing::Each(LengthIs(testing::DoubleEq(7.5), Lengthd::Unit::Px)))))));
+}
+
+TEST_F(StyleSystemTest, InsetDetachedRootContextUsesInitialFontWithoutRecursion) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" font-size="30">
+      <rect id="child" clip-path="inset(.5rem)"/>
+    </svg>)svg");
+  const auto element = document.querySelector("#child");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  const EntityHandle child = element->entityHandle();
+  auto& registry = document.registry();
+  auto& context = registry.ctx().get<SVGDocumentContext>();
+  const Entity originalRoot = context.rootEntity;
+  const Entity detached = registry.create();
+  registry.destroy(detached);
+  for (const Entity missingRoot : std::array<Entity, 2>{entt::null, detached}) {
+    context.rootEntity = missingRoot;
+    styleSystem.invalidateComputed(child);
+    ParseWarningSink warningSink;
+    const auto& properties = styleSystem.computeStyle(child, warningSink).properties;
+    ASSERT_THAT(properties, testing::Optional(testing::_));
+    EXPECT_THAT(properties->clipPath.get(),
+                testing::Optional(
+                    Field(&ClipPath::value,
+                          testing::VariantWith<InsetClipPath>(Field(
+                              &InsetClipPath::offsets,
+                              testing::Each(LengthIs(testing::DoubleEq(8), Lengthd::Unit::Px)))))));
+  }
+  context.rootEntity = originalRoot;
 }
 
 TEST(StyleResourceBudgetTest, SharesRetainedBytesAcrossDocumentFamily) {

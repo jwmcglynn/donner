@@ -4,7 +4,9 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -100,8 +102,8 @@ TEST(InsetClipPath, SvgReferenceBoxesAndAliases) {
 }
 
 TEST(InsetClipPath, OversubscribedAndZeroAreaInsetsReplaceEarlierClip) {
-  for (const auto offsets :
-       {"75% 0 50% 0", "0 75% 0 50%", "50%", "0 100% 0 0", "-50% 200% 0 -50%", "1e308px"}) {
+  for (const auto offsets : {"75% 0 50% 0", "0 75% 0 50%", "50%", "0 100% 0 0", "-50% 200% 0 -50%",
+                             "1e308px", "1e308em", "-1e308em"}) {
     SCOPED_TRACE(offsets);
     const auto actual = RenderInsetScene(
         "<g style='clip-path:circle(16px);clip-path:inset(" + std::string(offsets) +
@@ -128,6 +130,40 @@ TEST(InsetClipPath, InheritedEmUsesDeclaringFontSize) {
     </g>)svg");
   const auto expected = RenderInsetScene("<rect x='4' y='4' width='56' height='56' fill='red'/>");
   editor::tests::CompareBitmapToBitmap(actual, expected, "inset_inherited_em",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(InsetClipPath, RootFontMutationRecomputesInheritedRem) {
+  auto document = instantiateSubtree(R"svg(
+    <g font-size="20" clip-path="inset(.25rem) view-box">
+      <rect width="64" height="64" fill="red" font-size="40" clip-path="inherit"/>
+    </g><rect x="1" y="1" width="3" height="3" fill="lime"/>)svg",
+                                     {}, Vector2i(64, 64));
+  for (const int fontSize : {16, 32, 16}) {
+    SCOPED_TRACE(fontSize);
+    ASSERT_THAT(document.svgElement().setAttribute("font-size", std::to_string(fontSize)),
+                NoParseError());
+    const auto actual = RenderDocumentWithBackend(document, ActiveRendererBackend());
+    const int inset = fontSize / 4;
+    const auto expected =
+        RenderInsetScene("<rect x='" + std::to_string(inset) + "' y='" + std::to_string(inset) +
+                         "' width='" + std::to_string(64 - 2 * inset) + "' height='" +
+                         std::to_string(64 - 2 * inset) + "' fill='red'/>");
+    editor::tests::CompareBitmapToBitmap(actual, expected, "inset_root_font_mutation",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(InsetClipPath, InheritedPercentagesKeepChildSpecificReferenceBox) {
+  const auto actual = RenderInsetScene(R"svg(
+    <g clip-path="inset(25%) fill-box">
+      <rect width="64" height="64" fill="blue"/>
+      <rect x="8" y="12" width="40" height="32" fill="red" clip-path="inherit"/>
+    </g>)svg");
+  const auto expected = RenderInsetScene(
+      "<rect x='16' y='16' width='32' height='32' fill='blue'/>"
+      "<rect x='18' y='20' width='20' height='16' fill='red'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "inset_inherited_percentage",
                                        editor::tests::PixelmatchIdentityParams());
 }
 

@@ -2055,6 +2055,29 @@ TEST(PropertyRegistry, InsetRejectsUnsupportedContextualUnitsWithoutReplacingCli
   }
 }
 
+TEST(PropertyRegistry, InsetAbsoluteLengthsComputeAndOverflowRemainsClipped) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:inset(1in 72pt 2.54cm 25%)");
+  registry.resolveInsetClipLengths(30);
+  EXPECT_THAT(registry.clipPath.get(),
+              Optional(testing::Field(
+                  &ClipPath::value,
+                  testing::VariantWith<InsetClipPath>(testing::Field(
+                      &InsetClipPath::offsets,
+                      testing::ElementsAre(LengthValueIs(96, Lengthd::Unit::Px),
+                                           LengthValueIs(96, Lengthd::Unit::Px),
+                                           LengthValueIs(96, Lengthd::Unit::Px),
+                                           LengthValueIs(25, Lengthd::Unit::Percent)))))));
+  registry.parseStyle("clip-path:inset(1e308em)");
+  registry.resolveInsetClipLengths(30);
+  EXPECT_THAT(
+      registry.clipPath.get(),
+      Optional(testing::Field(&ClipPath::value,
+                              testing::VariantWith<InsetClipPath>(testing::Field(
+                                  &InsetClipPath::offsets,
+                                  testing::Each(LengthValueIs(50, Lengthd::Unit::Percent)))))));
+}
+
 TEST(PropertyRegistry, InvalidInsetKeepsEarlierDeclaration) {
   for (const std::string_view value :
        {"inset()", "inset(1px 2px 3px 4px 5px)", "inset(1px, 2px)", "inset(2)", "inset(auto)",

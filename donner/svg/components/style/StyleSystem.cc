@@ -38,6 +38,18 @@ namespace donner::svg::components {
 
 namespace {
 
+double InsetRootFontSize(const Registry& registry) {
+  const auto* context = registry.ctx().find<SVGDocumentContext>();
+  if (context && registry.valid(context->rootEntity)) {
+    // Installed root properties avoid re-entering style computation for root-owned rem.
+    if (const auto* root = registry.try_get<ComputedStyleComponent>(context->rootEntity);
+        root && root->properties) {
+      return root->properties->fontSize.get().value().value;
+    }
+  }
+  return FontMetrics().rootFontSize;
+}
+
 void SynchronizeStylesheetFonts(ResourceManagerContext& resources, Registry& registry,
                                 Entity entity, const StylesheetComponent& stylesheet) {
   const css::Stylesheet empty;
@@ -870,6 +882,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   if (computedStyle.properties) {
     resolveComputedParentFonts(handle, parent, *computedStyle.properties);
     computedStyle.properties->resolveTextDecorationThickness(DecorationRootFontSize(registry));
+    computedStyle.properties->resolveInsetClipLengths(InsetRootFontSize(registry));
   }
 }
 
