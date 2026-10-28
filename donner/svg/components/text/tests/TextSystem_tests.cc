@@ -1715,4 +1715,58 @@ TEST_F(TextSystemTest, CssWhiteSpacePreLineTrimsAcrossSpans) {
   EXPECT_THAT(contents, Eq("A\nB"));
 }
 
+TEST_F(TextSystemTest, CssWhiteSpaceNormalizesCarriageReturns) {
+  auto document = ParseAndCompute(
+      "<svg xmlns=\'http://www.w3.org/2000/svg\'><text id='t' "
+      "white-space='pre'>A\r\nB\rC</text></svg>");
+  const auto entity = document.querySelector("#t")->unsafeEntityHandle().entity();
+  EXPECT_THAT(document.registry().get<ComputedTextComponent>(entity).spans,
+              testing::ElementsAre(TextSpanTextIs("A\nB\nC")));
+}
+
+TEST_F(TextSystemTest, CssWhiteSpacePreservesSupplementaryPositioningIndices) {
+  auto document = ParseAndCompute(
+      "<svg xmlns=\'http://www.w3.org/2000/svg\'><text id='t' white-space='pre' x='1 2 3 4'>"
+      "\xf0\x9f\x98\x80\t\nB</text></svg>");
+  const auto entity = document.querySelector("#t")->unsafeEntityHandle().entity();
+  const auto& spans = document.registry().get<ComputedTextComponent>(entity).spans;
+  ASSERT_THAT(spans, SizeIs(1));
+  EXPECT_THAT(spans[0].xList,
+              testing::ElementsAre(OptionalLengthValueIs(1), OptionalLengthValueIs(2),
+                                   OptionalLengthValueIs(3), OptionalLengthValueIs(4)));
+}
+
+TEST_F(TextSystemTest, CssWhiteSpaceRecomputesAfterStyleMutation) {
+  auto document = ParseAndCompute(
+      "<svg xmlns=\'http://www.w3.org/2000/svg\'><text id='t'>  A   B  </text></svg>");
+  auto text = document.querySelector("#t").value();
+  text.setAttribute("style", "white-space:pre");
+  ParseWarningSink warnings;
+  StyleSystem().computeAllStyles(document.registry(), warnings);
+  TextSystem().instantiateAllComputedComponents(document.registry(), warnings);
+  EXPECT_THAT(
+      document.registry().get<ComputedTextComponent>(text.unsafeEntityHandle().entity()).spans,
+      testing::ElementsAre(TextSpanTextIs("  A   B  ")));
+}
+
+TEST_F(TextSystemTest, CssWhiteSpaceRecordsCommonAncestorBoundaryPolicy) {
+  auto document = ParseAndCompute(
+      "<svg xmlns=\'http://www.w3.org/2000/svg\'><text id='t' white-space='nowrap'><tspan "
+      "white-space='normal'>A </tspan>B</text></svg>");
+  const auto entity = document.querySelector("#t")->unsafeEntityHandle().entity();
+  const auto& spans = document.registry().get<ComputedTextComponent>(entity).spans;
+  ASSERT_THAT(spans, SizeIs(3));
+  EXPECT_THAT(spans[1].boundaryWhiteSpace, testing::Optional(WhiteSpace::Nowrap));
+}
+
+TEST_F(TextSystemTest, CssWhiteSpaceCollapsesAfterPreservedBreak) {
+  auto document = ParseAndCompute(
+      "<svg xmlns=\'http://www.w3.org/2000/svg\'><text id='t'><tspan white-space='pre'>A\n</tspan>"
+      "  B</text></svg>");
+  const auto entity = document.querySelector("#t")->unsafeEntityHandle().entity();
+  const auto& spans = document.registry().get<ComputedTextComponent>(entity).spans;
+  EXPECT_THAT(spans,
+              testing::ElementsAre(TextSpanTextIs(""), TextSpanTextIs("A\n"), TextSpanTextIs("B")));
+}
+
 }  // namespace donner::svg::components

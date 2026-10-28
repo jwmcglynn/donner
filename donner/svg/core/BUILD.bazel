@@ -47,6 +47,7 @@ cc_library(
         "UserAgentStylesheet.h",
         "VectorEffect.h",
         "Visibility.h",
+        "WhiteSpace.h",
         "WritingMode.h",
     ],
     visibility = [

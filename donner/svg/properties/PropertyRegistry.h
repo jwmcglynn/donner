@@ -38,6 +38,7 @@
 #include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/core/VectorEffect.h"
 #include "donner/svg/core/Visibility.h"
+#include "donner/svg/core/WhiteSpace.h"
 #include "donner/svg/core/WritingMode.h"
 #include "donner/svg/properties/ClipPath.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -127,6 +128,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `marker-end` | \ref markerEnd | `none` |
  * | `font-family` | \ref fontFamily | `serif` |
  * | `font-size` | \ref fontSize | `16px` |
+ * | `white-space` | \ref whiteSpace | `normal` |
  * | `text-anchor` | \ref textAnchor | `start` |
  * | `text-decoration` | \ref textDecoration | `none` |
  * | `dominant-baseline` | \ref dominantBaseline | `auto` |
@@ -383,6 +385,10 @@ public:
       "font-size-adjust",
       []() -> std::optional<std::optional<double>> { return std::optional<double>(); }};
 
+  /// CSS white-space collapsing and wrapping policy, inherited by text descendants.
+  Property<WhiteSpace, PropertyCascade::Inherit> whiteSpace{
+      "white-space", []() -> std::optional<WhiteSpace> { return WhiteSpace::Normal; }};
+
   /// `text-anchor` property, which determines the alignment of text relative to its anchor point.
   /// Inherited. Defaults to \ref TextAnchor::Start.
   Property<TextAnchor, PropertyCascade::Inherit> textAnchor{
@@ -494,9 +500,9 @@ public:
         vectorEffect, clipPath, clipRule, mask, maskType, colorInterpolation, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, fontKerning,
-        fontSizeAdjust, textAnchor, textDecoration, dominantBaseline, writingMode, textOrientation,
-        inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode,
-        isolation, imageRendering, paintOrder);
+        fontSizeAdjust, whiteSpace, textAnchor, textDecoration, dominantBaseline, writingMode,
+        textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline,
+        mixBlendMode, isolation, imageRendering, paintOrder);
   }
 
   /**
