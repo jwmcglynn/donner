@@ -2731,7 +2731,11 @@ std::vector<bool> ExcludedWrappingItems(const std::vector<WrappingGlyph>& flat, 
 void RecordAnchorExclusions(const std::vector<TextRun>& runs,
                             const components::ComputedTextComponent& text,
                             const std::vector<WrappingGlyph>& flat,
-                            const std::vector<bool>& excluded, AnchorExclusions& result) {
+                            const std::vector<bool>& excluded, AnchorExclusions* output) {
+  if (!output) {
+    return;
+  }
+  auto& result = *output;
   for (size_t i = 0; i < flat.size(); ++i) {
     if (!excluded[i]) {
       continue;
@@ -2875,8 +2879,8 @@ bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedT
   });
   const bool wrapped = HasWrappingLines(flat);
   const auto excluded = ExcludedWrappingItems(flat, numLines, measurePx);
-  if (!wrapped && exclusions) {
-    RecordAnchorExclusions(runs, text, flat, excluded, *exclusions);
+  if (!wrapped) {
+    RecordAnchorExclusions(runs, text, flat, excluded, exclusions);
   }
   if (!wrapped && !hasControls) {
     return false;
