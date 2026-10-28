@@ -40,6 +40,7 @@
 #include "donner/svg/text/TextBackendSimple.h"
 #include "donner/svg/text/TextEngineHelpers.h"
 #include "donner/svg/text/TextPathWarp.h"
+#include "donner/svg/text/TextTransform.h"
 #ifdef DONNER_TEXT_FULL
 #include "donner/svg/text/TextBackendFull.h"
 #endif
@@ -869,6 +870,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontStyle = style->properties->fontStyle.get().value();
     span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.get().value());
     span.fontVariant = style->properties->fontVariant.get().value();
+    span.textTransform = style->properties->textTransform.get().value();
     span.fontKerning = style->properties->fontKerning.get().value();
     span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
     span.fontSize = style->properties->fontSize.get().value();
@@ -1164,13 +1166,13 @@ bool EndsTextPathCluster(const TextRun& run, size_t glyphIndex, unsigned int cha
 /// Preserves glyph-local offsets while advancing one run's logical path clusters.
 void StageTextPathRun(TextRun& run, size_t runIndex,
                       const components::ComputedTextComponent::TextSpan& span,
-                      const ByteIndexMappings& mappings, const TextLayoutParams& params,
-                      const TextBackend& backend, double defaultY,
+                      std::string_view shapingText, const ByteIndexMappings& mappings,
+                      const TextLayoutParams& params, const TextBackend& backend, double defaultY,
                       const SmallVector<std::optional<Lengthd>, 1>& dxList,
                       const SmallVector<std::optional<Lengthd>, 1>& dyList, double boundaryKern,
                       TextPathStagingState& state) {
   state.advance += boundaryKern;
-  const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+  const std::string_view spanText = shapingText;
   const bool vertical = isVertical(params.writingMode);
   for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
     TextGlyph& glyph = run.glyphs[gi];
@@ -1199,7 +1201,7 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
       if (!backend.isCursive(codepoint)) {
         state.advance += span.letterSpacingPx;
       }
-      if (codepoint == 0x20) {
+      if (codepoint == 0x20 || codepoint == 0x3000) {
         state.advance += span.wordSpacingPx;
       }
     }
@@ -2476,7 +2478,7 @@ struct WrappingGlyph {
 
   double x = 0;
 
-  bool isSpace() const { return codepoint == ' ' || codepoint == '\t'; }
+  bool isSpace() const { return codepoint == ' ' || codepoint == '\t' || codepoint == 0x3000; }
   bool isBreak() const { return codepoint == '\n' && PreservesSegmentBreaks(mode); }
 };
 
@@ -2540,7 +2542,11 @@ std::vector<WrappingGlyph> CollectWrappingGlyphs(const std::vector<TextRun>& run
       chunk = boundary.index;
       const auto [resetsInline, resetsBlock] = WrappingAxisResets(boundary, vertical);
       size_t byte = GetPositioningCluster(glyph);
-      const uint32_t cp = byte < spanText.size() ? decodeUtf8(spanText, byte) : 0;
+      uint32_t cp = byte < spanText.size() ? decodeUtf8(spanText, byte) : 0;
+      if (span.textTransform == TextTransform::FullWidth) {
+        cp = text_transform::FullWidthCodepoint(
+            cp, span.preservesSpaces || PreservesSpaces(span.whiteSpace));
+      }
       const double advance = vertical ? glyph.yAdvance : glyph.xAdvance;
       flat.push_back(
           {ri, gi, InlinePenPosition(glyph, vertical), vertical ? glyph.xPosition : glyph.yPosition,
@@ -2614,7 +2620,7 @@ bool IsWrappingOverflow(const WrappingGlyph& item, double width, double measureP
 
 void TrimSoftBreakSpaces(std::vector<WrappingGlyph>& flat, size_t start, size_t end) {
   for (size_t trim = end; trim > start && flat[trim - 1].isSpace(); --trim) {
-    if (!PreservesSpaces(flat[trim - 1].mode)) {
+    if (!PreservesSpaces(flat[trim - 1].mode) && flat[trim - 1].codepoint != 0x3000) {
       flat[trim - 1].advance = 0.0;
     }
   }
@@ -3685,7 +3691,7 @@ PreparedSpanShaping PrepareSpanShaping(const ChunkShaper& shaper, std::string_vi
 
 /// Word spacing advances only after every glyph attached to the space group.
 bool IsWordSpacingGroupEnd(const PreparedSpanChunk& chunk, size_t index, uint32_t codepoint) {
-  return codepoint == 0x20 &&
+  return (codepoint == 0x20 || codepoint == 0x3000) &&
          (index + 1 == chunk.positioningClusters.size() ||
           chunk.positioningClusters[index] != chunk.positioningClusters[index + 1]);
 }
@@ -3811,9 +3817,10 @@ private:
 
     const TextSpan* span = nullptr;
     TextRun run;
-    /// Aliases the source span or controlShapingText for this immovable stack frame.
+    /// Aliases source text or owned shaping buffers for this immovable stack frame.
     std::string_view text;
     std::string controlShapingText;
+    std::optional<text_transform::FullWidthText> fullWidthText;
     FontHandle font;
     double specifiedFontSizePx = 0.0;
     float fontSizePx = 0.0f;
@@ -3882,7 +3889,10 @@ private:
       return;
     }
 
-    prepareShaping(state);
+    if (!prepareShaping(state)) {
+      commitUnshapedSpan(state);
+      return;
+    }
     layoutChunks(state);
     commitShapedSpan(state);
   }
@@ -4026,7 +4036,18 @@ private:
     runs_.push_back(std::move(state.run));
   }
 
-  void prepareShaping(SpanState& state) {
+  bool prepareShaping(SpanState& state) {
+    if (state.span->textTransform == TextTransform::FullWidth) {
+      const bool preserveSpaces =
+          state.span->preservesSpaces || PreservesSpaces(state.span->whiteSpace);
+      if (text_transform::NeedsFullWidth(state.text, preserveSpaces)) {
+        state.fullWidthText = text_transform::MakeFullWidth(state.text, preserveSpaces);
+        if (!state.fullWidthText) {
+          return false;
+        }
+        state.text = state.fullWidthText->text;
+      }
+    }
     if (state.text.find_first_of("\n\t") != std::string_view::npos) {
       // Shape controls as blank glyphs while keeping byte clusters for line layout and DOM APIs.
       state.controlShapingText = std::string(state.text);
@@ -4063,6 +4084,7 @@ private:
     state.previousChunkFont = previousSpanFont_;
     state.previousChunkFontSizePx = previousSpanFontSizePx_;
     state.previousChunkKerning = previousSpanKerning_;
+    return true;
   }
 
   void layoutChunks(SpanState& state) {
@@ -4440,10 +4462,34 @@ private:
       firstPathRun_ = runs_.size();
       previousTextPathSource_ = state.span->textPathSourceEntity;
     }
-    StageTextPathRun(state.run, runs_.size(), *state.span, state.indexMappings, params_, backend_,
-                     state.defaultY, state.dxList, state.dyList, state.pathBoundaryKern,
-                     pathStaging_);
+    const std::string_view logicalText =
+        state.fullWidthText ? std::string_view(state.fullWidthText->text)
+                            : std::string_view(state.span->text.data() + state.span->start,
+                                               state.span->end - state.span->start);
+    StageTextPathRun(state.run, runs_.size(), *state.span, logicalText, state.indexMappings,
+                     params_, backend_, state.defaultY, state.dxList, state.dyList,
+                     state.pathBoundaryKern, pathStaging_);
     state.run.onPath = true;
+  }
+
+  /// Restore source byte indices only after shaping and path staging have consumed transformed
+  /// text.
+  void restoreSourceClusters(SpanState& state) const {
+    if (!state.fullWidthText) {
+      return;
+    }
+    const auto sourceCluster = [&state](uint32_t byte) -> uint32_t {
+      if (byte >= state.indexMappings.byteToCharIdx.size()) {
+        return static_cast<uint32_t>(state.span->end - state.span->start);
+      }
+      return state.fullWidthText->sourceByteOffsets[state.indexMappings.byteToCharIdx[byte]];
+    };
+    for (auto& glyph : state.run.glyphs) {
+      glyph.cluster = sourceCluster(glyph.cluster);
+      if (glyph.positioningCluster) {
+        glyph.positioningCluster = sourceCluster(*glyph.positioningCluster);
+      }
+    }
   }
 
   void commitShapedSpan(SpanState& state) {
@@ -4452,6 +4498,7 @@ private:
     if (state.span->pathSpline) {
       stageTextPathSpan(state);
     }
+    restoreSourceClusters(state);
     runExtents_.push_back({state.runPenStartX, state.runPenStartY, state.penX, state.penY});
     runs_.push_back(std::move(state.run));
   }

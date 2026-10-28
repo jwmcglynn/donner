@@ -22,9 +22,9 @@
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/TextOrientation.h"
+#include "donner/svg/core/TextTransform.h"
 #include "donner/svg/core/Visibility.h"
 #include "donner/svg/core/WhiteSpace.h"
-#include "donner/svg/core/TextTransform.h"
 #include "donner/svg/text/TextTypes.h"
 
 namespace donner::svg::components {

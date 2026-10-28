@@ -35,7 +35,9 @@ def generate(source: bytes) -> str:
     header += "\n\n#include <array>\n#include <cstdint>\n#include <utility>\n\n"
     header += "namespace donner::svg::detail {\n\n"
     header += "inline constexpr std::array<std::pair<char32_t, char32_t>, 226> kFullWidthMapping = {{\n"
-    header += "".join(f"    {{0x{key:04x}, 0x{value:04x}}},\n" for key, value in sorted(mapping.items()))
+    entries = [f"{{0x{key:04x}, 0x{value:04x}}}," for key, value in sorted(mapping.items())]
+    header += "".join("    " + " ".join(entries[index:index + 5]) + "\n"
+                      for index in range(0, len(entries), 5))
     header += "}};\n\n}  // namespace donner::svg::detail\n"
     return header
 

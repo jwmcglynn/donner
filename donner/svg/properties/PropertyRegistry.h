@@ -506,9 +506,9 @@ public:
         vectorEffect, clipPath, clipRule, mask, maskType, colorInterpolation, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, fontKerning,
-        fontSizeAdjust, textTransform, whiteSpace, textAnchor, textDecoration, dominantBaseline, writingMode,
-        textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline,
-        mixBlendMode, isolation, imageRendering, paintOrder);
+        fontSizeAdjust, textTransform, whiteSpace, textAnchor, textDecoration, dominantBaseline,
+        writingMode, textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift,
+        alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
   }
 
   /**

@@ -49,13 +49,16 @@ donner_cc_library(
 
 donner_cc_library(
     name = "text_engine",
-    srcs = ["TextEngine.cc"],
+    srcs = [
+        "TextEngine.cc",
+        "TextTransform.cc",
+    ],
     hdrs = [
+        "FullWidthMapping.h",
         "TextEngine.h",
         "TextEngineHelpers.h",
         "TextPathWarp.h",
         "TextTransform.h",
-        "FullWidthMapping.h",
     ],
     defines = select({
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],
@@ -225,6 +228,15 @@ donner_cc_test(
         ":text_types",
         "//donner/svg/components/text:components",
         "//donner/svg/core",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "text_transform_tests",
+    srcs = ["tests/TextTransform_tests.cc"],
+    deps = [
+        ":text_engine",
         "@com_google_gtest//:gtest_main",
     ],
 )

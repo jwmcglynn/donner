@@ -3620,4 +3620,118 @@ TEST(TextEngineScriptedTest, FullWidthUsesOriginalCodepointPositions) {
                                   GlyphXPositionIs(DoubleEq(52))));
 }
 
+TEST(TextEngineScriptedTest, FullWidthMatchesLiteralUnicodeAcrossAxesAndWhitespace) {
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    for (auto whiteSpace : {WhiteSpace::Pre, WhiteSpace::PreWrap, WhiteSpace::BreakSpaces}) {
+      SCOPED_TRACE(testing::Message() << mode << " " << whiteSpace);
+      Registry registry;
+      FontManager fonts(registry);
+      TextEngine engine = MakeScriptedEngine(registry, fonts);
+      components::ComputedTextComponent text;
+      auto span = MakeSpan("A B\nC\tD");
+      span.textTransform = TextTransform::FullWidth;
+      span.whiteSpace = whiteSpace;
+      span.textAnchor = TextAnchor::End;
+      span.wordSpacingPx = 5;
+      text.spans.push_back(span);
+      auto params = MakeTextParams(20);
+      params.writingMode = mode;
+      params.inlineSizePx = 35;
+      const auto transformed = engine.layout(text, params);
+      text.spans[0].textTransform = TextTransform::None;
+      text.spans[0].text = RcString(
+          "\xef\xbc\xa1\xe3\x80\x80\xef\xbc\xa2\n"
+          "\xef\xbc\xa3\t\xef\xbc\xa4");
+      text.spans[0].end = text.spans[0].text.size();
+      const auto literal = engine.layout(text, params);
+      ASSERT_THAT(transformed, SizeIs(1));
+      ASSERT_THAT(literal, SizeIs(1));
+      ASSERT_THAT(transformed[0].glyphs, SizeIs(literal[0].glyphs.size()));
+      const auto& firstB = transformed[0].glyphs[2];
+      const double block = isVertical(mode) ? firstB.xPosition : firstB.yPosition;
+      const double offset = isVertical(mode) ? 2 : 3;
+      const double line = whiteSpace == WhiteSpace::Pre     ? 0
+                          : mode == WritingMode::VerticalRl ? -20
+                                                            : 20;
+      EXPECT_THAT(block, DoubleNear(offset + line, 1e-9));
+      for (size_t i = 0; i < literal[0].glyphs.size(); ++i) {
+        const auto& expected = literal[0].glyphs[i];
+        EXPECT_THAT(transformed[0].glyphs[i],
+                    AllOf(GlyphIndexIs(Eq(expected.glyphIndex)),
+                          GlyphXPositionIs(DoubleNear(expected.xPosition, 1e-9)),
+                          GlyphYPositionIs(DoubleNear(expected.yPosition, 1e-9)),
+                          Field("sideways", &TextGlyph::sideways, Eq(expected.sideways))));
+        EXPECT_THAT(transformed[0].glyphs[i].cluster, Eq(i));
+      }
+    }
+  }
+}
+
+TEST(TextEngineScriptedTest, FullWidthPathUsesMappedTextAndSourceClusters) {
+  const auto transformed = LayoutParsedTextPath(
+      "<textPath href='#p' style='text-transform:full-width;white-space:pre;word-spacing:5px'>"
+      "A B</textPath>");
+  const auto literal = LayoutParsedTextPath(
+      "<textPath href='#p' style='white-space:pre;word-spacing:5px'>"
+      "\xef\xbc\xa1\xe3\x80\x80\xef\xbc\xa2</textPath>");
+  ASSERT_THAT(transformed, SizeIs(3));
+  ASSERT_THAT(literal, SizeIs(3));
+  for (size_t i = 0; i < literal.size(); ++i) {
+    EXPECT_THAT(transformed[i], AllOf(GlyphIndexIs(Eq(literal[i].glyphIndex)),
+                                      GlyphXPositionIs(DoubleNear(literal[i].xPosition, 1e-9)),
+                                      Field("cluster", &TextGlyph::cluster, Eq(i))));
+  }
+}
+
+TEST(TextEngineScriptedTest, FullWidthRestoresReversedVisualSourceClusters) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts, true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(
+      "A\xc3\xa9"
+      "B");
+  span.textTransform = TextTransform::FullWidth;
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, SizeIs(1));
+  EXPECT_THAT(runs[0].glyphs, ElementsAre(Field("cluster", &TextGlyph::cluster, Eq(3u)),
+                                          Field("cluster", &TextGlyph::cluster, Eq(1u)),
+                                          Field("cluster", &TextGlyph::cluster, Eq(0u))));
+}
+
+TEST(TextEngineScriptedTest, FullWidthHonorsLegacySpaceAndCssPrecedence) {
+  const auto preserved =
+      LayoutParsedTextPath("<tspan xml:space='preserve' text-transform='full-width'>A B</tspan>");
+  ASSERT_THAT(preserved, SizeIs(3));
+  EXPECT_THAT(preserved[1], GlyphIndexIs(Eq(static_cast<int>(0x3000 % 997u) + 1)));
+  const auto overridden = LayoutParsedTextPath(
+      "<tspan text-transform='full-width' style='text-transform:none'>A</tspan>");
+  EXPECT_THAT(overridden, ElementsAre(GlyphIndexIs(Eq(static_cast<int>('A') + 1))));
+}
+
+TEST(TextEngineScriptedTest, FullWidthCharacterApisRetainOriginalUtf16Indices) {
+  const std::string sourceText =
+      "A\xc3\xa9\xf0\x9f\x98\x80"
+      "B";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><text id='t' font-size='20' "
+      "style='text-transform:full-width'>" +
+          sourceText + "</text></svg>",
+      warnings);
+  ASSERT_THAT(parsed.hasResult(), Eq(true));
+  auto document = std::move(parsed).result();
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  const auto handle = document.querySelector("#t")->unsafeEntityHandle();
+  engine.prepareForElement(handle, warnings);
+  EXPECT_THAT(engine.getNumberOfChars(handle), Eq(5));
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 4).x, DoubleNear(35, 1e-9));
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 2).x,
+              DoubleNear(engine.getStartPositionOfChar(handle, 3).x, 1e-9));
+  EXPECT_THAT(handle.get<components::TextComponent>().text.str(), Eq(sourceText));
+}
+
 }  // namespace donner::svg
