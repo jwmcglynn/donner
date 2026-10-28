@@ -231,6 +231,19 @@ TEST(TextDecorationThickness, OriginatingFillNoneDoesNotUseDescendantPaint) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(TextDecorationThickness, OriginReferenceFallbackDoesNotUseDescendantPaint) {
+  const auto actual = RenderDecorationScene(R"svg(
+    <linearGradient id="empty"/>
+    <text x="10" y="40" font-size="20" fill="url(#empty) red"
+          style="text-decoration:underline;text-decoration-thickness:8px"><tspan fill="blue"
+          style="text-decoration:line-through;text-decoration-thickness:2px">XX</tspan></text>)svg");
+  const auto expected = RenderDecorationScene(
+      "<rect x='10' y='38' width='20' height='8' fill='red'/>"
+      "<rect x='10' y='33' width='20' height='2' fill='blue'/>");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_origin_reference_fallback",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(TextDecorationThickness, OriginPatternRemainsAvailableWithDescendantSolidPaint) {
   constexpr std::string_view pattern =
       "<pattern id='p' patternUnits='userSpaceOnUse' width='4' height='4'>"

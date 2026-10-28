@@ -3177,6 +3177,11 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                                    tiny_skia::FilterQuality::Bilinear, combinedOpacity,
                                    toTinyTransform(patternFillPaint_->targetFromPattern));
             decoFillPaint = paint;
+          } else if (ref->fallback) {
+            decoFillPaint =
+                makeSolidPaint(css::Color(ref->fallback->resolve(
+                                   spanCurrentColor, NarrowToFloat(decoration.fillOpacity))),
+                               span.opacity);
           }
         }
         if (!span.decorations) {
