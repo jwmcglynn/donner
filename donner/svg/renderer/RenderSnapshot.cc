@@ -1,7 +1,9 @@
 #include "donner/svg/renderer/RenderSnapshot.h"
 
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <utility>
@@ -27,6 +29,7 @@ namespace donner::svg {
 struct SnapshotFontPayload {
   std::vector<uint8_t> bytes;
   FontDataTrust trust = FontDataTrust::Untrusted;
+  FontDataRenderingOptions rendering;
 };
 #endif
 namespace {
@@ -146,7 +149,7 @@ struct DrawTextCommand {
   components::ComputedTextComponent text;
   TextParams params;
   std::vector<css::FontFace> fontFaces;
-  size_t fontDomain = 0;
+  std::optional<size_t> fontDomain;
 #ifdef DONNER_TEXT_ENABLED
   std::vector<SnapshotFont> preparedFonts;
   /// Fallback faces of prepared glyphs, keyed by the glyph's ordinal across all prepared runs.
@@ -186,6 +189,59 @@ struct SourceEntityKeyHash {
   }
 };
 
+// Font identities use weak ownership, so a destroyed source cannot alias a new source at the
+// same address. The pointer is used only for sources without an installed font-loading domain.
+struct FontDomainKey {
+  std::weak_ptr<const void> owner;
+  Registry* uninitializedSource = nullptr;
+  size_t retainedIdentityBytes = 0;
+
+  bool operator<(const FontDomainKey& other) const {
+    const std::owner_less<std::weak_ptr<const void>> less;
+    if (less(owner, other.owner)) {
+      return true;
+    }
+    if (less(other.owner, owner)) {
+      return false;
+    }
+    return std::less<Registry*>{}(uninitializedSource, other.uninitializedSource);
+  }
+};
+
+FontDomainKey GetFontDomainKey(Registry& source) {
+#ifdef DONNER_TEXT_ENABLED
+  if (const auto* manager = source.ctx().find<FontManager>()) {
+    auto identity = manager->fontDomainIdentity();
+    auto& owner = identity.owner;
+    const std::weak_ptr<const void> empty;
+    if (owner.owner_before(empty) || empty.owner_before(owner)) {
+      return {std::move(owner), nullptr, identity.retainedStorageBytes};
+    }
+  }
+#endif
+  return {{}, &source};
+}
+
+struct FontSourceKey {
+  FontDomainKey domain;
+  Entity entity = entt::null;
+
+  bool operator<(const FontSourceKey& other) const {
+    if (domain < other.domain) {
+      return true;
+    }
+    if (other.domain < domain) {
+      return false;
+    }
+    return entity < other.entity;
+  }
+};
+
+// Conservative map-node/control-block allowances supplement the owned value sizes. The cap
+// accounts for weak keys as well as encoded bytes, including domains whose faces are refused.
+template <typename Value>
+constexpr size_t SnapshotNodeBytes = sizeof(Value) + 4 * sizeof(void*);
+
 class SnapshotResourceMapper {
 public:
   explicit SnapshotResourceMapper(Registry& registry) : registry_(registry) {}
@@ -215,8 +271,11 @@ public:
     return paint;
   }
 
+  /// Decoration faces are copied only when the draw's font domain was admitted; a refused
+  /// domain replays in isolation and must not retain or borrow any face.
   components::ComputedTextComponent mapComputedText(Registry& sourceRegistry,
-                                                    components::ComputedTextComponent text) {
+                                                    components::ComputedTextComponent text,
+                                                    bool captureFonts) {
     for (auto& span : text.spans) {
       span.sourceEntity = entt::null;
       span.textPathSourceEntity = entt::null;
@@ -234,11 +293,13 @@ public:
           origin.stroke = mapPaint(std::move(origin.stroke));
 #ifdef DONNER_TEXT_ENABLED
           if (origin.font) {
-            origin.snapshotFont = captureFont(sourceRegistry, origin.font->font);
+            origin.snapshotFont =
+                captureFonts ? captureFont(sourceRegistry, origin.font->font) : SnapshotFont();
             origin.font->font = FontHandle();
           }
 #else
           (void)sourceRegistry;
+          (void)captureFonts;
 #endif
         }
         const std::size_t bytes =
@@ -262,13 +323,29 @@ public:
     return text;
   }
 
-  size_t captureTextDomain(Registry& sourceRegistry) {
-    if (const auto it = textDomains_.find(&sourceRegistry); it != textDomains_.end()) {
+  std::optional<size_t> captureTextDomain(Registry& sourceRegistry) {
+    const FontDomainKey key = GetFontDomainKey(sourceRegistry);
+    if (const auto it = textDomains_.find(key); it != textDomains_.end()) {
       return it->second;
     }
+    const size_t cost =
+        SnapshotNodeBytes<std::pair<const FontDomainKey, size_t>> + key.retainedIdentityBytes;
+    if (!admitFontStorage(cost)) {
+      return std::nullopt;
+    }
     const size_t domain = textDomains_.size();
-    textDomains_.emplace(&sourceRegistry, domain);
+    textDomains_.emplace(key, domain);
     return domain;
+  }
+
+  bool admitFontStorage(size_t bytes) {
+    if (fontPayloadLimitExceeded_ || capturedFontBytes_ > maximumCapturedFontBytes_ ||
+        bytes > maximumCapturedFontBytes_ - capturedFontBytes_) {
+      fontPayloadLimitExceeded_ = true;
+      return false;
+    }
+    capturedFontBytes_ += bytes;
+    return true;
   }
 
 #ifdef DONNER_TEXT_ENABLED
@@ -277,7 +354,7 @@ public:
       return {};
     }
     // Entity IDs can collide across subdocuments; capture bytes once per source font.
-    const SourceEntityKey key{&sourceRegistry, handle.entity()};
+    const FontSourceKey key{GetFontDomainKey(sourceRegistry), handle.entity()};
     if (const auto it = capturedFonts_.find(key); it != capturedFonts_.end()) {
       return it->second;
     }
@@ -289,8 +366,11 @@ public:
     if (bytes.empty()) {
       return {};
     }
-    if (fontPayloadLimitExceeded_ || capturedFontBytes_ > maximumCapturedFontBytes_ ||
-        bytes.size() > maximumCapturedFontBytes_ - capturedFontBytes_) {
+    constexpr size_t metadata = SnapshotNodeBytes<SnapshotFontPayload> +
+                                SnapshotNodeBytes<std::pair<const FontSourceKey, SnapshotFont>>;
+    if (bytes.size() > maximumCapturedFontBytes_ ||
+        metadata > maximumCapturedFontBytes_ - bytes.size() ||
+        !admitFontStorage(bytes.size() + metadata)) {
       fontPayloadLimitExceeded_ = true;
       return {};
     }
@@ -298,8 +378,10 @@ public:
     payload->bytes.assign(bytes.begin(), bytes.end());
     payload->trust =
         manager->isTrustedFont(handle) ? FontDataTrust::Trusted : FontDataTrust::Untrusted;
+    payload->rendering = FontDataRenderingOptions{manager->providerFaceRequest(handle),
+                                                  manager->isGenericSansProviderFont(handle),
+                                                  manager->isImmutableCatalogFont(handle)};
     capturedFonts_.emplace(key, payload);
-    capturedFontBytes_ += bytes.size();
     return payload;
   }
 #endif
@@ -380,14 +462,12 @@ private:
   std::size_t capturedDecorationBytes_ = 0;
   Registry& registry_;
   std::unordered_map<SourceEntityKey, Entity, SourceEntityKeyHash> mappedEntities_;
-  std::unordered_map<Registry*, size_t> textDomains_;
+  std::map<FontDomainKey, size_t> textDomains_;
   size_t maximumCapturedFontBytes_ = RenderSnapshot::kMaximumCapturedFontBytes;
-#ifdef DONNER_TEXT_ENABLED
   size_t capturedFontBytes_ = 0;
-#endif
   bool fontPayloadLimitExceeded_ = false;
 #ifdef DONNER_TEXT_ENABLED
-  std::unordered_map<SourceEntityKey, SnapshotFont, SourceEntityKeyHash> capturedFonts_;
+  std::map<FontSourceKey, SnapshotFont> capturedFonts_;
 #endif
 };
 
@@ -470,8 +550,9 @@ FontHandle LoadSnapshotFont(FontManager& manager, const SnapshotFont& font,
   }
   const auto [it, inserted] = domain.handles.try_emplace(font.get());
   if (inserted) {
-    it->second = manager.loadFontData(
-        std::span<const uint8_t>(font->bytes.data(), font->bytes.size()), font->trust);
+    it->second =
+        manager.loadFontData(std::span<const uint8_t>(font->bytes.data(), font->bytes.size()),
+                             font->trust, font->rendering);
   }
   return it->second;
 }
@@ -542,7 +623,12 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
           },
           [&](const DrawImageCommand& value) { renderer.drawImage(value.image, value.params); },
           [&](const DrawTextCommand& value) {
-            auto& domain = replayFonts.domain(value.fontDomain);
+            // A refused domain still emits the command, but cannot borrow any other face or
+            // loading namespace. It has no retained key and is isolated for this draw.
+            auto refusedDomain =
+                value.fontDomain ? nullptr : std::make_unique<SnapshotReplayFontState::Domain>();
+            auto& domain =
+                value.fontDomain ? replayFonts.domain(*value.fontDomain) : *refusedDomain;
             Registry& textRegistry = domain.registry;
 #ifdef DONNER_TEXT_ENABLED
             auto& fontManager = textRegistry.ctx().contains<FontManager>()
@@ -802,27 +888,29 @@ void RenderSnapshotRecorder::drawText(Registry& sourceRegistry,
                                       const components::ComputedTextComponent& text,
                                       const TextParams& params) {
   DrawTextCommand command;
-  command.text = snapshot_.impl_->resourceMapper.mapComputedText(sourceRegistry, text);
+  command.fontDomain = snapshot_.impl_->resourceMapper.captureTextDomain(sourceRegistry);
+  command.text = snapshot_.impl_->resourceMapper.mapComputedText(sourceRegistry, text,
+                                                                 command.fontDomain.has_value());
   command.params = params;
   command.params.fontFaces = {};
   command.params.textRootEntity = entt::null;
   command.fontFaces.assign(params.fontFaces.begin(), params.fontFaces.end());
-  command.fontDomain = snapshot_.impl_->resourceMapper.captureTextDomain(sourceRegistry);
 #ifdef DONNER_TEXT_ENABLED
+  const auto captureFont = [&](FontHandle font) {
+    return command.fontDomain ? snapshot_.impl_->resourceMapper.captureFont(sourceRegistry, font)
+                              : SnapshotFont();
+  };
   if (params.preparedTextDraw) {
     // Keep the placed glyphs, but replace every source-registry font handle on replay.
     auto prepared = std::make_shared<PreparedTextDraw>(*params.preparedTextDraw);
     command.preparedFonts.reserve(prepared->runs.size());
     size_t glyphOrdinal = 0;
     for (TextRun& run : prepared->runs) {
-      command.preparedFonts.push_back(
-          snapshot_.impl_->resourceMapper.captureFont(sourceRegistry, run.font));
+      command.preparedFonts.push_back(captureFont(run.font));
       run.font = FontHandle();
       for (TextGlyph& glyph : run.glyphs) {
         if (glyph.font) {
-          command.preparedGlyphFonts.emplace_back(
-              glyphOrdinal,
-              snapshot_.impl_->resourceMapper.captureFont(sourceRegistry, glyph.font));
+          command.preparedGlyphFonts.emplace_back(glyphOrdinal, captureFont(glyph.font));
           glyph.font = FontHandle();
         }
         ++glyphOrdinal;

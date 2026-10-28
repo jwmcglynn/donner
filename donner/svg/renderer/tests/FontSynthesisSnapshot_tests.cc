@@ -1,6 +1,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <barrier>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
@@ -9,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -204,6 +207,8 @@ TEST(FontSynthesisStyleSnapshotTest, ReconstructedSourceAddressCannotAliasAnothe
   Registry* firstSource = nullptr;
   FontHandle firstFont;
   std::vector<Path> expected;
+  std::weak_ptr<const void> previousOwner;
+  std::vector<std::weak_ptr<const std::vector<uint8_t>>> sourceBytes;
   for (const char* filename : {"NotoSans-Regular.ttf", "NotoSans-Italic.ttf"}) {
     source.emplace();
     Registry& registry = *source;
@@ -217,6 +222,7 @@ TEST(FontSynthesisStyleSnapshotTest, ReconstructedSourceAddressCannotAliasAnothe
     const auto bytes =
         std::make_shared<const std::vector<uint8_t>>(SnapshotSynthesisFont(filename));
     ASSERT_THAT(*bytes, Not(IsEmpty()));
+    sourceBytes.push_back(bytes);
     css::FontFace face;
     face.familyName = "CapturedFace";
     face.sources.push_back({css::FontFaceSource::Kind::Data, bytes, {}, {}, true});
@@ -228,6 +234,7 @@ TEST(FontSynthesisStyleSnapshotTest, ReconstructedSourceAddressCannotAliasAnothe
     span.end = 1;
     span.startsNewChunk = true;
     span.fontFamilies.emplace_back("CapturedFace");
+    span.fontSynthesisStyle = FontSynthesisStyle::None;
     text.spans.push_back(span);
     TextLayoutParams layout;
     layout.fontFamilies.emplace_back("CapturedFace");
@@ -251,8 +258,14 @@ TEST(FontSynthesisStyleSnapshotTest, ReconstructedSourceAddressCannotAliasAnothe
     params.preparedTextDraw = std::move(prepared);
     recorder.drawText(registry, text, params);
     EXPECT_THAT(snapshot.liveRegistryReferenceCountForTesting(registry), Eq(0u));
+    previousOwner = fonts.fontDomainIdentity().owner;
     source.reset();
+    EXPECT_THAT(previousOwner.expired(), Eq(true));
+    const std::weak_ptr<const void> empty;
+    EXPECT_THAT(previousOwner.owner_before(empty) || empty.owner_before(previousOwner), Eq(true));
   }
+  EXPECT_THAT(sourceBytes,
+              testing::Each(testing::Truly([](const auto& bytes) { return bytes.expired(); })));
   ASSERT_THAT(expected, SizeIs(2));
   ASSERT_THAT(expected.front().points(), Not(IsEmpty()));
   ASSERT_THAT(expected.back().points(), Not(ElementsAreArray(expected.front().points())));
@@ -282,6 +295,166 @@ TEST(FontSynthesisStyleSnapshotTest, ReconstructedSourceAddressCannotAliasAnothe
       });
   snapshot.replay(inspection);
   EXPECT_THAT(index, Eq(2u));
+}
+
+TEST(FontSynthesisStyleSnapshotTest, SameBytesKeepDistinctRequestsAcrossAllPreparedFontSlots) {
+  RenderSnapshot snapshot;
+  NiceMock<tests::MockRendererInterface> inspection;
+  std::vector<Path> outlines;
+  std::vector<FontFaceRequest> requests;
+  std::vector<FontHandle> sourceFaces;
+  {
+    Registry source;
+    auto calls = std::make_shared<size_t>(0);
+    SnapshotStyleProvider provider(calls);
+    auto& fonts = source.ctx().emplace<FontManager>(source);
+    fonts.setFontProvider(&provider);
+    auto& engine = source.ctx().emplace<TextEngine>(fonts, source);
+    RenderSnapshotRecorder recorder(snapshot, inspection);
+    for (const FontStyle style : {FontStyle::Normal, FontStyle::Italic, FontStyle::Oblique}) {
+      for (const FontSynthesisStyle policy : {FontSynthesisStyle::Auto, FontSynthesisStyle::None}) {
+        components::ComputedTextComponent text;
+        components::ComputedTextComponent::TextSpan span;
+        span.text = "A";
+        span.start = 0;
+        span.end = 1;
+        span.startsNewChunk = true;
+        span.fontFamilies.emplace_back("sans-serif");
+        span.fontStyle = style;
+        span.fontSynthesisStyle = policy;
+        text.spans.push_back(span);
+        TextLayoutParams layout;
+        layout.fontFamilies.emplace_back("sans-serif");
+        layout.fontSize = Lengthd(64, Lengthd::Unit::Px);
+        layout.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+        auto runs = engine.layout(text, layout);
+        ASSERT_THAT(runs, SizeIs(1));
+        ASSERT_THAT(runs.front().glyphs, SizeIs(1));
+        auto& run = runs.front();
+        const FontHandle face = run.font;
+        const FontFaceRequest request{400, style};
+        ASSERT_THAT(fonts.providerFaceRequest(face), testing::Optional(request));
+        if (!sourceFaces.empty()) {
+          EXPECT_THAT(fonts.fontData(face), ElementsAreArray(fonts.fontData(sourceFaces.front())));
+        }
+        sourceFaces.push_back(face);
+        requests.push_back(request);
+        outlines.push_back(PlacedGlyphOutline(engine, face, run, run.glyphs.front(),
+                                              engine.scaleForEmToPixels(face, run.usedFontSizePx),
+                                              0.1));
+        // Exercise all three remap slots with the same provider face. The run deliberately has
+        // an upright face while the glyph and decoration retain the requested face.
+        run.glyphs.front().font = face;
+        run.font = fonts.findFont("sans-serif", 400, 0, 5);
+        text.spans.front().decorationFont = ResolvedTextFont{face, run.usedFontSizePx};
+        auto prepared = std::make_shared<PreparedTextDraw>();
+        prepared->runs = std::move(runs);
+        TextParams params;
+        params.preparedTextDraw = prepared;
+        recorder.drawText(source, text, params);
+      }
+    }
+    EXPECT_THAT(sourceFaces[0], testing::Ne(sourceFaces[2]));
+    EXPECT_THAT(sourceFaces[2], testing::Ne(sourceFaces[4]));
+    EXPECT_THAT(sourceFaces[0], Eq(sourceFaces[1]));
+    ASSERT_THAT(outlines[2].points(), Not(ElementsAreArray(outlines[3].points())));
+  }
+  std::vector<FontHandle> replayFaces;
+  EXPECT_CALL(inspection, drawText(_, _, _))
+      .Times(6)
+      .WillRepeatedly([&](Registry& replay, const components::ComputedTextComponent& text,
+                          const TextParams& params) {
+        const size_t index = replayFaces.size();
+        ASSERT_THAT(index, testing::Lt(outlines.size()));
+        ASSERT_THAT(params.preparedTextDraw, NotNull());
+        const auto& run = params.preparedTextDraw->runs.front();
+        const FontHandle face = run.glyphs.front().font;
+        replayFaces.push_back(face);
+        const auto& fonts = replay.ctx().get<FontManager>();
+        EXPECT_THAT(fonts.providerFaceRequest(face), testing::Optional(requests[index]));
+        EXPECT_THAT(fonts.providerFaceRequest(run.font), testing::Optional(FontFaceRequest{}));
+        ASSERT_THAT(text.spans.front().decorationFont, testing::Optional(_));
+        EXPECT_THAT(text.spans.front().decorationFont->font, Eq(face));
+        const auto& engine = replay.ctx().get<TextEngine>();
+        const Path outline =
+            PlacedGlyphOutline(engine, face, run, run.glyphs.front(),
+                               engine.scaleForEmToPixels(face, run.usedFontSizePx), 0.1);
+        EXPECT_THAT(outline.points(), ElementsAreArray(outlines[index].points()));
+      });
+  snapshot.replay(inspection);
+  ASSERT_THAT(replayFaces, SizeIs(6));
+  EXPECT_THAT(replayFaces[0], Eq(replayFaces[1]));
+  EXPECT_THAT(replayFaces[0], testing::Ne(replayFaces[2]));
+  EXPECT_THAT(replayFaces[2], testing::Ne(replayFaces[4]));
+}
+
+TEST(FontSynthesisStyleSnapshotTest, RepeatedAndConcurrentReplayOwnTheirFontDomains) {
+  auto calls = std::make_shared<size_t>(0);
+  CapturedStyleGlyph captured;
+  {
+    SnapshotStyleProvider provider(calls);
+    captured = CaptureStyleGlyph(&provider, "sans-serif", {400, FontStyle::Oblique},
+                                 FontSynthesisStyle::Auto);
+  }
+  const size_t before = *calls;
+  ExpectReplayMatchesDirect(captured);
+  ExpectReplayMatchesDirect(captured);
+  std::barrier bothDomainsLive(2);
+  std::array<const Registry*, 2> domains{};
+  const auto replay = [&](size_t index) {
+    NiceMock<tests::MockRendererInterface> inspection;
+    EXPECT_CALL(inspection, drawText(_, _, _))
+        .WillOnce([&](Registry& registry, const components::ComputedTextComponent&,
+                      const TextParams& params) {
+          domains[index] = &registry;
+          bothDomainsLive.arrive_and_wait();
+          EXPECT_THAT(domains[0], testing::Ne(domains[1]));
+          ASSERT_THAT(params.preparedTextDraw, NotNull());
+          const auto& run = params.preparedTextDraw->runs.front();
+          const auto& engine = registry.ctx().get<TextEngine>();
+          const Path outline =
+              PlacedGlyphOutline(engine, run.font, run, run.glyphs.front(),
+                                 engine.scaleForEmToPixels(run.font, run.usedFontSizePx), 0.1);
+          EXPECT_THAT(outline.points(), ElementsAreArray(captured.directOutline.points()));
+        });
+    captured.snapshot.replay(inspection);
+  };
+  std::thread first(replay, 0);
+  std::thread second(replay, 1);
+  first.join();
+  second.join();
+  EXPECT_THAT(*calls, Eq(before));
+}
+
+TEST(FontSynthesisStyleSnapshotTest, RefusedDomainDoesNotBorrowPreparedFaceOrSource) {
+  Registry registry;
+  auto& fonts = registry.ctx().emplace<FontManager>(registry);
+  const FontHandle font = fonts.loadFontData(SnapshotSynthesisFont(), FontDataTrust::Trusted);
+  ASSERT_THAT(static_cast<bool>(font), Eq(true));
+  auto prepared = std::make_shared<PreparedTextDraw>();
+  TextRun run;
+  run.font = font;
+  run.glyphs.push_back(TextGlyph{.glyphIndex = 1, .font = font});
+  prepared->runs.push_back(run);
+  TextParams params;
+  params.preparedTextDraw = prepared;
+  RenderSnapshot snapshot;
+  NiceMock<tests::MockRendererInterface> inspection;
+  RenderSnapshotRecorder recorder(snapshot, inspection, 0);
+  recorder.drawText(registry, {}, params);
+  EXPECT_THAT(snapshot.fontPayloadLimitExceeded(), Eq(true));
+  EXPECT_THAT(snapshot.liveRegistryReferenceCountForTesting(registry), Eq(0u));
+  EXPECT_CALL(inspection, drawText(_, _, _))
+      .WillOnce([&](Registry& replay, const components::ComputedTextComponent&,
+                    const TextParams& replayParams) {
+        EXPECT_THAT(&replay, testing::Ne(&registry));
+        ASSERT_THAT(replayParams.preparedTextDraw, NotNull());
+        const auto& replayRun = replayParams.preparedTextDraw->runs.front();
+        EXPECT_THAT(static_cast<bool>(replayRun.font), Eq(false));
+        EXPECT_THAT(static_cast<bool>(replayRun.glyphs.front().font), Eq(false));
+        EXPECT_THAT(replayRun.glyphs.front().glyphIndex, Eq(0));
+      });
+  snapshot.replay(inspection);
 }
 
 #ifdef DONNER_TEXT_FULL

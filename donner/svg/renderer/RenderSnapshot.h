@@ -20,7 +20,7 @@ namespace donner::svg {
  */
 class RenderSnapshot {
 public:
-  /// Maximum font bytes copied into one snapshot across all source registries.
+  /// Maximum encoded font bytes and conservative identity/payload storage per snapshot.
   static constexpr std::size_t kMaximumCapturedFontBytes = 128 * 1024 * 1024;
 
   /// Create an empty render snapshot.
@@ -100,7 +100,8 @@ public:
    * @param snapshot Snapshot receiving recorded commands.
    * @param offscreenFactory Backend used only for creating offscreen renderers
    *     while capture prepares filters, masks, and sub-documents.
-   * @param maximumCapturedFontBytes Maximum cumulative font bytes retained by this recorder.
+   * @param maximumCapturedFontBytes Maximum cumulative font bytes and font-identity metadata
+   * retained by this recorder.
    * @param maximumCapturedDecorationBytes Maximum retained text-decoration metadata bytes.
    */
   RenderSnapshotRecorder(

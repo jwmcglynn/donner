@@ -584,7 +584,9 @@ TEST(RendererSnapshotTests, FontPayloadLimitRejectsLaterFontWithoutRetainingItsB
     ASSERT_TRUE(static_cast<bool>(first));
     ASSERT_TRUE(static_cast<bool>(second));
 
-    RenderSnapshotRecorder recorder(snapshot, renderer, embedded::kPublicSansMediumOtf.size());
+    // Admit the first face plus its bounded identity/payload metadata, but not the second face.
+    RenderSnapshotRecorder recorder(snapshot, renderer,
+                                    embedded::kPublicSansMediumOtf.size() + 4096);
     const components::ComputedTextComponent text;
     for (const FontHandle font : {first, second}) {
       auto prepared = std::make_shared<PreparedTextDraw>();

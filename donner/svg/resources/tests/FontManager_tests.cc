@@ -8,6 +8,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -45,6 +46,82 @@ struct FontManagerTestAccess {
 };
 
 namespace {
+
+bool SameFontDomainOwner(const std::weak_ptr<const void>& first,
+                         const std::weak_ptr<const void>& second) {
+  return !first.owner_before(second) && !second.owner_before(first);
+}
+
+TEST(FontManagerTest, FontDomainIdentityIsReadOnlySharedAndLifetimeSpecific) {
+  std::optional<Registry> registry;
+  registry.emplace();
+  const Registry* address = &*registry;
+  std::weak_ptr<const void> previous;
+  const std::weak_ptr<const void> empty;
+  {
+    FontManager first(*registry, 1);
+    FontManager loader(*registry);
+    EXPECT_THAT(SameFontDomainOwner(first.fontDomainIdentity().owner, empty), Eq(true));
+    EXPECT_THAT(SameFontDomainOwner(loader.fontDomainIdentity().owner, empty), Eq(true));
+    EXPECT_THAT(FontManagerTestAccess::HasPersistentBudgetState(*registry), Eq(false));
+    // The read-only identity query must not let the first manager's one-byte cap become policy.
+    ASSERT_THAT(static_cast<bool>(loader.loadFontData(embedded::kPublicSansMediumOtf)), Eq(true));
+    previous = loader.fontDomainIdentity().owner;
+    EXPECT_THAT(previous.expired(), Eq(false));
+    EXPECT_THAT(loader.fontDomainIdentity().retainedStorageBytes, testing::Gt(0u));
+    EXPECT_THAT(SameFontDomainOwner(first.fontDomainIdentity().owner, previous), Eq(true));
+    EXPECT_THAT(SameFontDomainOwner(previous, empty), Eq(false));
+  }
+  registry.reset();
+  EXPECT_THAT(previous.expired(), Eq(true));
+  EXPECT_THAT(SameFontDomainOwner(previous, empty), Eq(false));
+  registry.emplace();
+  ASSERT_THAT(&*registry, Eq(address));
+  FontManager replacement(*registry);
+  ASSERT_THAT(static_cast<bool>(replacement.loadFontData(embedded::kPublicSansMediumOtf)),
+              Eq(true));
+  EXPECT_THAT(SameFontDomainOwner(previous, replacement.fontDomainIdentity().owner), Eq(false));
+}
+
+TEST(FontManagerTest, RawLoadRenderingMetadataIsOwnedPerNewHandleAndOldOverloadRemains) {
+  Registry registry;
+  FontManager manager(registry);
+  using OldLoad = FontHandle (FontManager::*)(std::span<const uint8_t>, FontDataTrust);
+  const OldLoad oldLoad = &FontManager::loadFontData;
+  const auto bytes = embedded::kPublicSansMediumOtf;
+  const FontHandle raw = (manager.*oldLoad)(bytes, FontDataTrust::Trusted);
+  ASSERT_THAT(static_cast<bool>(raw), Eq(true));
+  EXPECT_THAT(manager.providerFaceRequest(raw), Eq(std::nullopt));
+  std::vector<FontHandle> handles;
+  for (const FontStyle style : {FontStyle::Normal, FontStyle::Italic, FontStyle::Oblique}) {
+    FontDataRenderingOptions options{FontFaceRequest{700, style}, true, true};
+    const FontHandle font = manager.loadFontData(bytes, FontDataTrust::Trusted, options);
+    ASSERT_THAT(static_cast<bool>(font), Eq(true));
+    EXPECT_THAT(font, testing::Ne(raw));
+    for (const FontHandle previous : handles) {
+      EXPECT_THAT(font, testing::Ne(previous));
+    }
+    EXPECT_THAT(manager.providerFaceRequest(font), testing::Optional(*options.providerRequest));
+    EXPECT_THAT(manager.isGenericSansProviderFont(font), Eq(true));
+    EXPECT_THAT(manager.isImmutableCatalogFont(font), Eq(true));
+    handles.push_back(font);
+    options.providerRequest.reset();
+    EXPECT_THAT(manager.providerFaceRequest(font), testing::Optional(FontFaceRequest{700, style}));
+  }
+  EXPECT_THAT(manager.providerFaceRequest(raw), Eq(std::nullopt));
+}
+
+TEST(FontManagerTest, RawLoadRenderingMetadataCannotBypassAdmission) {
+  Registry registry;
+  FontManager manager(registry, 1);
+  const FontDataRenderingOptions options{FontFaceRequest{700, FontStyle::Italic}, true, true};
+  EXPECT_THAT(static_cast<bool>(manager.loadFontData(embedded::kPublicSansMediumOtf,
+                                                     FontDataTrust::Trusted, options)),
+              Eq(false));
+  EXPECT_THAT(static_cast<bool>(
+                  manager.loadFontData(embedded::kPublicSansMediumOtf, FontDataTrust::Trusted)),
+              Eq(false));
+}
 
 struct TestCacheComponent {
   int value = 0;
