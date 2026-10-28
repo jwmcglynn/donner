@@ -787,7 +787,9 @@ rotated pattern case, use exact Geode goldens so the backend remains fully gated
 
 ## Text decoration thickness
 
-`text-decoration-thickness` accepts `auto`, `from-font`, lengths, and percentages. Explicit
+`text-decoration-thickness` accepts `auto`, `from-font`, absolute lengths, `em`, `rem`, and
+percentages. The font-metric units `ex`/`ch` and viewport units `vw`/`vh`/`vmin`/`vmax` are rejected
+until their computed-value context is available in the style pipeline. Explicit
 percentages use the originating decoration's used font size; font-relative lengths compute before
 explicit inheritance. The supported `text-decoration` shorthand resets omitted thickness to `auto`
 and preserves independent cascade priorities. Draft line-width keywords and the complete

@@ -226,12 +226,12 @@ void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
 /// @param originCount Number of declarations affecting the span.
 /// @param fontSize Used run size for direct-caller fallback metrics.
 /// @param engine Font metrics provider.
-/// @param deviceScale Device scale in the decoration thickness direction.
+/// @param deviceFromLocal Transform used to resolve each segment's thickness direction.
 /// @param remainingWork Shared per-draw geometry work allowance.
 /// @param emit Paint callback for each generated path.
 void EmitTextDecorationPaths(const TextRun& run, const components::TextDecorationOrigin& origin,
                              std::size_t originCount, float fontSize, const TextEngine& engine,
-                             double deviceScale, std::size_t& remainingWork,
+                             const Transform2d& deviceFromLocal, std::size_t& remainingWork,
                              const std::function<void(const Path&)>& emit);
 
 }  // namespace donner::svg

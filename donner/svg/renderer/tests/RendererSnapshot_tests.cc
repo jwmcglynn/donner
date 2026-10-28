@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <future>
@@ -348,6 +349,41 @@ TEST(RendererSnapshotTests, ImageSourceEntityIsClearedBeforeReplay) {
 }
 
 #ifdef DONNER_TEXT_ENABLED
+TEST(RendererSnapshotTests, DecorationCopyRefusalDropsOnlyDecorations) {
+  using components::DocumentResourceFamilyBudget;
+  using components::TextDecorationData;
+  using components::TextDecorationOrigin;
+  DocumentResourceFamilyBudget::Limits limits;
+  limits.geometryBytes = sizeof(TextDecorationData) + sizeof(TextDecorationOrigin);
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(limits);
+  std::array<TextDecorationOrigin, 1> origins{};
+  origins[0].lines = TextDecoration::Underline;
+  components::ComputedTextComponent text;
+  text.spans.emplace_back();
+  text.spans.back().text = "X";
+  text.spans.back().end = 1;
+  text.spans.back().textDecoration = TextDecoration::Underline;
+  text.spans.back().decorations = TextDecorationData::Create(family, origins);
+  ASSERT_TRUE(text.spans.back().decorations);
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RenderSnapshot snapshot;
+  RenderSnapshotRecorder recorder(snapshot, renderer);
+  Registry source;
+  recorder.drawText(source, text, TextParams{});
+  EXPECT_TRUE(family->securityStats().rejected);
+  EXPECT_CALL(renderer, drawText(_, _, _))
+      .WillOnce([](Registry&, const components::ComputedTextComponent& replay, const TextParams&) {
+        ASSERT_EQ(replay.spans.size(), 1u);
+        EXPECT_EQ(replay.spans[0].textDecoration, TextDecoration::None);
+        EXPECT_FALSE(replay.spans[0].decorations);
+        EXPECT_EQ(replay.spans[0].end, 1u);
+      });
+  RendererDriver driver(renderer);
+  driver.draw(snapshot);
+  text.spans.clear();
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::Geometry), 0u);
+}
+
 TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
   ::testing::NiceMock<MockRendererInterface> renderer;
   RendererDriver driver(renderer);

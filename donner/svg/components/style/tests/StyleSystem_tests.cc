@@ -931,6 +931,38 @@ TEST_F(StyleSystemTest, DecorationThicknessRetainsInheritedPercentage) {
             Lengthd(20, Lengthd::Unit::Percent));
 }
 
+TEST_F(StyleSystemTest, DecorationRemUsesComputedRootSizeAndRejectsViewportUnits) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" font-size="30"><text font-size="20"
+      style="text-decoration-thickness:1rem;text-decoration-thickness:1vw">
+      <tspan id="child" font-size="40" style="text-decoration-thickness:inherit">X</tspan>
+    </text></svg>)svg");
+  const auto child = document.querySelector("#child")->entityHandle();
+  EXPECT_EQ(document.registry()
+                .get<ComputedStyleComponent>(child.entity())
+                .properties->textDecorationThickness.get()
+                ->value,
+            Lengthd(30, Lengthd::Unit::Px));
+}
+
+TEST_F(StyleSystemTest, RejectedDecorationUnitsPreserveNestedInheritance) {
+  for (const auto unit : {"ex", "ch", "vw", "vh", "vmin", "vmax"}) {
+    auto document = ParseAndComputeStyles(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
+        "<g style='text-decoration-thickness:5px;text-decoration-thickness:1" +
+        std::string(unit) +
+        "'><svg viewBox='0 0 10 10' style='text-decoration-thickness:inherit'>"
+        "<text id='child' font-size='40' style='text-decoration-thickness:inherit'>X</text>"
+        "</svg></g></svg>");
+    const auto child = document.querySelector("#child")->entityHandle();
+    EXPECT_EQ(document.registry()
+                  .get<ComputedStyleComponent>(child.entity())
+                  .properties->textDecorationThickness.get()
+                  ->value,
+              Lengthd(5, Lengthd::Unit::Px));
+  }
+}
+
 TEST(StyleResourceBudgetTest, SharesRetainedBytesAcrossDocumentFamily) {
   DocumentResourceFamilyBudget::Limits familyLimits;
   familyLimits.computedStyleBytes = 1024;

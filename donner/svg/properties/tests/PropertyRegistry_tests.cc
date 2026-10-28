@@ -2889,10 +2889,13 @@ TEST(PropertyRegistry, DecorationThicknessGrammarAndShorthandReset) {
   properties.parseStyle("text-decoration:underline nonsense");
   EXPECT_EQ(properties.textDecoration.get(), TextDecoration::Overline);
   EXPECT_EQ(properties.textDecorationThickness.get()->value, Lengthd(4, Lengthd::Unit::Px));
+  properties.parseStyle("text-decoration-thickness:-1px");
+  EXPECT_EQ(properties.textDecorationThickness.get()->value, Lengthd(-1, Lengthd::Unit::Px));
   properties.parseStyle("text-decoration-thickness:from-font");
   EXPECT_EQ(properties.textDecorationThickness.get()->kind,
             TextDecorationThickness::Kind::FromFont);
-  for (const auto value : {"-1px", "1e999px", "thin", "1px 2px", "2"}) {
+  for (const auto value :
+       {"1e999px", "thin", "1px 2px", "2", "1ex", "1ch", "1vw", "1vh", "1vmin", "1vmax"}) {
     properties.parseStyle("text-decoration-thickness:" + std::string(value));
     EXPECT_EQ(properties.textDecorationThickness.get()->kind,
               TextDecorationThickness::Kind::FromFont);

@@ -7746,9 +7746,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         };
 
         EmitTextDecorationPaths(run, decoration, origins.size(), spanFontSizePx, textEngine,
-                                std::hypot(impl_->deviceFromLocalTransform.data[2],
-                                           impl_->deviceFromLocalTransform.data[3]),
-                                decorationWorkRemaining, drawDecoPath);
+                                impl_->deviceFromLocalTransform, decorationWorkRemaining,
+                                drawDecoPath);
       }
     }
   }

@@ -323,8 +323,17 @@ ParseResult<TextDecorationThickness> ParseDecorationThickness(
     }
   }
   const auto length = parser::ParseLengthPercentage(values.front(), allowUserUnits);
-  if (length.hasError() || !std::isfinite(length.result().value) || length.result().value < 0) {
+  if (length.hasError() || !std::isfinite(length.result().value)) {
     return InvalidDecoration();
+  }
+  switch (length.result().unit) {
+    case Lengthd::Unit::Ex:
+    case Lengthd::Unit::Ch:
+    case Lengthd::Unit::Vw:
+    case Lengthd::Unit::Vh:
+    case Lengthd::Unit::Vmin:
+    case Lengthd::Unit::Vmax: return InvalidDecoration();
+    default: break;
   }
   return TextDecorationThickness{TextDecorationThickness::Kind::Length, length.result()};
 }
@@ -3349,9 +3358,7 @@ void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
 void PropertyRegistry::resolveTextDecorationThickness(double rootFontSizePx) {
   const auto* stored = textDecorationThickness.getStoredValue();
   if (!stored || stored->kind != TextDecorationThickness::Kind::Length ||
-      stored->value.unit == Lengthd::Unit::Percent || stored->value.unit == Lengthd::Unit::Vw ||
-      stored->value.unit == Lengthd::Unit::Vh || stored->value.unit == Lengthd::Unit::Vmin ||
-      stored->value.unit == Lengthd::Unit::Vmax) {
+      stored->value.unit == Lengthd::Unit::Percent) {
     return;
   }
   FontMetrics metrics = FontMetrics::DefaultsWithFontSize(fontSize.get().value().value);

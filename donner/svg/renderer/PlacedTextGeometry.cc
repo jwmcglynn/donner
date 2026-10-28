@@ -352,22 +352,66 @@ double DecorationEnd(const TextRun& run, std::size_t index) {
                                   : std::min(glyph.xPosition + glyph.xAdvance, next->xPosition);
 }
 
-void EmitRotatedDecoration(const TextRun& run, double top, double width,
+double DecorationOffset(TextDecoration line, const DecorationMetrics& metrics) {
+  if (line == TextDecoration::Underline) {
+    return metrics.underlinePosition != 0 ? metrics.underlinePosition : -metrics.descent * 0.4;
+  }
+  if (line == TextDecoration::Overline) {
+    return -metrics.ascent;
+  }
+  return metrics.strikePosition != 0 ? metrics.strikePosition : -metrics.ascent * 0.35;
+}
+
+double MultipleDecorationAdjustment(TextDecoration line, TextDecoration lines,
+                                    std::size_t originCount, double width) {
+  const int count = static_cast<int>(hasFlag(lines, TextDecoration::Underline)) +
+                    static_cast<int>(hasFlag(lines, TextDecoration::Overline)) +
+                    static_cast<int>(hasFlag(lines, TextDecoration::LineThrough));
+  if (originCount != 1 || count <= 1) {
+    return 0;
+  }
+  return line == TextDecoration::Overline      ? width * 1.5
+         : line == TextDecoration::LineThrough ? -width
+                                               : 0;
+}
+struct DecorationBand {
+  TextDecoration line;
+  TextDecoration lines;
+  TextDecorationThickness thickness;
+  std::size_t originCount;
+  double automatic;
+  double underline;
+  double offset;
+};
+
+std::pair<double, double> ResolveDecorationBand(const DecorationBand& band,
+                                                const Transform2d& deviceFromSegment) {
+  const double scale = std::hypot(deviceFromSegment.data[2], deviceFromSegment.data[3]);
+  const double width =
+      ResolveDecorationThickness(band.thickness, band.automatic, band.underline, scale);
+  return {band.offset - width / 2 +
+              MultipleDecorationAdjustment(band.line, band.lines, band.originCount, width),
+          width};
+}
+
+void EmitRotatedDecoration(const TextRun& run, const DecorationBand& band,
+                           const Transform2d& deviceFromLocal,
                            const std::function<void(const Path&)>& emit) {
   for (std::size_t index = 0; index < run.glyphs.size(); ++index) {
     const auto& glyph = run.glyphs[index];
     if (!DecorationGlyphVisible(glyph)) {
       continue;
     }
-    PathBuilder builder(4);
-    if (!AppendDecorationRect(builder, 0, top, DecorationEnd(run, index) - glyph.xPosition,
-                              top + width)) {
-      continue;
-    }
     Transform2d transform = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
     if (glyph.rotateDegrees != 0) {
       transform =
           Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) * transform;
+    }
+    const auto [top, width] = ResolveDecorationBand(band, transform * deviceFromLocal);
+    PathBuilder builder(4);
+    if (!AppendDecorationRect(builder, 0, top, DecorationEnd(run, index) - glyph.xPosition,
+                              top + width)) {
+      continue;
     }
     const Path path = builder.build().transformed(transform);
     if (std::all_of(path.points().begin(), path.points().end(), [](const Vector2d& point) {
@@ -408,33 +452,11 @@ void EmitStraightDecoration(const TextRun& run, double top, double width,
   }
 }
 
-double DecorationOffset(TextDecoration line, const DecorationMetrics& metrics) {
-  if (line == TextDecoration::Underline) {
-    return metrics.underlinePosition != 0 ? metrics.underlinePosition : -metrics.descent * 0.4;
-  }
-  if (line == TextDecoration::Overline) {
-    return -metrics.ascent;
-  }
-  return metrics.strikePosition != 0 ? metrics.strikePosition : -metrics.ascent * 0.35;
-}
-
-double MultipleDecorationAdjustment(TextDecoration line, TextDecoration lines,
-                                    std::size_t originCount, double width) {
-  const int count = static_cast<int>(hasFlag(lines, TextDecoration::Underline)) +
-                    static_cast<int>(hasFlag(lines, TextDecoration::Overline)) +
-                    static_cast<int>(hasFlag(lines, TextDecoration::LineThrough));
-  if (originCount != 1 || count <= 1) {
-    return 0;
-  }
-  return line == TextDecoration::Overline      ? width * 1.5
-         : line == TextDecoration::LineThrough ? -width
-                                               : 0;
-}
 }  // namespace
 
 void EmitTextDecorationPaths(const TextRun& run, const components::TextDecorationOrigin& origin,
                              std::size_t originCount, float fontSize, const TextEngine& engine,
-                             double deviceScale, std::size_t& remainingWork,
+                             const Transform2d& deviceFromLocal, std::size_t& remainingWork,
                              const std::function<void(const Path&)>& emit) {
   if (run.glyphs.size() > remainingWork / 12) {
     remainingWork = 0;
@@ -452,13 +474,17 @@ void EmitTextDecorationPaths(const TextRun& run, const components::TextDecoratio
     const double automatic = line == TextDecoration::LineThrough && metrics.strikeWidth > 0
                                  ? metrics.strikeWidth
                                  : metrics.automaticWidth;
-    const double width = ResolveDecorationThickness(origin.thickness, automatic,
-                                                    metrics.underlineWidth, deviceScale);
-    const double top = DecorationOffset(line, metrics) - width / 2 +
-                       MultipleDecorationAdjustment(line, origin.lines, originCount, width);
+    const DecorationBand band{line,
+                              origin.lines,
+                              origin.thickness,
+                              originCount,
+                              automatic,
+                              metrics.underlineWidth,
+                              DecorationOffset(line, metrics)};
     if (rotated) {
-      EmitRotatedDecoration(run, top, width, emit);
+      EmitRotatedDecoration(run, band, deviceFromLocal, emit);
     } else {
+      const auto [top, width] = ResolveDecorationBand(band, deviceFromLocal);
       EmitStraightDecoration(run, top, width, emit);
     }
   }

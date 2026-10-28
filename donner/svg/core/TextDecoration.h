@@ -68,7 +68,7 @@ inline double ResolveDecorationThickness(const TextDecorationThickness& thicknes
     result = underline;
   } else if (thickness.kind == TextDecorationThickness::Kind::Length) {
     if (!(deviceScale > 0) || !std::isfinite(deviceScale) ||
-        !std::isfinite(thickness.value.value) || thickness.value.value < 0) {
+        !std::isfinite(thickness.value.value)) {
       return 0;
     }
     result = std::max(thickness.value.value, 1.0 / deviceScale);

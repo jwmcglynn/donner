@@ -3211,10 +3211,8 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                                            toTinyTransform(deviceFromLocalTransform_), mask);
           }
         };
-        EmitTextDecorationPaths(
-            run, decoration, origins.size(), spanFontSizePx, textEngine,
-            std::hypot(deviceFromLocalTransform_.data[2], deviceFromLocalTransform_.data[3]),
-            decorationWorkRemaining, drawDecoPath);
+        EmitTextDecorationPaths(run, decoration, origins.size(), spanFontSizePx, textEngine,
+                                deviceFromLocalTransform_, decorationWorkRemaining, drawDecoPath);
       }
     }
   }
