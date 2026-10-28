@@ -21,6 +21,59 @@ class DocsPublishTest(unittest.TestCase):
         self.api.tip.return_value = "e" * 40
         self.api.call.return_value = {"status": "succeed"}
 
+    def test_attestation_failures_keep_bounded_redacted_diagnostics(self):
+        tokens = {"GH_TOKEN": "example-gh-secret", "GITHUB_TOKEN": "example-github-secret",
+                  "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "example-oidc-secret"}
+        diagnostic = ("verification rejected " + " ".join(tokens.values()) +
+                      "\n::error::untrusted response " + "x" * 6000).encode()
+        error = publish.subprocess.CalledProcessError(7, ["gh", "attestation", "verify"],
+                                                     stderr=diagnostic)
+        bundle = self.root / "bundle.json"
+        bundle.write_text("{}")
+        calls = {
+            "online": lambda: publish.attestation(self.root / "subject", publish.WORKFLOW,
+                              "b" * 40, self.root / "online.json"),
+            "bundle": lambda: publish._bundle_attestation(self.root / "subject", bundle,
+                              "b" * 40, self.root / "bundle-proof.json"),
+            "retained": lambda: publish._offline_attestation(self.root / "subject",
+                site.canonical([{"attestation": {"bundle": {}}}]), "b" * 40, self.root),
+        }
+        for name, call in calls.items():
+            with self.subTest(name=name), mock.patch.dict(os.environ, tokens), \
+                 mock.patch.object(publish.subprocess, "run", side_effect=error):
+                with self.assertRaisesRegex(ValueError, "attestation verification failed.*exit 7") as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertIn("verification rejected", message)
+                self.assertIn("[REDACTED]", message)
+                self.assertNotIn("\n", message)
+                self.assertLess(len(message), 5000)
+                for token in tokens.values():
+                    self.assertNotIn(token, message)
+
+    def test_attestation_diagnostic_redacts_overlapping_tokens_longest_first(self):
+        tokens = {"GH_TOKEN": "example-token", "GITHUB_TOKEN": "example-token-extended",
+                  "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "example-token-extended-longest"}
+        error = publish.subprocess.CalledProcessError(7, ["gh"],
+            stderr=" ".join(tokens.values()).encode())
+        with mock.patch.dict(os.environ, tokens), \
+             mock.patch.object(publish.subprocess, "run", side_effect=error), \
+             self.assertRaises(ValueError) as caught:
+            publish.attestation(self.root / "subject", publish.WORKFLOW,
+                                "b" * 40, self.root / "overlap.json")
+        self.assertTrue(str(caught.exception).endswith(json.dumps("[REDACTED] [REDACTED] [REDACTED]")))
+
+    def test_attestation_diagnostics_neutralize_legacy_actions_commands(self):
+        diagnostic = "certificate error ##[error]text ##[add-mask]value ##[stop-commands]marker"
+        error = publish.subprocess.CalledProcessError(7, ["gh"], stderr=diagnostic.encode())
+        with mock.patch.object(publish.subprocess, "run", side_effect=error), \
+             self.assertRaises(ValueError) as caught:
+            publish.attestation(self.root / "subject", publish.WORKFLOW,
+                                "b" * 40, self.root / "legacy.json")
+        message = str(caught.exception)
+        self.assertNotIn("##[", message)
+        self.assertEqual(json.loads(message.split(": ", 1)[1]), diagnostic)
+
     def test_request_cannot_override_workflow_context_or_smuggle_extra_fields(self):
         request = {"composition_run": "123/1", "composition_sha256": "a" * 64, "prior_composition": "b" * 64, "bootstrap": None}
         with mock.patch.dict(os.environ, {"DOCS_REQUEST": json.dumps(request)}):
