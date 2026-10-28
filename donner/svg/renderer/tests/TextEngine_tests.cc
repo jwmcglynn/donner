@@ -2220,4 +2220,193 @@ TEST(TextEngineTest, InlineSizeLargeMeasureDoesNotWrap) {
   EXPECT_THAT(DistinctBaselines(runs), SizeIs(1));
 }
 
+TEST(TextEngineTest, WhiteSpaceControlsSoftWrap) {
+  for (const auto mode : {WhiteSpace::Normal, WhiteSpace::Pre, WhiteSpace::Nowrap,
+                          WhiteSpace::PreWrap, WhiteSpace::BreakSpaces, WhiteSpace::PreLine}) {
+    SCOPED_TRACE(testing::PrintToString(mode));
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("aaa bbb ccc");
+    span.whiteSpace = mode;
+    text.spans.push_back(std::move(span));
+    auto params = MakeTextParams(20.0);
+    params.inlineSizePx = 45.0;
+    EXPECT_THAT(DistinctBaselines(engine.layout(text, params)),
+                SizeIs(AllowsSoftWrap(mode) ? 3 : 1));
+  }
+}
+
+TEST(TextEngineTest, WhiteSpacePreservesForcedBreaksWithoutInlineSize) {
+  for (const auto mode :
+       {WhiteSpace::Pre, WhiteSpace::PreWrap, WhiteSpace::BreakSpaces, WhiteSpace::PreLine}) {
+    SCOPED_TRACE(testing::PrintToString(mode));
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("A\n\nB");
+    span.whiteSpace = mode;
+    text.spans.push_back(std::move(span));
+    const auto runs = engine.layout(text, MakeTextParams(20.0));
+    ASSERT_THAT(runs, SizeIs(1));
+    ASSERT_THAT(runs[0].glyphs, SizeIs(4));
+    EXPECT_THAT(runs[0].glyphs[3].yPosition - runs[0].glyphs[0].yPosition, DoubleNear(40.0, 1e-5));
+    EXPECT_THAT(runs[0].glyphs[3].xPosition, DoubleEq(runs[0].glyphs[0].xPosition));
+    EXPECT_THAT(runs[0].glyphs[1].xAdvance, DoubleEq(0.0));
+  }
+}
+
+TEST(TextEngineTest, WhiteSpaceBreakSpacesWrapsInsideSpaceRun) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  auto params = MakeTextParams(20.0);
+  params.inlineSizePx = 25.0;
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A    B");
+  span.whiteSpace = WhiteSpace::PreWrap;
+  text.spans.push_back(span);
+  const auto preWrap = engine.layout(text, params);
+  text.spans[0].whiteSpace = WhiteSpace::BreakSpaces;
+  const auto breakSpaces = engine.layout(text, params);
+  EXPECT_THAT(DistinctBaselines(preWrap), SizeIs(2));
+  EXPECT_THAT(DistinctBaselines(breakSpaces), SizeIs(3));
+  EXPECT_THAT(breakSpaces[0].glyphs[2].yPosition, Gt(breakSpaces[0].glyphs[1].yPosition));
+}
+
+TEST(TextEngineTest, WhiteSpaceTabUsesEightSpaceStops) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A\tB");
+  span.whiteSpace = WhiteSpace::Pre;
+  text.spans.push_back(span);
+  const auto tab = engine.layout(text, MakeTextParams(20.0));
+  text.spans[0] = MakeSpan("A B");
+  text.spans[0].whiteSpace = WhiteSpace::Pre;
+  const auto space = engine.layout(text, MakeTextParams(20.0));
+  ASSERT_THAT(tab, SizeIs(1));
+  ASSERT_THAT(tab[0].glyphs, SizeIs(3));
+  ASSERT_THAT(space, SizeIs(1));
+  ASSERT_THAT(space[0].glyphs, SizeIs(3));
+  EXPECT_THAT(tab[0].glyphs[2].xPosition, DoubleEq(space[0].glyphs[1].xAdvance * 8.0 + 1.0));
+}
+
+TEST(TextEngineTest, WhiteSpaceForcedBreakContinuesAcrossRuns) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  for (const auto* contents : {"A\n", "B", "\nC"}) {
+    auto span = MakeSpan(contents);
+    span.whiteSpace = WhiteSpace::Pre;
+    span.startsNewChunk = false;
+    text.spans.push_back(span);
+  }
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+  ASSERT_THAT(runs, SizeIs(3));
+  EXPECT_THAT(runs[1].glyphs,
+              ElementsAre(testing::AllOf(GlyphXPositionIs(DoubleEq(0.0)),
+                                         GlyphYPositionIs(DoubleNear(20.0, 1e-5)))));
+  ASSERT_THAT(runs[2].glyphs, SizeIs(2));
+  EXPECT_THAT(runs[2].glyphs[1].xPosition, DoubleEq(0.0));
+  EXPECT_THAT(runs[2].glyphs[1].yPosition, DoubleNear(40.0, 1e-5));
+}
+
+TEST(TextEngineTest, WhiteSpaceVerticalForcedBreaksAndTabs) {
+  for (const auto writingMode : {WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("A\tB\nC");
+    span.whiteSpace = WhiteSpace::Pre;
+    span.textOrientation = TextOrientation::Upright;
+    text.spans.push_back(span);
+    auto params = MakeTextParams(20.0);
+    params.writingMode = writingMode;
+    const auto runs = engine.layout(text, params);
+    ASSERT_THAT(runs, SizeIs(1));
+    ASSERT_THAT(runs[0].glyphs, SizeIs(5));
+    EXPECT_THAT(runs[0].glyphs[1].yAdvance, Gt(12.0));
+    EXPECT_THAT(runs[0].glyphs[4].yPosition, DoubleEq(runs[0].glyphs[0].yPosition));
+    EXPECT_THAT(runs[0].glyphs[4].xPosition - runs[0].glyphs[0].xPosition,
+                DoubleNear(writingMode == WritingMode::VerticalRl ? -20.0 : 20.0, 1e-5));
+  }
+}
+
+TEST(TextEngineTest, WhiteSpaceFlatForcedBreakSurvivesTextPathSibling) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto pathSpan = MakeSpan("X");
+  pathSpan.pathSpline = PathBuilder().moveTo({0, 0}).lineTo({200, 0}).build();
+  text.spans.push_back(pathSpan);
+  auto flatSpan = MakeSpan("A\nB");
+  flatSpan.whiteSpace = WhiteSpace::Pre;
+  text.spans.push_back(flatSpan);
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+  ASSERT_THAT(runs, SizeIs(2));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(1));
+  ASSERT_THAT(runs[1].glyphs, SizeIs(3));
+  EXPECT_THAT(runs[1].glyphs[2].yPosition - runs[1].glyphs[0].yPosition, DoubleNear(20.0, 1e-5));
+  EXPECT_THAT(runs[1].glyphs[2].xPosition, DoubleEq(runs[1].glyphs[0].xPosition));
+}
+
+TEST(TextEngineTest, WhiteSpaceTabSkipsStopCloserThanHalfSpace) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A\tB");
+  span.whiteSpace = WhiteSpace::Pre;
+  span.dxList.resize(3);
+  span.dxList[1] = Lengthd(66.5);
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(3));
+  EXPECT_THAT(runs[0].glyphs[1].xAdvance, Gt(80.0));
+}
+
+TEST(TextEngineTest, WhiteSpacePreWrapCountsSpacesBeforeForcedBreakForAnchor) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A \nB");
+  span.whiteSpace = WhiteSpace::PreWrap;
+  text.spans.push_back(span);
+  auto params = MakeTextParams(20.0);
+  params.textAnchor = TextAnchor::End;
+  params.inlineSizePx = 200.0;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(4));
+  EXPECT_THAT(runs[0].glyphs[1].xPosition + runs[0].glyphs[1].xAdvance, DoubleEq(0.0));
+  EXPECT_THAT(runs[0].glyphs[0].xPosition, testing::Lt(runs[0].glyphs[3].xPosition));
+}
+
+TEST(TextEngineTest, WhiteSpaceCommonAncestorControlsSpanBoundaryBreak) {
+  for (const auto common : {WhiteSpace::Normal, WhiteSpace::Nowrap}) {
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    components::ComputedTextComponent text;
+    auto first = MakeSpan("AA ");
+    first.whiteSpace = WhiteSpace::Normal;
+    first.boundaryWhiteSpace = common;
+    text.spans.push_back(first);
+    text.spans.push_back(MakeSpan("BB"));
+    auto params = MakeTextParams(20.0);
+    params.inlineSizePx = 30.0;
+    EXPECT_THAT(DistinctBaselines(engine.layout(text, params)),
+                SizeIs(common == WhiteSpace::Normal ? 2 : 1));
+  }
+}
+
 }  // namespace donner::svg

@@ -2367,135 +2367,205 @@ double computeSpanBaselineShiftPx(const TextBackend& backend,
   return spanBaselineShiftPx;
 }
 
-bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
-                         const TextLayoutParams& params, double measurePx, double lineHeightPx) {
-  if (measurePx <= 0.0) {
-    return false;
-  }
+struct WrappingGlyph {
+  size_t run;
+  size_t glyph;
+  double originalX;
+  double originalY;
+  double originalAdvance;
+  double advance;
+  uint32_t codepoint;
+  WhiteSpace mode;
+  WhiteSpace breakMode;
+  size_t block = 0;
+  size_t line = 0;
+  size_t lineOffset = 0;
+  double origin = 0;
 
-  // A flat, document-order view of every laid-out glyph, tagged with whether it is a soft-wrap
-  // opportunity (whitespace). Runs with no glyphs (empty spans, or a textPath that failed to
-  // resolve) contribute nothing. A `visibility: hidden` or `collapse` span keeps its glyphs here:
-  // visibility suppresses painting, not layout, so its words still occupy line width.
-  struct FlatGlyph {
-    size_t run;
-    size_t glyph;
-    double origX;    ///< Original xPosition from the flat single-line layout.
-    double advance;  ///< Glyph xAdvance.
-    double origY;    ///< Original yPosition (carries per-glyph baseline-shift).
-    bool isSpace;    ///< Whitespace: a soft-wrap opportunity between words.
-  };
+  double x = 0;
 
-  std::vector<FlatGlyph> flat;
+  bool isSpace() const { return codepoint == ' ' || codepoint == '\t'; }
+  bool isBreak() const { return codepoint == '\n' && PreservesSegmentBreaks(mode); }
+};
+
+std::vector<WrappingGlyph> CollectWrappingGlyphs(const std::vector<TextRun>& runs,
+                                                 const components::ComputedTextComponent& text,
+                                                 bool vertical) {
+  std::vector<WrappingGlyph> flat;
+  size_t block = 0;
   for (size_t ri = 0; ri < runs.size() && ri < text.spans.size(); ++ri) {
-    const auto& run = runs[ri];
-    if (run.onPath) {
-      return false;  // inline-size does not combine with text-on-path.
+    if (runs[ri].onPath) {
+      ++block;
+      continue;
     }
     const auto& span = text.spans[ri];
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
-    for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
-      const auto& g = run.glyphs[gi];
-      size_t clusterPos = GetPositioningCluster(g);
-      const uint32_t cp = clusterPos < spanText.size() ? decodeUtf8(spanText, clusterPos) : 0;
-      const bool isSpace = (cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0D);
-      flat.push_back({ri, gi, g.xPosition, g.xAdvance, g.yPosition, isSpace});
+    for (size_t gi = 0; gi < runs[ri].glyphs.size(); ++gi) {
+      const auto& glyph = runs[ri].glyphs[gi];
+      size_t byte = GetPositioningCluster(glyph);
+      const uint32_t cp = byte < spanText.size() ? decodeUtf8(spanText, byte) : 0;
+      const double advance = vertical ? glyph.yAdvance : glyph.xAdvance;
+      flat.push_back(
+          {ri, gi, InlinePenPosition(glyph, vertical), vertical ? glyph.xPosition : glyph.yPosition,
+           advance, advance, cp, span.whiteSpace,
+           gi + 1 == runs[ri].glyphs.size() ? span.boundaryWhiteSpace.value_or(span.whiteSpace)
+                                            : span.whiteSpace,
+           block});
     }
   }
+  return flat;
+}
 
-  if (flat.size() < 2) {
-    return false;  // Nothing to wrap.
+/// Resolves tab stops from the line start, retaining glyph-local kerning between ordinary letters.
+double PlaceWrappingGlyph(std::vector<WrappingGlyph>& flat, size_t index, size_t start,
+                          double width, size_t line) {
+  auto& item = flat[index];
+  const double gap =
+      index == start
+          ? 0.0
+          : item.originalX - (flat[index - 1].originalX + flat[index - 1].originalAdvance);
+  item.x = width + gap;
+  item.line = line;
+  if (item.isBreak()) {
+    item.advance = 0.0;
+  } else if (item.codepoint == '\t' && item.originalAdvance > 0.0) {
+    const double stop = item.originalAdvance * 8.0;
+    item.advance = stop - std::fmod(std::max(0.0, item.x), stop);
+    if (item.advance < item.originalAdvance * 0.5) {
+      item.advance += stop;
+    }
   }
+  return item.x + item.advance;
+}
 
-  const double originX = flat.front().origX;
-  const double originY = flat.front().origY;
+bool IsWrappingOverflow(const WrappingGlyph& item, double width, double measurePx,
+                        std::optional<size_t> lastBreak, size_t start) {
+  return measurePx > 0.0 && width > measurePx + 1e-3 && lastBreak && *lastBreak > start &&
+         (!item.isSpace() || item.mode == WhiteSpace::BreakSpaces);
+}
 
-  // ── Phase A: assign each glyph a line index via greedy word wrapping ──
-  std::vector<size_t> lineOf(flat.size(), 0);
+void TrimSoftBreakSpaces(std::vector<WrappingGlyph>& flat, size_t start, size_t end) {
+  for (size_t trim = end; trim > start && flat[trim - 1].isSpace(); --trim) {
+    if (!PreservesSpaces(flat[trim - 1].mode)) {
+      flat[trim - 1].advance = 0.0;
+    }
+  }
+}
+
+bool IsSoftBreakAfter(const std::vector<WrappingGlyph>& flat, size_t index) {
+  const auto& item = flat[index];
+  const bool endOfSpaces = index + 1 == flat.size() || !flat[index + 1].isSpace();
+  return item.isSpace() && AllowsSoftWrap(item.breakMode) &&
+         (item.mode == WhiteSpace::BreakSpaces || endOfSpaces);
+}
+
+/// Greedy line selection never breaks an unbreakable word or a pre/nowrap span.
+size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
   size_t line = 0;
-  double lineWidthUsed = 0.0;  // Committed width on the current line, excluding trailing spaces.
-  double pendingSpace = 0.0;   // Width of spaces since the last committed word.
-
-  size_t i = 0;
-  while (i < flat.size()) {
-    if (flat[i].isSpace) {
-      // Spaces stay (tentatively) on the current line; their width is pending until the next
-      // word commits it or a wrap discards it (trailing spaces hang).
-      lineOf[i] = line;
-      pendingSpace += flat[i].advance;
-      ++i;
+  size_t blockLine = 0;
+  size_t block = flat.front().block;
+  double origin = flat.front().originalX;
+  size_t start = 0;
+  size_t index = 0;
+  std::optional<size_t> lastBreak;
+  double width = 0.0;
+  while (index < flat.size()) {
+    auto& item = flat[index];
+    if (item.block != block) {
+      block = item.block;
+      blockLine = ++line;
+      origin = item.originalX;
+      start = index;
+      width = 0.0;
+      lastBreak.reset();
+    }
+    width = PlaceWrappingGlyph(flat, index, start, width, line);
+    item.origin = origin;
+    item.lineOffset = line - blockLine;
+    if (item.isBreak()) {
+      start = ++index;
+      ++line;
+      width = 0.0;
+      lastBreak.reset();
       continue;
     }
-
-    // Gather a maximal word (run of non-space glyphs).
-    const size_t wordStart = i;
-    while (i < flat.size() && !flat[i].isSpace) {
-      ++i;
-    }
-    const size_t wordEnd = i;  // Exclusive.
-    const double wordWidth =
-        (flat[wordEnd - 1].origX + flat[wordEnd - 1].advance) - flat[wordStart].origX;
-
-    if (lineWidthUsed > 0.0 && lineWidthUsed + pendingSpace + wordWidth > measurePx + 1e-3) {
-      // Break before this word: start a new line. Pending trailing spaces hang on the old line.
+    if (IsWrappingOverflow(item, width, measurePx, lastBreak, start)) {
+      TrimSoftBreakSpaces(flat, start, *lastBreak);
+      start = *lastBreak;
+      index = start;
       ++line;
-      lineWidthUsed = wordWidth;
-    } else if (lineWidthUsed == 0.0) {
-      lineWidthUsed = wordWidth;  // First word on the line: no leading space counted.
-    } else {
-      lineWidthUsed += pendingSpace + wordWidth;
+      width = 0.0;
+      lastBreak.reset();
+      continue;
     }
-    pendingSpace = 0.0;
+    if (IsSoftBreakAfter(flat, index)) {
+      lastBreak = index + 1;
+    }
+    ++index;
+  }
+  return line + 1;
+}
 
-    for (size_t w = wordStart; w < wordEnd; ++w) {
-      lineOf[w] = line;
+/// Preserved end spaces hang after a soft wrap; before a forced break they hang only on overflow.
+bool CountsForLineWidth(const WrappingGlyph& item, bool forcedEnd, double measurePx) {
+  if (item.isBreak()) {
+    return false;
+  }
+  if (!item.isSpace() || item.mode == WhiteSpace::Pre || item.mode == WhiteSpace::BreakSpaces) {
+    return true;
+  }
+  return item.mode == WhiteSpace::PreWrap && forcedEnd &&
+         (!(measurePx > 0.0) || item.x + item.advance <= measurePx);
+}
+
+bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
+                         const TextLayoutParams& params, double measurePx, double lineHeightPx) {
+  const bool vertical = isVertical(params.writingMode);
+  auto flat = CollectWrappingGlyphs(runs, text, vertical);
+  if (flat.empty()) {
+    return false;
+  }
+  const size_t numLines = AssignWrappingLines(flat, measurePx);
+  const bool hasControls = std::any_of(flat.begin(), flat.end(), [](const WrappingGlyph& item) {
+    return item.isBreak() || item.codepoint == '\t';
+  });
+  const bool wrapped = std::any_of(flat.begin(), flat.end(),
+                                   [](const WrappingGlyph& item) { return item.lineOffset > 0; });
+  if (!wrapped && !hasControls) {
+    return false;
+  }
+  std::vector<bool> forcedEnds(numLines, false);
+  for (const auto& item : flat) {
+    forcedEnds[item.line] = forcedEnds[item.line] || item.isBreak();
+  }
+  forcedEnds.back() = true;
+  std::vector<double> widths(numLines, 0.0);
+  for (const auto& item : flat) {
+    if (CountsForLineWidth(item, forcedEnds[item.line], measurePx)) {
+      widths[item.line] = std::max(widths[item.line], item.x + item.advance);
     }
   }
-
-  const size_t numLines = line + 1;
-  if (numLines < 2) {
-    return false;  // Everything fit on one line: leave the flat layout (and its global
-                   // text-anchor pass) untouched.
-  }
-
-  // ── Phase B: position glyphs line by line, preserving intra-line spacing ──
-  std::vector<double> newX(flat.size(), 0.0);
-  for (size_t k = 0; k < flat.size(); ++k) {
-    if (k == 0 || lineOf[k] != lineOf[k - 1]) {
-      newX[k] = originX;  // First glyph of a line starts at the block origin.
-    } else {
-      newX[k] = newX[k - 1] + (flat[k].origX - flat[k - 1].origX);
-    }
-  }
-
-  // ── Phase C: per-line text-anchor shift ──
-  // Each line's used width is the right edge of its last non-space glyph minus the origin.
-  std::vector<double> lineRightEdge(numLines, originX);
-  for (size_t k = 0; k < flat.size(); ++k) {
-    if (!flat[k].isSpace) {
-      lineRightEdge[lineOf[k]] = std::max(lineRightEdge[lineOf[k]], newX[k] + flat[k].advance);
-    }
-  }
-
-  std::vector<double> lineShift(numLines, 0.0);
-  for (size_t l = 0; l < numLines; ++l) {
-    const double used = lineRightEdge[l] - originX;
+  for (const auto& item : flat) {
+    double shift = 0.0;
     if (params.textAnchor == TextAnchor::Middle) {
-      lineShift[l] = -used / 2.0;
-    } else if (params.textAnchor == TextAnchor::End) {
-      lineShift[l] = -used;
+      shift = -widths[item.line] / 2.0;
+    }
+    if (params.textAnchor == TextAnchor::End) {
+      shift = -widths[item.line];
+    }
+    auto& glyph = runs[item.run].glyphs[item.glyph];
+    const double lineOffset = static_cast<double>(item.lineOffset) * lineHeightPx;
+    if (vertical) {
+      glyph.yPosition = item.origin + item.x + shift + glyph.verticalOriginOffset;
+      glyph.xPosition = item.originalY +
+                        (params.writingMode == WritingMode::VerticalRl ? -lineOffset : lineOffset);
+      glyph.yAdvance = item.advance;
+    } else {
+      glyph.xPosition = item.origin + item.x + shift;
+      glyph.yPosition = item.originalY + lineOffset;
+      glyph.xAdvance = item.advance;
     }
   }
-
-  // ── Write back positions ──
-  for (size_t k = 0; k < flat.size(); ++k) {
-    const size_t l = lineOf[k];
-    auto& g = runs[flat[k].run].glyphs[flat[k].glyph];
-    g.xPosition = newX[k] + lineShift[l];
-    // Preserve each glyph's baseline-shift delta from the original baseline, then stack the line.
-    g.yPosition = originY + static_cast<double>(l) * lineHeightPx + (flat[k].origY - originY);
-  }
-
   return true;
 }
 
@@ -3401,6 +3471,7 @@ private:
     const TextSpan* span = nullptr;
     TextRun run;
     std::string_view text;
+    std::string controlShapingText;
     FontHandle font;
     double specifiedFontSizePx = 0.0;
     float fontSizePx = 0.0f;
@@ -3602,6 +3673,16 @@ private:
   }
 
   void prepareShaping(SpanState& state) {
+    if (!state.span->pathSpline && state.text.find_first_of("\n\t") != std::string_view::npos) {
+      // Shape controls as blank glyphs while keeping byte clusters for line layout and DOM APIs.
+      state.controlShapingText = std::string(state.text);
+      for (char& c : state.controlShapingText) {
+        if (c == '\n' || c == '\t') {
+          c = ' ';
+        }
+      }
+      state.text = state.controlShapingText;
+    }
     state.runPenStartX = state.penX;
     state.runPenStartY = state.penY;
     state.chunkRanges = findChunkRanges(state.text, state.xList, state.yList);
@@ -4086,7 +4167,15 @@ private:
   }
 
   void applyInlineWrap() {
-    if (runs_.empty() || !(params_.inlineSizePx > 0.0) || isVertical(params_.writingMode)) {
+    if (runs_.empty()) {
+      return;
+    }
+    if (!(params_.inlineSizePx > 0.0) &&
+        std::none_of(text_.spans.begin(), text_.spans.end(), [](const TextSpan& span) {
+          return PreservesSegmentBreaks(span.whiteSpace) &&
+                 std::string_view(span.text.data() + span.start, span.end - span.start)
+                         .find_first_of("\n\t") != std::string_view::npos;
+        })) {
       return;
     }
     const FontVMetrics metrics = backend_.fontVMetrics(baseFont_);
@@ -4106,7 +4195,11 @@ private:
   }
 
   void applyFinalAdjustments() {
-    if (runs_.empty() || wrapped_) {
+    if (runs_.empty()) {
+      return;
+    }
+    if (wrapped_) {
+      placeDeferredTextPaths();
       return;
     }
     const bool vertical = isVertical(params_.writingMode);
