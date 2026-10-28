@@ -1,3 +1,4 @@
+load(":native_delivery_fixture.bzl", "native_delivery_fixture")
 load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("//build_defs:embed_resources.bzl", "embed_resources")
@@ -647,7 +648,7 @@ py_test(
 )
 
 cc_binary(
-    name = "native_delivery_elf_fixture",
+    name = "_native_delivery_elf_fixture_impl",
     testonly = True,
     srcs = ["native_delivery_elf_fixture.cc"],
     copts = [
@@ -656,12 +657,23 @@ cc_binary(
         "-fdebug-compilation-dir=.",
         "-ffile-compilation-dir=.",
     ],
-    features = ["-strip_debug_symbols"],
     linkopts = ["-Wl,--build-id=sha1"],
     target_compatible_with = [
         "@platforms//os:linux",
         "@platforms//cpu:x86_64",
     ],
+    visibility = ["//visibility:private"],
+)
+
+native_delivery_fixture(
+    name = "native_delivery_elf_fixture",
+    testonly = True,
+    binary = ":_native_delivery_elf_fixture_impl",
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    visibility = ["//visibility:private"],
 )
 
 py_test(
