@@ -403,14 +403,27 @@ TEST(FontSynthesisStyleSnapshotTest, RepeatedAndConcurrentReplayOwnTheirFontDoma
   std::barrier bothDomainsLive(2);
   std::latch firstReplayFinished(1);
   std::array<const Registry*, 2> domains{};
+  std::array<FontHandle, 2> faces{};
+  std::array<const uint8_t*, 2> fontBytes{};
   const auto replay = [&](size_t index) {
     NiceMock<tests::MockRendererInterface> inspection;
     EXPECT_CALL(inspection, drawText(_, _, _))
         .WillOnce([&](Registry& registry, const components::ComputedTextComponent&,
                       const TextParams& params) {
           domains[index] = &registry;
+          if (params.preparedTextDraw && !params.preparedTextDraw->runs.empty()) {
+            faces[index] = params.preparedTextDraw->runs.front().font;
+            fontBytes[index] = registry.ctx().get<FontManager>().fontData(faces[index]).data();
+          }
+          // All assertions that can return from this callback follow the rendezvous. The outer
+          // replay function still signals retirement if a later ASSERT ends this callback early.
           bothDomainsLive.arrive_and_wait();
           EXPECT_THAT(domains[0], testing::Ne(domains[1]));
+          EXPECT_THAT(std::pair(domains[0], faces[0]),
+                      testing::Ne(std::pair(domains[1], faces[1])));
+          EXPECT_THAT(fontBytes[0], NotNull());
+          EXPECT_THAT(fontBytes[1], NotNull());
+          EXPECT_THAT(fontBytes[0], testing::Ne(fontBytes[1]));
           // The domains and byte loaders overlap. The Full backend's shared FreeType library
           // requires serialized face creation/destruction, so its first outline extraction waits
           // for the other replay's face to retire. This tests namespace isolation, not that backend

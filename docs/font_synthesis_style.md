@@ -33,3 +33,6 @@ and does not consult the original provider. Font source domains use weak ownersh
 reconstructing a source at the same address cannot reuse a destroyed source's prepared font faces.
 Capture admission counts encoded bytes and conservative fixed identity/payload storage allowances;
 a refused face stays invalid rather than selecting a different run face.
+
+The Full backend retains its existing serialized-use requirement for face creation and destruction
+on its shared FreeType library. Replay-domain and metadata isolation do not change that requirement.
