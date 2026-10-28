@@ -3170,6 +3170,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             tiny_skia::Paint paint = makeBasePaint(antialias_);
             paint.shader = std::move(*shader);
             decoFillPaint = paint;
+          } else if (patternFillPaint_ && decoration.usesPreparedFill(paint_.fill)) {
+            tiny_skia::Paint paint = makeBasePaint(antialias_);
+            paint.shader =
+                tiny_skia::Pattern(patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
+                                   tiny_skia::FilterQuality::Bilinear, combinedOpacity,
+                                   toTinyTransform(patternFillPaint_->targetFromPattern));
+            decoFillPaint = paint;
           }
         }
         if (!span.decorations) {

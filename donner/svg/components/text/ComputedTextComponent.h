@@ -46,6 +46,26 @@ struct TextDecorationOrigin {
   std::shared_ptr<const SnapshotFontPayload> snapshotFont;  ///< Snapshot-owned font bytes.
   double strokeWidth = 0.0;                                 ///< Origin's resolved SVG stroke width.
   TextDecorationThickness thickness;  ///< Explicit dimensions are resolved to pixels.
+
+  /// Whether prepared paint names this origin's resource in the same coordinate context.
+  /// @param prepared Paint whose backend resource is available for reuse.
+  bool usesPreparedFill(const ResolvedPaintServer& prepared) const {
+    const auto* origin = std::get_if<PaintResolvedReference>(&fill);
+    const auto* candidate = std::get_if<PaintResolvedReference>(&prepared);
+    if (!origin || !candidate || !origin->reference.valid() ||
+        origin->reference.handle != candidate->reference.handle ||
+        origin->contextRemap.has_value() != candidate->contextRemap.has_value()) {
+      return false;
+    }
+    if (!origin->contextRemap) {
+      return true;
+    }
+    const auto& a = *origin->contextRemap;
+    const auto& b = *candidate->contextRemap;
+    return a.contextBounds == b.contextBounds &&
+           a.entityFromContextTransform == b.entityFromContextTransform &&
+           a.resolveAtDrawTime == b.resolveAtDrawTime && a.seededFromStroke == b.seededFromStroke;
+  }
 };
 
 /// Immutable origin list with a shared document-family lifetime charge.

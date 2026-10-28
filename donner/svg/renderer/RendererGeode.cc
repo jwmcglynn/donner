@@ -7688,12 +7688,15 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
                                : std::span<const components::TextDecorationOrigin>(&fallback, 1);
       for (const auto& decoration : origins) {
         css::RGBA decoFill = span.decorations ? css::RGBA(0, 0, 0, 0) : spanFill;
-        bool decoUsesPattern = !span.decorations && usePatternFill;
+        const bool decoUsesPattern =
+            impl_->patternFillPaint && ((!span.decorations && usePatternFill) ||
+                                        decoration.usesPreparedFill(impl_->paint.fill));
+        const double decoFillOpacity =
+            span.decorations ? decoration.fillOpacity * span.opacity : impl_->paint.fillOpacity;
         if (!std::holds_alternative<PaintServer::None>(decoration.fill)) {
           if (auto c = impl_->resolveSolidPaint(decoration.fill,
                                                 decoration.fillOpacity * span.opacity)) {
             decoFill = *c;
-            decoUsesPattern = false;
           }
         }
         // Decoration stroke (solid).
@@ -7722,8 +7725,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
             impl_->syncTransform();
             impl_->encoder->fillPathPattern(
                 path, FillRule::NonZero,
-                impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity),
-                encoded);
+                impl_->buildPatternPaint(*impl_->patternFillPaint, decoFillOpacity), encoded);
           } else if (decoFill.a != 0) {
             impl_->encoder->fillPath(path, decoFill, FillRule::NonZero, encoded);
           }

@@ -231,6 +231,32 @@ TEST(TextDecorationThickness, OriginatingFillNoneDoesNotUseDescendantPaint) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(TextDecorationThickness, OriginPatternRemainsAvailableWithDescendantSolidPaint) {
+  constexpr std::string_view pattern =
+      "<pattern id='p' patternUnits='userSpaceOnUse' width='4' height='4'>"
+      "<rect width='2' height='4' fill='red'/>"
+      "<rect x='2' width='2' height='4' fill='blue'/></pattern>";
+  for (const bool child : {false, true}) {
+    SCOPED_TRACE(child);
+    const std::string text = child ? "<tspan fill='lime' style='text-decoration:line-through;"
+                                     "text-decoration-thickness:2px'>XX</tspan>"
+                                   : "XX";
+    const auto actual =
+        RenderDecorationScene(std::string(pattern) +
+                              "<text x='10' y='40' font-size='20' fill='url(#p)' "
+                              "style='text-decoration:underline;text-decoration-thickness:8px'>" +
+                              text + "</text>");
+    const std::string glyphFill = child ? "lime" : "url(#p)";
+    const auto expected = RenderDecorationScene(
+        std::string(pattern) + "<rect x='10' y='38' width='1' height='2' fill='" + glyphFill +
+        "'/><rect x='20' y='38' width='1' height='2' fill='" + glyphFill +
+        "'/><rect x='10' y='38' width='20' height='8' fill='url(#p)'/>" +
+        (child ? "<rect x='10' y='33' width='20' height='2' fill='lime'/>" : ""));
+    editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_origin_pattern",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(TextDecorationThickness, ShearedMinimumUsesPerpendicularDeviceWidth) {
   for (const auto value : {"0px", "-1px", "0.1px"}) {
     SCOPED_TRACE(value);
