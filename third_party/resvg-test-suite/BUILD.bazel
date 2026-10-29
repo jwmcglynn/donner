@@ -121,6 +121,22 @@ redrew on a 200x200 viewBox and which were replaced as well.
   tests/structure/image/raster-image-and-size-with-odd-numbers.png
   tests/structure/image/width-and-height-set-to-auto.png
   tests/structure/image/with-transform.png
+
+From the same revision and license, these PNGs were replaced with their 300x300 versions. The
+snapshot's references were flattened onto white: their opaque seagreen interiors were stored as
+(0, 113, 49) at alpha 209, which matches only when composited over white. Their SVG inputs are
+byte-identical at both revisions. The snapshot's subregion-and-primitiveUnits=objectBoundingBox-1
+and -2 references are flattened the same way but are kept: the v0.49.0 renderings end their
+0.5-wide objectBoundingBox subregion at 98 user units instead of the 84 that the element's
+bounding box gives, which the snapshot and Donner both draw. The snapshot's
+everything-via-xlink-href, some-attributes-via-xlink-href and with-region-and-subregion
+references are flattened too but are kept: their filter regions cut the blur's input, and the
+v0.49.0 renderings drop the box-blur spill there, which Donner keeps.
+
+  tests/filters/filter/complex-order-and-xlink-href.png
+  tests/filters/filter/negative-subregion.png
+  tests/filters/filter/with-subregion-1.png
+  tests/filters/filter/with-subregion-2.png
 """
 
 package(default_visibility = ["//visibility:public"])
@@ -129,6 +145,7 @@ exports_files([
     "LICENSE",
     "fonts/Noto-LICENSE-OFL.txt",
     "resources/ub.png",
+    "results.csv",
 ])
 
 filegroup(

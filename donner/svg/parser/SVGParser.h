@@ -125,6 +125,10 @@ public:
   /**
    * Parses an SVG XML document from a string (typically the contents of a .svg file).
    *
+   * This is a rendering parser, not an SVG sanitizer. SVGDocument::source() retains the original
+   * markup, including browser-active constructs that Donner does not render. Do not serve that
+   * source as a trusted browser document or treat serialization as sanitized output.
+   *
    * The input buffer does not need to be null-terminated, but if there are embedded null characters
    * parsing will stop. Gzip-compressed input (SVGZ) is detected and decompressed automatically.
    *

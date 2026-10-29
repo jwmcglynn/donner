@@ -174,6 +174,14 @@ verified prior archive for bounded recovery, checks the returned artifact agains
 its exact bytes, persists the candidate and evidence to the protected branch, downloads that
 copy back, and only then requests Pages cutover. Normal publication does not build documentation.
 
+The Pages build version is the verified source commit SHA, matching the official deployment
+action. Pages may reuse that SHA as a deployment ID across artifact uploads, so a terminal
+SHA-addressed status cannot prove that the latest artifact request has stopped. If publication
+fails with such an ID, the job records `recovery-required` and does not automatically request a
+rollback. Preserve the candidate, prior archive and receipts; confirm the current request is no
+longer in flight before selecting a controlled recovery. Full live-content checks still gate
+successful publication. Automatic restoration is limited to an unambiguous deployment identity.
+
 Live verification checks the composition marker, version manifest, root and per-version indexes,
 source markers and selector assets. After Pages reports success, promotion, rollback and recovery
 allow a two-minute propagation window with a shared monotonic deadline, bounded reads and

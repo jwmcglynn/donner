@@ -467,15 +467,14 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Reference disagreement: PNG hides an invalid URL; Filter Effects "
                               "ignores the chain, covered by independent visible-geometry tests "
                               "(FilterReferenceStages_tests)")},
+                {"negative-subregion.svg", ResvgV049Reference()},
+                {"with-subregion-1.svg", ResvgV049Reference()},
+                {"with-subregion-2.svg", ResvgV049Reference()},
                 // Pixelmatch 2.0 checkerboard exposes pre-existing filter-region
                 // compositing alpha deltas vs resvg that white-blending masked. Each
                 // threshold is the measured minimal passing hundredth at the
                 // existing pixel allowance (PR #1285, see README_pixelmatch_2.md).
                 {"everything-via-xlink-href.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
-                {"negative-subregion.svg",
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},
@@ -487,16 +486,19 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},
-                {"with-subregion-1.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
-                {"with-subregion-2.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
+                // Reference refreshed to resvg v0.49.0; see
+                // third_party/resvg-test-suite/BUILD.bazel.
                 {"complex-order-and-xlink-href.svg",
-                 Params::Skip("Bug: Color is slightly off, we are missing transparency")},
+                 Params::Skip("Reference disagreement: the region's x and height cut the blur's "
+                              "input at its left and bottom edges. The reference blurs with five "
+                              "box passes that each drop what spreads past the region, so the "
+                              "first row and column inside read alpha 84 where Donner, which "
+                              "keeps that spill, reads 143, close to a single Gaussian of the "
+                              "clipped input (1,275 px, all within 5 px of those "
+                              "edges; Geode adds 3 frame-corner pixels); "
+                              "FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom pins the "
+                              "region clip")
+                     .setCanvasSize(300, 300)},
                 {"in=BackgroundAlpha-with-enable-background.svg",
                  Params::DeprecatedInSVG2("enable-background: BackgroundAlpha of an SVG 1.1 "
                                           "enable-background=new snapshot (removed in SVG 2)")},
