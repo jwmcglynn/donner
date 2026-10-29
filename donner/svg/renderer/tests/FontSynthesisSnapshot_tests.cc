@@ -311,6 +311,7 @@ TEST(FontSynthesisStyleSnapshotTest, SameBytesKeepDistinctRequestsAcrossAllPrepa
     auto& fonts = source.ctx().emplace<FontManager>(source);
     fonts.setFontProvider(&provider);
     auto& engine = source.ctx().emplace<TextEngine>(fonts, source);
+    auto decorationFamily = std::make_shared<components::DocumentResourceFamilyBudget>();
     RenderSnapshotRecorder recorder(snapshot, inspection);
     for (const FontStyle style : {FontStyle::Normal, FontStyle::Italic, FontStyle::Oblique}) {
       for (const FontSynthesisStyle policy : {FontSynthesisStyle::Auto, FontSynthesisStyle::None}) {
@@ -347,7 +348,13 @@ TEST(FontSynthesisStyleSnapshotTest, SameBytesKeepDistinctRequestsAcrossAllPrepa
         // an upright face while the glyph and decoration retain the requested face.
         run.glyphs.front().font = face;
         run.font = fonts.findFont("sans-serif", 400, 0, 5);
-        text.spans.front().decorationFont = ResolvedTextFont{face, run.usedFontSizePx};
+        std::array<components::TextDecorationOrigin, 1> origins{};
+        origins[0].lines = TextDecoration::Underline;
+        origins[0].font = ResolvedTextFont{face, run.usedFontSizePx};
+        text.spans.front().textDecoration = TextDecoration::Underline;
+        text.spans.front().decorations =
+            components::TextDecorationData::Create(decorationFamily, origins);
+        ASSERT_THAT(text.spans.front().decorations, NotNull());
         auto prepared = std::make_shared<PreparedTextDraw>();
         prepared->runs = std::move(runs);
         TextParams params;
@@ -374,8 +381,11 @@ TEST(FontSynthesisStyleSnapshotTest, SameBytesKeepDistinctRequestsAcrossAllPrepa
         const auto& fonts = replay.ctx().get<FontManager>();
         EXPECT_THAT(fonts.providerFaceRequest(face), testing::Optional(requests[index]));
         EXPECT_THAT(fonts.providerFaceRequest(run.font), testing::Optional(FontFaceRequest{}));
-        ASSERT_THAT(text.spans.front().decorationFont, testing::Optional(_));
-        EXPECT_THAT(text.spans.front().decorationFont->font, Eq(face));
+        ASSERT_THAT(text.spans.front().decorations, NotNull());
+        ASSERT_THAT(text.spans.front().decorations->origins(), SizeIs(1));
+        const auto& decorationFont = text.spans.front().decorations->origins().front().font;
+        ASSERT_THAT(decorationFont, testing::Optional(_));
+        EXPECT_THAT(decorationFont->font, Eq(face));
         const auto& engine = replay.ctx().get<TextEngine>();
         const Path outline =
             PlacedGlyphOutline(engine, face, run, run.glyphs.front(),
@@ -465,14 +475,28 @@ TEST(FontSynthesisStyleSnapshotTest, RefusedDomainDoesNotBorrowPreparedFaceOrSou
   params.preparedTextDraw = prepared;
   RenderSnapshot snapshot;
   NiceMock<tests::MockRendererInterface> inspection;
+  components::ComputedTextComponent text;
+  text.spans.emplace_back();
+  std::array<components::TextDecorationOrigin, 1> origins{};
+  origins[0].lines = TextDecoration::Underline;
+  origins[0].font = ResolvedTextFont{font, 16.0f};
+  text.spans.back().textDecoration = TextDecoration::Underline;
+  text.spans.back().decorations = components::TextDecorationData::Create(
+      std::make_shared<components::DocumentResourceFamilyBudget>(), origins);
+  ASSERT_THAT(text.spans.back().decorations, NotNull());
   RenderSnapshotRecorder recorder(snapshot, inspection, 0);
-  recorder.drawText(registry, {}, params);
+  recorder.drawText(registry, text, params);
   EXPECT_THAT(snapshot.fontPayloadLimitExceeded(), Eq(true));
   EXPECT_THAT(snapshot.liveRegistryReferenceCountForTesting(registry), Eq(0u));
   EXPECT_CALL(inspection, drawText(_, _, _))
-      .WillOnce([&](Registry& replay, const components::ComputedTextComponent&,
+      .WillOnce([&](Registry& replay, const components::ComputedTextComponent& replayText,
                     const TextParams& replayParams) {
         EXPECT_THAT(&replay, testing::Ne(&registry));
+        ASSERT_THAT(replayText.spans, SizeIs(1));
+        ASSERT_THAT(replayText.spans.front().decorations, NotNull());
+        const auto& origin = replayText.spans.front().decorations->origins().front();
+        ASSERT_THAT(origin.font, testing::Optional(_));
+        EXPECT_THAT(static_cast<bool>(origin.font->font), Eq(false));
         ASSERT_THAT(replayParams.preparedTextDraw, NotNull());
         const auto& replayRun = replayParams.preparedTextDraw->runs.front();
         EXPECT_THAT(static_cast<bool>(replayRun.font), Eq(false));
