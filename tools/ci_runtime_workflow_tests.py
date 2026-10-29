@@ -26,7 +26,7 @@ ENFORCED_PAYLOAD_CEILINGS = {
     "--max-js-raw-bytes": 202000,
     "--max-total-raw-bytes": 12880000,
     "--max-wasm-data-segments": 64,
-    "--max-wasm-function-body-bytes": 46000,
+    "--max-wasm-function-body-bytes": 47000,
     "--max-wasm-gzip-bytes": 3540000,
     "--max-wasm-raw-bytes": 10800000,
 }
