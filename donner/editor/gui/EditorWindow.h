@@ -1265,6 +1265,16 @@ private:
   /// Whether the window has an attached framebuffer GPU device.
   bool hasPresentationDevice() const;
   bool observePresentationCompletion();
+  /// Whether the oldest pending UI submission was already confirmed overdue (browser only).
+  bool presentationOverdueConfirmed() const;
+  /// Progress to report for a timed-out admission seen by the non-drawing presentation poll.
+  PresentationProgress timedOutPresentationProgress() const;
+#ifdef __EMSCRIPTEN__
+  /// Whether a timed-out admission still gets its one bounded completion recheck.
+  bool shouldRecheckOverduePresentation() const;
+  /// Keeps an overdue browser UI frame deferred instead of declaring the device lost.
+  void deferOverduePresentation();
+#endif
   /// Commits the document acknowledgment for a completed frame in the current producer lifetime.
   /// @param frame Immutable identity and acceptance status sealed with the completed submission.
   void recordCompletedDocumentFrame(const internal::PresentationSubmissionQueue::Fence& frame);

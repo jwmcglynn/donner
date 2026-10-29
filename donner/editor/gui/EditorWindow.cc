@@ -2336,13 +2336,9 @@ bool EditorWindow::hasUsableFrameTarget(int width, int height) {
 
 bool EditorWindow::admitFrameSubmission(bool requestedReadback) {
   bool ready = observePresentationCompletion();
-  bool recheck = !ready && requestedReadback && !presentationCompletionProbeForTesting_ &&
-                 !wgpuState_->framebufferGeodeDevice->isDeviceLost();
-#ifdef __EMSCRIPTEN__
   // A submission already confirmed overdue is waited out by polling, not by another recheck.
-  recheck = recheck && presentationSubmissions_.oldestSerial() != presentationOverdueSerial_;
-#endif
-  if (recheck) {
+  if (!ready && requestedReadback && !presentationCompletionProbeForTesting_ &&
+      !wgpuState_->framebufferGeodeDevice->isDeviceLost() && !presentationOverdueConfirmed()) {
     auto& device = wgpuState_->framebufferGeodeDevice->runtimeDevice();
     if (device.waitForSerial(presentationSubmissions_.oldestSerial(), 0.25)) {
       ready = observePresentationCompletion();
@@ -2462,6 +2458,49 @@ void EditorWindow::recordCompletedDocumentFrame(
 #endif
 }
 
+bool EditorWindow::presentationOverdueConfirmed() const {
+#ifdef __EMSCRIPTEN__
+  return presentationSubmissions_.pendingCount() != 0 &&
+         presentationSubmissions_.oldestSerial() == presentationOverdueSerial_;
+#else
+  return false;
+#endif
+}
+
+EditorWindow::PresentationProgress EditorWindow::timedOutPresentationProgress() const {
+  // Already confirmed overdue in the browser: keep polling for its completion. The progress window
+  // still ends in a frame, which defers again without repeating the blocking recheck.
+  if (presentationOverdueConfirmed()) {
+    return PresentationProgress::Pending;
+  }
+  // Only the actual frame performs the bounded confirmation or marks device loss.
+  return PresentationProgress::Deadline;
+}
+
+#ifdef __EMSCRIPTEN__
+bool EditorWindow::shouldRecheckOverduePresentation() const {
+  return !wgpuState_->framebufferGeodeDevice->isDeviceLost() && !presentationOverdueConfirmed();
+}
+
+void EditorWindow::deferOverduePresentation() {
+  // The browser reports a lost device itself through `GPUDevice.lost`, including a GPU process its
+  // watchdog gave up on. A loss declared here could never be recovered: every later frame would be
+  // refused even after the overdue work completes, so a stall of a few seconds would leave the
+  // editor showing its last frame for good. An overdue UI frame therefore only defers
+  // presentation; its completion, or the browser's loss report, ends the wait.
+  if (presentationOverdueConfirmed()) {
+    return;
+  }
+  presentationOverdueSerial_ = presentationSubmissions_.oldestSerial();
+  const std::string overdueMs =
+      std::to_string(presentationSubmissions_.oldestAge(std::chrono::steady_clock::now()).count());
+  std::fprintf(stderr,
+               "[EditorWindow] UI submission %s is %s ms overdue; presentation is deferred until "
+               "the browser completes it\n",
+               std::to_string(presentationOverdueSerial_).c_str(), overdueMs.c_str());
+}
+#endif
+
 bool EditorWindow::observePresentationCompletion() {
   if (!hasPresentationDevice()) {
     return false;
@@ -2478,8 +2517,7 @@ bool EditorWindow::observePresentationCompletion() {
   const auto admission = presentationSubmissions_.observe(
       completed, std::chrono::steady_clock::now(),
       [&] {
-        if (!wgpuState_->framebufferGeodeDevice->isDeviceLost() &&
-            presentationSubmissions_.oldestSerial() != presentationOverdueSerial_) {
+        if (shouldRecheckOverduePresentation()) {
           ++presentationCompletionConfirmations_;
           // A paused browser can have finished GPU work whose callback has not run yet.
           (void)device.waitForSerial(presentationSubmissions_.oldestSerial(), 0.25);
@@ -2553,22 +2591,7 @@ bool EditorWindow::observePresentationCompletion() {
   }
   if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut) {
 #ifdef __EMSCRIPTEN__
-    // The browser reports a lost device itself through `GPUDevice.lost`, including a GPU process
-    // its watchdog gave up on. A loss declared here could never be recovered: every later frame
-    // would be refused even after the overdue work completes, so a stall of a few seconds would
-    // leave the editor showing its last frame for good. An overdue UI frame therefore only defers
-    // presentation; its completion, or the browser's loss report, ends the wait.
-    const std::uint64_t oldest = presentationSubmissions_.oldestSerial();
-    if (oldest != presentationOverdueSerial_) {
-      presentationOverdueSerial_ = oldest;
-      std::fprintf(
-          stderr,
-          "[EditorWindow] UI submission %llu is %lld ms overdue; presentation is deferred "
-          "until the browser completes it\n",
-          static_cast<unsigned long long>(oldest),
-          static_cast<long long>(
-              presentationSubmissions_.oldestAge(std::chrono::steady_clock::now()).count()));
-    }
+    deferOverduePresentation();
 #else
     declarePresentationTimeoutLoss(device, presentationTimeoutAge_);
 #endif
@@ -2638,15 +2661,7 @@ EditorWindow::PresentationProgress EditorWindow::pollDeferredPresentation() {
       case internal::PresentationSubmissionQueue::Admission::Busy:
         return PresentationProgress::Pending;
       case internal::PresentationSubmissionQueue::Admission::TimedOut:
-#ifdef __EMSCRIPTEN__
-        // Already confirmed overdue: keep polling for its completion. The progress window still
-        // ends in a frame, which defers again without repeating the blocking recheck.
-        if (presentationSubmissions_.oldestSerial() == presentationOverdueSerial_) {
-          return PresentationProgress::Pending;
-        }
-#endif
-        // Only the actual frame performs the bounded confirmation or marks device loss.
-        return PresentationProgress::Deadline;
+        return timedOutPresentationProgress();
     }
   }
 #endif
