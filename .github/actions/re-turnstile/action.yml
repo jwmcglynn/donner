@@ -29,8 +29,11 @@ description: >-
 
   The admission rules live in admission.py, which reads fabricated Actions API
   payloads just as well as real ones and is unit-tested by
-  tools/turnstile_admission_tests.py. This file only fetches pages and applies
-  the answer.
+  tools/turnstile_admission_tests.py. The wait loop lives in turnstile.py: it
+  paces polls by queue position, skips runs whose pool jobs already finished,
+  sends conditional requests and waits out an exhausted API budget, because
+  every workflow in the repository shares that budget. It is unit-tested by
+  tools/turnstile_wait_tests.py.
 
 inputs:
   lane:
@@ -71,9 +74,18 @@ inputs:
     required: false
     default: "150"
   poll-seconds:
-    description: Base seconds between polls (a small random jitter is added).
+    description: >-
+      Seconds between polls at the head of the queue (a small random jitter is
+      added). A run that needs N slot releases before it can be admitted polls
+      every N times this, up to max-poll-seconds.
     required: false
-    default: "30"
+    default: "60"
+  max-poll-seconds:
+    description: >-
+      Longest interval between polls. Bounds how late a run far back in the
+      queue notices the pool draining.
+    required: false
+    default: "300"
 
 runs:
   using: composite
@@ -88,163 +100,6 @@ runs:
         TURNSTILE_TOKEN: ${{ inputs.token }}
         TURNSTILE_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         TURNSTILE_POLL_SECONDS: ${{ inputs.poll-seconds }}
+        TURNSTILE_MAX_POLL_SECONDS: ${{ inputs.max-poll-seconds }}
         TURNSTILE_ACTION_PATH: ${{ github.action_path }}
-      run: |
-        set -uo pipefail
-
-        api="${GITHUB_API_URL:-https://api.github.com}"
-        repo="${GITHUB_REPOSITORY}"
-        run_id="${GITHUB_RUN_ID}"
-        lane="${TURNSTILE_LANE}"
-        poll="${TURNSTILE_POLL_SECONDS}"
-        capacity="${TURNSTILE_CAPACITY}"
-        admission="${TURNSTILE_ACTION_PATH}/admission.py"
-        deadline=$(( $(date +%s) + TURNSTILE_TIMEOUT_MINUTES * 60 ))
-
-        pool_names="${TURNSTILE_POOL}"
-        if [[ -z "${pool_names// /}" ]]; then
-          pool_names="${lane}"
-        fi
-        # shellcheck disable=SC2086 # deliberate word splitting into a JSON array
-        pool_json=$(printf '%s\n' ${pool_names} | jq -Rsc 'split("\n") | map(select(length > 0))')
-
-        # GET one Actions API page. Callers that enumerate collections own the
-        # pagination so admission does not depend on a burst fitting one page.
-        gh_get() {
-          curl --silent --show-error --fail-with-body \
-            --max-time 30 \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${TURNSTILE_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$1" 2>/dev/null
-        }
-
-        # Identify this run's workflow, then resolve every workflow whose runs
-        # can hold a pool slot. API availability is part of admission
-        # correctness, so retry off-pool until the common safety deadline
-        # instead of releasing all waiters on one transient 5xx response.
-        workflow_ids=""
-        while true; do
-          workflow_ids=""
-          if me_json=$(gh_get "${api}/repos/${repo}/actions/runs/${run_id}"); then
-            my_workflow=$(printf '%s' "${me_json}" | jq -er '.workflow_id | numbers' 2>/dev/null) || my_workflow=""
-            if [[ "${my_workflow}" =~ ^[0-9]+$ ]]; then
-              if [[ -z "${TURNSTILE_POOL_WORKFLOWS// /}" ]]; then
-                workflow_ids="${my_workflow}"
-              elif all_workflows=$(gh_get "${api}/repos/${repo}/actions/workflows?per_page=100"); then
-                # shellcheck disable=SC2086 # deliberate word splitting into a JSON array
-                wanted=$(printf '%s\n' ${TURNSTILE_POOL_WORKFLOWS} | jq -Rsc 'split("\n") | map(select(length > 0))')
-                workflow_request=$(printf '%s' "${all_workflows}" | jq -c --argjson wanted "${wanted}" \
-                  '{workflows: (.workflows // []), wanted: $wanted}' 2>/dev/null) || workflow_request=""
-                workflow_ids=$(printf '%s' "${workflow_request}" | \
-                  python3 "${admission}" workflow-ids 2>/dev/null) || workflow_ids=""
-              fi
-            fi
-          fi
-          if [[ -n "${workflow_ids}" ]]; then
-            break
-          fi
-          now=$(date +%s)
-          if (( now >= deadline )); then
-            echo "turnstile: safety timeout reached while Actions API metadata is unavailable; proceeding (fail-open)"
-            exit 0
-          fi
-          jitter=$(( RANDOM % 5 ))
-          echo "turnstile: Actions API metadata unavailable; re-checking in $(( poll + jitter ))s"
-          sleep $(( poll + jitter ))
-        done
-        echo "turnstile: lane='${lane}' pool=${pool_json} capacity=${capacity} run ${run_id}"
-
-        last_blockers=""
-        clear_observations=0
-        while true; do
-          list_failed=0
-          # Enumerate still-active runs of every pool workflow. Filter each
-          # nonterminal status server-side so an old active run is never hidden
-          # behind a page of newer runs.
-          candidates=$(
-            for workflow_id in ${workflow_ids}; do
-              for status in queued in_progress requested waiting pending; do
-                page=1
-                while true; do
-                  if ! p=$(gh_get "${api}/repos/${repo}/actions/workflows/${workflow_id}/runs?status=${status}&per_page=100&page=${page}"); then
-                    echo "LIST_FAILED"
-                    break
-                  fi
-                  if ! printf '%s' "${p}" | jq -e '.workflow_runs | arrays' >/dev/null 2>&1; then
-                    echo "LIST_FAILED"
-                    break
-                  fi
-                  printf '%s' "${p}" | jq -r '.workflow_runs[].id'
-                  page_size=$(printf '%s' "${p}" | jq -r '.workflow_runs | length')
-                  if (( page_size < 100 )); then
-                    break
-                  fi
-                  page=$(( page + 1 ))
-                done
-              done
-            done
-          )
-          if printf '%s\n' "${candidates}" | grep -q '^LIST_FAILED$'; then
-            list_failed=1
-          fi
-
-          # Collect each candidate run's job list. A run whose jobs cannot be
-          # read is passed through as null, which admission.py counts as
-          # executing, so an API hiccup narrows the pool instead of opening it.
-          request=$(jq -nc --argjson capacity "${capacity}" --argjson me "${run_id}" \
-            --argjson pool "${pool_json}" \
-            '{capacity: $capacity, me: $me, pool: $pool, runs: []}')
-          while read -r other_id; do
-            if ! [[ "${other_id}" =~ ^[0-9]+$ ]] || [[ "${other_id}" == "${run_id}" ]]; then
-              continue
-            fi
-            if ! jobs=$(gh_get "${api}/repos/${repo}/actions/runs/${other_id}/jobs?per_page=100"); then
-              jobs="null"
-            fi
-            if ! printf '%s' "${jobs}" | jq -e '.' >/dev/null 2>&1; then
-              jobs="null"
-            fi
-            request=$(printf '%s' "${request}" | jq -c --argjson id "${other_id}" \
-              --argjson jobs "${jobs}" '.runs += [{id: $id, jobs: $jobs}]')
-          done < <(printf '%s\n' "${candidates}" | grep -v '^LIST_FAILED$' | sort -n -u)
-
-          decision=$(printf '%s' "${request}" | python3 "${admission}")
-          admit=$(printf '%s' "${decision}" | jq -r '.admit')
-          occupancy=$(printf '%s' "${decision}" | jq -r '.occupancy')
-          blockers=$(printf '%s' "${decision}" | jq -r '.blockers | join(", ")')
-
-          if [[ "${admit}" == "true" && "${list_failed}" -eq 0 ]]; then
-            # Status-filtered run lists converge asynchronously after dispatch.
-            # Confirm free capacity across a poll interval before taking a slot.
-            clear_observations=$(( clear_observations + 1 ))
-            if (( clear_observations >= 2 )); then
-              echo "turnstile: ${occupancy}/${capacity} pool slots held, proceeding"
-              exit 0
-            fi
-            jitter=$(( RANDOM % 5 ))
-            echo "turnstile: ${occupancy}/${capacity} pool slots held; confirming in $(( poll + jitter ))s"
-            sleep $(( poll + jitter ))
-            continue
-          fi
-
-          clear_observations=0
-          if [[ "${list_failed}" -eq 1 ]]; then
-            blockers="${blockers:-${last_blockers:-Actions API unavailable}}"
-          else
-            last_blockers="${blockers}"
-          fi
-
-          now=$(date +%s)
-          if (( now >= deadline )); then
-            echo "turnstile: safety timeout reached while waiting behind ${blockers}; proceeding (fail-open)"
-            exit 0
-          fi
-          jitter=$(( RANDOM % 5 ))
-          if [[ "${list_failed}" -eq 1 ]]; then
-            echo "turnstile: Actions API list unavailable; retaining gate behind ${blockers}; re-checking in $(( poll + jitter ))s"
-          else
-            echo "turnstile: ${occupancy}/${capacity} pool slots held by ${blockers}; re-checking in $(( poll + jitter ))s"
-          fi
-          sleep $(( poll + jitter ))
-        done
+      run: python3 "${TURNSTILE_ACTION_PATH}/turnstile.py"

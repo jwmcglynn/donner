@@ -45,10 +45,23 @@ class GatekeeperTest(unittest.TestCase):
         cls.executables = ExecutableFixtureDirectory()
         cls.addClassCleanup(cls.executables.cleanup)
         fake_gh = cls.executables.path / "fake_gh.py"
+        # GH_RATE_LIMITED_CALLS refuses that many leading calls the way GitHub's rate limit
+        # does; `gh api rate_limit` reports an exhausted window that resets now.
         fake_gh.write_text(
-            "import json, os, sys\n"
+            "import json, os, sys, time\n"
             "with open(os.environ['GH_CAPTURE'], 'a', encoding='utf-8') as capture:\n"
             "    capture.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            "if sys.argv[1:3] == ['api', 'rate_limit']:\n"
+            "    sys.stdout.write(json.dumps({'resources': {'core': {'limit': 1000,\n"
+            "        'remaining': 0, 'used': 1000, 'reset': int(time.time())}}}))\n"
+            "    sys.exit(0)\n"
+            "state = os.environ.get('GH_RATE_LIMIT_STATE')\n"
+            "if state:\n"
+            "    refused = int(open(state).read() or '0') if os.path.exists(state) else 0\n"
+            "    if refused < int(os.environ['GH_RATE_LIMITED_CALLS']):\n"
+            "        open(state, 'w').write(str(refused + 1))\n"
+            "        sys.stderr.write('HTTP 403: API rate limit exceeded for installation.\\n')\n"
+            "        sys.exit(1)\n"
             "sys.stdout.write(os.environ['GH_STDOUT'])\n"
             "sys.exit(int(os.environ['GH_STATUS']))\n",
             encoding="utf-8",
@@ -149,6 +162,9 @@ class GatekeeperTest(unittest.TestCase):
         helper.parent.mkdir(parents=True)
         action.parent.mkdir(parents=True)
         helper.write_bytes(Path(self.script).read_bytes())
+        # The admission checkout also holds the rate-limit helper the gatekeeper imports.
+        (helper.parent / "github_rate_limit.py").write_bytes(
+            (Path(self.script).parent / "github_rate_limit.py").read_bytes())
         action.write_bytes(Path(runfiles.Create().Rlocation(
             "donner/.github/actions/pr-trust/action.yml")).read_bytes())
         originals = (helper.read_bytes(), action.read_bytes())
@@ -185,6 +201,18 @@ class GatekeeperTest(unittest.TestCase):
              "-c", body], env=env, cwd=cwd, capture_output=True, text=True, check=False,
             timeout=test_timing.STALL_GUARD_SECONDS)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rate_limited_query_waits_for_the_reset_and_repeats(self):
+        result, output, calls = self._run(
+            "duplicate-push", gh_stdout="1\n", GITHUB_EVENT_NAME="push",
+            GH_RATE_LIMITED_CALLS="1", GH_RATE_LIMIT_STATE=str(self.work / "refused"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "is_duplicate_push=true\n")
+        query = ["pr", "list", "--repo", "owner/repo", "--state", "open", "--head", "feature",
+                 "--json", "number", "-q", "length"]
+        self.assertEqual(calls, [query, ["api", "rate_limit"], query])
+        # The window the refusal reported is logged, so a failure shows when it resets.
+        self.assertRegex(result.stderr, r"remaining=0 limit=1000 used=1000 reset=\d{4}-")
 
     def test_push_without_open_pull_request_runs(self):
         result, output, calls = self._run("duplicate-push", gh_stdout="0\n",
@@ -329,6 +357,16 @@ class GatekeeperTest(unittest.TestCase):
                 result, output, _ = self._advanced(stdout, cwd=checkout)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output, "should_run=true\n")
+
+    def test_rate_limited_run_list_is_repeated_after_the_reset(self):
+        checkout = self._checkout()
+        result, output, calls = self._advanced(
+            self.root + "\n", cwd=checkout, GH_RATE_LIMITED_CALLS="1",
+            GH_RATE_LIMIT_STATE=str(self.work / "refused"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "should_run=false\n")
+        self.assertEqual([call[:2] for call in calls],
+                         [["run", "list"], ["api", "rate_limit"], ["run", "list"]])
 
     def test_query_failures_fail_the_step_without_a_decision(self):
         checkout = self._checkout()
