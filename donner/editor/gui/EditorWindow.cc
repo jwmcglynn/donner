@@ -2473,7 +2473,8 @@ bool EditorWindow::observePresentationCompletion() {
   const auto admission = presentationSubmissions_.observe(
       completed, std::chrono::steady_clock::now(),
       [&] {
-        if (!wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+        if (!wgpuState_->framebufferGeodeDevice->isDeviceLost() &&
+            presentationSubmissions_.oldestSerial() != presentationOverdueSerial_) {
           ++presentationCompletionConfirmations_;
           // A paused browser can have finished GPU work whose callback has not run yet.
           (void)device.waitForSerial(presentationSubmissions_.oldestSerial(), 0.25);
@@ -2546,7 +2547,26 @@ bool EditorWindow::observePresentationCompletion() {
     return false;
   }
   if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut) {
+#ifdef __EMSCRIPTEN__
+    // The browser reports a lost device itself through `GPUDevice.lost`, including a GPU process
+    // its watchdog gave up on. A loss declared here could never be recovered: every later frame
+    // would be refused even after the overdue work completes, so a stall of a few seconds would
+    // leave the editor showing its last frame for good. An overdue UI frame therefore only defers
+    // presentation; its completion, or the browser's loss report, ends the wait.
+    const std::uint64_t oldest = presentationSubmissions_.oldestSerial();
+    if (oldest != presentationOverdueSerial_) {
+      presentationOverdueSerial_ = oldest;
+      std::fprintf(
+          stderr,
+          "[EditorWindow] UI submission %llu is %lld ms overdue; presentation is deferred "
+          "until the browser completes it\n",
+          static_cast<unsigned long long>(oldest),
+          static_cast<long long>(
+              presentationSubmissions_.oldestAge(std::chrono::steady_clock::now()).count()));
+    }
+#else
     declarePresentationTimeoutLoss(device, presentationTimeoutAge_);
+#endif
     return false;
   }
   return admission == internal::PresentationSubmissionQueue::Admission::Ready;
@@ -2613,6 +2633,13 @@ EditorWindow::PresentationProgress EditorWindow::pollDeferredPresentation() {
       case internal::PresentationSubmissionQueue::Admission::Busy:
         return PresentationProgress::Pending;
       case internal::PresentationSubmissionQueue::Admission::TimedOut:
+#ifdef __EMSCRIPTEN__
+        // Already confirmed overdue: keep polling for its completion. The progress window still
+        // ends in a frame, which defers again without repeating the blocking recheck.
+        if (presentationSubmissions_.oldestSerial() == presentationOverdueSerial_) {
+          return PresentationProgress::Pending;
+        }
+#endif
         // Only the actual frame performs the bounded confirmation or marks device loss.
         return PresentationProgress::Deadline;
     }

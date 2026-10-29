@@ -26,12 +26,12 @@ keeping their own handles and serials, and a texture of one runtime device reach
 through export and registration. Waits that detect a hung device measure time without progress
 rather than the time a whole backlog takes, except two Vulkan waits whose progress the queue cannot
 judge. Geode's queue-idle drain, a Metal present, Metal's wait for room under its command-buffer
-backstop, the editor's UI submission admission and framebuffer readback, and the cross-context
-registration helper declare the device lost when progress stops; the other waits, such as a host
-access to a busy buffer, a texture upload and the Metal teardown drain, give up without declaring a
-loss. The one remaining wgpu-native consumer is a checksum-pinned, Linux-only, test-only resvg
-comparison reference; the lexical no-Rust verifier and the configured dependency audits keep it out
-of every product.
+backstop, the editor's native UI submission admission and framebuffer readback, and the
+cross-context registration helper declare the device lost when progress stops; the other waits,
+such as a host access to a busy buffer, a texture upload and the Metal teardown drain, give up
+without declaring a loss. The one remaining wgpu-native consumer is a checksum-pinned, Linux-only,
+test-only resvg comparison reference; the lexical no-Rust verifier and the configured dependency
+audits keep it out of every product.
 
 The browser editor keeps its device, retained tile textures and canvas on the application thread.
 Raster workers dispatch validated commands and resource identities; the desktop compositor draws

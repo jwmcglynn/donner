@@ -1281,6 +1281,9 @@ private:
   internal::PresentationDeviceLossRecord presentationDeviceLoss_;
 #ifdef __EMSCRIPTEN__
   std::uint64_t presentationCompletionConfirmations_ = 0;
+  /// Oldest UI submission already confirmed overdue in the browser. Its frame stays deferred,
+  /// without another blocking recheck, until its completion or the browser's loss report arrives.
+  std::uint64_t presentationOverdueSerial_ = 0;
 #endif
   std::uint64_t presentationFrameId_ = 0;
   std::uint64_t presentationCaptureId_ = 0;
