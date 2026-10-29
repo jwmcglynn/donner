@@ -2336,8 +2336,13 @@ bool EditorWindow::hasUsableFrameTarget(int width, int height) {
 
 bool EditorWindow::admitFrameSubmission(bool requestedReadback) {
   bool ready = observePresentationCompletion();
-  if (!ready && requestedReadback && !presentationCompletionProbeForTesting_ &&
-      !wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+  bool recheck = !ready && requestedReadback && !presentationCompletionProbeForTesting_ &&
+                 !wgpuState_->framebufferGeodeDevice->isDeviceLost();
+#ifdef __EMSCRIPTEN__
+  // A submission already confirmed overdue is waited out by polling, not by another recheck.
+  recheck = recheck && presentationSubmissions_.oldestSerial() != presentationOverdueSerial_;
+#endif
+  if (recheck) {
     auto& device = wgpuState_->framebufferGeodeDevice->runtimeDevice();
     if (device.waitForSerial(presentationSubmissions_.oldestSerial(), 0.25)) {
       ready = observePresentationCompletion();

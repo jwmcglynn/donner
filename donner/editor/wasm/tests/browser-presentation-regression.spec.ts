@@ -6236,10 +6236,11 @@ test("browser trackpad pinch matches the desktop zoom identity", async ({ page }
   expect(failures).toEqual([]);
 });
 
-// Longer than the editor's UI admission deadline (`PresentationSubmissionQueue::kCompletionDeadline`,
-// 5 s), its 250 ms completion recheck and the 5.5 s presentation progress window that ends in the
-// frame performing that recheck, with room for the first held submission to start late.
-const kGpuCompletionStallMs = 10_000;
+// Longer than the editor's UI admission deadline
+// (`PresentationSubmissionQueue::kCompletionDeadline`, 5 s), its 250 ms completion recheck and the
+// 5.5 s presentation progress window that ends in the frame performing that recheck, with ample
+// room for the pinch's first held submission to start late.
+const kGpuCompletionStallMs = 15_000;
 
 interface GpuCompletionHold {
   installed: boolean;
@@ -6249,13 +6250,16 @@ interface GpuCompletionHold {
 
 // Holds every GPU queue completion in every editor worker for `holdMs`, as a browser whose GPU
 // process stops answering does: the work may finish, but no completion callback reaches the
-// editor until the hold ends. Each worker releases itself on its own timer.
+// editor until the hold ends. Every worker releases at the same wall-clock time, and a worker
+// reached after that time installs nothing.
 async function holdGpuCompletions(page: Page, holdMs: number): Promise<number> {
+  const releaseAtMs = Date.now() + holdMs;
   const installed = await Promise.all(
     page.workers().map((worker) =>
       boundFailureDiagnostic(
-        worker.evaluate((holdMs) => {
-          if (typeof GPUQueue === "undefined") {
+        worker.evaluate((releaseAtMs) => {
+          const holdMs = releaseAtMs - Date.now();
+          if (typeof GPUQueue === "undefined" || holdMs <= 0) {
             return false;
           }
           const scope = globalThis as typeof globalThis & {
@@ -6291,7 +6295,8 @@ async function holdGpuCompletions(page: Page, holdMs: number): Promise<number> {
           scope.__donnerReleaseGpuCompletions = restore;
           GPUQueue.prototype.onSubmittedWorkDone = held;
           return true;
-        }, holdMs),
+        }, releaseAtMs),
+        kStallGuardMs,
       )
     ),
   );
