@@ -352,10 +352,11 @@ def live_marker(url: str = SITE_URL, *, deadline: float | None = None) -> dict |
 
 
 def deploy(artifact_id: int, commit: str, api, wait=time.sleep, receipt: Path | None = None) -> str:
+    site.require(isinstance(commit, str) and site.SHA.fullmatch(commit), "invalid Pages source commit")
     api.require_protection()
     token = _oidc_token()
     value = api.call(store.REPO + "/pages/deployments", "POST", {
-        "artifact_id": artifact_id, "pages_build_version": commit + "-" + str(artifact_id),
+        "artifact_id": artifact_id, "pages_build_version": commit,
         "oidc_token": token, "environment": store.deployment_environment()})
     site.require(isinstance(value, dict), "Pages returned no deployment identity")
     deployment_id = str(value.get("id") or str(value.get("status_url", "")).rsplit("/", 1)[-1])
