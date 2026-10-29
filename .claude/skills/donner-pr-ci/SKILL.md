@@ -109,8 +109,8 @@ gh api repos/jwmcglynn/donner/pulls/<N>/reviews       # review state + top-level
 when opened, reopened or pushed, not when its title or description is edited, so an edit does
 not cancel or restart it. A base-branch change (retarget) runs the same jobs through
 `pr_base_change.yml` (workflow "CI (base change)"), whose checks are named
-`base-change-ci / <job>`. Once a head's base has changed, each later edit of that head reruns
-that base-change CI, so its newest run always holds real results; the next push ends that state.
+`base-change-ci / <job>`. A later title or description edit never reruns it; the PR keeps
+every run's checks on its head, so the base-change results stay visible until the next push.
 
 A new head commit (PR opened, pushed or reopened) cancels the queued and in-progress runs of the
 PR's earlier head in `main.yml`, `cmake.yml`, `lint.yml`, `bcr_preflight.yml`, `editor_wasm.yml`
@@ -164,7 +164,7 @@ Workflow map (all in `.github/workflows/`):
 | Workflow             | Trigger                                                                                                                      | Role                                                                                                           |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `main.yml`           | push + PR (opened/synchronize/reopened) + `workflow_call`                                                                    | Required gate: Bazel build/test on Linux + macOS                                                               |
-| `pr_base_change.yml` | PR edited                                                                                                                    | Calls `main.yml` after a base-branch change (or an edit following one on the same head); otherwise skips       |
+| `pr_base_change.yml` | PR edited                                                                                                                    | Calls `main.yml` only when the edit changed the base branch; a title or description edit skips                 |
 | `pr_metadata.yml`    | PR opened/synchronize/reopened/edited                                                                                        | PR text checks (`tools/check_pr_body.py`); its own concurrency group, never touches CI                         |
 | `cmake.yml`          | push + PR                                                                                                                    | CMake mirror: `gen_cmakelists.py --check` + real CMake build/ctest                                             |
 | `lint.yml`           | push + PR                                                                                                                    | Banned-pattern check for `examples/`, `gen_cmakelists.py --check`                                              |

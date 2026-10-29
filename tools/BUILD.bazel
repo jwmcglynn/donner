@@ -261,10 +261,7 @@ py_test(
 py_test(
     name = "ci_pull_request_events_tests",
     size = "small",
-    srcs = [
-        "ci_pull_request_events_tests.py",
-        "test_executable_fixtures.py",
-    ],
+    srcs = ["ci_pull_request_events_tests.py"],
     data = ["//:github_action_definitions"],
     imports = ["."],
     deps = ["@rules_python//python/runfiles"],

@@ -11,12 +11,12 @@ env:
 # the same event as a title or description edit. main.yml does not trigger on
 # `edited`, so an edit never cancels or restarts CI.
 #
-# GitHub shows a PR the newest run of each workflow for its head commit. An edit
-# run that skipped its jobs would hide the results of an earlier base-change run
-# on the same head, so once the base has changed on a head, every later edit of
-# that head reruns full CI here. A push starts a new head and ends that state.
-#
-# The run name marks base-change runs; the detect job looks for it.
+# Only an event that changed the base runs CI. A title or description edit
+# starts no job here, even on a head whose base changed earlier: a pull request
+# keeps the checks of every run on its head, so the earlier base-change run's
+# results stay visible next to this run's skipped call. The decision reads the
+# event alone and makes no API call, so an API outage or rate limit cannot turn
+# an edit into a full CI run.
 run-name: ${{ github.event.changes.base && 'Base branch changed' || 'Pull request edited' }}
 
 on:
@@ -29,59 +29,8 @@ on:
 permissions: {}
 
 jobs:
-  detect:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: read
-    outputs:
-      run_ci: ${{ steps.detect.outputs.run_ci }}
-    steps:
-      - id: detect
-        name: Decide whether this edit needs full CI
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BASE_FROM: ${{ github.event.changes.base.ref.from }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          BASE_CHANGE_RUN_NAME: Base branch changed
-        run: |
-          set -euo pipefail
-          if [[ -n "${BASE_FROM}" ]]; then
-            echo "The base branch changed; running full CI against the new base."
-            echo "run_ci=true" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          # Count earlier base-change runs of this workflow on the same head commit. Run ids
-          # increase across the repository, so only a smaller id is earlier: a retarget that
-          # arrives after this edit has its own run and must not be cancelled by this one. Fail
-          # toward running CI: an extra run is safe, a hidden result is not.
-          if ! pages="$(gh api --paginate --slurp -X GET \
-              "repos/${REPOSITORY}/actions/workflows/pr_base_change.yml/runs" \
-              -f head_sha="${HEAD_SHA}" -f event=pull_request -f per_page=100)" ||
-             ! earlier="$(python3 -c '
-          import json, os, sys
-          runs = [run for page in json.load(sys.stdin) for run in page["workflow_runs"]]
-          print(sum(run["display_title"] == os.environ["BASE_CHANGE_RUN_NAME"]
-                    and run["id"] < int(os.environ["RUN_ID"]) for run in runs))
-          ' <<< "${pages}")"; then
-            echo "::warning::Could not list earlier base-change runs; running full CI."
-            echo "run_ci=true" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          if [[ "${earlier}" != "0" ]]; then
-            echo "The base changed earlier on this head; rerunning full CI so this run does not hide it."
-            echo "run_ci=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "Title or description edit only; CI is not rerun."
-            echo "run_ci=false" >> "${GITHUB_OUTPUT}"
-          fi
-
   base-change-ci:
-    needs: detect
-    if: ${{ needs.detect.outputs.run_ci == 'true' }}
+    if: ${{ github.event.changes.base }}
     # The scopes main.yml grants its jobs.
     permissions:
       contents: read
