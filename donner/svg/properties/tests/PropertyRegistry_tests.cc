@@ -3023,6 +3023,30 @@ TEST(PropertyRegistry, ResolveFontStretch) {
   }
 }
 
+TEST(PropertyRegistry, WhiteSpaceKeywordsAndInvalidDeclarations) {
+  const std::pair<const char*, WhiteSpace> cases[] = {{"normal", WhiteSpace::Normal},
+                                                      {"pre", WhiteSpace::Pre},
+                                                      {"nowrap", WhiteSpace::Nowrap},
+                                                      {"pre-wrap", WhiteSpace::PreWrap},
+                                                      {"break-spaces", WhiteSpace::BreakSpaces},
+                                                      {"pre-line", WhiteSpace::PreLine}};
+  for (const auto& [keyword, value] : cases) {
+    SCOPED_TRACE(keyword);
+    PropertyRegistry properties;
+    EXPECT_THAT(properties.parsePresentationAttribute("white-space", keyword), ParseResultIs(true));
+    EXPECT_THAT(properties.whiteSpace.get(), Optional(value));
+    EXPECT_THAT(properties.unparsedProperties, testing::IsEmpty());
+  }
+  EXPECT_EQ(PropertyRegistry::isPresentationAttributeInherited("white-space"), true);
+  PropertyRegistry properties;
+  properties.parseStyle("white-space: PrE-WrAp");
+  EXPECT_THAT(properties.whiteSpace.get(), Optional(WhiteSpace::PreWrap));
+  for (const char* invalid : {"preserve", "normal pre", "1", "pre-wrap extra"}) {
+    properties.parseStyle(std::string("white-space:") + invalid);
+    EXPECT_THAT(properties.whiteSpace.get(), Optional(WhiteSpace::PreWrap));
+  }
+}
+
 TEST(PropertyRegistry, SmallCapsSynthesisParsesAndInherits) {
   PropertyRegistry parent;
   parent.parseStyle("font-synthesis-small-caps: NoNe");

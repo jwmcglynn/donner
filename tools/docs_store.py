@@ -54,7 +54,7 @@ class GitHub:
              raw: bool = False, maximum: int = MAX_CONTROL) -> object:
         args = ["gh", "api", endpoint, "--method", method]
         if raw:
-            args += ["-H", "Accept: application/vnd.github.raw+json"]
+            args += ["-H", "Accept: application/vnd.github.raw"]
         with tempfile.TemporaryFile() as output:
             try:
                 result = subprocess.run(args + (["--input", "-"] if data is not None else []),

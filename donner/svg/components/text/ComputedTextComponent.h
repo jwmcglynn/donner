@@ -28,6 +28,7 @@
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/TextOrientation.h"
 #include "donner/svg/core/Visibility.h"
+#include "donner/svg/core/WhiteSpace.h"
 #include "donner/svg/text/TextTypes.h"
 
 namespace donner::svg {
@@ -301,6 +302,11 @@ struct ComputedTextComponent {
     /// each text chunk uses the text-anchor of its first rendered character's element.
     /// Populated by RendererDriver from sourceEntity's ComputedStyleComponent.
     TextAnchor textAnchor = TextAnchor::Start;
+
+    /// Whitespace policy resolved when source text is normalized.
+    WhiteSpace whiteSpace = WhiteSpace::Normal;
+    /// Common ancestor's whitespace policy at the boundary with the next nonempty span.
+    std::optional<WhiteSpace> boundaryWhiteSpace;
 
     /// Per-span textLength override from the source element's TextComponent.
     /// When set, textLength adjustment is applied to this span's run individually

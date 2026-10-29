@@ -37,13 +37,27 @@ def download(artifact_id: int, output: Path) -> None:
     site.require(output.stat().st_size <= site.MAX_SITE, "artifact is oversized")
 
 
+def _attestation_command(args: list[str], stdout) -> None:
+    try:
+        subprocess.run(args, stdout=stdout, stderr=subprocess.PIPE, timeout=180, check=True)
+    except subprocess.CalledProcessError as error:
+        diagnostic = error.stderr or b""
+        tokens = {os.environ.get(name, "") for name in
+                  ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")}
+        for token in sorted(tokens, key=len, reverse=True):
+            if token:
+                diagnostic = diagnostic.replace(token.encode(), b"[REDACTED]")
+        detail = json.dumps(diagnostic[:4096].decode("utf-8", errors="replace"))
+        detail = detail.replace("#", "\\u0023")
+        raise ValueError(f"GitHub attestation verification failed (exit {error.returncode}): {detail}") from None
+
+
 def attestation(path: Path, workflow: str, commit: str, output: Path) -> None:
     with output.open("wb") as stream:
-        subprocess.run(["gh", "attestation", "verify", str(path), "--repo", "jwmcglynn/donner",
+        _attestation_command(["gh", "attestation", "verify", str(path), "--repo", "jwmcglynn/donner",
                         "--signer-workflow", "jwmcglynn/donner/" + workflow,
                         "--source-digest", commit, "--source-ref", "refs/heads/main",
-                        "--deny-self-hosted-runners", "--format", "json"], stdout=stream,
-                       stderr=subprocess.PIPE, timeout=180, check=True)
+                        "--deny-self-hosted-runners", "--format", "json"], stdout=stream)
 
 
 def source_file(commit: str, name: str) -> str:
@@ -338,10 +352,11 @@ def live_marker(url: str = SITE_URL, *, deadline: float | None = None) -> dict |
 
 
 def deploy(artifact_id: int, commit: str, api, wait=time.sleep, receipt: Path | None = None) -> str:
+    site.require(isinstance(commit, str) and site.SHA.fullmatch(commit), "invalid Pages source commit")
     api.require_protection()
     token = _oidc_token()
     value = api.call(store.REPO + "/pages/deployments", "POST", {
-        "artifact_id": artifact_id, "pages_build_version": commit + "-" + str(artifact_id),
+        "artifact_id": artifact_id, "pages_build_version": commit,
         "oidc_token": token, "environment": store.deployment_environment()})
     site.require(isinstance(value, dict), "Pages returned no deployment identity")
     deployment_id = str(value.get("id") or str(value.get("status_url", "")).rsplit("/", 1)[-1])
@@ -663,11 +678,10 @@ def _offline_attestation(path: Path, raw: bytes, commit: str, work: Path, workfl
     site.require(isinstance(values, list) and bool(values), "stored attestation is missing")
     bundle = work / (path.name + ".bundle.json")
     bundle.write_bytes(site.canonical(values[0]["attestation"]["bundle"]))
-    subprocess.run(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
+    _attestation_command(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
                     "--repo", "jwmcglynn/donner", "--signer-workflow", "jwmcglynn/donner/" + workflow,
                     "--source-digest", commit, "--source-ref", "refs/heads/main",
-                    "--deny-self-hosted-runners"], stdout=subprocess.DEVNULL,
-                   stderr=subprocess.PIPE, timeout=180, check=True)
+                    "--deny-self-hosted-runners"], stdout=subprocess.DEVNULL)
 
 
 def rollback_preflight(target: str, snapshot: str, prior: str, work: Path, api=None) -> None:
@@ -740,6 +754,9 @@ def _recover(record, prior_identity, previous_id, api, error, expected_tip=None,
         site.require(expected_tip is not None and api.tip() == expected_tip,
                      "snapshot branch advanced or recovery scope is unknown")
         site.require(deployment_id is not None, "candidate deployment identity is unknown")
+        # SHA-based Pages status can describe an earlier artifact at the same commit.
+        site.require(not site.SHA.fullmatch(str(deployment_id)),
+                     "SHA deployment status is not bound to the current artifact request")
         candidate_state = api.call(store.REPO + "/pages/deployments/" + str(deployment_id))["status"]
         site.require(candidate_state in {"succeed", "deployment_failed", "deployment_content_failed",
                                          "deployment_cancelled", "deployment_lost"},
@@ -872,11 +889,10 @@ def _bundle_attestation(path: Path, bundle: Path, commit: str, output: Path) -> 
     site.require(bundle.is_file() and not bundle.is_symlink() and bundle.stat().st_size <= site.MAX_FILE,
                  "automatic attestation bundle is missing or oversized")
     with output.open("wb") as stream:
-        subprocess.run(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
+        _attestation_command(["gh", "attestation", "verify", str(path), "--bundle", str(bundle),
                         "--repo", "jwmcglynn/donner", "--signer-workflow", "jwmcglynn/donner/" + WORKFLOW,
                         "--source-digest", commit, "--source-ref", "refs/heads/main",
-                        "--deny-self-hosted-runners", "--format", "json"], stdout=stream,
-                       stderr=subprocess.PIPE, timeout=180, check=True)
+                        "--deny-self-hosted-runners", "--format", "json"], stdout=stream)
 
 
 def _auto_artifact(name: str, work: Path, output: Path) -> None:

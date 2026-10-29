@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import argparse
 import ast
+from collections import Counter
 from collections.abc import Callable
+import csv
 from dataclasses import dataclass
+import io
 import json
 import os
 from pathlib import Path
@@ -958,6 +961,137 @@ def generate_report(repo_root: Path) -> dict[str, object]:
     return build_report(source, repo_root / TESTS_ROOT)
 
 
+RESULTS_CSV = Path("third_party/resvg-test-suite/results.csv")
+HEAD_TO_HEAD_ENGINE = "resvg"
+# Per-engine codes in the suite's results.csv: manual visual judgments recorded at the vendored
+# snapshot, not an automated pixel diff.
+RESULT_CODE_NAMES = {0: "unknown", 1: "passed", 2: "failed", 3: "crashed"}
+# Exceptions that loosen a comparison. Gating a case to a feature tier or backend does not.
+_LOOSENING_EXCEPTIONS = {
+    "threshold", "simple_text_threshold", "geode_threshold", "shared_golden", "geode_golden",
+}
+
+
+_RESULT_CODES = {str(code): code for code in RESULT_CODE_NAMES}
+
+
+def _engine_result_row(row: dict[str | None, object], engine: str) -> tuple[str, int]:
+    """Return the path and result code of one results.csv row, rejecting malformed rows."""
+
+    path = str(row["title"] or "").strip()
+    if not path.endswith(".svg"):
+        raise ParityReportError(f"results.csv row has no SVG path: {path!r}")
+    if None in row:
+        raise ParityReportError(f"results.csv row for {path} has extra columns")
+    value = str(row[engine] or "").strip()
+    if value not in _RESULT_CODES:
+        raise ParityReportError(f"results.csv has invalid {engine} code {value!r} for {path}")
+    return path, _RESULT_CODES[value]
+
+
+def parse_engine_results(text: str, engine: str = HEAD_TO_HEAD_ENGINE) -> dict[str, int]:
+    """Return one engine's result code per test path from the suite's results.csv."""
+
+    reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames is None or "title" not in reader.fieldnames:
+        raise ParityReportError("results.csv has no `title` column")
+    if engine not in reader.fieldnames:
+        raise ParityReportError(f"results.csv has no {engine!r} column")
+
+    results: dict[str, int] = {}
+    try:
+        for row in reader:
+            path, code = _engine_result_row(row, engine)
+            if path in results:
+                raise ParityReportError(f"duplicate results.csv row {path}")
+            results[path] = code
+    except csv.Error as error:
+        raise ParityReportError(f"malformed results.csv: {error}") from error
+    if not results:
+        raise ParityReportError("results.csv contains no rows")
+    return results
+
+
+def _gap_state(case: dict[str, object]) -> str:
+    if case["registration"] != "active":
+        return "disabled"
+    if case["primary_state"] == "compare" and not case["comparison_modes"]:
+        return "no-backend"
+    return str(case["render_only_kind"] or case["primary_state"])
+
+
+def build_head_to_head(
+    report: dict[str, object], engine_results: dict[str, int], engine: str = HEAD_TO_HEAD_ENGINE
+) -> dict[str, object]:
+    """Compare Donner's compared cases with one engine's recorded passes on the same corpus.
+
+    A Donner pass is an active case that compares against its reference, by default or within a
+    recorded budget on at least one backend, so the count assumes the comparison tests are green.
+    Skipped, render-only and disabled cases are not passes. A strict pass also carries no pixel
+    budget or golden override.
+    The engine's passes are its `passed` rows; `unknown` and `crashed` rows are not passes.
+    """
+
+    cases = {str(case["path"]): case for case in report["cases"]}  # type: ignore[union-attr]
+    missing = sorted(set(cases) - set(engine_results))
+    extra = sorted(set(engine_results) - set(cases))
+    if missing or extra:
+        raise ParityReportError(
+            "results.csv and the vendored corpus disagree: "
+            f"{len(missing)} cases without a result {missing[:5]}, "
+            f"{len(extra)} results without a case {extra[:5]}"
+        )
+
+    donner_passes = {path for path, case in cases.items() if _gap_state(case) == "compare"}
+    engine_passes = {path for path, code in engine_results.items() if code == 1}
+    strict_passes = {
+        path for path in donner_passes
+        if not set(cases[path]["exception_types"]) & _LOOSENING_EXCEPTIONS
+    }
+    donner_only = sorted(donner_passes - engine_passes)
+    gap = sorted(engine_passes - donner_passes)
+
+    def engine_result(path: str) -> str:
+        return RESULT_CODE_NAMES[engine_results[path]]
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source": {
+            "engine": engine,
+            "engine_results": RESULTS_CSV.as_posix(),
+            "registration_source": REGISTRATION_SOURCE.as_posix(),
+            "tests_root": TESTS_ROOT.as_posix(),
+        },
+        "summary": {
+            "both_pass": len(donner_passes & engine_passes),
+            "donner_only": len(donner_only),
+            "donner_only_by_engine_result": dict(Counter(map(engine_result, donner_only))),
+            "donner_pass": len(donner_passes),
+            "donner_strict_pass": len(strict_passes),
+            "engine_pass": len(engine_passes),
+            "gap": len(gap),
+            "gap_by_state": dict(Counter(_gap_state(cases[path]) for path in gap)),
+            "margin": len(donner_passes) - len(engine_passes),
+            "total_cases": len(cases),
+        },
+        "donner_only": [{"engine_result": engine_result(path), "path": path}
+                        for path in donner_only],
+        "gap": [
+            {"path": path, "reason": cases[path]["reason"], "state": _gap_state(cases[path])}
+            for path in gap
+        ],
+    }
+
+
+def generate_head_to_head(repo_root: Path) -> dict[str, object]:
+    results_path = repo_root / RESULTS_CSV
+    try:
+        text = results_path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ParityReportError(f"cannot read engine results {results_path}: {error}") from error
+    return build_head_to_head(generate_report(repo_root), parse_engine_results(text))
+
+
 def _default_repo_root() -> Path:
     workspace = os.environ.get("BUILD_WORKSPACE_DIRECTORY")
     if workspace:
@@ -987,13 +1121,21 @@ def _argument_parser() -> argparse.ArgumentParser:
         help="Donner repository root (default: inferred from this script)",
     )
     parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
+    parser.add_argument(
+        "--head-to-head",
+        action="store_true",
+        help=f"compare Donner's passes with {HEAD_TO_HEAD_ENGINE}'s in {RESULTS_CSV} instead of "
+        "writing the per-case ledger",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None, stdout: TextIO = sys.stdout) -> int:
     args = _argument_parser().parse_args(argv)
     try:
-        report = generate_report(args.repo_root.resolve())
+        repo_root = args.repo_root.resolve()
+        report = (generate_head_to_head(repo_root) if args.head_to_head
+                  else generate_report(repo_root))
         _write_json(report, args.output, stdout)
     except ParityReportError as error:
         print(f"parity_report: error: {error}", file=sys.stderr)
