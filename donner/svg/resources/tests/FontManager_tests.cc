@@ -88,7 +88,7 @@ TEST(FontManagerTest, RawLoadRenderingMetadataIsOwnedPerNewHandleAndOldOverloadR
   FontManager manager(registry);
   using OldLoad = FontHandle (FontManager::*)(std::span<const uint8_t>, FontDataTrust);
   const OldLoad oldLoad = &FontManager::loadFontData;
-  const auto bytes = embedded::kPublicSansMediumOtf;
+  const auto& bytes = embedded::kPublicSansMediumOtf;
   const FontHandle raw = (manager.*oldLoad)(bytes, FontDataTrust::Trusted);
   ASSERT_THAT(static_cast<bool>(raw), Eq(true));
   EXPECT_THAT(manager.providerFaceRequest(raw), Eq(std::nullopt));
