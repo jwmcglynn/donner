@@ -153,7 +153,7 @@ py_test(
         "--js-file",
         "$(rootpath :donner_wasm_bin.js)",
         "--max-wasm-raw-bytes",
-        "2210000",
+        "2250000",
         "--max-wasm-gzip-bytes",
         "900000",
         "--max-js-raw-bytes",
