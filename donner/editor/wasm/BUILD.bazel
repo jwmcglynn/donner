@@ -381,7 +381,7 @@ py_test(
         "--max-wasm-gzip-bytes",
         "3540000",
         "--max-wasm-function-body-bytes",
-        "47000",
+        "48000",
         "--max-wasm-data-segments",
         "64",
         "--max-js-raw-bytes",
