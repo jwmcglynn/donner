@@ -25,6 +25,29 @@ enum class FontDataTrust {
 };
 
 /**
+ * Owned rendering attributes for a provider face reloaded from encoded bytes.
+ *
+ * These values configure the new face before a backend can cache it. They do not name or query
+ * a provider, and do not associate the face with a CSS family.
+ */
+struct FontDataRenderingOptions {
+  std::optional<FontFaceRequest> providerRequest;  ///< Requested weight, style and stretch.
+  bool genericSans = false;       ///< The source face belongs to the generic sans-serif provider.
+  bool immutableCatalog = false;  ///< The source face belongs to an immutable font catalog.
+};
+
+/**
+ * Non-owning identity of an installed font-loading domain.
+ *
+ * Compare owner control blocks, including after expiration. The allowance conservatively accounts
+ * for the fixed coallocation kept alive by a weak reference, not live font data or physical RSS.
+ */
+struct FontLoadingDomainIdentity {
+  std::weak_ptr<const void> owner;  ///< Does not retain the source or its resources.
+  size_t retainedStorageBytes = 0;  ///< Conservative fixed weak-identity storage allowance.
+};
+
+/**
  * Opaque handle to a loaded font, used to reference fonts in the FontManager.
  */
 class FontHandle {
@@ -276,6 +299,29 @@ public:
    */
   FontHandle loadFontData(std::span<const uint8_t> data,
                           FontDataTrust trust = FontDataTrust::Untrusted);
+
+  /**
+   * Load encoded bytes with owned provider rendering attributes on the new face.
+   *
+   * Admission and validation are identical to the two-argument overload. No provider is queried.
+   * Each successful call creates a distinct face, including when the bytes are identical.
+   *
+   * @param data Encoded font bytes.
+   * @param trust Trust classification for the encoded bytes.
+   * @param rendering Rendering attributes installed before the handle is returned.
+   * @return A new handle, or an invalid handle on admission or validation failure.
+   */
+  FontHandle loadFontData(std::span<const uint8_t> data, FontDataTrust trust,
+                          const FontDataRenderingOptions& rendering);
+
+  /**
+   * Return a weak identity for the installed font-loading domain, without creating it.
+   *
+   * Empty before a load establishes the domain. Compare ownership, rather than locking or
+   * comparing addresses: an expired identity remains distinct from an empty identity and from
+   * later domains. Retaining this identity does not retain fonts, providers or the source.
+   */
+  [[nodiscard]] FontLoadingDomainIdentity fontDomainIdentity() const;
 
   /**
    * Get the raw font data bytes for a handle.

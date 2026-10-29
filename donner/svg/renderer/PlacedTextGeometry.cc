@@ -94,7 +94,8 @@ GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, Font
   }
 
   // 1. Raw outline at the glyph's effective scale.
-  result.outline = textEngine.glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale);
+  result.outline = textEngine.glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale,
+                                           glyph.allowSyntheticOblique);
   if (result.outline.empty()) {
     return result;  // No vector outline (e.g. bitmap-only) -- caller handles.
   }
@@ -183,7 +184,8 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
   // backend's golden images are pinned to that exact arithmetic. Splitting it
   // into a rotate pass and a translate pass is the same mapping but not the
   // same rounding.
-  Path glyphPath = textEngine.glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale);
+  Path glyphPath = textEngine.glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale,
+                                           glyph.allowSyntheticOblique);
   if (glyphPath.empty()) {
     return glyphPath;  // No vector outline (e.g. bitmap-only) -- caller handles.
   }

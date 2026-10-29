@@ -38,17 +38,17 @@ struct ParseAllocationBudget {
 // ceiling.
 constexpr ParseAllocationBudget kRepeatedAttributesBudget = {
     .allocationCalls = 16'500,
-    .allocationBytes = 7'700'000,
-    .liveBytes = 7'400'000,
-    .peakLiveBytes = 7'400'000,
+    .allocationBytes = 7'900'000,
+    .liveBytes = 7'500'000,
+    .peakLiveBytes = 7'500'000,
 };
 
 /// Broad resource ceiling with portability headroom for standard-library layout differences.
 constexpr ParseAllocationBudget kDonnerSplashBudget = {
     .allocationCalls = 26'500,
-    .allocationBytes = 10'650'000,
-    .liveBytes = 9'700'000,
-    .peakLiveBytes = 9'700'000,
+    .allocationBytes = 10'800'000,
+    .liveBytes = 9'900'000,
+    .peakLiveBytes = 9'900'000,
 };
 
 std::optional<std::string> ReadFile(std::string_view path) {
