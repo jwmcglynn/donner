@@ -651,6 +651,11 @@ donner_cc_test(
     ],
     data = ["//third_party/resvg-test-suite:fonts"],
     opens_gpu_device = True,
+    # Nearly 200 independent render-and-compare cases. Unsharded, the default-config target ran
+    # 58.9 s and 59.0 s under ASan on the hosted nightly runner, then timed out at the 60 s
+    # `size = "small"` ceiling while still passing case by case. Sharding splits the work so each
+    # shard keeps wide headroom under the same limit; the variants inherit the shard count.
+    shard_count = 4,
     variants = [
         "tiny",
         "text_full",
