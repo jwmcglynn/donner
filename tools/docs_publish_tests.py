@@ -21,6 +21,59 @@ class DocsPublishTest(unittest.TestCase):
         self.api.tip.return_value = "e" * 40
         self.api.call.return_value = {"status": "succeed"}
 
+    def test_attestation_failures_keep_bounded_redacted_diagnostics(self):
+        tokens = {"GH_TOKEN": "example-gh-secret", "GITHUB_TOKEN": "example-github-secret",
+                  "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "example-oidc-secret"}
+        diagnostic = ("verification rejected " + " ".join(tokens.values()) +
+                      "\n::error::untrusted response " + "x" * 6000).encode()
+        error = publish.subprocess.CalledProcessError(7, ["gh", "attestation", "verify"],
+                                                     stderr=diagnostic)
+        bundle = self.root / "bundle.json"
+        bundle.write_text("{}")
+        calls = {
+            "online": lambda: publish.attestation(self.root / "subject", publish.WORKFLOW,
+                              "b" * 40, self.root / "online.json"),
+            "bundle": lambda: publish._bundle_attestation(self.root / "subject", bundle,
+                              "b" * 40, self.root / "bundle-proof.json"),
+            "retained": lambda: publish._offline_attestation(self.root / "subject",
+                site.canonical([{"attestation": {"bundle": {}}}]), "b" * 40, self.root),
+        }
+        for name, call in calls.items():
+            with self.subTest(name=name), mock.patch.dict(os.environ, tokens), \
+                 mock.patch.object(publish.subprocess, "run", side_effect=error):
+                with self.assertRaisesRegex(ValueError, "attestation verification failed.*exit 7") as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertIn("verification rejected", message)
+                self.assertIn("[REDACTED]", message)
+                self.assertNotIn("\n", message)
+                self.assertLess(len(message), 5000)
+                for token in tokens.values():
+                    self.assertNotIn(token, message)
+
+    def test_attestation_diagnostic_redacts_overlapping_tokens_longest_first(self):
+        tokens = {"GH_TOKEN": "example-token", "GITHUB_TOKEN": "example-token-extended",
+                  "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "example-token-extended-longest"}
+        error = publish.subprocess.CalledProcessError(7, ["gh"],
+            stderr=" ".join(tokens.values()).encode())
+        with mock.patch.dict(os.environ, tokens), \
+             mock.patch.object(publish.subprocess, "run", side_effect=error), \
+             self.assertRaises(ValueError) as caught:
+            publish.attestation(self.root / "subject", publish.WORKFLOW,
+                                "b" * 40, self.root / "overlap.json")
+        self.assertTrue(str(caught.exception).endswith(json.dumps("[REDACTED] [REDACTED] [REDACTED]")))
+
+    def test_attestation_diagnostics_neutralize_legacy_actions_commands(self):
+        diagnostic = "certificate error ##[error]text ##[add-mask]value ##[stop-commands]marker"
+        error = publish.subprocess.CalledProcessError(7, ["gh"], stderr=diagnostic.encode())
+        with mock.patch.object(publish.subprocess, "run", side_effect=error), \
+             self.assertRaises(ValueError) as caught:
+            publish.attestation(self.root / "subject", publish.WORKFLOW,
+                                "b" * 40, self.root / "legacy.json")
+        message = str(caught.exception)
+        self.assertNotIn("##[", message)
+        self.assertEqual(json.loads(message.split(": ", 1)[1]), diagnostic)
+
     def test_request_cannot_override_workflow_context_or_smuggle_extra_fields(self):
         request = {"composition_run": "123/1", "composition_sha256": "a" * 64, "prior_composition": "b" * 64, "bootstrap": None}
         with mock.patch.dict(os.environ, {"DOCS_REQUEST": json.dumps(request)}):
@@ -148,6 +201,18 @@ class DocsPublishTest(unittest.TestCase):
         with mock.patch.object(publish, "_live_identity", return_value=True), mock.patch.object(publish, "deploy") as deploy:
             result = publish._recover(self.record, self.prior, 7, self.api, "timeout", "e" * 40, "91")
         self.assertEqual(result["status"], "recovery-required")
+        deploy.assert_not_called()
+
+    def test_reused_sha_status_cannot_authorize_recovery_of_an_inflight_candidate(self):
+        self.api.call.return_value = {"status": "succeed"}
+        with mock.patch.object(publish, "_live_identity", return_value=False), \
+             mock.patch.object(publish, "live_marker", return_value={"manifest_sha256": "a" * 64}), \
+             mock.patch.object(publish, "_wait_for_live"), \
+             mock.patch.object(publish, "deploy") as deploy:
+            result = publish._recover(self.record, self.prior, 7, self.api, "unhealthy candidate",
+                                      "e" * 40, self.record["workflow_commit"])
+        self.assertEqual(result["status"], "recovery-required")
+        self.assertIn("not bound to the current artifact request", result["recovery_error"])
         deploy.assert_not_called()
 
     def test_subprocess_timeout_cannot_escape_recovery_receipt(self):
@@ -621,6 +686,32 @@ class DocsPublishTest(unittest.TestCase):
                 self.assertEqual(publish.deploy(7, "b" * 40, api), "91")
             self.assertEqual(api.call.call_args_list[0].args[2]["environment"], expected)
             api.require_protection.assert_called_once()
+
+    def test_pages_build_version_is_the_exact_source_commit(self):
+        commit = "b" * 40
+        for artifact_id in (7, 8):
+            with self.subTest(artifact_id=artifact_id):
+                api = mock.Mock()
+                api.call.side_effect = [
+                    {"id": commit, "page_url": publish.SITE_URL}, {"status": "succeed"}]
+                receipt = self.root / (str(artifact_id) + ".json")
+                with mock.patch.object(publish, "_oidc_token", return_value="fixture-token"):
+                    self.assertEqual(publish.deploy(artifact_id, commit, api, receipt=receipt), commit)
+                request = api.call.call_args_list[0].args[2]
+                self.assertEqual(request["pages_build_version"], commit)
+                self.assertEqual(request["artifact_id"], artifact_id)
+                self.assertEqual(site.read_json(receipt), {
+                    "deployment_id": commit, "artifact_id": artifact_id})
+
+    def test_pages_rejects_a_non_commit_build_version_before_credentials_or_requests(self):
+        for commit in ("b" * 40 + "-7", "main", "b" * 39, None):
+            with self.subTest(commit=commit):
+                api = mock.Mock()
+                with mock.patch.object(publish, "_oidc_token") as token, \
+                     self.assertRaisesRegex(ValueError, "invalid Pages source commit"):
+                    publish.deploy(7, commit, api)
+                token.assert_not_called()
+                api.call.assert_not_called()
 
     def test_wrong_pages_url_preserves_the_known_request_identity_before_failure(self):
         api = mock.Mock()

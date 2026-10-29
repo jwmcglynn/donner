@@ -29,6 +29,9 @@ public:
   /// Destructor.
   ~RenderSnapshot();
 
+  /// Default per-snapshot bound for retained text-decoration metadata.
+  static constexpr std::size_t kMaximumCapturedDecorationBytes = 64 * 1024 * 1024;
+
   /// Move constructor.
   RenderSnapshot(RenderSnapshot&& other) noexcept;
 
@@ -98,10 +101,12 @@ public:
    * @param offscreenFactory Backend used only for creating offscreen renderers
    *     while capture prepares filters, masks, and sub-documents.
    * @param maximumCapturedFontBytes Maximum cumulative font bytes retained by this recorder.
+   * @param maximumCapturedDecorationBytes Maximum retained text-decoration metadata bytes.
    */
   RenderSnapshotRecorder(
       RenderSnapshot& snapshot, RendererInterface& offscreenFactory,
-      std::size_t maximumCapturedFontBytes = RenderSnapshot::kMaximumCapturedFontBytes);
+      std::size_t maximumCapturedFontBytes = RenderSnapshot::kMaximumCapturedFontBytes,
+      std::size_t maximumCapturedDecorationBytes = RenderSnapshot::kMaximumCapturedDecorationBytes);
 
   void draw(SVGDocument& document) override;
   [[nodiscard]] int width() const override;

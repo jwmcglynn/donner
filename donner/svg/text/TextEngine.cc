@@ -2233,85 +2233,170 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
   }
 }
 
-/// Fix up chunk text-anchors and apply per-chunk text-anchor adjustment.
+/// Anchoring uses the full pen extent, including backwards displacements and advances.
+struct TextAnchorBounds {
+  double initial = 0.0;
+  double minimum = 0.0;
+  double maximum = 0.0;
+  bool initialized = false;
+
+  void startAt(double position) {
+    initial = minimum = maximum = position;
+    initialized = true;
+  }
+
+  void include(double position, double advance) {
+    if (!initialized) {
+      startAt(position);
+    }
+    minimum = std::min({minimum, position, position + advance});
+    maximum = std::max({maximum, position, position + advance});
+  }
+
+  double shift(TextAnchor anchor) const {
+    const double alignment = anchor == TextAnchor::Middle ? minimum / 2.0 + maximum / 2.0
+                             : anchor == TextAnchor::End  ? maximum
+                                                          : minimum;
+    return initial - alignment;
+  }
+};
+
+struct TextAnchorRange {
+  ChunkBoundary begin;
+  ChunkBoundary end;
+};
+
+std::pair<size_t, size_t> AnchorRunRange(const TextAnchorRange& range, size_t runIndex,
+                                         size_t size) {
+  return {std::min(runIndex == range.begin.runIndex ? range.begin.glyphIndex : 0, size),
+          std::min(runIndex == range.end.runIndex ? range.end.glyphIndex : size, size)};
+}
+
+template <typename Fn>
+void ForEachAnchorGlyph(std::vector<TextRun>& runs, const TextAnchorRange& range, Fn&& fn) {
+  if (runs.empty() || range.begin.runIndex >= runs.size()) {
+    return;
+  }
+  for (size_t ri = range.begin.runIndex; ri <= std::min(range.end.runIndex, runs.size() - 1);
+       ++ri) {
+    if (runs[ri].onPath) {
+      continue;
+    }
+    const auto [begin, end] = AnchorRunRange(range, ri, runs[ri].glyphs.size());
+    for (size_t gi = begin; gi < end; ++gi) {
+      fn(runs[ri].glyphs[gi], ri);
+    }
+  }
+}
+
+void MarkRejectedAnchorRange(const std::vector<TextRun>& runs, const TextAnchorRange& range,
+                             std::vector<std::vector<bool>>& rejected) {
+  if (rejected.empty()) {
+    rejected.resize(runs.size());
+  }
+  if (runs.empty() || range.begin.runIndex >= runs.size()) {
+    return;
+  }
+  for (size_t ri = range.begin.runIndex; ri <= std::min(range.end.runIndex, runs.size() - 1);
+       ++ri) {
+    if (runs[ri].onPath) {
+      continue;
+    }
+    const auto [begin, end] = AnchorRunRange(range, ri, runs[ri].glyphs.size());
+    if (rejected[ri].empty()) {
+      rejected[ri].resize(runs[ri].glyphs.size(), false);
+    }
+    std::fill(rejected[ri].begin() + begin, rejected[ri].begin() + end, true);
+  }
+}
+
+void CompactRejectedAnchorGlyphs(std::vector<TextRun>& runs,
+                                 const std::vector<std::vector<bool>>& rejected) {
+  for (size_t ri = 0; ri < rejected.size(); ++ri) {
+    if (rejected[ri].empty()) {
+      continue;
+    }
+    auto& glyphs = runs[ri].glyphs;
+    size_t retained = 0;
+    for (size_t gi = 0; gi < glyphs.size(); ++gi) {
+      if (!rejected[ri][gi]) {
+        if (retained != gi) {
+          glyphs[retained] = std::move(glyphs[gi]);
+        }
+        ++retained;
+      }
+    }
+    glyphs.resize(retained);
+  }
+}
+
+void ShiftAnchorGlyph(TextGlyph& glyph, double shift, bool vertical) {
+  if (vertical) {
+    glyph.yPosition += shift;
+  } else {
+    glyph.xPosition += shift;
+  }
+}
+
+bool IsExcludedAnchorGlyph(const AnchorExclusions& exclusions, size_t runIndex,
+                           const TextGlyph& glyph) {
+  const size_t cluster = GetPositioningCluster(glyph);
+  return runIndex < exclusions.size() && cluster < exclusions[runIndex].size() &&
+         exclusions[runIndex][cluster];
+}
+
+bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, bool vertical,
+                     const AnchorExclusions& exclusions) {
+  TextAnchorBounds bounds;
+  bool finite = true;
+  ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph, size_t runIndex) {
+    finite &= HasFiniteFlatGlyphGeometry(glyph);
+    if (!IsExcludedAnchorGlyph(exclusions, runIndex, glyph)) {
+      bounds.include(InlinePenPosition(glyph, vertical),
+                     vertical ? glyph.yAdvance : glyph.xAdvance);
+    }
+  });
+  if (!bounds.initialized) {
+    return finite;
+  }
+  const double shift = bounds.shift(range.begin.textAnchor);
+  finite &= std::isfinite(shift);
+  ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph, size_t) {
+    auto translated = glyph;
+    ShiftAnchorGlyph(translated, shift, vertical);
+    finite &= HasFiniteFlatGlyphGeometry(translated);
+  });
+  if (!finite) {
+    return false;
+  }
+  ForEachAnchorGlyph(runs, range,
+                     [&](TextGlyph& glyph, size_t) { ShiftAnchorGlyph(glyph, shift, vertical); });
+  return true;
+}
+
+/// Retain original chunk indices until all groups are validated, then compact each run once.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
-                     const components::ComputedTextComponent& text, bool vertical) {
-  // For each chunk, use the text-anchor from the first span that has actual glyph content.
+                     const components::ComputedTextComponent& text, bool vertical,
+                     const AnchorExclusions& exclusions) {
   for (auto& chunk : chunkBoundaries) {
     for (size_t ri = chunk.runIndex; ri < runs.size(); ++ri) {
-      const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
-      if (gStart < runs[ri].glyphs.size()) {
+      const size_t begin = ri == chunk.runIndex ? chunk.glyphIndex : 0;
+      if (begin < runs[ri].glyphs.size()) {
         chunk.textAnchor = text.spans[ri].textAnchor;
         break;
       }
     }
   }
-
-  // Apply text-anchor adjustment per text chunk.
+  std::vector<std::vector<bool>> rejected;
   for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
-    const auto& chunk = chunkBoundaries[ci];
-    if (chunk.textAnchor == TextAnchor::Start) {
-      continue;
-    }
-
-    size_t endRunIdx = runs.size();
-    size_t endGlyphIdx = 0;
-    if (ci + 1 < chunkBoundaries.size()) {
-      endRunIdx = chunkBoundaries[ci + 1].runIndex;
-      endGlyphIdx = chunkBoundaries[ci + 1].glyphIndex;
-    }
-
-    double chunkStartPos = 0.0;
-    double chunkEndPos = 0.0;
-    bool foundFirst = false;
-    for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
-      if (runs[ri].onPath) {
-        continue;  // On-path runs already have text-anchor applied along the path.
-      }
-      const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
-      const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
-      for (size_t gi = gStart; gi < gEnd; ++gi) {
-        const auto& g = runs[ri].glyphs[gi];
-        // Measure from pen positions: an upright glyph is drawn past its pen by its origin.
-        const double pos = vertical ? g.yPosition - g.verticalOriginOffset : g.xPosition;
-        const double adv = vertical ? g.yAdvance : g.xAdvance;
-        if (!foundFirst) {
-          chunkStartPos = pos;
-          chunkEndPos = pos + adv;
-          foundFirst = true;
-        } else {
-          chunkEndPos = pos + adv;
-        }
-      }
-    }
-
-    if (!foundFirst) {
-      continue;
-    }
-
-    const double chunkLength = chunkEndPos - chunkStartPos;
-    double shift = 0.0;
-    if (chunk.textAnchor == TextAnchor::Middle) {
-      shift = -chunkLength / 2.0;
-    } else if (chunk.textAnchor == TextAnchor::End) {
-      shift = -chunkLength;
-    }
-
-    for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
-      if (runs[ri].onPath) {
-        continue;  // On-path runs already have text-anchor applied along the path.
-      }
-      const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
-      const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
-      for (size_t gi = gStart; gi < gEnd; ++gi) {
-        if (vertical) {
-          runs[ri].glyphs[gi].yPosition += shift;
-        } else {
-          runs[ri].glyphs[gi].xPosition += shift;
-        }
-      }
+    const ChunkBoundary end =
+        ci + 1 < chunkBoundaries.size() ? chunkBoundaries[ci + 1] : ChunkBoundary{runs.size(), 0};
+    const TextAnchorRange range{chunkBoundaries[ci], end};
+    if (!AnchorTextRange(runs, range, vertical, exclusions)) {
+      MarkRejectedAnchorRange(runs, range, rejected);
     }
   }
+  CompactRejectedAnchorGlyphs(runs, rejected);
 }
 
 /// Compute per-span baseline-shift in pixels, including OS/2 sub/super metrics
@@ -2368,136 +2453,452 @@ double computeSpanBaselineShiftPx(const TextBackend& backend,
   return spanBaselineShiftPx;
 }
 
-bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
-                         const TextLayoutParams& params, double measurePx, double lineHeightPx) {
-  if (measurePx <= 0.0) {
-    return false;
+struct WrappingGlyph {
+  size_t run;
+  size_t glyph;
+  double originalX;
+  double originalY;
+  double originalAdvance;
+  double advance;
+  uint32_t codepoint;
+  WhiteSpace mode;
+  WhiteSpace breakMode;
+  double halfCh;
+  TextAnchor textAnchor;
+  bool resetsInline;
+  bool resetsBlock;
+  size_t chunk = 0;
+  size_t anchorGroup = 0;
+  size_t block = 0;
+  size_t line = 0;
+  size_t lineOffset = 0;
+  double origin = 0;
+  double inlineDisplacement = 0;
+
+  double x = 0;
+
+  bool isSpace() const { return codepoint == ' ' || codepoint == '\t'; }
+  bool isBreak() const { return codepoint == '\n' && PreservesSegmentBreaks(mode); }
+};
+
+double HalfChAdvance(const TextBackend* backend, const TextRun& run, bool vertical) {
+  if (!backend) {
+    return 0.0;
   }
+  const auto shaped = backend->shapeRun(run.font, run.usedFontSizePx, "0", 0, 1, vertical,
+                                        FontVariant::Normal, true);
+  if (shaped.glyphs.empty()) {
+    return 0.0;
+  }
+  const auto& glyph = shaped.glyphs.front();
+  return (vertical ? glyph.yAdvance : glyph.xAdvance) * 0.5;
+}
 
-  // A flat, document-order view of every laid-out glyph, tagged with whether it is a soft-wrap
-  // opportunity (whitespace). Runs with no glyphs (empty spans, or a textPath that failed to
-  // resolve) contribute nothing. A `visibility: hidden` or `collapse` span keeps its glyphs here:
-  // visibility suppresses painting, not layout, so its words still occupy line width.
-  struct FlatGlyph {
-    size_t run;
-    size_t glyph;
-    double origX;    ///< Original xPosition from the flat single-line layout.
-    double advance;  ///< Glyph xAdvance.
-    double origY;    ///< Original yPosition (carries per-glyph baseline-shift).
-    bool isSpace;    ///< Whitespace: a soft-wrap opportunity between words.
-  };
+struct WrappingChunkBoundary {
+  size_t index;
+  bool absoluteX = false;
+  bool absoluteY = false;
+};
 
-  std::vector<FlatGlyph> flat;
+WrappingChunkBoundary AdvanceWrappingChunk(std::span<const ChunkBoundary> chunks, size_t chunk,
+                                           size_t run, size_t glyph) {
+  WrappingChunkBoundary result{chunk};
+  while (result.index < chunks.size() &&
+         (chunks[result.index].runIndex < run ||
+          (chunks[result.index].runIndex == run && chunks[result.index].glyphIndex <= glyph))) {
+    result.absoluteX |= chunks[result.index].absoluteX;
+    result.absoluteY |= chunks[result.index].absoluteY;
+    ++result.index;
+  }
+  return result;
+}
+
+std::pair<bool, bool> WrappingAxisResets(const WrappingChunkBoundary& boundary, bool vertical) {
+  return vertical ? std::pair(boundary.absoluteY, boundary.absoluteX)
+                  : std::pair(boundary.absoluteX, boundary.absoluteY);
+}
+
+std::vector<WrappingGlyph> CollectWrappingGlyphs(const std::vector<TextRun>& runs,
+                                                 const components::ComputedTextComponent& text,
+                                                 bool vertical, const TextBackend* backend,
+                                                 std::span<const ChunkBoundary> chunks) {
+  std::vector<WrappingGlyph> flat;
+  size_t block = 0;
+  size_t chunk = 0;
   for (size_t ri = 0; ri < runs.size() && ri < text.spans.size(); ++ri) {
-    const auto& run = runs[ri];
-    if (run.onPath) {
-      return false;  // inline-size does not combine with text-on-path.
+    if (runs[ri].onPath) {
+      ++block;
+      continue;
     }
     const auto& span = text.spans[ri];
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
-    for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
-      const auto& g = run.glyphs[gi];
-      size_t clusterPos = GetPositioningCluster(g);
-      const uint32_t cp = clusterPos < spanText.size() ? decodeUtf8(spanText, clusterPos) : 0;
-      const bool isSpace = (cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0D);
-      flat.push_back({ri, gi, g.xPosition, g.xAdvance, g.yPosition, isSpace});
+    const double halfCh = spanText.find('\t') != std::string_view::npos
+                              ? HalfChAdvance(backend, runs[ri], vertical)
+                              : 0.0;
+    for (size_t gi = 0; gi < runs[ri].glyphs.size(); ++gi) {
+      const auto& glyph = runs[ri].glyphs[gi];
+      const auto boundary = AdvanceWrappingChunk(chunks, chunk, ri, gi);
+      chunk = boundary.index;
+      const auto [resetsInline, resetsBlock] = WrappingAxisResets(boundary, vertical);
+      size_t byte = GetPositioningCluster(glyph);
+      const uint32_t cp = byte < spanText.size() ? decodeUtf8(spanText, byte) : 0;
+      const double advance = vertical ? glyph.yAdvance : glyph.xAdvance;
+      flat.push_back(
+          {ri, gi, InlinePenPosition(glyph, vertical), vertical ? glyph.xPosition : glyph.yPosition,
+           advance, advance, cp, span.whiteSpace,
+           gi + 1 == runs[ri].glyphs.size() ? span.boundaryWhiteSpace.value_or(span.whiteSpace)
+                                            : span.whiteSpace,
+           halfCh, span.textAnchor, resetsInline, resetsBlock, chunk, 0, block});
     }
   }
+  return flat;
+}
 
-  if (flat.size() < 2) {
-    return false;  // Nothing to wrap.
+/// Consume only metadata for the current run/glyph, skipping retired path runs.
+double TakeInlineDisplacement(std::span<const InlineDisplacement> values, size_t& index, size_t run,
+                              size_t glyph) {
+  while (index < values.size() &&
+         (values[index].runIndex < run ||
+          (values[index].runIndex == run && values[index].glyphIndex < glyph))) {
+    ++index;
   }
+  return index < values.size() && values[index].runIndex == run && values[index].glyphIndex == glyph
+             ? values[index++].distance
+             : 0.0;
+}
 
-  const double originX = flat.front().origX;
-  const double originY = flat.front().origY;
+/// SVG relative positions accumulate after CSS layout; immutable origins survive overflow retries.
+void ResolveWrappingOrigins(std::vector<WrappingGlyph>& flat,
+                            std::span<const InlineDisplacement> displacements) {
+  size_t next = 0;
+  double origin = 0.0;
+  for (size_t i = 0; i < flat.size(); ++i) {
+    auto& item = flat[i];
+    item.inlineDisplacement = TakeInlineDisplacement(displacements, next, item.run, item.glyph);
+    if (i == 0 || item.block != flat[i - 1].block || item.resetsInline) {
+      origin = item.originalX;
+    } else {
+      origin += item.inlineDisplacement;
+    }
+    item.origin = origin;
+  }
+}
 
-  // ── Phase A: assign each glyph a line index via greedy word wrapping ──
-  std::vector<size_t> lineOf(flat.size(), 0);
+/// Resolves tab stops from the line start, retaining glyph-local kerning between ordinary letters.
+double PlaceWrappingGlyph(std::vector<WrappingGlyph>& flat, size_t index, size_t start,
+                          double width, size_t line) {
+  auto& item = flat[index];
+  const double gap = index == start
+                         ? 0.0
+                         : item.originalX -
+                               (flat[index - 1].originalX + flat[index - 1].originalAdvance) -
+                               item.inlineDisplacement;
+  item.x = width + gap;
+  item.line = line;
+  if (item.isBreak()) {
+    item.advance = 0.0;
+  } else if (item.codepoint == '\t' && item.originalAdvance > 0.0) {
+    const double stop = item.originalAdvance * 8.0;
+    item.advance = stop - std::fmod(std::max(0.0, item.x), stop);
+    if (item.advance < item.halfCh) {
+      item.advance += stop;
+    }
+  }
+  return item.x + item.advance;
+}
+
+bool IsWrappingOverflow(const WrappingGlyph& item, double width, double measurePx,
+                        std::optional<size_t> lastBreak, size_t start) {
+  return measurePx > 0.0 && width > measurePx + 1e-3 && lastBreak && *lastBreak > start &&
+         (!item.isSpace() || item.mode == WhiteSpace::BreakSpaces);
+}
+
+void TrimSoftBreakSpaces(std::vector<WrappingGlyph>& flat, size_t start, size_t end) {
+  for (size_t trim = end; trim > start && flat[trim - 1].isSpace(); --trim) {
+    if (!PreservesSpaces(flat[trim - 1].mode)) {
+      flat[trim - 1].advance = 0.0;
+    }
+  }
+}
+
+bool IsSoftBreakAfter(const std::vector<WrappingGlyph>& flat, size_t index) {
+  const auto& item = flat[index];
+  const bool endOfSpaces = index + 1 == flat.size() || !flat[index + 1].isSpace();
+  return item.isSpace() && AllowsSoftWrap(item.breakMode) &&
+         (item.mode == WhiteSpace::BreakSpaces || endOfSpaces);
+}
+
+/// Greedy line selection never breaks an unbreakable word or a pre/nowrap span.
+size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
   size_t line = 0;
-  double lineWidthUsed = 0.0;  // Committed width on the current line, excluding trailing spaces.
-  double pendingSpace = 0.0;   // Width of spaces since the last committed word.
-
-  size_t i = 0;
-  while (i < flat.size()) {
-    if (flat[i].isSpace) {
-      // Spaces stay (tentatively) on the current line; their width is pending until the next
-      // word commits it or a wrap discards it (trailing spaces hang).
-      lineOf[i] = line;
-      pendingSpace += flat[i].advance;
-      ++i;
+  size_t blockLine = 0;
+  size_t block = flat.front().block;
+  size_t start = 0;
+  size_t index = 0;
+  std::optional<size_t> lastBreak;
+  double width = 0.0;
+  while (index < flat.size()) {
+    auto& item = flat[index];
+    if (item.block != block) {
+      block = item.block;
+      blockLine = ++line;
+      start = index;
+      width = 0.0;
+      lastBreak.reset();
+    }
+    // An overflow retry visits the authored reset again on its newly assigned line.
+    if (item.resetsBlock) {
+      blockLine = line;
+    }
+    if (item.resetsInline) {
+      start = index;
+      width = 0.0;
+      lastBreak.reset();
+    }
+    width = PlaceWrappingGlyph(flat, index, start, width, line);
+    item.lineOffset = line - blockLine;
+    if (item.isBreak()) {
+      start = ++index;
+      ++line;
+      width = 0.0;
+      lastBreak.reset();
       continue;
     }
-
-    // Gather a maximal word (run of non-space glyphs).
-    const size_t wordStart = i;
-    while (i < flat.size() && !flat[i].isSpace) {
-      ++i;
-    }
-    const size_t wordEnd = i;  // Exclusive.
-    const double wordWidth =
-        (flat[wordEnd - 1].origX + flat[wordEnd - 1].advance) - flat[wordStart].origX;
-
-    if (lineWidthUsed > 0.0 && lineWidthUsed + pendingSpace + wordWidth > measurePx + 1e-3) {
-      // Break before this word: start a new line. Pending trailing spaces hang on the old line.
+    if (IsWrappingOverflow(item, width, measurePx, lastBreak, start)) {
+      TrimSoftBreakSpaces(flat, start, *lastBreak);
+      start = *lastBreak;
+      index = start;
       ++line;
-      lineWidthUsed = wordWidth;
-    } else if (lineWidthUsed == 0.0) {
-      lineWidthUsed = wordWidth;  // First word on the line: no leading space counted.
+      width = 0.0;
+      lastBreak.reset();
+      continue;
+    }
+    if (IsSoftBreakAfter(flat, index)) {
+      lastBreak = index + 1;
+    }
+    ++index;
+  }
+  return line + 1;
+}
+
+/// Preserved end spaces hang after a soft wrap; before a forced break they hang only on overflow.
+bool CountsForLineWidth(const WrappingGlyph& item, bool forcedEnd, double measurePx) {
+  if (item.isBreak()) {
+    return false;
+  }
+  if (!item.isSpace() || item.mode == WhiteSpace::Pre || item.mode == WhiteSpace::BreakSpaces) {
+    return true;
+  }
+  return item.mode == WhiteSpace::PreWrap && forcedEnd &&
+         (!(measurePx > 0.0) || item.x + item.advance <= measurePx);
+}
+
+std::vector<bool> ForcedWrappingEnds(const std::vector<WrappingGlyph>& flat, size_t numLines) {
+  std::vector<bool> result(numLines, false);
+  for (size_t i = 0; i < flat.size(); ++i) {
+    const auto& item = flat[i];
+    result[item.line] = result[item.line] || item.isBreak() || i + 1 == flat.size() ||
+                        item.block != flat[i + 1].block;
+  }
+  return result;
+}
+
+/// Only a line's trailing whitespace can hang; its CSS decision precedes SVG textLength.
+std::vector<bool> ExcludedWrappingItems(const std::vector<WrappingGlyph>& flat, size_t numLines,
+                                        double measurePx) {
+  const auto forcedEnds = ForcedWrappingEnds(flat, numLines);
+  std::vector<bool> result(flat.size(), false);
+  size_t line = flat.back().line;
+  size_t block = flat.back().block;
+  bool trailing = true;
+  for (size_t i = flat.size(); i-- > 0;) {
+    const auto& item = flat[i];
+    if (item.line != line || item.block != block) {
+      line = item.line;
+      block = item.block;
+      trailing = true;
+    }
+    if (item.isBreak()) {
+      result[i] = true;
+    } else if (!item.isSpace()) {
+      trailing = false;
     } else {
-      lineWidthUsed += pendingSpace + wordWidth;
-    }
-    pendingSpace = 0.0;
-
-    for (size_t w = wordStart; w < wordEnd; ++w) {
-      lineOf[w] = line;
+      result[i] = trailing && !CountsForLineWidth(item, forcedEnds[item.line], measurePx);
     }
   }
+  return result;
+}
 
-  const size_t numLines = line + 1;
-  if (numLines < 2) {
-    return false;  // Everything fit on one line: leave the flat layout (and its global
-                   // text-anchor pass) untouched.
+void RecordAnchorExclusions(const std::vector<TextRun>& runs,
+                            const components::ComputedTextComponent& text,
+                            const std::vector<WrappingGlyph>& flat,
+                            const std::vector<bool>& excluded, AnchorExclusions* output) {
+  if (!output) {
+    return;
   }
-
-  // ── Phase B: position glyphs line by line, preserving intra-line spacing ──
-  std::vector<double> newX(flat.size(), 0.0);
-  for (size_t k = 0; k < flat.size(); ++k) {
-    if (k == 0 || lineOf[k] != lineOf[k - 1]) {
-      newX[k] = originX;  // First glyph of a line starts at the block origin.
-    } else {
-      newX[k] = newX[k - 1] + (flat[k].origX - flat[k - 1].origX);
+  auto& result = *output;
+  for (size_t i = 0; i < flat.size(); ++i) {
+    if (!excluded[i]) {
+      continue;
+    }
+    if (result.empty()) {
+      result.resize(runs.size());
+    }
+    const auto& item = flat[i];
+    auto& mask = result[item.run];
+    if (mask.empty()) {
+      mask.resize(text.spans[item.run].end - text.spans[item.run].start, false);
+    }
+    const size_t cluster = GetPositioningCluster(runs[item.run].glyphs[item.glyph]);
+    if (cluster < mask.size()) {
+      mask[cluster] = true;
     }
   }
+}
 
-  // ── Phase C: per-line text-anchor shift ──
-  // Each line's used width is the right edge of its last non-space glyph minus the origin.
-  std::vector<double> lineRightEdge(numLines, originX);
-  for (size_t k = 0; k < flat.size(); ++k) {
-    if (!flat[k].isSpace) {
-      lineRightEdge[lineOf[k]] = std::max(lineRightEdge[lineOf[k]], newX[k] + flat[k].advance);
+struct WrappingAnchorGroup {
+  TextAnchor anchor = TextAnchor::Start;
+  TextAnchorBounds bounds;
+};
+
+void AccumulateWrappingAnchor(WrappingAnchorGroup& group, const WrappingGlyph& item,
+                              bool contributesWidth) {
+  if (!group.bounds.initialized && !item.isBreak()) {
+    group.anchor = item.textAnchor;
+    group.bounds.startAt(item.origin + item.x);
+  }
+  if (contributesWidth) {
+    group.bounds.include(item.origin + item.x, item.advance);
+  }
+}
+
+/// A line start or authored x/y reset starts an anchored chunk; a style-only span does not.
+std::vector<double> WrappingAnchorShifts(std::vector<WrappingGlyph>& flat,
+                                         const std::vector<bool>& excluded) {
+  std::vector<WrappingAnchorGroup> groups;
+  for (size_t i = 0; i < flat.size(); ++i) {
+    auto& item = flat[i];
+    if (i == 0 || item.line != flat[i - 1].line || item.chunk != flat[i - 1].chunk) {
+      groups.emplace_back();
+    }
+    item.anchorGroup = groups.size() - 1;
+    AccumulateWrappingAnchor(groups.back(), item, !excluded[i]);
+  }
+  std::vector<double> shifts;
+  shifts.reserve(groups.size());
+  for (const auto& group : groups) {
+    shifts.push_back(group.bounds.shift(group.anchor));
+  }
+  return shifts;
+}
+
+void PlaceWrappedGlyph(TextGlyph& glyph, const WrappingGlyph& item, const TextLayoutParams& params,
+                       double shift, double lineHeightPx) {
+  const double lineOffset = static_cast<double>(item.lineOffset) * lineHeightPx;
+  if (isVertical(params.writingMode)) {
+    glyph.yPosition = item.origin + item.x + shift + glyph.verticalOriginOffset;
+    glyph.xPosition =
+        item.originalY + (params.writingMode == WritingMode::VerticalRl ? -lineOffset : lineOffset);
+    glyph.yAdvance = item.advance;
+  } else {
+    glyph.xPosition = item.origin + item.x + shift;
+    glyph.yPosition = item.originalY + lineOffset;
+    glyph.xAdvance = item.advance;
+  }
+}
+
+std::vector<bool> FiniteWrappingGroups(const std::vector<TextRun>& runs,
+                                       const std::vector<WrappingGlyph>& flat,
+                                       const TextLayoutParams& params,
+                                       const std::vector<double>& shifts, double lineHeightPx) {
+  std::vector<bool> finite(shifts.size(), true);
+  for (const auto& item : flat) {
+    auto translated = runs[item.run].glyphs[item.glyph];
+    PlaceWrappedGlyph(translated, item, params, shifts[item.anchorGroup], lineHeightPx);
+    finite[item.anchorGroup] = finite[item.anchorGroup] && HasFiniteFlatGlyphGeometry(translated);
+  }
+  return finite;
+}
+
+void DiscardNonfiniteWrappingGroups(std::vector<TextRun>& runs,
+                                    const std::vector<WrappingGlyph>& flat,
+                                    const std::vector<bool>& finite) {
+  size_t index = 0;
+  for (size_t ri = 0; ri < runs.size(); ++ri) {
+    if (runs[ri].onPath) {
+      continue;
+    }
+    auto& glyphs = runs[ri].glyphs;
+    size_t retained = 0;
+    for (size_t gi = 0; gi < glyphs.size(); ++gi) {
+      bool keep = true;
+      if (index < flat.size() && flat[index].run == ri && flat[index].glyph == gi) {
+        keep = finite[flat[index].anchorGroup];
+        ++index;
+      }
+      if (keep) {
+        if (retained != gi) {
+          glyphs[retained] = std::move(glyphs[gi]);
+        }
+        ++retained;
+      }
+    }
+    glyphs.resize(retained);
+  }
+}
+
+bool HasWrappingLines(const std::vector<WrappingGlyph>& flat) {
+  size_t block = flat.front().block;
+  size_t line = flat.front().line;
+  for (const auto& item : flat) {
+    if (item.isBreak()) {
+      return true;
+    }
+    if (item.block != block) {
+      block = item.block;
+      line = item.line;
+    } else if (item.line != line) {
+      return true;
     }
   }
+  return false;
+}
 
-  std::vector<double> lineShift(numLines, 0.0);
-  for (size_t l = 0; l < numLines; ++l) {
-    const double used = lineRightEdge[l] - originX;
-    if (params.textAnchor == TextAnchor::Middle) {
-      lineShift[l] = -used / 2.0;
-    } else if (params.textAnchor == TextAnchor::End) {
-      lineShift[l] = -used;
+bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
+                         const TextLayoutParams& params, double measurePx, double lineHeightPx,
+                         const TextBackend* backend, std::span<const ChunkBoundary> chunks,
+                         std::span<const InlineDisplacement> displacements,
+                         AnchorExclusions* exclusions) {
+  auto flat = CollectWrappingGlyphs(runs, text, isVertical(params.writingMode), backend, chunks);
+  if (flat.empty()) {
+    return false;
+  }
+  ResolveWrappingOrigins(flat, displacements);
+  const size_t numLines = AssignWrappingLines(flat, measurePx);
+  const bool hasControls = std::any_of(flat.begin(), flat.end(), [](const WrappingGlyph& item) {
+    return item.isBreak() || item.codepoint == '\t';
+  });
+  const bool wrapped = HasWrappingLines(flat);
+  const auto excluded = ExcludedWrappingItems(flat, numLines, measurePx);
+  if (!wrapped) {
+    RecordAnchorExclusions(runs, text, flat, excluded, exclusions);
+  }
+  if (!wrapped && !hasControls) {
+    return false;
+  }
+  const auto shifts = WrappingAnchorShifts(flat, excluded);
+  const auto finite = wrapped ? FiniteWrappingGroups(runs, flat, params, shifts, lineHeightPx)
+                              : std::vector<bool>(shifts.size(), true);
+  for (const auto& item : flat) {
+    if (finite[item.anchorGroup]) {
+      PlaceWrappedGlyph(runs[item.run].glyphs[item.glyph], item, params,
+                        wrapped ? shifts[item.anchorGroup] : 0.0, lineHeightPx);
     }
   }
-
-  // ── Write back positions ──
-  for (size_t k = 0; k < flat.size(); ++k) {
-    const size_t l = lineOf[k];
-    auto& g = runs[flat[k].run].glyphs[flat[k].glyph];
-    g.xPosition = newX[k] + lineShift[l];
-    // Preserve each glyph's baseline-shift delta from the original baseline, then stack the line.
-    g.yPosition = originY + static_cast<double>(l) * lineHeightPx + (flat[k].origY - originY);
+  if (wrapped) {
+    DiscardNonfiniteWrappingGroups(runs, flat, finite);
   }
-
-  return true;
+  return wrapped;
 }
 
 }  // namespace text_engine_detail
@@ -3255,6 +3656,57 @@ struct PreparedSpanChunk {
   }
 };
 
+/// Keep forced lines in source order while each line shapes into its own visual order.
+std::vector<ChunkRange> SplitShapingRangesAtLineBreaks(std::string_view text,
+                                                       const std::vector<ChunkRange>& ranges) {
+  std::vector<ChunkRange> result;
+  result.reserve(ranges.size());
+  for (const auto& range : ranges) {
+    const auto chunk = text.substr(range.byteStart, range.byteEnd - range.byteStart);
+    size_t start = 0;
+    for (size_t position = chunk.find('\n'); position != std::string_view::npos;
+         position = chunk.find('\n', position + 1)) {
+      if (position != start) {
+        result.push_back({range.byteStart + start, range.byteStart + position});
+      }
+      result.push_back({range.byteStart + position, range.byteStart + position + 1});
+      start = position + 1;
+    }
+    if (start != chunk.size()) {
+      result.push_back({range.byteStart + start, range.byteEnd});
+    }
+  }
+  return result;
+}
+
+std::vector<ChunkRange> FindSpanShapingRanges(
+    const components::ComputedTextComponent::TextSpan& span, std::string_view text,
+    const SmallVector<std::optional<Lengthd>, 1>& xList,
+    const SmallVector<std::optional<Lengthd>, 1>& yList) {
+  auto ranges = findChunkRanges(text, xList, yList);
+  if (!span.pathSpline && PreservesSegmentBreaks(span.whiteSpace) &&
+      text.find('\n') != std::string_view::npos) {
+    return SplitShapingRangesAtLineBreaks(text, ranges);
+  }
+  return ranges;
+}
+
+/// Record control roles before shaping copies or replacements change their byte representation.
+std::vector<bool> FindForcedShapingSeparators(
+    const components::ComputedTextComponent::TextSpan& span, std::string_view text,
+    const std::vector<ChunkRange>& ranges) {
+  if (span.pathSpline || !PreservesSegmentBreaks(span.whiteSpace) ||
+      text.find('\n') == std::string_view::npos) {
+    return {};
+  }
+  std::vector<bool> result;
+  result.reserve(ranges.size());
+  for (const auto& range : ranges) {
+    result.push_back(range.byteStart < text.size() && text[range.byteStart] == '\n');
+  }
+  return result;
+}
+
 /// Reuses one shaping result per existing chunk and records its positioning group starts.
 struct PreparedSpanShaping {
   std::vector<PreparedSpanChunk> chunks;
@@ -3379,6 +3831,10 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
 
 namespace {
 
+bool HasInitialTextPosition(const SmallVector<std::optional<Lengthd>, 1>& positions) {
+  return !positions.empty() && positions.front().has_value();
+}
+
 class TextLayoutInvocation {
 public:
   TextLayoutInvocation(Registry& registry, FontManager& fontManager, TextBackend& backend,
@@ -3412,9 +3868,17 @@ private:
   using TextSpan = components::ComputedTextComponent::TextSpan;
 
   struct SpanState {
+    SpanState() = default;
+    SpanState(const SpanState&) = delete;
+    SpanState& operator=(const SpanState&) = delete;
+    SpanState(SpanState&&) = delete;
+    SpanState& operator=(SpanState&&) = delete;
+
     const TextSpan* span = nullptr;
     TextRun run;
+    /// Aliases the source span or controlShapingText for this immovable stack frame.
     std::string_view text;
+    std::string controlShapingText;
     FontHandle font;
     double specifiedFontSizePx = 0.0;
     float fontSizePx = 0.0f;
@@ -3427,6 +3891,7 @@ private:
     double verticalBaselineOffset = 0.0;
     double penX = 0.0;
     double penY = 0.0;
+    double initialInlineDisplacement = 0.0;
     double runPenStartX = 0.0;
     double runPenStartY = 0.0;
     SmallVector<std::optional<Lengthd>, 1> xList;
@@ -3434,6 +3899,7 @@ private:
     SmallVector<std::optional<Lengthd>, 1> dxList;
     SmallVector<std::optional<Lengthd>, 1> dyList;
     std::vector<ChunkRange> chunkRanges;
+    std::vector<bool> forcedSeparators;
     ByteIndexMappings indexMappings;
     PreparedSpanShaping shaping;
     uint32_t lastCodepoint = 0;
@@ -3575,9 +4041,20 @@ private:
     state.dxList = span.dxList;
     state.dyList = span.dyList;
     if (span.startsNewChunk || !haveCurrentPosition_) {
+      const bool absoluteX = HasInitialTextPosition(state.xList);
+      const bool absoluteY = HasInitialTextPosition(state.yList);
+      state.initialInlineDisplacement = spanStartInlineDisplacement(state);
       consumeSpanStartPositions(state);
-      chunkBoundaries_.push_back({runs_.size(), 0, span.textAnchor});
+      chunkBoundaries_.push_back({runs_.size(), 0, span.textAnchor, absoluteX, absoluteY});
     }
+  }
+
+  double spanStartInlineDisplacement(const SpanState& state) const {
+    const auto& values = state.vertical ? state.dyList : state.dxList;
+    return !values.empty() && values[0]
+               ? values[0]->toPixels(params_.viewBox, params_.fontMetrics,
+                                     state.vertical ? Lengthd::Extent::Y : Lengthd::Extent::X)
+               : 0.0;
   }
 
   void consumeSpanStartPositions(SpanState& state) const {
@@ -3616,9 +4093,21 @@ private:
   }
 
   void prepareShaping(SpanState& state) {
+    state.chunkRanges = FindSpanShapingRanges(*state.span, state.text, state.xList, state.yList);
+    state.forcedSeparators =
+        FindForcedShapingSeparators(*state.span, state.text, state.chunkRanges);
+    if (state.text.find_first_of("\n\t") != std::string_view::npos) {
+      // Shape controls as blank glyphs while keeping byte clusters for line layout and DOM APIs.
+      state.controlShapingText = std::string(state.text);
+      for (char& c : state.controlShapingText) {
+        if (c == '\n' || c == '\t') {
+          c = ' ';
+        }
+      }
+      state.text = state.controlShapingText;
+    }
     state.runPenStartX = state.penX;
     state.runPenStartY = state.penY;
-    state.chunkRanges = findChunkRanges(state.text, state.xList, state.yList);
     state.indexMappings = buildByteIndexMappings(state.text);
     const TextSpan& span = *state.span;
     fallbackCoverage_.grant(state.text.size());
@@ -3682,7 +4171,14 @@ private:
            state.defaultY;
   }
 
+  bool isForcedSeparator(const SpanState& state, size_t chunkIndex) const {
+    return chunkIndex < state.forcedSeparators.size() && state.forcedSeparators[chunkIndex];
+  }
+
   KernAdjustment resolveCrossKern(const SpanState& state, size_t chunkIndex) const {
+    if (isForcedSeparator(state, chunkIndex)) {
+      return {};
+    }
     if (chunkIndex > 0) {
       return resolveCrossChunkKern(state, chunkIndex);
     }
@@ -3746,6 +4242,7 @@ private:
     const auto groupY = PositionForGroup(state.yList, charIndex, applyPosition);
     const auto groupDx = PositionForGroup(state.dxList, charIndex, applyPosition);
     const auto groupDy = PositionForGroup(state.dyList, charIndex, applyPosition);
+    recordInlineDisplacement(state, chunkIndex, glyphIndex, groupDx, groupDy);
     if (state.vertical) {
       layoutVerticalGlyph(state, chunkIndex, glyphIndex, codepoint, charIndex, positioningCluster,
                           groupX, groupY, groupDx, groupDy, crossKern);
@@ -3753,14 +4250,31 @@ private:
       layoutHorizontalGlyph(state, chunkIndex, glyphIndex, codepoint, charIndex, positioningCluster,
                             groupX, groupY, groupDx, groupDy, yOverride, crossKern);
     }
-    state.lastCodepoint = codepoint;
+    state.lastCodepoint = isForcedSeparator(state, chunkIndex) ? 0 : codepoint;
     state.lastFont = prepared.drawingFace(glyphIndex, state.font);
+  }
+
+  void recordInlineDisplacement(const SpanState& state, size_t chunkIndex, size_t glyphIndex,
+                                const std::optional<Lengthd>& dx,
+                                const std::optional<Lengthd>& dy) {
+    const auto& value = state.vertical ? dy : dx;
+    double distance =
+        value ? value->toPixels(params_.viewBox, params_.fontMetrics,
+                                state.vertical ? Lengthd::Extent::Y : Lengthd::Extent::X)
+              : 0.0;
+    if (chunkIndex == 0 && glyphIndex == 0) {
+      distance += state.initialInlineDisplacement;
+    }
+    if (distance != 0.0) {
+      inlineDisplacements_.push_back({runs_.size(), state.run.glyphs.size(), distance});
+    }
   }
 
   void recordChunkBoundary(const SpanState& state, size_t chunkIndex, size_t glyphIndex,
                            bool hasAbsoluteX, bool hasAbsoluteY) {
     if ((hasAbsoluteX || hasAbsoluteY) && !(chunkIndex == 0 && glyphIndex == 0)) {
-      chunkBoundaries_.push_back({runs_.size(), state.run.glyphs.size(), state.span->textAnchor});
+      chunkBoundaries_.push_back({runs_.size(), state.run.glyphs.size(), state.span->textAnchor,
+                                  hasAbsoluteX, hasAbsoluteY});
     }
   }
 
@@ -3976,8 +4490,7 @@ private:
     if (prepared.shaped.glyphs.empty()) {
       return;
     }
-    size_t lastCluster = prepared.positioningClusters.back();
-    state.previousChunkCodepoint = decodeUtf8(state.text, lastCluster);
+    state.previousChunkCodepoint = state.lastCodepoint;
     state.previousChunkFont = prepared.drawingFace(prepared.shaped.glyphs.size() - 1, state.font);
     state.previousChunkFontSizePx = state.fontSizePx;
     state.previousChunkKerning = state.fontKerning;
@@ -4104,8 +4617,46 @@ private:
     resetTextPathState();
   }
 
+  std::vector<RunPenExtent> flatGlyphExtents() const {
+    std::vector<RunPenExtent> result;
+    result.reserve(runs_.size());
+    for (const auto& run : runs_) {
+      if (run.glyphs.empty() || run.onPath) {
+        result.push_back({});
+        continue;
+      }
+      const auto& first = run.glyphs.front();
+      const auto& last = run.glyphs.back();
+      result.push_back({first.xPosition, first.yPosition, last.xPosition + last.xAdvance,
+                        last.yPosition + last.yAdvance});
+    }
+    return result;
+  }
+
+  void updateControlOnlyExtents(const std::vector<RunPenExtent>& before) {
+    const auto after = flatGlyphExtents();
+    for (size_t i = 0; i < runExtents_.size(); ++i) {
+      runExtents_[i].startX += after[i].startX - before[i].startX;
+      runExtents_[i].startY += after[i].startY - before[i].startY;
+      runExtents_[i].endX += after[i].endX - before[i].endX;
+      runExtents_[i].endY += after[i].endY - before[i].endY;
+    }
+    if (!runExtents_.empty()) {
+      currentPenX_ = runExtents_.back().endX;
+      currentPenY_ = runExtents_.back().endY;
+    }
+  }
+
   void applyInlineWrap() {
-    if (runs_.empty() || !(params_.inlineSizePx > 0.0) || isVertical(params_.writingMode)) {
+    if (runs_.empty()) {
+      return;
+    }
+    if (!(params_.inlineSizePx > 0.0) &&
+        std::none_of(text_.spans.begin(), text_.spans.end(), [](const TextSpan& span) {
+          return PreservesSegmentBreaks(span.whiteSpace) &&
+                 std::string_view(span.text.data() + span.start, span.end - span.start)
+                         .find_first_of("\n\t") != std::string_view::npos;
+        })) {
       return;
     }
     const FontVMetrics metrics = backend_.fontVMetrics(baseFont_);
@@ -4115,7 +4666,13 @@ private:
     if (!(lineHeight > 0.0)) {
       lineHeight = static_cast<double>(baseFontSizePx_) * 1.2;
     }
-    wrapped_ = applyInlineSizeWrap(runs_, text_, params_, params_.inlineSizePx, lineHeight);
+    const auto before = flatGlyphExtents();
+    wrapped_ =
+        applyInlineSizeWrap(runs_, text_, params_, params_.inlineSizePx, lineHeight, &backend_,
+                            chunkBoundaries_, inlineDisplacements_, &anchorExclusions_);
+    if (!wrapped_) {
+      updateControlOnlyExtents(before);
+    }
   }
 
   void placeDeferredTextPaths() {
@@ -4125,7 +4682,11 @@ private:
   }
 
   void applyFinalAdjustments() {
-    if (runs_.empty() || wrapped_) {
+    if (runs_.empty()) {
+      return;
+    }
+    if (wrapped_) {
+      placeDeferredTextPaths();
       return;
     }
     const bool vertical = isVertical(params_.writingMode);
@@ -4135,7 +4696,7 @@ private:
       applyTextLength(runs_, text_, runExtents_, params_, vertical, currentPenX_, currentPenY_);
     }
     placeDeferredTextPaths();
-    applyTextAnchor(runs_, chunkBoundaries_, text_, vertical);
+    applyTextAnchor(runs_, chunkBoundaries_, text_, vertical, anchorExclusions_);
   }
 
   Registry& registry_;
@@ -4166,6 +4727,8 @@ private:
   size_t deferredTextPathBytes_ = 0;
   std::vector<PostTextPathBoundary> postPathBoundaries_;
   std::vector<ChunkBoundary> chunkBoundaries_;
+  std::vector<InlineDisplacement> inlineDisplacements_;
+  AnchorExclusions anchorExclusions_;
   std::vector<RunPenExtent> runExtents_;
   bool wrapped_ = false;
   bool* resourceRejected_ = nullptr;

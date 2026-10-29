@@ -23,10 +23,6 @@ svg:not(:root), image, marker, pattern, symbol { overflow: hidden; }
   transform-origin: 0 0;
 }
 
-*[xml|space=preserve] {
-  text-space-collapse: preserve-spaces;
-}
-
 :link, :visited {
   cursor: pointer;
 }

@@ -39,6 +39,7 @@
 #include "donner/svg/core/TransformOrigin.h"
 #include "donner/svg/core/VectorEffect.h"
 #include "donner/svg/core/Visibility.h"
+#include "donner/svg/core/WhiteSpace.h"
 #include "donner/svg/core/WritingMode.h"
 #include "donner/svg/properties/ClipPath.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -129,6 +130,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `font-family` | \ref fontFamily | `serif` |
  * | `font-size` | \ref fontSize | `16px` |
  * | `font-synthesis-small-caps` | \ref fontSynthesisSmallCaps | `auto` |
+ * | `white-space` | \ref whiteSpace | `normal` |
  * | `text-anchor` | \ref textAnchor | `start` |
  * | `text-decoration` | \ref textDecoration | `none` |
  * | `dominant-baseline` | \ref dominantBaseline | `auto` |
@@ -390,6 +392,10 @@ public:
       "font-size-adjust",
       []() -> std::optional<std::optional<double>> { return std::optional<double>(); }};
 
+  /// CSS white-space collapsing and wrapping policy, inherited by text descendants.
+  Property<WhiteSpace, PropertyCascade::Inherit> whiteSpace{
+      "white-space", []() -> std::optional<WhiteSpace> { return WhiteSpace::Normal; }};
+
   /// `text-anchor` property, which determines the alignment of text relative to its anchor point.
   /// Inherited. Defaults to \ref TextAnchor::Start.
   Property<TextAnchor, PropertyCascade::Inherit> textAnchor{
@@ -399,6 +405,10 @@ public:
   /// Not inherited. Defaults to \ref TextDecoration::None.
   Property<TextDecoration> textDecoration{
       "text-decoration", []() -> std::optional<TextDecoration> { return TextDecoration::None; }};
+
+  /// CSS thickness of decorations originating on this element; not inherited.
+  Property<TextDecorationThickness> textDecorationThickness{
+      "text-decoration-thickness", []() { return std::optional(TextDecorationThickness{}); }};
 
   /// `dominant-baseline` property, which determines the baseline alignment for text.
   /// Inherited (CSS Inline Layout 3). Defaults to \ref DominantBaseline::Auto.
@@ -501,9 +511,10 @@ public:
         vectorEffect, clipPath, clipRule, mask, maskType, colorInterpolation, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant,
-        fontSynthesisSmallCaps, fontKerning, fontSizeAdjust, textAnchor, textDecoration,
-        dominantBaseline, writingMode, textOrientation, inlineSize, letterSpacing, wordSpacing,
-        baselineShift, alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
+        fontSynthesisSmallCaps, fontKerning, fontSizeAdjust, whiteSpace, textAnchor, textDecoration,
+        textDecorationThickness, dominantBaseline, writingMode, textOrientation, inlineSize,
+        letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation,
+        imageRendering, paintOrder);
   }
 
   /**
@@ -585,6 +596,10 @@ public:
    *   initial value) for the root element.
    */
   void resolveFontSize(double parentFontSizePx);
+
+  /// Compute font-relative decoration lengths before a descendant explicitly inherits them.
+  /// @param rootFontSizePx Root computed font size for rem units.
+  void resolveTextDecorationThickness(double rootFontSizePx = 16.0);
 
   /**
    * Resolve relative font-weight keywords (`bolder`/`lighter`) against the parent's

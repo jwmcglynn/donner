@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <future>
@@ -348,6 +349,76 @@ TEST(RendererSnapshotTests, ImageSourceEntityIsClearedBeforeReplay) {
 }
 
 #ifdef DONNER_TEXT_ENABLED
+TEST(RendererSnapshotTests, DecorationCopyRefusalDropsOnlyDecorations) {
+  using components::DocumentResourceFamilyBudget;
+  using components::TextDecorationData;
+  using components::TextDecorationOrigin;
+  DocumentResourceFamilyBudget::Limits limits;
+  limits.geometryBytes = sizeof(TextDecorationData) + sizeof(TextDecorationOrigin);
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(limits);
+  std::array<TextDecorationOrigin, 1> origins{};
+  origins[0].lines = TextDecoration::Underline;
+  components::ComputedTextComponent text;
+  text.spans.emplace_back();
+  text.spans.back().text = "X";
+  text.spans.back().end = 1;
+  text.spans.back().textDecoration = TextDecoration::Underline;
+  text.spans.back().decorations = TextDecorationData::Create(family, origins);
+  ASSERT_THAT(text.spans.back().decorations, testing::NotNull());
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RenderSnapshot snapshot;
+  RenderSnapshotRecorder recorder(snapshot, renderer, RenderSnapshot::kMaximumCapturedFontBytes, 0);
+  Registry source;
+  recorder.drawText(source, text, TextParams{});
+  EXPECT_FALSE(family->securityStats().rejected);
+  EXPECT_CALL(renderer, drawText(_, _, _))
+      .WillOnce([](Registry&, const components::ComputedTextComponent& replay, const TextParams&) {
+        ASSERT_EQ(replay.spans.size(), 1u);
+        EXPECT_EQ(replay.spans[0].textDecoration, TextDecoration::None);
+        EXPECT_THAT(replay.spans[0].decorations, testing::IsNull());
+        EXPECT_EQ(replay.spans[0].end, 1u);
+      });
+  RendererDriver driver(renderer);
+  driver.draw(snapshot);
+  text.spans.clear();
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::Geometry), 0u);
+}
+
+TEST(RendererSnapshotTests, DecorationMetadataReplaysConcurrentlyWithoutSourceBudget) {
+  auto sourceFamily = std::make_shared<components::DocumentResourceFamilyBudget>();
+  RenderSnapshot snapshot;
+  {
+    std::array<components::TextDecorationOrigin, 1> origins{};
+    origins[0].lines = TextDecoration::Underline;
+    components::ComputedTextComponent text;
+    text.spans.emplace_back();
+    text.spans.back().textDecoration = TextDecoration::Underline;
+    text.spans.back().decorations = components::TextDecorationData::Create(sourceFamily, origins);
+    ::testing::NiceMock<MockRendererInterface> renderer;
+    RenderSnapshotRecorder recorder(snapshot, renderer);
+    Registry source;
+    recorder.drawText(source, text, TextParams{});
+  }
+  EXPECT_EQ(sourceFamily->retainedBytes(components::DocumentResourceFamilyBudget::Kind::Geometry),
+            0u);
+  const auto replay = [&snapshot]() {
+    ::testing::NiceMock<MockRendererInterface> renderer;
+    std::size_t count = 0;
+    EXPECT_CALL(renderer, drawText(_, _, _))
+        .WillOnce([&](Registry&, const components::ComputedTextComponent& text, const TextParams&) {
+          ASSERT_THAT(text.spans[0].decorations, testing::NotNull());
+          count = text.spans[0].decorations->origins().size();
+        });
+    snapshot.replay(renderer);
+    return count;
+  };
+  auto first = std::async(std::launch::async, replay);
+  auto second = std::async(std::launch::async, replay);
+  EXPECT_EQ(first.get(), 1u);
+  EXPECT_EQ(second.get(), 1u);
+  EXPECT_FALSE(sourceFamily->securityStats().rejected);
+}
+
 TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
   ::testing::NiceMock<MockRendererInterface> renderer;
   RendererDriver driver(renderer);
@@ -356,7 +427,8 @@ TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
     SVGDocument document = MakeDocument(R"svg(
       <defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
       <text x="10" y="60" font-family="sans-serif" font-size="48"
-            text-decoration="underline">A<tspan clip-path="url(#clip)">B</tspan>C</text>
+            text-decoration="underline" style="text-decoration-thickness:4px">A<tspan clip-path="url(#clip)"
+            style="text-decoration:underline;text-decoration-thickness:2px">B</tspan>C</text>
     )svg");
     snapshot = driver.captureRenderSnapshot(document);
     EXPECT_EQ(snapshot.liveRegistryReferenceCountForTesting(document.registry()), 0u);
@@ -367,16 +439,20 @@ TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
       .WillRepeatedly([&](Registry& registry, const components::ComputedTextComponent& text,
                           const TextParams& params) {
         ++drawCount;
-        ASSERT_TRUE(params.preparedTextDraw);
+        ASSERT_THAT(params.preparedTextDraw, testing::NotNull());
         const auto& fonts = registry.ctx().get<FontManager>();
         for (const TextRun& run : params.preparedTextDraw->runs) {
           if (!run.glyphs.empty()) {
-            EXPECT_FALSE(fonts.fontData(run.font).empty());
+            EXPECT_THAT(fonts.fontData(run.font), testing::Not(testing::IsEmpty()));
           }
         }
         for (const auto& span : text.spans) {
-          if (span.decorationFont) {
-            EXPECT_FALSE(fonts.fontData(span.decorationFont->font).empty());
+          if (span.decorations) {
+            for (const auto& origin : span.decorations->origins()) {
+              if (origin.font) {
+                EXPECT_THAT(fonts.fontData(origin.font->font), testing::Not(testing::IsEmpty()));
+              }
+            }
           }
         }
       });

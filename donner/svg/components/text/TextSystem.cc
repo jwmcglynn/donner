@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "donner/base/Utf8.h"
 #include "donner/base/xml/components/AttributesComponent.h"
@@ -56,36 +57,56 @@ bool hasXmlSpacePreserve(Registry& registry, Entity entity) {
   return false;
 }
 
-RcString collapseTextWhitespace(std::string_view text, bool preserveSpaces) {
-  if (preserveSpaces) {
-    // xml:space="preserve": convert newlines/tabs to spaces but keep all spaces (no collapse).
-    std::string out;
-    out.reserve(text.size());
-    for (char c : text) {
-      if (c == '\t' || c == '\n' || c == '\r') {
+std::string NormalizeSegmentBreaks(std::string_view text) {
+  std::string out;
+  out.reserve(text.size());
+  bool previousCarriageReturn = false;
+  for (char c : text) {
+    if (c != '\n' || !previousCarriageReturn) {
+      out.push_back(c == '\r' ? '\n' : c);
+    }
+    previousCarriageReturn = c == '\r';
+  }
+  return out;
+}
+
+RcString CollapseSpaces(std::string_view text, bool preserveBreaks) {
+  std::string out;
+  out.reserve(text.size());
+  bool previousSpace = false;
+  for (char c : text) {
+    if (c == '\n' && preserveBreaks) {
+      if (!out.empty() && out.back() == ' ') {
+        out.pop_back();
+      }
+      out.push_back(c);
+      previousSpace = true;
+    } else if (c == '\t' || c == '\n' || c == ' ') {
+      if (!previousSpace) {
         out.push_back(' ');
-      } else {
-        out.push_back(c);
+      }
+      previousSpace = true;
+    } else {
+      out.push_back(c);
+      previousSpace = false;
+    }
+  }
+  return RcString(out);
+}
+
+RcString collapseTextWhitespace(std::string_view text, WhiteSpace mode, bool legacyPreserve) {
+  if (legacyPreserve) {
+    std::string out(text);
+    for (char& c : out) {
+      if (c == '\t' || c == '\n' || c == '\r') {
+        c = ' ';
       }
     }
     return RcString(out);
   }
-
-  std::string out;
-  out.reserve(text.size());
-  bool prevWasSpace = false;
-  for (char c : text) {
-    if (c == '\t' || c == '\n' || c == '\r' || c == ' ') {
-      if (!prevWasSpace) {
-        out.push_back(' ');
-        prevWasSpace = true;
-      }
-    } else {
-      out.push_back(c);
-      prevWasSpace = false;
-    }
-  }
-  return RcString(out);
+  const std::string normalized = NormalizeSegmentBreaks(text);
+  return PreservesSpaces(mode) ? RcString(normalized)
+                               : CollapseSpaces(normalized, PreservesSegmentBreaks(mode));
 }
 
 void removeLeadingSpace(RcString& text) {
@@ -309,6 +330,7 @@ struct PendingTextSpan {
   bool applyElementPositioning;
   size_t depth;
   bool preserveSpaces;
+  WhiteSpace whiteSpace;
   bool hidden = false;
 };
 
@@ -433,14 +455,84 @@ void CollapseAdjacentPendingSpaces(std::vector<PendingTextSpan>& pendingSpans) {
   }
 }
 
-void NormalizePendingSpaces(std::vector<PendingTextSpan>& pendingSpans) {
-  if (pendingSpans.empty()) {
-    return;
+void TrimBeforeBreak(std::vector<PendingTextSpan>& spans, size_t index) {
+  for (size_t j = index; j > 0;) {
+    auto& previous = spans[--j];
+    if (previous.hidden || previous.preserveSpaces) {
+      break;
+    }
+    removeTrailingSpace(previous.text);
+    if (!previous.text.empty()) {
+      break;
+    }
   }
+}
 
+void TrimAfterBreak(std::vector<PendingTextSpan>& spans, size_t index) {
+  for (size_t j = index + 1; j < spans.size(); ++j) {
+    auto& next = spans[j];
+    if (next.hidden || next.preserveSpaces) {
+      break;
+    }
+    removeLeadingSpace(next.text);
+    if (!next.text.empty()) {
+      break;
+    }
+  }
+}
+
+void NormalizePendingSpaces(std::vector<PendingTextSpan>& pendingSpans) {
+  for (size_t i = 0; i < pendingSpans.size(); ++i) {
+    const auto& span = pendingSpans[i];
+    if (span.text.empty() || span.hidden) {
+      continue;
+    }
+    if (span.text.data()[0] == '\n') {
+      TrimBeforeBreak(pendingSpans, i);
+    }
+    if (span.text.data()[span.text.size() - 1] == '\n') {
+      TrimAfterBreak(pendingSpans, i);
+    }
+  }
   TrimLeadingPendingSpace(pendingSpans);
   CollapseAdjacentPendingSpaces(pendingSpans);
   TrimTrailingPendingSpace(pendingSpans);
+}
+
+Entity TextParent(Registry& registry, Entity entity) {
+  const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+  return tree ? tree->parent() : entt::null;
+}
+
+WhiteSpace CommonAncestorWhiteSpace(Registry& registry, Entity first, Entity second) {
+  std::unordered_set<Entity> ancestors;
+  for (Entity entity = first; entity != entt::null; entity = TextParent(registry, entity)) {
+    ancestors.insert(entity);
+  }
+  for (Entity entity = second; entity != entt::null; entity = TextParent(registry, entity)) {
+    if (ancestors.contains(entity)) {
+      const auto* style = registry.try_get<ComputedStyleComponent>(entity);
+      return style && style->properties ? style->properties->whiteSpace.getOr(WhiteSpace::Normal)
+                                        : WhiteSpace::Normal;
+    }
+  }
+  return WhiteSpace::Normal;
+}
+
+void ResolveSpanWhitespaceBoundaries(Registry& registry, ComputedTextComponent& text) {
+  std::optional<size_t> previous;
+  for (size_t i = 0; i < text.spans.size(); ++i) {
+    auto& span = text.spans[i];
+    if (span.text.empty() || span.hidden) {
+      continue;
+    }
+    if (previous) {
+      auto& before = text.spans[*previous];
+      before.boundaryWhiteSpace =
+          CommonAncestorWhiteSpace(registry, before.sourceEntity, span.sourceEntity);
+    }
+    previous = i;
+  }
 }
 
 class ComputedTextBuilder {
@@ -457,6 +549,7 @@ public:
     collectSpans(rootHandle_, 0, false);
     NormalizePendingSpaces(pendingSpans_);
     materializeSpans();
+    ResolveSpanWhitespaceBoundaries(registry_, computed_);
   }
 
 private:
@@ -496,15 +589,20 @@ private:
 
   void emitTextChunks(EntityHandle handle, size_t depth, bool isHidden) {
     const auto& text = handle.get<TextComponent>();
-    const bool preserveSpaces = hasXmlSpacePreserve(registry_, handle.entity());
+    const auto* style = handle.try_get<ComputedStyleComponent>();
+    const auto* property = style && style->properties ? &style->properties->whiteSpace : nullptr;
+    const WhiteSpace mode = property ? property->getOr(WhiteSpace::Normal) : WhiteSpace::Normal;
+    const bool legacyPreserve =
+        (!property || !property->isSpecified()) && hasXmlSpacePreserve(registry_, handle.entity());
+    const bool preserveSpaces = legacyPreserve || PreservesSpaces(mode);
     size_t chunkIndex = 0;
     bool emittedFirstChunk = false;
 
     auto emitChunk = [&](const RcString& chunk) {
       if (!emittedFirstChunk || !chunk.empty()) {
         pendingSpans_.push_back(
-            PendingTextSpan{handle, collapseTextWhitespace(chunk, preserveSpaces),
-                            !emittedFirstChunk, depth, preserveSpaces, isHidden});
+            PendingTextSpan{handle, collapseTextWhitespace(chunk, mode, legacyPreserve),
+                            !emittedFirstChunk, depth, preserveSpaces, mode, isHidden});
         emittedFirstChunk = true;
       }
     };
@@ -605,6 +703,7 @@ private:
   void appendVisibleSpan(const PendingTextSpan& pending) {
     ComputedTextComponent::TextSpan span;
     span.text = pending.text;
+    span.whiteSpace = pending.whiteSpace;
     span.start = 0;
     span.end = static_cast<std::size_t>(pending.text.size());
 

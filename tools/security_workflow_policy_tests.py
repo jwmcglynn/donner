@@ -916,6 +916,49 @@ def _run_bodies(workflow):
     return bodies
 
 
+def _github_path_glob(pattern):
+    """A workflow `paths` filter as a regular expression: `**` crosses `/`, `*` does not."""
+    out = []
+    index = 0
+    while index < len(pattern):
+        if pattern.startswith("**/", index):
+            out.append("(?:.*/)?")
+            index += 3
+        elif pattern.startswith("**", index):
+            out.append(".*")
+            index += 2
+        elif pattern[index] == "*":
+            out.append("[^/]*")
+            index += 1
+        else:
+            out.append(re.escape(pattern[index]))
+            index += 1
+    return "".join(out)
+
+
+def _bcr_pull_request_trigger(workflow):
+    """Whether a changed path starts the BCR preflight on a pull request (its `paths` filter)."""
+    block = workflow.split("\n  pull_request:\n    paths:\n", 1)[1]
+    paths = []
+    for line in block.split("\n"):
+        if line.startswith("      - "):
+            paths.append(line.strip()[2:].strip('"'))
+        elif line.strip() and not line.lstrip().startswith("#"):
+            break
+    assert paths, workflow
+
+    def matches(path):
+        # As GitHub evaluates `paths`: the last pattern that matches decides, `!` excludes.
+        selected = False
+        for pattern in paths:
+            negated = pattern.startswith("!")
+            if re.fullmatch(_github_path_glob(pattern.lstrip("!")), path):
+                selected = not negated
+        return selected
+
+    return matches
+
+
 def _gatekeeper_source_violations(workflow):
     steps = _steps(_jobs(workflow)["gatekeeper"])
     if len(steps) != 6:
@@ -930,7 +973,7 @@ def _gatekeeper_source_violations(workflow):
          and _with_key(source, "path", 8) is None and
          _with_key(source, "repository", 8) is None, "admission source is not the immutable base"),
         (_step_values(source, "sparse-checkout") ==
-         ["tools/ci/gatekeeper.py", ".github/actions/pr-trust"],
+         ["tools/ci/gatekeeper.py", "tools/ci/github_rate_limit.py", ".github/actions/pr-trust"],
          "admission checkout includes unexpected code"),
         (_step_key(comparison, "uses", 8) == "actions/checkout@v7" and
          _step_key(comparison, "if", 8) == "github.event_name == 'pull_request'" and
@@ -2625,6 +2668,37 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         deploy = self.supply_chain_files[DOCS_WORKFLOW].split("\n  deploy:\n", 1)[1]
         self.assertEqual([], _build_steps(deploy.replace("bazel-contrib", "")))
 
+    def test_bcr_preflight_pull_request_paths_cover_its_inputs(self):
+        """A pull request skips the preflight unless it changes an input the preflight reads."""
+        preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        matches = _bcr_pull_request_trigger(preflight)
+
+        # Every input that selects the full matrix also starts the preflight.
+        for pattern in bcr_preflight.RELEASE_PATHS:
+            example = pattern.replace("*", "example")
+            self.assertTrue(matches(example), f"{pattern} ({example}) does not start it")
+        # So does every tool its steps run, and the build graph a consumer resolves.
+        steps = "\n".join(line for line in preflight.split("\n")
+                          if not line.lstrip().startswith("#"))
+        tools = set(re.findall(r"tools/[\w/.-]+\.(?:py|sh|txt)", steps))
+        tools |= {"tools/%s.py" % module.replace(".", "/")
+                  for module in re.findall(r"python3 -B -m tools\.([\w.]+)", steps)}
+        tools |= {"tools/bcr_admission.py", "tools/bcr_dependency_closure.py",
+                  "tools/ci/github_rate_limit.py"}
+        for path in sorted(tools) + ["MODULE.bazel", "NOTICE", "donner/svg/BUILD.bazel",
+                                     "donner/svg/renderer/BUILD.bazel", "donner/base/BUILD.bazel",
+                                     "third_party/x/BUILD.bazel", "third_party/BUILD.stb",
+                                     "third_party/a.patch", "build_defs/x.bzl", "x/y/z.bzl",
+                                     "examples/bazel_consumer/MODULE.bazel", ".bcr/presubmit.yml"]:
+            self.assertTrue(matches(path), f"{path} does not start the preflight")
+        # A source or test change is left to CI on the pull request and the preflight on main.
+        for path in ("donner/svg/SVGElement.cc", "donner/svg/tests/BUILD.bazel",
+                     "donner/editor/tests/BUILD.bazel", "tools/ci/gatekeeper.py",
+                     "donner/svg/renderer/wasm/BUILD.bazel", "third_party/tiny-skia-cpp/a.cc",
+                     "third_party/resvg-test-suite/BUILD.bazel", "docs/building.md"):
+            self.assertFalse(matches(path), f"{path} starts the preflight")
+        self.assertIn("\n  push:\n    branches: [main]\n", preflight)
+
     def test_bcr_preflight_has_no_publication_credentials(self):
         preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
         self.assertIn("workflow_dispatch:", preflight)
@@ -2711,10 +2785,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_native_editor_packaging_inputs_trigger_preflight(self):
         workflow = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
-        trigger = workflow.split("permissions:", 1)[0]
-        self.assertIn("      - LICENSE\n", trigger)
-        self.assertIn("      - tools/release_macos_editor*.py\n", trigger)
-        self.assertIn("      - tools/ci_macos_xcode.txt\n", trigger)
+        matches = _bcr_pull_request_trigger(workflow)
+        self.assertTrue(matches("LICENSE"))
+        self.assertTrue(matches("tools/release_macos_editor.py"))
+        self.assertTrue(matches("tools/ci_macos_xcode.txt"))
         self.assertTrue(bcr_preflight.is_release_path("LICENSE"))
         self.assertTrue(bcr_preflight.is_release_path("tools/release_macos_editor.py"))
         self.assertTrue(bcr_preflight.is_release_path("tools/ci_macos_xcode.txt"))

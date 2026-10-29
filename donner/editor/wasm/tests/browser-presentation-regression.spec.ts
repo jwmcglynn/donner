@@ -217,6 +217,7 @@ declare global {
       inputRepresented: boolean;
       viewportZoom: number;
       deviceLost?: boolean;
+      timeoutSerial?: number;
       pointerX?: number;
       pointerY?: number;
       mouseDown?: boolean;
@@ -6172,30 +6173,14 @@ test("trackpad pan moves the presented document content", async ({ page }) => {
   expect(failures).toEqual([]);
 });
 
-test("browser trackpad pinch matches the desktop zoom identity", async ({ page }) => {
-  // A synthesized pinch (ctrl-flagged wheel with no physical key held)
-  // carries deltaY = -100*ln(scale); the input bridge discriminates it and
-  // applies the desktop calibration so the applied zoom equals the gesture's
-  // scale. A pinch to 1.25x must scale the rendered artwork by 1.25 within
-  // a few percent (raster snapping contributes the tolerance).
-  const failures = await openEditor(page);
-  const { editorBounds } = await openDonnerSplash(page);
-  const zoomPoint = { x: editorBounds.x + 480, y: editorBounds.y + 320 };
-  await page.mouse.move(zoomPoint.x, zoomPoint.y);
-
-  // the single-canvas architecture leaves no element whose box tracks the zoom, so the zoom
-  // observable is the rendered Splash letter's own width, measured in the wide
-  // letter region (the shared pane probe region clips the letter to a fragment
-  // whose width does not track the zoom).
-  const letterRegion = splashLetterMeasureRegion(editorBounds);
-  const letterWidth = async () => {
-    const bounds = await readSplashLetterBounds(page, letterRegion);
-    return bounds === null ? 0 : bounds.maxX - bounds.minX;
-  };
-  const beforeWidth = await letterWidth();
-  expect(beforeWidth).toBeGreaterThan(0);
-
-  const kTargetScale = 1.25;
+// A synthesized trackpad pinch: a ctrl-flagged wheel with no physical key held, carrying
+// deltaY = -100*ln(scale). The input bridge discriminates it and applies the desktop calibration,
+// so the applied zoom equals `scale`.
+async function dispatchTrackpadPinch(
+  page: Page,
+  point: { x: number; y: number },
+  scale: number,
+): Promise<void> {
   await page.evaluate(({ x, y, scale }) => {
     document.getElementById("canvas")!.dispatchEvent(
       new WheelEvent("wheel", {
@@ -6208,15 +6193,205 @@ test("browser trackpad pinch matches the desktop zoom identity", async ({ page }
         deltaY: -100 * Math.log(scale),
       }),
     );
-  }, { ...zoomPoint, scale: kTargetScale });
+  }, { ...point, scale });
+}
+
+// The single-canvas architecture leaves no element whose box tracks the zoom, so the zoom
+// observable is the rendered Splash letter's own width, measured in the wide letter region (the
+// shared pane probe region clips the letter to a fragment whose width does not track the zoom).
+function splashLetterWidthReader(
+  page: Page,
+  editorBounds: { x: number; y: number; width: number; height: number },
+): () => Promise<number> {
+  const letterRegion = splashLetterMeasureRegion(editorBounds);
+  return async () => {
+    const bounds = await readSplashLetterBounds(page, letterRegion);
+    return bounds === null ? 0 : bounds.maxX - bounds.minX;
+  };
+}
+
+const kTrackpadPinchScale = 1.25;
+
+test("browser trackpad pinch matches the desktop zoom identity", async ({ page }) => {
+  // A pinch to 1.25x must scale the rendered artwork by 1.25 within a few percent (raster
+  // snapping contributes the tolerance).
+  const failures = await openEditor(page);
+  const { editorBounds } = await openDonnerSplash(page);
+  const zoomPoint = { x: editorBounds.x + 480, y: editorBounds.y + 320 };
+  await page.mouse.move(zoomPoint.x, zoomPoint.y);
+
+  const letterWidth = splashLetterWidthReader(page, editorBounds);
+  const beforeWidth = await letterWidth();
+  expect(beforeWidth).toBeGreaterThan(0);
+
+  await dispatchTrackpadPinch(page, zoomPoint, kTrackpadPinchScale);
 
   await expect
     .poll(async () => (await letterWidth()) / beforeWidth, {
       message: "the pinch never scaled the rendered document content",
       timeout: scaledMs(5_000),
     })
-    .toBeGreaterThan(kTargetScale * 0.93);
-  expect((await letterWidth()) / beforeWidth).toBeLessThan(kTargetScale * 1.07);
+    .toBeGreaterThan(kTrackpadPinchScale * 0.93);
+  expect((await letterWidth()) / beforeWidth).toBeLessThan(kTrackpadPinchScale * 1.07);
+  expect(failures).toEqual([]);
+});
+
+// Longer than the editor's UI admission deadline
+// (`PresentationSubmissionQueue::kCompletionDeadline`, 5 s), its 250 ms completion recheck and the
+// 5.5 s presentation progress window that ends in the frame performing that recheck, with ample
+// room for the pinch's first held submission to start late.
+const kGpuCompletionStallMs = 15_000;
+
+interface GpuCompletionHold {
+  installed: boolean;
+  calls: number;
+  released: boolean;
+}
+
+// Holds every GPU queue completion in every editor worker for `holdMs`, as a browser whose GPU
+// process stops answering does: the work may finish, but no completion callback reaches the
+// editor until the hold ends. Every worker releases at the same wall-clock time, and a worker
+// reached after that time installs nothing.
+async function holdGpuCompletions(page: Page, holdMs: number): Promise<number> {
+  const releaseAtMs = Date.now() + holdMs;
+  const installed = await Promise.all(
+    page.workers().map((worker) =>
+      boundFailureDiagnostic(
+        worker.evaluate((releaseAtMs) => {
+          const holdMs = releaseAtMs - Date.now();
+          if (typeof GPUQueue === "undefined" || holdMs <= 0) {
+            return false;
+          }
+          const scope = globalThis as typeof globalThis & {
+            __donnerGpuCompletionHold?: GpuCompletionHold;
+            __donnerReleaseGpuCompletions?: () => void;
+          };
+          const original = GPUQueue.prototype.onSubmittedWorkDone;
+          let release!: () => void;
+          const hold = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          const state: GpuCompletionHold = { installed: true, calls: 0, released: false };
+          const held = function(this: GPUQueue) {
+            const completion = original.call(this);
+            if (state.released) {
+              return completion;
+            }
+            ++state.calls;
+            return completion.then(() => hold);
+          };
+          const restore = () => {
+            if (state.released) {
+              return;
+            }
+            state.released = true;
+            if (GPUQueue.prototype.onSubmittedWorkDone === held) {
+              GPUQueue.prototype.onSubmittedWorkDone = original;
+            }
+            release();
+          };
+          setTimeout(restore, holdMs);
+          scope.__donnerGpuCompletionHold = state;
+          scope.__donnerReleaseGpuCompletions = restore;
+          GPUQueue.prototype.onSubmittedWorkDone = held;
+          return true;
+        }, releaseAtMs),
+        kStallGuardMs,
+      )
+    ),
+  );
+  return installed.filter((value) => value === true).length;
+}
+
+async function readGpuCompletionHolds(page: Page): Promise<GpuCompletionHold[]> {
+  const holds = await Promise.all(
+    page.workers().map((worker) =>
+      boundFailureDiagnostic(
+        worker.evaluate(() =>
+          (globalThis as typeof globalThis & { __donnerGpuCompletionHold?: GpuCompletionHold })
+            .__donnerGpuCompletionHold ?? null
+        ),
+      )
+    ),
+  );
+  return holds.filter((hold): hold is GpuCompletionHold => hold !== null);
+}
+
+async function releaseGpuCompletions(page: Page): Promise<void> {
+  await Promise.all(
+    page.workers().map((worker) =>
+      boundFailureDiagnostic(
+        worker.evaluate(() =>
+          (globalThis as typeof globalThis & { __donnerReleaseGpuCompletions?: () => void })
+            .__donnerReleaseGpuCompletions?.()
+        ),
+      )
+    ),
+  );
+}
+
+test("a GPU completion stall past the UI admission deadline still presents the pinch", async ({ page }) => {
+  // Hosted macOS CI once had the browser's GPU completions stop for about 20 s just after the
+  // editor started. The overdue UI frame reached the admission deadline, the editor declared its
+  // presentation device lost, and nothing was presented again: the pinch above was applied
+  // (viewport zoom 1.25) and rasterized but never reached the canvas. A browser reports a lost
+  // device itself, so there an overdue frame only defers presentation until its completion
+  // arrives. This case stalls completions past the deadline while the pinch is in flight.
+  test.slow();
+  const failures = await openEditor(page);
+  const { editorBounds } = await openDonnerSplash(page);
+  const zoomPoint = { x: editorBounds.x + 480, y: editorBounds.y + 320 };
+  await page.mouse.move(zoomPoint.x, zoomPoint.y);
+  const letterWidth = splashLetterWidthReader(page, editorBounds);
+  const beforeWidth = await letterWidth();
+  expect(beforeWidth).toBeGreaterThan(0);
+  const presentationQueue = () => page.evaluate(() => window.__donnerPresentationQueueStats);
+  await expect
+    .poll(async () => (await presentationQueue())?.framesInFlight, {
+      message: "presentation must be idle before the completion stall",
+      timeout: kStallGuardMs,
+    })
+    .toBe(0);
+  expect((await presentationQueue())?.timeoutSerial ?? 0).toBe(0);
+
+  try {
+    expect(await holdGpuCompletions(page, kGpuCompletionStallMs), "no worker owns a GPU queue")
+      .toBeGreaterThan(0);
+    await dispatchTrackpadPinch(page, zoomPoint, kTrackpadPinchScale);
+    await expect
+      .poll(async () => {
+        const holds = await readGpuCompletionHolds(page);
+        return holds.length > 0 && holds.every((hold) => hold.released);
+      }, {
+        message: "the completion stall must end on its own timer",
+        timeout: kGpuCompletionStallMs + kStallGuardMs,
+      })
+      .toBe(true);
+  } finally {
+    await releaseGpuCompletions(page);
+  }
+
+  const holds = await readGpuCompletionHolds(page);
+  expect(
+    holds.reduce((calls, hold) => calls + hold.calls, 0),
+    "the pinch's frames must have waited on held completions",
+  ).toBeGreaterThan(0);
+  const afterStall = await presentationQueue();
+  expect(
+    afterStall?.timeoutSerial ?? 0,
+    "the stall must outlast the UI admission deadline for this case to exercise it",
+  ).toBeGreaterThan(0);
+  expect(
+    afterStall?.deviceLost,
+    "an overdue UI frame declared the presentation device lost, so nothing presents again",
+  ).toBe(false);
+  await expect
+    .poll(async () => (await letterWidth()) / beforeWidth, {
+      message: "the pinch never reached the canvas after the completion stall ended",
+      timeout: kStallGuardMs,
+    })
+    .toBeGreaterThan(kTrackpadPinchScale * 0.93);
+  expect((await letterWidth()) / beforeWidth).toBeLessThan(kTrackpadPinchScale * 1.07);
   expect(failures).toEqual([]);
 });
 

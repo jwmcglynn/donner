@@ -51,6 +51,21 @@ reference is not the resvg UB marker image and the case is not in `SPEC_UB_ALLOW
 deprecated-in-SVG-2 case is not under a feature in `DEPRECATED_IN_SVG2_FEATURES` (both in
 `parity_report.py`; see the policy below).
 
+`--head-to-head` compares Donner with resvg's own recorded results for the same snapshot, the
+`resvg` column of `third_party/resvg-test-suite/results.csv`:
+
+```sh
+bazel run //tools/resvg_parity:parity_report -- --head-to-head --output /tmp/resvg-head-to-head.json
+```
+
+It reports both pass counts, the margin (Donner passes minus resvg passes), a strict Donner count
+(no pixel budget or golden override), the cases Donner passes and resvg does not (with resvg's
+recorded result), and the gap: cases resvg passes and Donner does not, with their state and reason.
+A Donner pass is a case that compares, by default or within a recorded budget, so the count assumes
+the comparison tests are green. Skipped and render-only cases are not passes; neither are resvg's
+`unknown` or `crashed` rows. The `results.csv` values are manual visual judgments recorded with the
+snapshot, not a pixel diff, and current upstream resvg may score differently.
+
 Some tests require a more lenient threshold, or must be skipped entirely due to incomplete Donner
 functionality. To do this, per-test params may be specified. A test registration appears as:
 

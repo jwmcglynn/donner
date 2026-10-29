@@ -25,9 +25,9 @@ export const kMaxCanvasQuiescencePasses = 7;
 
 /**
  * Longest a capture holds the app's canvas completions at once, from arming the hold to the end of
- * the screenshot. The app declares its presentation device lost once its oldest frame has waited
- * 5 s without observed progress (`PresentationSubmissionQueue::kCompletionDeadline`), so a hold
- * must end well before that. This bounds the hold only; it is not a deadline for the capture.
+ * the screenshot. Once the app's oldest frame has waited 5 s
+ * (`PresentationSubmissionQueue::kCompletionDeadline`), the app stops presenting until that frame's
+ * completion arrives, so a hold must end well before that. This bounds the hold only; it is not a deadline for the capture.
  */
 export const kMaxCanvasCompletionHoldMs = 3500;
 

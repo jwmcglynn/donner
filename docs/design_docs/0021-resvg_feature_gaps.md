@@ -571,7 +571,7 @@ content-placement transform.
 | structure/style           |     1 | CSS `@import` / external CSS remains unsupported: imports are diagnosed and ignored, with no target requests; `UnsupportedCssImportsNeverRequestConfiguredResponses` in `//donner/svg/renderer/tests:renderer_public_api_tests` enforces that.                                                                                                       |
 | structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                                                     |
 | painting/image-rendering  |     1 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. `on-feImage` uses an independently derived nearest reference; `optimizeSpeed` compares against resvg v0.49.0 on TinySkia and is disabled on Geode, whose interpolated texture coordinate lands just below texel boundaries on pixel centers.          |
-| masking/clipPath          |     1 | CSS circle shapes support fill, stroke and viewport reference boxes with bounded geometry preparation; two opaque reference images retain explicit background qualifications. The transformed-text reference remains under review.                                                                                                                   |
+| masking/clipPath          |     0 | CSS circle shapes support fill, stroke and viewport reference boxes with bounded geometry preparation; two opaque reference images retain explicit background qualifications. The transformed-text case compares against resvg v0.49.0 with zero differing pixels; both use the glyph-cell text box.                                                 |
 | masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                      |
 | text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                |
 | text/tspan                |     3 | tspan interaction with `clip-path`/`filter`/`mask`                                                                                                                                                                                                                                                                                                   |
@@ -793,3 +793,23 @@ rotated pattern case, use exact Geode goldens so the backend remains fully gated
 
 - path/to/first-test.svg
 ```
+
+## Text decoration thickness
+
+`text-decoration-thickness` accepts `auto`, `from-font`, absolute lengths, `em`, `rem`, and
+percentages. The font-metric units `ex`/`ch` and viewport units `vw`/`vh`/`vmin`/`vmax` are rejected
+until their computed-value context is available in the style pipeline. Explicit
+percentages use the originating decoration's used font size; font-relative lengths compute before
+explicit inheritance. The supported `text-decoration` shorthand resets omitted thickness to `auto`
+and preserves independent cascade priorities. Draft line-width keywords and the complete
+line/style/color longhands, underline offsets, shadows, and emphasis remain unsupported.
+
+Each originating declaration retains its own font, paint and thickness, including repeated
+underline declarations on nested spans. The software and GPU renderers consume the same bounded
+decoration geometry. `from-font` uses the preferred underline width for all line kinds and falls
+back to automatic metrics when unavailable. Automatic placement retains the existing behavior.
+
+Immutable decoration lists are limited to 64 originating declarations per span and charged to the
+shared geometry budget. Snapshot copies retain and remap their own font and paint resources; a
+refused list suppresses those decorations. New live-bitmap comparisons in
+`text_decoration_thickness_tests` use synthetic font metrics and the canonical exact comparator.

@@ -14,6 +14,7 @@ import tempfile
 from urllib.parse import quote
 
 from tools import docs_site as site
+from tools.ci import github_rate_limit
 
 REPO = "repos/jwmcglynn/donner"
 BRANCH = "docs-snapshots"
@@ -54,12 +55,22 @@ class GitHub:
              raw: bool = False, maximum: int = MAX_CONTROL) -> object:
         args = ["gh", "api", endpoint, "--method", method]
         if raw:
-            args += ["-H", "Accept: application/vnd.github.raw+json"]
+            args += ["-H", "Accept: application/vnd.github.raw"]
         with tempfile.TemporaryFile() as output:
+            def restart() -> None:
+                output.seek(0)
+                output.truncate()
+            # A rate-limit refusal is repeated after the reset (bounded); the request was not
+            # applied, so repeating a write is safe.
             try:
-                result = subprocess.run(args + (["--input", "-"] if data is not None else []),
-                                        input=site.canonical(data) if data is not None else None,
-                                        stdout=output, stderr=subprocess.PIPE, timeout=180, check=False)
+                result = github_rate_limit.run_gh(
+                    args + (["--input", "-"] if data is not None else []),
+                    input=site.canonical(data) if data is not None else None, stdout=output,
+                    timeout=180, check=False, runner=subprocess.run, prepare=restart,
+                    echo_stderr=False, label="docs " + method + " " + endpoint.split("?")[0])
+            except github_rate_limit.RateLimitExhausted:
+                raise ValueError("GitHub API rate limit outlasted the wait: "
+                                 + endpoint.split("?")[0]) from None
             except (OSError, subprocess.SubprocessError):
                 raise ValueError("GitHub request outcome is unknown: " + endpoint.split("?")[0]) from None
             if result.returncode:

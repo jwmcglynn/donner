@@ -449,9 +449,12 @@ Waits judged by progress:
   and the swapchain's waits do not end when the root is declared lost (see
   [Retirement order](#GpuRuntimeRetirement)).
 - The editor: UI submission admission, where a frame times out only once it is five seconds old
-  and the device has also made no progress for five seconds
-  (`PresentationSubmissionQueue::kCompletionDeadline`), declaring the loss at `QueueIdle`; and the
-  framebuffer readback map, which declares the loss at `ReadbackMap`.
+  (`PresentationSubmissionQueue::kCompletionDeadline`) and, on the native backends, the device has
+  also made no progress for five seconds, declaring the loss at `QueueIdle`; and the framebuffer
+  readback map, which declares the loss at `ReadbackMap`. In the browser an overdue UI frame gets
+  one bounded 250 ms completion recheck and then only defers presentation until its completion
+  arrives: the browser reports a lost device itself through `GPUDevice.lost`, while a loss declared
+  after a transient stall could never be recovered once the overdue work completes.
 - `geode::RegisterOrderedTexture()`, which judges a producer by the progress its backend reports.
 
 Waits whose budget is the caller's latency policy keep a fixed budget and declare nothing by

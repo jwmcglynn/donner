@@ -634,6 +634,46 @@ TEST(SVGParser, ForeignNamespaceElementsAreRetainedAsUnknown) {
       testing::StartsWith("<other:group"));
 }
 
+TEST(SVGParser, BrowserActiveMarkupIsInertInProjectionButRetainedInSource) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+  <frame id="html-frame" xmlns="http://www.w3.org/1999/xhtml" src="javascript:marker()"/>
+  <iframe id="html-iframe" xmlns="http://www.w3.org/1999/xhtml" srcdoc="marker"/>
+  <foreignObject id="foreign"><script id="script">marker()</script></foreignObject>
+  <svg id="nested" onload="marker()"/>
+  <a id="link" href="#safe"><animate id="animated-href" attributeName="href"
+      values="JavaScript:marker()"/></a>
+</svg>)svg";
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(result, NoParseError());
+  SVGDocument& document = result.result();
+
+  for (const char* id : {"html-frame", "html-iframe", "foreign", "script"}) {
+    SCOPED_TRACE(id);
+    auto element = document.querySelector(std::string("#") + id);
+    ASSERT_THAT(element, testing::Ne(std::nullopt));
+    EXPECT_THAT(element->type(), testing::Eq(ElementType::Unknown));
+  }
+  const auto nested = document.querySelector("#nested");
+  ASSERT_THAT(nested, testing::Ne(std::nullopt));
+  EXPECT_THAT(nested->type(), testing::Eq(ElementType::SVG));
+  const auto animatedHref = document.querySelector("#animated-href");
+  ASSERT_THAT(animatedHref, testing::Ne(std::nullopt));
+  EXPECT_THAT(animatedHref->type(), testing::Eq(ElementType::Animate));
+  EXPECT_THAT(document.source(), testing::Eq(source));
+  EXPECT_THAT(document.source(), testing::HasSubstr("onload="));
+}
+
+TEST(SVGParser, XmlStylesheetInstructionIsRejectedBeforeSvgProjection) {
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG("<?xml version='1.0' encoding='UTF-8'?>"
+                                  "<?xml-stylesheet type='text/xsl' href='data:text/xsl,marker'?>"
+                                  "<svg xmlns='http://www.w3.org/2000/svg'/>",
+                                  warnings),
+              ParseErrorIs(testing::HasSubstr("XML declaration missing closing")));
+}
+
 TEST(SVGParser, ForeignNamespaceSubtreeWarnsOnceAndCountsTowardCaps) {
   // A retained foreign subtree materializes one entity per element and is charged to the
   // tree-node and depth caps like any other content. Under the default caps a large subtree
