@@ -754,6 +754,9 @@ def _recover(record, prior_identity, previous_id, api, error, expected_tip=None,
         site.require(expected_tip is not None and api.tip() == expected_tip,
                      "snapshot branch advanced or recovery scope is unknown")
         site.require(deployment_id is not None, "candidate deployment identity is unknown")
+        # SHA-based Pages status can describe an earlier artifact at the same commit.
+        site.require(not site.SHA.fullmatch(str(deployment_id)),
+                     "SHA deployment status is not bound to the current artifact request")
         candidate_state = api.call(store.REPO + "/pages/deployments/" + str(deployment_id))["status"]
         site.require(candidate_state in {"succeed", "deployment_failed", "deployment_content_failed",
                                          "deployment_cancelled", "deployment_lost"},
