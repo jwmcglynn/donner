@@ -244,47 +244,55 @@ FontHandle selectBackendSafeFont(const TextBackend& backend, FontManager& fontMa
   return font;
 }
 
+struct PositioningCodepointInterval {
+  uint32_t first;
+  uint32_t last;
+};
+
+// Preserve the existing intervals, including the legacy block-wide combining ranges.
+constexpr std::array<PositioningCodepointInterval, 17> kPositioningCombiningIntervals = {{
+    {0x0300, 0x036F},  // Combining Diacritical Marks
+    {0x0483, 0x0489},  // Cyrillic combining
+    {0x0591, 0x05C7},  // Hebrew combining
+    {0x0610, 0x061A},  // Arabic combining
+    {0x064B, 0x065F},  // Arabic combining
+    {0x0670, 0x0670},  // Arabic superscript alef
+    {0x06D6, 0x06ED},  // Arabic combining
+    {0x0730, 0x074A},  // Syriac combining
+    {0x0E31, 0x0E31},  // Thai combining
+    {0x0E34, 0x0E3A},  // Thai combining
+    {0x0EB1, 0x0EB1},  // Lao combining
+    {0x0EB4, 0x0EBC},  // Lao combining
+    {0x1AB0, 0x1AFF},  // Combining Diacritical Marks Extended
+    {0x1DC0, 0x1DFF},  // Combining Diacritical Marks Supplement
+    {0x20D0, 0x20FF},  // Combining Diacritical Marks for Symbols
+    {0x3099, 0x309A},  // Kana combining voicing marks
+    {0xFE20, 0xFE2F},  // Combining Half Marks
+}};
+
+bool IsPositioningCombiningCodepoint(uint32_t cp) {
+  return std::any_of(kPositioningCombiningIntervals.begin(), kPositioningCombiningIntervals.end(),
+                     [cp](const PositioningCodepointInterval& interval) {
+                       return cp >= interval.first && cp <= interval.last;
+                     });
+}
+
+bool IsPositioningJoiner(uint32_t cp) {
+  return cp == 0x200C || cp == 0x200D || cp == 0x034F;
+}
+
+bool IsPositioningVariationSelector(uint32_t cp) {
+  return (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF);
+}
+
 /**
  * Existing nonspacing classification used to keep shaping input intact at
  * positioning boundaries. These codepoints still consume addressable source slots.
  * Includes combining marks, zero-width joiners, and variation selectors.
  */
 bool isNonSpacing(uint32_t cp) {
-  // Combining marks (General Category M).
-  if ((cp >= 0x0300 && cp <= 0x036F) ||  // Combining Diacritical Marks
-      (cp >= 0x0483 && cp <= 0x0489) ||  // Cyrillic combining
-      (cp >= 0x0591 && cp <= 0x05C7) ||  // Hebrew combining
-      (cp >= 0x0610 && cp <= 0x061A) ||  // Arabic combining
-      (cp >= 0x064B && cp <= 0x065F) ||  // Arabic combining
-      (cp >= 0x0670 && cp == 0x0670) ||  // Arabic superscript alef
-      (cp >= 0x06D6 && cp <= 0x06ED) ||  // Arabic combining
-      (cp >= 0x0730 && cp <= 0x074A) ||  // Syriac combining
-      (cp >= 0x0E31 && cp == 0x0E31) ||  // Thai combining
-      (cp >= 0x0E34 && cp <= 0x0E3A) ||  // Thai combining
-      (cp >= 0x0EB1 && cp == 0x0EB1) ||  // Lao combining
-      (cp >= 0x0EB4 && cp <= 0x0EBC) ||  // Lao combining
-      (cp >= 0x1AB0 && cp <= 0x1AFF) ||  // Combining Diacritical Marks Extended
-      (cp >= 0x1DC0 && cp <= 0x1DFF) ||  // Combining Diacritical Marks Supplement
-      (cp >= 0x20D0 && cp <= 0x20FF) ||  // Combining Diacritical Marks for Symbols
-      (cp >= 0x3099 && cp <= 0x309A) ||  // Kana combining voicing marks
-      (cp >= 0xFE20 && cp <= 0xFE2F)) {  // Combining Half Marks
-    return true;
-  }
-
-  // Zero-width joiners and format characters used in emoji/ligature sequences.
-  if (cp == 0x200C ||  // Zero Width Non-Joiner
-      cp == 0x200D ||  // Zero Width Joiner (emoji ZWJ sequences)
-      cp == 0x034F) {  // Combining Grapheme Joiner
-    return true;
-  }
-
-  // Variation selectors (emoji style selectors, ideographic variation sequences).
-  if ((cp >= 0xFE00 && cp <= 0xFE0F) ||    // Variation Selectors (VS1-VS16)
-      (cp >= 0xE0100 && cp <= 0xE01EF)) {  // Variation Selectors Supplement
-    return true;
-  }
-
-  return false;
+  return IsPositioningCombiningCodepoint(cp) || IsPositioningJoiner(cp) ||
+         IsPositioningVariationSelector(cp);
 }
 
 Path transformPath(const Path& spline, const Transform2d& transform) {
