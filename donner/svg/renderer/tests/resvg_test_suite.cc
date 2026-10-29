@@ -672,9 +672,11 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "masking/clipPath",
                 {
+                    // The 300x300 resvg v0.49.0 rendering. The superseded reference mapped the clip
+                    // through the glyph ink extents of the text rather than its glyph cells.
                     {"clip-path-with-transform-on-text.svg",
-                     Params::Skip("Triage: text objectBoundingBox units resolve; 2526px transform "
-                                  "alignment residual remains")},
+                     ResvgV049Reference().requireFeature(RendererBackendFeature::Text,
+                                                         "text rendering")},
                     {"on-the-root-svg-without-size.svg",
                      Params::UndefinedBehavior("on root `<svg>` without size")},
 
@@ -978,17 +980,19 @@ INSTANTIATE_TEST_SUITE_P(
                     {"control-points-clamping-1.svg",
                      WithMaxPixels(150, "Stroke control-point clamping edge coverage")
                          .withGeodeMaxPixelsDifferent(500)},
-                    // Both references map a stroke paint server's objectBoundingBox units through
-                    // the glyph *ink* extents of "Text" (measured 42.80..156.08 x 66.96..110.40
-                    // user units at font-size 60) instead of the glyph cells that SVG 1.1 and
-                    // SVG 2 define: advance width by the font's full ascent and descent (42.20..
-                    // 157.40 x 45.66..127.38). The sibling painting/fill references for the same
-                    // text pin the glyph-cell box, so the corpus disagrees with itself and only
-                    // one of the two can be matched. Donner follows the specification.
+                    // Both vendored references map a stroke paint server's objectBoundingBox units
+                    // through the glyph *ink* extents of "Text" (measured 42.80..156.08 x 66.96..
+                    // 110.40 user units at font-size 60) instead of its glyph cells: advance width
+                    // by the font's ascent and descent (42.20..157.40 x 45.66..127.38), which
+                    // Donner and resvg v0.49.0 use for fill and stroke alike.
                     //
                     // A default linear gradient runs along x only, where the two boxes differ by
                     // under 2 user units, so it stays inside a loosened per-pixel tolerance. The
-                    // radial gradient sees the full 1.9x height difference and cannot.
+                    // radial gradient sees the full 1.9x height difference and cannot. Against
+                    // resvg v0.49.0's 300x300 rendering, which uses the glyph cells, 358 and 364
+                    // simple-text pixels (352 and 361 full text) still differ, with no alpha delta
+                    // above 58 of 255 and no opaque color delta above 3. The root cause of that
+                    // residual is not yet identified, so these references are not replaced.
                     {"linear-gradient-on-text.svg",
                      Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
                                            "Reference uses text ink extents for stroke paint")
@@ -996,7 +1000,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"pattern-on-text.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "AA artifacts")},
                     {"radial-gradient-on-text.svg",
-                     Params::Skip("Reference uses text ink extents for stroke paint")},
+                     Params::Skip("Reference uses text ink extents for stroke paint; 364 px "
+                                  "residual against resvg v0.49.0")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1059,16 +1064,11 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/visibility",
                 {
-                    // The reference maps the objectBoundingBox clip through the union of the two
-                    // text elements' glyph *ink* extents (measured 50.5..144.4 x 69.3..105.5 user
-                    // units), not their glyph cells. SVG 1.1 and SVG 2 both define the object
-                    // bounding box of text as the union of full glyph cells: advance width by the
-                    // font's full ascent and descent. Donner follows the specification, which the
-                    // same corpus pins in painting/fill/{linear,radial}-gradient-on-text.svg, so
-                    // the two references disagree with each other and this one cannot be matched
-                    // without also breaking those.
-                    {"bbox-impact-3.svg",
-                     Params::Skip("Reference uses text ink extents for objectBoundingBox")},
+                    // The 300x300 resvg v0.49.0 rendering. The superseded reference mapped the clip
+                    // through the union of the two text elements' glyph ink extents (measured
+                    // 50.5..144.4 x 69.3..105.5 user units) rather than their glyph cells.
+                    {"bbox-impact-3.svg", ResvgV049Reference().requireFeature(
+                                              RendererBackendFeature::Text, "text rendering")},
                     {"collapse-on-tspan.svg",
                      Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"hidden-on-tspan.svg",
