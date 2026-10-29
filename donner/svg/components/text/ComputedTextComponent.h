@@ -1,8 +1,12 @@
 #pragma once
 /// @file
 
+#include <algorithm>
+#include <array>
 #include <entt/entity/entity.hpp>  // entt::entity, entt::null
+#include <memory>
 #include <optional>
+#include <span>
 #include <unordered_map>
 
 #include "donner/base/Length.h"
@@ -27,7 +31,94 @@
 #include "donner/svg/core/WhiteSpace.h"
 #include "donner/svg/text/TextTypes.h"
 
+namespace donner::svg {
+struct SnapshotFontPayload;
+}
+
 namespace donner::svg::components {
+
+/// One originating text-decoration declaration, independent of descendant declarations.
+struct TextDecorationOrigin {
+  TextDecoration lines = TextDecoration::None;       ///< Lines contributed by this origin.
+  ResolvedPaintServer fill = PaintServer::None();    ///< Origin's resolved fill.
+  ResolvedPaintServer stroke = PaintServer::None();  ///< Origin's resolved stroke.
+  double fillOpacity = 1.0;                          ///< Origin's fill opacity.
+  double strokeOpacity = 1.0;                        ///< Origin's stroke opacity.
+  std::optional<ResolvedTextFont> font;              ///< Origin's resolved face and used size.
+  std::shared_ptr<const SnapshotFontPayload> snapshotFont;  ///< Snapshot-owned font bytes.
+  double strokeWidth = 0.0;                                 ///< Origin's resolved SVG stroke width.
+  TextDecorationThickness thickness;  ///< Explicit dimensions are resolved to pixels.
+
+  /// Whether prepared paint names this origin's resource in the same coordinate context.
+  /// @param prepared Paint whose backend resource is available for reuse.
+  bool usesPreparedFill(const ResolvedPaintServer& prepared) const {
+    const auto* origin = std::get_if<PaintResolvedReference>(&fill);
+    const auto* candidate = std::get_if<PaintResolvedReference>(&prepared);
+    if (!origin || !candidate || !origin->reference.valid() ||
+        origin->reference.handle != candidate->reference.handle ||
+        origin->contextRemap.has_value() != candidate->contextRemap.has_value()) {
+      return false;
+    }
+    if (!origin->contextRemap) {
+      return true;
+    }
+    const auto& a = *origin->contextRemap;
+    const auto& b = *candidate->contextRemap;
+    return a.contextBounds == b.contextBounds &&
+           a.entityFromContextTransform == b.entityFromContextTransform &&
+           a.resolveAtDrawTime == b.resolveAtDrawTime && a.seededFromStroke == b.seededFromStroke;
+  }
+};
+
+/// Immutable origin list with a shared document-family lifetime charge.
+class TextDecorationData {
+public:
+  /// Bound per-span ancestry storage and stack-based copies used during snapshot remapping.
+  static constexpr std::size_t kMaximumOrigins = 64;
+
+  /// Reserve before allocation and copy an origin list; return null on refusal.
+  /// @param family Shared document-family memory owner.
+  /// @param origins Origin declarations to retain.
+  static std::shared_ptr<const TextDecorationData> Create(
+      std::shared_ptr<DocumentResourceFamilyBudget> family,
+      std::span<const TextDecorationOrigin> origins) {
+    if (!family || origins.empty() || origins.size() > kMaximumOrigins) {
+      return nullptr;
+    }
+    const std::size_t bytes =
+        sizeof(TextDecorationData) + origins.size() * sizeof(TextDecorationOrigin);
+    if (!family->reserve(DocumentResourceFamilyBudget::Kind::Geometry, bytes)) {
+      return nullptr;
+    }
+    return std::shared_ptr<const TextDecorationData>(
+        new TextDecorationData(std::move(family), origins, bytes));
+  }
+
+  ~TextDecorationData() { family_->release(DocumentResourceFamilyBudget::Kind::Geometry, bytes_); }
+  TextDecorationData(const TextDecorationData&) = delete;
+  TextDecorationData& operator=(const TextDecorationData&) = delete;
+
+  /// Borrow immutable declarations for this object's lifetime.
+  std::span<const TextDecorationOrigin> origins() const UTILS_LIFETIME_BOUND {
+    return {origins_.get(), count_};
+  }
+  /// Shared accounting owner for independently retained snapshot copies.
+  std::shared_ptr<DocumentResourceFamilyBudget> family() const { return family_; }
+
+private:
+  TextDecorationData(std::shared_ptr<DocumentResourceFamilyBudget> family,
+                     std::span<const TextDecorationOrigin> origins, std::size_t bytes)
+      : family_(std::move(family)),
+        origins_(std::make_unique<TextDecorationOrigin[]>(origins.size())),
+        count_(origins.size()),
+        bytes_(bytes) {
+    std::copy(origins.begin(), origins.end(), origins_.get());
+  }
+  std::shared_ptr<DocumentResourceFamilyBudget> family_;
+  std::unique_ptr<TextDecorationOrigin[]> origins_;
+  std::size_t count_;
+  std::size_t bytes_;
+};
 
 /**
  * Pre-computed layout information for a text subtree.
@@ -204,27 +295,8 @@ struct ComputedTextComponent {
     /// (markers do not apply to text). Populated by RendererDriver from sourceEntity.
     PaintOrder paintOrder;
 
-    /// Fill paint resolved from the element that declared text-decoration (not this span).
-    /// Per CSS Text Decoration §3, decoration uses the declaring element's paint.
-    ResolvedPaintServer resolvedDecorationFill;
-
-    /// Stroke paint from the declaring element (for stroking decoration lines).
-    ResolvedPaintServer resolvedDecorationStroke;
-
-    /// CSS `fill-opacity` resolved from the text element that provides decoration paint.
-    double decorationFillOpacity = 1.0;
-
-    /// CSS `stroke-opacity` resolved from the text element that provides decoration paint.
-    double decorationStrokeOpacity = 1.0;
-
-    /// Declaring element's resolved face and adjusted used size for decoration metrics.
-    std::optional<ResolvedTextFont> decorationFont;
-
-    /// Stroke width from the declaring element, for stroking decoration lines.
-    double decorationStrokeWidth = 0.0;
-
-    /// Number of ancestors that explicitly declared a non-none text-decoration for this span.
-    int decorationDeclarationCount = 0;
+    /// All originating decoration declarations affecting this span, outermost first.
+    std::shared_ptr<const TextDecorationData> decorations;
 
     /// Per-span text-anchor value. Used for per-chunk text-anchor adjustment:
     /// each text chunk uses the text-anchor of its first rendered character's element.

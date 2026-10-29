@@ -2909,6 +2909,46 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
   }
 }
 
+TEST(PropertyRegistry, DecorationThicknessGrammarAndShorthandReset) {
+  PropertyRegistry properties;
+  properties.parseStyle("text-decoration-thickness:3px");
+  EXPECT_THAT(properties.textDecorationThickness.get()->value, LengthValueIs(3, Lengthd::Unit::Px));
+  properties.parseStyle("text-decoration:underline");
+  EXPECT_EQ(properties.textDecorationThickness.get()->kind, TextDecorationThickness::Kind::Auto);
+  properties.parseStyle("text-decoration:4px overline");
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Overline));
+  EXPECT_THAT(properties.textDecorationThickness.get()->value, LengthValueIs(4, Lengthd::Unit::Px));
+  properties.parseStyle("text-decoration:underline nonsense");
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Overline));
+  EXPECT_THAT(properties.textDecorationThickness.get()->value, LengthValueIs(4, Lengthd::Unit::Px));
+  properties.parseStyle("text-decoration-thickness:-1px");
+  EXPECT_THAT(properties.textDecorationThickness.get()->value,
+              LengthValueIs(-1, Lengthd::Unit::Px));
+  properties.parseStyle("text-decoration-thickness:from-font");
+  EXPECT_EQ(properties.textDecorationThickness.get()->kind,
+            TextDecorationThickness::Kind::FromFont);
+  for (const auto value :
+       {"1e999px", "thin", "1px 2px", "2", "1ex", "1ch", "1vw", "1vh", "1vmin", "1vmax"}) {
+    properties.parseStyle("text-decoration-thickness:" + std::string(value));
+    EXPECT_EQ(properties.textDecorationThickness.get()->kind,
+              TextDecorationThickness::Kind::FromFont);
+  }
+}
+
+TEST(PropertyRegistry, DecorationThicknessCascadeAndCssWideKeywords) {
+  PropertyRegistry properties;
+  properties.parseStyle("text-decoration-thickness:8px!important;text-decoration:underline 2px");
+  EXPECT_THAT(properties.textDecorationThickness.get()->value, LengthValueIs(8, Lengthd::Unit::Px));
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Underline));
+  properties.parseStyle("text-decoration:initial!important");
+  EXPECT_EQ(properties.textDecorationThickness.state, PropertyState::ExplicitInitial);
+  EXPECT_EQ(properties.textDecoration.state, PropertyState::ExplicitInitial);
+  properties.parseStyle("text-decoration:inherit!important");
+  EXPECT_EQ(properties.textDecorationThickness.state, PropertyState::Inherit);
+  properties.parseStyle("text-decoration:unset!important");
+  EXPECT_EQ(properties.textDecorationThickness.state, PropertyState::ExplicitUnset);
+}
+
 TEST(PropertyRegistry, TextDecorationAndDasharrayErrorPaths) {
   {
     PropertyRegistry registry;

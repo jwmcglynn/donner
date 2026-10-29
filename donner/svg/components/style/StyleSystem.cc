@@ -19,6 +19,7 @@
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
@@ -62,6 +63,16 @@ bool IsApplicableStylesheet(const Registry& registry, const StylesheetComponent&
   // The built-in sheet has an SVG default namespace; authored namespace handling is separate.
   const auto* type = registry.try_get<ElementTypeComponent>(dataEntity);
   return type && type->inSvgNamespace();
+}
+
+double DecorationRootFontSize(Registry& registry) {
+  if (const auto* context = registry.ctx().find<SVGDocumentContext>()) {
+    if (const auto* root = registry.try_get<ComputedStyleComponent>(context->rootEntity);
+        root && root->properties) {
+      return root->properties->fontSize.get().value().value;
+    }
+  }
+  return 16.0;
 }
 
 StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
@@ -858,6 +869,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   // font-size, and percentages resolve against the parent font-size (not the viewBox).
   if (computedStyle.properties) {
     resolveComputedParentFonts(handle, parent, *computedStyle.properties);
+    computedStyle.properties->resolveTextDecorationThickness(DecorationRootFontSize(registry));
   }
 }
 

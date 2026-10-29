@@ -406,6 +406,10 @@ public:
   Property<TextDecoration> textDecoration{
       "text-decoration", []() -> std::optional<TextDecoration> { return TextDecoration::None; }};
 
+  /// CSS thickness of decorations originating on this element; not inherited.
+  Property<TextDecorationThickness> textDecorationThickness{
+      "text-decoration-thickness", []() { return std::optional(TextDecorationThickness{}); }};
+
   /// `dominant-baseline` property, which determines the baseline alignment for text.
   /// Inherited (CSS Inline Layout 3). Defaults to \ref DominantBaseline::Auto.
   Property<DominantBaseline, PropertyCascade::Inherit> dominantBaseline{
@@ -508,8 +512,9 @@ public:
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant,
         fontSynthesisSmallCaps, fontKerning, fontSizeAdjust, whiteSpace, textAnchor, textDecoration,
-        dominantBaseline, writingMode, textOrientation, inlineSize, letterSpacing, wordSpacing,
-        baselineShift, alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
+        textDecorationThickness, dominantBaseline, writingMode, textOrientation, inlineSize,
+        letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation,
+        imageRendering, paintOrder);
   }
 
   /**
@@ -591,6 +596,10 @@ public:
    *   initial value) for the root element.
    */
   void resolveFontSize(double parentFontSizePx);
+
+  /// Compute font-relative decoration lengths before a descendant explicitly inherits them.
+  /// @param rootFontSizePx Root computed font size for rem units.
+  void resolveTextDecorationThickness(double rootFontSizePx = 16.0);
 
   /**
    * Resolve relative font-weight keywords (`bolder`/`lighter`) against the parent's

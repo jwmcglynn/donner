@@ -303,51 +303,157 @@ ParseResult<PaintOrder> ParsePaintOrder(std::span<const css::ComponentValue> com
   return result;
 }
 
-ParseResult<TextDecoration> ParseTextDecoration(std::span<const css::ComponentValue> components) {
-  TextDecoration result = TextDecoration::None;
+bool RequiresCssLengthUnits(std::string_view name) {
+  return name == "filter" || name == "clip-path" || name == "text-decoration" ||
+         name == "text-decoration-thickness";
+}
 
+ParseDiagnostic InvalidDecoration() {
+  ParseDiagnostic error;
+  error.reason = "Invalid text-decoration value";
+  return error;
+}
+
+bool IsSupportedDecorationUnit(Lengthd::Unit unit) {
+  switch (unit) {
+    case Lengthd::Unit::Ex:
+    case Lengthd::Unit::Ch:
+    case Lengthd::Unit::Vw:
+    case Lengthd::Unit::Vh:
+    case Lengthd::Unit::Vmin:
+    case Lengthd::Unit::Vmax: return false;
+    default: return true;
+  }
+}
+
+ParseResult<TextDecorationThickness> ParseDecorationThickness(
+    std::span<const css::ComponentValue> values, bool allowUserUnits) {
+  if (values.size() != 1) {
+    return InvalidDecoration();
+  }
+  if (const auto* ident = values.front().tryGetToken<css::Token::Ident>()) {
+    if (ident->value.equalsLowercase("auto")) {
+      return TextDecorationThickness{};
+    }
+    if (ident->value.equalsLowercase("from-font")) {
+      return TextDecorationThickness{TextDecorationThickness::Kind::FromFont, {}};
+    }
+  }
+  const auto length = parser::ParseLengthPercentage(values.front(), allowUserUnits);
+  if (length.hasError() || !std::isfinite(length.result().value)) {
+    return InvalidDecoration();
+  }
+  if (!IsSupportedDecorationUnit(length.result().unit)) {
+    return InvalidDecoration();
+  }
+  return TextDecorationThickness{TextDecorationThickness::Kind::Length, length.result()};
+}
+
+struct ParsedDecoration {
+  TextDecoration lines = TextDecoration::None;
+  TextDecorationThickness thickness;
+  bool lineSpecified = false;
+  bool thicknessSpecified = false;
+  bool styleSpecified = false;
+  bool colorSpecified = false;
+};
+
+bool ParseDecorationIdent(const RcString& value, ParsedDecoration& parsed) {
+  TextDecoration line = TextDecoration::None;
+  if (value.equalsLowercase("underline")) {
+    line = TextDecoration::Underline;
+  } else if (value.equalsLowercase("overline")) {
+    line = TextDecoration::Overline;
+  } else if (value.equalsLowercase("line-through")) {
+    line = TextDecoration::LineThrough;
+  } else if (value.equalsLowercase("none")) {
+    if (parsed.lineSpecified) {
+      return false;
+    }
+    parsed.lineSpecified = true;
+    return true;
+  } else {
+    return false;
+  }
+  if ((parsed.lineSpecified && parsed.lines == TextDecoration::None) ||
+      hasFlag(parsed.lines, line)) {
+    return false;
+  }
+  parsed.lines |= line;
+  parsed.lineSpecified = true;
+  return true;
+}
+
+bool ParseDecorationComponent(const css::ComponentValue& component, ParsedDecoration& parsed,
+                              bool allowUserUnits) {
+  if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+    if (ParseDecorationIdent(ident->value, parsed)) {
+      return true;
+    }
+    const auto& value = ident->value;
+    if (value.equalsLowercase("solid") || value.equalsLowercase("double") ||
+        value.equalsLowercase("dotted") || value.equalsLowercase("dashed") ||
+        value.equalsLowercase("wavy")) {
+      return !std::exchange(parsed.styleSpecified, true);
+    }
+  }
+  const auto single = std::span(&component, 1);
+  const auto thickness = ParseDecorationThickness(single, allowUserUnits);
+  if (thickness.hasResult()) {
+    if (std::exchange(parsed.thicknessSpecified, true)) {
+      return false;
+    }
+    parsed.thickness = thickness.result();
+    return true;
+  }
+  const auto color = css::parser::ColorParser::Parse(single);
+  return color.hasResult() && !std::exchange(parsed.colorSpecified, true);
+}
+
+ParseResult<ParsedDecoration> ParseTextDecoration(std::span<const css::ComponentValue> components,
+                                                  bool allowUserUnits) {
+  ParsedDecoration parsed;
+  bool any = false;
   for (const auto& component : components) {
-    if (component.tryGetToken<css::Token::Comma>()) {
-      ParseDiagnostic err;
-      err.reason = "Invalid text-decoration value";
-      err.range.start = component.sourceOffset();
-      return err;
+    if (component.isToken<css::Token::Whitespace>()) {
+      continue;
     }
-
-    if (const auto* delim = component.tryGetToken<css::Token::Delim>()) {
-      if (delim->value == ',') {
-        ParseDiagnostic err;
-        err.reason = "Invalid text-decoration value";
-        err.range.start = component.sourceOffset();
-        return err;
-      }
+    if (!ParseDecorationComponent(component, parsed, allowUserUnits)) {
+      return InvalidDecoration();
     }
-
-    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
-      const RcString& value = ident->value;
-      if (value.equalsLowercase("none")) {
-        if (components.size() == 1) {
-          return TextDecoration::None;
-        }
-      } else if (value.equalsLowercase("underline")) {
-        result |= TextDecoration::Underline;
-      } else if (value.equalsLowercase("overline")) {
-        result |= TextDecoration::Overline;
-      } else if (value.equalsLowercase("line-through")) {
-        result |= TextDecoration::LineThrough;
-      }
-      // Skip unknown idents (color/style values from full shorthand).
-    }
+    any = true;
   }
+  return any && (parsed.lineSpecified || parsed.thicknessSpecified)
+             ? ParseResult<ParsedDecoration>(parsed)
+             : ParseResult<ParsedDecoration>(InvalidDecoration());
+}
 
-  if (result == TextDecoration::None && !components.empty()) {
-    ParseDiagnostic err;
-    err.reason = "Invalid text-decoration value";
-    err.range.start = components.front().sourceOffset();
-    return err;
+std::optional<ParseDiagnostic> ApplyTextDecoration(PropertyRegistry& registry,
+                                                   const parser::PropertyParseFnParams& params) {
+  if (params.explicitState != PropertyState::NotSet) {
+    if (!registry.textDecoration.isSpecified() ||
+        params.specificity >= registry.textDecoration.specificity) {
+      registry.textDecoration.set(params.explicitState, params.specificity);
+    }
+    if (!registry.textDecorationThickness.isSpecified() ||
+        params.specificity >= registry.textDecorationThickness.specificity) {
+      registry.textDecorationThickness.set(params.explicitState, params.specificity);
+    }
+    return std::nullopt;
   }
-
-  return result;
+  const auto parsed = ParseTextDecoration(params.components(), params.allowUserUnits());
+  if (parsed.hasError()) {
+    return parsed.error();
+  }
+  if (!registry.textDecoration.isSpecified() ||
+      params.specificity >= registry.textDecoration.specificity) {
+    registry.textDecoration.set(parsed.result().lines, params.specificity);
+  }
+  if (!registry.textDecorationThickness.isSpecified() ||
+      params.specificity >= registry.textDecorationThickness.specificity) {
+    registry.textDecorationThickness.set(parsed.result().thickness, params.specificity);
+  }
+  return std::nullopt;
 }
 
 ParseResult<DominantBaseline> ParseDominantBaseline(
@@ -2472,15 +2578,17 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.textAnchor);
                  }},  //
-                {"text-decoration",
+                {"text-decoration", ApplyTextDecoration},
+                {"text-decoration-thickness",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
                        params,
-                       [](const parser::PropertyParseFnParams& params) {
-                         return ParseTextDecoration(params.components());
+                       [](const parser::PropertyParseFnParams& value) {
+                         return ParseDecorationThickness(value.components(),
+                                                         value.allowUserUnits());
                        },
-                       &registry.textDecoration);
-                 }},  //
+                       &registry.textDecorationThickness);
+                 }},
                 {"dominant-baseline",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
@@ -3058,8 +3166,8 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
     const parser::PropertyParseBehavior parseBehavior =
-        name == "filter" || name == "clip-path" ? parser::PropertyParseBehavior::Default
-                                                : parser::PropertyParseBehavior::AllowUserUnits;
+        RequiresCssLengthUnits(name) ? parser::PropertyParseBehavior::Default
+                                     : parser::PropertyParseBehavior::AllowUserUnits;
     return (*parseFn)(
         *this, parser::PropertyParseFnParams::Create(declaration, specificity, parseBehavior));
   }
@@ -3308,6 +3416,20 @@ void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
       break;
   }
   fontSize.value = Lengthd(resolvedPx, Lengthd::Unit::Px);
+}
+
+void PropertyRegistry::resolveTextDecorationThickness(double rootFontSizePx) {
+  const auto* stored = textDecorationThickness.getStoredValue();
+  if (!stored || stored->kind != TextDecorationThickness::Kind::Length ||
+      stored->value.unit == Lengthd::Unit::Percent) {
+    return;
+  }
+  FontMetrics metrics = FontMetrics::DefaultsWithFontSize(fontSize.get().value().value);
+  metrics.rootFontSize = rootFontSizePx;
+  const double pixels = stored->value.toPixels(Box2d(), metrics);
+  TextDecorationThickness resolved = *stored;
+  resolved.value = Lengthd(pixels, Lengthd::Unit::Px);
+  textDecorationThickness.substitute(resolved);
 }
 
 void PropertyRegistry::resolveFontWeight(int parentFontWeight) {
