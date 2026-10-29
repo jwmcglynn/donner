@@ -109,6 +109,13 @@ redrew on a 200x200 viewBox and which were replaced as well.
   tests/structure/image/raster-image-and-size-with-odd-numbers.png
   tests/structure/image/width-and-height-set-to-auto.png
   tests/structure/image/with-transform.png
+
+From the same revision and license, this PNG was replaced with its 300x300 version. The
+snapshot's reference was flattened onto white: its opaque seagreen interior was stored as
+(0, 113, 49) at alpha 209, which matches only when composited over white. Its SVG input is
+byte-identical at both revisions.
+
+  tests/filters/filter/complex-order-and-xlink-href.png
 """
 
 package(default_visibility = ["//visibility:public"])
