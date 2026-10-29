@@ -579,6 +579,36 @@ void LoadPreparedTextFonts(PreparedTextDraw& prepared, const DrawTextCommand& co
     }
   }
 }
+
+/// Rebuilds each span's decoration origins with faces loaded into \p manager, owned by the
+/// replay domain's decoration budget.
+void LoadDecorationFonts(components::ComputedTextComponent& text, FontManager& manager,
+                         SnapshotReplayFontState::Domain& domain) {
+  for (auto& span : text.spans) {
+    if (!span.decorations) {
+      continue;
+    }
+    const auto previous = span.decorations;
+    std::array<components::TextDecorationOrigin, components::TextDecorationData::kMaximumOrigins>
+        origins;
+    std::copy(previous->origins().begin(), previous->origins().end(), origins.begin());
+    for (std::size_t index = 0; index < previous->origins().size(); ++index) {
+      auto& origin = origins[index];
+      if (origin.font) {
+        origin.font->font = LoadSnapshotFont(manager, origin.snapshotFont, domain);
+      }
+    }
+    if (!domain.decorationFamily) {
+      domain.decorationFamily =
+          std::make_shared<components::DocumentResourceFamilyBudget>(previous->family()->limits());
+    }
+    span.decorations = components::TextDecorationData::Create(
+        domain.decorationFamily, std::span(origins).first(previous->origins().size()));
+    if (!span.decorations) {
+      span.textDecoration = TextDecoration::None;
+    }
+  }
+}
 #endif
 
 void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
@@ -652,31 +682,7 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
               params.preparedTextDraw = std::move(prepared);
             }
             components::ComputedTextComponent text = value.text;
-            for (auto& span : text.spans) {
-              if (span.decorations) {
-                const auto previous = span.decorations;
-                std::array<components::TextDecorationOrigin,
-                           components::TextDecorationData::kMaximumOrigins>
-                    origins;
-                std::copy(previous->origins().begin(), previous->origins().end(), origins.begin());
-                for (std::size_t index = 0; index < previous->origins().size(); ++index) {
-                  auto& origin = origins[index];
-                  if (origin.font) {
-                    origin.font->font = LoadSnapshotFont(fontManager, origin.snapshotFont, domain);
-                  }
-                }
-                if (!domain.decorationFamily) {
-                  domain.decorationFamily =
-                      std::make_shared<components::DocumentResourceFamilyBudget>(
-                          previous->family()->limits());
-                }
-                span.decorations = components::TextDecorationData::Create(
-                    domain.decorationFamily, std::span(origins).first(previous->origins().size()));
-                if (!span.decorations) {
-                  span.textDecoration = TextDecoration::None;
-                }
-              }
-            }
+            LoadDecorationFonts(text, fontManager, domain);
             renderer.drawText(textRegistry, text, params);
 #else
             renderer.drawText(textRegistry, value.text, params);
