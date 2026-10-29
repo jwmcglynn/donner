@@ -352,10 +352,11 @@ def live_marker(url: str = SITE_URL, *, deadline: float | None = None) -> dict |
 
 
 def deploy(artifact_id: int, commit: str, api, wait=time.sleep, receipt: Path | None = None) -> str:
+    site.require(isinstance(commit, str) and site.SHA.fullmatch(commit), "invalid Pages source commit")
     api.require_protection()
     token = _oidc_token()
     value = api.call(store.REPO + "/pages/deployments", "POST", {
-        "artifact_id": artifact_id, "pages_build_version": commit + "-" + str(artifact_id),
+        "artifact_id": artifact_id, "pages_build_version": commit,
         "oidc_token": token, "environment": store.deployment_environment()})
     site.require(isinstance(value, dict), "Pages returned no deployment identity")
     deployment_id = str(value.get("id") or str(value.get("status_url", "")).rsplit("/", 1)[-1])
@@ -753,6 +754,9 @@ def _recover(record, prior_identity, previous_id, api, error, expected_tip=None,
         site.require(expected_tip is not None and api.tip() == expected_tip,
                      "snapshot branch advanced or recovery scope is unknown")
         site.require(deployment_id is not None, "candidate deployment identity is unknown")
+        # SHA-based Pages status can describe an earlier artifact at the same commit.
+        site.require(not site.SHA.fullmatch(str(deployment_id)),
+                     "SHA deployment status is not bound to the current artifact request")
         candidate_state = api.call(store.REPO + "/pages/deployments/" + str(deployment_id))["status"]
         site.require(candidate_state in {"succeed", "deployment_failed", "deployment_content_failed",
                                          "deployment_cancelled", "deployment_lost"},

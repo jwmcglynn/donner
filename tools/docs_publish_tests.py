@@ -203,6 +203,18 @@ class DocsPublishTest(unittest.TestCase):
         self.assertEqual(result["status"], "recovery-required")
         deploy.assert_not_called()
 
+    def test_reused_sha_status_cannot_authorize_recovery_of_an_inflight_candidate(self):
+        self.api.call.return_value = {"status": "succeed"}
+        with mock.patch.object(publish, "_live_identity", return_value=False), \
+             mock.patch.object(publish, "live_marker", return_value={"manifest_sha256": "a" * 64}), \
+             mock.patch.object(publish, "_wait_for_live"), \
+             mock.patch.object(publish, "deploy") as deploy:
+            result = publish._recover(self.record, self.prior, 7, self.api, "unhealthy candidate",
+                                      "e" * 40, self.record["workflow_commit"])
+        self.assertEqual(result["status"], "recovery-required")
+        self.assertIn("not bound to the current artifact request", result["recovery_error"])
+        deploy.assert_not_called()
+
     def test_subprocess_timeout_cannot_escape_recovery_receipt(self):
         import subprocess
         self.api.call.side_effect = subprocess.TimeoutExpired("gh", 180)
@@ -674,6 +686,32 @@ class DocsPublishTest(unittest.TestCase):
                 self.assertEqual(publish.deploy(7, "b" * 40, api), "91")
             self.assertEqual(api.call.call_args_list[0].args[2]["environment"], expected)
             api.require_protection.assert_called_once()
+
+    def test_pages_build_version_is_the_exact_source_commit(self):
+        commit = "b" * 40
+        for artifact_id in (7, 8):
+            with self.subTest(artifact_id=artifact_id):
+                api = mock.Mock()
+                api.call.side_effect = [
+                    {"id": commit, "page_url": publish.SITE_URL}, {"status": "succeed"}]
+                receipt = self.root / (str(artifact_id) + ".json")
+                with mock.patch.object(publish, "_oidc_token", return_value="fixture-token"):
+                    self.assertEqual(publish.deploy(artifact_id, commit, api, receipt=receipt), commit)
+                request = api.call.call_args_list[0].args[2]
+                self.assertEqual(request["pages_build_version"], commit)
+                self.assertEqual(request["artifact_id"], artifact_id)
+                self.assertEqual(site.read_json(receipt), {
+                    "deployment_id": commit, "artifact_id": artifact_id})
+
+    def test_pages_rejects_a_non_commit_build_version_before_credentials_or_requests(self):
+        for commit in ("b" * 40 + "-7", "main", "b" * 39, None):
+            with self.subTest(commit=commit):
+                api = mock.Mock()
+                with mock.patch.object(publish, "_oidc_token") as token, \
+                     self.assertRaisesRegex(ValueError, "invalid Pages source commit"):
+                    publish.deploy(7, commit, api)
+                token.assert_not_called()
+                api.call.assert_not_called()
 
     def test_wrong_pages_url_preserves_the_known_request_identity_before_failure(self):
         api = mock.Mock()
