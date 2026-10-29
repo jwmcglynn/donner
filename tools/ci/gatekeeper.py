@@ -16,6 +16,10 @@ for every event. Who may run what (trust and secrets) stays in the workflow itse
                   `should_run=true` for a manual dispatch, or when origin/main has moved since
                   FILE's last successful run (or FILE has none). A scheduled nightly then skips
                   a commit it has already passed. Needs `GH_TOKEN` for `gh run list`.
+
+The `gh` calls share the repository's hourly API budget with every other workflow. A call the
+rate limit refuses is repeated after the window resets, within github_rate_limit's cap; past
+the cap the step fails rather than guess an answer.
 """
 
 from __future__ import annotations
@@ -27,6 +31,11 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
+
+# The shared rate-limit helper sits beside this script; the admission checkout includes it. The
+# directory is added explicitly because an interpreter in safe-path mode does not add it.
+sys.path.insert(0, str(Path(__file__).absolute().parent))
+import github_rate_limit  # noqa: E402
 
 MAIN_REF = "refs/heads/main"
 
@@ -49,7 +58,13 @@ def _write_output(environ: Mapping[str, str], name: str, value: bool) -> None:
 
 
 def _run(command: list[str]) -> str:
-    """Runs `command` and returns its stdout; a failure ends the step with that command's status."""
+    """Runs `command` and returns its stdout; a failure ends the step with that command's status.
+
+    A `gh` command is repeated after a rate-limit refusal (github_rate_limit.run_gh).
+    """
+    if command[0] == "gh":
+        return github_rate_limit.run_gh(command, stdout=subprocess.PIPE, text=True,
+                                        label="gatekeeper").stdout
     return subprocess.run(command, stdout=subprocess.PIPE, text=True, check=True).stdout
 
 
@@ -149,3 +164,5 @@ if __name__ == "__main__":
         sys.exit(main())
     except subprocess.CalledProcessError as error:
         sys.exit(error.returncode)
+    except github_rate_limit.RateLimitExhausted:
+        sys.exit(1)

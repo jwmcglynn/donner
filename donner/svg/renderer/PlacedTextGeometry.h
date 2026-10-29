@@ -13,6 +13,7 @@
 /// `TextEngine` - no backend paint types. No allocation beyond what `Path`
 /// itself does; no exceptions.
 
+#include <functional>
 #include <span>
 #include <vector>
 
@@ -218,5 +219,19 @@ Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>
  */
 void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
                               entt::entity spanEffectOwner, std::vector<TextRun>& runs);
+
+/// Emit bounded decoration paths while preserving each originating declaration.
+/// @param run Laid-out glyph run.
+/// @param origin Declaration whose geometry is emitted.
+/// @param originCount Number of declarations affecting the span.
+/// @param fontSize Used run size for direct-caller fallback metrics.
+/// @param engine Font metrics provider.
+/// @param deviceFromLocal Transform used to resolve each segment's thickness direction.
+/// @param remainingWork Shared per-draw geometry work allowance.
+/// @param emit Paint callback for each generated path.
+void EmitTextDecorationPaths(const TextRun& run, const components::TextDecorationOrigin& origin,
+                             std::size_t originCount, float fontSize, const TextEngine& engine,
+                             const Transform2d& deviceFromLocal, std::size_t& remainingWork,
+                             const std::function<void(const Path&)>& emit);
 
 }  // namespace donner::svg

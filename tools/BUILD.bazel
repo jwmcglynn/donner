@@ -261,10 +261,7 @@ py_test(
 py_test(
     name = "ci_pull_request_events_tests",
     size = "small",
-    srcs = [
-        "ci_pull_request_events_tests.py",
-        "test_executable_fixtures.py",
-    ],
+    srcs = ["ci_pull_request_events_tests.py"],
     data = ["//:github_action_definitions"],
     imports = ["."],
     deps = ["@rules_python//python/runfiles"],
@@ -871,7 +868,10 @@ py_test(
 py_library(
     name = "bcr_admission",
     srcs = ["bcr_admission.py"],
-    deps = [":bcr_source"],
+    deps = [
+        ":bcr_source",
+        "//tools/ci:github_rate_limit",
+    ],
 )
 
 py_test(
@@ -956,7 +956,22 @@ py_test(
     data = [
         "//:.github/actions/re-turnstile/action.yml",
         "//:.github/actions/re-turnstile/admission.py",
+        "//:.github/actions/re-turnstile/turnstile.py",
         "//:github_action_definitions",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+# The turnstile's wait loop: its API cost per poll, poll spacing and rate-limit behavior.
+py_test(
+    name = "turnstile_wait_tests",
+    size = "small",
+    srcs = ["turnstile_wait_tests.py"],
+    data = [
+        "//:.github/actions/re-turnstile/action.yml",
+        "//:.github/actions/re-turnstile/admission.py",
+        "//:.github/actions/re-turnstile/turnstile.py",
+        "//tools/ci:github_rate_limit.py",
     ],
     deps = ["@rules_python//python/runfiles"],
 )
@@ -1103,7 +1118,10 @@ py_test(
 py_library(
     name = "docs_store",
     srcs = ["docs_store.py"],
-    deps = [":docs_site"],
+    deps = [
+        ":docs_site",
+        "//tools/ci:github_rate_limit",
+    ],
 )
 
 py_test(
@@ -1122,6 +1140,7 @@ py_library(
         ":docs_store",
         ":pages_artifact",
         ":release_candidate",
+        "//tools/ci:github_rate_limit",
     ],
 )
 

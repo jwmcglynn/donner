@@ -133,6 +133,27 @@ class StoreTest(unittest.TestCase):
             store.commit(api, "a" * 40, self.payload, {})
         api.call.assert_not_called()
 
+    def test_rate_limited_request_is_repeated_after_the_reset_with_fresh_output(self):
+        import json
+        import time
+        calls = []
+        def run(args, *, stdout, **kwargs):
+            calls.append(args[:3])
+            if args[:3] == ["gh", "api", "rate_limit"]:
+                window = {"limit": 1000, "remaining": 0, "used": 1000, "reset": int(time.time())}
+                return store.subprocess.CompletedProcess(
+                    args, 0, json.dumps({"resources": {"core": window}}), "")
+            if len(calls) == 1:
+                stdout.write(b'{"partial"')
+                return store.subprocess.CompletedProcess(
+                    args, 1, stderr=b"HTTP 403: API rate limit exceeded for installation.")
+            stdout.write(b'{"object": {"sha": "' + b"b" * 40 + b'"}}')
+            return store.subprocess.CompletedProcess(args, 0, stderr=b"")
+        with mock.patch.object(store.subprocess, "run", side_effect=run):
+            self.assertEqual(store.GitHub().tip(), "b" * 40)
+        endpoint = ["gh", "api", "repos/jwmcglynn/donner/git/ref/heads/docs-snapshots"]
+        self.assertEqual(calls, [endpoint, ["gh", "api", "rate_limit"], endpoint])
+
     def test_actual_subprocess_timeout_becomes_an_unknown_outcome(self):
         import subprocess
         with mock.patch.object(store.subprocess, "run", side_effect=subprocess.TimeoutExpired("gh", 180)), \

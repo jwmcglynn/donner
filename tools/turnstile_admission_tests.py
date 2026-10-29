@@ -248,6 +248,7 @@ class TurnstileWiringTests(unittest.TestCase):
 
     def setUp(self):
         self.action = _read("donner/.github/actions/re-turnstile/action.yml")
+        self.loop = _read("donner/.github/actions/re-turnstile/turnstile.py")
         self.workflows = {"main.yml": _read("donner/.github/workflows/main.yml")}
 
     def _turnstile_usages(self, text):
@@ -305,14 +306,15 @@ class TurnstileWiringTests(unittest.TestCase):
         self.assertNotIn("concurrency:", body)
 
     def test_fail_open_and_api_retry_properties_are_kept(self):
-        self.assertIn("proceeding (fail-open)", self.action)
-        self.assertIn("retaining gate behind", self.action)
+        self.assertIn("proceeding (fail-open)", self.loop)
+        self.assertIn("retaining gate behind", self.loop)
 
     def test_action_defaults_preserve_single_lane_behavior(self):
         self.assertRegex(self.action, r"capacity:\n(?:.*\n)*?\s+default: \"1\"")
 
     def test_action_uses_tested_workflow_resolution(self):
-        self.assertIn('"${admission}" workflow-ids', self.action)
+        self.assertIn("admission.workflow_ids(", self.loop)
+        self.assertIn("admission.decide(", self.loop)
         self.assertNotIn('$wanted[] | select($w.path | endswith("/" + .))', self.action)
 
 

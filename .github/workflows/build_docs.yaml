@@ -38,8 +38,9 @@ jobs:
       - name: Bind the docs site to this source run
         run: python3 -B -m tools.pages_artifact marker --output generated-doxygen/html/docs-build.json
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v6
+      # No actions/configure-pages step: nothing here reads its outputs, and its REST lookup
+      # of the Pages site failed this job whenever the repository's shared hourly API budget
+      # was spent. tools/docs_publish.py verifies the Pages environment when it deploys.
       - name: Upload retained Pages artifact
         id: pages
         uses: actions/upload-pages-artifact@v5

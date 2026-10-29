@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -284,6 +285,216 @@ Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>
     return Box2d({minX, minY}, {maxX, maxY});
   }
   return Box2d();
+}
+
+namespace {
+struct DecorationMetrics {
+  double ascent = 0;
+  double descent = 0;
+  double underlinePosition = 0;
+  double underlineWidth = 0;
+  double strikePosition = 0;
+  double strikeWidth = 0;
+  double automaticWidth = 0;
+};
+
+DecorationMetrics GetDecorationMetrics(const TextRun& run,
+                                       const components::TextDecorationOrigin& origin,
+                                       float fontSize, const TextEngine& engine) {
+  const auto font = origin.font.value_or(ResolvedTextFont{run.font, fontSize});
+  const double scale = engine.scaleForPixelHeight(font.font, font.usedSizePx);
+  const double emScale = engine.scaleForEmToPixels(font.font, font.usedSizePx);
+  const auto metrics = engine.fontVMetrics(font.font);
+  DecorationMetrics result;
+  result.ascent = static_cast<double>(metrics.ascent) * scale;
+  result.descent = static_cast<double>(metrics.descent) * scale;
+  if (const auto underline = engine.underlineMetrics(font.font)) {
+    result.underlinePosition = -underline->position * emScale;
+    result.underlineWidth = underline->thickness * emScale;
+  }
+  if (const auto strike = engine.strikeoutMetrics(font.font)) {
+    result.strikePosition = -strike->position * emScale;
+    result.strikeWidth = strike->thickness * emScale;
+  }
+  result.automaticWidth =
+      result.underlineWidth > 0 ? result.underlineWidth : (result.ascent - result.descent) / 18.0;
+  return result;
+}
+
+bool DecorationGlyphVisible(const TextGlyph& glyph) {
+  return glyph.glyphIndex != 0 && glyph.xAdvance > 0;
+}
+
+bool ValidDecorationCoordinate(double value) {
+  return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max() / 4.0;
+}
+
+bool AppendDecorationRect(PathBuilder& builder, double left, double top, double right,
+                          double bottom) {
+  const std::array<double, 4> values = {left, top, right, bottom};
+  if (!(right > left && bottom > top) ||
+      !std::all_of(values.begin(), values.end(), ValidDecorationCoordinate)) {
+    return false;
+  }
+  builder.moveTo({left, top})
+      .lineTo({right, top})
+      .lineTo({right, bottom})
+      .lineTo({left, bottom})
+      .closePath();
+  return true;
+}
+
+double DecorationEnd(const TextRun& run, std::size_t index) {
+  const auto& glyph = run.glyphs[index];
+  const auto next =
+      std::find_if(run.glyphs.begin() + index + 1, run.glyphs.end(), DecorationGlyphVisible);
+  return next == run.glyphs.end() ? glyph.xPosition + glyph.xAdvance
+                                  : std::min(glyph.xPosition + glyph.xAdvance, next->xPosition);
+}
+
+double DecorationOffset(TextDecoration line, const DecorationMetrics& metrics) {
+  if (line == TextDecoration::Underline) {
+    return metrics.underlinePosition != 0 ? metrics.underlinePosition : -metrics.descent * 0.4;
+  }
+  if (line == TextDecoration::Overline) {
+    return -metrics.ascent;
+  }
+  return metrics.strikePosition != 0 ? metrics.strikePosition : -metrics.ascent * 0.35;
+}
+
+double MultipleDecorationAdjustment(TextDecoration line, TextDecoration lines,
+                                    std::size_t originCount, double width) {
+  const int count = static_cast<int>(hasFlag(lines, TextDecoration::Underline)) +
+                    static_cast<int>(hasFlag(lines, TextDecoration::Overline)) +
+                    static_cast<int>(hasFlag(lines, TextDecoration::LineThrough));
+  if (originCount != 1 || count <= 1) {
+    return 0;
+  }
+  return line == TextDecoration::Overline      ? width * 1.5
+         : line == TextDecoration::LineThrough ? -width
+                                               : 0;
+}
+struct DecorationBand {
+  TextDecoration line;
+  TextDecoration lines;
+  TextDecorationThickness thickness;
+  std::size_t originCount;
+  double automatic;
+  double underline;
+  double offset;
+};
+
+std::pair<double, double> ResolveDecorationBand(const DecorationBand& band,
+                                                const Transform2d& deviceFromSegment) {
+  const double baselineLength = std::hypot(deviceFromSegment.data[0], deviceFromSegment.data[1]);
+  double scale = 0;
+  if (baselineLength > 0 && std::isfinite(baselineLength)) {
+    // Only the normal's perpendicular component separates the transformed parallel edges.
+    scale = std::abs((deviceFromSegment.data[0] / baselineLength) * deviceFromSegment.data[3] -
+                     (deviceFromSegment.data[1] / baselineLength) * deviceFromSegment.data[2]);
+  }
+  const double width =
+      ResolveDecorationThickness(band.thickness, band.automatic, band.underline, scale);
+  return {band.offset - width / 2 +
+              MultipleDecorationAdjustment(band.line, band.lines, band.originCount, width),
+          width};
+}
+
+void EmitRotatedDecoration(const TextRun& run, const DecorationBand& band,
+                           const Transform2d& deviceFromLocal,
+                           const std::function<void(const Path&)>& emit) {
+  for (std::size_t index = 0; index < run.glyphs.size(); ++index) {
+    const auto& glyph = run.glyphs[index];
+    if (!DecorationGlyphVisible(glyph)) {
+      continue;
+    }
+    Transform2d localFromSegment = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+    if (glyph.rotateDegrees != 0) {
+      localFromSegment =
+          Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+          localFromSegment;
+    }
+    const auto [top, width] = ResolveDecorationBand(band, localFromSegment * deviceFromLocal);
+    PathBuilder builder(4);
+    if (!AppendDecorationRect(builder, 0, top, DecorationEnd(run, index) - glyph.xPosition,
+                              top + width)) {
+      continue;
+    }
+    const Path path = builder.build().transformed(localFromSegment);
+    if (std::all_of(path.points().begin(), path.points().end(), [](const Vector2d& point) {
+          return ValidDecorationCoordinate(point.x) && ValidDecorationCoordinate(point.y);
+        })) {
+      emit(path);
+    }
+  }
+}
+
+void EmitStraightDecoration(const TextRun& run, double top, double width,
+                            const std::function<void(const Path&)>& emit) {
+  const auto first = std::find_if(run.glyphs.begin(), run.glyphs.end(), DecorationGlyphVisible);
+  const auto last = std::find_if(run.glyphs.rbegin(), run.glyphs.rend(), DecorationGlyphVisible);
+  if (first == run.glyphs.end() || last == run.glyphs.rend()) {
+    return;
+  }
+  const bool sameBaseline =
+      std::all_of(run.glyphs.begin(), run.glyphs.end(), [&](const auto& glyph) {
+        return !DecorationGlyphVisible(glyph) ||
+               std::abs(glyph.yPosition - first->yPosition) < 1e-6;
+      });
+  PathBuilder builder(run.glyphs.size() * 4);
+  if (sameBaseline) {
+    (void)AppendDecorationRect(builder, first->xPosition, first->yPosition + top,
+                               last->xPosition + last->xAdvance, first->yPosition + top + width);
+  } else {
+    for (std::size_t index = 0; index < run.glyphs.size(); ++index) {
+      const auto& glyph = run.glyphs[index];
+      if (DecorationGlyphVisible(glyph)) {
+        (void)AppendDecorationRect(builder, glyph.xPosition, glyph.yPosition + top,
+                                   DecorationEnd(run, index), glyph.yPosition + top + width);
+      }
+    }
+  }
+  if (!builder.empty()) {
+    emit(builder.build());
+  }
+}
+
+}  // namespace
+
+void EmitTextDecorationPaths(const TextRun& run, const components::TextDecorationOrigin& origin,
+                             std::size_t originCount, float fontSize, const TextEngine& engine,
+                             const Transform2d& deviceFromLocal, std::size_t& remainingWork,
+                             const std::function<void(const Path&)>& emit) {
+  if (run.glyphs.size() > remainingWork / 12) {
+    remainingWork = 0;
+    return;
+  }
+  remainingWork -= run.glyphs.size() * 12;
+  const DecorationMetrics metrics = GetDecorationMetrics(run, origin, fontSize, engine);
+  const bool rotated = std::any_of(run.glyphs.begin(), run.glyphs.end(),
+                                   [](const auto& glyph) { return glyph.rotateDegrees != 0; });
+  for (const auto line :
+       {TextDecoration::Underline, TextDecoration::Overline, TextDecoration::LineThrough}) {
+    if (!hasFlag(origin.lines, line)) {
+      continue;
+    }
+    const double automatic = line == TextDecoration::LineThrough && metrics.strikeWidth > 0
+                                 ? metrics.strikeWidth
+                                 : metrics.automaticWidth;
+    const DecorationBand band{line,
+                              origin.lines,
+                              origin.thickness,
+                              originCount,
+                              automatic,
+                              metrics.underlineWidth,
+                              DecorationOffset(line, metrics)};
+    if (rotated) {
+      EmitRotatedDecoration(run, band, deviceFromLocal, emit);
+    } else {
+      const auto [top, width] = ResolveDecorationBand(band, deviceFromLocal);
+      EmitStraightDecoration(run, top, width, emit);
+    }
+  }
 }
 
 }  // namespace donner::svg

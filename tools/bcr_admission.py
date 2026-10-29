@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Mapping
 import importlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+from urllib.parse import quote
 
 from tools import bcr_source
+from tools.ci import github_rate_limit
 
 
 def validate(upstream: Path, registry: Path, artifacts: Path, commit: str, report: Path) -> int:
@@ -37,8 +41,42 @@ def validate(upstream: Path, registry: Path, artifacts: Path, commit: str, repor
         sys.path.remove(str(tools))
 
 
+def prime_maintainer_ids(validation, registry: Path, environ: Mapping[str, str] = os.environ,
+                         client=None, retry: Callable = github_rate_limit.retry_rate_limited) -> None:
+    """Looks up each maintainer's GitHub user ID for the validator, waiting out the rate limit.
+
+    The validator compares every maintainer's `github_user_id` with GitHub's user lookup for
+    that login and reports a refused lookup as a bad username. The workflow token shares the
+    repository's hourly budget with every other workflow, so the same lookups are made here
+    first, with github_rate_limit's bounded wait, and stored in the validator's own cache; its
+    comparison is unchanged. A lookup that fails for another reason is left to the validator,
+    which reports it as before. An exhausted cap fails the step (RateLimitExhausted).
+    """
+    cache = getattr(validation, "GITHUB_USER_ID_CACHE", None)
+    if not isinstance(cache, dict):
+        print("The BCR validator has no GitHub user ID cache; it performs its own lookups.")
+        return
+    metadata = json.loads((registry / "modules/donner/metadata.json").read_text())
+    api = environ.get("GITHUB_API_URL") or "https://api.github.com"
+    client = client or github_rate_limit.ApiClient(environ.get("GITHUB_TOKEN", ""))
+    for maintainer in metadata.get("maintainers", []):
+        login = maintainer.get("github")
+        if not isinstance(login, str) or not login or login in cache:
+            continue
+        url = "/".join((api, "users", quote(login, safe="")))
+        try:
+            user = retry(lambda: client.get_json(url), label=f"BCR maintainer lookup ({login})")
+        except github_rate_limit.ApiError as error:
+            print(f"Maintainer lookup for {login} failed ({error}); the validator repeats it.")
+            continue
+        if isinstance(user, dict) and isinstance(user.get("id"), int):
+            cache[login] = user["id"]
+
+
 def run_validator(validation, registry_api, upstream: Path, registry: Path, archive: Path,
-                  version: str, source_url: str, report: Path) -> int:
+                  version: str, source_url: str, report: Path,
+                  prime: Callable = prime_maintainer_ids) -> int:
+    prime(validation, registry)
     original_download = validation.download
     original_download_file = validation.download_file
 

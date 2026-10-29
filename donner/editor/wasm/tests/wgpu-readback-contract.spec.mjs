@@ -834,6 +834,32 @@ test("ordinary and deferred observations both publish retired document frames", 
     "a completed-frame obligation arms the existing pulse after its fence is queued");
 });
 
+test("an overdue browser UI frame defers presentation instead of declaring loss", () => {
+  const ordinary = source.match(
+    /bool EditorWindow::observePresentationCompletion\(\) \{[\s\S]*?\n\}/,
+  )?.[0];
+  assert.ok(ordinary, "the ordinary completion path exists");
+  const timedOut = ordinary.match(
+    /if \(admission == internal::PresentationSubmissionQueue::Admission::TimedOut\) \{\n#ifdef __EMSCRIPTEN__\n([\s\S]*?)#else\n([\s\S]*?)#endif\n\s*return false;/,
+  );
+  assert.ok(timedOut, "the timed-out admission splits browser and native handling");
+  const [, browser, native] = timedOut;
+  assert.doesNotMatch(browser, /declarePresentationTimeoutLoss|markDeviceLost/,
+    "a browser stall must not declare a loss that nothing can recover");
+  assert.match(browser, /deferOverduePresentation\(\);/,
+    "the browser keeps the overdue frame deferred");
+  const defer = source.match(
+    /void EditorWindow::deferOverduePresentation\(\) \{[\s\S]*?\n\}/,
+  )?.[0];
+  assert.ok(defer, "the browser deferral exists");
+  assert.doesNotMatch(defer, /declarePresentationTimeoutLoss|markDeviceLost/,
+    "the deferral cannot declare a loss either");
+  assert.match(defer, /presentationOverdueSerial_ = presentationSubmissions_\.oldestSerial\(\);/,
+    "the browser records the overdue submission so later polls skip the blocking recheck");
+  assert.match(native, /declarePresentationTimeoutLoss\(device, presentationTimeoutAge_\);/,
+    "native backends still declare a stalled device lost");
+});
+
 test("the presentation timeline rides the queue-stats proxy call and stays bounded", () => {
   const observe = source.match(
     /bool EditorWindow::observePresentationCompletion\(\) \{[\s\S]*?\n\}/,
