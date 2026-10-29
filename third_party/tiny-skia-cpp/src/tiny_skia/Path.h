@@ -100,8 +100,7 @@ class Path {
   /// Returns true if the path is convex. Checks the control polygon: all cross products of
   /// consecutive edge vectors must have the same sign, AND no edges self-intersect.
   [[nodiscard]] bool isConvex() const {
-    const auto n = controlPolygonSize();
-    if (n < 3) return false;
+    if (points_.size() < 3) return false;
 
     // Must be a single closed contour.
     int moveCount = 0;
@@ -112,12 +111,16 @@ class Path {
     }
     if (moveCount != 1 || !hasClosed) return false;
 
+    const std::vector<Point> polygon = controlPolygon();
+    const auto n = polygon.size();
+    if (n < 3) return false;
+
     // Check cross products of consecutive direction vectors on the control polygon.
     int sign = 0;  // 0 = unknown, 1 = positive, -1 = negative
     for (std::size_t i = 0; i < n; i++) {
-      const auto& p0 = points_[i];
-      const auto& p1 = points_[(i + 1) % n];
-      const auto& p2 = points_[(i + 2) % n];
+      const auto& p0 = polygon[i];
+      const auto& p1 = polygon[(i + 1) % n];
+      const auto& p2 = polygon[(i + 2) % n];
 
       float dx1 = p1.x - p0.x;
       float dy1 = p1.y - p0.y;
@@ -146,12 +149,12 @@ class Path {
              p.y <= std::max(start.y, end.y);
     };
     for (std::size_t i = 0; i < n; i++) {
-      const auto& a = points_[i];
-      const auto& b = points_[(i + 1) % n];
+      const auto& a = polygon[i];
+      const auto& b = polygon[(i + 1) % n];
       for (std::size_t j = i + 2; j < n; j++) {
         if (i == 0 && j == n - 1) continue;  // Adjacent via wrap-around.
-        const auto& c = points_[j];
-        const auto& d = points_[(j + 1) % n];
+        const auto& c = polygon[j];
+        const auto& d = polygon[(j + 1) % n];
         // Check proper intersection using orientation tests.
         float d1 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
         float d2 = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x);
@@ -199,14 +202,22 @@ class Path {
   [[nodiscard]] std::optional<Path> dash(const StrokeDash& dash, float resScale) const;
 
  private:
-  [[nodiscard]] std::size_t controlPolygonSize() const {
-    auto count = points_.size();
-    // An explicit closing endpoint is adjacent to the first edge, not a self-touch.
-    // Keep interior repeats so winding multiplicity still rejects the convex fast path.
-    if (count > 1 && points_[count - 1].x == points_[0].x && points_[count - 1].y == points_[0].y) {
-      --count;
+  [[nodiscard]] std::vector<Point> controlPolygon() const {
+    // A zero-length control edge, such as a curve control point on its own endpoint or an
+    // explicit closing endpoint, adds no winding. Drop consecutive repeats only; a later
+    // revisit of an earlier point still rejects the convex fast path.
+    std::vector<Point> polygon;
+    polygon.reserve(points_.size());
+    for (const Point& point : points_) {
+      if (polygon.empty() || point.x != polygon.back().x || point.y != polygon.back().y) {
+        polygon.push_back(point);
+      }
     }
-    return count;
+    while (polygon.size() > 1 && polygon.back().x == polygon.front().x &&
+           polygon.back().y == polygon.front().y) {
+      polygon.pop_back();
+    }
+    return polygon;
   }
 
   void recomputeBounds() {
