@@ -91,6 +91,22 @@ TEST(GeodeGlyphCacheTest, CubicApproximationToleranceSeparatesCachedGeometry) {
   EXPECT_THAT(cache.find(refined)->encoded.curves.size(), testing::Eq(4u));
 }
 
+TEST(GeodeGlyphCacheTest, SyntheticObliquePermissionSeparatesCachedOutlines) {
+  GeodeGlyphCache cache(/*deviceId=*/1u);
+  const GlyphGeometryKey automatic = MakeKey(42);
+  GlyphGeometryKey disabled = automatic;
+  disabled.allowSyntheticOblique = false;
+  auto* automaticEntry = InsertUsed(cache, automatic, 2u, 1u);
+  ASSERT_THAT(automaticEntry, testing::NotNull());
+  EXPECT_THAT(cache.find(disabled), testing::IsNull());
+  auto* disabledEntry = InsertUsed(cache, disabled, 3u, 1u);
+  ASSERT_THAT(disabledEntry, testing::NotNull());
+  EXPECT_THAT(disabledEntry, testing::Ne(automaticEntry));
+  EXPECT_THAT(cache.find(automatic), testing::Eq(automaticEntry));
+  EXPECT_THAT(cache.find(disabled), testing::Eq(disabledEntry));
+  EXPECT_THAT(cache.size(), testing::Eq(2u));
+}
+
 TEST(GeodeGlyphCacheTest, RepeatedLookupOfOneIdentityReusesTheSameEntry) {
   GeodeGlyphCache cache(/*deviceId=*/1u);
   const GlyphGeometryKey key = MakeKey(/*glyphIndex=*/42);

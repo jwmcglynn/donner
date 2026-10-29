@@ -53,6 +53,32 @@ TEST(FontCatalogVariableAxesTest, InterWeightAndItalicChangeGlyphOutlines) {
               ::testing::Not(::testing::ElementsAreArray(boldOutline.points())));
 }
 
+TEST(FontCatalogVariableAxesTest, SynthesisPermissionPreservesWeightAxisAndSuppressesOnlyStyle) {
+  FontCatalog catalog;
+  Registry registry;
+  FontManager manager(registry);
+  manager.setFontProvider(&catalog);
+  TextBackendFull backend(manager, registry);
+  const FontHandle regular = manager.findFont("Inter", 400);
+  const FontHandle bold = manager.findFont("Inter", 700);
+  const FontHandle boldItalic =
+      manager.findFont("Inter", 700, static_cast<int>(FontStyle::Italic), 5);
+  ASSERT_THAT(manager.sfntTable(boldItalic, "fvar"), testing::Optional(testing::_));
+  const auto shaped =
+      backend.shapeRun(boldItalic, 64.0f, "A", 0, 1, false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, testing::SizeIs(1));
+  const float scale = backend.scaleForEmToPixels(boldItalic, 64.0f);
+  const Path automatic = backend.glyphOutline(boldItalic, shaped.glyphs.front().glyphIndex, scale);
+  const Path disabled =
+      backend.glyphOutline(boldItalic, shaped.glyphs.front().glyphIndex, scale, false);
+  const Path normal = OutlineFor(backend, regular);
+  const Path realBold = OutlineFor(backend, bold);
+  ASSERT_THAT(automatic.points(), testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(realBold.points(), testing::Not(testing::ElementsAreArray(normal.points())));
+  EXPECT_THAT(automatic.points(), testing::Not(testing::ElementsAreArray(realBold.points())));
+  EXPECT_THAT(disabled.points(), testing::ElementsAreArray(realBold.points()));
+}
+
 TEST(FontCatalogVariableAxesTest, StaticCatalogFaceSynthesizesMissingBoldAndItalic) {
   FontCatalog catalog;
   Registry registry;

@@ -7556,6 +7556,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       key.stretchScaleY = glyph.stretchScaleY;
       key.rotateDegrees = glyph.rotateDegrees;
       key.fillTolerance = geode::FillCubicToleranceFor(impl_->deviceFromLocalTransform);
+      key.allowSyntheticOblique = glyph.allowSyntheticOblique;
 
       geode::GeodeGlyphResidentEntry* entry = impl_->residentGlyphEntry(
           registry, fontManager, face.font, glyph.glyphIndex, key, [&]() -> Path {

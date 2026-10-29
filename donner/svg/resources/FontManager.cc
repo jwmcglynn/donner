@@ -903,13 +903,30 @@ FontHandle FontManager::findProviderFont(std::string_view family,
 }
 
 FontHandle FontManager::loadFontData(std::span<const uint8_t> data, FontDataTrust trust) {
+  return loadFontData(data, trust, {});
+}
+
+FontHandle FontManager::loadFontData(std::span<const uint8_t> data, FontDataTrust trust,
+                                     const FontDataRenderingOptions& rendering) {
   const Entity entity = registry_.create();
   if (!loadFontDataIntoEntity(entity, data, trust)) {
     registry_.destroy(entity);
     return FontHandle();
   }
 
+  auto& font = registry_.get<LoadedFontComponent>(entity);
+  font.providerRequest = rendering.providerRequest;
+  font.genericSans = rendering.genericSans;
+  font.immutableCatalog = rendering.immutableCatalog;
   return FontHandle(entity);
+}
+
+FontLoadingDomainIdentity FontManager::fontDomainIdentity() const {
+  const Registry& registry = registry_;
+  const auto* context = registry.ctx().find<FontBudgetContext>();
+  return context ? FontLoadingDomainIdentity{context->state,
+                                             sizeof(FontBudgetState) + 4 * sizeof(void*)}
+                 : FontLoadingDomainIdentity{};
 }
 
 bool FontManager::loadFontDataSharedIntoEntity(

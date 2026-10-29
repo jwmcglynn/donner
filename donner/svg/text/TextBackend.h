@@ -87,6 +87,18 @@ public:
   /// scaled by \p scale, with Y flipped for SVG's y-down convention.
   virtual Path glyphOutline(FontHandle font, int glyphIndex, float scale) const = 0;
 
+  /// Extract an outline with per-glyph synthetic-oblique permission.
+  /// @param font Face whose glyph is extracted.
+  /// @param glyphIndex Glyph index in the face.
+  /// @param scale Font-unit to pixel scale.
+  /// @param allowSyntheticOblique Whether a synthesized oblique transform may be applied.
+  /// @return The glyph outline; native styles and variable axes are always preserved.
+  virtual Path glyphOutline(FontHandle font, int glyphIndex, float scale,
+                            bool allowSyntheticOblique) const {
+    (void)allowSyntheticOblique;
+    return glyphOutline(font, glyphIndex, scale);
+  }
+
   /// Returns true if the font is bitmap-only (no vector outlines).
   virtual bool isBitmapOnly(FontHandle font) const = 0;
 

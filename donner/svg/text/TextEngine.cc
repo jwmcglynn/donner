@@ -870,6 +870,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.get().value());
     span.fontVariant = style->properties->fontVariant.get().value();
     span.fontSynthesisSmallCaps = style->properties->fontSynthesisSmallCaps.get().value();
+    span.fontSynthesisStyle = style->properties->fontSynthesisStyle.get().value();
     span.fontKerning = style->properties->fontKerning.get().value();
     span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
     span.fontSize = style->properties->fontSize.get().value();
@@ -4749,9 +4750,19 @@ std::vector<TextRun> TextEngine::layoutWithResourceStatus(
     bool& resourceRejected) {
   ++layoutCallCount_;
   resourceRejected = false;
-  return TextLayoutInvocation(registry_, fontManager_, *backend_, text, params, &resourceRejected,
-                              &fallbackCoverageEntries_)
-      .run();
+  auto runs = TextLayoutInvocation(registry_, fontManager_, *backend_, text, params,
+                                   &resourceRejected, &fallbackCoverageEntries_)
+                  .run();
+  for (size_t index = 0; index < runs.size() && index < text.spans.size(); ++index) {
+    const auto& span = text.spans[index];
+    const bool allow = span.fontSynthesisStyle == FontSynthesisStyle::Auto ||
+                       (span.fontSynthesisStyle == FontSynthesisStyle::ObliqueOnly &&
+                        span.fontStyle == FontStyle::Oblique);
+    for (TextGlyph& glyph : runs[index].glyphs) {
+      glyph.allowSyntheticOblique = allow;
+    }
+  }
+  return runs;
 }
 
 FontVMetrics TextEngine::fontVMetrics(FontHandle font) const {
@@ -4780,6 +4791,11 @@ std::optional<SubSuperMetrics> TextEngine::subSuperMetrics(FontHandle font) cons
 
 Path TextEngine::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
   return backend_->glyphOutline(font, glyphIndex, scale);
+}
+
+Path TextEngine::glyphOutline(FontHandle font, int glyphIndex, float scale,
+                              bool allowSyntheticOblique) const {
+  return backend_->glyphOutline(font, glyphIndex, scale, allowSyntheticOblique);
 }
 
 bool TextEngine::isBitmapOnly(FontHandle font) const {
@@ -4935,7 +4951,8 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
       ReserveStretchedCacheOutline(registry, fontManager, textRootEntity, font, glyph.glyphIndex,
                                    stretchedCacheReservation);
   Path glyphPath = outlineAdmitted
-                       ? engine.glyphOutline(font, glyph.glyphIndex, emScale * glyph.fontSizeScale)
+                       ? engine.glyphOutline(font, glyph.glyphIndex, emScale * glyph.fontSizeScale,
+                                             glyph.allowSyntheticOblique)
                        : Path();
   if (!glyphPath.empty()) {
     Path transformed = PlaceCachedGlyphOutline(std::move(glyphPath), run, glyph);
@@ -5152,7 +5169,7 @@ bool AppendReferenceOutline(const TextEngine& engine, FontManager& manager, cons
     return false;
   }
   const float scale = engine.scaleForEmToPixels(font, run.usedFontSizePx) * glyph.fontSizeScale;
-  Path raw = engine.glyphOutline(font, glyph.glyphIndex, scale);
+  Path raw = engine.glyphOutline(font, glyph.glyphIndex, scale, glyph.allowSyntheticOblique);
   if (raw.empty()) {
     return true;
   }

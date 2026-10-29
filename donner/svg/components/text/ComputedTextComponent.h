@@ -20,6 +20,7 @@
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontSynthesisSmallCaps.h"
+#include "donner/svg/core/FontSynthesisStyle.h"
 #include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/PaintOrder.h"
@@ -345,6 +346,8 @@ struct ComputedTextComponent {
     /// True when a \ref xml_textPath element's href could not be resolved. Per SVG spec,
     /// a textPath with an invalid or missing href does not render.
     bool textPathFailed = false;
+    /// Resolved permission to synthesize an oblique face for this span.
+    FontSynthesisStyle fontSynthesisStyle = FontSynthesisStyle::Auto;
   };
 
   // Computed spans with positioning data for rendering.

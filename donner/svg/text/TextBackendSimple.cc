@@ -257,6 +257,11 @@ std::optional<SubSuperMetrics> TextBackendSimple::subSuperMetrics(FontHandle fon
 }
 
 Path TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
+  return glyphOutline(font, glyphIndex, scale, true);
+}
+
+Path TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scale,
+                                     bool allowSyntheticOblique) const {
   const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return {};
@@ -278,7 +283,8 @@ Path TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scal
   Path outline = OutlineFromStbVertices(vertices, numVertices, scale);
   stbtt_FreeShape(info, vertices);
   const auto* cached = registry_.try_get<StbFontComponent>(font.entity());
-  if (cached != nullptr && NeedsSyntheticOblique(fontManager_, *cached, font)) {
+  if (allowSyntheticOblique && cached != nullptr &&
+      NeedsSyntheticOblique(fontManager_, *cached, font)) {
     outline = SyntheticOblique(outline);
   }
   return outline;

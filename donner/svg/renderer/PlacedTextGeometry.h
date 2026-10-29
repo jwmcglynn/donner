@@ -107,7 +107,8 @@ Transform2d GlyphPlacementTransform(const TextGlyph& glyph);
  *
  * Encodes tiny-skia's placement inputs, split at the point where the
  * glyph-identity-dependent work ends:
- *   1. `glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale)`,
+ *   1. `glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale,
+ *      glyph.allowSyntheticOblique)`,
  *   2. stretch the **raw outline** by `Scale(stretchScaleX, stretchScaleY)`
  *      (only when either differs from 1),
  *   3. rotate by `rotateDegrees` about the glyph's own origin -- these three
@@ -115,7 +116,7 @@ Transform2d GlyphPlacementTransform(const TextGlyph& glyph);
  *   4. `Translate(xPosition, yPosition)` -- this is `glyphFromLocal`.
  *
  * Steps 1 to 3 depend only on (font, glyph index, `scale * fontSizeScale`,
- * stretch, rotation); step 4 depends only on the glyph's position.
+ * stretch, rotation, synthesis permission); step 4 depends only on the glyph's position.
  *
  * @param textEngine Engine providing glyph outlines.
  * @param font Font handle for the run.

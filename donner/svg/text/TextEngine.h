@@ -119,6 +119,13 @@ public:
   std::optional<SubSuperMetrics> subSuperMetrics(FontHandle font) const;
   /// Return the vector outline for \p glyphIndex in \p font at the given \p scale.
   Path glyphOutline(FontHandle font, int glyphIndex, float scale) const;
+  /// Extract an outline without changing the shared face's synthesis configuration.
+  /// @param font Face whose glyph is extracted.
+  /// @param glyphIndex Glyph index in the face.
+  /// @param scale Font-unit to pixel scale.
+  /// @param allowSyntheticOblique Per-glyph permission to synthesize an oblique outline.
+  /// @return The glyph outline, preserving native style and variation axes.
+  Path glyphOutline(FontHandle font, int glyphIndex, float scale, bool allowSyntheticOblique) const;
   /// Return true if \p font only contains bitmap glyphs (e.g. color emoji).
   bool isBitmapOnly(FontHandle font) const;
   /// Return a rasterized bitmap glyph for \p glyphIndex in \p font at the given \p scale.

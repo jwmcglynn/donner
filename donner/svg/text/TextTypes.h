@@ -96,6 +96,8 @@ struct TextGlyph {
   /// Face for a cluster that the run's face cannot render; null when \ref TextRun::font renders
   /// it. Use \ref GlyphFont to resolve the face that draws the glyph.
   FontHandle font;
+  /// Immutable outline policy resolved from the source span and its requested font style.
+  bool allowSyntheticOblique = true;
 };
 
 /**
