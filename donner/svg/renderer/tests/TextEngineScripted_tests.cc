@@ -3676,7 +3676,7 @@ public:
     ShapedRun run =
         ScriptedTextBackend::shapeRun(font, size, text, offset, length, vertical, variant, logical);
     for (auto& glyph : run.glyphs) {
-      const uint32_t cp = Utf8::NextCodepointLenient(text.substr(glyph.cluster)).first;
+      const uint32_t cp = std::get<0>(Utf8::NextCodepointLenient(text.substr(glyph.cluster)));
       glyph.xKern = glyph.yKern = 0;
       glyph.xOffset = glyph.yOffset = 0;
       if (cp == 0x0301 || cp == 0x3099 || cp == 0x309a) {
