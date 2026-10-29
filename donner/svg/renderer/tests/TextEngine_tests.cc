@@ -41,6 +41,7 @@ using ::testing::DoubleEq;
 using ::testing::DoubleNear;
 using ::testing::Each;
 using ::testing::ElementsAre;
+using ::testing::Eq;
 using ::testing::Field;
 using ::testing::FloatEq;
 using ::testing::Gt;
