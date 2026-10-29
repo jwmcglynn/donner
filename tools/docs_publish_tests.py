@@ -203,6 +203,18 @@ class DocsPublishTest(unittest.TestCase):
         self.assertEqual(result["status"], "recovery-required")
         deploy.assert_not_called()
 
+    def test_reused_sha_status_cannot_authorize_recovery_of_an_inflight_candidate(self):
+        self.api.call.return_value = {"status": "succeed"}
+        with mock.patch.object(publish, "_live_identity", return_value=False), \
+             mock.patch.object(publish, "live_marker", return_value={"manifest_sha256": "a" * 64}), \
+             mock.patch.object(publish, "_wait_for_live"), \
+             mock.patch.object(publish, "deploy") as deploy:
+            result = publish._recover(self.record, self.prior, 7, self.api, "unhealthy candidate",
+                                      "e" * 40, self.record["workflow_commit"])
+        self.assertEqual(result["status"], "recovery-required")
+        self.assertIn("not bound to the current artifact request", result["recovery_error"])
+        deploy.assert_not_called()
+
     def test_subprocess_timeout_cannot_escape_recovery_receipt(self):
         import subprocess
         self.api.call.side_effect = subprocess.TimeoutExpired("gh", 180)
