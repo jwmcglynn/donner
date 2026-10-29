@@ -266,6 +266,7 @@ bool isNonSpacing(uint32_t cp) {
       (cp >= 0x1AB0 && cp <= 0x1AFF) ||  // Combining Diacritical Marks Extended
       (cp >= 0x1DC0 && cp <= 0x1DFF) ||  // Combining Diacritical Marks Supplement
       (cp >= 0x20D0 && cp <= 0x20FF) ||  // Combining Diacritical Marks for Symbols
+      (cp >= 0x3099 && cp <= 0x309A) ||  // Kana combining voicing marks
       (cp >= 0xFE20 && cp <= 0xFE2F)) {  // Combining Half Marks
     return true;
   }
