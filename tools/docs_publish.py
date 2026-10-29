@@ -27,16 +27,17 @@ SITE_URL = "https://jwmcglynn.github.io/donner/"
 def _gh(argv: list[str], stream=None, **kwargs) -> subprocess.CompletedProcess:
     """Runs `gh`, repeating a rate-limited request after the reset (bounded, then fails).
 
-    `stream` is an output file that is rewound before each attempt.
+    `stream` is the command's stdout; a file object is rewound before each attempt, while a
+    descriptor such as `subprocess.DEVNULL` is passed through unchanged.
     """
     def restart() -> None:
-        if stream is not None:
+        if hasattr(stream, "seek"):
             stream.seek(0)
             stream.truncate()
     try:
         return github_rate_limit.run_gh(argv, runner=subprocess.run, prepare=restart,
                                         echo_stderr=False, label="docs " + " ".join(argv[1:3]),
-                                        timeout=180, **({"stdout": stream} if stream else {}),
+                                        timeout=180, **({"stdout": stream} if stream is not None else {}),
                                         **kwargs)
     except github_rate_limit.RateLimitExhausted as error:
         raise ValueError(str(error)) from None
