@@ -1711,15 +1711,12 @@ INSTANTIATE_TEST_SUITE_P(
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                     {"arabic.svg",
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
-                    // resvg v0.49.0's zero.png is not a replacement: its glyphs sit about 17.3
-                    // units right (1834 differing pixels).
                     {"zero.svg",
                      Params().withMaxPixelsDifferent(410).withReason(
-                         "Reference rasterizer generation: the glyph layout matches; this PNG "
-                         "draws the x=100 crosshair at alpha 128/192, as 4x4 supersampled "
-                         "coverage does, where Donner's analytic coverage draws 160/160; "
-                         "analytic residual 396 px, supersampled 0 px; a 1 px text shift reaches "
-                         "433")},
+                         "SVG2 anchors compressed pen extents after textLength adjustment; "
+                         "the reference is an independent resvg 0.49.0 render with the bundled "
+                         "Noto Sans face at the original 500x500 size. The existing rasterizer "
+                         "allowance is retained.")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

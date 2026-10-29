@@ -156,6 +156,7 @@ TEST(InlineSizeWrap, TrailingSpacesHangAndDoNotCountToWidth) {
 TEST(InlineSizeWrap, PerLineTextAnchorMiddle) {
   // Each wrapped line is independently centered about the block origin (x = 0).
   Synth s = makeSingleSpan("aaa bbbbb");  // "aaa"=30, "bbbbb"=50
+  s.text.spans[0].textAnchor = TextAnchor::Middle;
   const bool wrapped =
       applyInlineSizeWrap(s.runs, s.text, makeParams(35.0, TextAnchor::Middle), 35.0, 24.0);
   ASSERT_TRUE(wrapped);
@@ -171,6 +172,7 @@ TEST(InlineSizeWrap, PerLineTextAnchorMiddle) {
 TEST(InlineSizeWrap, PerLineTextAnchorEnd) {
   // End anchor: each line's right edge sits at the block origin (x = 0).
   Synth s = makeSingleSpan("aaa bbbbb");
+  s.text.spans[0].textAnchor = TextAnchor::End;
   const bool wrapped =
       applyInlineSizeWrap(s.runs, s.text, makeParams(35.0, TextAnchor::End), 35.0, 24.0);
   ASSERT_TRUE(wrapped);

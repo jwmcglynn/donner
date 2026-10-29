@@ -2434,6 +2434,35 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.fontSizeAdjust);
                  }},  //
+                {"white-space",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& value) -> ParseResult<WhiteSpace> {
+                         const auto& components = value.components();
+                         if (components.size() == 1) {
+                           if (const auto* ident =
+                                   components.front().tryGetToken<css::Token::Ident>()) {
+                             constexpr std::pair<std::string_view, WhiteSpace> keywords[] = {
+                                 {"normal", WhiteSpace::Normal},
+                                 {"pre", WhiteSpace::Pre},
+                                 {"nowrap", WhiteSpace::Nowrap},
+                                 {"pre-wrap", WhiteSpace::PreWrap},
+                                 {"break-spaces", WhiteSpace::BreakSpaces},
+                                 {"pre-line", WhiteSpace::PreLine}};
+                             for (const auto& [keyword, mode] : keywords) {
+                               if (ident->value.equalsLowercase(keyword)) {
+                                 return mode;
+                               }
+                             }
+                           }
+                         }
+                         ParseDiagnostic error;
+                         error.reason = "Invalid white-space value";
+                         return error;
+                       },
+                       &registry.whiteSpace);
+                 }},
                 {"text-anchor",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(

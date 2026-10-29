@@ -14,6 +14,18 @@ The upstream `tools/` (the multi-backend `vdiff` runner), `check.py`, and
 `stats.py` are vendored alongside the data but are not wired into any Bazel
 target here — they are standalone scripts run directly.
 
+The zero-text-length reference was regenerated at its original 500x500 size with the
+resvg 0.49.0 release CLI and the bundled NotoSans-Regular.ttf. SVG2 applies anchoring
+from compressed pen extents after textLength adjustment, which moves this fixture's
+start-anchored glyphs by the final glyph advance (17.328 units). The SVG input is
+unchanged; the reference remains under the MIT notice in LICENSE-resvg-MIT.
+
+  resvg --skip-system-fonts --use-font-file fonts/NotoSans-Regular.ttf \
+    --width 500 --height 500 tests/text/textLength/zero.svg tests/text/textLength/zero.png
+
+  tests/text/textLength/zero.png
+  SHA256: 5d16080849d72f911878f6ba7f1a10674e427b1969b6a09317847c0ca7e963d0
+
 Refreshed references: these tests now live in the resvg repository
 (https://github.com/linebender/resvg, crates/resvg/tests/tests/). The snapshot
 above predates resvg placing sideways vertical glyphs on the central baseline

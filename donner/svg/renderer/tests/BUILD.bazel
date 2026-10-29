@@ -730,6 +730,7 @@ donner_cc_test(
     variants = ["text_full"],
     deps = [
         "//donner/base:base_test_utils",
+        "//donner/svg",
         "//donner/svg/text:text_backend_full",
         "//donner/svg/text:text_backend_simple",
         "//donner/svg/text:text_engine",
