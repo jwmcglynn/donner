@@ -83,7 +83,11 @@
     }
 
     download(source, name) {
-      const url = this.host.URL.createObjectURL(new Blob([source], { type: "image/svg+xml" }));
+      // The source is editable SVG, not sanitized browser content. Avoid declaring the
+      // temporary same-origin blob as active SVG if a browser ignores `download`.
+      const url = this.host.URL.createObjectURL(
+        new Blob([source], { type: "application/octet-stream" }),
+      );
       const link = this.host.document.createElement("a");
       link.href = url;
       link.download = name;

@@ -9,6 +9,7 @@ exports_files([
     "docs_lane.sh",
     "editor_wasm_lane.sh",
     "editor_wasm_stage.py",
+    "github_rate_limit.py",
     "test_with_exclusions.py",
 ])
 
@@ -267,6 +268,19 @@ py_test(
     ],
 )
 
+# Bounded waits for the shared GitHub API rate limit, used by CI steps that call the API.
+py_library(
+    name = "github_rate_limit",
+    srcs = ["github_rate_limit.py"],
+)
+
+py_test(
+    name = "github_rate_limit_tests",
+    size = "small",
+    srcs = ["github_rate_limit_tests.py"],
+    deps = [":github_rate_limit"],
+)
+
 # Run-admission decisions (duplicate push, docs-only pull request) for the workflows'
 # gatekeeper jobs.
 py_test(
@@ -275,6 +289,7 @@ py_test(
     srcs = ["gatekeeper_tests.py"],
     data = [
         "gatekeeper.py",
+        "github_rate_limit.py",
         "//:.github/actions/pr-trust/action.yml",
         "//:.github/workflows/main.yml",
     ],

@@ -606,6 +606,132 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(stdout.getvalue())["summary"]["total_cases"], 1)
 
+    def _head_to_head_fixture(self) -> dict[str, object]:
+        for filename in ("both.svg", "budget.svg", "golden.svg", "gated.svg", "unknown.svg",
+                         "skip.svg", "ub.svg", "neither.svg"):
+            self.fixture.add_case("painting/fill/" + filename)
+        self.fixture.add_case("painting/stroke/off.svg")
+        source = _registration(
+            "PaintingFill",
+            '"painting/fill", {'
+            '{"budget.svg", Params::WithThreshold(0.1f, 200, "edge coverage")},'
+            '{"golden.svg", Params::WithGoldenOverride("g.png", 0.1f, "own golden")},'
+            '{"gated.svg", Params().requireFeature(RendererBackendFeature::Text, "text")},'
+            '{"skip.svg", Params::Skip("Bug: pending fix")},'
+            '{"ub.svg", Params::UndefinedBehavior("UB: undefined")},'
+            '{"neither.svg", Params::Skip("Not impl: feature")}'
+            '}',
+        ) + textwrap.dedent(
+            """
+            // INSTANTIATE_TEST_SUITE_P(
+            //     PaintingStroke, ImageComparisonTestFixture,
+            //     Combine(ValuesIn(getTestsInCategory("painting/stroke")),
+            //             ValuesIn(ActiveComparisonModes())),
+            //     TestNameFromFilename);
+            """
+        )
+        return parity_report.build_report(source, self.fixture.tests_root)
+
+    def test_head_to_head_counts_passes_and_lists_both_differences(self) -> None:
+        report = self._head_to_head_fixture()
+        results = parity_report.parse_engine_results(textwrap.dedent(
+            """\
+            title,chrome,resvg
+            painting/fill/both.svg,2,1
+            painting/fill/budget.svg,1,2
+            painting/fill/golden.svg,1,1
+            painting/fill/gated.svg,1,1
+            painting/fill/unknown.svg,1,0
+            painting/fill/skip.svg,2,1
+            painting/fill/ub.svg,2,1
+            painting/fill/neither.svg,1,3
+            painting/stroke/off.svg,2,1
+            """
+        ))
+
+        head_to_head = parity_report.build_head_to_head(report, results)
+
+        # Budgets and golden overrides leave strict; a feature gate does not.
+        self.assertEqual(head_to_head["summary"], {
+            "both_pass": 3,
+            "donner_only": 2,
+            "donner_only_by_engine_result": {"failed": 1, "unknown": 1},
+            "donner_pass": 5,
+            "donner_strict_pass": 3,
+            "engine_pass": 6,
+            "gap": 3,
+            "gap_by_state": {"disabled": 1, "skip": 1, "undefined-behavior": 1},
+            "margin": -1,
+            "total_cases": 9,
+        })
+        self.assertEqual(head_to_head["donner_only"], [
+            {"engine_result": "failed", "path": "painting/fill/budget.svg"},
+            {"engine_result": "unknown", "path": "painting/fill/unknown.svg"},
+        ])
+        self.assertEqual(head_to_head["gap"], [
+            {"path": "painting/fill/skip.svg", "reason": "Bug: pending fix", "state": "skip"},
+            {"path": "painting/fill/ub.svg", "reason": "UB: undefined",
+             "state": "undefined-behavior"},
+            {"path": "painting/stroke/off.svg", "reason": None, "state": "disabled"},
+        ])
+
+    def test_head_to_head_fails_closed_when_results_and_corpus_disagree(self) -> None:
+        report = self._head_to_head_fixture()
+        results = {"painting/fill/both.svg": 1, "painting/fill/renamed.svg": 1}
+
+        with self.assertRaisesRegex(parity_report.ParityReportError,
+                                    r"8 cases without a result .*1 results without a case"):
+            parity_report.build_head_to_head(report, results)
+
+    def test_engine_results_reject_malformed_rows(self) -> None:
+        malformed = {
+            "no engine column": "title,chrome\npainting/fill/a.svg,1\n",
+            "no title column": "name,resvg\npainting/fill/a.svg,1\n",
+            "unknown code": "title,resvg\npainting/fill/a.svg,4\n",
+            "empty code": "title,resvg\npainting/fill/a.svg,\n",
+            "duplicate row": "title,resvg\npainting/fill/a.svg,1\npainting/fill/a.svg,2\n",
+            "non-SVG path": "title,resvg\npainting/fill/a.png,1\n",
+            "non-ASCII digit": "title,resvg\npainting/fill/a.svg,\u0661\n",
+            "superscript digit": "title,resvg\npainting/fill/a.svg,\u00b2\n",
+            "leading zero": "title,resvg\npainting/fill/a.svg,01\n",
+            "extra column": "title,resvg\npainting/fill/a.svg,1,9\n",
+            "unterminated quote": 'title,resvg\n"painting/fill/a.svg,1\n',
+            "oversized field": "title,resvg\n" + "x" * 200_000 + ".svg,1\n",
+            "no rows": "title,resvg\n",
+        }
+        for label, text in malformed.items():
+            with self.subTest(label), self.assertRaises(parity_report.ParityReportError):
+                parity_report.parse_engine_results(text)
+        with self.assertRaisesRegex(parity_report.ParityReportError, "malformed results.csv"):
+            parity_report.parse_engine_results(malformed["oversized field"])
+
+    def test_cli_head_to_head_reads_the_vendored_results(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        self.fixture.add_case("painting/fill/b.svg")
+        source_path = self.fixture.root / parity_report.REGISTRATION_SOURCE
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(
+            _registration("PaintingFill",
+                          '"painting/fill", {{"b.svg", Params::Skip("Bug: pending")}}'),
+            encoding="utf-8",
+        )
+        (self.fixture.root / parity_report.RESULTS_CSV).write_text(
+            "title,resvg\npainting/fill/a.svg,2\npainting/fill/b.svg,1\n", encoding="utf-8"
+        )
+        stdout = io.StringIO()
+
+        result = parity_report.main(
+            ["--repo-root", str(self.fixture.root), "--head-to-head"], stdout=stdout
+        )
+
+        self.assertEqual(result, 0)
+        head_to_head = json.loads(stdout.getvalue())
+        self.assertEqual(
+            (head_to_head["summary"]["donner_pass"], head_to_head["summary"]["engine_pass"]),
+            (1, 1),
+        )
+        self.assertEqual([row["path"] for row in head_to_head["gap"]], ["painting/fill/b.svg"])
+
 
 class RealTreeParityReportTests(unittest.TestCase):
     def test_current_corpus_is_fully_registered_and_consistently_reported(self) -> None:
@@ -661,6 +787,30 @@ class RealTreeParityReportTests(unittest.TestCase):
                              sum(flag in case["exception_types"] for case in cases), metric)
         self.assertEqual(summary["backend_disabled_cases"],
                          sum(bool(case["disabled_backends"]) for case in cases))
+
+    def test_live_head_to_head_partitions_both_engines_passes(self) -> None:
+        repo_root = parity_report._default_repo_root()
+        report = parity_report.generate_report(repo_root)
+
+        head_to_head = parity_report.generate_head_to_head(repo_root)
+
+        summary = head_to_head["summary"]
+        self.assertEqual(summary["total_cases"], report["summary"]["total_cases"])
+        self.assertEqual(summary["donner_pass"], report["summary"]["compare_cases"])
+        self.assertEqual(summary["both_pass"] + summary["donner_only"], summary["donner_pass"])
+        self.assertEqual(summary["both_pass"] + summary["gap"], summary["engine_pass"])
+        self.assertEqual(summary["margin"], summary["donner_pass"] - summary["engine_pass"])
+        self.assertEqual(sum(summary["gap_by_state"].values()), summary["gap"])
+        self.assertNotIn("passed", summary["donner_only_by_engine_result"])
+        self.assertNotIn("compare", summary["gap_by_state"])
+        # Known rows pin the column that is read: resvg failed the first and passed the second.
+        self.assertIn(
+            {"engine_result": "failed", "path": "filters/enable-background/accumulate.svg"},
+            head_to_head["donner_only"],
+        )
+        self.assertIn("filters/feGaussianBlur/huge-stdDeviation.svg",
+                      [row["path"] for row in head_to_head["gap"]])
+        self.assertGreater(summary["engine_pass"], 1000)
 
     def test_live_render_only_rows_use_a_named_bucket(self) -> None:
         report = parity_report.generate_report(parity_report._default_repo_root())

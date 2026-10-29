@@ -7371,6 +7371,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   // one consecutive range and a batch can cover the whole element.
   Impl::TextRecordCursor textRecords = impl_->beginTextRecords(registry, params.textRootEntity);
 
+  std::size_t decorationWorkRemaining = Path::kMaximumGeometryQueryWork;
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
     const auto& run = runs[runIndex];
     if (run.font == FontHandle()) {
@@ -7680,221 +7681,71 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     if (spanDecoration != TextDecoration::None && !run.glyphs.empty() &&
         runIndex < text.spans.size()) {
       const auto& span = text.spans[runIndex];
-
-      const ResolvedTextFont decorationFont =
-          span.decorationFont.value_or(ResolvedTextFont{run.font, spanFontSizePx});
-      const float decoScale =
-          textEngine.scaleForPixelHeight(decorationFont.font, decorationFont.usedSizePx);
-      const float decoEmScale =
-          textEngine.scaleForEmToPixels(decorationFont.font, decorationFont.usedSizePx);
-
-      const FontVMetrics vmetrics = textEngine.fontVMetrics(decorationFont.font);
-      const int ascent = vmetrics.ascent;
-      const int descent = vmetrics.descent;
-
-      double fontUnderlinePos = 0.0;
-      double fontUnderlineThick = 0.0;
-      if (auto ul = textEngine.underlineMetrics(decorationFont.font)) {
-        fontUnderlinePos = ul->position;
-        fontUnderlineThick = ul->thickness;
-      }
-      double fontStrikePos = 0.0;
-      double fontStrikeThick = 0.0;
-      if (auto strike = textEngine.strikeoutMetrics(decorationFont.font)) {
-        fontStrikePos = strike->position;
-        fontStrikeThick = strike->thickness;
-      }
-
-      const double thickness = fontUnderlineThick > 0.0
-                                   ? fontUnderlineThick * decoEmScale
-                                   : static_cast<double>(ascent - descent) * decoScale / 18.0;
-
-      // Decoration fill colour (solid): declaring element's decoration fill,
-      // falling back to the span fill. When the element uses a pattern fill and
-      // the decoration has no explicit solid fill of its own, the decoration
-      // inherits the pattern too (per CSS Text Decoration §3 + tiny-skia).
-      css::RGBA decoFill = spanFill;
-      bool decoUsesPattern = usePatternFill;
-      if (!std::holds_alternative<PaintServer::None>(span.resolvedDecorationFill)) {
-        if (auto c = impl_->resolveSolidPaint(span.resolvedDecorationFill,
-                                              span.decorationFillOpacity * span.opacity)) {
-          decoFill = *c;
-          decoUsesPattern = false;
-        }
-      }
-      // Decoration stroke (solid).
-      std::optional<css::RGBA> decoStrokeColor;
-      std::optional<StrokeStyle> decoStrokeStyle;
-      if (span.decorationStrokeWidth > 0.0 &&
-          !std::holds_alternative<PaintServer::None>(span.resolvedDecorationStroke)) {
-        if (auto c = impl_->resolveSolidPaint(span.resolvedDecorationStroke,
-                                              span.decorationStrokeOpacity * span.opacity)) {
-          if (c->a != 0) {
-            decoStrokeColor = c;
-            StrokeParams decoSp;
-            decoSp.strokeWidth = span.decorationStrokeWidth;
-            decoStrokeStyle = toStrokeStyle(decoSp);
+      components::TextDecorationOrigin fallback;
+      fallback.lines = spanDecoration;
+      const auto origins = span.decorations
+                               ? span.decorations->origins()
+                               : std::span<const components::TextDecorationOrigin>(&fallback, 1);
+      for (const auto& decoration : origins) {
+        css::RGBA decoFill = span.decorations ? css::RGBA(0, 0, 0, 0) : spanFill;
+        const bool decoUsesPattern =
+            impl_->patternFillPaint && ((!span.decorations && usePatternFill) ||
+                                        decoration.usesPreparedFill(impl_->paint.fill));
+        const double decoFillOpacity =
+            span.decorations ? decoration.fillOpacity * span.opacity : impl_->paint.fillOpacity;
+        if (!std::holds_alternative<PaintServer::None>(decoration.fill)) {
+          if (auto c = impl_->resolveSolidPaint(decoration.fill,
+                                                decoration.fillOpacity * span.opacity)) {
+            decoFill = *c;
           }
         }
-      }
-
-      const auto drawDecoPath = [&](const Path& path) {
-        if (path.empty()) {
-          return;
-        }
-        const geode::EncodedPath* encoded = impl_->encodeTransientGeometry(path, FillRule::NonZero);
-        if (decoUsesPattern) {
-          impl_->syncTransform();
-          impl_->encoder->fillPathPattern(
-              path, FillRule::NonZero,
-              impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity),
-              encoded);
-        } else if (decoFill.a != 0) {
-          impl_->encoder->fillPath(path, decoFill, FillRule::NonZero, encoded);
-        }
-        if (decoStrokeColor.has_value()) {
-          // Device-aware flattening, as in every other renderer-side stroke.
-          const Path stroked = path.strokeToFill(*decoStrokeStyle, impl_->strokeFlattenTolerance());
-          if (!stroked.empty()) {
-            impl_->countStrokeOutline(stroked);
-            const FillRule strokeRule = FillRule::NonZero;
-            const geode::EncodedPath* strokeEncoded =
-                impl_->encodeTransientGeometry(stroked, strokeRule);
-            impl_->encoder->fillPath(stroked, *decoStrokeColor, strokeRule, strokeEncoded);
-          }
-        }
-      };
-
-      const auto isRenderedGlyph = [](const auto& g) {
-        return g.glyphIndex != 0 && g.xAdvance > 0.0;
-      };
-      const bool hasRotation = std::any_of(run.glyphs.begin(), run.glyphs.end(),
-                                           [](const auto& g) { return g.rotateDegrees != 0.0; });
-
-      for (const TextDecoration decoType :
-           {TextDecoration::Underline, TextDecoration::Overline, TextDecoration::LineThrough}) {
-        if (!hasFlag(spanDecoration, decoType)) {
-          continue;
-        }
-
-        double decoThickness = thickness;
-        if (decoType == TextDecoration::LineThrough && fontStrikeThick > 0.0) {
-          decoThickness = fontStrikeThick * decoEmScale;
-        }
-
-        double decoOffsetY = 0.0;
-        if (decoType == TextDecoration::Underline) {
-          decoOffsetY = fontUnderlinePos != 0.0 ? -fontUnderlinePos * decoEmScale
-                                                : -static_cast<double>(descent) * decoScale * 0.4;
-        } else if (decoType == TextDecoration::Overline) {
-          decoOffsetY = -static_cast<double>(ascent) * decoScale;
-        } else {  // LineThrough
-          decoOffsetY = fontStrikePos != 0.0 ? -fontStrikePos * decoEmScale
-                                             : -static_cast<double>(ascent) * decoScale * 0.35;
-        }
-
-        double decoTopY = decoOffsetY - decoThickness / 2.0;
-
-        const bool hasMultipleDecorationLines =
-            (hasFlag(spanDecoration, TextDecoration::Underline) ? 1 : 0) +
-                (hasFlag(spanDecoration, TextDecoration::Overline) ? 1 : 0) +
-                (hasFlag(spanDecoration, TextDecoration::LineThrough) ? 1 : 0) >
-            1;
-        if (span.decorationDeclarationCount == 1 && hasMultipleDecorationLines) {
-          if (decoType == TextDecoration::Overline) {
-            decoTopY += decoThickness * 1.5;
-          } else if (decoType == TextDecoration::LineThrough) {
-            decoTopY -= decoThickness;
-          }
-        }
-
-        if (hasRotation) {
-          for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
-            const auto& glyph = run.glyphs[gi];
-            if (!isRenderedGlyph(glyph)) {
-              continue;
-            }
-            double segmentWidth = glyph.xAdvance;
-            for (size_t nj = gi + 1; nj < run.glyphs.size(); ++nj) {
-              if (!isRenderedGlyph(run.glyphs[nj])) {
-                continue;
-              }
-              segmentWidth = std::min(segmentWidth, run.glyphs[nj].xPosition - glyph.xPosition);
-              break;
-            }
-            if (segmentWidth <= 0.0) {
-              continue;
-            }
-            const Path segPath = PathBuilder()
-                                     .moveTo(Vector2d(0.0, decoTopY))
-                                     .lineTo(Vector2d(segmentWidth, decoTopY))
-                                     .lineTo(Vector2d(segmentWidth, decoTopY + decoThickness))
-                                     .lineTo(Vector2d(0.0, decoTopY + decoThickness))
-                                     .closePath()
-                                     .build();
-            Transform2d segFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-            if (glyph.rotateDegrees != 0.0) {
-              segFromLocal =
-                  Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
-                  segFromLocal;
-            }
-            drawDecoPath(TransformPath(segPath, segFromLocal));
-          }
-        } else {
-          const auto firstGlyph =
-              std::find_if(run.glyphs.begin(), run.glyphs.end(), isRenderedGlyph);
-          const auto lastGlyph =
-              std::find_if(run.glyphs.rbegin(), run.glyphs.rend(), isRenderedGlyph);
-          if (firstGlyph == run.glyphs.end() || lastGlyph == run.glyphs.rend()) {
-            continue;
-          }
-          const double baselineY = firstGlyph->yPosition;
-          const bool sameBaseline =
-              std::all_of(run.glyphs.begin(), run.glyphs.end(), [&](const auto& g) {
-                return !isRenderedGlyph(g) || std::abs(g.yPosition - baselineY) < 1e-6;
-              });
-          if (sameBaseline) {
-            const double x0 = firstGlyph->xPosition;
-            const double x1 = lastGlyph->xPosition + lastGlyph->xAdvance;
-            const double y = baselineY + decoTopY;
-            drawDecoPath(PathBuilder()
-                             .moveTo(Vector2d(x0, y))
-                             .lineTo(Vector2d(x1, y))
-                             .lineTo(Vector2d(x1, y + decoThickness))
-                             .lineTo(Vector2d(x0, y + decoThickness))
-                             .closePath()
-                             .build());
-          } else {
-            PathBuilder decoBuilder;
-            for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
-              const auto& glyph = run.glyphs[gi];
-              if (!isRenderedGlyph(glyph)) {
-                continue;
-              }
-              const double x0 = glyph.xPosition;
-              double x1 = glyph.xPosition + glyph.xAdvance;
-              for (size_t nj = gi + 1; nj < run.glyphs.size(); ++nj) {
-                if (!isRenderedGlyph(run.glyphs[nj])) {
-                  continue;
-                }
-                x1 = std::min(x1, run.glyphs[nj].xPosition);
-                break;
-              }
-              if (x1 <= x0) {
-                continue;
-              }
-              const double y = glyph.yPosition + decoTopY;
-              decoBuilder.moveTo(Vector2d(x0, y));
-              decoBuilder.lineTo(Vector2d(x1, y));
-              decoBuilder.lineTo(Vector2d(x1, y + decoThickness));
-              decoBuilder.lineTo(Vector2d(x0, y + decoThickness));
-              decoBuilder.closePath();
-            }
-            if (!decoBuilder.empty()) {
-              drawDecoPath(decoBuilder.build());
+        // Decoration stroke (solid).
+        std::optional<css::RGBA> decoStrokeColor;
+        std::optional<StrokeStyle> decoStrokeStyle;
+        if (decoration.strokeWidth > 0.0 &&
+            !std::holds_alternative<PaintServer::None>(decoration.stroke)) {
+          if (auto c = impl_->resolveSolidPaint(decoration.stroke,
+                                                decoration.strokeOpacity * span.opacity)) {
+            if (c->a != 0) {
+              decoStrokeColor = c;
+              StrokeParams decoSp;
+              decoSp.strokeWidth = decoration.strokeWidth;
+              decoStrokeStyle = toStrokeStyle(decoSp);
             }
           }
         }
+
+        const auto drawDecoPath = [&](const Path& path) {
+          if (path.empty()) {
+            return;
+          }
+          const geode::EncodedPath* encoded =
+              impl_->encodeTransientGeometry(path, FillRule::NonZero);
+          if (decoUsesPattern) {
+            impl_->syncTransform();
+            impl_->encoder->fillPathPattern(
+                path, FillRule::NonZero,
+                impl_->buildPatternPaint(*impl_->patternFillPaint, decoFillOpacity), encoded);
+          } else if (decoFill.a != 0) {
+            impl_->encoder->fillPath(path, decoFill, FillRule::NonZero, encoded);
+          }
+          if (decoStrokeColor.has_value()) {
+            // Device-aware flattening, as in every other renderer-side stroke.
+            const Path stroked =
+                path.strokeToFill(*decoStrokeStyle, impl_->strokeFlattenTolerance());
+            if (!stroked.empty()) {
+              impl_->countStrokeOutline(stroked);
+              const FillRule strokeRule = FillRule::NonZero;
+              const geode::EncodedPath* strokeEncoded =
+                  impl_->encodeTransientGeometry(stroked, strokeRule);
+              impl_->encoder->fillPath(stroked, *decoStrokeColor, strokeRule, strokeEncoded);
+            }
+          }
+        };
+
+        EmitTextDecorationPaths(run, decoration, origins.size(), spanFontSizePx, textEngine,
+                                impl_->deviceFromLocalTransform, decorationWorkRemaining,
+                                drawDecoPath);
       }
     }
   }

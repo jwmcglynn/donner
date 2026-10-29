@@ -467,15 +467,14 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip("Reference disagreement: PNG hides an invalid URL; Filter Effects "
                               "ignores the chain, covered by independent visible-geometry tests "
                               "(FilterReferenceStages_tests)")},
+                {"negative-subregion.svg", ResvgV049Reference()},
+                {"with-subregion-1.svg", ResvgV049Reference()},
+                {"with-subregion-2.svg", ResvgV049Reference()},
                 // Pixelmatch 2.0 checkerboard exposes pre-existing filter-region
                 // compositing alpha deltas vs resvg that white-blending masked. Each
                 // threshold is the measured minimal passing hundredth at the
                 // existing pixel allowance (PR #1285, see README_pixelmatch_2.md).
                 {"everything-via-xlink-href.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
-                {"negative-subregion.svg",
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},
@@ -487,16 +486,19 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(
                      0.18f, kDefaultMismatchedPixels,
                      "Checkerboard exposes subregion alpha delta; measured minimal")},
-                {"with-subregion-1.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
-                {"with-subregion-2.svg",
-                 Params::WithThreshold(
-                     0.18f, kDefaultMismatchedPixels,
-                     "Checkerboard exposes subregion alpha delta; measured minimal")},
+                // Reference refreshed to resvg v0.49.0; see
+                // third_party/resvg-test-suite/BUILD.bazel.
                 {"complex-order-and-xlink-href.svg",
-                 Params::Skip("Bug: Color is slightly off, we are missing transparency")},
+                 Params::Skip("Reference disagreement: the region's x and height cut the blur's "
+                              "input at its left and bottom edges. The reference blurs with five "
+                              "box passes that each drop what spreads past the region, so the "
+                              "first row and column inside read alpha 84 where Donner, which "
+                              "keeps that spill, reads 143, close to a single Gaussian of the "
+                              "clipped input (1,275 px, all within 5 px of those "
+                              "edges; Geode adds 3 frame-corner pixels); "
+                              "FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom pins the "
+                              "region clip")
+                     .setCanvasSize(300, 300)},
                 {"in=BackgroundAlpha-with-enable-background.svg",
                  Params::DeprecatedInSVG2("enable-background: BackgroundAlpha of an SVG 1.1 "
                                           "enable-background=new snapshot (removed in SVG 2)")},
@@ -670,9 +672,11 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "masking/clipPath",
                 {
+                    // The 300x300 resvg v0.49.0 rendering. The superseded reference mapped the clip
+                    // through the glyph ink extents of the text rather than its glyph cells.
                     {"clip-path-with-transform-on-text.svg",
-                     Params::Skip("Triage: text objectBoundingBox units resolve; 2526px transform "
-                                  "alignment residual remains")},
+                     ResvgV049Reference().requireFeature(RendererBackendFeature::Text,
+                                                         "text rendering")},
                     {"on-the-root-svg-without-size.svg",
                      Params::UndefinedBehavior("on root `<svg>` without size")},
 
@@ -976,17 +980,19 @@ INSTANTIATE_TEST_SUITE_P(
                     {"control-points-clamping-1.svg",
                      WithMaxPixels(150, "Stroke control-point clamping edge coverage")
                          .withGeodeMaxPixelsDifferent(500)},
-                    // Both references map a stroke paint server's objectBoundingBox units through
-                    // the glyph *ink* extents of "Text" (measured 42.80..156.08 x 66.96..110.40
-                    // user units at font-size 60) instead of the glyph cells that SVG 1.1 and
-                    // SVG 2 define: advance width by the font's full ascent and descent (42.20..
-                    // 157.40 x 45.66..127.38). The sibling painting/fill references for the same
-                    // text pin the glyph-cell box, so the corpus disagrees with itself and only
-                    // one of the two can be matched. Donner follows the specification.
+                    // Both vendored references map a stroke paint server's objectBoundingBox units
+                    // through the glyph *ink* extents of "Text" (measured 42.80..156.08 x 66.96..
+                    // 110.40 user units at font-size 60) instead of its glyph cells: advance width
+                    // by the font's ascent and descent (42.20..157.40 x 45.66..127.38), which
+                    // Donner and resvg v0.49.0 use for fill and stroke alike.
                     //
                     // A default linear gradient runs along x only, where the two boxes differ by
                     // under 2 user units, so it stays inside a loosened per-pixel tolerance. The
-                    // radial gradient sees the full 1.9x height difference and cannot.
+                    // radial gradient sees the full 1.9x height difference and cannot. Against
+                    // resvg v0.49.0's 300x300 rendering, which uses the glyph cells, 358 and 364
+                    // simple-text pixels (352 and 361 full text) still differ, with no alpha delta
+                    // above 58 of 255 and no opaque color delta above 3. The root cause of that
+                    // residual is not yet identified, so these references are not replaced.
                     {"linear-gradient-on-text.svg",
                      Params::WithThreshold(0.05f, kDefaultMismatchedPixels,
                                            "Reference uses text ink extents for stroke paint")
@@ -994,7 +1000,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"pattern-on-text.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "AA artifacts")},
                     {"radial-gradient-on-text.svg",
-                     Params::Skip("Reference uses text ink extents for stroke paint")},
+                     Params::Skip("Reference uses text ink extents for stroke paint; 364 px "
+                                  "residual against resvg v0.49.0")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1057,16 +1064,11 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/visibility",
                 {
-                    // The reference maps the objectBoundingBox clip through the union of the two
-                    // text elements' glyph *ink* extents (measured 50.5..144.4 x 69.3..105.5 user
-                    // units), not their glyph cells. SVG 1.1 and SVG 2 both define the object
-                    // bounding box of text as the union of full glyph cells: advance width by the
-                    // font's full ascent and descent. Donner follows the specification, which the
-                    // same corpus pins in painting/fill/{linear,radial}-gradient-on-text.svg, so
-                    // the two references disagree with each other and this one cannot be matched
-                    // without also breaking those.
-                    {"bbox-impact-3.svg",
-                     Params::Skip("Reference uses text ink extents for objectBoundingBox")},
+                    // The 300x300 resvg v0.49.0 rendering. The superseded reference mapped the clip
+                    // through the union of the two text elements' glyph ink extents (measured
+                    // 50.5..144.4 x 69.3..105.5 user units) rather than their glyph cells.
+                    {"bbox-impact-3.svg", ResvgV049Reference().requireFeature(
+                                              RendererBackendFeature::Text, "text rendering")},
                     {"collapse-on-tspan.svg",
                      Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"hidden-on-tspan.svg",
@@ -1709,15 +1711,12 @@ INSTANTIATE_TEST_SUITE_P(
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                     {"arabic.svg",
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
-                    // resvg v0.49.0's zero.png is not a replacement: its glyphs sit about 17.3
-                    // units right (1834 differing pixels).
                     {"zero.svg",
                      Params().withMaxPixelsDifferent(410).withReason(
-                         "Reference rasterizer generation: the glyph layout matches; this PNG "
-                         "draws the x=100 crosshair at alpha 128/192, as 4x4 supersampled "
-                         "coverage does, where Donner's analytic coverage draws 160/160; "
-                         "analytic residual 396 px, supersampled 0 px; a 1 px text shift reaches "
-                         "433")},
+                         "SVG2 anchors compressed pen extents after textLength adjustment; "
+                         "the reference is an independent resvg 0.49.0 render with the bundled "
+                         "Noto Sans face at the original 500x500 size. The existing rasterizer "
+                         "allowance is retained.")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

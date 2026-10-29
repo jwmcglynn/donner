@@ -58,8 +58,10 @@ TRIGGER_ALLOWLIST = {
         "Builds the documentation site from main for verified publication. Doxygen warnings "
         "are not errors, so a pull request cannot make it fail through source changes alone.",
     ("bcr_preflight.yml", "pull-request-paths"):
-        "Pull requests run the BCR preflight only when they touch its listed inputs, to save "
-        "hosted macOS capacity; main runs it on every push.",
+        "Pull requests run the BCR preflight only when they change what it consumes (the "
+        "module and its build graph, packaging and release inputs, and its own tools), to "
+        "save hosted capacity and API budget; source-only changes are built and tested by CI "
+        "on the pull request, and main runs the preflight on every push.",
 }
 
 # Jobs that run on a main push but not on one kind of pull request, mapped to the job that runs

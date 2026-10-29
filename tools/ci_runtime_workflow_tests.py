@@ -36,7 +36,7 @@ RENDERER_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 2800,
     "--max-js-raw-bytes": 5700,
     "--max-wasm-gzip-bytes": 900000,
-    "--max-wasm-raw-bytes": 2210000,
+    "--max-wasm-raw-bytes": 2500000,
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"

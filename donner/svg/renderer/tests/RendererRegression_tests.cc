@@ -8,9 +8,11 @@
 #include <cstdlib>
 #include <filesystem>
 #include <initializer_list>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <source_location>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -606,6 +608,44 @@ TEST_F(RendererRegressionTests, FilterBlurNearCanvasEdgeMatchesBlurWithRoom) {
       editor::tests::CropBitmap(RenderDocumentWithBackend(withRoom, ActiveRendererBackend()),
                                 Vector2i(32, 32), Vector2i(64, 64)),
       "blur_canvas_edge_spill", editor::tests::PixelmatchIdentityParams());
+}
+
+// The derived filter inherits the blur, y and height through href, and its own x cuts through the
+// rect's left side while the inherited height cuts its bottom. The region clips the blur's input
+// and result, so inside it the render must equal a blur of the rect's visible part rendered with
+// room around it, and outside it nothing is drawn.
+TEST_F(RendererRegressionTests, FilterHrefRegionClipMatchesClippedSourceBlurredWithRoom) {
+  SVGDocument clippedByRegion = instantiateSubtree(R"svg(
+    <filter id="base" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="40">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <filter id="derived" x="20" width="44" href="#base"/>
+    <filter id="unused" y="10" href="#derived"/>
+    <rect x="4" y="16" width="48" height="32" fill="seagreen" filter="url(#derived)"/>)svg",
+                                                   {}, Vector2i(64, 64));
+  SVGDocument withRoom = instantiateSubtree(R"svg(
+    <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <rect x="20" y="16" width="32" height="24" fill="seagreen" filter="url(#f)"/>)svg",
+                                            {}, Vector2i(64, 64));
+  const RendererBitmap actual = RenderDocumentWithBackend(clippedByRegion, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "href_region_clip_visible");
+
+  const auto expectTransparent = [&actual](Vector2i origin, Vector2i size, std::string_view label) {
+    const RendererBitmap outside = editor::tests::CropBitmap(actual, origin, size);
+    RendererBitmap transparent = outside;
+    std::fill(transparent.pixels.begin(), transparent.pixels.end(), 0);
+    editor::tests::CompareBitmapToBitmap(outside, transparent, label,
+                                         editor::tests::PixelmatchIdentityParams());
+  };
+  expectTransparent(Vector2i(0, 0), Vector2i(20, 64), "href_region_clip_outside_left");
+  expectTransparent(Vector2i(20, 40), Vector2i(44, 24), "href_region_clip_outside_bottom");
+  editor::tests::CompareBitmapToBitmap(
+      editor::tests::CropBitmap(actual, Vector2i(20, 0), Vector2i(44, 40)),
+      editor::tests::CropBitmap(RenderDocumentWithBackend(withRoom, ActiveRendererBackend()),
+                                Vector2i(20, 0), Vector2i(44, 40)),
+      "href_region_clip_inside", editor::tests::PixelmatchIdentityParams());
 }
 
 /// A drop shadow whose offset carries its source toward or past the edge of the filter raster.
@@ -2858,6 +2898,95 @@ TEST_F(RendererRegressionTests, GroupObjectBoundingBoxExcludesDisplayNoneSubtree
   ASSERT_THAT(actual.has_value(), testing::IsTrue());
   EXPECT_THAT(*actual, BoxEq(Vector2Near(expected.topLeft.x, expected.topLeft.y),
                              Vector2Near(expected.bottomRight.x, expected.bottomRight.y)));
+}
+
+/// A transformed, clipped text render and the boxes its text element reports.
+struct ClippedTextRender {
+  RendererBitmap bitmap;  //!< The rendered 200x200 canvas.
+  Box2d objectBox;        //!< The text's object bounding box, in its own user space.
+  Box2d inkBox;           //!< The text's glyph ink extents, in its own user space.
+};
+
+/// Renders "Hog" in 48px Noto Sans, rotated and translated by its own `transform`, under the
+/// `#clip` clip path that \p clipPath defines.
+ClippedTextRender RenderTransformedClippedText(std::string_view clipPath) {
+  SVGDocument document = instantiateSubtree(
+      std::string(clipPath) +
+          R"svg(<text id="text" font-family="Noto Sans" font-size="48" fill="green"
+                      clip-path="url(#clip)" transform="translate(40 30) rotate(30)">Hog</text>)svg",
+      parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  ClippedTextRender result;
+  // Rendering prepares the text layout that the boxes are derived from. The software renderer runs
+  // in every variant, so both text tiers draw this case.
+  result.bitmap = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+  const auto text = document.querySelector("#text");
+  EXPECT_THAT(text, testing::Ne(std::nullopt));
+  if (text) {
+    result.objectBox = text->cast<SVGTextElement>().objectBoundingBox();
+    result.inkBox = text->cast<SVGTextElement>().inkBoundingBox();
+  }
+  return result;
+}
+
+/// The `#clip` userSpaceOnUse clip path whose rectangle covers the middle 60% of \p box, the
+/// placement an objectBoundingBox rectangle at 0.2 with size 0.6 resolves to on that box.
+std::string UserSpaceClipOnMiddleOf(const Box2d& box) {
+  std::ostringstream clipPath;
+  clipPath << std::setprecision(17)
+           << R"svg(<clipPath id="clip" clipPathUnits="userSpaceOnUse"><rect x=")svg"
+           << box.topLeft.x + 0.2 * box.width() << R"svg(" y=")svg"
+           << box.topLeft.y + 0.2 * box.height() << R"svg(" width=")svg" << 0.6 * box.width()
+           << R"svg(" height=")svg" << 0.6 * box.height() << R"svg("/></clipPath>)svg";
+  return clipPath.str();
+}
+
+/// Counts the pixels where \p actual differs from \p expected under the canonical identity
+/// comparison, without reporting the difference as a failure. Returns -1 when the two bitmaps
+/// cannot be compared, for example because their sizes differ.
+int IdentityMismatchCount(const RendererBitmap& actual, const RendererBitmap& expected,
+                          std::string_view label) {
+  int mismatchedPixels = -1;
+  testing::TestPartResultArray differences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected, label, editor::tests::PixelmatchIdentityParams(), &mismatchedPixels);
+  }
+  return mismatchedPixels;
+}
+
+// An objectBoundingBox clip on text with a `transform` maps the unit square onto the text's
+// object bounding box in the text's own user space, which the transform then places on the
+// canvas. For text that box is the union of the glyph cells: each glyph's advance by the font's
+// ascent and descent, not its ink. The same rectangle in userSpaceOnUse units must clip
+// identically, and the rectangle placed on the ink extents must not.
+TEST_F(RendererRegressionTests, ObjectBoundingBoxClipOnTransformedTextUsesLocalGlyphCells) {
+  const ClippedTextRender objectUnits = RenderTransformedClippedText(
+      R"svg(<clipPath id="clip" clipPathUnits="objectBoundingBox">
+              <rect x="0.2" y="0.2" width="0.6" height="0.6"/></clipPath>)svg");
+  AssertVisibleFixture(objectUnits.bitmap, "obb_clip_on_transformed_text_visible");
+
+  // Noto Sans Regular has a 1000-unit em, ascent 1069 and descent -293. The text sits at its
+  // local origin, so its glyph cells span y from -1.069 to 0.293 em at 48px.
+  EXPECT_THAT(objectUnits.objectBox.topLeft, Vector2Near(0.0, -1.069 * 48.0));
+  EXPECT_THAT(objectUnits.objectBox.bottomRight.y, testing::DoubleNear(0.293 * 48.0, 0.01));
+  // The ink control is only meaningful if the two boxes differ.
+  ASSERT_THAT(objectUnits.inkBox.topLeft.y, testing::Gt(objectUnits.objectBox.topLeft.y + 1.0));
+
+  const ClippedTextRender cellUserSpace =
+      RenderTransformedClippedText(UserSpaceClipOnMiddleOf(objectUnits.objectBox));
+  editor::tests::CompareBitmapToBitmap(objectUnits.bitmap, cellUserSpace.bitmap,
+                                       "obb_clip_matches_glyph_cell_user_space_clip",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  const ClippedTextRender inkUserSpace =
+      RenderTransformedClippedText(UserSpaceClipOnMiddleOf(objectUnits.inkBox));
+  EXPECT_THAT(
+      IdentityMismatchCount(objectUnits.bitmap, inkUserSpace.bitmap, "obb_clip_versus_ink_clip"),
+      testing::Gt(0))
+      << "a clip on the ink extents must render differently";
 }
 
 // SVG 2 applies `clip-path`, `mask`, and `filter` to text content elements, so a `tspan` that

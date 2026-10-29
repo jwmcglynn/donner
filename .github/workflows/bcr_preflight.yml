@@ -8,6 +8,19 @@ env:
 on:
   push:
     branches: [main]
+  # A pull request runs the preflight only when it changes something the preflight consumes:
+  # the module and its build configuration (MODULE.bazel, .bazel* files, .bzl macros,
+  # build_defs, config, third-party BUILD files, patches and licenses), the BUILD files of the
+  # packages a consumer's libraries reach (donner/base, css, gpu and svg, apart from tests,
+  # benchmarks, the Wasm bindings and the command-line tool), the archive's own rules
+  # (.gitattributes, LICENSE, NOTICE), the BCR templates and example consumer, the release and
+  # packaging inputs that select the full matrix (tools/bcr_preflight.py RELEASE_PATHS), and
+  # the scripts its steps run. A change to sources or tests alone is built and tested by CI on
+  # the same pull request, and the preflight still runs on every push to main, so a
+  # consumer-only regression surfaces there the same day. Order matters: the negative
+  # patterns drop only paths matched by the build-graph patterns above them.
+  # tools/security_workflow_policy_tests.py checks that every RELEASE_PATHS input and every
+  # tool a step runs starts the preflight, and that a source-only change does not.
   pull_request:
     paths:
       - .bazelignore
@@ -18,32 +31,65 @@ on:
       - .github/workflows/bcr_preflight.yml
       - .github/workflows/publish_bcr.yml
       - .github/workflows/release.yml
+      - "**/*.bzl"
+      - donner/base/**/BUILD.bazel
+      - donner/css/**/BUILD.bazel
+      - donner/gpu/**/BUILD.bazel
+      - donner/svg/**/BUILD.bazel
+      - third_party/**/BUILD*
+      - third_party/*.BUILD
+      - third_party/*.patch
+      - third_party/bazel/**
+      - third_party/licenses/**
+      - third_party/patches/**
+      - "!**/tests/**"
+      - "!**/*_tests/**"
+      - "!**/benchmarks/**"
+      - "!**/testdata/**"
+      - "!donner/svg/renderer/wasm/**"
+      - "!donner/svg/tool/**"
+      - "!third_party/resvg-test-suite/**"
       - BUILD.bazel
       - LICENSE
       - MODULE.bazel
       - MODULE.bazel.lock
+      - NOTICE
       - build_defs/**
       - config/**
-      - donner/**
+      - donner/editor/BUILD.bazel
+      - donner/editor/art/Donner.icns
+      - donner/editor/art/Info.plist
+      - donner/editor/write_build_info.sh
       - examples/bazel_consumer/**
-      - third_party/**
       - tools/BUILD.bazel
-      - tools/bcr_*.py
-      - tools/notice_coverage*.py
-      - tools/render_notice.py
-      - "tools/ci/**"
+      - tools/bcr_*
+      - tools/ci/BUILD.bazel
+      - tools/ci/free_hosted_macos_disk.sh
+      - tools/ci/github_rate_limit.py
+      - tools/ci/release_*
+      - tools/ci_check_runner_disk.sh
       - tools/ci_macos_xcode.txt
+      - tools/ci_select_macos_xcode.sh
+      - tools/default_notice*
       - tools/editor_build_info_tests.py
-      - tools/release_cli*.py
-      - tools/release_macos_editor*.py
-      - tools/macos_editor_test_bundle*.py
-      - tools/release_artifact_publisher*.py
+      - tools/macos_editor_test_bundle*
+      - tools/notice*
+      - tools/release_*
+      - tools/render_notice*
   # The full matrix qualifies a release candidate: run it nightly and on
   # request. Pushes to main run the slim check (see the prepare job).
   schedule:
     # After the other nightly workflows (latest: Coverage at 08:15 UTC).
     - cron: "35 8 * * *"
   workflow_dispatch:
+
+# A new commit on a pull request cancels the runs, queued or in progress, of its previous head.
+# Only opened, synchronize and reopened events share the per-PR group. Every other run (push,
+# schedule, dispatch, or a call from an edit) has a group of its own and is never cancelled.
+# tools/ci_concurrency_policy_tests.py owns this exact setting.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') && format('ci-{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('ci-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') }}
 
 permissions:
   contents: read
@@ -85,10 +131,13 @@ jobs:
           python3 -B -m tools.bcr_source archive \
             --output "$RUNNER_TEMP/donner-bcr/artifacts" --github-output "$GITHUB_OUTPUT"
 
+      # An explicit ref: without one the checkout asks the REST API for the default branch,
+      # which spends the repository's shared hourly API budget and fails when it is exhausted.
       - name: Checkout current BCR admission tools and registry metadata
         uses: actions/checkout@v7
         with:
           repository: bazelbuild/bazel-central-registry
+          ref: main
           path: upstream-bcr
           persist-credentials: false
 

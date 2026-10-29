@@ -2909,6 +2909,46 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
   }
 }
 
+TEST(PropertyRegistry, DecorationThicknessGrammarAndShorthandReset) {
+  PropertyRegistry properties;
+  properties.parseStyle("text-decoration-thickness:3px");
+  EXPECT_THAT(properties.textDecorationThickness.get()->value, LengthValueIs(3, Lengthd::Unit::Px));
+  properties.parseStyle("text-decoration:underline");
+  EXPECT_EQ(properties.textDecorationThickness.get()->kind, TextDecorationThickness::Kind::Auto);
+  properties.parseStyle("text-decoration:4px overline");
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Overline));
+  EXPECT_THAT(properties.textDecorationThickness.get()->value, LengthValueIs(4, Lengthd::Unit::Px));
+  properties.parseStyle("text-decoration:underline nonsense");
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Overline));
+  EXPECT_THAT(properties.textDecorationThickness.get()->value, LengthValueIs(4, Lengthd::Unit::Px));
+  properties.parseStyle("text-decoration-thickness:-1px");
+  EXPECT_THAT(properties.textDecorationThickness.get()->value,
+              LengthValueIs(-1, Lengthd::Unit::Px));
+  properties.parseStyle("text-decoration-thickness:from-font");
+  EXPECT_EQ(properties.textDecorationThickness.get()->kind,
+            TextDecorationThickness::Kind::FromFont);
+  for (const auto value :
+       {"1e999px", "thin", "1px 2px", "2", "1ex", "1ch", "1vw", "1vh", "1vmin", "1vmax"}) {
+    properties.parseStyle("text-decoration-thickness:" + std::string(value));
+    EXPECT_EQ(properties.textDecorationThickness.get()->kind,
+              TextDecorationThickness::Kind::FromFont);
+  }
+}
+
+TEST(PropertyRegistry, DecorationThicknessCascadeAndCssWideKeywords) {
+  PropertyRegistry properties;
+  properties.parseStyle("text-decoration-thickness:8px!important;text-decoration:underline 2px");
+  EXPECT_THAT(properties.textDecorationThickness.get()->value, LengthValueIs(8, Lengthd::Unit::Px));
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Underline));
+  properties.parseStyle("text-decoration:initial!important");
+  EXPECT_EQ(properties.textDecorationThickness.state, PropertyState::ExplicitInitial);
+  EXPECT_EQ(properties.textDecoration.state, PropertyState::ExplicitInitial);
+  properties.parseStyle("text-decoration:inherit!important");
+  EXPECT_EQ(properties.textDecorationThickness.state, PropertyState::Inherit);
+  properties.parseStyle("text-decoration:unset!important");
+  EXPECT_EQ(properties.textDecorationThickness.state, PropertyState::ExplicitUnset);
+}
+
 TEST(PropertyRegistry, TextDecorationAndDasharrayErrorPaths) {
   {
     PropertyRegistry registry;
@@ -2980,6 +3020,30 @@ TEST(PropertyRegistry, ResolveFontStretch) {
     registry.parseStyle("font-stretch: condensed");
     registry.resolveFontStretch(static_cast<int>(FontStretch::Normal));
     EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Condensed)));
+  }
+}
+
+TEST(PropertyRegistry, WhiteSpaceKeywordsAndInvalidDeclarations) {
+  const std::pair<const char*, WhiteSpace> cases[] = {{"normal", WhiteSpace::Normal},
+                                                      {"pre", WhiteSpace::Pre},
+                                                      {"nowrap", WhiteSpace::Nowrap},
+                                                      {"pre-wrap", WhiteSpace::PreWrap},
+                                                      {"break-spaces", WhiteSpace::BreakSpaces},
+                                                      {"pre-line", WhiteSpace::PreLine}};
+  for (const auto& [keyword, value] : cases) {
+    SCOPED_TRACE(keyword);
+    PropertyRegistry properties;
+    EXPECT_THAT(properties.parsePresentationAttribute("white-space", keyword), ParseResultIs(true));
+    EXPECT_THAT(properties.whiteSpace.get(), Optional(value));
+    EXPECT_THAT(properties.unparsedProperties, testing::IsEmpty());
+  }
+  EXPECT_EQ(PropertyRegistry::isPresentationAttributeInherited("white-space"), true);
+  PropertyRegistry properties;
+  properties.parseStyle("white-space: PrE-WrAp");
+  EXPECT_THAT(properties.whiteSpace.get(), Optional(WhiteSpace::PreWrap));
+  for (const char* invalid : {"preserve", "normal pre", "1", "pre-wrap extra"}) {
+    properties.parseStyle(std::string("white-space:") + invalid);
+    EXPECT_THAT(properties.whiteSpace.get(), Optional(WhiteSpace::PreWrap));
   }
 }
 
