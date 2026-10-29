@@ -406,8 +406,11 @@ TEST(RendererPublicApiTest, RectCssXUnitlessStrokeWidthRemainsValid) {
 class ExternalUseResourceLoader final : public ResourceLoaderInterface {
 public:
   explicit ExternalUseResourceLoader(std::string_view svgSource,
-                                     std::shared_ptr<std::vector<std::string>> trace = nullptr)
-      : bytes_(svgSource.begin(), svgSource.end()), trace_(std::move(trace)) {}
+                                     std::shared_ptr<std::vector<std::string>> trace = nullptr,
+                                     std::string_view resourceUrl = "external.svg")
+      : bytes_(svgSource.begin(), svgSource.end()),
+        trace_(std::move(trace)),
+        resourceUrl_(resourceUrl) {}
 
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view url) override {
@@ -415,7 +418,7 @@ public:
     if (trace_) {
       trace_->emplace_back(url);
     }
-    if (url != "external.svg") {
+    if (url != resourceUrl_) {
       return ResourceLoaderError::NotFound;
     }
     return bytes_;
@@ -427,6 +430,7 @@ private:
   std::vector<uint8_t> bytes_;
   std::vector<std::string> requests_;
   std::shared_ptr<std::vector<std::string>> trace_;
+  std::string resourceUrl_;
 };
 
 struct ExternalUseRenderResult {
@@ -437,8 +441,9 @@ struct ExternalUseRenderResult {
 /// Renders an external-use fixture through the public API and captures its resource requests.
 ExternalUseRenderResult RenderExternalUse(std::string_view hostSource,
                                           std::string_view externalSource,
-                                          ProcessingMode childMode = ProcessingMode::SecureStatic) {
-  auto loader = std::make_unique<ExternalUseResourceLoader>(externalSource);
+                                          ProcessingMode childMode = ProcessingMode::SecureStatic,
+                                          std::string_view resourceUrl = "external.svg") {
+  auto loader = std::make_unique<ExternalUseResourceLoader>(externalSource, nullptr, resourceUrl);
   const ExternalUseResourceLoader* observedLoader = loader.get();
   SVGDocument::Settings settings;
   settings.resourceLoader = std::move(loader);
@@ -761,6 +766,33 @@ TEST(RendererPublicApiTest, ExternalUseInheritsHostFillWithoutExternalAncestors)
   editor::tests::CompareBitmapToBitmap(
       actual.bitmap, expected, ::testing::UnitTest::GetInstance()->current_test_info()->name(),
       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseNamedGifRendersOnlySvgContent) {
+  const ExternalUseRenderResult actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="image.gif#tile"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <g id="tile"><script>marker()</script>
+          <frame xmlns="http://www.w3.org/1999/xhtml" src="javascript:marker()"/>
+          <rect width="8" height="8" fill="red"/>
+        </g>
+      </svg>)svg",
+      ProcessingMode::SecureStatic, "image.gif");
+  ASSERT_THAT(actual.bitmap.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.requests, ElementsAre("image.gif"));
+  EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(255, 0, 0, 255));
+
+  SVGDocument expectedDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="red"/>
+      </svg>)svg");
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expectedDocument);
+  editor::tests::CompareBitmapToBitmap(
+      actual.bitmap, NormalizeSnapshot(expectedRenderer.takeSnapshot()),
+      "gif_named_svg_active_markup_projection", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RendererPublicApiTest, ExternalUseCachedFragmentsInheritIndependently) {
@@ -3978,6 +4010,23 @@ TEST(RendererPublicApiTest, UnsupportedCssImportsNeverRequestConfiguredResponses
     EXPECT_EQ(*calls, 0u);
     EXPECT_THAT(warnings.warnings(), testing::SizeIs(1));
   }
+}
+
+TEST(RendererPublicApiTest, SecureStaticDoesNotFetchSvgNamedGif) {
+  auto calls = std::make_shared<std::size_t>(0);
+  SVGDocument::Settings settings;
+  settings.processingMode = ProcessingMode::SecureStatic;
+  settings.resourceLoader =
+      std::make_unique<UnrequestedImportLoader>(calls, UnrequestedImportLoader::Response::Cyclic);
+  ParseWarningSink warnings;
+  auto result = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+      "<use href='image.gif#x'/></svg>",
+      warnings, parser::SVGParser::Options(), std::move(settings));
+  ASSERT_THAT(result.hasError(), testing::IsFalse());
+  RendererTinySkia renderer;
+  renderer.draw(result.result());
+  EXPECT_THAT(*calls, testing::Eq(0u));
 }
 
 TEST(RendererPublicApiTest, UnsupportedCssImportKeepsFollowingLocalRules) {

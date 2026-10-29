@@ -151,3 +151,51 @@ test("download fallback reports a copy without replacing the original handle", a
   assert.equal(downloads, 1);
   assert.equal(api.sessions.get(1).handle, original);
 });
+
+test("download fallback labels unsanitized SVG blob as generic data", async () => {
+  const events = [];
+  const link = {
+    hidden: false,
+    click() {
+      events.push(["click", this.href, this.download]);
+    },
+    remove() {
+      events.push(["remove"]);
+    },
+  };
+  const source = "<svg xmlns='http://www.w3.org/2000/svg'><script>marker()</script></svg>";
+  const api = fixture({
+    URL: {
+      createObjectURL(blob) {
+        events.push(["blob", blob.type]);
+        return "blob:download-only";
+      },
+      revokeObjectURL(url) {
+        events.push(["revoke", url]);
+      },
+    },
+    document: {
+      createElement(name) {
+        assert.equal(name, "a");
+        return link;
+      },
+      body: {
+        append(node) {
+          assert.equal(node, link);
+          events.push(["append"]);
+        },
+      },
+    },
+    setTimeout(callback) {
+      callback();
+    },
+  });
+  api.download(source, "art.svg");
+  assert.deepEqual(events, [
+    ["blob", "application/octet-stream"],
+    ["append"],
+    ["click", "blob:download-only", "art.svg"],
+    ["remove"],
+    ["revoke", "blob:download-only"],
+  ]);
+});
