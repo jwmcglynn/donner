@@ -2,24 +2,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const prepare = require("./prepare-browser-archives.js");
-const { writeHeartbeat } = require("./browser-heartbeat.cjs");
+const { refreshIdleHeartbeat } = require("./browser-heartbeat.cjs");
 module.exports = async function setup(config) {
   const heartbeat = process.env.DONNER_WATCHDOG_HEARTBEAT;
   if (!heartbeat) throw new Error("browser timing tests require their external watchdog");
-  const beat = () => {
-    if (!fs.existsSync(`${heartbeat}.app-active`)) {
-      let prior;
-      try {
-        prior = JSON.parse(fs.readFileSync(heartbeat, "utf8"));
-      } catch {}
-      writeHeartbeat(heartbeat, {
-        atMs: Date.now(),
-        phase: prior?.phase === "teardown" ? "teardown" : "launch",
-        phaseStartedAtMs: prior?.phaseStartedAtMs,
-        sessionId: prior?.sessionId,
-      });
-    }
-  };
+  const beat = () => refreshIdleHeartbeat(heartbeat);
   beat();
   const timer = setInterval(beat, 1000);
   timer.unref();

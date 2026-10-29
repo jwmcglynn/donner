@@ -207,8 +207,13 @@ export async function supervise(executable, args, options = {}) {
     }
   };
   const trackHeartbeatSession = (row) => {
-    if (row.application?.phase === "active" && row.application.sessionId !== heartbeatSessionId) {
-      heartbeatSessionId = row.application.sessionId;
+    const phase = row.application?.phase;
+    const sessionId = row.application?.sessionId;
+    // A new session, active or launching, means the previous session's teardown finished.
+    const newSession = phase === "active"
+      || (phase === "launch" && sessionId !== undefined);
+    if (newSession && sessionId !== heartbeatSessionId) {
+      heartbeatSessionId = sessionId;
       teardownDeadline = undefined;
     }
     if (row.application?.phase === "teardown") {

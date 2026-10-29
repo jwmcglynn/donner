@@ -484,6 +484,38 @@ test("fresh late samples cannot erase a latched teardown deadline", async () => 
   assert.equal(result.reason, "browser teardown deadline exceeded");
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
 });
+test("a later session's launch ends the previous session's teardown deadline", async () => {
+  // A case that runs no application heartbeat must not inherit the previous case's teardown
+  // deadline: once the next case starts, that teardown finished.
+  const outputDir = directory();
+  const heartbeatFile = path.join(outputDir, "heartbeat");
+  const acknowledged = path.join(outputDir, "teardown-observed");
+  fs.writeFileSync(
+    heartbeatFile,
+    JSON.stringify({ phase: "teardown", sessionId: "first", atMs: Date.now() }),
+  );
+  const writer = createRequire(import.meta.url).resolve("./browser-heartbeat.cjs");
+  const script = `const fs=require('node:fs');
+    const {writeHeartbeat,refreshIdleHeartbeat}=require(${JSON.stringify(writer)});
+    const file=process.env.DONNER_WATCHDOG_HEARTBEAT;
+    const wait=setInterval(()=>{
+      if(!fs.existsSync(${JSON.stringify(acknowledged)})) return;
+      clearInterval(wait);
+      writeHeartbeat(file,{phase:'launch',sessionId:'second',atMs:Date.now()});
+      const idle=setInterval(()=>refreshIdleHeartbeat(file),20);
+      setTimeout(()=>{clearInterval(idle);},600);
+    },20);`;
+  const result = await supervise(process.execPath, ["-e", script], {
+    outputDir,
+    heartbeatFile,
+    intervalMs: 20,
+    teardownLimitMs: 200,
+    deadlineMs: 5000,
+    writeReceipt: () => fs.writeFileSync(acknowledged, "observed"),
+  });
+  assert.equal(result.reason, null);
+  assert.equal(result.exit.code, 0);
+});
 test("termination is issued once even when the stop and exit paths both run", async () => {
   const original = process.kill;
   let terminations = 0;
