@@ -872,10 +872,15 @@ template <typename PropertyType>
   }
 }
 
-std::optional<std::string> StyleValue(const PropertyRegistry& properties,
-                                      std::string_view attribute,
-                                      const AnimationValueContext& context,
-                                      AnimationResourceBudget& budget) {
+/// Kept out of line: the name match below expands once per registry property, so inlining it grows
+/// the caller with every new property. Folded into `AnimationBaseOrUnderlyingValue` it pushes that
+/// body past the browser tier-compiler complexity budget enforced by
+/// `//donner/editor/wasm:wasm_geode_package_size_tests`. It runs at most once per base-value query,
+/// so the extra call is not a measurable cost.
+[[gnu::noinline]] std::optional<std::string> StyleValue(const PropertyRegistry& properties,
+                                                        std::string_view attribute,
+                                                        const AnimationValueContext& context,
+                                                        AnimationResourceBudget& budget) {
   std::optional<std::string> result;
   const auto all = properties.allProperties();
   PropertyRegistry::forEachProperty<0, PropertyRegistry::numProperties()>([&](auto index) {
