@@ -38,7 +38,8 @@ namespace donner::svg::components {
 
 namespace {
 
-double InsetRootFontSize(const Registry& registry) {
+/// Root computed font size for rem lengths resolved before descendants inherit them.
+double ComputedRootFontSize(const Registry& registry) {
   const auto* context = registry.ctx().find<SVGDocumentContext>();
   if (context && registry.valid(context->rootEntity)) {
     // Installed root properties avoid re-entering style computation for root-owned rem.
@@ -75,16 +76,6 @@ bool IsApplicableStylesheet(const Registry& registry, const StylesheetComponent&
   // The built-in sheet has an SVG default namespace; authored namespace handling is separate.
   const auto* type = registry.try_get<ElementTypeComponent>(dataEntity);
   return type && type->inSvgNamespace();
-}
-
-double DecorationRootFontSize(Registry& registry) {
-  if (const auto* context = registry.ctx().find<SVGDocumentContext>()) {
-    if (const auto* root = registry.try_get<ComputedStyleComponent>(context->rootEntity);
-        root && root->properties) {
-      return root->properties->fontSize.get().value().value;
-    }
-  }
-  return 16.0;
 }
 
 StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
@@ -881,8 +872,9 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   // font-size, and percentages resolve against the parent font-size (not the viewBox).
   if (computedStyle.properties) {
     resolveComputedParentFonts(handle, parent, *computedStyle.properties);
-    computedStyle.properties->resolveTextDecorationThickness(DecorationRootFontSize(registry));
-    computedStyle.properties->resolveInsetClipLengths(InsetRootFontSize(registry));
+    const double rootFontSizePx = ComputedRootFontSize(registry);
+    computedStyle.properties->resolveTextDecorationThickness(rootFontSizePx);
+    computedStyle.properties->resolveInsetClipLengths(rootFontSizePx);
   }
 }
 
