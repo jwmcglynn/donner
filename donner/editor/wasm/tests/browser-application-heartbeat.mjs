@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { APPLICATION_HEARTBEAT_LIMIT_MS, writeHeartbeat } from "./browser-heartbeat.cjs";
+import {
+  APPLICATION_HEARTBEAT_LIMIT_MS,
+  applicationActiveMarker,
+  writeHeartbeat,
+} from "./browser-heartbeat.cjs";
 
 // Ownership discovery is bounded by the existing application-liveness ceiling. An unanswered
 // IPC is unknown, not a negative role response. Keep one request per worker, including requests
@@ -75,7 +79,7 @@ export async function startApplicationHeartbeat(
   heartbeat = process.env.DONNER_WATCHDOG_HEARTBEAT,
 ) {
   const sessionId = crypto.randomUUID();
-  const marker = `${heartbeat}.app-active`;
+  const marker = applicationActiveMarker(heartbeat);
   const workerRequests = new Set();
   const application = await discoverApplicationWorker(page, workerRequests);
   fs.writeFileSync(marker, "active");
@@ -206,4 +210,24 @@ export async function startApplicationHeartbeat(
       phaseStartedAtMs: Date.now(),
     });
   };
+}
+
+/**
+ * End a finished application session's teardown record. Call it as a case starts: the runner
+ * starts a case only after the previous case's page and context closed, so a teardown still
+ * recorded then is complete. The new launch session scopes the watchdog's teardown deadline to
+ * that close; without it, the deadline also ran through every following case that starts no
+ * application heartbeat, and a run of such cases longer than the deadline killed the run.
+ * @param {string | undefined} heartbeat Heartbeat file.
+ */
+export function endApplicationTeardown(heartbeat = process.env.DONNER_WATCHDOG_HEARTBEAT) {
+  if (!heartbeat) return;
+  let prior;
+  try {
+    prior = JSON.parse(fs.readFileSync(heartbeat, "utf8"));
+  } catch {
+    return;
+  }
+  if (prior?.phase !== "teardown") return;
+  writeHeartbeat(heartbeat, { atMs: Date.now(), phase: "launch", sessionId: crypto.randomUUID() });
 }

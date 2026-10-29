@@ -5,7 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
+import { createRequire } from "node:module";
+import {
+  endApplicationTeardown,
+  startApplicationHeartbeat,
+} from "./browser-application-heartbeat.mjs";
+
+const { applicationActiveMarker, refreshIdleHeartbeat, writeHeartbeat } =
+  createRequire(import.meta.url)("./browser-heartbeat.cjs");
 
 function deferred() {
   let resolve;
@@ -338,4 +345,49 @@ test("late identity cannot beat an expired deadline when timer delivery is delay
   assert.match(state.failure().message, /discovery deadline/);
   assert.equal(state.stop(), undefined);
   assert.equal(fs.existsSync(state.heartbeat), false);
+});
+
+test("the next case ends a finished session's teardown with a new launch session", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "application-heartbeat-test-"));
+  try {
+    const heartbeat = path.join(directory, "heartbeat.json");
+    const read = () => JSON.parse(fs.readFileSync(heartbeat, "utf8"));
+    endApplicationTeardown(heartbeat);
+    assert.equal(fs.existsSync(heartbeat), false);
+    writeHeartbeat(heartbeat, { phase: "teardown", sessionId: "first", atMs: 1 });
+    endApplicationTeardown(heartbeat);
+    const launch = read();
+    assert.equal(launch.phase, "launch");
+    assert.equal(typeof launch.sessionId, "string");
+    assert.notEqual(launch.sessionId, "first");
+    endApplicationTeardown(heartbeat);
+    assert.deepEqual(read(), launch, "only a teardown record is ended");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("idle refreshes keep liveness without rewriting the record", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "application-heartbeat-test-"));
+  try {
+    const heartbeat = path.join(directory, "heartbeat.json");
+    refreshIdleHeartbeat(heartbeat);
+    assert.equal(JSON.parse(fs.readFileSync(heartbeat, "utf8")).phase, "launch");
+    const record = JSON.stringify({ phase: "launch", sessionId: "second", atMs: 1 });
+    fs.writeFileSync(heartbeat, record);
+    const old = new Date(Date.now() - 60000);
+    fs.utimesSync(heartbeat, old, old);
+    refreshIdleHeartbeat(heartbeat);
+    assert.equal(fs.readFileSync(heartbeat, "utf8"), record);
+    assert.ok(Date.now() - fs.statSync(heartbeat).mtimeMs < 30000, "the refresh renews liveness");
+    fs.writeFileSync(applicationActiveMarker(heartbeat), "active");
+    fs.utimesSync(heartbeat, old, old);
+    refreshIdleHeartbeat(heartbeat);
+    assert.ok(
+      Date.now() - fs.statSync(heartbeat).mtimeMs >= 30000,
+      "an active session owns its own liveness",
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

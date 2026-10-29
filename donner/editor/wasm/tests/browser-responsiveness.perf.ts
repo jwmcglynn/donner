@@ -5,7 +5,10 @@ import { sumPipelineCompilesPending } from "./pipeline-compile-readiness.mjs";
 import { dispatchCanvasPointer } from "./canvas-pointer";
 import { expect, type Page, test } from "@playwright/test";
 import fs from "node:fs";
-import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
+import {
+  endApplicationTeardown,
+  startApplicationHeartbeat,
+} from "./browser-application-heartbeat.mjs";
 import { checkDocumentGpuResidency } from "./browser-gpu-residency";
 import { readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
 import { resourceQueuesAreQuiescent } from "./browser-resource-quiescence.mjs";
@@ -41,8 +44,11 @@ import {
 } from "./surface-frame-probe";
 import { kStallGuardMs } from "./test-timing";
 
-// Every case here opens the editor; echo its GPU acquisition trace into the test log.
+// Every case here opens the editor; echo its GPU acquisition trace into the test log. The previous
+// case's page and context have closed by now, so end its application teardown record: the
+// watchdog's teardown deadline bounds that close, not the cases that follow it.
 test.beforeEach(({ page }) => {
+  endApplicationTeardown();
   echoGpuSessionConsole(page);
 });
 
