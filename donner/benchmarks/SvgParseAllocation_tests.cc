@@ -44,6 +44,7 @@ constexpr ParseAllocationBudget kRepeatedAttributesBudget = {
 };
 
 /// Broad resource ceiling with portability headroom for standard-library layout differences.
+// Fixed inset clip storage in each style slot raises requested bytes, not allocation calls.
 constexpr ParseAllocationBudget kDonnerSplashBudget = {
     .allocationCalls = 26'500,
     .allocationBytes = 10'800'000,
