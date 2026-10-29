@@ -57,6 +57,21 @@ genrule(
     visibility = ["//visibility:private"],  # Only used by the test in this file
 )
 
+filegroup(
+    name = "embedded_resource_test_golden_input",
+    testonly = True,
+    srcs = ["//third_party/public-sans:PublicSans-Medium.otf"],
+    visibility = ["//visibility:private"],
+)
+
+embed_resources(
+    name = "embedded_resource_test_golden",
+    testonly = True,
+    header_output = "embedded_resource_test_golden.h",
+    resources = {"kPublicSansMediumOtf": ":embedded_resource_test_golden_input"},
+    visibility = ["//visibility:private"],
+)
+
 py_test(
     name = "embed_resources_tests",
     size = "small",
@@ -69,14 +84,14 @@ py_test(
         "--generated_files_subdir",
         "donner/tools/py_embedded_dir",
         "--golden_header_path",
-        "$(location //third_party/public-sans:embedded_header)",
+        "$(location :embedded_resource_test_golden.h)",
         "--golden_cpp_path",
-        "$(location //third_party/public-sans:embedded_cpp)",
+        "$(location :_embedded_resource_test_golden_input.cpp)",
     ],
     data = [
+        ":_embedded_resource_test_golden_input.cpp",
+        ":embedded_resource_test_golden.h",
         ":generate_embedded_test_resources",
-        "//third_party/public-sans:embedded_cpp",
-        "//third_party/public-sans:embedded_header",
     ],
     deps = ["@rules_python//python/runfiles"],
 )
@@ -310,6 +325,7 @@ py_test(
         "//donner/svg/renderer/wasm:BUILD.bazel",
         "//tools:ci_bazel_test.sh",
         "//tools:coverage.sh",
+        "//tools:run-browser-ci.sh",
         "//tools/ci:BUILD.bazel",
         "//tools/ci:editor_wasm_lane.sh",
     ],
@@ -703,6 +719,7 @@ py_binary(
 py_library(
     name = "release_cli",
     srcs = ["release_cli.py"],
+    deps = [":native_delivery_lib"],
 )
 
 py_test(
@@ -746,7 +763,11 @@ py_test(
     name = "macos_editor_test_bundle_tests",
     size = "small",
     srcs = ["macos_editor_test_bundle_tests.py"],
-    deps = [":macos_editor_test_bundle"],
+    data = ["//build_defs:macos_app_bundle.bzl"],
+    deps = [
+        ":macos_editor_test_bundle",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 # Manual artifact qualification copies, compresses and signature-checks a complete app; it is
@@ -787,7 +808,10 @@ py_test(
     name = "release_macos_editor_tests",
     size = "small",
     srcs = ["release_macos_editor_tests.py"],
-    data = ["BUILD.bazel"],
+    data = [
+        "BUILD.bazel",
+        "//donner/base/fonts:testdata/valid-001.woff2",
+    ],
     deps = [
         ":bcr_preflight",
         ":release_candidate",
@@ -824,6 +848,7 @@ py_test(
     name = "release_cli_tests",
     size = "small",
     srcs = ["release_cli_tests.py"],
+    data = ["//donner/base/fonts:testdata/valid-001.woff2"],
     deps = [":release_cli"],
 )
 

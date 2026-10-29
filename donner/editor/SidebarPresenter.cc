@@ -793,7 +793,7 @@ Lengthd FirstSelectedStrokeWidth(const EditorApp& app) {
 
 }  // namespace
 
-std::span<const unsigned char> StrokeWidthPresetSvg() {
+ResourceLease StrokeWidthPresetSvg() {
   return embedded::kStrokeWidthPresetsSvg;
 }
 
@@ -801,7 +801,7 @@ std::uint64_t StrokeWidthPresetTextureKey() {
   return 0xf800000000000008ull;
 }
 
-std::span<const unsigned char> StrokePreviewIconSvg(StrokePreviewIcon icon) {
+ResourceLease StrokePreviewIconSvg(StrokePreviewIcon icon) {
   switch (icon) {
     case StrokePreviewIcon::ButtCap: return embedded::kStrokeCapButtSvg;
     case StrokePreviewIcon::RoundCap: return embedded::kStrokeCapRoundSvg;
@@ -818,7 +818,7 @@ std::uint64_t StrokePreviewIconTextureKey(StrokePreviewIcon icon) {
   return kIconTextureKeyBase + static_cast<std::uint64_t>(icon) + 1u;
 }
 
-std::span<const unsigned char> PathOperationIconSvg(PathOperationKind operation) {
+ResourceLease PathOperationIconSvg(PathOperationKind operation) {
   switch (operation) {
     case PathOperationKind::Union: return embedded::kBootstrapUnionSvg;
     case PathOperationKind::Intersect: return embedded::kBootstrapIntersectSvg;
@@ -843,8 +843,8 @@ std::uint64_t PathOperationIconTextureKey(PathOperationKind operation) {
   return kIconTextureKeyBase;
 }
 
-std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
-  static const std::array<EmbeddedSvgIconRequest, 12> kRequests = {{
+std::vector<EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
+  return {
       {PathOperationIconSvg(PathOperationKind::Union), kPathOperationIconRasterSizePx,
        /*tintableMask=*/true},
       {PathOperationIconSvg(PathOperationKind::Intersect), kPathOperationIconRasterSizePx,
@@ -868,8 +868,7 @@ std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
       {StrokePreviewIconSvg(StrokePreviewIcon::BevelJoin), kStrokePreviewRasterSizePx,
        /*tintableMask=*/false},
       {StrokeWidthPresetSvg(), kStrokeWidthPresetRasterSizePx, /*tintableMask=*/false},
-  }};
-  return kRequests;
+  };
 }
 
 std::optional<DecomposedTransform> DecomposeTransform(const Transform2d& transform) {

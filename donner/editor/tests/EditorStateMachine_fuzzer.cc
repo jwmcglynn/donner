@@ -22,6 +22,7 @@
 #include "donner/base/FileOffset.h"
 #include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/PackagedResourceTestProvider.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
@@ -600,6 +601,11 @@ private:
 }  // namespace
 
 /// Fuzzer entry point, see https://llvm.org/docs/LibFuzzer.html.
+extern "C" int LLVMFuzzerInitialize(int* /*argc*/, char*** argv) {
+  donner::tests::InitializeFuzzerPackagedResourceFixtures((*argv)[0]);
+  return 0;
+}
+
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   if (size > kMaxInputSize) {
     return 0;

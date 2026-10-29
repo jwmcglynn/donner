@@ -20,7 +20,7 @@ from tools.test_executable_fixtures import ExecutableFixtureDirectory
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 TARGETS = ["//tools/ci:release_svg", "//tools/ci:release_svg_notice",
-           "//tools/ci:release_compiler_identity"]
+           "//tools/ci:release_compiler_identity", "//tools/ci:release_cli_resources"]
 LIBRARIES = ["@donner//donner/base:base", "@donner//donner/css:css",
              "@donner//donner/svg:svg", "@donner//donner/svg/renderer:renderer"]
 
@@ -174,6 +174,15 @@ class BcrPreflightTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(calls, self._consumer_commands()[:1])
 
+    def test_packaged_resource_inputs_select_the_full_matrix(self):
+        for path in ("build_defs/packaged_resources.py", "build_defs/packaged_resources.bzl",
+                     "donner/base/PackagedResource.cc", "third_party/public-sans/BUILD.bazel",
+                     "third_party/fira-code/FiraCode-Regular.ttf", "third_party/roboto/Roboto.ttf",
+                     "third_party/google_fonts/catalog_generate.py",
+                     "donner/editor/art/samples/basic-shapes.svg"):
+            with self.subTest(path=path):
+                self.assertTrue(bcr_preflight.is_release_path(path))
+
     def test_native_packaging_inputs_select_the_full_matrix(self):
         for path in ("LICENSE", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl", "donner/editor/BUILD.bazel",
                      "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
@@ -196,8 +205,9 @@ class BcrPreflightTest(unittest.TestCase):
                     ["bazelisk", "test", "--lockfile_mode=error", "-c", "opt",
                      "//tools/ci:release_svg_notice_coverage", workspace],
                     ["python3", "-B", "-m", "tools.release_cli", "package",
-                     "--platform", platform, "--binary", "bazel-bin/donner/svg/tool/donner-svg",
+                     "--platform", platform, "--binary", "bazel-bin/donner/svg/tool/donner-cli",
                      "--notice", "bazel-bin/third_party/licenses/notice_cli.txt",
+                     "--resources", "bazel-bin/tools/ci/release_cli_resources.assets",
                      "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
                      "--output", f"{self.temp}/donner-cli-{short}", "--commit", COMMIT,
                      "--run-id", "1234", "--attempt", "2", workspace],
@@ -342,9 +352,24 @@ class BcrPreflightTest(unittest.TestCase):
                 self.assertEqual(output, expected)
         self.assertIn(b"Full preflight matrix selected by .bcr/\xfe.yml\n", result.stdout)
 
+    def test_native_example_delivery_selects_full_scope_with_negative_controls(self):
+        positive = ["examples/BUILD.bazel", "examples/svg_to_png.cc",
+                    "examples/svg_text_interaction.cc", "examples/svg_viewer.cc",
+                    "examples/geode_embed.cc", "examples/native_resource_delivery_tests.py",
+                    "examples/native_no_text_resource_delivery_tests.py"]
+        negative = ["examples/svg_tree_interaction.cc", "examples/svg_quickstart.cc",
+                    "examples/README.md", "examples/svg_viewer.cc.orig"]
+        for path, expected in [(path, True) for path in positive] + [
+                (path, False) for path in negative]:
+            with self.subTest(path=path):
+                shutil.rmtree(self.work / "repo", ignore_errors=True)
+                result, output = self._scope_with_changed_paths([path.encode()])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, "full_matrix=" + str(expected).lower() + "\n")
+
     def test_release_paths_match_like_shell_case_patterns(self):
         # `*` crosses directories, as in the shell `case` the workflow used.
-        for path in ("tools/bcr_preflight.py", ".bcr/nested/presubmit.yml",
+        for path in ("tools/bcr_preflight.py", "tools/native_delivery.py", ".bcr/nested/presubmit.yml",
                      "third_party/licenses/a/b.txt", "third_party/BUILD.harfbuzz",
                      "tools/ci/release_compiler_identity.cc"):
             self.assertTrue(bcr_preflight.is_release_path(path), path)

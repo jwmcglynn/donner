@@ -1,5 +1,7 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load(":shipped_product.bzl", "shipped_product")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -123,6 +125,16 @@ test_suite(
 )
 
 test_suite(
+    name = "wasm_text_resource_tests",
+    tags = ["manual"],
+    tests = [
+        "//donner/svg/renderer/wasm:geode_browser_test_transition_test",
+        "//donner/svg/renderer/wasm:render_text_test",
+        "//donner/svg/renderer/wasm:renderer_resource_bootstrap_test",
+    ],
+)
+
+test_suite(
     name = "editor_wasm_size_tests",
     tags = ["manual"],
     tests = ["//donner/editor/wasm:wasm_geode_package_size_tests"],
@@ -208,10 +220,30 @@ filegroup(
     testonly = True,
     srcs = [
         "//donner/svg/renderer/tests:filter_graph_executor_tests",
-        "//donner/svg/tool:donner-svg",
+        "//donner/svg/tool:donner-cli",
     ],
     tags = ["manual"],
 )
+
+packaged_resource_bundle(
+    name = "release_cli_resources",
+    resources = select({
+        "//donner/svg/renderer:text_enabled": ["//third_party/public-sans:public-sans_resource_files"],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+)
+
+[
+    configured_dependency_audit_test(
+        name = "release_cli_" + tier + "_resources_audit",
+        forbidden = ["//third_party/public-sans:public-sans_resource_files"] if tier == "none" else [],
+        required = ["//tools/ci:release_cli_resources"] + (["//third_party/public-sans:public-sans_resource_files"] if tier != "none" else []),
+        target = ":release_cli_resources",
+        text_configuration = tier,
+    )
+    for tier in ("none", "basic", "full")
+]
 
 cc_binary(
     name = "release_crash_probe",
@@ -223,7 +255,7 @@ cc_binary(
 
 alias(
     name = "release_svg",
-    actual = "//donner/svg/tool:donner-svg",
+    actual = "//donner/svg/tool:donner-cli",
     tags = ["manual"],
 )
 
@@ -482,12 +514,12 @@ shipped_product(
     tags = ["manual"],
 )
 
-# The released `donner-svg` CLI. It links the CPU renderer under every configuration, so the
+# The released `donner-cli` CLI. It links the CPU renderer under every configuration, so the
 # shipped configuration builds the same program as the release build (`-c opt`).
 shipped_product(
     name = "shipped_donner_svg",
     testonly = True,
-    product = "//donner/svg/tool:donner-svg",
+    product = "//donner/svg/tool:donner-cli",
     tags = ["manual"],
 )
 

@@ -8,7 +8,7 @@ rasterizer, no cloud tracing service: the same renderer Donner ships answers
 ## The loop
 
 ```
-edit SVG  ->  render (donner-svg)  ->  score  ->  inspect diff.png  ->  edit again
+edit SVG  ->  render (donner-cli)  ->  score  ->  inspect diff.png  ->  edit again
 ```
 
 Each pass is one `vectorize.py` invocation. You (the agent) own the SVG editing;
@@ -18,7 +18,7 @@ rules).
 
 1. **Edit the candidate SVG.** Add/adjust shapes, groups, gradients, paths.
 2. **Render + score:** run the command below. It renders the SVG through
-   `donner-svg` at the reference's exact pixel size and diffs the two.
+   `donner-cli` at the reference's exact pixel size and diffs the two.
 3. **Read `score.json`:** check `rmse`, `diff_pixel_percent`, and `worst_tiles`.
 4. **Open `diff.png`:** bright red = large per-pixel error, near-black = match.
    The heatmap tells you _where_ to work next; `worst_tiles` gives coordinates.
@@ -26,10 +26,10 @@ rules).
 
 ## The oracles (where render + diff come from)
 
-- **Render oracle:** `//donner/svg/tool:donner-svg`, the repo's own CLI renderer
+- **Render oracle:** `//donner/svg/tool:donner-cli`, the repo's own CLI renderer
   (the same target the release workflow builds). Build once:
-  `bazel build //donner/svg/tool:donner-svg`. The harness auto-discovers the
-  binary at `bazel-bin/donner/svg/tool/donner-svg`; override with `--renderer`.
+  `bazel build //donner/svg/tool:donner-cli`. The harness auto-discovers the
+  binary at `bazel-bin/donner/svg/tool/donner-cli`; override with `--renderer`.
 - **Diff oracle:** implemented in `vectorize.py` in pure Python (stdlib only, no
   PIL/numpy so it runs anywhere python3 does). The repo's C++ pixel-diff dep
   (`pixelmatch-cpp17`) is a Bazel-only dev dependency with no importable Python
@@ -97,7 +97,7 @@ the win.
 Build the renderer once (from repo root):
 
 ```
-bazel build //donner/svg/tool:donner-svg
+bazel build //donner/svg/tool:donner-cli
 ```
 
 Score one candidate against a reference:
@@ -109,14 +109,14 @@ python3 tools/vectorize/vectorize.py \
     --out <workdir>
 ```
 
-Outputs land in `<workdir>`: `score.json`, `rendered.png` (the donner-svg
+Outputs land in `<workdir>`: `score.json`, `rendered.png` (the donner-cli
 render), and `diff.png` (the error heatmap).
 
 Useful flags: `--background white|black|gray` (composite background),
 `--threshold N` (diff-pixel sensitivity),
 `--grid N` (NxN worst-tile grid), `--worst K` (tiles reported),
 `--width/--height` (render size override; defaults to the reference size),
-`--renderer <path>` (explicit donner-svg binary).
+`--renderer <path>` (explicit donner-cli binary).
 
 ### Starting a real vectorization session
 
@@ -126,7 +126,7 @@ and publication status have been reviewed.
 
 ```
 # 1. Build the render oracle once.
-bazel build //donner/svg/tool:donner-svg
+bazel build //donner/svg/tool:donner-cli
 
 # 2. Start from an empty/rough candidate and iterate. Re-run after every SVG edit.
 python3 tools/vectorize/vectorize.py \
@@ -144,7 +144,7 @@ to score at half resolution, then drop the override for final polish.
 
 ## Worked example
 
-See `example/`. `reference_source.svg` is rendered by donner-svg into
+See `example/`. `reference_source.svg` is rendered by donner-cli into
 `reference.png` (the pretend "raster reference": a purple circle with a dark rim
 and a "Donner" wordmark). Two candidate iterations show the score improving:
 
@@ -158,7 +158,7 @@ Reproduce:
 ```
 cd tools/vectorize
 # reference.png is committed; regenerate it if needed:
-../../bazel-bin/donner/svg/tool/donner-svg example/reference_source.svg \
+../../bazel-bin/donner/svg/tool/donner-cli example/reference_source.svg \
     --output example/reference.png --width 256 --height 256 --quiet
 
 python3 vectorize.py --reference example/reference.png \

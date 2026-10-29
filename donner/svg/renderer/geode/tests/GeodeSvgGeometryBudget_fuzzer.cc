@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/PackagedResourceTestProvider.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -57,7 +58,8 @@ void RunBoundaryOracle(const std::shared_ptr<geode::GeodeDevice>& device) {
 
 }  // namespace
 
-extern "C" int LLVMFuzzerInitialize(int* /*argc*/, char*** /*argv*/) {
+extern "C" int LLVMFuzzerInitialize(int* /*argc*/, char*** argv) {
+  donner::tests::InitializeFuzzerPackagedResourceFixtures((*argv)[0]);
   SharedDevice();
   return 0;
 }

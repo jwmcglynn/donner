@@ -10,6 +10,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
+#include "donner/base/tests/PackagedResourceTestProvider.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLParser.h"
@@ -268,6 +269,11 @@ void BuildXMLTree(XMLDocument& document, XMLNode& root, FuzzedDataProvider& prov
 }
 
 }  // namespace
+
+extern "C" int LLVMFuzzerInitialize(int* /*argc*/, char*** argv) {
+  donner::tests::InitializeFuzzerPackagedResourceFixtures((*argv)[0]);
+  return 0;
+}
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   constexpr std::string_view kNonFiniteFontSizeSeed = "NONFINITE_FONT_SIZE\n";

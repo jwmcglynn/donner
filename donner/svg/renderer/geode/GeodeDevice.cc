@@ -152,6 +152,8 @@ struct GeodeDevice::Impl {
   // are at the bottom of Impl so they destruct before the runtime device
   // they release their handles through (reverse-declaration order).
   std::unique_ptr<GeodePipeline> pipeline;
+  /// Startup-only RGBA fill seed when the editor canvas uses a different target format.
+  std::unique_ptr<GeodePipeline> headlessFillPipeline;
   /// Built lazily on first `checkerboardPipeline()` access - see the header.
   std::unique_ptr<GeodeCheckerboardPipeline> checkerboardPipeline;
   /// Built lazily on first `checkerboardUnderlayPipeline()` access - see the header.
@@ -785,6 +787,13 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
 
 void GeodeDevice::buildOnDemandPipelinesAheadOfUse() const {
   pipeline().batchedPipeline();
+  if (textureFormat_ != gpu::TextureFormat::RGBA8Unorm) {
+    if (!impl_->headlessFillPipeline) {
+      impl_->headlessFillPipeline =
+          std::make_unique<GeodePipeline>(runtimeDevice(), gpu::TextureFormat::RGBA8Unorm);
+    }
+    impl_->headlessFillPipeline->batchedPipeline();
+  }
   maskPipeline();
   checkerboardPipeline();
   if (!impl_->snapshotReadbackPipeline) {

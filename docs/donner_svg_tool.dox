@@ -1,21 +1,27 @@
 /**
  * @file
- * @page DonnerSvgTool donner-svg CLI Tool
+ * @page DonnerSvgTool donner-cli CLI Tool
  *
  * @section DonnerSvgToolOverview Overview
  *
- * `donner-svg` is a command line utility for rendering SVG files to PNG and previewing output in
- * terminal environments. A convenience wrapper is checked in at `tools/donner-svg`, which is the
+ * `donner-cli` is a command line utility for rendering SVG files to PNG and previewing output in
+ * terminal environments. A convenience wrapper is checked in at `tools/donner-cli`, which is the
  * recommended way to invoke it from inside the repository.
  *
  * Build and run:
  * ```sh
- * tools/donner-svg input.svg
+ * tools/donner-cli input.svg
  * ```
  *
  * @section DonnerSvgToolBackend Rendering backend
  *
- * `donner-svg` always renders with Donner's CPU (tiny-skia) backend, under
+ * Text-enabled native packages contain `donner-cli`, its executable-adjacent `donner-assets`
+ * directory, and licenses. Keep these files together when relocating an installation; rendering
+ * works offline and reports an error if a required resource is missing or corrupt. Builds with
+ * `--config=no-text` or `--config=tiny` do not require font resources; a no-text archive may
+ * retain an empty resource manifest.
+ *
+ * `donner-cli` always renders with Donner's CPU (tiny-skia) backend, under
  * every build configuration. A one-shot command-line render cannot amortize
  * the GPU backend's fixed device and shader setup cost, so the CPU path is
  * faster for single-frame output. The GPU (Geode) backend is Donner's
@@ -68,20 +74,20 @@
  *
  * ```sh
  * # Render to PNG
- * tools/donner-svg input.svg --output output.png
+ * tools/donner-cli input.svg --output output.png
  *
  * # Terminal preview mode
- * tools/donner-svg input.svg --preview
+ * tools/donner-cli input.svg --preview
  *
  * # Interactive mode
- * tools/donner-svg input.svg --interactive
+ * tools/donner-cli input.svg --interactive
  *
  * # Animated GIF of the first 4 seconds at 20 fps and twice the intrinsic size
- * tools/donner-svg input.svg --gif output.gif --end 4 --fps 20 --scale 2 --background white
+ * tools/donner-cli input.svg --gif output.gif --end 4 --fps 20 --scale 2 --background white
  * ```
  *
- * @note `tools/donner-svg` is a thin shell wrapper that invokes
- *       `bazel run //donner/svg/tool:donner-svg -- <args>` with Bazel's progress/info output
+ * @note `tools/donner-cli` is a thin shell wrapper that invokes
+ *       `bazel run //donner/svg/tool:donner-cli -- <args>` with Bazel's progress/info output
  *       suppressed so the tool behaves like a normal CLI. The underlying Bazel target can also
  *       be invoked directly.
  *

@@ -1,7 +1,11 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_python//python:defs.bzl", "py_test")
 load(
     "//build_defs:rules.bzl",
     "donner_cc_library",
+    "donner_multi_transitioned_test",
 )
 load(
     "//donner/editor:editor_product_config.bzl",
@@ -898,9 +902,12 @@ donner_cc_test(
 
 donner_cc_fuzzer(
     name = "editor_state_machine_fuzzer",
+    testonly = True,
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = ["EditorStateMachine_fuzzer.cc"],
     corpus = "testdata/editor_state_machine_fuzzer_corpus",
     deps = [
+        "//donner/base:packaged_resource_test_fixture",
         "//donner/editor:attribute_writeback",
         "//donner/editor:editor_app",
         "//donner/editor:focus_view",
@@ -915,9 +922,12 @@ donner_cc_fuzzer(
 
 donner_cc_fuzzer(
     name = "inspector_ui_fuzzer",
+    testonly = True,
+    data = ["//third_party/public-sans:public-sans_resource_files"],
     srcs = ["InspectorUi_fuzzer.cc"],
     corpus = "testdata/inspector_ui_fuzzer_corpus",
     deps = [
+        "//donner/base:packaged_resource_test_fixture",
         "//donner/editor:editor_app",
         "//donner/editor:editor_theme",
         "//donner/editor:imgui_headers",
@@ -1254,7 +1264,7 @@ filegroup(
 donner_cc_binary(
     name = "editor_rnr_gl_replay",
     srcs = ["EditorRnrGlReplay.cc"],
-    data = [
+    data = [":editor_rnr_gl_replay_resources"] + [
         "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
         "geode_drag_zoom_o_pop.rnr",
@@ -1270,6 +1280,7 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        "//donner/base:packaged_resource",
         "//donner/editor/repro:gl_rnr_replay",
     ],
 )
@@ -1474,6 +1485,54 @@ donner_cc_test(
         "//donner/editor/gui:ui_texture_registry",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu:recording_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "packaged_resource_fixture_probe_fuzzer",
+    testonly = True,
+    data = ["//third_party/public-sans:public-sans_resource_files"],
+    srcs = ["PackagedResourceFixtureProbe_fuzzer.cc"],
+    corpus = "testdata/packaged_resource_fixture_corpus",
+    deps = [
+        "//donner/base:packaged_resource_test_fixture",
+        "//donner/editor:editor_icons",
+        "//donner/editor:embedded_svg_icon",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_tiny_skia",
+    ],
+)
+
+py_test(
+    name = "packaged_resource_raw_fixture_tests",
+    srcs = ["PackagedResourceRawFixture_tests.py"],
+    args = [
+        "--fuzzer=$(rootpath :packaged_resource_fixture_probe_fuzzer_bin)",
+        "--font-tree=$(rootpath //third_party/public-sans:public-sans_resource_files)",
+        "--icon-tree=$(rootpath //donner/editor:editor_icons_resource_files)",
+    ],
+    data = [
+        ":packaged_resource_fixture_probe_fuzzer_bin",
+        "//donner/editor:editor_icons_resource_files",
+        "//third_party/public-sans:public-sans_resource_files",
+    ],
+    main = "PackagedResourceRawFixture_tests.py",
+)
+
+donner_cc_test(
+    name = "icon_prewarm_ownership_tests",
+    srcs = ["IconPrewarmOwnership_tests.cc"],
+    renderer_backend = "tiny_skia",
+    deps = [
+        "//donner/base:packaged_resource",
+        "//donner/editor:disclosure_chevron",
+        "//donner/editor:embedded_svg_icon",
+        "//donner/editor:layers_panel",
+        "//donner/editor:sidebar_presenter",
+        "//donner/editor:toolbar_icon_set",
+        "//donner/svg/renderer:renderer_tiny_skia",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -1797,4 +1856,56 @@ donner_cc_test(
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+packaged_resource_bundle(
+    name = "editor_rnr_gl_replay_resources",
+    output_name = "editor_rnr_gl_replay_impl.assets",
+    resources = ["//donner/editor:editor_resource_bundle"],
+)
+
+py_test(
+    name = "native_repl_resource_delivery_tests_impl",
+    size = "medium",
+    srcs = ["native_editor_resource_delivery_tests.py"],
+    data = ["//donner/editor/app:render_repl"],
+    main = "native_editor_resource_delivery_tests.py",
+    tags = ["manual"],
+    deps = ["//donner/svg/renderer/tests:native_resource_delivery_fixture"],
+)
+
+donner_multi_transitioned_test(
+    name = "native_repl_resource_delivery_tests",
+    size = "medium",
+    dep = ":native_repl_resource_delivery_tests_impl",
+    fixed_args = ["ReplDelivery"],
+    renderer_backend = "tiny_skia",
+    text = "true",
+    text_full = "true",
+)
+
+py_test(
+    name = "native_editor_helper_resource_delivery_tests_impl",
+    size = "medium",
+    srcs = ["native_editor_resource_delivery_tests.py"],
+    data = [
+        ":editor_rnr_gl_replay",
+        "//tools/mcp-servers/editor-control:editor_control_mcp_server",
+    ],
+    main = "native_editor_resource_delivery_tests.py",
+    tags = ["manual"],
+    deps = ["//donner/svg/renderer/tests:native_resource_delivery_fixture"],
+)
+
+donner_multi_transitioned_test(
+    name = "native_editor_helper_resource_delivery_tests",
+    size = "medium",
+    dep = ":native_editor_helper_resource_delivery_tests_impl",
+    fixed_args = [
+        "ReplayDelivery",
+        "McpDelivery",
+    ],
+    renderer_backend = "geode",
+    text = "true",
+    text_full = "true",
 )

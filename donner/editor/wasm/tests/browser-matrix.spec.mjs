@@ -1580,6 +1580,32 @@ test("only the tracked responsiveness checks go through the completion check hel
   );
 });
 
+test("catalog browser gate admits resource failure and warm update acceptance without dropping cases", () => {
+  const spec = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
+  const build = readFileSync(path.join(testDirectory, "BUILD.bazel"), "utf8");
+  const lane = [...build.matchAll(/playwright_bin\.playwright_test\(([\s\S]*?)\n\)\n/g)]
+    .map(([, body]) => body)
+    .find((body) => body.includes("name = \"catalog_font_loading_test\""));
+  assert.ok(lane, "the normal catalog browser gate must exist");
+  const pattern = /"--grep=([^"]+)"/.exec(lane)?.[1];
+  assert.ok(pattern, "the gate must declare its selected smoke cases");
+  const titles = [...spec.matchAll(/^test(?:\.\w+)?\(\s*"([^"]+)"/gm)].map(([, title]) => title);
+  const expected = [
+    "catalog font loading records only fixed GPU acquisition markers",
+    "catalog font loading adopts deferred WOFF2 without authored edits",
+    "welcome picker paints before asynchronously rendering real SVG thumbnails",
+    "WGPU diagnostics do not block the first carousel interaction",
+    "required resource failure stays readable and prevents application startup",
+    "code-only updates transfer no unchanged essential resource bodies",
+  ];
+  for (const title of expected) assert.ok(titles.includes(title), `${title} must remain declared`);
+  assert.deepEqual(
+    titles.filter((title) => new RegExp(pattern).test(title)).sort(),
+    expected.sort(),
+    "the named normal gate must execute both resource acceptance cases and every existing case",
+  );
+});
+
 // The first-boot case takes each browser's one-time startup cost, so the animation cases after it
 // budget only their own boot and probes. That holds only while the lane runs one worker, in
 // declaration order, with every case selected by the lane's grep.

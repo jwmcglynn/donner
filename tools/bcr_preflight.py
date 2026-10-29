@@ -49,13 +49,18 @@ import sys
 # matches `/`.
 RELEASE_PATHS = (
     "LICENSE", "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion", ".bazelrc", ".bcr/*",
-    "examples/bazel_consumer/*", "third_party/licenses/*", "third_party/bazel/*",
+    "examples/bazel_consumer/*", "examples/BUILD.bazel", "examples/svg_to_png.cc",
+    "examples/svg_text_interaction.cc", "examples/svg_viewer.cc", "examples/geode_embed.cc",
+    "examples/native_resource_delivery_tests.py", "examples/native_no_text_resource_delivery_tests.py",
+    "third_party/licenses/*", "third_party/bazel/*",
     "third_party/BUILD*", "third_party/*.BUILD", "third_party/*.bzl",
     "third_party/patches/*", "build_defs/licenses.bzl", "build_defs/dep_audit.bzl",
-    "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/notice*",
+    "tools/BUILD.bazel", "tools/bcr_*", "tools/release_*", "tools/native_delivery.py", "tools/notice*",
     "tools/render_notice*", "tools/default_notice*", "tools/macos_editor_test_bundle*", "tools/ci/BUILD.bazel",
     "tools/ci/release_*", "tools/ci_macos_xcode.txt", "build_defs/macos_app_bundle.bzl",
-    "build_defs/editor_build_info.bzl", "build_defs/BUILD.bazel",
+    "build_defs/editor_build_info.bzl", "build_defs/BUILD.bazel", "build_defs/packaged_resources*",
+    "donner/base/PackagedResource*", "third_party/public-sans/*", "third_party/fira-code/*",
+    "third_party/roboto/*", "third_party/google_fonts/*", "donner/editor/art/*",
     "donner/editor/write_build_info.sh", "tools/editor_build_info_tests.py", "donner/editor/BUILD.bazel",
     "donner/editor/art/Info.plist", "donner/editor/art/Donner.icns",
     ".github/workflows/bcr_preflight.yml",
@@ -65,7 +70,7 @@ RELEASE_PATHS = (
 # The release CLI, its NOTICE and the compiler identity probe, built in one invocation so the
 # NOTICE and the provenance's compiler describe the CLI's own configuration.
 RELEASE_TARGETS = ("//tools/ci:release_svg", "//tools/ci:release_svg_notice",
-                   "//tools/ci:release_compiler_identity")
+                   "//tools/ci:release_compiler_identity", "//tools/ci:release_cli_resources")
 # The NOTICE must attribute every third-party component in the CLI configuration's closure.
 NOTICE_COVERAGE = "//tools/ci:release_svg_notice_coverage"
 # The Donner libraries a consumer builds, whose configured closure the consumer audit checks.
@@ -276,8 +281,9 @@ def cli_plan(layout: Layout, platform: str, commit: str, run_id: str,
                 ("bazelisk", "test", "--lockfile_mode=error", "-c", "opt", NOTICE_COVERAGE)),
         Command("Package the CLI",
                 ("python3", "-B", "-m", "tools.release_cli", "package",
-                 "--platform", platform, "--binary", "bazel-bin/donner/svg/tool/donner-svg",
+                 "--platform", platform, "--binary", "bazel-bin/donner/svg/tool/donner-cli",
                  "--notice", "bazel-bin/third_party/licenses/notice_cli.txt",
+                 "--resources", "bazel-bin/tools/ci/release_cli_resources.assets",
                  "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
                  "--output", layout.cli_output(platform), "--commit", commit,
                  "--run-id", run_id, "--attempt", attempt)),

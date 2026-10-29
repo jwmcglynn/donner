@@ -1,6 +1,6 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
@@ -262,7 +262,7 @@ banned_deps_test(
     # targets cover the main dependency tree.
     scope = [
         "//:donner",
-        "//donner/svg/tool:donner-svg",
+        "//donner/svg/tool:donner-cli",
         "//examples:svg_to_png",
         "//third_party:zlib",
         "//third_party:freetype",
@@ -352,4 +352,33 @@ string_flag(
     name = "release_source_commit",
     build_setting_default = "",
     visibility = ["//visibility:public"],
+)
+
+py_binary(
+    name = "packaged_resources_generator",
+    srcs = ["packaged_resources.py"],
+    main = "packaged_resources.py",
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "packaged_resources_tests",
+    srcs = [
+        "packaged_resources.py",
+        "packaged_resources_test.py",
+    ],
+    data = [
+        ":BUILD.bazel",
+        ":packaged_resource_manifest_fixture",
+        "//:MODULE.bazel",
+    ],
+    imports = ["."],
+    main = "packaged_resources_test.py",
+)
+
+filegroup(
+    name = "packaged_resource_manifest_fixture",
+    testonly = True,
+    srcs = ["testdata/packaged-resource-manifest.json"],
+    visibility = ["//donner/base:__pkg__"],
 )

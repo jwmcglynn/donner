@@ -18,6 +18,9 @@
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/base/PackagedResource.h"
+#endif
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/wasm/WasmBridgeUtils.h"
@@ -29,9 +32,58 @@ std::string gLastError;
 
 constexpr size_t kMaximumPixelBufferSize = 64 * 1024 * 1024;
 
+#ifdef DONNER_TEXT_ENABLED
+/// Require authenticated host-installed font resources before rendering text.
+bool PrepareResources() {
+  std::string error;
+  if (!donner::PreparePackagedResources(&error)) {
+    gLastError = "Packaged resources unavailable: " + error;
+    return false;
+  }
+  return true;
+}
+#endif
+
+/// Copy the validated snapshot into the caller-owned C API buffer.
+uint8_t* CopySnapshot(const donner::svg::RendererBitmap& bitmap, int width, int height,
+                      size_t expectedBytes) {
+  const size_t dstRowBytes = static_cast<size_t>(width) * 4;
+  if (bitmap.empty() || bitmap.dimensions != donner::Vector2i(width, height) ||
+      bitmap.rowBytes < dstRowBytes || bitmap.rowBytes > bitmap.pixels.size() ||
+      static_cast<size_t>(height) > bitmap.pixels.size() / bitmap.rowBytes) {
+    gLastError = "Rendering produced an invalid bitmap";
+    return nullptr;
+  }
+
+  // NOLINTNEXTLINE: malloc is required for Emscripten interop - JS frees via donner_free_pixels.
+  auto* pixels = static_cast<uint8_t*>(std::malloc(expectedBytes));
+  if (pixels == nullptr) {
+    gLastError = "Failed to allocate pixel buffer";
+    return nullptr;
+  }
+
+  // Copy rows, handling potential stride differences between the renderer's
+  // rowBytes and the tightly-packed output expected by the caller.
+  for (int y = 0; y < height; ++y) {
+    const size_t srcOffset = static_cast<size_t>(y) * bitmap.rowBytes;
+    const size_t dstOffset = static_cast<size_t>(y) * dstRowBytes;
+    std::memcpy(pixels + dstOffset, bitmap.pixels.data() + srcOffset, dstRowBytes);
+  }
+
+  return pixels;
+}
+
 }  // namespace
 
 extern "C" {
+
+#ifdef DONNER_TEXT_ENABLED
+/// Install-only startup capability; this does not start an application or fetch resource bytes.
+int donner_prepare_resources() {
+  gLastError.clear();
+  return PrepareResources() ? 1 : 0;
+}
+#endif
 
 void donner_geode_init() {
   // Reserved for future use. WebGPU device creation happens lazily on
@@ -81,6 +133,12 @@ uint8_t* donner_geode_render_svg_len(const char* svgText, size_t svgTextSize, in
   }
   const size_t expectedBytes = area * 4;
 
+#ifdef DONNER_TEXT_ENABLED
+  if (!PrepareResources()) {
+    return nullptr;
+  }
+#endif
+
   // Parse the SVG document.
   std::cerr << "[wasm] parsing SVG (" << svgTextSize << " bytes)" << std::endl;
   ParseWarningSink warnings;
@@ -111,30 +169,7 @@ uint8_t* donner_geode_render_svg_len(const char* svgText, size_t svgTextSize, in
   RendererBitmap bitmap = renderer.takeSnapshot();
   std::cerr << "[wasm] takeSnapshot() returned; pixels.size=" << bitmap.pixels.size()
             << " rowBytes=" << bitmap.rowBytes << std::endl;
-  const size_t dstRowBytes = static_cast<size_t>(width) * 4;
-  if (bitmap.empty() || bitmap.dimensions != Vector2i(width, height) ||
-      bitmap.rowBytes < dstRowBytes || bitmap.rowBytes > bitmap.pixels.size() ||
-      static_cast<size_t>(height) > bitmap.pixels.size() / bitmap.rowBytes) {
-    gLastError = "Rendering produced an invalid bitmap";
-    return nullptr;
-  }
-
-  // NOLINTNEXTLINE: malloc is required for Emscripten interop - JS frees via donner_free_pixels.
-  auto* pixels = static_cast<uint8_t*>(std::malloc(expectedBytes));
-  if (pixels == nullptr) {
-    gLastError = "Failed to allocate pixel buffer";
-    return nullptr;
-  }
-
-  // Copy rows, handling potential stride differences between the renderer's
-  // rowBytes and the tightly-packed output expected by the caller.
-  for (int y = 0; y < height; ++y) {
-    const size_t srcOffset = static_cast<size_t>(y) * bitmap.rowBytes;
-    const size_t dstOffset = static_cast<size_t>(y) * dstRowBytes;
-    std::memcpy(pixels + dstOffset, bitmap.pixels.data() + srcOffset, dstRowBytes);
-  }
-
-  return pixels;
+  return CopySnapshot(bitmap, width, height, expectedBytes);
 }
 
 uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {

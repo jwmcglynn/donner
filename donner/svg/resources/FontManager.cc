@@ -1119,12 +1119,12 @@ FontHandle FontManager::fallbackFont() {
 
   const Entity entity = registry_.create();
 
-  // Load the embedded Public Sans font.
-  std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
-                            embedded::kPublicSansMediumOtf.end());
+  // Keep a verified owning lease until the manager has copied its private face data.
+  const ResourceLease fallback(embedded::kPublicSansMediumOtf);
+  std::vector<uint8_t> data(fallback.bytes().begin(), fallback.bytes().end());
   if (!setRawFontData(entity, std::move(data), FontDataTrust::Trusted)) {
     registry_.destroy(entity);
-    std::cerr << "FontManager: Failed to load embedded fallback font (Public Sans)\n";
+    std::cerr << "FontManager: Failed to load packaged fallback font (Public Sans)\n";
     return FontHandle();
   }
 

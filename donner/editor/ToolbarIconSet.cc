@@ -15,7 +15,7 @@ constexpr float kToolbarIconDisplaySize = 20.0f;
 
 }  // namespace
 
-std::span<const unsigned char> ToolbarIconSvg(ToolbarIcon icon) {
+ResourceLease ToolbarIconSvg(ToolbarIcon icon) {
   switch (icon) {
     case ToolbarIcon::Select: return embedded::kToolSelectIconSvg;
     case ToolbarIcon::Pen: return embedded::kToolPenIconSvg;
@@ -36,15 +36,14 @@ std::uint64_t ToolbarIconTextureKey(ToolbarIcon icon) {
   return kIconTextureKeyBase;
 }
 
-std::span<const EmbeddedSvgIconRequest> ToolbarIconPrewarmRequests() {
-  static const std::array<EmbeddedSvgIconRequest, kToolbarIcons.size()> kRequests = {{
+std::vector<EmbeddedSvgIconRequest> ToolbarIconPrewarmRequests() {
+  return {
       {ToolbarIconSvg(ToolbarIcon::Select), kToolbarIconRasterSizePx, /*tintableMask=*/false},
       {ToolbarIconSvg(ToolbarIcon::Pen), kToolbarIconRasterSizePx, /*tintableMask=*/false},
       {ToolbarIconSvg(ToolbarIcon::Text), kToolbarIconRasterSizePx, /*tintableMask=*/false},
       {ToolbarIconSvg(ToolbarIcon::Eyedropper), kToolbarIconRasterSizePx,
        /*tintableMask=*/false},
-  }};
-  return kRequests;
+  };
 }
 
 const std::optional<svg::RendererBitmap>& CachedToolbarIconBitmap(ToolbarIcon icon) {

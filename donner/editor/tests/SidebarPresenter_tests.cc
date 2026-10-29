@@ -4056,8 +4056,8 @@ TEST(SidebarPathOperationIcons, EveryInspectorOperationMapsToItsOwnIconAndTextur
   std::vector<std::pair<PathOperationKind, const unsigned char*>> iconSources;
   std::vector<std::uint64_t> textureKeys;
   for (const PathOperationKind operation : kInspectorPathOperations) {
-    const std::span<const unsigned char> svg = PathOperationIconSvg(operation);
-    ASSERT_THAT(svg, Not(IsEmpty())) << "operation " << static_cast<int>(operation);
+    const ResourceLease svg = PathOperationIconSvg(operation);
+    ASSERT_THAT(svg.bytes(), Not(IsEmpty())) << "operation " << static_cast<int>(operation);
     iconSources.emplace_back(operation, svg.data());
     textureKeys.push_back(PathOperationIconTextureKey(operation));
   }
@@ -4078,9 +4078,9 @@ TEST(SidebarPathOperationIcons, EveryInspectorOperationMapsToItsOwnIconAndTextur
 // has to carry every button's artwork; a button missing from it pays a GPU
 // readback on the first selection instead.
 TEST(SidebarPathOperationIcons, PrewarmRequestsCoverEveryInspectorButton) {
-  const std::span<const EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
+  const std::vector<EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
   for (const PathOperationKind operation : kInspectorPathOperations) {
-    const std::span<const unsigned char> svg = PathOperationIconSvg(operation);
+    const ResourceLease svg = PathOperationIconSvg(operation);
     const bool present =
         std::any_of(requests.begin(), requests.end(), [&](const EmbeddedSvgIconRequest& request) {
           return request.svgBytes.data() == svg.data() && request.tintableMask;
@@ -4099,9 +4099,9 @@ TEST(SidebarStrokePreviewIcons, SvgStrokesRenderDistinctCapsAndJoins) {
   std::array<std::uint64_t, kStrokePreviewIcons.size()> textureKeys;
   for (std::size_t index = 0; index < kStrokePreviewIcons.size(); ++index) {
     const StrokePreviewIcon icon = kStrokePreviewIcons[index];
-    const std::span<const unsigned char> source = StrokePreviewIconSvg(icon);
+    const ResourceLease source = StrokePreviewIconSvg(icon);
     ASSERT_FALSE(source.empty());
-    const std::string_view svg(reinterpret_cast<const char*>(source.data()), source.size());
+    const std::string_view svg = source.text();
     EXPECT_NE(svg.find(kAttributes[index]), std::string_view::npos);
     const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgArtwork(source, 96);
     ASSERT_TRUE(bitmap.has_value());
@@ -4139,9 +4139,9 @@ TEST(SidebarStrokePreviewIcons, WidthPresetSpriteUsesOnePixelPerUserUnitAtActual
 }
 
 TEST(SidebarStrokePreviewIcons, PrewarmRequestsIncludeEveryStrokeSvg) {
-  const std::span<const EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
+  const std::vector<EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
   for (const StrokePreviewIcon icon : kStrokePreviewIcons) {
-    const std::span<const unsigned char> source = StrokePreviewIconSvg(icon);
+    const ResourceLease source = StrokePreviewIconSvg(icon);
     const bool present =
         std::any_of(requests.begin(), requests.end(), [&](const EmbeddedSvgIconRequest& request) {
           return request.svgBytes.data() == source.data() && request.outputSizePx == 96 &&

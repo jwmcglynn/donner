@@ -47,6 +47,7 @@ void PublishWasmPinchZoomPolicy(double wheelDeltaPerLnScale) {
 #include "donner/base/FailureSignalHandler.h"
 #endif
 
+#include "donner/base/PackagedResource.h"
 #include "donner/editor/EditorBuildInfo.h"
 #include "donner/editor/EditorShell.h"
 #include "donner/editor/Notice.h"
@@ -342,13 +343,66 @@ void RunWasmEditorFrame(void* userdata, bool forceFrame) {
 }
 #endif
 
+#ifndef __EMSCRIPTEN__
+bool ParseNativeEditorArguments(int argc, char** argv, std::optional<std::string>& svgPath,
+                                std::optional<std::string>& reproOutputPath) {
+  constexpr std::string_view kUsage =
+      "Usage: donner-editor [--experimental] [--save-repro <path>] [filename]\n";
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view arg(argv[i]);
+    if (arg == "--experimental") {
+      // Developer CLI contract: keep accepting this flag even when it is a
+      // no-op. Old repro scripts and launch aliases pass it, and removing it
+      // breaks callers.
+      continue;
+    }
+
+    if (arg == "--save-repro") {
+      if (i + 1 >= argc) {
+        std::cerr << "--save-repro requires a filename argument\n" << kUsage;
+        return false;
+      }
+      reproOutputPath = std::string(argv[++i]);
+      continue;
+    }
+
+    if (arg.starts_with("--")) {
+      std::cerr << "Unknown option " << arg << "\n" << kUsage;
+      return false;
+    }
+
+    if (svgPath.has_value()) {
+      std::cerr << kUsage;
+      return false;
+    }
+
+    svgPath = std::string(arg);
+  }
+
+  return true;
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifndef __EMSCRIPTEN__
+  struct ResourceLifetime {
+    ResourceLifetime() {
+      donner::SetPackagedResourceSession(std::make_shared<donner::PackagedResourceSession>());
+    }
+    ~ResourceLifetime() { donner::SetPackagedResourceSession(nullptr); }
+  } resources;
+#endif
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::cerr << "Cannot start Donner: " << resourceError << "\n";
+    return 1;
+  }
+
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
-  // Must precede every other line: `main()` runs on a pthread here, and the
-  // first editor `EM_JS` body that touches `window` would otherwise throw
-  // before anything is constructed.
+  // Install browser globals before editor code can touch window. main() runs on a pthread,
+  // while the resource barrier above only inspects already-installed C++ bytes.
   donner::editor::whole_app_worker::InstallWorkerGlobalShim();
   donner::editor::whole_app_worker::Install();
   donner::gpu::browser::RegisterBrowserGpuOwner();
@@ -370,37 +424,8 @@ int main(int argc, char** argv) {
   showWelcome = true;
 #else
   std::optional<std::string> reproOutputPath;
-  constexpr std::string_view kUsage =
-      "Usage: donner-editor [--experimental] [--save-repro <path>] [filename]\n";
-  for (int i = 1; i < argc; ++i) {
-    const std::string_view arg(argv[i]);
-    if (arg == "--experimental") {
-      // Developer CLI contract: keep accepting this flag even when it is a
-      // no-op. Old repro scripts and launch aliases pass it, and removing it
-      // breaks callers.
-      continue;
-    }
-
-    if (arg == "--save-repro") {
-      if (i + 1 >= argc) {
-        std::cerr << "--save-repro requires a filename argument\n" << kUsage;
-        return 1;
-      }
-      reproOutputPath = std::string(argv[++i]);
-      continue;
-    }
-
-    if (arg.starts_with("--")) {
-      std::cerr << "Unknown option " << arg << "\n" << kUsage;
-      return 1;
-    }
-
-    if (svgPath.has_value()) {
-      std::cerr << kUsage;
-      return 1;
-    }
-
-    svgPath = std::string(arg);
+  if (!ParseNativeEditorArguments(argc, argv, svgPath, reproOutputPath)) {
+    return 1;
   }
 
   if (!svgPath.has_value()) {

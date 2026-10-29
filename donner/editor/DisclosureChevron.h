@@ -10,7 +10,7 @@
 /// `AddImage` path rather than a rotated quad.
 
 #include <optional>
-#include <span>
+#include <vector>
 
 #include "donner/base/Vector2.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
@@ -36,7 +36,7 @@ inline constexpr int kDisclosureChevronRasterSizePx = 32;
 /// Both chevron rasterizations, for the shell's startup prewarm batch. The two
 /// masks are cached together on first use, so a tree row of either state pays
 /// for both.
-[[nodiscard]] std::span<const EmbeddedSvgIconRequest> DisclosureChevronPrewarmRequests();
+[[nodiscard]] std::vector<EmbeddedSvgIconRequest> DisclosureChevronPrewarmRequests();
 
 /// Blit an already-uploaded chevron @p texture centered at @p center within a
 /// @p sizePx square, tinted @p tint. The texture's valid payload UV range is

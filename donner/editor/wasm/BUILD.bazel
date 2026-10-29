@@ -82,6 +82,8 @@ _EDITOR_FIXED_MEMORY_BYTES = 402653184  # 384 MiB
 # Linker flags for the Geode-only editor WebAssembly binary.
 _EDITOR_LINKOPTS = [
     "--closure=1",
+    "-sEXPORTED_RUNTIME_METHODS=['callMain','HEAPU8']",
+    "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free']",
     # SIMPLE keeps DOM, Emscripten, and WebGPU property names intact while
     # still compressing local glue. ADVANCED rewrites cross-language contracts
     # such as the input bridge and can leave the editor unresponsive.
@@ -158,6 +160,7 @@ cc_binary(
     srcs = [
         "BrowserGpuOwnerWait.cc",
         "BrowserGpuOwnerWait.h",
+        "PackagedResourceBridge.cc",
         "//donner/editor:main.cc",
     ],
     additional_linker_inputs = [
@@ -185,9 +188,11 @@ cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = _EDITOR_WASM_BINARY_DEPS + [
+        "//donner/base:packaged_resource",
         "//donner/editor:editor_build_info",
         "//donner/editor:notice",
-        "//donner/gpu:gpu",
+        "//donner/editor:whole_app_worker_bridge",
+        "//donner/gpu",
     ],
 )
 
@@ -217,9 +222,13 @@ web_package(
         "editor-bootstrap.js",
         "enable-threads.js",
         "index.html",
+        "packaged-resource-loader.js",
         "//:donner_icon.svg",
     ],
-    asset_trees = ["//third_party/google_fonts:google_fonts_woff2_assets"],
+    asset_trees = [
+        "//donner/editor:editor_web_resource_bundle",
+        "//third_party/google_fonts:google_fonts_woff2_assets",
+    ],
     tags = [
         "manual",
         "wasm",
@@ -306,6 +315,7 @@ py_test(
     name = "catalog_package_integrity_test",
     srcs = ["catalog_package_integrity_test.py"],
     args = [
+        "--bazel-inputs",
         "--package",
         "$(rootpath :_wasm_web_package_for_serve)",
         "--native-notices",
@@ -319,7 +329,10 @@ py_test(
 
 py_test(
     name = "catalog_package_validation_tests",
-    srcs = ["catalog_package_integrity_test.py"],
+    srcs = [
+        "catalog_package_integrity_test.py",
+        "package_web_files.py",
+    ],
     main = "catalog_package_integrity_test.py",
 )
 
@@ -389,7 +402,7 @@ py_test(
         "--max-js-gzip-bytes",
         "56000",
         "--max-total-raw-bytes",
-        "12880000",
+        "13000000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # The WebGPU readback diagnostic the browser pixel suites read, published by

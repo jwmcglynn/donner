@@ -1,4 +1,5 @@
-load("//build_defs:dep_audit.bzl", "forbidden_transitive_dep_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "forbidden_transitive_dep_test")
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load(
     "//build_defs:rules.bzl",
     "donner_cc_binary",
@@ -11,7 +12,13 @@ load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_tes
 
 alias(
     name = "tool",
-    actual = ":donner-svg",
+    actual = ":donner-cli",
+)
+
+alias(
+    name = "donner-svg",
+    actual = ":donner-cli",
+    deprecation = "Use :donner-cli; this alias will be removed at the next breaking version.",
 )
 
 donner_cc_library(
@@ -26,9 +33,22 @@ donner_cc_library(
     ],
 )
 
+packaged_resource_bundle(
+    name = "cli_resource_bundle",
+    output_name = "donner-assets",
+    resources = select({
+        "//donner/svg/renderer:text_enabled": ["//third_party/public-sans:public-sans_resource_files"],
+        "//conditions:default": [],
+    }),
+)
+
 donner_cc_binary(
-    name = "donner-svg",
+    name = "donner-cli",
     srcs = ["donner_svg_tool.cc"],
+    data = select({
+        "//donner/svg/renderer:text_enabled": [":cli_resource_bundle"],
+        "//conditions:default": [],
+    }),
     linkopts = identical_code_folding_linkopts(),
     tags = [
         "codeql_default",
@@ -45,7 +65,7 @@ no_rust_dependency_audit_test(
     name = "donner_svg_no_rust_dependency_audit_test",
     size = "small",
     required = ["//donner/svg/renderer:renderer_tiny_skia"],
-    target = ":donner-svg",
+    target = ":donner-cli",
 )
 
 donner_cc_library(
@@ -56,6 +76,7 @@ donner_cc_library(
     deps = [
         ":donner_svg_tool_utils",
         "//donner/base:diagnostic_renderer",
+        "//donner/base:packaged_resource",
         "//donner/base/parser",
         "//donner/css:core",
         "//donner/css/parser",
@@ -102,6 +123,39 @@ donner_cc_test(
     ],
 )
 
+config_setting(
+    name = "installed_cli_basic_text",
+    flag_values = {
+        "//donner/svg/renderer:text": "true",
+        "//donner/svg/renderer:text_full": "false",
+    },
+)
+
+donner_cc_test(
+    name = "donner_cli_installed_workflow_tests",
+    srcs = ["DonnerCliInstalledWorkflow_tests.cc"],
+    data = [
+        ":cli_resource_bundle",
+        ":donner-cli",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }) + select({
+        ":installed_cli_basic_text": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer/tests:gif_test_decoder",
+        "//tools/svg_suite:image_compare",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # The one-shot CLI must never link the GPU (Geode) backend: a single
 # rendered frame cannot amortize GPU device and shader setup, so the CPU
 # backend is the CLI renderer under every build config, including
@@ -116,5 +170,28 @@ forbidden_transitive_dep_test(
         "audit",
         "deps",
     ],
-    target = "//donner/svg/tool:donner-svg",
+    target = "//donner/svg/tool:donner-cli",
 )
+
+[
+    configured_dependency_audit_test(
+        name = "donner_cli_" + tier + "_resources_audit",
+        forbidden = [
+            "//donner/svg/tool:cli_resource_bundle",
+            "//donner/svg/resources:generic_sans_faces_resource_files",
+            "//third_party/google_fonts:catalog_resource_files",
+            "//third_party/public-sans:public-sans_resource_files",
+        ] if tier == "none" else [],
+        required = [
+            "//donner/svg/tool:donner-cli",
+            "//donner/svg/renderer:renderer_tiny_skia",
+        ] + ([
+            "//donner/svg/tool:cli_resource_bundle",
+            "//donner/svg/resources:font_manager",
+            "//third_party/public-sans:public-sans_resource_files",
+        ] if tier != "none" else []),
+        target = ":donner-cli",
+        text_configuration = tier,
+    )
+    for tier in ("none", "basic", "full")
+]

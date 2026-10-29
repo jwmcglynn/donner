@@ -430,14 +430,14 @@ dependency onto CI images that already link fine. See
 
 ### `-c opt` link fails with `unrecognized option '--icf=safe'`
 
-Optimized Linux builds of the shipped binaries (`donner-svg`, `svg_to_png` and the editor) fold
+Optimized Linux builds of the shipped binaries (`donner-cli`, `svg_to_png` and the editor) fold
 identical functions at link time with `-Wl,--icf=safe`, which `lld` and `ld.gold` support. Bazel's
 autoconfigured toolchain picks one of those whenever it is installed; this error means it fell
 back to GNU `ld` (bfd), which does not. Either install `lld` and build with `--config=lld`, or turn
 the folding off:
 
 ```sh
-bazel build -c opt --//build_defs:linker_icf=false //donner/svg/tool:donner-svg
+bazel build -c opt --//build_defs:linker_icf=false //donner/svg/tool:donner-cli
 ```
 
 Folding changes only the binary's size, not its behavior.
@@ -472,3 +472,30 @@ bazel run //donner/editor/wasm:serve_http -- --https
 Use `-- --https` for LAN access with the generated local certificate. Then open
 the served `index.html` in a browser. See \ref EditorArchitecture for how the
 editor is put together.
+
+## Native delivery diagnostics
+
+`--config=native-release-macos` and `--config=native-release-linux` build optimized inputs
+with line tables and stable compilation directories. The macOS variant requests a dSYM;
+the Linux variant requests an ELF build ID. These opt-in configurations support delivery
+experiments; ordinary release producers retain their existing configuration.
+
+`python3 -m tools.native_delivery` copies an input executable, strips the copy and retains its
+matching diagnostics in the explicit `--symbols` directory. Its parent must already exist,
+be owned by the current user and be inaccessible to other users. On macOS, pass the matching
+Bazel-produced dSYM with `--dsym`; the tool checks its UUID. On Linux, it creates a separate
+debug file, checks the build ID and adds a debug link. It verifies that unwind sections and
+binary identity survive stripping, and records both executable hashes and the symbol hash in
+`delivery.json`. It refuses to reuse output paths or generate diagnostics in a shared directory.
+
+The test-only `//tools/ci:release_crash_probe` installs the production failure handler. Running
+it with `--crash` reports its image load address and deliberately aborts through an uninlined
+`DonnerReleaseCrashProbe` frame. Verify that the stripped copy still prints a stack trace, then
+symbolicate the recorded address using the paired diagnostics before adopting a delivery policy.
+The probe has no product dependencies beyond the failure handler and is not part of a release.
+
+Stripping must precede signing and hashing. The diagnostic tool can ad-hoc sign a fresh macOS
+copy with `--sign`; production signing retains its existing separate process. Symbols are
+controlled evidence, excluded from release archives and attachments. Release adoption remains
+pending an explicitly configured retention destination and native crash/symbolication proof;
+these helpers do not change ordinary release producer behavior.

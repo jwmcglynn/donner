@@ -1,11 +1,13 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:licenses.bzl", "donner_notice_file")
 load("//donner/editor/wasm:web_package.bzl", "web_package")
 load("//tools/http:serve_http.bzl", "serve_http")
 load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
-load(":geode_browser_test_transition.bzl", "geode_browser_test_package")
+load(":geode_browser_test_transition.bzl", "geode_browser_config_probe", "geode_browser_test_package")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -51,6 +53,33 @@ _WASM_GEODE_COMPATIBLE_WITH = select({
     "//conditions:default": ["@platforms//:incompatible"],
 })
 
+# Transport stays static JavaScript; no editor C++ or worker runtime enters these modules.
+donner_notice_file(
+    name = "fallback_font_notice",
+    licenses = ["//third_party/licenses:public-sans"],
+    variant = "Standalone renderer fallback font",
+)
+
+filegroup(
+    name = "fallback_font_notice_text",
+    srcs = [":fallback_font_notice"],
+    output_group = "notice",
+)
+
+_TEXT_RESOURCE_SUPPORT = select({
+    "//donner/svg/renderer:text_enabled": [
+        ":fallback_font_notice_text",
+        "//donner/editor/wasm:catalog-fonts.js",
+        "//donner/editor/wasm:packaged-resource-loader.js",
+    ],
+    "//conditions:default": [],
+})
+
+_TEXT_RESOURCE_TREES = select({
+    "//donner/svg/renderer:text_enabled": ["//third_party/public-sans:public-sans_resource_files"],
+    "//conditions:default": [],
+})
+
 # ─── Tiny-Skia (software rasterizer) WASM build ────────────────────────
 
 # Internal cc_binary that Emscripten's wasm_cc_binary transitions to WASM.
@@ -65,14 +94,16 @@ cc_binary(
         "-sEXPORT_ES6=1",
         "-sENVIRONMENT=web",
         "-sALLOW_MEMORY_GROWTH=1",
-        "-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
         # Smaller allocator than the default dlmalloc; safe with USE_PTHREADS=0.
         "-sMALLOC=emmalloc",
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
         "-sUSE_PTHREADS=0",
         "-sSTACK_SIZE=1048576",
         "--no-entry",
-    ],
+    ] + select({
+        "//donner/svg/renderer:text_enabled": ["-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free,_donner_prepare_resources"],
+        "//conditions:default": ["-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free"],
+    }),
     tags = ["manual"],
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
     deps = [
@@ -94,14 +125,16 @@ wasm_cc_binary(
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
 )
 
-# Convenience filegroup for the test page and its assets.
-filegroup(
+# Complete software-renderer test page and its optional text assets.
+web_package(
     name = "test_page",
     srcs = [
+        "renderer-resources.js",
         "test.html",
-        ":donner_wasm",
-    ],
+    ] + _TEXT_RESOURCE_SUPPORT,
+    asset_trees = _TEXT_RESOURCE_TREES,
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+    wasm_deps = [":donner_wasm"],
 )
 
 # Headless render gate for the tiny_skia wasm module. Loads the built module
@@ -127,8 +160,25 @@ py_test(
     ],
     env = {"DONNER_NODE_PATH": "$(NODE_PATH)"},
     tags = ["manual"],
-    toolchains = ["@rules_nodejs//nodejs:current_node_runtime"],
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+    toolchains = ["@rules_nodejs//nodejs:current_node_runtime"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+# Run with --config=wasm-size --//donner/svg/renderer:text=true.
+py_test(
+    name = "render_text_test",
+    size = "small",
+    srcs = ["render_text_test.py"],
+    data = [
+        "render_text_test_driver.mjs",
+        ":test_page",
+        "@rules_nodejs//nodejs:current_node_runtime",
+    ],
+    env = {"DONNER_NODE_PATH": "$(NODE_PATH)"},
+    tags = ["manual"],
+    target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+    toolchains = ["@rules_nodejs//nodejs:current_node_runtime"],
     deps = ["@rules_python//python/runfiles"],
 )
 
@@ -189,13 +239,15 @@ cc_binary(
         "-sALLOW_MEMORY_GROWTH=1",
         "-sASYNCIFY=1",
         "-sASYNCIFY_STACK_SIZE=131072",
-        "-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_geode_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
         "-sUSE_PTHREADS=0",
         "-sSTACK_SIZE=1048576",
         "--no-entry",
         "--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)",
-    ],
+    ] + select({
+        "//donner/svg/renderer:text_enabled": ["-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_geode_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free,_donner_prepare_resources"],
+        "//conditions:default": ["-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_geode_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free"],
+    }),
     tags = ["manual"],
     target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
     deps = [
@@ -229,13 +281,10 @@ no_rust_dependency_audit_test(
     target = ":donner_wasm_geode",
 )
 
-# Convenience filegroup for the Geode test page and its assets.
-filegroup(
+# Complete Geode test page and its optional text assets.
+alias(
     name = "test_page_geode",
-    srcs = [
-        "test-geode.html",
-        ":donner_wasm_geode",
-    ],
+    actual = ":geode_browser_test_package",
     target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
 )
 
@@ -243,7 +292,11 @@ filegroup(
 # build it under the same Browser setting as the normal --config=wasm-geode module.
 web_package(
     name = "geode_browser_test_package",
-    srcs = ["test-geode.html"],
+    srcs = [
+        "renderer-resources.js",
+        "test-geode.html",
+    ] + _TEXT_RESOURCE_SUPPORT,
+    asset_trees = _TEXT_RESOURCE_TREES,
     tags = ["manual"],
     target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
     wasm_deps = [":donner_wasm_geode"],
@@ -272,4 +325,39 @@ serve_http(
     dir = ":test_page",
     tags = ["manual"],
     target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+)
+
+# Observe the real private fixture transition even under smaller or fuller ambient text tiers.
+geode_browser_config_probe(
+    name = "_ambient_config_probe",
+    testonly = True,
+)
+
+geode_browser_test_package(
+    name = "_basic_text_config_probe",
+    testonly = True,
+    package = ":_ambient_config_probe",
+)
+
+py_test(
+    name = "geode_browser_test_transition_test",
+    size = "small",
+    srcs = ["geode_browser_test_transition_test.py"],
+    args = ["$(rootpath :_basic_text_config_probe)"],
+    data = [":_basic_text_config_probe"],
+)
+
+js_test(
+    name = "renderer_resource_bootstrap_test",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "renderer-resources.js",
+        "renderer-resources.spec.mjs",
+        "//donner/editor/wasm:catalog-fonts.js",
+        "//donner/editor/wasm:packaged-resource-loader.js",
+    ],
+    entry_point = "renderer-resources.spec.mjs",
+    env = {"NODE_OPTIONS": ""},
+    node_options = ["--test"],
 )

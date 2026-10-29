@@ -18,7 +18,7 @@
 ///   donner/svg/renderer/testdata/Ghostscript_Tiger.svg
 /// ```
 ///
-/// Text workloads otherwise resolve every family to the built-in fallback font. To measure them
+/// Text workloads otherwise resolve every family to the packaged fallback font. To measure them
 /// against real document fonts, register one with `--font-face=Family=/path/to/font.ttf`
 /// (repeatable); each is announced to every parsed document as an `@font-face` rule.
 
@@ -36,6 +36,10 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/base/PackagedResource.h"
+#endif
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
@@ -446,12 +450,7 @@ void printPhase(const char* label, const Stats& stats) {
               stats.max);
 }
 
-}  // namespace
-
-int main(int argc, char* argv[]) {
-  std::vector<std::string> extraFiles;
-  const Config cfg = parseArgs(argc, argv, extraFiles);
-
+std::vector<Workload> BuildWorkloads(const std::vector<std::string>& extraFiles) {
   // -- Build workload list --
   std::vector<Workload> workloads;
   workloads.push_back({"simple_shapes (inline)", std::string(kSimpleShapesSvg)});
@@ -486,6 +485,25 @@ int main(int argc, char* argv[]) {
   for (const auto& f : extraFiles) {
     tryAddFile(f);
   }
+
+  return workloads;
+}
+
+}  // namespace
+
+int main(int argc, char* argv[]) {
+  std::vector<std::string> extraFiles;
+  const Config cfg = parseArgs(argc, argv, extraFiles);
+
+#ifdef DONNER_TEXT_ENABLED
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::fprintf(stderr, "Packaged resources unavailable: %s\n", resourceError.c_str());
+    return 1;
+  }
+#endif
+
+  const auto workloads = BuildWorkloads(extraFiles);
 
   // -- Create device and renderer --
   auto device = donner::geode::GeodeDevice::CreateHeadless();

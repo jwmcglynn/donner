@@ -29,6 +29,12 @@ client. It launches the child binary at:
 Set `DONNER_EDITOR_CONTROL_BUILD_ON_START=1` if the wrapper should run the Bazel
 build before the first proxied request after startup.
 
+Bazel carries the complete offline resource companion with the server. When copying the native
+implementation directly, keep `editor_control_mcp_server_impl.assets` beside
+`editor_control_mcp_server_impl`. Startup authenticates its manifest and every linked resource before
+reading MCP messages. Missing, mismatched or corrupt resources fail on stderr without writing
+protocol output.
+
 ## Tools
 
 - `load_document`: Load an SVG file into the headless editor session.

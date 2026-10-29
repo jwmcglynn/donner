@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """AI-assisted vectorization loop harness for Donner.
 
-Renders a candidate SVG through Donner's own CLI renderer (``donner-svg``),
+Renders a candidate SVG through Donner's own CLI renderer (``donner-cli``),
 compares the render against a raster reference image, and emits a machine
 readable score plus a visual diff PNG. A coding agent runs this in a loop:
 
-    edit SVG  ->  render (donner-svg)  ->  score  ->  inspect diff PNG  ->  edit
+    edit SVG  ->  render (donner-cli)  ->  score  ->  inspect diff PNG  ->  edit
 
 The render oracle is the repository's own renderer, so "does it look right"
 is answered by the same code Donner ships, not a third party rasterizer.
@@ -13,7 +13,7 @@ is answered by the same code Donner ships, not a third party rasterizer.
 Dependencies: Python 3 standard library only (no PIL, no numpy). PNG decode
 and encode are implemented in pure Python so the loop runs anywhere python3
 runs. Bit depth 8, non-interlaced PNGs are supported (this covers both what
-donner-svg emits and the Geode splash reference).
+donner-cli emits and the Geode splash reference).
 
 Usage:
     python3 vectorize.py --reference ref.png --svg candidate.svg --out workdir
@@ -370,7 +370,7 @@ def diff_images(
 
 
 # ---------------------------------------------------------------------------
-# Renderer oracle: Donner's own donner-svg CLI.
+# Renderer oracle: Donner's own donner-cli CLI.
 # ---------------------------------------------------------------------------
 
 
@@ -403,12 +403,12 @@ def report_path(path: str, repo_root: Optional[str]) -> str:
 def default_renderer(repo_root: Optional[str]) -> Optional[str]:
     if not repo_root:
         return None
-    cand = os.path.join(repo_root, "bazel-bin", "donner", "svg", "tool", "donner-svg")
+    cand = os.path.join(repo_root, "bazel-bin", "donner", "svg", "tool", "donner-cli")
     return cand if os.path.exists(cand) else None
 
 
 def render_svg(renderer: str, svg: str, out_png: str, width: int, height: int) -> None:
-    """Render an SVG to PNG at an exact pixel size using donner-svg."""
+    """Render an SVG to PNG at an exact pixel size using donner-cli."""
     cmd = [
         renderer,
         os.path.abspath(svg),
@@ -428,7 +428,7 @@ def render_svg(renderer: str, svg: str, out_png: str, width: int, height: int) -
     )
     if proc.returncode != 0 or not os.path.exists(out_png):
         raise RuntimeError(
-            "donner-svg render failed (exit %d)\ncmd: %s\nstdout:\n%s\nstderr:\n%s"
+            "donner-cli render failed (exit %d)\ncmd: %s\nstdout:\n%s\nstderr:\n%s"
             % (proc.returncode, " ".join(cmd), proc.stdout, proc.stderr)
         )
 
@@ -441,7 +441,7 @@ def render_svg(renderer: str, svg: str, out_png: str, width: int, height: int) -
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Donner AI-assisted vectorization loop: render a candidate "
-        "SVG through donner-svg, diff it against a raster reference, and emit a score."
+        "SVG through donner-cli, diff it against a raster reference, and emit a score."
     )
     parser.add_argument("--reference", required=True, help="Raster reference PNG.")
     parser.add_argument("--svg", required=True, help="Candidate SVG to score.")
@@ -449,7 +449,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument(
         "--renderer",
         default=None,
-        help="Path to donner-svg binary (default: repo bazel-bin build).",
+        help="Path to donner-cli binary (default: repo bazel-bin build).",
     )
     parser.add_argument(
         "--background",
@@ -477,8 +477,8 @@ def main(argv: List[str]) -> int:
     renderer = args.renderer or default_renderer(repo_root)
     if not renderer or not os.path.exists(renderer):
         sys.stderr.write(
-            "error: donner-svg renderer not found.\n"
-            "Build it first:  bazel build //donner/svg/tool:donner-svg\n"
+            "error: donner-cli renderer not found.\n"
+            "Build it first:  bazel build //donner/svg/tool:donner-cli\n"
             "or pass --renderer <path>.\n"
         )
         return 2

@@ -86,7 +86,10 @@ def _validate_structure(records):
     files = {record["name"] for record in records if not record["directory"]}
     required = {name.split("/", 1)[1] for name in native.REQUIRED - {"LICENSE", "NOTICE.txt"}}
     if "Contents" not in directories or not required <= files:
-        raise ValueError("native test bundle is missing required application members")
+        raise ValueError(
+            "native test bundle is missing required application members "
+            f"(Contents_directory={'Contents' in directories}, "
+            f"missing={sorted(required - files)!r}, records={len(records)})")
     for record in records:
         parents = PurePosixPath(record["name"]).parents
         if any(str(parent) != "." and str(parent) not in directories for parent in parents):

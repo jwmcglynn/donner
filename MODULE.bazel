@@ -161,7 +161,8 @@ bazel_dep(name = "re2", version = "2025-11-05.bcr.1", dev_dependency = True)
 bazel_dep(name = "googletest", version = "1.18.0.bcr.1", dev_dependency = True, repo_name = "com_google_gtest")
 bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.2", dev_dependency = True)
 bazel_dep(name = "google_benchmark", version = "1.9.5", dev_dependency = True)
-bazel_dep(name = "rules_shell", version = "0.8.0", dev_dependency = True)
+# Shared code-generation rules load the shell rule set.
+bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "pixelmatch-cpp17", version = "2.0.0", dev_dependency = True)
 
 svg_suite_deps = use_extension("//tools/svg_suite:dependencies.bzl", "suite_deps", dev_dependency = True)
@@ -367,7 +368,8 @@ new_local_repository(
 # resvg-test-suite goldens are now vendored in-tree under
 # third_party/resvg-test-suite/ so they ship in the source archive.
 
-bazel_dep(name = "rules_python", version = "2.4.2", dev_dependency = True)
+# Resource generation is part of downstream library builds.
+bazel_dep(name = "rules_python", version = "2.4.2")
 
 # Hermetic Python toolchain. Without this, rules_python's py_binary targets
 # fall back to `/usr/bin/env python3` on the host — which is fine for local

@@ -3,9 +3,9 @@
 (() => {
   "use strict";
 
-  const maximumAssetBytes = 2 * 1024 * 1024;
-  const maximumCacheBytes = 4 * 1024 * 1024;
-  const cacheName = "donner-catalog-fonts-v1";
+  const maximumAssetBytes = 8 * 1024 * 1024;
+  const maximumCacheBytes = 16 * 1024 * 1024;
+  const cacheName = "donner-assets-v1";
   const hashPattern = /^[a-f0-9]{64}$/;
 
   class CatalogFailure extends Error {
@@ -79,6 +79,32 @@
     return bytes.subarray(0, used);
   }
 
+  function normalizeAsset(asset) {
+    const typed = typeof asset?.sha256 === "string";
+    const id = typed ? asset.sha256 : asset?.id;
+    const extensions = {
+      "font/woff2": "woff2",
+      "font/ttf": "ttf",
+      "font/otf": "otf",
+      "image/svg+xml": "svg",
+    };
+    const mediaType = typed ? asset.mediaType : "font/woff2";
+    const encodedBytes = typed ? asset.encodedSize : asset?.encodedBytes;
+    const decodedBytes = typed ? asset.decodedSize : asset?.decodedBytes;
+    const expectedPath = typed ? `assets/${id}.${extensions[mediaType]}` : `fonts/${id}.woff2`;
+    if (
+      !hashPattern.test(id) || !Object.hasOwn(extensions, mediaType) || asset.path !== expectedPath
+      || !Number.isSafeInteger(encodedBytes) || encodedBytes < 1
+      || encodedBytes > (typed ? maximumAssetBytes : 2 * 1024 * 1024)
+      || !Number.isSafeInteger(decodedBytes) || decodedBytes < 1
+      || decodedBytes > maximumAssetBytes
+      || (typed && (!/^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(asset.id)
+        || !["ui-font", "fallback-font", "chrome", "sample", "catalog-font"].includes(asset.group)))
+      || (mediaType === "font/woff2" && (encodedBytes < 48 || decodedBytes < 12))
+    ) throw new CatalogFailure("font-manifest");
+    return { ...asset, id, encodedBytes, decodedBytes, mediaType };
+  }
+
   class CatalogFontBroker {
     constructor(
       {
@@ -101,21 +127,23 @@
       ) {
         throw new CatalogFailure("font-base");
       }
-      if (!Array.isArray(assets) || assets.length > 12) throw new CatalogFailure("font-manifest");
+      if (!Array.isArray(assets) || assets.length > 128) throw new CatalogFailure("font-manifest");
       this.assets = new Map();
       let totalBytes = 0;
-      for (const asset of assets) {
-        if (
-          !hashPattern.test(asset.id) || asset.path !== `fonts/${asset.id}.woff2`
-          || !Number.isSafeInteger(asset.encodedBytes) || asset.encodedBytes < 48
-          || asset.encodedBytes > maximumAssetBytes
-          || !Number.isSafeInteger(asset.decodedBytes) || asset.decodedBytes < 12
-          || asset.decodedBytes > maximumAssetBytes || this.assets.has(asset.id)
-        ) {
-          throw new CatalogFailure("font-manifest");
+      for (const descriptor of assets) {
+        const asset = normalizeAsset(descriptor);
+        const prior = this.assets.get(asset.id);
+        if (prior) {
+          if (
+            !descriptor.sha256 || prior.path !== asset.path
+            || prior.encodedBytes !== asset.encodedBytes
+            || prior.decodedBytes !== asset.decodedBytes
+            || prior.mediaType !== asset.mediaType
+          ) throw new CatalogFailure("font-manifest");
+          continue;
         }
         totalBytes += asset.encodedBytes;
-        this.assets.set(asset.id, Object.freeze({ ...asset }));
+        this.assets.set(asset.id, Object.freeze(asset));
       }
       if (totalBytes > maximumCacheBytes) throw new CatalogFailure("font-manifest");
       this.fetch = fetchImpl;
@@ -132,6 +160,8 @@
       this.enabled = enabled;
       this.cacheWork = Promise.resolve();
       this.cacheWritePending = false;
+      this.persistenceQueue = [];
+      this.persistenceQueueBytes = 0;
       this.cachePersistence = null;
       this.persistenceDisabled = false;
     }
@@ -177,6 +207,8 @@
 
     close() {
       this.closed = true;
+      this.persistenceQueue = [];
+      this.persistenceQueueBytes = 0;
       this.cachePersistence?.controller.abort();
       for (const request of this.requests.values()) {
         request.controller?.abort();
@@ -211,10 +243,11 @@
 
     async verify(bytes, asset) {
       if (
-        bytes.byteLength !== asset.encodedBytes || bytes[0] !== 0x77 || bytes[1] !== 0x4f
-        || bytes[2] !== 0x46 || bytes[3] !== 0x32
-        || new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(16)
-          !== asset.decodedBytes
+        bytes.byteLength !== asset.encodedBytes
+        || (asset.mediaType === "font/woff2" && (bytes[0] !== 0x77 || bytes[1] !== 0x4f
+          || bytes[2] !== 0x46 || bytes[3] !== 0x32
+          || new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(16)
+            !== asset.decodedBytes))
       ) {
         throw new CatalogFailure("font-content");
       }
@@ -230,7 +263,7 @@
     }
 
     cacheKey(id) {
-      return new URL(`/.donner-font-cache/v1/${id}`, this.base.origin).href;
+      return new URL(`/.donner-asset-cache/v1/${id}`, this.base.origin).href;
     }
 
     async readCache(asset, signal) {
@@ -282,8 +315,14 @@
       // Skip persistence when another tab owns the namespace; font delivery never waits for it.
       if (
         !this.locks || !this.storage || this.closed || this.persistenceDisabled
-        || this.cacheWritePending
       ) return;
+      if (this.cacheWritePending) {
+        if (this.persistenceQueue.some((entry) => entry.asset.id === asset.id)) return;
+        if (bytes.byteLength > maximumCacheBytes - this.persistenceQueueBytes) return;
+        this.persistenceQueue.push({ asset, bytes });
+        this.persistenceQueueBytes += bytes.byteLength;
+        return;
+      }
       const work = { asset, bytes, controller: new AbortController() };
       this.cachePersistence = work;
       this.cacheWritePending = true;
@@ -296,6 +335,8 @@
         work.bytes = null;
         // An issued Cache API mutation cannot be aborted. Do not admit another write behind it.
         this.persistenceDisabled = true;
+        this.persistenceQueue = [];
+        this.persistenceQueueBytes = 0;
       };
       signal.addEventListener("abort", abort, { once: true });
       const deadline = this.timers.setTimeout(() => work.controller.abort(), 250);
@@ -315,6 +356,11 @@
         work.bytes = null;
         this.cachePersistence = null;
         this.cacheWritePending = false;
+        const next = this.persistenceQueue.shift();
+        if (next) {
+          this.persistenceQueueBytes -= next.bytes.byteLength;
+          this.persist(next.asset, next.bytes);
+        }
       }
     }
 
@@ -328,7 +374,7 @@
       throwIfCancelled(signal);
       const response = new Response(work.bytes, {
         headers: {
-          "content-type": "font/woff2",
+          "content-type": work.asset.mediaType,
           "content-length": String(work.bytes.byteLength),
           "x-donner-used": String(this.now()),
         },
@@ -360,7 +406,7 @@
         const declared = Number(response?.headers.get("content-length"));
         if (
           !response || !Number.isFinite(used) || !Number.isSafeInteger(declared)
-          || declared < 48 || declared > maximumAssetBytes || retained.length >= 128
+          || declared < 1 || declared > maximumAssetBytes || retained.length >= 128
         ) {
           await this.deleteCached(cache, key, signal);
           continue;
@@ -411,13 +457,17 @@
         }
         const mime = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
         if (
-          mime !== "font/woff2" && mime !== "application/font-woff2"
+          mime !== asset.mediaType
+          && !(asset.mediaType === "font/woff2" && mime === "application/font-woff2")
           && mime !== "application/octet-stream"
         ) {
           await response.body?.cancel();
           throw new CatalogFailure("font-type");
         }
-        return await this.verify(await readBounded(response, asset.encodedBytes), asset);
+        return await this.verify(
+          await readBounded(response, asset.encodedBytes, controller.signal),
+          asset,
+        );
       } catch (error) {
         if (error instanceof CatalogFailure) throw error;
         throw new CatalogFailure(controller.signal.aborted ? "font-timeout" : "font-network", true);
@@ -476,5 +526,6 @@
     }
   }
 
+  globalThis.DonnerAssetBroker = CatalogFontBroker;
   globalThis.DonnerCatalogFontBroker = CatalogFontBroker;
 })();

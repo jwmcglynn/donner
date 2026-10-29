@@ -886,6 +886,11 @@ void StopFrameDriver() {
   state.admission.stop();
   state.eventWake.stop();
   state.progressAdmission.stop();
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM({
+    window['__donnerClosePackagedResources']?.();
+  });
+  // clang-format on
   state.pollPresentation = nullptr;
   state.eventDeferred = false;
   state.canRunFrame = nullptr;

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,15 @@ from tools import release_cli
 
 PROBE_COMPILER = "Ubuntu Clang 18.1.3 (1ubuntu1)"
 RUNNER_CXX = "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+
+# Header-only fixtures from valid ELF64 little-endian and arm64 Mach-O images.
+LINUX_HEADER = bytes.fromhex(
+    "7f454c4602010103000000000000000003003e0001000000403e020000000000"
+    "4000000000000000d8dd01000000000000000000400038000a0040000b000a00")
+DARWIN_HEADER = bytes.fromhex(
+    "cffaedfe0c000001000000000200000015000000100700008580a10000000000"
+    "19000000480000005f5f504147455a45524f0000000000000000000000000000")
+
 
 
 class ReleaseCliFixture:
@@ -43,11 +53,24 @@ class ReleaseCliFixture:
             "registry": "https://bcr.bazel.build/modules/donner/0.8.0/MODULE.bazel",
         }) + "\n"
         (self.root / release_cli.LOCKFILE).write_text(self.lock_contents)
-        self.binary = Path(self.temporary.name) / "donner-svg"
-        self.binary.write_bytes(b"retained CLI bytes\n")
+        (self.root / "LICENSE").write_text("MIT License fixture\n")
+        self.resources = Path(self.temporary.name) / "resources"
+        (self.resources / "assets").mkdir(parents=True)
+        payload = b"font fixture"
+        checksum = release_cli.sha256(payload).hexdigest()
+        asset_path = f"assets/{checksum}.ttf"
+        (self.resources / asset_path).write_bytes(payload)
+        (self.resources / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "assets": [{
+            "id": "fixture.font", "sha256": checksum, "encodedSize": len(payload),
+            "decodedSize": len(payload), "mediaType": "font/ttf", "group": "fallback",
+            "path": asset_path}]}))
+        self.binary = Path(self.temporary.name) / "donner-cli"
+        self.binary.write_bytes(LINUX_HEADER + b"retained CLI bytes\n")
+        self.macos_binary = Path(self.temporary.name) / "donner-cli-macos"
+        self.macos_binary.write_bytes(DARWIN_HEADER + b"retained CLI bytes\n")
         self.notice = Path(self.temporary.name) / "notice_cli.txt"
         self.notice_contents = (
-            release_cli.NOTICE_HEADER + "donner-svg\n" + "=" * 72 + "\n\n" + "-" * 72 +
+            release_cli.NOTICE_HEADER + "donner-cli\n" + "=" * 72 + "\n\n" + "-" * 72 +
             "\nPackage: tiny-skia-cpp\nLicense: BSD-3-Clause\n\nCopyright fixture\n"
         )
         self.notice.write_text(self.notice_contents, encoding="utf-8")
@@ -74,8 +97,9 @@ class ReleaseCliFixture:
             release_cli.subprocess, "check_output", side_effect=fixture_check_output
         ):
             return release_cli.package(
-                root=self.root, binary=self.binary, notice=self.notice,
-                compiler_probe=self.probe, output=self.artifacts,
+                root=self.root, binary=self.macos_binary if platform == "darwin-arm64" else self.binary,
+                notice=self.notice,
+                compiler_probe=self.probe, resources=self.resources, output=self.artifacts,
                 platform=platform, commit=self.commit, run_id="123", attempt="2",
             )
 
@@ -95,12 +119,14 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
                 self.assertEqual(expected["compiler_version"], PROBE_COMPILER)
                 self.assertEqual(self._verify(platform), expected)
                 binary_name = release_cli.PLATFORMS[platform]
-                self.assertEqual((self.artifacts / binary_name).read_bytes(), self.binary.read_bytes())
+                self.assertEqual(release_cli._read_archive(self.artifacts / binary_name)["donner-cli"],
+                                 (self.macos_binary if platform == "darwin-arm64"
+                                  else self.binary).read_bytes())
                 self.assertEqual(
                     (self.artifacts / f"{binary_name}.NOTICE.txt").read_bytes(),
                     self.notice.read_bytes(),
                 )
-                self.assertEqual(expected["schema"], 3)
+                self.assertEqual(expected["schema"], 4)
                 self.assertEqual(expected["notice_sha256"], release_cli.digest(self.notice))
                 self.assertEqual(
                     json.loads((self.artifacts / f"{binary_name}.provenance").read_text()),
@@ -108,6 +134,233 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
                 )
                 for path in self.artifacts.iterdir():
                     path.unlink()
+
+    def test_no_text_packages_allow_an_empty_resource_manifest_on_both_platforms(self) -> None:
+        for path in (self.resources / "assets").iterdir():
+            path.unlink()
+        manifest = {"schemaVersion": 1, "assets": []}
+        (self.resources / "manifest.json").write_text(json.dumps(manifest))
+        for platform in release_cli.PLATFORMS:
+            with self.subTest(platform=platform):
+                expected = self._package(platform)
+                self.assertEqual(self._verify(platform), expected)
+                files = release_cli._read_archive(self.artifacts / release_cli.PLATFORMS[platform])
+                self.assertEqual({name for name in files if name.startswith("donner-assets/")},
+                                 {release_cli.MANIFEST})
+                self.assertEqual(json.loads(files[release_cli.MANIFEST]), manifest)
+                for path in self.artifacts.iterdir():
+                    path.unlink()
+
+    def test_empty_manifest_rejects_unbound_font_payloads(self) -> None:
+        (self.resources / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "assets": []}))
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            release_cli._resource_files(self.resources)
+
+    def test_resource_manifest_negative_controls(self) -> None:
+        original = json.loads((self.resources / "manifest.json").read_text())
+        mutations = {
+            "wrong schema": lambda item: item.update(schemaVersion=2),
+            "boolean schema": lambda item: item.update(schemaVersion=True),
+            "traversal": lambda item: item["assets"][0].update(path="../font.ttf"),
+            "wrong digest": lambda item: item["assets"][0].update(sha256="0" * 64),
+            "wrong length": lambda item: item["assets"][0].update(encodedSize=1),
+            "decoded overflow": lambda item: item["assets"][0].update(decodedSize=2**32),
+            "raw decoded mismatch": lambda item: item["assets"][0].update(
+                decodedSize=item["assets"][0]["encodedSize"] + 1),
+            "boolean size": lambda item: item["assets"][0].update(encodedSize=True),
+            "duplicate identity": lambda item: item["assets"].append(item["assets"][0]),
+        }
+        for case, mutate in mutations.items():
+            with self.subTest(case=case):
+                document = json.loads(json.dumps(original))
+                mutate(document)
+                (self.resources / "manifest.json").write_text(json.dumps(document))
+                with self.assertRaises(ValueError):
+                    release_cli._resource_files(self.resources)
+        (self.resources / "manifest.json").write_text(json.dumps(original))
+        self.assertTrue(release_cli._resource_files(self.resources))
+
+    def test_resource_links_extra_files_and_corruption_fail_closed(self) -> None:
+        asset = next((self.resources / "assets").iterdir())
+        original = asset.read_bytes()
+        asset.write_bytes(b"corrupted")
+        with self.assertRaisesRegex(ValueError, "digest or length"):
+            release_cli._resource_files(self.resources)
+        asset.write_bytes(original)
+        extra = self.resources / "unbound.ttf"
+        extra.write_bytes(b"extra")
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            release_cli._resource_files(self.resources)
+        extra.unlink()
+        extra.symlink_to(asset)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            release_cli._resource_files(self.resources)
+
+    def _woff2_resource(self, payload: bytes, decoded_size: int) -> dict[str, bytes]:
+        checksum = release_cli.sha256(payload).hexdigest()
+        path = f"assets/{checksum}.woff2"
+        manifest = {"schemaVersion": 1, "assets": [{
+            "id": "fixture.woff2", "sha256": checksum, "encodedSize": len(payload),
+            "decodedSize": decoded_size, "mediaType": "font/woff2", "group": "catalog",
+            "path": path}]}
+        return {release_cli.MANIFEST: json.dumps(manifest).encode(),
+                "donner-assets/" + path: payload}
+
+    def test_valid_compressed_woff2_preserves_distinct_encoded_and_decoded_sizes(self) -> None:
+        payload = (Path(__file__).parents[1] /
+                   "donner/base/fonts/testdata/valid-001.woff2").read_bytes()
+        decoded_size = struct.unpack_from(">I", payload, 16)[0]
+        self.assertGreater(decoded_size, len(payload))
+        files = self._woff2_resource(payload, decoded_size)
+        self.assertEqual(release_cli._validate_resources(files),
+                         release_cli.sha256(files[release_cli.MANIFEST]).hexdigest())
+        for name, content in files.items():
+            destination = self.resources / name.removeprefix("donner-assets/")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(content)
+        for asset in (self.resources / "assets").glob("*.ttf"):
+            asset.unlink()
+        expected = self._package("darwin-arm64")
+        self.assertEqual(self._verify("darwin-arm64"), expected)
+        archived = release_cli._read_archive(
+            self.artifacts / release_cli.PLATFORMS["darwin-arm64"])
+        self.assertEqual(archived[next(name for name in files if name.endswith(".woff2"))], payload)
+
+    def test_woff2_header_manifest_and_size_negative_controls(self) -> None:
+        original = (Path(__file__).parents[1] /
+                    "donner/base/fonts/testdata/valid-001.woff2").read_bytes()
+        decoded = struct.unpack_from(">I", original, 16)[0]
+        for label, offset, value in (("encoded length", 8, len(original) + 4),
+                                     ("decoded reference", 16, decoded + 4),
+                                     ("decoded overflow", 16, release_cli.MAX_RESOURCE_BYTES + 4),
+                                     ("compressed overflow", 20, len(original) + 4)):
+            with self.subTest(label=label):
+                payload = bytearray(original)
+                struct.pack_into(">I", payload, offset, value)
+                with self.assertRaisesRegex(ValueError, "header lengths"):
+                    release_cli._validate_resources(self._woff2_resource(bytes(payload), decoded))
+        with self.assertRaisesRegex(ValueError, "resource size"):
+            release_cli._validate_resources(self._woff2_resource(
+                original, release_cli.MAX_RESOURCE_BYTES + 4))
+        with self.assertRaisesRegex(ValueError, "header or type"):
+            release_cli._validate_resources(self._woff2_resource(original[:40], decoded))
+        with self.assertRaisesRegex(ValueError, "header lengths"):
+            release_cli._validate_resources(self._woff2_resource(original, len(original)))
+        invalid_signature = b"bad!" + original[4:]
+        with self.assertRaisesRegex(ValueError, "header or type"):
+            release_cli._validate_resources(self._woff2_resource(invalid_signature, decoded))
+
+    def test_compressed_assets_keep_a_separate_aggregate_decoded_budget(self) -> None:
+        payload = (Path(__file__).parents[1] /
+                   "donner/base/fonts/testdata/valid-001.woff2").read_bytes()
+        decoded = struct.unpack_from(">I", payload, 16)[0]
+        files = self._woff2_resource(payload, decoded)
+        document = json.loads(files[release_cli.MANIFEST])
+        document["assets"].append({**document["assets"][0], "id": "fixture.alias"})
+        files[release_cli.MANIFEST] = json.dumps(document).encode()
+        self.assertLess(sum(map(len, files.values())), 2 * decoded - 1)
+        with mock.patch.object(release_cli, "MAX_PACKAGE_BYTES", 2 * decoded - 1):
+            with self.assertRaisesRegex(ValueError, "aggregate byte limit"):
+                release_cli._validate_resources(files)
+
+
+    def test_archive_member_names_links_modes_and_duplicates_fail_closed(self) -> None:
+        import tarfile
+        import zipfile
+        for extension in ("zip", "tar.gz"):
+            archive = Path(self.temporary.name) / f"invalid.{extension}"
+            for name in ("../escape", "/absolute", "donner-svg", "binary.debug"):
+                with self.subTest(extension=extension, name=name):
+                    release_cli._write_archive(archive, {name: b"unbound"})
+                    with self.assertRaisesRegex(ValueError, "invalid or duplicate member"):
+                        release_cli._read_archive(archive)
+        archive = Path(self.temporary.name) / "invalid.tar.gz"
+        with tarfile.open(archive, "w:gz") as output:
+            link = tarfile.TarInfo("donner-cli")
+            link.type, link.linkname = tarfile.SYMTYPE, "outside"
+            output.addfile(link)
+        with self.assertRaisesRegex(ValueError, "invalid or duplicate member"):
+            release_cli._read_archive(archive)
+        archive = Path(self.temporary.name) / "invalid.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            member = zipfile.ZipInfo("donner-cli")
+            member.create_system = 3
+            member.external_attr = (stat.S_IFREG | 0o644) << 16
+            output.writestr(member, b"not executable")
+        with self.assertRaisesRegex(ValueError, "not executable"):
+            release_cli._read_archive(archive)
+        with zipfile.ZipFile(archive, "w") as output:
+            member.external_attr = (stat.S_IFREG | 0o755) << 16
+            output.writestr(member, b"first")
+            output.writestr(member, b"second")
+        with self.assertRaisesRegex(ValueError, "invalid or duplicate member"):
+            release_cli._read_archive(archive)
+
+    def test_zip_directory_limits_apply_before_zipfile_parses_metadata(self) -> None:
+        archive = Path(self.temporary.name) / "metadata.zip"
+        release_cli._write_archive(archive, {"first": b"a", "second": b"b"})
+        for limit in ("MAX_ARCHIVE_FILES", "MAX_ZIP_DIRECTORY_BYTES"):
+            with self.subTest(limit=limit), mock.patch.object(release_cli, limit, 1), \
+                 mock.patch.object(release_cli.zipfile, "ZipFile",
+                                   side_effect=AssertionError("must not parse metadata")):
+                with self.assertRaisesRegex(ValueError, "ZIP directory"):
+                    release_cli._read_archive(archive)
+
+    def test_pax_and_gnu_metadata_expansion_is_bounded_before_tarfile_parsing(self) -> None:
+        import tarfile
+        for flavor in (tarfile.PAX_FORMAT, tarfile.GNU_FORMAT):
+            archive = Path(self.temporary.name) / f"metadata-{flavor}.tar.gz"
+            with tarfile.open(archive, "w:gz", format=flavor) as output:
+                item = tarfile.TarInfo("donner-cli" if flavor == tarfile.PAX_FORMAT else "x" * 10000)
+                if flavor == tarfile.PAX_FORMAT:
+                    item.pax_headers = {"comment": "x" * 10000}
+                output.addfile(item)
+            self.assertLess(archive.stat().st_size, 1024)
+            with self.subTest(flavor=flavor), \
+                 mock.patch.object(release_cli, "MAX_PACKAGE_BYTES", 1024), \
+                 mock.patch.object(release_cli, "MAX_TAR_METADATA_BYTES", 1024), \
+                 mock.patch.object(release_cli.tarfile, "open",
+                                   side_effect=AssertionError("must not parse metadata")):
+                with self.assertRaisesRegex(ValueError, "expanded tar exceeds"):
+                    release_cli._read_archive(archive)
+
+    def test_rehashed_archive_cannot_change_executable_or_manifest_provenance(self) -> None:
+        self._package()
+        archive_name = release_cli.PLATFORMS["linux-x86-64"]
+        archive = self.artifacts / archive_name
+        files = release_cli._read_archive(archive)
+        files["donner-cli"] += b"changed executable"
+        release_cli._write_archive(archive, files)
+        (self.artifacts / (archive_name + ".sha256")).write_text(
+            f"{release_cli.digest(archive)}  {archive_name}\n")
+        with self.assertRaisesRegex(ValueError, "provenance"):
+            self._verify()
+
+    def test_source_architecture_must_match_declared_package_platform(self) -> None:
+        image = bytearray(LINUX_HEADER)
+        struct.pack_into("<H", image, 18, 183)
+        self.binary.write_bytes(image)
+        with self.assertRaisesRegex(ValueError, "architecture"):
+            self._package()
+        self.assertFalse(self.artifacts.exists())
+        self.macos_binary.write_bytes(LINUX_HEADER)
+        with self.assertRaisesRegex(ValueError, "architecture"):
+            self._package("darwin-arm64")
+        self.assertFalse(self.artifacts.exists())
+
+    def test_rehashed_archive_cannot_relabel_an_arm_elf_as_x86(self) -> None:
+        self._package()
+        archive_name = release_cli.PLATFORMS["linux-x86-64"]
+        archive = self.artifacts / archive_name
+        files = release_cli._read_archive(archive)
+        image = bytearray(files["donner-cli"])
+        struct.pack_into("<H", image, 18, 183)
+        files["donner-cli"] = bytes(image)
+        release_cli._write_archive(archive, files)
+        (self.artifacts / (archive_name + ".sha256")).write_text(
+            f"{release_cli.digest(archive)}  {archive_name}\n")
+        with self.assertRaisesRegex(ValueError, "architecture"):
+            self._verify()
 
     def test_provenance_records_the_bazel_built_compiler_not_the_runner_cxx(self) -> None:
         # Bazel builds with CC=clang/CXX=clang++ (.bazelrc), so the runner's default `c++` (GCC on
@@ -153,7 +406,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
 
     def test_previous_schema_with_runner_compiler_is_rejected(self) -> None:
         self._package()
-        path = self.artifacts / "donner-svg_linux_x86_64.provenance"
+        path = self.artifacts / "donner-cli_linux_x86_64.tar.gz.provenance"
         provenance = json.loads(path.read_text())
         provenance["schema"] = 2
         provenance["host_cxx_version"] = provenance.pop("compiler_version")
@@ -168,10 +421,11 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
     def test_tampered_binary_and_mismatched_run_fail_closed(self) -> None:
         self._package()
         binary = self.artifacts / release_cli.PLATFORMS["linux-x86-64"]
+        original = binary.read_bytes()
         binary.write_bytes(b"different bytes")
         with self.assertRaisesRegex(ValueError, "checksum"):
             self._verify()
-        binary.write_bytes(self.binary.read_bytes())
+        binary.write_bytes(original)
         with self.assertRaisesRegex(ValueError, "provenance"):
             release_cli.verify(
                 root=self.root, artifacts=self.artifacts, platform="linux-x86-64",
@@ -180,7 +434,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
 
     def test_changed_lockfile_and_missing_or_extra_assets_fail_closed(self) -> None:
         self._package()
-        lock = self.artifacts / "donner-svg_linux_x86_64.bazel.lock"
+        lock = self.artifacts / "donner-cli_linux_x86_64.tar.gz.bazel.lock"
         lock.write_text(json.dumps({"registry": "https://bcr.bazel.build/modules/other/1.0/MODULE.bazel"}))
         with self.assertRaisesRegex(ValueError, "provenance"):
             self._verify()
@@ -190,13 +444,13 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unexpected files"):
             self._verify()
         extra.unlink()
-        (self.artifacts / "donner-svg_linux_x86_64.sha256").unlink()
+        (self.artifacts / "donner-cli_linux_x86_64.tar.gz.sha256").unlink()
         with self.assertRaisesRegex(ValueError, "incomplete"):
             self._verify()
 
     def test_changed_missing_or_replaced_notice_fails_closed(self) -> None:
         self._package()
-        notice = self.artifacts / "donner-svg_linux_x86_64.NOTICE.txt"
+        notice = self.artifacts / "donner-cli_linux_x86_64.tar.gz.NOTICE.txt"
         notice.write_text(self.notice_contents.replace("tiny-skia-cpp", "other"), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "provenance"):
             self._verify()
@@ -214,7 +468,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
             "missing": None,
             "empty": b"",
             "not a notice": b"MIT License\n",
-            "no packages": release_cli.NOTICE_HEADER.encode() + b"donner-svg\n",
+            "no packages": release_cli.NOTICE_HEADER.encode() + b"donner-cli\n",
             "not UTF-8": release_cli.NOTICE_HEADER.encode() + b"\nPackage: \xff\n",
             "NUL": release_cli.NOTICE_HEADER.encode() + b"\nPackage: x\n\x00",
             "too large": release_cli.NOTICE_HEADER.encode() + b"\nPackage: x\n" +
@@ -237,7 +491,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "checkout"):
             release_cli.package(
                 root=self.root, binary=self.binary, notice=self.notice,
-                compiler_probe=self.probe, output=self.artifacts,
+                compiler_probe=self.probe, resources=self.resources, output=self.artifacts,
                 platform="linux-x86-64", commit="a" * 40, run_id="123", attempt="2",
             )
         self._package()
@@ -299,7 +553,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         with mock.patch.object(release_cli.shutil, "copyfile", side_effect=copy_with_changed_lock):
             with self.assertRaisesRegex(ValueError, "non-public"):
                 self._package()
-        self.assertFalse((self.artifacts / "donner-svg_linux_x86_64.provenance").exists())
+        self.assertFalse((self.artifacts / "donner-cli_linux_x86_64.tar.gz.provenance").exists())
 
     def test_lockfile_check_for_other_artifacts_returns_digest_or_fails_closed(self) -> None:
         # The editor package and docs build retain their generated lockfiles through this check.
@@ -355,7 +609,7 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         with mock.patch.object(release_cli.shutil, "copyfile", side_effect=copy_with_truncated_notice):
             with self.assertRaisesRegex(ValueError, "license notice"):
                 self._package()
-        self.assertFalse((self.artifacts / "donner-svg_linux_x86_64.provenance").exists())
+        self.assertFalse((self.artifacts / "donner-cli_linux_x86_64.tar.gz.provenance").exists())
 
 
 class VerifyReleaseTest(ReleaseCliFixture, unittest.TestCase):

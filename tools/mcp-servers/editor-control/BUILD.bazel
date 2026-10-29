@@ -1,3 +1,4 @@
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//donner/editor:editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "editor_cc_binary", donner_cc_test = "editor_cc_test")
 
@@ -61,6 +62,7 @@ cc_library(
 editor_cc_binary(
     name = "editor_control_mcp_server",
     srcs = ["EditorControlMcpServer.cc"],
+    data = [":editor_control_mcp_server_resources"],
     tags = [
         "codeql_default",
         "codeql_text_full",
@@ -68,6 +70,7 @@ editor_cc_binary(
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
     deps = [
         ":editor_control_session",
+        "//donner/base:packaged_resource",
         "@nlohmann_json//:json",
     ],
 )
@@ -150,4 +153,10 @@ py_test(
         "editor_control_wrapper_tests.py",
     ],
     main = "editor_control_wrapper_tests.py",
+)
+
+packaged_resource_bundle(
+    name = "editor_control_mcp_server_resources",
+    output_name = "editor_control_mcp_server_impl.assets",
+    resources = ["//donner/editor:editor_resource_bundle"],
 )

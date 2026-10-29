@@ -1,11 +1,10 @@
 # Wasm editor package
 
-The editor uses full text support on native and Wasm. The Wasm package contains
-`editor.wasm`, its JavaScript/bootstrap files, and a `fonts/` directory of twelve
-content-addressed WOFF2 catalog assets. UI fonts and the Public Sans fallback stay
-inside the module. Native editors embed the same catalog WOFF2 bytes and decode
-in memory; they need no companion font files, network connection, or writable
-font cache.
+The editor uses full text support on native and Wasm. The complete Wasm package includes
+`editor.wasm`, JavaScript/bootstrap files, `assets/` with content-addressed UI fonts,
+fallback fonts, chrome SVGs and samples, and `fonts/` with the twelve deferred catalog faces.
+Application fonts and static SVG payloads are external to the shipping module. ImGui retains
+its small built-in default font. Native packages carry their own verified offline resources.
 
 File > Open uses the browser's native file picker. Save and Save As use a native
 save picker when the browser supports writable file handles; other browsers download
@@ -22,7 +21,8 @@ bazel build --config=editor-wasm //donner/editor/wasm:wasm_web_package
 
 Serve the complete output directory, preserving its layout. The bootstrap captures
 its own package URL, so a versioned subdirectory also works. Font requests never
-use an SVG document URL or an external font service. Serve WOFF2 as `font/woff2`
+use an SVG document URL or an external font service. Serve TTF as `font/ttf`, OTF as
+`font/otf`, SVG as `image/svg+xml`, and WOFF2 as `font/woff2`
 (`application/octet-stream` is accepted), retain the editor's existing cross-origin
 isolation headers, and keep fonts on the application's own origin without redirects.
 
@@ -30,10 +30,15 @@ Publish each bundle atomically at an immutable versioned path. Retain old bundle
 while their clients remain supported: an already-open client can request its first
 catalog font later and still needs the asset pinned by that client's compiled
 manifest. The browser cache is optional and cannot replace this retention rule.
-`catalog-fonts.json` is an audit artifact; runtime trust comes from metadata
-compiled into the application.
+`catalog-fonts.json` and `packaged-resources.json` are audit artifacts. The generated
+`packaged-resources.js` contains metadata only and starts essential downloads alongside
+module compilation. Once initialized, the module's compiled manifest must match before
+verified bytes can be installed. Application startup waits for all required UI, fallback
+and chrome resources; a missing or invalid resource produces a readable page error. Samples
+load only when selected or visible in the sample picker. Preserve every declared file.
+Serve content-addressed assets with immutable cache headers where supported.
 
-Catalog metadata and startup do not fetch fonts. Visible document, font-picker,
+Catalog metadata and startup do not fetch catalog fonts. Visible document, font-picker,
 and sample-preview demand can start requests after the first presented frame.
 At most two transfers run together; document/output demand takes precedence over
 previews. A pending known font renders with fallback until a safe frame boundary
@@ -41,8 +46,9 @@ adopts its verified bytes. This changes rendering without changing SVG source or
 adding an undo entry. Geometry and pixel output require complete font readiness.
 
 The browser verifies the compiled length, WOFF2 header, and SHA-256 before making
-bytes available to the decoder. Memory and persistent encoded caches are each
-bounded to 4 MiB. Persistent entries are reverified and shared across versions
+bytes available to the decoder. The application resource store and persistent encoded cache each have a 16 MiB budget.
+The broker admits at most two transfers of up to 8 MiB each, plus one persistence write and
+a bounded 16 MiB persistence queue. Staging allocations are released after installation. Persistent entries are reverified and shared across versions
 under one cross-tab lock. Storage denial leaves online loading available; warm
 cached assets can work offline, but cold offline access to every Wasm catalog
 family is not promised. Network failures have one bounded automatic retry;
@@ -52,11 +58,10 @@ The package includes `CatalogFontNotices.txt`; preserve it with the assets.
 The [catalog documentation](https://github.com/jwmcglynn/donner/blob/main/third_party/google_fonts/README.md) describes
 generation, pins, codec limits, and semantic equivalence checks.
 
-The Wasm module goal is approximately 3.2 MB with gzip level 9 and a zero timestamp.
-With rich text, visual stroke controls, and background font previews, the measured
-module is 3,170,662 bytes; the regression gate allows 3,205,000 bytes. The generic
-sans-serif face reuses the renderer's existing Public Sans font on Web, while
-desktop-only preview-cache persistence and Noto faces stay out of the module.
-Deferred font bytes, JavaScript, and total package size are measured separately.
-The dependency audit rejects native catalog payloads, TinySkia, and ReproFile
-infrastructure in the Wasm runtime graph.
+Module bytes, JavaScript, cold essential bytes, deferred bodies and total package bytes are
+measured separately. An unchanged asset uses the same digest cache key across release paths;
+a warm code-only update does not fetch its body again. Cache hits are reverified. Cache eviction
+falls back to verified fetch, storage denial falls back to the current session, and a cold offline
+miss reports unavailability. The package integrity gate checks every declared digest and rejects
+font or SVG payloads linked into the actual shipping module. The dependency audit also rejects
+native catalog payloads, TinySkia and ReproFile infrastructure in the Wasm runtime graph.

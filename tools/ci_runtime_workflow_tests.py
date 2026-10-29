@@ -24,7 +24,7 @@ from tools import test_timing
 ENFORCED_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 56000,
     "--max-js-raw-bytes": 202000,
-    "--max-total-raw-bytes": 12880000,
+    "--max-total-raw-bytes": 13000000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 47000,
     "--max-wasm-gzip-bytes": 3540000,
@@ -718,6 +718,54 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     f"{test_timing.STALL_GUARD_SECONDS} seconds "
                     f"(entry_marker_seen={entered}, exit_marker_seen={exited})"
                 ) from None
+
+    def test_browser_comparator_runfiles_copy_is_removable_without_changing_bazel_inputs(self):
+        script = _repository_text("tools/run-browser-ci.sh")
+        staging = script.split('compare_copy="${work_dir}/browser-bitmap-compare"', 1)[1]
+        staging = 'compare_copy="${work_dir}/browser-bitmap-compare"' + staging.split(
+            'export DONNER_BROWSER_GOLDEN_COMPARE=', 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source-comparator"
+            source.write_bytes(b"comparator executable fixture")
+            source.chmod(0o555)
+            assets = root / "bazel-assets"
+            (assets / "assets").mkdir(parents=True)
+            (assets / "manifest.json").write_bytes(b"manifest fixture")
+            (assets / "assets/font.otf").write_bytes(b"font fixture")
+            for path in assets.rglob("*"):
+                path.chmod(0o555 if path.is_dir() else 0o444)
+            assets.chmod(0o555)
+            runfiles = Path(str(source) + ".runfiles") / "_main/third_party/public-sans"
+            runfiles.mkdir(parents=True)
+            (runfiles / "resource_gen.assets").symlink_to(assets, target_is_directory=True)
+            work = root / "work"
+            work.mkdir()
+            try:
+                environment = dict(os.environ, work_dir=str(work), compare_rel=str(source))
+                result = self._run_script(staging, [], env=environment)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                copied = work / "browser-bitmap-compare.runfiles"
+                self.assertEqual((work / "browser-bitmap-compare").read_bytes(), source.read_bytes())
+                delivered = copied / "_main/third_party/public-sans/resource_gen.assets"
+                self.assertEqual((delivered / "manifest.json").read_bytes(), b"manifest fixture")
+                self.assertEqual((delivered / "assets/font.otf").read_bytes(), b"font fixture")
+                for path in [copied, *copied.rglob("*")]:
+                    self.assertFalse(path.is_symlink())
+                    if path.is_dir():
+                        self.assertEqual(path.stat().st_mode & 0o200, 0o200, str(path))
+                self.assertEqual(assets.stat().st_mode & 0o777, 0o555)
+                self.assertEqual((assets / "assets").stat().st_mode & 0o777, 0o555)
+                self.assertEqual((assets / "assets/font.otf").stat().st_mode & 0o777, 0o444)
+                self.assertEqual((assets / "assets/font.otf").read_bytes(), b"font fixture")
+                self.assertEqual(source.stat().st_mode & 0o777, 0o555)
+                shutil.rmtree(copied)
+                self.assertFalse(copied.exists())
+            finally:
+                # Restore only this disposable fixture, including after the expected red control.
+                for path in root.rglob("*"):
+                    if path.is_dir() and not path.is_symlink():
+                        path.chmod(path.stat().st_mode | 0o200)
 
     def test_wasm_build_and_browser_checks_share_one_runner_and_package(self):
         self.assertNotIn("\n  test:\n", self.editor_wasm)
@@ -1557,17 +1605,21 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             prefetch.count("if: steps.editor-wasm-prefetch.outcome == 'failure'"),
         )
         fetch = self._lane_function("prefetch")
-        self.assertEqual(4, fetch.count("bazelisk fetch"))
+        self.assertEqual(5, fetch.count("bazelisk fetch"))
         self.assertNotRegex(fetch, r"bazelisk (?:build|test)")
 
         size_check = self._step_body(workflow, SIZE_CHECK_STEP.removeprefix("- name: "))
         self.assertNotIn("continue-on-error", size_check)
         build = self._size_check_phase()
-        self.assertEqual(5, build.count("bazelisk test"))
+        self.assertEqual(6, build.count("bazelisk test"))
         self.assertNotIn("bazelisk fetch", build)
         self.assertNotIn("||", build)
         self.assertIn("//tools/ci:editor_wasm_shipped_browser_audit", build)
         self.assertIn("//tools/ci:editor_wasm_size_tests", build)
+        self.assertIn("bazelisk fetch --config=wasm-size --//donner/svg/renderer:text=true "
+                      "//tools/ci:wasm_text_resource_tests", fetch)
+        self.assertIn("bazelisk test --config=wasm-size --//donner/svg/renderer:text=true "
+                      "--test_output=errors //tools/ci:wasm_text_resource_tests", build)
 
     def test_editor_wasm_pull_requests_link_the_browser_gpu_bridge(self):
         """Both bridge probes, the standalone module and its default audit run on every PR.

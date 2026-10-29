@@ -104,9 +104,11 @@ cc_library(
     name = "google_fonts_data",
     srcs = [":native_sources"],
     hdrs = [":native_header"],
+    data = [":catalog_resource_files"],
     includes = ["."],
     target_compatible_with = CATALOG_COMPATIBILITY,
     visibility = ["//donner:__subpackages__"],
+    deps = ["//donner/base:packaged_resource"],
 )
 
 filegroup(
@@ -196,3 +198,11 @@ exports_files([
     "LICENSES.md",
     "fonts.bzl",
 ])
+
+filegroup(
+    name = "catalog_resource_files",
+    srcs = [":catalog_gen"],
+    output_group = "resources",
+    target_compatible_with = CATALOG_COMPATIBILITY,
+    visibility = ["//visibility:public"],
+)

@@ -6,6 +6,7 @@ build-validation helper exercised against synthetic source trees.
 """
 
 import base64
+import io
 import os
 import re
 import sys
@@ -211,6 +212,90 @@ class CqueryBuildOutputTest(unittest.TestCase):
         self.assertFalse(targets[0].compatible)
         self.assertEqual(targets[1].label, "//third_party/roboto:roboto")
         self.assertEqual(targets[1].kind, "embed_resources")
+
+
+class PackagedResourceCmakeTest(unittest.TestCase):
+    def test_parser_recovers_resource_identity_and_include_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            output = textwrap.dedent(f"""\
+                # {workspace}/third_party/public-sans/BUILD.bazel:3:16
+                packaged_resources_generate(
+                  name = "public-sans_resource_gen",
+                  resource_name = "public-sans",
+                  header_output = "embed_resources/PublicSansFont.h",
+                  ids = ["kPublicSansMediumOtf"],
+                  srcs = ["//third_party/public-sans:PublicSans-Medium.otf"],
+                  group = "essential",
+                )
+                """)
+            targets = g._parse_cquery_build_output(output, workspace)
+        self.assertEqual(len(targets), 1)
+        self.assertEqual(targets[0].label, "//third_party/public-sans:public-sans")
+        self.assertEqual(targets[0].kind, "packaged_resources")
+
+    def test_emits_metadata_header_and_external_tree_without_payload_cpp(self):
+        target = g.CMakeTarget("//third_party/public-sans:public-sans", "third_party/public-sans",
+                               "public-sans", "packaged_resources", {"default"}, {})
+        target.resource_attrs = dict(header_output="embed_resources/PublicSansFont.h",
+                                     ids=["kPublicSansMediumOtf"],
+                                     srcs=["//third_party/public-sans:PublicSans-Medium.otf"],
+                                     group="essential")
+        out = io.StringIO()
+        g._emit_packaged_resources(out, target)
+        generated = out.getvalue()
+        self.assertIn("build_defs/packaged_resources.py", generated)
+        self.assertIn("INTERFACE donner_base_packaged_resource", generated)
+        self.assertIn("embed_resources/PublicSansFont.h", generated)
+        self.assertIn("donner-assets", generated)
+        self.assertNotIn(".otf.cpp", generated)
+        self.assertNotIn("embed_resources.py", generated)
+        self.assertNotIn("install(", generated)
+
+    def test_rejects_mismatched_resource_lists(self):
+        target = g.CMakeTarget("//fonts:fonts", "fonts", "fonts", "packaged_resources",
+                               {"default"}, {})
+        target.resource_attrs = dict(header_output="Font.h", ids=["kFont"], srcs=[], group="essential")
+        with self.assertRaisesRegex(RuntimeError, "resource"):
+            g._emit_packaged_resources(io.StringIO(), target)
+
+    def test_rejects_source_or_header_traversal(self):
+        for attrs in [
+            dict(header_output="../escape.h", ids=["kFont"], srcs=["//fonts:font.ttf"], group="essential"),
+            dict(header_output="Font.h", ids=["kFont"], srcs=["//fonts:../outside.ttf"], group="essential"),
+        ]:
+            target = g.CMakeTarget("//fonts:fonts", "fonts", "fonts", "packaged_resources",
+                                   {"default"}, {})
+            target.resource_attrs = attrs
+            with self.subTest(attrs=attrs), self.assertRaisesRegex(RuntimeError, "resource"):
+                g._emit_packaged_resources(io.StringIO(), target)
+
+    def test_resource_metadata_wins_over_generated_header_wrapper(self):
+        label = "//fonts:fonts"
+        attrs = dict(header_output="Font.h", ids=["kFont"], srcs=["//fonts:font.ttf"],
+                     group="essential")
+        wrapper = g.ConfiguredTargetInfo(label, "fonts", "fonts", "cc_library", {}, True)
+        resource = g.ConfiguredTargetInfo(label, "fonts", "fonts", "packaged_resources", attrs, True)
+        targets = {}
+        g._merge_configured_target(targets, wrapper, "default")
+        g._merge_configured_target(targets, resource, "default")
+        g._merge_configured_target(targets, wrapper, "text_full")
+        g._merge_configured_target(targets, resource, "text_full")
+        self.assertEqual(targets[label].kind, "packaged_resources")
+        self.assertEqual(targets[label].configs, {"default", "text_full"})
+        self.assertEqual(targets[label].resource_attrs, attrs)
+
+    def test_rejects_inconsistent_resource_inputs_across_configurations(self):
+        label = "//fonts:fonts"
+        attrs = dict(header_output="Font.h", ids=["kFont"], srcs=["//fonts:font.ttf"],
+                     group="essential")
+        targets = {}
+        g._merge_configured_target(targets, g.ConfiguredTargetInfo(
+            label, "fonts", "fonts", "packaged_resources", attrs, True), "default")
+        with self.assertRaisesRegex(RuntimeError, "metadata differs"):
+            g._merge_configured_target(targets, g.ConfiguredTargetInfo(
+                label, "fonts", "fonts", "packaged_resources",
+                {**attrs, "srcs": ["//fonts:other.ttf"]}, True), "text_full")
 
 
 class CqueryExpressionTest(unittest.TestCase):

@@ -197,8 +197,21 @@ def _donner_transitioned_executable_impl(ctx):
 
     executable = ctx.actions.declare_file(ctx.label.name)
     launcher_target = "_donner_transitioned/{}/{}".format(ctx.label.package, ctx.label.name)
+    declared_data = depset(transitive = [
+        dep_default_info.default_runfiles.files,
+        dep_default_info.data_runfiles.files,
+    ]).to_list()
+    companions = [file for file in declared_data if file.is_directory and file.basename == files_to_run.executable.basename + ".assets"]
+    if not companions:
+        companions = [file for file in declared_data if file.is_directory and file.basename == "donner-assets"]
+    if len(companions) > 1:
+        fail("ambiguous packaged resource companions for {}".format(dep_target.label))
+    root_symlinks = {launcher_target: files_to_run.executable}
+    if companions:
+        # Remote runfiles may materialize the executable alias as an ordinary file.
+        root_symlinks[launcher_target + ".assets"] = companions[0]
     forwarded_runfiles = ctx.runfiles(
-        root_symlinks = {launcher_target: files_to_run.executable},
+        root_symlinks = root_symlinks,
     ).merge(dep_default_info.default_runfiles).merge(dep_default_info.data_runfiles)
 
     # Do not forward the transitioned executable as a plain symlink. Native
@@ -270,6 +283,13 @@ fi
 if [[ -n "$library_path" ]]; then
   export DYLD_LIBRARY_PATH="$library_path${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}}"
   export LD_LIBRARY_PATH="$library_path${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
+fi
+# argv[0] is the inner alias, so child libraries cannot rediscover the wrapper's tree.
+if [[ -n "$runfiles_dir" ]]; then
+  export RUNFILES_DIR="$runfiles_dir"
+fi
+if [[ -n "$manifest" ]]; then
+  export RUNFILES_MANIFEST_FILE="$manifest"
 fi
 exec "$impl" {fixed_args} "$@"
 """.format(
@@ -917,6 +937,7 @@ def donner_cc_fuzzer(
         routing_manifest = None,
         routing_manifest_visibility = None,
         full_text_only = False,
+        data = [],
         **kwargs):
     """
     Create a libfuzzer-based fuzz target.
@@ -925,6 +946,7 @@ def donner_cc_fuzzer(
       name: Rule name.
       corpus: Path to a corpus directory, or a filegroup rule for the corpus.
       deps: List of dependencies.
+      data: Explicit runtime fixtures shared by raw, corpus and soak entry points.
       per_input_timeout_seconds: libFuzzer `-timeout` for `{name}_soak`. This is a hang guard,
         not a latency budget: it only has to separate an input that never finishes from a slow
         one on a loaded runner, including first-input setup under sanitizers. Under
@@ -990,6 +1012,7 @@ def donner_cc_fuzzer(
         linkopts = fuzzer_runtime_linkopts,
         linkstatic = 1,
         deps = deps + libc_compat_deps(),
+        data = data,
         target_compatible_with = fuzzer_compatible_with(),
         tags = implementation_tags,
         **kwargs
@@ -1002,6 +1025,7 @@ def donner_cc_fuzzer(
             renderer_backend = "inherit",
             full_text_only = True,
             tags = common_target_tags,
+            testonly = kwargs.get("testonly", False),
             target_compatible_with = fuzzer_compatible_with(),
         )
 
@@ -1051,7 +1075,7 @@ def donner_cc_fuzzer(
         args = ["$(locations %s)" % corpus_name],
         linkstatic = 1,
         deps = deps,
-        data = [corpus_name] + select({
+        data = data + [corpus_name] + select({
             "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
             "//conditions:default": [],
         }),

@@ -104,6 +104,10 @@ EDITOR_COMMON_FILES = {
 
 
 # Retained candidates from older source revisions legitimately lack this script.
+EDITOR_RESOURCE_FILES = {f"{prefix}/{name}" for prefix in ("site", "deploy")
+                         for name in ("packaged-resources.js", "packaged-resources.json",
+                                      "packaged-resource-loader.js")}
+
 EDITOR_DIALOG_FILES = {"site/browser-file-dialogs.js", "deploy/browser-file-dialogs.js"}
 
 
@@ -244,8 +248,8 @@ ATTEMPTLESS_ROLES = ("editor", "docs")
 def _artifact_name(role: str, commit: str, attempt: int) -> str:
     return {
         "source": f"donner-bcr-qualified-{attempt}",
-        "cli-linux": f"donner-svg-linux-x86-64-{commit}-{attempt}",
-        "cli-macos": f"donner-svg-darwin-arm64-{commit}-{attempt}",
+        "cli-linux": f"donner-cli-linux-x86-64-{commit}-{attempt}",
+        "cli-macos": f"donner-cli-darwin-arm64-{commit}-{attempt}",
         "editor-macos": f"donner-editor-darwin-arm64-{commit}-{attempt}",
         "bcr-entry": f"donner-bcr-entry-{attempt}",
         "editor": f"donner-editor-wasm-geode-{commit}",
@@ -304,6 +308,17 @@ def _editor_font_files(names: set[str]) -> set[str]:
     return {f"{prefix}/{font}" for prefix in ("site", "deploy") for font in fonts}
 
 
+def _editor_resource_files(names: set[str]) -> set[str]:
+    assets = {name.removeprefix("site/") for name in names if name.startswith("site/assets/")}
+    deployed = {name for name in names if name.startswith("deploy/assets/")}
+    if (any(not re.fullmatch(r"assets/[0-9a-f]{64}\.(?:ttf|otf|woff2|svg)", name)
+            for name in assets) or {f"deploy/{name}" for name in assets} != deployed):
+        raise ValueError("editor resource paths are outside the published asset shape")
+    if (assets or names & EDITOR_RESOURCE_FILES) and not EDITOR_RESOURCE_FILES <= names:
+        raise ValueError("editor resource metadata is incomplete")
+    return {f"{prefix}/{name}" for prefix in ("site", "deploy") for name in assets}
+
+
 def _verify_role_files(role: str, names: set[str], version: str) -> None:
     required = _fixed_role_files(role, version)
     if required is None:
@@ -312,6 +327,9 @@ def _verify_role_files(role: str, names: set[str], version: str) -> None:
         required.update(f"{prefix}/{name}" for prefix in ("site", "deploy")
                         for name in EDITOR_COMMON_FILES)
         required.update(_editor_font_files(names))
+        required.update(_editor_resource_files(names))
+        if names & EDITOR_RESOURCE_FILES:
+            required.update(EDITOR_RESOURCE_FILES)
         if names & EDITOR_DIALOG_FILES:
             required.update(EDITOR_DIALOG_FILES)
     elif role == "bcr-entry":

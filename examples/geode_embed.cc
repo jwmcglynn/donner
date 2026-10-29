@@ -23,6 +23,9 @@
 
 #include "donner/base/FileUtils.h"
 #include "donner/base/ParseWarningSink.h"
+#ifdef DONNER_EXAMPLE_NATIVE_TEXT
+#include "donner/base/PackagedResource.h"
+#endif
 #include "donner/base/TerminalEscape.h"
 #include "donner/gpu/Device.h"
 #include "donner/svg/SVG.h"
@@ -78,6 +81,13 @@ donner::gpu::SurfaceConfiguration Configuration(const donner::gpu::SurfaceCapabi
 }
 
 std::optional<donner::svg::SVGDocument> ParseDocument(const char* svgPath) {
+#ifdef DONNER_EXAMPLE_NATIVE_TEXT
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::cerr << "Packaged resources unavailable: " << resourceError << "\n";
+    return std::nullopt;
+  }
+#endif
   const std::string svgData = LoadFile(svgPath);
   if (svgData.empty()) {
     const std::string safePath = donner::EscapeTerminalText(svgPath);

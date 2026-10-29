@@ -12,9 +12,11 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "donner/gpu/CommandEncoder.h"
@@ -1101,6 +1103,67 @@ public:
   /// Devices opened so far, in order. Borrowed; the contexts own them.
   std::vector<const gpu::Device*> opened;
 };
+
+/// Records the full descriptors so missing target formats and duplicate registrations are visible.
+std::vector<std::string> RecordedBatchedFillPipelines(const gpu::RecordingDevice& device) {
+  std::istringstream capture(device.serialize());
+  std::vector<std::string> pipelines;
+  for (std::string line; std::getline(capture, line);) {
+    if (line.starts_with("createRenderPipeline ") &&
+        line.find("entryPoint=\"fs_main_batched\"") != std::string::npos) {
+      pipelines.push_back(std::move(line));
+    }
+  }
+  return pipelines;
+}
+
+/// Opens a context without selecting a native GPU backend or issuing GPU work.
+std::unique_ptr<GeodeDevice> CreateRecordedWarmupContext(
+    const std::shared_ptr<RecordingDeviceSource>& source, gpu::TextureFormat format) {
+  std::shared_ptr<GeodeGpuRoot> root = AdoptRuntimeDeviceSource(
+      source, GeodeGpuRootCapabilities{}, std::make_shared<gpu::DeviceLostState>());
+  return GeodeDevice::CreateOverSelectedRoot(std::move(root), format);
+}
+
+TEST(GeodeAdoptedRuntimeDeviceSource, EditorWarmupSeedsCanvasAndHeadlessBatchedFill) {
+  auto source = std::make_shared<RecordingDeviceSource>();
+  auto context = CreateRecordedWarmupContext(source, gpu::TextureFormat::BGRA8Unorm);
+  ASSERT_THAT(context, NotNull());
+  const auto& recording = static_cast<const gpu::RecordingDevice&>(context->runtimeDevice());
+  EXPECT_THAT(RecordedBatchedFillPipelines(recording), testing::IsEmpty())
+      << "ordinary context construction must keep the batched fill lazy";
+
+  context->buildOnDemandPipelinesAheadOfUse();
+
+  EXPECT_THAT(RecordedBatchedFillPipelines(recording),
+              testing::UnorderedElementsAre(testing::HasSubstr("format=BGRA8Unorm "),
+                                            testing::HasSubstr("format=RGBA8Unorm ")));
+  const std::string afterWarmup = recording.serialize();
+  context->buildOnDemandPipelinesAheadOfUse();
+  EXPECT_THAT(recording.serialize(), Eq(afterWarmup))
+      << "repeated warmup must reuse every registered pipeline and its owned handles";
+  EXPECT_THAT(source->opened, testing::SizeIs(1))
+      << "both formats must use the existing runtime device";
+  EXPECT_THAT(afterWarmup, testing::Not(testing::HasSubstr("submit ")));
+}
+
+TEST(GeodeAdoptedRuntimeDeviceSource, EditorWarmupReusesRgbaBatchedFill) {
+  auto source = std::make_shared<RecordingDeviceSource>();
+  auto context = CreateRecordedWarmupContext(source, gpu::TextureFormat::RGBA8Unorm);
+  ASSERT_THAT(context, NotNull());
+  const auto& recording = static_cast<const gpu::RecordingDevice&>(context->runtimeDevice());
+  EXPECT_THAT(RecordedBatchedFillPipelines(recording), testing::IsEmpty());
+
+  context->buildOnDemandPipelinesAheadOfUse();
+
+  EXPECT_THAT(RecordedBatchedFillPipelines(recording),
+              testing::ElementsAre(testing::HasSubstr("format=RGBA8Unorm ")));
+  const std::string afterWarmup = recording.serialize();
+  context->buildOnDemandPipelinesAheadOfUse();
+  EXPECT_THAT(recording.serialize(), Eq(afterWarmup));
+  EXPECT_THAT(source->opened, testing::SizeIs(1));
+  EXPECT_THAT(afterWarmup, testing::Not(testing::HasSubstr("submit ")));
+}
 
 /// An adopted source supplies every runtime device; each context keeps one of its own, the
 /// adopted capabilities and loss condition reach every context, and nothing about the backend is

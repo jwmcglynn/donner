@@ -57,7 +57,7 @@ struct LayersLockedRejectionFlash {
 /// are on screen from the first frame; the toggled states cost nothing extra to
 /// rasterize in the same batch and keep the first toggle from stalling on a
 /// readback.
-[[nodiscard]] std::span<const EmbeddedSvgIconRequest> LayersPanelIconPrewarmRequests();
+[[nodiscard]] std::vector<EmbeddedSvgIconRequest> LayersPanelIconPrewarmRequests();
 
 /// ImGui Layers panel backed by a `LayerTreeModel` snapshot.
 class LayersPanel {

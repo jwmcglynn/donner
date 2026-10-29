@@ -1,7 +1,11 @@
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
+load("@rules_python//python:defs.bzl", "py_test")
+
 """Renderer benchmarks: backend-independent document-preparation timing, plus per-phase
 timing for the Geode WebGPU/Slug backend."""
 
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
+load("//build_defs:packaged_resources.bzl", "packaged_resource_bundle")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -40,7 +44,10 @@ donner_cc_binary(
 donner_cc_binary(
     name = "renderer_bench",
     srcs = ["RendererBench.cc"],
-    data = [
+    data = select({
+        "//donner/svg/renderer:text_enabled": [":renderer_bench_resources"],
+        "//conditions:default": [],
+    }) + [
         "testdata/gradient_grid.svg",
         "//donner/svg/renderer/testdata",
     ],
@@ -50,6 +57,7 @@ donner_cc_binary(
     }),
     deps = [
         "//donner/base",
+        "//donner/base:packaged_resource",
         "//donner/css",
         "//donner/svg",
         "//donner/svg/components/resources:resource_manager_context",
@@ -65,12 +73,16 @@ donner_cc_binary(
         "AllocationTracker.h",
         "EngineCompareBench.cc",
     ],
-    data = ["testdata/simple_setup.svg"],
+    data = select({
+        "//donner/svg/renderer:text_enabled": [":engine_compare_bench_resources"],
+        "//conditions:default": [],
+    }) + ["testdata/simple_setup.svg"],
     target_compatible_with = select({
         "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        "//donner/base:packaged_resource",
         ":proc_status_parser",
         "//donner/base",
         "//donner/svg",
@@ -84,4 +96,66 @@ donner_cc_binary(
         "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer/geode:geode_device",
     ],
+)
+
+packaged_resource_bundle(
+    name = "renderer_bench_resources",
+    output_name = "renderer_bench.assets",
+    resources = select({
+        "//donner/svg/renderer:text_enabled": ["//third_party/public-sans:public-sans_resource_files"],
+        "//conditions:default": [],
+    }),
+)
+
+packaged_resource_bundle(
+    name = "engine_compare_bench_resources",
+    output_name = "engine_compare_bench.assets",
+    resources = select({
+        "//donner/svg/renderer:text_enabled": ["//third_party/public-sans:public-sans_resource_files"],
+        "//conditions:default": [],
+    }),
+)
+
+py_test(
+    name = "native_benchmark_resource_delivery_tests_impl",
+    size = "medium",
+    srcs = ["native_benchmark_resource_delivery_tests.py"],
+    data = [
+        ":engine_compare_bench",
+        ":renderer_bench",
+    ],
+    main = "native_benchmark_resource_delivery_tests.py",
+    tags = ["manual"],
+    deps = ["//donner/svg/renderer/tests:native_resource_delivery_fixture"],
+)
+
+donner_multi_transitioned_test(
+    name = "native_benchmark_resource_delivery_tests",
+    size = "medium",
+    dep = ":native_benchmark_resource_delivery_tests_impl",
+    renderer_backend = "geode",
+    text = "true",
+    text_full = "false",
+)
+
+configured_dependency_audit_test(
+    name = "renderer_bench_no_text_resource_audit",
+    forbidden = [
+        "//donner/svg/renderer/benchmarks:renderer_bench_resources",
+        "//third_party/public-sans:public-sans_resource_files",
+    ],
+    required = ["//donner/svg/renderer/benchmarks:renderer_bench"],
+    target = "//donner/svg/renderer/benchmarks:renderer_bench",
+    text_configuration = "none",
+)
+
+configured_dependency_audit_test(
+    name = "engine_compare_bench_no_text_resource_audit",
+    forbidden = [
+        "//donner/svg/renderer/benchmarks:engine_compare_bench_resources",
+        "//third_party/public-sans:public-sans_resource_files",
+    ],
+    required = ["//donner/svg/renderer/benchmarks:engine_compare_bench"],
+    target = "//donner/svg/renderer/benchmarks:engine_compare_bench",
+    text_configuration = "none",
 )

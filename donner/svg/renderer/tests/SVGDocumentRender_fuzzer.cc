@@ -1,6 +1,7 @@
 #include <cstdlib>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/PackagedResourceTestProvider.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -20,6 +21,11 @@ namespace donner::svg {
  *
  * See https://llvm.org/docs/LibFuzzer.html
  */
+extern "C" int LLVMFuzzerInitialize(int* /*argc*/, char*** argv) {
+  donner::tests::InitializeFuzzerPackagedResourceFixtures((*argv)[0]);
+  return 0;
+}
+
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // NOLINTNEXTLINE: Allow reinterpret_cast
   const std::string_view buffer(reinterpret_cast<const char*>(data), size);

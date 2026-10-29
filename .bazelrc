@@ -339,7 +339,7 @@ build:linux-binary-size --linkopt=-Wl,--gc-sections
 # and offered as a separate shipped-size config. tools/binary_size.sh reports
 # both: the non-LTO build (with per-compile-unit attribution) and this LTO
 # build (headline shipped size, no attribution). Usage:
-#   bazel build --config=macos-binary-size-lto //donner/svg/tool:donner-svg.stripped
+#   bazel build --config=macos-binary-size-lto //donner/svg/tool:donner-cli.stripped
 build:binary-size-lto --config=binary-size
 build:binary-size-lto --copt=-flto=thin --linkopt=-flto=thin
 build:macos-binary-size-lto --config=macos-binary-size

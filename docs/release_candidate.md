@@ -94,8 +94,8 @@ the verifier recomputes each one from the retained file:
 
 | Key         | Build                                                     | Retained lockfile and digest                                      |
 | ----------- | --------------------------------------------------------- | ----------------------------------------------------------------- |
-| `cli-linux` | BCR Preflight, `-c opt` CLI build, update then error mode | `donner-svg_linux_x86_64.bazel.lock`; `generated_lock_sha256`     |
-| `cli-macos` | BCR Preflight, `-c opt` CLI build, update then error mode | `donner-svg_darwin_arm64.bazel.lock`; `generated_lock_sha256`     |
+| `cli-linux` | BCR Preflight, `-c opt` CLI build, update then error mode | `donner-cli_linux_x86_64.tar.gz.bazel.lock`; `generated_lock_sha256`     |
+| `cli-macos` | BCR Preflight, `-c opt` CLI build, update then error mode | `donner-cli_darwin_arm64.zip.bazel.lock`; `generated_lock_sha256`     |
 | `editor-macos` | BCR Preflight, optimized Geode/full-text native app, update then error mode | `donner-editor_darwin_arm64.zip.bazel.lock`; `generated_lock_sha256` |
 | `editor`    | Editor WASM, `--config=editor-wasm` package build         | `MODULE.bazel.lock` in the package; `generated_lock_sha256`       |
 | `docs`      | Docs build, `bazel mod graph --ignore_dev_dependency`     | `MODULE.bazel.lock` in `docs-provenance`; `generated_lock_sha256` |

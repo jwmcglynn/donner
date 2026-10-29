@@ -22,18 +22,20 @@ const kShaderSource = "@vertex fn vs() {} @fragment fn fsA() {} @fragment fn fsB
 /** A stub device with one in-order timeline of compiles and submissions. */
 function createTimelineDevice({ asyncCompiles = true, refuseAsync = false } = {}) {
   const timeline = [];
-  const compiles = new Map(); // Fragment entry point to { finished, settle: [] }.
+  const compiles = new Map(); // Entry point and target formats to { finished, settle: [] }.
   const created = { sync: [], async: [] };
   const compileFor = (descriptor) => {
     const name = descriptor.fragment
       ? descriptor.fragment.entryPoint
       : descriptor.compute.entryPoint;
-    let compile = compiles.get(name);
+    const formats = Array.from(descriptor.fragment?.targets ?? [], (target) => target.format);
+    const key = JSON.stringify([name, formats]);
+    let compile = compiles.get(key);
     if (compile === undefined) {
       compile = { finished: false, settle: [] };
-      compiles.set(name, compile);
+      compiles.set(key, compile);
     }
-    return { name, compile };
+    return { name, formats, compile };
   };
   const advance = () => {
     while (timeline.length > 0) {
@@ -76,10 +78,10 @@ function createTimelineDevice({ asyncCompiles = true, refuseAsync = false } = {}
     createPipelineLayout: (descriptor) => ({ descriptor }),
     createTexture: (descriptor) => ({ descriptor, destroy() {}, createView: () => ({}) }),
     createRenderPipeline(descriptor) {
-      const { name, compile } = compileFor(descriptor);
+      const { name, formats, compile } = compileFor(descriptor);
       created.sync.push(name);
       timeline.push({ kind: "compile", compile });
-      return { name, synchronous: true };
+      return { name, formats, synchronous: true };
     },
     createCommandEncoder() {
       return {
@@ -90,11 +92,11 @@ function createTimelineDevice({ asyncCompiles = true, refuseAsync = false } = {}
   };
   if (asyncCompiles) {
     device.createRenderPipelineAsync = (descriptor) => {
-      const { name, compile } = compileFor(descriptor);
+      const { name, formats, compile } = compileFor(descriptor);
       created.async.push(name);
       return new Promise((resolve, reject) => {
         compile.settle.push(() =>
-          refuseAsync ? reject(new Error("refused")) : resolve({ name, synchronous: false })
+          refuseAsync ? reject(new Error("refused")) : resolve({ name, formats, synchronous: false })
         );
         if (compile.finished) compile.settle.splice(0).forEach((settle) => settle());
       });
@@ -103,10 +105,11 @@ function createTimelineDevice({ asyncCompiles = true, refuseAsync = false } = {}
   return {
     device,
     created,
-    /** Finishes the compile of the pipeline whose fragment entry point is `name`. */
-    finishCompile(name) {
-      const compile = compiles.get(name);
-      assert.ok(compile, `nothing has asked to compile ${name}`);
+    /** Finishes only the compile with this entry point and these target formats. */
+    finishCompile(name, formats = ["rgba8unorm"]) {
+      const key = JSON.stringify([name, formats]);
+      const compile = compiles.get(key);
+      assert.ok(compile, `nothing has asked to compile ${key}`);
       compile.finished = true;
       compile.settle.splice(0).forEach((settle) => settle());
       advance();
@@ -155,7 +158,7 @@ function buildPipelines(bridge, handle, fragments) {
   assert.equal(gpu.donner_gpu_pipeline_layout_group(handle, kGroupLayout), state.kSuccess);
   assert.equal(gpu.donner_gpu_pipeline_layout_finish(handle, kLayout), state.kSuccess);
   const vertex = bridge.string("vs");
-  for (const [id, name] of fragments) {
+  for (const [id, name, formatCode = 1] of fragments) {
     const fragment = bridge.string(name);
     assert.equal(
       gpu.donner_gpu_render_pipeline_begin(
@@ -173,7 +176,7 @@ function buildPipelines(bridge, handle, fragments) {
       state.kSuccess,
     );
     assert.equal(
-      gpu.donner_gpu_render_pipeline_color_target(handle, 1, 0, 0, 0, 0, 0, 0, 0, 15),
+      gpu.donner_gpu_render_pipeline_color_target(handle, formatCode, 0, 0, 0, 0, 0, 0, 0, 15),
       state.kSuccess,
     );
     assert.equal(gpu.donner_gpu_render_pipeline_finish(handle, id), state.kSuccess);
@@ -267,6 +270,61 @@ test("identical pipelines on two logical devices compile once and share the resu
     { compiles: 2, shared: 1, onFirstUse: 0 },
   );
 });
+
+test("a settled BGRA pipeline does not hide an unregistered RGBA first-use compile", async () => {
+  const stub = createTimelineDevice();
+  const bridge = await openOver(stub, [kFirst, kSecond]);
+  buildPipelines(bridge, kFirst, [[kPipelineA, "fsA", 2]]);
+  await drain();
+  stub.finishCompile("fsA", ["bgra8unorm"]);
+  await drain();
+  assert.equal(bridge.state.debugStatistics()["pipelineCompilesPending"], 0);
+
+  // Registration and use in one task cannot borrow the other target format's compiled pipeline.
+  buildPipelines(bridge, kSecond, [[kPipelineA, "fsA", 1]]);
+  submitDraw(bridge, kSecond, 1, kPipelineA);
+  assert.equal(bridge.state.debugStatistics()["pipelineCompilesOnFirstUse"], 1);
+  assert.equal(bridge.state.pipelines.size, 2);
+  const draws = stub.device.draws.map(({ formats, synchronous }) => ({ formats, synchronous }));
+  assert.deepEqual(draws, [{ formats: ["rgba8unorm"], synchronous: true }]);
+  stub.finishCompile("fsA", ["rgba8unorm"]);
+  await until(
+    () => bridge.entryPoints.donner_gpu_completed_serial(kSecond) === 1,
+    "the RGBA submission completes once its own compile finishes",
+  );
+  await drain();
+  assert.deepEqual(stub.created, { sync: ["fsA"], async: ["fsA"] });
+});
+
+for (const canvas of [{ name: "BGRA", code: 2 }, { name: "RGBA", code: 1 }]) {
+  test(`an RGBA seed survives ${canvas.name} startup without first-use compilation`, async () => {
+    const stub = createTimelineDevice();
+    const bridge = await openOver(stub, [kFirst, kSecond]);
+    buildPipelines(bridge, kFirst, [[kPipelineA, "fsA", canvas.code], [kPipelineB, "fsA", 1]]);
+    await drain();
+    const expectedCompiles = canvas.code === 2 ? 2 : 1;
+    assert.equal(bridge.state.debugStatistics()["pipelineCompilesPending"], expectedCompiles);
+    if (canvas.code === 2) {
+      stub.finishCompile("fsA", ["bgra8unorm"]);
+      await drain();
+      assert.equal(bridge.state.debugStatistics()["pipelineCompilesPending"], 1);
+    }
+    stub.finishCompile("fsA", ["rgba8unorm"]);
+    await drain();
+    assert.equal(bridge.state.debugStatistics()["pipelineCompilesPending"], 0);
+
+    buildPipelines(bridge, kSecond, [[kPipelineA, "fsA", 1]]);
+    submitDraw(bridge, kFirst, 1, kPipelineB);
+    submitDraw(bridge, kSecond, 1, kPipelineA);
+    const [seed, headless] = stub.device.draws;
+    assert.equal(seed, headless, "headless draws use the precompiled RGBA object");
+    assert.deepEqual(headless.formats, ["rgba8unorm"]);
+    assert.equal(headless.synchronous, false);
+    assert.equal(bridge.state.pipelines.size, expectedCompiles);
+    assert.equal(bridge.state.debugStatistics()["pipelineCompilesOnFirstUse"], 0);
+    assert.deepEqual(stub.created, { sync: [], async: Array(expectedCompiles).fill("fsA") });
+  });
+}
 
 test("a compile the browser refuses is created at first use, where the browser reports it", async () => {
   const stub = createTimelineDevice({ refuseAsync: true });

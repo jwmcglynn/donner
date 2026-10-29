@@ -1665,7 +1665,7 @@ CANDIDATE_INPUTS = ("candidate_commit", "preflight_run", "editor_run", "docs_run
                     "coverage_run", "fuzz_run", "sanitizers_run", "security_review_comment",
                     "supply_chain_review_comment")
 RELEASE_CLI_ASSETS = tuple(
-    "donner-svg_%s%s" % (platform, suffix) for platform in ("linux_x86_64", "darwin_arm64")
+    "donner-cli_%s%s" % (platform, suffix) for platform in ("linux_x86_64.tar.gz", "darwin_arm64.zip")
     for suffix in ("", ".sha256", ".provenance", ".bazel.lock", ".NOTICE.txt"))
 
 
@@ -1786,15 +1786,15 @@ def _release_step_violations(jobs):
 
 def _release_file_violations(publication):
     attested = _continued_arguments(_named_step(publication, RELEASE_STEPS[2]), "for subject in")
-    signed = [asset for asset in RELEASE_CLI_ASSETS if asset.endswith(("64", ".bazel.lock",
+    signed = [asset for asset in RELEASE_CLI_ASSETS if asset.endswith((".tar.gz", ".zip", ".bazel.lock",
                                                                         ".NOTICE.txt"))]
     signed += [asset for asset in RELEASE_NATIVE_ASSETS
                if asset.endswith((".zip", ".bazel.lock", ".NOTICE.txt"))]
     uploaded = _continued_arguments(_named_step(publication, RELEASE_STEPS[3]),
                                     "python3 tools/release_artifact_publisher.py")
     expected_uploaded = _release_asset_paths((
-        "donner-svg_linux_x86_64", "donner-svg_linux_x86_64.sha256",
-        "donner-svg_darwin_arm64", "donner-svg_darwin_arm64.sha256",
+        "donner-cli_linux_x86_64.tar.gz", "donner-cli_linux_x86_64.tar.gz.sha256",
+        "donner-cli_darwin_arm64.zip", "donner-cli_darwin_arm64.zip.sha256",
         "donner-editor_darwin_arm64.zip", "donner-editor_darwin_arm64.zip.sha256")) + [
         '"$RUNNER_TEMP"/release/source/*.tar.gz',
         '"$RUNNER_TEMP"/release/source/*.tar.gz.sha256']
@@ -2480,9 +2480,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         uploads = (
             (".github/workflows/bcr_preflight.yml", "upload-artifact@", "name: donner-bcr-qualified-"),
             (".github/workflows/bcr_preflight.yml", "upload-artifact@",
-             "name: donner-svg-linux-x86-64-"),
+             "name: donner-cli-linux-x86-64-"),
             (".github/workflows/bcr_preflight.yml", "upload-artifact@",
-             "name: donner-svg-darwin-arm64-"),
+             "name: donner-cli-darwin-arm64-"),
             (".github/workflows/editor_wasm.yml", "upload-artifact@",
              "name: donner-editor-wasm-geode-"),
             (".github/workflows/build_docs.yaml", "upload-pages-artifact@", "retention-days:"),
@@ -2527,7 +2527,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         upload = '            "$RUNNER_TEMP"/release/source/*.tar.gz.sha256\n'
         self._assert_rejected(lambda files, path: _release_publication_violations(files[path]), {
             "build": (path, release.replace(
-                stage, "          bazelisk build -c opt //donner/svg/tool:donner-svg\n" + stage, 1),
+                stage, "          bazelisk build -c opt //donner/svg/tool:donner-cli\n" + stage, 1),
                 "release builds"),
             "doxygen": (path, release.replace(stage, "          tools/build_docs.sh\n" + stage, 1),
                         "release builds"),
@@ -2735,7 +2735,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         # compiler identity probe is built in the same invocations, so its configuration (and
         # therefore its compiler) is the CLI's.
         targets = ("//tools/ci:release_svg", "//tools/ci:release_svg_notice",
-                   "//tools/ci:release_compiler_identity")
+                   "//tools/ci:release_compiler_identity", "//tools/ci:release_cli_resources")
         for platform in ("linux-x86-64", "darwin-arm64"):
             with self.subTest(platform=platform):
                 commands = [command.argv for command in bcr_preflight.cli_plan(
@@ -2750,8 +2750,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 package = " ".join(commands[3])
                 self.assertTrue(package.startswith(
                     "python3 -B -m tools.release_cli package --platform %s " % platform))
-                for argument in ("--binary bazel-bin/donner/svg/tool/donner-svg",
+                for argument in ("--binary bazel-bin/donner/svg/tool/donner-cli",
                                  "--notice bazel-bin/third_party/licenses/notice_cli.txt",
+                                 "--resources bazel-bin/tools/ci/release_cli_resources.assets",
                                  "--compiler-probe bazel-bin/tools/ci/release_compiler_identity",
                                  "--commit %s --run-id 7 --attempt 2" % _BCR_COMMIT):
                     self.assertIn(" %s " % argument, package + " ")
@@ -2772,8 +2773,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                     "python3 -B -m tools.release_cli verify --artifacts /temp/donner-bcr/cli-%s "
                     "--platform %s --commit %s --run-id 7 --attempt 2"
                     % (short, platform, _BCR_COMMIT), commands)
-        for platform in ("linux_x86_64", "darwin_arm64"):
-            self.assertIn(f"/donner-svg_{platform}.NOTICE.txt\n", preflight)
+        for platform in ("linux_x86_64.tar.gz", "darwin_arm64.zip"):
+            self.assertIn(f"/donner-cli_{platform}.NOTICE.txt\n", preflight)
         self.assertIn("actions/attest-build-provenance@", preflight)
         self.assertIn("if: github.ref == 'refs/heads/main'", preflight)
         self.assertIn("id-token: write", preflight)
@@ -2836,11 +2837,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                         '--artifacts "%s"' % shell.artifacts],
         }
         for job in ("attest-artifacts", "qualify"):
-            for platform, name in (("linux-x86-64", "linux_x86_64"),
-                                   ("darwin-arm64", "darwin_arm64")):
+            for platform, name in (("linux-x86-64", "linux_x86_64.tar.gz"),
+                                   ("darwin-arm64", "darwin_arm64.zip")):
                 expected[job].append("path: %s\n" % temp.cli_download(platform))
                 if job == "attest-artifacts":
-                    expected[job].extend("%s/donner-svg_%s%s\n" % (
+                    expected[job].extend("%s/donner-cli_%s%s\n" % (
                         temp.cli_download(platform), name, suffix)
                         for suffix in ("", ".bazel.lock", ".NOTICE.txt"))
         for job in ("attest-artifacts", "qualify"):
@@ -2869,7 +2870,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                     "      - id: %s\n"
                     "        uses: actions/download-artifact@v8\n"
                     "        with:\n"
-                    "          name: donner-svg-%s-${{ needs.prepare.outputs.source_commit }}"
+                    "          name: donner-cli-%s-${{ needs.prepare.outputs.source_commit }}"
                     "-${{ github.run_attempt }}\n" % (step_id, platform)
                 )
                 self.assertEqual(job.count(download), 1, "%s %s" % (job_name, step_id))
@@ -3000,6 +3001,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                         ["tools/ci/test_with_exclusions.py"], [".github/workflows/main.yml"]):
             with self.subTest(changed=changed):
                 self.assertEqual("false", self._bcr_scope(changed))
+
+    def test_native_delivery_module_triggers_the_full_package_preflight(self):
+        workflow = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        trigger = workflow.split("permissions:", 1)[0]
+        self.assertIn("      - tools/native_delivery.py\n", trigger)
+        self.assertEqual("true", self._bcr_scope(["tools/native_delivery.py"]))
 
     def test_bcr_release_path_pull_requests_run_the_full_matrix(self):
         for changed in (["MODULE.bazel"], ["MODULE.bazel.lock"], [".bazelversion"],

@@ -135,7 +135,7 @@ concern; the tag never moves retroactively.
   - Add `Release-Candidate-Record: <assembly-run-id>/<attempt> sha256:<record-sha256>` on its own
     line, copied from the assembly summary. The Release workflow rejects a missing, ambiguous or
     mismatched record, and a body that still names a `Release-Candidate-Preflight:` attempt.
-  - Attach binary artifacts (e.g., `donner-svg_darwin_arm64`, `donner-svg_linux_x86_64`)
+  - Attach binary artifacts (e.g., `donner-cli_darwin_arm64.zip`, `donner-cli_linux_x86_64.tar.gz`)
     and their checksums through the Release workflow, which re-verifies the
     record and uploads only the four retained payloads and their four checksums.
 - [ ] **Verify release artifacts**. Check that the GitHub release page shows the correct tag,

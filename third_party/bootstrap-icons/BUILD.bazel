@@ -1,6 +1,6 @@
-load("//build_defs:embed_resources.bzl", "embed_resources")
+load("//build_defs:packaged_resources.bzl", "packaged_resources")
 
-embed_resources(
+packaged_resources(
     name = "bootstrap_icons",
     header_output = "embed_resources/BootstrapIcons.h",
     resources = {

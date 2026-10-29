@@ -17,6 +17,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/tests/PackagedResourceTestProvider.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
@@ -305,6 +306,11 @@ private:
 }  // namespace
 
 /// Fuzzer entry point, see https://llvm.org/docs/LibFuzzer.html.
+extern "C" int LLVMFuzzerInitialize(int* /*argc*/, char*** argv) {
+  donner::tests::InitializeFuzzerPackagedResourceFixtures((*argv)[0]);
+  return 0;
+}
+
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
   if (data == nullptr || size == 0 || size > kMaxInputSize) {
     return 0;

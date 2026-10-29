@@ -1484,9 +1484,8 @@ void ConfigureNativeGpuIdleMaintenance(AsyncRenderer& worker,
 /// starts drawing; the per-icon calls then hit the prewarmed cache.
 void PrewarmEditorIcons() {
   std::vector<EmbeddedSvgIconRequest> requests;
-  for (const std::span<const EmbeddedSvgIconRequest> group :
-       {ToolbarIconPrewarmRequests(), DisclosureChevronPrewarmRequests(),
-        LayersPanelIconPrewarmRequests(), SidebarIconPrewarmRequests()}) {
+  for (const auto& group : {ToolbarIconPrewarmRequests(), DisclosureChevronPrewarmRequests(),
+                            LayersPanelIconPrewarmRequests(), SidebarIconPrewarmRequests()}) {
     requests.insert(requests.end(), group.begin(), group.end());
   }
   PrewarmEmbeddedSvgIcons(requests);
@@ -1584,28 +1583,28 @@ void EditorShell::configureEditorFonts() {
     uiFontBold_ = existingFonts.uiBold;
     codeFont_ = existingFonts.code;
   } else {
+    const ResourceLease regular(embedded::kRobotoRegularTtf);
+    const ResourceLease bold(embedded::kRobotoBoldTtf);
+    const ResourceLease code(embedded::kFiraCodeRegularTtf);
     ImFontConfig fontCfg;
     fontCfg.FontDataOwnedByAtlas = false;
     const double displayScale = window_.displayScale();
     ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-        static_cast<int>(embedded::kRobotoRegularTtf.size()),
+        const_cast<unsigned char*>(regular.data()), static_cast<int>(regular.size()),
         static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
     uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
-        static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
-        &fontCfg, kEditorGlyphRanges);
+        const_cast<unsigned char*>(bold.data()), static_cast<int>(bold.size()),
+        static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
     codeFont_ = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
-        static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
+        const_cast<unsigned char*>(code.data()), static_cast<int>(code.size()),
         static_cast<float>(14.0 * displayScale), &fontCfg, kEditorGlyphRanges);
     ImFontConfig codeSymbolFontCfg = fontCfg;
     codeSymbolFontCfg.MergeMode = true;
     std::ignore = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-        static_cast<int>(embedded::kRobotoRegularTtf.size()),
+        const_cast<unsigned char*>(regular.data()), static_cast<int>(regular.size()),
         static_cast<float>(14.0 * displayScale), &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
     window_.setEditorFonts({
+        .resourceLeases = {regular, bold, code},
         .uiRegular = uiFontRegular,
         .uiBold = uiFontBold_,
         .code = codeFont_,
@@ -2476,6 +2475,7 @@ void EditorShell::requestNewDocument() {
 
 void EditorShell::queuePendingSampleLoad(std::string sampleId) {
   pendingSampleLoadId_ = std::move(sampleId);
+  sampleLoadError_.clear();
   pendingNewDocument_ = false;
   pendingSampleLoadNeedsConfirmation_ = false;
   pendingSampleLoadDiscardConfirmed_ = false;
@@ -2501,54 +2501,55 @@ void EditorShell::confirmPendingSampleLoadDiscard() {
   window_.wakeEventLoop();
 }
 
-void EditorShell::processPendingSampleLoad() {
-  if (pendingSampleLoadId_.empty() && !pendingNewDocument_) {
-    return;
+bool EditorShell::pendingSampleResourceReady() {
+  const EditorSample* requestedSample = FindEditorSample(pendingSampleLoadId_);
+  if (!requestedSample || requestedSample->source.request()) {
+    return true;
   }
-  const bool hasDocument = app_.hasDocument();
-  std::optional<svg::DocumentWriteAccess> documentAccess =
-      hasDocument ? app_.document().document().tryWriteAccess() : std::nullopt;
-  const bool documentWriteAvailable = !hasDocument || documentAccess.has_value();
-  if (!internal::PendingDocumentReplacementCanProcess(
-          !pendingSampleLoadId_.empty() || pendingNewDocument_, documentWriteAvailable,
-          app_.document().hasPendingMutations())) {
-    return;
-  }
-
-  if (!pendingSampleLoadDiscardConfirmed_ && (app_.isDirty() || textEditor_.isTextChanged())) {
-    pendingSampleLoadNeedsConfirmation_ = true;
-    showSamplePicker_ = true;
-    return;
-  }
-
-  if (pendingNewDocument_) {
-    pendingNewDocument_ = false;
-    pendingSampleLoadNeedsConfirmation_ = false;
-    pendingSampleLoadDiscardConfirmed_ = false;
-#ifdef DONNER_EDITOR_WGPU
-    // The previous frame's direct callback has run, but remains installed until the next
-    // render-pane submission. Detach it before releasing presentation resources for the old
-    // document.
-    window_.setWgpuDirectRenderCallback({});
-#endif
-    // If the previous render is packaging a result after releasing the DOM, ensure that result is
-    // dropped instead of landing over the replacement document.
-    renderCoordinator_.asyncRenderer().cancelInFlight();
-    std::string error;
-    if (tryLoadSource(kNewDocumentSvg, std::nullopt, &error)) {
-      activeSampleId_.clear();
+  if (requestedSample->source.resource.failed()) {
+    std::fprintf(stderr, "[editor] built-in sample unavailable: %s\n",
+                 pendingSampleLoadId_.c_str());
+    cancelPendingSampleLoad();
 #ifdef __EMSCRIPTEN__
-      PublishActiveSampleId("");
+    sampleLoadError_ =
+        "This sample could not be loaded. Check your connection and reopen the editor to try "
+        "again.";
+#else
+    sampleLoadError_ = "This sample is unavailable. Reinstall the complete application package.";
 #endif
-      welcomePlaceholderActive_ = false;
-      showSamplePicker_ = false;
-      requestRenderAtEndOfFrame_ = true;
-    } else {
-      std::fprintf(stderr, "[editor] failed to create new document: %s\n", error.c_str());
-    }
-    return;
+    showSamplePicker_ = true;
   }
+  return false;
+}
 
+void EditorShell::createPendingNewDocument() {
+  pendingNewDocument_ = false;
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = false;
+#ifdef DONNER_EDITOR_WGPU
+  // The previous frame's direct callback has run, but remains installed until the next
+  // render-pane submission. Detach it before releasing presentation resources for the old
+  // document.
+  window_.setWgpuDirectRenderCallback({});
+#endif
+  // If the previous render is packaging a result after releasing the DOM, ensure that result is
+  // dropped instead of landing over the replacement document.
+  renderCoordinator_.asyncRenderer().cancelInFlight();
+  std::string error;
+  if (tryLoadSource(kNewDocumentSvg, std::nullopt, &error)) {
+    activeSampleId_.clear();
+#ifdef __EMSCRIPTEN__
+    PublishActiveSampleId("");
+#endif
+    welcomePlaceholderActive_ = false;
+    showSamplePicker_ = false;
+    requestRenderAtEndOfFrame_ = true;
+  } else {
+    std::fprintf(stderr, "[editor] failed to create new document: %s\n", error.c_str());
+  }
+}
+
+void EditorShell::applyPendingSampleDocument() {
   const std::string sampleId = std::exchange(pendingSampleLoadId_, {});
   pendingSampleLoadNeedsConfirmation_ = false;
   pendingSampleLoadDiscardConfirmed_ = false;
@@ -2567,7 +2568,8 @@ void EditorShell::processPendingSampleLoad() {
   // dropped instead of landing over the replacement document.
   renderCoordinator_.asyncRenderer().cancelInFlight();
   std::string error;
-  if (tryLoadSource(sample->source, std::nullopt, &error)) {
+  const auto sampleSource = sample->source.lease();
+  if (tryLoadSource(sampleSource.text(), std::nullopt, &error)) {
     activeSampleId_ = sampleId;
     // Test-only: a completion barrier a test requested holds only this sample's renders. The
     // previous document's render was cancelled above, so it cannot be the one held.
@@ -2585,6 +2587,37 @@ void EditorShell::processPendingSampleLoad() {
     std::fprintf(stderr, "[editor] failed to load built-in sample %s: %s\n", sampleId.c_str(),
                  error.c_str());
   }
+}
+
+void EditorShell::processPendingSampleLoad() {
+  if (pendingSampleLoadId_.empty() && !pendingNewDocument_) {
+    return;
+  }
+  if (!pendingSampleResourceReady()) {
+    return;
+  }
+
+  const bool hasDocument = app_.hasDocument();
+  std::optional<svg::DocumentWriteAccess> documentAccess =
+      hasDocument ? app_.document().document().tryWriteAccess() : std::nullopt;
+  const bool documentWriteAvailable = !hasDocument || documentAccess.has_value();
+  if (!internal::PendingDocumentReplacementCanProcess(
+          !pendingSampleLoadId_.empty() || pendingNewDocument_, documentWriteAvailable,
+          app_.document().hasPendingMutations())) {
+    return;
+  }
+
+  if (!pendingSampleLoadDiscardConfirmed_ && (app_.isDirty() || textEditor_.isTextChanged())) {
+    pendingSampleLoadNeedsConfirmation_ = true;
+    showSamplePicker_ = true;
+    return;
+  }
+
+  if (pendingNewDocument_) {
+    createPendingNewDocument();
+    return;
+  }
+  applyPendingSampleDocument();
 }
 
 bool EditorShell::tryApplyGroupOperation(bool ungroup) {
@@ -6376,6 +6409,16 @@ void EditorShell::advanceVisiblePreviews() {
   }
 }
 
+std::optional<std::size_t> EditorShell::nextEligibleSampleThumbnail(std::size_t sampleCount) const {
+  for (std::size_t index = 0; index < sampleCount; ++index) {
+    if (visibleSamplePreviewIndices_.contains(index) &&
+        !finishedSamplePreviewIndices_.contains(index) && !waitingSamplePreviews_.contains(index)) {
+      return index;
+    }
+  }
+  return std::nullopt;
+}
+
 void EditorShell::ensureSampleThumbnails() {
   const std::span<const EditorSample> samples = GetEditorSampleCatalog();
   if (sampleThumbnailBitmaps_.empty()) {
@@ -6394,25 +6437,25 @@ void EditorShell::ensureSampleThumbnails() {
     publishSampleThumbnailStats();
     return;
   }
-  std::optional<std::size_t> next;
-  for (std::size_t index = 0; index < samples.size(); ++index) {
-    if (visibleSamplePreviewIndices_.contains(index) &&
-        !finishedSamplePreviewIndices_.contains(index) && !waitingSamplePreviews_.contains(index)) {
-      next = index;
-      break;
-    }
-  }
+  const auto next = nextEligibleSampleThumbnail(samples.size());
   if (!next) {
     sampleThumbnailRetryPending_ = false;
     publishSampleThumbnailStats();
     return;
   }
+  if (!samples[*next].source.request()) {
+    if (samples[*next].source.resource.failed()) {
+      finishedSamplePreviewIndices_.insert(*next);
+    }
+    return;
+  }
   const auto store = fontCatalog_.encodedStore();
+  const auto sourceLease = samples[*next].source.lease();
   SampleThumbnailRenderRequest request{
       .key = *next,
       .taskGeneration = previewTaskGeneration_,
       .fontWakeRevision = store ? store->wakeRevision() : 0,
-      .source = std::string(samples[*next].source),
+      .source = std::string(sourceLease.text()),
       .dimensions = Vector2i(192, 120),
   };
 #ifndef __EMSCRIPTEN__
@@ -6623,8 +6666,12 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
                        static_cast<float>(sampleThumbnailBitmaps_[index]->dimensions.y),
     };
   };
-  const SamplePickerActions actions = samplePickerPresenter_.render(
-      SamplePickerState{.visible = true, .selectedSampleId = activeSampleId_}, thumbnailProvider);
+  const SamplePickerActions actions =
+      samplePickerPresenter_.render(SamplePickerState{.visible = true,
+                                                      .selectedSampleId = activeSampleId_,
+                                                      .loading = !pendingSampleLoadId_.empty(),
+                                                      .error = sampleLoadError_},
+                                    thumbnailProvider);
   visibleSamplePreviewIndices_.insert(actions.visibleSampleIndices.begin(),
                                       actions.visibleSampleIndices.end());
   ImGui::EndChild();

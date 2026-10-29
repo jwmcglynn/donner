@@ -15,6 +15,9 @@
 
 #include "donner/base/Length.h"
 #include "donner/base/ParseWarningSink.h"
+#ifdef DONNER_EXAMPLE_NATIVE_TEXT
+#include "donner/base/PackagedResource.h"
+#endif
 #include "donner/base/Utils.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGSVGElement.h"
@@ -29,6 +32,13 @@ using donner::svg::SVGTextElement;
 using donner::svg::SVGTSpanElement;
 
 int main(int argc, char* argv[]) {
+#ifdef DONNER_EXAMPLE_NATIVE_TEXT
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::cerr << "Packaged resources unavailable: " << resourceError << "\n";
+    return 1;
+  }
+#endif
   // Parse an initial document with one <text> element and two <tspan> runs. In a real
   // application you would typically load this from a file, but the embedded snippet here
   // keeps the example self-contained.
@@ -78,6 +88,14 @@ int main(int argc, char* argv[]) {
   //! [text_append_tspan]
 
   std::cout << "After append, text content: \"" << text.textContent() << "\"\n";
+#ifdef DONNER_EXAMPLE_NATIVE_TEXT
+  const double textLength = text.getComputedTextLength();
+  if (!(textLength > 0)) {
+    std::cerr << "Text layout did not produce a positive advance\n";
+    return 1;
+  }
+  std::cout << "Computed text length: " << textLength << "\n";
+#endif
 
   //! [text_render]
   // Render the modified document to PNG.

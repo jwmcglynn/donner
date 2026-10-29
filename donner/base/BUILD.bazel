@@ -103,6 +103,18 @@ donner_cc_library(
     visibility = ["//visibility:public"],
 )
 
+donner_cc_library(
+    name = "packaged_resource_test_fixture",
+    testonly = 1,
+    srcs = ["tests/PackagedResourceTestProvider.cc"],
+    hdrs = ["tests/PackagedResourceTestProvider.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":packaged_resource",
+        "@rules_cc//cc/runfiles",
+    ],
+)
+
 # Linked into every donner_cc_test so a crashing test prints a stack instead of
 # a log that stops at its `[ RUN ]` line. See tests/InstallCrashHandler.cc.
 donner_cc_library(
@@ -110,10 +122,13 @@ donner_cc_library(
     testonly = 1,
     srcs = [
         "tests/InstallCrashHandler.cc",
+        "tests/InstallPackagedResourceTestProvider.cc",
     ],
     visibility = ["//visibility:public"],
     deps = [
         ":failure_signal_handler",
+        ":packaged_resource",
+        ":packaged_resource_test_fixture",
     ],
     alwayslink = 1,
 )
@@ -347,5 +362,30 @@ donner_cc_fuzzer(
     corpus = "tests/utf8_corpus",
     deps = [
         ":base",
+    ],
+)
+
+donner_cc_library(
+    name = "packaged_resource",
+    srcs = [
+        "PackagedResource.cc",
+        "PackagedResourcePaths.h",
+    ],
+    hdrs = ["PackagedResource.h"],
+    visibility = ["//visibility:public"],
+    deps = [":base"],
+)
+
+donner_cc_test(
+    name = "packaged_resource_tests",
+    srcs = [
+        "PackagedResourcePaths.h",
+        "tests/PackagedResource_tests.cc",
+    ],
+    data = ["//build_defs:packaged_resource_manifest_fixture"],
+    deps = [
+        ":base_test_utils",
+        ":packaged_resource",
+        "@com_google_gtest//:gtest_main",
     ],
 )

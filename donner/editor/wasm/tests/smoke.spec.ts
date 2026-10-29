@@ -81,6 +81,7 @@ declare global {
     __donnerBackend?: string;
     __donnerWholeAppWorker?: boolean;
     __donnerCanStartWasm?: boolean;
+    __donnerResourcesInstalledAtMs?: number;
     __donnerFirstFramePresented?: boolean;
     __donnerRasterShutdownRequests?: number;
     __donnerLayerThumbnailStats?: {
@@ -709,6 +710,7 @@ async function captureCatalogFontDiagnostics(
 ) {
   const diagnostic = await page.evaluate(() => {
     const state = window as Window & {
+      Module?: Record<string, unknown>;
       __donnerCatalogBrokers?: Map<number, {
         broker: {
           enabled: boolean;
@@ -720,6 +722,18 @@ async function captureCatalogFontDiagnostics(
       }>;
     };
     return {
+      resourceStartup: {
+        error: document.getElementById("capability-error-detail")?.textContent?.slice(0, 2000),
+        exports: Object.fromEntries([
+          "callMain",
+          "HEAPU8",
+          "_malloc",
+          "_free",
+          "_DonnerPackagedResourceManifest",
+          "_DonnerInstallPackagedResource",
+          "_DonnerFailPackagedResource",
+        ].map((name) => [name, typeof state.Module?.[name]])),
+      },
       firstFrame: state.__donnerFirstFramePresented,
       frameCount: state.__donnerMainLoopRenderedFrames,
       activeSample: document.querySelector("canvas")?.getAttribute("data-active-sample-id"),
@@ -2558,6 +2572,80 @@ for (
   });
 }
 
+test("required resource failure stays readable and prevents application startup", async ({ page }) => {
+  await page.route("**/assets/**", (route) => route.fulfill({
+    status: 404, body: "missing resource", contentType: "text/plain",
+  }));
+  await page.goto(process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000", {
+    waitUntil: "domcontentloaded",
+  });
+  await expect(page.locator("#capability-error")).toBeVisible();
+  await expect(page.locator("#capability-error-detail")).toContainText("required editor resources");
+  await expect(page.locator("#capability-error-detail")).toContainText("font-http");
+  expect(await page.evaluate(() => ({
+    installed: window.__donnerResourcesInstalledAtMs ?? null,
+    firstFrame: window.__donnerFirstFramePresented ?? false,
+  }))).toEqual({ installed: null, firstFrame: false });
+});
+
+test("code-only updates transfer no unchanged essential resource bodies", async ({ page }, testInfo) => {
+  const baseUrl = new URL(process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000");
+  const response = await page.request.get(new URL("packaged-resources.json", baseUrl).href);
+  expect(response.ok()).toBe(true);
+  const manifest = await response.json() as {
+    assets: { sha256: string; path: string; group: string; encodedSize: number }[];
+  };
+  const critical = manifest.assets.filter((asset) =>
+    ["ui-font", "fallback-font", "chrome"].includes(asset.group)
+  );
+  expect(critical.length).toBeGreaterThan(0);
+  const urls = new Set(critical.map((asset) => new URL(asset.path, baseUrl).href));
+  const bodies: string[] = [];
+  page.on("request", (request) => {
+    if (urls.has(request.url())) bodies.push(request.url());
+  });
+  let codeRevision = 1;
+  await page.route("**/editor.js", async (route) => {
+    const code = await route.fetch();
+    await route.fulfill({ response: code, body: `${await code.text()}\nvoid ${codeRevision};\n` });
+  });
+  const coldErrors = await openEditor(page, { postInitializationDwellMs: 0 });
+  expect(coldErrors).toEqual([]);
+  expect(new Set(bodies)).toEqual(urls);
+  expect(await page.evaluate(() => ({
+    installed: (window.__donnerResourcesInstalledAtMs ?? Infinity)
+      < (window.__donnerFirstFramePresentedAtMs ?? 0),
+  }))).toEqual({ installed: true });
+  await expect.poll(() => page.evaluate(async (digests) => {
+    const cache = await caches.open("donner-assets-v1");
+    const available = await Promise.all(digests.map((digest) =>
+      cache.match(new URL(`/.donner-asset-cache/v1/${digest}`, location.origin).href)
+    ));
+    return available.filter(Boolean).length;
+  }, Array.from(new Set(critical.map((asset) => asset.sha256))))).toBe(urls.size);
+  const coldBodies = bodies.length;
+  const coldBodyUrls = [...bodies];
+  bodies.length = 0;
+  codeRevision = 2;
+  const warmErrors = await openEditor(page, { postInitializationDwellMs: 0 });
+  expect(warmErrors).toEqual([]);
+  expect(bodies).toEqual([]);
+  const transferPath = testInfo.outputPath("essential-resource-transfer.json");
+  const transferReport = {
+    ...packageHashes(),
+    criticalBytes: critical.reduce((total, asset) => total + asset.encodedSize, 0),
+    coldBodies,
+    warmBodies: bodies.length,
+    coldBodyUrls,
+    warmBodyUrls: [...bodies],
+  };
+  await writeFile(transferPath, JSON.stringify(transferReport, null, 2));
+  await testInfo.attach("essential-resource-transfer", {
+    path: transferPath,
+    contentType: "application/json",
+  });
+});
+
 test(
   "catalog font loading adopts deferred WOFF2 without authored edits",
   async ({ page }, testInfo) => {
@@ -2600,7 +2688,7 @@ test(
 
     const networkRequests: string[] = [];
     page.on("request", (request) => {
-      if (/\.(?:ttf|otf|woff2?)$/.test(new URL(request.url()).pathname)) {
+      if (new URL(request.url()).pathname.includes("/fonts/")) {
         networkRequests.push(request.url());
       }
     });

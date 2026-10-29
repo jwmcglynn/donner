@@ -1,5 +1,7 @@
 """Contracts for a retained native editor artifact, separate from the Wasm editor."""
 
+import json
+import struct
 import unittest
 
 from tools import bcr_preflight, release_candidate
@@ -72,6 +74,24 @@ class MacosEditorPackageTest(unittest.TestCase):
             "CFBundleExecutable": "Donner", "CFBundleIdentifier": "dev.donner.editor",
             "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "0.8",
             "CFBundleVersion": "1"}))
+        resources = self.app / "Contents/Resources/donner-assets"
+        (resources / "assets").mkdir(parents=True)
+        payload = b"native font fixture"
+        checksum = native.release_cli.sha256(payload).hexdigest()
+        resource_path = f"assets/{checksum}.ttf"
+        (resources / resource_path).write_bytes(payload)
+        woff2 = (Path(__file__).parents[1] /
+                 "donner/base/fonts/testdata/valid-001.woff2").read_bytes()
+        woff2_checksum = native.release_cli.sha256(woff2).hexdigest()
+        woff2_path = f"assets/{woff2_checksum}.woff2"
+        (resources / woff2_path).write_bytes(woff2)
+        (resources / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "assets": [{
+            "id": "fixture.font", "sha256": checksum, "encodedSize": len(payload),
+            "decodedSize": len(payload), "mediaType": "font/ttf", "group": "fallback",
+            "path": resource_path}, {
+            "id": "fixture.catalog", "sha256": woff2_checksum, "encodedSize": len(woff2),
+            "decodedSize": struct.unpack_from(">I", woff2, 16)[0], "mediaType": "font/woff2",
+            "group": "catalog", "path": woff2_path}]}))
         (self.app / "Contents/MacOS/Donner").chmod(0o755)
         self.notice = self.base / "notice.txt"
         self.notice.write_text(native.release_cli.NOTICE_HEADER + "editor\n\nPackage: fixture\n")
@@ -160,12 +180,36 @@ class MacosEditorPackageTest(unittest.TestCase):
         expected = self.package()
         self.assertEqual(self.verify(), expected)
         self.assertEqual(expected["native_validation"]["signature"], "ad-hoc")
+        self.assertEqual(expected["resource_manifest_sha256"], self.native.release_cli.digest(
+            self.app / "Contents/Resources/donner-assets/manifest.json"))
         with zipfile.ZipFile(self.output / self.native.ARCHIVE) as archive:
             self.assertEqual(archive.read("Donner SVG Editor.app/Contents/MacOS/Donner"), before)
             self.assertEqual(archive.read("LICENSE"), (self.root / "LICENSE").read_bytes())
             self.assertEqual(archive.read("NOTICE.txt"), self.notice.read_bytes())
             self.assertEqual((archive.getinfo("Donner SVG Editor.app/Contents/MacOS/Donner").external_attr
                               >> 16) & 0o777, 0o755)
+
+    def test_full_text_editor_rejects_an_empty_resource_manifest(self):
+        resources = self.app / "Contents/Resources/donner-assets"
+        for path in (resources / "assets").iterdir():
+            path.unlink()
+        (resources / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "assets": []}))
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            self.package()
+
+    def test_missing_or_corrupt_resources_cannot_be_packaged(self):
+        manifest = self.app / "Contents/Resources/donner-assets/manifest.json"
+        original = manifest.read_bytes()
+        manifest.unlink()
+        with self.assertRaisesRegex(ValueError, "missing required"):
+            self.package()
+        manifest.write_bytes(original)
+        import shutil
+        shutil.rmtree(self.output)
+        asset = next((manifest.parent / "assets").iterdir())
+        asset.write_bytes(b"corrupted")
+        with self.assertRaisesRegex(ValueError, "digest or length"):
+            self.package()
 
     def test_other_attempt_or_commit_is_refused(self):
         self.package()

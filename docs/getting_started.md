@@ -140,6 +140,15 @@ PNG file:
 
 \snippet svg_to_png.cc render
 
+Native examples that render text carry an executable-specific resource directory beside the
+binary: `svg_to_png.assets/`, `svg_text_interaction.assets/`, `svg_viewer.assets/`, or
+`geode_embed.assets/`. Copy the complete directory with its matching executable when relocating
+an example. It contains the manifest and Public Sans fallback font, so text works offline without
+installed system fonts. The examples validate these resources before rendering or creating a
+window and report a clear error if they are missing or corrupt. Builds with `--config=no-text`
+omit the font directory and preflight. The fixed shape-only examples and pure DOM examples need
+no companion font directory.
+
 Pixel data can also be read back with a snapshot:
 
 \snippet svg_quickstart.cc snapshot
@@ -199,7 +208,7 @@ parser callback.
 
 The complete program, `examples/svg_animation.cc`, checks that the click starts an animation and
 that the lifecycle boundaries match the document; run it with `bazel run //examples:svg_animation`.
-The editor's Preview mode plays animations with this same API, and `donner-svg --gif` exports an
+The editor's Preview mode plays animations with this same API, and `donner-cli --gif` exports an
 animation as an animated GIF (see \ref DonnerSvgTool).
 
 ## Third-Party License Attribution

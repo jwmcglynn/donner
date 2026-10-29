@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -81,10 +82,9 @@ std::optional<svg::SVGDocument> ParseEmbeddedSvgIcon(std::span<const unsigned ch
   return document;
 }
 
-/// Identifies a prewarmed rasterization. Embedded resources are static arrays,
-/// so the source pointer and length identify the asset without hashing bytes.
+/// Identifies rasterization by content without retaining encoded resource bytes.
 struct PrewarmedIconKey {
-  const unsigned char* data = nullptr;
+  std::string digest;
   std::size_t size = 0;
   int outputSizePx = 0;
   bool tintableMask = true;
@@ -94,16 +94,21 @@ struct PrewarmedIconKey {
 
 struct PrewarmedIconKeyHash {
   std::size_t operator()(const PrewarmedIconKey& key) const {
-    std::size_t hash = std::hash<const void*>()(key.data);
+    std::size_t hash = std::hash<std::string>()(key.digest);
     hash = hash * 31u + std::hash<std::size_t>()(key.size);
     hash = hash * 31u + std::hash<int>()(key.outputSizePx);
     return hash * 31u + (key.tintableMask ? 1u : 0u);
   }
 };
 
-PrewarmedIconKey KeyForRequest(const EmbeddedSvgIconRequest& request) {
-  return PrewarmedIconKey{request.svgBytes.data(), request.svgBytes.size(), request.outputSizePx,
-                          request.tintableMask};
+PrewarmedIconKey KeyForBytes(std::span<const unsigned char> bytes, int outputSizePx,
+                             bool tintableMask) {
+  return PrewarmedIconKey{ResourceSha256(bytes), bytes.size(), outputSizePx, tintableMask};
+}
+
+bool ValidIconInput(std::span<const unsigned char> bytes, int outputSizePx) {
+  return outputSizePx > 0 && !bytes.empty() &&
+         bytes.size() <= svg::parser::SVGParser::kDefaultMaximumInputSize;
 }
 
 using PrewarmedIconMap =
@@ -160,13 +165,12 @@ svg::RendererBitmap SliceAtlasTile(const svg::RendererBitmap& atlas, Vector2i or
 std::optional<svg::RendererBitmap> RenderEmbeddedSvgBitmap(std::span<const unsigned char> svgBytes,
                                                            int outputSizePx,
                                                            bool normalizeToTintableMask) {
-  if (outputSizePx <= 0) {
+  if (!ValidIconInput(svgBytes, outputSizePx)) {
     return std::nullopt;
   }
 
   const PrewarmedIconMap& prewarmed = PrewarmedIcons();
-  if (const auto it = prewarmed.find(PrewarmedIconKey{svgBytes.data(), svgBytes.size(),
-                                                      outputSizePx, normalizeToTintableMask});
+  if (const auto it = prewarmed.find(KeyForBytes(svgBytes, outputSizePx, normalizeToTintableMask));
       it != prewarmed.end()) {
     return it->second;
   }
@@ -285,6 +289,7 @@ void ResetEmbeddedSvgIconRenderer(const svg::RendererInterface& expectedRenderer
   SharedIconRendererState& state = SharedIconRendererStateInstance();
   if (state.configuredRenderer == &expectedRenderer) {
     state.configuredRenderer = nullptr;
+    PrewarmedIcons().clear();
   }
 }
 
@@ -319,7 +324,11 @@ void PrewarmEmbeddedSvgIcons(std::span<const EmbeddedSvgIconRequest> requests) {
   uniqueRequests.reserve(requests.size());
   uniqueKeys.reserve(requests.size());
   for (const EmbeddedSvgIconRequest& request : requests) {
-    const PrewarmedIconKey key = KeyForRequest(request);
+    if (!ValidIconInput(request.svgBytes.bytes(), request.outputSizePx)) {
+      continue;
+    }
+    const PrewarmedIconKey key =
+        KeyForBytes(request.svgBytes.bytes(), request.outputSizePx, request.tintableMask);
     if (prewarmed.contains(key) ||
         std::find(uniqueKeys.begin(), uniqueKeys.end(), key) != uniqueKeys.end()) {
       continue;

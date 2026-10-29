@@ -48,6 +48,9 @@ SITE_FILES = (
     "editor.wasm",
     "enable-threads.js",
     "index.html",
+    "packaged-resources.js",
+    "packaged-resources.json",
+    "packaged-resource-loader.js",
 )
 # The served files copied unchanged to deploy/; editor.wasm is served gzip-encoded instead.
 DEPLOY_FILES = tuple(name for name in SITE_FILES if name != "editor.wasm")
@@ -191,7 +194,9 @@ def stage_package(environ: Mapping[str, str], run: Callable[[list[str]], str] = 
 def _expected_site_files(site_dir: Path) -> list[str]:
     manifest = json.loads((site_dir / "catalog-fonts.json").read_text(encoding="utf-8"))
     fonts = "\n".join(font["path"] for font in manifest["fonts"]) + "\n"
-    return sorted([*SITE_FILES, *fonts.split("\n")[:-1]], key=os.fsencode)
+    resources = json.loads((site_dir / "packaged-resources.json").read_text(encoding="utf-8"))
+    return sorted([*SITE_FILES, *fonts.split("\n")[:-1],
+                   *{asset["path"] for asset in resources["assets"]}], key=os.fsencode)
 
 
 def _provenance(environ: Mapping[str, str], lockfile_sha256: str,
@@ -243,6 +248,7 @@ def stage_candidate(environ: Mapping[str, str]) -> None:
     for name in DEPLOY_FILES:
         _copy_file(site_dir / name, deploy_dir / name)
     _copy_tree(site_dir / "fonts", deploy_dir / "fonts")
+    _copy_tree(site_dir / "assets", deploy_dir / "assets")
     compressed = deploy_dir / "editor.wasm.gz"
     with open(compressed, "wb") as stream:
         status = subprocess.run(["gzip", "-n", "-9", "-c", str(site_dir / "editor.wasm")],

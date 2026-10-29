@@ -2,7 +2,7 @@
 /// Prints the identity of the C++ compiler that built this program, as one line.
 ///
 /// The release CLI job builds this probe in the same Bazel invocation and configuration as the
-/// released `donner-svg` binary, so both are compiled by the C++ toolchain Bazel resolved for that
+/// released `donner-cli` binary, so both are compiled by the C++ toolchain Bazel resolved for that
 /// build. `tools/release_cli.py` records this output as the CLI's compiler version.
 
 #include <cstdio>

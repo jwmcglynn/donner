@@ -329,7 +329,7 @@ _EMPTY_LINK_HOOK = ("An empty C++ link hook (default malloc or extra link librar
 
 _DONNER_TOOLCHAIN_SHIM = "Donner's own toolchain compatibility shim, under Donner's license."
 
-# The NOTICE that ships beside each released `donner-svg` binary. It attributes exactly the
+# The NOTICE that ships beside each released `donner-cli` binary. It attributes exactly the
 # third-party components in the configured closure of `//tools/ci:release_svg`, and BCR Preflight
 # builds it (as `//tools/ci:release_svg_notice`) in the same invocation and configuration as the
 # binary. `//tools:cli_notice_coverage_tests` fails when that closure reaches a component with
@@ -364,7 +364,7 @@ donner_closure_notice_file(
         "-lm": "The platform C math library, dynamically linked from the system and not shipped.",
     },
     target = "//tools/ci:release_svg",
-    variant = "donner-svg command-line tool (configured closure of //tools/ci:release_svg)",
+    variant = "donner-cli command-line tool (configured closure of //tools/ci:release_svg)",
 )
 
 filegroup(

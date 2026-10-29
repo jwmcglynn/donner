@@ -8,6 +8,10 @@
 #include <string>
 #include <string_view>
 
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/base/PackagedResource.h"
+#endif
+
 #include "nlohmann/json.hpp"
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
@@ -245,6 +249,14 @@ int main() {
   if (const char* bwd = std::getenv("BUILD_WORKING_DIRECTORY")) {
     std::filesystem::current_path(bwd);
   }
+
+#ifdef DONNER_TEXT_ENABLED
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::cerr << "Packaged resources unavailable: " << resourceError << "\n";
+    return 1;
+  }
+#endif
 
   donner::editor::mcp::EditorControlSession session;
 

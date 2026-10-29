@@ -31,11 +31,16 @@ donner_cc_fuzzer(
 )
 
 exports_files(
-    [
-        "testdata/valid-001.woff",
-        "testdata/valid-001.woff2",
-    ],
+    ["testdata/valid-001.woff"],
     visibility = ["//donner:__subpackages__"],
+)
+
+exports_files(
+    ["testdata/valid-001.woff2"],
+    visibility = [
+        "//donner:__subpackages__",
+        "//tools:__pkg__",
+    ],
 )
 
 donner_cc_library(

@@ -25,6 +25,11 @@ function makeCanvas(properties = {}) {
 function makeWindow(properties = {}) {
   const windowHandlers = new Map();
   const window = {
+    DonnerPackagedResourceLoader: class {
+      async install() {}
+      async request() {}
+      close() {}
+    },
     addEventListener(type, handler) {
       windowHandlers.set(type, handler);
     },
@@ -45,6 +50,7 @@ async function runBootstrap({ canvas, window, elements = {}, globals = {}, now }
   const consoleMessages = { error: [], log: [], warn: [] };
   const loadingClasses = new Set();
   const timers = [];
+  const mainCalls = [];
   let defaultNowMs = 100;
   const pageElements = {
     canvas,
@@ -86,6 +92,7 @@ async function runBootstrap({ canvas, window, elements = {}, globals = {}, now }
     ...globals,
   });
   vm.runInContext(source, context, { filename: "editor-bootstrap.js" });
+  context.Module.callMain = (args) => mainCalls.push(Array.from(args));
   return {
     animationFrames,
     appended,
@@ -94,6 +101,7 @@ async function runBootstrap({ canvas, window, elements = {}, globals = {}, now }
     context,
     elements: pageElements,
     loadingClasses,
+    mainCalls,
     timers,
   };
 }
@@ -149,8 +157,10 @@ async function loadTouchPointerBridge() {
 }
 
 // A page that can start the editor, so the reveal path is reachable.
-async function loadReadyHandoff({ now } = {}) {
-  const { window, windowHandlers } = makeWindow({ isSecureContext: true });
+async function loadReadyHandoff({ now, resourceLoader } = {}) {
+  const properties = { isSecureContext: true };
+  if (resourceLoader) properties.DonnerPackagedResourceLoader = resourceLoader;
+  const { window, windowHandlers } = makeWindow(properties);
   const harness = await runBootstrap({
     canvas: makeCanvas(),
     globals: {
@@ -167,7 +177,7 @@ async function loadReadyHandoff({ now } = {}) {
 // frame and the page is waiting for that frame to reach the canvas.
 async function loadReportedFirstFrame(options) {
   const harness = await loadReadyHandoff(options);
-  harness.context.Module.onRuntimeInitialized();
+  await harness.context.Module.onRuntimeInitialized();
   harness.context.window.__donnerFirstFramePresented = true;
   harness.windowHandlers.get("donner:first-frame-presented")();
   return harness;
@@ -290,8 +300,13 @@ test("the loader stays up until the presented frame reaches the canvas", async (
     101,
     "the bootstrap stamps its start time from the page clock",
   );
-  assert.equal(context.window.__donnerRuntimeInitializedAtMs, 102, "runtime init is stamped");
-  assert.equal(context.window.__donnerFirstFramePresentedAtMs, 103, "the report is stamped");
+  assert.equal(
+    context.window.__donnerResourcesInstalledAtMs,
+    102,
+    "resource installation is stamped",
+  );
+  assert.equal(context.window.__donnerRuntimeInitializedAtMs, 103, "runtime init is stamped");
+  assert.equal(context.window.__donnerFirstFramePresentedAtMs, 104, "the report is stamped");
   assert.equal(
     loadingClasses.has("is-complete"),
     false,
@@ -355,7 +370,7 @@ test("the loader stays up until the presented frame reaches the canvas", async (
 test("the editor reveals at once when the presented frame arrived before the report", async () => {
   const { animationFrames, canvas, context, loadingClasses, windowHandlers } =
     await loadReadyHandoff();
-  context.Module.onRuntimeInitialized();
+  await context.Module.onRuntimeInitialized();
   canvas.width = 1390;
   canvas.height = 1121;
   context.window.__donnerFirstFramePresented = true;
@@ -482,4 +497,54 @@ test("bootstrap reports the capability error and skips the download without thre
   assert.equal(elements["capability-error"].hidden, false);
   assert.match(elements["capability-error-detail"].textContent, /SharedArrayBuffer/);
   assert.match(elements["capability-error-detail"].textContent, /secure context/);
+});
+
+test("bootstrap awaits required resource installation before starting the application", async () => {
+  let release;
+  const installation = new Promise((resolve) => {
+    release = resolve;
+  });
+  const { context, mainCalls } = await loadReadyHandoff({
+    resourceLoader: class {
+      install() {
+        return installation;
+      }
+      close() {}
+    },
+  });
+  assert.equal(context.Module.noInitialRun, true);
+  const runtime = context.Module.onRuntimeInitialized();
+  await Promise.resolve();
+  assert.deepEqual(mainCalls, [], "application main cannot run while resources are pending");
+  assert.equal(context.window.__donnerResourcesInstalledAtMs, undefined);
+  release();
+  await runtime;
+  assert.deepEqual(mainCalls, [[]], "the application starts once after installation");
+  assert.ok(
+    context.window.__donnerResourcesInstalledAtMs > context.window.__donnerBootstrapStartedAtMs,
+  );
+});
+
+test("bootstrap resource failure closes the session and keeps the application stopped", async () => {
+  let closed = 0;
+  const { context, elements, mainCalls } = await loadReadyHandoff({
+    resourceLoader: class {
+      async install() {
+        throw new Error("required asset missing");
+      }
+      close() {
+        ++closed;
+      }
+    },
+  });
+  await context.Module.onRuntimeInitialized();
+  assert.deepEqual(mainCalls, []);
+  assert.equal(context.window.__donnerResourcesInstalledAtMs, undefined);
+  assert.equal(context.window.__donnerPackagedResourceSession.active, false);
+  assert.equal(closed, 1);
+  assert.equal(elements["capability-error"].hidden, false);
+  assert.match(
+    elements["capability-error-detail"].textContent,
+    /required editor resources.*required asset missing/,
+  );
 });

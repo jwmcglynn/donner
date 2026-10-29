@@ -1,7 +1,8 @@
-load("//build_defs:embed_resources.bzl", "embed_resources")
+load("//build_defs:packaged_resources.bzl", "packaged_resources")
 
-embed_resources(
+packaged_resources(
     name = "roboto",
+    group = "ui-font",
     header_output = "embed_resources/RobotoFont.h",
     resources = {
         "kRobotoRegularTtf": "Roboto-Regular.ttf",

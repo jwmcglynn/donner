@@ -8,14 +8,17 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
+#include "donner/base/PackagedResource.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/tests/GifTestDecoder.h"
 #include "gmock/gmock.h"
@@ -47,7 +50,7 @@ void ExpectFrameIdentical(const DecodedGif& gif, size_t frameIndex,
 int RunTool(const std::vector<std::string>& args, std::ostringstream* out,
             std::ostringstream* err) {
   std::vector<std::string> storage;
-  storage.emplace_back("donner-svg");
+  storage.emplace_back("donner-cli");
   storage.insert(storage.end(), args.begin(), args.end());
 
   std::vector<char*> argv;
@@ -166,8 +169,39 @@ constexpr std::string_view kSimpleSvg =
          <rect width="4" height="3" fill="#ff0000"/>
        </svg>)";
 
+TEST_F(DonnerSvgToolFileTest, ResourceStartupRequiresOnlyEnabledTextResources) {
+  const auto input = WriteSvg("input.svg", kSimpleSvg);
+  const auto output = tmpDir_ / "output.png";
+#ifdef DONNER_TEXT_ENABLED
+  constexpr int kExpectedExitCode = 2;
+  constexpr char kExpectedError[] = "Failed to load packaged resources:";
+#else
+  constexpr int kExpectedExitCode = 0;
+  constexpr char kExpectedError[] = "";
+#endif
+  EXPECT_EXIT(
+      {
+        auto unavailable = std::make_shared<PackagedResourceSession>(
+            [](const PackagedResource&) -> ResourceBytes { return {}; });
+        if (!SetPackagedResourceSession(std::move(unavailable))) {
+          std::_Exit(3);
+        }
+        std::ostringstream out;
+        std::ostringstream err;
+        const int result = RunTool({input.string(), "--output", output.string()}, &out, &err);
+        const std::string message = err.str();
+        (void)write(STDERR_FILENO, message.data(), message.size());
+        std::_Exit(result);
+      },
+      testing::ExitedWithCode(kExpectedExitCode), kExpectedError);
+#ifndef DONNER_TEXT_ENABLED
+  EXPECT_THAT(ReadPngMagic(output),
+              testing::ElementsAre(0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A));
+#endif
+}
+
 TEST(DonnerSvgTool, HelpFlagPrintsPreviewAndReturnsZero) {
-  char arg0[] = "donner-svg";
+  char arg0[] = "donner-cli";
   char arg1[] = "--help";
   char* argv[] = {arg0, arg1};
 
@@ -179,7 +213,7 @@ TEST(DonnerSvgTool, HelpFlagPrintsPreviewAndReturnsZero) {
 }
 
 TEST(DonnerSvgTool, UnknownFlagReturnsOne) {
-  char arg0[] = "donner-svg";
+  char arg0[] = "donner-cli";
   char arg1[] = "--bogus";
   char* argv[] = {arg0, arg1};
 
@@ -212,7 +246,7 @@ TEST(DonnerSvgTool, MissingInputFileReturnsUsageError) {
 }
 
 TEST(DonnerSvgTool, PreviewFlagParsesAndThenFailsOnMissingInputFile) {
-  char arg0[] = "donner-svg";
+  char arg0[] = "donner-cli";
   char arg1[] = "--preview";
   char arg2[] = "does_not_exist.svg";
   char* argv[] = {arg0, arg1, arg2};

@@ -173,6 +173,7 @@ cp -L "${compare_rel}" "${compare_copy}"
 chmod u+x "${compare_copy}"
 if [[ -d "${compare_rel}.runfiles" ]]; then
   cp -RL "${compare_rel}.runfiles" "${compare_copy}.runfiles"
+  chmod -R u+w "${compare_copy}.runfiles"
 fi
 export DONNER_BROWSER_GOLDEN_COMPARE="${compare_copy}"
 

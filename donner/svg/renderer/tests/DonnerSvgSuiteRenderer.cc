@@ -6,6 +6,10 @@
 #include <string>
 #include <string_view>
 
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/base/PackagedResource.h"
+#endif
+
 #include "donner/svg/renderer/tests/SvgSuiteRender.h"
 
 namespace {
@@ -62,6 +66,14 @@ int main(int argc, char** argv) {
     std::cerr << "--input, --output and --root are required\n";
     return 2;
   }
+#ifdef DONNER_TEXT_ENABLED
+  std::string resourceError;
+  if (!donner::PreparePackagedResources(&resourceError)) {
+    std::cerr << "Packaged resources unavailable: " << resourceError << "\n";
+    return 2;
+  }
+#endif
+
   const auto result = donner::svg::RenderSvgSuiteCase(settings);
   if (!result.image) {
     std::cerr << result.error << "\n";

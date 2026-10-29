@@ -99,7 +99,7 @@ _ConfiguredDepsInfo = provider(fields = ["labels", "linkopts"])
 
 # Follow binary/library dependencies, aliases, and every label-bearing input a
 # product package can ship. Build-only tools stay outside the product closure.
-_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "actual", "binary", "cc_target", "wasm_deps", "dir", "data", "srcs", "asset_trees", "additional_linker_inputs"]
+_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "actual", "binary", "cc_target", "wasm_deps", "dir", "data", "srcs", "resources", "asset_trees", "additional_linker_inputs"]
 
 def _collect_configured_deps(target, ctx, attrs, info):
     if ctx.rule == None:
@@ -110,9 +110,13 @@ def _collect_configured_deps(target, ctx, attrs, info):
     transitive_linkopts = []
     for name in attrs:
         deps = getattr(ctx.rule.attr, name, [])
-        if type(deps) != "list":
+        if type(deps) == "dict":
+            deps = deps.keys() + deps.values()
+        elif type(deps) != "list":
             deps = [deps] if deps != None else []
         for dep in deps:
+            if not hasattr(dep, "label"):
+                continue
             direct_labels.append(dep.label)
             if info in dep:
                 transitive_labels.append(dep[info].labels)
@@ -268,10 +272,10 @@ def configured_dependency_audit_test(name, target, forbidden = [], forbidden_pac
     Args:
       name: Test name.
       target: Product root, including any platform-transition wrappers.
-      forbidden: Labels that must not be reachable through binary dependencies.
+      forbidden: Fully qualified labels that must not be reachable through binary dependencies.
       forbidden_packages: Packages (and subpackages) that must not be reachable through dependencies,
                           linker inputs, or linker options.
-      required: Labels that must be visited, guarding traversal through wrappers.
+      required: Fully qualified labels that must be visited, guarding traversal through wrappers.
       text_configuration: Ambient core text tier applied before product transitions.
       disable_backend_transitions: Exercise the backend-transition bypass flag.
       **kwargs: Standard sh_test attributes.

@@ -270,7 +270,7 @@ std::size_t PenCursorIndex(PenCursorHint hint) {
 }
 #endif
 
-std::span<const unsigned char> PenCursorSvgBytes(PenCursorHint hint) {
+ResourceLease PenCursorSvgBytes(PenCursorHint hint) {
   switch (hint) {
     case PenCursorHint::Base: return embedded::kPenCursorSvg;
     case PenCursorHint::Add: return embedded::kPenAddCursorSvg;
@@ -290,8 +290,7 @@ double RotationDegreesForCorner(SelectionTransformCorner corner) {
   return 0.0;
 }
 
-std::string RotatedCursorSvg(std::span<const unsigned char> bytes,
-                             SelectionTransformCorner corner) {
+std::string RotatedCursorSvg(ResourceLease bytes, SelectionTransformCorner corner) {
   std::string svg(reinterpret_cast<const char*>(bytes.data()), bytes.size());
   std::ostringstream replacement;
   replacement << "rotate(" << RotationDegreesForCorner(corner) << ",16,16)";
@@ -310,7 +309,7 @@ void ApplyRasterSize(std::string* svg) {
 }
 
 // Raster-sized SVG for a fixed-orientation cursor.
-std::string SizedCursorSvg(std::span<const unsigned char> bytes) {
+std::string SizedCursorSvg(ResourceLease bytes) {
   std::string svg(reinterpret_cast<const char*>(bytes.data()), bytes.size());
   ApplyRasterSize(&svg);
   return svg;
@@ -318,14 +317,13 @@ std::string SizedCursorSvg(std::span<const unsigned char> bytes) {
 
 // Raster-sized SVG for a corner-oriented cursor: rewrites the
 // `rotate(0,16,16)` placeholder on the glyph group to the corner's angle.
-std::string SizedRotatedCursorSvg(std::span<const unsigned char> bytes,
-                                  SelectionTransformCorner corner) {
+std::string SizedRotatedCursorSvg(ResourceLease bytes, SelectionTransformCorner corner) {
   std::string svg = RotatedCursorSvg(bytes, corner);
   ApplyRasterSize(&svg);
   return svg;
 }
 
-std::span<const unsigned char> PanCursorSvgBytes(PanCursorKind kind) {
+ResourceLease PanCursorSvgBytes(PanCursorKind kind) {
   switch (kind) {
     case PanCursorKind::OpenHand: return embedded::kPanCursorSvg;
     case PanCursorKind::ClosedHand: return embedded::kPanClosedCursorSvg;
@@ -336,14 +334,15 @@ std::span<const unsigned char> PanCursorSvgBytes(PanCursorKind kind) {
 #if defined(__EMSCRIPTEN__)
 std::string BrowserCursorSvg(EditorCursor cursor, SelectionTransformCorner corner) {
   switch (cursor) {
-    case EditorCursor::Select:
-      return std::string(reinterpret_cast<const char*>(embedded::kSelectCursorSvg.data()),
-                         embedded::kSelectCursorSvg.size());
+    case EditorCursor::Select: {
+      const ResourceLease source(embedded::kSelectCursorSvg);
+      return std::string(source.text());
+    }
     case EditorCursor::Pen:
     case EditorCursor::PenAdd:
     case EditorCursor::PenRemove:
     case EditorCursor::PenClose: {
-      const std::span<const unsigned char> bytes =
+      const ResourceLease bytes =
           PenCursorSvgBytes(cursor == EditorCursor::Pen         ? PenCursorHint::Base
                             : cursor == EditorCursor::PenAdd    ? PenCursorHint::Add
                             : cursor == EditorCursor::PenRemove ? PenCursorHint::Remove
@@ -352,12 +351,13 @@ std::string BrowserCursorSvg(EditorCursor cursor, SelectionTransformCorner corne
     }
     case EditorCursor::Rotate: return RotatedCursorSvg(embedded::kRotateCursorSvg, corner);
     case EditorCursor::Scale: return RotatedCursorSvg(embedded::kScaleCursorSvg, corner);
-    case EditorCursor::PathModify:
-      return std::string(reinterpret_cast<const char*>(embedded::kPathModifyCursorSvg.data()),
-                         embedded::kPathModifyCursorSvg.size());
+    case EditorCursor::PathModify: {
+      const ResourceLease source(embedded::kPathModifyCursorSvg);
+      return std::string(source.text());
+    }
     case EditorCursor::PanOpen:
     case EditorCursor::PanClosed: {
-      const std::span<const unsigned char> bytes = PanCursorSvgBytes(
+      const ResourceLease bytes = PanCursorSvgBytes(
           cursor == EditorCursor::PanOpen ? PanCursorKind::OpenHand : PanCursorKind::ClosedHand);
       return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     }
