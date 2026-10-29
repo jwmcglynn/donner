@@ -3665,6 +3665,104 @@ TEST(TextEngineScriptedTest, WhiteSpaceParsedNewlineRetainsRelativeInlinePositio
   EXPECT_THAT(glyphs[2].xPosition, DoubleNear(20, 1e-5));
 }
 
+class KanaPositioningBackend : public ScriptedTextBackend {
+public:
+  mutable std::vector<std::string> shapingRanges;
+
+  ShapedRun shapeRun(FontHandle font, float size, std::string_view text, size_t offset,
+                     size_t length, bool vertical, FontVariant variant,
+                     bool logical) const override {
+    shapingRanges.emplace_back(text.substr(offset, length));
+    ShapedRun run =
+        ScriptedTextBackend::shapeRun(font, size, text, offset, length, vertical, variant, logical);
+    for (auto& glyph : run.glyphs) {
+      const uint32_t cp = Utf8::NextCodepointLenient(text.substr(glyph.cluster)).first;
+      glyph.xKern = glyph.yKern = 0;
+      glyph.xOffset = glyph.yOffset = 0;
+      if (cp == 0x0301 || cp == 0x3099 || cp == 0x309a) {
+        glyph.xAdvance = glyph.yAdvance = 0;
+        glyph.xOffset = -10;
+      }
+    }
+    return run;
+  }
+};
+
+struct KanaPositioningCase {
+  std::string name;
+  std::string source;
+  TextTransform transform;
+  std::vector<std::string> shapingRanges;
+  std::array<uint32_t, 3> sourceClusters;
+  bool attached;
+};
+
+class FullWidthKanaScriptedTest : public testing::TestWithParam<KanaPositioningCase> {};
+
+TEST_P(FullWidthKanaScriptedTest, KeepsShapingAndPositioningGroupsWithOriginalSourceIndices) {
+  const auto& input = GetParam();
+  Registry registry;
+  FontManager fonts(registry);
+  auto backend = std::make_unique<KanaPositioningBackend>();
+  const auto* observed = backend.get();
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(input.source);
+  span.textTransform = input.transform;
+  span.xList = {Lengthd(0), Lengthd(100), Lengthd(200)};
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(20);
+  params.fontKerning = FontKerning::None;
+
+  const auto runs = engine.layout(text, params);
+
+  EXPECT_THAT(observed->shapingRanges, testing::ContainerEq(input.shapingRanges));
+  ASSERT_THAT(runs, SizeIs(1));
+  const auto& glyphs = runs[0].glyphs;
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs, ElementsAre(Field("cluster", &TextGlyph::cluster, input.sourceClusters[0]),
+                                  Field("cluster", &TextGlyph::cluster, input.sourceClusters[1]),
+                                  Field("cluster", &TextGlyph::cluster, input.sourceClusters[2])));
+  EXPECT_THAT(glyphs[1].positioningCluster,
+              testing::Optional(Eq(input.attached ? 0u : input.sourceClusters[1])));
+  EXPECT_THAT(glyphs[0].xPosition, DoubleNear(0, 1e-5));
+  EXPECT_THAT(glyphs[1].xPosition, DoubleNear(input.attached ? 0 : 100, 1e-5));
+  EXPECT_THAT(glyphs[2].xPosition, DoubleNear(200, 1e-5));
+  EXPECT_THAT(text.spans[0].text, Eq(RcString(input.source)));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Positioned, FullWidthKanaScriptedTest,
+    testing::Values(KanaPositioningCase{"Voiced",
+                                        "\xef\xbd\xb6\xef\xbe\x9e"
+                                        "A",
+                                        TextTransform::FullWidth,
+                                        {"\xe3\x82\xab\xe3\x82\x99", "\xef\xbc\xa1"},
+                                        {0, 3, 6},
+                                        true},
+                    KanaPositioningCase{"Semivoiced",
+                                        "\xef\xbe\x8a\xef\xbe\x9f"
+                                        "A",
+                                        TextTransform::FullWidth,
+                                        {"\xe3\x83\x8f\xe3\x82\x9a", "\xef\xbc\xa1"},
+                                        {0, 3, 6},
+                                        true},
+                    KanaPositioningCase{"ExistingAcute",
+                                        "e\xcc\x81"
+                                        "A",
+                                        TextTransform::None,
+                                        {"e\xcc\x81", "A"},
+                                        {0, 1, 3},
+                                        true},
+                    KanaPositioningCase{"UntransformedSpacingMark",
+                                        "\xef\xbd\xb6\xef\xbe\x9e"
+                                        "A",
+                                        TextTransform::None,
+                                        {"\xef\xbd\xb6", "\xef\xbe\x9e", "A"},
+                                        {0, 3, 6},
+                                        false}),
+    [](const testing::TestParamInfo<KanaPositioningCase>& info) { return info.param.name; });
+
 TEST(TextEngineScriptedTest, FullWidthMapsUnicodeWithoutChangingSourceClusters) {
   const auto glyphs = LayoutParsedTextPath(
       "<tspan style='text-transform:full-width'>A1!\xef\xbd\xb6\xef\xbe\x9e"

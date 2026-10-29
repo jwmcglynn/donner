@@ -1240,6 +1240,74 @@ TEST(TextEngineTest, OneCodepointFallbackChunkShapesLikeThePrimaryFace) {
   EXPECT_THAT(layOut("Noto Sans"), testing::ContainerEq(primary));
 }
 
+#ifdef DONNER_TEXT_FULL
+struct NativeKanaPositioningCase {
+  std::string name;
+  std::string sourcePair;
+  std::string mappedPair;
+  std::string precomposed;
+};
+
+class FullWidthKanaNativeTest : public testing::TestWithParam<NativeKanaPositioningCase> {};
+
+TEST_P(FullWidthKanaNativeTest, PositionedMarkPreservesNativeCompositionAndSourceAddressing) {
+  const auto& input = GetParam();
+  Registry registry;
+  FontManager fonts(registry);
+  const FontHandle font = LoadResvgFont(fonts, "MPLUS1p-Regular.ttf", "Kana Regression");
+  ASSERT_THAT(font, Not(Eq(FontHandle())));
+  TextBackendFull backend(fonts, registry);
+  const auto pair = backend.shapeRun(font, 24, input.mappedPair, 0, input.mappedPair.size(), false,
+                                     TextOrientation::Mixed, FontVariant::Normal, false);
+  const auto precomposed =
+      backend.shapeRun(font, 24, input.precomposed, 0, input.precomposed.size(), false,
+                       TextOrientation::Mixed, FontVariant::Normal, false);
+  ASSERT_THAT(precomposed.glyphs, SizeIs(1));
+  ASSERT_THAT(pair.glyphs, ElementsAre(Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex,
+                                             AllOf(Gt(0), Eq(precomposed.glyphs[0].glyphIndex)))));
+  EXPECT_THAT(pair.glyphs[0].xAdvance, DoubleNear(precomposed.glyphs[0].xAdvance, 1e-5));
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(input.sourcePair + "A");
+  span.textTransform = TextTransform::FullWidth;
+  span.xList = {Lengthd(0), std::nullopt, Lengthd(200)};
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(24);
+  params.fontFamilies = {RcString("Kana Regression")};
+  params.fontKerning = FontKerning::None;
+  TextEngine engine(fonts, registry);
+  const auto control = engine.layout(text, params);
+  ASSERT_THAT(control, SizeIs(1));
+  ASSERT_THAT(control[0].font, Eq(font));
+  ASSERT_THAT(control[0].glyphs, SizeIs(2));
+  ASSERT_THAT(control[0].glyphs[0].glyphIndex, Eq(pair.glyphs[0].glyphIndex));
+
+  text.spans[0].xList[1] = Lengthd(100);
+  const auto positioned = engine.layout(text, params);
+  ASSERT_THAT(positioned, SizeIs(1));
+  ASSERT_THAT(positioned[0].font, Eq(font));
+  ASSERT_THAT(positioned[0].glyphs, ElementsAre(GlyphIndexIs(Eq(control[0].glyphs[0].glyphIndex)),
+                                                GlyphIndexIs(Eq(control[0].glyphs[1].glyphIndex))));
+  for (size_t i = 0; i < 2; ++i) {
+    EXPECT_THAT(positioned[0].glyphs[i].xPosition,
+                DoubleNear(control[0].glyphs[i].xPosition, 1e-5));
+    EXPECT_THAT(positioned[0].glyphs[i].xAdvance, DoubleNear(control[0].glyphs[i].xAdvance, 1e-5));
+    EXPECT_THAT(GlyphFont(positioned[0], positioned[0].glyphs[i]), Eq(font));
+  }
+  EXPECT_THAT(positioned[0].glyphs, ElementsAre(Field("cluster", &TextGlyph::cluster, 0u),
+                                                Field("cluster", &TextGlyph::cluster, 6u)));
+  EXPECT_THAT(text.spans[0].text, Eq(RcString(input.sourcePair + "A")));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Positioned, FullWidthKanaNativeTest,
+    testing::Values(NativeKanaPositioningCase{"Voiced", "\xef\xbd\xb6\xef\xbe\x9e",
+                                              "\xe3\x82\xab\xe3\x82\x99", "\xe3\x82\xac"},
+                    NativeKanaPositioningCase{"Semivoiced", "\xef\xbe\x8a\xef\xbe\x9f",
+                                              "\xe3\x83\x8f\xe3\x82\x9a", "\xe3\x83\x91"}),
+    [](const testing::TestParamInfo<NativeKanaPositioningCase>& info) { return info.param.name; });
+#endif
+
 // A range shaped in context joins with its neighbors: the middle seen of three takes the same
 // medial glyph as when the whole word is shaped at once, not its isolated form.
 TEST(TextEngineTest, RangeShapedInContextJoinsWithItsNeighbors) {
