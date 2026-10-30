@@ -198,11 +198,11 @@ class BcrPreflightTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 workspace = str(self.workspace)
                 expected = [
-                    ["bazelisk", "build", "--lockfile_mode=update", "-c", "opt", *TARGETS,
-                     workspace],
-                    ["bazelisk", "build", "--lockfile_mode=error", "-c", "opt", *TARGETS,
-                     workspace],
-                    ["bazelisk", "test", "--lockfile_mode=error", "-c", "opt",
+                    ["bazelisk", "build", "--lockfile_mode=update", "-c", "opt", "--copt=-Os",
+                     *TARGETS, workspace],
+                    ["bazelisk", "build", "--lockfile_mode=error", "-c", "opt", "--copt=-Os",
+                     *TARGETS, workspace],
+                    ["bazelisk", "test", "--lockfile_mode=error", "-c", "opt", "--copt=-Os",
                      "//tools/ci:release_svg_notice_coverage", workspace],
                     ["python3", "-B", "-m", "tools.release_cli", "package",
                      "--platform", platform, "--binary", "bazel-bin/donner/svg/tool/donner-cli",
@@ -213,7 +213,7 @@ class BcrPreflightTest(unittest.TestCase):
                      "--run-id", "1234", "--attempt", "2", workspace],
                 ]
                 if platform == "darwin-arm64":
-                    flags = ["-c", "opt", "--config=geode", "--config=text-full",
+                    flags = ["-c", "opt", "--copt=-Os", "--config=geode", "--config=text-full",
                              "--//build_defs:enable_tracy=false",
                              f"--//build_defs:release_source_commit={COMMIT}"]
                     targets = ["//donner/editor:editor_macos_app",

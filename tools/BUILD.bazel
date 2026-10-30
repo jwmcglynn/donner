@@ -471,6 +471,7 @@ py_library(
 py_library(
     name = "bcr_preflight",
     srcs = ["bcr_preflight.py"],
+    visibility = ["//tools/ci:__pkg__"],
 )
 
 py_test(
