@@ -856,6 +856,36 @@ TEST(RendererAnimationPresentation, ToOnlyViewBoxUsesTypedBase) {
   }
 }
 
+TEST(RendererAnimationPresentation, RemovingAnimatedViewBoxResetsTypedValue) {
+  auto document = ParsePresentation(
+      "<svg id='v' width='16' height='16' viewBox='0 0 8 8'>"
+      "<rect x='1' y='1' width='2' height='2'/>"
+      "<set attributeName='viewBox' to='0 0 4 4' dur='1s'/></svg>");
+  auto viewport = document.querySelector("#v");
+  ASSERT_TRUE(viewport.has_value());
+  document.setTime(0.5);
+  auto active = ParsePresentation(
+      "<svg width='16' height='16' viewBox='0 0 4 4'>"
+      "<rect x='1' y='1' width='2' height='2'/></svg>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(active),
+      "removed-viewbox-active", editor::tests::PixelmatchIdentityParams());
+  ASSERT_THAT(viewport->cast<SVGSVGElement>().viewBox(),
+              testing::Optional(Box2d::FromXYWH(0, 0, 4, 4)));
+
+  viewport->removeAttribute("viewBox");
+  EXPECT_EQ(viewport->getAttribute("viewBox"), std::nullopt);
+  EXPECT_EQ(viewport->cast<SVGSVGElement>().viewBox(), std::nullopt);
+  document.setTime(2);
+  auto expected = ParsePresentation(
+      "<svg width='16' height='16'>"
+      "<rect x='1' y='1' width='2' height='2'/></svg>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "removed-viewbox-restored", editor::tests::PixelmatchIdentityParams());
+  EXPECT_EQ(viewport->cast<SVGSVGElement>().viewBox(), std::nullopt);
+}
+
 TEST(RendererAnimationPresentation, MarkerAngleCompositionPacingAndTypedBase) {
   const std::string prefix =
       "<defs><marker id='m' markerUnits='userSpaceOnUse' markerWidth='16' markerHeight='16' "
