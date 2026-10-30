@@ -3295,7 +3295,7 @@ TEST(PropertyRegistry, DecorationStyleLonghandGrammar) {
 
 TEST(PropertyRegistry, DecorationColorLonghandGrammar) {
   PropertyRegistry properties;
-  EXPECT_EQ(properties.textDecorationColor.get(), std::nullopt);
+  EXPECT_THAT(properties.textDecorationColor.get(), testing::Eq(std::nullopt));
   properties.parseStyle("text-decoration-color:blue");
   EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
   properties.parseStyle("text-decoration-color:currentcolor");
@@ -3308,7 +3308,7 @@ TEST(PropertyRegistry, DecorationColorLonghandGrammar) {
     EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(RGBA(1, 2, 3, 0x7f))));
   }
   properties.parseStyle("text-decoration-color:initial");
-  EXPECT_EQ(properties.textDecorationColor.get(), std::nullopt);
+  EXPECT_THAT(properties.textDecorationColor.get(), testing::Eq(std::nullopt));
 }
 
 TEST(PropertyRegistry, DecorationShorthandSetsAndResetsEveryLonghand) {
@@ -3327,7 +3327,7 @@ TEST(PropertyRegistry, DecorationShorthandSetsAndResetsEveryLonghand) {
   properties.parseStyle("text-decoration:overline");
   EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Overline));
   EXPECT_THAT(properties.textDecorationStyle.get(), Optional(TextDecorationStyle::Solid));
-  EXPECT_EQ(properties.textDecorationColor.get(), std::nullopt);
+  EXPECT_THAT(properties.textDecorationColor.get(), testing::Eq(std::nullopt));
 
   // Every component is optional, so a color or style alone is valid and resets the line.
   properties.parseStyle("text-decoration:red");
@@ -3335,7 +3335,7 @@ TEST(PropertyRegistry, DecorationShorthandSetsAndResetsEveryLonghand) {
   EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(RGBA(255, 0, 0, 255))));
   properties.parseStyle("text-decoration:wavy");
   EXPECT_THAT(properties.textDecorationStyle.get(), Optional(TextDecorationStyle::Wavy));
-  EXPECT_EQ(properties.textDecorationColor.get(), std::nullopt);
+  EXPECT_THAT(properties.textDecorationColor.get(), testing::Eq(std::nullopt));
 
   // A repeated component invalidates the declaration and keeps the previous values.
   for (const auto value : {"wavy dotted underline", "red blue underline", "underline wavy wavy"}) {

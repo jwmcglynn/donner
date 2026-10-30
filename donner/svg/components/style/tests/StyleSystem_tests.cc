@@ -928,6 +928,14 @@ TEST_F(StyleSystemTest, DecorationLonghandsDoNotInheritUnlessRequested) {
       style="text-decoration-style:inherit;text-decoration-color:inherit">Y</tspan><tspan id="sheet"
       class="d">Z</tspan></text><style>.d { text-decoration-line: overline;
       text-decoration-style: dotted; text-decoration-color: currentcolor }</style></svg>)svg");
+  for (const char* selector : {"#parent", "#plain", "#child", "#sheet"}) {
+    SCOPED_TRACE(selector);
+    const auto element = document.querySelector(selector);
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    const auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
+    ASSERT_THAT(computed, NotNull());
+    ASSERT_THAT(computed->properties, testing::Optional(testing::_));
+  }
   const auto& registry = document.registry();
   const auto properties = [&](const char* selector) -> const PropertyRegistry& {
     return *registry.get<ComputedStyleComponent>(document.querySelector(selector)->entityHandle())
@@ -943,7 +951,7 @@ TEST_F(StyleSystemTest, DecorationLonghandsDoNotInheritUnlessRequested) {
   // Not inherited: a child without declarations has the initial values.
   EXPECT_THAT(properties("#plain").textDecorationStyle.get(),
               testing::Optional(TextDecorationStyle::Solid));
-  EXPECT_EQ(properties("#plain").textDecorationColor.get(), std::nullopt);
+  EXPECT_THAT(properties("#plain").textDecorationColor.get(), testing::Eq(std::nullopt));
   // Explicit inheritance copies the parent's values.
   EXPECT_THAT(properties("#child").textDecorationStyle.get(),
               testing::Optional(TextDecorationStyle::Wavy));

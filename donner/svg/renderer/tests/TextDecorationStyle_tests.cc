@@ -35,17 +35,12 @@ std::string DecoratedText(std::string_view decoration, std::string_view extraAtt
          ";text-decoration-thickness:2px'>XX</text>";
 }
 
-void ExpectScene(const std::string& actualSvg, const std::string& expectedSvg,
-                 std::string_view label) {
-  editor::tests::CompareBitmapToBitmap(RenderDecorationScene(actualSvg),
-                                       RenderDecorationScene(expectedSvg), label,
-                                       editor::tests::PixelmatchIdentityParams());
-}
-
 TEST(TextDecorationStyle, SolidIsOneBand) {
-  ExpectScene(DecoratedText("underline solid"),
-              "<rect x='10' y='41' width='20' height='2' fill='red'/>" + std::string(kRedGlyphs),
-              "decoration_style_solid");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDecorationScene(DecoratedText("underline solid")),
+      RenderDecorationScene("<rect x='10' y='41' width='20' height='2' fill='red'/>" +
+                            std::string(kRedGlyphs)),
+      "decoration_style_solid", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(TextDecorationStyle, DoubleAddsASecondBandAwayFromTheText) {
@@ -62,18 +57,21 @@ TEST(TextDecorationStyle, DoubleAddsASecondBandAwayFromTheText) {
     const std::string bands = "<rect x='10' y='" + std::to_string(c.first) +
                               "' width='20' height='2' fill='red'/><rect x='10' y='" +
                               std::to_string(c.second) + "' width='20' height='2' fill='red'/>";
-    ExpectScene(DecoratedText(std::string(c.line) + " double"),
-                c.beneathText ? bands + std::string(kRedGlyphs) : std::string(kRedGlyphs) + bands,
-                c.line);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDecorationScene(DecoratedText(std::string(c.line) + " double")),
+        RenderDecorationScene(c.beneathText ? bands + std::string(kRedGlyphs)
+                                            : std::string(kRedGlyphs) + bands),
+        c.line, editor::tests::PixelmatchIdentityParams());
   }
 }
 
 TEST(TextDecorationStyle, DashedRepeatsThreeThicknessDashesEveryFive) {
-  ExpectScene(DecoratedText("underline dashed"),
-              "<rect x='10' y='41' width='6' height='2' fill='red'/>"
-              "<rect x='20' y='41' width='6' height='2' fill='red'/>" +
-                  std::string(kRedGlyphs),
-              "decoration_style_dashed");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDecorationScene(DecoratedText("underline dashed")),
+      RenderDecorationScene("<rect x='10' y='41' width='6' height='2' fill='red'/>"
+                            "<rect x='20' y='41' width='6' height='2' fill='red'/>" +
+                            std::string(kRedGlyphs)),
+      "decoration_style_dashed", editor::tests::PixelmatchIdentityParams());
 }
 
 /// Path data for a unit-radius dot: four cubic quarter-circles with the standard 0.5522847498
@@ -99,8 +97,10 @@ TEST(TextDecorationStyle, DottedRepeatsRoundDotsEveryTwoThicknesses) {
     dots += DotPathData(cx, 42);
   }
   dots += "'/>";
-  ExpectScene(DecoratedText("underline dotted"), dots + std::string(kRedGlyphs),
-              "decoration_style_dotted");
+  editor::tests::CompareBitmapToBitmap(RenderDecorationScene(DecoratedText("underline dotted")),
+                                       RenderDecorationScene(dots + std::string(kRedGlyphs)),
+                                       "decoration_style_dotted",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(TextDecorationStyle, WavyFollowsWholeHalfWavesAcrossTheSegment) {
@@ -109,20 +109,25 @@ TEST(TextDecorationStyle, WavyFollowsWholeHalfWavesAcrossTheSegment) {
   constexpr std::string_view kWave =
       "<path fill='red' d='M10 41 Q12 37 14 41 Q16 45 18 41 Q20 37 22 41 Q24 45 26 41 Q28 37 30 41 "
       "L30 43 Q28 39 26 43 Q24 47 22 43 Q20 39 18 43 Q16 47 14 43 Q12 39 10 43 Z'/>";
-  ExpectScene(DecoratedText("underline wavy"), std::string(kWave) + std::string(kRedGlyphs),
-              "decoration_style_wavy");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDecorationScene(DecoratedText("underline wavy")),
+      RenderDecorationScene(std::string(kWave) + std::string(kRedGlyphs)), "decoration_style_wavy",
+      editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(TextDecorationStyle, StyleAppliesPerOrigin) {
   // The span's dotted line-through does not restyle the ancestor's solid underline.
-  ExpectScene(
-      "<text x='10' y='40' font-size='20' fill='red' "
-      "style='text-decoration:underline;text-decoration-thickness:2px'><tspan "
-      "style='text-decoration:line-through dashed;text-decoration-thickness:2px'>XX</tspan></text>",
-      "<rect x='10' y='41' width='20' height='2' fill='red'/>" + std::string(kRedGlyphs) +
-          "<rect x='10' y='33' width='6' height='2' fill='red'/>"
-          "<rect x='20' y='33' width='6' height='2' fill='red'/>",
-      "decoration_style_per_origin");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDecorationScene(
+          "<text x='10' y='40' font-size='20' fill='red' "
+          "style='text-decoration:underline;text-decoration-thickness:2px'><tspan "
+          "style='text-decoration:line-through "
+          "dashed;text-decoration-thickness:2px'>XX</tspan></text>"),
+      RenderDecorationScene("<rect x='10' y='41' width='20' height='2' fill='red'/>" +
+                            std::string(kRedGlyphs) +
+                            "<rect x='10' y='33' width='6' height='2' fill='red'/>"
+                            "<rect x='20' y='33' width='6' height='2' fill='red'/>"),
+      "decoration_style_per_origin", editor::tests::PixelmatchIdentityParams());
 }
 
 /// Emit one origin's underline for a single-glyph run and return the emitted paths' point counts.
@@ -228,54 +233,67 @@ TEST(TextDecorationStyle, DecorationWorkIsSharedAcrossTheFrame) {
         std::string(45, 'X') + "</text>";
   }
   scene += "</g>";
-  ExpectScene(scene + DecoratedText("underline"), std::string(kRedGlyphs),
-              "decoration_frame_allowance");
+  editor::tests::CompareBitmapToBitmap(RenderDecorationScene(scene + DecoratedText("underline")),
+                                       RenderDecorationScene(std::string(kRedGlyphs)),
+                                       "decoration_frame_allowance",
+                                       editor::tests::PixelmatchIdentityParams());
   // Control: without the offscreen texts, the same underline draws.
-  ExpectScene(DecoratedText("underline"),
-              "<rect x='10' y='41' width='20' height='2' fill='red'/>" + std::string(kRedGlyphs),
-              "decoration_frame_allowance_control");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDecorationScene(DecoratedText("underline")),
+      RenderDecorationScene("<rect x='10' y='41' width='20' height='2' fill='red'/>" +
+                            std::string(kRedGlyphs)),
+      "decoration_frame_allowance_control", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(TextDecorationColor, ReplacesTheDeclaringFill) {
-  ExpectScene(DecoratedText("underline blue"),
-              "<rect x='10' y='41' width='20' height='2' fill='blue'/>" + std::string(kRedGlyphs),
-              "decoration_color_fill");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDecorationScene(DecoratedText("underline blue")),
+      RenderDecorationScene("<rect x='10' y='41' width='20' height='2' fill='blue'/>" +
+                            std::string(kRedGlyphs)),
+      "decoration_color_fill", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(TextDecorationColor, PaintsEvenWhenTheDeclaringFillIsNone) {
-  ExpectScene(
-      "<text x='10' y='40' font-size='20' fill='none' style='text-decoration:underline blue;"
-      "text-decoration-thickness:2px'>XX</text>",
-      "<rect x='10' y='41' width='20' height='2' fill='blue'/>", "decoration_color_fill_none");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDecorationScene(
+          "<text x='10' y='40' font-size='20' fill='none' style='text-decoration:underline blue;"
+          "text-decoration-thickness:2px'>XX</text>"),
+      RenderDecorationScene("<rect x='10' y='41' width='20' height='2' fill='blue'/>"),
+      "decoration_color_fill_none", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(TextDecorationColor, KeepsTheDeclaringStroke) {
   constexpr std::string_view kStroke = "stroke='lime' stroke-width='1'";
-  ExpectScene(DecoratedText("underline blue", kStroke),
-              "<rect x='10' y='41' width='20' height='2' fill='blue' " + std::string(kStroke) +
-                  "/><rect x='10' y='38' width='1' height='2' fill='red' " + std::string(kStroke) +
-                  "/><rect x='20' y='38' width='1' height='2' fill='red' " + std::string(kStroke) +
-                  "/>",
-              "decoration_color_stroke");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDecorationScene(DecoratedText("underline blue", kStroke)),
+      RenderDecorationScene(
+          "<rect x='10' y='41' width='20' height='2' fill='blue' " + std::string(kStroke) +
+          "/><rect x='10' y='38' width='1' height='2' fill='red' " + std::string(kStroke) +
+          "/><rect x='20' y='38' width='1' height='2' fill='red' " + std::string(kStroke) + "/>"),
+      "decoration_color_stroke", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(TextDecorationColor, CurrentColorUsesTheDeclaringElementColor) {
-  ExpectScene(
-      "<text x='10' y='40' font-size='20' fill='red' color='green'><tspan color='blue' "
-      "style='text-decoration:underline;text-decoration-color:currentcolor;"
-      "text-decoration-thickness:2px'>XX</tspan></text>",
-      "<rect x='10' y='41' width='20' height='2' fill='blue'/>" + std::string(kRedGlyphs),
-      "decoration_color_currentcolor");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDecorationScene(
+          "<text x='10' y='40' font-size='20' fill='red' color='green'><tspan color='blue' "
+          "style='text-decoration:underline;text-decoration-color:currentcolor;"
+          "text-decoration-thickness:2px'>XX</tspan></text>"),
+      RenderDecorationScene("<rect x='10' y='41' width='20' height='2' fill='blue'/>" +
+                            std::string(kRedGlyphs)),
+      "decoration_color_currentcolor", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(TextDecorationColor, UnsetKeepsTheSvgFillRule) {
   // Without text-decoration-color, SVG 2 section 11.11 paints the decoration with the declaring
   // element's fill, not the span's.
-  ExpectScene(
-      "<text x='10' y='40' font-size='20' fill='green' style='text-decoration:underline;"
-      "text-decoration-thickness:2px'><tspan fill='red'>XX</tspan></text>",
-      "<rect x='10' y='41' width='20' height='2' fill='green'/>" + std::string(kRedGlyphs),
-      "decoration_color_unset");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDecorationScene(
+          "<text x='10' y='40' font-size='20' fill='green' style='text-decoration:underline;"
+          "text-decoration-thickness:2px'><tspan fill='red'>XX</tspan></text>"),
+      RenderDecorationScene("<rect x='10' y='41' width='20' height='2' fill='green'/>" +
+                            std::string(kRedGlyphs)),
+      "decoration_color_unset", editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace
