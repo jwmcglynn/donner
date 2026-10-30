@@ -73,6 +73,7 @@ RELEASE_TARGETS = ("//tools/ci:release_svg", "//tools/ci:release_svg_notice",
                    "//tools/ci:release_compiler_identity", "//tools/ci:release_cli_resources")
 # The NOTICE must attribute every third-party component in the CLI configuration's closure.
 NOTICE_COVERAGE = "//tools/ci:release_svg_notice_coverage"
+NATIVE_RELEASE_FLAGS = ("-c", "opt", "--copt=-Os")
 # The Donner libraries a consumer builds, whose configured closure the consumer audit checks.
 CONSUMER_LIBRARIES = ("@donner//donner/base:base", "@donner//donner/css:css",
                       "@donner//donner/svg:svg", "@donner//donner/svg/renderer:renderer")
@@ -274,11 +275,13 @@ def cli_plan(layout: Layout, platform: str, commit: str, run_id: str,
     """
     commands = [
         Command("Resolve the module graph",
-                ("bazelisk", "build", "--lockfile_mode=update", "-c", "opt", *RELEASE_TARGETS)),
+                ("bazelisk", "build", "--lockfile_mode=update",
+                 *NATIVE_RELEASE_FLAGS, *RELEASE_TARGETS)),
         Command("Build under the resolved lockfile",
-                ("bazelisk", "build", "--lockfile_mode=error", "-c", "opt", *RELEASE_TARGETS)),
+                ("bazelisk", "build", "--lockfile_mode=error",
+                 *NATIVE_RELEASE_FLAGS, *RELEASE_TARGETS)),
         Command("Test NOTICE coverage",
-                ("bazelisk", "test", "--lockfile_mode=error", "-c", "opt", NOTICE_COVERAGE)),
+                ("bazelisk", "test", "--lockfile_mode=error", *NATIVE_RELEASE_FLAGS, NOTICE_COVERAGE)),
         Command("Package the CLI",
                 ("python3", "-B", "-m", "tools.release_cli", "package",
                  "--platform", platform, "--binary", "bazel-bin/donner/svg/tool/donner-cli",
@@ -296,7 +299,7 @@ def cli_plan(layout: Layout, platform: str, commit: str, run_id: str,
 def editor_macos_plan(layout: Layout, commit: str, run_id: str, attempt: str) -> list[Command]:
     targets = ("//donner/editor:editor_macos_app", "//third_party/licenses:notice_release_editor_txt",
                "//tools/ci:release_compiler_identity", "//donner/editor:editor_build_info_txt")
-    flags = ("-c", "opt", "--config=geode", "--config=text-full",
+    flags = (*NATIVE_RELEASE_FLAGS, "--config=geode", "--config=text-full",
              "--//build_defs:enable_tracy=false", f"--//build_defs:release_source_commit={commit}")
     return [
         Command("Resolve native editor dependencies",

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import struct
@@ -14,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import native_linked_size as size  # noqa: E402  (sibling module, path set just above)
+from tools import bcr_preflight
 
 SHF_WRITE = 0x1
 SHF_ALLOC = 0x2
@@ -75,6 +77,93 @@ def macho(segments: list[tuple[str, list[tuple[int, int]]] | None]) -> bytes:
     header = struct.pack("<IiiIIIII", 0xFEEDFACF, 0x0100000C, 0, 2, len(segments), len(commands),
                          0, 0)
     return header + commands
+
+
+class ShippedConfigurationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = Path(__file__).with_name("shipped_product.bzl").read_text(encoding="utf-8")
+        layout = bcr_preflight.Layout("/temp")
+        cls.plans = {
+            platform: [command.argv for command in bcr_preflight.cli_plan(
+                layout, platform, "0" * 40, "1", "1") if command.argv[0] == "bazelisk"]
+            for platform in ("linux-x86-64", "darwin-arm64")
+        }
+
+    @staticmethod
+    def _read_transition(source):
+        # The transition body uses Python-compatible Starlark; evaluate only that pure function.
+        tree = ast.parse(source)
+        function = next(statement for statement in tree.body
+                        if isinstance(statement, ast.FunctionDef)
+                        and statement.name == "_shipped_configuration_impl")
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "shipped_product.bzl", "exec"),
+             namespace)
+        declaration = next(statement.value for statement in tree.body
+                           if isinstance(statement, ast.Assign)
+                           and any(isinstance(target, ast.Name)
+                                   and target.id == "_shipped_configuration"
+                                   for target in statement.targets))
+        attributes = {item.arg: item.value for item in declaration.keywords}
+        return namespace[function.name], attributes
+
+    def _assert_release_optimization(self, source, plans):
+        transition, attributes = self._read_transition(source)
+        self.assertEqual(attributes["implementation"].id, transition.__name__)
+        copt = "//command_line_option:copt"
+        mode = "//command_line_option:compilation_mode"
+        self.assertIn(copt, ast.literal_eval(attributes["inputs"]))
+        self.assertIn(copt, ast.literal_eval(attributes["outputs"]))
+        self.assertIn(mode, ast.literal_eval(attributes["outputs"]))
+        inherited = ["-DKEEP_CALLER_SETTING=1", "-gline-tables-only", "-O2"]
+        result = transition({copt: inherited}, None)
+        self.assertEqual(result[copt], [*inherited, "-Os"])
+        self.assertEqual(inherited, ["-DKEEP_CALLER_SETTING=1", "-gline-tables-only", "-O2"])
+        self.assertEqual(result[mode], "opt")
+        for platform, commands in plans.items():
+            self.assertEqual(len(commands), 6 if platform == "darwin-arm64" else 3)
+            for index, command in enumerate(commands):
+                phase = f"{platform} phase {index}"
+                self.assertEqual(command[command.index("-c") + 1], result[mode], phase)
+                copts = [argument.removeprefix("--copt=") for argument in command
+                         if argument.startswith("--copt=")]
+                self.assertEqual(copts, [result[copt][-1]], phase)
+
+    def test_measurement_matches_every_native_build_and_notice_configuration(self):
+        self._assert_release_optimization(self.source, self.plans)
+
+    def test_contract_rejects_lost_copts_and_ineffective_size_optimization(self):
+        original = 'settings["//command_line_option:copt"] + ["-Os"]'
+        self.assertIn(original, self.source)
+        mutations = {
+            "lost caller flags": self.source.replace(original, '["-Os"]', 1),
+            "caller optimization wins": self.source.replace(
+                original, '["-Os"] + settings["//command_line_option:copt"]', 1),
+            "missing optimization": self.source.replace(
+                original, 'settings["//command_line_option:copt"]', 1),
+            "different implementation": self.source.replace(
+                'implementation = _shipped_configuration_impl', 'implementation = other', 1),
+            "undeclared input": self.source.replace(
+                'inputs = ["//command_line_option:copt"]', 'inputs = []', 1),
+            "undeclared output": self.source.replace(
+                '        "//command_line_option:copt",\n', '', 1),
+        }
+        for name, source in mutations.items():
+            with self.subTest(mutation=name), self.assertRaises(AssertionError):
+                self._assert_release_optimization(source, self.plans)
+
+    def test_contract_rejects_each_producer_phase_losing_size_optimization(self):
+        for platform, commands in self.plans.items():
+            for index in range(len(commands)):
+                for replacement in ((), ("--copt=-Os", "--copt=-O2")):
+                    changed = list(commands)
+                    changed[index] = tuple(argument for argument in changed[index]
+                                           if argument != "--copt=-Os") + replacement
+                    plans = {**self.plans, platform: changed}
+                    with self.subTest(platform=platform, phase=index, replacement=replacement):
+                        with self.assertRaises(AssertionError):
+                            self._assert_release_optimization(self.source, plans)
 
 
 class MeasureElfTest(unittest.TestCase):

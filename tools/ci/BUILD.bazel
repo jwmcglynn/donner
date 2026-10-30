@@ -496,10 +496,12 @@ py_test(
         "native_linked_size.py",
         "native_linked_size_tests.py",
     ],
+    data = ["shipped_product.bzl"],
     main = "native_linked_size_tests.py",
+    deps = ["//tools:bcr_preflight"],
 )
 
-# The shipped native products, built optimized with Geode and without the Tracy profiler client.
+# The shipped native products, optimized for size with Geode and without the Tracy profiler client.
 shipped_product(
     name = "shipped_editor",
     testonly = True,
@@ -515,7 +517,7 @@ shipped_product(
 )
 
 # The released `donner-cli` CLI. It links the CPU renderer under every configuration, so the
-# shipped configuration builds the same program as the release build (`-c opt`).
+# shipped configuration uses the release build's `-c opt --copt=-Os` optimization.
 shipped_product(
     name = "shipped_donner_svg",
     testonly = True,
