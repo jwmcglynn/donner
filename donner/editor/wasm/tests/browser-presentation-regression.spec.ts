@@ -13,6 +13,7 @@ import { boundBrowserDiagnostic, readGpuOwnerDispatchStats } from "./browser-run
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
   captureEditorPage,
+  captureSplashCompositeFrame,
   captureSplashPresentationFrame,
   type CssRegion,
   type EditorBackgroundCoverageStats,
@@ -6220,20 +6221,94 @@ test("browser trackpad pinch matches the desktop zoom identity", async ({ page }
   const zoomPoint = { x: editorBounds.x + 480, y: editorBounds.y + 320 };
   await page.mouse.move(zoomPoint.x, zoomPoint.y);
 
-  const letterWidth = splashLetterWidthReader(page, editorBounds);
-  const beforeWidth = await letterWidth();
-  expect(beforeWidth).toBeGreaterThan(0);
+  const letterRegion = splashLetterMeasureRegion(editorBounds);
+  const readAccount = () =>
+    boundFailureDiagnostic(page.evaluate(() => ({
+      sampledAtMs: performance.now(),
+      zoom: window.__donnerViewportStats?.zoom ?? null,
+      documentWidth: window.__donnerViewportStats?.documentWidth ?? null,
+      documentHeight: window.__donnerViewportStats?.documentHeight ?? null,
+      frameId: window.__donnerPresentationQueueStats?.frameId ?? null,
+      captureId: window.__donnerPresentationQueueStats?.captureId ?? null,
+      completedSerial: window.__donnerPresentationQueueStats?.completedSerial ?? null,
+      viewportZoom: window.__donnerPresentationQueueStats?.viewportZoom ?? null,
+      inputRepresented: window.__donnerPresentationQueueStats?.inputRepresented ?? null,
+      lastSurfacePresented: window.__donnerHostFrameTiming?.lastSurfacePresented ?? null,
+      presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+    })));
+  const captureLetter = async () => {
+    const before = await readAccount();
+    const capture = await captureSplashCompositeFrame(page, letterRegion, {
+      minX: 0,
+      minY: 0,
+      maxX: letterRegion.width,
+      maxY: letterRegion.height,
+    });
+    const after = await readAccount();
+    const bounds = capture.stats.yellow;
+    return {
+      png: capture.png,
+      bounds,
+      width: bounds === null ? 0 : bounds.maxX - bounds.minX,
+      before,
+      after,
+    };
+  };
+  type LetterCapture = Awaited<ReturnType<typeof captureLetter>>;
+  let baseline: LetterCapture | undefined;
+  let lastPoll: LetterCapture | undefined;
+  try {
+    baseline = await captureLetter();
+    const beforeWidth = baseline.width;
+    expect(beforeWidth).toBeGreaterThan(0);
 
-  await dispatchTrackpadPinch(page, zoomPoint, kTrackpadPinchScale);
+    await dispatchTrackpadPinch(page, zoomPoint, kTrackpadPinchScale);
 
-  await expect
-    .poll(async () => (await letterWidth()) / beforeWidth, {
-      message: "the pinch never scaled the rendered document content",
-      timeout: scaledMs(5_000),
-    })
-    .toBeGreaterThan(kTrackpadPinchScale * 0.93);
-  expect((await letterWidth()) / beforeWidth).toBeLessThan(kTrackpadPinchScale * 1.07);
-  expect(failures).toEqual([]);
+    await expect
+      .poll(async () => {
+        lastPoll = await captureLetter();
+        return lastPoll.width / beforeWidth;
+      }, {
+        message: "the pinch never scaled the rendered document content",
+        timeout: scaledMs(5_000),
+      })
+      .toBeGreaterThan(kTrackpadPinchScale * 0.93);
+    lastPoll = await captureLetter();
+    expect(lastPoll.width / beforeWidth).toBeLessThan(kTrackpadPinchScale * 1.07);
+    expect(failures).toEqual([]);
+  } catch (error) {
+    // Retain the scored images, rather than taking another capture after the failed assertion.
+    const account = (capture: LetterCapture | undefined) =>
+      capture === undefined ? null : {
+        bounds: capture.bounds,
+        width: capture.width,
+        before: capture.before,
+        after: capture.after,
+      };
+    await boundFailureDiagnostic(Promise.all([
+      baseline === undefined
+        ? Promise.resolve()
+        : attachEvidenceFile("pinch-baseline", baseline.png, "image/png"),
+      lastPoll === undefined
+        ? Promise.resolve()
+        : attachEvidenceFile("pinch-last-poll", lastPoll.png, "image/png"),
+      attachEvidenceFile(
+        "pinch-measurements",
+        JSON.stringify(
+          {
+            region: letterRegion,
+            requestedScale: kTrackpadPinchScale,
+            baseline: account(baseline),
+            lastPoll: account(lastPoll),
+          },
+          null,
+          2,
+        ),
+        "application/json",
+      ),
+    ]));
+    throw error;
+  }
 });
 
 // Longer than the editor's UI admission deadline
