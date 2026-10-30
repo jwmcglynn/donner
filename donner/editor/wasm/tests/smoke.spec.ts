@@ -8,15 +8,7 @@ import {
   readPipelineCompileFault,
   sumPipelineCompilesPending,
 } from "./pipeline-compile-readiness.mjs";
-import {
-  errors,
-  expect,
-  type Page,
-  type Response as PlaywrightResponse,
-  test,
-  type TestInfo,
-  type Worker,
-} from "@playwright/test";
+import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
@@ -2610,9 +2602,13 @@ test("code-only updates transfer no unchanged essential resource bodies from a p
   expect(critical.length).toBeGreaterThan(0);
   const urls = new Set(critical.map((asset) => new URL(asset.path, baseUrl).href));
   const bodies: string[] = [];
-  const coldResponses: PlaywrightResponse[] = [];
-  page.on("response", (response) => {
-    if (urls.has(response.url())) coldResponses.push(response);
+  const coldResponses = new Map<string, { ok: boolean; bytes: Buffer }>();
+  const isCriticalAsset = (url: URL) => urls.has(url.href);
+  await page.route(isCriticalAsset, async (route) => {
+    const response = await route.fetch();
+    const bytes = await response.body();
+    coldResponses.set(route.request().url(), { ok: response.ok(), bytes });
+    await route.fulfill({ response, body: bytes });
   });
   page.on("request", (request) => {
     if (urls.has(request.url())) bodies.push(request.url());
@@ -2629,18 +2625,16 @@ test("code-only updates transfer no unchanged essential resource bodies from a p
     installed: (window.__donnerResourcesInstalledAtMs ?? Infinity)
       < (window.__donnerFirstFramePresentedAtMs ?? 0),
   }))).toEqual({ installed: true });
-  expect(new Set(coldResponses.map((response) => response.url()))).toEqual(urls);
-  const cachedAssets = await Promise.all(critical.map(async (asset) => {
-    const response = coldResponses.find((entry) =>
-      entry.url() === new URL(asset.path, baseUrl).href
-    );
-    expect(response?.ok()).toBe(true);
+  expect(new Set(coldResponses.keys())).toEqual(urls);
+  const cachedAssets = critical.map((asset) => {
+    const response = coldResponses.get(new URL(asset.path, baseUrl).href);
+    expect(response?.ok).toBe(true);
     if (!response) throw new Error(`Missing cold response: ${asset.path}`);
-    const bytes = await response.body();
+    const { bytes } = response;
     expect(bytes.byteLength).toBe(asset.encodedSize);
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(asset.sha256);
     return { sha256: asset.sha256, mediaType: asset.mediaType, bytes: Array.from(bytes) };
-  }));
+  });
   // Persistence is best effort; establish the warm fixture without depending on storage deadlines.
   await page.evaluate(async (assets) => {
     await navigator.locks.request("donner-assets-v1", async () => {
@@ -2657,6 +2651,7 @@ test("code-only updates transfer no unchanged essential resource bodies from a p
       }
     });
   }, cachedAssets);
+  await page.unroute(isCriticalAsset);
   const coldBodies = bodies.length;
   const coldBodyUrls = [...bodies];
   bodies.length = 0;
