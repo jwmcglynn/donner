@@ -425,6 +425,9 @@ public:
   void setTextEditingChrome(std::optional<CapturedPresentation::TextEditing> text) {
     if (text.has_value()) {
       text->identity.presentationEpoch = presentationEpoch_;
+      retainMeasuredTextEditing(*text);
+    } else {
+      measuredTextEditing_.clear();
     }
     textEditing_ = std::move(text);
   }
@@ -710,7 +713,13 @@ private:
   std::optional<Path> penHoverPreviewSegmentDoc_;
   std::optional<Vector2d> penHoverCloseAffordanceDoc_;
   std::optional<CapturedPresentation::TextEditing> textEditing_;
+  /// Text annotations of the open session, oldest first, one per measured document revision.
+  /// A render posted for one revision can capture a later one when an edit flushes before the
+  /// worker acquires the document, so the raster that lands may predate `textEditing_`.
+  std::vector<CapturedPresentation::TextEditing> measuredTextEditing_;
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> textBoxDragPreviewDoc_;
+
+  void retainMeasuredTextEditing(const CapturedPresentation::TextEditing& text);
 
   void presentCompositedResult(RenderResult& result, EditorApp& app, const ViewportState& viewport,
                                GlTextureCache& textures);
