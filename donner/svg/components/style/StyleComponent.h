@@ -1,4 +1,6 @@
 #pragma once
+
+#include <cstddef>
 /// @file
 
 #include "donner/base/EcsRegistry.h"
@@ -12,6 +14,9 @@ namespace donner::svg::components {
  * during the CSS cascade, which stores the final element style in \ref ComputedStyleComponent.
  */
 struct StyleComponent {
+  /// Limit initial storage for this large component while retaining paged pointer stability.
+  static constexpr std::size_t page_size = 64;
+
   /// The properties of the element, which are parsed from the `style=""` attribute.
   PropertyRegistry properties;
   /// True when the most recent inline-style parse exceeded its resource budget.

@@ -77,6 +77,9 @@ public:
   /// bounds the work shaping a chunk's ranges in context does.
   [[nodiscard]] std::size_t detectedContextBytesForTesting() const { return detectedContextBytes_; }
 
+  /// Total range bytes actually supplied to shaping, including fallback and analysis calls.
+  [[nodiscard]] std::size_t shapedBytesForTesting() const { return shapedBytes_; }
+
 private:
   ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
                          size_t byteOffset, size_t byteLength, bool isVertical,
@@ -90,6 +93,7 @@ private:
   Registry& registry_;
   /// See \ref detectedContextBytesForTesting.
   mutable std::size_t detectedContextBytes_ = 0;
+  mutable std::size_t shapedBytes_ = 0;
 
   /// Cache entry stored on the font entity.
   struct HbFontEntry;

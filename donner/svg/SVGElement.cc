@@ -60,6 +60,17 @@ void markStyleCascadeDirty(EntityHandle handle, uint16_t extraFlags = 0) {
   (void)components::InvalidateTextLayout(handle);
 }
 
+/// Attributes outside the presentation whitelist do not need a style registry.
+ParseResult<bool> TrySetCommonPresentationAttribute(const ElementAnchor& handle,
+                                                    DocumentWriteAccess& access,
+                                                    std::string_view name, std::string_view value) {
+  if (!PropertyRegistry::isPresentationAttributeName(name)) {
+    return false;
+  }
+  return handle.get_or_emplace<components::StyleComponent>(access).trySetPresentationAttribute(
+      handle, name, value);
+}
+
 /// Resource colors support explicit inheritance despite their non-inherited defaults.
 bool ShouldInvalidateDescendantStyles(std::string_view name) {
   return PropertyRegistry::isPresentationAttributeInherited(name) || name == "flood-color" ||
@@ -623,9 +634,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
   }
 
   // Try common CSS properties first (fill, stroke, opacity, transform, etc.).
-  auto trySetResult =
-      handle_.get_or_emplace<components::StyleComponent>(access).trySetPresentationAttribute(
-          handle_, actualName, value);
+  auto trySetResult = TrySetCommonPresentationAttribute(handle_, access, actualName, value);
 
   if (trySetResult.hasError()) {
     mutation.cancel();

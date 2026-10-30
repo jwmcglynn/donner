@@ -3119,6 +3119,43 @@ TEST(PropertyRegistry, WhiteSpaceKeywordsAndInvalidDeclarations) {
   }
 }
 
+TEST(PropertyRegistry, OverflowWrapKeywordsShareTheWordWrapAliasCascadeSlot) {
+  PropertyRegistry properties;
+  EXPECT_THAT(properties.overflowWrap.get(), Optional(OverflowWrap::Normal));
+  const std::pair<const char*, OverflowWrap> cases[] = {{"NoRmAl", OverflowWrap::Normal},
+                                                        {"BrEaK-WoRd", OverflowWrap::BreakWord},
+                                                        {"AnYwHeRe", OverflowWrap::Anywhere}};
+  for (const auto& [keyword, value] : cases) {
+    SCOPED_TRACE(keyword);
+    for (const char* name : {"overflow-wrap", "word-wrap"}) {
+      SCOPED_TRACE(name);
+      properties.parseStyle(std::string(name) + ":" + keyword);
+      EXPECT_THAT(properties.overflowWrap.get(), Optional(value));
+      EXPECT_THAT(properties.parsePresentationAttribute(name, keyword), ParseResultIs(false));
+    }
+  }
+  EXPECT_THAT(properties.numPropertiesSet(), Eq(1));
+  properties.parseStyle("overflow-wrap:anywhere!important;word-wrap:normal");
+  EXPECT_THAT(properties.overflowWrap.get(), Optional(OverflowWrap::Anywhere));
+}
+
+TEST(PropertyRegistry, OverflowWrapInvalidValuesAndInheritance) {
+  PropertyRegistry parent;
+  parent.parseStyle("word-wrap:break-word");
+  EXPECT_THAT(PropertyRegistry().inheritFrom(parent).overflowWrap.get(),
+              Optional(OverflowWrap::BreakWord));
+  PropertyRegistry child;
+  for (const char* value : {"normal anywhere", "break-all", "1", "auto", "anywhere extra"}) {
+    SCOPED_TRACE(value);
+    child.parseStyle(std::string("overflow-wrap:") + value);
+    EXPECT_THAT(child.inheritFrom(parent).overflowWrap.get(), Optional(OverflowWrap::BreakWord));
+  }
+  child.parseStyle("word-wrap:initial");
+  EXPECT_THAT(child.inheritFrom(parent).overflowWrap.get(), Optional(OverflowWrap::Normal));
+  child.parseStyle("overflow-wrap:unset");
+  EXPECT_THAT(child.inheritFrom(parent).overflowWrap.get(), Optional(OverflowWrap::BreakWord));
+}
+
 TEST(PropertyRegistry, TextTransformSupportedSubsetRejectsUnsupportedOperations) {
   PropertyRegistry properties;
   EXPECT_THAT(properties.textTransform.get(), Optional(TextTransform::None));

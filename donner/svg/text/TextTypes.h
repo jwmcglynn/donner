@@ -98,6 +98,12 @@ struct TextGlyph {
   FontHandle font;
   /// Immutable outline policy resolved from the source span and its requested font style.
   bool allowSyntheticOblique = true;
+  /// A safe emergency boundary precedes this visual glyph group after contextual shaping.
+  bool emergencyBreakBefore = false;
+  /// First visual group of a planned line, retaining logical order between backward lines.
+  bool emergencyLineStart = false;
+  /// Preserved logical end space hanging before a backward line's visual content.
+  bool hangingBefore = false;
 };
 
 /**
