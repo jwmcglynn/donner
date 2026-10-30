@@ -222,17 +222,22 @@ donner_perf_sensitive_cc_library(
     ],
 )
 
-# Shared backend-agnostic text geometry (placement) consumed by both
-# RendererTinySkia::drawText and RendererGeode::drawText — the start of the
-# 0038 hoist that de-duplicates per-glyph placement so the two backends can't
-# drift. Text-only (depends on TextEngine); both backends dep it conditionally
-# on `:text_enabled`.
+donner_cc_library(
+    name = "decoration_work_budget",
+    hdrs = ["DecorationWorkBudget.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Both renderers share glyph placement and bounded decoration geometry so their
+# transforms and work accounting stay consistent. Text-only (depends on TextEngine);
+# both backends depend on it conditionally on `:text_enabled`.
 donner_perf_sensitive_cc_library(
     name = "placed_text_geometry",
     srcs = ["PlacedTextGeometry.cc"],
     hdrs = ["PlacedTextGeometry.h"],
     visibility = ["//visibility:public"],
     deps = [
+        ":decoration_work_budget",
         ":renderer_interface",
         "//donner/base",
         "//donner/svg/components/text:components",

@@ -1,6 +1,7 @@
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwright_bin = "bin")
+load("@npm//donner/editor/wasm/tests:esbuild/package_json.bzl", esbuild_bin = "bin")
 load("@npm//donner/editor/wasm/tests:eslint/package_json.bzl", eslint_bin = "bin")
 
 package(default_visibility = ["//visibility:public"])
@@ -288,10 +289,10 @@ playwright_bin.playwright_test(
         "canvas-quiescent-capture.mjs",
         "carousel-samples.mjs",
         "chromium-launch-env.cjs",
+        "completed-result-handoff.mjs",
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
-        "completed-result-handoff.mjs",
         "firefox-launch-env.cjs",
         "first-click-breakdown.mjs",
         "flat-capture-retake.mjs",
@@ -1354,4 +1355,26 @@ playwright_bin.playwright_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+# Build-only tool: platform executables are pinned by the npm lockfiles.
+esbuild_bin.esbuild_binary(
+    name = "esbuild",
+)
+
+js_test(
+    name = "static_javascript_package_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        ":node_modules/espree",
+        "//donner/editor/wasm:minified_static_javascript",
+        "//donner/editor/wasm:static_javascript_sources",
+    ],
+    entry_point = "static-javascript-package.spec.mjs",
+    env = {
+        "MINIFIED_SCRIPTS": "$(rootpaths //donner/editor/wasm:minified_static_javascript)",
+        "ORIGINAL_SCRIPTS": "$(rootpaths //donner/editor/wasm:static_javascript_sources)",
+    },
+    node_options = ["--test"],
 )

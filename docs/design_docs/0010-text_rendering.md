@@ -143,9 +143,10 @@ or unit tests.
 - [x] Decoration paint and stroke from the declaring element (CSS Text Decoration §3)
 - [x] Painting order: underline and overline beneath the glyphs, line-through above them, and the
       decoration's fill/stroke order from the declaring element's `paint-order`
-- [ ] `text-decoration-color` — not implemented (uses fill color)
-- [ ] `text-decoration-style` — solid only; no wavy, dotted, dashed, double
-- [ ] `text-decoration-thickness` — not implemented (uses font post table)
+- [x] `text-decoration-line` longhand
+- [x] `text-decoration-color`: replaces the declaring fill when specified; stroke unchanged
+- [x] `text-decoration-style`: solid, double, dotted, dashed and wavy
+- [x] `text-decoration-thickness`: lengths, percentages, `auto` and `from-font`
 - [x] Decoration stroke
 
 ### Text Spacing

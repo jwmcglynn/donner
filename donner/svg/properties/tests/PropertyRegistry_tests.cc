@@ -3257,14 +3257,117 @@ TEST(PropertyRegistry, DecorationThicknessCascadeAndCssWideKeywords) {
   EXPECT_EQ(properties.textDecorationThickness.state, PropertyState::ExplicitUnset);
 }
 
-TEST(PropertyRegistry, TextDecorationAndDasharrayErrorPaths) {
-  {
-    PropertyRegistry registry;
-    css::Declaration declaration = css::CSS::ParseStyleAttribute("text-decoration: red").at(0);
-    EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
-                ParseErrorIs("Invalid text-decoration value"));
+TEST(PropertyRegistry, DecorationLineLonghandGrammar) {
+  PropertyRegistry properties;
+  properties.parseStyle("text-decoration-line:overline line-through");
+  EXPECT_THAT(properties.textDecoration.get(),
+              Optional(TextDecoration::Overline | TextDecoration::LineThrough));
+  properties.parseStyle("text-decoration-line:none");
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::None));
+  properties.parseStyle("text-decoration-line:underline");
+  for (const auto value : {"underline underline", "none underline", "blink", "dotted", "red", "1px",
+                           "underline, overline"}) {
+    SCOPED_TRACE(value);
+    properties.parseStyle("text-decoration-line:" + std::string(value));
+    EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Underline));
   }
+}
 
+TEST(PropertyRegistry, DecorationStyleLonghandGrammar) {
+  PropertyRegistry properties;
+  EXPECT_THAT(properties.textDecorationStyle.get(), Optional(TextDecorationStyle::Solid));
+  for (const auto [value, expected] : {std::pair{"double", TextDecorationStyle::Double},
+                                       std::pair{"DOTTED", TextDecorationStyle::Dotted},
+                                       std::pair{"dashed", TextDecorationStyle::Dashed},
+                                       std::pair{"wavy", TextDecorationStyle::Wavy},
+                                       std::pair{"solid", TextDecorationStyle::Solid}}) {
+    SCOPED_TRACE(value);
+    properties.parseStyle("text-decoration-style:" + std::string(value));
+    EXPECT_THAT(properties.textDecorationStyle.get(), Optional(expected));
+  }
+  properties.parseStyle("text-decoration-style:wavy");
+  for (const auto value : {"underline", "wavy dotted", "red", "1px", "none"}) {
+    SCOPED_TRACE(value);
+    properties.parseStyle("text-decoration-style:" + std::string(value));
+    EXPECT_THAT(properties.textDecorationStyle.get(), Optional(TextDecorationStyle::Wavy));
+  }
+}
+
+TEST(PropertyRegistry, DecorationColorLonghandGrammar) {
+  PropertyRegistry properties;
+  EXPECT_THAT(properties.textDecorationColor.get(), testing::Eq(std::nullopt));
+  properties.parseStyle("text-decoration-color:blue");
+  EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+  properties.parseStyle("text-decoration-color:currentcolor");
+  EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(Color::CurrentColor())));
+  properties.parseStyle("text-decoration-color:#0102037f");
+  EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(RGBA(1, 2, 3, 0x7f))));
+  for (const auto value : {"underline", "dotted", "red blue", "1px"}) {
+    SCOPED_TRACE(value);
+    properties.parseStyle("text-decoration-color:" + std::string(value));
+    EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(RGBA(1, 2, 3, 0x7f))));
+  }
+  properties.parseStyle("text-decoration-color:initial");
+  EXPECT_THAT(properties.textDecorationColor.get(), testing::Eq(std::nullopt));
+}
+
+TEST(PropertyRegistry, DecorationShorthandSetsAndResetsEveryLonghand) {
+  PropertyRegistry properties;
+  properties.parseStyle("text-decoration:dashed underline blue 3px");
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Underline));
+  EXPECT_THAT(properties.textDecorationStyle.get(), Optional(TextDecorationStyle::Dashed));
+  EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+  EXPECT_THAT(
+      properties.textDecorationThickness.get(),
+      Optional(testing::AllOf(
+          testing::Field(&TextDecorationThickness::kind, TextDecorationThickness::Kind::Length),
+          testing::Field(&TextDecorationThickness::value, LengthValueIs(3, Lengthd::Unit::Px)))));
+
+  // Omitted components reset to their initial values.
+  properties.parseStyle("text-decoration:overline");
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Overline));
+  EXPECT_THAT(properties.textDecorationStyle.get(), Optional(TextDecorationStyle::Solid));
+  EXPECT_THAT(properties.textDecorationColor.get(), testing::Eq(std::nullopt));
+
+  // Every component is optional, so a color or style alone is valid and resets the line.
+  properties.parseStyle("text-decoration:red");
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::None));
+  EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(RGBA(255, 0, 0, 255))));
+  properties.parseStyle("text-decoration:wavy");
+  EXPECT_THAT(properties.textDecorationStyle.get(), Optional(TextDecorationStyle::Wavy));
+  EXPECT_THAT(properties.textDecorationColor.get(), testing::Eq(std::nullopt));
+
+  // A repeated component invalidates the declaration and keeps the previous values.
+  for (const auto value : {"wavy dotted underline", "red blue underline", "underline wavy wavy"}) {
+    SCOPED_TRACE(value);
+    properties.parseStyle("text-decoration:" + std::string(value));
+    EXPECT_THAT(properties.textDecorationStyle.get(), Optional(TextDecorationStyle::Wavy));
+  }
+}
+
+TEST(PropertyRegistry, DecorationLonghandsCascadeWithShorthand) {
+  PropertyRegistry properties;
+  properties.parseStyle(
+      "text-decoration-style:dotted!important;text-decoration-color:green!important;"
+      "text-decoration:underline wavy red");
+  EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Underline));
+  EXPECT_THAT(properties.textDecorationStyle.get(), Optional(TextDecorationStyle::Dotted));
+  EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(RGBA(0, 128, 0, 255))));
+
+  PropertyRegistry later;
+  later.parseStyle("text-decoration:underline wavy red;text-decoration-style:double");
+  EXPECT_THAT(later.textDecorationStyle.get(), Optional(TextDecorationStyle::Double));
+  EXPECT_THAT(later.textDecorationColor.get(), Optional(Color(RGBA(255, 0, 0, 255))));
+
+  later.parseStyle("text-decoration:inherit");
+  EXPECT_EQ(later.textDecorationStyle.state, PropertyState::Inherit);
+  EXPECT_EQ(later.textDecorationColor.state, PropertyState::Inherit);
+  later.parseStyle("text-decoration:initial");
+  EXPECT_EQ(later.textDecorationStyle.state, PropertyState::ExplicitInitial);
+  EXPECT_EQ(later.textDecorationColor.state, PropertyState::ExplicitInitial);
+}
+
+TEST(PropertyRegistry, TextDecorationAndDasharrayErrorPaths) {
   {
     PropertyRegistry registry;
     css::Declaration declaration =

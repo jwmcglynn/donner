@@ -7371,7 +7371,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   // one consecutive range and a batch can cover the whole element.
   Impl::TextRecordCursor textRecords = impl_->beginTextRecords(registry, params.textRootEntity);
 
-  std::size_t decorationWorkRemaining = Path::kMaximumGeometryQueryWork;
+  // Each draw spends at most the per-draw geometry allowance, and only what the frame has left.
+  std::size_t decorationWorkRemaining = std::min(
+      Path::kMaximumGeometryQueryWork, impl_->textMaterializationBudget->remainingDecorationWork());
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
     const auto& run = runs[runIndex];
     if (run.font == FontHandle()) {
@@ -7741,9 +7743,12 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
               PaintFillAndStroke(decoration.paintOrder, fillDecoration, strokeDecoration);
             };
 
+            const std::size_t workBefore = decorationWorkRemaining;
             EmitTextDecorationPaths(run, decoration, emittedLines, origins.size(), spanFontSizePx,
                                     textEngine, impl_->deviceFromLocalTransform,
                                     decorationWorkRemaining, drawDecoPath);
+            impl_->textMaterializationBudget->consumeDecorationWork(workBefore -
+                                                                    decorationWorkRemaining);
           });
     };
 

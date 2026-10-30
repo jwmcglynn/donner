@@ -872,6 +872,7 @@ template <typename PropertyType>
   }
 }
 
+// Keep registry expansion out of the caller to bound browser function-body complexity.
 [[gnu::noinline]] std::optional<std::string> StyleValue(const PropertyRegistry& properties,
                                                         std::string_view attribute,
                                                         const AnimationValueContext& context,
