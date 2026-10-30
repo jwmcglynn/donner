@@ -897,6 +897,7 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   penHoverPreviewSegmentDoc_.reset();
   penHoverCloseAffordanceDoc_.reset();
   textEditing_.reset();
+  measuredTextEditing_.clear();
   textBoxDragPreviewDoc_.reset();
   renderScheduler_.reset();
   displayNoneSuppressedSelectionEntity_ = entt::null;
@@ -1300,6 +1301,27 @@ void RenderCoordinator::refreshFrameSelectionCapture(
   }
 }
 
+void RenderCoordinator::retainMeasuredTextEditing(const CapturedPresentation::TextEditing& text) {
+  // Enough revisions to cover the renders a fast typist can queue behind one slow raster. Older
+  // revisions cannot be captured again: every queued render reads the document at or after the
+  // revision current when it was posted.
+  constexpr std::size_t kMaxMeasuredTextRevisions = 8;
+  if (!measuredTextEditing_.empty()) {
+    const PresentationIdentity& newest = measuredTextEditing_.back().identity;
+    if (measuredTextEditing_.back().subject != text.subject ||
+        newest.documentGeneration != text.identity.documentGeneration ||
+        newest.presentationEpoch != text.identity.presentationEpoch) {
+      measuredTextEditing_.clear();
+    } else if (newest.documentRevision == text.identity.documentRevision) {
+      measuredTextEditing_.pop_back();
+    }
+  }
+  measuredTextEditing_.push_back(text);
+  if (measuredTextEditing_.size() > kMaxMeasuredTextRevisions) {
+    measuredTextEditing_.erase(measuredTextEditing_.begin());
+  }
+}
+
 PresentationIdentity RenderCoordinator::currentPresentationIdentity(const EditorApp& app) const {
   return {.documentGeneration = app.document().documentGeneration(),
           .documentRevision = app.document().document().handle()->revision(),
@@ -1331,6 +1353,7 @@ FramePresentationInput RenderCoordinator::makeFrameInput(EditorApp& app, SelectT
                                              .penPreviewSegmentDoc = penHoverPreviewSegmentDoc_,
                                              .penCloseAffordanceDoc = penHoverCloseAffordanceDoc_,
                                              .textEditing = textEditing_,
+                                             .measuredTextEditing = measuredTextEditing_,
                                              .textBoxDragPreviewDoc = textBoxDragPreviewDoc_},
       .suppressedLayerEntity = suppressedCompositedLayerEntity(app),
       .suppressSelectionPixels = selectedElementIsDisplayNone(app),
