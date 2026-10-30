@@ -1246,6 +1246,7 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
             }),
             visibility = ["//donner:__subpackages__"],
             tags = ["perf_sensitive"],
+            testonly = kwargs.get("testonly", False),
             **compat
         )
     else:
