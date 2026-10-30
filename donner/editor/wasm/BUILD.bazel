@@ -1,3 +1,4 @@
+load("@aspect_rules_js//js:defs.bzl", "js_run_binary")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
@@ -213,31 +214,41 @@ wasm_cc_binary(
     }),
 )
 
-filegroup(
-    name = "static_javascript_sources",
-    srcs = [
-        "browser-file-dialogs.js",
-        "catalog-fonts.js",
-        "enable-threads.js",
-        "packaged-resource-loader.js",
-    ],
-)
+_STATIC_JAVASCRIPT = [
+    "browser-file-dialogs.js",
+    "catalog-fonts.js",
+    "enable-threads.js",
+    "packaged-resource-loader.js",
+]
 
 filegroup(
+    name = "static_javascript_sources",
+    srcs = _STATIC_JAVASCRIPT,
+)
+
+js_run_binary(
     name = "minified_static_javascript",
-    srcs = [":static_javascript_sources"],
+    srcs = _STATIC_JAVASCRIPT,
+    outs = ["minified_static_javascript/" + filename for filename in _STATIC_JAVASCRIPT],
+    args = _STATIC_JAVASCRIPT + [
+        "--outdir=minified_static_javascript",
+        "--minify-whitespace",
+        "--target=esnext",
+        "--legal-comments=inline",
+        "--charset=utf8",
+    ],
+    chdir = package_name(),
+    mnemonic = "MinifyEditorJavaScript",
+    tool = "//donner/editor/wasm/tests:esbuild",
 )
 
 web_package(
     name = "wasm_web_package",
     srcs = [
-        "browser-file-dialogs.js",
-        "catalog-fonts.js",
         "editor.css",
         "editor-bootstrap.js",
-        "enable-threads.js",
         "index.html",
-        "packaged-resource-loader.js",
+        ":minified_static_javascript",
         "//:donner_icon.svg",
     ],
     asset_trees = [
