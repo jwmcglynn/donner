@@ -6,6 +6,7 @@
 
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
+#include "donner/svg/parser/PathParser.h"
 #include "donner/svg/parser/PointsListParser.h"
 
 namespace donner::svg {
@@ -370,9 +371,43 @@ ParseResult<ClipPath> ParseInsetFunction(const css::Function& function, RadialCl
   return ClipPath(std::move(inset));
 }
 
+bool ParsePathRule(const Arguments& args, ClipRule& rule) {
+  if (args.size == 1) {
+    return true;
+  }
+  if (args.size != 3 ||
+      (!IsIdent(*args.values[0], "evenodd") && !IsIdent(*args.values[0], "nonzero")) ||
+      !args.values[1]->isToken<css::Token::Comma>()) {
+    return false;
+  }
+  rule = IsIdent(*args.values[0], "evenodd") ? ClipRule::EvenOdd : ClipRule::NonZero;
+  return true;
+}
+
+ParseResult<ClipPath> ParsePathFunction(const css::Function& function, RadialClipPath::Box box) {
+  Arguments args;
+  PathClipPath path;
+  path.box = box;
+  if (!args.append(function.values) || !ParsePathRule(args, path.rule)) {
+    return InvalidShape();
+  }
+  const auto* string = args.values[args.size - 1]->tryGetToken<css::Token::String>();
+  if (!string || string->value.size() > PathClipPath::kMaximumDataBytes) {
+    return InvalidShape();
+  }
+  auto parsed = parser::PathParser::Parse(string->value);
+  // CSS rejects the entire value, unlike SVG's partial-path error recovery.
+  if (parsed.hasError() || !parsed.hasResult() || parsed.result().empty()) {
+    return InvalidShape();
+  }
+  path.data = std::move(parsed).result();
+  return ClipPath(std::move(path));
+}
+
 bool IsSupportedShape(const css::Function& function) {
   return function.name.equalsLowercase("circle") || function.name.equalsLowercase("ellipse") ||
-         function.name.equalsLowercase("polygon") || function.name.equalsLowercase("inset");
+         function.name.equalsLowercase("polygon") || function.name.equalsLowercase("inset") ||
+         function.name.equalsLowercase("path");
 }
 
 ParseResult<ClipPath> ParseShapeFunction(const css::Function& function, RadialClipPath::Box box,
@@ -382,6 +417,9 @@ ParseResult<ClipPath> ParseShapeFunction(const css::Function& function, RadialCl
   }
   if (function.name.equalsLowercase("inset")) {
     return ParseInsetFunction(function, box, allowUserUnits);
+  }
+  if (function.name.equalsLowercase("path")) {
+    return ParsePathFunction(function, box);
   }
   return ParseRadialFunction(function, box, allowUserUnits);
 }
@@ -454,6 +492,10 @@ std::ostream& operator<<(std::ostream& os, const ClipPath& clip) {
     os << "inset(" << inset->offsets[0] << ' ' << inset->offsets[1] << ' ' << inset->offsets[2]
        << ' ' << inset->offsets[3] << ") ";
     return PrintReferenceBox(os, inset->box);
+  }
+  if (const auto* path = std::get_if<PathClipPath>(&clip.value)) {
+    os << "path(" << path->rule << ", \"" << path->data.toSVGPathData() << "\") ";
+    return PrintReferenceBox(os, path->box);
   }
   const RadialClipPath* shape;
   if (const auto* circle = std::get_if<CircleClipPath>(&clip.value)) {

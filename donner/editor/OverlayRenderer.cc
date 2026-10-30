@@ -715,7 +715,7 @@ std::optional<std::optional<css::RGBA>> SolidPreviewColor(const svg::PaintServer
 /// CSS geometry and compositing effects require the normal computed/raster representation.
 bool LivePathStyleRequiresRaster(const svg::PropertyRegistry& style) {
   const auto filters = style.filter.get();
-  return style.unparsedProperties.contains("d") || style.clipPath.get().has_value() ||
+  return style.unparsedProperties.contains("d") || style.clipPath.getStoredValue() != nullptr ||
          style.mask.get().has_value() || (filters.has_value() && !filters->empty()) ||
          style.markerStart.get().has_value() || style.markerMid.get().has_value() ||
          style.markerEnd.get().has_value();

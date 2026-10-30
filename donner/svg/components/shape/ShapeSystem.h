@@ -154,6 +154,13 @@ public:
   Path insetClipPath(EntityHandle handle, const InsetClipPath& inset,
                      CircleClipGeometryBudget& budget);
 
+  /// Resolve an SVG path clipping shape in element-local coordinates.
+  /// @param handle Styled element supplying reference geometry.
+  /// @param path Parsed path and reference-box selection.
+  /// @param budget Shared admission budget for render preparation.
+  Path pathClipPath(EntityHandle handle, const PathClipPath& path,
+                    CircleClipGeometryBudget& budget);
+
   /**
    * Get the bounds for the given entity in world space, if it has a shape component.
    *

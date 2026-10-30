@@ -601,6 +601,37 @@ Path BuildPolygonClipPath(const PolygonClipPath& polygon, const Box2d& box,
   return path;
 }
 
+bool PathClipCoordinatesFit(const Path& path, const Vector2d& origin) {
+  if (path.points().empty()) {
+    return false;
+  }
+  Box2d bounds = Box2d::CreateEmpty(path.points().front() + origin);
+  for (const Vector2d& source : path.points()) {
+    const Vector2d point = source + origin;
+    if (!IsRenderableClipCoordinate(point.x) || !IsRenderableClipCoordinate(point.y)) {
+      return false;
+    }
+    bounds.addPoint(point);
+  }
+  return IsRenderableClipCoordinate(bounds.width()) && IsRenderableClipCoordinate(bounds.height());
+}
+
+Path BuildClosedPathClip(const Path& path, const Vector2d& origin) {
+  PathBuilder builder(path.points().size());
+  path.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
+    switch (verb) {
+      case Path::Verb::MoveTo: builder.closePath().moveTo(points[0] + origin); break;
+      case Path::Verb::LineTo: builder.lineTo(points[0] + origin); break;
+      case Path::Verb::QuadTo: builder.quadTo(points[0] + origin, points[1] + origin); break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(points[0] + origin, points[1] + origin, points[2] + origin);
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
+    }
+  });
+  return builder.closePath().build();
+}
+
 class ReferenceBoundsAccumulator {
 public:
   ReferenceBoundsAccumulator(ShapeSystem& shapes, EntityHandle root,
@@ -1011,6 +1042,26 @@ Path ShapeSystem::insetClipPath(EntityHandle handle, const InsetClipPath& inset,
     return {};
   }
   return PathBuilder(4).addRect(Box2d({left, top}, {right, bottom})).build();
+}
+
+Path ShapeSystem::pathClipPath(EntityHandle handle, const PathClipPath& path,
+                               CircleClipGeometryBudget& budget) {
+  const std::size_t points = path.data.points().size();
+  const std::size_t commands = path.data.commands().size();
+  if (points > parser::PathParser::kMaximumPoints ||
+      commands > parser::PathParser::kMaximumCommands) {
+    budget.reject();
+    return {};
+  }
+  // Charge validation, translated copies and an implicit close for every possible contour.
+  if (!budget.reserve(2 * points + 2 * commands + 1)) {
+    return {};
+  }
+  const std::optional<Box2d> box = getCircleReferenceBox(handle, path.box, budget);
+  if (!box || !PathClipCoordinatesFit(path.data, box->topLeft)) {
+    return {};
+  }
+  return BuildClosedPathClip(path.data, box->topLeft);
 }
 
 std::optional<Box2d> ShapeSystem::getCircleReferenceBox(EntityHandle handle,

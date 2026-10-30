@@ -129,7 +129,7 @@ bool BlockExternalReference(Property<Reference, cascade>& property,
 }
 
 bool BlockExternalClipPath(PropertyRegistry& properties, const PropertyRegistry& local) {
-  const auto clip = properties.clipPath.get();
+  const ClipPath* clip = properties.clipPath.getStoredValue();
   if (local.clipPath.state != PropertyState::Inherit || !clip) {
     return false;
   }

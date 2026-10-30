@@ -13,7 +13,7 @@ bool HasFixedAncestor(const svg::SVGElement& element) {
        parent = parent->parentElement()) {
     const auto& style = parent->getComputedStyle();
     const auto filters = style.filter.get();
-    if (style.clipPath.get().has_value() || style.mask.get().has_value() ||
+    if (style.clipPath.getStoredValue() != nullptr || style.mask.get().has_value() ||
         (filters.has_value() && !filters->empty())) {
       return true;
     }
@@ -43,7 +43,7 @@ bool PathBoundsCoverFrame(const svg::SVGElement& element) {
 bool HasUnboundedPaintEffect(const svg::SVGElement& element) {
   const auto& style = element.getComputedStyle();
   const auto filters = style.filter.get();
-  return style.clipPath.get().has_value() || style.mask.get().has_value() ||
+  return style.clipPath.getStoredValue() != nullptr || style.mask.get().has_value() ||
          (filters.has_value() && !filters->empty()) || style.markerStart.get().has_value() ||
          style.markerMid.get().has_value() || style.markerEnd.get().has_value();
 }

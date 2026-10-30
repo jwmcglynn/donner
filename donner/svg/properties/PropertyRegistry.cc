@@ -3142,6 +3142,9 @@ std::size_t PropertyRegistry::complexPropertyBytes() const {
     if (const auto* polygon = std::get_if<PolygonClipPath>(&clip->value)) {
       SaturatingAddArrayBytes(result, polygon->vertices.capacity(),
                               sizeof(PolygonClipPath::Vertex));
+    } else if (const auto* path = std::get_if<PathClipPath>(&clip->value)) {
+      SaturatingAdd(result,
+                    path->data.retainedBytes().value_or(std::numeric_limits<std::size_t>::max()));
     }
   }
   for (const auto& entry : unparsedProperties) {

@@ -1998,6 +1998,68 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
   }
 }
 
+TEST(PropertyRegistry, PathClipStoresParsedGeometryAndChargesCapacity) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:path(evenodd, 'M-2 3Q4 5 6 7Z') fill-box");
+  const ClipPath* clip = registry.clipPath.getStoredValue();
+  ASSERT_THAT(clip, testing::NotNull());
+  ASSERT_THAT(clip->value, testing::VariantWith<PathClipPath>(testing::_));
+  const auto& path = std::get<PathClipPath>(clip->value);
+  EXPECT_EQ(path.box, RadialClipPath::Box::Fill);
+  EXPECT_EQ(clip->clipRule(), ClipRule::EvenOdd);
+  EXPECT_THAT(path.data,
+              Eq(PathBuilder().moveTo({-2, 3}).quadTo({4, 5}, {6, 7}).closePath().build()));
+  const auto bytes = path.data.retainedBytes();
+  ASSERT_THAT(bytes, Optional(testing::Gt(0u)));
+  EXPECT_EQ(registry.complexPropertyBytes(), *bytes);
+  const PropertyRegistry copy = registry;
+  const auto* copiedClip = copy.clipPath.getStoredValue();
+  ASSERT_THAT(copiedClip, testing::NotNull());
+  ASSERT_THAT(copiedClip->value, testing::VariantWith<PathClipPath>(testing::_));
+  const auto copiedBytes = std::get<PathClipPath>(copiedClip->value).data.retainedBytes();
+  ASSERT_THAT(copiedBytes, Optional(testing::Gt(0u)));
+  EXPECT_EQ(copy.complexPropertyBytes(), *copiedBytes);
+}
+
+TEST(PropertyRegistry, PathClipDecodedByteLimitAndEscapes) {
+  PropertyRegistry escaped;
+  escaped.parseStyle(R"css(clip-path:path('\4d 0 0H10V10Z'))css");
+  EXPECT_THAT(
+      escaped.clipPath.get(),
+      Optional(testing::Field(&ClipPath::value, testing::VariantWith<PathClipPath>(testing::_))));
+  const std::string data = "M0 0" + std::string(PathClipPath::kMaximumDataBytes - 4, ' ');
+  PropertyRegistry atLimit;
+  atLimit.parseStyle("clip-path:path('" + data + "')");
+  EXPECT_THAT(
+      atLimit.clipPath.get(),
+      Optional(testing::Field(&ClipPath::value, testing::VariantWith<PathClipPath>(testing::_))));
+  PropertyRegistry tooLarge;
+  tooLarge.parseStyle("clip-path:url(#clip);clip-path:path('" + data + " ')");
+  EXPECT_THAT(tooLarge.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+}
+
+TEST(PropertyRegistry, PathClipAcceptsQuotedDataAndFillRule) {
+  for (const auto value : {"path(\"M8 8H32V32H8Z\")", "path(evenodd, 'M8 8H32V32H8Z') fill-box",
+                           "view-box PATH(nonzero, \"M8 8L32 32\")", "path('M8 8')"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:" + std::string(value));
+    EXPECT_THAT(registry.clipPath.get(), Optional(testing::_));
+  }
+}
+
+TEST(PropertyRegistry, InvalidPathClipKeepsEarlierDeclaration) {
+  for (const auto value :
+       {"path()", "path('')", "path(' ')", "path(M0 0)", "path(evenodd 'M0 0')", "path(, 'M0 0')",
+        "path(unknown, 'M0 0')", "path('M0 0', 'M1 1')", "path('M0 0L')",
+        "path('M0 0L1 1 garbage')", "path('M0 0') fill-box view-box"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(value));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
 TEST(PropertyRegistry, InsetOffsetsExpandAndRetainInlineStorage) {
   struct Example {
     std::string_view value;
