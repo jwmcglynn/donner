@@ -704,6 +704,7 @@ private:
     ComputedTextComponent::TextSpan span;
     span.text = pending.text;
     span.whiteSpace = pending.whiteSpace;
+    span.preservesSpaces = pending.preserveSpaces;
     span.start = 0;
     span.end = static_cast<std::size_t>(pending.text.size());
 

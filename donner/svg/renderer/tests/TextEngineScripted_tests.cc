@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "donner/base/Utf8.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/FontFace.h"
 #include "donner/css/Specificity.h"
@@ -21,6 +22,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextBackend.h"
@@ -3661,6 +3663,381 @@ TEST(TextEngineScriptedTest, WhiteSpaceParsedNewlineRetainsRelativeInlinePositio
       LayoutParsedTextPath("<tspan white-space='pre'>A&#10;<tspan dx='20'>B</tspan></tspan>");
   ASSERT_THAT(glyphs, SizeIs(3));
   EXPECT_THAT(glyphs[2].xPosition, DoubleNear(20, 1e-5));
+}
+
+class KanaPositioningBackend : public ScriptedTextBackend {
+public:
+  mutable std::vector<std::string> shapingRanges;
+
+  ShapedRun shapeRun(FontHandle font, float size, std::string_view text, size_t offset,
+                     size_t length, bool vertical, FontVariant variant,
+                     bool logical) const override {
+    shapingRanges.emplace_back(text.substr(offset, length));
+    ShapedRun run =
+        ScriptedTextBackend::shapeRun(font, size, text, offset, length, vertical, variant, logical);
+    for (auto& glyph : run.glyphs) {
+      const uint32_t cp = std::get<0>(Utf8::NextCodepointLenient(text.substr(glyph.cluster)));
+      glyph.xKern = glyph.yKern = 0;
+      glyph.xOffset = glyph.yOffset = 0;
+      if (cp == 0x0301 || cp == 0x3099 || cp == 0x309a) {
+        glyph.xAdvance = glyph.yAdvance = 0;
+        glyph.xOffset = -10;
+      }
+    }
+    return run;
+  }
+};
+
+struct KanaPositioningCase {
+  std::string name;
+  std::string source;
+  TextTransform transform;
+  std::vector<std::string> shapingRanges;
+  std::array<uint32_t, 3> sourceClusters;
+  bool attached;
+};
+
+class FullWidthKanaScriptedTest : public testing::TestWithParam<KanaPositioningCase> {};
+
+TEST_P(FullWidthKanaScriptedTest, KeepsShapingAndPositioningGroupsWithOriginalSourceIndices) {
+  const auto& input = GetParam();
+  Registry registry;
+  FontManager fonts(registry);
+  auto backend = std::make_unique<KanaPositioningBackend>();
+  const auto* observed = backend.get();
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(input.source);
+  span.textTransform = input.transform;
+  span.xList = {Lengthd(0), Lengthd(100), Lengthd(200)};
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(20);
+  params.fontKerning = FontKerning::None;
+
+  const auto runs = engine.layout(text, params);
+
+  EXPECT_THAT(observed->shapingRanges, testing::ContainerEq(input.shapingRanges));
+  ASSERT_THAT(runs, SizeIs(1));
+  const auto& glyphs = runs[0].glyphs;
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs, ElementsAre(Field("cluster", &TextGlyph::cluster, input.sourceClusters[0]),
+                                  Field("cluster", &TextGlyph::cluster, input.sourceClusters[1]),
+                                  Field("cluster", &TextGlyph::cluster, input.sourceClusters[2])));
+  EXPECT_THAT(glyphs[1].positioningCluster,
+              testing::Optional(Eq(input.attached ? 0u : input.sourceClusters[1])));
+  EXPECT_THAT(glyphs[0].xPosition, DoubleNear(0, 1e-5));
+  EXPECT_THAT(glyphs[1].xPosition, DoubleNear(input.attached ? 0 : 100, 1e-5));
+  EXPECT_THAT(glyphs[2].xPosition, DoubleNear(200, 1e-5));
+  EXPECT_THAT(text.spans[0].text, Eq(RcString(input.source)));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Positioned, FullWidthKanaScriptedTest,
+    testing::Values(KanaPositioningCase{"Voiced",
+                                        "\xef\xbd\xb6\xef\xbe\x9e"
+                                        "A",
+                                        TextTransform::FullWidth,
+                                        {"\xe3\x82\xab\xe3\x82\x99", "\xef\xbc\xa1"},
+                                        {0, 3, 6},
+                                        true},
+                    KanaPositioningCase{"Semivoiced",
+                                        "\xef\xbe\x8a\xef\xbe\x9f"
+                                        "A",
+                                        TextTransform::FullWidth,
+                                        {"\xe3\x83\x8f\xe3\x82\x9a", "\xef\xbc\xa1"},
+                                        {0, 3, 6},
+                                        true},
+                    KanaPositioningCase{"ExistingAcute",
+                                        "e\xcc\x81"
+                                        "A",
+                                        TextTransform::None,
+                                        {"e\xcc\x81", "A"},
+                                        {0, 1, 3},
+                                        true},
+                    KanaPositioningCase{"UntransformedSpacingMark",
+                                        "\xef\xbd\xb6\xef\xbe\x9e"
+                                        "A",
+                                        TextTransform::None,
+                                        {"\xef\xbd\xb6", "\xef\xbe\x9e", "A"},
+                                        {0, 3, 6},
+                                        false}),
+    [](const testing::TestParamInfo<KanaPositioningCase>& info) { return info.param.name; });
+
+TEST(TextEngineScriptedTest, FullWidthMapsUnicodeWithoutChangingSourceClusters) {
+  const auto glyphs = LayoutParsedTextPath(
+      "<tspan style='text-transform:full-width'>A1!\xef\xbd\xb6\xef\xbe\x9e"
+      "\xc3\xa9\xf0\x9f\x98\x80</tspan>");
+  const auto mapped = [](uint32_t cp, uint32_t offset) {
+    return AllOf(GlyphIndexIs(Eq(static_cast<int>(cp % 997u) + 1)),
+                 Field("cluster", &TextGlyph::cluster, Eq(offset)));
+  };
+  EXPECT_THAT(glyphs, ElementsAre(mapped(0xff21, 0), mapped(0xff11, 1), mapped(0xff01, 2),
+                                  mapped(0x30ab, 3), mapped(0x3099, 6), mapped(0xe9, 9),
+                                  mapped(0x1f600, 11)));
+}
+
+TEST(TextEngineScriptedTest, FullWidthTransformsOnlyPreservedSpaces) {
+  for (const char* mode : {"normal", "pre"}) {
+    SCOPED_TRACE(mode);
+    const auto glyphs =
+        LayoutParsedTextPath(std::string("<tspan style='text-transform:full-width;") +
+                             "white-space:" + mode + "'>A B</tspan>");
+    ASSERT_THAT(glyphs, SizeIs(3));
+    const uint32_t space = std::string_view(mode) == "pre" ? 0x3000 : 0x20;
+    EXPECT_THAT(glyphs[1], GlyphIndexIs(Eq(static_cast<int>(space % 997u) + 1)));
+  }
+}
+
+TEST(TextEngineScriptedTest, FullWidthInheritsAndLeavesSourceTextUnchanged) {
+  std::vector<ParsedPathRunDetails> details;
+  const auto glyphs = LayoutParsedTextPath(
+      "<tspan style='text-transform:full-width'>A<tspan style='text-transform:none'>b</tspan>"
+      "C</tspan>",
+      true, "M0 0H500", false, {}, &details);
+  EXPECT_THAT(glyphs, ElementsAre(GlyphIndexIs(Eq(static_cast<int>(0xff21 % 997u) + 1)),
+                                  GlyphIndexIs(Eq(static_cast<int>('b') + 1)),
+                                  GlyphIndexIs(Eq(static_cast<int>(0xff23 % 997u) + 1))));
+  EXPECT_THAT(details, ElementsAre(Field("text", &ParsedPathRunDetails::text, Eq("A")),
+                                   Field("text", &ParsedPathRunDetails::text, Eq("b")),
+                                   Field("text", &ParsedPathRunDetails::text, Eq("C"))));
+}
+
+TEST(TextEngineScriptedTest, FullWidthUsesOriginalCodepointPositions) {
+  const auto glyphs = LayoutParsedTextPath(
+      "<tspan style='text-transform:full-width' x='10 30 50'>A\xef\xbc\xa2"
+      "C</tspan>");
+  EXPECT_THAT(glyphs, ElementsAre(GlyphXPositionIs(DoubleEq(12)), GlyphXPositionIs(DoubleEq(32)),
+                                  GlyphXPositionIs(DoubleEq(52))));
+}
+
+TEST(TextEngineScriptedTest, FullWidthMatchesLiteralUnicodeAcrossAxesAndWhitespace) {
+  for (auto mode : {WritingMode::HorizontalTb, WritingMode::VerticalRl, WritingMode::VerticalLr}) {
+    for (auto whiteSpace : {WhiteSpace::Pre, WhiteSpace::PreWrap, WhiteSpace::BreakSpaces}) {
+      SCOPED_TRACE(testing::Message() << mode << " " << whiteSpace);
+      Registry registry;
+      FontManager fonts(registry);
+      TextEngine engine = MakeScriptedEngine(registry, fonts);
+      components::ComputedTextComponent text;
+      auto span = MakeSpan("A B\nC\tD");
+      span.textTransform = TextTransform::FullWidth;
+      span.whiteSpace = whiteSpace;
+      span.textAnchor = TextAnchor::End;
+      span.wordSpacingPx = 5;
+      text.spans.push_back(span);
+      auto params = MakeTextParams(20);
+      params.writingMode = mode;
+      params.inlineSizePx = 31;
+      const auto transformed = engine.layout(text, params);
+      text.spans[0].textTransform = TextTransform::None;
+      text.spans[0].text = RcString(
+          "\xef\xbc\xa1\xe3\x80\x80\xef\xbc\xa2\n"
+          "\xef\xbc\xa3\t\xef\xbc\xa4");
+      text.spans[0].end = text.spans[0].text.size();
+      const auto literal = engine.layout(text, params);
+      ASSERT_THAT(transformed, SizeIs(1));
+      ASSERT_THAT(literal, SizeIs(1));
+      ASSERT_THAT(transformed[0].glyphs, SizeIs(literal[0].glyphs.size()));
+      const auto& firstB = transformed[0].glyphs[2];
+      const double block = isVertical(mode) ? firstB.xPosition : firstB.yPosition;
+      const double offset = isVertical(mode) ? 2 : 3;
+      const double lineHeight = 1200.0 * static_cast<double>(20.0f / 1200.0f);
+      const double line = whiteSpace == WhiteSpace::Pre     ? 0
+                          : mode == WritingMode::VerticalRl ? -lineHeight
+                                                            : lineHeight;
+      EXPECT_THAT(block, DoubleNear(offset + line, 1e-9));
+      for (size_t i = 0; i < literal[0].glyphs.size(); ++i) {
+        const auto& expected = literal[0].glyphs[i];
+        EXPECT_THAT(transformed[0].glyphs[i],
+                    AllOf(GlyphIndexIs(Eq(expected.glyphIndex)),
+                          GlyphXPositionIs(DoubleNear(expected.xPosition, 1e-9)),
+                          GlyphYPositionIs(DoubleNear(expected.yPosition, 1e-9)),
+                          Field("sideways", &TextGlyph::sideways, Eq(expected.sideways))));
+        EXPECT_THAT(transformed[0].glyphs[i].cluster, Eq(i));
+      }
+    }
+  }
+}
+
+TEST(TextEngineScriptedTest, FullWidthPathUsesMappedTextAndSourceClusters) {
+  const auto transformed = LayoutParsedTextPath(
+      "<textPath href='#p' style='text-transform:full-width;white-space:pre;word-spacing:5px'>"
+      "A B</textPath>");
+  const auto literal = LayoutParsedTextPath(
+      "<textPath href='#p' style='white-space:pre;word-spacing:5px'>"
+      "\xef\xbc\xa1\xe3\x80\x80\xef\xbc\xa2</textPath>");
+  ASSERT_THAT(transformed, SizeIs(3));
+  ASSERT_THAT(literal, SizeIs(3));
+  for (size_t i = 0; i < literal.size(); ++i) {
+    EXPECT_THAT(transformed[i], AllOf(GlyphIndexIs(Eq(literal[i].glyphIndex)),
+                                      GlyphXPositionIs(DoubleNear(literal[i].xPosition, 1e-9)),
+                                      Field("cluster", &TextGlyph::cluster, Eq(i))));
+  }
+}
+
+TEST(TextEngineScriptedTest, FullWidthRestoresReversedVisualSourceClusters) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts, true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(
+      "A\xc3\xa9"
+      "B");
+  span.textTransform = TextTransform::FullWidth;
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, SizeIs(1));
+  EXPECT_THAT(runs[0].glyphs, ElementsAre(Field("cluster", &TextGlyph::cluster, Eq(3u)),
+                                          Field("cluster", &TextGlyph::cluster, Eq(1u)),
+                                          Field("cluster", &TextGlyph::cluster, Eq(0u))));
+}
+
+TEST(TextEngineScriptedTest, FullWidthPreservedLinesKeepVisualOrderAndOriginalIndices) {
+  class LineBoundaryBackend : public ScriptedTextBackend {
+  public:
+    mutable size_t boundaryKernCalls = 0;
+    double crossSpanKern(FontHandle, float, FontHandle, float, uint32_t, uint32_t,
+                         bool vertical) const override {
+      ++boundaryKernCalls;
+      return vertical ? 4.0 : 3.0;
+    }
+  };
+  Registry registry;
+  FontManager fonts(registry);
+  auto backend = std::make_unique<LineBoundaryBackend>();
+  backend->reverseClusters = true;
+  const auto& probe = *backend;
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("AB\nCD");
+  span.textTransform = TextTransform::FullWidth;
+  span.whiteSpace = WhiteSpace::Pre;
+  text.spans.push_back(span);
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(5));
+  EXPECT_THAT(runs[0].glyphs,
+              ElementsAre(Field(&TextGlyph::cluster, Eq(1u)), Field(&TextGlyph::cluster, Eq(0u)),
+                          Field(&TextGlyph::cluster, Eq(2u)), Field(&TextGlyph::cluster, Eq(4u)),
+                          Field(&TextGlyph::cluster, Eq(3u))));
+  EXPECT_THAT(runs[0].glyphs[3].yPosition - runs[0].glyphs[0].yPosition, DoubleNear(20.0, 1e-5));
+  EXPECT_THAT(probe.boundaryKernCalls, Eq(0u));
+}
+
+TEST(TextEngineScriptedTest, FullWidthUsesCssWithLegacySpaceAndIgnoresNonPresentationAttribute) {
+  const auto preserved = LayoutParsedTextPath(
+      "<tspan xml:space='preserve' style='text-transform:full-width'>A B</tspan>");
+  ASSERT_THAT(preserved, SizeIs(3));
+  EXPECT_THAT(preserved[1], GlyphIndexIs(Eq(static_cast<int>(0x3000 % 997u) + 1)));
+  const auto attributeOnly = LayoutParsedTextPath("<tspan text-transform='full-width'>A</tspan>");
+  EXPECT_THAT(attributeOnly, ElementsAre(GlyphIndexIs(Eq(static_cast<int>('A') + 1))));
+  const auto overridden = LayoutParsedTextPath(
+      "<tspan text-transform='full-width' style='text-transform:none'>A</tspan>");
+  EXPECT_THAT(overridden, ElementsAre(GlyphIndexIs(Eq(static_cast<int>('A') + 1))));
+}
+
+TEST(TextEngineScriptedTest, FullWidthCharacterApisRetainOriginalUtf16Indices) {
+  const std::string sourceText =
+      "A\xc3\xa9\xf0\x9f\x98\x80"
+      "B";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><text id='t' font-size='20' "
+      "style='text-transform:full-width'>" +
+          sourceText + "</text></svg>",
+      warnings);
+  ASSERT_THAT(parsed, ParseResultIs(_));
+  auto document = std::move(parsed).result();
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  const auto target = document.querySelector("#t");
+  ASSERT_THAT(target, testing::Optional(_));
+  const auto handle = target->unsafeEntityHandle();
+  engine.prepareForElement(handle, warnings);
+  EXPECT_THAT(engine.getNumberOfChars(handle), Eq(5));
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 4).x, DoubleNear(35, 1e-9));
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 2).x,
+              DoubleNear(engine.getStartPositionOfChar(handle, 3).x, 1e-9));
+  EXPECT_THAT(handle.get<components::TextComponent>().text.str(), Eq(sourceText));
+}
+
+TEST(TextEngineScriptedTest, FullWidthWordSpacingExcludesIdeographicSpacesOnFlatAndPathText) {
+  struct SpaceCase {
+    const char* content;
+    const char* style;
+    double addedSpacing;
+  };
+  const SpaceCase cases[] = {
+      {"A\xe3\x80\x80"
+       "B",
+       "white-space:pre", 0},
+      {"A B", "white-space:pre;text-transform:full-width", 0},
+      {"A B", "white-space:normal;text-transform:full-width", 5},
+  };
+  for (const auto& space : cases) {
+    for (bool onPath : {false, true}) {
+      SCOPED_TRACE(testing::Message() << space.style << " path=" << onPath);
+      std::array<double, 2> positions{};
+      for (size_t index = 0; index < positions.size(); ++index) {
+        const std::string tag = onPath ? "textPath" : "tspan";
+        const std::string attributes = onPath ? " href='#p'" : "";
+        const auto glyphs = LayoutParsedTextPath("<" + tag + attributes + " style='" + space.style +
+                                                 ";word-spacing:" + std::to_string(index * 5) +
+                                                 "px'>" + space.content + "</" + tag + ">");
+        ASSERT_THAT(glyphs, SizeIs(3));
+        positions[index] = glyphs.back().xPosition;
+      }
+      EXPECT_THAT(positions[1] - positions[0], DoubleNear(space.addedSpacing, 1e-9));
+    }
+  }
+}
+
+TEST(TextEngineScriptedTest, FullWidthStyleMutationInvalidatesGeometryAndPreservesSource) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><text id='t'>A</text></svg>", warnings);
+  ASSERT_THAT(parsed, ParseResultIs(_));
+  auto document = std::move(parsed).result();
+  auto target = document.querySelector("#t");
+  ASSERT_THAT(target, testing::Optional(_));
+  const auto handle = target->unsafeEntityHandle();
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  for (TextTransform transform :
+       {TextTransform::None, TextTransform::FullWidth, TextTransform::None}) {
+    SCOPED_TRACE(transform);
+    target->setStyle(transform == TextTransform::FullWidth ? "text-transform:full-width"
+                                                           : "text-transform:none");
+    engine.prepareForElement(handle, warnings);
+    const auto& geometry = engine.ensureComputedTextGeometryComponent(handle);
+    const uint32_t codepoint = transform == TextTransform::FullWidth ? 0xff21 : 'A';
+    EXPECT_THAT(geometry.runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                                   GlyphIndexIs(Eq(static_cast<int>(codepoint % 997u) + 1))))));
+    EXPECT_THAT(engine.getNumberOfChars(handle), Eq(1));
+    EXPECT_THAT(handle.get<components::TextComponent>().text.str(), Eq("A"));
+  }
+}
+
+TEST(TextEngineScriptedTest, FullWidthFallbackUsesTransformedCodepointAndOriginalCluster) {
+  Registry registry;
+  FontManager fonts(registry);
+  const FontHandle coveringFont = RegisterFallbackBackedFace(fonts, "WidthFace");
+  ASSERT_THAT(coveringFont, Not(Eq(FontHandle{})));
+  auto backend = std::make_unique<CoverageProbeBackend>();
+  backend->coveringFont = coveringFont;
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A"));
+  const auto original = engine.layout(text, MakeTextParams(20));
+  ASSERT_THAT(original, ElementsAre(RunGlyphsAre(SizeIs(1))));
+  EXPECT_THAT(original[0].glyphs[0].font, Not(Eq(coveringFont)));
+  text.spans[0].textTransform = TextTransform::FullWidth;
+  const auto transformed = engine.layout(text, MakeTextParams(20));
+  EXPECT_THAT(transformed, ElementsAre(RunGlyphsAre(ElementsAre(
+                               AllOf(GlyphIndexIs(Eq(static_cast<int>(0xff21 % 997u) + 1)),
+                                     Field("font", &TextGlyph::font, Eq(coveringFont)),
+                                     Field("cluster", &TextGlyph::cluster, Eq(0u)))))));
 }
 
 namespace {
