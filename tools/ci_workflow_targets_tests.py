@@ -112,6 +112,9 @@ class WorkflowTargetsTest(unittest.TestCase):
         self.assertIn("--nocache_test_results", qualification)
         self.assertIn("--noskip_incompatible_explicit_targets", qualification)
         self.assertIn("//tools/ci:macos_vm_qualification", qualification)
+        self.assertIn('--build_event_json_file="$RUNNER_TEMP/coverage-qualification.bep.json"', qualification)
+        self.assertIn("vm-qualification-evidence-", qualification)
+        self.assertIn('step.get("executed", 0) != 4', qualification)
 
     def test_native_suite_keeps_every_shader_validated_device_test(self):
         resolver = runfiles.Create()

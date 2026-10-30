@@ -2246,14 +2246,45 @@ jobs:
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
 
       - name: Qualify concurrent VM workload
+        id: qualification
         shell: bash
         run: |
           set -euo pipefail
           bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
             --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 \
             --nocache_test_results --test_tag_filters= --noskip_incompatible_explicit_targets \
+            --build_event_json_file="$RUNNER_TEMP/coverage-qualification.bep.json" \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
             //tools/ci:macos_vm_qualification
+
+      - name: Record VM qualification execution evidence
+        if: always()
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+        run: python3 tools/ci_coverage_contract.py receipt macos-vm-qualification
+
+      - name: Require four executed qualification tests
+        if: success()
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "coverage-receipt/coverage-receipt.json"
+          step = json.loads(path.read_text())["steps"]["qualification"]
+          if step.get("executed", 0) != 4 or step.get("tests", 0) != 4:
+              raise SystemExit("Expected four executed qualification tests")
+          PYCODE
+
+      - name: Retain VM qualification execution evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vm-qualification-evidence-${{ matrix.instance }}
+          path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Upload Bazel test failure artifacts
         if: failure()
