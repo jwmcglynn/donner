@@ -8,6 +8,7 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utils.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/renderer/DecorationWorkBudget.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/text/TextPathWarp.h"
 
@@ -617,14 +618,15 @@ void EmitStraightDecoration(const TextRun& run, const DecorationBand& band, doub
                             double width, std::size_t& remainingWork,
                             const std::function<void(const Path&)>& emit) {
   // Size the bounded builder for every segment before appending any of them.
-  std::size_t points = 0;
+  detail::DecorationWorkBudget<std::size_t> budget(remainingWork);
   ForEachStraightSegment(run, [&](double left, double, double right) {
-    points += StyledDecorationPoints(band.style, right - left, width);
+    budget.add(StyledDecorationPoints(band.style, right - left, width));
   });
-  if (points == 0 || !ChargeDecorationWork(points, remainingWork)) {
+  remainingWork = budget.remaining();
+  if (budget.exceeded() || budget.points() == 0) {
     return;
   }
-  PathBuilder builder(points);
+  PathBuilder builder(budget.points());
   ForEachStraightSegment(run, [&](double left, double baseline, double right) {
     (void)AppendStyledDecoration(builder, band.style, band.line, left, baseline + top, right,
                                  width);

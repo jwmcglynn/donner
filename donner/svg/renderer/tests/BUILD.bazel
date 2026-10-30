@@ -784,6 +784,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "decoration_work_budget_tests",
+    srcs = ["DecorationWorkBudget_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:decoration_work_budget",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "placed_text_geometry_tests",
     srcs = ["PlacedTextGeometry_tests.cc"],
     deps = [

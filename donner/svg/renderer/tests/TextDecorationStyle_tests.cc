@@ -148,6 +148,37 @@ std::vector<std::size_t> EmitUnderline(TextDecorationStyle style, double x, doub
   return points;
 }
 
+TEST(TextDecorationStyle, StraightSegmentsRespectTheExactSharedAllowance) {
+  auto document = DecorationDocument("");
+  const auto& engine = document.registry().ctx().get<TextEngine>();
+  TextRun run;
+  for (int index = 0; index < 2; ++index) {
+    TextGlyph glyph;
+    glyph.glyphIndex = 3;
+    glyph.xPosition = index * 10;
+    glyph.yPosition = index;
+    glyph.xAdvance = 10;
+    run.glyphs.push_back(glyph);
+  }
+  components::TextDecorationOrigin origin;
+  origin.lines = TextDecoration::Underline;
+  origin.style = TextDecorationStyle::Solid;
+  origin.thickness = {TextDecorationThickness::Kind::Length, Lengthd(2)};
+  for (const std::size_t allowance : {15u, 16u}) {
+    SCOPED_TRACE(allowance);
+    std::size_t remaining = allowance;
+    std::vector<std::size_t> points;
+    EmitTextDecorationPaths(run, origin, origin.lines, 1, 20, engine, Transform2d(), remaining,
+                            [&](const Path& path) { points.push_back(path.points().size()); });
+    EXPECT_EQ(remaining, 0u);
+    if (allowance == 16) {
+      EXPECT_THAT(points, testing::ElementsAre(8u));
+    } else {
+      EXPECT_THAT(points, testing::IsEmpty());
+    }
+  }
+}
+
 TEST(TextDecorationStyle, DashesCoverAnExactMultipleOfThePeriod) {
   // 20 units at a 2 unit thickness is exactly two 10 unit periods: two dashes, four points each.
   EXPECT_THAT(EmitUnderline(TextDecorationStyle::Dashed, 10, 20, 2), testing::ElementsAre(8u));
