@@ -170,10 +170,10 @@
         "shader-validation": {
           "when": "always",
           "pr_only": true,
-          "description": "Full Metal shader validation on a real GPU. Main runs none: the hosted image's virtual GPU cannot (see hosted-shader-validation), so this step is the only shader-validation gate.",
+          "description": "Full Metal shader validation on a real GPU. The native Metal job is independent of the virtual macOS build and test pool.",
           "counterparts": [
             {
-              "job": "macos-self-hosted",
+              "job": "macos-metal",
               "step": "metal_profile"
             }
           ]
@@ -184,7 +184,7 @@
           "description": "The Metal preflight, including the deliberate out-of-bounds read that shader validation must abort, on a real GPU.",
           "counterparts": [
             {
-              "job": "macos-self-hosted",
+              "job": "macos-metal",
               "step": "metal_preflight"
             }
           ]
@@ -196,6 +196,18 @@
             "decision": "Maintainer decision 2026-10-20, #1952",
             "reason": "Main's hosted macOS lane runs its Metal tests without shader validation and skips the tests that assert it: on the xcode-27 image (macOS 27.0.1, 26A434) the virtual GPU reports pipeline validation disabled and does not abort a deliberate out-of-bounds read (https://github.com/jwmcglynn/donner/actions/runs/39381507143). Shader validation runs only on the self-hosted real GPU, for trusted pull requests routed to it; any other pull request needs a local verifier receipt before merge."
           }
+        },
+        "native-metal": {
+          "when": "always",
+          "pr_only": true,
+          "description": "The complete native Metal device suite keeps shader validation enabled alongside the virtual pool.",
+          "counterparts": [
+            {
+              "job": "macos-metal",
+              "step": "metal_native",
+              "min_tests": 1
+            }
+          ]
         }
       },
       "Qualify pinned Chromium archive": {

@@ -53,11 +53,13 @@ TEST_ONLY_VARIABLES = ("BAZEL_MACOS_TEST_FLAGS", "BROWSER_STALL_TEST_FLAGS")
 _RC_LINE = re.compile(r"^(?:build|test|common):([A-Za-z0-9_-]+)\s+(.*)$")
 # Each lane names itself in its test environment, so test results never cross runners.
 LANE_TEST_ENV = {"macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
-                 "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted",
-                 "macos-hosted-parity": "--test_env=DONNER_CI_MACOS_LANE=hosted-parity"}
+                 "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted-vm",
+                 "macos-hosted-parity": "--test_env=DONNER_CI_MACOS_LANE=hosted-parity-vm",
+                 "macos-metal": "--test_env=DONNER_CI_MACOS_LANE=native-metal",
+                 "macos-vm-qualification": "--test_env=DONNER_CI_MACOS_LANE=vm-qualification"}
 # The main.yml lanes that must compute identical action keys. Every macOS job, in any workflow,
 # selects the pinned Xcode and fails without it.
-LANES = (HOSTED, SELF_HOSTED, PARITY)
+LANES = (HOSTED, SELF_HOSTED, PARITY, "macos-metal", "macos-vm-qualification")
 # The toolchain repository refresh runs before any build and takes no build flags.
 TOOLCHAIN_REFRESH = "fetch --force --lockfile_mode=off"
 SELECT_SCRIPT = "tools/ci_select_macos_xcode.sh"
@@ -378,7 +380,7 @@ def _runner_labels(job):
 
 
 def _is_macos(label):
-    return label == "macOS" or label.startswith(("macos", "xcode-"))
+    return label.lower().startswith(("macos", "xcode-"))
 
 
 def _macos_jobs(files):
@@ -632,7 +634,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertEqual({owner for owner, *_ in _macos_jobs(files)}, {
             ".github/workflows/" + job for job in (
                 "main.yml:" + HOSTED, "main.yml:macos-browser", "main.yml:" + SELF_HOSTED,
-                "main.yml:" + PARITY, "cmake.yml:macos", "editor_wasm.yml:build",
+                "main.yml:" + PARITY, "main.yml:macos-metal", "main.yml:macos-vm-qualification", "cmake.yml:macos", "editor_wasm.yml:build",
                 "bcr_preflight.yml:consumer", "bcr_preflight.yml:cli-macos", "fuzz.yml:macos",
                 "perf.yml:perf", "sign_macos_release.yml:sign", "sign_macos_release.yml:verify")})
         cmake, wasm = ".github/workflows/cmake.yml", ".github/workflows/editor_wasm.yml"
