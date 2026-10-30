@@ -2626,7 +2626,8 @@ void ResolveWrappingOrigins(std::vector<WrappingGlyph>& flat,
   }
 }
 
-double LeadingHangingPosition(const std::vector<WrappingGlyph>& flat, size_t index, size_t start) {
+double LeadingHangingPosition(const std::vector<WrappingGlyph>& flat, size_t index, size_t start,
+                              double width) {
   if (index > start && flat[index - 1].hangingBefore) {
     return flat[index - 1].x + flat[index - 1].advance;
   }
@@ -2637,7 +2638,7 @@ double LeadingHangingPosition(const std::vector<WrappingGlyph>& flat, size_t ind
     }
     extent += flat[end].advance;
   }
-  return -extent;
+  return width - extent;
 }
 
 double WrappingGap(const std::vector<WrappingGlyph>& flat, size_t index, size_t start) {
@@ -2655,8 +2656,8 @@ double PlaceWrappingGlyph(std::vector<WrappingGlyph>& flat, size_t index, size_t
   auto& item = flat[index];
   item.line = line;
   if (item.hangingBefore) {
-    item.x = LeadingHangingPosition(flat, index, start);
-    return 0.0;
+    item.x = LeadingHangingPosition(flat, index, start, width);
+    return width;
   }
   item.x = width + WrappingGap(flat, index, start);
   if (item.isBreak()) {
