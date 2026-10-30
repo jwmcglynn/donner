@@ -71,10 +71,23 @@ struct PolygonClipPath {
   bool operator==(const PolygonClipPath&) const = default;
 };
 
-/// A non-rounded inset rectangle used as a CSS clipping shape.
+/// An inset rectangle with optional elliptical corners used as a CSS clipping shape.
 struct InsetClipPath {
   RadialClipPath::Box box = RadialClipPath::Box::Stroke;  ///< SVG reference geometry.
   std::array<Lengthd, 4> offsets{};  ///< Insets in top, right, bottom, left order.
+  std::array<Lengthd, 4> radiiX{};   ///< Horizontal radii in top-left clockwise order.
+  std::array<Lengthd, 4> radiiY{};   ///< Vertical radii in top-left clockwise order.
+
+  /// Whether any specified radius requires rounded-corner geometry admission.
+  bool hasRoundedCorners() const {
+    for (std::size_t i = 0; i < radiiX.size(); ++i) {
+      if (radiiX[i].value != 0 || radiiY[i].value != 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   bool operator==(const InsetClipPath&) const = default;
 };
 

@@ -3063,6 +3063,19 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                  }},                     //
             }));
 
+bool ResolveInsetLengthArray(std::array<Lengthd, 4>& values, const FontMetrics& metrics) {
+  for (Lengthd& length : values) {
+    if (length.unit != Lengthd::Unit::Percent) {
+      const double pixels = length.toPixels(Box2d(), metrics);
+      if (!std::isfinite(pixels)) {
+        return false;
+      }
+      length = Lengthd(pixels, Lengthd::Unit::Px);
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 PropertyRegistry::PropertyRegistry() = default;
@@ -3466,16 +3479,13 @@ void PropertyRegistry::resolveInsetClipLengths(double rootFontSizePx) {
   InsetClipPath computed = *inset;
   FontMetrics metrics = FontMetrics::DefaultsWithFontSize(fontSize.get().value().value);
   metrics.rootFontSize = rootFontSizePx;
-  for (Lengthd& offset : computed.offsets) {
-    if (offset.unit != Lengthd::Unit::Percent) {
-      const double pixels = offset.toPixels(Box2d(), metrics);
-      if (!std::isfinite(pixels)) {
-        // Keep an unrepresentable declaration clipped rather than disabling its clip.
-        computed.offsets.fill(Lengthd(50, Lengthd::Unit::Percent));
-        break;
-      }
-      offset = Lengthd(pixels, Lengthd::Unit::Px);
-    }
+  if (!ResolveInsetLengthArray(computed.offsets, metrics) ||
+      !ResolveInsetLengthArray(computed.radiiX, metrics) ||
+      !ResolveInsetLengthArray(computed.radiiY, metrics)) {
+    // Keep an unrepresentable declaration clipped rather than disabling its clip.
+    computed.offsets.fill(Lengthd(50, Lengthd::Unit::Percent));
+    computed.radiiX.fill(Lengthd());
+    computed.radiiY.fill(Lengthd());
   }
   clipPath.substitute(ClipPath(std::move(computed)));
 }

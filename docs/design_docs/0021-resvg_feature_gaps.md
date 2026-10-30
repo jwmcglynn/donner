@@ -241,11 +241,15 @@ size before explicit inheritance. Horizontal percentages use reference width; ve
 use reference height. The font-metric units `ex`/`ch` and viewport units `vw`/`vh`/`vmin`/`vmax` are
 rejected until their computed-value context is available. Unrepresentable computed lengths produce
 an empty clip. Oversized opposing insets reduce to zero area, which
-produces an empty clipping region rather than preserving an earlier declaration. The fixed-size
-value needs no additional retained allocation, and rectangle construction shares the bounded
-reference-geometry walk and path-work budget. Rounded corners (`round`) and `calc()` offsets remain
-unsupported. `inset_clip_path_tests`, `properties_tests` and `shape_system_tests` cover exact
-rendering, nested clips, grammar, numeric limits and work refusal. See the
+produces an empty clipping region rather than preserving an earlier declaration. Optional `round`
+radii accept one to four horizontal values and an optional slash with one to four vertical values,
+using the same supported units. Radius percentages use the original reference box dimensions;
+all corners share one overlap reduction constrained by the used inset rectangle. Negative or
+nonfinite radii invalidate the declaration, and a zero radius on either axis makes a square corner.
+Fixed inline radius arrays add no dynamic radius storage; rounded path construction admits its
+maximum command and point work before allocating geometry. `calc()` remains unsupported.
+`inset_clip_path_tests`, `properties_tests` and `shape_system_tests` cover exact rendering, nested
+clips, grammar, inheritance, mutation, numeric limits and work refusal. See the
 [CSS Shapes inset definition](https://drafts.csswg.org/css-shapes-1/#funcdef-inset).
 
 `clip-path: path()` supports quoted SVG path data with an optional `nonzero` or `evenodd` rule,
