@@ -431,7 +431,8 @@ class NativeSpeedOptionsTest(unittest.TestCase):
         info = g.ConfiguredTargetInfo(
             label=target.label, package=target.package, name=target.name, kind=target.kind,
             attrs={"srcs": ["//donner/svg/renderer:Speed.cc"],
-                   "copts": ["-DKEEP_CALLER_OPTION=1", "-O2"]}, compatible=True,
+                   "copts": ["-DKEEP_CALLER_OPTION=1", "-O3", "-O2"],
+                   "native_optimization_level": "O2"}, compatible=True,
         )
         for config in g.CMAKE_CONFIGS:
             g._record_cpp_attrs(target, info, config.name)
@@ -442,6 +443,7 @@ class NativeSpeedOptionsTest(unittest.TestCase):
         self.assertIn("PRIVATE", text)
         self.assertRegex(text, r"target_compile_options\([^\n]* PRIVATE [^\n]*-O2")
         self.assertIn("-DKEEP_CALLER_OPTION=1", text)
+        self.assertNotIn("-O3", text)
         self.assertNotRegex(text, r"target_compile_options\([^\n]* (PUBLIC|INTERFACE) [^\n]*-O2")
 
     def test_png_encoder_optimized_except_debug(self):

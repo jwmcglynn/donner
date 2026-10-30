@@ -569,6 +569,7 @@ def _target_value_map() -> Dict[str, Dict[str, Set[str]]]:
         "hdrs": {},
         "deps": {},
         "copts": {},
+        "native_optimization_level": {},
         "defines": {},
         "includes": {},
         "tags": {},
@@ -677,6 +678,12 @@ def _record_cpp_attrs(target: CMakeTarget, info: ConfiguredTargetInfo, config_na
     copts = [opt for opt in _list_attr(info.attrs, "copts")
              if not opt.startswith("-I") and not opt.startswith("-isystem")]
     _record_values(target, "copts", copts, config_name)
+    speed = info.attrs.get("native_optimization_level", "")
+    if speed:
+        if speed not in {"O2", "O3"}:
+            raise ValueError(f"Unsupported native optimization level for {info.label}: {speed}")
+        _record_values(target, "native_optimization_level", [speed], config_name)
+
     _record_values(target, "deps", map(_normalize_dep_label, _list_attr(info.attrs, "deps")), config_name)
     for attr in ("defines", "includes", "tags"):
         _record_values(target, attr, _list_attr(info.attrs, attr), config_name)
@@ -1447,6 +1454,21 @@ class _TargetEmission:
     include_scope: str
 
 
+def _apply_native_speed_policy(target: CMakeTarget, copts, conditional_copts, has_sources):
+    """Keep the declared speed level effective despite sorting and CMake option deduplication."""
+    if not target.values.get("native_optimization_level"):
+        return copts, conditional_copts
+    levels, conditional_levels = _values_for_target(target, "native_optimization_level")
+    optimization = re.compile(r"-O(?:[0-3sgz]|fast)$")
+    copts = [opt for opt in copts if not optimization.fullmatch(opt)]
+    conditional_copts = [(opt, condition) for opt, condition in conditional_copts
+                         if not optimization.fullmatch(opt)]
+    if has_sources:
+        copts.extend("-" + level for level in levels)
+        conditional_copts.extend(("-" + level, condition) for level, condition in conditional_levels)
+    return copts, conditional_copts
+
+
 def _prepare_emission(target: CMakeTarget, pkg: str) -> _TargetEmission:
     """Gather the values needed to emit one target's CMake stanza."""
     hdrs = sorted(target.values["hdrs"])
@@ -1458,6 +1480,9 @@ def _prepare_emission(target: CMakeTarget, pkg: str) -> _TargetEmission:
     # must be created as a concrete (STATIC) library rather than
     # INTERFACE, so that target_sources(PRIVATE ...) works.
     has_concrete_sources = bool(srcs) or bool(extracted_cond_srcs)
+    copts, cond_copts = _apply_native_speed_policy(
+        target, copts, cond_copts, has_concrete_sources,
+    )
     return _TargetEmission(
         target=target,
         pkg=pkg,

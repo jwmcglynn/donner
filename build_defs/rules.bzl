@@ -1185,6 +1185,7 @@ _donner_perf_sensitive_cc_library = rule(
         "defines": attr.string_list(default = []),  # Optional defines
         "local_defines": attr.string_list(default = []),  # Optional defines
         "copts": attr.string_list(default = []),  # Optional compile options
+        "native_optimization_level": attr.string(default = ""),
         "linkopts": attr.string_list(default = []),  # Optional link options
         "alwayslink": attr.bool(default = False),  # Whole-archive inclusion
     },
@@ -1220,8 +1221,11 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
         compat["target_compatible_with"] = target_compatible_with
         kwargs["target_compatible_with"] = target_compatible_with
 
+    speed_copts = native_speed_copts(optimization_level)
     optimized_kwargs = dict(kwargs)
-    optimized_kwargs["copts"] = kwargs.get("copts", []) + native_speed_copts(optimization_level)
+    if kwargs.get("srcs", []):
+        optimized_kwargs["copts"] = kwargs.get("copts", []) + speed_copts
+        optimized_kwargs["native_optimization_level"] = optimization_level
 
     if allow_debug_builds_config != None:
         _donner_perf_sensitive_cc_library(
