@@ -541,6 +541,42 @@ class ReleaseCliTest(ReleaseCliFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lockfile is missing"):
             self._package()
 
+    def test_secret_field_names_fail_but_public_package_names_pass(self) -> None:
+        lock = self.root / release_cli.LOCKFILE
+        # Field names that hold credentials fail closed in every common spelling, even when the
+        # value carries no recognizable secret shape.
+        for key in ("token", "TOKEN", "auth_token", "accessToken", "githubtoken", "tokens",
+                    "password", "passwords", "dbPassword", "secret", "secrets", "client_secret",
+                    "secretKey", "secretkey", "credential", "credentials", "Authorization",
+                    "api_key", "apiKey", "apikey", "x-api-key", "private_key", "privateKey",
+                    "private-key-pem", "AWS_SECRET_ACCESS_KEY"):
+            with self.subTest(key=key):
+                lock.write_text(json.dumps({"nested": [{key: "value"}]}))
+                with self.assertRaisesRegex(ValueError, "sensitive key"):
+                    release_cli.check_public_lockfile(lock)
+        # rules_python's pip extension records the public PyPI index and the sha256 of each
+        # distribution of its own tool dependencies, keyed by package name and download URL.
+        # Package names that only contain a sensitive word, such as `secretstorage` or
+        # `tokenize-rt`, are public metadata.
+        url = "https://files.pythonhosted.org/packages/b7/46/0123/secretstorage-3.5.0-py3-none-any.whl"
+        facts = {"facts": {"@@rules_python+//python/extensions:pip.bzl%pip": {
+            "dist_hashes": {"https://pypi.org/simple": {
+                "secretstorage": {url: "sha256:" + "0" * 64},
+                "tokenize-rt": {url.replace("secretstorage", "tokenize_rt"): "sha256:" + "1" * 64},
+                "keyring": {url.replace("secretstorage", "keyring"): "sha256:" + "2" * 64},
+            }},
+            "fact_version": "v2",
+        }}}
+        lock.write_text(json.dumps(facts))
+        self.assertEqual(release_cli.check_public_lockfile(lock), release_cli.digest(lock))
+        # The reviewed index host still rejects a query, the URL userinfo and look-alike hosts.
+        for index in ("https://pypi.org/simple?index=mirror", "https://user:value@pypi.org/simple",
+                      "https://pypi.org.example.invalid/simple", "http://pypi.org/simple"):
+            with self.subTest(index=index):
+                lock.write_text(json.dumps({"dist_hashes": {index: {}}}))
+                with self.assertRaisesRegex(ValueError, "unreviewed URL"):
+                    release_cli.check_public_lockfile(lock)
+
     def test_copied_lockfile_is_rechecked_before_artifact_upload(self) -> None:
         original_copy = release_cli.shutil.copyfile
 

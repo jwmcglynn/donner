@@ -66,6 +66,9 @@ PUBLIC_LOCK_HOSTS = frozenset({
     # Public package registries that module extensions in the production module graph record,
     # which the docs build retains (rules_python, rules_fuzzing, and the Bazel mirror).
     "files.pythonhosted.org",
+    # The PyPI simple index that rules_python's pip extension records as the source of the
+    # distribution hashes of its own tool dependencies.
+    "pypi.org",
     "mirror.bazel.build",
     "repo1.maven.org",
 })
@@ -75,7 +78,13 @@ PUBLIC_LOCK_HOSTS = frozenset({
 PRIVATE_PATH = re.compile(
     r"(?i)(?:file://|(?<![A-Za-z0-9_.+@~/-])/(?:Users|home|private|var|tmp|opt|root|etc|mnt|proc|"
     r"srv|run)/|(?<![A-Za-z])[A-Za-z]:[\\/])")
-SECRET_KEY = re.compile(r"(?i)(?:token|password|secret|credential|authorization|api[_-]?key|private[_-]?key)")
+# A credential field name ends in a sensitive word: at the end of the key, before a separator or
+# before a camelCase capital (`access_token`, `accessToken`, `githubtoken`, `secretKey`). A word
+# that continues in lowercase letters is a different word, such as the PyPI package names
+# `secretstorage` and `tokenize-rt` that rules_python's pip extension records.
+SECRET_KEY = re.compile(
+    r"(?i:token|password|secret|credential|authorization|api[_-]?key|private[_-]?key|"
+    r"secret[_-]?key)(?i:s)?(?![a-z])")
 SECRET_SHAPE = re.compile(
     r"(?i)(?:-----BEGIN|AKIA[0-9A-Z]{16}|github_pat_[A-Za-z0-9_]{16,}|"
     r"gh[pousr]_[A-Za-z0-9]{20,}|\bBearer\s+\S+|"
