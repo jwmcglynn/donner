@@ -1270,10 +1270,68 @@ bool ShapeVariantRanges(FT_Face ftFace, hb_font_t* hbFont, float fontSizePx, con
 
 }  // namespace
 
+namespace {
+
+bool AdmitContextualShaping(const TextBackend::ShapingContext* context, size_t bytes) {
+  return !context || !context->work ||
+         context->work->consume(bytes, context->detected.valid ? 0 : context->byteLength);
+}
+
+struct ShapingOrder {
+  std::optional<bool> backward;
+  bool mixed = false;
+
+  void observe(hb_direction_t direction) {
+    const bool value = HB_DIRECTION_IS_BACKWARD(direction);
+    mixed = mixed || (backward && *backward != value);
+    backward = value;
+  }
+
+  std::optional<bool> output(bool logical) const {
+    return logical ? std::optional<bool>(false) : (mixed ? std::nullopt : backward);
+  }
+};
+
+struct ShapingFeatures {
+  std::array<hb_feature_t, 8> values;
+  unsigned int count = 0;
+};
+
+ShapingFeatures MakeShapingFeatures(bool smallCaps, bool kerning, bool suppressOptional,
+                                    bool suppressRlig) {
+  ShapingFeatures result;
+  if (smallCaps) {
+    result.values[result.count++] = {HB_TAG('s', 'm', 'c', 'p'), 1, 0, UINT_MAX};
+  }
+  if (!kerning) {
+    result.values[result.count++] = {HB_TAG('k', 'e', 'r', 'n'), 0, 0, UINT_MAX};
+  }
+  if (suppressOptional) {
+    constexpr hb_tag_t tags[] = {HB_TAG('l', 'i', 'g', 'a'), HB_TAG('c', 'l', 'i', 'g'),
+                                 HB_TAG('c', 'a', 'l', 't'), HB_TAG('d', 'l', 'i', 'g'),
+                                 HB_TAG('h', 'l', 'i', 'g')};
+    for (hb_tag_t tag : tags) {
+      result.values[result.count++] = {tag, 0, 0, UINT_MAX};
+    }
+  }
+  if (suppressRlig) {
+    result.values[result.count++] = {HB_TAG('r', 'l', 'i', 'g'), 0, 0, UINT_MAX};
+  }
+  return result;
+}
+
+}  // namespace
+
 TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     FontHandle font, float fontSizePx, std::string_view spanText, size_t byteOffset,
     size_t byteLength, bool isVertical, TextOrientation textOrientation, FontVariant fontVariant,
     bool enableKerning, bool forceLogicalOrder, const ShapingContext* context) const {
+  if (!AdmitContextualShaping(context, byteLength)) {
+    return {};
+  }
+  shapedBytes_ += byteLength;
+  const bool suppressOptional = context && context->suppressOptionalSubstitutions;
+  const bool suppressRlig = context && context->suppressRligForAnalysis;
   // A context that adds no characters leaves the range shaped as without one.
   if (context && context->byteLength <= byteLength) {
     context = nullptr;
@@ -1312,6 +1370,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
   // Lambda to shape a byte range and collect results.
   // rangeStart/rangeEnd are byte offsets relative to the start of `text`.
   std::vector<ShapedGlyphInfo> allGlyphs;
+  ShapingOrder order;
 
   auto shapeRange = [&](const char* text, size_t rangeStart, size_t rangeEnd, bool isSmallCapRange,
                         hb_feature_t* features, unsigned int numFeatures) {
@@ -1319,9 +1378,10 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     const int64_t clusterOffset =
         AddShapingRange(buf, text, rangeStart, rangeEnd, spanText, byteOffset, shapingContext);
 
-    hb_buffer_set_direction(
-        buf, ShapingDirection(detectedDirection, useVerticalShaping, hb_buffer_get_length(buf),
-                              shapingContext != nullptr));
+    const auto direction = ShapingDirection(detectedDirection, useVerticalShaping,
+                                            hb_buffer_get_length(buf), shapingContext != nullptr);
+    order.observe(direction);
+    hb_buffer_set_direction(buf, direction);
     hb_buffer_set_script(buf, detectedScript);
     hb_buffer_set_language(buf, detectedLanguage);
     hb_shape(hbFont, buf, features, numFeatures);
@@ -1337,23 +1397,19 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     hb_buffer_destroy(buf);
   };
 
-  std::array<hb_feature_t, 2> features;
-  unsigned int numFeatures = 0;
-  if (useSmcpFeature) {
-    features[numFeatures++] = {HB_TAG('s', 'm', 'c', 'p'), 1, 0, UINT_MAX};
-  }
-  if (!enableKerning) {
-    features[numFeatures++] = {HB_TAG('k', 'e', 'r', 'n'), 0, 0, UINT_MAX};
-  }
+  auto features =
+      MakeShapingFeatures(useSmcpFeature, enableKerning, suppressOptional, suppressRlig);
 
   if (!ShapeVariantRanges(ftFace, hbFont, fontSizePx, chunkData, byteLength, smallCaps,
-                          features.data(), numFeatures, shapeRange)) {
+                          features.values.data(), features.count, shapeRange)) {
     return {};
   }
 
-  return ConvertShapedRun(allGlyphs, hbFont, fontSizePx, pixelScaleX, pixelScaleY, spanText,
-                          byteOffset, isVertical, useVerticalShaping, textOrientation,
-                          forceLogicalOrder);
+  auto result = ConvertShapedRun(allGlyphs, hbFont, fontSizePx, pixelScaleX, pixelScaleY, spanText,
+                                 byteOffset, isVertical, useVerticalShaping, textOrientation,
+                                 forceLogicalOrder);
+  result.backward = order.output(forceLogicalOrder);
+  return result;
 }
 
 // ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/components/text/TextSystem.h"
 #include "donner/svg/core/DominantBaseline.h"
+#include "donner/svg/text/GraphemeBreak.h"
 #include "donner/svg/text/TextBackendSimple.h"
 #include "donner/svg/text/TextEngineHelpers.h"
 #include "donner/svg/text/TextPathWarp.h"
@@ -892,6 +893,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontSynthesisSmallCaps = style->properties->fontSynthesisSmallCaps.get().value();
     span.fontSynthesisStyle = style->properties->fontSynthesisStyle.get().value();
     span.textTransform = style->properties->textTransform.get().value();
+    span.overflowWrap = style->properties->overflowWrap.get().value();
     span.fontKerning = style->properties->fontKerning.get().value();
     span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
     span.fontSize = style->properties->fontSize.get().value();
@@ -2489,6 +2491,9 @@ struct WrappingGlyph {
   TextAnchor textAnchor;
   bool resetsInline;
   bool resetsBlock;
+  bool emergencyBreakBefore;
+  bool emergencyLineStart;
+  bool hangingBefore;
   size_t chunk = 0;
   size_t anchorGroup = 0;
   size_t block = 0;
@@ -2540,6 +2545,19 @@ std::pair<bool, bool> WrappingAxisResets(const WrappingChunkBoundary& boundary, 
                   : std::pair(boundary.absoluteX, boundary.absoluteY);
 }
 
+struct EmergencyGlyphFlags {
+  bool boundary;
+  bool lineStart;
+  bool hanging;
+};
+
+EmergencyGlyphFlags WrappingEmergencyFlags(const components::ComputedTextComponent::TextSpan& span,
+                                           const TextGlyph& glyph) {
+  const bool enabled = span.overflowWrap != OverflowWrap::Normal && AllowsSoftWrap(span.whiteSpace);
+  return {enabled && !glyph.hangingBefore && glyph.emergencyBreakBefore,
+          enabled && glyph.emergencyLineStart, enabled && glyph.hangingBefore};
+}
+
 std::vector<WrappingGlyph> CollectWrappingGlyphs(const std::vector<TextRun>& runs,
                                                  const components::ComputedTextComponent& text,
                                                  bool vertical, const TextBackend* backend,
@@ -2565,12 +2583,14 @@ std::vector<WrappingGlyph> CollectWrappingGlyphs(const std::vector<TextRun>& run
       size_t byte = GetPositioningCluster(glyph);
       const uint32_t cp = SpanLayoutCodepoint(span, byte);
       const double advance = vertical ? glyph.yAdvance : glyph.xAdvance;
+      const auto flags = WrappingEmergencyFlags(span, glyph);
       flat.push_back(
           {ri, gi, InlinePenPosition(glyph, vertical), vertical ? glyph.xPosition : glyph.yPosition,
            advance, advance, cp, span.whiteSpace,
            gi + 1 == runs[ri].glyphs.size() ? span.boundaryWhiteSpace.value_or(span.whiteSpace)
                                             : span.whiteSpace,
-           halfCh, span.textAnchor, resetsInline, resetsBlock, chunk, 0, block});
+           halfCh, span.textAnchor, resetsInline, resetsBlock, flags.boundary, flags.lineStart,
+           flags.hanging, chunk, 0, block});
     }
   }
   return flat;
@@ -2606,17 +2626,40 @@ void ResolveWrappingOrigins(std::vector<WrappingGlyph>& flat,
   }
 }
 
+double LeadingHangingPosition(const std::vector<WrappingGlyph>& flat, size_t index, size_t start,
+                              double width) {
+  if (index > start && flat[index - 1].hangingBefore) {
+    return flat[index - 1].x + flat[index - 1].advance;
+  }
+  double extent = 0.0;
+  for (size_t end = index; end < flat.size() && flat[end].hangingBefore; ++end) {
+    if (end > index && flat[end].emergencyLineStart) {
+      break;
+    }
+    extent += flat[end].advance;
+  }
+  return width - extent;
+}
+
+double WrappingGap(const std::vector<WrappingGlyph>& flat, size_t index, size_t start) {
+  if (index == start || flat[index - 1].hangingBefore) {
+    return 0.0;
+  }
+  const auto& item = flat[index];
+  return item.originalX - (flat[index - 1].originalX + flat[index - 1].originalAdvance) -
+         item.inlineDisplacement;
+}
+
 /// Resolves tab stops from the line start, retaining glyph-local kerning between ordinary letters.
 double PlaceWrappingGlyph(std::vector<WrappingGlyph>& flat, size_t index, size_t start,
                           double width, size_t line) {
   auto& item = flat[index];
-  const double gap = index == start
-                         ? 0.0
-                         : item.originalX -
-                               (flat[index - 1].originalX + flat[index - 1].originalAdvance) -
-                               item.inlineDisplacement;
-  item.x = width + gap;
   item.line = line;
+  if (item.hangingBefore) {
+    item.x = LeadingHangingPosition(flat, index, start, width);
+    return width;
+  }
+  item.x = width + WrappingGap(flat, index, start);
   if (item.isBreak()) {
     item.advance = 0.0;
   } else if (item.codepoint == '\t' && item.originalAdvance > 0.0) {
@@ -2646,11 +2689,32 @@ void TrimSoftBreakSpaces(std::vector<WrappingGlyph>& flat, size_t start, size_t 
 bool IsSoftBreakAfter(const std::vector<WrappingGlyph>& flat, size_t index) {
   const auto& item = flat[index];
   const bool endOfSpaces = index + 1 == flat.size() || !flat[index + 1].isSpace();
-  return item.isSpace() && AllowsSoftWrap(item.breakMode) &&
+  return item.isSpace() && !item.hangingBefore && AllowsSoftWrap(item.breakMode) &&
          (item.mode == WhiteSpace::BreakSpaces || endOfSpaces);
 }
 
-/// Greedy line selection never breaks an unbreakable word or a pre/nowrap span.
+bool AllowsEmergencyBoundary(const std::vector<WrappingGlyph>& flat, size_t index, size_t start) {
+  return index > start && AllowsSoftWrap(flat[index - 1].breakMode);
+}
+
+bool IsEmergencyLineStart(const std::vector<WrappingGlyph>& flat, size_t index, size_t start) {
+  return flat[index].emergencyLineStart && AllowsEmergencyBoundary(flat, index, start);
+}
+
+bool IsEmergencyCandidate(const std::vector<WrappingGlyph>& flat, size_t index, size_t start,
+                          double width, double measure, std::optional<size_t> previous) {
+  return flat[index].emergencyBreakBefore && AllowsEmergencyBoundary(flat, index, start) &&
+         (width <= measure + 1e-3 || !previous);
+}
+
+void TrimNormalWrappingBreak(std::vector<WrappingGlyph>& flat, size_t start,
+                             std::optional<size_t> normalBreak) {
+  if (normalBreak) {
+    TrimSoftBreakSpaces(flat, start, *normalBreak);
+  }
+}
+
+/// Greedy line selection prefers ordinary opportunities over emergency grapheme boundaries.
 size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
   size_t line = 0;
   size_t blockLine = 0;
@@ -2658,6 +2722,7 @@ size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
   size_t start = 0;
   size_t index = 0;
   std::optional<size_t> lastBreak;
+  std::optional<size_t> emergencyBreak;
   double width = 0.0;
   while (index < flat.size()) {
     auto& item = flat[index];
@@ -2667,6 +2732,14 @@ size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
       start = index;
       width = 0.0;
       lastBreak.reset();
+      emergencyBreak.reset();
+    }
+    if (IsEmergencyLineStart(flat, index, start)) {
+      start = index;
+      ++line;
+      width = 0.0;
+      lastBreak.reset();
+      emergencyBreak.reset();
     }
     // An overflow retry visits the authored reset again on its newly assigned line.
     if (item.resetsBlock) {
@@ -2676,6 +2749,10 @@ size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
       start = index;
       width = 0.0;
       lastBreak.reset();
+      emergencyBreak.reset();
+    }
+    if (IsEmergencyCandidate(flat, index, start, width, measurePx, emergencyBreak)) {
+      emergencyBreak = index;
     }
     width = PlaceWrappingGlyph(flat, index, start, width, line);
     item.lineOffset = line - blockLine;
@@ -2684,15 +2761,18 @@ size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
       ++line;
       width = 0.0;
       lastBreak.reset();
+      emergencyBreak.reset();
       continue;
     }
-    if (IsWrappingOverflow(item, width, measurePx, lastBreak, start)) {
-      TrimSoftBreakSpaces(flat, start, *lastBreak);
-      start = *lastBreak;
+    const std::optional<size_t> candidate = lastBreak ? lastBreak : emergencyBreak;
+    if (IsWrappingOverflow(item, width, measurePx, candidate, start)) {
+      TrimNormalWrappingBreak(flat, start, lastBreak);
+      start = *candidate;
       index = start;
       ++line;
       width = 0.0;
       lastBreak.reset();
+      emergencyBreak.reset();
       continue;
     }
     if (IsSoftBreakAfter(flat, index)) {
@@ -2740,7 +2820,7 @@ std::vector<bool> ExcludedWrappingItems(const std::vector<WrappingGlyph>& flat, 
       block = item.block;
       trailing = true;
     }
-    if (item.isBreak()) {
+    if (item.isBreak() || item.hangingBefore) {
       result[i] = true;
     } else if (!item.isSpace()) {
       trailing = false;
@@ -2787,7 +2867,7 @@ void AccumulateWrappingAnchor(WrappingAnchorGroup& group, const WrappingGlyph& i
                               bool contributesWidth) {
   if (!group.bounds.initialized && !item.isBreak()) {
     group.anchor = item.textAnchor;
-    group.bounds.startAt(item.origin + item.x);
+    group.bounds.startAt(item.origin + (item.hangingBefore ? 0.0 : item.x));
   }
   if (contributesWidth) {
     group.bounds.include(item.origin + item.x, item.advance);
@@ -3455,6 +3535,8 @@ struct ClusterFallback {
   int stretch = 5;
 };
 
+bool BackwardShapedGroups(const TextBackend::ShapedRun& shaped);
+
 /// Shapes one span's chunks with its primary face, except clusters that face cannot render, which
 /// take the first fallback face that can, as CSS per-character font fallback does.
 class ChunkShaper {
@@ -3475,10 +3557,17 @@ public:
   /// Shapes \p chunk, recording each glyph's fallback face in \p faces, which stays empty when the
   /// primary face draws every glyph.
   TextBackend::ShapedRun shape(const ChunkRange& chunk, std::vector<FontHandle>& faces) const {
+    return shapeFragment(chunk, nullptr, faces);
+  }
+
+  /// Shape a complete fragment with original context, including face fallback.
+  TextBackend::ShapedRun shapeFragment(const ChunkRange& chunk,
+                                       const TextBackend::ShapingContext* context,
+                                       std::vector<FontHandle>& faces) const {
     if (run_.usedFontSizePx == 0.0f) {
       return ShapeAddressableZeroSizeText(text_, chunk.byteStart, chunk.byteEnd - chunk.byteStart);
     }
-    TextBackend::ShapedRun primary = shapeWith(run_.font, chunk);
+    TextBackend::ShapedRun primary = shapeWith(run_.font, chunk, context);
     PrimaryClusters clusters = primaryClusters(primary, chunk);
     if (!clusters.anyNotdef) {
       return primary;
@@ -3492,7 +3581,9 @@ public:
         primary.glyphs.front().cluster > primary.glyphs.back().cluster) {
       std::reverse(items.begin(), items.end());
     }
-    return shapeItems(items, chunk, faces);
+    auto result = shapeItems(items, chunk, context, faces);
+    result.backward = BackwardShapedGroups(primary);
+    return result;
   }
 
 private:
@@ -3556,8 +3647,11 @@ private:
   /// in \p faces. The chunk supplies each item's shaping context, so joining continues across
   /// faces and script-neutral items take the chunk's direction.
   TextBackend::ShapedRun shapeItems(const std::vector<Item>& items, const ChunkRange& chunk,
+                                    const TextBackend::ShapingContext* suppliedContext,
                                     std::vector<FontHandle>& faces) const {
-    const TextBackend::ShapingContext context{chunk.byteStart, chunk.byteEnd - chunk.byteStart};
+    const TextBackend::ShapingContext fallbackContext{chunk.byteStart,
+                                                      chunk.byteEnd - chunk.byteStart};
+    const auto& context = suppliedContext ? *suppliedContext : fallbackContext;
     TextBackend::ShapedRun result;
     for (const Item& item : items) {
       const TextBackend::ShapedRun shaped = backend_.shapeRunInContext(
@@ -3570,9 +3664,14 @@ private:
     return result;
   }
 
-  TextBackend::ShapedRun shapeWith(FontHandle font, const ChunkRange& chunk) const {
+  TextBackend::ShapedRun shapeWith(FontHandle font, const ChunkRange& chunk,
+                                   const TextBackend::ShapingContext* context) const {
     const size_t length = chunk.byteEnd - chunk.byteStart;
     const FontVariant variant = EffectiveSmallCapsVariant(backend_, font, variant_, synthesis_);
+    if (context) {
+      return backend_.shapeRunInContext(font, run_.usedFontSizePx, text_, *context, chunk.byteStart,
+                                        length, vertical_, orientation_, variant, kerning_);
+    }
     return kerning_ ? backend_.shapeRun(font, run_.usedFontSizePx, text_, chunk.byteStart, length,
                                         vertical_, orientation_, variant, false)
                     : backend_.shapeRunNoKerning(font, run_.usedFontSizePx, text_, chunk.byteStart,
@@ -3661,9 +3760,817 @@ private:
   mutable bool candidatesResolved_ = false;
 };
 
+struct EmergencyWrapOptions {
+  EmergencyWrapOptions() = default;
+  EmergencyWrapOptions(const EmergencyWrapOptions&) = delete;
+  EmergencyWrapOptions& operator=(const EmergencyWrapOptions&) = delete;
+  EmergencyWrapOptions(EmergencyWrapOptions&&) = delete;
+  EmergencyWrapOptions& operator=(EmergencyWrapOptions&&) = delete;
+
+  bool admit(size_t bytes) {
+    constexpr size_t kMaximumBytes = 64u * 1024u * 1024u;
+    if (bytes <= reservation.bytes) {
+      return true;
+    }
+    if (bytes > kMaximumBytes || !reservation.family ||
+        !reservation.family->reserve(components::DocumentResourceFamilyBudget::Kind::Geometry,
+                                     bytes - reservation.bytes)) {
+      rejected = true;
+      return false;
+    }
+    reservation.bytes = bytes;
+    return true;
+  }
+
+  struct Reservation {
+    std::shared_ptr<components::DocumentResourceFamilyBudget> family;
+    size_t bytes = 0;
+    ~Reservation() {
+      if (family) {
+        family->release(components::DocumentResourceFamilyBudget::Kind::Geometry, bytes);
+      }
+    }
+  };
+  Reservation reservation;
+  size_t baseBytes = 0;
+  size_t preparedBytes = 0;
+  double measure = 0.0;
+  double letterSpacing = 0.0;
+  double wordSpacing = 0.0;
+  double halfCh = 0.0;
+  WhiteSpace whiteSpace = WhiteSpace::Normal;
+  bool endOfFlow = false;
+  /// Aliases immutable span source or its owned full-width buffer through this stack frame.
+  std::string_view logicalText;
+  const TextBackend* backend = nullptr;
+  float fontSizePx = 0.0f;
+  bool vertical = false;
+  TextOrientation orientation = TextOrientation::Mixed;
+  std::vector<uint32_t> boundaries;
+  std::vector<uint32_t> blocked;
+  std::vector<uint32_t> visualLineStarts;
+  std::vector<uint32_t> trimmed;
+  std::vector<std::pair<uint32_t, double>> hanging;
+  /// Glyphs earlier spans already placed on the line where \ref incomingByte continues, in
+  /// logical order. Backward words that continue across a styling-only span boundary are planned
+  /// against this occupancy so the span boundary does not change where they wrap. Empty when the
+  /// span starts a new line or the bounded lookback declines to collect it.
+  std::vector<WrappingGlyph> incomingLine;
+  /// Byte offset of the shaping chunk that continues \ref incomingLine.
+  size_t incomingByte = 0;
+  bool rejected = false;
+};
+
+/// The glyphs of \p flat's final assigned line, rebased to a standalone planning block.
+std::vector<WrappingGlyph> LastWrappingLine(const std::vector<WrappingGlyph>& flat) {
+  size_t start = flat.size() - 1;
+  while (start > 0 && flat[start - 1].line == flat.back().line &&
+         flat[start - 1].block == flat.back().block) {
+    --start;
+  }
+  std::vector<WrappingGlyph> result(flat.begin() + static_cast<std::ptrdiff_t>(start), flat.end());
+  for (auto& item : result) {
+    item.block = 0;
+    item.resetsBlock = false;
+  }
+  return result;
+}
+
+/// Extent of the word that \p line ends with, which the next span's first word continues.
+double IncomingWordExtent(const std::vector<WrappingGlyph>& line) {
+  if (line.empty() || line.back().isSpace() || line.back().isBreak()) {
+    return 0.0;
+  }
+  size_t start = line.size() - 1;
+  while (start > 0 && !line[start - 1].isSpace() && !line[start - 1].isBreak()) {
+    --start;
+  }
+  return line.back().x + line.back().advance - line[start].x;
+}
+
+/// Match the inline advance selected by ordinary horizontal or vertical placement.
+double EmergencyInlineAdvance(const TextBackend::ShapedGlyph& glyph, std::string_view text,
+                              const EmergencyWrapOptions& options) {
+  if (!options.vertical) {
+    return glyph.xAdvance;
+  }
+  size_t byte = glyph.cluster;
+  const uint32_t codepoint = byte < text.size() ? decodeUtf8(text, byte) : 0;
+  if (options.orientation == TextOrientation::Sideways ||
+      (options.orientation == TextOrientation::Mixed && codepoint < 0x2e80)) {
+    return glyph.xAdvance > 0 ? glyph.xAdvance : glyph.yAdvance;
+  }
+  return glyph.yAdvance > 0 ? glyph.yAdvance : (glyph.xAdvance == 0 ? 0.0 : options.fontSizePx);
+}
+
+struct EmergencyCluster {
+  uint32_t start;
+  double gapBefore = 0.0;
+  double pen = 0.0;
+  double minimum = 0.0;
+  double maximum = 0.0;
+
+  void append(double value, double gap) {
+    pen += gap;
+    minimum = std::min(minimum, pen);
+    maximum = std::max(maximum, pen);
+    pen += value;
+    minimum = std::min(minimum, pen);
+    maximum = std::max(maximum, pen);
+  }
+};
+
+/// Zero-advance marks share the preceding SVG positioning group.
+uint32_t ShapingPositioningCluster(const TextBackend::ShapedGlyph& glyph, std::string_view text,
+                                   std::optional<uint32_t> previous) {
+  if (previous && glyph.cluster < text.size() && glyph.xAdvance == 0.0) {
+    size_t byte = glyph.cluster;
+    if (isNonSpacing(decodeUtf8(text, byte))) {
+      return *previous;
+    }
+  }
+  return glyph.cluster;
+}
+
+bool EndsShapingPositioningGroup(const TextBackend::ShapedRun& shaped, size_t index,
+                                 std::string_view text, uint32_t cluster) {
+  return index + 1 == shaped.glyphs.size() ||
+         ShapingPositioningCluster(shaped.glyphs[index + 1], text, cluster) != cluster;
+}
+
+double EmergencyTrailingSpacing(uint32_t codepoint, bool groupEnd,
+                                const EmergencyWrapOptions& options) {
+  const double letter =
+      options.backend && options.backend->isCursive(codepoint) ? 0.0 : options.letterSpacing;
+  return letter + (codepoint == 0x20 && groupEnd ? options.wordSpacing : 0.0);
+}
+
+void NormalizeEmergencyGaps(std::vector<EmergencyCluster>& clusters, bool backward) {
+  if (!backward || clusters.empty()) {
+    return;
+  }
+  // Incoming visual gaps become outgoing logical gaps in backward source order.
+  for (size_t index = clusters.size() - 1; index > 0; --index) {
+    clusters[index].gapBefore = clusters[index - 1].gapBefore;
+  }
+  clusters.front().gapBefore = 0;
+}
+
+std::vector<EmergencyCluster> EmergencyClusters(const TextBackend::ShapedRun& shaped,
+                                                std::string_view text,
+                                                const EmergencyWrapOptions& options) {
+  std::vector<EmergencyCluster> result;
+  result.reserve(shaped.glyphs.size());
+  double previousSpacing = 0;
+  std::optional<uint32_t> previousGroup;
+  for (size_t index = 0; index < shaped.glyphs.size(); ++index) {
+    const auto& glyph = shaped.glyphs[index];
+    const bool first = result.empty() || result.back().start != glyph.cluster;
+    const double incomingGap = previousSpacing + (options.vertical ? glyph.yKern : glyph.xKern);
+    if (first) {
+      result.push_back({glyph.cluster});
+      result.back().gapBefore = incomingGap;
+    }
+    result.back().append(EmergencyInlineAdvance(glyph, text, options), first ? 0.0 : incomingGap);
+    const uint32_t group = ShapingPositioningCluster(glyph, text, previousGroup);
+    size_t byte = group;
+    const uint32_t codepoint = byte < text.size() ? decodeUtf8(text, byte) : 0;
+    previousSpacing = EmergencyTrailingSpacing(
+        codepoint, EndsShapingPositioningGroup(shaped, index, text, group), options);
+    previousGroup = group;
+  }
+  std::sort(result.begin(), result.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.start < rhs.start; });
+  NormalizeEmergencyGaps(result, BackwardShapedGroups(shaped));
+  return result;
+}
+
+struct EmergencyAnalysisKey {
+  uint32_t cluster;
+  int glyph;
+  FontHandle face;
+  bool operator==(const EmergencyAnalysisKey&) const = default;
+};
+
+std::vector<EmergencyAnalysisKey> EmergencyAnalysisKeys(const TextBackend::ShapedRun& shaped,
+                                                        const std::vector<FontHandle>& faces) {
+  std::vector<EmergencyAnalysisKey> result;
+  result.reserve(shaped.glyphs.size());
+  for (size_t index = 0; index < shaped.glyphs.size(); ++index) {
+    result.push_back({shaped.glyphs[index].cluster, shaped.glyphs[index].glyphIndex,
+                      faces.empty() ? FontHandle() : faces[index]});
+  }
+  std::stable_sort(result.begin(), result.end(),
+                   [](const auto& lhs, const auto& rhs) { return lhs.cluster < rhs.cluster; });
+  return result;
+}
+
+bool EmergencySpace(const EmergencyCluster& cluster, std::string_view text) {
+  size_t byte = cluster.start;
+  const uint32_t cp = byte < text.size() ? decodeUtf8(text, byte) : 0;
+  return cp == ' ' || cp == '\t' || cp == '\n' || cp == 0x3000;
+}
+
+bool EmergencyWordOverflows(std::span<const EmergencyCluster> clusters, double measure,
+                            double leading = 0.0) {
+  double pen = 0.0;
+  double minimum = 0.0;
+  double maximum = 0.0;
+  for (size_t index = 0; index < clusters.size(); ++index) {
+    pen += index == 0 ? 0.0 : clusters[index].gapBefore;
+    minimum = std::min(minimum, pen + clusters[index].minimum);
+    maximum = std::max(maximum, pen + clusters[index].maximum);
+    pen += clusters[index].pen;
+  }
+  return leading + maximum - minimum > measure + 1e-3;
+}
+
+/// Prefer original cluster boundaries; expose optional internal units only when necessary.
+std::optional<uint32_t> EmergencyWordCut(std::span<const EmergencyCluster> word, uint32_t end,
+                                         const std::vector<uint32_t>& candidates) {
+  std::vector<uint32_t> preferred;
+  for (size_t index = 1; index < word.size(); ++index) {
+    if (std::binary_search(candidates.begin(), candidates.end(), word[index].start)) {
+      preferred.push_back(word[index].start);
+    }
+  }
+  if (!preferred.empty()) {
+    return preferred[preferred.size() / 2];
+  }
+  const auto first = std::upper_bound(candidates.begin(), candidates.end(), word.front().start);
+  const auto last = std::lower_bound(first, candidates.end(), end);
+  return first == last ? std::nullopt : std::optional<uint32_t>(*(first + (last - first) / 2));
+}
+
+/// Extent a word starting at \p start inherits from the incoming line when it continues the word
+/// that line ends with, so a span boundary inside a word does not hide that word's overflow.
+double ContinuedWordLeading(uint32_t start, const EmergencyWrapOptions& options) {
+  return start == options.incomingByte ? IncomingWordExtent(options.incomingLine) : 0.0;
+}
+
+/// Bisection bounds retries without scanning every possible prefix of an overlong word.
+std::vector<uint32_t> EmergencySplitPoints(const TextBackend::ShapedRun& shaped,
+                                           const ChunkRange& range, std::string_view text,
+                                           const EmergencyWrapOptions& options,
+                                           const std::vector<uint32_t>& candidates) {
+  const auto clusters = EmergencyClusters(shaped, text, options);
+  std::vector<uint32_t> result;
+  for (size_t start = 0; start < clusters.size();) {
+    if (EmergencySpace(clusters[start], text)) {
+      ++start;
+      continue;
+    }
+    size_t end = start + 1;
+    while (end < clusters.size() && !EmergencySpace(clusters[end], text)) {
+      ++end;
+    }
+    const auto word = std::span(clusters).subspan(start, end - start);
+    const uint32_t byteEnd = end < clusters.size() ? clusters[end].start : range.byteEnd;
+    if (EmergencyWordOverflows(word, options.measure,
+                               ContinuedWordLeading(word.front().start, options))) {
+      if (const auto cut = EmergencyWordCut(word, byteEnd, candidates)) {
+        result.push_back(*cut);
+      }
+    }
+    start = end;
+  }
+  return result;
+}
+
+struct PreparedShapingFragment {
+  size_t firstGlyph;
+  size_t glyphCount;
+  bool backward;
+};
+
+bool BackwardShapedGroups(const TextBackend::ShapedRun& shaped) {
+  return shaped.backward.value_or(shaped.glyphs.size() > 1 &&
+                                  shaped.glyphs.front().cluster > shaped.glyphs.back().cluster);
+}
+
+struct LamAlefCandidate {
+  LamAlefCandidateBreaker breaker;
+  size_t start = 0;
+
+  bool consume(char32_t codepoint, size_t byte) {
+    if (breaker.breakBefore(codepoint)) {
+      start = byte;
+    }
+    return breaker.completesPair();
+  }
+};
+
+bool HasLamAlefCandidate(std::string_view text, const ChunkRange& range) {
+  LamAlefCandidate candidate;
+  for (size_t byte = range.byteStart; byte < range.byteEnd;) {
+    const size_t start = byte;
+    if (candidate.consume(decodeUtf8(text, byte), start)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Contextual fragments replace the entire authored chunk, never splice into its old glyph output.
+class EmergencyChunkPlanner {
+public:
+  EmergencyChunkPlanner(const ChunkShaper& shaper, std::string_view text,
+                        EmergencyWrapOptions& options, const ChunkRange& range)
+      : shaper_(shaper),
+        text_(text),
+        options_(options),
+        context_{range.byteStart, range.byteEnd - range.byteStart},
+        remainingBytes_((range.byteEnd - range.byteStart) * 40),
+        remainingCalls_((range.byteEnd - range.byteStart) * 4 + 4),
+        work_{(range.byteEnd - range.byteStart) * 512 + 512,
+              (range.byteEnd - range.byteStart) * 8 + 8} {
+    context_.work = &work_;
+  }
+
+  TextBackend::ShapedRun prepare(const ChunkRange& range, TextBackend::ShapedRun initial,
+                                 std::vector<FontHandle>& faces,
+                                 SmallVector<PreparedShapingFragment, 1>& fragments) {
+    const size_t bytes = range.byteEnd - range.byteStart;
+    if (!admitInitial(initial, bytes)) {
+      return {};
+    }
+    const bool overflows = canOverflow(initial);
+    if (!overflows && !HasLamAlefCandidate(text_, range)) {
+      return initial;
+    }
+    if (!admitWorkingStorage(bytes) || !qualifyLamAlef(range)) {
+      return {};
+    }
+    if (!overflows) {
+      return initial;
+    }
+    boundaries_ = [&] {
+      TextBackend::ShapingContext analysisContext = context_;
+      analysisContext.suppressOptionalSubstitutions = true;
+      std::vector<FontHandle> analysisFaces;
+      const auto analysis = shape(range, analysisContext, analysisFaces);
+      return candidateBoundaries(analysis, analysisFaces, analysisContext, range);
+    }();
+    if (options_.rejected) {
+      return {};
+    }
+    std::vector<Node> pending;
+    pending.push_back({range, std::move(initial), std::move(faces)});
+    std::vector<Node> complete;
+    while (!pending.empty() && !options_.rejected) {
+      Node node = std::move(pending.back());
+      pending.pop_back();
+      const auto cuts = EmergencySplitPoints(node.shaped, node.range, text_, options_, boundaries_);
+      if (cuts.empty()) {
+        complete.push_back(std::move(node));
+      } else {
+        split(std::move(node), cuts, pending);
+      }
+    }
+    return concatenate(std::move(complete), faces, fragments);
+  }
+
+private:
+  struct Node {
+    ChunkRange range;
+    TextBackend::ShapedRun shaped;
+    std::vector<FontHandle> faces;
+  };
+
+  bool admitInitial(const TextBackend::ShapedRun& initial, size_t bytes) {
+    if (initial.glyphs.size() > bytes * 8u) {
+      options_.rejected = true;
+      return false;
+    }
+    return options_.admit(options_.baseBytes + options_.preparedBytes +
+                          initial.glyphs.size() * sizeof(EmergencyCluster));
+  }
+
+  bool admitWorkingStorage(size_t bytes) {
+    constexpr size_t kStoragePerByte =
+        40u * (sizeof(TextBackend::ShapedGlyph) + sizeof(FontHandle)) + 2u * sizeof(Node) +
+        12u * sizeof(uint32_t) + 4u * sizeof(EmergencyCluster) + 2u * sizeof(WrappingGlyph);
+    // Admit live analysis, parent/child glyphs, faces and partition metadata before allocation.
+    if (bytes > (64u * 1024u * 1024u) / kStoragePerByte ||
+        !options_.admit(options_.baseBytes + options_.preparedBytes + bytes * kStoragePerByte)) {
+      options_.rejected = true;
+      return false;
+    }
+    return true;
+  }
+
+  bool usableBoundary(bool before, bool after, uint32_t byte) const {
+    return before && after &&
+           !std::binary_search(ligatureBoundaries_.begin(), ligatureBoundaries_.end(), byte);
+  }
+
+  bool continuesIncomingLine() const {
+    return context_.byteOffset == options_.incomingByte && !options_.incomingLine.empty();
+  }
+
+  bool canOverflow(const TextBackend::ShapedRun& shaped) const {
+    const auto clusters = EmergencyClusters(shaped, text_, options_);
+    for (size_t start = 0; start < clusters.size();) {
+      size_t end = start;
+      while (end < clusters.size() && !EmergencySpace(clusters[end], text_)) {
+        ++end;
+      }
+      if (end > start &&
+          EmergencyWordOverflows(std::span(clusters).subspan(start, end - start), options_.measure,
+                                 ContinuedWordLeading(clusters[start].start, options_))) {
+        return true;
+      }
+      start = end + 1;
+    }
+    return false;
+  }
+
+  bool lamAlefSubstitutionsChange(const ChunkRange& pair) {
+    std::vector<FontHandle> originalFaces;
+    const auto original = shape(pair, context_, originalFaces);
+    TextBackend::ShapingContext comparison = context_;
+    comparison.suppressRligForAnalysis = true;
+    comparison.suppressOptionalSubstitutions = true;
+    std::vector<FontHandle> comparisonFaces;
+    const auto withoutRlig = shape(pair, comparison, comparisonFaces);
+    return !options_.rejected && EmergencyAnalysisKeys(original, originalFaces) !=
+                                     EmergencyAnalysisKeys(withoutRlig, comparisonFaces);
+  }
+
+  bool qualifyLamAlef(const ChunkRange& range) {
+    LamAlefCandidate candidate;
+    for (size_t byte = range.byteStart; byte < range.byteEnd;) {
+      const size_t boundary = byte;
+      const char32_t codepoint = decodeUtf8(text_, byte);
+      if (candidate.consume(codepoint, boundary) &&
+          lamAlefSubstitutionsChange({candidate.start, byte})) {
+        const auto first = std::upper_bound(options_.boundaries.begin(), options_.boundaries.end(),
+                                            candidate.start);
+        const auto last = std::lower_bound(first, options_.boundaries.end(), byte);
+        ligatureBoundaries_.insert(ligatureBoundaries_.end(), first, last);
+        options_.blocked.insert(options_.blocked.end(), first, last);
+      }
+      if (options_.rejected) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool independentUnit(const ChunkRange& unit, const std::vector<EmergencyAnalysisKey>& expected,
+                       const TextBackend::ShapingContext& context) {
+    std::vector<FontHandle> faces;
+    const auto shaped = shape(unit, context, faces);
+    const auto actual = EmergencyAnalysisKeys(shaped, faces);
+    const auto before = [](const EmergencyAnalysisKey& glyph, size_t byte) {
+      return glyph.cluster < byte;
+    };
+    const auto first = std::lower_bound(expected.begin(), expected.end(), unit.byteStart, before);
+    const auto last = std::lower_bound(first, expected.end(), unit.byteEnd, before);
+    return !options_.rejected && std::equal(actual.begin(), actual.end(), first, last);
+  }
+
+  std::vector<uint32_t> candidateBoundaries(const TextBackend::ShapedRun& analysis,
+                                            const std::vector<FontHandle>& faces,
+                                            const TextBackend::ShapingContext& context,
+                                            const ChunkRange& range) {
+    std::vector<uint32_t> units{static_cast<uint32_t>(range.byteStart)};
+    for (const auto& cluster : EmergencyClusters(analysis, text_, options_)) {
+      if (cluster.start > range.byteStart &&
+          std::binary_search(options_.boundaries.begin(), options_.boundaries.end(),
+                             cluster.start)) {
+        units.push_back(cluster.start);
+      }
+    }
+    units.push_back(static_cast<uint32_t>(range.byteEnd));
+    const auto firstBoundary =
+        std::lower_bound(options_.boundaries.begin(), options_.boundaries.end(), range.byteStart);
+    const auto lastBoundary =
+        std::lower_bound(firstBoundary, options_.boundaries.end(), range.byteEnd);
+    for (auto boundary = firstBoundary; boundary != lastBoundary; ++boundary) {
+      if (!std::binary_search(units.begin(), units.end(), *boundary)) {
+        options_.blocked.push_back(*boundary);
+      }
+    }
+    const auto expected = EmergencyAnalysisKeys(analysis, faces);
+    std::vector<bool> independent;
+    independent.reserve(units.size() - 1);
+    for (size_t index = 1; index < units.size(); ++index) {
+      independent.push_back(independentUnit({units[index - 1], units[index]}, expected, context));
+      if (options_.rejected) {
+        return {};
+      }
+    }
+    std::vector<uint32_t> result;
+    for (size_t index = 1; index + 1 < units.size(); ++index) {
+      if (usableBoundary(independent[index - 1], independent[index], units[index])) {
+        result.push_back(units[index]);
+      } else {
+        options_.blocked.push_back(units[index]);
+      }
+    }
+    return result;
+  }
+
+  TextBackend::ShapedRun shape(const ChunkRange& range, const TextBackend::ShapingContext& context,
+                               std::vector<FontHandle>& faces) {
+    const size_t bytes = range.byteEnd - range.byteStart;
+    if (options_.rejected || bytes > remainingBytes_ || remainingCalls_ == 0) {
+      options_.rejected = true;
+      return {};
+    }
+    remainingBytes_ -= bytes;
+    --remainingCalls_;
+    auto result = shaper_.shapeFragment(range, &context, faces);
+    if (work_.rejected || result.glyphs.size() > bytes * 8u) {
+      options_.rejected = true;
+      return {};
+    }
+    return result;
+  }
+
+  bool canSlice(const Node& node, const std::vector<uint32_t>& cuts) const {
+    std::vector<uint32_t> clusters;
+    clusters.reserve(node.shaped.glyphs.size());
+    for (const auto& glyph : node.shaped.glyphs) {
+      clusters.push_back(glyph.cluster);
+    }
+    std::sort(clusters.begin(), clusters.end());
+    return std::all_of(cuts.begin(), cuts.end(), [&clusters](uint32_t cut) {
+      return std::binary_search(clusters.begin(), clusters.end(), cut);
+    });
+  }
+
+  std::vector<Node> slice(const Node& parent, const std::vector<uint32_t>& cuts) const {
+    std::vector<Node> children(cuts.size() + 1);
+    size_t start = parent.range.byteStart;
+    for (size_t index = 0; index < children.size(); ++index) {
+      const size_t end = index < cuts.size() ? cuts[index] : parent.range.byteEnd;
+      children[index].range = {start, end};
+      children[index].shaped.backward = BackwardShapedGroups(parent.shaped);
+      start = end;
+    }
+    for (size_t index = 0; index < parent.shaped.glyphs.size(); ++index) {
+      const auto& glyph = parent.shaped.glyphs[index];
+      const size_t child = std::upper_bound(cuts.begin(), cuts.end(), glyph.cluster) - cuts.begin();
+      children[child].shaped.glyphs.push_back(glyph);
+      if (!parent.faces.empty()) {
+        children[child].faces.push_back(parent.faces[index]);
+      }
+    }
+    return children;
+  }
+
+  void split(Node parent, const std::vector<uint32_t>& cuts, std::vector<Node>& pending) {
+    if (canSlice(parent, cuts)) {
+      auto children = slice(parent, cuts);
+      pending.insert(pending.end(), std::make_move_iterator(children.begin()),
+                     std::make_move_iterator(children.end()));
+      return;
+    }
+    size_t start = parent.range.byteStart;
+    for (uint32_t end : cuts) {
+      append({start, end}, pending);
+      start = end;
+    }
+    append({start, parent.range.byteEnd}, pending);
+  }
+
+  void append(const ChunkRange& range, std::vector<Node>& pending) {
+    Node node;
+    node.range = range;
+    node.shaped = shape(range, context_, node.faces);
+    pending.push_back(std::move(node));
+  }
+
+  std::vector<WrappingGlyph> logicalMetrics(const Node& node) const {
+    const auto clusters = EmergencyClusters(node.shaped, text_, options_);
+    std::vector<WrappingGlyph> result;
+    result.reserve(clusters.size());
+    double pen = 0.0;
+    for (const auto& cluster : clusters) {
+      size_t byte = cluster.start;
+      const uint32_t cp = decodeUtf8(options_.logicalText, byte);
+      WrappingGlyph item{};
+      item.glyph = cluster.start;
+      item.originalX = pen + cluster.gapBefore;
+      item.originalAdvance = cluster.pen;
+      item.advance = cluster.pen;
+      item.codepoint = cp;
+      item.mode = options_.whiteSpace;
+      item.breakMode = options_.whiteSpace;
+      item.emergencyBreakBefore =
+          std::binary_search(boundaries_.begin(), boundaries_.end(), cluster.start);
+      item.halfCh = options_.halfCh;
+      result.push_back(item);
+      pen = item.originalX + item.advance;
+    }
+    return result;
+  }
+
+  bool knownLineEnd(const Node& node) const {
+    const size_t end = context_.byteOffset + context_.byteLength;
+    if (node.range.byteEnd < end || options_.endOfFlow) {
+      return true;
+    }
+    const size_t next = node.range.byteEnd;
+    return next < options_.logicalText.size() && options_.logicalText[next] == '\n' &&
+           PreservesSegmentBreaks(options_.whiteSpace);
+  }
+
+  void trimCollapsedSpaces(Node& node, std::vector<uint32_t> clusters) {
+    std::sort(clusters.begin(), clusters.end());
+    options_.trimmed.insert(options_.trimmed.end(), clusters.begin(), clusters.end());
+    for (auto& glyph : node.shaped.glyphs) {
+      if (std::binary_search(clusters.begin(), clusters.end(), glyph.cluster)) {
+        glyph.xAdvance = 0.0;
+        glyph.yAdvance = 0.0;
+        glyph.xKern = 0.0;
+        glyph.yKern = 0.0;
+      }
+    }
+  }
+
+  bool collapsedEndSpace(const WrappingGlyph& item) const {
+    return !PreservesSpaces(options_.whiteSpace) && item.codepoint != 0x3000;
+  }
+
+  bool hangsAtEnd(const WrappingGlyph& item, bool softEnd) const {
+    return options_.whiteSpace == WhiteSpace::PreWrap &&
+           (softEnd || item.x + item.advance > options_.measure + 1e-3);
+  }
+
+  void resolveBackwardEndSpaces(Node& node) {
+    if (!knownLineEnd(node)) {
+      return;
+    }
+    auto metrics = logicalMetrics(node);
+    if (metrics.empty()) {
+      return;
+    }
+    AssignWrappingLines(metrics, options_.measure);
+    const bool softEnd = node.range.byteEnd < context_.byteOffset + context_.byteLength;
+    std::vector<uint32_t> trimmed;
+    for (size_t index = metrics.size(); index > 0 && metrics[index - 1].isSpace(); --index) {
+      const auto& item = metrics[index - 1];
+      const uint32_t cluster = static_cast<uint32_t>(item.glyph);
+      if (collapsedEndSpace(item)) {
+        trimmed.push_back(cluster);
+      } else if (hangsAtEnd(item, softEnd)) {
+        options_.hanging.emplace_back(cluster, item.advance);
+      }
+    }
+    trimCollapsedSpaces(node, std::move(trimmed));
+  }
+
+  Node mergeBackward(std::span<Node> nodes) const {
+    if (nodes.size() == 1) {
+      return std::move(nodes.front());
+    }
+    struct Entry {
+      TextBackend::ShapedGlyph glyph;
+      FontHandle face;
+    };
+    size_t count = 0;
+    for (const auto& node : nodes) {
+      count += node.shaped.glyphs.size();
+    }
+    std::vector<Entry> entries;
+    entries.reserve(count);
+    for (const auto& node : nodes) {
+      for (size_t index = 0; index < node.shaped.glyphs.size(); ++index) {
+        entries.push_back(
+            {node.shaped.glyphs[index], node.faces.empty() ? FontHandle() : node.faces[index]});
+      }
+    }
+    std::stable_sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
+      return lhs.glyph.cluster > rhs.glyph.cluster;
+    });
+    Node result;
+    result.range = {nodes.front().range.byteStart, nodes.back().range.byteEnd};
+    result.shaped.backward = true;
+    result.shaped.glyphs.reserve(count);
+    result.faces.reserve(count);
+    for (const auto& entry : entries) {
+      result.shaped.glyphs.push_back(entry.glyph);
+      result.faces.push_back(entry.face);
+    }
+    return result;
+  }
+
+  /// Append \p items after \p metrics with no gap at the junction, retaining internal gaps.
+  static void appendContinuing(std::vector<WrappingGlyph>& metrics,
+                               std::vector<WrappingGlyph> items) {
+    if (items.empty()) {
+      return;
+    }
+    const double shift =
+        metrics.empty()
+            ? 0.0
+            : metrics.back().originalX + metrics.back().originalAdvance - items.front().originalX;
+    for (auto& item : items) {
+      item.originalX += shift;
+      metrics.push_back(item);
+    }
+  }
+
+  /// Plan backward lines after the glyphs already on the line: earlier spans' glyphs on the line
+  /// this chunk continues, then the preceding nodes of this chunk.
+  void appendBackwardLines(Node node, std::vector<Node>& result) {
+    std::vector<WrappingGlyph> metrics;
+    if (continuesIncomingLine()) {
+      metrics = options_.incomingLine;
+    }
+    for (const auto& preceding : result) {
+      appendContinuing(metrics, logicalMetrics(preceding));
+    }
+    const size_t first = metrics.size();
+    appendContinuing(metrics, logicalMetrics(node));
+    if (!metrics.empty()) {
+      AssignWrappingLines(metrics, options_.measure);
+    }
+    std::vector<uint32_t> cuts;
+    for (size_t index = first + 1; index < metrics.size(); ++index) {
+      if (metrics[index].line != metrics[index - 1].line) {
+        cuts.push_back(static_cast<uint32_t>(metrics[index].glyph));
+      }
+    }
+    if (cuts.empty()) {
+      resolveBackwardEndSpaces(node);
+      result.push_back(std::move(node));
+      return;
+    }
+    auto lines = slice(node, cuts);
+    for (auto& line : lines) {
+      resolveBackwardEndSpaces(line);
+      result.push_back(std::move(line));
+    }
+  }
+
+  std::vector<Node> normalLines(std::vector<Node> complete) {
+    std::sort(complete.begin(), complete.end(), [](const Node& lhs, const Node& rhs) {
+      return lhs.range.byteStart < rhs.range.byteStart;
+    });
+    std::vector<Node> result;
+    for (size_t index = 0; index < complete.size();) {
+      if (!BackwardShapedGroups(complete[index].shaped)) {
+        result.push_back(std::move(complete[index++]));
+        continue;
+      }
+      size_t end = index + 1;
+      while (end < complete.size() && BackwardShapedGroups(complete[end].shaped)) {
+        ++end;
+      }
+      appendBackwardLines(mergeBackward(std::span(complete).subspan(index, end - index)), result);
+      index = end;
+    }
+    return result;
+  }
+
+  TextBackend::ShapedRun concatenate(std::vector<Node> complete, std::vector<FontHandle>& faces,
+                                     SmallVector<PreparedShapingFragment, 1>& fragments) {
+    if (options_.rejected) {
+      faces.clear();
+      return {};
+    }
+    complete = normalLines(std::move(complete));
+    std::sort(complete.begin(), complete.end(), [](const Node& lhs, const Node& rhs) {
+      return lhs.range.byteStart < rhs.range.byteStart;
+    });
+    TextBackend::ShapedRun result;
+    fragments.clear();
+    for (const auto& node : complete) {
+      if (node.range.byteStart != context_.byteOffset && BackwardShapedGroups(node.shaped) &&
+          !node.shaped.glyphs.empty()) {
+        options_.visualLineStarts.push_back(node.shaped.glyphs.front().cluster);
+      }
+      const size_t first = result.glyphs.size();
+      fragments.push_back({first, node.shaped.glyphs.size(), BackwardShapedGroups(node.shaped)});
+      result.glyphs.insert(result.glyphs.end(), node.shaped.glyphs.begin(),
+                           node.shaped.glyphs.end());
+      faces.resize(result.glyphs.size());
+      if (!node.faces.empty()) {
+        std::copy(node.faces.begin(), node.faces.end(), faces.begin() + first);
+      }
+    }
+    return result;
+  }
+
+  const ChunkShaper& shaper_;
+  std::string_view text_;
+  EmergencyWrapOptions& options_;
+  TextBackend::ShapingContext context_;
+  size_t remainingBytes_;
+  size_t remainingCalls_;
+  TextBackend::ShapingContext::WorkBudget work_;
+  std::vector<uint32_t> ligatureBoundaries_;
+  std::vector<uint32_t> boundaries_;
+};
+
 /// A shaped chunk retains backend source clusters and separate SVG positioning groups.
 struct PreparedSpanChunk {
   TextBackend::ShapedRun shaped;
+  SmallVector<PreparedShapingFragment, 1> fragments;
   std::vector<uint32_t> positioningClusters;
   /// Per-glyph fallback faces, null where the run's face draws the glyph; empty when it draws all.
   std::vector<FontHandle> faces;
@@ -3735,10 +4642,79 @@ struct PreparedSpanShaping {
   std::vector<bool> groupStarts;
 };
 
+bool AdmitPreparedBytes(EmergencyWrapOptions* emergency, size_t bytes) {
+  if (!emergency) {
+    return true;
+  }
+  constexpr size_t kMaximumBytes = 64u * 1024u * 1024u;
+  if (emergency->preparedBytes > kMaximumBytes ||
+      bytes > kMaximumBytes - emergency->preparedBytes) {
+    emergency->rejected = true;
+    return false;
+  }
+  emergency->preparedBytes += bytes;
+  return emergency->admit(emergency->baseBytes + emergency->preparedBytes);
+}
+
+bool RetainPreparedChunks(EmergencyWrapOptions* emergency, size_t count) {
+  constexpr size_t kMaximumBytes = 64u * 1024u * 1024u;
+  if (count > kMaximumBytes / sizeof(PreparedSpanChunk)) {
+    if (emergency) {
+      emergency->rejected = true;
+    }
+    return !emergency;
+  }
+  return AdmitPreparedBytes(emergency, count * sizeof(PreparedSpanChunk));
+}
+
+bool RetainEmergencyPreparation(EmergencyWrapOptions* emergency,
+                                const PreparedSpanChunk& prepared) {
+  if (!emergency) {
+    return true;
+  }
+  const size_t retained = prepared.shaped.glyphs.capacity() * sizeof(TextBackend::ShapedGlyph) +
+                          prepared.faces.capacity() * sizeof(FontHandle) +
+                          prepared.shaped.glyphs.size() * sizeof(uint32_t) +
+                          prepared.fragments.capacity() * sizeof(PreparedShapingFragment);
+  return AdmitPreparedBytes(emergency, retained);
+}
+
+bool PrepareEmergencyChunk(const ChunkShaper& shaper, std::string_view text,
+                           const ChunkRange& range, EmergencyWrapOptions* emergency,
+                           PreparedSpanChunk& prepared) {
+  if (!emergency) {
+    return true;
+  }
+  EmergencyChunkPlanner planner(shaper, text, *emergency, range);
+  prepared.shaped =
+      planner.prepare(range, std::move(prepared.shaped), prepared.faces, prepared.fragments);
+  return !emergency->rejected;
+}
+
+void PreparePositioningGroups(PreparedSpanChunk& prepared, std::string_view text,
+                              const ByteIndexMappings& mappings, std::vector<bool>& groupStarts) {
+  prepared.positioningClusters.reserve(prepared.shaped.glyphs.size());
+  for (size_t index = 0; index < prepared.shaped.glyphs.size(); ++index) {
+    const auto& glyph = prepared.shaped.glyphs[index];
+    const std::optional<uint32_t> previous =
+        prepared.positioningClusters.empty() ? std::nullopt
+                                             : std::optional(prepared.positioningClusters.back());
+    const uint32_t positioningCluster = ShapingPositioningCluster(glyph, text, previous);
+    prepared.positioningClusters.push_back(positioningCluster);
+    if (positioningCluster < mappings.byteToCharIdx.size()) {
+      groupStarts[mappings.byteToCharIdx[positioningCluster]] = true;
+    }
+  }
+}
+
 PreparedSpanShaping PrepareSpanShaping(const ChunkShaper& shaper, std::string_view text,
                                        const std::vector<ChunkRange>& ranges,
-                                       const ByteIndexMappings& mappings) {
+                                       const ByteIndexMappings& mappings,
+                                       EmergencyWrapOptions* emergency = nullptr) {
   PreparedSpanShaping result;
+  if (!RetainPreparedChunks(emergency, ranges.size())) {
+    return result;
+  }
   result.chunks.reserve(ranges.size());
   size_t codepointCount = 0;
   for (size_t pos = 0; pos < text.size(); ++codepointCount) {
@@ -3748,23 +4724,15 @@ PreparedSpanShaping PrepareSpanShaping(const ChunkShaper& shaper, std::string_vi
   for (const auto& range : ranges) {
     PreparedSpanChunk prepared;
     prepared.shaped = shaper.shape(range, prepared.faces);
-    prepared.positioningClusters.reserve(prepared.shaped.glyphs.size());
-    for (size_t index = 0; index < prepared.shaped.glyphs.size(); ++index) {
-      const auto& glyph = prepared.shaped.glyphs[index];
-      uint32_t positioningCluster = glyph.cluster;
-      // The simple backend reports marks separately. Preserve a zero-advance mark
-      // with its preceding group without merging a separately shaped spacing glyph.
-      if (index != 0 && glyph.cluster < text.size() && glyph.xAdvance == 0.0) {
-        size_t position = glyph.cluster;
-        if (isNonSpacing(decodeUtf8(text, position))) {
-          positioningCluster = prepared.positioningClusters.back();
-        }
-      }
-      prepared.positioningClusters.push_back(positioningCluster);
-      if (positioningCluster < mappings.byteToCharIdx.size()) {
-        result.groupStarts[mappings.byteToCharIdx[positioningCluster]] = true;
-      }
+    prepared.fragments.push_back(
+        {0, prepared.shaped.glyphs.size(), BackwardShapedGroups(prepared.shaped)});
+    if (!PrepareEmergencyChunk(shaper, text, range, emergency, prepared)) {
+      return result;
     }
+    if (!RetainEmergencyPreparation(emergency, prepared)) {
+      return result;
+    }
+    PreparePositioningGroups(prepared, text, mappings, result.groupStarts);
     result.chunks.push_back(std::move(prepared));
   }
   return result;
@@ -3873,6 +4841,11 @@ public:
 
   std::vector<TextRun> run() {
     resolveBaseFont();
+    prepareEmergency_ = params_.inlineSizePx > 0.0 &&
+                        std::any_of(text_.spans.begin(), text_.spans.end(), [](const auto& span) {
+                          return span.overflowWrap != OverflowWrap::Normal &&
+                                 AllowsSoftWrap(span.whiteSpace) && !span.pathSpline;
+                        });
     for (const auto& span : text_.spans) {
       layoutSpan(span);
     }
@@ -3902,6 +4875,8 @@ private:
     std::string_view text;
     std::string controlShapingText;
     std::optional<text_transform::FullWidthText> fullWidthText;
+    EmergencyWrapOptions emergency;
+    std::vector<bool> unitStarts;
     FontHandle font;
     double specifiedFontSizePx = 0.0;
     float fontSizePx = 0.0f;
@@ -4133,13 +5108,38 @@ private:
     return true;
   }
 
-  bool prepareShaping(SpanState& state) {
-    if (!prepareFullWidthShapingText(state)) {
-      return false;
+  bool rejectEmergencySpan() {
+    if (resourceRejected_) {
+      *resourceRejected_ = true;
     }
-    state.chunkRanges = FindSpanShapingRanges(*state.span, state.text, state.xList, state.yList);
-    state.forcedSeparators =
-        FindForcedShapingSeparators(*state.span, state.text, state.chunkRanges);
+    return false;
+  }
+
+  bool prepareEmergencyBoundaries(SpanState& state) {
+    if (!prepareEmergency_) {
+      return true;
+    }
+    state.emergency.reservation.family = TextPathResourceFamily(registry_);
+    if (state.text.size() > (64u * 1024u * 1024u) / 96u) {
+      return rejectEmergencySpan();
+    }
+    state.emergency.baseBytes = state.text.size() * 96u;
+    if (!state.emergency.admit(state.emergency.baseBytes)) {
+      return rejectEmergencySpan();
+    }
+    if (state.span->pathSpline) {
+      graphemeUnits_ = GraphemeBreaker();
+    }
+    for (size_t byte = 0; byte < state.text.size();) {
+      state.unitStarts.push_back(graphemeUnits_.breakBefore(decodeUtf8(state.text, byte)));
+    }
+    if (state.span->pathSpline) {
+      graphemeUnits_ = GraphemeBreaker();
+    }
+    return true;
+  }
+
+  void prepareControlShapingText(SpanState& state) {
     if (state.text.find_first_of("\n\t") != std::string_view::npos) {
       // Shape controls as blank glyphs while keeping byte clusters for line layout and DOM APIs.
       state.controlShapingText = std::string(state.text);
@@ -4150,6 +5150,113 @@ private:
       }
       state.text = state.controlShapingText;
     }
+  }
+
+  bool endsFlatFlow(const TextSpan& span) const {
+    size_t index = static_cast<size_t>(&span - text_.spans.data());
+    while (++index < text_.spans.size()) {
+      const auto& next = text_.spans[index];
+      if (next.hidden || next.textPathFailed || next.end <= next.start) {
+        continue;
+      }
+      return next.pathSpline.has_value() ||
+             (PreservesSegmentBreaks(next.whiteSpace) && next.text.data()[next.start] == '\n');
+    }
+    return true;
+  }
+
+  EmergencyWrapOptions* emergencyOptions(SpanState& state) {
+    const TextSpan& span = *state.span;
+    EmergencyWrapOptions* emergency = nullptr;
+    if (prepareEmergency_ && span.overflowWrap != OverflowWrap::Normal &&
+        AllowsSoftWrap(span.whiteSpace) && !span.pathSpline) {
+      state.emergency.measure = params_.inlineSizePx;
+      state.emergency.letterSpacing = span.letterSpacingPx;
+      state.emergency.wordSpacing = span.wordSpacingPx;
+      state.emergency.backend = &backend_;
+      state.emergency.whiteSpace = span.whiteSpace;
+      state.emergency.endOfFlow = endsFlatFlow(span);
+      state.emergency.logicalText =
+          state.fullWidthText
+              ? std::string_view(state.fullWidthText->text)
+              : std::string_view(span.text.data() + span.start, span.end - span.start);
+      state.emergency.halfCh = state.emergency.logicalText.find('\t') != std::string_view::npos
+                                   ? HalfChAdvance(&backend_, state.run, state.vertical)
+                                   : 0.0;
+      state.emergency.fontSizePx = state.fontSizePx;
+      state.emergency.vertical = state.vertical;
+      state.emergency.orientation = state.orientation;
+      state.emergency.incomingLine = incomingWrapLine(state);
+      state.emergency.incomingByte =
+          state.chunkRanges.empty() ? 0 : state.chunkRanges.front().byteStart;
+      for (size_t byte = 0; byte < state.text.size();) {
+        const size_t start = byte;
+        decodeUtf8(state.text, byte);
+        if (state.unitStarts[state.indexMappings.byteToCharIdx[start]]) {
+          state.emergency.boundaries.push_back(static_cast<uint32_t>(start));
+        }
+      }
+      emergency = &state.emergency;
+    }
+    return emergency;
+  }
+
+  /// True when this span's first glyph cannot continue the line earlier spans left: a text path
+  /// run ends the flow, or the span starts with an absolute inline-axis position.
+  bool startsFreshWrapLine(const SpanState& state) const {
+    if (runs_.empty() || runs_.back().onPath) {
+      return true;
+    }
+    const bool startsHere =
+        !chunkBoundaries_.empty() && chunkBoundaries_.back().runIndex == runs_.size();
+    return startsHere &&
+           (state.vertical ? chunkBoundaries_.back().absoluteY : chunkBoundaries_.back().absoluteX);
+  }
+
+  /// Bounds the lookback so per-span planning stays linear in document size. The count stops as
+  /// soon as it passes the bound, so a long run list costs at most the bound per span.
+  bool exceedsIncomingLookback() const {
+    constexpr size_t kMaxIncomingWrapItems = 4096;
+    if (runs_.size() > kMaxIncomingWrapItems) {
+      return true;
+    }
+    size_t items = runs_.size();
+    for (const auto& run : runs_) {
+      items += run.glyphs.size();
+      if (items > kMaxIncomingWrapItems) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Glyphs that earlier spans leave on the line this span continues, as the inline-size pass will
+  /// place them. Beyond the lookback bound the span plans its backward words against an empty line.
+  std::vector<WrappingGlyph> incomingWrapLine(const SpanState& state) const {
+    if (startsFreshWrapLine(state) || exceedsIncomingLookback()) {
+      return {};
+    }
+    auto flat = CollectWrappingGlyphs(runs_, text_, isVertical(params_.writingMode), &backend_,
+                                      chunkBoundaries_);
+    if (flat.empty() || flat.back().isBreak()) {
+      return {};
+    }
+    ResolveWrappingOrigins(flat, inlineDisplacements_);
+    AssignWrappingLines(flat, params_.inlineSizePx);
+    return LastWrappingLine(flat);
+  }
+
+  bool prepareShaping(SpanState& state) {
+    if (!prepareFullWidthShapingText(state)) {
+      return false;
+    }
+    if (!prepareEmergencyBoundaries(state)) {
+      return false;
+    }
+    state.chunkRanges = FindSpanShapingRanges(*state.span, state.text, state.xList, state.yList);
+    state.forcedSeparators =
+        FindForcedShapingSeparators(*state.span, state.text, state.chunkRanges);
+    prepareControlShapingText(state);
     state.runPenStartX = state.penX;
     state.runPenStartY = state.penY;
     state.indexMappings = buildByteIndexMappings(state.text);
@@ -4165,7 +5272,19 @@ private:
     const ChunkShaper shaper(backend_, state.run, state.text, state.vertical, state.orientation,
                              span.fontVariant, span.fontSynthesisSmallCaps, state.fontKerning,
                              fallback);
-    state.shaping = PrepareSpanShaping(shaper, state.text, state.chunkRanges, state.indexMappings);
+    EmergencyWrapOptions* emergency = emergencyOptions(state);
+    state.shaping =
+        PrepareSpanShaping(shaper, state.text, state.chunkRanges, state.indexMappings, emergency);
+    if (state.emergency.rejected) {
+      return rejectEmergencySpan();
+    }
+    std::sort(state.emergency.visualLineStarts.begin(), state.emergency.visualLineStarts.end());
+    std::sort(state.emergency.hanging.begin(), state.emergency.hanging.end());
+    std::sort(state.emergency.trimmed.begin(), state.emergency.trimmed.end());
+    std::sort(state.emergency.blocked.begin(), state.emergency.blocked.end());
+    state.emergency.blocked.erase(
+        std::unique(state.emergency.blocked.begin(), state.emergency.blocked.end()),
+        state.emergency.blocked.end());
     state.dxList = ResolveGroupDisplacements(
         state.span->pathSpline ? state.span->dxList : state.dxList, state.shaping.groupStarts,
         Lengthd::Extent::X, params_, pendingDx_);
@@ -4187,21 +5306,21 @@ private:
 
   void layoutChunk(SpanState& state, size_t chunkIndex) {
     const PreparedSpanChunk& prepared = state.shaping.chunks[chunkIndex];
-    const auto yOverride = chunkYOverride(state, chunkIndex);
     const KernAdjustment crossKern = resolveCrossKern(state, chunkIndex);
     std::optional<unsigned int> previousPositionedGroup;
-    for (size_t glyphIndex = 0; glyphIndex < prepared.shaped.glyphs.size(); ++glyphIndex) {
-      layoutGlyph(state, chunkIndex, glyphIndex, yOverride, crossKern, previousPositionedGroup);
+    for (const auto& fragment : prepared.fragments) {
+      const auto yOverride = chunkYOverride(state, chunkIndex, fragment.backward);
+      const size_t end = fragment.firstGlyph + fragment.glyphCount;
+      for (size_t glyphIndex = fragment.firstGlyph; glyphIndex < end; ++glyphIndex) {
+        layoutGlyph(state, chunkIndex, glyphIndex, yOverride, crossKern, previousPositionedGroup);
+      }
     }
     updateChunkPredecessor(state, prepared);
   }
 
-  std::optional<double> chunkYOverride(const SpanState& state, size_t chunkIndex) const {
-    const auto& prepared = state.shaping.chunks[chunkIndex];
-    const auto& shaped = prepared.shaped;
-    const bool isRtl = shaped.glyphs.size() > 1 &&
-                       prepared.positioningClusters.front() > prepared.positioningClusters.back();
-    if (!isRtl || chunkIndex == 0) {
+  std::optional<double> chunkYOverride(const SpanState& state, size_t chunkIndex,
+                                       bool backward) const {
+    if (!backward || chunkIndex == 0) {
       return std::nullopt;
     }
     const size_t byteStart = state.chunkRanges[chunkIndex].byteStart;
@@ -4388,9 +5507,17 @@ private:
     glyph.rotateDegrees = rotationFor(*state.span, charIndex, 0.0);
   }
 
+  bool suppressesEmergencySpacing(const SpanState& state, uint32_t cluster) const {
+    return std::binary_search(state.emergency.trimmed.begin(), state.emergency.trimmed.end(),
+                              cluster);
+  }
+
   void advanceVerticalPen(SpanState& state, const PreparedSpanChunk& prepared, size_t glyphIndex,
                           uint32_t codepoint, const TextGlyph& glyph) const {
     state.penY += glyph.yAdvance;
+    if (suppressesEmergencySpacing(state, prepared.shaped.glyphs[glyphIndex].cluster)) {
+      return;
+    }
     if (!backend_.isCursive(codepoint)) {
       state.penY += state.span->letterSpacingPx;
     }
@@ -4501,6 +5628,9 @@ private:
   void advanceHorizontalPen(SpanState& state, const PreparedSpanChunk& prepared, size_t glyphIndex,
                             uint32_t codepoint, const TextBackend::ShapedGlyph& shapedGlyph) const {
     state.penX += shapedGlyph.xAdvance;
+    if (suppressesEmergencySpacing(state, shapedGlyph.cluster)) {
+      return;
+    }
     if (!backend_.isCursive(codepoint)) {
       state.penX += state.span->letterSpacingPx;
     }
@@ -4594,7 +5724,61 @@ private:
     }
   }
 
+  void applyHangingAdvance(const SpanState& state, TextGlyph& glyph, uint32_t cluster,
+                           bool first) const {
+    const auto hanging =
+        std::lower_bound(state.emergency.hanging.begin(), state.emergency.hanging.end(), cluster,
+                         [](const auto& item, uint32_t value) { return item.first < value; });
+    if (hanging != state.emergency.hanging.end() && hanging->first == cluster) {
+      glyph.hangingBefore = true;
+      const double advance = first ? hanging->second : 0.0;
+      if (state.vertical) {
+        glyph.yAdvance = advance;
+      } else {
+        glyph.xAdvance = advance;
+      }
+    }
+  }
+
+  void recordEmergencyBoundaries(SpanState& state) const {
+    if (state.unitStarts.empty() || state.span->pathSpline) {
+      return;
+    }
+    std::vector<uint32_t> clusters;
+    clusters.reserve(state.run.glyphs.size() + 1);
+    for (const auto& glyph : state.run.glyphs) {
+      clusters.push_back(GetPositioningCluster(glyph));
+    }
+    clusters.push_back(static_cast<uint32_t>(state.text.size()));
+    std::sort(clusters.begin(), clusters.end());
+    clusters.erase(std::unique(clusters.begin(), clusters.end()), clusters.end());
+    const auto& mapping = state.indexMappings.byteToCharIdx;
+    for (size_t index = 0; index < state.run.glyphs.size(); ++index) {
+      auto& glyph = state.run.glyphs[index];
+      const uint32_t cluster = GetPositioningCluster(glyph);
+      const bool first =
+          index == 0 || cluster != GetPositioningCluster(state.run.glyphs[index - 1]);
+      applyHangingAdvance(state, glyph, cluster, first);
+      if (!first) {
+        continue;
+      }
+      const uint32_t boundary =
+          index != 0 && GetPositioningCluster(state.run.glyphs[index - 1]) > cluster
+              ? *std::upper_bound(clusters.begin(), clusters.end(), cluster)
+              : cluster;
+      if (boundary < mapping.size()) {
+        glyph.emergencyBreakBefore = state.unitStarts[mapping[boundary]] &&
+                                     !std::binary_search(state.emergency.blocked.begin(),
+                                                         state.emergency.blocked.end(), boundary);
+      }
+      glyph.emergencyLineStart =
+          std::binary_search(state.emergency.visualLineStarts.begin(),
+                             state.emergency.visualLineStarts.end(), cluster);
+    }
+  }
+
   void commitShapedSpan(SpanState& state) {
+    recordEmergencyBoundaries(state);
     updateSpanPredecessor(state);
     updateCurrentPen(state);
     if (state.span->pathSpline) {
@@ -4769,6 +5953,8 @@ private:
     applyTextAnchor(runs_, chunkBoundaries_, text_, vertical, anchorExclusions_);
   }
 
+  bool prepareEmergency_ = false;
+  GraphemeBreaker graphemeUnits_;
   Registry& registry_;
   FontManager& fontManager_;
   TextBackend& backend_;

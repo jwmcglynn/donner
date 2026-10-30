@@ -2381,6 +2381,32 @@ constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAt
 DONNER_CONSTEXPR_MAP auto kValidPresentationAttributes =
     makeCompileTimeMap(kValidPresentationAttributeEntries);
 
+std::optional<ParseDiagnostic> ParseOverflowWrap(PropertyRegistry& registry,
+                                                 const parser::PropertyParseFnParams& params) {
+  return Parse(
+      params,
+      [](const parser::PropertyParseFnParams& value) -> ParseResult<OverflowWrap> {
+        const auto& components = value.components();
+        if (components.size() == 1) {
+          if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+            constexpr std::pair<std::string_view, OverflowWrap> keywords[] = {
+                {"normal", OverflowWrap::Normal},
+                {"break-word", OverflowWrap::BreakWord},
+                {"anywhere", OverflowWrap::Anywhere}};
+            for (const auto& [keyword, policy] : keywords) {
+              if (ident->value.equalsLowercase(keyword)) {
+                return policy;
+              }
+            }
+          }
+        }
+        ParseDiagnostic error;
+        error.reason = "Invalid overflow-wrap value";
+        return error;
+      },
+      &registry.overflowWrap);
+}
+
 using PropertyParseFn = std::optional<ParseDiagnostic> (*)(
     PropertyRegistry& registry, const parser::PropertyParseFnParams& params);
 
@@ -2567,6 +2593,8 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.fontSizeAdjust);
                  }},  //
+                {"overflow-wrap", ParseOverflowWrap},
+                {"word-wrap", ParseOverflowWrap},
                 {"text-transform",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(

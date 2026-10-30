@@ -872,10 +872,10 @@ template <typename PropertyType>
   }
 }
 
-std::optional<std::string> StyleValue(const PropertyRegistry& properties,
-                                      std::string_view attribute,
-                                      const AnimationValueContext& context,
-                                      AnimationResourceBudget& budget) {
+[[gnu::noinline]] std::optional<std::string> StyleValue(const PropertyRegistry& properties,
+                                                        std::string_view attribute,
+                                                        const AnimationValueContext& context,
+                                                        AnimationResourceBudget& budget) {
   std::optional<std::string> result;
   const auto all = properties.allProperties();
   PropertyRegistry::forEachProperty<0, PropertyRegistry::numProperties()>([&](auto index) {

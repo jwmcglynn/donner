@@ -31,6 +31,7 @@
 #include "donner/svg/core/MaskType.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/Overflow.h"
+#include "donner/svg/core/OverflowWrap.h"
 #include "donner/svg/core/PaintOrder.h"
 #include "donner/svg/core/PointerEvents.h"
 #include "donner/svg/core/Stroke.h"
@@ -132,6 +133,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `font-family` | \ref fontFamily | `serif` |
  * | `font-size` | \ref fontSize | `16px` |
  * | `text-transform` | \ref textTransform | `none` |
+ * | `overflow-wrap` (`word-wrap` alias) | \ref overflowWrap | `normal` |
  * | `font-synthesis-small-caps` | \ref fontSynthesisSmallCaps | `auto` |
  * | `font-synthesis-style` | \ref fontSynthesisStyle | `auto` |
  * | `white-space` | \ref whiteSpace | `normal` |
@@ -401,6 +403,10 @@ public:
       "font-size-adjust",
       []() -> std::optional<std::optional<double>> { return std::optional<double>(); }};
 
+  /// Inherited emergency line-breaking policy; word-wrap is an alias of this property.
+  Property<OverflowWrap, PropertyCascade::Inherit> overflowWrap{
+      "overflow-wrap", []() -> std::optional<OverflowWrap> { return OverflowWrap::Normal; }};
+
   /// Supported inherited CSS text-transform operation; defaults to none.
   Property<TextTransform, PropertyCascade::Inherit> textTransform{
       "text-transform", []() -> std::optional<TextTransform> { return TextTransform::None; }};
@@ -525,9 +531,9 @@ public:
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant,
         fontSynthesisSmallCaps, fontSynthesisStyle, fontKerning, fontSizeAdjust, textTransform,
-        whiteSpace, textAnchor, textDecoration, textDecorationThickness, dominantBaseline,
-        writingMode, textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift,
-        alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
+        overflowWrap, whiteSpace, textAnchor, textDecoration, textDecorationThickness,
+        dominantBaseline, writingMode, textOrientation, inlineSize, letterSpacing, wordSpacing,
+        baselineShift, alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
   }
 
   /**

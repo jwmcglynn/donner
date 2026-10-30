@@ -23,6 +23,7 @@
 #include "donner/svg/core/FontSynthesisStyle.h"
 #include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/LengthAdjust.h"
+#include "donner/svg/core/OverflowWrap.h"
 #include "donner/svg/core/PaintOrder.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TextAnchor.h"
@@ -354,6 +355,8 @@ struct ComputedTextComponent {
     bool textPathFailed = false;
     /// Resolved permission to synthesize an oblique face for this span.
     FontSynthesisStyle fontSynthesisStyle = FontSynthesisStyle::Auto;
+    /// Emergency breaking policy from this span's computed style.
+    OverflowWrap overflowWrap = OverflowWrap::Normal;
   };
 
   // Computed spans with positioning data for rendering.

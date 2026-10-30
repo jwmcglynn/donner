@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <deque>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
@@ -14,7 +15,9 @@
 #include "donner/svg/SVGDescElement.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
+#include "donner/svg/SVGLinearGradientElement.h"
 #include "donner/svg/SVGMetadataElement.h"
+#include "donner/svg/SVGPatternElement.h"
 #include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGSVGElement.h"
@@ -1102,6 +1105,127 @@ TEST_F(SVGElementTests, RemoveMarksParentDirty) {
   const auto* parentDirty = parent.entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(parentDirty, nullptr);
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::All));
+}
+
+TEST_F(SVGElementTests, PresentationProbeUnknownNameDoesNotConstructStyle) {
+  auto element = create();
+  ASSERT_FALSE(element.entityHandle().all_of<components::StyleComponent>());
+  EXPECT_THAT(element.trySetPresentationAttribute("custom-geometry-note", "15"),
+              ParseResultIs(false));
+  EXPECT_THAT(element.getAttribute("custom-geometry-note"), testing::Eq(std::nullopt));
+  EXPECT_FALSE(element.entityHandle().all_of<components::StyleComponent>());
+}
+
+TEST_F(SVGElementTests, PresentationProbeCustomXmlAttributeKeepsDataWithoutStyle) {
+  auto element = create();
+  ASSERT_FALSE(element.entityHandle().all_of<components::StyleComponent>());
+  element.setAttribute("data-custom", "17");
+  EXPECT_THAT(element.getAttribute("data-custom"), Optional(RcString("17")));
+  auto selector = css::parser::SelectorParser::Parse("[data-custom='17']");
+  ASSERT_THAT(selector, ParseResultIs(testing::_));
+  css::SelectorMatchOptions<SVGElement> options;
+  const SVGElement& target = element;
+  EXPECT_TRUE(selector.result().matches(target, options).matched);
+  EXPECT_FALSE(element.entityHandle().all_of<components::StyleComponent>());
+}
+
+TEST_F(SVGElementTests, PresentationProbeRetainsGeometryFallbackAndDirtyFlags) {
+  auto rect = createRect();
+  EXPECT_THAT(rect.trySetPresentationAttribute("x", "15"), ParseResultIs(true));
+  EXPECT_THAT(rect.trySetPresentationAttribute("width", "30"), ParseResultIs(true));
+  EXPECT_THAT(rect.x(), LengthIs(15, Lengthd::Unit::None));
+  EXPECT_THAT(rect.width(), LengthIs(30, Lengthd::Unit::None));
+  EXPECT_THAT(rect.getAttribute("x"), Optional(RcString("15")));
+  const auto* dirty = rect.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_THAT(dirty, testing::NotNull());
+  EXPECT_TRUE(dirty->test(components::DirtyFlagsComponent::Shape));
+  EXPECT_TRUE(dirty->test(components::DirtyFlagsComponent::StyleCascade));
+}
+
+TEST_F(SVGElementTests, PresentationProbeTransformRetainsSelectorInvalidation) {
+  auto document = parseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>rect { fill: blue; } [transform] { fill: red; }</style><rect id="target"/>
+  </svg>)svg");
+  auto element = document.querySelector("#target");
+  ASSERT_THAT(element, Optional(testing::_));
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  components::StyleSystem styles;
+  styles.computeAllStyles(document.registry(), warnings);
+  if (!document.registry().ctx().contains<components::RenderTreeState>()) {
+    document.registry().ctx().emplace<components::RenderTreeState>();
+  }
+  auto& renderState = document.registry().ctx().get<components::RenderTreeState>();
+  renderState.hasBeenBuilt = true;
+  renderState.needsFullRebuild = false;
+  renderState.needsFullStyleRecompute = false;
+  EXPECT_THAT(element->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)))));
+  EXPECT_THAT(element->trySetPresentationAttribute("transform", "translate(7 9)"),
+              ParseResultIs(true));
+  EXPECT_THAT(element->getAttribute("transform"), Optional(RcString("translate(7 9)")));
+  EXPECT_TRUE(document.registry().ctx().get<components::RenderTreeState>().needsFullStyleRecompute);
+  styles.computeAllStyles(document.registry(), warnings);
+  EXPECT_THAT(element->getComputedStyle().fill.get(),
+              Optional(PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)))));
+}
+
+TEST_F(SVGElementTests, PresentationProbeGradientTransformRetainsAuthoredName) {
+  auto gradient = SVGLinearGradientElement::Create(document_);
+  EXPECT_THAT(gradient.trySetPresentationAttribute("gradientTransform", "translate(7 9)"),
+              ParseResultIs(true));
+  EXPECT_THAT(gradient.gradientTransform(), TransformEq(Transform2d::Translate({7, 9})));
+  EXPECT_THAT(gradient.getAttribute("gradientTransform"), Optional(RcString("translate(7 9)")));
+  EXPECT_THAT(gradient.getAttribute("transform"), testing::Eq(std::nullopt));
+}
+
+TEST_F(SVGElementTests, PresentationProbePatternTransformRetainsAuthoredName) {
+  auto pattern = SVGPatternElement::Create(document_);
+  EXPECT_THAT(pattern.trySetPresentationAttribute("patternTransform", "translate(7 9)"),
+              ParseResultIs(true));
+  EXPECT_THAT(pattern.patternTransform(), TransformEq(Transform2d::Translate({7, 9})));
+  EXPECT_THAT(pattern.getAttribute("patternTransform"), Optional(RcString("translate(7 9)")));
+  EXPECT_THAT(pattern.getAttribute("transform"), testing::Eq(std::nullopt));
+}
+
+TEST_F(SVGElementTests, StyleStorageSmallPageHasBoundedInitialAllocation) {
+  Registry registry;
+  const Entity entity = registry.create();
+  registry.emplace<components::StyleComponent>(entity);
+  const Registry& readOnly = registry;
+  const auto* storage = readOnly.storage<components::StyleComponent>();
+  ASSERT_THAT(storage, testing::NotNull());
+  EXPECT_EQ(storage->size(), 1u);
+  EXPECT_LE(storage->capacity() * sizeof(components::StyleComponent), 512u * 1024u);
+  testing::Test::RecordProperty("component_bytes",
+                                std::to_string(sizeof(components::StyleComponent)));
+  testing::Test::RecordProperty("allocated_slots", std::to_string(storage->capacity()));
+}
+
+TEST_F(SVGElementTests, StyleStorageGrowthKeepsComponentAddressesAndValues) {
+  Registry registry;
+  constexpr size_t kPage = entt::component_traits<components::StyleComponent>::page_size;
+  std::vector<std::pair<Entity, const components::StyleComponent*>> retained;
+  for (size_t index = 0; index < kPage * 2 + 1; ++index) {
+    const Entity entity = registry.create();
+    auto& style = registry.emplace<components::StyleComponent>(entity);
+    style.properties.overflowWrap.set(
+        index % 2 == 0 ? OverflowWrap::Anywhere : OverflowWrap::Normal, css::Specificity());
+    retained.emplace_back(entity, &style);
+  }
+  const Registry& readOnly = registry;
+  const auto* storage = readOnly.storage<components::StyleComponent>();
+  ASSERT_THAT(storage, testing::NotNull());
+  EXPECT_GT(storage->capacity(), kPage);
+  EXPECT_EQ(storage->size(), retained.size());
+  for (size_t index = 0; index < retained.size(); ++index) {
+    const auto* current = registry.try_get<components::StyleComponent>(retained[index].first);
+    ASSERT_THAT(current, testing::Eq(retained[index].second));
+    EXPECT_THAT(current->properties.overflowWrap.get(),
+                Optional(index % 2 == 0 ? OverflowWrap::Anywhere : OverflowWrap::Normal));
+  }
+  testing::Test::RecordProperty("page_slots", std::to_string(kPage));
+  testing::Test::RecordProperty("used_slots", std::to_string(storage->size()));
+  testing::Test::RecordProperty("allocated_slots", std::to_string(storage->capacity()));
 }
 
 TEST_F(SVGElementTests, TrySetPresentationAttribute) {
