@@ -3317,7 +3317,11 @@ TEST(PropertyRegistry, DecorationShorthandSetsAndResetsEveryLonghand) {
   EXPECT_THAT(properties.textDecoration.get(), Optional(TextDecoration::Underline));
   EXPECT_THAT(properties.textDecorationStyle.get(), Optional(TextDecorationStyle::Dashed));
   EXPECT_THAT(properties.textDecorationColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
-  EXPECT_THAT(properties.textDecorationThickness.get()->value, LengthValueIs(3, Lengthd::Unit::Px));
+  EXPECT_THAT(
+      properties.textDecorationThickness.get(),
+      Optional(testing::AllOf(
+          testing::Field(&TextDecorationThickness::kind, TextDecorationThickness::Kind::Length),
+          testing::Field(&TextDecorationThickness::value, LengthValueIs(3, Lengthd::Unit::Px)))));
 
   // Omitted components reset to their initial values.
   properties.parseStyle("text-decoration:overline");
