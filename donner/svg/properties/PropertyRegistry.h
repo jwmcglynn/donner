@@ -31,6 +31,7 @@
 #include "donner/svg/core/MaskType.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/Overflow.h"
+#include "donner/svg/core/OverflowWrap.h"
 #include "donner/svg/core/PaintOrder.h"
 #include "donner/svg/core/PointerEvents.h"
 #include "donner/svg/core/Stroke.h"
@@ -132,6 +133,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `font-family` | \ref fontFamily | `serif` |
  * | `font-size` | \ref fontSize | `16px` |
  * | `text-transform` | \ref textTransform | `none` |
+ * | `overflow-wrap` (`word-wrap` alias) | \ref overflowWrap | `normal` |
  * | `font-synthesis-small-caps` | \ref fontSynthesisSmallCaps | `auto` |
  * | `font-synthesis-style` | \ref fontSynthesisStyle | `auto` |
  * | `white-space` | \ref whiteSpace | `normal` |
@@ -143,6 +145,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `text-decoration-thickness` | \ref textDecorationThickness | `auto` |
  * | `dominant-baseline` | \ref dominantBaseline | `auto` |
  * | `inline-size` | \ref inlineSize | `0` |
+ * | `text-indent` | \ref textIndent | `0px` |
  */
 class PropertyRegistry {
 public:
@@ -405,6 +408,10 @@ public:
       "font-size-adjust",
       []() -> std::optional<std::optional<double>> { return std::optional<double>(); }};
 
+  /// Inherited emergency line-breaking policy; word-wrap is an alias of this property.
+  Property<OverflowWrap, PropertyCascade::Inherit> overflowWrap{
+      "overflow-wrap", []() -> std::optional<OverflowWrap> { return OverflowWrap::Normal; }};
+
   /// Supported inherited CSS text-transform operation; defaults to none.
   Property<TextTransform, PropertyCascade::Inherit> textTransform{
       "text-transform", []() -> std::optional<TextTransform> { return TextTransform::None; }};
@@ -484,8 +491,8 @@ public:
   /// given length; text greedily wraps to that measure. Not inherited. The initial value `0`
   /// means "no wrapping area" (the text behaves as ordinary single-line SVG text).
   ///
-  /// Donner supports auto-flow only for horizontal writing modes today; see
-  /// \ref donner::svg::TextEngine for the documented limitation.
+  /// Uses Donner's current per-line wrapping and text-anchor profile in horizontal and vertical
+  /// writing modes.
   /// @see https://www.w3.org/TR/SVG2/text.html#InlineSizeProperty
   Property<Lengthd> inlineSize{
       "inline-size", []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
@@ -508,6 +515,12 @@ public:
   /// of a shape/text are painted. Inherited. Defaults to fill, stroke, markers.
   Property<PaintOrder, PropertyCascade::Inherit> paintOrder{
       "paint-order", []() -> std::optional<PaintOrder> { return PaintOrder{}; }};
+
+  /// CSS `text-indent`: inherited first-line start margin in a fixed inline-size text area.
+  /// Absolute lengths and em compute to pixels; percentages resolve against this text area's
+  /// inline measure. `hanging`, `each-line` and other relative units are not supported.
+  Property<Lengthd, PropertyCascade::Inherit> textIndent{
+      "text-indent", []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::Px); }};
 
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
@@ -543,10 +556,10 @@ public:
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant,
         fontSynthesisSmallCaps, fontSynthesisStyle, fontKerning, fontSizeAdjust, textTransform,
-        whiteSpace, textAnchor, textDecoration, textDecorationStyle, textDecorationColor,
-        textDecorationThickness, dominantBaseline, writingMode, textOrientation, inlineSize,
-        letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation,
-        imageRendering, paintOrder);
+        overflowWrap, whiteSpace, textAnchor, textDecoration, textDecorationStyle,
+        textDecorationColor, textDecorationThickness, dominantBaseline, writingMode,
+        textOrientation, inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline,
+        mixBlendMode, isolation, imageRendering, paintOrder, textIndent);
   }
 
   /**
@@ -622,16 +635,24 @@ public:
   /**
    * Resolve font-size from relative units (em, %, ex) to absolute pixels. Must be called after CSS
    * cascade with the parent's computed font-size, since font-size percentages and em units resolve
-   * against the parent (not the viewBox).
+   * against the parent (not the viewBox). Also canonicalizes text-indent absolute lengths and
+   * computes local em lengths against this element's unadjusted computed font-size, before
+   * that value can be inherited. Percentages retain their own-area dependency.
    *
-   * @param parentFontSizePx The parent element's computed font-size in pixels. Use 16.0 (CSS
-   *   initial value) for the root element.
+   * @param parentFontSizePx The parent element's computed font-size in pixels. Use the renderer's
+   *   initial 12px font-size for the root element.
    */
   void resolveFontSize(double parentFontSizePx);
 
   /// Compute font-relative decoration lengths before a descendant explicitly inherits them.
   /// @param rootFontSizePx Root computed font size for rem units.
   void resolveTextDecorationThickness(double rootFontSizePx = 16.0);
+
+  /// Resolve supported inset offsets to computed pixels while retaining percentages.
+  /// Unrepresentable offsets keep an empty clipping region.
+  /// Call after resolving this element's computed font size, before descendants inherit styles.
+  /// @param rootFontSizePx Root element's computed font size in pixels.
+  void resolveInsetClipLengths(double rootFontSizePx);
 
   /**
    * Resolve relative font-weight keywords (`bolder`/`lighter`) against the parent's

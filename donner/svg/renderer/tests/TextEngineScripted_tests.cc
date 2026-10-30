@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -18,6 +20,7 @@
 #include "donner/css/Specificity.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGTextPathElement.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -3663,6 +3666,535 @@ TEST(TextEngineScriptedTest, WhiteSpaceParsedNewlineRetainsRelativeInlinePositio
       LayoutParsedTextPath("<tspan white-space='pre'>A&#10;<tspan dx='20'>B</tspan></tspan>");
   ASSERT_THAT(glyphs, SizeIs(3));
   EXPECT_THAT(glyphs[2].xPosition, DoubleNear(20, 1e-5));
+}
+
+std::vector<TextGlyph> LayoutEmergencyWrap(std::string_view value, std::string_view content,
+                                           std::string_view property = "overflow-wrap",
+                                           std::string_view extraStyle = {}) {
+  ParseWarningSink warnings;
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><path id='p' d='M0 0H500'/>"
+      "<text style='inline-size:22px;" +
+      std::string(property) + ":" + std::string(value) + ";" + std::string(extraStyle) + "'>" +
+      std::string(content) + "</text></svg>";
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_THAT(parsed, ParseResultIs(_));
+  if (!parsed.hasResult()) {
+    return {};
+  }
+  auto document = std::move(parsed).result();
+  auto element = document.querySelector("text");
+  EXPECT_THAT(element, testing::Optional(_));
+  if (!element) {
+    return {};
+  }
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  const auto handle = element->unsafeEntityHandle();
+  engine.prepareForElement(handle, warnings);
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(handle);
+  std::vector<TextGlyph> result;
+  for (const auto& run : geometry.runs) {
+    result.insert(result.end(), run.glyphs.begin(), run.glyphs.end());
+  }
+  return result;
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapBreaksOnlyOtherwiseUnbreakableWords) {
+  const auto normal = LayoutEmergencyWrap("normal", "ABCD");
+  ASSERT_THAT(normal, SizeIs(4));
+  EXPECT_THAT(normal[3].yPosition, DoubleNear(normal[0].yPosition, 1e-5));
+  for (const char* value : {"anywhere", "break-word"}) {
+    SCOPED_TRACE(value);
+    const auto wrapped = LayoutEmergencyWrap(value, "ABCD");
+    ASSERT_THAT(wrapped, SizeIs(4));
+    EXPECT_THAT(wrapped[1].yPosition, DoubleNear(wrapped[0].yPosition, 1e-5));
+    EXPECT_THAT(wrapped[2].yPosition, Gt(wrapped[0].yPosition));
+    EXPECT_THAT(wrapped[2].xPosition, DoubleNear(wrapped[0].xPosition, 1e-5));
+  }
+}
+
+TEST(TextEngineScriptedTest, WordWrapAliasInheritsAcrossTransparentSpans) {
+  const auto wrapped = LayoutEmergencyWrap("break-word", "AB<tspan>CD</tspan>", "word-wrap");
+  ASSERT_THAT(wrapped, SizeIs(4));
+  EXPECT_THAT(wrapped[2].yPosition, Gt(wrapped[0].yPosition));
+  EXPECT_THAT(wrapped[2].xPosition, DoubleNear(wrapped[0].xPosition, 1e-5));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapRetainsNormalOpportunityBeforeEmergencyBreaks) {
+  const auto wrapped = LayoutEmergencyWrap("anywhere", "A BCDE");
+  ASSERT_THAT(wrapped, SizeIs(6));
+  EXPECT_THAT(wrapped[2].yPosition, Gt(wrapped[0].yPosition));
+  EXPECT_THAT(wrapped[3].yPosition, DoubleNear(wrapped[2].yPosition, 1e-5));
+  EXPECT_THAT(wrapped[4].yPosition, Gt(wrapped[2].yPosition));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapKeepsExtendedGraphemesAtomic) {
+  const char* units[] = {"e\xcc\x81", "\xf0\x9f\x87\xba\xf0\x9f\x87\xb8",
+                         "\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb",
+                         "\xf0\x9f\x91\x8d\xf0\x9f\x8f\xbd"};
+  for (const char* unit : units) {
+    SCOPED_TRACE(unit);
+    const auto glyphs = LayoutEmergencyWrap("anywhere", std::string(unit) + "A", "overflow-wrap",
+                                            "inline-size:11px");
+    ASSERT_THAT(glyphs.size(), Gt(2u));
+    const std::string content = std::string(unit) + "A";
+    const auto penY = [&content](const TextGlyph& glyph) {
+      const char32_t codepoint =
+          std::get<0>(Utf8::NextCodepointLenient(std::string_view(content).substr(glyph.cluster)));
+      return glyph.yPosition - (codepoint >= 0x2e80 ? 3.0 : 0.0);
+    };
+    const double baseline = penY(glyphs.front());
+    for (size_t index = 1; index + 1 < glyphs.size(); ++index) {
+      EXPECT_THAT(penY(glyphs[index]), DoubleNear(baseline, 1e-5));
+    }
+    EXPECT_THAT(penY(glyphs.back()), Gt(baseline));
+  }
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapRespectsUnwrappedWhitespaceAndTextPathFlow) {
+  for (const char* whitespace : {"pre", "nowrap"}) {
+    SCOPED_TRACE(whitespace);
+    const auto glyphs = LayoutEmergencyWrap("anywhere", "ABCD", "overflow-wrap",
+                                            std::string("white-space:") + whitespace);
+    ASSERT_THAT(glyphs, SizeIs(4));
+    EXPECT_THAT(glyphs.back().yPosition, DoubleNear(glyphs.front().yPosition, 1e-5));
+  }
+  const auto path = LayoutEmergencyWrap("anywhere", "<textPath href='#p'>ABCD</textPath>");
+  ASSERT_THAT(path, SizeIs(4));
+  EXPECT_THAT(path.back().yPosition, DoubleNear(path.front().yPosition, 1e-5));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapBoundaryUsesCommonAncestorWhitespace) {
+  for (const char* root : {"normal", "nowrap"}) {
+    SCOPED_TRACE(root);
+    const auto glyphs = LayoutEmergencyWrap(
+        "anywhere",
+        "<tspan style='white-space:normal'>A</tspan><tspan style='white-space:normal'>B</tspan>",
+        "overflow-wrap", std::string("inline-size:15px;white-space:") + root);
+    ASSERT_THAT(glyphs, SizeIs(2));
+    EXPECT_THAT(glyphs[1].yPosition > glyphs[0].yPosition, Eq(std::string_view(root) == "normal"));
+  }
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapCommonNoWrapBoundaryRetainsInternalChildBreaks) {
+  const auto glyphs = LayoutEmergencyWrap(
+      "anywhere",
+      "<tspan style='white-space:normal'>ABC</tspan><tspan style='white-space:normal'>D</tspan>",
+      "overflow-wrap", "inline-size:15px;white-space:nowrap");
+  ASSERT_THAT(glyphs, SizeIs(4));
+  EXPECT_THAT(glyphs[1].yPosition, Gt(glyphs[0].yPosition));
+  EXPECT_THAT(glyphs[2].yPosition, Gt(glyphs[1].yPosition));
+  EXPECT_THAT(glyphs[3].yPosition, DoubleNear(glyphs[2].yPosition, 1e-5));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapRetainsGraphemesAcrossMixedStyleSpans) {
+  const auto glyphs = LayoutEmergencyWrap("anywhere",
+                                          "<tspan>Ae</tspan><tspan style='fill:red'>\xcc\x81"
+                                          "B</tspan>");
+  ASSERT_THAT(glyphs, SizeIs(4));
+  EXPECT_THAT(glyphs[2].yPosition, DoubleNear(glyphs[1].yPosition, 1e-5));
+  EXPECT_THAT(glyphs[3].yPosition, Gt(glyphs[2].yPosition));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapUsesInlineAndBlockAxes) {
+  struct Case {
+    const char* style;
+    size_t nextLine;
+    double blockSign;
+  };
+  const Case cases[] = {{"writing-mode:horizontal-tb", 2, 0},
+                        {"writing-mode:vertical-rl;text-orientation:upright", 1, -1},
+                        {"writing-mode:vertical-lr;text-orientation:upright", 1, 1}};
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.style);
+    const auto glyphs = LayoutEmergencyWrap("anywhere", "ABCD", "overflow-wrap", item.style);
+    ASSERT_THAT(glyphs, SizeIs(4));
+    const auto& next = glyphs[item.nextLine];
+    if (item.blockSign == 0) {
+      EXPECT_THAT(next.yPosition, Gt(glyphs[0].yPosition));
+      EXPECT_THAT(next.xPosition, DoubleNear(glyphs[0].xPosition, 1e-5));
+    } else {
+      EXPECT_THAT((next.xPosition - glyphs[0].xPosition) * item.blockSign, Gt(0));
+      EXPECT_THAT(next.yPosition - next.verticalOriginOffset,
+                  DoubleNear(glyphs[0].yPosition - glyphs[0].verticalOriginOffset, 1e-5));
+    }
+  }
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapPreservesFullWidthSourceIndicesAndSvgDeltas) {
+  const auto glyphs = LayoutEmergencyWrap("anywhere", "<tspan dx='0 20 30'>A😀B</tspan>",
+                                          "overflow-wrap", "text-transform:full-width");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[0].cluster, Eq(0u));
+  EXPECT_THAT(glyphs[1].cluster, Eq(1u));
+  EXPECT_THAT(glyphs[2].cluster, Eq(5u));
+  EXPECT_THAT(glyphs[2].yPosition, Gt(glyphs[0].yPosition));
+  EXPECT_THAT(glyphs[2].xPosition - glyphs[0].xPosition, DoubleNear(50, 1e-5));
+}
+
+class VisualKernScriptedBackend : public ScriptedTextBackend {
+public:
+  bool zeroSpaceAdvance = false;
+
+  ShapedRun shapeRun(FontHandle font, float size, std::string_view text, size_t start,
+                     size_t length, bool vertical, FontVariant variant,
+                     bool logical) const override {
+    auto result =
+        ScriptedTextBackend::shapeRun(font, size, text, start, length, vertical, variant, logical);
+    for (size_t index = 0; index < result.glyphs.size(); ++index) {
+      auto& glyph = result.glyphs[index];
+      glyph.xKern = index == 0 ? 0 : 1;
+      glyph.yKern = index == 0 ? 0 : 2;
+      if (zeroSpaceAdvance && text[glyph.cluster] == ' ') {
+        glyph.xAdvance = 0;
+      }
+    }
+    return result;
+  }
+};
+
+struct EmergencyPackingStyle {
+  double letterSpacing = 0;
+  FontKerning kerning = FontKerning::None;
+  size_t columns = 3;
+};
+
+void CheckEmergencyGreedyPacking(bool backward, size_t count, EmergencyPackingStyle style = {}) {
+  SCOPED_TRACE(count);
+  Registry registry;
+  FontManager fonts(registry);
+  auto backend = std::make_unique<VisualKernScriptedBackend>();
+  backend->reverseClusters = backward;
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(std::string(count, 'A'));
+  span.overflowWrap = OverflowWrap::Anywhere;
+  span.fontKerning = style.kerning;
+  span.letterSpacingPx = style.letterSpacing;
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(20);
+  params.inlineSizePx = 31;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(count));
+  for (const auto& glyph : runs[0].glyphs) {
+    const size_t line = glyph.cluster / style.columns;
+    const size_t lineSize = std::min(style.columns, count - line * style.columns);
+    const size_t relative = glyph.cluster % style.columns;
+    const size_t slot = backward ? lineSize - 1 - relative : relative;
+    const double step = 10 + style.letterSpacing + (style.kerning == FontKerning::None ? 0 : 1);
+    EXPECT_THAT(glyph.xPosition, DoubleNear(static_cast<double>(slot) * step, 1e-5));
+    EXPECT_THAT(glyph.yPosition, DoubleNear(static_cast<double>(line) * 20, 1e-5));
+  }
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapGreedilyPacksUnevenLtrWords) {
+  CheckEmergencyGreedyPacking(false, 5);
+  CheckEmergencyGreedyPacking(false, 7);
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapGreedilyPacksUnevenRtlWords) {
+  CheckEmergencyGreedyPacking(true, 5);
+  CheckEmergencyGreedyPacking(true, 7);
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapBackwardWordPlansAcrossStyledSpans) {
+  // A styling-only span boundary inside a backward word must not change where it wraps: the
+  // backward planner accounts for the glyph the preceding span already placed on the line.
+  Registry registry;
+  FontManager fonts(registry);
+  auto backend = std::make_unique<VisualKernScriptedBackend>();
+  backend->reverseClusters = true;
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto first = MakeSpan("A");
+  first.overflowWrap = OverflowWrap::Anywhere;
+  first.fontKerning = FontKerning::None;
+  auto second = MakeSpan("AAAAA");
+  second.startsNewChunk = false;
+  second.overflowWrap = OverflowWrap::Anywhere;
+  second.fontKerning = FontKerning::None;
+  text.spans.push_back(std::move(first));
+  text.spans.push_back(std::move(second));
+  auto params = MakeTextParams(20);
+  params.inlineSizePx = 31;
+  const auto runs = engine.layout(text, params);
+  std::map<double, size_t> glyphsPerLine;
+  for (const auto& run : runs) {
+    for (const auto& glyph : run.glyphs) {
+      ++glyphsPerLine[glyph.yPosition];
+    }
+  }
+  EXPECT_THAT(glyphsPerLine, ElementsAre(testing::Pair(_, 3u), testing::Pair(_, 3u)));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapBackwardHangingSpacesKeepIncomingLineWidth) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts, true);
+  components::ComputedTextComponent text;
+  auto first = MakeSpan("A");
+  first.overflowWrap = OverflowWrap::Anywhere;
+  first.whiteSpace = WhiteSpace::PreWrap;
+  first.fontKerning = FontKerning::None;
+  auto second = MakeSpan("A BBBBB");
+  second.startsNewChunk = false;
+  second.overflowWrap = OverflowWrap::Anywhere;
+  second.whiteSpace = WhiteSpace::PreWrap;
+  second.fontKerning = FontKerning::None;
+  text.spans.push_back(std::move(first));
+  text.spans.push_back(std::move(second));
+  auto params = MakeTextParams(20);
+  params.inlineSizePx = 31;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(2));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(1));
+  EXPECT_THAT(runs[0].glyphs[0],
+              AllOf(GlyphXPositionIs(DoubleNear(0, 1e-5)), GlyphYPositionIs(DoubleNear(0, 1e-5))));
+  const auto& glyphs = runs[1].glyphs;
+  const auto continued = std::find_if(glyphs.begin(), glyphs.end(),
+                                      [](const TextGlyph& glyph) { return glyph.cluster == 0; });
+  ASSERT_THAT(continued, Not(Eq(glyphs.end())));
+  EXPECT_THAT(*continued,
+              AllOf(GlyphXPositionIs(DoubleNear(10, 1e-5)), GlyphYPositionIs(DoubleNear(0, 1e-5))));
+  const auto space = std::find_if(glyphs.begin(), glyphs.end(),
+                                  [](const TextGlyph& glyph) { return glyph.cluster == 1; });
+  ASSERT_THAT(space, Not(Eq(glyphs.end())));
+  EXPECT_THAT(*space,
+              AllOf(GlyphXPositionIs(DoubleNear(0, 1e-5)), GlyphYPositionIs(DoubleNear(0, 1e-5))));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapGreedyMetricsIncludeLetterSpacing) {
+  CheckEmergencyGreedyPacking(false, 7, {.letterSpacing = 3, .columns = 2});
+  CheckEmergencyGreedyPacking(true, 7, {.letterSpacing = 3, .columns = 2});
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapGreedyMetricsIncludeKerning) {
+  CheckEmergencyGreedyPacking(false, 7, {.kerning = FontKerning::Normal, .columns = 2});
+  CheckEmergencyGreedyPacking(true, 7, {.kerning = FontKerning::Normal, .columns = 2});
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapRetainsWordSpacingForAuthoredZeroAdvanceSpace) {
+  Registry registry;
+  FontManager fonts(registry);
+  auto backend = std::make_unique<VisualKernScriptedBackend>();
+  backend->zeroSpaceAdvance = true;
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A B");
+  span.overflowWrap = OverflowWrap::Anywhere;
+  span.fontKerning = FontKerning::None;
+  span.wordSpacingPx = 5;
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(20);
+  params.inlineSizePx = 100;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(3));
+  EXPECT_THAT(runs[0].glyphs[1].xAdvance, DoubleEq(0));
+  EXPECT_THAT(runs[0].glyphs[2].xPosition, DoubleNear(15, 1e-5));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapRtlTrimsNormalEndSpaceIncludingWordSpacing) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts, true);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A BBBBB");
+  span.overflowWrap = OverflowWrap::Anywhere;
+  span.fontKerning = FontKerning::None;
+  span.wordSpacingPx = 5;
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(20);
+  params.inlineSizePx = 31;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  const auto& glyphs = runs[0].glyphs;
+  ASSERT_THAT(glyphs, SizeIs(7));
+  struct Expected {
+    uint32_t cluster;
+    double x;
+    double y;
+  };
+  for (const auto& item : {Expected{0, 0, 0}, {2, 20, 20}, {4, 0, 20}, {5, 10, 40}}) {
+    const auto found = std::find_if(glyphs.begin(), glyphs.end(), [&](const auto& glyph) {
+      return glyph.cluster == item.cluster;
+    });
+    ASSERT_THAT(found, Not(Eq(glyphs.end())));
+    EXPECT_THAT(found->xPosition, DoubleNear(item.x, 1e-5));
+    EXPECT_THAT(found->yPosition, DoubleNear(item.y, 1e-5));
+  }
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapStyleMutationRetainsOriginalDomText) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><text id='t'>A😀BC</text></svg>", warnings);
+  ASSERT_THAT(parsed, ParseResultIs(_));
+  auto document = std::move(parsed).result();
+  auto element = document.querySelector("#t");
+  ASSERT_THAT(element, testing::Optional(_));
+  const auto handle = element->unsafeEntityHandle();
+  Registry& registry = document.registry();
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  for (const char* value : {"normal", "anywhere", "normal"}) {
+    SCOPED_TRACE(value);
+    element->setStyle(std::string("inline-size:22px;text-transform:full-width;overflow-wrap:") +
+                      value);
+    engine.prepareForElement(handle, warnings);
+    const auto& geometry = engine.ensureComputedTextGeometryComponent(handle);
+    ASSERT_THAT(geometry.runs, SizeIs(1));
+    ASSERT_THAT(geometry.runs[0].glyphs, SizeIs(4));
+    const auto& glyphs = geometry.runs[0].glyphs;
+    EXPECT_THAT(glyphs.back().yPosition > glyphs.front().yPosition,
+                Eq(std::string_view(value) == "anywhere"));
+    EXPECT_THAT(engine.getNumberOfChars(handle), Eq(5));
+    EXPECT_THAT(engine.getStartPositionOfChar(handle, 1),
+                Eq(engine.getStartPositionOfChar(handle, 2)));
+    EXPECT_THAT(handle.get<components::TextComponent>().text.str(), Eq("A😀BC"));
+  }
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapKeepsFallbackFacesAndTransformedSourceIndices) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto covering = RegisterFallbackBackedFace(fonts, "Emergency Width Face");
+  ASSERT_THAT(covering, Not(Eq(FontHandle{})));
+  auto backend = std::make_unique<CoverageProbeBackend>();
+  backend->coveringFont = covering;
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A😀BC");
+  span.overflowWrap = OverflowWrap::Anywhere;
+  span.textTransform = TextTransform::FullWidth;
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(20);
+  params.inlineSizePx = 22;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(4));
+  EXPECT_THAT(runs[0].glyphs, testing::Each(Field("font", &TextGlyph::font, Eq(covering))));
+  EXPECT_THAT(runs[0].glyphs, ElementsAre(Field("cluster", &TextGlyph::cluster, Eq(0u)),
+                                          Field("cluster", &TextGlyph::cluster, Eq(1u)),
+                                          Field("cluster", &TextGlyph::cluster, Eq(5u)),
+                                          Field("cluster", &TextGlyph::cluster, Eq(6u))));
+  EXPECT_THAT(runs[0].glyphs.back().yPosition, Gt(runs[0].glyphs.front().yPosition));
+  EXPECT_THAT(text.spans[0].text.str(), Eq("A😀BC"));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapRejectsMetadataBeforeShapingAndReleasesCharges) {
+  class CountingBackend : public ScriptedTextBackend {
+  public:
+    mutable size_t calls = 0;
+    ShapedRun shapeRun(FontHandle font, float size, std::string_view text, size_t start,
+                       size_t length, bool vertical, FontVariant variant,
+                       bool logical) const override {
+      ++calls;
+      return ScriptedTextBackend::shapeRun(font, size, text, start, length, vertical, variant,
+                                           logical);
+    }
+  };
+  Registry registry;
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.geometryBytes = 128;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  registry.ctx().emplace<components::DocumentResourceFamilyContext>(family);
+  FontManager fonts(registry);
+  auto backend = std::make_unique<CountingBackend>();
+  const auto& probe = *backend;
+  TextEngine engine(fonts, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("ABCD");
+  span.overflowWrap = OverflowWrap::Anywhere;
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(20);
+  params.inlineSizePx = 22;
+  EXPECT_THAT(engine.layout(text, params), ElementsAre(RunGlyphsAre(IsEmpty())));
+  EXPECT_THAT(probe.calls, Eq(0u));
+  EXPECT_THAT(family->securityStats().rejected, Eq(true));
+  EXPECT_THAT(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::Geometry),
+              Eq(0u));
+  EXPECT_THAT(text.spans[0].text.str(), Eq("ABCD"));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapDoesNotInventLamAlefLigatures) {
+  for (const char* sequence : {"لا", "لَأ"}) {
+    SCOPED_TRACE(sequence);
+    const std::string text = std::string(sequence) + "A";
+    const auto glyphs = LayoutEmergencyWrap("anywhere", text, "overflow-wrap", "inline-size:11px");
+    ASSERT_THAT(glyphs.size(), testing::Ge(3u));
+    const uint32_t alef = static_cast<uint32_t>(std::string_view(sequence).size() - 2);
+    const auto found = std::find_if(glyphs.begin(), glyphs.end(),
+                                    [alef](const auto& glyph) { return glyph.cluster == alef; });
+    ASSERT_THAT(found, Not(Eq(glyphs.end())));
+    EXPECT_THAT(found->yPosition, Gt(glyphs.front().yPosition));
+    EXPECT_THAT(glyphs.back().yPosition, Gt(found->yPosition));
+  }
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapRetainsWrappedTextLengthSuppression) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts);
+  std::vector<std::tuple<double, double, double>> reference;
+  for (int owner : {0, 1, 2}) {
+    SCOPED_TRACE(owner);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan("ABCD");
+    span.overflowWrap = OverflowWrap::Anywhere;
+    auto params = MakeTextParams(20);
+    params.inlineSizePx = 22;
+    params.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+    if (owner == 1) {
+      params.textLength = Lengthd(200);
+    } else if (owner == 2) {
+      span.textLength = Lengthd(200);
+      span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+    }
+    text.spans.push_back(std::move(span));
+    const auto runs = engine.layout(text, params);
+    ASSERT_THAT(runs, SizeIs(1));
+    ASSERT_THAT(runs[0].glyphs, SizeIs(4));
+    const auto& glyphs = runs[0].glyphs;
+    EXPECT_THAT(glyphs.back().yPosition, Gt(glyphs.front().yPosition));
+    std::vector<std::tuple<double, double, double>> positions;
+    for (const auto& glyph : glyphs) {
+      positions.emplace_back(glyph.xPosition, glyph.yPosition, glyph.xAdvance);
+    }
+    if (owner == 0) {
+      reference = positions;
+    } else {
+      EXPECT_THAT(positions, testing::ContainerEq(reference));
+    }
+  }
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapRetainsGlyphAggregateSourceCompatibility) {
+  const TextGlyph legacy{
+      7,     1,           2, 3, 4, 5, 6, 8, std::nullopt, 9, 1, 1, 1, std::nullopt, 0, std::nullopt,
+      false, FontHandle{}};
+  EXPECT_THAT(legacy.font, Eq(FontHandle{}));
+  EXPECT_THAT(legacy.emergencyBreakBefore, Eq(false));
+  EXPECT_THAT(legacy.emergencyLineStart, Eq(false));
+  EXPECT_THAT(legacy.hangingBefore, Eq(false));
+  testing::Test::RecordProperty("text_glyph_bytes", std::to_string(sizeof(TextGlyph)));
+  testing::Test::RecordProperty(
+      "text_span_bytes", std::to_string(sizeof(components::ComputedTextComponent::TextSpan)));
+  testing::Test::RecordProperty("glyph_font_offset", std::to_string(offsetof(TextGlyph, font)));
+  testing::Test::RecordProperty("glyph_emergency_offset",
+                                std::to_string(offsetof(TextGlyph, emergencyBreakBefore)));
+}
+
+TEST(TextEngineScriptedTest, OverflowWrapWorkBudgetRefusalIsSticky) {
+  TextBackend::ShapingContext::WorkBudget budget{100, 2};
+  EXPECT_THAT(budget.consume(80), Eq(false));
+  EXPECT_THAT(budget.rejected, Eq(true));
+  EXPECT_THAT(budget.consume(1), Eq(false));
+  EXPECT_THAT(budget.bytes, Eq(100u));
+  EXPECT_THAT(budget.calls, Eq(2u));
 }
 
 class KanaPositioningBackend : public ScriptedTextBackend {

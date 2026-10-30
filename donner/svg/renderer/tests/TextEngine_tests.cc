@@ -1241,6 +1241,500 @@ TEST(TextEngineTest, OneCodepointFallbackChunkShapesLikeThePrimaryFace) {
   EXPECT_THAT(layOut("Noto Sans"), testing::ContainerEq(primary));
 }
 
+std::vector<TextGlyph> LayoutEmergencyFull(Registry& registry, FontManager& fonts,
+                                           std::string_view text, std::string_view family,
+                                           double measure, OverflowWrap policy,
+                                           WhiteSpace whiteSpace = WhiteSpace::Normal,
+                                           FontHandle* drawingFace = nullptr) {
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  components::ComputedTextComponent component;
+  auto span = MakeSpan(std::string(text));
+  span.overflowWrap = policy;
+  span.whiteSpace = whiteSpace;
+  component.spans.push_back(std::move(span));
+  auto params = MakeTextParams(40);
+  params.fontFamilies = {RcString(family)};
+  params.inlineSizePx = measure;
+  const auto runs = engine.layout(component, params);
+  EXPECT_THAT(runs, SizeIs(1));
+  if (drawingFace && !runs.empty()) {
+    *drawingFace = runs.front().font;
+  }
+  return runs.empty() ? std::vector<TextGlyph>() : runs.front().glyphs;
+}
+
+std::vector<std::pair<int, uint32_t>> EmergencyGlyphIdentities(
+    const std::vector<TextGlyph>& glyphs) {
+  std::vector<std::pair<int, uint32_t>> result;
+  for (const auto& glyph : glyphs) {
+    result.emplace_back(glyph.glyphIndex, glyph.cluster);
+  }
+  return result;
+}
+
+TEST(TextEngineTest, OverflowWrapContextFragmentsRecordActualBackendProgression) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "Amiri-Regular.ttf", "Emergency Arabic");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  TextBackendFull backend(fonts, registry);
+  const std::string word = "سسس";
+  const auto alone = backend.shapeRun(face, 40, word, 2, 2, false, FontVariant::Normal, false);
+  const TextBackend::ShapingContext context{0, word.size()};
+  const auto fragment = backend.shapeRunInContext(
+      face, 40, word, context, 2, 2, false, TextOrientation::Mixed, FontVariant::Normal, true);
+  ASSERT_THAT(alone.glyphs, SizeIs(1));
+  ASSERT_THAT(fragment.glyphs, SizeIs(1));
+  EXPECT_THAT(alone.backward, testing::Optional(false));
+  EXPECT_THAT(fragment.backward, testing::Optional(true));
+  EXPECT_THAT(fragment.glyphs[0].glyphIndex, Not(testing::Eq(alone.glyphs[0].glyphIndex)));
+}
+
+TEST(TextEngineTest, OverflowWrapAnalysisAdmitsAllSmallCapsFeatureOverrides) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "SourceSansPro-Regular.ttf", "Emergency Native Caps");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  TextBackendFull backend(fonts, registry);
+  ASSERT_THAT(backend.hasSmallCapsFeature(face), testing::Eq(true));
+  const auto normal = backend.shapeRun(face, 40, "abc", 0, 1, false, FontVariant::SmallCaps, false);
+  TextBackend::ShapingContext context{0, 3, TextBackend::ShapingContext::Detected{}};
+  context.suppressOptionalSubstitutions = true;
+  context.suppressRligForAnalysis = true;
+  TextBackend::ShapingContext::WorkBudget budget{1024, 4};
+  context.work = &budget;
+  const auto analysis = backend.shapeRunInContext(
+      face, 40, "abc", context, 0, 1, false, TextOrientation::Mixed, FontVariant::SmallCaps, false);
+  ASSERT_THAT(normal.glyphs, SizeIs(1));
+  ASSERT_THAT(analysis.glyphs, SizeIs(1));
+  EXPECT_THAT(analysis.glyphs[0].glyphIndex, testing::Eq(normal.glyphs[0].glyphIndex));
+  EXPECT_THAT(budget.calls, testing::Eq(3u));
+  EXPECT_THAT(budget.rejected, testing::Eq(false));
+}
+
+TEST(TextEngineTest, OverflowWrapSplitsVerifiedOptionalLigaturesAndPreservesFittingWords) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "NotoSerif-Regular.ttf", "Emergency Latin");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  TextBackendFull backend(fonts, registry);
+  for (const char* text : {"ffi", "ffl"}) {
+    SCOPED_TRACE(text);
+    const auto original = backend.shapeRun(face, 40, text, 0, 3, false, FontVariant::Normal, false);
+    ASSERT_THAT(original.glyphs, SizeIs(1));
+    ASSERT_THAT(original.glyphs[0].glyphIndex, Gt(0));
+    const double measure = original.glyphs[0].xAdvance * 0.6;
+    const auto fitting =
+        LayoutEmergencyFull(registry, fonts, text, "Emergency Latin", 1000, OverflowWrap::Anywhere);
+    ASSERT_THAT(fitting, SizeIs(1));
+    EXPECT_THAT(fitting[0].glyphIndex, testing::Eq(original.glyphs[0].glyphIndex));
+    const auto wrapped = LayoutEmergencyFull(registry, fonts, text, "Emergency Latin", measure,
+                                             OverflowWrap::Anywhere);
+    ASSERT_THAT(wrapped.size(), Gt(1u));
+    EXPECT_THAT(wrapped.back().yPosition, Gt(wrapped.front().yPosition));
+    EXPECT_THAT(wrapped.back().cluster, testing::Eq(2u));
+  }
+}
+
+TEST(TextEngineTest, OverflowWrapSplitsLigatureThatContinuesAWordAcrossSpans) {
+  // A styled span that continues a word owns part of that word's overflow: its ligature exposes
+  // typographic units even though the span alone fits the measure.
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "NotoSerif-Regular.ttf", "Emergency Latin");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  TextBackendFull backend(fonts, registry);
+  const auto letter = backend.shapeRun(face, 40, "A", 0, 1, false, FontVariant::Normal, false);
+  const auto ffi = backend.shapeRun(face, 40, "ffi", 0, 3, false, FontVariant::Normal, false);
+  ASSERT_THAT(letter.glyphs, SizeIs(1));
+  ASSERT_THAT(ffi.glyphs, SizeIs(1));
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  components::ComputedTextComponent component;
+  auto first = MakeSpan("A");
+  first.overflowWrap = OverflowWrap::Anywhere;
+  auto second = MakeSpan("ffi");
+  second.startsNewChunk = false;
+  second.overflowWrap = OverflowWrap::Anywhere;
+  component.spans.push_back(std::move(first));
+  component.spans.push_back(std::move(second));
+  auto params = MakeTextParams(40);
+  params.fontFamilies = {RcString("Emergency Latin")};
+  params.inlineSizePx = letter.glyphs[0].xAdvance + ffi.glyphs[0].xAdvance * 0.6;
+  const auto runs = engine.layout(component, params);
+  ASSERT_THAT(runs, SizeIs(2));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(1));
+  EXPECT_THAT(runs[1].glyphs.size(), Gt(1u));
+  ASSERT_THAT(runs[1].glyphs, Not(testing::IsEmpty()));
+  EXPECT_THAT(runs[1].glyphs.front().yPosition,
+              testing::DoubleNear(runs[0].glyphs.front().yPosition, 1e-5));
+  EXPECT_THAT(runs[1].glyphs.back().yPosition, Gt(runs[0].glyphs.front().yPosition));
+}
+
+TEST(TextEngineTest, OverflowWrapPreservesFittingLigatureBeforeAnOversizedNeighbor) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "NotoSerif-Regular.ttf", "Emergency Latin");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  TextBackendFull backend(fonts, registry);
+  const auto fi = backend.shapeRun(face, 40, "fi", 0, 2, false, FontVariant::Normal, false);
+  const auto ffi = backend.shapeRun(face, 40, "ffi", 0, 3, false, FontVariant::Normal, false);
+  ASSERT_THAT(fi.glyphs, SizeIs(1));
+  ASSERT_THAT(ffi.glyphs, SizeIs(1));
+  ASSERT_THAT(ffi.glyphs[0].xAdvance, Gt(fi.glyphs[0].xAdvance));
+  const double measure = (fi.glyphs[0].xAdvance + ffi.glyphs[0].xAdvance) * 0.5;
+  const auto wrapped = LayoutEmergencyFull(registry, fonts, "fi ffi", "Emergency Latin", measure,
+                                           OverflowWrap::Anywhere);
+  ASSERT_THAT(wrapped.size(), Gt(3u));
+  EXPECT_THAT(wrapped.front().glyphIndex, testing::Eq(fi.glyphs[0].glyphIndex));
+  EXPECT_THAT(wrapped.front().cluster, testing::Eq(0u));
+  EXPECT_THAT(wrapped.back().yPosition, Gt(wrapped.front().yPosition));
+}
+
+std::vector<std::pair<int, uint32_t>> LogicalEmergencyGlyphIdentities(
+    const std::vector<TextGlyph>& glyphs) {
+  auto result = EmergencyGlyphIdentities(glyphs);
+  std::stable_sort(result.begin(), result.end(),
+                   [](const auto& lhs, const auto& rhs) { return lhs.second < rhs.second; });
+  return result;
+}
+
+std::optional<double> EmergencyBaselineAtCluster(const std::vector<TextGlyph>& glyphs,
+                                                 uint32_t cluster) {
+  const auto found = std::find_if(glyphs.begin(), glyphs.end(), [cluster](const TextGlyph& glyph) {
+    return glyph.cluster == cluster;
+  });
+  return found == glyphs.end() ? std::nullopt : std::optional<double>(found->yPosition);
+}
+
+TEST(TextEngineTest, OverflowWrapFallbackRetainsArabicJoiningAndLogicalPrefix) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(LoadResvgFont(fonts, "NotoSans-Regular.ttf", "Emergency Primary"),
+              Not(testing::Eq(FontHandle{})));
+  const auto fallback = LoadResvgFont(fonts, "Amiri-Regular.ttf", "Emergency Arabic");
+  ASSERT_THAT(fallback, Not(testing::Eq(FontHandle{})));
+  const std::string word = "نوشتن";
+  const auto whole =
+      LayoutEmergencyFull(registry, fonts, word, "Emergency Primary", 1000, OverflowWrap::Normal);
+  const auto wrapped =
+      LayoutEmergencyFull(registry, fonts, word, "Emergency Primary", 25, OverflowWrap::Anywhere);
+  ASSERT_THAT(wrapped, SizeIs(whole.size()));
+  EXPECT_THAT(wrapped, Each(Field("font", &TextGlyph::font, testing::Eq(fallback))));
+  EXPECT_THAT(LogicalEmergencyGlyphIdentities(wrapped),
+              testing::ContainerEq(LogicalEmergencyGlyphIdentities(whole)));
+  EXPECT_THAT(EmergencyBaselineAtCluster(wrapped, 0),
+              testing::Optional(DoubleNear(wrapped.front().yPosition, 1e-5)));
+  EXPECT_THAT(EmergencyBaselineAtCluster(wrapped, 8),
+              testing::Optional(Gt(wrapped.front().yPosition)));
+}
+
+TEST(TextEngineTest, OverflowWrapArabicJoiningRetainsWholeWordForms) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "Amiri-Regular.ttf", "Emergency Arabic");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  const std::string word = "نوشتن";
+  const auto whole =
+      LayoutEmergencyFull(registry, fonts, word, "Emergency Arabic", 1000, OverflowWrap::Normal);
+  ASSERT_THAT(whole.size(), Gt(2u));
+  double measure = 0;
+  for (const auto& glyph : whole) {
+    measure = std::max(measure, glyph.xAdvance);
+  }
+  const auto wrapped = LayoutEmergencyFull(registry, fonts, word, "Emergency Arabic", measure,
+                                           OverflowWrap::Anywhere);
+  EXPECT_THAT(LogicalEmergencyGlyphIdentities(wrapped),
+              testing::ContainerEq(LogicalEmergencyGlyphIdentities(whole)));
+  ASSERT_THAT(wrapped, SizeIs(whole.size()));
+  EXPECT_THAT(wrapped.back().yPosition, Gt(wrapped.front().yPosition));
+  const auto prefix = EmergencyBaselineAtCluster(wrapped, 0);
+  const auto suffix = EmergencyBaselineAtCluster(wrapped, 8);
+  ASSERT_THAT(prefix, testing::Optional(_));
+  ASSERT_THAT(suffix, testing::Optional(_));
+  EXPECT_THAT(*prefix, DoubleNear(wrapped.front().yPosition, 1e-5));
+  EXPECT_THAT(*suffix, Gt(*prefix));
+  for (size_t index = 1; index < wrapped.size(); ++index) {
+    if (wrapped[index].yPosition == wrapped[index - 1].yPosition) {
+      EXPECT_THAT(wrapped[index].cluster, testing::Le(wrapped[index - 1].cluster));
+    }
+  }
+}
+
+double EmergencyAnchorCoordinate(TextAnchor anchor, double minimum, double maximum) {
+  switch (anchor) {
+    case TextAnchor::Start: return minimum;
+    case TextAnchor::Middle: return minimum * 0.5 + maximum * 0.5;
+    case TextAnchor::End: return maximum;
+  }
+  return minimum;
+}
+
+void CheckRtlEmergencyCoordinates(TextAnchor anchor) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "Amiri-Regular.ttf", "Emergency Arabic");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("نوشتن");
+  span.overflowWrap = OverflowWrap::Anywhere;
+  span.textAnchor = anchor;
+  span.xList.push_back(Lengthd(50));
+  span.yList.push_back(Lengthd(70));
+  span.dxList.push_back(Lengthd(5));
+  span.dyList.push_back(Lengthd(7));
+  span.rotateList = {5, 20, 35, 50, 65};
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(40);
+  params.fontFamilies = {RcString("Emergency Arabic")};
+  params.inlineSizePx = 30;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].font, testing::Eq(face));
+  const auto& glyphs = runs[0].glyphs;
+  ASSERT_THAT(glyphs, SizeIs(5));
+  const auto metrics = engine.fontVMetrics(face);
+  const double height =
+      (metrics.ascent - metrics.descent + metrics.lineGap) * engine.scaleForEmToPixels(face, 40);
+  size_t line = 0;
+  double baseline = 77;
+  double minimum = glyphs.front().xPosition;
+  double maximum = minimum;
+  for (size_t index = 0; index < glyphs.size(); ++index) {
+    const auto& glyph = glyphs[index];
+    if (glyph.yPosition != baseline) {
+      EXPECT_THAT(EmergencyAnchorCoordinate(anchor, minimum, maximum), DoubleNear(55, 1e-5));
+      ++line;
+      baseline = glyph.yPosition;
+      minimum = glyph.xPosition;
+      maximum = minimum;
+    } else if (index != 0) {
+      EXPECT_THAT(glyph.xPosition - glyphs[index - 1].xPosition,
+                  DoubleNear(glyphs[index - 1].xAdvance, 1e-5));
+    }
+    EXPECT_THAT(glyph.yPosition, DoubleNear(77 + static_cast<double>(line) * height, 1e-5));
+    EXPECT_THAT(glyph.rotateDegrees, DoubleNear(5 + 15 * (glyph.cluster / 2), 1e-5));
+    minimum = std::min(minimum, glyph.xPosition);
+    maximum = std::max(maximum, glyph.xPosition + glyph.xAdvance);
+  }
+  EXPECT_THAT(EmergencyAnchorCoordinate(anchor, minimum, maximum), DoubleNear(55, 1e-5));
+  EXPECT_THAT(line, Gt(0u));
+  EXPECT_THAT(EmergencyBaselineAtCluster(glyphs, 0), testing::Optional(DoubleNear(77, 1e-5)));
+}
+
+TEST(TextEngineTest, OverflowWrapRtlCoordinatesRetainSvgListsAndPerLineAnchors) {
+  for (TextAnchor anchor : {TextAnchor::Start, TextAnchor::Middle, TextAnchor::End}) {
+    SCOPED_TRACE(anchor);
+    CheckRtlEmergencyCoordinates(anchor);
+  }
+}
+
+std::optional<TextGlyph> EmergencyGlyphAtCluster(const std::vector<TextGlyph>& glyphs,
+                                                 uint32_t cluster) {
+  const auto found = std::find_if(glyphs.begin(), glyphs.end(), [cluster](const auto& glyph) {
+    return glyph.cluster == cluster;
+  });
+  return found == glyphs.end() ? std::nullopt : std::optional<TextGlyph>(*found);
+}
+
+TEST(TextEngineTest, OverflowWrapRtlPrefixWordPrecedesEmergencyLines) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(LoadResvgFont(fonts, "Amiri-Regular.ttf", "Emergency Arabic"),
+              Not(testing::Eq(FontHandle{})));
+  const auto glyphs = LayoutEmergencyFull(registry, fonts, "ا نوشتن ا", "Emergency Arabic", 20,
+                                          OverflowWrap::Anywhere);
+  ASSERT_THAT(glyphs, Not(IsEmpty()));
+  const auto prefix = EmergencyBaselineAtCluster(glyphs, 0);
+  const auto word = EmergencyBaselineAtCluster(glyphs, 3);
+  const auto suffix = EmergencyBaselineAtCluster(glyphs, 14);
+  ASSERT_THAT(prefix, testing::Optional(_));
+  ASSERT_THAT(word, testing::Optional(_));
+  ASSERT_THAT(suffix, testing::Optional(_));
+  EXPECT_THAT(*prefix, DoubleNear(glyphs.front().yPosition, 1e-5));
+  EXPECT_THAT(*word, Gt(*prefix));
+  EXPECT_THAT(*suffix, Gt(*word));
+  EXPECT_THAT(EmergencyGlyphAtCluster(glyphs, 2),
+              testing::Optional(Field("xAdvance", &TextGlyph::xAdvance, DoubleEq(0))));
+  EXPECT_THAT(EmergencyGlyphAtCluster(glyphs, 13),
+              testing::Optional(Field("xAdvance", &TextGlyph::xAdvance, DoubleEq(0))));
+}
+
+TEST(TextEngineTest, OverflowWrapRtlPreWrapHangsSourceEndSpacesBeforeVisualContent) {
+  Registry registry;
+  FontManager fonts(registry);
+  ASSERT_THAT(LoadResvgFont(fonts, "Amiri-Regular.ttf", "Emergency Arabic"),
+              Not(testing::Eq(FontHandle{})));
+  const auto glyphs = LayoutEmergencyFull(registry, fonts, "ا نوشتن", "Emergency Arabic", 20,
+                                          OverflowWrap::Anywhere, WhiteSpace::PreWrap);
+  const auto prefix = EmergencyGlyphAtCluster(glyphs, 0);
+  const auto space = EmergencyGlyphAtCluster(glyphs, 2);
+  ASSERT_THAT(prefix, testing::Optional(_));
+  ASSERT_THAT(space, testing::Optional(_));
+  EXPECT_THAT(prefix->xPosition, DoubleNear(0, 1e-5));
+  EXPECT_THAT(space->xAdvance, Gt(0));
+  EXPECT_THAT(space->xPosition + space->xAdvance, DoubleNear(prefix->xPosition, 1e-5));
+  EXPECT_THAT(space->yPosition, DoubleNear(prefix->yPosition, 1e-5));
+  EXPECT_THAT(EmergencyBaselineAtCluster(glyphs, 3), testing::Optional(Gt(prefix->yPosition)));
+}
+
+TEST(TextEngineTest, OverflowWrapRtlPreWrapConditionallyHangsOnlyOverflowingEndSpace) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "Amiri-Regular.ttf", "Emergency Arabic");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  TextBackendFull backend(fonts, registry);
+  const auto pair = backend.shapeRun(face, 40, "لا", 0, 4, false, FontVariant::Normal, false);
+  const auto blank = backend.shapeRun(face, 40, " ", 0, 1, false, FontVariant::Normal, false);
+  ASSERT_THAT(pair.glyphs, SizeIs(2));
+  ASSERT_THAT(blank.glyphs, SizeIs(1));
+  const double spaceWidth = blank.glyphs[0].xAdvance;
+  const double measure = pair.glyphs[0].xAdvance + pair.glyphs[1].xAdvance + spaceWidth * 1.5;
+  const auto glyphs = LayoutEmergencyFull(registry, fonts, "ننننن لا  ", "Emergency Arabic",
+                                          measure, OverflowWrap::Anywhere, WhiteSpace::PreWrap);
+  const auto fitting = EmergencyGlyphAtCluster(glyphs, 15);
+  const auto hanging = EmergencyGlyphAtCluster(glyphs, 16);
+  const auto alef = EmergencyGlyphAtCluster(glyphs, 13);
+  ASSERT_THAT(fitting, testing::Optional(_));
+  ASSERT_THAT(hanging, testing::Optional(_));
+  ASSERT_THAT(alef, testing::Optional(_));
+  EXPECT_THAT(fitting->xAdvance, DoubleNear(spaceWidth, 1e-5));
+  EXPECT_THAT(hanging->xAdvance, DoubleNear(spaceWidth, 1e-5));
+  EXPECT_THAT(fitting->xPosition, DoubleNear(0, 1e-5));
+  EXPECT_THAT(hanging->xPosition, DoubleNear(-spaceWidth, 1e-5));
+  EXPECT_THAT(alef->xPosition, DoubleNear(spaceWidth, 1e-5));
+  EXPECT_THAT(hanging->yPosition, DoubleNear(alef->yPosition, 1e-5));
+}
+
+TEST(TextEngineTest, OverflowWrapRetainsRequiredArabicLigaturesAndIndicSyllables) {
+  struct Case {
+    const char* font;
+    const char* family;
+    const char* text;
+  };
+  const Case cases[] = {{"Amiri-Regular.ttf", "Emergency Arabic", "لا"},
+                        {"Amiri-Regular.ttf", "Emergency Arabic", "لَأ"},
+                        {"Amiri-Regular.ttf", "Emergency Arabic", "ل\u061cا"},
+                        {"NotoSansDevanagari-Regular.ttf", "Emergency Indic", "क्षि"}};
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.family);
+    Registry registry;
+    FontManager fonts(registry);
+    const auto face = LoadResvgFont(fonts, item.font, item.family);
+    ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+    TextBackendFull probe(fonts, registry);
+    const auto original = probe.shapeRun(face, 40, item.text, 0, std::string_view(item.text).size(),
+                                         false, FontVariant::Normal, false);
+    SCOPED_TRACE(testing::PrintToString(original.glyphs));
+    const auto whole =
+        LayoutEmergencyFull(registry, fonts, item.text, item.family, 1000, OverflowWrap::Normal);
+    ASSERT_THAT(whole, Not(IsEmpty()));
+    const auto wrapped =
+        LayoutEmergencyFull(registry, fonts, item.text, item.family, 1, OverflowWrap::Anywhere);
+    EXPECT_THAT(EmergencyGlyphIdentities(wrapped),
+                testing::ContainerEq(EmergencyGlyphIdentities(whole)));
+    ASSERT_THAT(wrapped, SizeIs(whole.size()));
+    for (size_t index = 0; index < whole.size(); ++index) {
+      EXPECT_THAT(wrapped[index].yPosition, DoubleNear(whole[index].yPosition, 1e-5));
+    }
+  }
+}
+
+TEST(TextEngineTest, OverflowWrapRetainsExistingSeparateSpanArabicShaping) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "Amiri-Regular.ttf", "Emergency Arabic");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  TextEngine engine(fonts, registry, std::make_unique<TextBackendFull>(fonts, registry));
+  components::ComputedTextComponent text;
+  text.spans = {MakeSpan("ل"), MakeSpan("ا")};
+  text.spans[1].startsNewChunk = false;
+  auto params = MakeTextParams(40);
+  params.fontFamilies = {RcString("Emergency Arabic")};
+  params.inlineSizePx = 1;
+  const auto normal = engine.layout(text, params);
+  ASSERT_THAT(normal, SizeIs(2));
+  text.spans[0].overflowWrap = OverflowWrap::Anywhere;
+  text.spans[1].overflowWrap = OverflowWrap::Anywhere;
+  const auto wrapped = engine.layout(text, params);
+  ASSERT_THAT(wrapped, SizeIs(2));
+  for (size_t index = 0; index < 2; ++index) {
+    ASSERT_THAT(normal[index].glyphs, SizeIs(1));
+    ASSERT_THAT(wrapped[index].glyphs, SizeIs(1));
+    EXPECT_THAT(wrapped[index].font, testing::Eq(face));
+    EXPECT_THAT(wrapped[index].glyphs[0].glyphIndex,
+                testing::Eq(normal[index].glyphs[0].glyphIndex));
+    const std::string key = "span_" + std::to_string(index);
+    testing::Test::RecordProperty(key + "_original_glyph",
+                                  std::to_string(normal[index].glyphs[0].glyphIndex));
+    testing::Test::RecordProperty(key + "_wrapped_glyph",
+                                  std::to_string(wrapped[index].glyphs[0].glyphIndex));
+    testing::Test::RecordProperty(key + "_wrapped_baseline",
+                                  std::to_string(wrapped[index].glyphs[0].yPosition));
+  }
+  EXPECT_THAT(wrapped[1].glyphs[0].yPosition, Gt(wrapped[0].glyphs[0].yPosition));
+}
+
+TEST(TextEngineTest, OverflowWrapRetainsRealEmojiGraphemes) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "NotoColorEmoji.ttf", "Emergency Emoji");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  for (const char* unit : {"👩\u200d💻", "👍🏽", "🇺🇸", "❤️"}) {
+    SCOPED_TRACE(unit);
+    const std::string text = std::string(unit) + "😁";
+    FontHandle drawingFace;
+    const auto whole = LayoutEmergencyFull(registry, fonts, text, "Emergency Emoji", 1000,
+                                           OverflowWrap::Normal, WhiteSpace::Normal, &drawingFace);
+    ASSERT_THAT(whole, SizeIs(2));
+    EXPECT_THAT(drawingFace, testing::Eq(face));
+    for (const auto& glyph : whole) {
+      EXPECT_THAT(glyph.font ? glyph.font : drawingFace, testing::Eq(face));
+    }
+    const auto wrapped =
+        LayoutEmergencyFull(registry, fonts, text, "Emergency Emoji", 1, OverflowWrap::Anywhere);
+    EXPECT_THAT(EmergencyGlyphIdentities(wrapped),
+                testing::ContainerEq(EmergencyGlyphIdentities(whole)));
+    ASSERT_THAT(wrapped, SizeIs(2));
+    EXPECT_THAT(wrapped[1].cluster, testing::Eq(std::string_view(unit).size()));
+    EXPECT_THAT(wrapped[1].yPosition, Gt(wrapped[0].yPosition));
+  }
+}
+
+TEST(TextEngineTest, OverflowWrapBoundsContextAndFragmentWorkForManyLigatures) {
+  Registry registry;
+  FontManager fonts(registry);
+  const auto face = LoadResvgFont(fonts, "NotoSerif-Regular.ttf", "Emergency Latin");
+  ASSERT_THAT(face, Not(testing::Eq(FontHandle{})));
+  auto backend = std::make_unique<TextBackendFull>(fonts, registry);
+  const auto& probe = *backend;
+  TextEngine engine(fonts, registry, std::move(backend));
+  std::string source;
+  for (size_t index = 0; index < 100; ++index) {
+    source += "ffi";
+  }
+  components::ComputedTextComponent text;
+  auto span = MakeSpan(source);
+  span.overflowWrap = OverflowWrap::Anywhere;
+  text.spans.push_back(std::move(span));
+  auto params = MakeTextParams(40);
+  params.fontFamilies = {RcString("Emergency Latin")};
+  params.inlineSizePx = 20;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(1));
+  ASSERT_THAT(runs[0].glyphs.size(), Gt(100u));
+  for (const auto& glyph : runs[0].glyphs) {
+    EXPECT_THAT(glyph.xPosition + glyph.xAdvance, testing::Le(20.001));
+  }
+  EXPECT_THAT(probe.detectedContextBytesForTesting(), testing::Le(source.size() * 2u));
+  EXPECT_THAT(probe.shapedBytesForTesting(),
+              testing::AllOf(Gt(source.size()), testing::Le(source.size() * 128u)));
+  testing::Test::RecordProperty("context_detection_bytes",
+                                std::to_string(probe.detectedContextBytesForTesting()));
+  testing::Test::RecordProperty("shaped_range_bytes",
+                                std::to_string(probe.shapedBytesForTesting()));
+}
+
 #ifdef DONNER_TEXT_FULL
 struct NativeKanaPositioningCase {
   std::string name;

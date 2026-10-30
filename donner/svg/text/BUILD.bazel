@@ -50,11 +50,14 @@ donner_cc_library(
 donner_cc_library(
     name = "text_engine",
     srcs = [
+        "GraphemeBreak.cc",
         "TextEngine.cc",
         "TextTransform.cc",
     ],
     hdrs = [
         "FullWidthMapping.h",
+        "GraphemeBreak.h",
+        "GraphemeProperties.h",
         "TextEngine.h",
         "TextEngineHelpers.h",
         "TextPathWarp.h",
@@ -235,6 +238,16 @@ donner_cc_test(
 donner_cc_test(
     name = "text_transform_tests",
     srcs = ["tests/TextTransform_tests.cc"],
+    deps = [
+        ":text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "grapheme_break_tests",
+    srcs = ["tests/GraphemeBreak_tests.cc"],
+    data = ["tests/unicode/GraphemeBreakTest.txt"],
     deps = [
         ":text_engine",
         "@com_google_gtest//:gtest_main",

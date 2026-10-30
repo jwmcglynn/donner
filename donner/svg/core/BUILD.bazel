@@ -36,6 +36,7 @@ cc_library(
         "MixBlendMode.h",
         "NonScalingStroke.h",
         "Overflow.h",
+        "OverflowWrap.h",
         "PaintOrder.h",
         "Pattern.h",
         "PointerEvents.h",

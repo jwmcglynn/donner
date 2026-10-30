@@ -1,6 +1,7 @@
 /// @file
 /// @brief C++ allocation and peak-live-requested-byte ceilings for SVG parsing.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -16,8 +17,11 @@
 #include <thread>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/benchmarks/SvgParseAllocationTracker.h"
+#include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 
 namespace donner::benchmarks {
 namespace {
@@ -34,8 +38,8 @@ struct ParseAllocationBudget {
 
 /// Broad resource ceiling with portability headroom for standard-library layout differences.
 // Inline synthesis, decoration and text-transform properties add fixed storage to each allocated
-// style slot. Keep byte headroom for that metadata while retaining the allocation-call work
-// ceiling.
+// style slot. Keep byte headroom for that metadata and fixed rounded-inset radii while retaining
+// the allocation-call work ceiling.
 constexpr ParseAllocationBudget kRepeatedAttributesBudget = {
     .allocationCalls = 16'500,
     .allocationBytes = 7'900'000,
@@ -44,7 +48,7 @@ constexpr ParseAllocationBudget kRepeatedAttributesBudget = {
 };
 
 /// Broad resource ceiling with portability headroom for standard-library layout differences.
-/// The decoration line, style and color properties add fixed storage to each style slot here too.
+// Clip and decoration properties add fixed storage to each style slot, not allocation calls.
 constexpr ParseAllocationBudget kDonnerSplashBudget = {
     .allocationCalls = 26'500,
     .allocationBytes = 10'850'000,
@@ -209,6 +213,47 @@ TEST(AllocationTrackerTest, RejectsOverlappingScopes) {
         parse_allocations::Scope second;
       },
       "");
+}
+
+std::optional<Snapshot> MeasurePathClipRedraw(int childCount) {
+  std::string data = "M0 0";
+  for (int i = 0; i < 2000; ++i) {
+    data += "H1V1H0V0";
+  }
+  std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+      "<g style='clip-path:path(\"" +
+      data + "\") view-box'>";
+  for (int i = 0; i < childCount; ++i) {
+    source += "<rect width='64' height='64' clip-path='inherit'/>";
+  }
+  source += "</g></svg>";
+  svg::RendererTinySkia renderer;
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = SVGParser::ParseSVG(source, warnings);
+  EXPECT_THAT(parsed, NoParseError());
+  if (!parsed.hasResult()) {
+    return std::nullopt;
+  }
+  auto document = std::move(parsed).result();
+  document.setCanvasSize(64, 64);
+  renderer.draw(document);
+  document.svgElement().setTransform(Transform2d::Translate({1, 0}));
+  parse_allocations::Scope scope;
+  renderer.draw(document);
+  const Snapshot snapshot = scope.stop();
+  return snapshot;
+}
+
+TEST(SvgParseAllocationTest, PathClipDrawStopsCopyingAfterGeometryRefusal) {
+  const auto smaller = MeasurePathClipRedraw(64);
+  const auto larger = MeasurePathClipRedraw(128);
+  ASSERT_THAT(smaller, testing::Optional(testing::_));
+  ASSERT_THAT(larger, testing::Optional(testing::_));
+  PrintSnapshot("path_clip_draw_64", *smaller);
+  PrintSnapshot("path_clip_draw_128", *larger);
+  // Both draws exhaust geometry work; the larger rejected tail needs only small instance records.
+  EXPECT_LE(larger->allocationBytes, smaller->allocationBytes + 1024u * 1024u);
 }
 
 TEST(SvgParseAllocationTest, RepeatedAttributes) {

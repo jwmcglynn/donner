@@ -223,8 +223,7 @@ percentages use reference height. A zero radius on either axis produces an empty
 `circle_clip_path_tests` and `properties_tests` targets cover ellipse parsing, reference boxes,
 independent axis resolution, transformed/nested clips and invalid declaration fallback. A single
 `closest-side` or `farthest-side` keyword selects both radii. Corner extent keywords and `calc()`
-radii are not supported; explicit radii use the two-value form. Inset and path CSS clipping
-functions remain unsupported.
+radii are not supported; explicit radii use the two-value form.
 
 `clip-path: polygon()` supports comma-separated length/percentage vertices, optional `nonzero`
 or `evenodd` interior rules, and the same SVG reference boxes. Vertices may lie outside the
@@ -234,6 +233,38 @@ render preparation admits all polygon work before constructing paths. Retained v
 charged for each computed style, including explicitly inherited copies. Polygon corner rounding
 and `calc()` coordinates are unsupported. `polygon_clip_path_tests`, `properties_tests` and
 `shape_system_tests` cover rendering, nested rules, grammar and resource refusal.
+
+`clip-path: inset()` supports one to four offsets with margin-style expansion, negative offsets,
+and the same SVG reference boxes. Accepted units are absolute lengths, `em`, `rem`, and percentages.
+Lengths compute to pixels using the declaring element's computed font size and actual root font
+size before explicit inheritance. Horizontal percentages use reference width; vertical percentages
+use reference height. The font-metric units `ex`/`ch` and viewport units `vw`/`vh`/`vmin`/`vmax` are
+rejected until their computed-value context is available. Unrepresentable computed lengths produce
+an empty clip. Oversized opposing insets reduce to zero area, which
+produces an empty clipping region rather than preserving an earlier declaration. Optional `round`
+radii accept one to four horizontal values and an optional slash with one to four vertical values,
+using the same supported units. Radius percentages use the original reference box dimensions;
+all corners share one overlap reduction constrained by the used inset rectangle. Negative or
+nonfinite radii invalidate the declaration, and a zero radius on either axis makes a square corner.
+Fixed inline radius arrays add no dynamic radius storage; rounded path construction admits its
+maximum command and point work before allocating geometry. `calc()` remains unsupported.
+`inset_clip_path_tests`, `properties_tests` and `shape_system_tests` cover exact rendering, nested
+clips, grammar, inheritance, mutation, numeric limits and work refusal. See the
+[CSS Shapes inset definition](https://drafts.csswg.org/css-shapes-1/#funcdef-inset).
+
+`clip-path: path()` supports quoted SVG path data with an optional `nonzero` or `evenodd` rule,
+using the existing SVG path parser and the same reference boxes. Coordinates are pixel offsets
+from the reference-box origin; selecting a box translates the path without scaling it. Every open
+contour closes for clipping. Malformed or empty data rejects the entire declaration; valid
+zero-area paths produce empty clips. The function's interior rule takes precedence over SVG
+`clip-rule`. Decoded strings are limited to 64 KiB before parsing, command and point expansion
+uses the SVG parser's limits, and computed styles charge retained path-vector capacities including
+inherited copies. Render preparation reserves validation, copy and contour-closing work before
+allocation and rejects unrepresentable translated coordinates or extents. `path_clip_path_tests`,
+`properties_tests`, `style_system_tests` and `shape_system_tests` cover these contracts.
+Path data accepts SVG numeric coordinates, not CSS units, percentages or `calc()`.
+See [CSS Shapes path()](https://drafts.csswg.org/css-shapes-1/#funcdef-basic-shape-path) and
+[CSS Masking reference boxes](https://drafts.csswg.org/css-masking-1/#the-clip-path).
 
 The plain `circle-shorthand.svg` comparison is restored. The stroke-box and view-box PNGs use an
 opaque white backdrop, while Donner's RGBA API retains transparency outside painted content.

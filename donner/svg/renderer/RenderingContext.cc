@@ -504,7 +504,7 @@ public:
     }
 
     if (!isShadowOnlyInLightTree) {
-      if (const auto clip = properties.clipPath.get()) {
+      if (const ClipPath* clip = properties.clipPath.getStoredValue()) {
         instantiateClipPath(dataHandle, styleEntity, instance, *clip);
       }
 
@@ -652,7 +652,7 @@ public:
 
     const auto& properties = style->properties.value();
     const std::vector<FilterEffect>* filterEffects = properties.filter.getStoredValue();
-    return properties.clipPath.get().has_value() || properties.mask.get().has_value() ||
+    return properties.clipPath.getStoredValue() != nullptr || properties.mask.get().has_value() ||
            (filterEffects != nullptr && !filterEffects->empty());
   }
 
@@ -831,6 +831,12 @@ public:
     if (const auto* polygon = std::get_if<PolygonClipPath>(&clip.value)) {
       return ShapeSystem().polygonClipPath(entity, *polygon, circleClipBudget_);
     }
+    if (const auto* inset = std::get_if<InsetClipPath>(&clip.value)) {
+      return ShapeSystem().insetClipPath(entity, *inset, circleClipBudget_);
+    }
+    if (const auto* path = std::get_if<PathClipPath>(&clip.value)) {
+      return ShapeSystem().pathClipPath(entity, *path, circleClipBudget_);
+    }
     return ShapeSystem().ellipseClipPath(entity, std::get<EllipseClipPath>(clip.value),
                                          circleClipBudget_);
   }
@@ -838,10 +844,11 @@ public:
   bool collectNestedClipForEntity(EntityHandle entity, const ComputedPathComponent* clipPathData,
                                   ClipPathCollection& collection) {
     const auto* computedStyle = entity.try_get<ComputedStyleComponent>();
-    if (!computedStyle || !computedStyle->properties->clipPath.get()) {
+    const ClipPath* clip =
+        computedStyle ? computedStyle->properties->clipPath.getStoredValue() : nullptr;
+    if (!clip) {
       return true;
     }
-    const auto clip = computedStyle->properties->clipPath.get();
     if (!std::holds_alternative<Reference>(clip->value)) {
       const Transform2d referenceFromEntity =
           LayoutSystem().getAbsoluteTransformComponent(entity).worldFromEntity;
@@ -850,8 +857,7 @@ public:
                                     clip->clipRule(), true, collection.layer + 1);
       return true;
     }
-    const ResolvedClipPath resolved =
-        resolveClipPath(entity, computedStyle->properties->clipPath.get().value());
+    const ResolvedClipPath resolved = resolveClipPath(entity, *clip);
     if (!resolved.valid() || collection.guard.hasRecursion(resolved.reference.handle)) {
       return true;
     }
@@ -926,7 +932,7 @@ public:
     const auto& [dataEntity, textEntity, clipPathData, computedStyle, isTextClipChild] = *geometry;
     const auto& style = computedStyle->properties.value();
     // Keep text glyphs separate for evenodd; reject nested clips until layers preserve groups.
-    if (isTextClipChild && style.clipPath.get()) {
+    if (isTextClipChild && style.clipPath.getStoredValue()) {
       collection.valid = false;
       return;
     }

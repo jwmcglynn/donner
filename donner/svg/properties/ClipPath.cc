@@ -6,6 +6,7 @@
 
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
+#include "donner/svg/parser/PathParser.h"
 #include "donner/svg/parser/PointsListParser.h"
 
 namespace donner::svg {
@@ -49,8 +50,9 @@ std::optional<Lengthd> FiniteLength(const Component& component, bool allowUserUn
 }
 
 /// Fixed storage bounds both the argument grammar and its allocation cost.
-struct Arguments {
-  std::array<const Component*, 7> values{};
+template <std::size_t Capacity>
+struct BoundedArguments {
+  std::array<const Component*, Capacity> values{};
   std::size_t size = 0;
 
   bool append(std::span<const Component> components) {
@@ -66,6 +68,8 @@ struct Arguments {
     return true;
   }
 };
+
+using Arguments = BoundedArguments<7>;
 
 /// -1 means a length or center, 0 a horizontal edge, 1 a vertical edge.
 int PositionAxis(const Component& component) {
@@ -327,16 +331,139 @@ ParseResult<ClipPath> ParsePolygonFunction(const css::Function& function, Radial
   return InvalidShape();
 }
 
+std::optional<Lengthd> FiniteInsetLength(const Component& component, bool allowUserUnits) {
+  const auto length = FiniteLength(component, allowUserUnits);
+  if (!length) {
+    return std::nullopt;
+  }
+  switch (length->unit) {
+    case Lengthd::Unit::Ex:
+    case Lengthd::Unit::Ch:
+    case Lengthd::Unit::Vw:
+    case Lengthd::Unit::Vh:
+    case Lengthd::Unit::Vmin:
+    case Lengthd::Unit::Vmax: return std::nullopt;
+    default: return length;
+  }
+}
+
+bool ParseInsetLengths(std::span<const Component* const> args, std::array<Lengthd, 4>& values,
+                       bool allowUserUnits, bool nonNegative) {
+  if (args.empty() || args.size() > values.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < args.size(); ++i) {
+    const auto length = FiniteInsetLength(*args[i], allowUserUnits);
+    if (!length || (nonNegative && length->value < 0)) {
+      return false;
+    }
+    values[i] = *length;
+  }
+  if (args.size() == 1) {
+    values[1] = values[0];
+  }
+  if (args.size() < 3) {
+    values[2] = values[0];
+  }
+  if (args.size() < 4) {
+    values[3] = values[1];
+  }
+  return true;
+}
+
+bool ParseInsetRadii(std::span<const Component* const> args, InsetClipPath& inset,
+                     bool allowUserUnits) {
+  std::size_t slash = 0;
+  while (slash < args.size()) {
+    const auto* delimiter = args[slash]->tryGetToken<css::Token::Delim>();
+    if (delimiter && delimiter->value == '/') {
+      break;
+    }
+    ++slash;
+  }
+  if (!ParseInsetLengths(args.first(slash), inset.radiiX, allowUserUnits, true)) {
+    return false;
+  }
+  if (slash == args.size()) {
+    inset.radiiY = inset.radiiX;
+    return true;
+  }
+  return ParseInsetLengths(args.subspan(slash + 1), inset.radiiY, allowUserUnits, true);
+}
+
+ParseResult<ClipPath> ParseInsetFunction(const css::Function& function, RadialClipPath::Box box,
+                                         bool allowUserUnits) {
+  BoundedArguments<14> args;
+  if (!args.append(function.values)) {
+    return InvalidShape();
+  }
+  const std::span<const Component* const> values(args.values.data(), args.size);
+  std::size_t round = 0;
+  while (round < values.size() && !IsIdent(*values[round], "round")) {
+    ++round;
+  }
+  InsetClipPath inset;
+  inset.box = box;
+  if (!ParseInsetLengths(values.first(round), inset.offsets, allowUserUnits, false)) {
+    return InvalidShape();
+  }
+  if (round < values.size() && !ParseInsetRadii(values.subspan(round + 1), inset, allowUserUnits)) {
+    return InvalidShape();
+  }
+  return ClipPath(std::move(inset));
+}
+
+bool ParsePathRule(const Arguments& args, ClipRule& rule) {
+  if (args.size == 1) {
+    return true;
+  }
+  if (args.size != 3 ||
+      (!IsIdent(*args.values[0], "evenodd") && !IsIdent(*args.values[0], "nonzero")) ||
+      !args.values[1]->isToken<css::Token::Comma>()) {
+    return false;
+  }
+  rule = IsIdent(*args.values[0], "evenodd") ? ClipRule::EvenOdd : ClipRule::NonZero;
+  return true;
+}
+
+ParseResult<ClipPath> ParsePathFunction(const css::Function& function, RadialClipPath::Box box) {
+  Arguments args;
+  PathClipPath path;
+  path.box = box;
+  if (!args.append(function.values) || !ParsePathRule(args, path.rule)) {
+    return InvalidShape();
+  }
+  const auto* string = args.values[args.size - 1]->tryGetToken<css::Token::String>();
+  if (!string || string->value.size() > PathClipPath::kMaximumDataBytes) {
+    return InvalidShape();
+  }
+  auto parsed = parser::PathParser::Parse(string->value);
+  // CSS rejects the entire value, unlike SVG's partial-path error recovery.
+  if (parsed.hasError() || !parsed.hasResult() || parsed.result().empty()) {
+    return InvalidShape();
+  }
+  path.data = std::move(parsed).result();
+  return ClipPath(std::move(path));
+}
+
 bool IsSupportedShape(const css::Function& function) {
   return function.name.equalsLowercase("circle") || function.name.equalsLowercase("ellipse") ||
-         function.name.equalsLowercase("polygon");
+         function.name.equalsLowercase("polygon") || function.name.equalsLowercase("inset") ||
+         function.name.equalsLowercase("path");
 }
 
 ParseResult<ClipPath> ParseShapeFunction(const css::Function& function, RadialClipPath::Box box,
                                          bool allowUserUnits) {
-  return function.name.equalsLowercase("polygon")
-             ? ParsePolygonFunction(function, box, allowUserUnits)
-             : ParseRadialFunction(function, box, allowUserUnits);
+  if (function.name.equalsLowercase("polygon")) {
+    return ParsePolygonFunction(function, box, allowUserUnits);
+  }
+  if (function.name.equalsLowercase("inset")) {
+    return ParseInsetFunction(function, box, allowUserUnits);
+  }
+  if (function.name.equalsLowercase("path")) {
+    return ParsePathFunction(function, box);
+  }
+  return ParseRadialFunction(function, box, allowUserUnits);
 }
 
 std::ostream& PrintReferenceBox(std::ostream& os, RadialClipPath::Box box) {
@@ -357,6 +484,23 @@ std::ostream& PrintPolygon(std::ostream& os, const PolygonClipPath& polygon) {
   }
   os << ") ";
   return PrintReferenceBox(os, polygon.box);
+}
+
+std::ostream& PrintInset(std::ostream& os, const InsetClipPath& inset) {
+  os << "inset(" << inset.offsets[0] << ' ' << inset.offsets[1] << ' ' << inset.offsets[2] << ' '
+     << inset.offsets[3];
+  if (inset.hasRoundedCorners()) {
+    os << " round";
+    for (const Lengthd& radius : inset.radiiX) {
+      os << ' ' << radius;
+    }
+    os << " /";
+    for (const Lengthd& radius : inset.radiiY) {
+      os << ' ' << radius;
+    }
+  }
+  os << ") ";
+  return PrintReferenceBox(os, inset.box);
 }
 
 void PrintRadius(std::ostream& os, RadialClipPath::Radius type, const Lengthd& radius) {
@@ -402,6 +546,13 @@ std::ostream& operator<<(std::ostream& os, const ClipPath& clip) {
   }
   if (const auto* polygon = std::get_if<PolygonClipPath>(&clip.value)) {
     return PrintPolygon(os, *polygon);
+  }
+  if (const auto* inset = std::get_if<InsetClipPath>(&clip.value)) {
+    return PrintInset(os, *inset);
+  }
+  if (const auto* path = std::get_if<PathClipPath>(&clip.value)) {
+    os << "path(" << path->rule << ", \"" << path->data.toSVGPathData() << "\") ";
+    return PrintReferenceBox(os, path->box);
   }
   const RadialClipPath* shape;
   if (const auto* circle = std::get_if<CircleClipPath>(&clip.value)) {

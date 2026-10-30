@@ -199,6 +199,8 @@ public:
   /// Result of shaping a text range.
   struct ShapedRun {
     std::vector<ShapedGlyph> glyphs;
+    /// Known source-group progression; absent when a backend leaves it implicit in its clusters.
+    std::optional<bool> backward;
   };
 
   /// Shape a range of text, producing glyph IDs with advances and kerning.
@@ -251,7 +253,6 @@ public:
   struct ShapingContext {
     size_t byteOffset = 0;  ///< Start of the context within the span text.
     size_t byteLength = 0;  ///< Length of the context.
-
     /// Backend-defined shaping properties detected for the whole context.
     struct Detected {
       bool valid = false;              ///< Whether the fields below have been filled.
@@ -262,6 +263,34 @@ public:
     };
     /// Filled on first use, so the ranges of one context detect its properties once.
     mutable Detected detected;
+
+    /// Analysis-only shaping suppresses optional substitutions to propose emergency boundaries.
+    bool suppressOptionalSubstitutions = false;
+    /// Analysis-only rlig comparison for font-dependent lam-alef candidate groups.
+    bool suppressRligForAnalysis = false;
+
+    /// Shared admission for all primary/fallback calls while preparing contextual fragments.
+    struct WorkBudget {
+      size_t bytes;
+      size_t calls;
+      bool rejected = false;
+
+      /// Charge range traversal, uncached context detection and bounded surrounding context.
+      /// @param rangeBytes Bytes of output text passed to the shaper.
+      /// @param contextBytes Additional context bytes that must be scanned on this call.
+      bool consume(size_t rangeBytes, size_t contextBytes = 0) {
+        if (rejected || calls == 0 || rangeBytes > bytes || contextBytes > bytes - rangeBytes ||
+            bytes - rangeBytes - contextBytes < 40u) {
+          rejected = true;
+          return false;
+        }
+        bytes -= rangeBytes + contextBytes + 40u;
+        --calls;
+        return true;
+      }
+    };
+    /// Aliases a planner-owned budget alive through all synchronous fragment shaping calls.
+    WorkBudget* work = nullptr;
   };
 
   /**
@@ -296,7 +325,9 @@ public:
                                       size_t byteLength, bool isVertical,
                                       TextOrientation textOrientation, FontVariant fontVariant,
                                       bool kerning) const {
-    (void)context;
+    if (context.work && !context.work->consume(byteLength)) {
+      return {};
+    }
     return kerning ? shapeRun(font, fontSizePx, spanText, byteOffset, byteLength, isVertical,
                               textOrientation, fontVariant, false)
                    : shapeRunNoKerning(font, fontSizePx, spanText, byteOffset, byteLength,

@@ -1833,6 +1833,10 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
     params.lengthAdjust = textComp->lengthAdjust;
   }
 
+  params.textIndentPx = properties.textIndent.get().value().toPixels(
+      Box2d::FromXYWH(0, 0, params.inlineSizePx, params.inlineSizePx), params.fontMetrics,
+      Lengthd::Extent::X);
+
   // Pass @font-face declarations so renderers can resolve custom fonts.
   if (auto* resourceManager = registry.ctx().find<components::ResourceManagerContext>()) {
     params.fontFaces = resourceManager->fontFaces();

@@ -38,6 +38,19 @@ namespace donner::svg::components {
 
 namespace {
 
+/// Root computed font size for rem lengths resolved before descendants inherit them.
+double ComputedRootFontSize(const Registry& registry) {
+  const auto* context = registry.ctx().find<SVGDocumentContext>();
+  if (context && registry.valid(context->rootEntity)) {
+    // Installed root properties avoid re-entering style computation for root-owned rem.
+    if (const auto* root = registry.try_get<ComputedStyleComponent>(context->rootEntity);
+        root && root->properties) {
+      return root->properties->fontSize.get().value().value;
+    }
+  }
+  return FontMetrics().rootFontSize;
+}
+
 void SynchronizeStylesheetFonts(ResourceManagerContext& resources, Registry& registry,
                                 Entity entity, const StylesheetComponent& stylesheet) {
   const css::Stylesheet empty;
@@ -63,16 +76,6 @@ bool IsApplicableStylesheet(const Registry& registry, const StylesheetComponent&
   // The built-in sheet has an SVG default namespace; authored namespace handling is separate.
   const auto* type = registry.try_get<ElementTypeComponent>(dataEntity);
   return type && type->inSvgNamespace();
-}
-
-double DecorationRootFontSize(Registry& registry) {
-  if (const auto* context = registry.ctx().find<SVGDocumentContext>()) {
-    if (const auto* root = registry.try_get<ComputedStyleComponent>(context->rootEntity);
-        root && root->properties) {
-      return root->properties->fontSize.get().value().value;
-    }
-  }
-  return 16.0;
 }
 
 StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
@@ -126,7 +129,7 @@ bool BlockExternalReference(Property<Reference, cascade>& property,
 }
 
 bool BlockExternalClipPath(PropertyRegistry& properties, const PropertyRegistry& local) {
-  const auto clip = properties.clipPath.get();
+  const ClipPath* clip = properties.clipPath.getStoredValue();
   if (local.clipPath.state != PropertyState::Inherit || !clip) {
     return false;
   }
@@ -778,6 +781,7 @@ PropertyRegistry StyleSystem::inheritProperties(Registry& registry, Entity paren
   PropertyRegistry inherited =
       properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
   PreserveLocalValue(properties.fontSize, inherited.fontSize);
+  PreserveLocalValue(properties.textIndent, inherited.textIndent);
   PreserveLocalValue(properties.color, inherited.color);
   PreserveLocalValue(properties.fill, inherited.fill);
   PreserveLocalValue(properties.stroke, inherited.stroke);
@@ -866,10 +870,13 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
 
   // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to
   // always be an absolute length. Relative units (em, %, ex) resolve against the parent's computed
-  // font-size, and percentages resolve against the parent font-size (not the viewBox).
+  // font-size, and percentages resolve against the parent font-size (not the viewBox). Local
+  // text-indent em lengths compute from that result before descendants inherit them.
   if (computedStyle.properties) {
     resolveComputedParentFonts(handle, parent, *computedStyle.properties);
-    computedStyle.properties->resolveTextDecorationThickness(DecorationRootFontSize(registry));
+    const double rootFontSizePx = ComputedRootFontSize(registry);
+    computedStyle.properties->resolveTextDecorationThickness(rootFontSizePx);
+    computedStyle.properties->resolveInsetClipLengths(rootFontSizePx);
   }
 }
 

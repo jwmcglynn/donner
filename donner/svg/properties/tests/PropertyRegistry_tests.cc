@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -1997,6 +1998,241 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
   }
 }
 
+TEST(PropertyRegistry, PathClipStoresParsedGeometryAndChargesCapacity) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:path(evenodd, 'M-2 3Q4 5 6 7Z') fill-box");
+  const ClipPath* clip = registry.clipPath.getStoredValue();
+  ASSERT_THAT(clip, testing::NotNull());
+  ASSERT_THAT(clip->value, testing::VariantWith<PathClipPath>(testing::_));
+  const auto& path = std::get<PathClipPath>(clip->value);
+  EXPECT_EQ(path.box, RadialClipPath::Box::Fill);
+  EXPECT_EQ(clip->clipRule(), ClipRule::EvenOdd);
+  EXPECT_THAT(path.data,
+              Eq(PathBuilder().moveTo({-2, 3}).quadTo({4, 5}, {6, 7}).closePath().build()));
+  const auto bytes = path.data.retainedBytes();
+  ASSERT_THAT(bytes, Optional(testing::Gt(0u)));
+  EXPECT_EQ(registry.complexPropertyBytes(), *bytes);
+  const PropertyRegistry copy = registry;
+  const auto* copiedClip = copy.clipPath.getStoredValue();
+  ASSERT_THAT(copiedClip, testing::NotNull());
+  ASSERT_THAT(copiedClip->value, testing::VariantWith<PathClipPath>(testing::_));
+  const auto copiedBytes = std::get<PathClipPath>(copiedClip->value).data.retainedBytes();
+  ASSERT_THAT(copiedBytes, Optional(testing::Gt(0u)));
+  EXPECT_EQ(copy.complexPropertyBytes(), *copiedBytes);
+}
+
+TEST(PropertyRegistry, PathClipDecodedByteLimitAndEscapes) {
+  PropertyRegistry escaped;
+  escaped.parseStyle(R"css(clip-path:path('\4d 0 0H10V10Z'))css");
+  EXPECT_THAT(
+      escaped.clipPath.get(),
+      Optional(testing::Field(&ClipPath::value, testing::VariantWith<PathClipPath>(testing::_))));
+  const std::string data = "M0 0" + std::string(PathClipPath::kMaximumDataBytes - 4, ' ');
+  PropertyRegistry atLimit;
+  atLimit.parseStyle("clip-path:path('" + data + "')");
+  EXPECT_THAT(
+      atLimit.clipPath.get(),
+      Optional(testing::Field(&ClipPath::value, testing::VariantWith<PathClipPath>(testing::_))));
+  PropertyRegistry tooLarge;
+  tooLarge.parseStyle("clip-path:url(#clip);clip-path:path('" + data + " ')");
+  EXPECT_THAT(tooLarge.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+}
+
+TEST(PropertyRegistry, PathClipAcceptsQuotedDataAndFillRule) {
+  for (const auto value : {"path(\"M8 8H32V32H8Z\")", "path(evenodd, 'M8 8H32V32H8Z') fill-box",
+                           "view-box PATH(nonzero, \"M8 8L32 32\")", "path('M8 8')"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:" + std::string(value));
+    EXPECT_THAT(registry.clipPath.get(), Optional(testing::_));
+  }
+}
+
+TEST(PropertyRegistry, InvalidPathClipKeepsEarlierDeclaration) {
+  for (const auto value :
+       {"path()", "path('')", "path(' ')", "path(M0 0)", "path(evenodd 'M0 0')", "path(, 'M0 0')",
+        "path(unknown, 'M0 0')", "path('M0 0', 'M1 1')", "path('M0 0L')",
+        "path('M0 0L1 1 garbage')", "path('M0 0') fill-box view-box"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(value));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
+TEST(PropertyRegistry, RoundedInsetAcceptsOneToFourRadiiAndIndependentAxes) {
+  for (const auto value : {"8px round 4px", "8px round 4px 8px", "8px round 4px 8px 12px",
+                           "8px round 4px 8px 12px 16px", "8px round 20% / .5em",
+                           "1px 2px 3px 4px round 1px 2px 3px 4px / 4px 3px 2px 1px"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:inset(" + std::string(value) + ") fill-box");
+    EXPECT_THAT(registry.clipPath.get(),
+                Optional(testing::Field(&ClipPath::value,
+                                        testing::VariantWith<InsetClipPath>(testing::_))));
+    EXPECT_EQ(registry.complexPropertyBytes(), 0u);
+  }
+}
+
+TEST(PropertyRegistry, RoundedInsetExpandsIndependentCornerPairs) {
+  struct Example {
+    std::string_view value;
+    std::array<double, 4> x;
+    std::array<double, 4> y;
+  };
+  for (const auto& example :
+       {Example{"1px", {1, 1, 1, 1}, {1, 1, 1, 1}}, Example{"1px 2px", {1, 2, 1, 2}, {1, 2, 1, 2}},
+        Example{"1px 2px 3px", {1, 2, 3, 2}, {1, 2, 3, 2}},
+        Example{"1px 2px 3px 4px / 4px 3px 2px 1px", {1, 2, 3, 4}, {4, 3, 2, 1}}}) {
+    SCOPED_TRACE(example.value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:inset(0 round " + std::string(example.value) + ")");
+    const auto clip = registry.clipPath.get();
+    ASSERT_THAT(clip, Optional(testing::Field(&ClipPath::value,
+                                              testing::VariantWith<InsetClipPath>(testing::_))));
+    const auto& inset = std::get<InsetClipPath>(clip->value);
+    EXPECT_THAT(inset.radiiX, testing::ElementsAre(LengthValueIs(example.x[0], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.x[1], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.x[2], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.x[3], Lengthd::Unit::Px)));
+    EXPECT_THAT(inset.radiiY, testing::ElementsAre(LengthValueIs(example.y[0], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.y[1], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.y[2], Lengthd::Unit::Px),
+                                                   LengthValueIs(example.y[3], Lengthd::Unit::Px)));
+  }
+}
+
+TEST(PropertyRegistry, RoundedInsetComputesLengthsButRetainsPercentages) {
+  PropertyRegistry registry;
+  registry.parseStyle("font-size:20px;clip-path:inset(0 round .2em 1rem / 25%)");
+  registry.resolveInsetClipLengths(30);
+  const auto clip = registry.clipPath.get();
+  ASSERT_THAT(clip, Optional(testing::Field(&ClipPath::value,
+                                            testing::VariantWith<InsetClipPath>(testing::_))));
+  const auto& inset = std::get<InsetClipPath>(clip->value);
+  EXPECT_THAT(inset.radiiX, testing::ElementsAre(LengthValueIs(4, Lengthd::Unit::Px),
+                                                 LengthValueIs(30, Lengthd::Unit::Px),
+                                                 LengthValueIs(4, Lengthd::Unit::Px),
+                                                 LengthValueIs(30, Lengthd::Unit::Px)));
+  EXPECT_THAT(inset.radiiY, testing::Each(LengthValueIs(25, Lengthd::Unit::Percent)));
+  EXPECT_EQ(registry.complexPropertyBytes(), 0u);
+  RecordProperty("ClipPathBytes", sizeof(ClipPath));
+  RecordProperty("PropertyRegistryBytes", sizeof(PropertyRegistry));
+}
+
+TEST(PropertyRegistry, RoundedInsetRejectsMalformedOrContextualRadiusAtomically) {
+  for (const auto radius : {"", "-1px", "1px -1%", "1px / -1px", "1px /", "/ 1px",
+                            "1px / 2px / 3px", "1px 2px 3px 4px 5px", "1e999px", "1ex", "1ch",
+                            "1vw", "1vh", "1vmin", "1vmax", "calc(1px)"}) {
+    SCOPED_TRACE(radius);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:inset(0 round " + std::string(radius) +
+                        ")");
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
+TEST(PropertyRegistry, RoundedInsetPresentationAcceptsUserUnits) {
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.parsePresentationAttribute("clip-path", "inset(2 round 4 / 8)"),
+              NoParseError());
+  EXPECT_THAT(
+      registry.clipPath.get(),
+      Optional(testing::Field(&ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
+}
+
+TEST(PropertyRegistry, InsetOffsetsExpandAndRetainInlineStorage) {
+  struct Example {
+    std::string_view value;
+    std::array<double, 4> offsets;
+  };
+  for (const auto& example :
+       {Example{"1px", {1, 1, 1, 1}}, Example{"1px 2px", {1, 2, 1, 2}},
+        Example{"1px 2px 3px", {1, 2, 3, 2}}, Example{"1px 2px 3px 4px", {1, 2, 3, 4}}}) {
+    SCOPED_TRACE(example.value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:fill-box inset(" + std::string(example.value) + ")");
+    const auto clip = registry.clipPath.get();
+    ASSERT_THAT(clip, Optional(testing::Field(&ClipPath::value,
+                                              testing::VariantWith<InsetClipPath>(testing::_))));
+    const auto& inset = std::get<InsetClipPath>(clip->value);
+    EXPECT_EQ(inset.box, RadialClipPath::Box::Fill);
+    for (std::size_t i = 0; i < example.offsets.size(); ++i) {
+      EXPECT_THAT(inset.offsets[i], LengthValueIs(example.offsets[i], Lengthd::Unit::Px));
+    }
+    EXPECT_EQ(registry.complexPropertyBytes(), 0u);
+  }
+}
+
+TEST(PropertyRegistry, InsetAcceptsNegativePercentagesAndPresentationUnits) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:INSET(-10% 2px) view-box");
+  const auto clip = registry.clipPath.get();
+  ASSERT_THAT(clip, Optional(testing::Field(&ClipPath::value,
+                                            testing::VariantWith<InsetClipPath>(testing::_))));
+  const auto& inset = std::get<InsetClipPath>(clip->value);
+  EXPECT_THAT(inset.offsets[0], LengthValueIs(-10, Lengthd::Unit::Percent));
+  EXPECT_THAT(inset.offsets[2], LengthValueIs(-10, Lengthd::Unit::Percent));
+  EXPECT_EQ(inset.box, RadialClipPath::Box::View);
+  PropertyRegistry presentation;
+  EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "inset(1 2 3 4)"),
+              NoParseError());
+  const auto presentationClip = presentation.clipPath.get();
+  ASSERT_THAT(
+      presentationClip,
+      Optional(testing::Field(&ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
+  EXPECT_THAT(std::get<InsetClipPath>(presentationClip->value).offsets[3],
+              LengthValueIs(4, Lengthd::Unit::None));
+  EXPECT_EQ(testing::PrintToString(*clip), "inset(-10% 2px -10% 2px) view-box");
+}
+
+TEST(PropertyRegistry, InsetRejectsUnsupportedContextualUnitsWithoutReplacingClip) {
+  for (const auto unit : {"ex", "ch", "vw", "vh", "vmin", "vmax"}) {
+    SCOPED_TRACE(unit);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:inset(1px 1" + std::string(unit) + ")");
+    EXPECT_THAT(
+        registry.clipPath.get(),
+        Optional(testing::Field(&ClipPath::value, testing::VariantWith<Reference>(
+                                                      testing::Field(&Reference::href, "#clip")))));
+  }
+}
+
+TEST(PropertyRegistry, InsetAbsoluteLengthsComputeAndOverflowRemainsClipped) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:inset(1in 72pt 2.54cm 25%)");
+  registry.resolveInsetClipLengths(30);
+  EXPECT_THAT(registry.clipPath.get(),
+              Optional(testing::Field(
+                  &ClipPath::value,
+                  testing::VariantWith<InsetClipPath>(testing::Field(
+                      &InsetClipPath::offsets,
+                      testing::ElementsAre(LengthValueIs(96, Lengthd::Unit::Px),
+                                           LengthValueIs(96, Lengthd::Unit::Px),
+                                           LengthValueIs(96, Lengthd::Unit::Px),
+                                           LengthValueIs(25, Lengthd::Unit::Percent)))))));
+  registry.parseStyle("clip-path:inset(1e308em)");
+  registry.resolveInsetClipLengths(30);
+  EXPECT_THAT(
+      registry.clipPath.get(),
+      Optional(testing::Field(&ClipPath::value,
+                              testing::VariantWith<InsetClipPath>(testing::Field(
+                                  &InsetClipPath::offsets,
+                                  testing::Each(LengthValueIs(50, Lengthd::Unit::Percent)))))));
+}
+
+TEST(PropertyRegistry, InvalidInsetKeepsEarlierDeclaration) {
+  for (const std::string_view value :
+       {"inset()", "inset(1px 2px 3px 4px 5px)", "inset(1px, 2px)", "inset(2)", "inset(auto)",
+        "inset(1e999px)", "inset(1px round)", "inset(round 2px)", "inset(calc(2px))",
+        "inset(1px) fill-box view-box", "inset(1px) garbage"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(value));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
 TEST(PropertyRegistry, PolygonRetainedCapacityIsCharged) {
   PolygonClipPath polygon;
   polygon.vertices.reserve(8);
@@ -3218,6 +3454,43 @@ TEST(PropertyRegistry, WhiteSpaceKeywordsAndInvalidDeclarations) {
   }
 }
 
+TEST(PropertyRegistry, OverflowWrapKeywordsShareTheWordWrapAliasCascadeSlot) {
+  PropertyRegistry properties;
+  EXPECT_THAT(properties.overflowWrap.get(), Optional(OverflowWrap::Normal));
+  const std::pair<const char*, OverflowWrap> cases[] = {{"NoRmAl", OverflowWrap::Normal},
+                                                        {"BrEaK-WoRd", OverflowWrap::BreakWord},
+                                                        {"AnYwHeRe", OverflowWrap::Anywhere}};
+  for (const auto& [keyword, value] : cases) {
+    SCOPED_TRACE(keyword);
+    for (const char* name : {"overflow-wrap", "word-wrap"}) {
+      SCOPED_TRACE(name);
+      properties.parseStyle(std::string(name) + ":" + keyword);
+      EXPECT_THAT(properties.overflowWrap.get(), Optional(value));
+      EXPECT_THAT(properties.parsePresentationAttribute(name, keyword), ParseResultIs(false));
+    }
+  }
+  EXPECT_THAT(properties.numPropertiesSet(), Eq(1));
+  properties.parseStyle("overflow-wrap:anywhere!important;word-wrap:normal");
+  EXPECT_THAT(properties.overflowWrap.get(), Optional(OverflowWrap::Anywhere));
+}
+
+TEST(PropertyRegistry, OverflowWrapInvalidValuesAndInheritance) {
+  PropertyRegistry parent;
+  parent.parseStyle("word-wrap:break-word");
+  EXPECT_THAT(PropertyRegistry().inheritFrom(parent).overflowWrap.get(),
+              Optional(OverflowWrap::BreakWord));
+  PropertyRegistry child;
+  for (const char* value : {"normal anywhere", "break-all", "1", "auto", "anywhere extra"}) {
+    SCOPED_TRACE(value);
+    child.parseStyle(std::string("overflow-wrap:") + value);
+    EXPECT_THAT(child.inheritFrom(parent).overflowWrap.get(), Optional(OverflowWrap::BreakWord));
+  }
+  child.parseStyle("word-wrap:initial");
+  EXPECT_THAT(child.inheritFrom(parent).overflowWrap.get(), Optional(OverflowWrap::Normal));
+  child.parseStyle("overflow-wrap:unset");
+  EXPECT_THAT(child.inheritFrom(parent).overflowWrap.get(), Optional(OverflowWrap::BreakWord));
+}
+
 TEST(PropertyRegistry, TextTransformSupportedSubsetRejectsUnsupportedOperations) {
   PropertyRegistry properties;
   EXPECT_THAT(properties.textTransform.get(), Optional(TextTransform::None));
@@ -3268,6 +3541,70 @@ TEST(PropertyRegistry, SmallCapsSynthesisCascadesIndependentlyOfFontShorthand) {
       "font-synthesis-small-caps: none !important; "
       "font-synthesis-small-caps: auto; font: 20px serif");
   EXPECT_THAT(registry.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
+}
+
+TEST(PropertyRegistry, TextIndentSupportedScalarGrammarAndPresentationBoundary) {
+  PropertyRegistry properties;
+  EXPECT_THAT(properties.textIndent.get(), Optional(LengthValueIs(0, Lengthd::Unit::Px)));
+  EXPECT_FALSE(PropertyRegistry::isPresentationAttributeName("text-indent"));
+  EXPECT_THAT(properties.parsePresentationAttribute("text-indent", "10px"), ParseResultIs(false));
+  const std::pair<const char*, Lengthd> cases[] = {{"0", Lengthd(0)},
+                                                   {"-12px", Lengthd(-12, Lengthd::Unit::Px)},
+                                                   {"25%", Lengthd(25, Lengthd::Unit::Percent)},
+                                                   {"2em", Lengthd(2, Lengthd::Unit::Em)},
+                                                   {"1cm", Lengthd(1, Lengthd::Unit::Cm)}};
+  for (const auto& [text, expected] : cases) {
+    SCOPED_TRACE(text);
+    properties.parseStyle(std::string("text-indent:") + text);
+    EXPECT_THAT(properties.textIndent.get(),
+                Optional(LengthValueIs(expected.value, expected.unit)));
+  }
+}
+
+TEST(PropertyRegistry, TextIndentRejectsUnsupportedUnitsFlagsAndNonfiniteValues) {
+  for (const char* text : {"10", "1ex", "1ch", "1rem", "1vw", "1vh", "1vmin", "1vmax",
+                           "10px hanging", "10px each-line", "calc(1px + 2%)", "auto", "1e999px"}) {
+    SCOPED_TRACE(text);
+    PropertyRegistry properties;
+    properties.parseStyle("text-indent:7px");
+    properties.parseStyle(std::string("text-indent:") + text);
+    EXPECT_THAT(properties.textIndent.get(), Optional(LengthValueIs(7, Lengthd::Unit::Px)));
+  }
+}
+
+TEST(PropertyRegistry, TextIndentAbsoluteLengthComputesToPixels) {
+  PropertyRegistry properties;
+  properties.parseStyle("text-indent:1in");
+  properties.resolveFontSize(12);
+  EXPECT_THAT(properties.textIndent.get(), Optional(LengthValueIs(96, Lengthd::Unit::Px)));
+}
+
+TEST(PropertyRegistry, TextIndentEmComputesBeforeInheritanceAndLeavesPercentUnresolved) {
+  PropertyRegistry parent;
+  parent.parseStyle("font-size:10px;text-indent:2em");
+  parent.resolveFontSize(12);
+  EXPECT_THAT(parent.textIndent.get(), Optional(LengthValueIs(20, Lengthd::Unit::Px)));
+  PropertyRegistry child;
+  child.parseStyle("font-size:20px");
+  auto computed = child.inheritFrom(parent);
+  computed.resolveFontSize(10);
+  EXPECT_THAT(computed.textIndent.get(), Optional(LengthValueIs(20, Lengthd::Unit::Px)));
+  child.parseStyle("text-indent:10%");
+  child.resolveFontSize(10);
+  EXPECT_THAT(child.textIndent.get(), Optional(LengthValueIs(10, Lengthd::Unit::Percent)));
+}
+
+TEST(PropertyRegistry, TextIndentUnresolvedCssWideComputesConcreteInitialValue) {
+  for (const char* keyword : {"inherit", "unset"}) {
+    SCOPED_TRACE(keyword);
+    PropertyRegistry properties;
+    properties.parseStyle(std::string("text-indent:") + keyword);
+    properties.resolveFontSize(12);
+    ASSERT_EQ(properties.textIndent.state, PropertyState::Set);
+    EXPECT_THAT(properties.textIndent.get(), Optional(LengthValueIs(0, Lengthd::Unit::Px)));
+    const auto descendant = PropertyRegistry().inheritFrom(properties);
+    EXPECT_THAT(descendant.textIndent.get(), Optional(LengthValueIs(0, Lengthd::Unit::Px)));
+  }
 }
 
 TEST(PropertyRegistry, StyleSynthesisParsesAndInherits) {

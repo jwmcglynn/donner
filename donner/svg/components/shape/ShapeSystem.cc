@@ -571,8 +571,132 @@ bool IsFiniteEllipse(const Vector2d& center, double rx, double ry) {
                      [](double value) { return std::isfinite(value); });
 }
 
-bool IsRenderablePolygonCoordinate(double value) {
+bool IsRenderableClipCoordinate(double value) {
   return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
+}
+
+using InsetCornerRadii = std::array<Vector2d, 4>;
+
+/// Limit the used largest radius without overflowing sums or underflowing a common factor.
+double InsetRadiusLimit(double largest, double first, double second, double side) {
+  const double pairLargest = std::max(first, second);
+  if (pairLargest == 0) {
+    return largest;
+  }
+  const double sum = first / pairLargest + second / pairLargest;
+  int largestExponent, sideExponent, pairExponent, adjustment;
+  const double largestMantissa = std::frexp(largest, &largestExponent);
+  const double sideMantissa = std::frexp(side, &sideExponent);
+  const double pairMantissa = std::frexp(pairLargest, &pairExponent);
+  const double mantissa =
+      std::frexp(largestMantissa * sideMantissa / (pairMantissa * sum), &adjustment);
+  const int exponent = largestExponent + sideExponent - pairExponent + adjustment;
+  if (exponent > largestExponent || (exponent == largestExponent && mantissa >= largestMantissa)) {
+    return largest;
+  }
+  return std::ldexp(mantissa, exponent);
+}
+
+double ScaleInsetRadius(double radius, double largest, double usedLargest) {
+  if (usedLargest >= 1) {
+    return radius * (usedLargest / largest);
+  }
+  return (radius / largest) * usedLargest;
+}
+
+void ConstrainInsetRadii(InsetCornerRadii& radii, const Vector2d& size) {
+  double largest = 0;
+  for (const Vector2d& radius : radii) {
+    largest = std::max({largest, radius.x, radius.y});
+  }
+  if (largest == 0) {
+    return;
+  }
+  const double usedLargest =
+      std::min({largest, InsetRadiusLimit(largest, radii[0].x, radii[1].x, size.x),
+                InsetRadiusLimit(largest, radii[1].y, radii[2].y, size.y),
+                InsetRadiusLimit(largest, radii[2].x, radii[3].x, size.x),
+                InsetRadiusLimit(largest, radii[3].y, radii[0].y, size.y)});
+  for (Vector2d& radius : radii) {
+    if (usedLargest < largest) {
+      radius.x = ScaleInsetRadius(radius.x, largest, usedLargest);
+      radius.y = ScaleInsetRadius(radius.y, largest, usedLargest);
+    }
+    if (radius.x == 0 || radius.y == 0) {
+      radius = Vector2d();
+    }
+  }
+}
+
+double InsetRadiusPixels(const Lengthd& radius, const Box2d& reference, const FontMetrics& metrics,
+                         Lengthd::Extent axis) {
+  if (!std::isfinite(radius.value) || radius.value < 0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  if (radius.unit != Lengthd::Unit::Percent) {
+    return radius.toPixels(reference, metrics, axis);
+  }
+  const double extent = axis == Lengthd::Extent::X ? reference.width() : reference.height();
+  if (!std::isfinite(extent)) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  int radiusExponent, extentExponent;
+  const double radiusMantissa = std::frexp(radius.value, &radiusExponent);
+  const double extentMantissa = std::frexp(extent, &extentExponent);
+  return std::ldexp(radiusMantissa * extentMantissa / 100, radiusExponent + extentExponent);
+}
+
+std::optional<InsetCornerRadii> ResolveInsetRadii(const InsetClipPath& inset,
+                                                  const Box2d& reference,
+                                                  const FontMetrics& metrics,
+                                                  const Vector2d& size) {
+  InsetCornerRadii radii;
+  for (std::size_t i = 0; i < radii.size(); ++i) {
+    radii[i] = Vector2d(InsetRadiusPixels(inset.radiiX[i], reference, metrics, Lengthd::Extent::X),
+                        InsetRadiusPixels(inset.radiiY[i], reference, metrics, Lengthd::Extent::Y));
+    if (!std::isfinite(radii[i].x) || !std::isfinite(radii[i].y) || radii[i].x < 0 ||
+        radii[i].y < 0) {
+      return std::nullopt;
+    }
+  }
+  ConstrainInsetRadii(radii, size);
+  return radii;
+}
+
+Path BuildRoundedInsetClip(const Box2d& rect, const InsetCornerRadii& radii) {
+  if (std::all_of(radii.begin(), radii.end(),
+                  [](const Vector2d& radius) { return radius.x == 0 && radius.y == 0; })) {
+    return PathBuilder(4).addRect(rect).build();
+  }
+  constexpr double kKappa = 0.5522847498;
+  const double left = rect.topLeft.x, top = rect.topLeft.y;
+  const double right = rect.bottomRight.x, bottom = rect.bottomRight.y;
+  const Vector2d& tl = radii[0];
+  const Vector2d& tr = radii[1];
+  const Vector2d& br = radii[2];
+  const Vector2d& bl = radii[3];
+  PathBuilder builder(17);
+  builder.moveTo({left + tl.x, top}).lineTo({right - tr.x, top});
+  if (tr.x > 0) {
+    builder.curveTo({right - tr.x + tr.x * kKappa, top}, {right, top + tr.y - tr.y * kKappa},
+                    {right, top + tr.y});
+  }
+  builder.lineTo({right, bottom - br.y});
+  if (br.x > 0) {
+    builder.curveTo({right, bottom - br.y + br.y * kKappa}, {right - br.x + br.x * kKappa, bottom},
+                    {right - br.x, bottom});
+  }
+  builder.lineTo({left + bl.x, bottom});
+  if (bl.x > 0) {
+    builder.curveTo({left + bl.x - bl.x * kKappa, bottom}, {left, bottom - bl.y + bl.y * kKappa},
+                    {left, bottom - bl.y});
+  }
+  builder.lineTo({left, top + tl.y});
+  if (tl.x > 0) {
+    builder.curveTo({left, top + tl.y - tl.y * kKappa}, {left + tl.x - tl.x * kKappa, top},
+                    {left + tl.x, top});
+  }
+  return builder.closePath().build();
 }
 
 Path BuildPolygonClipPath(const PolygonClipPath& polygon, const Box2d& box,
@@ -583,7 +707,7 @@ Path BuildPolygonClipPath(const PolygonClipPath& polygon, const Box2d& box,
     const Vector2d point =
         box.topLeft + Vector2d(vertex.x.toPixels(box, metrics, Lengthd::Extent::X),
                                vertex.y.toPixels(box, metrics, Lengthd::Extent::Y));
-    if (!IsRenderablePolygonCoordinate(point.x) || !IsRenderablePolygonCoordinate(point.y)) {
+    if (!IsRenderableClipCoordinate(point.x) || !IsRenderableClipCoordinate(point.y)) {
       return {};
     }
     if (first) {
@@ -595,11 +719,41 @@ Path BuildPolygonClipPath(const PolygonClipPath& polygon, const Box2d& box,
   }
   Path path = builder.closePath().build();
   const Box2d bounds = path.bounds();
-  if (!IsRenderablePolygonCoordinate(bounds.width()) ||
-      !IsRenderablePolygonCoordinate(bounds.height())) {
+  if (!IsRenderableClipCoordinate(bounds.width()) || !IsRenderableClipCoordinate(bounds.height())) {
     return {};
   }
   return path;
+}
+
+bool PathClipCoordinatesFit(const Path& path, const Vector2d& origin) {
+  if (path.points().empty()) {
+    return false;
+  }
+  Box2d bounds = Box2d::CreateEmpty(path.points().front() + origin);
+  for (const Vector2d& source : path.points()) {
+    const Vector2d point = source + origin;
+    if (!IsRenderableClipCoordinate(point.x) || !IsRenderableClipCoordinate(point.y)) {
+      return false;
+    }
+    bounds.addPoint(point);
+  }
+  return IsRenderableClipCoordinate(bounds.width()) && IsRenderableClipCoordinate(bounds.height());
+}
+
+Path BuildClosedPathClip(const Path& path, const Vector2d& origin) {
+  PathBuilder builder(path.points().size());
+  path.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
+    switch (verb) {
+      case Path::Verb::MoveTo: builder.closePath().moveTo(points[0] + origin); break;
+      case Path::Verb::LineTo: builder.lineTo(points[0] + origin); break;
+      case Path::Verb::QuadTo: builder.quadTo(points[0] + origin, points[1] + origin); break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(points[0] + origin, points[1] + origin, points[2] + origin);
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
+    }
+  });
+  return builder.closePath().build();
 }
 
 class ReferenceBoundsAccumulator {
@@ -984,6 +1138,59 @@ Path ShapeSystem::polygonClipPath(EntityHandle handle, const PolygonClipPath& po
   }
   const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
   return BuildPolygonClipPath(polygon, *box, metrics);
+}
+
+Path ShapeSystem::insetClipPath(EntityHandle handle, const InsetClipPath& inset,
+                                CircleClipGeometryBudget& budget) {
+  if (!budget.reserve(inset.hasRoundedCorners() ? 27 : 9)) {
+    return {};
+  }
+  const std::optional<Box2d> box = getCircleReferenceBox(handle, inset.box, budget);
+  const auto* style = handle.try_get<ComputedStyleComponent>();
+  if (!box || !style || !style->properties) {
+    return {};
+  }
+  const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
+  const double top = box->topLeft.y + inset.offsets[0].toPixels(*box, metrics, Lengthd::Extent::Y);
+  const double right =
+      box->bottomRight.x - inset.offsets[1].toPixels(*box, metrics, Lengthd::Extent::X);
+  const double bottom =
+      box->bottomRight.y - inset.offsets[2].toPixels(*box, metrics, Lengthd::Extent::Y);
+  const double left = box->topLeft.x + inset.offsets[3].toPixels(*box, metrics, Lengthd::Extent::X);
+  const std::array<double, 6> coordinates = {left, top, right, bottom, right - left, bottom - top};
+  if (!std::all_of(coordinates.begin(), coordinates.end(), IsRenderableClipCoordinate)) {
+    return {};
+  }
+  // Proportional reduction of oversized opposing insets has zero area for clipping.
+  if (right <= left || bottom <= top) {
+    return {};
+  }
+  const Box2d rect({left, top}, {right, bottom});
+  const auto radii = ResolveInsetRadii(inset, *box, metrics, rect.size());
+  if (!radii) {
+    return {};
+  }
+  return BuildRoundedInsetClip(rect, *radii);
+}
+
+Path ShapeSystem::pathClipPath(EntityHandle handle, const PathClipPath& path,
+                               CircleClipGeometryBudget& budget) {
+  const std::size_t points = path.data.points().size();
+  const std::size_t commands = path.data.commands().size();
+  if (points > parser::PathParser::kMaximumPoints ||
+      commands > parser::PathParser::kMaximumCommands) {
+    budget.reject();
+    return {};
+  }
+  // Charge validation, translated copies and an implicit close for every possible contour.
+  if (!budget.reserve(2 * points + 2 * commands + 1)) {
+    return {};
+  }
+  const std::optional<Box2d> box = getCircleReferenceBox(handle, path.box, budget);
+  if (!box || !PathClipCoordinatesFit(path.data, box->topLeft)) {
+    return {};
+  }
+  return BuildClosedPathClip(path.data, box->topLeft);
 }
 
 std::optional<Box2d> ShapeSystem::getCircleReferenceBox(EntityHandle handle,

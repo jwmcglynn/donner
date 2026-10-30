@@ -1089,7 +1089,7 @@ struct TextParams {
   /// If set, stretches or compresses text to fill the given length.
   std::optional<Lengthd> textLength;
   LengthAdjust lengthAdjust = LengthAdjust::Default;
-  /// SVG2 `inline-size` measure in pixels. > 0 wraps text to this measure (horizontal only);
+  /// SVG2 `inline-size` measure in pixels. > 0 wraps horizontal or vertical text to this measure;
   /// 0 = no wrapping area. @see https://www.w3.org/TR/SVG2/text.html#InlineSizeProperty
   double inlineSizePx = 0.0;
   /// `@font-face` declarations for custom font resolution.
@@ -1103,6 +1103,8 @@ struct TextParams {
   /// Optional driver-prepared runs for this draw. Shared ownership keeps them alive through the
   /// synchronous backend call; the runs align with the text spans passed to drawText.
   std::shared_ptr<const PreparedTextDraw> preparedTextDraw;
+  /// Computed CSS first-line start margin for a positive inline-size area; paths ignore it.
+  double textIndentPx = 0.0;
 };
 
 /**

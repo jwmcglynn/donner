@@ -825,6 +825,22 @@ ParseResult<Lengthd> ParseInlineSize(std::span<const css::ComponentValue> compon
   return result;
 }
 
+/// Parse the supported scalar text-indent grammar without accepting unsupported relative units.
+ParseResult<Lengthd> ParseTextIndent(std::span<const css::ComponentValue> components) {
+  auto result = parser::ParseLengthPercentage(components, false);
+  if (result.hasError()) {
+    return result;
+  }
+  const auto& length = result.result();
+  const bool supportedUnit = length.unit <= Lengthd::Unit::Em;
+  if (!supportedUnit || !std::isfinite(length.value)) {
+    ParseDiagnostic error;
+    error.reason = "Unsupported text-indent length";
+    return error;
+  }
+  return result;
+}
+
 ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -2447,6 +2463,32 @@ constexpr std::array<std::pair<std::string_view, bool>, 75> kValidPresentationAt
 DONNER_CONSTEXPR_MAP auto kValidPresentationAttributes =
     makeCompileTimeMap(kValidPresentationAttributeEntries);
 
+std::optional<ParseDiagnostic> ParseOverflowWrap(PropertyRegistry& registry,
+                                                 const parser::PropertyParseFnParams& params) {
+  return Parse(
+      params,
+      [](const parser::PropertyParseFnParams& value) -> ParseResult<OverflowWrap> {
+        const auto& components = value.components();
+        if (components.size() == 1) {
+          if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+            constexpr std::pair<std::string_view, OverflowWrap> keywords[] = {
+                {"normal", OverflowWrap::Normal},
+                {"break-word", OverflowWrap::BreakWord},
+                {"anywhere", OverflowWrap::Anywhere}};
+            for (const auto& [keyword, policy] : keywords) {
+              if (ident->value.equalsLowercase(keyword)) {
+                return policy;
+              }
+            }
+          }
+        }
+        ParseDiagnostic error;
+        error.reason = "Invalid overflow-wrap value";
+        return error;
+      },
+      &registry.overflowWrap);
+}
+
 using PropertyParseFn = std::optional<ParseDiagnostic> (*)(
     PropertyRegistry& registry, const parser::PropertyParseFnParams& params);
 
@@ -2633,6 +2675,8 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.fontSizeAdjust);
                  }},  //
+                {"overflow-wrap", ParseOverflowWrap},
+                {"word-wrap", ParseOverflowWrap},
                 {"text-transform",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
@@ -2814,6 +2858,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParseInlineSize(params.components(), params.allowUserUnits());
                        },
                        &registry.inlineSize);
+                 }},  //
+                {"text-indent",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& value) {
+                         return ParseTextIndent(value.components());
+                       },
+                       &registry.textIndent);
                  }},  //
                 {"isolation",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
@@ -3156,6 +3209,19 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                  }},                     //
             }));
 
+bool ResolveInsetLengthArray(std::array<Lengthd, 4>& values, const FontMetrics& metrics) {
+  for (Lengthd& length : values) {
+    if (length.unit != Lengthd::Unit::Percent) {
+      const double pixels = length.toPixels(Box2d(), metrics);
+      if (!std::isfinite(pixels)) {
+        return false;
+      }
+      length = Lengthd(pixels, Lengthd::Unit::Px);
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 PropertyRegistry::PropertyRegistry() = default;
@@ -3235,6 +3301,9 @@ std::size_t PropertyRegistry::complexPropertyBytes() const {
     if (const auto* polygon = std::get_if<PolygonClipPath>(&clip->value)) {
       SaturatingAddArrayBytes(result, polygon->vertices.capacity(),
                               sizeof(PolygonClipPath::Vertex));
+    } else if (const auto* path = std::get_if<PathClipPath>(&clip->value)) {
+      SaturatingAdd(result,
+                    path->data.retainedBytes().value_or(std::numeric_limits<std::size_t>::max()));
     }
   }
   for (const auto& entry : unparsedProperties) {
@@ -3544,6 +3613,29 @@ bool PropertyRegistry::isPresentationAttributeInherited(std::string_view name) {
   return inherited;
 }
 
+void PropertyRegistry::resolveInsetClipLengths(double rootFontSizePx) {
+  const ClipPath* stored = clipPath.getStoredValue();
+  if (!stored) {
+    return;
+  }
+  const auto* inset = std::get_if<InsetClipPath>(&stored->value);
+  if (!inset) {
+    return;
+  }
+  InsetClipPath computed = *inset;
+  FontMetrics metrics = FontMetrics::DefaultsWithFontSize(fontSize.get().value().value);
+  metrics.rootFontSize = rootFontSizePx;
+  if (!ResolveInsetLengthArray(computed.offsets, metrics) ||
+      !ResolveInsetLengthArray(computed.radiiX, metrics) ||
+      !ResolveInsetLengthArray(computed.radiiY, metrics)) {
+    // Keep an unrepresentable declaration clipped rather than disabling its clip.
+    computed.offsets.fill(Lengthd(50, Lengthd::Unit::Percent));
+    computed.radiiX.fill(Lengthd());
+    computed.radiiY.fill(Lengthd());
+  }
+  clipPath.substitute(ClipPath(std::move(computed)));
+}
+
 void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
   const Lengthd fs = fontSize.get().value();
   double resolvedPx;
@@ -3567,6 +3659,18 @@ void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
       break;
   }
   fontSize.value = Lengthd(resolvedPx, Lengthd::Unit::Px);
+  const Lengthd indent = textIndent.get().value();
+  if (textIndent.state == PropertyState::Inherit ||
+      textIndent.state == PropertyState::ExplicitUnset) {
+    // Missing ancestor values still compute to the initial value before descendants inherit.
+    textIndent.set(indent, textIndent.specificity);
+  }
+  if (indent.unit == Lengthd::Unit::Em) {
+    textIndent.value = Lengthd(indent.value * resolvedPx, Lengthd::Unit::Px);
+  } else if (indent.unit != Lengthd::Unit::Percent && indent.unit != Lengthd::Unit::Px) {
+    textIndent.value =
+        Lengthd(indent.toPixels(Box2d(), FontMetrics(), Lengthd::Extent::Mixed), Lengthd::Unit::Px);
+  }
 }
 
 void PropertyRegistry::resolveTextDecorationThickness(double rootFontSizePx) {

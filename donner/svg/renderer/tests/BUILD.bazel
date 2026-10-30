@@ -835,12 +835,38 @@ donner_multi_transitioned_test(
 )
 
 donner_cc_test(
+    name = "text_indent_tests",
+    srcs = [
+        "MockTextBackend.h",
+        "TextIndent_tests.cc",
+    ],
+    data = ["//third_party/resvg-test-suite:fonts"],
+    variants = ["text_full"],
+    deps = [
+        ":mock_renderer_interface",
+        "//donner/base:base_test_utils",
+        "//donner/svg",
+        "//donner/svg/components/text:components",
+        "//donner/svg/parser",
+        "//donner/svg/properties",
+        "//donner/svg/renderer:placed_text_geometry",
+        "//donner/svg/renderer:render_snapshot",
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/text:text_backend",
+        "//donner/svg/text:text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "text_engine_scripted_tests",
     srcs = ["TextEngineScripted_tests.cc"],
     deps = [
         "//donner/base:base_test_utils",
         "//donner/base/xml/components",
         "//donner/svg",
+        "//donner/svg/components:components_core",
         "//donner/svg/components/layout:components",
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/style:components",
@@ -1754,6 +1780,32 @@ donner_cc_test(
         ":decoration_test_scene",
         ":image_comparison_test_fixture",
         "//donner/editor/tests:bitmap_golden_compare",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "inset_clip_path_tests",
+    srcs = ["InsetClipPath_tests.cc"],
+    opens_gpu_device = True,
+    variants = ["geode"],
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "path_clip_path_tests",
+    srcs = ["PathClipPath_tests.cc"],
+    opens_gpu_device = True,
+    variants = ["geode"],
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

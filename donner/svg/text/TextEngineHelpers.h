@@ -116,24 +116,26 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
                      bool vertical, double currentPenX, double currentPenY,
                      TextLengthTraversalStats* traversalStats = nullptr);
 
-/// Fix up chunk text-anchors and apply per-chunk text-anchor adjustment.
+/// Fix up chunk anchors and apply the existing per-line anchor profile.
+/// firstLineIndent contributes its signed leading margin only to the first flat chunk.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
                      const components::ComputedTextComponent& text, bool vertical,
-                     const AnchorExclusions& exclusions = {});
+                     const AnchorExclusions& exclusions = {}, double firstLineIndent = 0.0);
 
 /// Apply whitespace-dependent line layout along the inline axis, before text-anchor adjustment.
 /// Each line/chunk uses its first addressable character's anchor; lines advance along the block
 /// axis.
 ///
 /// Soft wrapping uses spaces and tabs according to each span's white-space policy. Preserved
-/// segment breaks force new lines even without inline-size. There is no mid-word breaking,
-/// hyphenation, or CJK per-character breaking. Collapsible trailing spaces are removed;
-/// pre-wrap spaces may hang, while break-spaces gives each preserved space a break opportunity.
-/// Text-on-path runs are excluded: their controls are shaped as blanks without creating line boxes.
+/// segment breaks force new lines even without inline-size. Overflow-wrap enables bounded
+/// emergency typographic-unit breaks; there is no hyphenation or CJK per-character policy.
+/// Collapsible trailing spaces are removed; pre-wrap spaces may hang, while break-spaces gives each
+/// preserved space a break opportunity. Text-on-path runs are excluded: their controls are shaped
+/// as blanks without creating line boxes.
 ///
 /// @param runs Runs produced by the single-line layout; glyph positions are rewritten.
 /// @param text Computed text tree, parallel to \p runs (span i corresponds to run i).
-/// @param params Layout params, including writing mode.
+/// @param params Layout params, including writing mode and the first-line start margin.
 /// @param measurePx The inline-size measure in pixels, or zero to apply only forced breaks/tabs.
 /// @param lineHeightPx Advance between line baselines along the block axis, in pixels.
 /// @param backend Font metrics for the minimum tab advance (0.5ch).
