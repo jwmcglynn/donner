@@ -1255,3 +1255,9 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
             tags = ["perf_sensitive"],
             **optimized_kwargs
         )
+
+    _source_format_check(
+        name = name,
+        srcs = kwargs.get("srcs", []),
+        hdrs = kwargs.get("hdrs", []),
+    )

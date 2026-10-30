@@ -59,6 +59,31 @@ The first build downloads the external dependencies and builds them from source.
 
 - **Apple Silicon M1**: ~2 minutes
 
+## Native optimization policies {#NativeOptimizationPolicies}
+
+Within Donner, declare speed-sensitive code on the target that compiles it:
+
+```python
+load("//build_defs:rules.bzl", "donner_perf_sensitive_cc_library")
+
+donner_perf_sensitive_cc_library(
+    name = "text_processing",
+    srcs = ["TextProcessing.cc"],
+    optimization_level = "O2",
+)
+```
+
+The default native level is `O2`; use `O3` for kernels whose measurements justify it.
+These options take precedence over global `-Os` or `-Oz` and apply only to the target's own
+sources. A dependency-only wrapper does not upgrade its dependencies. The explicit
+`allow_debug_builds_config` escape selects the original unconfigured Bazel library.
+WebAssembly retains its caller-selected optimization policy.
+
+Generated CMake targets carry the same selected native level as private compile options.
+The generator resolves conflicting optimization flags before emission so CMake's option
+sorting and deduplication cannot reverse the selected level. Function `hot` annotations are
+hotness hints; they do not replace this build policy.
+
 ## Running Tests
 
 To run the tests, run:

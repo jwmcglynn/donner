@@ -446,6 +446,32 @@ class NativeSpeedOptionsTest(unittest.TestCase):
         self.assertNotIn("-O3", text)
         self.assertNotRegex(text, r"target_compile_options\([^\n]* (PUBLIC|INTERFACE) [^\n]*-O2")
 
+    def test_selected_o3_replaces_conflicting_cmake_optimization(self):
+        values = g._target_value_map()
+        values["srcs"]["Kernel.cc"] = set(g._ALL_CONFIG_NAMES)
+        values["copts"]["-O2"] = set(g._ALL_CONFIG_NAMES)
+        values["copts"]["-O3"] = set(g._ALL_CONFIG_NAMES)
+        values["native_optimization_level"]["O3"] = set(g._ALL_CONFIG_NAMES)
+        target = g.CMakeTarget(
+            label="//donner/svg/renderer:kernel", package="donner/svg/renderer", name="kernel",
+            kind="cc_library", configs=set(g._ALL_CONFIG_NAMES), values=values,
+        )
+        emission = g._prepare_emission(target, target.package)
+        self.assertEqual(emission.copts, ["-O3"])
+        self.assertEqual(emission.option_scope, "PRIVATE")
+
+    def test_header_only_target_does_not_export_speed_flags(self):
+        values = g._target_value_map()
+        values["hdrs"]["Header.h"] = set(g._ALL_CONFIG_NAMES)
+        values["copts"]["-O2"] = set(g._ALL_CONFIG_NAMES)
+        values["native_optimization_level"]["O2"] = set(g._ALL_CONFIG_NAMES)
+        target = g.CMakeTarget(
+            label="//donner/base:header", package="donner/base", name="header",
+            kind="cc_library", configs=set(g._ALL_CONFIG_NAMES), values=values,
+        )
+        emission = g._prepare_emission(target, target.package)
+        self.assertEqual(emission.copts, [])
+
     def test_png_encoder_optimized_except_debug(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             previous_cwd = Path.cwd()
