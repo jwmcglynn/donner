@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <concepts>
+#include <limits>
 #include <memory>
 #include <tuple>
 #include <utility>
@@ -570,6 +571,37 @@ bool IsFiniteEllipse(const Vector2d& center, double rx, double ry) {
                      [](double value) { return std::isfinite(value); });
 }
 
+bool IsRenderablePolygonCoordinate(double value) {
+  return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
+}
+
+Path BuildPolygonClipPath(const PolygonClipPath& polygon, const Box2d& box,
+                          const FontMetrics& metrics) {
+  PathBuilder builder(polygon.vertices.size());
+  bool first = true;
+  for (const auto& vertex : polygon.vertices) {
+    const Vector2d point =
+        box.topLeft + Vector2d(vertex.x.toPixels(box, metrics, Lengthd::Extent::X),
+                               vertex.y.toPixels(box, metrics, Lengthd::Extent::Y));
+    if (!IsRenderablePolygonCoordinate(point.x) || !IsRenderablePolygonCoordinate(point.y)) {
+      return {};
+    }
+    if (first) {
+      builder.moveTo(point);
+      first = false;
+    } else {
+      builder.lineTo(point);
+    }
+  }
+  Path path = builder.closePath().build();
+  const Box2d bounds = path.bounds();
+  if (!IsRenderablePolygonCoordinate(bounds.width()) ||
+      !IsRenderablePolygonCoordinate(bounds.height())) {
+    return {};
+  }
+  return path;
+}
+
 class ReferenceBoundsAccumulator {
 public:
   ReferenceBoundsAccumulator(ShapeSystem& shapes, EntityHandle root,
@@ -934,6 +966,24 @@ Path ShapeSystem::ellipseClipPath(EntityHandle handle, const EllipseClipPath& el
     return {};
   }
   return result;
+}
+
+Path ShapeSystem::polygonClipPath(EntityHandle handle, const PolygonClipPath& polygon,
+                                  CircleClipGeometryBudget& budget) {
+  const std::size_t count = polygon.vertices.size();
+  if (count > PolygonClipPath::kMaximumVertices || !budget.reserve(count * 2 + 1)) {
+    return {};
+  }
+  if (count < 3) {
+    return {};
+  }
+  const std::optional<Box2d> box = getCircleReferenceBox(handle, polygon.box, budget);
+  const auto* style = handle.try_get<ComputedStyleComponent>();
+  if (!box || !style || !style->properties) {
+    return {};
+  }
+  const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
+  return BuildPolygonClipPath(polygon, *box, metrics);
 }
 
 std::optional<Box2d> ShapeSystem::getCircleReferenceBox(EntityHandle handle,

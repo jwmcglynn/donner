@@ -108,6 +108,31 @@ TEST_F(ShapeSystemTest, CircleFillReferenceAdmitsPathScanBeforeBounds) {
   EXPECT_THAT(clip.bounds(), BoxEq(Vector2d(49, 0), Vector2d(51, 2)));
 }
 
+TEST_F(ShapeSystemTest, PolygonAdmissionAndNonFiniteCoordinatesFailClosed) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="r" width="64" height="64"/>
+    </svg>)");
+  const auto element = document.querySelector("#r");
+  ASSERT_THAT(element, testing::Optional(testing::_));
+  PolygonClipPath polygon;
+  polygon.box = RadialClipPath::Box::View;
+  polygon.vertices = {
+      {Lengthd(0), Lengthd(0)}, {Lengthd(32), Lengthd(0)}, {Lengthd(0), Lengthd(32)}};
+  CircleClipGeometryBudget limited;
+  limited.remainingWork = 6;
+  EXPECT_THAT(shapeSystem.polygonClipPath(element->entityHandle(), polygon, limited).commands(),
+              testing::IsEmpty());
+  EXPECT_THAT(limited.rejected, testing::IsTrue());
+  CircleClipGeometryBudget admitted;
+  EXPECT_THAT(shapeSystem.polygonClipPath(element->entityHandle(), polygon, admitted).commands(),
+              testing::Not(testing::IsEmpty()));
+  polygon.vertices[0].x = Lengthd(1e308);
+  CircleClipGeometryBudget huge;
+  EXPECT_THAT(shapeSystem.polygonClipPath(element->entityHandle(), polygon, huge).commands(),
+              testing::IsEmpty());
+}
+
 TEST_F(ShapeSystemTest, EllipseRejectsNonFinitePathBuilderIntermediates) {
   auto document = ParseAndComputeShapes(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">

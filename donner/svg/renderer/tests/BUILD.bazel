@@ -1501,6 +1501,15 @@ alias(
 
 # Direct primitive coverage also runs in Donner's dependency graph.
 donner_cc_test(
+    name = "tiny_skia_path_tests",
+    srcs = ["TinySkiaPath_tests.cc"],
+    deps = [
+        "@com_google_gtest//:gtest_main",
+        "@tiny-skia-cpp//src:tiny_skia_lib",
+    ],
+)
+
+donner_cc_test(
     name = "convolve_matrix_bias_tests",
     srcs = ["@tiny-skia-cpp//src/tiny_skia/filter/tests:ConvolveMatrixTest.cpp"],
     deps = [
@@ -1679,6 +1688,19 @@ donner_cc_test(
         "//donner/svg/tests:parser_test_utils",
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "polygon_clip_path_tests",
+    srcs = ["PolygonClipPath_tests.cc"],
+    opens_gpu_device = True,
+    variants = ["geode"],
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

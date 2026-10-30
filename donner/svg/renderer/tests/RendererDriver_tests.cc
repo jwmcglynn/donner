@@ -147,6 +147,22 @@ TEST_F(RendererDriverTest, MiterClipRangeBoundsIncludeDiagonalReversalCorners) {
   EXPECT_GE(bounds->bottomRight.y, corner);
 }
 
+TEST_F(RendererDriverTest, CssPolygonWindingIsIndependentOfElementClipRule) {
+  SVGDocument document = makeDocument(R"svg(
+    <g clip-rule="evenodd" clip-path="polygon(nonzero, 8px 8px, 56px 8px, 56px 56px,
+        8px 56px, 8px 8px, 56px 8px, 56px 56px, 8px 56px) view-box">
+      <rect width="64" height="64" fill="red"/>
+    </g>
+  )svg",
+                                      Vector2i(64, 64));
+  EXPECT_CALL(renderer, pushClip(_)).WillOnce([](const ResolvedClip& clip) {
+    ASSERT_THAT(clip.clipPaths, SizeIs(1));
+    EXPECT_THAT(clip.clipPaths.front().fillRule, Eq(FillRule::NonZero));
+    EXPECT_THAT(clip.clipPaths.front().path.commands(), testing::Not(testing::IsEmpty()));
+  });
+  driver.draw(document);
+}
+
 TEST_F(RendererDriverTest, BeginsAndEndsFrameAroundTraversal) {
   SVGDocument document = makeDocument(R"svg(
     <rect width="8" height="6" fill="red" />

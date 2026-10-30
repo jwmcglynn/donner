@@ -963,6 +963,58 @@ TEST_F(StyleSystemTest, RejectedDecorationUnitsPreserveNestedInheritance) {
   }
 }
 
+TEST_F(StyleSystemTest, PolygonInheritanceChargesAndReleasesRetainedStorage) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent" clip-path="polygon(0 0, 10 0, 10 10, 0 10)">
+        <rect id="first" style="clip-path:inherit"/>
+        <rect id="second" style="clip-path:inherit"/>
+      </g>
+    </svg>)svg");
+  const auto parentElement = document.querySelector("#parent");
+  const auto firstElement = document.querySelector("#first");
+  const auto secondElement = document.querySelector("#second");
+  ASSERT_THAT(parentElement, testing::Optional(testing::_));
+  ASSERT_THAT(firstElement, testing::Optional(testing::_));
+  ASSERT_THAT(secondElement, testing::Optional(testing::_));
+  auto parent = parentElement->entityHandle();
+  auto first = firstElement->entityHandle();
+  auto second = secondElement->entityHandle();
+  constexpr std::size_t kPolygonBytes = 4 * sizeof(PolygonClipPath::Vertex);
+  DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.computedStyleBytes = 2 * kPolygonBytes;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(familyLimits);
+  StyleResourceBudget::Limits limits;
+  limits.complexPropertyBytes = 2 * kPolygonBytes;
+  auto& budget = document.registry().ctx().emplace<StyleResourceBudget>(limits, family);
+  ParseWarningSink warnings;
+  ASSERT_THAT(styleSystem.computeStyle(parent, warnings).properties->clipPath.get(),
+              testing::Optional(testing::_));
+  EXPECT_EQ(budget.complexPropertyBytes(), kPolygonBytes);
+  ASSERT_THAT(styleSystem.computeStyle(first, warnings).properties->clipPath.get(),
+              testing::Optional(testing::_));
+  EXPECT_EQ(budget.complexPropertyBytes(), 2 * kPolygonBytes);
+  EXPECT_THAT(styleSystem.computeStyle(second, warnings).properties->clipPath.get(),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(budget.rejected(), testing::IsTrue());
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle),
+            2 * kPolygonBytes);
+
+  styleSystem.invalidateComputed(first);
+  EXPECT_EQ(budget.complexPropertyBytes(), kPolygonBytes);
+  budget.reset();
+  first.get<StyleComponent>().properties.parseStyle("clip-path:none");
+  EXPECT_THAT(styleSystem.computeStyle(first, warnings).properties->clipPath.get(),
+              testing::Eq(std::nullopt));
+  EXPECT_EQ(budget.complexPropertyBytes(), kPolygonBytes);
+  styleSystem.invalidateComputed(parent);
+  parent.get<StyleComponent>().properties.parseStyle("clip-path:none");
+  EXPECT_THAT(styleSystem.computeStyle(parent, warnings).properties->clipPath.get(),
+              testing::Eq(std::nullopt));
+  EXPECT_EQ(budget.complexPropertyBytes(), 0u);
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 0u);
+}
+
 TEST(StyleResourceBudgetTest, SharesRetainedBytesAcrossDocumentFamily) {
   DocumentResourceFamilyBudget::Limits familyLimits;
   familyLimits.computedStyleBytes = 1024;

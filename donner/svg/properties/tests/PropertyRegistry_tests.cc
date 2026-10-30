@@ -1997,6 +1997,78 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
   }
 }
 
+TEST(PropertyRegistry, PolygonRetainedCapacityIsCharged) {
+  PolygonClipPath polygon;
+  polygon.vertices.reserve(8);
+  polygon.vertices.push_back({Lengthd(0), Lengthd(0)});
+  const std::size_t expected = polygon.vertices.capacity() * sizeof(PolygonClipPath::Vertex);
+  PropertyRegistry registry;
+  registry.clipPath.set(ClipPath(std::move(polygon)), Specificity());
+  EXPECT_EQ(registry.complexPropertyBytes(), expected);
+}
+
+TEST(PropertyRegistry, PolygonClipParsesRuleCoordinatesAndBox) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:polygon(evenodd, -2px 0, 50% 100%, 0 5px) fill-box");
+  const auto clip = registry.clipPath.get();
+  ASSERT_THAT(clip, Optional(testing::Field("value", &ClipPath::value,
+                                            testing::VariantWith<PolygonClipPath>(testing::_))));
+  const auto& polygon = std::get<PolygonClipPath>(clip->value);
+  EXPECT_EQ(polygon.rule, ClipRule::EvenOdd);
+  EXPECT_EQ(polygon.box, RadialClipPath::Box::Fill);
+  ASSERT_EQ(polygon.vertices.size(), 3u);
+  EXPECT_THAT(polygon.vertices[0].x, Eq(Lengthd(-2, Lengthd::Unit::Px)));
+  EXPECT_THAT(polygon.vertices[1].x, Eq(Lengthd(50, Lengthd::Unit::Percent)));
+  EXPECT_THAT(polygon.vertices[1].y, Eq(Lengthd(100, Lengthd::Unit::Percent)));
+
+  PropertyRegistry presentation;
+  EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "polygon(2 3, 4 5)"),
+              NoParseError());
+  ASSERT_THAT(
+      presentation.clipPath.get(),
+      Optional(testing::Field("value", &ClipPath::value,
+                              testing::VariantWith<PolygonClipPath>(testing::Field(
+                                  "vertices", &PolygonClipPath::vertices, testing::SizeIs(2))))));
+}
+
+TEST(PropertyRegistry, InvalidPolygonKeepsEarlierDeclaration) {
+  for (const std::string_view value :
+       {"polygon()", "polygon(evenodd)", "polygon(evenodd 0 0)", "polygon(0)", "polygon(0 0,)",
+        "polygon(0 0 0 0)", "polygon(0 0,,0 0)", "polygon(2 3, 4 5)",
+        "polygon(0 0) fill-box view-box", "polygon(1e999px 0)", "polygon(0 0, 0 calc(2px))",
+        "polygon(round 1px, 0 0, 1px 0, 0 1px)"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(value));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
+  }
+}
+
+TEST(PropertyRegistry, PolygonVertexLimitIsBounded) {
+  auto declaration = css::CSS::ParseStyleAttribute("clip-path:polygon(0 0,0 0)").front();
+  auto& function = declaration.values.front().get<css::Function>();
+  const auto coordinate = function.values[0];
+  const auto comma = function.values[3];
+  function.values.clear();
+  for (std::size_t i = 0; i < PolygonClipPath::kMaximumVertices; ++i) {
+    if (i) {
+      function.values.push_back(comma);
+    }
+    function.values.push_back(coordinate);
+    function.values.push_back(coordinate);
+  }
+  auto result = ParseBasicShapeClipPath(declaration.values, false);
+  ASSERT_THAT(result, ParseResultIs(testing::Field(
+                          "value", &ClipPath::value,
+                          testing::VariantWith<PolygonClipPath>(testing::Field(
+                              "vertices", &PolygonClipPath::vertices,
+                              testing::SizeIs(PolygonClipPath::kMaximumVertices))))));
+  function.values.push_back(comma);
+  function.values.push_back(coordinate);
+  function.values.push_back(coordinate);
+  EXPECT_THAT(ParseBasicShapeClipPath(declaration.values, false), ParseErrorIs(testing::_));
+}
+
 TEST(PropertyRegistry, EllipseClipParsingAndInvalidDeclarationFallback) {
   PropertyRegistry valid;
   valid.parseStyle("clip-path:ellipse(8px 4px at right 2px bottom 3px) fill-box");

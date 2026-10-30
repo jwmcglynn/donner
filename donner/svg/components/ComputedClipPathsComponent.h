@@ -25,6 +25,9 @@ struct ComputedClipPathsComponent {
     /// Computed clip rule for this path.
     ClipRule clipRule = ClipRule::NonZero;
 
+    /// Basic shapes specify their own rule, independently of the element clip-rule property.
+    bool hasOwnClipRule = false;
+
     /**
      * Nested clip paths immediately precede their referencing shape at a greater layer index.
      * Their union intersects only that shape. The resulting sibling shapes at the same layer
