@@ -759,6 +759,22 @@ ParseResult<Lengthd> ParseInlineSize(std::span<const css::ComponentValue> compon
   return result;
 }
 
+/// Parse the supported scalar text-indent grammar without accepting unsupported relative units.
+ParseResult<Lengthd> ParseTextIndent(std::span<const css::ComponentValue> components) {
+  auto result = parser::ParseLengthPercentage(components, false);
+  if (result.hasError()) {
+    return result;
+  }
+  const auto& length = result.result();
+  const bool supportedUnit = length.unit <= Lengthd::Unit::Em;
+  if (!supportedUnit || !std::isfinite(length.value)) {
+    ParseDiagnostic error;
+    error.reason = "Unsupported text-indent length";
+    return error;
+  }
+  return result;
+}
+
 ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -2750,6 +2766,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.inlineSize);
                  }},  //
+                {"text-indent",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& value) {
+                         return ParseTextIndent(value.components());
+                       },
+                       &registry.textIndent);
+                 }},  //
                 {"isolation",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
@@ -3541,6 +3566,18 @@ void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
       break;
   }
   fontSize.value = Lengthd(resolvedPx, Lengthd::Unit::Px);
+  const Lengthd indent = textIndent.get().value();
+  if (textIndent.state == PropertyState::Inherit ||
+      textIndent.state == PropertyState::ExplicitUnset) {
+    // Missing ancestor values still compute to the initial value before descendants inherit.
+    textIndent.set(indent, textIndent.specificity);
+  }
+  if (indent.unit == Lengthd::Unit::Em) {
+    textIndent.value = Lengthd(indent.value * resolvedPx, Lengthd::Unit::Px);
+  } else if (indent.unit != Lengthd::Unit::Percent && indent.unit != Lengthd::Unit::Px) {
+    textIndent.value =
+        Lengthd(indent.toPixels(Box2d(), FontMetrics(), Lengthd::Extent::Mixed), Lengthd::Unit::Px);
+  }
 }
 
 void PropertyRegistry::resolveTextDecorationThickness(double rootFontSizePx) {

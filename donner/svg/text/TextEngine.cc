@@ -391,6 +391,9 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
   // the root element's computed style here.
   const Lengthd inlineSize = properties.inlineSize.get().value();
   params.inlineSizePx = inlineSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+  params.textIndentPx = properties.textIndent.get().value().toPixels(
+      Box2d::FromXYWH(0, 0, params.inlineSizePx, params.inlineSizePx), params.fontMetrics,
+      Lengthd::Extent::X);
   return params;
 }
 
@@ -2369,8 +2372,17 @@ bool IsExcludedAnchorGlyph(const AnchorExclusions& exclusions, size_t runIndex,
          exclusions[runIndex][cluster];
 }
 
+/// The leading signed margin participates in the existing per-line anchor profile.
+double IndentAnchorAdjustment(double indent, TextAnchor anchor) {
+  return anchor == TextAnchor::Middle ? -indent * 0.5 : anchor == TextAnchor::End ? -indent : 0.0;
+}
+
+double TextAreaIndent(const TextLayoutParams& params) {
+  return params.inlineSizePx > 0.0 ? params.textIndentPx : 0.0;
+}
+
 bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, bool vertical,
-                     const AnchorExclusions& exclusions) {
+                     const AnchorExclusions& exclusions, double indent) {
   TextAnchorBounds bounds;
   bool finite = true;
   ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph, size_t runIndex) {
@@ -2383,7 +2395,8 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
   if (!bounds.initialized) {
     return finite;
   }
-  const double shift = bounds.shift(range.begin.textAnchor);
+  const double shift =
+      bounds.shift(range.begin.textAnchor) + IndentAnchorAdjustment(indent, range.begin.textAnchor);
   finite &= std::isfinite(shift);
   ForEachAnchorGlyph(runs, range, [&](const TextGlyph& glyph, size_t) {
     auto translated = glyph;
@@ -2401,7 +2414,7 @@ bool AnchorTextRange(std::vector<TextRun>& runs, const TextAnchorRange& range, b
 /// Retain original chunk indices until all groups are validated, then compact each run once.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
                      const components::ComputedTextComponent& text, bool vertical,
-                     const AnchorExclusions& exclusions) {
+                     const AnchorExclusions& exclusions, double firstLineIndent) {
   for (auto& chunk : chunkBoundaries) {
     for (size_t ri = chunk.runIndex; ri < runs.size(); ++ri) {
       const size_t begin = ri == chunk.runIndex ? chunk.glyphIndex : 0;
@@ -2412,11 +2425,19 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
     }
   }
   std::vector<std::vector<bool>> rejected;
+  bool indentPending = firstLineIndent != 0.0;
   for (size_t ci = 0; ci < chunkBoundaries.size(); ++ci) {
     const ChunkBoundary end =
         ci + 1 < chunkBoundaries.size() ? chunkBoundaries[ci + 1] : ChunkBoundary{runs.size(), 0};
     const TextAnchorRange range{chunkBoundaries[ci], end};
-    if (!AnchorTextRange(runs, range, vertical, exclusions)) {
+    double indent = 0.0;
+    if (indentPending) {
+      ForEachAnchorGlyph(runs, range, [&](const TextGlyph&, size_t) {
+        indent = firstLineIndent;
+        indentPending = false;
+      });
+    }
+    if (!AnchorTextRange(runs, range, vertical, exclusions, indent)) {
       MarkRejectedAnchorRange(runs, range, rejected);
     }
   }
@@ -2664,7 +2685,8 @@ double PlaceWrappingGlyph(std::vector<WrappingGlyph>& flat, size_t index, size_t
     item.advance = 0.0;
   } else if (item.codepoint == '\t' && item.originalAdvance > 0.0) {
     const double stop = item.originalAdvance * 8.0;
-    item.advance = stop - std::fmod(std::max(0.0, item.x), stop);
+    const double remainder = std::fmod(item.x, stop);
+    item.advance = remainder < 0.0 ? -remainder : stop - remainder;
     if (item.advance < item.halfCh) {
       item.advance += stop;
     }
@@ -2714,8 +2736,14 @@ void TrimNormalWrappingBreak(std::vector<WrappingGlyph>& flat, size_t start,
   }
 }
 
+/// An authored inline reset retains the margin only at the first glyph of the first line.
+double IndentForInlineReset(size_t index, size_t line, double firstLineIndent) {
+  return index == 0 && line == 0 ? firstLineIndent : 0.0;
+}
+
 /// Greedy line selection prefers ordinary opportunities over emergency grapheme boundaries.
-size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
+size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx,
+                           double firstLineIndent = 0.0) {
   size_t line = 0;
   size_t blockLine = 0;
   size_t block = flat.front().block;
@@ -2723,7 +2751,7 @@ size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
   size_t index = 0;
   std::optional<size_t> lastBreak;
   std::optional<size_t> emergencyBreak;
-  double width = 0.0;
+  double width = firstLineIndent;
   while (index < flat.size()) {
     auto& item = flat[index];
     if (item.block != block) {
@@ -2747,7 +2775,7 @@ size_t AssignWrappingLines(std::vector<WrappingGlyph>& flat, double measurePx) {
     }
     if (item.resetsInline) {
       start = index;
-      width = 0.0;
+      width = IndentForInlineReset(index, line, firstLineIndent);
       lastBreak.reset();
       emergencyBreak.reset();
     }
@@ -2876,7 +2904,8 @@ void AccumulateWrappingAnchor(WrappingAnchorGroup& group, const WrappingGlyph& i
 
 /// A line start or authored x/y reset starts an anchored chunk; a style-only span does not.
 std::vector<double> WrappingAnchorShifts(std::vector<WrappingGlyph>& flat,
-                                         const std::vector<bool>& excluded) {
+                                         const std::vector<bool>& excluded,
+                                         double firstLineIndent) {
   std::vector<WrappingAnchorGroup> groups;
   for (size_t i = 0; i < flat.size(); ++i) {
     auto& item = flat[i];
@@ -2889,7 +2918,9 @@ std::vector<double> WrappingAnchorShifts(std::vector<WrappingGlyph>& flat,
   std::vector<double> shifts;
   shifts.reserve(groups.size());
   for (const auto& group : groups) {
-    shifts.push_back(group.bounds.shift(group.anchor));
+    const double indent = shifts.empty() ? firstLineIndent : 0.0;
+    shifts.push_back(group.bounds.shift(group.anchor) +
+                     IndentAnchorAdjustment(indent, group.anchor));
   }
   return shifts;
 }
@@ -2966,29 +2997,10 @@ bool HasWrappingLines(const std::vector<WrappingGlyph>& flat) {
   return false;
 }
 
-bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
-                         const TextLayoutParams& params, double measurePx, double lineHeightPx,
-                         const TextBackend* backend, std::span<const ChunkBoundary> chunks,
-                         std::span<const InlineDisplacement> displacements,
-                         AnchorExclusions* exclusions) {
-  auto flat = CollectWrappingGlyphs(runs, text, isVertical(params.writingMode), backend, chunks);
-  if (flat.empty()) {
-    return false;
-  }
-  ResolveWrappingOrigins(flat, displacements);
-  const size_t numLines = AssignWrappingLines(flat, measurePx);
-  const bool hasControls = std::any_of(flat.begin(), flat.end(), [](const WrappingGlyph& item) {
-    return item.isBreak() || item.codepoint == '\t';
-  });
-  const bool wrapped = HasWrappingLines(flat);
-  const auto excluded = ExcludedWrappingItems(flat, numLines, measurePx);
-  if (!wrapped) {
-    RecordAnchorExclusions(runs, text, flat, excluded, exclusions);
-  }
-  if (!wrapped && !hasControls) {
-    return false;
-  }
-  const auto shifts = WrappingAnchorShifts(flat, excluded);
+/// Preflights anchored groups before committing positions and compacting rejected geometry.
+void ApplyWrappingPositions(std::vector<TextRun>& runs, const std::vector<WrappingGlyph>& flat,
+                            const TextLayoutParams& params, const std::vector<double>& shifts,
+                            double lineHeightPx, bool wrapped) {
   const auto finite = wrapped ? FiniteWrappingGroups(runs, flat, params, shifts, lineHeightPx)
                               : std::vector<bool>(shifts.size(), true);
   for (const auto& item : flat) {
@@ -3000,6 +3012,33 @@ bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedT
   if (wrapped) {
     DiscardNonfiniteWrappingGroups(runs, flat, finite);
   }
+}
+
+bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
+                         const TextLayoutParams& params, double measurePx, double lineHeightPx,
+                         const TextBackend* backend, std::span<const ChunkBoundary> chunks,
+                         std::span<const InlineDisplacement> displacements,
+                         AnchorExclusions* exclusions) {
+  auto flat = CollectWrappingGlyphs(runs, text, isVertical(params.writingMode), backend, chunks);
+  if (flat.empty()) {
+    return false;
+  }
+  ResolveWrappingOrigins(flat, displacements);
+  const double indent = TextAreaIndent(params);
+  const size_t numLines = AssignWrappingLines(flat, measurePx, indent);
+  const bool hasControls = std::any_of(flat.begin(), flat.end(), [](const WrappingGlyph& item) {
+    return item.isBreak() || item.codepoint == '\t';
+  });
+  const bool wrapped = HasWrappingLines(flat);
+  const auto excluded = ExcludedWrappingItems(flat, numLines, measurePx);
+  if (!wrapped) {
+    RecordAnchorExclusions(runs, text, flat, excluded, exclusions);
+  }
+  if (!wrapped && !hasControls && indent == 0.0) {
+    return false;
+  }
+  const auto shifts = WrappingAnchorShifts(flat, excluded, indent);
+  ApplyWrappingPositions(runs, flat, params, shifts, lineHeightPx, wrapped);
   return wrapped;
 }
 
@@ -3795,6 +3834,7 @@ struct EmergencyWrapOptions {
   size_t baseBytes = 0;
   size_t preparedBytes = 0;
   double measure = 0.0;
+  double firstLineIndent = 0.0;
   double letterSpacing = 0.0;
   double wordSpacing = 0.0;
   double halfCh = 0.0;
@@ -3818,6 +3858,8 @@ struct EmergencyWrapOptions {
   std::vector<WrappingGlyph> incomingLine;
   /// Byte offset of the shaping chunk that continues \ref incomingLine.
   size_t incomingByte = 0;
+  /// First-line indentation of \ref incomingLine when it is the text's first line, else zero.
+  double incomingLineIndent = 0.0;
   bool rejected = false;
 };
 
@@ -4008,6 +4050,25 @@ double ContinuedWordLeading(uint32_t start, const EmergencyWrapOptions& options)
   return start == options.incomingByte ? IncomingWordExtent(options.incomingLine) : 0.0;
 }
 
+/// First-line indentation that bounds a word continuing the incoming line, when that word is the
+/// first on the line and so cannot move to an unindented line as a whole.
+double ContinuedWordIndent(uint32_t start, const EmergencyWrapOptions& options) {
+  if (start != options.incomingByte || options.incomingLine.empty()) {
+    return 0.0;
+  }
+  const bool wordStartsLine =
+      std::none_of(options.incomingLine.begin(), options.incomingLine.end(),
+                   [](const WrappingGlyph& item) { return item.isSpace() || item.isBreak(); });
+  return wordStartsLine ? options.incomingLineIndent : 0.0;
+}
+
+/// Only the first source word, or the word continuing the indented first line, can consume the
+/// initial margin without an earlier normal break.
+double EmergencyWordMeasure(uint32_t start, const EmergencyWrapOptions& options) {
+  return options.measure - (start == 0 ? options.firstLineIndent : 0.0) -
+         ContinuedWordIndent(start, options);
+}
+
 /// Bisection bounds retries without scanning every possible prefix of an overlong word.
 std::vector<uint32_t> EmergencySplitPoints(const TextBackend::ShapedRun& shaped,
                                            const ChunkRange& range, std::string_view text,
@@ -4026,7 +4087,7 @@ std::vector<uint32_t> EmergencySplitPoints(const TextBackend::ShapedRun& shaped,
     }
     const auto word = std::span(clusters).subspan(start, end - start);
     const uint32_t byteEnd = end < clusters.size() ? clusters[end].start : range.byteEnd;
-    if (EmergencyWordOverflows(word, options.measure,
+    if (EmergencyWordOverflows(word, EmergencyWordMeasure(word.front().start, options),
                                ContinuedWordLeading(word.front().start, options))) {
       if (const auto cut = EmergencyWordCut(word, byteEnd, candidates)) {
         result.push_back(*cut);
@@ -4176,7 +4237,8 @@ private:
         ++end;
       }
       if (end > start &&
-          EmergencyWordOverflows(std::span(clusters).subspan(start, end - start), options_.measure,
+          EmergencyWordOverflows(std::span(clusters).subspan(start, end - start),
+                                 EmergencyWordMeasure(clusters[start].start, options_),
                                  ContinuedWordLeading(clusters[start].start, options_))) {
         return true;
       }
@@ -4408,7 +4470,8 @@ private:
     if (metrics.empty()) {
       return;
     }
-    AssignWrappingLines(metrics, options_.measure);
+    AssignWrappingLines(metrics, options_.measure,
+                        node.range.byteStart == 0 ? options_.firstLineIndent : 0.0);
     const bool softEnd = node.range.byteEnd < context_.byteOffset + context_.byteLength;
     std::vector<uint32_t> trimmed;
     for (size_t index = metrics.size(); index > 0 && metrics[index - 1].isSpace(); --index) {
@@ -4474,6 +4537,16 @@ private:
     }
   }
 
+  /// First-line indentation applies when the planned sequence starts the text's first line.
+  double plannedLineIndent(const Node& node, const std::vector<Node>& preceding) const {
+    if (continuesIncomingLine()) {
+      return options_.incomingLineIndent;
+    }
+    const size_t start =
+        preceding.empty() ? node.range.byteStart : preceding.front().range.byteStart;
+    return start == 0 ? options_.firstLineIndent : 0.0;
+  }
+
   /// Plan backward lines after the glyphs already on the line: earlier spans' glyphs on the line
   /// this chunk continues, then the preceding nodes of this chunk.
   void appendBackwardLines(Node node, std::vector<Node>& result) {
@@ -4487,7 +4560,7 @@ private:
     const size_t first = metrics.size();
     appendContinuing(metrics, logicalMetrics(node));
     if (!metrics.empty()) {
-      AssignWrappingLines(metrics, options_.measure);
+      AssignWrappingLines(metrics, options_.measure, plannedLineIndent(node, result));
     }
     std::vector<uint32_t> cuts;
     for (size_t index = first + 1; index < metrics.size(); ++index) {
@@ -5171,6 +5244,7 @@ private:
     if (prepareEmergency_ && span.overflowWrap != OverflowWrap::Normal &&
         AllowsSoftWrap(span.whiteSpace) && !span.pathSpline) {
       state.emergency.measure = params_.inlineSizePx;
+      state.emergency.firstLineIndent = firstFlatShaping_ ? TextAreaIndent(params_) : 0.0;
       state.emergency.letterSpacing = span.letterSpacingPx;
       state.emergency.wordSpacing = span.wordSpacingPx;
       state.emergency.backend = &backend_;
@@ -5186,7 +5260,7 @@ private:
       state.emergency.fontSizePx = state.fontSizePx;
       state.emergency.vertical = state.vertical;
       state.emergency.orientation = state.orientation;
-      state.emergency.incomingLine = incomingWrapLine(state);
+      state.emergency.incomingLine = incomingWrapLine(state, state.emergency.incomingLineIndent);
       state.emergency.incomingByte =
           state.chunkRanges.empty() ? 0 : state.chunkRanges.front().byteStart;
       for (size_t byte = 0; byte < state.text.size();) {
@@ -5232,7 +5306,8 @@ private:
 
   /// Glyphs that earlier spans leave on the line this span continues, as the inline-size pass will
   /// place them. Beyond the lookback bound the span plans its backward words against an empty line.
-  std::vector<WrappingGlyph> incomingWrapLine(const SpanState& state) const {
+  std::vector<WrappingGlyph> incomingWrapLine(const SpanState& state, double& indent) const {
+    indent = 0.0;
     if (startsFreshWrapLine(state) || exceedsIncomingLookback()) {
       return {};
     }
@@ -5242,7 +5317,8 @@ private:
       return {};
     }
     ResolveWrappingOrigins(flat, inlineDisplacements_);
-    AssignWrappingLines(flat, params_.inlineSizePx);
+    AssignWrappingLines(flat, params_.inlineSizePx, TextAreaIndent(params_));
+    indent = flat.back().line == 0 ? TextAreaIndent(params_) : 0.0;
     return LastWrappingLine(flat);
   }
 
@@ -5778,6 +5854,9 @@ private:
   }
 
   void commitShapedSpan(SpanState& state) {
+    if (!state.span->pathSpline && !state.run.glyphs.empty()) {
+      firstFlatShaping_ = false;
+    }
     recordEmergencyBoundaries(state);
     updateSpanPredecessor(state);
     updateCurrentPen(state);
@@ -5950,9 +6029,11 @@ private:
       applyTextLength(runs_, text_, runExtents_, params_, vertical, currentPenX_, currentPenY_);
     }
     placeDeferredTextPaths();
-    applyTextAnchor(runs_, chunkBoundaries_, text_, vertical, anchorExclusions_);
+    applyTextAnchor(runs_, chunkBoundaries_, text_, vertical, anchorExclusions_,
+                    TextAreaIndent(params_));
   }
 
+  bool firstFlatShaping_ = true;
   bool prepareEmergency_ = false;
   GraphemeBreaker graphemeUnits_;
   Registry& registry_;

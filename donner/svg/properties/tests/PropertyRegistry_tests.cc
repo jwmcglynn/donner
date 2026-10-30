@@ -3444,6 +3444,70 @@ TEST(PropertyRegistry, SmallCapsSynthesisCascadesIndependentlyOfFontShorthand) {
   EXPECT_THAT(registry.fontSynthesisSmallCaps.get(), Optional(FontSynthesisSmallCaps::None));
 }
 
+TEST(PropertyRegistry, TextIndentSupportedScalarGrammarAndPresentationBoundary) {
+  PropertyRegistry properties;
+  EXPECT_THAT(properties.textIndent.get(), Optional(LengthValueIs(0, Lengthd::Unit::Px)));
+  EXPECT_FALSE(PropertyRegistry::isPresentationAttributeName("text-indent"));
+  EXPECT_THAT(properties.parsePresentationAttribute("text-indent", "10px"), ParseResultIs(false));
+  const std::pair<const char*, Lengthd> cases[] = {{"0", Lengthd(0)},
+                                                   {"-12px", Lengthd(-12, Lengthd::Unit::Px)},
+                                                   {"25%", Lengthd(25, Lengthd::Unit::Percent)},
+                                                   {"2em", Lengthd(2, Lengthd::Unit::Em)},
+                                                   {"1cm", Lengthd(1, Lengthd::Unit::Cm)}};
+  for (const auto& [text, expected] : cases) {
+    SCOPED_TRACE(text);
+    properties.parseStyle(std::string("text-indent:") + text);
+    EXPECT_THAT(properties.textIndent.get(),
+                Optional(LengthValueIs(expected.value, expected.unit)));
+  }
+}
+
+TEST(PropertyRegistry, TextIndentRejectsUnsupportedUnitsFlagsAndNonfiniteValues) {
+  for (const char* text : {"10", "1ex", "1ch", "1rem", "1vw", "1vh", "1vmin", "1vmax",
+                           "10px hanging", "10px each-line", "calc(1px + 2%)", "auto", "1e999px"}) {
+    SCOPED_TRACE(text);
+    PropertyRegistry properties;
+    properties.parseStyle("text-indent:7px");
+    properties.parseStyle(std::string("text-indent:") + text);
+    EXPECT_THAT(properties.textIndent.get(), Optional(LengthValueIs(7, Lengthd::Unit::Px)));
+  }
+}
+
+TEST(PropertyRegistry, TextIndentAbsoluteLengthComputesToPixels) {
+  PropertyRegistry properties;
+  properties.parseStyle("text-indent:1in");
+  properties.resolveFontSize(12);
+  EXPECT_THAT(properties.textIndent.get(), Optional(LengthValueIs(96, Lengthd::Unit::Px)));
+}
+
+TEST(PropertyRegistry, TextIndentEmComputesBeforeInheritanceAndLeavesPercentUnresolved) {
+  PropertyRegistry parent;
+  parent.parseStyle("font-size:10px;text-indent:2em");
+  parent.resolveFontSize(12);
+  EXPECT_THAT(parent.textIndent.get(), Optional(LengthValueIs(20, Lengthd::Unit::Px)));
+  PropertyRegistry child;
+  child.parseStyle("font-size:20px");
+  auto computed = child.inheritFrom(parent);
+  computed.resolveFontSize(10);
+  EXPECT_THAT(computed.textIndent.get(), Optional(LengthValueIs(20, Lengthd::Unit::Px)));
+  child.parseStyle("text-indent:10%");
+  child.resolveFontSize(10);
+  EXPECT_THAT(child.textIndent.get(), Optional(LengthValueIs(10, Lengthd::Unit::Percent)));
+}
+
+TEST(PropertyRegistry, TextIndentUnresolvedCssWideComputesConcreteInitialValue) {
+  for (const char* keyword : {"inherit", "unset"}) {
+    SCOPED_TRACE(keyword);
+    PropertyRegistry properties;
+    properties.parseStyle(std::string("text-indent:") + keyword);
+    properties.resolveFontSize(12);
+    ASSERT_EQ(properties.textIndent.state, PropertyState::Set);
+    EXPECT_THAT(properties.textIndent.get(), Optional(LengthValueIs(0, Lengthd::Unit::Px)));
+    const auto descendant = PropertyRegistry().inheritFrom(properties);
+    EXPECT_THAT(descendant.textIndent.get(), Optional(LengthValueIs(0, Lengthd::Unit::Px)));
+  }
+}
+
 TEST(PropertyRegistry, StyleSynthesisParsesAndInherits) {
   PropertyRegistry parent;
   parent.parseStyle("font-synthesis-style: ObLiQuE-OnLy");

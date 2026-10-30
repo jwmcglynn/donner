@@ -25,6 +25,7 @@ TextLayoutParams ToTextLayoutParams(const TextParams& params) {
   layoutParams.textLength = params.textLength;
   layoutParams.lengthAdjust = params.lengthAdjust;
   layoutParams.inlineSizePx = params.inlineSizePx;
+  layoutParams.textIndentPx = params.textIndentPx;
   return layoutParams;
 }
 
