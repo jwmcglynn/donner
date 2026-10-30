@@ -421,6 +421,53 @@ class GeneratedCompileBudgetTest(unittest.TestCase):
                 os.chdir(previous_cwd)
 
 
+class NativeSpeedOptionsTest(unittest.TestCase):
+    def test_configured_speed_option_is_private_and_preserves_caller_options(self):
+        values = g._target_value_map()
+        target = g.CMakeTarget(
+            label="//donner/svg/renderer:speed_probe", package="donner/svg/renderer",
+            name="speed_probe", kind="cc_library", configs=set(g._ALL_CONFIG_NAMES), values=values,
+        )
+        info = g.ConfiguredTargetInfo(
+            label=target.label, package=target.package, name=target.name, kind=target.kind,
+            attrs={"srcs": ["//donner/svg/renderer:Speed.cc"],
+                   "copts": ["-DKEEP_CALLER_OPTION=1", "-O2"]}, compatible=True,
+        )
+        for config in g.CMAKE_CONFIGS:
+            g._record_cpp_attrs(target, info, config.name)
+        emission = g._prepare_emission(target, target.package)
+        output = io.StringIO()
+        g._emit_library_target(output, emission)
+        text = output.getvalue()
+        self.assertIn("PRIVATE", text)
+        self.assertRegex(text, r"target_compile_options\([^\n]* PRIVATE [^\n]*-O2")
+        self.assertIn("-DKEEP_CALLER_OPTION=1", text)
+        self.assertNotRegex(text, r"target_compile_options\([^\n]* (PUBLIC|INTERFACE) [^\n]*-O2")
+
+    def test_png_encoder_optimized_except_debug(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(temp_dir)
+                target = g.CMakeTarget(
+                    label="//:donner", package="", name="donner", kind="cc_library",
+                    configs=set(g._ALL_CONFIG_NAMES), values=g._target_value_map(),
+                )
+                with (
+                    mock.patch.object(g, "get_fetchcontent_externals", return_value=[]),
+                    mock.patch.object(g, "extract_versions_from_module_bazel", return_value={}),
+                    mock.patch.object(g, "get_cmake_targets", return_value={"//:donner": target}),
+                ):
+                    g.generate_root()
+                text = Path("CMakeLists.txt").read_text()
+            finally:
+                os.chdir(previous_cwd)
+        self.assertIn(
+            "target_compile_options(stb_image_write PRIVATE $<$<NOT:$<CONFIG:Debug>>:-O2>)",
+            text,
+        )
+
+
 class SkippedTestTargetsTest(unittest.TestCase):
     def test_cc_test_targets_are_not_emitted(self):
         values = g._target_value_map()

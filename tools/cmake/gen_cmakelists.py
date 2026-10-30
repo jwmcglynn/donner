@@ -1103,6 +1103,10 @@ def generate_root() -> None:
             "set_target_properties(stb_image_write PROPERTIES CXX_STANDARD 20 "
             "CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
         )
+        f.write(
+            "target_compile_options(stb_image_write PRIVATE "
+            "$<$<NOT:$<CONFIG:Debug>>:-O2>)\n"
+        )
 
         # ── stb_truetype (locally vendored) ────────────────────────────
         f.write(

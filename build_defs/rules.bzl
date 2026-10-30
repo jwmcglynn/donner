@@ -4,6 +4,7 @@ Helper rules, such as for building fuzzers.
 
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("//build_defs:performance.bzl", "native_speed_copts")
 load(
     "//tools/format:clang_format_check.bzl",
     "clang_format_check",
@@ -1096,19 +1097,6 @@ def donner_cc_fuzzer(
             **{key: kwargs[key] for key in _VARIANT_FORWARDED_ATTRS if key in kwargs and key != "target_compatible_with"}
         )
 
-def _force_opt_transition_impl(settings, _attr):
-    if settings["//build_defs:disable_perf_opt_transition"]:
-        return {}
-    return {
-        "//command_line_option:compilation_mode": "opt",
-    }
-
-_force_opt_transition = transition(
-    implementation = _force_opt_transition_impl,
-    inputs = ["//build_defs:disable_perf_opt_transition"],
-    outputs = ["//command_line_option:compilation_mode"],
-)
-
 def _is_compilation_outputs_empty(compilation_outputs):
     return (len(compilation_outputs.pic_objects) == 0 and
             len(compilation_outputs.objects) == 0)
@@ -1203,13 +1191,13 @@ _donner_perf_sensitive_cc_library = rule(
     fragments = ["cpp"],
 )
 
-def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, target_compatible_with = None, **kwargs):
+def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, target_compatible_with = None, optimization_level = "O2", **kwargs):
     """
-    Wrapper around a cc_library that is always compiled with optimizations.
+    Compiles its own native sources for speed, independently of global size flags.
 
-    By default, this rule is always compiled in "opt" mode, regardless of the
-    --compilation_mode flag. This is useful for performance-sensitive code that
-    should not be run in debug builds, such as benchmarks or core rendering code.
+    The opt feature remains enabled regardless of --compilation_mode. Native sources
+    additionally receive the selected O2/O3 level after caller copts. Dependencies
+    retain their own settings, and WebAssembly retains its existing size policy.
 
     If `allow_debug_builds_config` is set, this creates a configurable target
     that will switch between the optimized and unconfigured versions of the library.
@@ -1224,6 +1212,7 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
         will allow this library to be built in debug mode.
       target_compatible_with: Optional platform compatibility constraints, propagated
         to all generated sub-targets.
+      optimization_level: Native speed level, O2 by default or O3 for measured kernels.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
     compat = {}
@@ -1231,10 +1220,13 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
         compat["target_compatible_with"] = target_compatible_with
         kwargs["target_compatible_with"] = target_compatible_with
 
+    optimized_kwargs = dict(kwargs)
+    optimized_kwargs["copts"] = kwargs.get("copts", []) + native_speed_copts(optimization_level)
+
     if allow_debug_builds_config != None:
         _donner_perf_sensitive_cc_library(
             name = name + "_opt",
-            **kwargs
+            **optimized_kwargs
         )
 
         cc_library(
@@ -1256,5 +1248,5 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, tar
         _donner_perf_sensitive_cc_library(
             name = name,
             tags = ["perf_sensitive"],
-            **kwargs
+            **optimized_kwargs
         )

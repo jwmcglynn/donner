@@ -5,6 +5,7 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
+load("//build_defs:performance_tests.bzl", "performance_tests")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
 
 exports_files(
@@ -14,6 +15,7 @@ exports_files(
         "macos_app_bundle.bzl",
         "editor_build_info.bzl",
         "rules.bzl",
+        "performance.bzl",
     ],
     visibility = ["//visibility:public"],
 )
@@ -171,6 +173,18 @@ sh_test(
     ],
 )
 
+config_setting(
+    name = "wasm32_platform",
+    constraint_values = ["@platforms//cpu:wasm32"],
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "debug_compilation",
+    values = {"compilation_mode": "dbg"},
+    visibility = ["//visibility:public"],
+)
+
 string_flag(
     name = "llvm_latest",
     build_setting_default = "0",
@@ -181,10 +195,8 @@ bool_flag(
     build_setting_default = False,
 )
 
-# When true, perf-sensitive libraries will NOT force their
-# deps to opt mode.  Useful when the forced transition causes link conflicts
-# (e.g. zlib appearing in both opt and fastbuild configurations).
-# Set with --//build_defs:disable_perf_opt_transition=true
+# Compatibility flag for existing callers; native speed flags apply only to a target
+# itself and never transition dependency configurations.
 bool_flag(
     name = "disable_perf_opt_transition",
     build_setting_default = False,
@@ -382,3 +394,5 @@ filegroup(
     srcs = ["testdata/packaged-resource-manifest.json"],
     visibility = ["//donner/base:__pkg__"],
 )
+
+performance_tests()
