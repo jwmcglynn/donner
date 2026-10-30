@@ -213,6 +213,21 @@ wasm_cc_binary(
     }),
 )
 
+filegroup(
+    name = "static_javascript_sources",
+    srcs = [
+        "browser-file-dialogs.js",
+        "catalog-fonts.js",
+        "enable-threads.js",
+        "packaged-resource-loader.js",
+    ],
+)
+
+filegroup(
+    name = "minified_static_javascript",
+    srcs = [":static_javascript_sources"],
+)
+
 web_package(
     name = "wasm_web_package",
     srcs = [
