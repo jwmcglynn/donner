@@ -778,6 +778,7 @@ PropertyRegistry StyleSystem::inheritProperties(Registry& registry, Entity paren
   PropertyRegistry inherited =
       properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
   PreserveLocalValue(properties.fontSize, inherited.fontSize);
+  PreserveLocalValue(properties.textIndent, inherited.textIndent);
   PreserveLocalValue(properties.color, inherited.color);
   PreserveLocalValue(properties.fill, inherited.fill);
   PreserveLocalValue(properties.stroke, inherited.stroke);
@@ -866,7 +867,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
 
   // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to
   // always be an absolute length. Relative units (em, %, ex) resolve against the parent's computed
-  // font-size, and percentages resolve against the parent font-size (not the viewBox).
+  // font-size, and percentages resolve against the parent font-size (not the viewBox). Local
+  // text-indent em lengths compute from that result before descendants inherit them.
   if (computedStyle.properties) {
     resolveComputedParentFonts(handle, parent, *computedStyle.properties);
     computedStyle.properties->resolveTextDecorationThickness(DecorationRootFontSize(registry));

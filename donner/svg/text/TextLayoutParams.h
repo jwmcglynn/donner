@@ -37,10 +37,15 @@ struct TextLayoutParams {
   LengthAdjust lengthAdjust = LengthAdjust::Default;
 
   /// SVG2 `inline-size` measure in pixels. When greater than 0 (and the writing mode is
-  /// horizontal), the text engine wraps glyph runs to this measure, producing multiple stacked
+  /// horizontal or vertical), the engine wraps glyph runs to this measure, producing stacked
   /// lines. 0 means no wrapping area (ordinary single-line SVG text).
   /// @see https://www.w3.org/TR/SVG2/text.html#InlineSizeProperty
   double inlineSizePx = 0.0;
+
+  /// Signed CSS first-line start margin in pixels. Used only with a positive inlineSizePx;
+  /// percentages resolve against the own-area measure before layout; em computes in style.
+  /// Does not affect text paths.
+  double textIndentPx = 0.0;
 };
 
 }  // namespace donner::svg

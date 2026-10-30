@@ -141,6 +141,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `text-decoration` | \ref textDecoration | `none` |
  * | `dominant-baseline` | \ref dominantBaseline | `auto` |
  * | `inline-size` | \ref inlineSize | `0` |
+ * | `text-indent` | \ref textIndent | `0px` |
  */
 class PropertyRegistry {
 public:
@@ -472,8 +473,8 @@ public:
   /// given length; text greedily wraps to that measure. Not inherited. The initial value `0`
   /// means "no wrapping area" (the text behaves as ordinary single-line SVG text).
   ///
-  /// Donner supports auto-flow only for horizontal writing modes today; see
-  /// \ref donner::svg::TextEngine for the documented limitation.
+  /// Uses Donner's current per-line wrapping and text-anchor profile in horizontal and vertical
+  /// writing modes.
   /// @see https://www.w3.org/TR/SVG2/text.html#InlineSizeProperty
   Property<Lengthd> inlineSize{
       "inline-size", []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
@@ -496,6 +497,12 @@ public:
   /// of a shape/text are painted. Inherited. Defaults to fill, stroke, markers.
   Property<PaintOrder, PropertyCascade::Inherit> paintOrder{
       "paint-order", []() -> std::optional<PaintOrder> { return PaintOrder{}; }};
+
+  /// CSS `text-indent`: inherited first-line start margin in a fixed inline-size text area.
+  /// Absolute lengths and em compute to pixels; percentages resolve against this text area's
+  /// inline measure. `hanging`, `each-line` and other relative units are not supported.
+  Property<Lengthd, PropertyCascade::Inherit> textIndent{
+      "text-indent", []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::Px); }};
 
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
@@ -533,7 +540,8 @@ public:
         fontSynthesisSmallCaps, fontSynthesisStyle, fontKerning, fontSizeAdjust, textTransform,
         overflowWrap, whiteSpace, textAnchor, textDecoration, textDecorationThickness,
         dominantBaseline, writingMode, textOrientation, inlineSize, letterSpacing, wordSpacing,
-        baselineShift, alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
+        baselineShift, alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder,
+        textIndent);
   }
 
   /**
@@ -609,10 +617,12 @@ public:
   /**
    * Resolve font-size from relative units (em, %, ex) to absolute pixels. Must be called after CSS
    * cascade with the parent's computed font-size, since font-size percentages and em units resolve
-   * against the parent (not the viewBox).
+   * against the parent (not the viewBox). Also canonicalizes text-indent absolute lengths and
+   * computes local em lengths against this element's unadjusted computed font-size, before
+   * that value can be inherited. Percentages retain their own-area dependency.
    *
-   * @param parentFontSizePx The parent element's computed font-size in pixels. Use 16.0 (CSS
-   *   initial value) for the root element.
+   * @param parentFontSizePx The parent element's computed font-size in pixels. Use the renderer's
+   *   initial 12px font-size for the root element.
    */
   void resolveFontSize(double parentFontSizePx);
 
