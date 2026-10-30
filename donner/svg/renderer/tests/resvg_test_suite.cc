@@ -1667,34 +1667,37 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextTextDecoration, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/text-decoration",
-            {
-                // 0.12 covers both CPU text configurations: simple text counts 100
-                // at 0.11 while full text counts 103, and all three cases count 68
-                // at 0.12 (PR #1285).
-                {"all-types-inline-comma-separated.svg",
-                 Params::WithThreshold(0.12f, kDefaultMismatchedPixels, "Minor AA diffs")},
-                {"all-types-inline-no-spaces.svg",
-                 Params::WithThreshold(0.12f, kDefaultMismatchedPixels, "Minor AA diffs")},
-                {"all-types-inline.svg",
-                 Params::WithThreshold(0.12f, kDefaultMismatchedPixels, "Minor AA diffs")},
-                {"indirect.svg", Params::WithGoldenOverride(
-                                     "donner/svg/renderer/testdata/golden/resvg-indirect.png")},
-                {"tspan-decoration.svg",
-                 Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "Minor AA diffs")},
-                {"underline-with-rotate-list-4.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "Minor shading diffs")},
+    Combine(ValuesIn(getTestsInCategory(
+                "text/text-decoration",
+                {
+                    // 0.12 covers both CPU text configurations: simple text counts 100
+                    // at 0.11 while full text counts 103, and all three cases count 68
+                    // at 0.12 (PR #1285).
+                    {"all-types-inline-comma-separated.svg",
+                     Params::WithThreshold(0.12f, kDefaultMismatchedPixels, "Minor AA diffs")},
+                    {"all-types-inline-no-spaces.svg",
+                     Params::WithThreshold(0.12f, kDefaultMismatchedPixels, "Minor AA diffs")},
+                    {"all-types-inline.svg",
+                     Params::WithThreshold(0.12f, kDefaultMismatchedPixels, "Minor AA diffs")},
+                    {"indirect.svg", Params::WithGoldenOverride(
+                                         "donner/svg/renderer/testdata/golden/resvg-indirect.png")},
+                    {"tspan-decoration.svg",
+                     Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "Minor AA diffs")},
+                    {"underline-with-rotate-list-4.svg",
+                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "Minor shading diffs")},
 
-                {"indirect-with-multiple-colors.svg",
-                 Params::Skip(
-                     "Not impl: text-decoration full SVG2 support (line/style/color independent)")},
-                // The reference is resvg v0.49.0's 300x300 rendering; the superseded underline was
-                // twice the font's 0.05em underline thickness.
-                {"with-textLength-on-a-single-character.svg", Params().setCanvasSize(300, 300)},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+                    // Each decoration takes the paint of the element that declared it (SVG 2
+                    // section 11.11). Without per-origin paint the line-through takes the span's
+                    // green and the case differs by 1589 px; a 1 px text shift reaches 2270 px.
+                    {"indirect-with-multiple-colors.svg",
+                     Params().withMaxPixelsDifferent(395).withReason(
+                         "Reference rasterizer generation: 4x4 supersampled coverage on the x=100 "
+                         "crosshair; analytic residual 382 px, supersampled 2 px")},
+                    // The reference is resvg v0.49.0's 300x300 rendering; the superseded underline
+                    // was twice the font's 0.05em underline thickness.
+                    {"with-textLength-on-a-single-character.svg", Params().setCanvasSize(300, 300)},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextTextRendering, ImageComparisonTestFixture,

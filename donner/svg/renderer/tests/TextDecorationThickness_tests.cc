@@ -12,77 +12,23 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/renderer/PlacedTextGeometry.h"
+#include "donner/svg/renderer/tests/DecorationTestScene.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
-#include "donner/svg/resources/FontManager.h"
-#include "donner/svg/tests/ParserTestUtils.h"
-#include "donner/svg/text/TextBackend.h"
 #include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 namespace {
 
-class DecorationBackend : public TextBackend {
-public:
-  explicit DecorationBackend(bool underlineMetrics = true)
-      : hasUnderlineMetrics_(underlineMetrics) {}
-  FontVMetrics fontVMetrics(FontHandle) const override {
-    return {.ascent = 800, .descent = -200, .lineGap = 0, .xHeight = 500, .unitsPerEm = 1000};
-  }
-  float scaleForPixelHeight(FontHandle, float size) const override { return size / 1000; }
-  float scaleForEmToPixels(FontHandle, float size) const override { return size / 1000; }
-  std::optional<UnderlineMetrics> underlineMetrics(FontHandle) const override {
-    return hasUnderlineMetrics_ ? std::optional(UnderlineMetrics{.position = -100, .thickness = 50})
-                                : std::nullopt;
-  }
-  std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle) const override {
-    return UnderlineMetrics{.position = 300, .thickness = 40};
-  }
-  std::optional<SubSuperMetrics> subSuperMetrics(FontHandle) const override { return std::nullopt; }
-  Path glyphOutline(FontHandle, int, float) const override {
-    return PathBuilder().addRect(Box2d::FromXYWH(0, -2, 1, 2)).build();
-  }
-  bool isBitmapOnly(FontHandle) const override { return false; }
-  bool isCursive(uint32_t) const override { return false; }
-  bool hasSmallCapsFeature(FontHandle) const override { return false; }
-  std::optional<BitmapGlyph> bitmapGlyph(FontHandle, int, float) const override {
-    return std::nullopt;
-  }
-  ShapedRun shapeRun(FontHandle, float, std::string_view text, size_t begin, size_t length, bool,
-                     FontVariant, bool) const override {
-    ShapedRun run;
-    for (size_t index = begin; index < std::min(text.size(), begin + length); ++index) {
-      run.glyphs.push_back({.glyphIndex = 3,
-                            .xAdvance = 10,
-                            .yAdvance = 10,
-                            .cluster = static_cast<uint32_t>(index)});
-    }
-    return run;
-  }
-  double crossSpanKern(FontHandle, float, FontHandle, float, uint32_t, uint32_t,
-                       bool) const override {
-    return 0;
-  }
-
-private:
-  bool hasUnderlineMetrics_;
-};
-
-SVGDocument DecorationDocument(std::string_view body, bool metrics = true) {
-  SVGDocument document = instantiateSubtree(body, {}, Vector2i(100, 100));
-  auto& registry = document.registry();
-  auto& fonts = registry.ctx().emplace<FontManager>(registry);
-  registry.ctx().emplace<TextEngine>(fonts, registry, std::make_unique<DecorationBackend>(metrics));
-  return document;
-}
-
-RendererBitmap RenderDecorationScene(std::string_view body, bool metrics = true) {
-  auto document = DecorationDocument(body, metrics);
-  return RenderDocumentWithBackend(document, ActiveRendererBackend());
-}
+using tests::DecorationDocument;
+using tests::RenderDecorationScene;
 
 constexpr std::string_view kRedGlyphs =
     "<rect x='10' y='38' width='1' height='2' fill='red'/>"
     "<rect x='20' y='38' width='1' height='2' fill='red'/>";
+/// Glyphs drawn after an underline band, which paints beneath them.
+constexpr std::string_view kBlueGlyphs =
+    "<rect x='10' y='38' width='1' height='2' fill='blue'/>"
+    "<rect x='20' y='38' width='1' height='2' fill='blue'/>";
 constexpr std::string_view kRotatedGlyphs =
     "<rect x='5' y='80' width='1' height='2' fill='red'/>"
     "<rect x='10' y='80' width='1' height='2' fill='red'/>";
@@ -116,8 +62,9 @@ TEST(TextDecorationThickness, ParentAndChildLinesKeepTheirOrigin) {
     <text x="10" y="40" font-size="20" fill="red"
           style="text-decoration:underline;text-decoration-thickness:8px"><tspan font-size="40" fill="blue"
              style="text-decoration:line-through;text-decoration-thickness:2px">XX</tspan></text>)svg");
-  const auto expected = RenderDecorationScene(std::string(kRedGlyphs) + R"svg(
-    <rect x="10" y="38" width="20" height="8" fill="red"/><rect x="10" y="27" width="20" height="2" fill="blue"/>)svg");
+  const auto expected = RenderDecorationScene(
+      R"svg(<rect x="10" y="38" width="20" height="8" fill="red"/>)svg" + std::string(kBlueGlyphs) +
+      R"svg(<rect x="10" y="27" width="20" height="2" fill="blue"/>)svg");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_independent_origins",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -126,8 +73,9 @@ TEST(TextDecorationThickness, RepeatedSameLineKeepsBothOrigins) {
   const auto actual = RenderDecorationScene(R"svg(
     <text x="10" y="40" font-size="20" fill="red"
           style="text-decoration:underline;text-decoration-thickness:8px"><tspan fill="blue" style="text-decoration:underline;text-decoration-thickness:2px">XX</tspan></text>)svg");
-  const auto expected = RenderDecorationScene(std::string(kRedGlyphs) + R"svg(
-    <rect x="10" y="38" width="20" height="8" fill="red"/><rect x="10" y="41" width="20" height="2" fill="blue"/>)svg");
+  const auto expected = RenderDecorationScene(R"svg(
+    <rect x="10" y="38" width="20" height="8" fill="red"/><rect x="10" y="41" width="20" height="2" fill="blue"/>)svg" +
+                                              std::string(kBlueGlyphs));
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_repeated_origins",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -137,7 +85,7 @@ TEST(TextDecorationThickness, ChildThicknessWithoutLineDoesNotChangeParent) {
     <text x="10" y="40" font-size="20" fill="red"
           style="text-decoration:underline;text-decoration-thickness:8px"><tspan font-size="40" fill="blue" style="text-decoration-thickness:2px">XX</tspan></text>)svg");
   const auto expected = RenderDecorationScene(
-      std::string(kRedGlyphs) + "<rect x='10' y='38' width='20' height='8' fill='red'/>");
+      "<rect x='10' y='38' width='20' height='8' fill='red'/>" + std::string(kBlueGlyphs));
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_unrelated_child_thickness",
                                        editor::tests::PixelmatchIdentityParams());
 }
@@ -238,7 +186,7 @@ TEST(TextDecorationThickness, OriginReferenceFallbackDoesNotUseDescendantPaint) 
           style="text-decoration:underline;text-decoration-thickness:8px"><tspan fill="blue"
           style="text-decoration:line-through;text-decoration-thickness:2px">XX</tspan></text>)svg");
   const auto expected = RenderDecorationScene(
-      "<rect x='10' y='38' width='20' height='8' fill='red'/>"
+      "<rect x='10' y='38' width='20' height='8' fill='red'/>" + std::string(kBlueGlyphs) +
       "<rect x='10' y='33' width='20' height='2' fill='blue'/>");
   editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_origin_reference_fallback",
                                        editor::tests::PixelmatchIdentityParams());
@@ -261,9 +209,9 @@ TEST(TextDecorationThickness, OriginPatternRemainsAvailableWithDescendantSolidPa
                               text + "</text>");
     const std::string glyphFill = child ? "lime" : "url(#p)";
     const auto expected = RenderDecorationScene(
-        std::string(pattern) + "<rect x='10' y='38' width='1' height='2' fill='" + glyphFill +
-        "'/><rect x='20' y='38' width='1' height='2' fill='" + glyphFill +
-        "'/><rect x='10' y='38' width='20' height='8' fill='url(#p)'/>" +
+        std::string(pattern) + "<rect x='10' y='38' width='20' height='8' fill='url(#p)'/>" +
+        "<rect x='10' y='38' width='1' height='2' fill='" + glyphFill +
+        "'/><rect x='20' y='38' width='1' height='2' fill='" + glyphFill + "'/>" +
         (child ? "<rect x='10' y='33' width='20' height='2' fill='lime'/>" : ""));
     editor::tests::CompareBitmapToBitmap(actual, expected, "decoration_origin_pattern",
                                          editor::tests::PixelmatchIdentityParams());
@@ -307,7 +255,7 @@ TEST(TextDecorationThickness, SingularAndNonFiniteTransformsSuppressExplicitBand
     std::copy(linear.begin(), linear.end(), deviceFromLocal.data);
     std::size_t remaining = Path::kMaximumGeometryQueryWork;
     bool emitted = false;
-    EmitTextDecorationPaths(run, origin, 1, 20, engine, deviceFromLocal, remaining,
+    EmitTextDecorationPaths(run, origin, origin.lines, 1, 20, engine, deviceFromLocal, remaining,
                             [&](const Path&) { emitted = true; });
     EXPECT_FALSE(emitted);
   }

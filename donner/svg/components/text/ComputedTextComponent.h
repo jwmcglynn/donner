@@ -49,6 +49,7 @@ struct TextDecorationOrigin {
   std::optional<ResolvedTextFont> font;              ///< Origin's resolved face and used size.
   std::shared_ptr<const SnapshotFontPayload> snapshotFont;  ///< Snapshot-owned font bytes.
   double strokeWidth = 0.0;                                 ///< Origin's resolved SVG stroke width.
+  PaintOrder paintOrder;  ///< Origin's `paint-order`, which orders the decoration's fill/stroke.
   TextDecorationThickness thickness;  ///< Explicit dimensions are resolved to pixels.
 
   /// Whether prepared paint names this origin's resource in the same coordinate context.

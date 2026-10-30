@@ -703,7 +703,9 @@ widths. `ClearUnpaintedSpanGlyphs` in `PlacedTextGeometry.cc` clears a
 span's glyphs for effect passes; it clears `decorationSegments` with them, so a cleared run draws
 no decoration, as today's `!run.glyphs.empty()` gate ensures.
 
-TinySkia and Geode draw those segments instead of computing extents themselves. This is the narrow
+TinySkia and Geode draw those segments instead of computing extents themselves. Each run draws its
+underline and overline segments before its glyphs and its line-through segments after them, per the
+CSS Text Decoration 3 painting order that SVG 2 adopts. This is the narrow
 precursor of the shared decoration geometry planned in Milestone 11 of
 [0062-svg_parity_completion](0062-svg_parity_completion.md), which extends the same field.
 Paint-server object bounding boxes keep using the union of the span's glyph cells.

@@ -221,9 +221,41 @@ Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>
 void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
                               entt::entity spanEffectOwner, std::vector<TextRun>& runs);
 
+/// Lines that CSS Text Decoration 3 paints beneath a run's glyphs; line-through paints above them.
+inline constexpr TextDecoration kDecorationLinesBeneathText =
+    TextDecoration::Underline | TextDecoration::Overline;
+
+/// Call `draw` for each origin that has a line in `emittedLines`, so a paint pass skips origins
+/// it would draw nothing for before resolving their paint.
+template <typename DrawFn>
+void ForEachEmittingOrigin(std::span<const components::TextDecorationOrigin> origins,
+                           TextDecoration emittedLines, const DrawFn& draw) {
+  for (const auto& origin : origins) {
+    if ((origin.lines & emittedLines) != TextDecoration::None) {
+      draw(origin);
+    }
+  }
+}
+
+/// Run `fill` and `stroke` in the order `paintOrder` gives them; SVG 2 section 11.11 orders a
+/// decoration's own fill and stroke by the `paint-order` where it is declared.
+template <typename FillFn, typename StrokeFn>
+void PaintFillAndStroke(const PaintOrder& paintOrder, const FillFn& fill, const StrokeFn& stroke) {
+  if (paintOrder.strokeBeforeFill()) {
+    stroke();
+    fill();
+  } else {
+    fill();
+    stroke();
+  }
+}
+
 /// Emit bounded decoration paths while preserving each originating declaration.
 /// @param run Laid-out glyph run.
 /// @param origin Declaration whose geometry is emitted.
+/// @param emittedLines Subset of the origin's lines to emit, so callers can paint lines beneath
+///   and above the glyphs in separate passes. Positions still account for all of the origin's
+///   lines.
 /// @param originCount Number of declarations affecting the span.
 /// @param fontSize Used run size for direct-caller fallback metrics.
 /// @param engine Font metrics provider.
@@ -231,8 +263,9 @@ void ClearUnpaintedSpanGlyphs(const components::ComputedTextComponent& text,
 /// @param remainingWork Shared per-draw geometry work allowance.
 /// @param emit Paint callback for each generated path.
 void EmitTextDecorationPaths(const TextRun& run, const components::TextDecorationOrigin& origin,
-                             std::size_t originCount, float fontSize, const TextEngine& engine,
-                             const Transform2d& deviceFromLocal, std::size_t& remainingWork,
+                             TextDecoration emittedLines, std::size_t originCount, float fontSize,
+                             const TextEngine& engine, const Transform2d& deviceFromLocal,
+                             std::size_t& remainingWork,
                              const std::function<void(const Path&)>& emit);
 
 }  // namespace donner::svg

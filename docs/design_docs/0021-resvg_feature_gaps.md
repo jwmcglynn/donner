@@ -822,3 +822,13 @@ Immutable decoration lists are limited to 64 originating declarations per span a
 shared geometry budget. Snapshot copies retain and remap their own font and paint resources; a
 refused list suppresses those decorations. New live-bitmap comparisons in
 `text_decoration_thickness_tests` use synthetic font metrics and the canonical exact comparator.
+
+## Text decoration painting order
+
+Underlines and overlines paint beneath a run's glyphs and line-throughs above them, following the
+Painting Order of Text Decorations in CSS Text Decoration 3, which SVG 2 section 11.11 adopts.
+Each decoration's own fill and stroke follow the `paint-order` of the element whose paint it uses.
+Both renderers make two decoration passes per run around the glyph paint, and
+`text_decoration_paint_order_tests` compares overlapping glyph and decoration colors exactly. With
+per-origin paint and this order, `text/text-decoration/indirect-with-multiple-colors` compares; its
+remaining residual is the reference rasterizer generation's coverage on the x=100 crosshair.
