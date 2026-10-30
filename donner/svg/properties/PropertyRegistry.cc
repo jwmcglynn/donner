@@ -3451,6 +3451,32 @@ bool PropertyRegistry::isPresentationAttributeInherited(std::string_view name) {
   return inherited;
 }
 
+void PropertyRegistry::resolveInsetClipLengths(double rootFontSizePx) {
+  const ClipPath* stored = clipPath.getStoredValue();
+  if (!stored) {
+    return;
+  }
+  const auto* inset = std::get_if<InsetClipPath>(&stored->value);
+  if (!inset) {
+    return;
+  }
+  InsetClipPath computed = *inset;
+  FontMetrics metrics = FontMetrics::DefaultsWithFontSize(fontSize.get().value().value);
+  metrics.rootFontSize = rootFontSizePx;
+  for (Lengthd& offset : computed.offsets) {
+    if (offset.unit != Lengthd::Unit::Percent) {
+      const double pixels = offset.toPixels(Box2d(), metrics);
+      if (!std::isfinite(pixels)) {
+        // Keep an unrepresentable declaration clipped rather than disabling its clip.
+        computed.offsets.fill(Lengthd(50, Lengthd::Unit::Percent));
+        break;
+      }
+      offset = Lengthd(pixels, Lengthd::Unit::Px);
+    }
+  }
+  clipPath.substitute(ClipPath(std::move(computed)));
+}
+
 void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
   const Lengthd fs = fontSize.get().value();
   double resolvedPx;

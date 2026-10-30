@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <array>
 #include <cstddef>
 #include <ostream>
 #include <span>
@@ -69,14 +70,22 @@ struct PolygonClipPath {
   bool operator==(const PolygonClipPath&) const = default;
 };
 
+/// A non-rounded inset rectangle used as a CSS clipping shape.
+struct InsetClipPath {
+  RadialClipPath::Box box = RadialClipPath::Box::Stroke;  ///< SVG reference geometry.
+  std::array<Lengthd, 4> offsets{};  ///< Insets in top, right, bottom, left order.
+  bool operator==(const InsetClipPath&) const = default;
+};
+
 /// A referenced SVG clip or a supported CSS basic shape; absence is represented by the property.
 struct ClipPath {
-  std::variant<Reference, CircleClipPath, EllipseClipPath, PolygonClipPath>
+  std::variant<Reference, CircleClipPath, EllipseClipPath, PolygonClipPath, InsetClipPath>
       value;  ///< Owning parsed value.
   explicit ClipPath(Reference reference) : value(std::move(reference)) {}
   explicit ClipPath(CircleClipPath circle) : value(std::move(circle)) {}
   explicit ClipPath(EllipseClipPath ellipse) : value(std::move(ellipse)) {}
   explicit ClipPath(PolygonClipPath polygon) : value(std::move(polygon)) {}
+  explicit ClipPath(InsetClipPath inset) : value(std::move(inset)) {}
 
   /// Return the basic shape's interior rule; references provide their own rules.
   ClipRule clipRule() const {

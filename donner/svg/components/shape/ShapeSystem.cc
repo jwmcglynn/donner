@@ -571,7 +571,7 @@ bool IsFiniteEllipse(const Vector2d& center, double rx, double ry) {
                      [](double value) { return std::isfinite(value); });
 }
 
-bool IsRenderablePolygonCoordinate(double value) {
+bool IsRenderableClipCoordinate(double value) {
   return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
 }
 
@@ -583,7 +583,7 @@ Path BuildPolygonClipPath(const PolygonClipPath& polygon, const Box2d& box,
     const Vector2d point =
         box.topLeft + Vector2d(vertex.x.toPixels(box, metrics, Lengthd::Extent::X),
                                vertex.y.toPixels(box, metrics, Lengthd::Extent::Y));
-    if (!IsRenderablePolygonCoordinate(point.x) || !IsRenderablePolygonCoordinate(point.y)) {
+    if (!IsRenderableClipCoordinate(point.x) || !IsRenderableClipCoordinate(point.y)) {
       return {};
     }
     if (first) {
@@ -595,8 +595,7 @@ Path BuildPolygonClipPath(const PolygonClipPath& polygon, const Box2d& box,
   }
   Path path = builder.closePath().build();
   const Box2d bounds = path.bounds();
-  if (!IsRenderablePolygonCoordinate(bounds.width()) ||
-      !IsRenderablePolygonCoordinate(bounds.height())) {
+  if (!IsRenderableClipCoordinate(bounds.width()) || !IsRenderableClipCoordinate(bounds.height())) {
     return {};
   }
   return path;
@@ -984,6 +983,34 @@ Path ShapeSystem::polygonClipPath(EntityHandle handle, const PolygonClipPath& po
   }
   const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
   return BuildPolygonClipPath(polygon, *box, metrics);
+}
+
+Path ShapeSystem::insetClipPath(EntityHandle handle, const InsetClipPath& inset,
+                                CircleClipGeometryBudget& budget) {
+  if (!budget.reserve(9)) {
+    return {};
+  }
+  const std::optional<Box2d> box = getCircleReferenceBox(handle, inset.box, budget);
+  const auto* style = handle.try_get<ComputedStyleComponent>();
+  if (!box || !style || !style->properties) {
+    return {};
+  }
+  const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
+  const double top = box->topLeft.y + inset.offsets[0].toPixels(*box, metrics, Lengthd::Extent::Y);
+  const double right =
+      box->bottomRight.x - inset.offsets[1].toPixels(*box, metrics, Lengthd::Extent::X);
+  const double bottom =
+      box->bottomRight.y - inset.offsets[2].toPixels(*box, metrics, Lengthd::Extent::Y);
+  const double left = box->topLeft.x + inset.offsets[3].toPixels(*box, metrics, Lengthd::Extent::X);
+  const std::array<double, 6> coordinates = {left, top, right, bottom, right - left, bottom - top};
+  if (!std::all_of(coordinates.begin(), coordinates.end(), IsRenderableClipCoordinate)) {
+    return {};
+  }
+  // Proportional reduction of oversized opposing insets has zero area for clipping.
+  if (right <= left || bottom <= top) {
+    return {};
+  }
+  return PathBuilder(4).addRect(Box2d({left, top}, {right, bottom})).build();
 }
 
 std::optional<Box2d> ShapeSystem::getCircleReferenceBox(EntityHandle handle,

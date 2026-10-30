@@ -223,8 +223,8 @@ percentages use reference height. A zero radius on either axis produces an empty
 `circle_clip_path_tests` and `properties_tests` targets cover ellipse parsing, reference boxes,
 independent axis resolution, transformed/nested clips and invalid declaration fallback. A single
 `closest-side` or `farthest-side` keyword selects both radii. Corner extent keywords and `calc()`
-radii are not supported; explicit radii use the two-value form. Inset and path CSS clipping
-functions remain unsupported.
+radii are not supported; explicit radii use the two-value form. Path CSS clipping functions remain
+unsupported.
 
 `clip-path: polygon()` supports comma-separated length/percentage vertices, optional `nonzero`
 or `evenodd` interior rules, and the same SVG reference boxes. Vertices may lie outside the
@@ -234,6 +234,20 @@ render preparation admits all polygon work before constructing paths. Retained v
 charged for each computed style, including explicitly inherited copies. Polygon corner rounding
 and `calc()` coordinates are unsupported. `polygon_clip_path_tests`, `properties_tests` and
 `shape_system_tests` cover rendering, nested rules, grammar and resource refusal.
+
+`clip-path: inset()` supports one to four offsets with margin-style expansion, negative offsets,
+and the same SVG reference boxes. Accepted units are absolute lengths, `em`, `rem`, and percentages.
+Lengths compute to pixels using the declaring element's computed font size and actual root font
+size before explicit inheritance. Horizontal percentages use reference width; vertical percentages
+use reference height. The font-metric units `ex`/`ch` and viewport units `vw`/`vh`/`vmin`/`vmax` are
+rejected until their computed-value context is available. Unrepresentable computed lengths produce
+an empty clip. Oversized opposing insets reduce to zero area, which
+produces an empty clipping region rather than preserving an earlier declaration. The fixed-size
+value needs no additional retained allocation, and rectangle construction shares the bounded
+reference-geometry walk and path-work budget. Rounded corners (`round`) and `calc()` offsets remain
+unsupported. `inset_clip_path_tests`, `properties_tests` and `shape_system_tests` cover exact
+rendering, nested clips, grammar, numeric limits and work refusal. See the
+[CSS Shapes inset definition](https://drafts.csswg.org/css-shapes-1/#funcdef-inset).
 
 The plain `circle-shorthand.svg` comparison is restored. The stroke-box and view-box PNGs use an
 opaque white backdrop, while Donner's RGBA API retains transparency outside painted content.

@@ -614,6 +614,12 @@ public:
   /// @param rootFontSizePx Root computed font size for rem units.
   void resolveTextDecorationThickness(double rootFontSizePx = 16.0);
 
+  /// Resolve supported inset offsets to computed pixels while retaining percentages.
+  /// Unrepresentable offsets keep an empty clipping region.
+  /// Call after resolving this element's computed font size, before descendants inherit styles.
+  /// @param rootFontSizePx Root element's computed font size in pixels.
+  void resolveInsetClipLengths(double rootFontSizePx);
+
   /**
    * Resolve relative font-weight keywords (`bolder`/`lighter`) against the parent's
    * computed font-weight.

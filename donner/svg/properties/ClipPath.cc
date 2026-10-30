@@ -327,16 +327,63 @@ ParseResult<ClipPath> ParsePolygonFunction(const css::Function& function, Radial
   return InvalidShape();
 }
 
+std::optional<Lengthd> FiniteInsetLength(const Component& component, bool allowUserUnits) {
+  const auto length = FiniteLength(component, allowUserUnits);
+  if (!length) {
+    return std::nullopt;
+  }
+  switch (length->unit) {
+    case Lengthd::Unit::Ex:
+    case Lengthd::Unit::Ch:
+    case Lengthd::Unit::Vw:
+    case Lengthd::Unit::Vh:
+    case Lengthd::Unit::Vmin:
+    case Lengthd::Unit::Vmax: return std::nullopt;
+    default: return length;
+  }
+}
+
+ParseResult<ClipPath> ParseInsetFunction(const css::Function& function, RadialClipPath::Box box,
+                                         bool allowUserUnits) {
+  Arguments args;
+  if (!args.append(function.values) || args.size == 0 || args.size > 4) {
+    return InvalidShape();
+  }
+  InsetClipPath inset;
+  inset.box = box;
+  for (std::size_t i = 0; i < args.size; ++i) {
+    const auto offset = FiniteInsetLength(*args.values[i], allowUserUnits);
+    if (!offset) {
+      return InvalidShape();
+    }
+    inset.offsets[i] = *offset;
+  }
+  if (args.size == 1) {
+    inset.offsets[1] = inset.offsets[0];
+  }
+  if (args.size < 3) {
+    inset.offsets[2] = inset.offsets[0];
+  }
+  if (args.size < 4) {
+    inset.offsets[3] = inset.offsets[1];
+  }
+  return ClipPath(std::move(inset));
+}
+
 bool IsSupportedShape(const css::Function& function) {
   return function.name.equalsLowercase("circle") || function.name.equalsLowercase("ellipse") ||
-         function.name.equalsLowercase("polygon");
+         function.name.equalsLowercase("polygon") || function.name.equalsLowercase("inset");
 }
 
 ParseResult<ClipPath> ParseShapeFunction(const css::Function& function, RadialClipPath::Box box,
                                          bool allowUserUnits) {
-  return function.name.equalsLowercase("polygon")
-             ? ParsePolygonFunction(function, box, allowUserUnits)
-             : ParseRadialFunction(function, box, allowUserUnits);
+  if (function.name.equalsLowercase("polygon")) {
+    return ParsePolygonFunction(function, box, allowUserUnits);
+  }
+  if (function.name.equalsLowercase("inset")) {
+    return ParseInsetFunction(function, box, allowUserUnits);
+  }
+  return ParseRadialFunction(function, box, allowUserUnits);
 }
 
 std::ostream& PrintReferenceBox(std::ostream& os, RadialClipPath::Box box) {
@@ -402,6 +449,11 @@ std::ostream& operator<<(std::ostream& os, const ClipPath& clip) {
   }
   if (const auto* polygon = std::get_if<PolygonClipPath>(&clip.value)) {
     return PrintPolygon(os, *polygon);
+  }
+  if (const auto* inset = std::get_if<InsetClipPath>(&clip.value)) {
+    os << "inset(" << inset->offsets[0] << ' ' << inset->offsets[1] << ' ' << inset->offsets[2]
+       << ' ' << inset->offsets[3] << ") ";
+    return PrintReferenceBox(os, inset->box);
   }
   const RadialClipPath* shape;
   if (const auto* circle = std::get_if<CircleClipPath>(&clip.value)) {

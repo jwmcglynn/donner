@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -1994,6 +1995,98 @@ TEST(PropertyRegistry, PaintOrderGrammar) {
                   ParseErrorIs("Invalid paint-order value"))
           << property;
     }
+  }
+}
+
+TEST(PropertyRegistry, InsetOffsetsExpandAndRetainInlineStorage) {
+  struct Example {
+    std::string_view value;
+    std::array<double, 4> offsets;
+  };
+  for (const auto& example :
+       {Example{"1px", {1, 1, 1, 1}}, Example{"1px 2px", {1, 2, 1, 2}},
+        Example{"1px 2px 3px", {1, 2, 3, 2}}, Example{"1px 2px 3px 4px", {1, 2, 3, 4}}}) {
+    SCOPED_TRACE(example.value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:fill-box inset(" + std::string(example.value) + ")");
+    const auto clip = registry.clipPath.get();
+    ASSERT_THAT(clip, Optional(testing::Field(&ClipPath::value,
+                                              testing::VariantWith<InsetClipPath>(testing::_))));
+    const auto& inset = std::get<InsetClipPath>(clip->value);
+    EXPECT_EQ(inset.box, RadialClipPath::Box::Fill);
+    for (std::size_t i = 0; i < example.offsets.size(); ++i) {
+      EXPECT_THAT(inset.offsets[i], LengthValueIs(example.offsets[i], Lengthd::Unit::Px));
+    }
+    EXPECT_EQ(registry.complexPropertyBytes(), 0u);
+  }
+}
+
+TEST(PropertyRegistry, InsetAcceptsNegativePercentagesAndPresentationUnits) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:INSET(-10% 2px) view-box");
+  const auto clip = registry.clipPath.get();
+  ASSERT_THAT(clip, Optional(testing::Field(&ClipPath::value,
+                                            testing::VariantWith<InsetClipPath>(testing::_))));
+  const auto& inset = std::get<InsetClipPath>(clip->value);
+  EXPECT_THAT(inset.offsets[0], LengthValueIs(-10, Lengthd::Unit::Percent));
+  EXPECT_THAT(inset.offsets[2], LengthValueIs(-10, Lengthd::Unit::Percent));
+  EXPECT_EQ(inset.box, RadialClipPath::Box::View);
+  PropertyRegistry presentation;
+  EXPECT_THAT(presentation.parsePresentationAttribute("clip-path", "inset(1 2 3 4)"),
+              NoParseError());
+  const auto presentationClip = presentation.clipPath.get();
+  ASSERT_THAT(
+      presentationClip,
+      Optional(testing::Field(&ClipPath::value, testing::VariantWith<InsetClipPath>(testing::_))));
+  EXPECT_THAT(std::get<InsetClipPath>(presentationClip->value).offsets[3],
+              LengthValueIs(4, Lengthd::Unit::None));
+  EXPECT_EQ(testing::PrintToString(*clip), "inset(-10% 2px -10% 2px) view-box");
+}
+
+TEST(PropertyRegistry, InsetRejectsUnsupportedContextualUnitsWithoutReplacingClip) {
+  for (const auto unit : {"ex", "ch", "vw", "vh", "vmin", "vmax"}) {
+    SCOPED_TRACE(unit);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:inset(1px 1" + std::string(unit) + ")");
+    EXPECT_THAT(
+        registry.clipPath.get(),
+        Optional(testing::Field(&ClipPath::value, testing::VariantWith<Reference>(
+                                                      testing::Field(&Reference::href, "#clip")))));
+  }
+}
+
+TEST(PropertyRegistry, InsetAbsoluteLengthsComputeAndOverflowRemainsClipped) {
+  PropertyRegistry registry;
+  registry.parseStyle("clip-path:inset(1in 72pt 2.54cm 25%)");
+  registry.resolveInsetClipLengths(30);
+  EXPECT_THAT(registry.clipPath.get(),
+              Optional(testing::Field(
+                  &ClipPath::value,
+                  testing::VariantWith<InsetClipPath>(testing::Field(
+                      &InsetClipPath::offsets,
+                      testing::ElementsAre(LengthValueIs(96, Lengthd::Unit::Px),
+                                           LengthValueIs(96, Lengthd::Unit::Px),
+                                           LengthValueIs(96, Lengthd::Unit::Px),
+                                           LengthValueIs(25, Lengthd::Unit::Percent)))))));
+  registry.parseStyle("clip-path:inset(1e308em)");
+  registry.resolveInsetClipLengths(30);
+  EXPECT_THAT(
+      registry.clipPath.get(),
+      Optional(testing::Field(&ClipPath::value,
+                              testing::VariantWith<InsetClipPath>(testing::Field(
+                                  &InsetClipPath::offsets,
+                                  testing::Each(LengthValueIs(50, Lengthd::Unit::Percent)))))));
+}
+
+TEST(PropertyRegistry, InvalidInsetKeepsEarlierDeclaration) {
+  for (const std::string_view value :
+       {"inset()", "inset(1px 2px 3px 4px 5px)", "inset(1px, 2px)", "inset(2)", "inset(auto)",
+        "inset(1e999px)", "inset(1px round 2px)", "inset(round 2px)", "inset(calc(2px))",
+        "inset(1px) fill-box view-box", "inset(1px) garbage"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    registry.parseStyle("clip-path:url(#clip);clip-path:" + std::string(value));
+    EXPECT_THAT(registry.clipPath.get(), Optional(ClipPath(Reference("#clip"))));
   }
 }
 
