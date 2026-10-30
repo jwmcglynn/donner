@@ -64,10 +64,11 @@ Component InitialComponent(const Component& current) {
   }
 }
 
+enum class AttributeRestoreMode { Restore, Reset };
+
 struct AttributeRestore {
   std::optional<RcString> source;
-  std::function<void(Registry&, Entity)> restore;
-  std::function<void(Registry&, Entity)> reset;
+  std::function<void(Registry&, Entity, AttributeRestoreMode)> restore;
 };
 struct AnimationAttributeBackup {
   std::map<std::string, AttributeRestore> fields;
@@ -150,27 +151,22 @@ bool OverrideField(Registry& registry, Entity entity, std::string_view name, con
       return true;
     }
     backup.fields.emplace(
-        name, AttributeRestore{
-                  SourceAttribute(registry, entity, name),
-                  [original, value, read, write, created](Registry& destination, Entity target) {
-                    if (auto* component = destination.try_get<Component>(target);
-                        component && PresentationValueMatches(read(*component), value)) {
-                      if (created) {
-                        destination.remove<Component>(target);
-                      } else {
-                        write(*component, original);
-                      }
-                    }
-                  },
-                  [read, write, created](Registry& destination, Entity target) {
-                    if (auto* component = destination.try_get<Component>(target)) {
-                      if (created) {
-                        destination.remove<Component>(target);
-                      } else {
-                        write(*component, read(InitialComponent(*component)));
-                      }
-                    }
-                  }});
+        name,
+        AttributeRestore{SourceAttribute(registry, entity, name),
+                         [original, value, read, write, created](
+                             Registry& destination, Entity target, AttributeRestoreMode mode) {
+                           if (auto* component = destination.try_get<Component>(target);
+                               component && (mode == AttributeRestoreMode::Reset ||
+                                             PresentationValueMatches(read(*component), value))) {
+                             if (created) {
+                               destination.remove<Component>(target);
+                             } else if (mode == AttributeRestoreMode::Reset) {
+                               write(*component, read(InitialComponent(*component)));
+                             } else {
+                               write(*component, original);
+                             }
+                           }
+                         }});
   }
   write(*component, value);
   return true;
@@ -1122,9 +1118,9 @@ void RestoreAttributeBackup(Registry& registry, Entity entity,
   for (const auto& [name, field] : backup.fields) {
     const auto source = SourceAttribute(registry, entity, name);
     if (!source && source != field.source) {
-      field.reset(registry, entity);
+      field.restore(registry, entity, AttributeRestoreMode::Reset);
     } else {
-      field.restore(registry, entity);
+      field.restore(registry, entity, AttributeRestoreMode::Restore);
       if (source != field.source) {
         changed.push_back({entity, name, source});
       }
