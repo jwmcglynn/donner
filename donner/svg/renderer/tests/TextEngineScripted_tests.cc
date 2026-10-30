@@ -3930,6 +3930,42 @@ TEST(TextEngineScriptedTest, OverflowWrapBackwardWordPlansAcrossStyledSpans) {
   EXPECT_THAT(glyphsPerLine, ElementsAre(testing::Pair(_, 3u), testing::Pair(_, 3u)));
 }
 
+TEST(TextEngineScriptedTest, OverflowWrapBackwardHangingSpacesKeepIncomingLineWidth) {
+  Registry registry;
+  FontManager fonts(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fonts, true);
+  components::ComputedTextComponent text;
+  auto first = MakeSpan("A");
+  first.overflowWrap = OverflowWrap::Anywhere;
+  first.whiteSpace = WhiteSpace::PreWrap;
+  first.fontKerning = FontKerning::None;
+  auto second = MakeSpan("A BBBBB");
+  second.startsNewChunk = false;
+  second.overflowWrap = OverflowWrap::Anywhere;
+  second.whiteSpace = WhiteSpace::PreWrap;
+  second.fontKerning = FontKerning::None;
+  text.spans.push_back(std::move(first));
+  text.spans.push_back(std::move(second));
+  auto params = MakeTextParams(20);
+  params.inlineSizePx = 31;
+  const auto runs = engine.layout(text, params);
+  ASSERT_THAT(runs, SizeIs(2));
+  ASSERT_THAT(runs[0].glyphs, SizeIs(1));
+  EXPECT_THAT(runs[0].glyphs[0],
+              AllOf(GlyphXPositionIs(DoubleNear(0, 1e-5)), GlyphYPositionIs(DoubleNear(0, 1e-5))));
+  const auto& glyphs = runs[1].glyphs;
+  const auto continued = std::find_if(glyphs.begin(), glyphs.end(),
+                                      [](const TextGlyph& glyph) { return glyph.cluster == 0; });
+  ASSERT_THAT(continued, Not(Eq(glyphs.end())));
+  EXPECT_THAT(*continued,
+              AllOf(GlyphXPositionIs(DoubleNear(10, 1e-5)), GlyphYPositionIs(DoubleNear(0, 1e-5))));
+  const auto space = std::find_if(glyphs.begin(), glyphs.end(),
+                                  [](const TextGlyph& glyph) { return glyph.cluster == 1; });
+  ASSERT_THAT(space, Not(Eq(glyphs.end())));
+  EXPECT_THAT(*space,
+              AllOf(GlyphXPositionIs(DoubleNear(0, 1e-5)), GlyphYPositionIs(DoubleNear(0, 1e-5))));
+}
+
 TEST(TextEngineScriptedTest, OverflowWrapGreedyMetricsIncludeLetterSpacing) {
   CheckEmergencyGreedyPacking(false, 7, {.letterSpacing = 3, .columns = 2});
   CheckEmergencyGreedyPacking(true, 7, {.letterSpacing = 3, .columns = 2});
