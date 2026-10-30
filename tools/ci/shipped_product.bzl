@@ -2,13 +2,13 @@
 
 load("//build_defs:rules.bzl", "DonnerTransitionedBinaryInfo")
 
-def _shipped_configuration_impl(_settings, _attr):
-    # Optimized, without the Tracy profiler client that development builds link by default, with
-    # the Geode renderer and the default (basic) text tier. The product applies any transition of
-    # its own on top, as the editor does for its full text tier.
+def _shipped_configuration_impl(settings, _attr):
+    # Use size optimization, Geode, basic text and no Tracy profiler client. Products apply their
+    # own transitions on top, as the editor does for full text.
     return {
         "//build_defs:enable_tracy": False,
         "//command_line_option:compilation_mode": "opt",
+        "//command_line_option:copt": settings["//command_line_option:copt"] + ["-Os"],
         "//donner/svg/renderer/geode:enable_geode": True,
         "//donner/svg/renderer:renderer_backend": "geode",
         "//donner/svg/renderer:text": True,
@@ -17,10 +17,11 @@ def _shipped_configuration_impl(_settings, _attr):
 
 _shipped_configuration = transition(
     implementation = _shipped_configuration_impl,
-    inputs = [],
+    inputs = ["//command_line_option:copt"],
     outputs = [
         "//build_defs:enable_tracy",
         "//command_line_option:compilation_mode",
+        "//command_line_option:copt",
         "//donner/svg/renderer/geode:enable_geode",
         "//donner/svg/renderer:renderer_backend",
         "//donner/svg/renderer:text",
@@ -50,7 +51,7 @@ def _shipped_product_impl(ctx):
 
 shipped_product = rule(
     implementation = _shipped_product_impl,
-    doc = "Exposes `product`'s linked executable built optimized with Geode and without Tracy.",
+    doc = "Exposes `product`'s linked executable built optimized for size with Geode and without Tracy.",
     attrs = {
         "product": attr.label(
             cfg = _shipped_configuration,

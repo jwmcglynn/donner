@@ -38,6 +38,9 @@ struct PresentationDecorations {
 
   /// Text-editing caret, frame and selection for an open text session.
   std::optional<CapturedPresentation::TextEditing> textEditing;
+  /// Annotations of the open session, one per measured document revision, oldest first. A raster
+  /// whose capture carries none uses the one measured at its captured revision.
+  std::vector<CapturedPresentation::TextEditing> measuredTextEditing;
   /// Text-box creation preview while the text tool drags one out.
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> textBoxDragPreviewDoc;
 };
@@ -227,6 +230,8 @@ private:
   void applyLivePathReplacement(const FramePresentationInput& input);
   bool textMatchesFrame(const CapturedPresentation::TextEditing& text,
                         std::span<const Entity> selection) const;
+  bool textMeasuresFrameDocument(const CapturedPresentation::TextEditing& text,
+                                 std::span<const Entity> selection) const;
   void applyDecorations(const FramePresentationInput& input, const FramePresentation* previous);
   void applyDetail(SelectionChromeDetail detail);
   std::optional<SelectionChromeSnapshot> liveAdornment(

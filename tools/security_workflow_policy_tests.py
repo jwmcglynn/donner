@@ -2741,9 +2741,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 commands = [command.argv for command in bcr_preflight.cli_plan(
                     _BCR_LAYOUT, platform, _BCR_COMMIT, "7", "2")]
                 self.assertEqual(commands[:3], [
-                    ("bazelisk", "build", "--lockfile_mode=update", "-c", "opt", *targets),
-                    ("bazelisk", "build", "--lockfile_mode=error", "-c", "opt", *targets),
-                    ("bazelisk", "test", "--lockfile_mode=error", "-c", "opt",
+                    ("bazelisk", "build", "--lockfile_mode=update", "-c", "opt",
+                     "--copt=-Os", *targets),
+                    ("bazelisk", "build", "--lockfile_mode=error", "-c", "opt",
+                     "--copt=-Os", *targets),
+                    ("bazelisk", "test", "--lockfile_mode=error", "-c", "opt", "--copt=-Os",
                      "//tools/ci:release_svg_notice_coverage")])
                 self.assertEqual(len(commands), 8 if platform == "darwin-arm64" else 4,
                                  "each product packages only after its own build and checks")
@@ -2801,6 +2803,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                          [("bazelisk", "build"), ("bazelisk", "build"),
                           ("bazelisk", "test")])
         for command in native[:3]:
+            self.assertIn("--copt=-Os", command)
             self.assertIn("--//build_defs:enable_tracy=false", command)
             self.assertIn("--//build_defs:release_source_commit=" + _BCR_COMMIT, command)
         self.assertIn("--lockfile_mode=update", native[0])

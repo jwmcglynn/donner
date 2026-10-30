@@ -217,6 +217,14 @@ void CopyTextDecorations(SelectionChromeSnapshot& destination,
   destination.textFrameOpacity = source.textFrameOpacity;
 }
 
+void ApplyTextEditing(SelectionChromeSnapshot& destination,
+                      const CapturedPresentation::TextEditing& text) {
+  destination.textCaretDoc = text.caret;
+  destination.textSelectionQuadsDoc = text.selection;
+  destination.textFrameCornersDoc = text.frame;
+  destination.textFrameOpacity = text.frameOpacity;
+}
+
 }  // namespace
 
 Transform2d PresentedFramebufferFromDocumentTransform(const ViewportState& viewport,
@@ -733,6 +741,20 @@ bool FramePresentation::textMatchesFrame(const CapturedPresentation::TextEditing
          ContainsSelection(selection, text.subject);
 }
 
+bool FramePresentation::textMeasuresFrameDocument(const CapturedPresentation::TextEditing& text,
+                                                  std::span<const Entity> selection) const {
+  // A render captures the document when its worker acquires it, which can be after a later edit
+  // flushed. Its pixels then show that later revision while its request labels still name the
+  // posted version, so match the annotation measured at the captured document revision itself.
+  const PresentationIdentity& measured = text.identity;
+  return measured.documentGeneration == identity_.documentGeneration &&
+         measured.documentRevision == identity_.documentRevision &&
+         measured.fontResourceRevision == identity_.fontResourceRevision &&
+         measured.presentationEpoch == identity_.presentationEpoch &&
+         text.canvasSize == selectionCapture_->canvasSize() &&
+         ContainsSelection(selection, text.subject);
+}
+
 void FramePresentation::applyDecorations(const FramePresentationInput& input,
                                          const FramePresentation* previous) {
   if (!input.includeChrome) {
@@ -746,11 +768,15 @@ void FramePresentation::applyDecorations(const FramePresentationInput& input,
     return;
   }
   const auto& text = selectionCapture_->textEditing();
+  const auto& measuredHistory = input.decorations.measuredTextEditing;
+  const auto measured =
+      std::ranges::find_if(measuredHistory, [&](const CapturedPresentation::TextEditing& entry) {
+        return textMeasuresFrameDocument(entry, input.selection);
+      });
   if (text.has_value() && ContainsSelection(input.selection, text->subject)) {
-    chrome_.textCaretDoc = text->caret;
-    chrome_.textSelectionQuadsDoc = text->selection;
-    chrome_.textFrameCornersDoc = text->frame;
-    chrome_.textFrameOpacity = text->frameOpacity;
+    ApplyTextEditing(chrome_, *text);
+  } else if (measured != measuredHistory.end()) {
+    ApplyTextEditing(chrome_, *measured);
   } else if (previous != nullptr && previous->identity_ == identity_ &&
              SameSelection(previous->selectionCapture_->selection(),
                            selectionCapture_->selection())) {
@@ -758,10 +784,7 @@ void FramePresentation::applyDecorations(const FramePresentationInput& input,
   }
   const auto& currentText = input.decorations.textEditing;
   if (currentText.has_value() && textMatchesFrame(*currentText, input.selection)) {
-    chrome_.textCaretDoc = currentText->caret;
-    chrome_.textSelectionQuadsDoc = currentText->selection;
-    chrome_.textFrameCornersDoc = currentText->frame;
-    chrome_.textFrameOpacity = currentText->frameOpacity;
+    ApplyTextEditing(chrome_, *currentText);
   }
 }
 

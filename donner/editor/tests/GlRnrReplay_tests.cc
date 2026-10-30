@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <optional>
@@ -2910,6 +2911,124 @@ TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
   RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
+// The settled text session frame and the last frame of the typing replay.
+constexpr std::uint64_t kTypingBaselineFrame = 17;
+constexpr std::uint64_t kTypingLastFrame = 40;
+
+int CountGreenTextPixels(const svg::RendererBitmap& bitmap) {
+  int count = 0;
+  for (std::size_t i = 0; i + 3 < bitmap.pixels.size(); i += 4) {
+    const std::uint8_t r = bitmap.pixels[i];
+    const std::uint8_t g = bitmap.pixels[i + 1];
+    const std::uint8_t b = bitmap.pixels[i + 2];
+    if (g > 110 && r < 110 && b < 110) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+// Signal-teal editing frame chrome (the shipped EditorTheme selection token).
+// Counted only in the top half of the document-canvas crop: the text (and
+// its chrome) sits at the top of the 200x200 document while the perf HUD's
+// frame graph - which also renders accent-colored pixels - overlays the bottom.
+int CountSelectionChromePixels(const svg::RendererBitmap& bitmap) {
+  int count = 0;
+  const int chromeRows = bitmap.dimensions.y / 2;
+  for (int y = 0; y < chromeRows; ++y) {
+    const std::uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      const std::uint8_t r = row[x * 4];
+      const std::uint8_t g = row[x * 4 + 1];
+      const std::uint8_t b = row[x * 4 + 2];
+      if (g > 120 && b > 100 && r < 110 && g > b) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+void PrintTypingFrameDiagnostics(const repro::GlRnrReplayResult& result) {
+  for (std::uint64_t frame = kTypingBaselineFrame; frame <= kTypingLastFrame; ++frame) {
+    const repro::GlRnrReplayFrameDiagnostics* diag = FindFrameDiagnostics(result, frame);
+    if (diag == nullptr) {
+      continue;
+    }
+    std::optional<svg::RendererBitmap> bmp = LoadCaptureBitmap(result, frame);
+    std::cerr << "[diag] f=" << frame << " docV=" << diag->documentFrameVersion
+              << " dispV=" << diag->displayedDocVersion
+              << " fresh=" << static_cast<int>(diag->canvasFreshness) << " pendRasterE="
+              << static_cast<std::uint64_t>(diag->pendingSelectedLayerRasterizationEntity)
+              << " removed=" << diag->lastFlushRemovedElements
+              << " invalidated=" << diag->lastFlushCacheInvalidatedElements.size()
+              << " green=" << (bmp.has_value() ? CountGreenTextPixels(*bmp) : -1)
+              << " chrome=" << (bmp.has_value() ? CountSelectionChromePixels(*bmp) : -1)
+              << " tiles=";
+    for (const auto& tile : diag->tiles) {
+      std::cerr << tile.id << "(g" << tile.generation << ",grn" << tile.textureGreenPixels << ") ";
+    }
+    std::cerr << "\n";
+  }
+}
+
+void ExpectTypedFrameKeepsTextAndChrome(const repro::GlRnrReplayResult& result, std::uint64_t frame,
+                                        int baselineGreen, int baselineChrome) {
+  std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, frame);
+  ASSERT_TRUE(bitmap.has_value());
+  // Typing only appends glyphs, so the settled baseline is a floor for every
+  // subsequent frame (with headroom for antialiasing differences). The chrome
+  // floor is looser: the caret moves and the selection outline tracks the
+  // growing text, but the chrome must never collapse to (near) nothing.
+  const int green = CountGreenTextPixels(*bitmap);
+  EXPECT_GE(green, baselineGreen / 2) << "frame " << frame << " dropped the edited text: " << green
+                                      << " green pixels (settled baseline " << baselineGreen
+                                      << "): " << FindCapture(result, frame)->path;
+  const int chrome = CountSelectionChromePixels(*bitmap);
+  EXPECT_GE(chrome, baselineChrome / 4)
+      << "frame " << frame << " dropped the caret/selection chrome: " << chrome
+      << " cyan chrome pixels (settled baseline " << baselineChrome
+      << "): " << FindCapture(result, frame)->path;
+}
+
+// Replays typing into the box text with the worker configured by
+// @p configureWorker and checks every typed frame against the settled baseline.
+void ExpectTypingKeepsTextAndChromeEveryFrame(
+    std::string_view name, const std::function<void(repro::GlRnrReplayOptions&)>& configureWorker) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / std::string(name);
+  const std::optional<std::filesystem::path> replayPath =
+      WriteTextTypingIntoExistingTextReplay(outputDir, "text_typing.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  for (std::uint64_t frame = kTypingBaselineFrame; frame <= kTypingLastFrame; ++frame) {
+    options.captureFrames.insert(frame);
+  }
+  options.maxFrame = kTypingLastFrame;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.driveDocumentSpaceInput = true;
+  configureWorker(options);
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  PrintTypingFrameDiagnostics(result);
+
+  std::optional<svg::RendererBitmap> baseline = LoadCaptureBitmap(result, kTypingBaselineFrame);
+  ASSERT_TRUE(baseline.has_value());
+  const int baselineGreen = CountGreenTextPixels(*baseline);
+  ASSERT_GT(baselineGreen, 200) << "settled session frame must show the green text";
+  const int baselineChrome = CountSelectionChromePixels(*baseline);
+  ASSERT_GT(baselineChrome, 100)
+      << "settled box-text session must show its persistent editing frame";
+  for (std::uint64_t frame = kTypingBaselineFrame + 1; frame <= kTypingLastFrame; ++frame) {
+    ExpectTypedFrameKeepsTextAndChrome(result, frame, baselineGreen, baselineChrome);
+  }
+}
+
 // Typing must never blank the text being edited NOR its persistent box-text
 // frame. Each keystroke rewrites the
 // session <text> element's DOM content; until the async render of the new
@@ -2934,117 +3053,29 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
   if (!UsesGeodePresentation()) {
     GTEST_SKIP() << "Chrome pixels require the Geode direct presentation path.";
   }
-
-  const std::filesystem::path outputDir = DiagnosticOutputDir() / "text_typing_flicker";
-  const std::optional<std::filesystem::path> replayPath =
-      WriteTextTypingIntoExistingTextReplay(outputDir, "text_typing_flicker.rnr");
-  ASSERT_TRUE(replayPath.has_value());
-
-  repro::GlRnrReplayOptions options;
-  options.rnrPath = *replayPath;
-  options.outputDir = outputDir;
-  constexpr std::uint64_t kBaselineFrame = 17;
-  constexpr std::uint64_t kLastFrame = 40;
-  for (std::uint64_t frame = kBaselineFrame; frame <= kLastFrame; ++frame) {
-    options.captureFrames.insert(frame);
-  }
-  options.maxFrame = kLastFrame;
-  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
-  options.pace = false;
-  options.driveDocumentSpaceInput = true;
   // The worker stays busy across several keystroke frames, like a real
   // machine under fast typing: keystrokes flush while the previous
   // keystroke's render is still in flight.
-  options.workerRenderDelayMsForTesting = 25;
+  ExpectTypingKeepsTextAndChromeEveryFrame(
+      "text_typing_flicker", [](auto& options) { options.workerRenderDelayMsForTesting = 25; });
+}
 
-  repro::GlRnrReplayResult result;
-  std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
-
-  const auto greenPixels = [](const svg::RendererBitmap& bitmap) {
-    int count = 0;
-    for (std::size_t i = 0; i + 3 < bitmap.pixels.size(); i += 4) {
-      const std::uint8_t r = bitmap.pixels[i];
-      const std::uint8_t g = bitmap.pixels[i + 1];
-      const std::uint8_t b = bitmap.pixels[i + 2];
-      if (g > 110 && r < 110 && b < 110) {
-        ++count;
-      }
-    }
-    return count;
-  };
-  // Signal-teal editing frame chrome (the shipped EditorTheme selection token).
-  // Counted only in the top half of the document-canvas crop: the text (and
-  // its chrome) sits at the top of the 200x200 document while the perf HUD's
-  // frame graph - which also renders accent-colored pixels - overlays the bottom.
-  const auto selectionChromePixels = [](const svg::RendererBitmap& bitmap) {
-    int count = 0;
-    const int chromeRows = bitmap.dimensions.y / 2;
-    for (int y = 0; y < chromeRows; ++y) {
-      const std::uint8_t* row =
-          bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
-      for (int x = 0; x < bitmap.dimensions.x; ++x) {
-        const std::uint8_t r = row[x * 4];
-        const std::uint8_t g = row[x * 4 + 1];
-        const std::uint8_t b = row[x * 4 + 2];
-        if (g > 120 && b > 100 && r < 110 && g > b) {
-          ++count;
-        }
-      }
-    }
-    return count;
-  };
-
-  for (std::uint64_t frame = kBaselineFrame; frame <= kLastFrame; ++frame) {
-    const repro::GlRnrReplayFrameDiagnostics* diag = FindFrameDiagnostics(result, frame);
-    if (diag == nullptr) {
-      continue;
-    }
-    std::optional<svg::RendererBitmap> bmp = LoadCaptureBitmap(result, frame);
-    std::cerr << "[diag] f=" << frame << " docV=" << diag->documentFrameVersion
-              << " dispV=" << diag->displayedDocVersion
-              << " fresh=" << static_cast<int>(diag->canvasFreshness) << " pendRasterE="
-              << static_cast<std::uint64_t>(diag->pendingSelectedLayerRasterizationEntity)
-              << " removed=" << diag->lastFlushRemovedElements
-              << " invalidated=" << diag->lastFlushCacheInvalidatedElements.size()
-              << " green=" << (bmp.has_value() ? greenPixels(*bmp) : -1)
-              << " chrome=" << (bmp.has_value() ? selectionChromePixels(*bmp) : -1) << " tiles=";
-    for (const auto& tile : diag->tiles) {
-      std::cerr << tile.id << "(g" << tile.generation << ",grn" << tile.textureGreenPixels << ") ";
-    }
-    std::cerr << "\n";
+// A render posted for one keystroke reads the document only when its worker
+// acquires it. If the next keystroke flushes first, the raster shows that later
+// text while its request still names the earlier version, and the caret and
+// frame measured with the request no longer describe those pixels. The
+// presenter must use the annotation measured at the captured revision instead
+// of dropping the chrome. The hold keeps the worker from acquiring the
+// document from frame 18 (first keystroke) until frame 20, so frame 19's
+// keystroke always flushes ahead of the queued render.
+TEST(GlRnrReplayTest, TypingAheadOfQueuedRenderKeepsCaretChrome) {
+  if (!UsesGeodePresentation()) {
+    GTEST_SKIP() << "Chrome pixels require the Geode direct presentation path.";
   }
-
-  std::optional<svg::RendererBitmap> baseline = LoadCaptureBitmap(result, kBaselineFrame);
-  ASSERT_TRUE(baseline.has_value());
-  const int baselineGreen = greenPixels(*baseline);
-  ASSERT_GT(baselineGreen, 200) << "settled session frame must show the green text";
-  const int baselineChrome = selectionChromePixels(*baseline);
-  ASSERT_GT(baselineChrome, 100)
-      << "settled box-text session must show its persistent editing frame";
-
-  // Typing only appends glyphs, so the settled baseline is a floor for every
-  // subsequent frame (with headroom for antialiasing differences). The chrome
-  // floor is looser: the caret moves and the selection outline tracks the
-  // growing text, but the chrome must never collapse to (near) nothing.
-  const int floorGreen = baselineGreen / 2;
-  const int floorChrome = baselineChrome / 4;
-  for (std::uint64_t frame = kBaselineFrame + 1; frame <= kLastFrame; ++frame) {
-    std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, frame);
-    ASSERT_TRUE(bitmap.has_value());
-    const int green = greenPixels(*bitmap);
-    if (green < floorGreen) {
-      ADD_FAILURE() << "frame " << frame << " dropped the edited text: " << green
-                    << " green pixels (settled baseline " << baselineGreen
-                    << "): " << FindCapture(result, frame)->path;
-    }
-    const int chrome = selectionChromePixels(*bitmap);
-    if (chrome < floorChrome) {
-      ADD_FAILURE() << "frame " << frame << " dropped the caret/selection chrome: " << chrome
-                    << " cyan chrome pixels (settled baseline " << baselineChrome
-                    << "): " << FindCapture(result, frame)->path;
-    }
-  }
+  ExpectTypingKeepsTextAndChromeEveryFrame("text_typing_ahead_of_render", [](auto& options) {
+    options.workerDocumentAccessHoldStartFrame = 18;
+    options.workerDocumentAccessHoldEndFrame = 20;
+  });
 }
 
 /// Inclusive pixel bounds of the bright-red pixels in @p bitmap, or nullopt

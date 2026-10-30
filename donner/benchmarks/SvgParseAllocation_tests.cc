@@ -33,8 +33,9 @@ struct ParseAllocationBudget {
 };
 
 /// Broad resource ceiling with portability headroom for standard-library layout differences.
-// Inline synthesis and decoration properties add fixed storage to each allocated style slot.
-// Keep byte headroom for that metadata while retaining the allocation-call work ceiling.
+// Inline synthesis, decoration and text-transform properties add fixed storage to each allocated
+// style slot. Keep byte headroom for that metadata while retaining the allocation-call work
+// ceiling.
 constexpr ParseAllocationBudget kRepeatedAttributesBudget = {
     .allocationCalls = 16'500,
     .allocationBytes = 7'900'000,

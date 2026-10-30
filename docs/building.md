@@ -38,6 +38,14 @@ bazel build //donner/...
 
 All other dependencies will be downloaded on-demand.
 
+The release CLI and native macOS editor use `-c opt --copt=-Os`, which the native linked-size
+checks also apply. Target-local performance flags still take precedence; TinySkia retains `-O3`
+for its rendering hot path. To compile the CLI with the release optimization:
+
+```sh
+bazel build -c opt --copt=-Os //donner/svg/tool:donner-cli
+```
+
 With a disk or remote cache configured, builds reuse equivalent C++ compilation and archive
 results across renderer and text configurations by default. Bazel normalizes configuration-specific
 output paths for these actions. Cache keys still distinguish compiler flags, toolchains, and input

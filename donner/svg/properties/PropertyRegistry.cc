@@ -2633,6 +2633,31 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.fontSizeAdjust);
                  }},  //
+                {"text-transform",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& value)
+                           -> ParseResult<TextTransform> {
+                         const auto& components = value.components();
+                         if (components.size() == 1) {
+                           if (const auto* ident =
+                                   components.front().tryGetToken<css::Token::Ident>()) {
+                             if (ident->value.equalsLowercase("none")) {
+                               return TextTransform::None;
+                             }
+                             if (ident->value.equalsLowercase("full-width")) {
+                               return TextTransform::FullWidth;
+                             }
+                           }
+                         }
+                         ParseDiagnostic error;
+                         error.reason =
+                             "Unsupported text-transform; supported values: none, full-width";
+                         return error;
+                       },
+                       &registry.textTransform);
+                 }},
                 {"white-space",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(

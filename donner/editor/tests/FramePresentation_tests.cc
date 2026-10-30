@@ -705,6 +705,48 @@ TEST(FramePresentationTest, TextGeometryRequiresMatchingDocumentFontAndLayoutIde
 }
 
 }  // namespace
+// A queued render captures the document when its worker acquires it, so an edit that flushes first
+// leaves pixels of a later revision under the version its request named. The annotation measured
+// at that captured revision, not the newest one, describes those pixels.
+TEST(FramePresentationTest, TextChromeUsesAnnotationMeasuredAtTheCapturedRevision) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRect));
+  app.setSelection(*app.document().document().querySelector("#rect"));
+  const auto raster = Capture(app, 1);
+  ASSERT_THAT(raster, Ne(nullptr));
+  const std::array<Vector2d, 4> capturedFrame{Vector2d(10, 10), Vector2d(30, 10), Vector2d(30, 30),
+                                              Vector2d(10, 30)};
+  const auto annotation = [&](std::uint64_t versionsAhead, std::uint64_t revisionsAhead) {
+    CapturedPresentation::TextEditing text{.identity = raster->identity(),
+                                           .canvasSize = raster->canvasSize(),
+                                           .subject = raster->selection().front(),
+                                           .frame = capturedFrame};
+    text.identity.version += versionsAhead;
+    text.identity.documentRevision += revisionsAhead;
+    return text;
+  };
+  SelectTool tool;
+  const auto build = [&](std::vector<CapturedPresentation::TextEditing> measured) {
+    FramePresentationInput input = Input(app, tool, 1);
+    input.detail = SelectionChromeDetail::EditingChromeOnly;
+    input.decorations.textEditing = annotation(2, 2);
+    input.decorations.measuredTextEditing = std::move(measured);
+    return FramePresentation::Build(FramePresentationTestAccess::resources(
+                                        raster, {RectTile(raster->selection().front(), 10.0, 0.0)}),
+                                    input)
+        .frame;
+  };
+
+  // The request named the posted version; the pixels show the next keystroke's revision.
+  const auto matching = build({annotation(1, 0), annotation(2, 2)});
+  ASSERT_THAT(matching, Ne(nullptr));
+  EXPECT_THAT(matching->chrome().textFrameCornersDoc, Eq(std::optional(capturedFrame)));
+
+  const auto unmatched = build({annotation(1, 1), annotation(2, 2)});
+  ASSERT_THAT(unmatched, Ne(nullptr));
+  EXPECT_THAT(unmatched->chrome().textFrameCornersDoc, Eq(std::nullopt));
+}
+
 TEST(FramePresentationTest, CurrentCommittedCaptureReplacesAnOlderDisplayedOverride) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kRect));

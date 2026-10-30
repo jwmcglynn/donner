@@ -40,6 +40,7 @@
 #include "donner/svg/text/TextBackendSimple.h"
 #include "donner/svg/text/TextEngineHelpers.h"
 #include "donner/svg/text/TextPathWarp.h"
+#include "donner/svg/text/TextTransform.h"
 #ifdef DONNER_TEXT_FULL
 #include "donner/svg/text/TextBackendFull.h"
 #endif
@@ -175,6 +176,16 @@ uint32_t GetPositioningCluster(const TextGlyph& glyph) {
   return glyph.positioningCluster.value_or(glyph.cluster);
 }
 
+/// Read a rendered codepoint while retaining the span's original byte addressing.
+uint32_t SpanLayoutCodepoint(const components::ComputedTextComponent::TextSpan& span, size_t byte) {
+  const std::string_view text(span.text.data() + span.start, span.end - span.start);
+  const uint32_t codepoint = byte < text.size() ? decodeUtf8(text, byte) : 0;
+  return span.textTransform == TextTransform::FullWidth
+             ? text_transform::FullWidthCodepoint(
+                   codepoint, span.preservesSpaces || PreservesSpaces(span.whiteSpace))
+             : codepoint;
+}
+
 /// Encode a single Unicode codepoint as UTF-8.
 std::string encodeUtf8(uint32_t cp) {
   std::string result;
@@ -233,46 +244,55 @@ FontHandle selectBackendSafeFont(const TextBackend& backend, FontManager& fontMa
   return font;
 }
 
+struct PositioningCodepointInterval {
+  uint32_t first;
+  uint32_t last;
+};
+
+// Preserve the existing intervals, including the legacy block-wide combining ranges.
+constexpr std::array<PositioningCodepointInterval, 17> kPositioningCombiningIntervals = {{
+    {0x0300, 0x036F},  // Combining Diacritical Marks
+    {0x0483, 0x0489},  // Cyrillic combining
+    {0x0591, 0x05C7},  // Hebrew combining
+    {0x0610, 0x061A},  // Arabic combining
+    {0x064B, 0x065F},  // Arabic combining
+    {0x0670, 0x0670},  // Arabic superscript alef
+    {0x06D6, 0x06ED},  // Arabic combining
+    {0x0730, 0x074A},  // Syriac combining
+    {0x0E31, 0x0E31},  // Thai combining
+    {0x0E34, 0x0E3A},  // Thai combining
+    {0x0EB1, 0x0EB1},  // Lao combining
+    {0x0EB4, 0x0EBC},  // Lao combining
+    {0x1AB0, 0x1AFF},  // Combining Diacritical Marks Extended
+    {0x1DC0, 0x1DFF},  // Combining Diacritical Marks Supplement
+    {0x20D0, 0x20FF},  // Combining Diacritical Marks for Symbols
+    {0x3099, 0x309A},  // Kana combining voicing marks
+    {0xFE20, 0xFE2F},  // Combining Half Marks
+}};
+
+bool IsPositioningCombiningCodepoint(uint32_t cp) {
+  return std::any_of(kPositioningCombiningIntervals.begin(), kPositioningCombiningIntervals.end(),
+                     [cp](const PositioningCodepointInterval& interval) {
+                       return cp >= interval.first && cp <= interval.last;
+                     });
+}
+
+bool IsPositioningJoiner(uint32_t cp) {
+  return cp == 0x200C || cp == 0x200D || cp == 0x034F;
+}
+
+bool IsPositioningVariationSelector(uint32_t cp) {
+  return (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF);
+}
+
 /**
  * Existing nonspacing classification used to keep shaping input intact at
  * positioning boundaries. These codepoints still consume addressable source slots.
  * Includes combining marks, zero-width joiners, and variation selectors.
  */
 bool isNonSpacing(uint32_t cp) {
-  // Combining marks (General Category M).
-  if ((cp >= 0x0300 && cp <= 0x036F) ||  // Combining Diacritical Marks
-      (cp >= 0x0483 && cp <= 0x0489) ||  // Cyrillic combining
-      (cp >= 0x0591 && cp <= 0x05C7) ||  // Hebrew combining
-      (cp >= 0x0610 && cp <= 0x061A) ||  // Arabic combining
-      (cp >= 0x064B && cp <= 0x065F) ||  // Arabic combining
-      (cp >= 0x0670 && cp == 0x0670) ||  // Arabic superscript alef
-      (cp >= 0x06D6 && cp <= 0x06ED) ||  // Arabic combining
-      (cp >= 0x0730 && cp <= 0x074A) ||  // Syriac combining
-      (cp >= 0x0E31 && cp == 0x0E31) ||  // Thai combining
-      (cp >= 0x0E34 && cp <= 0x0E3A) ||  // Thai combining
-      (cp >= 0x0EB1 && cp == 0x0EB1) ||  // Lao combining
-      (cp >= 0x0EB4 && cp <= 0x0EBC) ||  // Lao combining
-      (cp >= 0x1AB0 && cp <= 0x1AFF) ||  // Combining Diacritical Marks Extended
-      (cp >= 0x1DC0 && cp <= 0x1DFF) ||  // Combining Diacritical Marks Supplement
-      (cp >= 0x20D0 && cp <= 0x20FF) ||  // Combining Diacritical Marks for Symbols
-      (cp >= 0xFE20 && cp <= 0xFE2F)) {  // Combining Half Marks
-    return true;
-  }
-
-  // Zero-width joiners and format characters used in emoji/ligature sequences.
-  if (cp == 0x200C ||  // Zero Width Non-Joiner
-      cp == 0x200D ||  // Zero Width Joiner (emoji ZWJ sequences)
-      cp == 0x034F) {  // Combining Grapheme Joiner
-    return true;
-  }
-
-  // Variation selectors (emoji style selectors, ideographic variation sequences).
-  if ((cp >= 0xFE00 && cp <= 0xFE0F) ||    // Variation Selectors (VS1-VS16)
-      (cp >= 0xE0100 && cp <= 0xE01EF)) {  // Variation Selectors Supplement
-    return true;
-  }
-
-  return false;
+  return IsPositioningCombiningCodepoint(cp) || IsPositioningJoiner(cp) ||
+         IsPositioningVariationSelector(cp);
 }
 
 Path transformPath(const Path& spline, const Transform2d& transform) {
@@ -871,6 +891,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontVariant = style->properties->fontVariant.get().value();
     span.fontSynthesisSmallCaps = style->properties->fontSynthesisSmallCaps.get().value();
     span.fontSynthesisStyle = style->properties->fontSynthesisStyle.get().value();
+    span.textTransform = style->properties->textTransform.get().value();
     span.fontKerning = style->properties->fontKerning.get().value();
     span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
     span.fontSize = style->properties->fontSize.get().value();
@@ -1166,13 +1187,13 @@ bool EndsTextPathCluster(const TextRun& run, size_t glyphIndex, unsigned int cha
 /// Preserves glyph-local offsets while advancing one run's logical path clusters.
 void StageTextPathRun(TextRun& run, size_t runIndex,
                       const components::ComputedTextComponent::TextSpan& span,
-                      const ByteIndexMappings& mappings, const TextLayoutParams& params,
-                      const TextBackend& backend, double defaultY,
+                      std::string_view shapingText, const ByteIndexMappings& mappings,
+                      const TextLayoutParams& params, const TextBackend& backend, double defaultY,
                       const SmallVector<std::optional<Lengthd>, 1>& dxList,
                       const SmallVector<std::optional<Lengthd>, 1>& dyList, double boundaryKern,
                       TextPathStagingState& state) {
   state.advance += boundaryKern;
-  const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+  const std::string_view spanText = shapingText;
   const bool vertical = isVertical(params.writingMode);
   for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
     TextGlyph& glyph = run.glyphs[gi];
@@ -2478,7 +2499,7 @@ struct WrappingGlyph {
 
   double x = 0;
 
-  bool isSpace() const { return codepoint == ' ' || codepoint == '\t'; }
+  bool isSpace() const { return codepoint == ' ' || codepoint == '\t' || codepoint == 0x3000; }
   bool isBreak() const { return codepoint == '\n' && PreservesSegmentBreaks(mode); }
 };
 
@@ -2542,7 +2563,7 @@ std::vector<WrappingGlyph> CollectWrappingGlyphs(const std::vector<TextRun>& run
       chunk = boundary.index;
       const auto [resetsInline, resetsBlock] = WrappingAxisResets(boundary, vertical);
       size_t byte = GetPositioningCluster(glyph);
-      const uint32_t cp = byte < spanText.size() ? decodeUtf8(spanText, byte) : 0;
+      const uint32_t cp = SpanLayoutCodepoint(span, byte);
       const double advance = vertical ? glyph.yAdvance : glyph.xAdvance;
       flat.push_back(
           {ri, gi, InlinePenPosition(glyph, vertical), vertical ? glyph.xPosition : glyph.yPosition,
@@ -2616,7 +2637,7 @@ bool IsWrappingOverflow(const WrappingGlyph& item, double width, double measureP
 
 void TrimSoftBreakSpaces(std::vector<WrappingGlyph>& flat, size_t start, size_t end) {
   for (size_t trim = end; trim > start && flat[trim - 1].isSpace(); --trim) {
-    if (!PreservesSpaces(flat[trim - 1].mode)) {
+    if (!PreservesSpaces(flat[trim - 1].mode) && flat[trim - 1].codepoint != 0x3000) {
       flat[trim - 1].advance = 0.0;
     }
   }
@@ -3877,9 +3898,10 @@ private:
 
     const TextSpan* span = nullptr;
     TextRun run;
-    /// Aliases the source span or controlShapingText for this immovable stack frame.
+    /// Aliases source text or owned shaping buffers for this immovable stack frame.
     std::string_view text;
     std::string controlShapingText;
+    std::optional<text_transform::FullWidthText> fullWidthText;
     FontHandle font;
     double specifiedFontSizePx = 0.0;
     float fontSizePx = 0.0f;
@@ -3949,7 +3971,10 @@ private:
       return;
     }
 
-    prepareShaping(state);
+    if (!prepareShaping(state)) {
+      commitUnshapedSpan(state);
+      return;
+    }
     layoutChunks(state);
     commitShapedSpan(state);
   }
@@ -4093,7 +4118,25 @@ private:
     runs_.push_back(std::move(state.run));
   }
 
-  void prepareShaping(SpanState& state) {
+  bool prepareFullWidthShapingText(SpanState& state) {
+    if (state.span->textTransform == TextTransform::FullWidth) {
+      const bool preserveSpaces =
+          state.span->preservesSpaces || PreservesSpaces(state.span->whiteSpace);
+      if (text_transform::NeedsFullWidth(state.text, preserveSpaces)) {
+        state.fullWidthText = text_transform::MakeFullWidth(state.text, preserveSpaces);
+        if (!state.fullWidthText) {
+          return false;
+        }
+        state.text = state.fullWidthText->text;
+      }
+    }
+    return true;
+  }
+
+  bool prepareShaping(SpanState& state) {
+    if (!prepareFullWidthShapingText(state)) {
+      return false;
+    }
     state.chunkRanges = FindSpanShapingRanges(*state.span, state.text, state.xList, state.yList);
     state.forcedSeparators =
         FindForcedShapingSeparators(*state.span, state.text, state.chunkRanges);
@@ -4133,6 +4176,7 @@ private:
     state.previousChunkFont = previousSpanFont_;
     state.previousChunkFontSizePx = previousSpanFontSizePx_;
     state.previousChunkKerning = previousSpanKerning_;
+    return true;
   }
 
   void layoutChunks(SpanState& state) {
@@ -4520,10 +4564,34 @@ private:
       firstPathRun_ = runs_.size();
       previousTextPathSource_ = state.span->textPathSourceEntity;
     }
-    StageTextPathRun(state.run, runs_.size(), *state.span, state.indexMappings, params_, backend_,
-                     state.defaultY, state.dxList, state.dyList, state.pathBoundaryKern,
-                     pathStaging_);
+    const std::string_view logicalText =
+        state.fullWidthText ? std::string_view(state.fullWidthText->text)
+                            : std::string_view(state.span->text.data() + state.span->start,
+                                               state.span->end - state.span->start);
+    StageTextPathRun(state.run, runs_.size(), *state.span, logicalText, state.indexMappings,
+                     params_, backend_, state.defaultY, state.dxList, state.dyList,
+                     state.pathBoundaryKern, pathStaging_);
     state.run.onPath = true;
+  }
+
+  /// Restore source byte indices only after shaping and path staging have consumed transformed
+  /// text.
+  void restoreSourceClusters(SpanState& state) const {
+    if (!state.fullWidthText) {
+      return;
+    }
+    const auto sourceCluster = [&state](uint32_t byte) -> uint32_t {
+      if (byte >= state.indexMappings.byteToCharIdx.size()) {
+        return static_cast<uint32_t>(state.span->end - state.span->start);
+      }
+      return state.fullWidthText->sourceByteOffsets[state.indexMappings.byteToCharIdx[byte]];
+    };
+    for (auto& glyph : state.run.glyphs) {
+      glyph.cluster = sourceCluster(glyph.cluster);
+      if (glyph.positioningCluster) {
+        glyph.positioningCluster = sourceCluster(*glyph.positioningCluster);
+      }
+    }
   }
 
   void commitShapedSpan(SpanState& state) {
@@ -4532,6 +4600,7 @@ private:
     if (state.span->pathSpline) {
       stageTextPathSpan(state);
     }
+    restoreSourceClusters(state);
     runExtents_.push_back({state.runPenStartX, state.runPenStartY, state.penX, state.penY});
     runs_.push_back(std::move(state.run));
   }
