@@ -97,6 +97,7 @@ jobs:
           persist-credentials: false
 
       - name: Select pinned Xcode
+        id: xcode
         shell: bash
         run: tools/ci_select_macos_xcode.sh
 
@@ -130,6 +131,7 @@ jobs:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           trusted-pr: ${{ needs.trust.outputs.trusted_pr }}
           renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
           download-outputs: toplevel
 
       - name: Configure BuildBuddy read-only cache
@@ -138,6 +140,7 @@ jobs:
         with:
           read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
           renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
           download-outputs: toplevel
 
       # Before Bazel, so a full disk fails in seconds with a clear error instead of an ENOSPC
