@@ -870,12 +870,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          missing=0
           for tool in xvfb-run Xvfb xauth cmake ninja; do
             if ! command -v "$tool" >/dev/null; then
               echo "::error::Self-hosted Linux is missing required native consumer tool: $tool"
-              exit 1
+              missing=1
             fi
           done
+          exit "$missing"
 
       - name: Record target selection
         shell: bash
