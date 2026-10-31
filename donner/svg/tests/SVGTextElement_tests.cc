@@ -283,8 +283,12 @@ TEST(SVGTextElementPublicApiTests, VerticalTextPathLengthMatchesStraightTextAdva
           <text id="path" writing-mode="vertical-rl" font-size="20"><textPath href="#p"
           method=")svg") + std::string(method) + R"svg(">A</textPath></text>)svg",
                                               kExperimentalOptions);
-    const auto ordinary = document.querySelector("#ordinary")->cast<SVGTextElement>();
-    const auto onPath = document.querySelector("#path")->cast<SVGTextElement>();
+    const auto ordinaryElement = document.querySelector("#ordinary");
+    const auto pathElement = document.querySelector("#path");
+    ASSERT_THAT(ordinaryElement, Optional(testing::_));
+    ASSERT_THAT(pathElement, Optional(testing::_));
+    const auto ordinary = ordinaryElement->cast<SVGTextElement>();
+    const auto onPath = pathElement->cast<SVGTextElement>();
     const double advance = ordinary.getComputedTextLength();
     ASSERT_THAT(advance, testing::Gt(0.0));
     EXPECT_THAT(onPath.getComputedTextLength(), testing::DoubleNear(advance, 1e-6));

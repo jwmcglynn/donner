@@ -3411,6 +3411,11 @@ TEST(TextEngineScriptedTest, VerticalTextPathCachedLengthUsesOneInlineAdvance) {
         span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
       }
       const Entity root = MakeTextRootWithSpan(registry, value, std::move(span));
+      if (adjusted) {
+        auto& owner = registry.get<components::TextComponent>(root);
+        owner.textLength = Lengthd(24.0, Lengthd::Unit::None);
+        owner.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+      }
       registry.get<components::ComputedStyleComponent>(root).properties->writingMode.set(
           WritingMode::VerticalRl, css::Specificity::Override());
       const EntityHandle handle(registry, root);
