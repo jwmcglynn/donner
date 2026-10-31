@@ -866,19 +866,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check native consumer tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          missing=0
-          for tool in xvfb-run Xvfb xauth cmake ninja; do
-            if ! command -v "$tool" >/dev/null; then
-              echo "::error::Self-hosted Linux is missing required native consumer tool: $tool"
-              missing=1
-            fi
-          done
-          exit "$missing"
-
       - name: Record target selection
         shell: bash
         run: |
@@ -1021,6 +1008,19 @@ jobs:
           exit "$status"
           EOF
           chmod +x "$DIAG_DIR/run_bazel_with_heartbeat.sh"
+
+      - name: Check native consumer tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for tool in xvfb-run Xvfb xauth cmake ninja; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "::error::Self-hosted Linux is missing required native consumer tool: $tool"
+              missing=1
+            fi
+          done
+          exit "$missing"
 
       - name: Sync Bazel toolchain
         # NixOS injects include paths via NIX_CFLAGS_COMPILE, which Bazel does
