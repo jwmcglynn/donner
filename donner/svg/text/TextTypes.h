@@ -75,7 +75,7 @@ struct TextGlyph {
   double xPosition = 0;      ///< Absolute X position for this glyph.
   double yPosition = 0;      ///< Absolute Y baseline position.
   double xAdvance = 0;       ///< Horizontal advance to next glyph.
-  double yAdvance = 0;       ///< Vertical advance (used in vertical writing modes).
+  double yAdvance = 0;       ///< Flat vertical advance; zero after text-path staging.
   double xKern = 0;          ///< Kerning adjustment applied before this glyph (for path layout).
   double rotateDegrees = 0;  ///< Per-glyph rotation in degrees.
   uint32_t cluster = 0;      ///< Byte offset into the span text for the glyph's source cluster.

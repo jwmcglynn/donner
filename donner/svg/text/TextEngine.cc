@@ -6270,7 +6270,7 @@ Path PlaceCachedGlyphOutline(Path outline, const TextRun& run, const TextGlyph& 
   return transformPath(outline, textElementFromGlyphLocal);
 }
 
-/// Returns a canonical path advance in document axes, including authored glyph rotation.
+/// Returns a canonical path advance in text-layout axes, including authored glyph rotation.
 Vector2d CachedTextPathAdvance(const TextGlyph& glyph, bool vertical) {
   const double rotation = glyph.rotateDegrees + (vertical && !glyph.sideways ? 90.0 : 0.0);
   const double angle = rotation * MathConstants<double>::kDegToRad;
