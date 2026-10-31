@@ -1420,6 +1420,51 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("--jobs=3", flags)
             self.assertIn("--local_resources=memory=4802", flags)
 
+    def test_vm_qualification_requires_real_cases_and_retains_their_hashes(self):
+        job = self._job_body("macos-vm-qualification")
+        step = self._step_body(job, "Require four executed qualification tests")
+        script = textwrap.dedent(step.split("run: |\n", 1)[1])
+        match = re.search(r"<<'PYCODE'\n(.*?)\nPYCODE", script, re.DOTALL)
+        self.assertIsNotNone(match)
+        targets = ("donner/base/base_tests", "donner/gpu/metal/tests/metal_buffer_bounds_tests",
+                   "donner/gpu/metal/tests/metal_color_matrix_tests",
+                   "donner/gpu/metal/tests/metal_queue_writes_tests")
+        valid = '<testsuite tests="1"><testcase name="case" status="run" result="completed"/></testsuite>'
+        for fault in (None, "cached", "missing", "zero", "skipped", "failed", "notrun", "invalid"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                receipt = root / "coverage-receipt/coverage-receipt.json"
+                receipt.parent.mkdir()
+                receipt.write_text(json.dumps({"steps": {"qualification": {
+                    "executed": 3 if fault == "cached" else 4, "tests": 4}}}))
+                for target in targets:
+                    report = root / "bazel-testlogs" / target / "test.xml"
+                    report.parent.mkdir(parents=True)
+                    report.write_text(valid)
+                report = root / "bazel-testlogs" / targets[-1] / "test.xml"
+                if fault == "missing": report.unlink()
+                elif fault == "zero": report.write_text('<testsuite tests="0"/>')
+                elif fault in ("skipped", "failed"):
+                    element = "skipped" if fault == "skipped" else "failure"
+                    report.write_text('<testsuite><testcase><%s/></testcase></testsuite>' % element)
+                elif fault == "notrun": report.write_text(valid.replace('status="run"', 'status="notrun"'))
+                elif fault == "invalid": report.write_text('<invalid')
+                result = subprocess.run([sys.executable, "-c", match.group(1)], cwd=root,
+                                        env=dict(os.environ, RUNNER_TEMP=str(root)),
+                                        capture_output=True, text=True, timeout=10)
+                proof = root / "qualification-test-cases.json"
+                if fault is None:
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    evidence = json.loads(proof.read_text())
+                    self.assertEqual(set(targets), set(evidence))
+                    self.assertTrue(all(item["executed_cases"] == 1 and len(item["xml_sha256"]) == 64
+                                        for item in evidence.values()))
+                else:
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertFalse(proof.exists())
+        artifact = self._step_body(job, "Retain VM qualification execution evidence")
+        self.assertIn("qualification-test-cases.json", artifact)
+
     def test_fixed_target_lanes_do_not_tolerate_an_empty_test_selection(self):
         """A named fixed test suite that yields no tests is a real defect.
 

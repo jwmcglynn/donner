@@ -2056,13 +2056,37 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PYCODE'
+          import hashlib
           import json
           import os
           from pathlib import Path
-          path = Path(os.environ["RUNNER_TEMP"]) / "coverage-receipt/coverage-receipt.json"
+          import xml.etree.ElementTree as ET
+          temporary = Path(os.environ["RUNNER_TEMP"])
+          path = temporary / "coverage-receipt/coverage-receipt.json"
           step = json.loads(path.read_text())["steps"]["qualification"]
           if step.get("executed", 0) != 4 or step.get("tests", 0) != 4:
               raise SystemExit("Expected four executed qualification tests")
+          targets = (
+              "donner/base/base_tests",
+              "donner/gpu/metal/tests/metal_buffer_bounds_tests",
+              "donner/gpu/metal/tests/metal_color_matrix_tests",
+              "donner/gpu/metal/tests/metal_queue_writes_tests",
+          )
+          proof = {}
+          for target in targets:
+              report = Path("bazel-testlogs") / target / "test.xml"
+              if report.stat().st_size > 16 * 1024 * 1024:
+                  raise SystemExit("Qualification test XML exceeds its bound")
+              data = report.read_bytes()
+              cases = list(ET.fromstring(data).iter("testcase"))
+              if not cases or any(
+                  case.find("skipped") is not None or case.find("failure") is not None
+                  or case.find("error") is not None or case.get("status", "run") != "run"
+                  or case.get("result", "completed") != "completed" for case in cases
+              ):
+                  raise SystemExit("Qualification needs actual passing cases in every target")
+              proof[target] = {"executed_cases": len(cases), "xml_sha256": hashlib.sha256(data).hexdigest()}
+          (temporary / "qualification-test-cases.json").write_text(json.dumps(proof, indent=2) + "\n")
           PYCODE
 
       - name: Retain VM qualification execution evidence
@@ -2070,7 +2094,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: vm-qualification-evidence-${{ matrix.instance }}
-          path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
+          path: |
+            ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
+            ${{ runner.temp }}/qualification-test-cases.json
           if-no-files-found: error
           retention-days: 3
 
