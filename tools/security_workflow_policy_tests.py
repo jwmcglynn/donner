@@ -102,6 +102,7 @@ REVIEWED_WORKFLOW_CALLS = {
 
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
 SELF_HOSTED_JOBS = {
+    (".github/workflows/cmake.yml", "macos-self-hosted"): "use_self_hosted_macos",
     (".github/workflows/lint.yml", "lint-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-browser"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
@@ -4907,7 +4908,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertTrue(_artifact_upload_violations({**files, path: changed}))
 
     def test_gatekeeper_uses_immutable_admission_code(self):
-        for path in (".github/workflows/main.yml", ".github/workflows/lint.yml"):
+        for path in (".github/workflows/main.yml", ".github/workflows/lint.yml",
+                     ".github/workflows/cmake.yml"):
             workflow = self.supply_chain_files[path]
             self.assertEqual([], _gatekeeper_source_violations(workflow))
             self.assertEqual(_jobs(self.supply_chain_files[".github/workflows/main.yml"])["gatekeeper"],
