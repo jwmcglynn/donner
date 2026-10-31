@@ -255,6 +255,45 @@ class DocsPublishTest(unittest.TestCase):
             shutil.copyfile(work / "pages/artifact.tar", output)
         return work, record, plan, commit, restore
 
+    def test_transport_rejection_blocks_retention_for_candidate_and_recovery(self):
+        import io
+        import shutil
+        import tarfile
+        import zipfile
+        for invalid in ("candidate", "recovery"):
+            with self.subTest(invalid=invalid):
+                work, record, plan, commit, restore = self.transaction()
+                previous = work / "previous.tar"
+                site.pack(work / "site", previous)
+                bad = work / "pages/artifact.tar" if invalid == "candidate" else previous
+                with tarfile.open(bad, "w:") as tar:
+                    info = tarfile.TarInfo("index.html")
+                    info.mode, info.size = 0o644, 5
+                    tar.addfile(info, io.BytesIO(b"prior"))
+                record["archive_sha256"] = publish.bcr_source.digest(work / "pages/artifact.tar")
+                plan.update(record=record, previous_archive_sha256=publish.bcr_source.digest(previous))
+                (work / "preflight.json").write_bytes(site.canonical(plan))
+                uploaded = work / "uploaded.zip"
+                with zipfile.ZipFile(uploaded, "w") as zipped:
+                    zipped.write(previous, "artifact.tar")
+                meta = {"expired": False, "name": "docs-rollback-1",
+                        "digest": "sha256:" + publish.bcr_source.digest(uploaded),
+                        "workflow_run": {"id": 123, "head_sha": "b" * 40}}
+                def download(artifact_id, output):
+                    shutil.copyfile(uploaded, output)
+                with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1",
+                                                  "GITHUB_SHA": "b" * 40}), \
+                     mock.patch.object(publish.store, "index", return_value=plan["current"]), \
+                     mock.patch.object(publish, "_live_identity", return_value=True), \
+                     mock.patch.object(publish, "github_json", return_value=meta), \
+                     mock.patch.object(publish, "download", side_effect=download), \
+                     mock.patch.object(publish, "_retain_and_deploy") as retain, \
+                     self.assertRaisesRegex(ValueError, "must start with ./"):
+                    publish.promote(work, 9, self.api)
+                retain.assert_not_called()
+                self.api.call.assert_not_called()
+                shutil.rmtree(work)
+
     def test_actual_post_timeout_retains_a_recovery_required_receipt(self):
         import subprocess
         work, record, plan, commit, restore = self.transaction()
