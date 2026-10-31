@@ -1133,10 +1133,10 @@ bool UsesSidewaysMetrics(TextOrientation orientation, uint32_t codepoint) {
          (orientation == TextOrientation::Mixed && codepoint > 0 && codepoint < 0x2E80);
 }
 
-/// Applies the existing sideways or upright vertical-origin adjustment to a shaped glyph.
+/// Converts sideways glyph metrics while retaining upright vertical shaping offsets.
 void AdjustVerticalGlyph(TextBackend::ShapedGlyph& glyph, const ShapedGlyphInfo& sg,
-                         hb_font_t* hbFont, float fontSizePx, double pixelScaleX,
-                         std::string_view spanText, TextOrientation textOrientation) {
+                         hb_font_t* hbFont, double pixelScaleX, std::string_view spanText,
+                         TextOrientation textOrientation) {
   const uint32_t codepoint = decodeCodepointAt(spanText, glyph.cluster);
   const bool sideways = UsesSidewaysMetrics(textOrientation, codepoint);
   if (sideways) {
@@ -1145,30 +1145,14 @@ void AdjustVerticalGlyph(TextBackend::ShapedGlyph& glyph, const ShapedGlyphInfo&
     glyph.yAdvance = 0.0;
     glyph.xOffset = 0.0;
     glyph.yOffset = 0.0;
-  } else if (textOrientation == TextOrientation::Mixed) {
-    FT_Face verticalFace = hb_ft_font_get_ft_face(hbFont);
-    if (verticalFace && verticalFace->units_per_EM > 0) {
-      double vertOriginY = glyph.yOffset;
-      const double emScale = fontSizePx / static_cast<double>(verticalFace->units_per_EM);
-      auto* vhea = static_cast<TT_VertHeader*>(FT_Get_Sfnt_Table(verticalFace, FT_SFNT_VHEA));
-      if (vhea && vhea->Ascender > 0) {
-        vertOriginY = static_cast<double>(vhea->Ascender) * emScale;
-      } else {
-        auto* os2 = static_cast<TT_OS2*>(FT_Get_Sfnt_Table(verticalFace, FT_SFNT_OS2));
-        if (os2 && os2->sTypoAscender > 0) {
-          vertOriginY = static_cast<double>(os2->sTypoAscender) * emScale;
-        }
-      }
-      glyph.yOffset = vertOriginY;
-    }
   }
 }
 
 /// Converts font-scaled shaping output to document-pixel advances, offsets, and clusters.
 TextBackend::ShapedRun ConvertShapedRun(const std::vector<ShapedGlyphInfo>& allGlyphs,
-                                        hb_font_t* hbFont, float fontSizePx, double pixelScaleX,
-                                        double pixelScaleY, std::string_view spanText,
-                                        size_t byteOffset, bool isVertical, bool useVerticalShaping,
+                                        hb_font_t* hbFont, double pixelScaleX, double pixelScaleY,
+                                        std::string_view spanText, size_t byteOffset,
+                                        bool isVertical, bool useVerticalShaping,
                                         TextOrientation textOrientation, bool forceLogicalOrder) {
   // Convert shaped glyphs to ShapedRun output.
   TextBackend::ShapedRun result;
@@ -1187,7 +1171,7 @@ TextBackend::ShapedRun ConvertShapedRun(const std::vector<ShapedGlyphInfo>& allG
     glyph.fontSizeScale = sg.isSynthSmallCap ? kSmallCapScale : 1.0f;
 
     if (isVertical && useVerticalShaping) {
-      AdjustVerticalGlyph(glyph, sg, hbFont, fontSizePx, pixelScaleX, spanText, textOrientation);
+      AdjustVerticalGlyph(glyph, sg, hbFont, pixelScaleX, spanText, textOrientation);
     }
 
     result.glyphs.push_back(glyph);
@@ -1405,9 +1389,9 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     return {};
   }
 
-  auto result = ConvertShapedRun(allGlyphs, hbFont, fontSizePx, pixelScaleX, pixelScaleY, spanText,
-                                 byteOffset, isVertical, useVerticalShaping, textOrientation,
-                                 forceLogicalOrder);
+  auto result =
+      ConvertShapedRun(allGlyphs, hbFont, pixelScaleX, pixelScaleY, spanText, byteOffset,
+                       isVertical, useVerticalShaping, textOrientation, forceLogicalOrder);
   result.backward = order.output(forceLogicalOrder);
   return result;
 }

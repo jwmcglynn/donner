@@ -8,3 +8,7 @@
 // Re-enable file I/O (hb_face_create_from_file_or_fail references
 // hb_blob_create_from_file_or_fail which is guarded by HB_NO_OPEN).
 #undef HB_NO_OPEN
+// Preserve font-provided vertical advances and per-glyph origins.
+#undef HB_NO_VERTICAL
+// Vertical origin reconstruction depends on variation-aware glyph metrics.
+#undef HB_NO_VAR

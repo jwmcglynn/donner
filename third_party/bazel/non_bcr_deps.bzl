@@ -59,6 +59,7 @@ def _non_bcr_deps_impl(_mctx):
     #   - the draw API for glyph outline extraction
     #   - CFF outlines for our OTF fallback font (Public Sans)
     #   - file I/O for hb_face_create_from_file_or_fail
+    #   - vertical advances and per-glyph origins from FreeType
     http_archive(
         name = "harfbuzz",
         build_file = "//third_party:BUILD.harfbuzz",
@@ -77,6 +78,10 @@ def _non_bcr_deps_impl(_mctx):
 // Re-enable file I/O (hb_face_create_from_file_or_fail references
 // hb_blob_create_from_file_or_fail which is guarded by HB_NO_OPEN).
 #undef HB_NO_OPEN
+// Preserve font-provided vertical advances and per-glyph origins.
+#undef HB_NO_VERTICAL
+// Vertical origin reconstruction depends on variation-aware glyph metrics.
+#undef HB_NO_VAR
 HBEOF""",
         ],
     )
