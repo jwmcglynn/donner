@@ -377,11 +377,13 @@ TEST(SVGTextElementPublicApiTests, UprightPathEndpointIncludesAuthoredRotation) 
     const auto* geometry = document.registry().try_get<components::ComputedTextGeometryComponent>(
         element->unsafeEntityHandle().entity());
     ASSERT_THAT(geometry, testing::NotNull());
-    ASSERT_THAT(geometry->runs, testing::Contains(testing::AllOf(
-        testing::Field("onPath", &TextRun::onPath, true),
-        testing::Field("font", &TextRun::font, Eq(font)),
-        testing::Field("glyphs", &TextRun::glyphs, testing::ElementsAre(
-            testing::Field("glyphIndex", &TextGlyph::glyphIndex, testing::Gt(0))))))));
+    const auto run =
+        std::find_if(geometry->runs.begin(), geometry->runs.end(),
+                     [](const TextRun& value) { return value.onPath && !value.glyphs.empty(); });
+    ASSERT_THAT(run, Ne(geometry->runs.end()));
+    ASSERT_THAT(run->font, Eq(font));
+    ASSERT_THAT(run->glyphs, testing::SizeIs(1));
+    ASSERT_THAT(run->glyphs[0].glyphIndex, testing::Gt(0));
     const Vector2d start = text.getStartPositionOfChar(0);
     EXPECT_THAT(text.getEndPositionOfChar(0), Vector2Near(start.x - 12.0, start.y + 16.0));
   }
