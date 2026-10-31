@@ -232,6 +232,16 @@ MAIN_ONLY_JOBS = {}
 # step, kind, value); the reason says why the difference cannot make main red after a green PR,
 # or names the accepted risk.
 INVOCATION_ALLOWLIST = {
+    ("cmake.yml", "macos", "macos-self-hosted", "Build with CMake (tiny_skia)",
+     "step-changed", "dceee0c1aa1f6a9e"):
+        "The same consumer configure/build/CTest runs with two build tasks and no ccache launcher; "
+        "native tool provisioning is checked rather than installed during a PR.",
+    ("cmake.yml", "macos", "macos-self-hosted", "Install build tools", "step-main-only", ""):
+        "The persistent runner must already provide CMake and Ninja; CI does not install host tools.",
+    ("cmake.yml", "macos", "macos-self-hosted", "Restore CMake dependencies", "step-main-only", ""):
+        "Hosted FetchContent trees embed absolute paths, so native builds resolve fresh dependencies.",
+    ("cmake.yml", "macos", "macos-self-hosted", "Restore compiler outputs", "step-main-only", ""):
+        "The bounded native consumer runs without the hosted ccache launcher or snapshot.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
      "-requires_desktop_session"):
         "The required hosted macos-browser subset runs these tests with main's invocation; "
