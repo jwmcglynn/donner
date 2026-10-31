@@ -3391,6 +3391,45 @@ TEST(TextEngineScriptedTest, TextAnchorSkipsOnPathRunsInsideChunks) {
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(70.0))))));
 }
 
+TEST(TextEngineScriptedTest, VerticalTextPathCachedLengthUsesOneInlineAdvance) {
+  for (const auto method :
+       {components::TextPathMethod::Align, components::TextPathMethod::Stretch}) {
+    for (const bool adjusted : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(method));
+      SCOPED_TRACE(adjusted);
+      Registry registry;
+      FontManager manager(registry);
+      TextEngine engine = MakeScriptedEngine(registry, manager);
+      const std::string value("\xe6\x97\xa5");
+      auto span = MakeSpan(value);
+      span.pathSpline =
+          PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(0.0, 100.0)).build();
+      span.textPathSourceEntity = registry.create();
+      span.textPathMethod = method;
+      if (adjusted) {
+        span.textLength = Lengthd(24.0, Lengthd::Unit::None);
+        span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+      }
+      const Entity root = MakeTextRootWithSpan(registry, value, std::move(span));
+      registry.get<components::ComputedStyleComponent>(root).properties->writingMode.set(
+          WritingMode::VerticalRl, css::Specificity::Override());
+      const EntityHandle handle(registry, root);
+      const double advance = adjusted ? 24.0 : 12.0;
+      EXPECT_THAT(engine.getComputedTextLength(handle), DoubleEq(advance));
+      EXPECT_THAT(engine.getSubStringLength(handle, 0, 1), DoubleEq(advance));
+      if (method == components::TextPathMethod::Stretch) {
+        const Vector2d start = engine.getStartPositionOfChar(handle, 0);
+        EXPECT_THAT(engine.getEndPositionOfChar(handle, 0),
+                    Eq(Vector2d(start.x, start.y + advance)));
+      }
+      const auto& cached = registry.get<components::ComputedTextGeometryComponent>(root);
+      ASSERT_THAT(cached.runs, SizeIs(1));
+      EXPECT_THAT(cached.runs.front().glyphs, ElementsAre(AllOf(GlyphXAdvanceIs(DoubleEq(advance)),
+                                                                GlyphYAdvanceIs(DoubleEq(0.0)))));
+    }
+  }
+}
+
 TEST(TextEngineScriptedTest, DomUtf16SupplementaryUnitsShareGlyphGeometry) {
   Registry registry;
   FontManager manager(registry);
