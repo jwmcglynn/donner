@@ -659,7 +659,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "runs-on: xcode-27", "runs-on: macos-26", 1), "not the xcode-27 image"),
             "a matrix entry on another image": (perf, files[perf].replace(
                 "- os: xcode-27", "- os: macos-latest", 1), "not the xcode-27 image"),
-            "no selection": (wasm, files[wasm].replace(select, "", 1), "does not select"),
+            "no selection": (wasm, files[wasm].replace(
+                select.replace("        shell:", "        id: xcode\n        shell:"), "", 1),
+                "does not select"),
             "selection after a build tool": (fuzz, fuzz_head + fuzz_macos.replace(
                 select, "", 1).replace("      - name: Soak", select + "\n      - name: Soak", 1),
                 "runs 'Setup Bazel' before selecting"),
