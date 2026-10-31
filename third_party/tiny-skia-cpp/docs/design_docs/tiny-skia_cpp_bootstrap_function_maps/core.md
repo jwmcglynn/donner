@@ -189,6 +189,12 @@ Legend: `☐` Not started, `🧩` Stub only, `🟡` Implemented/tested (Rust com
 | `Rect::from_ltrb` | `Rect::fromLtrb` | 🟢 | Line-by-line audited: Covered by `GeomTest.RectFromLtrbRejectsInvalidBounds`; reject-path now uses matcher-based `nullopt` assertions |
 | `int_rect_to_screen` | `intRectToScreen` | 🟢 | Line-by-line audited: Cross-type conversion checks |
 
+### `third_party/tiny-skia/path/src/rect.rs`
+| Rust function/item | C++ function/item | Status | Evidence / Notes |
+| --- | --- | --- | --- |
+| `Rect::round` | `Rect::round` | 🟡 | Widen rounded endpoints before subtraction to avoid signed overflow. `GeomTest.RectRoundingRejectsBoundsWiderThanAnIntRect` and `RectRoundingPreservesRepresentableBounds` cover rejection and normal bounds. C++ rejects an unrepresentable span where Rust saturates, so Rust-completeness is not claimed. |
+| `Rect::round_out` | `Rect::roundOut` | 🟡 | Widen rounded endpoints before subtraction. The same geometry regressions and `regression-extreme-circle-clip.svg` corpus seed cover the UBSan failure. C++ rejects an unrepresentable span where Rust saturates, so Rust-completeness is not claimed. |
+
 ### `third_party/tiny-skia/src/blitter.rs`
 | Rust function/item | C++ function/item | Status | Evidence / Notes |
 | --- | --- | --- | --- |

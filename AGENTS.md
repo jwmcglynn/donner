@@ -216,7 +216,7 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
   Donner renderer test utilities. Do not use external SVG renderers such as `rsvg-convert`,
   ImageMagick, browser screenshots, or resvg unless the task explicitly compares Donner against
   another engine.
-- **Regression tests must fail at HEAD before the fix lands.** Commit the failing test on its own commit first so CI records a red→green transition. See `CLAUDE.md` §"Debugging Discipline" and §"Bug-Fix Commit Discipline".
+- **Regression tests must fail against the broken code before the fix lands.** Run the targeted test before applying the fix, retain the failure evidence, and verify that the fixed code passes. The test and fix may be committed together. See `CLAUDE.md` §"Debugging Discipline" and §"Bug-Fix Commit Discipline".
 - **Editor visual bugs use the visual debugging playbook.** Start with a live `.rnr`/screenshot
   repro, then work down the editor stack using
   [`docs/editor_visual_debugging.md`](docs/editor_visual_debugging.md). Generate reproducible
