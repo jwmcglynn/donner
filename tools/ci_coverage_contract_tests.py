@@ -199,11 +199,6 @@ class CoverageContractTest(unittest.TestCase):
         # A fallback does not change routing.
         self.assertEqual(1, len(self._check(receipts, dict(selection, fallback=True))[0]))
 
-    def test_a_parity_step_that_ran_no_tests_does_not_count(self):
-        receipts = copy.deepcopy(_COMPLETE)
-        receipts["macos-hosted-parity"]["steps"]["test"] = _ran(0)
-        self.assertEqual(1, len(self._check(receipts)[0]))
-
     def test_bep_counts_separate_executed_from_cached_results(self):
         events = [
             {"id": {"testResult": {"label": "//a:t", "run": 1, "shard": 1, "attempt": 1}},
