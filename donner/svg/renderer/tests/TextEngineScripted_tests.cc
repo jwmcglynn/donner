@@ -171,6 +171,7 @@ public:
       glyph.cluster = run.glyphs.back().cluster;
       glyph.xKern = 0.0;
       glyph.yKern = 0.0;
+      glyph.yAdvance = 0.0;
       glyph.xOffset = -7.0;
       glyph.yOffset = -4.0;
     }
@@ -2128,6 +2129,30 @@ TEST(TextEngineScriptedTest, VerticalTextPathPreservesInlineAdvancesAndGlyphOffs
                 GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9))),
           AllOf(GlyphXPositionIs(DoubleNear(2.0, 1e-9)), GlyphYPositionIs(DoubleNear(17.0, 1e-9)),
                 GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9)))))));
+}
+
+TEST(TextEngineScriptedTest, VerticalTextPathRotatesUprightCombiningClusterOffsets) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<ScriptedTextBackend>();
+  backend->clusterCombiningMarks = true;
+  TextEngine engine(fontManager, registry, std::move(backend));
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("\xe6\x97\xa5\xcc\x81");
+  span.pathSpline = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(0.0, 100.0)).build();
+  span.textPathSourceEntity = registry.create();
+  span.rotateList = {90.0};
+  text.spans.push_back(std::move(span));
+  TextLayoutParams params = MakeTextParams(20.0);
+  params.writingMode = WritingMode::VerticalRl;
+  const auto runs = engine.layout(text, params);
+  EXPECT_THAT(
+      runs,
+      ElementsAre(RunGlyphsAre(ElementsAre(
+          AllOf(GlyphXPositionIs(DoubleNear(-3.0, 1e-9)), GlyphYPositionIs(DoubleNear(2.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-9))),
+          AllOf(GlyphXPositionIs(DoubleNear(-8.0, 1e-9)), GlyphYPositionIs(DoubleNear(-7.0, 1e-9)),
+                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-9)))))));
 }
 
 TEST(TextEngineScriptedTest, VerticalTextPathLengthScalesInlineOffsetsWithoutScalingNormalOffsets) {
