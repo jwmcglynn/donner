@@ -14,6 +14,7 @@ exports_files(
         # versions of deps that are hidden from BCR consumers behind a
         # dev_dependency module extension.
         "bazel/non_bcr_deps.bzl",
+        "harfbuzz_vertical_no_var_guard.patch",
         "woff2_bounded_decode.patch",
     ],
 )

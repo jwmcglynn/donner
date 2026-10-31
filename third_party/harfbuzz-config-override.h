@@ -10,5 +10,5 @@
 #undef HB_NO_OPEN
 // Preserve font-provided vertical advances and per-glyph origins.
 #undef HB_NO_VERTICAL
-// Vertical origin reconstruction depends on variation-aware glyph metrics.
-#undef HB_NO_VAR
+// Keep variation composite decoding outside the shaping capability set.
+#define HB_NO_VAR_COMPOSITES

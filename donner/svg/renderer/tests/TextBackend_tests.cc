@@ -597,9 +597,8 @@ TEST(TextBackendFullVerticalOrigin, RejectedVerticalMetricBudgetReturnsNoPartial
   TextBackend::ShapingContext context;
   context.byteLength = text.size();
   context.work = &work;
-  const auto shaped = backend.shapeRunInContext(font, 20.0f, text, 0, text.size(), true,
-                                                TextOrientation::Mixed, FontVariant::Normal,
-                                                false, context);
+  const auto shaped = backend.shapeRunInContext(font, 20.0f, text, context, 0, text.size(), true,
+                                                TextOrientation::Mixed, FontVariant::Normal, false);
   EXPECT_THAT(shaped.glyphs, IsEmpty());
   EXPECT_THAT(work.rejected, testing::IsTrue());
 }

@@ -65,6 +65,8 @@ def _non_bcr_deps_impl(_mctx):
         build_file = "//third_party:BUILD.harfbuzz",
         sha256 = "3c2a9006a7e1bf58737e557014d7882c554c628fb379a9f00008f5ea53dbbdfb",
         strip_prefix = "harfbuzz-14.2.1",
+        patches = ["//third_party:harfbuzz_vertical_no_var_guard.patch"],
+        patch_args = ["-p1"],
         urls = ["https://github.com/harfbuzz/harfbuzz/archive/refs/tags/14.2.1.tar.gz"],
         patch_cmds = [
             """cat > src/config-override.h << 'HBEOF'
@@ -80,8 +82,8 @@ def _non_bcr_deps_impl(_mctx):
 #undef HB_NO_OPEN
 // Preserve font-provided vertical advances and per-glyph origins.
 #undef HB_NO_VERTICAL
-// Vertical origin reconstruction depends on variation-aware glyph metrics.
-#undef HB_NO_VAR
+// Keep variation composite decoding outside the shaping capability set.
+#define HB_NO_VAR_COMPOSITES
 HBEOF""",
         ],
     )
