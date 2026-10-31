@@ -44,8 +44,9 @@ _COMPLETE = {
         "cmake_consumer": _ran()}),
     "linux-self-hosted": _receipt("linux-self-hosted", {"build": _ran(), "test": _ran()}),
     "macos-self-hosted": _receipt("macos-self-hosted", {
-        "metal_profile": _ran(), "metal_preflight": _ran(),
         "build": _ran(), "test": _ran(), "geode_test": _ran(6)}),
+    "macos-metal": _receipt("macos-metal", {
+        "metal_profile": _ran(), "metal_preflight": _ran(), "metal_native": _ran(10)}),
     "macos-browser": _receipt("macos-browser", {
         "browser_preflight": _ran(), "browser_test": _ran(2)}),
     "macos-hosted-parity": _receipt("macos-hosted-parity", {
@@ -105,11 +106,19 @@ class CoverageContractTest(unittest.TestCase):
                             ("metal_preflight", "shader-memory-canary")):
             with self.subTest(step=step):
                 receipts = copy.deepcopy(_COMPLETE)
-                receipts["macos-self-hosted"]["steps"][step] = _SKIPPED
+                receipts["macos-metal"]["steps"][step] = _SKIPPED
                 problems, _ = self._check(receipts)
                 self.assertEqual(problems, [
                     "macos / Test / %s is required on this pull request but did not run; "
-                    "expected an executed macos-self-hosted / %s" % (entry, step)])
+                    "expected an executed macos-metal / %s" % (entry, step)])
+
+    def test_native_metal_suite_cannot_be_skipped_or_empty(self):
+        for result in (_SKIPPED, _ran(0)):
+            with self.subTest(result=result):
+                receipts = copy.deepcopy(_COMPLETE)
+                receipts["macos-metal"]["steps"]["metal_native"] = result
+                problems, _ = self._check(receipts)
+                self.assertTrue(any("native-metal" in problem for problem in problems), problems)
 
     def test_replayed_skipped_hosted_linux_test_fails(self):
         # Negative control from #1889: the trusted pull request's hosted Linux job skipped
