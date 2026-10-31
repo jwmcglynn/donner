@@ -584,6 +584,81 @@ TEST_P(TextBackendTest, ShapeRunVerticalCjk) {
   }
 }
 
+TEST(TextBackendFullVerticalOrigin, MixedUsesEachGlyphVerticalSideBearing) {
+  Registry registry;
+  FontManager manager(registry);
+  TextBackendFull backend(manager, registry);
+  const FontHandle original = LoadResvgFont(manager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
+  ASSERT_THAT(static_cast<bool>(original), testing::IsTrue());
+  const std::string text = "\xe6\x97\xa5\xe6\x9c\xac";
+  const auto originalRun = backend.shapeRun(original, 1000.0f, text, 0, text.size(), true,
+                                            TextOrientation::Upright, FontVariant::Normal, false);
+  ASSERT_THAT(originalRun.glyphs, SizeIs(2));
+  const auto vhea = manager.sfntTable(original, "vhea");
+  ASSERT_THAT(vhea.has_value(), testing::IsTrue());
+  ASSERT_GE(vhea->size(), 36u);
+  const size_t longMetrics = ReadBe16(*vhea, 34);
+  std::vector<uint8_t> bytes = ReadResvgFontBytes("MPLUS1p-Regular.ttf");
+  size_t vmtxOffset = 0;
+  size_t vmtxSize = 0;
+  for (size_t i = 0; i < ReadBe16(bytes, 4); ++i) {
+    const size_t entry = 12 + i * 16;
+    ASSERT_LE(entry + 16, bytes.size());
+    if (ReadBe32(bytes, entry) == 0x766d7478) {
+      vmtxOffset = ReadBe32(bytes, entry + 8);
+      vmtxSize = ReadBe32(bytes, entry + 12);
+      break;
+    }
+  }
+  ASSERT_GT(vmtxOffset, 0u);
+  ASSERT_LE(vmtxOffset + vmtxSize, bytes.size());
+  constexpr std::array<uint16_t, 2> kSideBearings{140, 210};
+  std::array<double, 2> expectedOrigins{};
+  for (size_t i = 0; i < 2; ++i) {
+    const size_t glyph = originalRun.glyphs[i].glyphIndex;
+    const size_t bearingOffset =
+        glyph < longMetrics ? glyph * 4 + 2 : longMetrics * 4 + (glyph - longMetrics) * 2;
+    ASSERT_LE(bearingOffset + 2, vmtxSize);
+    WriteBe16(&bytes, vmtxOffset + bearingOffset, kSideBearings[i]);
+    const Path outline = backend.glyphOutline(original, static_cast<int>(glyph), 1.0f);
+    ASSERT_THAT(outline.commands(), Not(IsEmpty()));
+    expectedOrigins[i] = -outline.bounds().topLeft.y + kSideBearings[i];
+  }
+  const FontHandle changed = manager.loadFontData(bytes, FontDataTrust::Trusted);
+  ASSERT_THAT(static_cast<bool>(changed), testing::IsTrue());
+  const auto shaped = backend.shapeRun(changed, 1000.0f, text, 0, text.size(), true,
+                                       TextOrientation::Mixed, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, SizeIs(2));
+  for (size_t i = 0; i < 2; ++i) {
+    EXPECT_THAT(shaped.glyphs[i].yOffset, DoubleEq(expectedOrigins[i]));
+  }
+}
+
+TEST(TextBackendFullVerticalOrigin, MixedPreservesUprightCombiningMarkPositioning) {
+  Registry registry;
+  FontManager manager(registry);
+  TextBackendFull backend(manager, registry);
+  const FontHandle font = LoadResvgFont(manager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  const std::string text = "\xe6\x97\xa5\xcc\x81\xe6\x9c\xac";
+  for (float size : {20.0f, 64.0f}) {
+    SCOPED_TRACE(size);
+    const auto upright = backend.shapeRun(font, size, text, 0, text.size(), true,
+                                          TextOrientation::Upright, FontVariant::Normal, false);
+    const auto mixed = backend.shapeRun(font, size, text, 0, text.size(), true,
+                                        TextOrientation::Mixed, FontVariant::Normal, false);
+    ASSERT_THAT(upright.glyphs, SizeIs(3));
+    ASSERT_THAT(mixed.glyphs, SizeIs(3));
+    ASSERT_THAT(upright.glyphs[1].glyphIndex, Gt(0));
+    ASSERT_THAT(upright.glyphs[1].yAdvance, DoubleEq(0.0));
+    for (size_t i = 0; i < 3; ++i) {
+      EXPECT_THAT(mixed.glyphs[i].yOffset, DoubleEq(upright.glyphs[i].yOffset));
+      EXPECT_THAT(mixed.glyphs[i].xOffset, DoubleEq(upright.glyphs[i].xOffset));
+      EXPECT_THAT(mixed.glyphs[i].yAdvance, DoubleEq(upright.glyphs[i].yAdvance));
+    }
+  }
+}
+
 TEST_P(TextBackendTest, SmallCapsSynthesizesScaleForFontWithoutSmcp) {
   // MPLUS 1p doesn't have native smcp - both backends synthesize.
   const FontHandle font = loadFont("MPLUS1p-Regular.ttf", "MPLUS 1p");
