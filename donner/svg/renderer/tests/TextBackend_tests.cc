@@ -584,6 +584,26 @@ TEST_P(TextBackendTest, ShapeRunVerticalCjk) {
   }
 }
 
+TEST(TextBackendFullVerticalOrigin, RejectedVerticalMetricBudgetReturnsNoPartialRun) {
+  Registry registry;
+  FontManager manager(registry);
+  TextBackendFull backend(manager, registry);
+  const FontHandle font = LoadResvgFont(manager, "MPLUS1p-Regular.ttf", "MPLUS 1p", false);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  const std::string text = "\xe6\x97\xa5\xe6\x97\xa5\xe6\x97\xa5";
+  TextBackend::ShapingContext::WorkBudget work{1024, 8};
+  work.glyphOutlineVertices = 0;
+  work.glyphOutlineWork = 0;
+  TextBackend::ShapingContext context;
+  context.byteLength = text.size();
+  context.work = &work;
+  const auto shaped = backend.shapeRunInContext(font, 20.0f, text, 0, text.size(), true,
+                                                TextOrientation::Mixed, FontVariant::Normal,
+                                                false, context);
+  EXPECT_THAT(shaped.glyphs, IsEmpty());
+  EXPECT_THAT(work.rejected, testing::IsTrue());
+}
+
 TEST(TextBackendFullVerticalOrigin, MixedUsesEachGlyphVerticalSideBearing) {
   Registry registry;
   FontManager manager(registry);
