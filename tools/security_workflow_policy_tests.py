@@ -294,7 +294,7 @@ BUILDBUDDY_JOBS = {
     (".github/workflows/github_hosted_nightly.yml", "build"),
     (".github/workflows/main.yml", "linux"),
     (".github/workflows/main.yml", "macos"),
-    # Hosted macOS browser subset for trusted maintainer PRs, wired exactly like `macos`.
+    # Native desktop browser partition for trusted maintainer PRs.
     (".github/workflows/main.yml", "macos-browser"),
     (".github/workflows/main.yml", "macos-self-hosted"),
     (".github/workflows/main.yml", "macos-metal"),
@@ -2283,7 +2283,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertEqual(save, _steps(job)[-1], where)
                 # tools/ci_runner_loss_rerun.py treats a step of this name as post-job cleanup.
                 self.assertEqual("Save Bazel action cache", _step_key(save, "name", 8), where)
-        self.assertEqual(4, restoring)
+        self.assertEqual(3, restoring)
 
     def test_only_main_pushes_save_actions_caches(self):
         self.assertEqual([], _cache_write_violations(self.supply_chain_files))

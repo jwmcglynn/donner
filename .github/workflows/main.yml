@@ -336,7 +336,7 @@ jobs:
           while IFS= read -r path; do
             case "$path" in
               donner/editor/wasm/tests/package.json|donner/editor/wasm/tests/package-lock.json|donner/editor/wasm/tests/pnpm-lock.yaml|donner/editor/wasm/tests/browsers.*.json)
-                echo "Browser test dependency change selects the hosted browser job: $path"
+                echo "Browser test dependency change selects the browser partitions: $path"
                 browser_inputs_changed=true
                 break
                 ;;
@@ -471,7 +471,7 @@ jobs:
           fi
 
           # Dependency manifests feed every browser test: add them all to the selection, so
-          # every lane, including the hosted browser job, runs them. Fail closed: if they
+          # each browser partition sees the changed dependency inputs. Fail closed: if they
           # cannot be listed, fall back to //....
           if [[ "$browser_inputs_changed" == "true" ]]; then
             if manifest_tests="$(
@@ -495,7 +495,7 @@ jobs:
             fi
           fi
 
-          # Trusted PRs run hosted macOS only for browser targets (the macos-browser job). Ask
+          # Trusted PRs split browser tests between the VM and native desktop. Ask
           # the PR's merge graph whether any affected test launches a browser. bazel-diff hashes
           # every transitive input in the build graph, including the Wasm package and the spec
           # files these tests read; changed dependency manifests added their tests above.
@@ -512,7 +512,7 @@ jobs:
               echo "browser_affected=false" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "Browser target query failed; selecting the hosted browser job."
+            echo "Browser target query failed; selecting the native desktop browser job."
             echo "browser_affected=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -1900,7 +1900,7 @@ jobs:
         # `.github/workflows/fuzz.yml`, under sanitizers.
 
       # Browser tests share the GPU with native replays and need their own serial phase.
-      # Headed-browser tests need a desktop session; the required hosted browser job runs them.
+      # Headed-browser tests need a desktop session; the required native desktop browser job runs them.
 
       - name: Qualify pinned Chromium archive
         id: browser_preflight
@@ -2382,8 +2382,8 @@ jobs:
     # self-hosted Linux lane replaced hosted Linux; when hosted macOS ran (the ci:hosted-macos
     # label or a disabled macOS runner), the macOS lane needs no counterparts. It runs no build:
     # it reads receipts on a self-hosted Linux runner, so a trusted pull request gains no hosted
-    # job. The hosted macOS jobs also write the browser and Geode build event files only so their
-    # Bazel invocations stay identical to the pull request copies that the receipts read.
+    # job. Hosted main also retains browser and Geode build event files for consistent
+    # reporting across the different execution venues.
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux, linux-self-hosted, macos-self-hosted, macos-metal, macos-browser, macos-hosted-parity]
     if: ${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
