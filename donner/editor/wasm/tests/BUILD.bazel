@@ -1138,7 +1138,7 @@ playwright_bin.playwright_test(
     # with ANGLE/SwiftShader GL, Vulkan, and Graphite flag configurations, so
     # this is an environment capability boundary, not a flag or timing gap.
     # macOS headless Chromium presents through the real GPU and passes.
-    # Headed Firefox requires a desktop session. Both engines remain in the hosted browser gate.
+    # Headed Firefox requires a desktop session. Both engines remain in the native desktop browser gate.
     tags = [
         "launches-browser",
         "no-sandbox",

@@ -198,16 +198,23 @@ def _verify_current_roster(api, snapshot, state, work):
     require_preserved_releases(manifest, state["releases"])
 
 
+def _composition_state(api, snapshot: str | None, pinned_snapshot: bool) -> dict:
+    if pinned_snapshot:
+        store.automatic_context()
+        return store.read_index(api, snapshot)
+    if snapshot is None:
+        # Standalone preparation only creates an artifact. Seed and publication still require
+        # their live compare-and-swap target; this cannot replace an existing store.
+        return {"schema": 1, "releases": {}, "current": None, "previous": None}
+    return store.index(api, snapshot)
+
+
 def prepare(work: Path, main_run: str, release_run: str, record_sha256: str,
             snapshot: str | None, api=None, bootstrap: dict | None = None,
             pinned_snapshot: bool = False) -> None:
     api = api or store.GitHub()
     site.empty(work)
-    if pinned_snapshot:
-        store.automatic_context()
-        state = store.read_index(api, snapshot)
-    else:
-        state = store.index(api, snapshot)
+    state = _composition_state(api, snapshot, pinned_snapshot)
     _verify_current_roster(api, snapshot, state, work)
     if bootstrap is not None:
         _bootstrap_recovery(api, snapshot, state, bootstrap, work / "bootstrap")

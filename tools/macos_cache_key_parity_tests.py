@@ -53,14 +53,15 @@ SCHEDULING_ONLY_FLAG = re.compile(r"^--(?:jobs|local_resources|build_tests_only)
 TEST_ONLY_VARIABLES = ("BAZEL_MACOS_TEST_FLAGS", "BROWSER_STALL_TEST_FLAGS")
 _RC_LINE = re.compile(r"^(?:build|test|common):([A-Za-z0-9_-]+)\s+(.*)$")
 # Each lane names itself in its test environment, so test results never cross runners.
-LANE_TEST_ENV = {"macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
+LANE_TEST_ENV = {"macos-browser": "--test_env=DONNER_CI_MACOS_LANE=native-desktop-browser",
+                 "macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
                  "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted-vm",
                  "macos-hosted-parity": "--test_env=DONNER_CI_MACOS_LANE=hosted-parity-vm",
                  "macos-metal": "--test_env=DONNER_CI_MACOS_LANE=native-metal",
                  "macos-vm-qualification": "--test_env=DONNER_CI_MACOS_LANE=vm-qualification"}
 # The main.yml lanes that must compute identical action keys. Every macOS job, in any workflow,
 # selects the pinned Xcode and fails without it.
-LANES = (HOSTED, SELF_HOSTED, PARITY, "macos-metal", "macos-vm-qualification")
+LANES = (HOSTED, SELF_HOSTED, PARITY, "macos-metal", "macos-vm-qualification", "macos-browser")
 # The toolchain repository refresh runs before any build and takes no build flags.
 TOOLCHAIN_REFRESH = "fetch --force --lockfile_mode=off"
 SELECT_SCRIPT = "tools/ci_select_macos_xcode.sh"
@@ -272,7 +273,7 @@ def _bazelrc_problems(bazelrc):
 # pinned Xcode, so no macOS job and no workflow-level env may name them.
 XCODE_OVERRIDES = re.compile(
     r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|LSREGISTER|DEVELOPER_DIR|DONNER_CI_XCODE_IDENTITY|CCACHE_NAMESPACE)\b")
-MACOS_JOBS = LANES + ("macos-browser",)
+MACOS_JOBS = LANES
 
 
 def _xcode_override_problems(workflow):

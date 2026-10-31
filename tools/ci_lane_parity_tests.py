@@ -78,9 +78,7 @@ JOB_REPLACEMENTS = {
 # it is compared with the subset job instead of the replacement. The subset runs only when the
 # PR's affected set reaches the covered tests (or falls back to //...); a PR that cannot change
 # them leaves main's result for them unchanged, apart from flakes main's //... run can still hit.
-HOSTED_SUBSETS = {
-    ("main.yml", "macos", "trusted-pr"): ("macos-browser", ("Test (browser targets)",)),
-}
+HOSTED_SUBSETS = {}
 
 # Self-hosted jobs that rerun some of a replaced job's steps on a trusted PR under main's hosted
 # runner constraints, for the PRs whose affected set reaches those steps' runner-sensitive tests.
@@ -178,8 +176,8 @@ PARITY_ALLOWLIST = {
 # or speed, display scale or host tools, each with the escape that put it here. In the BUILD
 # files listed here, the tagged rules and the listed tests must match, so a listed test cannot
 # silently leave the parity subset. Browser tests (the carousel handoff,
-# animation pulse and WebKit drag classes) are covered by the hosted macos-browser subset on the
-# hosted image itself, so they are not tagged.
+# animation pulse and WebKit drag classes) run in the native desktop browser partition,
+# while headless browser cases run in the VM, so they are not tagged.
 HOSTED_PARITY_TESTS = {
     ("donner/editor/tests/BUILD.bazel", "editor_shell_tests"):
         "Frame-loop, drag and readiness cases that failed only on hosted macOS (#1824, #1902) "
@@ -204,13 +202,7 @@ HOSTED_PARITY_TESTS = {
 # Differences between a main step and the hosted subset's copy of it. Keyed by (workflow, main
 # job, subset job, step, kind, value). Only build-scope differences belong here: the subset must
 # test exactly what main tests.
-SUBSET_ALLOWLIST = {
-    ("main.yml", "macos", "macos-browser", "Test (browser targets)", "flag-pr-only",
-     "--build_tests_only"):
-        "Build scope only: main's job builds the whole selection in its Build step first, and "
-        "the subset has no Build step, so it builds only what the selected tests need. The "
-        "tests themselves, their filters and environment are main's.",
-}
+SUBSET_ALLOWLIST = {}
 
 # Setup step inputs whose value in a hosted subset is fixed instead of copied from main's job. The
 # subset runs only for pull requests, which must not save the Actions cache, so it states that
@@ -244,7 +236,7 @@ INVOCATION_ALLOWLIST = {
         "The bounded native consumer runs without the hosted ccache launcher or snapshot.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
      "-requires_desktop_session"):
-        "The required hosted macos-browser subset runs these tests with main's invocation; "
+        "The native macos-browser partition runs desktop-session tests separately; "
         "the service runner cannot launch browsers that require a desktop session.",
     # The hosted image has no offline Metal compiler, so its lane drops these targets. The
     # self-hosted runner has one and runs them, so the pull request runs more than main.
@@ -346,7 +338,7 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "7740b18fcd2296e1"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "2b83ea0f49a01f29"),
     ("main.yml", "determine-targets",
      "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "60a1b7a4e8d1b120"),
 }
@@ -2285,13 +2277,13 @@ class CiLaneParityTest(unittest.TestCase):
         self._assert_matches_allowlist(observed, SUBSET_ALLOWLIST,
                                        "a hosted subset runs a main step differently")
 
-    def test_desktop_browser_exclusion_keeps_required_hosted_coverage(self):
-        self.assertEqual(HOSTED_SUBSETS[("main.yml", "macos", "trusted-pr")],
-                         ("macos-browser", ("Test (browser targets)",)))
+    def test_browser_partitions_keep_complete_nonoverlapping_selection(self):
         workflow = self.workflows["main.yml"]
-        for job_name, scenario in (("macos", "main-push"),
-                                   ("macos-browser", "trusted-pr"),
-                                   ("macos-browser", "trusted-pr-fallback")):
+        for job_name, scenario, positive in (
+                ("macos", "main-push", "launches-browser"),
+                ("macos-self-hosted", "trusted-pr", "launches-browser"),
+                ("macos-browser", "trusted-pr", "requires_desktop_session"),
+                ("macos-browser", "trusted-pr-fallback", "requires_desktop_session")):
             with self.subTest(job=job_name, scenario=scenario):
                 self.assertTrue(job_gates(workflow, job_name, scenario))
                 job = _jobs(workflow)[job_name]
@@ -2300,8 +2292,12 @@ class CiLaneParityTest(unittest.TestCase):
                 invocations = profile["Test (browser targets)"]
                 self.assertTrue(invocations)
                 for invocation in invocations:
-                    self.assertIn("launches-browser", invocation["tag_filters"])
-                    self.assertNotIn("-requires_desktop_session", invocation["tag_filters"])
+                    tags = invocation["tag_filters"]
+                    self.assertEqual({positive}, {tag for tag in tags if not tag.startswith("-")})
+                    self.assertEqual(job_name == "macos-self-hosted",
+                                     "-requires_desktop_session" in tags)
+        for other in ("main-push", "untrusted-pr", "renovate-pr", "trusted-pr-native-only"):
+            self.assertFalse(job_gates(workflow, "macos-browser", other), other)
 
     def test_subset_order_problems_are_found(self):
         main = parse_workflow(

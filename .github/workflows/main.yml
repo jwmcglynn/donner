@@ -336,7 +336,7 @@ jobs:
           while IFS= read -r path; do
             case "$path" in
               donner/editor/wasm/tests/package.json|donner/editor/wasm/tests/package-lock.json|donner/editor/wasm/tests/pnpm-lock.yaml|donner/editor/wasm/tests/browsers.*.json)
-                echo "Browser test dependency change selects the hosted browser job: $path"
+                echo "Browser test dependency change selects the browser partitions: $path"
                 browser_inputs_changed=true
                 break
                 ;;
@@ -471,7 +471,7 @@ jobs:
           fi
 
           # Dependency manifests feed every browser test: add them all to the selection, so
-          # every lane, including the hosted browser job, runs them. Fail closed: if they
+          # each browser partition sees the changed dependency inputs. Fail closed: if they
           # cannot be listed, fall back to //....
           if [[ "$browser_inputs_changed" == "true" ]]; then
             if manifest_tests="$(
@@ -495,7 +495,7 @@ jobs:
             fi
           fi
 
-          # Trusted PRs run hosted macOS only for browser targets (the macos-browser job). Ask
+          # Trusted PRs split browser tests between the VM and native desktop. Ask
           # the PR's merge graph whether any affected test launches a browser. bazel-diff hashes
           # every transitive input in the build graph, including the Wasm package and the spec
           # files these tests read; changed dependency manifests added their tests above.
@@ -512,7 +512,7 @@ jobs:
               echo "browser_affected=false" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "Browser target query failed; selecting the hosted browser job."
+            echo "Browser target query failed; selecting the native desktop browser job."
             echo "browser_affected=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -1653,78 +1653,35 @@ jobs:
           namespace: native
           mode: save
 
-  # Hosted macOS browser subset for trusted PRs. Those PRs run every test on the
-  # self-hosted macOS runner, which has more cores and a real GPU, so a browser test
-  # that only meets its deadlines there can pass the PR and then fail main's hosted
-  # `macos` job. When the PR affects a test that launches a browser (or falls back
-  # to //...), this job runs main's hosted browser step on the same runner image,
-  # with the same targets, flags, quarantine and test environment. It runs no
-  # native suite and saves no cache: it restores main's caches only. Untrusted PRs
-  # and main pushes already run the full hosted `macos` job, so it never runs there.
+  # Desktop-session browser cases have one native owner; headless cases run in the VM.
+
   macos-browser:
-    runs-on: xcode-27
+    runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.browser_affected == 'true') }}
-    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
-    # runs allowed to write bind it, so other runs never receive that key.
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.browser_affected == 'true') }}
+    timeout-minutes: 60
     environment:
       name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
       deployment: false
-    # Keep this environment identical to the `macos` job's; ci_lane_parity_tests
-    # compares the browser step's Bazel invocation between the two.
     env:
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted"
-      BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
-      MIN_FREE_DISK_GIB: "45"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=native-desktop-browser"
+      MIN_FREE_DISK_GIB: "30"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      # The shared approved policy isolates action keys and cache partitions by
-      # the actual selected tuple; they match hosted lanes on that same tuple.
+      - name: Check runner disk space
+        shell: bash
+        run: tools/ci_check_runner_disk.sh
+
       - name: Select pinned Xcode
         id: xcode
         shell: bash
         run: tools/ci_select_macos_xcode.sh
 
-      # The xcode-27 image starts with far less free disk than a cold build of the tree needs.
-      - name: Free hosted macOS disk
-        shell: bash
-        run: tools/ci/free_hosted_macos_disk.sh
-
-      # Not used by browser tests. It keeps this job's setup identical to the `macos`
-      # job's, which the lane parity test requires.
-      - name: Install clang-tidy
-        uses: nick-fields/retry@v4
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          retry_wait_seconds: 15
-          command: |
-            brew install --quiet llvm@19
-            echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
-
-      - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.19.0
-        with:
-          bazelisk-cache: true
-          repository-cache: true
-          external-cache: true
-          cache-save: false
-
-      - name: Restore Bazel action cache
-        uses: ./.github/actions/cache-bazel-actions
-        with:
-          namespace: native
-
-      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
-      # runs and trusted maintainer pull requests read and write; Renovate pull
-      # requests only read; every other run configures no remote cache. The
-      # read-only repository secret still reaches every same-repository run of
-      # this job, so it is treated as public: it can only read the cache.
       - name: Configure BuildBuddy remote cache
         if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
         uses: ./.github/actions/buildbuddy-cache
@@ -1735,36 +1692,24 @@ jobs:
           cache-partition: ${{ steps.xcode.outputs.cache_partition }}
           download-outputs: minimal
 
-      - name: Configure BuildBuddy read-only cache
-        if: needs.gatekeeper.outputs.renovate_pr == 'true'
-        uses: ./.github/actions/buildbuddy-cache
-        with:
-          read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
-          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
-          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
-          download-outputs: minimal
-
-      # Before Bazel, so a full disk fails in seconds with a clear error instead of an ENOSPC
-      # late in the build.
-      - name: Check runner disk space
+      - name: Prepare self-hosted macOS toolchain
         shell: bash
-        run: tools/ci_check_runner_disk.sh
+        run: |
+          set -euo pipefail
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
+          test -x /opt/homebrew/bin/bazelisk
+          test -x /opt/homebrew/bin/bazel
+          test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
 
-      # Regenerate the Xcode and Apple toolchain repositories for the selected
-      # Xcode, as the `macos` job does.
       - name: Refresh Xcode toolchain configuration
         shell: bash
         run: |
-          bazelisk fetch --force --lockfile_mode=off \
+          bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off \
             --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
 
-      # Same command as the `macos` job's browser step: the PR's selected targets,
-      # filtered to tests that launch a browser, one at a time. That job builds the
-      # whole selection in its Build step first; this job has no Build step, and
-      # --build_tests_only keeps it from building anything the browser tests do not
-      # need (on a //... fallback, the rest of the repository).
       - name: Qualify pinned Chromium archive
         id: browser_preflight
         shell: bash
@@ -1779,11 +1724,11 @@ jobs:
             echo "::error::Empty target selection reached the browser preflight."
             exit 1
           fi
-          browser_targets=$(bazelisk query "attr('tags', 'launches-browser', tests(set($TARGETS)))")
+          browser_targets=$(bazelisk --nohome_rc --nosystem_rc query "attr('tags', 'requires_desktop_session', tests(set($TARGETS)))")
           if [[ -z "$browser_targets" ]]; then
             echo "No browser targets selected."
           else
-            tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results --test_output=errors \
+            tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
               $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
               //tools/ci:mac_browser_archive
           fi
@@ -1802,19 +1747,10 @@ jobs:
             echo "::error::Empty target selection reached the test step."
             exit 1
           fi
-          tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
             --local_test_jobs=1 --build_tests_only --build_event_json_file="$RUNNER_TEMP/coverage-browser_test.bep.json" \
-            --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak \
-            --config=hosted-macos-quarantine \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
-
-      # Diagnostic only: disk, cache and memory use once the tests have run.
-      - name: Probe runner resources after tests
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        timeout-minutes: 5
-        shell: bash
-        run: python3 -u tools/ci_disk_cache.py probe --stage after-test --marker "${RUNNER_TEMP}/bazel-disk-restore.marker"
+            --test_tag_filters=requires_desktop_session,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
 
       - name: Upload Bazel test failure artifacts
         if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.browser_test.outcome == 'failure')
@@ -1822,146 +1758,6 @@ jobs:
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
-      # A browser test that ended at its deadline records the window from its browser's
-      # launch to that deadline. Slice the runner's system log to those windows for the browser's
-      # own processes and for executable code-signing checks, which can delay a
-      # browser helper's first launch. The unified log is host-wide, so only this
-      # ephemeral hosted job collects it.
-      - name: Collect browser stall system log
-        id: browser_stall_log
-        if: ${{ !cancelled() && (steps.browser_test.outcome == 'failure') }}
-        continue-on-error: true
-        timeout-minutes: 5
-        shell: bash
-        run: |
-          set -euo pipefail
-          out="${RUNNER_TEMP}/browser-stall-system-log"
-          mkdir -p "$out"
-          iso='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
-          predicate='eventType == logEvent AND (process BEGINSWITH "Google Chrome for Testing" OR process == "syspolicyd" OR process == "amfid")'
-          count=0
-          while IFS= read -r -d '' window; do
-            start=""
-            end=""
-            read -r start end _ < "$window" || true
-            if [[ ! "$start" =~ $iso || ! "$end" =~ $iso ]]; then
-              echo "Skipping malformed window: $window"
-              continue
-            fi
-            count=$((count + 1))
-            start="${start/T/ }"
-            end="${end/T/ }"
-            raw="${RUNNER_TEMP}/browser-stall-window-${count}.raw"
-            if ! log show --style compact --timezone UTC \
-                --start "${start%Z}+0000" --end "${end%Z}+0000" \
-                --predicate "$predicate" > "$raw"; then
-              echo "System log slice ${count} failed: $window"
-            fi
-            # Keep the launch end of the window, where a stalled first launch shows.
-            head -c 2097152 "$raw" > "${out}/window-${count}.log"
-            rm -f "$raw"
-            if (( count == 4 )); then
-              break
-            fi
-          done < <(find -H bazel-testlogs -path '*/browser-stall/system-log-window.txt' -type f -print0 2>/dev/null | sort -z)
-          echo "Collected ${count} browser stall system log window(s)."
-
-      - name: Upload browser stall system log
-        if: ${{ !cancelled() && (steps.browser_test.outcome == 'failure') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: browser-stall-system-log-${{ github.job }}
-          path: ${{ runner.temp }}/browser-stall-system-log
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Detect browser GPU acquisition failure
-        id: browser_gpu_failure
-        if: ${{ !cancelled() && (steps.browser_test.outcome == 'failure' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics'))) }}
-        shell: bash
-        env:
-          BROWSER_GPU_DIAGNOSTICS_REQUESTED: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics') }}
-        run: |
-          set -euo pipefail
-          should_probe="$BROWSER_GPU_DIAGNOSTICS_REQUESTED"
-          for target in chromium_remote_smoke catalog_font_loading_test browser_presentation_regression_test standalone_geode_browser_renderer_test; do
-            log="bazel-testlogs/donner/editor/wasm/tests/${target}/test.log"
-            if [[ -f "$log" ]] && grep -qF 'stage=selection outcome=deadline_pending' "$log"; then
-              should_probe=true
-            fi
-            # A browser test ended at its deadline; its browser process states were recorded.
-            if [[ -f "$log" ]] && grep -qF 'browser-stall-diagnostics deadline' "$log"; then
-              should_probe=true
-            fi
-          done
-          echo "run_probe=$should_probe" >> "$GITHUB_OUTPUT"
-
-      - name: Compare browser GPU tests (serial)
-        id: browser_gpu_serial
-        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
-        continue-on-error: true
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazel_status=0
-          bazelisk test --config=ci --test_output=errors --nocache_test_results \
-            --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=1 --keep_going \
-            --build_event_json_file="${RUNNER_TEMP}/browser-gpu-serial.bep.json" \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS \
-            //tools/ci:browser_gpu_comparison || bazel_status=$?
-          report_status=0
-          python3 tools/browser_gpu_test_summary.py \
-            "${RUNNER_TEMP}/browser-gpu-serial.bep.json" \
-            "${RUNNER_TEMP}/browser-gpu-serial-summary.json" || report_status=$?
-          if [[ "$bazel_status" -ne 0 ]]; then exit "$bazel_status"; fi
-          exit "$report_status"
-
-      - name: Upload browser GPU comparison (serial)
-        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
-        uses: ./.github/actions/upload-bazel-test-artifacts
-        with:
-          name: browser-gpu-serial-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Compare browser GPU tests (parallel)
-        id: browser_gpu_parallel
-        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
-        continue-on-error: true
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazel_status=0
-          bazelisk test --config=ci --test_output=errors --nocache_test_results \
-            --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=4 --keep_going \
-            --build_event_json_file="${RUNNER_TEMP}/browser-gpu-parallel.bep.json" \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS \
-            //tools/ci:browser_gpu_comparison || bazel_status=$?
-          report_status=0
-          python3 tools/browser_gpu_test_summary.py \
-            "${RUNNER_TEMP}/browser-gpu-parallel.bep.json" \
-            "${RUNNER_TEMP}/browser-gpu-parallel-summary.json" || report_status=$?
-          if [[ "$bazel_status" -ne 0 ]]; then exit "$bazel_status"; fi
-          exit "$report_status"
-
-      - name: Upload browser GPU comparison (parallel)
-        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
-        uses: ./.github/actions/upload-bazel-test-artifacts
-        with:
-          name: browser-gpu-parallel-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Upload bounded browser GPU timing summaries
-        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: browser-gpu-timings-${{ github.job }}
-          path: |
-            ${{ runner.temp }}/browser-gpu-serial-summary.json
-            ${{ runner.temp }}/browser-gpu-parallel-summary.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
       - name: Record coverage receipt
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         shell: bash
@@ -1979,19 +1775,11 @@ jobs:
           overwrite: true
           retention-days: 3
 
-      # Last step, after every Bazel command: evicts the action cache to its budget and saves
-      # it on a main push.
-      - name: Save Bazel action cache
-        uses: ./.github/actions/cache-bazel-actions
-        with:
-          namespace: native
-          mode: save
+      - name: Remove BuildBuddy credentials
+        if: always()
+        shell: bash
+        run: rm -rf "${RUNNER_TEMP}/buildbuddy" "${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"
 
-  # The virtual macOS pool handles ordinary builds and tests. Native Metal validation
-  # runs independently on a shader-validation-capable runner.
-  # Replaces `macos` for trusted operator PRs. Main pushes, Renovate, and
-  # non-operator runs stay hosted. The host pre-provisions Bazelisk, Homebrew
-  # llvm@19, and Xcode Command Line Tools.
   macos-self-hosted:
     runs-on: [self-hosted, macOS-vm, ARM64]
     needs: [gatekeeper, determine-targets]
@@ -2112,7 +1900,7 @@ jobs:
         # `.github/workflows/fuzz.yml`, under sanitizers.
 
       # Browser tests share the GPU with native replays and need their own serial phase.
-      # Headed-browser tests need a desktop session; the required hosted browser job runs them.
+      # Headed-browser tests need a desktop session; the required native desktop browser job runs them.
 
       - name: Qualify pinned Chromium archive
         id: browser_preflight
@@ -2594,8 +2382,8 @@ jobs:
     # self-hosted Linux lane replaced hosted Linux; when hosted macOS ran (the ci:hosted-macos
     # label or a disabled macOS runner), the macOS lane needs no counterparts. It runs no build:
     # it reads receipts on a self-hosted Linux runner, so a trusted pull request gains no hosted
-    # job. The hosted macOS jobs also write the browser and Geode build event files only so their
-    # Bazel invocations stay identical to the pull request copies that the receipts read.
+    # job. Hosted main also retains browser and Geode build event files for consistent
+    # reporting across the different execution venues.
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux, linux-self-hosted, macos-self-hosted, macos-metal, macos-browser, macos-hosted-parity]
     if: ${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}

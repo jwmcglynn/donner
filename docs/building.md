@@ -265,10 +265,11 @@ default tiny-skia configuration.
 ## Continuous integration remote cache
 
 The GitHub-hosted Bazel lanes can share a [BuildBuddy](https://www.buildbuddy.io/) remote cache:
-the `linux`, `macos` and `macos-browser` jobs in `main.yml`, the Editor WASM build, the Geode ASan
-pull-request lane, and the scheduled nightly full-tree build and sanitizer lanes. Two self-hosted
-lanes share it too: `macos-self-hosted` and its hosted-parity subset `macos-hosted-parity`, which
-run only for trusted maintainer pull requests, so the hosted and self-hosted macOS lanes reuse
+the `linux` and `macos` jobs in `main.yml`, the Editor WASM build, the Geode ASan
+pull-request lane, and the scheduled nightly full-tree build and sanitizer lanes. The self-hosted
+macOS lanes share it too: `macos-self-hosted`, `macos-hosted-parity`, `macos-metal` and the
+desktop-only `macos-browser` partition. They run only for trusted maintainer pull requests,
+so the hosted and self-hosted macOS lanes reuse
 each other's build results. Trusted Linux writers also use cloud remote execution for the
 native build and test-build commands of the `linux` job in `main.yml`. Tests themselves run on
 the GitHub runner, where the display and graphics dependencies are installed. The other lanes,
