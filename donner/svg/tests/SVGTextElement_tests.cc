@@ -359,7 +359,8 @@ TEST(SVGTextElementPublicApiTests, UprightPathEndpointIncludesAuthoredRotation) 
           std::string("<path id='p' d='M20 20L180 140'/><text id='t' font-size='20' ") +
               "font-family='EndpointCjk' textLength='20' lengthAdjust='spacingAndGlyphs' "
               "rotate='90' writing-mode='vertical-rl'><textPath href='#p' method='" +
-              std::string(method) + "'>\xe6\x97\xa5</textPath></text>",
+              std::string(method) + "'>\xe6\x97\xa5" + (withMark ? "&#x301;" : "") +
+              "</textPath></text>",
           kExperimentalOptions);
       FontManager manager(document.registry());
       css::FontFace face;
