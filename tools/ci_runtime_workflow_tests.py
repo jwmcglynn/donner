@@ -149,6 +149,41 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         end = re.search(r"^      - name: ", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
 
+    def test_self_hosted_lint_isolates_both_nested_bazel_commands(self):
+        job = self._job_body("lint-self-hosted", self.lint)
+        step = self._step_body(job, "Isolate nested Bazel invocations")
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory(prefix="lint wrapper ") as directory:
+            root = Path(directory)
+            binary = root / "bazelisk"
+            binary.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@"\n')
+            binary.chmod(0o755)
+            path_file = root / "github-path"
+            result = subprocess.run(
+                ["bash", "-c", script], capture_output=True, text=True, check=False,
+                env={**os.environ, "RUNNER_TEMP": directory, "GITHUB_PATH": str(path_file),
+                     "PATH": directory + os.pathsep + os.environ["PATH"]})
+            self.assertEqual(0, result.returncode, result.stderr)
+            wrapper = Path(path_file.read_text().strip())
+            for name in ("bazel", "bazelisk"):
+                result = subprocess.run([str(wrapper / name), "query", "target with spaces"],
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(["--nohome_rc", "--nosystem_rc", "query", "target with spaces"],
+                                 result.stdout.splitlines())
+
+    def test_self_hosted_lint_preserves_generator_retry_on_documentation_prs(self):
+        job = self._job_body("lint-self-hosted", self.lint)
+        condition = next(line for line in job.splitlines() if line.startswith("    if:"))
+        self.assertNotIn("docs_only", condition)
+        self.assertNotIn("actions/cache", job)
+        self.assertIn("fetch-depth: 0", job)
+        self.assertIn("run: tools/ci/lint_lane.sh", job)
+        generator = job.split("      - id: cmake-generator-check\n", 1)[1]
+        hosted = self._job_body("cmake-validate", self.lint)
+        self.assertEqual(hosted.split("      - id: cmake-generator-check\n", 1)[1].strip(),
+                         generator.strip())
+
     @staticmethod
     def _variables(job):
         """The job's and its steps' literal `env:` values (`NAME: "value"` or `NAME: value`).
@@ -1496,7 +1531,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_cmake_generator_validation_retries_only_after_failure(self):
         """Transient Bazel query failures get one retry without masking a persistent failure."""
-        for workflow_name, workflow in (("CMake", self.cmake), ("Lint", self.lint)):
+        for workflow_name, workflow in (
+                ("CMake", self._job_body("validate-generator", self.cmake)),
+                ("Lint hosted", self._job_body("cmake-validate", self.lint)),
+                ("Lint ARM64", self._job_body("lint-self-hosted", self.lint))):
             with self.subTest(workflow=workflow_name):
                 self.assertEqual(
                     2,
