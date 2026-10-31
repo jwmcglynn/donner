@@ -72,6 +72,18 @@ During the per-span layout loop, spans with `pathData` set enter the text-on-pat
    encounters any `<textPath>` element, even if it's not a valid direct child of `<text>`.
    Content inside a nested (invalid) textPath is marked `textPathFailed` and hidden.
 
+### Character endpoints
+
+Character endpoint queries accumulate a path cluster's signed advance vectors from its first
+alignment point. The direction includes the writing mode, authored rotation, and path rotation;
+zero-advance marks retain the cluster endpoint. Both aligned and stretched text use the placed
+advance direction, including when the outline follows a bend.
+
+`//donner/svg/tests:svg_tests` and its `_text_full` and `_geode` variants cover vertical and
+sloped paths, authored rotation, upright CJK with combining marks, and a contour-corner control
+for `getEndPositionOfChar`. The controls also retain unrotated flat-text behavior and authored
+textLength checks.
+
 ### Error Handling
 
 - **Missing/invalid href**: Span marked `textPathFailed`, glyphs hidden entirely.

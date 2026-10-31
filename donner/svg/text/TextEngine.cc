@@ -6270,27 +6270,39 @@ Path PlaceCachedGlyphOutline(Path outline, const TextRun& run, const TextGlyph& 
   return transformPath(outline, textElementFromGlyphLocal);
 }
 
+/// Returns a canonical path advance in document axes, including authored glyph rotation.
+Vector2d CachedTextPathAdvance(const TextGlyph& glyph, bool vertical) {
+  const double rotation = glyph.rotateDegrees + (vertical && !glyph.sideways ? 90.0 : 0.0);
+  const double angle = rotation * MathConstants<double>::kDegToRad;
+  const double cosine = std::cos(angle);
+  const double sine = std::sin(angle);
+  return Vector2d(glyph.xAdvance * cosine - glyph.yAdvance * sine,
+                  glyph.xAdvance * sine + glyph.yAdvance * cosine);
+}
+
 void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fontManager,
                          Entity textRootEntity, const TextRun& run,
                          const components::ComputedTextComponent::TextSpan& span,
                          const TextGlyph& glyph, float runFontSizePx, bool hasPaintedGlyphs,
+                         bool vertical,
                          components::ComputedTextGeometryComponent::CharacterGeometry& charGeom,
                          components::ComputedTextGeometryComponent& cache, bool& hasInkBounds,
                          std::size_t& stretchedCacheReservation) {
+  const auto warpedStart = run.stretchedTextPath
+                               ? MapTextPathPoint(*run.stretchedTextPath, glyph, Vector2d(0.0, 0.0))
+                               : std::nullopt;
+  const Vector2d start = warpedStart.value_or(Vector2d(glyph.xPosition, glyph.yPosition));
   if (!charGeom.rendered) {
-    const auto warpedStart =
-        run.stretchedTextPath ? MapTextPathPoint(*run.stretchedTextPath, glyph, Vector2d(0.0, 0.0))
-                              : std::nullopt;
-    charGeom.startPosition = warpedStart.value_or(Vector2d(glyph.xPosition, glyph.yPosition));
+    charGeom.startPosition = start;
+    charGeom.endPosition = start;
     charGeom.rotation = glyph.rotateDegrees;
     charGeom.rendered = true;
   }
-  const auto warpedEnd = run.stretchedTextPath
-                             ? MapTextPathPoint(*run.stretchedTextPath, glyph,
-                                                Vector2d(glyph.xAdvance, glyph.yAdvance))
-                             : std::nullopt;
-  charGeom.endPosition = warpedEnd.value_or(
-      Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + glyph.yAdvance));
+  if (run.onPath) {
+    charGeom.endPosition += CachedTextPathAdvance(glyph, vertical);
+  } else {
+    charGeom.endPosition = start + Vector2d(glyph.xAdvance, glyph.yAdvance);
+  }
   charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
   if (!hasPaintedGlyphs) {
     return;
@@ -6324,7 +6336,7 @@ void PopulateCachedGlyph(TextEngine& engine, Registry& registry, FontManager& fo
 
 void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& fontManager,
                            Entity textRootEntity, const TextRun& run,
-                           const components::ComputedTextComponent::TextSpan& span,
+                           const components::ComputedTextComponent::TextSpan& span, bool vertical,
                            components::ComputedTextGeometryComponent& cache, bool& hasInkBounds,
                            bool& hasEmBoxBounds, std::size_t& objectBoundingBoxSpanVisits,
                            std::size_t& stretchedCacheReservation) {
@@ -6361,7 +6373,7 @@ void PopulateCachedTextRun(TextEngine& engine, Registry& registry, FontManager& 
                                       : 0;
     if (localCharIndex < localCharCount) {
       PopulateCachedGlyph(engine, registry, fontManager, textRootEntity, run, span, glyph,
-                          runFontSizePx, hasPaintedGlyphs,
+                          runFontSizePx, hasPaintedGlyphs, vertical,
                           cache.characters[charBaseIndex + localCharIndex], cache, hasInkBounds,
                           stretchedCacheReservation);
     }
@@ -6742,8 +6754,9 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
   for (size_t runIndex = 0; runIndex < runs.size() && runIndex < styledText.spans.size();
        ++runIndex) {
     PopulateCachedTextRun(const_cast<TextEngine&>(*this), registry_, fontManager_, textRootEntity,
-                          runs[runIndex], styledText.spans[runIndex], cache, hasInkBounds,
-                          hasEmBoxBounds, objectBoundingBoxSpanVisits_, stretchedCacheReservation);
+                          runs[runIndex], styledText.spans[runIndex],
+                          isVertical(params.writingMode), cache, hasInkBounds, hasEmBoxBounds,
+                          objectBoundingBoxSpanVisits_, stretchedCacheReservation);
   }
 
   BuildTextObjectBoundsIndex(registry_, textRootEntity, cache);
