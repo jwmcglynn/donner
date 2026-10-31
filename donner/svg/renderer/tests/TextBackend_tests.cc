@@ -584,6 +584,40 @@ TEST_P(TextBackendTest, ShapeRunVerticalCjk) {
   }
 }
 
+TEST(TextBackendFullVerticalOrigin, TrustedBitmapVerticalMetricsRemainAvailable) {
+  Registry registry;
+  FontManager manager(registry);
+  TextBackendFull backend(manager, registry);
+  const FontHandle font = LoadResvgFont(manager, "NotoColorEmoji.ttf", "Noto Color Emoji");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  ASSERT_THAT(backend.isBitmapOnly(font), testing::IsTrue());
+  const std::string text = "\xf0\x9f\x98\x81\xf0\x9f\x98\x82";
+  const auto shaped = backend.shapeRun(font, 32.0f, text, 0, text.size(), true,
+                                       TextOrientation::Upright, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, SizeIs(2));
+  EXPECT_THAT(shaped.glyphs[1].glyphIndex, Not(testing::Eq(shaped.glyphs[0].glyphIndex)));
+  EXPECT_THAT(shaped.glyphs[1].yAdvance, Gt(0.0));
+  EXPECT_THAT(shaped.glyphs[0].glyphIndex, Gt(0));
+  EXPECT_THAT(shaped.glyphs[0].yAdvance, Gt(0.0));
+  RecordProperty("verticalAdvance", std::to_string(shaped.glyphs[0].yAdvance));
+  RecordProperty("originX", std::to_string(shaped.glyphs[0].xOffset));
+  RecordProperty("originY", std::to_string(shaped.glyphs[0].yOffset));
+}
+
+TEST(TextBackendFullVerticalOrigin, UntrustedBitmapDoesNotEnterMetricCallbacks) {
+  Registry registry;
+  FontManager manager(registry);
+  TextBackendFull backend(manager, registry);
+  const FontHandle font = LoadResvgFont(manager, "NotoColorEmoji.ttf", "Noto Color Emoji", false);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  const std::string text = "\xf0\x9f\x98\x81\xf0\x9f\x98\x82";
+  const auto shaped = backend.shapeRun(font, 32.0f, text, 0, text.size(), true,
+                                       TextOrientation::Upright, FontVariant::Normal, false);
+  EXPECT_THAT(shaped.glyphs, IsEmpty());
+  EXPECT_THAT(backend.delegatedVerticalOriginCallsForTesting(), testing::Eq(0u));
+  EXPECT_THAT(backend.delegatedVerticalAdvanceCallsForTesting(), testing::Eq(0u));
+}
+
 TEST(TextBackendFullVerticalOrigin, RejectedVerticalMetricBudgetReturnsNoPartialRun) {
   Registry registry;
   FontManager manager(registry);
@@ -601,6 +635,69 @@ TEST(TextBackendFullVerticalOrigin, RejectedVerticalMetricBudgetReturnsNoPartial
                                                 TextOrientation::Mixed, FontVariant::Normal, false);
   EXPECT_THAT(shaped.glyphs, IsEmpty());
   EXPECT_THAT(work.rejected, testing::IsTrue());
+  EXPECT_THAT(backend.delegatedVerticalOriginCallsForTesting(), testing::Eq(0u));
+  EXPECT_THAT(backend.delegatedVerticalAdvanceCallsForTesting(), testing::Eq(0u));
+}
+
+TEST(TextBackendFullVerticalOrigin, AggregateMetricBudgetStopsRepeatedAndLaterContextWork) {
+  Registry registry;
+  FontManager manager(registry);
+  TextBackendFull backend(manager, registry);
+  const FontHandle font = LoadResvgFont(manager, "MPLUS1p-Regular.ttf", "MPLUS 1p", false);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  const std::string character = "\xe6\x97\xa5";
+  const auto probe = backend.shapeRun(font, 20.0f, character, 0, character.size(), false,
+                                      FontVariant::Normal, false);
+  ASSERT_THAT(probe.glyphs, SizeIs(1));
+  const auto complexity = manager.glyphOutlineComplexity(font, probe.glyphs[0].glyphIndex);
+  ASSERT_THAT(complexity.has_value(), testing::IsTrue());
+  ASSERT_THAT(complexity->work, Gt(0u));
+  ASSERT_LE(complexity->maximumVertices, fonts::kMaximumExpandedGlyphVertices / 2);
+  ASSERT_LE(complexity->work, fonts::kMaximumGlyphOutlineWork / 2);
+  const std::string text = character + character + character;
+  TextBackend::ShapingContext::WorkBudget work{4096, 8};
+  work.glyphOutlineVertices = complexity->maximumVertices * 2;
+  work.glyphOutlineWork = complexity->work * 2;
+  TextBackend::ShapingContext context;
+  context.byteLength = text.size();
+  context.work = &work;
+  const auto shaped = backend.shapeRunInContext(font, 20.0f, text, context, 0, text.size(), true,
+                                                TextOrientation::Mixed, FontVariant::Normal, false);
+  EXPECT_THAT(shaped.glyphs, IsEmpty());
+  EXPECT_THAT(work.rejected, testing::IsTrue());
+  EXPECT_THAT(backend.delegatedVerticalAdvanceCallsForTesting(), testing::Eq(2u));
+  EXPECT_THAT(backend.delegatedVerticalOriginCallsForTesting(), testing::Eq(0u));
+  const auto later =
+      backend.shapeRunInContext(font, 20.0f, text, context, 0, character.size(), true,
+                                TextOrientation::Mixed, FontVariant::Normal, false);
+  EXPECT_THAT(later.glyphs, IsEmpty());
+  EXPECT_THAT(backend.delegatedVerticalAdvanceCallsForTesting(), testing::Eq(2u));
+  EXPECT_THAT(backend.delegatedVerticalOriginCallsForTesting(), testing::Eq(0u));
+}
+
+TEST(TextBackendFullVerticalOrigin, MixedSmallCapsRangesKeepTheUprightParentScale) {
+  Registry registry;
+  FontManager manager(registry);
+  TextBackendFull backend(manager, registry);
+  const FontHandle font = LoadResvgFont(manager, "MPLUS1p-Regular.ttf", "MPLUS 1p", false);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  const std::string character = "\xe6\x97\xa5";
+  const std::string text = "a" + character + "b";
+  for (float size : {20.0f, 64.0f}) {
+    SCOPED_TRACE(size);
+    const auto control = backend.shapeRun(font, size, character, 0, character.size(), true,
+                                          TextOrientation::Mixed, FontVariant::Normal, false);
+    const auto mixed = backend.shapeRun(font, size, text, 0, text.size(), true,
+                                        TextOrientation::Mixed, FontVariant::SmallCaps, false);
+    ASSERT_THAT(control.glyphs, SizeIs(1));
+    ASSERT_THAT(mixed.glyphs, SizeIs(3));
+    EXPECT_THAT(mixed.glyphs[1].glyphIndex, testing::Eq(control.glyphs[0].glyphIndex));
+    EXPECT_THAT(mixed.glyphs[1].xOffset, DoubleEq(control.glyphs[0].xOffset));
+    EXPECT_THAT(mixed.glyphs[1].yOffset, DoubleEq(control.glyphs[0].yOffset));
+    EXPECT_THAT(mixed.glyphs[1].yAdvance, DoubleEq(control.glyphs[0].yAdvance));
+  }
+  EXPECT_THAT(backend.delegatedVerticalOriginCallsForTesting(), Gt(0u));
+  EXPECT_THAT(backend.delegatedVerticalAdvanceCallsForTesting(), Gt(0u));
 }
 
 TEST(TextBackendFullVerticalOrigin, MixedUsesEachGlyphVerticalSideBearing) {
@@ -657,7 +754,7 @@ TEST(TextBackendFullVerticalOrigin, MixedPreservesUprightCombiningMarkPositionin
   Registry registry;
   FontManager manager(registry);
   TextBackendFull backend(manager, registry);
-  const FontHandle font = LoadResvgFont(manager, "MPLUS1p-Regular.ttf", "MPLUS 1p");
+  const FontHandle font = LoadResvgFont(manager, "MPLUS1p-Regular.ttf", "MPLUS 1p", false);
   ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
   const std::string text = "\xe6\x97\xa5\xcc\x81\xe6\x9c\xac";
   for (float size : {20.0f, 64.0f}) {
@@ -676,6 +773,8 @@ TEST(TextBackendFullVerticalOrigin, MixedPreservesUprightCombiningMarkPositionin
       EXPECT_THAT(mixed.glyphs[i].yAdvance, DoubleEq(upright.glyphs[i].yAdvance));
     }
   }
+  EXPECT_THAT(backend.delegatedVerticalOriginCallsForTesting(), Gt(0u));
+  EXPECT_THAT(backend.delegatedVerticalAdvanceCallsForTesting(), Gt(0u));
 }
 
 TEST_P(TextBackendTest, SmallCapsSynthesizesScaleForFontWithoutSmcp) {

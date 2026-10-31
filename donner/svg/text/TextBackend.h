@@ -274,9 +274,9 @@ public:
       size_t bytes;
       size_t calls;
       bool rejected = false;
-      /// Aggregate outline expansion admitted before vertical metric callbacks.
+      /// Aggregate untrusted outline expansion admitted before vertical metric callbacks.
       size_t glyphOutlineVertices = fonts::kMaximumExpandedGlyphVertices;
-      /// Aggregate decode work admitted before vertical metric callbacks.
+      /// Aggregate untrusted decode work admitted before vertical metric callbacks.
       size_t glyphOutlineWork = fonts::kMaximumGlyphOutlineWork;
 
       /// Charge range traversal, uncached context detection and bounded surrounding context.

@@ -1256,6 +1256,75 @@ bool ShapeVariantRanges(FT_Face ftFace, hb_font_t* hbFont, float fontSizePx, con
 
 namespace {
 
+/// Synchronous callback state borrowed only by a range-local HarfBuzz child font.
+struct VerticalMetricAdmission {
+  const FontManager& manager;
+  FontHandle handle;
+  TextBackend::ShapingContext::WorkBudget& work;
+  std::size_t& originCalls;
+  std::size_t& advanceCalls;
+
+  bool admit(hb_codepoint_t glyph) {
+    if (work.rejected) {
+      return false;
+    }
+    const auto complexity = glyph <= static_cast<hb_codepoint_t>(std::numeric_limits<int>::max())
+                                ? manager.glyphOutlineComplexity(handle, static_cast<int>(glyph))
+                                : std::nullopt;
+    if (!complexity || complexity->maximumVertices > work.glyphOutlineVertices ||
+        complexity->work > work.glyphOutlineWork) {
+      work.rejected = true;
+      return false;
+    }
+    work.glyphOutlineVertices -= complexity->maximumVertices;
+    work.glyphOutlineWork -= complexity->work;
+    return true;
+  }
+};
+
+hb_bool_t BoundedVerticalOrigin(hb_font_t* font, void* data, hb_codepoint_t glyph, hb_position_t* x,
+                                hb_position_t* y, void*) {
+  auto& admission = *static_cast<VerticalMetricAdmission*>(data);
+  *x = *y = 0;
+  if (admission.admit(glyph)) {
+    ++admission.originCalls;
+    if (!hb_font_get_glyph_v_origin(hb_font_get_parent(font), glyph, x, y)) {
+      admission.work.rejected = true;
+      *x = *y = 0;
+    }
+  }
+  // Success suppresses HarfBuzz's outline-extents fallback; the entire result is rejected later.
+  return true;
+}
+
+hb_position_t BoundedVerticalAdvance(hb_font_t* font, void* data, hb_codepoint_t glyph, void*) {
+  auto& admission = *static_cast<VerticalMetricAdmission*>(data);
+  if (!admission.admit(glyph)) {
+    return 0;
+  }
+  ++admission.advanceCalls;
+  return hb_font_get_glyph_v_advance(hb_font_get_parent(font), glyph);
+}
+
+using HbFontOwner = std::unique_ptr<hb_font_t, decltype(&hb_font_destroy)>;
+
+/// Inherits the parent's current face, scale and ppem after each small-cap size change.
+HbFontOwner MakeVerticalMetricFont(hb_font_t* parent, VerticalMetricAdmission& admission) {
+  HbFontOwner child(hb_font_create_sub_font(parent), &hb_font_destroy);
+  hb_font_funcs_t* functions = hb_font_funcs_create();
+  if (hb_font_is_immutable(child.get()) || hb_font_funcs_is_immutable(functions)) {
+    admission.work.rejected = true;
+    hb_font_funcs_destroy(functions);
+    return HbFontOwner(nullptr, &hb_font_destroy);
+  }
+  hb_font_funcs_set_glyph_v_origin_func(functions, &BoundedVerticalOrigin, nullptr, nullptr);
+  hb_font_funcs_set_glyph_v_advance_func(functions, &BoundedVerticalAdvance, nullptr, nullptr);
+  hb_font_funcs_make_immutable(functions);
+  hb_font_set_funcs(child.get(), functions, &admission, nullptr);
+  hb_font_funcs_destroy(functions);
+  return child;
+}
+
 bool AdmitContextualShaping(const TextBackend::ShapingContext* context, size_t bytes) {
   return !context || !context->work ||
          context->work->consume(bytes, context->detected.valid ? 0 : context->byteLength);
@@ -1313,6 +1382,11 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
   if (!AdmitContextualShaping(context, byteLength)) {
     return {};
   }
+  TextBackend::ShapingContext::WorkBudget localMetricWork{0, 0};
+  auto& metricWork = context && context->work ? *context->work : localMetricWork;
+  VerticalMetricAdmission metricAdmission{fontManager_, font, metricWork,
+                                          delegatedVerticalOriginCalls_,
+                                          delegatedVerticalAdvanceCalls_};
   shapedBytes_ += byteLength;
   const bool suppressOptional = context && context->suppressOptionalSubstitutions;
   const bool suppressRlig = context && context->suppressRligForAnalysis;
@@ -1358,6 +1432,9 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
 
   auto shapeRange = [&](const char* text, size_t rangeStart, size_t rangeEnd, bool isSmallCapRange,
                         hb_feature_t* features, unsigned int numFeatures) {
+    if (metricWork.rejected) {
+      return;
+    }
     hb_buffer_t* buf = hb_buffer_create();
     const int64_t clusterOffset =
         AddShapingRange(buf, text, rangeStart, rangeEnd, spanText, byteOffset, shapingContext);
@@ -1368,7 +1445,15 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     hb_buffer_set_direction(buf, direction);
     hb_buffer_set_script(buf, detectedScript);
     hb_buffer_set_language(buf, detectedLanguage);
-    hb_shape(hbFont, buf, features, numFeatures);
+    HbFontOwner metricFont(nullptr, &hb_font_destroy);
+    if (direction == HB_DIRECTION_TTB && !fontManager_.isTrustedFont(font)) {
+      metricFont = MakeVerticalMetricFont(hbFont, metricAdmission);
+    }
+    if (metricWork.rejected) {
+      hb_buffer_destroy(buf);
+      return;
+    }
+    hb_shape(metricFont ? metricFont.get() : hbFont, buf, features, numFeatures);
 
     unsigned int count = 0;
     const hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(buf, &count);
@@ -1386,6 +1471,10 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
 
   if (!ShapeVariantRanges(ftFace, hbFont, fontSizePx, chunkData, byteLength, smallCaps,
                           features.values.data(), features.count, shapeRange)) {
+    return {};
+  }
+
+  if (metricWork.rejected) {
     return {};
   }
 
@@ -1428,6 +1517,11 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
   const double pixelScaleX = pixelScaleForPpem(ftFace, prevSizePx, true);
   const double pixelScaleY = pixelScaleForPpem(ftFace, prevSizePx, false);
 
+  TextBackend::ShapingContext::WorkBudget metricWork{0, 0};
+  VerticalMetricAdmission metricAdmission{fontManager_, prevFont, metricWork,
+                                          delegatedVerticalOriginCalls_,
+                                          delegatedVerticalAdvanceCalls_};
+
   // Shape the pair [prev, cur] to get the combined advance.
   hb_buffer_t* pairBuf = hb_buffer_create();
   const uint32_t pair[2] = {prevCodepoint, curCodepoint};
@@ -1442,13 +1536,22 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
   hb_buffer_set_direction(pairBuf, direction);
   hb_buffer_set_script(pairBuf, HB_SCRIPT_LATIN);
   hb_buffer_guess_segment_properties(pairBuf);
-  hb_shape(hbFont, pairBuf, nullptr, 0);
+  HbFontOwner metricFont(nullptr, &hb_font_destroy);
+  if (direction == HB_DIRECTION_TTB && !fontManager_.isTrustedFont(prevFont)) {
+    metricFont = MakeVerticalMetricFont(hbFont, metricAdmission);
+  }
+  if (metricWork.rejected) {
+    hb_buffer_destroy(pairBuf);
+    return 0.0;
+  }
+  hb_font_t* const shapingFont = metricFont ? metricFont.get() : hbFont;
+  hb_shape(shapingFont, pairBuf, nullptr, 0);
 
   unsigned int pairCount = 0;
   const hb_glyph_position_t* pairPos = hb_buffer_get_glyph_positions(pairBuf, &pairCount);
 
   double kernDelta = 0.0;
-  if (pairCount >= 1) {
+  if (pairCount >= 1 && !metricWork.rejected) {
     const double pairedAdvance = advance(pairPos[0]);
 
     // Shape the previous character alone to get its standalone advance.
@@ -1457,7 +1560,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
     hb_buffer_set_direction(soloBuf, direction);
     hb_buffer_set_script(soloBuf, HB_SCRIPT_LATIN);
     hb_buffer_guess_segment_properties(soloBuf);
-    hb_shape(hbFont, soloBuf, nullptr, 0);
+    hb_shape(shapingFont, soloBuf, nullptr, 0);
 
     unsigned int soloCount = 0;
     const hb_glyph_position_t* soloPos = hb_buffer_get_glyph_positions(soloBuf, &soloCount);
@@ -1469,7 +1572,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
   }
   hb_buffer_destroy(pairBuf);
 
-  return kernDelta;
+  return metricWork.rejected ? 0.0 : kernDelta;
 }
 
 }  // namespace donner::svg
