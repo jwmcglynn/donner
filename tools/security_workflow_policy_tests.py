@@ -4916,6 +4916,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for path in (".github/workflows/main.yml", ".github/workflows/lint.yml"):
             workflow = self.supply_chain_files[path]
             self.assertEqual([], _gatekeeper_source_violations(workflow))
+            self.assertEqual(_jobs(self.supply_chain_files[".github/workflows/main.yml"])["gatekeeper"],
+                             _jobs(workflow)["gatekeeper"])
             for old, new in (
                 ("github.event.pull_request.base.sha || github.sha", "github.sha"),
                 ("path: pr-input", "path: ."),
