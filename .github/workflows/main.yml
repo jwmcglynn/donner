@@ -1876,7 +1876,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk --nohome_rc --nosystem_rc build --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 $BAZEL_MACOS_BUILD_FLAGS $TARGETS
+          bazelisk --nohome_rc --nosystem_rc build --config=ci --jobs=4 --local_resources=cpu=4 --local_resources=memory=4096 $BAZEL_MACOS_BUILD_FLAGS $TARGETS
 
       - name: Test
         id: test
@@ -1892,7 +1892,7 @@ jobs:
             echo "::error::Empty target selection reached the test step."
             exit 1
           fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=4 --local_resources=cpu=4 --local_resources=memory=4096 --test_output=errors \
             --test_tag_filters=-manual,-perf,-requires_shader_validation,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
@@ -1921,7 +1921,7 @@ jobs:
           if [[ -z "$browser_targets" ]]; then
             echo "No browser targets selected."
           else
-            tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --nocache_test_results --test_output=errors \
+            tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=4 --local_resources=cpu=4 --local_resources=memory=4096 --nocache_test_results --test_output=errors \
               $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
               //tools/ci:mac_browser_archive
           fi
@@ -1941,7 +1941,7 @@ jobs:
             echo "::error::Empty target selection reached the browser test step."
             exit 1
           fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=4 --local_resources=cpu=4 --local_resources=memory=4096 --test_output=errors \
             --local_test_jobs=1 --build_event_json_file="$RUNNER_TEMP/coverage-browser_test.bep.json" \
             --test_tag_filters=launches-browser,-manual,-perf,-requires_desktop_session,-ci-remote-gpu,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
@@ -1952,7 +1952,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --config=geode --test_output=errors \
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=4 --local_resources=cpu=4 --local_resources=memory=4096 --config=geode --test_output=errors \
             --build_event_json_file="$RUNNER_TEMP/coverage-geode_test.bep.json" \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
@@ -1962,7 +1962,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --nocache_test_results --test_output=errors \
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=4 --local_resources=cpu=4 --local_resources=memory=4096 --nocache_test_results --test_output=errors \
             --local_test_jobs=1 --test_tag_filters= \
             --build_event_json_file="$RUNNER_TEMP/browser-context-diagnostic.bep.json" \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
@@ -2005,7 +2005,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance: [1, 2, 3, 4]
+        instance: [1, 2, 3, 4, 5, 6]
     timeout-minutes: 60
     env:
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
@@ -2039,7 +2039,7 @@ jobs:
         run: |
           set -euo pipefail
           bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
-            --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 \
+            --jobs=4 --local_resources=cpu=4 --local_resources=memory=4096 \
             --nocache_test_results --test_tag_filters= --noskip_incompatible_explicit_targets \
             --build_event_json_file="$RUNNER_TEMP/coverage-qualification.bep.json" \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \

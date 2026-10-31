@@ -1398,6 +1398,26 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             % (covered,),
         )
 
+    def test_vm_jobs_bound_aggregate_local_work_without_weakening_test_selection(self):
+        normal = self._job_body("macos-self-hosted")
+        qualification = self._job_body("macos-vm-qualification")
+        for name, job in (("normal", normal), ("qualification", qualification)):
+            options = list(bazelrc_configs.commands(job, self.configs, self._variables(job)))
+            workload = [flags for command, flags, _ in options if command in ("build", "test")]
+            self.assertTrue(workload, name)
+            for flags in workload:
+                with self.subTest(job=name, flags=flags):
+                    for flag in ("--jobs=4", "--local_resources=cpu=4",
+                                 "--local_resources=memory=4096"):
+                        self.assertIn(flag, flags)
+            self.assertNotIn("--jobs=6", job)
+        self.assertIn("instance: [1, 2, 3, 4, 5, 6]", qualification)
+        self.assertIn("--nocache_test_results", qualification)
+        self.assertIn("--noskip_incompatible_explicit_targets", qualification)
+        parity = self._job_body("macos-hosted-parity")
+        self.assertIn("--jobs=6", parity)
+        self.assertIn("--local_resources=memory=6144", parity)
+
     def test_fixed_target_lanes_do_not_tolerate_an_empty_test_selection(self):
         """A named fixed test suite that yields no tests is a real defect.
 
