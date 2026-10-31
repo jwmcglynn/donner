@@ -71,8 +71,7 @@ default gate or the requested early-delivery gate above.
   ```
 
   `determine-targets` in `main.yml` reads that label, falls back to `//...`, and sets its
-  `full_test` output — which also fans the run out to the GitHub-hosted lanes even when the
-  self-hosted runners are active (see §5).
+  `full_test` output. A broader target selection preserves the trust and runner-routing gates.
 
 ## 3. Monitoring (default for every PR you create)
 
@@ -136,28 +135,26 @@ the current head's run.
   - Changes to `MODULE.bazel`, `WORKSPACE*`, `.bazelrc`, `build_defs/*`, `.github/workflows/*`,
     or `.github/actions/*` force full `//...` coverage automatically.
   - An empty affected set, missing SHAs, or the `ci:full-test` label also fall back to `//...`.
-    The label additionally sets the job's `full_test` output, which the hosted-lane gates read.
+    The label additionally sets the job's `full_test` output without changing runner trust.
   - Check the job log before assuming under-selection — the fallback may already have fired.
 - **linux** (ubuntu-24.04) and **macos** (xcode-27) - GitHub-hosted lanes running
   `bazelisk build/test --config=ci` on the selected targets. Note `test:ci` sets
   `--test_tag_filters=-perf`, so perf-tagged wall-clock tests never gate a PR (they run nightly
   in `perf.yml`).
-- **linux-self-hosted** (ARM64) and **macos-self-hosted** — run on PR events when
-  `vars.SELFHOSTED_LINUX_RUNNER` / `SELFHOSTED_MACOS_RUNNER` == "true" AND both `github.actor`
-  and `github.triggering_actor` == `jwmcglynn`. The matching GitHub-hosted lane is then skipped
-  UNLESS `determine-targets` emitted `full_test == 'true'` (the `ci:full-test` label), which
-  fans the run out to the hosted lanes as well. Pushes to `main` always stay GitHub-hosted so a
-  dead self-hosted runner can never hang main's required check. Never "simplify" these gates —
-  the double-actor check prevents collaborator reruns from executing on (or poisoning the cache
-  of) the operator's runner.
-- **macos-browser** (xcode-27) - GitHub-hosted. Runs only on a trusted PR whose macOS lane went to
-  `macos-self-hosted`, when `determine-targets` reports `browser_affected == 'true'` (an affected
-  test is tagged `launches-browser`, or a browser test dependency manifest changed) or the
-  selection falls back to `//...`. It runs the hosted `macos` job's browser step unchanged (same
-  targets, filters, quarantine and test environment, plus `--build_tests_only`), so browser
-  tests see the hosted runner's three cores and paravirtual GPU before merge. Its BuildBuddy
-  wiring matches the `macos` job's (trusted PRs read and write); it saves no Actions cache.
-  `tools/ci_lane_parity_tests.py` fails if its browser step drifts from the `macos` job's.
+- **linux-self-hosted** (ARM64) and **macos-self-hosted** - trusted PR lanes admitted by the
+  runner gate. The per-OS repository switch, actor, triggering actor, PR author and repository
+  provenance must all permit self-hosted execution. The macOS VM replaces the hosted `macos`
+  build/test job; headless browser cases run there after native tests. The Linux lane runs
+  selected native tests on ARM64; the coverage contract declares additional hosted-only
+  obligations and accepted platform gaps. A full-test selection never overrides runner trust.
+  Main pushes remain GitHub-hosted. Preserve the admission checks when changing lane membership.
+- **macos-browser** (native ARM64) - runs only for trusted self-hosted macOS PRs with affected
+  browser targets, including a full-graph fallback. It selects `requires_desktop_session` only;
+  the VM selects `launches-browser` excluding those cases. Both partitions retain their own
+  coverage receipts and failure artifacts. The native job uses the selected approved Xcode's
+  BuildBuddy partition, a distinct test-result identity and unconditional credential cleanup.
+  It restores no Actions snapshot and publishes no host-wide browser diagnostics. The dedicated
+  `macos-metal` lane continues to own strict Metal validation and its negative canary.
 
 Workflow map (all in `.github/workflows/`):
 
