@@ -671,12 +671,20 @@ TEST(TextBackendFullVerticalOrigin, SvgUprightPlacementUsesAvailableVerticalOrig
   const auto shaped = backend.shapeRun(font, 1000.0f, text, 0, text.size(), true,
                                        TextOrientation::Mixed, FontVariant::Normal, false);
   ASSERT_THAT(shaped.glyphs, SizeIs(2));
+  EXPECT_THAT(backend.fontVMetrics(font).unitsPerEm, testing::Eq(1000));
+  EXPECT_THAT(shaped.glyphs[0].glyphIndex, testing::Eq(4868));
+  EXPECT_THAT(shaped.glyphs[1].glyphIndex, testing::Eq(4977));
   for (const auto& glyph : shaped.glyphs) {
     ASSERT_THAT(glyph.glyphIndex, Gt(0));
     const size_t index = static_cast<size_t>(glyph.glyphIndex);
     ASSERT_LT(index, longMetrics);
     ASSERT_LE(index * 4 + 4, vmtx->size());
     EXPECT_THAT(ReadBe16(*vmtx, index * 4), testing::Eq(1000));
+    const std::string character = index == 4868 ? "日" : "本";
+    const auto horizontal = backend.shapeRun(font, 1000.0f, character, 0, character.size(), false,
+                                             FontVariant::Normal, false);
+    ASSERT_THAT(horizontal.glyphs, SizeIs(1));
+    EXPECT_THAT(horizontal.glyphs[0].xAdvance, DoubleEq(1000));
     const Path outline = backend.glyphOutline(font, glyph.glyphIndex, 1.0f);
     ASSERT_THAT(outline.commands(), Not(IsEmpty()));
     EXPECT_THAT(-outline.bounds().topLeft.y + ReadBe16(*vmtx, index * 4 + 2), DoubleEq(860));
