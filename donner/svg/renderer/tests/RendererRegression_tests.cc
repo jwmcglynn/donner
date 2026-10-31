@@ -2995,8 +2995,8 @@ ClippedTextRender RenderTextRadialPaint(std::string_view gradientAttributes,
   SVGDocument document = instantiateSubtree(
       std::string(R"svg(<radialGradient id="paint" )svg") + std::string(gradientAttributes) +
           R"svg(><stop stop-color="white"/><stop offset="1" stop-color="black"/>
-                </radialGradient><text id="text" x="24" y="100" font-family="Noto Sans"
-                font-size="48" transform="translate(8 4) scale(1.1 0.9)" )svg" +
+                </radialGradient><text id="text" x="24" y="150" font-family="Noto Sans"
+                font-size="125" transform="translate(8 4) scale(0.6 0.7)" )svg" +
           std::string(paintAttributes) +
           R"svg(>H<tspan fill-opacity="0.6" stroke-opacity="0.6">og</tspan></text>)svg",
       parser::SVGParser::Options(), Vector2i(200, 160));
@@ -3033,15 +3033,12 @@ TEST_F(RendererRegressionTests, TextRadialFillAndStrokeUseGlyphCellsRatherThanIn
     SCOPED_TRACE(paint);
     const ClippedTextRender objectUnits =
         RenderTextRadialPaint(R"svg(cx="0.35" cy="0.65" r="0.55" fx="0.25" fy="0.5")svg", paint);
-    AssertVisibleFixture(objectUnits.bitmap, "text_radial_object_units_visible");
-    EXPECT_THAT(objectUnits.objectBox.topLeft, Vector2Near(24.0, 100.0 - 1.069 * 48.0));
-    EXPECT_THAT(objectUnits.objectBox.bottomRight.y,
-                testing::DoubleNear(100.0 + 0.293 * 48.0, 0.01));
+    ASSERT_THAT(objectUnits.bitmap.empty(), testing::IsFalse());
     ASSERT_THAT(objectUnits.inkBox.height(), testing::Lt(objectUnits.objectBox.height() - 1.0));
 
-    // Noto Sans hmtx advances are H=741, o=605 and g=615 units in a 1000-unit em.
-    const Box2d expectedCells =
-        Box2d::FromXYWH(24.0, 100.0 - 1.069 * 48.0, 1.961 * 48.0, 1.362 * 48.0);
+    // At 125px the 1000-unit font's advances and ascent/descent are binary-exact, including
+    // full-text shaping's 1/64px positioning: H=741, o=605, g=615; ascent=1069, descent=-293.
+    const Box2d expectedCells = Box2d::FromXYWH(24.0, 16.375, 245.125, 170.25);
     EXPECT_THAT(objectUnits.objectBox, BoxEq(expectedCells.topLeft, expectedCells.bottomRight));
     const ClippedTextRender cellUnits =
         RenderTextRadialPaint(UserSpaceRadialOn(expectedCells), paint);
@@ -3050,16 +3047,29 @@ TEST_F(RendererRegressionTests, TextRadialFillAndStrokeUseGlyphCellsRatherThanIn
                                          editor::tests::PixelmatchIdentityParams());
     const ClippedTextRender inkUnits =
         RenderTextRadialPaint(UserSpaceRadialOn(objectUnits.inkBox), paint);
-    const int inkMismatchCount = IdentityMismatchCount(objectUnits.bitmap, inkUnits.bitmap,
-                                                       "text_radial_differs_from_ink_mapping");
-    EXPECT_THAT(inkMismatchCount, testing::Gt(0));
-    std::cout << "radial paint " << paint << ": ink mapping differs at " << inkMismatchCount
-              << " pixels\n";
     const ClippedTextRender expandedUnits =
         RenderTextRadialPaint(UserSpaceRadialOn(expectedCells.inflatedBy(3.5)), paint);
-    EXPECT_THAT(IdentityMismatchCount(objectUnits.bitmap, expandedUnits.bitmap,
-                                      "text_radial_differs_from_stroke_expanded_mapping"),
-                testing::Gt(0));
+    RendererBitmap transparent = objectUnits.bitmap;
+    std::fill(transparent.pixels.begin(), transparent.pixels.end(), 0);
+    const std::array<std::pair<const RendererBitmap*, std::string_view>, 3> negativeControls = {{
+        {&transparent, "text_radial_visible"},
+        {&inkUnits.bitmap, "text_radial_ink_mapping"},
+        {&expandedUnits.bitmap, "text_radial_expanded_mapping"},
+    }};
+    for (const auto& [control, label] : negativeControls) {
+      SCOPED_TRACE(label);
+      int mismatchCount = -1;
+      testing::TestPartResultArray differences;
+      {
+        testing::ScopedFakeTestPartResultReporter capture(
+            testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+        editor::tests::CompareBitmapToBitmap(objectUnits.bitmap, *control, label,
+                                             editor::tests::PixelmatchIdentityParams(),
+                                             &mismatchCount);
+      }
+      EXPECT_THAT(mismatchCount, testing::Gt(0));
+      EXPECT_THAT(differences.size(), testing::Eq(1));
+    }
   }
 }
 
