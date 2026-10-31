@@ -67,6 +67,7 @@ TRIGGER_ALLOWLIST = {
 # Jobs that run on a main push but not on one kind of pull request, mapped to the job that runs
 # in their place there. The replacement's Bazel invocations are compared step by step.
 JOB_REPLACEMENTS = {
+    ("main.yml", "linux", "trusted-pr"): "linux-self-hosted",
     ("main.yml", "macos", "trusted-pr"): "macos-self-hosted",
 }
 
@@ -96,21 +97,8 @@ PARITY_SUBSETS = {
 # `hosted_parity` tests, because the PR skips main's step there. Keyed by (workflow, job,
 # scenario); the value is (PR step, main step). The hosted Linux job skips Build and Test on
 # trusted PRs (STEP_ALLOWLIST) and reruns its runner-sensitive tests on the hosted image.
-HOSTED_PARITY_STEPS = {
-    ("main.yml", "linux", "trusted-pr"): ("Test (hosted parity subset)", "Test"),
-}
-HOSTED_PARITY_STEP_ALLOWLIST = {
-    ("main.yml", "linux", "Test (hosted parity subset)", "tag-filter-pr-only", "hosted_parity"):
-        "The parity subset: only tests whose result can depend on the runner. Every other "
-        "selected test runs on the self-hosted ARM64 lane.",
-    ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only", "--build_tests_only"):
-        "Build scope only: this step builds only what the selected tests need, because the "
-        "PR's Build step runs on the self-hosted lane.",
-    ("main.yml", "linux", "Test (hosted parity subset)", "flag-pr-only",
-     "--build_event_json_file=$RUNNER_TEMP/coverage-hosted_parity_test.bep.json"):
-        "Records how many parity tests ran, for the coverage contract's receipt; it changes "
-        "what Bazel reports, not what it tests.",
-}
+HOSTED_PARITY_STEPS = {}
+HOSTED_PARITY_STEP_ALLOWLIST = {}
 
 # Main's hosted lanes whose phases tools/ci/coverage_contract.json declares, and the phases there
 # that run no Bazel command.
@@ -196,7 +184,7 @@ HOSTED_PARITY_TESTS = {
         "Runs the Xcode selection probe against host tools (#1895).",
     ("tools/BUILD.bazel", "native_delivery_elf_tests"):
         "Inspects real x86-64 ELF source lines with host binutils; the ARM64 lane skips this "
-        "architecture-specific regression, so trusted PRs retain the hosted x86 execution.",
+        "architecture-specific regression. The maintainer accepts its absence on ARM64 PRs.",
 }
 
 # Differences between a main step and the hosted subset's copy of it. Keyed by (workflow, main
@@ -376,8 +364,6 @@ STEP_ALLOWLIST = {
     # test failure specific to the hosted runner's architecture or speed first shows on main.
     # The hosted job's cloud build step builds main's hosted toolchain configuration before
     # merge, and its parity subset reruns the runner-sensitive tests.
-    ("main.yml", "linux", "Build", "trusted-pr"): _TRUSTED_LINUX_REASON,
-    ("main.yml", "linux", "Test", "trusted-pr"): _TRUSTED_LINUX_REASON,
 }
 
 # Steps main runs that a kind of pull request skips, but that a different job runs on that pull
@@ -429,7 +415,7 @@ COUNTERPART_ALLOWLIST = {
     ], "The self-hosted lane swaps each locally isolated GPU suite for its remote wrapper "
        "(tools/ci_remote_gpu_targets.py), which runs the same implementation and shards, so it "
        "keeps the remote wrappers and drops the local-only targets; hosted Linux does the "
-       "reverse. The local-display targets this drops run in the hosted job's Xvfb step."),
+       "reverse. The local-display targets this drops run in the self-hosted job's Xvfb step."),
 }
 
 # Each scenario sets every job output a condition reads; an output not modelled here raises.
@@ -1798,7 +1784,9 @@ class CiLaneParityTest(unittest.TestCase):
             with self.subTest(counterpart=counterpart):
                 for step in steps:
                     # A counterpart stands in for a main step the pull request skips.
-                    self.assertIn((name, job_name, step, scenario), STEP_ALLOWLIST)
+                    self.assertTrue(
+                        (name, job_name, step, scenario) in STEP_ALLOWLIST or
+                        JOB_REPLACEMENTS.get((name, job_name, scenario)) == counterpart)
                 self.assertTrue(job_gates(self.workflows[name], counterpart, scenario))
             workflow = self.workflows[name]
             for step, kind, value in invocation_differences(workflow, job_name, counterpart,

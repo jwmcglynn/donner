@@ -795,6 +795,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("github.event_name == 'push'", admission)
         self.assertIn("github.ref != 'refs/heads/main'", admission)
         consumer = self._step_body(self._job_body("linux"), "Build and test CMake consumer")
+        self.assertEqual(consumer.split("\n\n", 1)[0],
+                         self._step_body(self._job_body("linux-self-hosted"),
+                                         "Build and test CMake consumer").split("\n\n", 1)[0])
         self.assertIn("python3 tools/cmake/gen_cmakelists.py --check", consumer)
         self.assertIn("cmake -S examples/cmake_consumer -B build -G Ninja", consumer)
         self.assertIn("cmake --build build --target donner_cmake_consumer", consumer)
