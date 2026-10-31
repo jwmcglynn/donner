@@ -1222,6 +1222,7 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
       glyph.yPosition = -localX;
       glyph.rotateDegrees -= 90.0;
       glyph.xAdvance = glyph.yAdvance;
+      glyph.yAdvance = 0.0;
     } else {
       glyph.xPosition += state.advance - cluster.pathOffset;
     }
