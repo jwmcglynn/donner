@@ -207,6 +207,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertLess(job.index("name: Test (Geode editor lane)"),
                         job.index("name: Diagnose Chromium context lifecycle"))
 
+    def test_all_arm64_linux_test_phases_retain_failure_artifacts(self):
+        job = self._job_body("linux-self-hosted")
+        upload = self._step_body(job, "Upload Bazel test failure artifacts")
+        condition = next(line.strip() for line in upload.splitlines() if line.strip().startswith("if:"))
+        self.assertTrue(condition.startswith("if: failure() && "))
+        for step_id in ("test", "wgpu_resvg_reference", "deterministic_soak_probe", "local_xvfb"):
+            with self.subTest(step=step_id):
+                self.assertIn("steps.%s.outcome == 'failure'" % step_id, condition)
+        self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", upload)
+
     def test_early_macos_bazel_failures_keep_their_artifacts(self):
         for lane in ("macos", "macos-browser", "macos-self-hosted", "macos-metal"):
             with self.subTest(lane=lane):
