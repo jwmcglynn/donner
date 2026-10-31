@@ -232,6 +232,12 @@ MAIN_ONLY_JOBS = {}
 # step, kind, value); the reason says why the difference cannot make main red after a green PR,
 # or names the accepted risk.
 INVOCATION_ALLOWLIST = {
+    ("lint.yml", "lint", "lint-self-hosted", "Restore Bazel", "step-main-only", ""):
+        "The persistent ARM64 lint runner uses its own Bazel state, without importing hosted snapshots.",
+    ("lint.yml", "cmake-validate", "lint-self-hosted",
+     "actions/checkout@v7 [('persist-credentials', 'false')]", "step-main-only", ""):
+        "The shared lint checkout retains full history for changed-method complexity checks; "
+        "the generator consumes the same event source tree.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
      "-requires_desktop_session"):
         "The required hosted macos-browser subset runs these tests with main's invocation; "

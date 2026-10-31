@@ -1553,7 +1553,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_cmake_generator_validation_retries_only_after_failure(self):
         """Transient Bazel query failures get one retry without masking a persistent failure."""
-        for workflow_name, workflow in (("CMake", self.cmake), ("Lint", self.lint)):
+        for workflow_name, workflow in (
+                ("CMake", self._job_body("validate-generator", self.cmake)),
+                ("Lint hosted", self._job_body("cmake-validate", self.lint)),
+                ("Lint ARM64", self._job_body("lint-self-hosted", self.lint))):
             with self.subTest(workflow=workflow_name):
                 self.assertEqual(
                     2,
