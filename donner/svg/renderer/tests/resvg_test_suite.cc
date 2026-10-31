@@ -1769,7 +1769,9 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
                      .withReason("SVG2 endpoint continuation and anti-aliasing differences")},
-                {"mixed-children-2.svg", Params::Skip("Bug: Kerning on textPath")},
+                {"mixed-children-2.svg",
+                 Params::Skip("SVG 2 positions text after textPath at the geometric path endpoint; "
+                              "the reference continues from the occupied text extent")},
                 {"nested.svg",
                  Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-nested.png")
                      .withReason("Minor char")},
@@ -1867,7 +1869,9 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-underline.png")
                      .withReason("Minor char")},
-                {"writing-mode=tb.svg", Params::Skip("Deferred: writing-mode=tb on textPath")},
+                {"writing-mode=tb.svg",
+                 Params::Skip("Vertical path frames are implemented; upright CJK glyph origins "
+                              "still differ between the simple/full backends and the reference")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
