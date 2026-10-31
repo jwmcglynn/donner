@@ -929,6 +929,7 @@ donner_cc_test(
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_backend_full",
         "//donner/svg/text:text_backend_simple",
+        "//donner/svg/text:text_engine",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -21,6 +21,7 @@
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/text/TextBackendFull.h"
 #include "donner/svg/text/TextBackendSimple.h"
+#include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 
@@ -632,6 +633,78 @@ TEST(TextBackendFullCapabilities, PackagedCffFontShapesOutlinesAndRendersThrough
                                            editor::tests::PixelmatchIdentityParams()),
       "pixels differ");
   editor::tests::CompareBitmapToBitmap(actual, expected, "cff_text_outline",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(TextBackendFullVerticalOrigin, SvgUprightPlacementUsesAvailableVerticalOrigins) {
+  auto makeDocument = [](std::string_view content) {
+    auto document = instantiateSubtree(content, {}, {200, 220});
+    auto& registry = document.registry();
+    auto& manager = registry.ctx().emplace<FontManager>(registry);
+    css::FontFace face;
+    face.familyName = RcString("VerticalOriginControl");
+    css::FontFaceSource source;
+    source.kind = css::FontFaceSource::Kind::Data;
+    source.payload =
+        std::make_shared<const std::vector<uint8_t>>(ReadResvgFontBytes("MPLUS1p-Regular.ttf"));
+    source.trusted = true;
+    face.sources.push_back(std::move(source));
+    manager.addFontFace(face);
+    registry.ctx().emplace<TextEngine>(manager, registry,
+                                       std::make_unique<TextBackendFull>(manager, registry));
+    return document;
+  };
+  auto document = makeDocument(
+      "<text x='100' y='10' font-size='100' font-family='VerticalOriginControl' "
+      "writing-mode='tb'>日本</text>");
+  auto& manager = document.registry().ctx().get<FontManager>();
+  const FontHandle font = manager.findFont("VerticalOriginControl");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  const auto vhea = manager.sfntTable(font, "vhea");
+  const auto vmtx = manager.sfntTable(font, "vmtx");
+  ASSERT_THAT(vhea.has_value(), testing::IsTrue());
+  ASSERT_THAT(vmtx.has_value(), testing::IsTrue());
+  ASSERT_GE(vhea->size(), 36u);
+  const size_t longMetrics = ReadBe16(*vhea, 34);
+  TextBackendFull backend(manager, document.registry());
+  const std::string text = "日本";
+  const auto shaped = backend.shapeRun(font, 1000.0f, text, 0, text.size(), true,
+                                       TextOrientation::Mixed, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, SizeIs(2));
+  for (const auto& glyph : shaped.glyphs) {
+    ASSERT_THAT(glyph.glyphIndex, Gt(0));
+    const size_t index = static_cast<size_t>(glyph.glyphIndex);
+    ASSERT_LT(index, longMetrics);
+    ASSERT_LE(index * 4 + 4, vmtx->size());
+    EXPECT_THAT(ReadBe16(*vmtx, index * 4), testing::Eq(1000));
+    const Path outline = backend.glyphOutline(font, glyph.glyphIndex, 1.0f);
+    ASSERT_THAT(outline.commands(), Not(IsEmpty()));
+    EXPECT_THAT(-outline.bounds().topLeft.y + ReadBe16(*vmtx, index * 4 + 2), DoubleEq(860));
+  }
+  // vmtx origin 860 and advance 1000 at 100px place alphabetic origins at 96 and 196.
+  auto control = makeDocument(
+      "<g font-size='100' font-family='VerticalOriginControl'>"
+      "<text x='50' y='96'>日</text><text x='50' y='196'>本</text></g>");
+  auto shifted = makeDocument(
+      "<g font-size='100' font-family='VerticalOriginControl'>"
+      "<text x='50' y='98'>日</text><text x='50' y='198'>本</text></g>");
+  auto empty = instantiateSubtree("<g/>", {}, {200, 220});
+  const auto actual = RenderDocumentWithActiveBackend(document);
+  const auto expected = RenderDocumentWithActiveBackend(control);
+  const auto displaced = RenderDocumentWithActiveBackend(shifted);
+  const auto transparent = RenderDocumentWithActiveBackend(empty);
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(200, 220)));
+  ASSERT_THAT(actual.pixels, Not(IsEmpty()));
+  ASSERT_THAT(expected.pixels, Not(IsEmpty()));
+  EXPECT_NONFATAL_FAILURE(
+      editor::tests::CompareBitmapToBitmap(expected, transparent, "vertical_origin_visible_ink",
+                                           editor::tests::PixelmatchIdentityParams()),
+      "pixels differ");
+  EXPECT_NONFATAL_FAILURE(
+      editor::tests::CompareBitmapToBitmap(actual, displaced, "vertical_origin_displaced_control",
+                                           editor::tests::PixelmatchIdentityParams()),
+      "pixels differ");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "vertical_origin_svg_placement",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
