@@ -866,6 +866,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check native consumer tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in xvfb-run Xvfb xauth cmake ninja; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "::error::Self-hosted Linux is missing required native consumer tool: $tool"
+              exit 1
+            fi
+          done
+
       - name: Record target selection
         shell: bash
         run: |
@@ -1169,7 +1180,7 @@ jobs:
             exit 1
           fi
           tools/ci_bazel_test.sh bazelisk test --config=ci --config=latest_llvm --nocache_test_results \
-            --test_output=errors --test_tag_filters=requires_xvfb,-fuzz_soak \
+            --test_output=errors --test_env=PATH --test_tag_filters=requires_xvfb,-fuzz_soak \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS --strategy=TestRunner=local $TARGETS
 
       - name: Build and test CMake consumer

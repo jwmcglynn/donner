@@ -870,6 +870,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("tools/ci_bazel_test.sh bazelisk test", step)
         self.assertEqual("requires_xvfb,-fuzz_soak", self._tag_filters(step, local))
         self.assertIn("--strategy=TestRunner=local", self._test_options(step, local))
+        self.assertIn("--test_env=PATH", step)
+        self.assertIn("for tool in xvfb-run Xvfb xauth cmake ninja",
+                      self._step_body(local, "Check native consumer tools"))
         script_template = textwrap.dedent(step.split("run: |\n", 1)[1])
         native_target = "//donner/editor/tests:editor_window_vulkan_surface_tests"
         for fallback, affected, expected_target, no_tests in (
