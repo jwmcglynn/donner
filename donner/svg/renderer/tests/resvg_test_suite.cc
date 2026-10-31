@@ -1000,8 +1000,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"pattern-on-text.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "AA artifacts")},
                     {"radial-gradient-on-text.svg",
-                     Params::Skip("Reference uses text ink extents for stroke paint; 364 px "
-                                  "residual against resvg v0.49.0")},
+                     Params::Skip("Reference ink extents contradict SVG2 glyph-cell bounds "
+                                  "for text stroke paint")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
