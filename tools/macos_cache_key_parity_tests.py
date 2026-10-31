@@ -455,6 +455,15 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertFalse(_runs_self_hosted(jobs[HOSTED]))
         self.assertTrue(_runs_self_hosted(jobs[SELF_HOSTED]))
 
+    def test_editor_wasm_cache_uses_the_selected_xcode_partition(self):
+        job = _jobs(_read(".github/workflows/editor_wasm.yml"))["build"]
+        steps = dict(_steps(job))
+        self.assertIn("id: xcode", steps["Select pinned Xcode"])
+        for name in ("Configure BuildBuddy remote cache", "Configure BuildBuddy read-only cache"):
+            with self.subTest(step=name):
+                self.assertIn("cache-partition: ${{ steps.xcode.outputs.cache_partition }}",
+                              steps[name])
+
     def test_macos_lanes_pass_identical_key_affecting_flags(self):
         self.assertEqual([], key_parity_problems(self.workflow, self.bazelrc))
 
@@ -651,7 +660,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "runs-on: xcode-27", "runs-on: macos-26", 1), "not the xcode-27 image"),
             "a matrix entry on another image": (perf, files[perf].replace(
                 "- os: xcode-27", "- os: macos-latest", 1), "not the xcode-27 image"),
-            "no selection": (wasm, files[wasm].replace(select, "", 1), "does not select"),
+            "no selection": (wasm, files[wasm].replace(
+                select.replace("        shell:", "        id: xcode\n        shell:"), "", 1),
+                "does not select"),
             "selection after a build tool": (fuzz, fuzz_head + fuzz_macos.replace(
                 select, "", 1).replace("      - name: Soak", select + "\n      - name: Soak", 1),
                 "runs 'Setup Bazel' before selecting"),

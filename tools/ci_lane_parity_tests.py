@@ -69,6 +69,8 @@ TRIGGER_ALLOWLIST = {
 JOB_REPLACEMENTS = {
     ("cmake.yml", "macos", "trusted-pr"): "macos-self-hosted",
     ("cmake.yml", "validate-generator", "trusted-pr"): "macos-self-hosted",
+    ("lint.yml", "lint", "trusted-pr"): "lint-self-hosted",
+    ("lint.yml", "cmake-validate", "trusted-pr"): "lint-self-hosted",
     ("main.yml", "macos", "trusted-pr"): "macos-self-hosted",
 }
 
@@ -234,6 +236,12 @@ INVOCATION_ALLOWLIST = {
         "Hosted FetchContent trees embed absolute paths, so native builds resolve fresh dependencies.",
     ("cmake.yml", "macos", "macos-self-hosted", "Restore compiler outputs", "step-main-only", ""):
         "The bounded native consumer runs without the hosted ccache launcher or snapshot.",
+    ("lint.yml", "lint", "lint-self-hosted", "Restore Bazel", "step-main-only", ""):
+        "The persistent ARM64 lint runner uses its own Bazel state, without importing hosted snapshots.",
+    ("lint.yml", "cmake-validate", "lint-self-hosted",
+     "actions/checkout@v7 [('persist-credentials', 'false')]", "step-main-only", ""):
+        "The shared lint checkout retains full history for changed-method complexity checks; "
+        "the generator consumes the same event source tree.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
      "-requires_desktop_session"):
         "The native macos-browser partition runs desktop-session tests separately; "

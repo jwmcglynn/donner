@@ -8,3 +8,4 @@ import "./canvas-quiescent-capture.spec.mjs";
 import "./completed-result-handoff.spec.mjs";
 import "./event-presentation-delay.spec.mjs";
 import "./pipeline-compile-readiness.spec.mjs";
+import "./browser-diagnostic-policy.spec.mjs";

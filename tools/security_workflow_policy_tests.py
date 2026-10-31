@@ -103,6 +103,7 @@ REVIEWED_WORKFLOW_CALLS = {
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
 SELF_HOSTED_JOBS = {
     (".github/workflows/cmake.yml", "macos-self-hosted"): "use_self_hosted_macos",
+    (".github/workflows/lint.yml", "lint-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-browser"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-self-hosted"): "use_self_hosted_macos",
@@ -137,6 +138,13 @@ SELF_HOSTED_GATE_PREFIX = (
     "${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && "
     "(github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && "
     "(github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && ")
+
+# Lint must keep validating documentation-only pull requests too.
+SELF_HOSTED_GATE_OVERRIDES = {
+    (".github/workflows/lint.yml", "lint-self-hosted"): (
+        "${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && "
+        "(github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && "),
+}
 
 # Reviewed `runs-on` expressions that are neither a literal label nor `${{ matrix.<key> }}`, with
 # every label each can produce.
@@ -1488,7 +1496,7 @@ def _runner_violation(path, name, job):
         return problem
     if all(_is_hosted(labels) for labels in sets):
         return None
-    prefix = SELF_HOSTED_GATE_PREFIX.replace(
+    prefix = SELF_HOSTED_GATE_OVERRIDES.get((path, name), SELF_HOSTED_GATE_PREFIX).replace(
         "${{ ", "${{ " + SELF_HOSTED_STATUS_PREFIX.get((path, name), ""), 1)
     gate = prefix + "needs.gatekeeper.outputs.%s == 'true'%s }}" % (
         SELF_HOSTED_JOBS.get((path, name)), SELF_HOSTED_NARROWING.get((path, name), ""))
@@ -4900,23 +4908,24 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertTrue(_artifact_upload_violations({**files, path: changed}))
 
     def test_gatekeeper_uses_immutable_admission_code(self):
-        workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        self.assertEqual([], _gatekeeper_source_violations(workflow))
-        cmake = self.supply_chain_files[".github/workflows/cmake.yml"]
-        self.assertEqual(_jobs(workflow)["gatekeeper"], _jobs(cmake)["gatekeeper"])
-        self.assertEqual([], _gatekeeper_source_violations(cmake))
-        for old, new in (
-            ("github.event.pull_request.base.sha || github.sha", "github.sha"),
-            ("path: pr-input", "path: ."),
-            ('python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only',
-             "python3 tools/ci/gatekeeper.py docs-only"),
-            ("uses: ./.github/actions/pr-trust", "uses: ./pr-input/.github/actions/pr-trust"),
-            ("persist-credentials: false", "persist-credentials: true"),
-        ):
-            with self.subTest(mutation=new):
-                changed = workflow.replace(old, new, 1)
-                self.assertNotEqual(workflow, changed)
-                self.assertTrue(_gatekeeper_source_violations(changed))
+        for path in (".github/workflows/main.yml", ".github/workflows/lint.yml",
+                     ".github/workflows/cmake.yml"):
+            workflow = self.supply_chain_files[path]
+            self.assertEqual([], _gatekeeper_source_violations(workflow))
+            self.assertEqual(_jobs(self.supply_chain_files[".github/workflows/main.yml"])["gatekeeper"],
+                             _jobs(workflow)["gatekeeper"])
+            for old, new in (
+                ("github.event.pull_request.base.sha || github.sha", "github.sha"),
+                ("path: pr-input", "path: ."),
+                ('python3 "$GITHUB_WORKSPACE/tools/ci/gatekeeper.py" docs-only',
+                 "python3 tools/ci/gatekeeper.py docs-only"),
+                ("uses: ./.github/actions/pr-trust", "uses: ./pr-input/.github/actions/pr-trust"),
+                ("persist-credentials: false", "persist-credentials: true"),
+            ):
+                with self.subTest(mutation=new):
+                    changed = workflow.replace(old, new, 1)
+                    self.assertNotEqual(workflow, changed)
+                    self.assertTrue(_gatekeeper_source_violations(changed))
 
     def test_script_context_guard_reads_scalar_modifiers_and_stops_at_env(self):
         for scalar in ("|", "|-", "|+", "|2", "|2-", "|+2", ">", ">-", ">2+"):

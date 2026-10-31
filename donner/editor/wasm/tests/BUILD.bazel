@@ -60,6 +60,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-diagnostic-policy.js",
         "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
         "browser-runtime-diagnostics.ts",
@@ -213,6 +214,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-diagnostic-policy.js",
         "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
         "browser-runtime-diagnostics.ts",
@@ -987,6 +989,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-diagnostic-policy.js",
         "browser-bitmap-comparator.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
@@ -1076,6 +1079,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-diagnostic-policy.js",
         "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
         "browser-runtime-diagnostics.ts",
@@ -1165,6 +1169,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-diagnostic-policy.js",
         "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
         "browser-runtime-diagnostics.ts",
