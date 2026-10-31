@@ -1,6 +1,7 @@
 #include "donner/svg/text/TextBackend.h"
 
 #include <gmock/gmock.h>
+#include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -15,6 +16,9 @@
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGPathElement.h"
+#include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/text/TextBackendFull.h"
 #include "donner/svg/text/TextBackendSimple.h"
 
@@ -582,6 +586,51 @@ TEST_P(TextBackendTest, ShapeRunVerticalCjk) {
     // Full backend: CJK vertical advance from font's vmtx/vhea tables, with y offsets.
     EXPECT_THAT(shaped.glyphs, Each(GlyphYOffsetIs(Gt(0.0))));
   }
+}
+
+TEST(TextBackendFullCapabilities, PackagedCffFontShapesOutlinesAndRendersThroughFreeType) {
+  auto document = instantiateSubtree(
+      "<text x='16' y='48' font-size='24' font-family='CffControl'>A</text>", {}, {80, 80});
+  FontManager manager(document.registry());
+  const FontHandle packaged = manager.fallbackFont();
+  ASSERT_THAT(manager.sfntTable(packaged, "CFF ").has_value(), testing::IsTrue());
+  const auto bytes = manager.fontData(packaged);
+  css::FontFace face;
+  face.familyName = RcString("CffControl");
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = std::make_shared<const std::vector<uint8_t>>(bytes.begin(), bytes.end());
+  source.trusted = true;
+  face.sources.push_back(std::move(source));
+  manager.addFontFace(face);
+  const FontHandle selected = manager.findFont("CffControl");
+  ASSERT_THAT(manager.sfntTable(selected, "CFF ").has_value(), testing::IsTrue());
+  TextBackendFull backend(manager, document.registry());
+  const auto shaped =
+      backend.shapeRun(selected, 24.0f, "A", 0, 1, false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, SizeIs(1));
+  ASSERT_THAT(shaped.glyphs[0].glyphIndex, Gt(0));
+  ASSERT_THAT(shaped.glyphs[0].xOffset, DoubleEq(0.0));
+  ASSERT_THAT(shaped.glyphs[0].yOffset, DoubleEq(0.0));
+  const Path outline = backend.glyphOutline(selected, shaped.glyphs[0].glyphIndex,
+                                            backend.scaleForEmToPixels(selected, 24.0f));
+  ASSERT_THAT(outline.commands(), Not(IsEmpty()));
+  auto control =
+      instantiateSubtree("<path id='glyph' transform='translate(16 48)'/>", {}, {80, 80});
+  auto path = control.querySelector("#glyph")->cast<SVGPathElement>();
+  path.setSpline(outline);
+  auto empty = instantiateSubtree("<g/>", {}, {80, 80});
+  const auto actual = RenderDocumentWithActiveBackend(document);
+  const auto expected = RenderDocumentWithActiveBackend(control);
+  const auto transparent = RenderDocumentWithActiveBackend(empty);
+  ASSERT_THAT(actual.pixels, Not(IsEmpty()));
+  ASSERT_THAT(expected.dimensions, testing::Eq(Vector2i(80, 80)));
+  EXPECT_NONFATAL_FAILURE(
+      editor::tests::CompareBitmapToBitmap(expected, transparent, "cff_visible_outline",
+                                           editor::tests::PixelmatchIdentityParams()),
+      "pixels differ");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "cff_text_outline",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(TextBackendFullVerticalOrigin, TrustedBitmapVerticalMetricsRemainAvailable) {

@@ -1325,6 +1325,55 @@ HbFontOwner MakeVerticalMetricFont(hb_font_t* parent, VerticalMetricAdmission& a
   return child;
 }
 
+/// The selected budget aliases the caller's context or fallback through synchronous shaping.
+TextBackend::ShapingContext::WorkBudget& SelectMetricWork(
+    const TextBackend::ShapingContext* context, TextBackend::ShapingContext::WorkBudget& fallback) {
+  return context && context->work ? *context->work : fallback;
+}
+
+/// Shapes through the bounded child only for untrusted vertical fonts.
+bool ShapeWithMetricAdmission(hb_font_t* parent, hb_buffer_t* buffer, const hb_feature_t* features,
+                              unsigned int numFeatures, VerticalMetricAdmission& admission) {
+  if (admission.work.rejected) {
+    return false;
+  }
+  HbFontOwner metricFont(nullptr, &hb_font_destroy);
+  if (hb_buffer_get_direction(buffer) == HB_DIRECTION_TTB &&
+      !admission.manager.isTrustedFont(admission.handle)) {
+    metricFont = MakeVerticalMetricFont(parent, admission);
+  }
+  if (admission.work.rejected) {
+    return false;
+  }
+  hb_shape(metricFont ? metricFont.get() : parent, buffer, features, numFeatures);
+  return !admission.work.rejected;
+}
+
+/// Returns the first advance of a bounded pair/solo probe without retaining callback state.
+std::optional<double> ShapeFirstAdvance(hb_font_t* font, std::span<const uint32_t> codepoints,
+                                        hb_direction_t direction, double pixelScaleX,
+                                        double pixelScaleY, VerticalMetricAdmission& admission) {
+  hb_buffer_t* buffer = hb_buffer_create();
+  hb_buffer_add_codepoints(buffer, codepoints.data(), codepoints.size(), 0, codepoints.size());
+  hb_buffer_set_direction(buffer, direction);
+  hb_buffer_set_script(buffer, HB_SCRIPT_LATIN);
+  hb_buffer_guess_segment_properties(buffer);
+  if (!ShapeWithMetricAdmission(font, buffer, nullptr, 0, admission)) {
+    hb_buffer_destroy(buffer);
+    return std::nullopt;
+  }
+  unsigned int count = 0;
+  const hb_glyph_position_t* positions = hb_buffer_get_glyph_positions(buffer, &count);
+  std::optional<double> advance;
+  if (count != 0) {
+    advance = direction == HB_DIRECTION_TTB
+                  ? std::abs(static_cast<double>(positions[0].y_advance) * pixelScaleY)
+                  : static_cast<double>(positions[0].x_advance) * pixelScaleX;
+  }
+  hb_buffer_destroy(buffer);
+  return advance;
+}
+
 bool AdmitContextualShaping(const TextBackend::ShapingContext* context, size_t bytes) {
   return !context || !context->work ||
          context->work->consume(bytes, context->detected.valid ? 0 : context->byteLength);
@@ -1350,8 +1399,8 @@ struct ShapingFeatures {
   unsigned int count = 0;
 };
 
-ShapingFeatures MakeShapingFeatures(bool smallCaps, bool kerning, bool suppressOptional,
-                                    bool suppressRlig) {
+ShapingFeatures MakeShapingFeatures(bool smallCaps, bool kerning,
+                                    const TextBackend::ShapingContext* context) {
   ShapingFeatures result;
   if (smallCaps) {
     result.values[result.count++] = {HB_TAG('s', 'm', 'c', 'p'), 1, 0, UINT_MAX};
@@ -1359,7 +1408,7 @@ ShapingFeatures MakeShapingFeatures(bool smallCaps, bool kerning, bool suppressO
   if (!kerning) {
     result.values[result.count++] = {HB_TAG('k', 'e', 'r', 'n'), 0, 0, UINT_MAX};
   }
-  if (suppressOptional) {
+  if (context && context->suppressOptionalSubstitutions) {
     constexpr hb_tag_t tags[] = {HB_TAG('l', 'i', 'g', 'a'), HB_TAG('c', 'l', 'i', 'g'),
                                  HB_TAG('c', 'a', 'l', 't'), HB_TAG('d', 'l', 'i', 'g'),
                                  HB_TAG('h', 'l', 'i', 'g')};
@@ -1367,7 +1416,7 @@ ShapingFeatures MakeShapingFeatures(bool smallCaps, bool kerning, bool suppressO
       result.values[result.count++] = {tag, 0, 0, UINT_MAX};
     }
   }
-  if (suppressRlig) {
+  if (context && context->suppressRligForAnalysis) {
     result.values[result.count++] = {HB_TAG('r', 'l', 'i', 'g'), 0, 0, UINT_MAX};
   }
   return result;
@@ -1383,13 +1432,12 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     return {};
   }
   TextBackend::ShapingContext::WorkBudget localMetricWork{0, 0};
-  auto& metricWork = context && context->work ? *context->work : localMetricWork;
+  auto& metricWork = SelectMetricWork(context, localMetricWork);
   VerticalMetricAdmission metricAdmission{fontManager_, font, metricWork,
                                           delegatedVerticalOriginCalls_,
                                           delegatedVerticalAdvanceCalls_};
   shapedBytes_ += byteLength;
-  const bool suppressOptional = context && context->suppressOptionalSubstitutions;
-  const bool suppressRlig = context && context->suppressRligForAnalysis;
+  const ShapingContext* const featureContext = context;
   // A context that adds no characters leaves the range shaped as without one.
   if (context && context->byteLength <= byteLength) {
     context = nullptr;
@@ -1432,9 +1480,6 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
 
   auto shapeRange = [&](const char* text, size_t rangeStart, size_t rangeEnd, bool isSmallCapRange,
                         hb_feature_t* features, unsigned int numFeatures) {
-    if (metricWork.rejected) {
-      return;
-    }
     hb_buffer_t* buf = hb_buffer_create();
     const int64_t clusterOffset =
         AddShapingRange(buf, text, rangeStart, rangeEnd, spanText, byteOffset, shapingContext);
@@ -1445,15 +1490,10 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     hb_buffer_set_direction(buf, direction);
     hb_buffer_set_script(buf, detectedScript);
     hb_buffer_set_language(buf, detectedLanguage);
-    HbFontOwner metricFont(nullptr, &hb_font_destroy);
-    if (direction == HB_DIRECTION_TTB && !fontManager_.isTrustedFont(font)) {
-      metricFont = MakeVerticalMetricFont(hbFont, metricAdmission);
-    }
-    if (metricWork.rejected) {
+    if (!ShapeWithMetricAdmission(hbFont, buf, features, numFeatures, metricAdmission)) {
       hb_buffer_destroy(buf);
       return;
     }
-    hb_shape(metricFont ? metricFont.get() : hbFont, buf, features, numFeatures);
 
     unsigned int count = 0;
     const hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(buf, &count);
@@ -1466,8 +1506,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRunImpl(
     hb_buffer_destroy(buf);
   };
 
-  auto features =
-      MakeShapingFeatures(useSmcpFeature, enableKerning, suppressOptional, suppressRlig);
+  auto features = MakeShapingFeatures(useSmcpFeature, enableKerning, featureContext);
 
   if (!ShapeVariantRanges(ftFace, hbFont, fontSizePx, chunkData, byteLength, smallCaps,
                           features.values.data(), features.count, shapeRange)) {
@@ -1522,57 +1561,18 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
                                           delegatedVerticalOriginCalls_,
                                           delegatedVerticalAdvanceCalls_};
 
-  // Shape the pair [prev, cur] to get the combined advance.
-  hb_buffer_t* pairBuf = hb_buffer_create();
-  const uint32_t pair[2] = {prevCodepoint, curCodepoint};
-  hb_buffer_add_codepoints(pairBuf, pair, 2, 0, 2);
   const bool sideways = UsesSidewaysMetrics(textOrientation, curCodepoint);
   const hb_direction_t direction = isVertical && !sideways ? HB_DIRECTION_TTB : HB_DIRECTION_LTR;
-  const auto advance = [&](const hb_glyph_position_t& position) {
-    return direction == HB_DIRECTION_TTB
-               ? std::abs(static_cast<double>(position.y_advance) * pixelScaleY)
-               : static_cast<double>(position.x_advance) * pixelScaleX;
-  };
-  hb_buffer_set_direction(pairBuf, direction);
-  hb_buffer_set_script(pairBuf, HB_SCRIPT_LATIN);
-  hb_buffer_guess_segment_properties(pairBuf);
-  HbFontOwner metricFont(nullptr, &hb_font_destroy);
-  if (direction == HB_DIRECTION_TTB && !fontManager_.isTrustedFont(prevFont)) {
-    metricFont = MakeVerticalMetricFont(hbFont, metricAdmission);
-  }
-  if (metricWork.rejected) {
-    hb_buffer_destroy(pairBuf);
+  const std::array pair{prevCodepoint, curCodepoint};
+  const auto paired =
+      ShapeFirstAdvance(hbFont, pair, direction, pixelScaleX, pixelScaleY, metricAdmission);
+  if (!paired) {
     return 0.0;
   }
-  hb_font_t* const shapingFont = metricFont ? metricFont.get() : hbFont;
-  hb_shape(shapingFont, pairBuf, nullptr, 0);
-
-  unsigned int pairCount = 0;
-  const hb_glyph_position_t* pairPos = hb_buffer_get_glyph_positions(pairBuf, &pairCount);
-
-  double kernDelta = 0.0;
-  if (pairCount >= 1 && !metricWork.rejected) {
-    const double pairedAdvance = advance(pairPos[0]);
-
-    // Shape the previous character alone to get its standalone advance.
-    hb_buffer_t* soloBuf = hb_buffer_create();
-    hb_buffer_add_codepoints(soloBuf, &prevCodepoint, 1, 0, 1);
-    hb_buffer_set_direction(soloBuf, direction);
-    hb_buffer_set_script(soloBuf, HB_SCRIPT_LATIN);
-    hb_buffer_guess_segment_properties(soloBuf);
-    hb_shape(shapingFont, soloBuf, nullptr, 0);
-
-    unsigned int soloCount = 0;
-    const hb_glyph_position_t* soloPos = hb_buffer_get_glyph_positions(soloBuf, &soloCount);
-    if (soloCount >= 1) {
-      const double soloAdvance = advance(soloPos[0]);
-      kernDelta = pairedAdvance - soloAdvance;
-    }
-    hb_buffer_destroy(soloBuf);
-  }
-  hb_buffer_destroy(pairBuf);
-
-  return metricWork.rejected ? 0.0 : kernDelta;
+  const std::array solo{prevCodepoint};
+  const auto standalone =
+      ShapeFirstAdvance(hbFont, solo, direction, pixelScaleX, pixelScaleY, metricAdmission);
+  return standalone ? *paired - *standalone : 0.0;
 }
 
 }  // namespace donner::svg

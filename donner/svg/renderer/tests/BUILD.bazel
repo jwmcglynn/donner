@@ -912,6 +912,7 @@ donner_cc_test(
 donner_cc_test(
     name = "text_backend_tests",
     srcs = ["TextBackend_tests.cc"],
+    opens_gpu_device = True,
     data = [
         "//third_party/resvg-test-suite:fonts",
     ],
@@ -921,6 +922,9 @@ donner_cc_test(
     }),
     variants = ["text_full"],
     deps = [
+        ":renderer_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
         "//donner/base:base_test_utils",
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_backend_full",
