@@ -1415,8 +1415,10 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("--nocache_test_results", qualification)
         self.assertIn("--noskip_incompatible_explicit_targets", qualification)
         parity = self._job_body("macos-hosted-parity")
-        self.assertIn("--jobs=6", parity)
-        self.assertIn("--local_resources=memory=6144", parity)
+        for step in ("Test", "Test (Geode editor lane)"):
+            flags = self._test_options(self._step_body(parity, step), parity)
+            self.assertIn("--jobs=3", flags)
+            self.assertIn("--local_resources=memory=4802", flags)
 
     def test_fixed_target_lanes_do_not_tolerate_an_empty_test_selection(self):
         """A named fixed test suite that yields no tests is a real defect.
