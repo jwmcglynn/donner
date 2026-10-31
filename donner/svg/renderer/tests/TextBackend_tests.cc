@@ -676,6 +676,7 @@ TEST(TextBackendFullVerticalOrigin, SvgUprightPlacementUsesAvailableVerticalOrig
   EXPECT_THAT(shaped.glyphs[1].glyphIndex, testing::Eq(4977));
   for (const auto& glyph : shaped.glyphs) {
     ASSERT_THAT(glyph.glyphIndex, Gt(0));
+    EXPECT_THAT(glyph.xOffset, DoubleEq(-500));
     const size_t index = static_cast<size_t>(glyph.glyphIndex);
     ASSERT_LT(index, longMetrics);
     ASSERT_LE(index * 4 + 4, vmtx->size());
@@ -687,7 +688,8 @@ TEST(TextBackendFullVerticalOrigin, SvgUprightPlacementUsesAvailableVerticalOrig
     EXPECT_THAT(horizontal.glyphs[0].xAdvance, DoubleEq(1000));
     const Path outline = backend.glyphOutline(font, glyph.glyphIndex, 1.0f);
     ASSERT_THAT(outline.commands(), Not(IsEmpty()));
-    EXPECT_THAT(-outline.bounds().topLeft.y + ReadBe16(*vmtx, index * 4 + 2), DoubleEq(860));
+    EXPECT_THAT(-outline.bounds().topLeft.y + static_cast<int16_t>(ReadBe16(*vmtx, index * 4 + 2)),
+                DoubleEq(860));
   }
   // vmtx origin 860 and advance 1000 at 100px place alphabetic origins at 96 and 196.
   auto control = makeDocument(
