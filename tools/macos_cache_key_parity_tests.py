@@ -271,8 +271,8 @@ def _bazelrc_problems(bazelrc):
 # that sets any of them (job or workflow env, or a GITHUB_ENV write) can silently replace the
 # pinned Xcode, so no macOS job and no workflow-level env may name them.
 XCODE_OVERRIDES = re.compile(
-    r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|LSREGISTER|DEVELOPER_DIR)\b")
-MACOS_JOBS = (HOSTED, SELF_HOSTED, PARITY, "macos-browser")
+    r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|LSREGISTER|DEVELOPER_DIR|DONNER_CI_XCODE_IDENTITY|CCACHE_NAMESPACE)\b")
+MACOS_JOBS = LANES + ("macos-browser",)
 
 
 def _xcode_override_problems(workflow):
@@ -668,11 +668,219 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 problems = macos_job_problems({**files, path: text})
                 self.assertTrue(any(expected in problem for problem in problems), problems)
 
+    def _select_policy(self, policy, discovered, reports=None, statuses=None, report_status=0, registration=None):
+        """Exercise an isolated source policy with deterministic discovery tools."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "ci_select_macos_xcode.sh"
+            script.write_text(_read(SELECT_SCRIPT))
+            (root / "ci_macos_xcode.txt").write_text(policy)
+            trace = root / "trace"
+            locator = root / "locator"
+            branches = []
+            registration_branches = []
+            builds = dict(re.findall(r"(?m)^([0-9.]+) ([0-9A-Za-z]+)$", policy))
+            for version, paths in discovered.items():
+                registered = (registration or {}).get(version, {})
+                marker = root / ("registered-" + version)
+                output = "".join(str(root / path) + "\n" for path in paths)
+                after = "".join(str(root / path) + "\n"
+                                for path in registered.get("paths", paths))
+                branches.append(
+                    "%s) if [ -f %s ]; then printf '%%s' %s; exit %d; fi; "
+                    "printf '%%s' %s; exit %d;;" % (
+                        version, shlex.quote(str(marker)), shlex.quote(after),
+                        registered.get("probe_status", (statuses or {}).get(version, 0)),
+                        shlex.quote(output), (statuses or {}).get(version, 0)))
+                registration_branches.append(
+                    '%s) [ "$3" = %s ] || exit 41; touch %s; exit %d;;' % (
+                        version, shlex.quote(builds.get(version, "invalid")),
+                        shlex.quote(str(marker)), registered.get("status", 0)))
+            locator.write_text(
+                '#!/bin/sh\nif [ "${2:-}" = --register-installed ]; then\n'
+                'printf "register %s %s\\n" "$1" "$3" >> ' + shlex.quote(str(trace)) +
+                '\ncase "$1" in\n' + "\n".join(registration_branches) +
+                '\nesac\nexit 2\nfi\nprintf "%s\\n" "$1" >> ' + shlex.quote(str(trace)) +
+                '\ncase "$1" in\n' + "\n".join(branches) + "\nesac\nexit 2\n")
+            locator.chmod(0o755)
+            xcodebuild = root / "xcodebuild"
+            reports = reports or {"Preferred": "Xcode 27.1\nBuild version 27A9275",
+                                  "Fallback": "Xcode 27.2\nBuild version 27B52"}
+            cases = ["*%s*) printf '%%s' %s;;" % (name, shlex.quote(value))
+                     for name, value in reports.items()]
+            finish = "kill -ALRM $$\n" if report_status == "alarm" else "exit %d\n" % report_status
+            xcodebuild.write_text("#!/bin/sh\ncase \"$DEVELOPER_DIR\" in\n" +
+                                  "\n".join(cases) + "\nesac\n" + finish)
+            xcodebuild.chmod(0o755)
+            env_file, outputs = root / "env", root / "outputs"
+            env_file.write_text("")
+            outputs.write_text("")
+            result = subprocess.run(
+                ["/bin/bash", str(script)], capture_output=True, text=True,
+                timeout=test_timing.STALL_GUARD_SECONDS,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                     "GITHUB_ENV": str(env_file), "GITHUB_OUTPUT": str(outputs),
+                     "XCODE_LOCATOR": str(locator), "XCODEBUILD": str(xcodebuild),
+                     "XCODE_PROBE_PYTHON": sys.executable, "RUNNER_ARCH": "ARM64"})
+            return (result.returncode, env_file.read_text(), outputs.read_text(),
+                    result.stdout + result.stderr, trace.read_text() if trace.exists() else "")
+
+    def test_approved_fallback_is_used_only_when_preferred_is_absent(self):
+        code, env, output, log, trace = self._select_policy(
+            "27.1 27A9275\n27.2 27B52\n", {"27.1": [], "27.2": ["Fallback"]})
+        self.assertEqual(0, code, log)
+        self.assertIn("--xcode_version=27.2", env)
+        self.assertIn("DONNER_CI_XCODE_IDENTITY=27.2-27B52", env)
+        self.assertEqual("cache_partition=macos-ARM64-xcode-27.2-27B52\n", output)
+        self.assertEqual("27.1\nregister 27.1 27A9275\n27.1\n27.2\n", trace)
+
+    def test_unregistered_preferred_is_selected_before_installed_fallback(self):
+        code, env, output, log, trace = self._select_policy(
+            "27.1 27A9275\n27.2 27B52\n", {"27.1": [], "27.2": ["Fallback"]},
+            registration={"27.1": {"paths": ["Preferred"]}})
+        self.assertEqual(0, code, log)
+        self.assertIn("DONNER_CI_XCODE_IDENTITY=27.1-27A9275", env)
+        self.assertEqual("cache_partition=macos-ARM64-xcode-27.1-27A9275\n", output)
+        self.assertEqual("27.1\nregister 27.1 27A9275\n27.1\n", trace)
+
+    def test_unregistered_fallback_uses_its_own_approved_build(self):
+        code, env, output, log, trace = self._select_policy(
+            "27.1 27A9275\n27.2 27B52\n", {"27.1": [], "27.2": []},
+            registration={"27.2": {"paths": ["Fallback"]}})
+        self.assertEqual(0, code, log)
+        self.assertIn("DONNER_CI_XCODE_IDENTITY=27.2-27B52", env)
+        self.assertEqual("cache_partition=macos-ARM64-xcode-27.2-27B52\n", output)
+        self.assertEqual(
+            "27.1\nregister 27.1 27A9275\n27.1\n27.2\nregister 27.2 27B52\n27.2\n", trace)
+
+    def test_invalid_preferred_registration_never_falls_through(self):
+        for registered, reports in [
+                ({"status": 3}, None),
+                ({"status": 142}, None),
+                ({"paths": ["Preferred"], "probe_status": 2}, None),
+                ({"paths": ["Preferred", "Duplicate"]}, None),
+                ({"paths": ["Preferred"]}, {"Preferred": "Xcode 27.1\nBuild version 99Z9"})]:
+            with self.subTest(registered=registered, reports=reports):
+                code, env, output, log, trace = self._select_policy(
+                    "27.1 27A9275\n27.2 27B52\n", {"27.1": [], "27.2": ["Fallback"]},
+                    reports=reports, registration={"27.1": registered})
+                self.assertEqual((1, "", ""), (code, env, output), log)
+                self.assertIn("register 27.1 27A9275\n", trace)
+                self.assertNotIn("27.2", trace)
+
+    def test_approved_preference_does_not_depend_on_installation_order(self):
+        code, env, output, log, trace = self._select_policy(
+            "27.1 27A9275\n27.2 27B52\n",
+            {"27.1": ["Preferred"], "27.2": ["Fallback"]})
+        self.assertEqual(0, code, log)
+        self.assertIn("--xcode_version=27.1", env)
+        self.assertEqual("cache_partition=macos-ARM64-xcode-27.1-27A9275\n", output)
+        self.assertEqual("27.1\n", trace)
+
+    def test_invalid_preferred_discovery_never_falls_through(self):
+        policy = "27.1 27A9275\n27.2 27B52\n"
+        for paths, reports, statuses in [
+                (["Preferred", "Duplicate"], None, None),
+                (["Preferred"], {"Preferred": "Xcode 27.1\nBuild version 99Z9"}, None),
+                ([], None, {"27.1": 2})]:
+            with self.subTest(paths=paths, reports=reports, statuses=statuses):
+                code, env, output, log, trace = self._select_policy(
+                    policy, {"27.1": paths, "27.2": ["Fallback"]}, reports, statuses)
+                self.assertEqual(1, code, log)
+                self.assertEqual("", env)
+                self.assertEqual("", output)
+                self.assertEqual("27.1\n", trace)
+
+    def test_unapproved_fallback_build_is_rejected(self):
+        code, env, output, log, trace = self._select_policy(
+            "27.1 27A9275\n27.2 27B52\n", {"27.1": [], "27.2": ["Fallback"]},
+            {"Fallback": "Xcode 27.2\nBuild version 27B48"})
+        self.assertEqual(1, code, log)
+        self.assertEqual("", env)
+        self.assertEqual("", output)
+        self.assertEqual("27.1\nregister 27.1 27A9275\n27.1\n27.2\n", trace)
+
+    def test_actual_toolchain_identity_binds_all_bazel_cache_keys(self):
+        lines = _read(".bazelrc").splitlines()
+        for flag in ["build --action_env=DONNER_CI_XCODE_IDENTITY",
+                     "build --host_action_env=DONNER_CI_XCODE_IDENTITY",
+                     "test --test_env=DONNER_CI_XCODE_IDENTITY"]:
+            self.assertEqual(1, lines.count(flag), flag)
+
+    def test_failed_version_probe_cannot_publish_matching_stdout(self):
+        for report_status in [2, "alarm"]:
+            with self.subTest(report_status=report_status):
+                code, env, output, log, trace = self._select_policy(
+                    "27.1 27A9275\n27.2 27B52\n",
+                    {"27.1": ["Preferred"], "27.2": ["Fallback"]}, report_status=report_status)
+                self.assertEqual(1, code, log)
+                self.assertEqual("", env)
+                self.assertEqual("", output)
+                self.assertEqual("27.1\n", trace)
+
+    def test_policy_rejects_duplicate_versions_and_unbounded_entries(self):
+        for policy in ["", "27.1 27A9275\n27.1 27A9275\n",
+                       "27.1 27A9275\n27.1 27B52\n", "malformed\n",
+                       "27.1 27A9275\n27.2 27B52\n27.3 27C1\n"]:
+            with self.subTest(policy=policy):
+                code, env, output, log, trace = self._select_policy(policy, {})
+                self.assertEqual(1, code, log)
+                self.assertEqual("", env)
+                self.assertEqual("", output)
+                self.assertEqual("", trace)
+
+    def test_bcr_consumer_disk_cache_includes_actual_toolchain_identity(self):
+        workflow = _workflow_files()[".github/workflows/bcr_preflight.yml"]
+        consumer = _jobs(workflow)["consumer"]
+        disk_cache = re.findall(r"(?m)^          disk-cache: (.+)$", consumer)
+        self.assertEqual(disk_cache, [
+            "bcr-${{ matrix.os }}-${{ matrix.bazel }}-${{ env.DONNER_CI_XCODE_IDENTITY }}"])
+
+    def test_identity_has_no_config_or_workflow_override(self):
+        identity = "DONNER_CI_XCODE_IDENTITY"
+        lines = [line.split("#", 1)[0].strip() for line in _read(".bazelrc").splitlines()]
+        self.assertEqual(3, sum(identity in line for line in lines))
+        for path, text in _workflow_files().items():
+            for line in text.splitlines():
+                if identity in line:
+                    self.assertIn("${{ env.DONNER_CI_XCODE_IDENTITY }}", line)
+                    if path == ".github/workflows/bcr_preflight.yml":
+                        self.assertEqual(line.strip(),
+                                         "disk-cache: bcr-${{ matrix.os }}-${{ matrix.bazel }}-"
+                                         "${{ env.DONNER_CI_XCODE_IDENTITY }}")
+                    else:
+                        self.assertEqual(path, ".github/workflows/cmake.yml", (path, line))
+                        self.assertRegex(line.strip(), r"^(?:key:|ccache-macos-)")
+
+    def test_workflow_cannot_replace_the_selected_identity(self):
+        for name in ["DONNER_CI_XCODE_IDENTITY", "CCACHE_NAMESPACE"]:
+            modified = self.workflow.replace("env:\n", "env:\n  " + name + ": unverified\n", 1)
+            problems = key_parity_problems(modified, self.bazelrc)
+            self.assertTrue(any("selection override" in problem for problem in problems), problems)
+
+    def test_native_and_vm_qualification_cannot_override_xcode_selection(self):
+        jobs = _jobs(self.workflow)
+        for job in ("macos-metal", "macos-vm-qualification"):
+            for name in ("XCODEBUILD", "XCODE_APPLICATIONS_DIR", "XCODE_LOCATOR", "LSREGISTER",
+                         "DEVELOPER_DIR", "DONNER_CI_XCODE_IDENTITY", "CCACHE_NAMESPACE"):
+                with self.subTest(job=job, name=name):
+                    modified_job = jobs[job].replace(
+                        "    env:\n", "    env:\n      " + name + ": unverified\n", 1)
+                    self.assertNotEqual(jobs[job], modified_job)
+                    workflow = self.workflow.replace(jobs[job], modified_job, 1)
+                    self.assertIn(job + " sets an Xcode selection override",
+                                  _xcode_override_problems(workflow))
+
+    def test_cmake_cache_families_include_the_actual_toolchain(self):
+        workflow = _workflow_files()[".github/workflows/cmake.yml"]
+        for line in workflow.splitlines():
+            if "cmake-deps-macos-" in line or "ccache-macos-" in line:
+                self.assertIn("${{ env.DONNER_CI_XCODE_IDENTITY }}", line)
+
     def test_pin_names_one_hosted_xcode_version_and_build(self):
         lines = [line for line in _read(PIN_FILE).splitlines()
                  if line.strip() and not line.lstrip().startswith("#")]
-        self.assertEqual(1, len(lines))
-        self.assertRegex(lines[0], r"^\d+\.\d+(?:\.\d+)? \d+[A-Z]\d+[a-z]?$")
+        self.assertEqual(["27.1 27A9275", "27.2 27B52"], lines)
 
     def _select(self, discovered=("{root}/Xcode-any-name.app/Contents/Developer",),
                 reported="Xcode {version}\nBuild version {build}", locator_status=0,
@@ -702,12 +910,13 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             after = "".join(fill(line) + "\\n" for line in (
                 discovered if registered is None else registered))
             locator.write_text(
-                '#!/bin/sh\nif [ "${2:-}" = --register-installed ]; then\n'
+                '#!/bin/sh\n[ "$1" = %s ] || exit 0\n'
+                'if [ "${2:-}" = --register-installed ]; then\n'
                 '  [ "$3" = %s ] || exit 41\n'
                 '  touch %s\n  printf "%%s" %s >&2\n  exit %d\nfi\n'
                 'if [ -f %s ]; then\n  printf %s\n  exit %d\nfi\n'
                 'printf %s\nexit %d\n' % (
-                    shlex.quote(build), shlex.quote(str(marker)),
+                    shlex.quote(version), shlex.quote(build), shlex.quote(str(marker)),
                     shlex.quote(fill(registration_error)), registration_status,
                     shlex.quote(str(marker)), shlex.quote(after),
                     locator_status or 0 if post_locator_status is None else post_locator_status,
@@ -741,9 +950,11 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertEqual(0, code, log)
         self.assertEqual(env.splitlines(), [
             "DEVELOPER_DIR=%s/Xcode-any-name.app/Contents/Developer" % root,
+            "DONNER_CI_XCODE_IDENTITY=%s-%s" % (version, build),
+            "CCACHE_NAMESPACE=donner-xcode-%s-%s" % (version, build),
             "BAZEL_MACOS_BUILD_FLAGS=--config=ci-macos --xcode_version=%s" % version])
         self.assertEqual(output, "cache_partition=macos-ARM64-xcode-%s-%s\n" % (version, build))
-        self.assertIn("Selected the pinned Xcode %s (%s)." % (version, build), log)
+        self.assertIn("Selected the approved Xcode %s (%s)." % (version, build), log)
         self.assertNotIn("simulated noise", log)
 
     def test_select_script_fails_without_exactly_the_pinned_xcode(self):

@@ -379,27 +379,37 @@ def _check_entrypoint(app: Path, environment: dict | None = None) -> None:
             raise ValueError("native editor extracted entrypoint did not reject the test option")
 
 
+def _approved_xcodes(root: Path) -> list[str]:
+    rows = [line for line in (root / "tools/ci_macos_xcode.txt").read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+    if (not 1 <= len(rows) <= 2
+            or any(not re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)? [0-9]+[A-Z][0-9]+[a-z]?", row)
+                   for row in rows)
+            or len({row.split()[0] for row in rows}) != len(rows)):
+        raise ValueError("native editor Xcode policy is invalid")
+    return rows
+
+
 def _native_toolchain(root: Path) -> dict:
-    pin = [line.strip() for line in (root / "tools/ci_macos_xcode.txt").read_text().splitlines()
-           if line.strip() and not line.startswith("#")]
+    approved = _approved_xcodes(root)
     xcode = _tool("/usr/bin/xcodebuild", "-version").strip().splitlines()
-    if len(pin) != 1 or len(xcode) != 2 or xcode != ["Xcode " + pin[0].split()[0],
-                                                                  "Build version " + pin[0].split()[1]]:
-        raise ValueError("native editor Xcode differs from the source pin")
+    actual = next((row for row in approved
+                   if xcode == ["Xcode " + row.split()[0], "Build version " + row.split()[1]]), None)
+    if actual is None:
+        raise ValueError("native editor Xcode differs from the source policy")
     sdk = _tool("/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-version").strip()
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,2}", sdk):
         raise ValueError("native editor SDK version is invalid")
-    return {"xcode": pin[0], "macos_sdk": sdk}
+    return {"xcode": actual, "macos_sdk": sdk}
 
 
 def _check_toolchain(root: Path, value: object) -> None:
-    pin = [line.strip() for line in (root / "tools/ci_macos_xcode.txt").read_text().splitlines()
-           if line.strip() and not line.startswith("#")]
+    approved = _approved_xcodes(root)
     if (not isinstance(value, dict) or set(value) != {"xcode", "macos_sdk"}
-            or len(pin) != 1 or value["xcode"] != pin[0]
+            or value["xcode"] not in approved
             or not isinstance(value["macos_sdk"], str)
             or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,2}", value["macos_sdk"])):
-        raise ValueError("native editor toolchain provenance differs from the source pin")
+        raise ValueError("native editor toolchain provenance differs from the source policy")
 
 
 def package(*, root: Path, app: Path, notice: Path, compiler_probe: Path, build_info: Path, output: Path,

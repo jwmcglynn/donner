@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
-# Selects the pinned Xcode (tools/ci_macos_xcode.txt) for a macOS CI job, or fails the job.
+# Selects the first installed approved Xcode from tools/ci_macos_xcode.txt.
 #
 # Usage: ci_select_macos_xcode.sh
 #
-# Looks the pinned version up the way Bazel's native Xcode locator does, through
-# LaunchServices, so the selection does not depend on where a runner installs Xcode. Exactly
-# one registered installation may claim the pinned version, and it must report the pinned
-# build. The script then exports DEVELOPER_DIR and appends --xcode_version to
-# BAZEL_MACOS_BUILD_FLAGS through GITHUB_ENV, and writes cache_partition=<identity> to
-# GITHUB_OUTPUT. The identity names only the pinned, public Xcode, so every runner on it shares
-# one remote-cache partition. Any other outcome fails the job: a lane on another Xcode cannot
-# share action keys with the others.
+# Discovery follows Bazel's LaunchServices lookup. Only absence permits trying
+# the next tuple; ambiguity, discovery failure or a build mismatch fails closed.
+# The actual version/build binds the remote partition and all Bazel action/test
+# keys, including disk caches. Equal selected tuples retain cross-runner parity.
 #
 # Install paths are printed only on GitHub-hosted runners. XCODEBUILD, XCODE_LOCATOR, XCRUN and
 # XCODE_PROBE_PYTHON override tools in tests.
@@ -37,13 +33,28 @@ except OSError as error:
 }
 
 pin_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci_macos_xcode.txt"
-pin="$(grep -v '^[[:space:]]*\(#\|$\)' "${pin_file}")"
-if [[ ! "${pin}" =~ ^([0-9]+\.[0-9]+(\.[0-9]+)?)\ ([0-9]+[A-Z][0-9]+[a-z]?)$ ]]; then
-  echo "::error::${pin_file} must hold one '<version> <build>' line."
+pins=()
+versions=" "
+while IFS= read -r pin || [[ -n "${pin}" ]]; do
+  [[ "${pin}" =~ ^[[:space:]]*(#.*)?$ ]] && continue
+  if [[ ${#pins[@]} -ge 2 ||
+        ! "${pin}" =~ ^([0-9]+\.[0-9]+(\.[0-9]+)?)\ ([0-9]+[A-Z][0-9]+[a-z]?)$ ]]; then
+    echo "::error::The Xcode policy must hold one or two '<version> <build>' lines."
+    exit 1
+  fi
+  version="${BASH_REMATCH[1]}"
+  if [[ "${versions}" == *" ${version} "* ]]; then
+    echo "::error::The Xcode policy must name distinct versions."
+    exit 1
+  fi
+  versions+="${version} "
+  pins+=("${pin}")
+done < "${pin_file}"
+if [[ ${#pins[@]} -eq 0 ]]; then
+  echo "::error::The Xcode policy is empty."
   exit 1
 fi
-version="${BASH_REMATCH[1]}"
-build="${BASH_REMATCH[3]}"
+read -r version build <<< "${pins[0]}"
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/donner-xcode-locator.XXXXXX")"
 trap 'rm -rf "${scratch}"' EXIT
@@ -88,66 +99,83 @@ if [[ -z "${locator}" ]]; then
   fi
 fi
 
-probe_status=0
-developers="$(run_probe "${locator}" "${version}" 2>"${scratch}/probe.log")" || probe_status=$?
-if [[ "${probe_status}" != 0 ]]; then
-  show_diagnostics "${scratch}/probe.log"
-  fail "could not be looked up: the Xcode discovery probe failed (exit ${probe_status})."
-fi
+selected=false
+for pin in "${pins[@]}"; do
+  read -r version build <<< "${pin}"
+  probe_status=0
+  developers="$(run_probe "${locator}" "${version}" 2>"${scratch}/probe.log")" || probe_status=$?
+  if [[ "${probe_status}" != 0 ]]; then
+    show_diagnostics "${scratch}/probe.log"
+    fail "could not be looked up: the Xcode discovery probe failed (exit ${probe_status})."
+  fi
 
-# An installation added after the runner logged in may not be registered for its account yet.
-if [[ -z "${developers}" ]]; then
-  registration_status=0
-  "${XCODE_PROBE_PYTHON:-python3}" -c '
+  # An approved installation may not be registered for this runner account yet.
+  if [[ -z "${developers}" ]]; then
+    registration_status=0
+    "${XCODE_PROBE_PYTHON:-python3}" -c '
 import os
 import signal
 import sys
 signal.alarm(180)
 os.execvp(sys.argv[1], sys.argv[1:])
 ' "${locator}" "${version}" --register-installed "${build}" \
-    >"${scratch}/registration.log" 2>&1 || registration_status=$?
-  if [[ "${registration_status}" != 0 ]]; then
-    fail "could not be registered for this account (exit ${registration_status}); Apple signature, access or registration checks failed."
+      >"${scratch}/registration.log" 2>&1 || registration_status=$?
+    if [[ "${registration_status}" != 0 ]]; then
+      fail "could not be registered for this account (exit ${registration_status}); Apple signature, access or registration checks failed."
+    fi
+    probe_status=0
+    developers="$(run_probe "${locator}" "${version}" 2>"${scratch}/probe.log")" || probe_status=$?
+    if [[ "${probe_status}" != 0 ]]; then
+      show_diagnostics "${scratch}/probe.log"
+      fail "could not be looked up after registration: the Xcode discovery probe failed (exit ${probe_status})."
+    fi
   fi
-  probe_status=0
-  developers="$(run_probe "${locator}" "${version}" 2>"${scratch}/probe.log")" || probe_status=$?
-  if [[ "${probe_status}" != 0 ]]; then
-    show_diagnostics "${scratch}/probe.log"
-    fail "could not be looked up after registration: the Xcode discovery probe failed (exit ${probe_status})."
-  fi
-fi
 
-count=0
-developer_dir=""
-while IFS= read -r line; do
-  if [[ -n "${line}" ]]; then
-    count=$((count + 1))
-    developer_dir="${line}"
+  count=0
+  developer_dir=""
+  while IFS= read -r line; do
+    if [[ -n "${line}" ]]; then
+      count=$((count + 1))
+      developer_dir="${line}"
+    fi
+  done <<< "${developers}"
+  if [[ "${count}" == 0 ]]; then
+    continue
   fi
-done <<< "${developers}"
-if [[ "${count}" == 0 ]]; then
-  fail "is not installed where Bazel can discover it: LaunchServices lists no Xcode ${version}."
-fi
-if [[ "${count}" != 1 ]]; then
-  if [[ "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]]; then
-    echo "Installations that claim Xcode ${version}:" >&2
-    echo "${developers}" >&2
+  if [[ "${count}" != 1 ]]; then
+    if [[ "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]]; then
+      echo "Installations that claim Xcode ${version}:" >&2
+      echo "${developers}" >&2
+    fi
+    fail "is ambiguous: ${count} installations claim version ${version}, and Bazel could pick any of them."
   fi
-  fail "is ambiguous: ${count} installations claim version ${version}, and Bazel could pick any of them."
-fi
 
-reported="$(DEVELOPER_DIR="${developer_dir}" run_probe "${XCODEBUILD:-xcodebuild}" -version \
-  2>"${scratch}/xcodebuild.log" || true)"
-if [[ "${reported}" != "Xcode ${version}"$'\n'"Build version ${build}" ]]; then
-  echo "$(where "${developer_dir}") reports:" >&2
-  echo "${reported}" | head -n 5 >&2
-  show_diagnostics "${scratch}/xcodebuild.log"
-  fail "is not the Xcode that Bazel discovers for version ${version}."
+  report_status=0
+  reported="$(DEVELOPER_DIR="${developer_dir}" run_probe "${XCODEBUILD:-xcodebuild}" -version \
+    2>"${scratch}/xcodebuild.log")" || report_status=$?
+  if [[ "${report_status}" != 0 ]]; then
+    show_diagnostics "${scratch}/xcodebuild.log"
+    fail "could not report its version: xcodebuild failed (exit ${report_status})."
+  fi
+  if [[ "${reported}" != "Xcode ${version}"$'\n'"Build version ${build}" ]]; then
+    echo "$(where "${developer_dir}") reports:" >&2
+    echo "${reported}" | head -n 5 >&2
+    show_diagnostics "${scratch}/xcodebuild.log"
+    fail "is not the Xcode that Bazel discovers for version ${version}."
+  fi
+
+  selected=true
+  break
+done
+if [[ "${selected}" != true ]]; then
+  fail "is unavailable: LaunchServices lists no Xcode from the approved policy."
 fi
 
 {
   echo "DEVELOPER_DIR=${developer_dir}"
+  echo "DONNER_CI_XCODE_IDENTITY=${version}-${build}"
+  echo "CCACHE_NAMESPACE=donner-xcode-${version}-${build}"
   echo "BAZEL_MACOS_BUILD_FLAGS=${BAZEL_MACOS_BUILD_FLAGS:-} --xcode_version=${version}"
 } >> "${GITHUB_ENV}"
 echo "cache_partition=macos-${RUNNER_ARCH:-unknown}-xcode-${version}-${build}" >> "${GITHUB_OUTPUT}"
-echo "Selected the pinned Xcode ${version} (${build})."
+echo "Selected the approved Xcode ${version} (${build})."

@@ -2989,6 +2989,90 @@ TEST_F(RendererRegressionTests, ObjectBoundingBoxClipOnTransformedTextUsesLocalG
       << "a clip on the ink extents must render differently";
 }
 
+/// Renders an independently authored text paint scene with a configurable gradient mapping.
+ClippedTextRender RenderTextRadialPaint(std::string_view gradientAttributes,
+                                        std::string_view paintAttributes) {
+  SVGDocument document = instantiateSubtree(
+      std::string(R"svg(<radialGradient id="paint" )svg") + std::string(gradientAttributes) +
+          R"svg(><stop stop-color="white"/><stop offset="1" stop-color="black"/>
+                </radialGradient><text id="text" x="24" y="150" font-family="Noto Sans"
+                font-size="125" transform="translate(8 4) scale(0.6 0.7)" )svg" +
+          std::string(paintAttributes) +
+          R"svg(>H<tspan fill-opacity="0.6" stroke-opacity="0.6">og</tspan></text>)svg",
+      parser::SVGParser::Options(), Vector2i(200, 160));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  ClippedTextRender result;
+  result.bitmap = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  const auto text = document.querySelector("#text");
+  EXPECT_THAT(text, testing::Ne(std::nullopt));
+  if (text) {
+    result.objectBox = text->cast<SVGTextElement>().objectBoundingBox();
+    result.inkBox = text->cast<SVGTextElement>().inkBoundingBox();
+  }
+  return result;
+}
+
+/// Maps a unit radial gradient onto a known rectangle in the text's local user space.
+std::string UserSpaceRadialOn(const Box2d& box) {
+  std::ostringstream attributes;
+  attributes << std::setprecision(17)
+             << R"svg(gradientUnits="userSpaceOnUse" cx="0.35" cy="0.65" r="0.55" fx="0.25" fy="0.5"
+                      gradientTransform="matrix()svg"
+             << box.width() << " 0 0 " << box.height() << " " << box.topLeft.x << " "
+             << box.topLeft.y << R"svg()")svg";
+  return attributes.str();
+}
+
+// SVG 2 requires full glyph cells for text object bounds, including stroke paint servers.
+// https://www.w3.org/TR/SVG2/coords.html#BoundingBoxes
+TEST_F(RendererRegressionTests, TextRadialFillAndStrokeUseGlyphCellsRatherThanInkBounds) {
+  for (const std::string_view paint :
+       {R"svg(fill="url(#paint)" stroke="none")svg",
+        R"svg(fill="none" stroke="url(#paint)" stroke-width="2")svg",
+        R"svg(fill="none" stroke="url(#paint)" stroke-width="7")svg"}) {
+    SCOPED_TRACE(paint);
+    const ClippedTextRender objectUnits =
+        RenderTextRadialPaint(R"svg(cx="0.35" cy="0.65" r="0.55" fx="0.25" fy="0.5")svg", paint);
+    ASSERT_THAT(objectUnits.bitmap.empty(), testing::IsFalse());
+    ASSERT_THAT(objectUnits.inkBox.height(), testing::Lt(objectUnits.objectBox.height() - 1.0));
+
+    // At 125px the 1000-unit font's advances and ascent/descent are binary-exact, including
+    // full-text shaping's 1/64px positioning: H=741, o=605, g=615; ascent=1069, descent=-293.
+    const Box2d expectedCells = Box2d::FromXYWH(24.0, 16.375, 245.125, 170.25);
+    EXPECT_THAT(objectUnits.objectBox, BoxEq(expectedCells.topLeft, expectedCells.bottomRight));
+    const ClippedTextRender cellUnits =
+        RenderTextRadialPaint(UserSpaceRadialOn(expectedCells), paint);
+    editor::tests::CompareBitmapToBitmap(objectUnits.bitmap, cellUnits.bitmap,
+                                         "text_radial_matches_glyph_cell_mapping",
+                                         editor::tests::PixelmatchIdentityParams());
+    const ClippedTextRender inkUnits =
+        RenderTextRadialPaint(UserSpaceRadialOn(objectUnits.inkBox), paint);
+    const ClippedTextRender expandedUnits =
+        RenderTextRadialPaint(UserSpaceRadialOn(expectedCells.inflatedBy(3.5)), paint);
+    RendererBitmap transparent = objectUnits.bitmap;
+    std::fill(transparent.pixels.begin(), transparent.pixels.end(), 0);
+    const std::array<std::pair<const RendererBitmap*, std::string_view>, 3> negativeControls = {{
+        {&transparent, "text_radial_visible"},
+        {&inkUnits.bitmap, "text_radial_ink_mapping"},
+        {&expandedUnits.bitmap, "text_radial_expanded_mapping"},
+    }};
+    for (const auto& [control, label] : negativeControls) {
+      SCOPED_TRACE(label);
+      int mismatchCount = -1;
+      testing::TestPartResultArray differences;
+      {
+        testing::ScopedFakeTestPartResultReporter capture(
+            testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+        editor::tests::CompareBitmapToBitmap(objectUnits.bitmap, *control, label,
+                                             editor::tests::PixelmatchIdentityParams(),
+                                             &mismatchCount);
+      }
+      EXPECT_THAT(mismatchCount, testing::Gt(0));
+      EXPECT_THAT(differences.size(), testing::Eq(1));
+    }
+  }
+}
+
 // SVG 2 applies `clip-path`, `mask`, and `filter` to text content elements, so a `tspan` that
 // covers all of its text element's content must render exactly as the same effect on the text
 // element. Both forms resolve objectBoundingBox effect regions through the same glyph-cell box, so

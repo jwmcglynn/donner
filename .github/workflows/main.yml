@@ -1272,10 +1272,10 @@ jobs:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
       # Set the CI deployment target explicitly so hosted and self-hosted macOS
       # compile the same target instead of inheriting host defaults.
-      # --config=ci-macos pins the action PATH so this job and
-      # macos-self-hosted compute identical action keys; "Select pinned Xcode"
-      # adds --xcode_version. macos-self-hosted passes these same key-affecting
-      # flags (//tools:macos_cache_key_parity_tests).
+      # --config=ci-macos pins the action PATH. Lanes selecting the same approved
+      # Xcode tuple compute identical action keys; "Select pinned Xcode" adds
+      # --xcode_version. Self-hosted lanes pass these same key-affecting flags
+      # (//tools:macos_cache_key_parity_tests).
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME. The hosted image's virtual
@@ -1306,10 +1306,10 @@ jobs:
         with:
           persist-credentials: false
 
-      # Every macOS lane builds with the Xcode pinned in tools/ci_macos_xcode.txt,
-      # so their action keys and remote cache partition match. The xcode-27
-      # image ships it beside other Xcodes; the step fails the job when the
-      # runner does not have exactly that version and build.
+      # Every macOS lane selects an approved tuple from tools/ci_macos_xcode.txt.
+      # Lanes selecting the same version/build share action keys and a remote
+      # cache partition; different tuples remain isolated. Missing all approved
+      # versions or finding an ambiguous installation/build mismatch fails closed.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
@@ -1683,8 +1683,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same pinned Xcode as the `macos` job, so action keys and the BuildBuddy
-      # cache partition match main's hosted macOS lane.
+      # The shared approved policy isolates action keys and cache partitions by
+      # the actual selected tuple; they match hosted lanes on that same tuple.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
@@ -2037,16 +2037,16 @@ jobs:
         shell: bash
         run: tools/ci_check_runner_disk.sh
 
-      # Builds with the Xcode pinned in tools/ci_macos_xcode.txt, so action keys
-      # match the hosted macOS lanes'. A runner without exactly that version and
-      # build fails here rather than building with another Xcode.
+      # When this lane selects the same approved tuple as a hosted lane, their
+      # action keys match. Missing all approved versions, ambiguous discovery or
+      # an unexpected build fails here rather than selecting another toolchain.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
         run: tools/ci_select_macos_xcode.sh
 
       # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
-      # the pinned Xcode's partition (docs/building.md). The action fails
+      # the selected approved tuple's partition (docs/building.md). The action fails
       # rather than writing to another partition when this runner has none. It
       # runs before "Prepare self-hosted macOS toolchain", the first step that
       # touches Bazel.
@@ -2332,16 +2332,16 @@ jobs:
         shell: bash
         run: tools/ci_check_runner_disk.sh
 
-      # Builds with the Xcode pinned in tools/ci_macos_xcode.txt, so action keys
-      # match the hosted macOS lanes'. A runner without exactly that version and
-      # build fails here rather than building with another Xcode.
+      # Select an approved tuple from tools/ci_macos_xcode.txt. Action keys match
+      # hosted lanes on that tuple; missing all approved versions or invalid
+      # discovery/build identity fails closed.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
         run: tools/ci_select_macos_xcode.sh
 
       # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
-      # the pinned Xcode's partition (docs/building.md). The action fails
+      # the selected approved tuple's partition (docs/building.md). The action fails
       # rather than writing to another partition when this runner has none. It
       # runs before "Prepare self-hosted macOS toolchain", the first step that
       # touches Bazel.
@@ -2490,8 +2490,8 @@ jobs:
         shell: bash
         run: tools/ci_check_runner_disk.sh
 
-      # Selects the pinned Xcode exactly as the fast lane does, so this job tests with main's
-      # hosted Xcode.
+      # Select from the same approved policy as the fast lane. The actual tuple
+      # determines which hosted lanes can share its action and cache keys.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
