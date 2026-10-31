@@ -774,6 +774,13 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.assertEqual("", output)
                 self.assertEqual("", trace)
 
+    def test_bcr_consumer_disk_cache_includes_actual_toolchain_identity(self):
+        workflow = _workflow_files()[".github/workflows/bcr_preflight.yml"]
+        consumer = _jobs(workflow)["consumer"]
+        disk_cache = re.findall(r"(?m)^          disk-cache: (.+)$", consumer)
+        self.assertEqual(disk_cache, [
+            "bcr-${{ matrix.os }}-${{ matrix.bazel }}-${{ env.DONNER_CI_XCODE_IDENTITY }}"])
+
     def test_identity_has_no_config_or_workflow_override(self):
         identity = "DONNER_CI_XCODE_IDENTITY"
         lines = [line.split("#", 1)[0].strip() for line in _read(".bazelrc").splitlines()]
@@ -781,9 +788,14 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         for path, text in _workflow_files().items():
             for line in text.splitlines():
                 if identity in line:
-                    self.assertEqual(path, ".github/workflows/cmake.yml", (path, line))
                     self.assertIn("${{ env.DONNER_CI_XCODE_IDENTITY }}", line)
-                    self.assertRegex(line.strip(), r"^(?:key:|ccache-macos-)")
+                    if path == ".github/workflows/bcr_preflight.yml":
+                        self.assertEqual(line.strip(),
+                                         "disk-cache: bcr-${{ matrix.os }}-${{ matrix.bazel }}-"
+                                         "${{ env.DONNER_CI_XCODE_IDENTITY }}")
+                    else:
+                        self.assertEqual(path, ".github/workflows/cmake.yml", (path, line))
+                        self.assertRegex(line.strip(), r"^(?:key:|ccache-macos-)")
 
     def test_workflow_cannot_replace_the_selected_identity(self):
         for name in ["DONNER_CI_XCODE_IDENTITY", "CCACHE_NAMESPACE"]:
