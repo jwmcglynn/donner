@@ -79,7 +79,7 @@ if [[ -z "${locator}" ]]; then
   if [[ -z "${sdk_root}" ]] || ! (
     unset SDKROOT
     run_probe "${XCRUN:-/usr/bin/xcrun}" clang -fobjc-arc -isysroot "${sdk_root}" \
-      -framework Foundation -framework CoreServices \
+      -framework Foundation -framework CoreServices -framework Security \
       "$(dirname "${BASH_SOURCE[0]}")/ci_xcode_discoverable.m" -o "${locator}" \
       >"${scratch}/compile.log" 2>&1
   ); then
@@ -93,6 +93,28 @@ developers="$(run_probe "${locator}" "${version}" 2>"${scratch}/probe.log")" || 
 if [[ "${probe_status}" != 0 ]]; then
   show_diagnostics "${scratch}/probe.log"
   fail "could not be looked up: the Xcode discovery probe failed (exit ${probe_status})."
+fi
+
+# An installation added after the runner logged in may not be registered for its account yet.
+if [[ -z "${developers}" ]]; then
+  registration_status=0
+  "${XCODE_PROBE_PYTHON:-python3}" -c '
+import os
+import signal
+import sys
+signal.alarm(180)
+os.execvp(sys.argv[1], sys.argv[1:])
+' "${locator}" "${version}" --register-installed "${build}" \
+    >"${scratch}/registration.log" 2>&1 || registration_status=$?
+  if [[ "${registration_status}" != 0 ]]; then
+    fail "could not be registered for this account (exit ${registration_status}); Apple signature, access or registration checks failed."
+  fi
+  probe_status=0
+  developers="$(run_probe "${locator}" "${version}" 2>"${scratch}/probe.log")" || probe_status=$?
+  if [[ "${probe_status}" != 0 ]]; then
+    show_diagnostics "${scratch}/probe.log"
+    fail "could not be looked up after registration: the Xcode discovery probe failed (exit ${probe_status})."
+  fi
 fi
 
 count=0

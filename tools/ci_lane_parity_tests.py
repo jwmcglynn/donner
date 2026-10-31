@@ -156,7 +156,7 @@ PARITY_ALLOWLIST = {
        "or the fast lane's."
        for step in ("Test", "Test (Geode editor lane)")
        for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
-                           ("test-env-pr-only", "DONNER_CI_MACOS_LANE=hosted-parity"))},
+                           ("test-env-pr-only", "DONNER_CI_MACOS_LANE=hosted-parity-vm"))},
     _PARITY + ("Test", "tag-filter-pr-only", "hosted_parity"):
         "The parity subset: only tests whose result can depend on the runner. Every other "
         "affected test runs in the fast lane only.",
@@ -166,12 +166,10 @@ PARITY_ALLOWLIST = {
     _PARITY + ("Test", "test-env-main-only", "DONNER_BROWSER_STALL_DIAGNOSTICS=1"):
         "Diagnostics only: it changes what a timed-out browser test records, and this step runs "
         "no browser test.",
-    **{_PARITY + (step, kind, value): HOSTED_NO_SHADER_VALIDATION
-       for step in ("Test", "Test (Geode editor lane)") for kind, value in TEXTURE_USAGE_SPLIT},
-    _PARITY + ("Test", "tag-filter-main-only", "-requires_shader_validation"):
-        HOSTED_SKIPS_SHADER_VALIDATION_TESTS,
-    **{_PARITY + ("Test", "flag-main-only", flag): HOSTED_UNVALIDATED_CONFIG
-       for flag in _config_flags("hosted-macos-unvalidated")},
+    _PARITY + ("Test (Geode editor lane)", "flag-pr-only",
+               "--//build_defs:metal_shader_validation=off"):
+        "The VM cannot run shader validation. The independent native Metal job retains it; "
+        "this setting changes only Metal device tests' environment.",
 }
 
 # Tests that main's hosted jobs run and whose result can depend on the runner's CPU count
@@ -238,9 +236,6 @@ INVOCATION_ALLOWLIST = {
         "the service runner cannot launch browsers that require a desktop session.",
     # The hosted image has no offline Metal compiler, so its lane drops these targets. The
     # self-hosted runner has one and runs them, so the pull request runs more than main.
-    ("main.yml", "macos", "macos-self-hosted", "Test", "tag-filter-main-only",
-     "-requires_metal_toolchain"):
-        "Main runs fewer tests: the hosted image cannot compile offline Metal shaders.",
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-main-only",
      "-requires_metal_toolchain"):
         "Main runs fewer tests: the hosted image cannot compile offline Metal shaders.",
@@ -273,16 +268,16 @@ INVOCATION_ALLOWLIST = {
        for step in ("Qualify pinned Chromium archive", "Test", "Test (browser targets)",
                     "Test (Geode editor lane)")
        for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
-                           ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted"))},
-    **{("main.yml", "macos", "macos-self-hosted", step, kind, value):
-       HOSTED_NO_SHADER_VALIDATION
-       for step in ("Qualify pinned Chromium archive", "Test", "Test (browser targets)",
-                    "Test (Geode editor lane)")
-       for kind, value in TEXTURE_USAGE_SPLIT},
-    ("main.yml", "macos", "macos-self-hosted", "Test", "tag-filter-main-only",
-     "-requires_shader_validation"): HOSTED_SKIPS_SHADER_VALIDATION_TESTS,
-    **{("main.yml", "macos", "macos-self-hosted", "Test", "flag-main-only", flag):
-       HOSTED_UNVALIDATED_CONFIG for flag in _config_flags("hosted-macos-unvalidated")},
+                           ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted-vm"))},
+    **{("main.yml", "macos", "macos-self-hosted", "*", "flag-pr-only", flag):
+       "Scheduling budget for two concurrent VM jobs; it changes no action key."
+       for flag in ("--jobs=6", "--local_resources=cpu=6", "--local_resources=memory=6144")},
+    **{("main.yml", "macos", "macos-self-hosted", step, "flag-pr-only",
+        "--//build_defs:metal_shader_validation=off"):
+       "The VM uses API validation. The independent native Metal job retains shader validation; "
+       "this setting changes only Metal device tests' environment."
+       for step in ("Qualify pinned Chromium archive", "Test (browser targets)",
+                    "Test (Geode editor lane)")},
     # A changed non-Bazel step is keyed by a digest of both rendered definitions, so any edit to
     # what the step runs (its action, inputs, script, shell, its own env and the variables it
     # names) changes the digest and needs a new review. Overrides of the Xcode selection's test
@@ -1735,6 +1730,7 @@ class CiLaneParityTest(unittest.TestCase):
         expected = {
             "macos": {"main-push": True, "trusted-pr": False, "untrusted-pr": True},
             "macos-self-hosted": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
+            "macos-metal": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
             "linux": {"main-push": True, "trusted-pr": True, "untrusted-pr": True},
             "linux-self-hosted": {"main-push": False, "trusted-pr": True, "untrusted-pr": False},
         }
@@ -2415,7 +2411,7 @@ class CiLaneParityTest(unittest.TestCase):
             [*HOSTED_MACOS_RESOURCE_FLAGS, "--run_under=//tools/ci:hosted_parity_throttle",
              "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1", "--build_tests_only",
              "--test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,"
-             "-ci-remote-gpu,-launches-browser,-fuzz_soak", "--config=other"])
+             "-requires_shader_validation,-ci-remote-gpu,-launches-browser,-fuzz_soak", "--config=other"])
         # `test:` lines do not apply to a build.
         self.assertEqual(
             bazelrc_configs.expand("build", ["--config=hosted-parity-subset"], configs), [])

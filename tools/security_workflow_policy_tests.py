@@ -76,6 +76,8 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-self-hosted", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/main.yml", "macos-metal", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/main.yml", "macos-hosted-parity", "Configure BuildBuddy remote cache",
      None, "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/publish_bcr.yml", "publish-fork", "Create the fork branch only if absent", None,
@@ -104,6 +106,8 @@ REVIEWED_WORKFLOW_CALLS = {
 SELF_HOSTED_JOBS = {
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
     (".github/workflows/main.yml", "macos-self-hosted"): "use_self_hosted_macos",
+    (".github/workflows/main.yml", "macos-metal"): "use_self_hosted_macos",
+    (".github/workflows/main.yml", "macos-vm-qualification"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "macos-hosted-parity"): "use_self_hosted_macos",
     (".github/workflows/main.yml", "coverage-contract"): "use_self_hosted_linux",
 }
@@ -115,6 +119,8 @@ SELF_HOSTED_STATUS_PREFIX = {
 # Reviewed conditions a self-hosted job adds after its trusted gate. Each may only narrow it: it
 # follows the gate with `&&`, so it can skip a trusted run but never admit another one.
 SELF_HOSTED_NARROWING = {
+    (".github/workflows/main.yml", "macos-vm-qualification"):
+        " && contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification')",
     (".github/workflows/main.yml", "macos-hosted-parity"):
         " && (needs.determine-targets.outputs.fallback == 'true' || "
         "needs.determine-targets.outputs.hosted_parity_affected == 'true')",
@@ -289,6 +295,7 @@ BUILDBUDDY_JOBS = {
     # Hosted macOS browser subset for trusted maintainer PRs, wired exactly like `macos`.
     (".github/workflows/main.yml", "macos-browser"),
     (".github/workflows/main.yml", "macos-self-hosted"),
+    (".github/workflows/main.yml", "macos-metal"),
     (".github/workflows/main.yml", "macos-hosted-parity"),
     (".github/workflows/sanitizers-pr.yml", "asan-geode"),
     (".github/workflows/sanitizers.yml", "asan"),
@@ -298,6 +305,7 @@ BUILDBUDDY_JOBS = {
 # only for trusted maintainer pull requests, so each holds the read-write key and no Renovate
 # reader, and its last step removes the key from the persistent runner whatever the job's outcome.
 SELF_HOSTED_BUILDBUDDY_JOBS = {(".github/workflows/main.yml", "macos-self-hosted"),
+                               (".github/workflows/main.yml", "macos-metal"),
                                (".github/workflows/main.yml", "macos-hosted-parity")}
 BUILDBUDDY_CLEANUP = ("      - name: Remove BuildBuddy credentials\n"
                       "        if: always()\n"
@@ -4561,7 +4569,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         narrowing = SELF_HOSTED_NARROWING[(main, "macos-hosted-parity")]
         hosted = "    runs-on: ubuntu-24.04\n"
         ungated = "without the trusted gate"
-        self.assertEqual(1, files[main].count(gate + " }}"))
+        self.assertEqual(2, files[main].count(gate + " }}"))
         self.assertEqual(1, files[main].count(gate + narrowing + " }}"))
         self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, xcode-27]\n"))
         self._assert_rejected(lambda files, path: _self_hosted_violations(_workflows(files)), {

@@ -72,6 +72,23 @@ test_suite(
 )
 
 test_suite(
+    name = "metal_native",
+    tags = ["manual"],
+    tests = [
+        "//donner/gpu/metal/tests:metal_buffer_mapping_tests",
+        "//donner/gpu/metal/tests:metal_device_gate_tests",
+        "//donner/gpu/metal/tests:metal_device_loss_tests",
+        "//donner/gpu/metal/tests:metal_serial_wait_tests",
+        "//donner/gpu/metal/tests:metal_submission_backstop_tests",
+        "//donner/gpu/metal/tests:metal_sub_rectangle_upload_tests",
+        "//donner/gpu/metal/tests:metal_surface_tests",
+        "//donner/gpu/metal/tests:metal_texture_registration_tests",
+        "//donner/gpu/metal/tests:metal_ui_renderer_tests",
+        "//donner/gpu/metal/tests:metal_working_set_tests",
+    ],
+)
+
+test_suite(
     name = "metal_offline_compiler",
     tags = ["manual"],
     tests = ["//donner/gpu/shader:msl_xcrun_validation_tests"],
@@ -81,6 +98,17 @@ test_suite(
     name = "mac_browser_archive",
     tags = ["manual"],
     tests = ["//donner/editor/wasm/tests:mac_browser_archive_tests"],
+)
+
+test_suite(
+    name = "macos_vm_qualification",
+    tags = ["manual"],
+    tests = [
+        "//donner/base:base_tests",
+        "//donner/gpu/metal/tests:metal_buffer_bounds_tests",
+        "//donner/gpu/metal/tests:metal_color_matrix_tests",
+        "//donner/gpu/metal/tests:metal_queue_writes_tests",
+    ],
 )
 
 test_suite(
