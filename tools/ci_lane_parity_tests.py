@@ -67,6 +67,8 @@ TRIGGER_ALLOWLIST = {
 # Jobs that run on a main push but not on one kind of pull request, mapped to the job that runs
 # in their place there. The replacement's Bazel invocations are compared step by step.
 JOB_REPLACEMENTS = {
+    ("cmake.yml", "macos", "trusted-pr"): "macos-self-hosted",
+    ("cmake.yml", "validate-generator", "trusted-pr"): "macos-self-hosted",
     ("main.yml", "macos", "trusted-pr"): "macos-self-hosted",
 }
 
