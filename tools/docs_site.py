@@ -230,6 +230,25 @@ def decorate(root: Path, current: str, identity: dict, versions: list[str], base
     return {"identity": identity, "pages_sha256": digest(data)}
 
 
+def validate_pages_archive(archive: Path) -> None:
+    """Checks Pages transport rules without restricting historical archive restoration."""
+    require(archive.is_file() and not archive.is_symlink() and 0 < archive.stat().st_size <= MAX_SITE,
+            "missing or oversized Pages archive")
+    seen: set[str] = set()
+    total = 0
+    with tarfile.open(archive, "r:") as tar:
+        for member in tar:
+            require(member.name.startswith("./"), "Pages archive members must start with ./")
+            pages_artifact.validate_member(member, seen)
+            require(len(seen) <= MAX_FILES, "too many Pages archive members")
+            permissions = 0o005 if member.isdir() else 0o004
+            require(member.mode & permissions == permissions, "Pages archive member is not publicly readable")
+            if member.isfile():
+                total += member.size
+                require(0 <= member.size <= MAX_FILE and total <= MAX_SITE, "Pages archive size limit exceeded")
+    require(bool(seen), "Pages archive is empty")
+
+
 def pack(root: Path, destination: Path) -> str:
     require(not destination.exists(), "archive output already exists")
     with tarfile.open(destination, "w:", format=tarfile.PAX_FORMAT) as tar:
@@ -239,7 +258,7 @@ def pack(root: Path, destination: Path) -> str:
             return 1 if name.startswith("main/") else 0
         for name in sorted(inventory(root), key=lambda name: (group(name), name)):
             path = root / name
-            info = tar.gettarinfo(str(path), arcname=name)
+            info = tar.gettarinfo(str(path), arcname="./" + name)
             info.uid = info.gid = info.mtime = 0
             info.uname = info.gname = ""
             info.mode = 0o644

@@ -174,6 +174,14 @@ verified prior archive for bounded recovery, checks the returned artifact agains
 its exact bytes, persists the candidate and evidence to the protected branch, downloads that
 copy back, and only then requests Pages cutover. Normal publication does not build documentation.
 
+Candidate and recovery tar members must start with `./`, as required by the Pages service.
+The publisher checks both exact transport archives before retaining the candidate or requesting
+cutover. It also rejects unsafe/duplicate members, unreadable files and exceeded size limits.
+Historical archives remain readable for provenance and composition, but a bare-path archive
+cannot be selected directly for deployment or recovery. Repacking changes the archive digest:
+retain the original evidence and obtain a newly signed, explicitly selected composition rather
+than treating the replacement as the previously approved archive.
+
 The Pages build version is the verified source commit SHA, matching the official deployment
 action. Pages may reuse that SHA as a deployment ID across artifact uploads, so a terminal
 SHA-addressed status cannot prove that the latest artifact request has stopped. If publication
