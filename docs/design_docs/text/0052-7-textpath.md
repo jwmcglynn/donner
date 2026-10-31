@@ -133,7 +133,8 @@ Any golden or tolerance change requires explicit human approval after visual ret
 - [x] **012**: Mixed textPath/tspan/textPath continuation follows the SVG 2 text layout
   algorithm: unanchored text after each path starts at that path's geometric endpoint. The
   historical reference instead continues from the occupied text extent, so it remains skipped.
-  Independent renderer controls compare both continuations against explicit endpoint positions.
+  Independent renderer controls compare both continuations against explicit endpoint positions in
+  `//donner/svg/renderer/tests:text_path_convergence_tests` and its `_geode` and `_text_full` variants.
 
 ### Deferred Features
 - [ ] Implement `method=stretch` for glyph stretching along path curvature.
@@ -142,5 +143,8 @@ Any golden or tolerance change requires explicit human approval after visual ret
 - [ ] Support `path` attribute (SVG 2) for inline path data.
 - [ ] Handle text across discontinuous subpaths correctly.
 - [x] Map vertical inline advances, glyph offsets, rotation, and textLength into the path frame.
-  Independent geometry and renderer controls preserve the straight-path vertical layout.
+  `//donner/svg/renderer/tests:text_engine_scripted_tests` covers upright glyph offsets, cluster
+  rotation, and textLength. `//donner/svg/renderer/tests:text_path_convergence_tests` and its
+  `_geode` and `_text_full` variants compare the straight-path vertical layout and textLength
+  against ordinary vertical text, with visible-ink negative controls.
 - [ ] Resolve upright CJK glyph-origin differences between text backends and the reference.
