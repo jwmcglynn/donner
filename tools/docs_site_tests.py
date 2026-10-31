@@ -115,6 +115,30 @@ class DocsSiteTest(unittest.TestCase):
         self.assertEqual({member.name.removeprefix("./") for member in members},
                          set(site.inventory(output)))
 
+    def test_pages_transport_rejects_bare_and_mixed_names_but_legacy_restore_still_works(self):
+        for names in (("index.html",), ("./index.html", "nested/page.html")):
+            with self.subTest(names=names):
+                archive = self.root / (str(len(names)) + ".tar")
+                with tarfile.open(archive, "w:") as tar:
+                    for name in names:
+                        member = tarfile.TarInfo(name)
+                        member.mode = 0o644
+                        member.size = 4
+                        tar.addfile(member, io.BytesIO(b"site"))
+                with self.assertRaisesRegex(ValueError, "must start with ./"):
+                    site.validate_pages_archive(archive)
+                site.unpack(archive, self.root / ("legacy-" + str(len(names))))
+
+    def test_pages_transport_accepts_prefixed_long_paths(self):
+        root = self.root / "long"
+        root.mkdir()
+        (root / ("x" * 110 + ".html")).write_text("site")
+        archive = self.root / "long.tar"
+        site.pack(root, archive)
+        site.validate_pages_archive(archive)
+        with tarfile.open(archive) as tar:
+            self.assertTrue(tar.getmembers()[0].pax_headers)
+
     def test_archive_metadata_and_order_keep_stable_chunks_before_main(self):
         import os
         output, _ = self.compose()
@@ -125,7 +149,7 @@ class DocsSiteTest(unittest.TestCase):
         self.assertEqual(site.pack(output, self.root / "second.tar"), expected)
         with tarfile.open(first) as archive:
             members = archive.getmembers()
-        names = [member.name for member in members]
+        names = [member.name.removeprefix("./") for member in members]
         main = [i for i, name in enumerate(names) if name.startswith("main/")]
         stable = [i for i, name in enumerate(names) if not name.startswith(("main/", "_docs/")) and name != "docs-site.json"]
         metadata = [i for i, name in enumerate(names) if name.startswith("_docs/") or name == "docs-site.json"]
