@@ -277,25 +277,32 @@ TEST(SVGTextElementViewportTests, MultipleTSpansComputed) {
 
 TEST(SVGTextElementPublicApiTests, VerticalTextPathLengthMatchesStraightTextAdvance) {
   for (const std::string_view method : {"align", "stretch"}) {
-    SCOPED_TRACE(method);
-    SVGDocument document = instantiateSubtree(std::string(R"svg(<path id="p" d="M40 10V180"/>
-          <text id="ordinary" writing-mode="vertical-rl" font-size="20">A</text>
-          <text id="path" writing-mode="vertical-rl" font-size="20"><textPath href="#p"
-          method=")svg") + std::string(method) + R"svg(">A</textPath></text>)svg",
-                                              kExperimentalOptions);
-    const auto ordinaryElement = document.querySelector("#ordinary");
-    const auto pathElement = document.querySelector("#path");
-    ASSERT_THAT(ordinaryElement, Optional(testing::_));
-    ASSERT_THAT(pathElement, Optional(testing::_));
-    const auto ordinary = ordinaryElement->cast<SVGTextElement>();
-    const auto onPath = pathElement->cast<SVGTextElement>();
-    const double advance = ordinary.getComputedTextLength();
-    ASSERT_THAT(advance, testing::Gt(0.0));
-    EXPECT_THAT(onPath.getComputedTextLength(), testing::DoubleNear(advance, 1e-6));
-    EXPECT_THAT(onPath.getSubStringLength(0, 1), testing::DoubleNear(advance, 1e-6));
-    if (method == "stretch") {
-      const Vector2d start = onPath.getStartPositionOfChar(0);
-      EXPECT_THAT(onPath.getEndPositionOfChar(0), Vector2Near(start.x, start.y + advance));
+    for (const bool adjusted : {false, true}) {
+      SCOPED_TRACE(method);
+      SCOPED_TRACE(adjusted);
+      const std::string_view lengthAttributes =
+          adjusted ? R"svg(textLength="24" lengthAdjust="spacingAndGlyphs")svg" : "";
+      SVGDocument document = instantiateSubtree(
+          std::string(R"svg(<path id="p" d="M40 10V180"/>
+            <text id="ordinary" writing-mode="vertical-rl" font-size="20">A</text>
+            <text id="path" writing-mode="vertical-rl" font-size="20" )svg") +
+              std::string(lengthAttributes) + R"svg(><textPath href="#p" method=")svg" +
+              std::string(method) + R"svg(">A</textPath></text>)svg",
+          kExperimentalOptions);
+      const auto ordinaryElement = document.querySelector("#ordinary");
+      const auto pathElement = document.querySelector("#path");
+      ASSERT_THAT(ordinaryElement, Optional(testing::_));
+      ASSERT_THAT(pathElement, Optional(testing::_));
+      const auto ordinary = ordinaryElement->cast<SVGTextElement>();
+      const auto onPath = pathElement->cast<SVGTextElement>();
+      const double advance = adjusted ? 24.0 : ordinary.getComputedTextLength();
+      ASSERT_THAT(advance, testing::Gt(0.0));
+      EXPECT_THAT(onPath.getComputedTextLength(), testing::DoubleNear(advance, 1e-6));
+      EXPECT_THAT(onPath.getSubStringLength(0, 1), testing::DoubleNear(advance, 1e-6));
+      if (method == "stretch") {
+        const Vector2d start = onPath.getStartPositionOfChar(0);
+        EXPECT_THAT(onPath.getEndPositionOfChar(0), Vector2Near(start.x, start.y + advance));
+      }
     }
   }
 }
