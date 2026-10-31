@@ -104,6 +104,17 @@ class DocsSiteTest(unittest.TestCase):
         site.unpack(first, self.root / "restored")
         self.assertEqual(site.verify_site(self.root / "restored"), site.verify_site(output))
 
+    def test_pages_archive_members_use_the_required_relative_prefix(self):
+        output, _ = self.compose()
+        archive = self.root / "pages.tar"
+        site.pack(output, archive)
+        with tarfile.open(archive) as tar:
+            members = tar.getmembers()
+        self.assertTrue(members)
+        self.assertTrue(all(member.name.startswith("./") for member in members))
+        self.assertEqual({member.name.removeprefix("./") for member in members},
+                         set(site.inventory(output)))
+
     def test_archive_metadata_and_order_keep_stable_chunks_before_main(self):
         import os
         output, _ = self.compose()
