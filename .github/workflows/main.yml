@@ -1272,10 +1272,10 @@ jobs:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
       # Set the CI deployment target explicitly so hosted and self-hosted macOS
       # compile the same target instead of inheriting host defaults.
-      # --config=ci-macos pins the action PATH so this job and
-      # macos-self-hosted compute identical action keys; "Select pinned Xcode"
-      # adds --xcode_version. macos-self-hosted passes these same key-affecting
-      # flags (//tools:macos_cache_key_parity_tests).
+      # --config=ci-macos pins the action PATH. Lanes selecting the same approved
+      # Xcode tuple compute identical action keys; "Select pinned Xcode" adds
+      # --xcode_version. Self-hosted lanes pass these same key-affecting flags
+      # (//tools:macos_cache_key_parity_tests).
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME. The hosted image's virtual
@@ -1683,8 +1683,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same pinned Xcode as the `macos` job, so action keys and the BuildBuddy
-      # cache partition match main's hosted macOS lane.
+      # The shared approved policy isolates action keys and cache partitions by
+      # the actual selected tuple; they match hosted lanes on that same tuple.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
@@ -1987,22 +1987,19 @@ jobs:
           namespace: native
           mode: save
 
-  # Operator's ARM64 macOS runs on the operator's self-hosted runner.
+  # The virtual macOS pool handles ordinary builds and tests. Native Metal validation
+  # runs independently on a shader-validation-capable runner.
   # Replaces `macos` for trusted operator PRs. Main pushes, Renovate, and
   # non-operator runs stay hosted. The host pre-provisions Bazelisk, Homebrew
   # llvm@19, and Xcode Command Line Tools.
-  # The host also provides the offline Metal compiler, which is why this lane
-  # keeps the `requires_metal_toolchain` target the hosted macOS lane drops; the
-  # fail-closed MSL suite is the check that it still does.
   macos-self-hosted:
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS-vm, ARM64]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
     # Bound at 60 min so healthy affected-target runs have buffer while a stuck
     # run still fails instead of tailing for hours.
     timeout-minutes: 60
-    # Shares the BuildBuddy remote cache with the GitHub-hosted macOS lanes, the
-    # one self-hosted lane allowed to. This job only runs for trusted maintainer
+    # Shares the BuildBuddy remote cache with the GitHub-hosted macOS lanes. This job only runs for trusted maintainer
     # pull requests, so it binds the buildbuddy-write environment exactly as the
     # `macos` job does for them.
     environment:
@@ -2015,7 +2012,7 @@ jobs:
       # --config=ci-macos and --macos_minimum_os=13.3 are the key-affecting
       # flags, identical to the `macos` job's (//tools:macos_cache_key_parity_tests).
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=self-hosted"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=self-hosted-vm"
       # Keep in sync with the `macos` job: exactly one of the two runs per
       # event, so both need the Geode editor lane. See that job for why these
       # targets need an explicit invocation.
@@ -2049,7 +2046,302 @@ jobs:
         run: tools/ci_select_macos_xcode.sh
 
       # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
-      # the pinned Xcode's partition (docs/building.md). The action fails
+      # the selected approved tuple's partition (docs/building.md). The action fails
+      # rather than writing to another partition when this runner has none. It
+      # runs before "Prepare self-hosted macOS toolchain", the first step that
+      # touches Bazel.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
+          download-outputs: minimal
+
+      - name: Prepare self-hosted macOS toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
+          test -x /opt/homebrew/bin/bazelisk
+          test -x /opt/homebrew/bin/bazel
+          test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
+
+      - name: Refresh Xcode toolchain configuration
+        shell: bash
+        run: |
+          bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off \
+            --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
+
+      - name: Build
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk --nohome_rc --nosystem_rc build --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 $BAZEL_MACOS_BUILD_FLAGS $TARGETS
+
+      - name: Test
+        id: test
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the test step."
+            exit 1
+          fi
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --test_output=errors \
+            --test_tag_filters=-manual,-perf,-requires_shader_validation,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
+        # the `fuzz_soak` mutation targets; they run nightly or on demand in
+        # `.github/workflows/fuzz.yml`, under sanitizers.
+
+      # Browser tests share the GPU with native replays and need their own serial phase.
+      # Headed-browser tests need a desktop session; the required hosted browser job runs them.
+
+      - name: Qualify pinned Chromium archive
+        id: browser_preflight
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the browser preflight."
+            exit 1
+          fi
+          browser_targets=$(bazelisk --nohome_rc --nosystem_rc query "attr('tags', 'launches-browser', tests(set($TARGETS)))")
+          if [[ -z "$browser_targets" ]]; then
+            echo "No browser targets selected."
+          else
+            tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --nocache_test_results --test_output=errors \
+              $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+              //tools/ci:mac_browser_archive
+          fi
+
+      - name: Test (browser targets)
+        id: browser_test
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the browser test step."
+            exit 1
+          fi
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --test_output=errors \
+            --local_test_jobs=1 --build_event_json_file="$RUNNER_TEMP/coverage-browser_test.bep.json" \
+            --test_tag_filters=launches-browser,-manual,-perf,-requires_desktop_session,-ci-remote-gpu,-fuzz_soak \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
+
+      - name: Test (Geode editor lane)
+        id: geode_test
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --config=geode --test_output=errors \
+            --build_event_json_file="$RUNNER_TEMP/coverage-geode_test.bep.json" \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
+
+      - name: Diagnose Chromium context lifecycle
+        id: browser_context_diagnostic
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.gatekeeper.outputs.trusted_pr == 'true' && contains(github.event.pull_request.labels.*.name, 'ci:browser-context-probe') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 --nocache_test_results --test_output=errors \
+            --local_test_jobs=1 --test_tag_filters= \
+            --build_event_json_file="$RUNNER_TEMP/browser-context-diagnostic.bep.json" \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            --test_timeout=60 //tools/ci:chromium_context_diagnostic
+
+      - name: Upload Bazel test failure artifacts
+        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure' || steps.browser_context_diagnostic.outcome == 'failure')
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      # The steps this job ran, for the coverage contract (tools/ci/coverage_contract.json).
+      - name: Record coverage receipt
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+        run: python3 tools/ci_coverage_contract.py receipt macos-self-hosted
+
+      - name: Upload coverage receipt
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-receipt-macos-self-hosted
+          path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 3
+
+      # Remove the BuildBuddy key and its workspace helper, whatever the outcome.
+      - name: Remove BuildBuddy credentials
+        if: always()
+        shell: bash
+        run: rm -rf "${RUNNER_TEMP}/buildbuddy" "${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"
+
+  macos-vm-qualification:
+    runs-on: [self-hosted, macOS-vm-qualification, ARM64]
+    needs: [gatekeeper, determine-targets]
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && contains(github.event.pull_request.labels.*.name, 'ci:vm-qualification') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [1, 2, 3, 4]
+    timeout-minutes: 60
+    env:
+      BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
+      BAZEL_MACOS_TEST_FLAGS: "--//build_defs:metal_shader_validation=off --test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=vm-qualification"
+      MIN_FREE_DISK_GIB: "30"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check runner disk space
+        run: tools/ci_check_runner_disk.sh
+
+      - name: Select pinned Xcode
+        id: xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh
+
+      - name: Refresh Xcode toolchain configuration
+        shell: bash
+        run: |
+          bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off \
+            --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
+
+      - name: Qualify concurrent VM workload
+        id: qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
+            --jobs=6 --local_resources=cpu=6 --local_resources=memory=6144 \
+            --nocache_test_results --test_tag_filters= --noskip_incompatible_explicit_targets \
+            --build_event_json_file="$RUNNER_TEMP/coverage-qualification.bep.json" \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            //tools/ci:macos_vm_qualification
+
+      - name: Record VM qualification execution evidence
+        if: always()
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+        run: python3 tools/ci_coverage_contract.py receipt macos-vm-qualification
+
+      - name: Require four executed qualification tests
+        if: success()
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "coverage-receipt/coverage-receipt.json"
+          step = json.loads(path.read_text())["steps"]["qualification"]
+          if step.get("executed", 0) != 4 or step.get("tests", 0) != 4:
+              raise SystemExit("Expected four executed qualification tests")
+          PYCODE
+
+      - name: Retain VM qualification execution evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vm-qualification-evidence-${{ matrix.instance }}
+          path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload Bazel test failure artifacts
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-${{ github.job }}-${{ matrix.instance }}
+
+  macos-metal:
+    runs-on: [self-hosted, macOS, ARM64]
+    needs: [gatekeeper, determine-targets]
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
+    # Bound at 60 min so healthy affected-target runs have buffer while a stuck
+    # run still fails instead of tailing for hours.
+    timeout-minutes: 60
+    # Shares the BuildBuddy remote cache with the GitHub-hosted macOS lanes. This job only runs for trusted maintainer
+    # pull requests, so it binds the buildbuddy-write environment exactly as the
+    # `macos` job does for them.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
+    env:
+      # The runner host may have user or system Bazel rc files. The invocations
+      # below use --nohome_rc --nosystem_rc so CI matches GitHub-hosted macOS
+      # and only picks up settings declared in this repository and workflow.
+      # --config=ci-macos and --macos_minimum_os=13.3 are the key-affecting
+      # flags, identical to the `macos` job's (//tools:macos_cache_key_parity_tests).
+      BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=native-metal"
+      # Free space, in GiB, required on every filesystem this job writes. It
+      # bounds the job's working set: infrastructure PRs and full-graph
+      # fallbacks build and test all of //... with locally executed actions.
+      # This is
+      # intended to cover such a run with margin.
+      MIN_FREE_DISK_GIB: "30"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Before Bazel, so a full disk fails in seconds with a clear error instead of
+      # minutes to an hour in as a Bazel ENOSPC, a job timeout or a lost runner
+      # connection, which read like failures of the change under test.
+      - name: Check runner disk space
+        shell: bash
+        run: tools/ci_check_runner_disk.sh
+
+      # Select an approved tuple from tools/ci_macos_xcode.txt. Action keys match
+      # hosted lanes on that tuple; missing all approved versions or invalid
+      # discovery/build identity fails closed.
+      - name: Select pinned Xcode
+        id: xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh
+
+      # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
+      # the selected approved tuple's partition (docs/building.md). The action fails
       # rather than writing to another partition when this runner has none. It
       # runs before "Prepare self-hosted macOS toolchain", the first step that
       # touches Bazel.
@@ -2092,13 +2384,13 @@ jobs:
         run: python3 tools/ci_metal_toolchain.py --describe
 
       # The only shader-validation gate in CI: the hosted image's virtual GPU cannot run it,
-      # so main runs none. Both steps are mandatory whenever this job runs.
+      # so main runs none. The capability probe and native suites are mandatory whenever this job runs.
       - name: Require full Metal shader validation
         id: metal_profile
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_tag_filters= --test_output=errors \
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_tag_filters= --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
             //tools/ci:metal_full_validation
 
@@ -2107,7 +2399,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
             //tools/ci:metal_preflight
 
@@ -2116,114 +2408,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
             //tools/ci:metal_offline_compiler
 
-      - name: Build
-        id: build
+      - name: Test remaining native Metal suite
+        id: metal_native
         shell: bash
         run: |
           set -euo pipefail
-          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
-            echo "//..."
-          else
-            echo "${{ needs.determine-targets.outputs.affected }}"
-          fi)
-          bazelisk --nohome_rc --nosystem_rc build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
-
-      - name: Test
-        id: test
-        shell: bash
-        run: |
-          set -euo pipefail
-          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
-            echo "//..."
-          else
-            echo "${{ needs.determine-targets.outputs.affected }}"
-          fi)
-          if [[ -z "${TARGETS// /}" ]]; then
-            echo "::error::Empty target selection reached the test step."
-            exit 1
-          fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser,-fuzz_soak \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
-        # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
-        # the `fuzz_soak` mutation targets; they run nightly or on demand in
-        # `.github/workflows/fuzz.yml`, under sanitizers.
-
-      # Browser tests share the GPU with native replays and need their own serial phase.
-      # Headed-browser tests need a desktop session; the required hosted browser job runs them.
-
-      - name: Qualify pinned Chromium archive
-        id: browser_preflight
-        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
-            echo "//..."
-          else
-            echo "${{ needs.determine-targets.outputs.affected }}"
-          fi)
-          if [[ -z "${TARGETS// /}" ]]; then
-            echo "::error::Empty target selection reached the browser preflight."
-            exit 1
-          fi
-          browser_targets=$(bazelisk --nohome_rc --nosystem_rc query "attr('tags', 'launches-browser', tests(set($TARGETS)))")
-          if [[ -z "$browser_targets" ]]; then
-            echo "No browser targets selected."
-          else
-            tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
-              $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-              //tools/ci:mac_browser_archive
-          fi
-
-      - name: Test (browser targets)
-        id: browser_test
-        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
-            echo "//..."
-          else
-            echo "${{ needs.determine-targets.outputs.affected }}"
-          fi)
-          if [[ -z "${TARGETS// /}" ]]; then
-            echo "::error::Empty target selection reached the browser test step."
-            exit 1
-          fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
-            --local_test_jobs=1 --build_event_json_file="$RUNNER_TEMP/coverage-browser_test.bep.json" \
-            --test_tag_filters=launches-browser,-manual,-perf,-requires_desktop_session,-ci-remote-gpu,-fuzz_soak \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
-
-      - name: Test (Geode editor lane)
-        id: geode_test
-        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazelisk --nohome_rc --nosystem_rc test --config=ci --config=geode --test_output=errors \
-            --build_event_json_file="$RUNNER_TEMP/coverage-geode_test.bep.json" \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
-
-      - name: Diagnose Chromium context lifecycle
-        id: browser_context_diagnostic
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.gatekeeper.outputs.trusted_pr == 'true' && contains(github.event.pull_request.labels.*.name, 'ci:browser-context-probe') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
-            --local_test_jobs=1 --test_tag_filters= \
-            --build_event_json_file="$RUNNER_TEMP/browser-context-diagnostic.bep.json" \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --noskip_incompatible_explicit_targets --test_output=errors \
+            --build_event_json_file="$RUNNER_TEMP/coverage-metal_native.bep.json" \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            --test_timeout=60 //tools/ci:chromium_context_diagnostic
+            //tools/ci:metal_native
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.metal_compiler.outcome == 'failure' || steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure' || steps.browser_context_diagnostic.outcome == 'failure')
+        if: failure() && (steps.metal_compiler.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.metal_native.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -2234,20 +2434,19 @@ jobs:
         shell: bash
         env:
           STEPS_JSON: ${{ toJSON(steps) }}
-        run: python3 tools/ci_coverage_contract.py receipt macos-self-hosted
+        run: python3 tools/ci_coverage_contract.py receipt macos-metal
 
       - name: Upload coverage receipt
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-receipt-macos-self-hosted
+          name: coverage-receipt-macos-metal
           path: ${{ runner.temp }}/coverage-receipt/coverage-receipt.json
           if-no-files-found: error
           overwrite: true
           retention-days: 3
 
-      # The runner is persistent: remove the BuildBuddy key, its credential helper
-      # and the workspace fragment that names the helper, whatever the outcome.
+      # Remove the BuildBuddy key and its workspace helper, whatever the outcome.
       - name: Remove BuildBuddy credentials
         if: always()
         shell: bash
@@ -2258,7 +2457,7 @@ jobs:
     # `hosted_parity` tests and the Geode editor lane under main's hosted macOS configuration
     # (--config=hosted-parity in .bazelrc), only when the affected set reaches one. It can queue
     # another pull request's fast lane on the shared runner for its duration.
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS-vm, ARM64]
     needs: [gatekeeper, determine-targets, macos-self-hosted]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.hosted_parity_affected == 'true') }}
     timeout-minutes: 60
@@ -2272,7 +2471,7 @@ jobs:
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       # Main's hosted test environment under this lane's own name, so its test results are never
       # shared with the hosted lane's or the fast lane's.
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted-parity"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --//build_defs:metal_shader_validation=off --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted-parity-vm"
       # Free space, in GiB, required before Bazel runs: the fast lane's threshold, since this job
       # writes the same output root and can fall back to //....
       MIN_FREE_DISK_GIB: "30"
@@ -2291,8 +2490,8 @@ jobs:
         shell: bash
         run: tools/ci_check_runner_disk.sh
 
-      # Selects the pinned Xcode exactly as the fast lane does, so this job tests with main's
-      # hosted Xcode.
+      # Select from the same approved policy as the fast lane. The actual tuple
+      # determines which hosted lanes can share its action and cache keys.
       - name: Select pinned Xcode
         id: xcode
         shell: bash
@@ -2378,8 +2577,7 @@ jobs:
           overwrite: true
           retention-days: 3
 
-      # The runner is persistent: remove the BuildBuddy key, its credential helper
-      # and the workspace fragment that names the helper, whatever the outcome.
+      # Remove the BuildBuddy key and its workspace helper, whatever the outcome.
       - name: Remove BuildBuddy credentials
         if: always()
         shell: bash
@@ -2399,7 +2597,7 @@ jobs:
     # job. The hosted macOS jobs also write the browser and Geode build event files only so their
     # Bazel invocations stay identical to the pull request copies that the receipts read.
     runs-on: [self-hosted, linux, arm64]
-    needs: [gatekeeper, determine-targets, linux, linux-self-hosted, macos-self-hosted, macos-browser, macos-hosted-parity]
+    needs: [gatekeeper, determine-targets, linux, linux-self-hosted, macos-self-hosted, macos-metal, macos-browser, macos-hosted-parity]
     if: ${{ !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
     timeout-minutes: 10
     steps:

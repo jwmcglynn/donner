@@ -661,7 +661,7 @@ test:hosted-parity --config=hosted-macos-quarantine
 # `bazel test --config=hosted-parity-subset //...` runs what the CI lane runs.
 test:hosted-parity-subset --config=hosted-parity
 test:hosted-parity-subset --build_tests_only
-test:hosted-parity-subset --test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak
+test:hosted-parity-subset --test_tag_filters=hosted_parity,-manual,-perf,-requires_metal_toolchain,-requires_shader_validation,-ci-remote-gpu,-launches-browser,-fuzz_soak
 
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled
